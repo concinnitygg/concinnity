@@ -43,7 +43,6 @@ use objc2_metal::{MTLBuffer, MTLCommandBuffer as _, MTLCommandQueue as _, MTLDev
 use super::context::MtlContext;
 use super::graph_exec::GraphFrameParams;
 use super::uniforms::*;
-use crate::metal::post::post_device::MtlPostDevice;
 
 impl MtlContext {
     // Pump the NSEvent queue and encode one frame to the GPU.
@@ -1483,12 +1482,7 @@ impl MtlContext {
         // accumulation restarts.
         if render_changed && let Some(mut taa) = self.taa.pass.take() {
             let r = taa.resize(
-                &MtlPostDevice {
-                    device: &self.device,
-                    sampler: &self.post_sampler,
-                    timing: None,
-                    hot_reload: self.hot_reload.enabled,
-                },
+                &self.post_device(),
                 PostExtent {
                     width: render_w,
                     height: render_h,
@@ -1537,9 +1531,16 @@ impl MtlContext {
         }
         // The SSGI gather target is render-resolution scaled by `gi_scale`
         // (the composite bilateral-upsamples it back to full resolution).
-        if render_changed && let Some(s) = self.ssgi.settings {
-            let (gw, gh) = s.gi_dimensions(render_w, render_h);
-            self.ssgi.targets = Some(super::post::create_ssgi_targets(&self.device, gw, gh)?);
+        if render_changed && let Some(mut ssgi) = self.ssgi.pass.take() {
+            let r = ssgi.resize(
+                &self.post_device(),
+                PostExtent {
+                    width: render_w,
+                    height: render_h,
+                },
+            );
+            self.ssgi.pass = Some(ssgi);
+            r?;
         }
         // The Hi-Z pyramid matches the render (depth) resolution. Rebuild it
         // and mark it invalid so the next cull dispatch ignores the now-stale

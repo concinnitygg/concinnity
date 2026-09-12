@@ -1,10 +1,8 @@
 // src/vulkan/post/fullscreen.rs
 //
-// Shared lifecycle for single-draw fullscreen post passes (SSR resolve, TAA
-// resolve, ...): the render-pass bracket + full-resolution viewport / scissor
-// every such pass repeats. The per-pass encoders (ssr.rs / taa.rs) implement
-// `gfx::fullscreen::FullscreenPass` and call these from their begin/end so the
-// bracket lives once. See gfx/fullscreen.rs for the cross-backend driver.
+// The render-pass bracket and viewport / scissor that a fullscreen pass not yet
+// drawn through the shared post seam (`render::post`) writes by hand: the
+// reflection composite's blur and composite.
 
 use ash::vk;
 
@@ -24,10 +22,8 @@ impl VkContext {
     }
 
     // As `begin_fullscreen_pass`, but with an explicit target extent for a pass
-    // whose framebuffer is not the full render resolution -- the SSGI gather
-    // writes a `gi_scale`-reduced gi target, so its render area + viewport must
-    // match that smaller framebuffer (the composite then bilateral-upsamples it).
-    // The full-res callers go through `begin_fullscreen_pass` above.
+    // whose framebuffer is not the full render resolution -- the reflection
+    // blur -- so its render area + viewport match that smaller framebuffer.
     pub(in crate::vulkan) fn begin_fullscreen_pass_sized(
         &self,
         cmd: vk::CommandBuffer,

@@ -294,8 +294,7 @@ impl DxContext {
         // feature's slots. A reserved-but-unbuilt feature leaves its slots
         // unwritten; that is safe because no always-running pass binds them (each
         // feature's own pass runs only when the feature is on, and the main pass's
-        // SSAO occlusion binding falls back to the 1x1 white slot below), matching
-        // the existing reserved-but-unwritten SSR slot in a SSGI-only build. The
+        // SSAO occlusion binding falls back to the 1x1 white slot below). The
         // `*_enabled` / `*_present` gates below still drive whether the resources
         // are BUILT at init, just not whether the slots exist.
         //
@@ -312,17 +311,11 @@ impl DxContext {
         let ssao_enabled = ssao_settings.is_some();
         let ssao_rtv_extra = 2;
         let ssao_srv_extra = 2;
-        // SSR: 1 RTV + 1 SRV (resolve output); view normal + depth + roughness
-        // come from the G-buffer pre-pass, so no DSV. SSR / SSGI / RT all reuse
-        // the pre-pass; `ssr_prepass_present` still gates whether `SsrResources`
-        // is built at init.
+        // SSR / SSGI / RT all reuse the G-buffer pre-pass; `ssr_prepass_present`
+        // gates whether `SsrResources` is built at init. The SSR reflection
+        // target and the SSGI gather target take their descriptors from the
+        // shared post block.
         let ssr_prepass_present = ssr_settings.is_some() || ssgi_settings.is_some() || rt_enabled;
-        let ssr_rtv_extra = 1;
-        let ssr_srv_extra = 1;
-        // SSGI gather target: 1 RTV (the gather writes it) + 1 SRV (the composite
-        // reads it).
-        let ssgi_rtv_extra = 1;
-        let ssgi_srv_extra = 1;
         // RT-reflection output: 1 RTV (the trace writes it) at the RTV-heap tail
         // + 1 SRV (the post stack samples it) at the SRV-heap tail. Reserved
         // UNCONDITIONALLY like the other live-toggleable features, so a live
@@ -365,8 +358,6 @@ impl DxContext {
                     + bloom_count as u32
                     + post_rtv_extra as u32
                     + ssao_rtv_extra as u32
-                    + ssr_rtv_extra as u32
-                    + ssgi_rtv_extra as u32
                     + decal_rtv_extra as u32
                     + gbuffer_rtv_extra as u32
                     + rt_rtv_extra as u32
@@ -484,7 +475,6 @@ impl DxContext {
             post_srv_base_slot,
             ssao_srv_base_slot,
             ssao_white_srv_slot,
-            ssr_srv_base_slot,
             decal_depth_srv_slot,
             decal_srv_base_slot,
             particle_srv_base_slot,
@@ -500,7 +490,6 @@ impl DxContext {
             probe_cube_uav_base_slot,
             probe_mip0_pair_slot,
             transparent_scene_copy_srv_slot,
-            ssgi_gi_srv_slot,
             gbuffer_srv_base_slot,
             rt_output_srv_slot,
             refl_composite_srv_base_slot,
@@ -514,8 +503,6 @@ impl DxContext {
             n_atlases,
             bloom_count,
             ssao_srv_extra,
-            ssr_srv_extra,
-            ssgi_srv_extra,
             gbuffer_srv_extra,
             rt_output_srv_extra: rt_srv_extra,
             refl_composite_srv_extra,
@@ -1010,18 +997,12 @@ impl DxContext {
         };
         // RTV for `hdr_resolve`: the projected-decal pass renders into the
         // resolved scene target, so it needs a render-target view. Sits in
-        // the RTV heap right after the SSR RTVs. Only created when MSAA is
+        // the RTV heap right after the SSAO RTVs. Only created when MSAA is
         // on (MSAA off uses the existing `hdr_color_rtv`).
         let hdr_resolve_rtv = if let Some(resolve) = &hdr_resolve {
             let rtv_handle = D3D12_CPU_DESCRIPTOR_HANDLE {
                 ptr: rtv_base.ptr
-                    + (FRAMES
-                        + 1
-                        + bloom_count
-                        + post_rtv_extra
-                        + ssao_rtv_extra
-                        + ssr_rtv_extra
-                        + ssgi_rtv_extra)
+                    + (FRAMES + 1 + bloom_count + post_rtv_extra + ssao_rtv_extra)
                         * rtv_descriptor_size,
             };
             // SAFETY: the view descriptor and the resource it names are live for the call, and the
@@ -1401,27 +1382,6 @@ impl DxContext {
             rtv_descriptor_size,
         );
 
-        let ssr_rtv_for = |i: usize| D3D12_CPU_DESCRIPTOR_HANDLE {
-            ptr: rtv_base.ptr
-                + (FRAMES + 1 + bloom_count + post_rtv_extra + ssao_rtv_extra + i)
-                    * rtv_descriptor_size,
-        };
-        let ssr_slots = effects::SsrSlots {
-            output_rtv: ssr_rtv_for(0),
-            output_srv: (slot_cpu(ssr_srv_base_slot), slot_gpu(ssr_srv_base_slot)),
-        };
-
-        // SSGI gather target: RTV right after the SSR RTVs, SRV at the heap tail.
-        let ssgi_gi_rtv = D3D12_CPU_DESCRIPTOR_HANDLE {
-            ptr: rtv_base.ptr
-                + (FRAMES + 1 + bloom_count + post_rtv_extra + ssao_rtv_extra + ssr_rtv_extra)
-                    * rtv_descriptor_size,
-        };
-        let ssgi_slots = effects::SsgiSlots {
-            gi_rtv: ssgi_gi_rtv,
-            gi_srv: (slot_cpu(ssgi_gi_srv_slot), slot_gpu(ssgi_gi_srv_slot)),
-        };
-
         let ssao_rtv_for = |i: usize| D3D12_CPU_DESCRIPTOR_HANDLE {
             ptr: rtv_base.ptr
                 + (FRAMES + 1 + bloom_count + post_rtv_extra + i) * rtv_descriptor_size,
@@ -1446,8 +1406,6 @@ impl DxContext {
                     + bloom_count
                     + post_rtv_extra
                     + ssao_rtv_extra
-                    + ssr_rtv_extra
-                    + ssgi_rtv_extra
                     + decal_rtv_extra
                     + gbuffer_rtv_extra)
                     * rtv_descriptor_size,
@@ -1467,8 +1425,6 @@ impl DxContext {
             + bloom_count
             + post_rtv_extra
             + ssao_rtv_extra
-            + ssr_rtv_extra
-            + ssgi_rtv_extra
             + decal_rtv_extra
             + gbuffer_rtv_extra
             + rt_rtv_extra;
@@ -1507,14 +1463,8 @@ impl DxContext {
         // Unified G-buffer pre-pass descriptor slots (always reserved). Minted
         // here so both the conditional init build below and the runtime
         // `apply_quality_settings` rebuild use the same fixed slots.
-        let gb_rtv_base = FRAMES
-            + 1
-            + bloom_count
-            + post_rtv_extra
-            + ssao_rtv_extra
-            + ssr_rtv_extra
-            + ssgi_rtv_extra
-            + decal_rtv_extra;
+        let gb_rtv_base =
+            FRAMES + 1 + bloom_count + post_rtv_extra + ssao_rtv_extra + decal_rtv_extra;
         let gb_rtv = |i: usize| D3D12_CPU_DESCRIPTOR_HANDLE {
             ptr: rtv_base.ptr + (gb_rtv_base + i) * rtv_descriptor_size,
         };
@@ -1549,10 +1499,6 @@ impl DxContext {
             ssao_ao_raw_srv: ssao_slots.ao_raw_srv,
             ssao_ao_rtv: ssao_slots.ao_rtv,
             ssao_ao_srv: ssao_slots.ao_srv,
-            ssr_output_rtv: ssr_slots.output_rtv,
-            ssr_output_srv: ssr_slots.output_srv,
-            ssgi_gi_rtv: ssgi_slots.gi_rtv,
-            ssgi_gi_srv: ssgi_slots.gi_srv,
             rt_output_rtv: rt_slots.output_rtv,
             rt_output_srv: rt_slots.output_srv,
             refl_composite: refl_composite_slots,
@@ -1567,6 +1513,9 @@ impl DxContext {
                 descriptors: &post_descriptors,
                 srv_heap: &srv_heap,
                 info_queue: info_queue.as_ref(),
+                // Pipelines and targets only: nothing encodes before the
+                // context exists, so the device needs no probe set.
+                probes: None,
                 hot_reload,
             },
             effects::EffectDimensions {
@@ -1594,8 +1543,6 @@ impl DxContext {
                     srv_gpu_for: &bloom_srv_gpu_for,
                 },
                 ssao: ssao_slots,
-                ssr: ssr_slots,
-                ssgi: ssgi_slots,
                 rt: rt_slots,
             },
         )?;

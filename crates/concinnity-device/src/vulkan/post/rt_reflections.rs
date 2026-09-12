@@ -252,7 +252,7 @@ pub(in crate::vulkan) struct RebuiltRtPipelines {
 }
 
 // Rebuild the RT pipelines from disk-resident GLSL against the existing layouts +
-// render pass. Same shape as `rebuild_ssr_pipelines`.
+// render pass.
 pub(in crate::vulkan) fn rebuild_rt_pipelines(
     device: &VkDevice,
     rt: &RtReflectionsResources,

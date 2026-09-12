@@ -1,645 +1,61 @@
 // src/vulkan/post/ssgi.rs
 //
-// Screen-space global illumination for the Vulkan backend: a refinement of SSR.
-// It reuses the SSR depth + normal pre-pass G-buffer (so turning SSGI on forces
-// that pre-pass to run even when the SSR resolve is off) and runs two fullscreen
-// passes on the hdr_resolve RMW chain after the main pass:
-//
-//   * gather:    per pixel, a cone of cosine-weighted hemisphere rays marched
-//                against the G-buffer, accumulating the lit scene color at
-//                each on-screen hit into an off-screen `gi` target.
-//   * composite: a depth-aware blur of that noisy `gi` target, additively
-//                blended (ONE / ONE) into `hdr_resolve` so the near-field
-//                indirect bounce layers on top of the IBL ambient.
-//
-// Mirrors src/directx/post/ssgi.rs and src/metal/post/ssgi.rs. Unlike DirectX,
-// the 32-byte `SsgiParams` rides as a push constant (the same shape the SSR
-// resolve uses for `SsrParams`), so there is no per-frame param UBO: the
-// descriptor sets carry only image samplers.
+// Vulkan's share of screen-space global illumination, which is its settings and
+// where the pass reads and writes this frame. The gather and composite -- their
+// pipelines, the reduced gather target and both draws -- are written once in
+// `concinnity_core::render::post::ssgi` and reach Vulkan through `VkPostDevice`.
 
 use ash::vk;
-use concinnity_core::gfx::render_types::SsgiParams;
 use concinnity_core::gfx::ssgi::SsgiSettings;
-use concinnity_core::render::fullscreen::{FullscreenPass, encode_fullscreen};
+use concinnity_core::render::post::ssgi::{SsgiInputs, SsgiPass, SsgiPipelines};
 
-use super::super::allocator::DeviceAllocator;
-use super::super::context::{HDR_FORMAT, VkContext};
-use super::super::pipeline::*;
-use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
-use super::super::texture::*;
-use crate::vulkan::owned::{
-    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
-    OwnedSampler, OwnedSetLayout, VkDevice,
-};
-use crate::vulkan::slang_builtins::SlangCompile;
-
-// SPIR-V blobs for the SSGI pipelines. Produced by [`compile_ssgi_shaders`];
-// consumed by `SsgiResources::new` at init and by `rebuild_ssgi_pipelines`
-// during shader hot-reload. Mirrors the matching SSR struct.
-pub(in crate::vulkan) struct SsgiShaders {
-    pub vs: Vec<u8>,
-    pub gather_fs: Vec<u8>,
-    pub composite_fs: Vec<u8>,
-}
-
-// Compile the SSGI stages from `src/shaders/ssgi.slang` plus the shared
-// single-source fullscreen vertex. `hot_reload` routes each source resolve
-// through the disk-first path.
-pub(in crate::vulkan) fn compile_ssgi_shaders(hot_reload: bool) -> Result<SsgiShaders, String> {
-    use super::super::{builtins, slang_builtins};
-    let ctx = builtins::Ctx::plain(hot_reload);
-    Ok(SsgiShaders {
-        vs: slang_builtins::FULLSCREEN_VERT.compile(&ctx)?,
-        gather_fs: slang_builtins::SSGI_GATHER.compile(&ctx)?,
-        composite_fs: slang_builtins::SSGI_COMPOSITE.compile(&ctx)?,
-    })
-}
+use crate::vulkan::context::VkContext;
+use crate::vulkan::post::post_device::{PostPipeline, PostTarget, VkPostDevice, post_extent};
 
 // SSGI resources held by `VkContext` when `PostProcessConfig.indirect_lighting`
-// is `ssgi`. All `vk::*` handles are owned here and freed on `destroy`.
+// is `ssgi`.
 pub(in crate::vulkan) struct SsgiResources {
     // Resolved authored tunables; turned into a per-frame `SsgiParams` push.
     pub(in crate::vulkan) settings: SsgiSettings,
-
-    // Render passes: gather writes the `gi` target, composite LOAD/blends into
-    // the HDR resolve.
-    gather_render_pass: OwnedRenderPass,
-    composite_render_pass: OwnedRenderPass,
-
-    // One set layout shared by both passes (binding 0 = scene/gi, binding 1 =
-    // gbuffer) + one pipeline layout (that set + the SsgiParams push range).
-    _set_layout: OwnedSetLayout,
-    pipeline_layout: OwnedPipelineLayout,
-    gather_pso: OwnedPipeline,
-    composite_pso: OwnedPipeline,
-
-    _descriptor_pool: OwnedDescriptorPool,
-    // Per-frame gather sets: each binds that frame's HDR resolve as the scene
-    // input (binding 0) + that frame's G-buffer (binding 1).
-    gather_sets: Vec<vk::DescriptorSet>,
-    // Per-frame composite sets: the gi target (binding 0, shared) + that frame's
-    // G-buffer (binding 1). Per-frame because the unified G-buffer is a per-frame
-    // target, so the composite must sample its own frame's normal+depth.
-    composite_sets: Vec<vk::DescriptorSet>,
-
-    // Linear-clamp sampler the passes read scene / gi / G-buffer through.
-    sampler: OwnedSampler,
-
-    // Resolution-dependent targets (rebuilt on swapchain resize).
-    gi: GpuImage,
-    // The `gi_scale`-reduced gather extent (the gi target + gather framebuffer
-    // size). The gather pass rasterizes at this extent; the composite stays at
-    // full render resolution and bilateral-upsamples the gi target.
-    gi_extent: vk::Extent2D,
-    gather_framebuffer: OwnedFramebuffer,
-    // One per HDR-resolve slot: the composite LOAD/blends into each frame's
-    // resolved scene in place.
-    composite_framebuffers: Vec<OwnedFramebuffer>,
-}
-
-// Broad SUBPASS_EXTERNAL dependencies shared by both SSGI render passes. The
-// `dep_in` synchronizes every prior color write *and* shader read (the main
-// pass's hdr_resolve, the SSR pre-pass's G-buffer, the gather's gi) against this
-// pass's reads + writes; the `dep_out` makes this pass's color write available
-// to the next pass's fragment sample. Same shape as the SSR resolve + decal
-// render-pass dependencies that already run clean under the validation layer.
-fn ssgi_external_deps() -> [vk::SubpassDependency; 2] {
-    let dep_in = vk::SubpassDependency::default()
-        .src_subpass(vk::SUBPASS_EXTERNAL)
-        .dst_subpass(0)
-        .src_stage_mask(
-            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                | vk::PipelineStageFlags::FRAGMENT_SHADER,
-        )
-        .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE | vk::AccessFlags::SHADER_READ)
-        .dst_stage_mask(
-            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                | vk::PipelineStageFlags::FRAGMENT_SHADER,
-        )
-        .dst_access_mask(
-            vk::AccessFlags::COLOR_ATTACHMENT_WRITE
-                | vk::AccessFlags::COLOR_ATTACHMENT_READ
-                | vk::AccessFlags::SHADER_READ,
-        );
-    let dep_out = vk::SubpassDependency::default()
-        .src_subpass(0)
-        .dst_subpass(vk::SUBPASS_EXTERNAL)
-        .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-        .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-        .dst_stage_mask(vk::PipelineStageFlags::FRAGMENT_SHADER)
-        .dst_access_mask(vk::AccessFlags::SHADER_READ);
-    [dep_in, dep_out]
-}
-
-// Gather render pass: one HDR-format color attachment (`gi`). The gather
-// overwrites every pixel so `DONT_CARE` is safe on load; ends shader-readable
-// for the composite to sample.
-fn create_gather_render_pass(device: &VkDevice) -> Result<OwnedRenderPass, String> {
-    let attachment = vk::AttachmentDescription::default()
-        .format(HDR_FORMAT)
-        .samples(vk::SampleCountFlags::TYPE_1)
-        .load_op(vk::AttachmentLoadOp::DONT_CARE)
-        .store_op(vk::AttachmentStoreOp::STORE)
-        .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-        .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-        .initial_layout(vk::ImageLayout::UNDEFINED)
-        .final_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
-    let color_ref = vk::AttachmentReference::default()
-        .attachment(0)
-        .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
-    let subpass = vk::SubpassDescription::default()
-        .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-        .color_attachments(std::slice::from_ref(&color_ref));
-    let deps = ssgi_external_deps();
-    let info = vk::RenderPassCreateInfo::default()
-        .attachments(std::slice::from_ref(&attachment))
-        .subpasses(std::slice::from_ref(&subpass))
-        .dependencies(&deps);
-    device
-        .create_render_pass(&info)
-        .map_err(|e| format!("SSGI gather render pass: {e}"))
-}
-
-// Composite render pass: LOAD the HDR resolve, additively blend the denoised
-// indirect term, STORE. Stays in SHADER_READ_ONLY_OPTIMAL in + out so the next
-// RMW pass (Decals / Fog / SSR resolve) samples it unchanged. Mirrors
-// `create_decal_render_pass`.
-fn create_composite_render_pass(device: &VkDevice) -> Result<OwnedRenderPass, String> {
-    let attachment = vk::AttachmentDescription::default()
-        .format(HDR_FORMAT)
-        .samples(vk::SampleCountFlags::TYPE_1)
-        .load_op(vk::AttachmentLoadOp::LOAD)
-        .store_op(vk::AttachmentStoreOp::STORE)
-        .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-        .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-        .initial_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .final_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
-    let color_ref = vk::AttachmentReference::default()
-        .attachment(0)
-        .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
-    let subpass = vk::SubpassDescription::default()
-        .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-        .color_attachments(std::slice::from_ref(&color_ref));
-    let deps = ssgi_external_deps();
-    let info = vk::RenderPassCreateInfo::default()
-        .attachments(std::slice::from_ref(&attachment))
-        .subpasses(std::slice::from_ref(&subpass))
-        .dependencies(&deps);
-    device
-        .create_render_pass(&info)
-        .map_err(|e| format!("SSGI composite render pass: {e}"))
-}
-
-// Allocate a single-format color render target usable as both attachment and
-// sampled texture. Mirrors the SSR `create_color_target`.
-fn create_gi_target(
-    alloc: &DeviceAllocator,
-    device: &VkDevice,
-    width: u32,
-    height: u32,
-) -> Result<GpuImage, String> {
-    let pooled = create_image(
-        alloc,
-        &ImageSpec {
-            width,
-            height,
-            format: HDR_FORMAT,
-            tiling: vk::ImageTiling::OPTIMAL,
-            usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
-            mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            samples: vk::SampleCountFlags::TYPE_1,
-        },
-    )?;
-    let image = pooled.image();
-    let view = create_image_view(device, image, HDR_FORMAT, vk::ImageAspectFlags::COLOR)?;
-    Ok(GpuImage::from_pooled(pooled, view))
-}
-
-// Build one fullscreen SSGI pipeline. No vertex input (the fullscreen triangle
-// is procedural in the VS); no depth. `additive` configures an `ONE / ONE` add
-// blend (the composite blends into the scene) vs. a plain write (the gather
-// fills its own `gi` target).
-fn create_ssgi_pipeline(
-    device: &VkDevice,
-    render_pass: vk::RenderPass,
-    layout: vk::PipelineLayout,
-    vert_spv: &[u8],
-    frag_spv: &[u8],
-    additive: bool,
-) -> Result<OwnedPipeline, String> {
-    let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
-    let stages = modules.infos();
-    let vert_input = vk::PipelineVertexInputStateCreateInfo::default();
-    let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
-        .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
-    let viewport_state = vk::PipelineViewportStateCreateInfo::default()
-        .viewport_count(1)
-        .scissor_count(1);
-    let raster = vk::PipelineRasterizationStateCreateInfo::default()
-        .polygon_mode(vk::PolygonMode::FILL)
-        .line_width(1.0)
-        .cull_mode(vk::CullModeFlags::NONE)
-        .front_face(vk::FrontFace::COUNTER_CLOCKWISE);
-    let multisample = vk::PipelineMultisampleStateCreateInfo::default()
-        .rasterization_samples(vk::SampleCountFlags::TYPE_1);
-    let depth = vk::PipelineDepthStencilStateCreateInfo::default()
-        .depth_test_enable(false)
-        .depth_write_enable(false)
-        .depth_compare_op(vk::CompareOp::ALWAYS);
-    let blend_attach = if additive {
-        vk::PipelineColorBlendAttachmentState::default()
-            .color_write_mask(vk::ColorComponentFlags::RGBA)
-            .blend_enable(true)
-            .src_color_blend_factor(vk::BlendFactor::ONE)
-            .dst_color_blend_factor(vk::BlendFactor::ONE)
-            .color_blend_op(vk::BlendOp::ADD)
-            .src_alpha_blend_factor(vk::BlendFactor::ONE)
-            .dst_alpha_blend_factor(vk::BlendFactor::ONE)
-            .alpha_blend_op(vk::BlendOp::ADD)
-    } else {
-        vk::PipelineColorBlendAttachmentState::default()
-            .color_write_mask(vk::ColorComponentFlags::RGBA)
-            .blend_enable(false)
-    };
-    let blend = vk::PipelineColorBlendStateCreateInfo::default()
-        .attachments(std::slice::from_ref(&blend_attach));
-    let dyn_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-    let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dyn_states);
-
-    let info = vk::GraphicsPipelineCreateInfo::default()
-        .stages(&stages)
-        .vertex_input_state(&vert_input)
-        .input_assembly_state(&input_assembly)
-        .viewport_state(&viewport_state)
-        .rasterization_state(&raster)
-        .multisample_state(&multisample)
-        .depth_stencil_state(&depth)
-        .color_blend_state(&blend)
-        .dynamic_state(&dynamic)
-        .layout(layout)
-        .render_pass(render_pass)
-        .subpass(0);
-    let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &info)
-        .map_err(|e| format!("create ssgi pso: {e}"))?;
-    Ok(pipeline)
-}
-
-// Replacement SSGI pipelines built by the hot-reload pass.
-pub(in crate::vulkan) struct RebuiltSsgiPipelines {
-    pub gather: OwnedPipeline,
-    pub composite: OwnedPipeline,
-}
-
-// Rebuild both SSGI pipelines from disk-resident GLSL source against the
-// existing layout + render passes. Same shape as `rebuild_ssr_pipelines`.
-pub(in crate::vulkan) fn rebuild_ssgi_pipelines(
-    device: &VkDevice,
-    ssgi: &SsgiResources,
-    hot_reload: bool,
-) -> Result<RebuiltSsgiPipelines, String> {
-    let shaders = compile_ssgi_shaders(hot_reload)?;
-    let gather = create_ssgi_pipeline(
-        device,
-        ssgi.gather_render_pass.handle(),
-        ssgi.pipeline_layout.handle(),
-        &shaders.vs,
-        &shaders.gather_fs,
-        false,
-    )?;
-    let composite = create_ssgi_pipeline(
-        device,
-        ssgi.composite_render_pass.handle(),
-        ssgi.pipeline_layout.handle(),
-        &shaders.vs,
-        &shaders.composite_fs,
-        true,
-    )?;
-    Ok(RebuiltSsgiPipelines { gather, composite })
-}
-
-// The Vulkan device handles the SSGI resources are built and rebuilt against.
-// These three always travel together, so they ride as one bundle through `new`
-// and `rebuild`.
-#[derive(Clone, Copy)]
-pub(in crate::vulkan) struct SsgiDevice<'a> {
-    pub alloc: &'a DeviceAllocator,
-    pub device: &'a VkDevice,
-}
-
-// The image views `SsgiResources::new` wires its descriptor sets + framebuffers
-// against. `hdr_resolve_views` feeds the per-frame gather scene input + the
-// composite framebuffers; `gbuffer_view` is the SSR pre-pass G-buffer (view
-// normal + linear depth) every set samples.
-#[derive(Clone, Copy)]
-pub(in crate::vulkan) struct SsgiInputViews<'a> {
-    pub hdr_resolve_views: &'a [vk::ImageView],
-    pub gbuffer_view: vk::ImageView,
+    pass: SsgiPass<PostPipeline, PostTarget>,
 }
 
 impl SsgiResources {
-    // Build every SSGI resource. `views.hdr_resolve_views` feeds the per-frame
-    // gather scene input + the composite framebuffers; `views.gbuffer_view` is
-    // the SSR pre-pass G-buffer (view normal + linear depth) every set samples.
+    // Build both pipelines and the gather target for a render resolution of
+    // `extent`.
     pub(in crate::vulkan) fn new(
-        dev: SsgiDevice<'_>,
-        width: u32,
-        height: u32,
-        frames: usize,
+        device: &VkPostDevice,
         settings: SsgiSettings,
-        views: SsgiInputViews<'_>,
-        hot_reload: bool,
+        extent: vk::Extent2D,
     ) -> Result<Self, String> {
-        let SsgiDevice { alloc, device } = dev;
-        let SsgiInputViews {
-            hdr_resolve_views,
-            gbuffer_view,
-        } = views;
-        let gather_render_pass = create_gather_render_pass(device)?;
-        let composite_render_pass = create_composite_render_pass(device)?;
-
-        // set 0: binding 0 = scene/gi, binding 1 = gbuffer. Shared by both passes.
-        let set_layout = create_descriptor_set_layout(
-            device,
-            &[
-                (
-                    0,
-                    vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                    vk::ShaderStageFlags::FRAGMENT,
-                ),
-                (
-                    1,
-                    vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                    vk::ShaderStageFlags::FRAGMENT,
-                ),
-            ],
-        )?;
-
-        let push = vk::PushConstantRange::default()
-            .stage_flags(vk::ShaderStageFlags::FRAGMENT)
-            .offset(0)
-            .size(std::mem::size_of::<SsgiParams>() as u32);
-        let set_layouts = [set_layout.handle()];
-        let pipeline_layout = device
-            .create_pipeline_layout(
-                &vk::PipelineLayoutCreateInfo::default()
-                    .set_layouts(&set_layouts)
-                    .push_constant_ranges(std::slice::from_ref(&push)),
-            )
-            .map_err(|e| format!("ssgi pipeline layout: {e}"))?;
-
-        let shaders = compile_ssgi_shaders(hot_reload)?;
-        let gather_pso = create_ssgi_pipeline(
-            device,
-            gather_render_pass.handle(),
-            pipeline_layout.handle(),
-            &shaders.vs,
-            &shaders.gather_fs,
-            false,
-        )?;
-        let composite_pso = create_ssgi_pipeline(
-            device,
-            composite_render_pass.handle(),
-            pipeline_layout.handle(),
-            &shaders.vs,
-            &shaders.composite_fs,
-            true,
-        )?;
-
-        // Pool: `frames` gather sets + `frames` composite sets, 2 samplers each.
-        // Both are per-frame so each binds its own frame's unified G-buffer.
-        let sampler_count = frames as u32 * 2 * 2;
-        let pool_size = vk::DescriptorPoolSize::default()
-            .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .descriptor_count(sampler_count);
-        let descriptor_pool = device
-            .create_descriptor_pool(
-                &vk::DescriptorPoolCreateInfo::default()
-                    .pool_sizes(std::slice::from_ref(&pool_size))
-                    .max_sets(frames as u32 * 2),
-            )
-            .map_err(|e| format!("ssgi descriptor pool: {e}"))?;
-
-        let gather_layouts: Vec<_> = (0..frames).map(|_| set_layout.handle()).collect();
-        let gather_sets = alloc_descriptor_sets(device, descriptor_pool.handle(), &gather_layouts)?;
-        let composite_layouts: Vec<_> = (0..frames).map(|_| set_layout.handle()).collect();
-        let composite_sets =
-            alloc_descriptor_sets(device, descriptor_pool.handle(), &composite_layouts)?;
-
-        let sampler = create_sampler_linear_clamp(device)?;
-
-        let mut me = Self {
+        Ok(Self {
             settings,
-            gather_render_pass,
-            composite_render_pass,
-            _set_layout: set_layout,
-            pipeline_layout,
-            gather_pso,
-            composite_pso,
-            _descriptor_pool: descriptor_pool,
-            gather_sets,
-            composite_sets,
-            sampler,
-            // Placeholder; replaced by build_targets below.
-            gi: GpuImage::null(),
-            gi_extent: vk::Extent2D {
-                width: 1,
-                height: 1,
-            },
-            gather_framebuffer: OwnedFramebuffer::null(),
-            composite_framebuffers: Vec::new(),
-        };
-        me.build_targets(alloc, device, width, height, hdr_resolve_views)?;
-        me.wire_sets(
-            device,
-            hdr_resolve_views,
-            std::slice::from_ref(&gbuffer_view),
-        );
-        Ok(me)
+            pass: SsgiPass::new(device, settings.gi_scale, post_extent(extent))?,
+        })
     }
 
-    // Allocate (or re-allocate) the resolution-dependent `gi` target + the
-    // gather / composite framebuffers at the given extent.
-    fn build_targets(
-        &mut self,
-        alloc: &DeviceAllocator,
-        device: &VkDevice,
-        width: u32,
-        height: u32,
-        hdr_resolve_views: &[vk::ImageView],
-    ) -> Result<(), String> {
-        let w = width.max(1);
-        let h = height.max(1);
-        // The gather runs at `gi_scale`-reduced resolution; the composite (which
-        // LOAD/blends into the full-res HDR resolve) bilateral-upsamples it back,
-        // reading the gi texture's own dimensions for the tap stride. So the gi
-        // target + the gather framebuffer shrink while the composite framebuffers
-        // stay at full render resolution. Mirrors metal/post/ssgi.
-        let (gw, gh) = self.settings.gi_dimensions(w, h);
-        self.gi_extent = vk::Extent2D {
-            width: gw,
-            height: gh,
-        };
-        self.gi = create_gi_target(alloc, device, gw, gh)?;
-        self.gather_framebuffer = device
-            .create_framebuffer(
-                &vk::FramebufferCreateInfo::default()
-                    .render_pass(self.gather_render_pass.handle())
-                    .attachments(std::slice::from_ref(&self.gi.view))
-                    .width(gw)
-                    .height(gh)
-                    .layers(1),
-            )
-            .map_err(|e| format!("ssgi gather framebuffer: {e}"))?;
-        let mut fbs = Vec::with_capacity(hdr_resolve_views.len());
-        for &view in hdr_resolve_views {
-            let fb = device
-                .create_framebuffer(
-                    &vk::FramebufferCreateInfo::default()
-                        .render_pass(self.composite_render_pass.handle())
-                        .attachments(std::slice::from_ref(&view))
-                        .width(w)
-                        .height(h)
-                        .layers(1),
-                )
-                .map_err(|e| format!("ssgi composite framebuffer: {e}"))?;
-            fbs.push(fb);
-        }
-        self.composite_framebuffers = fbs;
-        Ok(())
-    }
-
-    // Wire the per-frame gather sets (scene = HDR resolve, gbuffer) and the
-    // per-frame composite sets (gi, gbuffer). Called after `build_targets` (init
-    // or resize) so the sets see the current images.
-    //
-    // When the unified G-buffer pre-pass is active, `gbuffer_views` carries its
-    // per-frame normal+depth views and set `i` binds slot `i`; when the slice
-    // has a single entry it is shared across frames (the legacy SSR pre-pass
-    // G-buffer, a single image). The gather scene input + composite gi are
-    // per-frame / shared respectively as before.
-    pub(in crate::vulkan) fn wire_sets(
-        &self,
-        device: &VkDevice,
-        hdr_resolve_views: &[vk::ImageView],
-        gbuffer_views: &[vk::ImageView],
-    ) {
-        let gb_view = |i: usize| gbuffer_views[i % gbuffer_views.len().max(1)];
-        for (i, &set) in self.gather_sets.iter().enumerate() {
-            let gb_info = vk::DescriptorImageInfo::default()
-                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(gb_view(i))
-                .sampler(self.sampler.handle());
-            let scene_view = hdr_resolve_views[i % hdr_resolve_views.len().max(1)];
-            let scene_info = vk::DescriptorImageInfo::default()
-                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(scene_view)
-                .sampler(self.sampler.handle());
-            let writes = [
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(0)
-                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .image_info(std::slice::from_ref(&scene_info)),
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(1)
-                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .image_info(std::slice::from_ref(&gb_info)),
-            ];
-            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-            // every set and resource it names belongs to this device.
-            unsafe { device.update_descriptor_sets(&writes, &[]) };
-        }
-        let gi_info = vk::DescriptorImageInfo::default()
-            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(self.gi.view)
-            .sampler(self.sampler.handle());
-        for (i, &set) in self.composite_sets.iter().enumerate() {
-            let gb_info = vk::DescriptorImageInfo::default()
-                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(gb_view(i))
-                .sampler(self.sampler.handle());
-            let writes = [
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(0)
-                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .image_info(std::slice::from_ref(&gi_info)),
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(1)
-                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .image_info(std::slice::from_ref(&gb_info)),
-            ];
-            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-            // every set and resource it names belongs to this device.
-            unsafe { device.update_descriptor_sets(&writes, &[]) };
-        }
-    }
-
-    // Re-point every gather + composite set's G-buffer binding at the unified
-    // pre-pass per-frame normal+depth views. Called by the caller (init /
-    // resize) when the unified G-buffer pre-pass is active. The scene input + gi
-    // bindings are left untouched (already wired by `wire_sets`).
-    pub(in crate::vulkan) fn wire_sets_gbuffer(
-        &self,
-        device: &VkDevice,
-        hdr_resolve_views: &[vk::ImageView],
-        gbuffer_views: &[vk::ImageView],
-    ) {
-        self.wire_sets(device, hdr_resolve_views, gbuffer_views);
-    }
-
-    fn destroy_targets(&mut self, _device: &VkDevice) {
-        self.gather_framebuffer = OwnedFramebuffer::null();
-        self.composite_framebuffers.clear();
-        if self.gi.image != vk::Image::null() {
-            self.gi = GpuImage::null();
-        }
-    }
-
-    // Rebuild the resolution-dependent targets at a new swapchain extent and
-    // re-wire the descriptor sets. The caller has already idled the device and
-    // rebuilt the SSR pre-pass, so `gbuffer_views` is current.
+    // Recreate the gather target at a new render extent. The caller has already
+    // idled the device and dropped the framebuffers naming the old view.
     pub(in crate::vulkan) fn rebuild(
         &mut self,
-        dev: SsgiDevice<'_>,
-        width: u32,
-        height: u32,
-        hdr_resolve_views: &[vk::ImageView],
-        gbuffer_views: &[vk::ImageView],
+        device: &VkPostDevice,
+        extent: vk::Extent2D,
     ) -> Result<(), String> {
-        let SsgiDevice { alloc, device } = dev;
-        self.destroy_targets(device);
-        self.build_targets(alloc, device, width, height, hdr_resolve_views)?;
-        self.wire_sets(device, hdr_resolve_views, gbuffer_views);
-        Ok(())
+        self.pass.resize(device, post_extent(extent))
     }
 
-    // Swap freshly-built pipelines into the live resources after a hot-reload.
-    // The caller has already `device_wait_idle`'d.
-    pub(in crate::vulkan) fn swap_pipelines(&mut self, rebuilt: RebuiltSsgiPipelines) {
-        self.gather_pso = rebuilt.gather;
-        self.composite_pso = rebuilt.composite;
-    }
-
-    // Destroy every SSGI resource. The caller has already idled the device.
-    pub(in crate::vulkan) fn destroy(&mut self, device: &VkDevice) {
-        self.destroy_targets(device);
+    // Swap in freshly built pipelines after a hot reload. The caller has already
+    // idled the device.
+    pub(in crate::vulkan) fn swap_pipelines(&mut self, pipelines: SsgiPipelines<PostPipeline>) {
+        self.pass.swap_pipelines(pipelines);
     }
 }
 
 impl VkContext {
-    // Encode the SSGI gather + composite. The gather marches hemisphere rays
-    // over the SSR pre-pass G-buffer and writes the noisy indirect radiance into
-    // the `gi` target; the composite depth-aware-blurs it and additively blends
-    // it into this frame's HDR resolve. Runs on the hdr_resolve RMW chain after
-    // the main pass; only dispatched when SSGI is on (and the SSR pre-pass
-    // G-buffer therefore exists).
-    //
-    // Both sub-passes are single-draw fullscreen passes, so each runs through the
-    // shared `gfx::fullscreen` driver; the render-pass bracket + viewport /
-    // scissor live once in `VkContext::begin/end_fullscreen_pass`.
+    // Encode the SSGI gather + composite: hemisphere rays marched over the
+    // G-buffer into the reduced gather target, then blurred and added into this
+    // frame's HDR resolve. Runs on the hdr_resolve read-modify-write chain after
+    // the main pass.
     pub(in crate::vulkan) fn encode_ssgi(
         &self,
         cmd: vk::CommandBuffer,
@@ -647,129 +63,24 @@ impl VkContext {
         fov_y_radians: f32,
         aspect: f32,
     ) {
-        // Resolve the pass's resources up front, before constructing either
-        // encoder, so the driver never leaves a render pass half-open. SSGI
-        // gathers against the SSR pre-pass G-buffer; if it is absent there is
-        // nothing to gather against, so skip rather than read a stale set.
         let Some(ssgi) = &self.ssgi else { return };
-        if self.ssr.is_none() {
-            return;
-        }
-        // The view params are shared by both sub-passes; the positive-height
-        // viewport (set by begin_fullscreen_pass) matches the negative-height
-        // pre-pass G-buffer, the convention ssgi_view_pos / ssgi_project assume.
+        // With no G-buffer there is nothing to gather against, so skip rather
+        // than read a stale view.
+        let Some(gbuffer) = &self.gbuffer else { return };
         let params = ssgi.settings.params(fov_y_radians, aspect);
-
-        // Gather: hemisphere ray-march over the G-buffer -> gi target, at the
-        // `gi_scale`-reduced gather extent.
-        encode_fullscreen(
-            &SsgiFullscreenPass {
-                ctx: self,
-                ssgi,
-                render_pass: ssgi.gather_render_pass.handle(),
-                framebuffer: ssgi.gather_framebuffer.handle(),
-                extent: ssgi.gi_extent,
-                pso: &ssgi.gather_pso.handle(),
-                set: ssgi.gather_sets[frame_idx],
-                params: &params,
-            },
+        let device = self.post_device(frame_idx);
+        let scene = self.hdr_scene_attachment(frame_idx);
+        if let Err(e) = ssgi.pass.encode(
+            &device,
             &cmd,
-        );
-
-        // Composite: depth-aware blur + upsample of gi, additively blended into
-        // the scene at full render resolution.
-        encode_fullscreen(
-            &SsgiFullscreenPass {
-                ctx: self,
-                ssgi,
-                render_pass: ssgi.composite_render_pass.handle(),
-                framebuffer: ssgi.composite_framebuffers[frame_idx].handle(),
-                extent: self.render_extent,
-                pso: &ssgi.composite_pso.handle(),
-                set: ssgi.composite_sets[frame_idx],
-                params: &params,
+            SsgiInputs {
+                scene: scene.view,
+                scene_target: scene,
+                normal_depth: gbuffer.normal_depth_view(frame_idx),
             },
-            &cmd,
-        );
-    }
-}
-
-// Encoder for one SSGI fullscreen sub-pass (gather or composite): the render
-// pass + framebuffer + pipeline + descriptor set that distinguish the two, plus
-// the shared per-frame SsgiParams push. The render-pass bracket + viewport /
-// scissor live in `VkContext::begin/end_fullscreen_pass` (post/fullscreen.rs);
-// only the SSGI-specific bind + draw is here. Constructed + driven by
-// `encode_ssgi` through `gfx::fullscreen::encode_fullscreen`.
-struct SsgiFullscreenPass<'a> {
-    ctx: &'a VkContext,
-    ssgi: &'a SsgiResources,
-    render_pass: vk::RenderPass,
-    framebuffer: vk::Framebuffer,
-    // Target extent: the reduced gi extent for the gather, the full render
-    // extent for the composite.
-    extent: vk::Extent2D,
-    pso: &'a vk::Pipeline,
-    set: vk::DescriptorSet,
-    params: &'a SsgiParams,
-}
-
-impl FullscreenPass for SsgiFullscreenPass<'_> {
-    type Rec = vk::CommandBuffer;
-
-    fn begin(&self, cmd: &Self::Rec) {
-        self.ctx
-            .begin_fullscreen_pass_sized(*cmd, self.render_pass, self.framebuffer, self.extent);
-    }
-
-    fn draw(&self, cmd: &Self::Rec) {
-        let cmd = *cmd;
-        let device = &self.ctx.device;
-        // SAFETY: `SsgiParams` is `#[repr(C)]` with only 4-byte scalar fields, so it has no padding
-        // and all 32 of its bytes are initialized; the slice borrows it and does not outlive it.
-        let push = unsafe {
-            std::slice::from_raw_parts(
-                self.params as *const SsgiParams as *const u8,
-                std::mem::size_of::<SsgiParams>(),
-            )
-        };
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, *self.pso);
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                self.ssgi.pipeline_layout.handle(),
-                0,
-                std::slice::from_ref(&self.set),
-                &[],
-            );
-            device.cmd_push_constants(
-                cmd,
-                self.ssgi.pipeline_layout.handle(),
-                vk::ShaderStageFlags::FRAGMENT,
-                0,
-                push,
-            );
-            device.cmd_draw(cmd, 3, 1, 0, 0);
+            &params,
+        ) {
+            tracing::error!("SSGI: {e}");
         }
-    }
-
-    fn end(&self, cmd: &Self::Rec) {
-        self.ctx.end_fullscreen_pass(*cmd);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    // The SSGI gather + composite + fullscreen GLSL all compile to SPIR-V. The
-    // CPU<->GPU `SsgiParams` std140 layout is guarded by
-    // `ssgi_params_layout_matches_shaders` in gfx::render_types.
-    #[test]
-    fn ssgi_shaders_compile() {
-        if !concinnity_slang::shader_tests_enabled() {
-            return;
-        }
-        super::compile_ssgi_shaders(false).expect("ssgi shaders compile");
     }
 }

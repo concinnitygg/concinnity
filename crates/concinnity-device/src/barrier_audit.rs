@@ -213,13 +213,6 @@ const AUDITS: &[BackendAudit] = &[
                 Reason::AttachmentLayout,
             ),
             (
-                "post/ssgi.rs",
-                ".final_layout(",
-                2,
-                Reason::AttachmentLayout,
-            ),
-            ("post/ssr.rs", ".final_layout(", 1, Reason::AttachmentLayout),
-            (
                 "post/pass_cache.rs",
                 ".final_layout(",
                 1,
@@ -256,8 +249,18 @@ const AUDITS: &[BackendAudit] = &[
             ("transparent.rs", ".ResourceBarrier(", 2, Reason::IntraPass),
             // The SSGI gather samples the scene the composite then blends into,
             // so this node reads and writes one resource; the graph models that
-            // as a single write and the gather borrows the read state.
-            ("post/ssgi.rs", ".ResourceBarrier(", 2, Reason::IntraPass),
+            // as a single write and the gather borrows the read state. One site,
+            // called on the way in and on the way out.
+            ("post/ssgi.rs", ".ResourceBarrier(", 1, Reason::IntraPass),
+            // The shared post seam's bracket for a target private to its pass
+            // (`PostTargetState::Pass`): the SSR reflection target and the SSGI
+            // gather target, which rest readable and never cross a node boundary.
+            (
+                "post/post_device.rs",
+                ".ResourceBarrier(",
+                2,
+                Reason::IntraPass,
+            ),
             // The same shape in two more bundled nodes, on targets the graph does
             // not model because they never cross a node boundary: SSAO's raw
             // occlusion, which its own blur consumes, and the RT reflection
@@ -277,10 +280,9 @@ const AUDITS: &[BackendAudit] = &[
             // The graph drives mip 0 (`bloom_top`) across the node boundary;
             // these order the steps within it.
             ("post/bloom.rs", ".ResourceBarrier(", 2, Reason::IntraPass),
-            // The shared fullscreen bracket, now used only by targets that live
-            // inside one node: the SSR / RT resolve output, the reflection blur,
-            // and the SSGI gather. Callers whose target the graph drives take
-            // `bind_fullscreen_rt` instead.
+            // The hand-written fullscreen bracket, used only by a target that
+            // lives inside one node: the reflection blur. Callers whose target
+            // the graph drives take `bind_fullscreen_rt` instead.
             (
                 "post/fullscreen.rs",
                 ".ResourceBarrier(",

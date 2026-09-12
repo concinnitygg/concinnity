@@ -1,20 +1,32 @@
-//! Backend-agnostic fullscreen-pass encoder seam, the first pilot of a hardware
-//! abstraction layer over the three render backends. The bloom
-//! prefilter -> downsample -> upsample chain is structurally identical on every
-//! backend, so its orchestration lives here once and each backend implements
-//! `BloomEncoder` to bind + draw one sub-pass in its own command stream.
+//! What order the two multi-draw post passes encode their sub-passes in, shared
+//! by every backend.
 //!
-//! Two associated types absorb the only real divergence, so the trait names no
+//! The bloom prefilter -> downsample -> upsample chain and the composite ->
+//! text overlay pass are structurally identical on every backend, so each one's
+//! loop lives here once and a backend implements the hooks that bind + draw one
+//! sub-pass in its own command stream. All three backends implement both.
+//!
+//! This shares orchestration only: every resource, layout and bind stays per
+//! backend, so a pass written against it is still written three times. The
+//! deeper seam beside it, `render::post`, shares the whole pass instead
+//! (pipeline, target, and one fullscreen draw over slot-indexed binds), so a
+//! pass written against that one is written once. A new post pass belongs
+//! there.
+//!
+//! What is left here is the two passes that are not a single draw. Converging
+//! them is open work, and neither is close: the composite writes the swapchain
+//! image and draws per-label geometry under its own scissor, and bloom's chain
+//! is a run of mips the render graph owns, none of which that seam models
+//! today.
+//!
+//! Two associated types absorb the only real divergence, so the traits name no
 //! backend types: `Rec` hides the per-backend command recorder, and `Args`
 //! carries the per-invocation binding context (DirectX passes the scene-color
 //! SRV its prefilter samples; Vulkan threads the frame-in-flight index that
-//! selects its per-frame framebuffers + descriptor sets). Everything else each
-//! impl reads from `&self`, consistent with the read-only parallel-encode
-//! contract.
-//!
-//! Implemented by DirectX + Vulkan. Metal keeps its hand-rolled `encode_bloom`,
-//! already factored through its own `fullscreen_pass`, so this seam is unused
-//! (dead code) on a Metal build.
+//! selects its per-frame framebuffers + descriptor sets; Metal, which binds per
+//! sub-pass encoder, carries what it needs on the encoder value itself and
+//! passes `()`). Everything else each impl reads from `&self`, consistent with
+//! the read-only parallel-encode contract.
 
 use crate::gfx::render_types::TextDrawCall;
 use crate::math::{ceil, floor};
@@ -80,8 +92,10 @@ pub fn text_upload_bytes(text_calls: &[TextDrawCall], align: u64) -> u64 {
 
 /// Per-backend hooks the shared bloom driver encodes through.
 pub trait BloomEncoder {
-    /// Per-backend command recorder (DX `ID3D12GraphicsCommandList`, VK `vk::CommandBuffer`).
-    type Rec;
+    /// Per-backend command recorder (DX `ID3D12GraphicsCommandList`, VK
+    /// `vk::CommandBuffer`, Metal the command buffer each sub-pass opens its own
+    /// render encoder on).
+    type Rec: ?Sized;
     /// Per-invocation binding context (DX scene-color SRV handle, VK frame index).
     type Args;
 
@@ -90,35 +104,50 @@ pub trait BloomEncoder {
     /// One-time per-encode preamble, run once before the sub-passes and on the
     /// same recorder: state every sub-pass shares belongs here, not in the
     /// per-mip hooks (DX root signature / heap / IA state and the post-process
-    /// root constants; VK the post-process push constants).
-    fn begin_bloom(&self, rec: &Self::Rec, args: &Self::Args);
+    /// root constants; VK the post-process push constants). Metal binds per
+    /// sub-pass encoder, so it has nothing to do here.
+    fn begin_bloom(&self, rec: &Self::Rec, args: &Self::Args) -> Result<(), String>;
     /// Prefilter: scene color -> mip 0 (soft-knee threshold + Karis average).
-    fn bloom_prefilter(&self, rec: &Self::Rec, args: &Self::Args);
+    fn bloom_prefilter(&self, rec: &Self::Rec, args: &Self::Args) -> Result<(), String>;
     /// Downsample: mip `dst - 1` -> mip `dst`.
-    fn bloom_downsample(&self, rec: &Self::Rec, args: &Self::Args, dst: usize);
+    fn bloom_downsample(
+        &self,
+        rec: &Self::Rec,
+        args: &Self::Args,
+        dst: usize,
+    ) -> Result<(), String>;
     /// Upsample: mip `dst + 1` -> mip `dst`, additively blended.
-    fn bloom_upsample(&self, rec: &Self::Rec, args: &Self::Args, dst: usize);
+    fn bloom_upsample(&self, rec: &Self::Rec, args: &Self::Args, dst: usize) -> Result<(), String>;
 }
 
 /// The bloom chain orchestration, previously hand-duplicated in each backend's
 /// `encode_bloom`. On return, mip 0 holds the accumulated glow the composite pass
 /// samples.
-pub fn encode_bloom_chain<E: BloomEncoder>(enc: &E, rec: &E::Rec, args: E::Args) {
+///
+/// A sub-pass reports failure where opening its own encoder can fail (Metal),
+/// which abandons the chain: the mips below the failure hold no glow, and the
+/// caller fails the frame rather than compositing a half-built chain.
+pub fn encode_bloom_chain<E: BloomEncoder>(
+    enc: &E,
+    rec: &E::Rec,
+    args: E::Args,
+) -> Result<(), String> {
     let n = enc.bloom_mip_count();
     if n == 0 {
-        return;
+        return Ok(());
     }
-    enc.begin_bloom(rec, &args);
+    enc.begin_bloom(rec, &args)?;
     // Prefilter: scene -> mip 0.
-    enc.bloom_prefilter(rec, &args);
+    enc.bloom_prefilter(rec, &args)?;
     // Downsample chain: mip i-1 -> mip i.
     for dst in 1..n {
-        enc.bloom_downsample(rec, &args, dst);
+        enc.bloom_downsample(rec, &args, dst)?;
     }
     // Upsample chain: mip i+1 -> mip i, walking back down to mip 0.
     for dst in (0..n - 1).rev() {
-        enc.bloom_upsample(rec, &args, dst);
+        enc.bloom_upsample(rec, &args, dst)?;
     }
+    Ok(())
 }
 
 /// The text-overlay state one draw call would set that the previous call in the
@@ -176,14 +205,17 @@ impl TextBindCache {
 /// (which drives its own composite loop rather than this trait) writes the whole
 /// frame's geometry into its slot before the render graph runs.
 pub trait CompositeEncoder {
-    /// Per-backend command recorder (DX `ID3D12GraphicsCommandList`, VK `vk::CommandBuffer`).
-    type Rec;
+    /// Per-backend command recorder (DX `ID3D12GraphicsCommandList`, VK
+    /// `vk::CommandBuffer`, Metal the render encoder the caller opened for the
+    /// whole chain).
+    type Rec: ?Sized;
     /// Per-invocation binding context (see the trait doc).
     type Args;
 
     /// Begin the pass: target the swapchain image (DX transitions it to
     /// RENDER_TARGET + binds the RTV; VK begins the composite render pass) and set
-    /// the full-window viewport / scissor.
+    /// the full-window viewport / scissor. Nothing to do on a backend whose
+    /// recorder is itself the open pass, which is how Metal reaches the chain.
     fn begin_composite(&self, rec: &Self::Rec, args: &Self::Args);
     /// The fullscreen tonemap draw: bind the composite pipeline + its inputs
     /// (scene, bloom, LUT) + push constants, draw the fullscreen triangle.
@@ -196,26 +228,34 @@ pub trait CompositeEncoder {
     /// and draw. `cache` carries what the previous call in this pass left bound;
     /// consult it for the atlas and the scissor so a run of labels sharing either
     /// binds it once (see [`TextBindCache`]).
+    ///
+    /// `idx` is the call's position in the frame's list, for a backend whose
+    /// geometry was uploaded before the pass and is addressed by that position
+    /// (Metal). A backend that appends here ignores it. Every call is offered in
+    /// order, including one a backend then skips, so the position always matches.
     fn text_draw(
         &self,
         rec: &Self::Rec,
         args: &Self::Args,
+        idx: usize,
         call: &TextDrawCall,
         cache: &mut TextBindCache,
     ) -> Result<(), String>;
     /// End the pass: DX transitions the back-buffer back to PRESENT; VK ends the
-    /// render pass.
+    /// render pass. Runs however the chain leaves, a failed text draw included,
+    /// so no backend is left with a pass or a resource state half-open. Nothing
+    /// to do on a backend whose recorder ends its own pass when it drops, which
+    /// is how Metal reaches the chain.
     fn end_composite(&self, rec: &Self::Rec, args: &Self::Args);
 }
 
 /// The composite + text orchestration, previously hand-duplicated in each
-/// backend's `encode_composite_and_text`. An error mid-text propagates without
-/// closing the pass, matching the prior DX/VK behavior (the frame fails either
-/// way: the target is just left mis-stated). This is unused on Metal, where a
-/// render encoder must be `endEncoding`-ed before the command buffer commits:
-/// skipping `end_composite` on a text error would crash at commit, so Metal's
-/// `encode_composite_and_text` ends the encoder on any `?` with a `ScopedEncoder`
-/// RAII guard instead.
+/// backend's `encode_composite_and_text`.
+///
+/// A failed text draw ends the pass before it propagates: the frame fails either
+/// way, but a backend is never left holding an open pass or a mis-stated target
+/// (Metal rejects a command buffer committed with an encoder still open, which
+/// is what kept it off this driver while the error path skipped the end).
 pub fn encode_composite_chain<E: CompositeEncoder>(
     enc: &E,
     rec: &E::Rec,
@@ -224,59 +264,20 @@ pub fn encode_composite_chain<E: CompositeEncoder>(
 ) -> Result<(), String> {
     enc.begin_composite(rec, args);
     enc.composite_draw(rec, args);
+    let mut result = Ok(());
     if !text_calls.is_empty() && enc.begin_text(rec, args) {
         // One cache per pass: the text calls are encoded back to back into the
         // same recorder, so what one call binds is still bound for the next.
         let mut cache = TextBindCache::new();
-        for call in text_calls {
-            enc.text_draw(rec, args, call, &mut cache)?;
+        for (idx, call) in text_calls.iter().enumerate() {
+            result = enc.text_draw(rec, args, idx, call, &mut cache);
+            if result.is_err() {
+                break;
+            }
         }
     }
     enc.end_composite(rec, args);
-    Ok(())
-}
-
-/// A single-draw fullscreen post pass (SSR resolve, TAA resolve, ...): target a
-/// render target, bind a pipeline + inputs, draw one fullscreen triangle, restore.
-/// Unlike the bloom + composite chains (whose drivers hold a mip / text loop), a
-/// fullscreen pass has no loop, so the driver is a fixed begin -> draw -> end. The
-/// value is the shared per-backend lifecycle factored behind begin/end (DX: the
-/// PSR<->RENDER_TARGET barrier bracket + render-target bind; VK: the render-pass
-/// bracket), reused across every such pass instead of re-pasted per pass.
-///
-/// The inert-pass guard lives at each backend's call site: it resolves the pass's
-/// resources (returning early if a required one is absent) BEFORE constructing the
-/// encoder, so the driver always runs all three steps over a fully-resolved pass
-/// and can never leave a render pass / barrier half-open. There is no `Args`: each
-/// backend's encoder is a small struct holding the already-resolved references +
-/// per-call scalars, so the trait names no backend types (like `BloomEncoder`).
-///
-/// Implemented by DirectX + Vulkan. Metal keeps its own `fullscreen_pass` helper,
-/// which already factors this begin/draw/end skeleton, so this seam is unused
-/// (dead code) on a Metal build.
-pub trait FullscreenPass {
-    /// Per-backend command recorder (DX `ID3D12GraphicsCommandList`, VK `vk::CommandBuffer`).
-    type Rec;
-
-    /// Begin: bind the target render target + set the full-resolution viewport /
-    /// scissor. DX transitions the target PIXEL_SHADER_RESOURCE -> RENDER_TARGET,
-    /// binds its RTV + the SRV heap; VK begins the pass's render pass.
-    fn begin(&self, rec: &Self::Rec);
-    /// Bind the pipeline + inputs + per-frame params and draw the fullscreen
-    /// triangle (3 vertices; the vertex shader builds the triangle from the id).
-    fn draw(&self, rec: &Self::Rec);
-    /// End: DX transitions the target back to PIXEL_SHADER_RESOURCE; VK ends the
-    /// render pass.
-    fn end(&self, rec: &Self::Rec);
-}
-
-/// The fullscreen-pass orchestration. Trivial by design (a single draw), but kept
-/// as a driver so every fullscreen post pass shares one begin -> draw -> end
-/// contract across backends, matching `encode_bloom_chain` / `encode_composite_chain`.
-pub fn encode_fullscreen<E: FullscreenPass>(enc: &E, rec: &E::Rec) {
-    enc.begin(rec);
-    enc.draw(rec);
-    enc.end(rec);
+    result
 }
 
 #[cfg(test)]
@@ -435,10 +436,32 @@ mod tests {
     }
 
     // A mock bloom encoder recording each sub-pass in call order. The trait's
-    // associated types name no backend types, so both are `()`.
+    // associated types name no backend types, so both are `()`. `fail_at` is the
+    // log entry whose sub-pass reports failure, for the abandon-the-chain test.
     struct MockBloom {
         mips: usize,
         log: RefCell<Vec<String>>,
+        fail_at: Option<&'static str>,
+    }
+
+    impl MockBloom {
+        fn new(mips: usize) -> Self {
+            Self {
+                mips,
+                log: RefCell::new(Vec::new()),
+                fail_at: None,
+            }
+        }
+
+        // Record one sub-pass, reporting failure where the test asked for it.
+        fn step(&self, entry: String) -> Result<(), String> {
+            let failed = self.fail_at == Some(entry.as_str());
+            self.log.borrow_mut().push(entry);
+            if failed {
+                return Err("sub-pass failed".to_string());
+            }
+            Ok(())
+        }
     }
 
     impl BloomEncoder for MockBloom {
@@ -448,17 +471,17 @@ mod tests {
         fn bloom_mip_count(&self) -> usize {
             self.mips
         }
-        fn begin_bloom(&self, _rec: &(), _args: &()) {
-            self.log.borrow_mut().push("begin".into());
+        fn begin_bloom(&self, _rec: &(), _args: &()) -> Result<(), String> {
+            self.step("begin".to_string())
         }
-        fn bloom_prefilter(&self, _rec: &(), _args: &()) {
-            self.log.borrow_mut().push("prefilter".into());
+        fn bloom_prefilter(&self, _rec: &(), _args: &()) -> Result<(), String> {
+            self.step("prefilter".to_string())
         }
-        fn bloom_downsample(&self, _rec: &(), _args: &(), dst: usize) {
-            self.log.borrow_mut().push(format!("down{dst}"));
+        fn bloom_downsample(&self, _rec: &(), _args: &(), dst: usize) -> Result<(), String> {
+            self.step(format!("down{dst}"))
         }
-        fn bloom_upsample(&self, _rec: &(), _args: &(), dst: usize) {
-            self.log.borrow_mut().push(format!("up{dst}"));
+        fn bloom_upsample(&self, _rec: &(), _args: &(), dst: usize) -> Result<(), String> {
+            self.step(format!("up{dst}"))
         }
     }
 
@@ -466,11 +489,8 @@ mod tests {
     fn bloom_chain_encodes_prefilter_downsample_upsample_in_order() {
         // 3 mips: prefilter, then the downsample chain 1..3, then the upsample
         // chain walking back down (1, 0).
-        let enc = MockBloom {
-            mips: 3,
-            log: RefCell::new(Vec::new()),
-        };
-        encode_bloom_chain(&enc, &(), ());
+        let enc = MockBloom::new(3);
+        assert!(encode_bloom_chain(&enc, &(), ()).is_ok());
         assert_eq!(
             *enc.log.borrow(),
             ["begin", "prefilter", "down1", "down2", "up1", "up0"]
@@ -483,11 +503,8 @@ mod tests {
         // rely on them surviving every sub-pass, so the preamble must run
         // exactly once per chain, ahead of the first draw.
         for mips in 1..8 {
-            let enc = MockBloom {
-                mips,
-                log: RefCell::new(Vec::new()),
-            };
-            encode_bloom_chain(&enc, &(), ());
+            let enc = MockBloom::new(mips);
+            assert!(encode_bloom_chain(&enc, &(), ()).is_ok());
             let log = enc.log.borrow();
             assert_eq!(log.iter().filter(|e| *e == "begin").count(), 1);
             assert_eq!(log[0], "begin");
@@ -497,12 +514,20 @@ mod tests {
     #[test]
     fn bloom_chain_with_zero_mips_is_a_noop() {
         // Bloom off: the driver returns before touching the encoder at all.
-        let enc = MockBloom {
-            mips: 0,
-            log: RefCell::new(Vec::new()),
-        };
-        encode_bloom_chain(&enc, &(), ());
+        let enc = MockBloom::new(0);
+        assert!(encode_bloom_chain(&enc, &(), ()).is_ok());
         assert!(enc.log.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_failed_sub_pass_abandons_the_rest_of_the_bloom_chain() {
+        // A backend that opens an encoder per sub-pass can fail mid-chain. The
+        // mips past the failure are left unwritten rather than half-built, and
+        // the caller sees the error.
+        let mut enc = MockBloom::new(3);
+        enc.fail_at = Some("down1");
+        assert!(encode_bloom_chain(&enc, &(), ()).is_err());
+        assert_eq!(*enc.log.borrow(), ["begin", "prefilter", "down1"]);
     }
 
     // A mock composite encoder. `text_ready` is the `begin_text` return; when
@@ -547,13 +572,17 @@ mod tests {
             &self,
             _rec: &(),
             _args: &(),
-            _call: &TextDrawCall,
-            _cache: &mut TextBindCache,
+            idx: usize,
+            call: &TextDrawCall,
+            cache: &mut TextBindCache,
         ) -> Result<(), String> {
             let mut n = self.text_seen.borrow_mut();
+            // The driver's index and the encoder's own call count must agree, so
+            // a backend addressing pre-uploaded geometry by position can trust it.
+            assert_eq!(idx, *n);
             self.binds
                 .borrow_mut()
-                .push(_cache.atlas_changed(_call.atlas_slot));
+                .push(cache.atlas_changed(call.atlas_slot));
             self.log.borrow_mut().push(format!("text{}", *n));
             let fail = self.fail_at == Some(*n);
             *n += 1;
@@ -580,17 +609,18 @@ mod tests {
     }
 
     #[test]
-    fn composite_chain_propagates_text_error_without_ending() {
-        // The first text draw fails: the error propagates and, matching the
-        // prior DX/VK behavior, the pass is left open (no `end_composite`) and
-        // the remaining text calls are skipped.
+    fn composite_chain_ends_the_pass_before_propagating_a_text_error() {
+        // The first text draw fails: the remaining calls are skipped, the pass
+        // still ends (Metal rejects a command buffer committed with an encoder
+        // open), and the error reaches the caller.
         let enc = MockComposite::new(true, Some(0));
         let calls = [text_call(), text_call()];
         let r = encode_composite_chain(&enc, &(), &(), &calls);
         assert_eq!(r, Err("text upload failed".into()));
-        let log = enc.log.borrow();
-        assert_eq!(*log, ["begin", "draw", "begin_text", "text0"]);
-        assert!(!log.contains(&"end".to_string()), "pass must stay open");
+        assert_eq!(
+            *enc.log.borrow(),
+            ["begin", "draw", "begin_text", "text0", "end"]
+        );
     }
 
     #[test]
@@ -685,33 +715,5 @@ mod tests {
             assert!(encode_composite_chain(&enc, &(), &(), &calls).is_ok());
             assert_eq!(*enc.binds.borrow(), [true, false]);
         }
-    }
-
-    // A mock single-draw fullscreen pass recording its lifecycle.
-    struct MockFullscreen {
-        log: RefCell<Vec<String>>,
-    }
-
-    impl FullscreenPass for MockFullscreen {
-        type Rec = ();
-
-        fn begin(&self, _rec: &()) {
-            self.log.borrow_mut().push("begin".into());
-        }
-        fn draw(&self, _rec: &()) {
-            self.log.borrow_mut().push("draw".into());
-        }
-        fn end(&self, _rec: &()) {
-            self.log.borrow_mut().push("end".into());
-        }
-    }
-
-    #[test]
-    fn fullscreen_encodes_begin_draw_end() {
-        let enc = MockFullscreen {
-            log: RefCell::new(Vec::new()),
-        };
-        encode_fullscreen(&enc, &());
-        assert_eq!(*enc.log.borrow(), ["begin", "draw", "end"]);
     }
 }

@@ -1272,7 +1272,7 @@ impl DxContext {
                 );
             }
             PassId::TaaResolve => {
-                self.encode_taa(cmd);
+                self.encode_taa(cmd, params.frame_idx);
             }
             PassId::Bloom => {
                 self.encode_bloom(cmd, params.scene_srv);

@@ -1,194 +1,57 @@
 // src/metal/post/ssgi.rs
 //
-// Screen-space global illumination: a refinement of SSR. It reuses the SSR
-// depth + normal pre-pass G-buffer (so turning SSGI on forces that pre-pass to
-// run even when SSR resolve is off) and runs two fullscreen passes after the
-// main pass:
-//
-//   * gather:    per pixel, cone of cosine-weighted hemisphere rays marched
-//                against the G-buffer, accumulating the lit scene color at
-//                each on-screen hit into an off-screen `gi` target.
-//   * composite: a depth-aware blur of that noisy `gi` target, additively
-//                blended (ONE / ONE) into `hdr_resolve` so the near-field
-//                indirect bounce layers on top of the IBL ambient.
-//
-// Pipelines, target, and both encoders live together so the effect is a single
-// unit Vulkan / DirectX can mirror.
+// Metal's share of screen-space global illumination, which is its settings and
+// where the pass reads and writes this frame. The gather and composite -- their
+// pipelines, the reduced gather target and both draws -- are written once in
+// `concinnity_core::render::post::ssgi` and reach Metal through `MtlPostDevice`.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::ssgi::SsgiSettings;
+use concinnity_core::render::post::ssgi::{SsgiInputs, SsgiPass};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_metal::{
-    MTLDevice as _, MTLLoadAction, MTLPixelFormat, MTLRenderPipelineState, MTLTexture,
-    MTLTextureUsage,
-};
+use objc2_metal::MTLTexture;
 
 use crate::metal::context::MtlContext;
-use crate::metal::descriptors::TextureDesc;
-use crate::metal::encode::RenderEncode;
-use crate::metal::post::fullscreen::{
-    FullscreenBlend, FullscreenPass, PassTimer, build_slang_fullscreen_pipeline,
-    set_fragment_sampler_range,
-};
-use crate::metal::slang_builtins::{SSGI_COMPOSITE, SSGI_GATHER, SlangLib};
+use crate::metal::post::post_device::MtlPostPipeline;
 
-// All screen-space-GI feature state grouped into one unit: the resolved
-// tunables, the `gi` gather target, and the gather + composite pipelines.
-// All `Some` only when SSGI is on (and the SSR pre-pass G-buffer it gathers
-// against therefore exists).
+// The shared gather + composite, holding Metal's own pipeline and target handles.
+pub(crate) type MtlSsgiPass = SsgiPass<MtlPostPipeline, Retained<ProtocolObject<dyn MTLTexture>>>;
+
+// Screen-space GI state: the resolved tunables, and the pass when SSGI is on
+// (and the unified G-buffer it gathers against therefore exists).
 pub(crate) struct SsgiState {
     pub settings: Option<SsgiSettings>,
-    pub targets: Option<SsgiTargets>,
-    pub gather_pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    pub composite_pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+    pub pass: Option<MtlSsgiPass>,
 }
-
-// Pipelines
-
-// Build one SSGI fullscreen pipeline for the given fragment entry point.
-// `additive` configures an `ONE / ONE` blend (the composite pass blends the
-// indirect term into `hdr_resolve`); the gather pass leaves it off so it
-// writes its `gi` target straight. Both write a single-sample `RGBA16Float`
-// target.
-fn build_ssgi_pipeline(
-    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
-    fragment: &SlangLib,
-    additive: bool,
-    hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    let blend = if additive {
-        FullscreenBlend::Additive
-    } else {
-        FullscreenBlend::Replace
-    };
-    build_slang_fullscreen_pipeline(
-        device,
-        fragment,
-        MTLPixelFormat::RGBA16Float,
-        blend,
-        hot_reload,
-    )
-}
-
-// Build the SSGI gather pipeline (hemisphere ray-march → `gi` target, no blend).
-pub(crate) fn build_ssgi_gather_pipeline(
-    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
-    hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    build_ssgi_pipeline(device, &SSGI_GATHER, false, hot_reload)
-}
-
-// Build the SSGI composite pipeline (depth-aware blur, additively blended into
-// `hdr_resolve`).
-pub(crate) fn build_ssgi_composite_pipeline(
-    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
-    hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    build_ssgi_pipeline(device, &SSGI_COMPOSITE, true, hot_reload)
-}
-
-// Targets
-
-// Off-screen target for the SSGI gather pass. The composite blends straight
-// into `hdr_resolve`, so only the intermediate `gi` texture lives here.
-// Single-sample, full render resolution; created when SSGI is enabled and
-// rebuilt with the HDR targets on resize.
-pub(crate) struct SsgiTargets {
-    // Gathered indirect radiance (`RGBA16Float`), before the depth-aware blur
-    // the composite pass applies.
-    pub gi: Retained<ProtocolObject<dyn MTLTexture>>,
-}
-
-// Create or recreate the SSGI targets at `width`x`height`.
-pub(crate) fn create_ssgi_targets(
-    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
-    width: u32,
-    height: u32,
-) -> Result<SsgiTargets, String> {
-    let w = width.max(1) as usize;
-    let h = height.max(1) as usize;
-    let usage = MTLTextureUsage(MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0);
-    let desc = TextureDesc {
-        format: MTLPixelFormat::RGBA16Float,
-        width: w,
-        height: h,
-        usage,
-        ..Default::default()
-    }
-    .build();
-    let gi = device
-        .newTextureWithDescriptor(&desc)
-        .ok_or("failed to create SSGI gi texture")?;
-    Ok(SsgiTargets { gi })
-}
-
-// Encoder
 
 impl MtlContext {
-    // Encode the SSGI gather + composite. The gather marches hemisphere rays
-    // over the SSR pre-pass G-buffer and writes the noisy indirect radiance
-    // into `ssgi_targets.gi`; the composite depth-aware-blurs it and additively
-    // blends it into `hdr_resolve`. Runs on the hdr_resolve RMW chain after the
-    // main pass; only called when SSGI is on (and the SSR pre-pass G-buffer
-    // therefore exists).
+    // Encode the SSGI gather + composite: hemisphere rays marched over the
+    // G-buffer into the reduced gather target, then blurred and added into
+    // `hdr_resolve`. Runs on the hdr_resolve read-modify-write chain after the
+    // main pass.
     pub(in crate::metal) fn encode_ssgi(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         ssgi_params: &render_types::SsgiParams,
     ) -> Result<u32, String> {
-        let (targets, gather_ps, composite_ps, gbuffer) = match (
-            &self.ssgi.targets,
-            &self.ssgi.gather_pipeline,
-            &self.ssgi.composite_pipeline,
-            self.gbuffer_normal_depth(),
-        ) {
-            (Some(t), Some(g), Some(c), Some(gb)) => (t, g, c, gb),
-            // SSGI requires the SSR pre-pass G-buffer for normals + depth; if
-            // it is missing (no pre-pass built this session) there is nothing
-            // to gather against, so skip the pass.
-            _ => return Ok(0),
+        // With no G-buffer there is nothing to gather against, so skip the pass.
+        let (Some(pass), Some(normal_depth)) = (&self.ssgi.pass, self.gbuffer_normal_depth())
+        else {
+            return Ok(0);
         };
-
-        // Gather: hemisphere ray-march over the G-buffer -> gi target.
-        self.fullscreen_pass(
+        let scene = self.hdr_targets.hdr_resolve.as_ref();
+        pass.encode(
+            &self.post_device(),
             cmd_buf,
-            FullscreenPass {
-                target: targets.gi.as_ref(),
-                load: MTLLoadAction::DontCare,
-                timer: PassTimer::First(crate::metal::pass_timing::PassId::Ssgi),
-                pipeline: gather_ps,
-                label: "SSGI gather",
+            SsgiInputs {
+                scene,
+                scene_target: scene,
+                normal_depth,
             },
-            |enc| {
-                enc.set_fragment_texture(self.hdr_targets.hdr_resolve.as_ref(), 0);
-                enc.set_fragment_texture(gbuffer, 1);
-                set_fragment_sampler_range(enc, &self.post_sampler, 0, 2);
-                enc.set_fragment_value(ssgi_params, 0);
-            },
+            ssgi_params,
         )?;
-
-        // Composite: depth-aware blur of gi, additively blended into the
-        // scene. Loads the existing hdr_resolve so the ONE/ONE blend adds the
-        // indirect term on top.
-        self.fullscreen_pass(
-            cmd_buf,
-            FullscreenPass {
-                target: self.hdr_targets.hdr_resolve.as_ref(),
-                load: MTLLoadAction::Load,
-                timer: PassTimer::Last(crate::metal::pass_timing::PassId::Ssgi),
-                pipeline: composite_ps,
-                label: "SSGI composite",
-            },
-            |enc| {
-                enc.set_fragment_texture(targets.gi.as_ref(), 0);
-                enc.set_fragment_texture(gbuffer, 1);
-                set_fragment_sampler_range(enc, &self.post_sampler, 0, 2);
-                enc.set_fragment_value(ssgi_params, 0);
-            },
-        )?;
-
         Ok(0)
     }
 }

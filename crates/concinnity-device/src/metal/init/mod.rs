@@ -822,7 +822,16 @@ impl MtlContext {
             auto_exposure_bias_ev: auto_exposure_bias,
         } = effects::build_effects(
             &allocator,
-            &post_sampler,
+            // Pipelines and targets only: nothing encodes before the context
+            // exists, so the device needs no probe set.
+            &super::post::post_device::MtlPostDevice {
+                device: &device,
+                sampler: &post_sampler,
+                cube_sampler: &cube_sampler,
+                probes: None,
+                timing: None,
+                hot_reload,
+            },
             requirements.scene,
             effects::EffectDimensions {
                 render_w,

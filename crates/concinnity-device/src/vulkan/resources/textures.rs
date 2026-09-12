@@ -303,33 +303,13 @@ impl VkContext {
             // every set and resource it names belongs to this device.
             unsafe { self.device.update_descriptor_sets(&writes, &[]) };
         }
-        // The IBL cubes are also bound outside `global_sets`: the SSR resolve
-        // sets sample the prefilter cube (set 0 binding 3) and the raymarch
-        // view sets sample both cubes (bindings 4 + 5). They captured the old
-        // image views too, so re-point them at the new cubes before the old
-        // ones are destroyed below; otherwise the next SSR resolve / raymarch
-        // draw reads a destroyed view and loses the device. Done here, not in
-        // `global_sets`, because the resize path re-wires these the same way.
-        if let Some(ssr) = self.ssr.as_ref() {
-            let hdr_views: Vec<vk::ImageView> =
-                self.hdr_resolve_images.iter().map(|img| img.view).collect();
-            // Keep the SSR resolve's G-buffer / roughness bindings on the unified
-            // pre-pass per-frame views when present (empty falls back to SSR's own
-            // pre-pass targets); only binding 3 (the prefilter cube) actually
-            // moved, but `wire_resolve_sets` rewrites all four bindings.
-            let (nd_views, rough_views) = match self.gbuffer.as_ref() {
-                Some(gb) => (gb.normal_depth_views(), gb.roughness_views()),
-                None => (Vec::new(), Vec::new()),
-            };
-            ssr.wire_resolve_sets(
-                &self.device,
-                &hdr_views,
-                &nd_views,
-                &rough_views,
-                new_prefilter_view,
-                self.cube_sampler.handle(),
-            );
-        }
+        // The IBL cubes are also bound outside `global_sets`: the raymarch view
+        // sets sample both cubes (bindings 4 + 5). They captured the old image
+        // views too, so re-point them at the new cubes before the old ones are
+        // destroyed below; otherwise the next raymarch draw reads a destroyed
+        // view and loses the device. Done here, not in `global_sets`, because
+        // the resize path re-wires these the same way. The SSR resolve reads the
+        // prefilter cube per frame, so it needs no re-point.
         if let Some(rm) = self.raymarch.as_ref() {
             rm.rewire_ibl_cubes(
                 &self.device,

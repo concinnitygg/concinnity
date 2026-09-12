@@ -29,7 +29,6 @@ use super::pipeline::{
 };
 use super::post::bloom::{compile_bloom_shaders, create_bloom_pipeline};
 use super::post::ssao::rebuild_ssao_pipelines;
-use super::post::ssr::rebuild_ssr_pipelines;
 
 // Rebuild a feature's pipeline(s) into a temporary only when the feature is
 // live, propagating any compile/create error out of the enclosing
@@ -400,25 +399,16 @@ impl VkContext {
             )
         );
 
-        // SSR (only when PostProcessConfig opted in). Rebuilds prepass
-        // static / instanced / skinned + resolve in one shot.
+        // SSR (only when PostProcessConfig opted in). Rebuilds the resolve.
         let ssr_rebuilt = rebuild_if_live!(
             self.ssr.is_some(),
-            rebuild_ssr_pipelines(
-                device,
-                self.ssr.as_ref().expect("SSR resources are live"),
-                hr
-            )
+            concinnity_core::render::post::ssr::build_pipeline(&self.post_device(0))
         );
 
         // SSGI (only when indirect_lighting: ssgi). Rebuilds gather + composite.
         let ssgi_rebuilt = rebuild_if_live!(
             self.ssgi.is_some(),
-            crate::vulkan::post::ssgi::rebuild_ssgi_pipelines(
-                device,
-                self.ssgi.as_ref().expect("SSGI resources are live"),
-                hr,
-            )
+            concinnity_core::render::post::ssgi::build_pipelines(&self.post_device(0))
         );
 
         // RT reflections (only when the world opted in + the GPU supports it).
@@ -519,7 +509,7 @@ impl VkContext {
             ssao.swap_pipelines(rebuilt);
         }
         if let (Some(rebuilt), Some(ssr)) = (ssr_rebuilt, self.ssr.as_mut()) {
-            ssr.swap_pipelines(rebuilt);
+            ssr.swap_pipeline(rebuilt);
         }
         if let (Some(rebuilt), Some(ssgi)) = (ssgi_rebuilt, self.ssgi.as_mut()) {
             ssgi.swap_pipelines(rebuilt);

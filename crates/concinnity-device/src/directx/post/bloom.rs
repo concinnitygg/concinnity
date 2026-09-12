@@ -320,7 +320,7 @@ impl fullscreen::BloomEncoder for DxContext {
         self.bloom.mips.len()
     }
 
-    fn begin_bloom(&self, cmd: &Self::Rec, _scene_srv: &Self::Args) {
+    fn begin_bloom(&self, cmd: &Self::Rec, _scene_srv: &Self::Args) -> Result<(), String> {
         let post = self.post_process;
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
@@ -343,9 +343,10 @@ impl fullscreen::BloomEncoder for DxContext {
                 0,
             );
         }
+        Ok(())
     }
 
-    fn bloom_prefilter(&self, cmd: &Self::Rec, scene_srv: &Self::Args) {
+    fn bloom_prefilter(&self, cmd: &Self::Rec, scene_srv: &Self::Args) -> Result<(), String> {
         // Mip 0 is the graph's `bloom_top`, so it arrives in RENDER_TARGET and
         // must leave in it. In between the downsample chain samples it, which is
         // the one state change this node owns.
@@ -364,9 +365,15 @@ impl fullscreen::BloomEncoder for DxContext {
                 after,
             },
         );
+        Ok(())
     }
 
-    fn bloom_downsample(&self, cmd: &Self::Rec, _scene_srv: &Self::Args, dst: usize) {
+    fn bloom_downsample(
+        &self,
+        cmd: &Self::Rec,
+        _scene_srv: &Self::Args,
+        dst: usize,
+    ) -> Result<(), String> {
         self.bloom_run_pass(
             cmd,
             BloomSubPass {
@@ -377,9 +384,15 @@ impl fullscreen::BloomEncoder for DxContext {
                 after: D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
             },
         );
+        Ok(())
     }
 
-    fn bloom_upsample(&self, cmd: &Self::Rec, _scene_srv: &Self::Args, dst: usize) {
+    fn bloom_upsample(
+        &self,
+        cmd: &Self::Rec,
+        _scene_srv: &Self::Args,
+        dst: usize,
+    ) -> Result<(), String> {
         // The chain walks back down to mip 0, whose last write hands
         // `bloom_top` back to the graph in RENDER_TARGET.
         let after = if dst == 0 {
@@ -397,6 +410,7 @@ impl fullscreen::BloomEncoder for DxContext {
                 after,
             },
         );
+        Ok(())
     }
 }
 
@@ -424,7 +438,9 @@ impl DxContext {
         cmd: &ID3D12GraphicsCommandList,
         scene_srv: D3D12_GPU_DESCRIPTOR_HANDLE,
     ) {
-        fullscreen::encode_bloom_chain(self, cmd, scene_srv);
+        // D3D12's sub-passes cannot fail (every mip, descriptor and PSO was
+        // built at init), so the chain's Result is always Ok here.
+        let _ = fullscreen::encode_bloom_chain(self, cmd, scene_srv);
     }
 
     // One fullscreen-triangle bloom sub-pass: sample `src_srv`, render into

@@ -5,44 +5,55 @@
 // each effect by name.
 //
 // A block of the shader-visible CBV/SRV/UAV heap and a block of the RTV heap,
-// each sub-allocated by a bump cursor and rewound as a unit when the targets
-// they describe are recreated. A post target is persistent -- a temporal pass
-// accumulates across frames, and the bloom prefilter and the composite bind its
-// output by a handle they hold -- so the descriptors describing one are
-// persistent too, and a per-frame ring would only force every consumer to
-// re-read a handle each frame. What the block removes is the per-pass naming:
-// a new post pass takes what it needs from here instead of adding a
-// `<effect>_srv_extra` to the heap cascade.
+// handed out a slot at a time and returned when the target holding the slot is
+// dropped. A post target is persistent, so the descriptors describing one are
+// too; a pass that recreates its targets drops the old ones first and gets the
+// same slots back. What the block removes is the per-pass naming: a new post
+// pass takes what it needs from here instead of adding a `<effect>_srv_extra`
+// to the heap cascade.
 
-use std::cell::Cell;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use windows::Win32::Graphics::Direct3D12::*;
 
-// Post targets the shared passes may hold at once. The temporal resolve is two;
-// this leaves room for the remaining fullscreen passes to follow without the
-// block being resized.
+// Post targets the shared passes may hold at once: the temporal resolve's two,
+// the reflection target, the indirect-light gather target, and room for the
+// passes still to follow.
 pub(in crate::directx) const POST_TARGET_SLOTS: usize = 16;
 
+// The occupancy mask is one bit per slot.
+const _: () = assert!(POST_TARGET_SLOTS <= u32::BITS as usize);
+
 // One post target's descriptors: the shader-visible SRV a consumer samples it
-// through, and the RTV the pass writes it through.
-#[derive(Clone, Copy)]
+// through, and the RTV the pass writes it through. The slot returns to the
+// block when this is dropped.
 pub(in crate::directx) struct PostTargetDescriptors {
     pub srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     pub srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
     pub rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
+    _lease: SlotLease,
 }
 
-// The reserved blocks and where the next target's descriptors come from.
-//
-// `Cell` because allocation happens while building or resizing resources, which
-// is a single-threaded `&self` path; the parallel graph executor only *reads*
-// handles a target already holds.
+// A held slot, released on drop.
+struct SlotLease {
+    used: Arc<AtomicU32>,
+    index: usize,
+}
+
+impl Drop for SlotLease {
+    fn drop(&mut self) {
+        self.used.fetch_and(!(1 << self.index), Ordering::Relaxed);
+    }
+}
+
+// The reserved blocks and which of their slots are held.
 pub(in crate::directx) struct PostDescriptors {
     srv_cpu_base: D3D12_CPU_DESCRIPTOR_HANDLE,
     srv_gpu_base: D3D12_GPU_DESCRIPTOR_HANDLE,
     srv_size: usize,
     rtv_base: D3D12_CPU_DESCRIPTOR_HANDLE,
     rtv_size: usize,
-    next: Cell<usize>,
+    used: Arc<AtomicU32>,
 }
 
 impl PostDescriptors {
@@ -60,19 +71,30 @@ impl PostDescriptors {
             srv_size,
             rtv_base,
             rtv_size,
-            next: Cell::new(0),
+            used: Arc::new(AtomicU32::new(0)),
         }
     }
 
-    // The next free target's descriptors.
+    // The lowest free slot's descriptors.
     pub(in crate::directx) fn allocate(&self) -> Result<PostTargetDescriptors, String> {
-        let i = self.next.get();
-        if i >= POST_TARGET_SLOTS {
-            return Err(format!(
-                "the shared post passes asked for more than {POST_TARGET_SLOTS} targets"
-            ));
-        }
-        self.next.set(i + 1);
+        let mut current = self.used.load(Ordering::Relaxed);
+        let i = loop {
+            let i = (!current).trailing_zeros() as usize;
+            if i >= POST_TARGET_SLOTS {
+                return Err(format!(
+                    "the shared post passes asked for more than {POST_TARGET_SLOTS} targets"
+                ));
+            }
+            match self.used.compare_exchange_weak(
+                current,
+                current | (1 << i),
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break i,
+                Err(actual) => current = actual,
+            }
+        };
         Ok(PostTargetDescriptors {
             srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE {
                 ptr: self.srv_cpu_base.ptr + i * self.srv_size,
@@ -83,15 +105,11 @@ impl PostDescriptors {
             rtv: D3D12_CPU_DESCRIPTOR_HANDLE {
                 ptr: self.rtv_base.ptr + i * self.rtv_size,
             },
+            _lease: SlotLease {
+                used: Arc::clone(&self.used),
+                index: i,
+            },
         })
-    }
-
-    // Rewind the block. Called when every post target is about to be recreated
-    // (a resize, or a quality toggle that rebuilds the passes), so the new set
-    // lands on the same slots the old one held and any handle a consumer still
-    // caches keeps describing the right target.
-    pub(in crate::directx) fn rewind(&self) {
-        self.next.set(0);
     }
 }
 
@@ -123,18 +141,43 @@ mod tests {
     }
 
     #[test]
-    fn a_rewind_reissues_the_same_slots() {
-        // A resize recreates every target; a consumer holding a handle must
-        // still be describing the target that replaced the one it named.
+    fn a_dropped_set_is_reissued_on_the_same_slots() {
+        // A resize drops a pass's targets and recreates them: the new set lands
+        // where the old one was.
         let b = block();
         let first: Vec<_> = (0..3).map(|_| b.allocate().expect("slot")).collect();
-        b.rewind();
+        let ptrs: Vec<_> = first.iter().map(|d| d.srv_gpu.ptr).collect();
+        drop(first);
         let again: Vec<_> = (0..3).map(|_| b.allocate().expect("slot")).collect();
-        for (a, c) in first.iter().zip(&again) {
-            assert_eq!(a.srv_cpu.ptr, c.srv_cpu.ptr);
-            assert_eq!(a.srv_gpu.ptr, c.srv_gpu.ptr);
-            assert_eq!(a.rtv.ptr, c.rtv.ptr);
-        }
+        assert_eq!(
+            ptrs,
+            again.iter().map(|d| d.srv_gpu.ptr).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_held_slot_is_never_reissued() {
+        // Two passes share the block: recreating one must not hand its slot to
+        // a target of the other while that target is still live.
+        let b = block();
+        let taa = [b.allocate().expect("slot"), b.allocate().expect("slot")];
+        let ssr = b.allocate().expect("slot");
+        let ssr_slot = ssr.srv_gpu.ptr;
+        drop(taa);
+        let rebuilt = [b.allocate().expect("slot"), b.allocate().expect("slot")];
+        assert!(rebuilt.iter().all(|d| d.srv_gpu.ptr != ssr_slot));
+        assert_eq!(ssr.srv_gpu.ptr, ssr_slot);
+    }
+
+    #[test]
+    fn a_freed_middle_slot_is_the_next_one_handed_out() {
+        let b = block();
+        let _first = b.allocate().expect("slot");
+        let middle = b.allocate().expect("slot");
+        let _last = b.allocate().expect("slot");
+        let middle_ptr = middle.rtv.ptr;
+        drop(middle);
+        assert_eq!(b.allocate().expect("slot").rtv.ptr, middle_ptr);
     }
 
     #[test]
@@ -142,9 +185,11 @@ mod tests {
         // Past the reservation the next handle would address another feature's
         // descriptors, so the allocation fails instead.
         let b = block();
-        for _ in 0..POST_TARGET_SLOTS {
-            b.allocate().expect("reserved slot");
-        }
+        let held: Vec<_> = (0..POST_TARGET_SLOTS)
+            .map(|_| b.allocate().expect("reserved slot"))
+            .collect();
         assert!(b.allocate().is_err());
+        drop(held);
+        assert!(b.allocate().is_ok());
     }
 }

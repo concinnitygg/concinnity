@@ -21,7 +21,6 @@
 //   [post_srv_base_slot..]         POST_TARGET_SLOTS shared post-pass target SRVs
 //   [ssao_srv_base_slot..]         (SSAO) ao_raw + ao_blurred
 //   [ssao_white_srv_slot]          1x1 white occlusion fallback (always)
-//   [ssr_srv_base_slot..]          (SSR) resolve output
 //   [decal_depth_srv_slot]         main-depth SRV (decal + glass + line passes)
 //   [decal_srv_base_slot..]        MAX_DECALS per-decal albedo SRVs
 //   [particle_srv_base_slot..]     MAX_EMITTERS emitter albedo SRVs
@@ -37,7 +36,12 @@
 //   [probe_cube_uav_base_slot..]   PROBE_MAX_MIPS probe-cube per-mip UAVs
 //   [probe_mip0_pair_slot..+2]     the mirror copy's (capture mip 0, probe mip 0)
 //   [transparent_scene_copy_srv_slot] pre-transparent scene snapshot SRV
-//   [ssgi_gi_srv_slot..]           (SSGI) gather-target SRV
+//   [gbuffer_srv_base_slot..]      (G-buffer) normal+depth, roughness, velocity
+//   [rt_output_srv_slot]           (RT) reflection output
+//   [refl_composite_srv_base_slot..] (reflections) composited output + blur
+//   [planar_resolve_srv_base_slot..] planar reflector resolves
+//   [flat_pool_base_slot..]        bindless albedo + normal pool, per frame
+//   [probe_cube_base_slot..]       MAX_PROBES reflection-probe cubes
 //   [spot_shadow_srv_slot]         spot shadow depth array SRV (Texture2DArray)
 //   [ltc_srv_base_slot..+2]        area-light LTC tables (matrix, magnitude)
 //   srv_slots                      total descriptor count (heap size)
@@ -55,16 +59,12 @@ use crate::directx::probe_prefilter::PROBE_MAX_MIPS;
 pub(in crate::directx) struct SrvHeapParams {
     pub n_atlases: usize,
     pub bloom_count: usize,
-    // Per-effect SRV reservations when enabled, else 0: SSAO = 2 (raw +
-    // blurred occlusion), SSR = 1 (resolve output). The view normal / depth /
-    // roughness / velocity all come from the unified G-buffer pre-pass
-    // (`gbuffer_srv_extra`). The shared post passes take theirs from a fixed
-    // block instead (`post_srv_base_slot`), so no effect drawing through that
-    // seam appears here.
+    // SSAO's SRV reservation when enabled, else 0: 2 (raw + blurred
+    // occlusion). The view normal / depth / roughness / velocity all come from
+    // the unified G-buffer pre-pass (`gbuffer_srv_extra`). The shared post
+    // passes take theirs from a fixed block instead (`post_srv_base_slot`), so
+    // no effect drawing through that seam appears here.
     pub ssao_srv_extra: usize,
-    pub ssr_srv_extra: usize,
-    // 1 when SSGI is enabled, else 0.
-    pub ssgi_srv_extra: usize,
     // 3 (normal+depth, roughness, velocity) when the unified G-buffer pre-pass
     // is active, else 0.
     pub gbuffer_srv_extra: usize,
@@ -106,7 +106,6 @@ pub(in crate::directx) struct SrvHeapLayout {
     pub post_srv_base_slot: usize,
     pub ssao_srv_base_slot: usize,
     pub ssao_white_srv_slot: usize,
-    pub ssr_srv_base_slot: usize,
     pub decal_depth_srv_slot: usize,
     pub decal_srv_base_slot: usize,
     pub particle_srv_base_slot: usize,
@@ -122,7 +121,6 @@ pub(in crate::directx) struct SrvHeapLayout {
     pub probe_cube_uav_base_slot: usize,
     pub probe_mip0_pair_slot: usize,
     pub transparent_scene_copy_srv_slot: usize,
-    pub ssgi_gi_srv_slot: usize,
     pub gbuffer_srv_base_slot: usize,
     pub rt_output_srv_slot: usize,
     // Reflection-composite SRVs: [0] composited output, [1] reduced-res blur.
@@ -169,8 +167,7 @@ impl SrvHeapLayout {
         // whether SSAO is on or off) so the main pass can bind a pass-through
         // occlusion when SSAO is disabled.
         let ssao_white_srv_slot = ssao_srv_base_slot + p.ssao_srv_extra;
-        let ssr_srv_base_slot = ssao_white_srv_slot + 1;
-        let decal_depth_srv_slot = ssr_srv_base_slot + p.ssr_srv_extra;
+        let decal_depth_srv_slot = ssao_white_srv_slot + 1;
         let decal_srv_base_slot = decal_depth_srv_slot + 1;
         let particle_srv_base_slot = decal_srv_base_slot + MAX_DECALS;
         let fog_froxel_uav_slot = particle_srv_base_slot + MAX_EMITTERS;
@@ -188,10 +185,9 @@ impl SrvHeapLayout {
         let probe_cube_uav_base_slot = probe_capture_uav_base_slot + PROBE_MAX_MIPS;
         let probe_mip0_pair_slot = probe_cube_uav_base_slot + PROBE_MAX_MIPS;
         let transparent_scene_copy_srv_slot = probe_mip0_pair_slot + 2;
-        let ssgi_gi_srv_slot = transparent_scene_copy_srv_slot + 1;
         // Unified G-buffer SRVs (normal+depth, roughness, velocity). 3 slots
         // when any screen-space consumer drives the pre-pass, else 0.
-        let gbuffer_srv_base_slot = ssgi_gi_srv_slot + p.ssgi_srv_extra;
+        let gbuffer_srv_base_slot = transparent_scene_copy_srv_slot + 1;
         // RT-reflection output SRV: one slot at the heap tail when RT is on.
         let rt_output_srv_slot = gbuffer_srv_base_slot + p.gbuffer_srv_extra;
         // Reflection-composite SRVs (composited output + reduced-res blur): 2 slots
@@ -226,7 +222,6 @@ impl SrvHeapLayout {
             post_srv_base_slot,
             ssao_srv_base_slot,
             ssao_white_srv_slot,
-            ssr_srv_base_slot,
             decal_depth_srv_slot,
             decal_srv_base_slot,
             particle_srv_base_slot,
@@ -242,7 +237,6 @@ impl SrvHeapLayout {
             probe_cube_uav_base_slot,
             probe_mip0_pair_slot,
             transparent_scene_copy_srv_slot,
-            ssgi_gi_srv_slot,
             gbuffer_srv_base_slot,
             rt_output_srv_slot,
             refl_composite_srv_base_slot,
@@ -271,7 +265,7 @@ mod tests {
     // with the running total and fails the assert.
     fn assert_gap_free(p: &SrvHeapParams) {
         let l = SrvHeapLayout::compute(p);
-        let blocks: [(usize, usize); 32] = [
+        let blocks: [(usize, usize); 30] = [
             (l.atlas_base_slot, p.n_atlases.max(1)),
             (l.hdr_srv_slot, 1),
             (l.bloom_srv_base_slot, p.bloom_count),
@@ -279,7 +273,6 @@ mod tests {
             (l.post_srv_base_slot, POST_TARGET_SLOTS),
             (l.ssao_srv_base_slot, p.ssao_srv_extra),
             (l.ssao_white_srv_slot, 1),
-            (l.ssr_srv_base_slot, p.ssr_srv_extra),
             (l.decal_depth_srv_slot, 1),
             (l.decal_srv_base_slot, MAX_DECALS),
             (l.particle_srv_base_slot, MAX_EMITTERS),
@@ -295,7 +288,6 @@ mod tests {
             (l.probe_cube_uav_base_slot, PROBE_MAX_MIPS),
             (l.probe_mip0_pair_slot, 2),
             (l.transparent_scene_copy_srv_slot, 1),
-            (l.ssgi_gi_srv_slot, p.ssgi_srv_extra),
             (l.gbuffer_srv_base_slot, p.gbuffer_srv_extra),
             (l.rt_output_srv_slot, p.rt_output_srv_extra),
             (l.refl_composite_srv_base_slot, p.refl_composite_srv_extra),
@@ -330,8 +322,6 @@ mod tests {
             n_atlases: 2,
             bloom_count: 6,
             ssao_srv_extra: 2,
-            ssr_srv_extra: 1,
-            ssgi_srv_extra: 1,
             gbuffer_srv_extra: 3,
             rt_output_srv_extra: 1,
             refl_composite_srv_extra: 2,
@@ -347,8 +337,6 @@ mod tests {
             n_atlases: 0,
             bloom_count: 0,
             ssao_srv_extra: 0,
-            ssr_srv_extra: 0,
-            ssgi_srv_extra: 0,
             gbuffer_srv_extra: 0,
             rt_output_srv_extra: 0,
             refl_composite_srv_extra: 0,
@@ -364,8 +352,6 @@ mod tests {
             n_atlases: 1,
             bloom_count: 5,
             ssao_srv_extra: 0,
-            ssr_srv_extra: 1,
-            ssgi_srv_extra: 0,
             gbuffer_srv_extra: 3,
             rt_output_srv_extra: 1,
             refl_composite_srv_extra: 2,
@@ -383,8 +369,6 @@ mod tests {
             n_atlases: 0,
             bloom_count: 0,
             ssao_srv_extra: 0,
-            ssr_srv_extra: 0,
-            ssgi_srv_extra: 0,
             gbuffer_srv_extra: 0,
             rt_output_srv_extra: 0,
             refl_composite_srv_extra: 0,

@@ -27,10 +27,33 @@ struct PassKey {
     load: PostLoadOp,
 }
 
+// How a pass under `load` opens its attachment: the load op and the layout the
+// attachment arrives in. A discarding load begins `UNDEFINED`, because nothing
+// the target holds survives a full-coverage draw; a preserving load begins
+// shader-readable, where every post target and the scene it blends into rest.
+fn attachment_open(load: PostLoadOp) -> (vk::AttachmentLoadOp, vk::ImageLayout) {
+    match load {
+        PostLoadOp::DontCare => (vk::AttachmentLoadOp::DONT_CARE, vk::ImageLayout::UNDEFINED),
+        PostLoadOp::Load => (
+            vk::AttachmentLoadOp::LOAD,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        ),
+    }
+}
+
+// The accesses the subpass performs on its attachment, declared the same under
+// every load op. A pipeline is built against one load's render pass and drawn
+// inside another's, and two render passes are only compatible when their
+// dependencies match. The read is the load itself, which follows the layout
+// transition ahead of it and has to be declared to be synchronized against it.
+fn attachment_access() -> vk::AccessFlags {
+    vk::AccessFlags::COLOR_ATTACHMENT_WRITE
+        | vk::AccessFlags::COLOR_ATTACHMENT_READ
+        | vk::AccessFlags::SHADER_READ
+}
+
 // The single color attachment a fullscreen post pass writes. It ends
-// shader-readable because every consumer of a post target samples it, and it
-// begins `UNDEFINED` under a discarding load because nothing the target already
-// holds survives a full-coverage draw.
+// shader-readable because every consumer of a post target samples it.
 //
 // The `EXTERNAL` dependency orders the subpass after the writes it samples *and*
 // after the previous frame's read of the slot it is about to overwrite, which is
@@ -41,13 +64,7 @@ fn create_render_pass(
     format: PixelFormat,
     load: PostLoadOp,
 ) -> Result<OwnedRenderPass, String> {
-    let (load_op, initial) = match load {
-        PostLoadOp::DontCare => (vk::AttachmentLoadOp::DONT_CARE, vk::ImageLayout::UNDEFINED),
-        PostLoadOp::Load => (
-            vk::AttachmentLoadOp::LOAD,
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-        ),
-    };
+    let (load_op, initial) = attachment_open(load);
     let attachment = vk::AttachmentDescription::default()
         .format(image_format(format))
         .samples(vk::SampleCountFlags::TYPE_1)
@@ -75,7 +92,7 @@ fn create_render_pass(
             vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
                 | vk::PipelineStageFlags::FRAGMENT_SHADER,
         )
-        .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE | vk::AccessFlags::SHADER_READ);
+        .dst_access_mask(attachment_access());
     let info = vk::RenderPassCreateInfo::default()
         .attachments(std::slice::from_ref(&attachment))
         .subpasses(std::slice::from_ref(&subpass))
@@ -174,5 +191,38 @@ impl PostPassCache {
         if let Ok(mut passes) = self.passes.lock() {
             passes.clear();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_preserving_load_begins_readable_and_a_discarding_one_undefined() {
+        assert_eq!(
+            attachment_open(PostLoadOp::Load),
+            (
+                vk::AttachmentLoadOp::LOAD,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
+            )
+        );
+        assert_eq!(
+            attachment_open(PostLoadOp::DontCare),
+            (vk::AttachmentLoadOp::DONT_CARE, vk::ImageLayout::UNDEFINED)
+        );
+    }
+
+    #[test]
+    fn the_dependency_declares_the_read_a_load_performs() {
+        // The SSGI composite loads the scene it adds into. Without the read in
+        // the dependency the layout transition ahead of the load is a
+        // read-after-write hazard, once per frame. The access does not vary with
+        // the load op, because a pipeline built against the discarding pass is
+        // drawn inside the loading one and their dependencies must match.
+        let access = attachment_access();
+        assert!(access.contains(vk::AccessFlags::COLOR_ATTACHMENT_READ));
+        assert!(access.contains(vk::AccessFlags::COLOR_ATTACHMENT_WRITE));
+        assert!(access.contains(vk::AccessFlags::SHADER_READ));
     }
 }

@@ -2277,10 +2277,8 @@ impl VkContext {
         // Transient image pool (the graph-owned transients, e.g. `ao_output`).
         self.transient_pool.destroy(device);
 
-        // SSR resources (pre-pass + resolve).
-        if let Some(mut ssr) = self.ssr.take() {
-            ssr.destroy(device);
-        }
+        // SSR resolve (pipeline + reflection target).
+        self.ssr = None;
 
         // Reflection composite (roughness blur + composite of the SSR/RT output).
         if let Some(mut rc) = self.reflection_composite.take() {
@@ -2288,9 +2286,7 @@ impl VkContext {
         }
 
         // SSGI resources (gather + composite).
-        if let Some(mut ssgi) = self.ssgi.take() {
-            ssgi.destroy(device);
-        }
+        self.ssgi = None;
 
         // Unified G-buffer pre-pass resources (per-frame MRT + pipelines + UBOs).
         if let Some(mut gb) = self.gbuffer.take() {

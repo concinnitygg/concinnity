@@ -1,13 +1,16 @@
 // src/metal/post/ssr.rs
 //
-// Screen-space reflections: a depth + normal + roughness pre-pass that runs
-// before the main pass, and a fullscreen ray-march resolve that runs after.
-// Pipelines, targets, and both encoders live together so the effect is a
-// single unit Vulkan / DirectX can mirror.
+// Screen-space reflections: the reflection targets the SSR and ray-traced
+// resolves write, the roughness-aware blur + composite that blends them over
+// the scene, and where the resolve's inputs come from this frame. The resolve
+// itself -- its pipeline and its draw -- is written once in
+// `concinnity_core::render::post::ssr` and reaches Metal through
+// `MtlPostDevice`.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::ssr::SsrSettings;
+use concinnity_core::render::post::ssr::{SsrInputs, SsrPass};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -22,17 +25,21 @@ use crate::metal::post::fullscreen::{
     FullscreenBlend, FullscreenPass, PassTimer, build_slang_fullscreen_pipeline,
     set_fragment_sampler_range,
 };
-use crate::metal::slang_builtins::{REFLECTION_BLUR, REFLECTION_COMPOSITE, SSR_RESOLVE};
+use crate::metal::post::post_device::MtlPostPipeline;
+use crate::metal::slang_builtins::{REFLECTION_BLUR, REFLECTION_COMPOSITE};
+
+// The shared resolve, holding Metal's own pipeline handle.
+pub(crate) type MtlSsrPass = SsrPass<MtlPostPipeline>;
 
 // All screen-space-reflection feature state grouped into one unit: the
-// resolved tunables, the resolve-output target, and the resolve pipeline.
+// resolved tunables, the reflection targets, and the pipelines that fill them.
 // `targets` is `Some` when SSR, SSGI, *or* RT reflections are on (they share
-// the G-buffer pre-pass output and RT reuses `targets.output`); `settings`
-// and `resolve_pipeline` are `Some` only when SSR itself is on.
+// the G-buffer pre-pass output and RT reuses `targets.reflection`); `settings`
+// and `resolve` are `Some` only when SSR itself is on.
 pub(crate) struct SsrState {
     pub settings: Option<SsrSettings>,
     pub targets: Option<SsrTargets>,
-    pub resolve_pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+    pub resolve: Option<MtlSsrPass>,
     // Roughness-aware blur + composite of the reflection target over the scene.
     // Shared by the SSR and RT-reflection resolves (both write the reflection
     // target, then run this). Built whenever the reflection targets exist.
@@ -47,22 +54,6 @@ pub(crate) struct SsrState {
 }
 
 // Pipelines
-
-// Build the SSR resolve pipeline: a fullscreen-triangle pass that ray-marches
-// the reflection and composites it over the scene, writing a single-sample
-// `RGBA16Float` target.
-pub(crate) fn build_ssr_pipeline(
-    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
-    hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
-    build_slang_fullscreen_pipeline(
-        device,
-        &SSR_RESOLVE,
-        MTLPixelFormat::RGBA16Float,
-        FullscreenBlend::Replace,
-        hot_reload,
-    )
-}
 
 // Build the reflection composite pipeline: the full-resolution second pass that
 // lerps the sharp reflection against the upsampled half-res blur by roughness
@@ -99,12 +90,11 @@ pub(crate) fn build_reflection_blur_pipeline(
 
 // Targets
 
-// Off-screen target for the screen-space reflection (SSR) resolve pass: the HDR
-// scene with reflections composited in. The view-space normal / linear depth /
-// roughness the resolve reads now come from the unified G-buffer pre-pass
-// (`metal/post/gbuffer.rs`); only this resolve output lives here. Single-sample,
-// full drawable resolution; created when SSR is enabled and rebuilt with the HDR
-// targets on resize.
+// The targets the reflection resolves and their composite write. The
+// view-space normal / linear depth / roughness they read come from the unified
+// G-buffer pre-pass (`metal/post/gbuffer.rs`). Single-sample, full render
+// resolution except the blur; created when a reflection path is enabled and
+// rebuilt with the HDR targets on resize.
 pub(crate) struct SsrTargets {
     // Reflection target (`RGBA16Float`): the SSR / RT resolve writes reflected
     // radiance in `.rgb` and the Fresnel/gloss composite weight in `.a` here,
@@ -160,13 +150,9 @@ pub(crate) fn create_ssr_targets(
 // Encoders
 
 impl MtlContext {
-    // Encode the SSR resolve: a fullscreen ray-march over the pre-pass
-    // G-buffer that reflects `hdr_resolve` and composites the result into
-    // `ssr_targets.output`. Rays that miss -- or fade out near a screen
-    // border -- fall back to the IBL prefilter cubemap so the reflection
-    // hands off to the environment rather than snapping to the base shading;
-    // with no EnvironmentMap bound the cube is skipped and a miss keeps the
-    // base shading. Runs after the main pass; only called when SSR is on.
+    // Encode the SSR resolve into the reflection target, then blur and composite
+    // it over `hdr_resolve` into the targets' `output`. Runs after the main pass;
+    // only called when SSR is on.
     pub(in crate::metal) fn encode_ssr_resolve(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
@@ -174,54 +160,29 @@ impl MtlContext {
     ) -> Result<u32, String> {
         // The pre-pass channels are pool-owned, so they are fetched here rather
         // than cached: a pool rebuild repacks every slot.
-        let (targets, resolve_ps, gb_normal_depth, gb_roughness) = match (
+        let (Some(targets), Some(resolve), Some(normal_depth), Some(roughness)) = (
             &self.ssr.targets,
-            &self.ssr.resolve_pipeline,
+            &self.ssr.resolve,
             self.gbuffer_normal_depth(),
             self.gbuffer_roughness(),
-        ) {
-            (Some(t), Some(b), Some(n), Some(r)) => (t, b, n, r),
-            _ => return Ok(0),
+        ) else {
+            return Ok(0);
         };
-
-        // Resolve: ray-march the reflection over `hdr_resolve` -> reflection
-        // target (reflected radiance + composite weight, not yet blended).
-        self.fullscreen_pass(
+        resolve.encode(
+            &self.post_device(),
             cmd_buf,
-            FullscreenPass {
+            SsrInputs {
                 target: targets.reflection.as_ref(),
-                load: MTLLoadAction::DontCare,
-                timer: PassTimer::Whole(crate::metal::pass_timing::PassId::SsrResolve),
-                pipeline: resolve_ps,
-                label: "SSR resolve",
+                scene: self.hdr_targets.hdr_resolve.as_ref(),
+                normal_depth,
+                roughness,
+                // Always valid: a gray fallback when no EnvironmentMap is bound,
+                // which `SsrParams.prefilter_mip_count == 0` tells the shader to
+                // ignore.
+                prefilter: self.env_map.prefilter.as_ref(),
             },
-            |enc| {
-                enc.set_fragment_texture(self.hdr_targets.hdr_resolve.as_ref(), 0);
-                enc.set_fragment_texture(gb_normal_depth, 1);
-                enc.set_fragment_texture(gb_roughness, 2);
-                // The IBL prefilter cubemap is the miss / screen-edge fallback.
-                // It is always valid (a gray fallback when no EnvironmentMap is
-                // bound); `SsrParams.prefilter_mip_count == 0` tells the shader to
-                // ignore it in that case.
-                enc.set_fragment_texture(self.env_map.prefilter.as_ref(), 3);
-                // Local reflection-probe cubes, through their argument buffer:
-                // when a probe is baked a missed/edge ray reflects its
-                // box-projected scene capture instead of the foreign sky HDR
-                // (the source the forward IBL specular term uses). The
-                // ProbeSet's `count` gates whether the shader samples them.
-                self.bind_probe_cubes(enc);
-                // The screen sources take the post sampler at 0..2; the
-                // prefilter cube at sampler(3) and the probe block's own
-                // sampler at sampler(4) take the cube sampler.
-                set_fragment_sampler_range(enc, &self.post_sampler, 0, 3);
-                set_fragment_sampler_range(enc, self.cube_sampler.as_ref(), 3, 2);
-                enc.set_fragment_value(ssr_params, 0);
-                // Reflection-probe set (count + per-probe parallax boxes) at
-                // buffer(1); count == 0 keeps the sky fallback above.
-                enc.set_fragment_value(&self.probe.set, 1);
-            },
+            ssr_params,
         )?;
-        // Blur by roughness + composite the reflection over the scene -> output.
         self.encode_reflection_composite(cmd_buf)?;
         Ok(0)
     }

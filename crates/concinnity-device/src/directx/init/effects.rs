@@ -22,8 +22,8 @@ use crate::directx::post::rt_reflections::{
     RtBuildContext, RtBuildInit, RtOutputDescriptors, RtReflectionsResources,
 };
 use crate::directx::post::ssao::{SsaoDescriptorHandles, SsaoDeviceCtx, SsaoResources};
-use crate::directx::post::ssgi::{SsgiDescriptors, SsgiDevice, SsgiResources};
-use crate::directx::post::ssr::{SsrInitInputs, SsrResources};
+use crate::directx::post::ssgi::SsgiResources;
+use crate::directx::post::ssr::SsrResources;
 use crate::directx::post::taa::TaaResources;
 use crate::directx::texture::{
     HDR_FORMAT, create_fallback_white_resource, write_hdr_srv, write_texture_srv,
@@ -72,16 +72,6 @@ pub(super) struct SsaoSlots {
     pub white_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE),
 }
 
-pub(super) struct SsrSlots {
-    pub output_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub output_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE),
-}
-
-pub(super) struct SsgiSlots {
-    pub gi_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub gi_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE),
-}
-
 pub(super) struct RtReflectionsSlots {
     pub output_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
     pub output_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE),
@@ -119,12 +109,11 @@ pub(super) struct EffectFlags {
     pub hot_reload: bool,
 }
 
-// Descriptor-heap slots for every effect pass: bloom, TAA, SSAO, SSR, SSGI, RT.
+// Descriptor-heap slots for the effect passes that do not draw through the
+// shared post seam: bloom, SSAO, RT.
 pub(super) struct EffectDescriptorSlots<'a> {
     pub bloom: BloomSlots<'a>,
     pub ssao: SsaoSlots,
-    pub ssr: SsrSlots,
-    pub ssgi: SsgiSlots,
     pub rt: RtReflectionsSlots,
 }
 
@@ -161,8 +150,6 @@ pub(super) fn build_effects(
     let EffectDescriptorSlots {
         bloom,
         ssao: ssao_slots,
-        ssr: ssr_slots,
-        ssgi: ssgi_slots,
         rt: rt_slots,
     } = slots;
     // Transient pool: the graph-owned transient render targets. `bloom_top`
@@ -278,42 +265,30 @@ pub(super) fn build_effects(
     // SSR: a fullscreen resolve reading the unified G-buffer pre-pass. The
     // resources are built whenever SSR *or* SSGI *or* RT reflections are on (all
     // reuse the G-buffer); `ssr_settings` (the resolve half) stays `None` for a
-    // SSGI-only or RT-only build, which leaves the reserved output slot unwritten.
+    // SSGI-only or RT-only build, which then holds no resolve or target.
     let ssr =
         if ssr_settings.is_some() || ssgi_settings.is_some() || rt_reflection_settings.is_some() {
             Some(SsrResources::new(
-                alloc,
+                post_device,
                 render_width,
                 render_height,
-                SsrInitInputs {
-                    resolve_settings: ssr_settings,
-                    output_rtv: ssr_slots.output_rtv,
-                    output_srv: ssr_slots.output_srv,
-                },
-                info_queue,
-                hot_reload,
+                ssr_settings,
             )?)
         } else {
             None
         };
 
     // SSGI: hemisphere-gather + depth-aware blur over the unified G-buffer
-    // pre-pass. The gather target lives here; the composite blends straight
-    // into the scene.
-    let ssgi = if let Some(settings) = ssgi_settings {
-        Some(SsgiResources::new(
-            SsgiDevice { alloc, info_queue },
+    // pre-pass. The gather target lives in the shared pass; the composite blends
+    // straight into the scene.
+    let ssgi = match ssgi_settings {
+        Some(settings) => Some(SsgiResources::new(
+            post_device,
             render_width,
             render_height,
             settings,
-            SsgiDescriptors {
-                gi_rtv: ssgi_slots.gi_rtv,
-                gi_srv: ssgi_slots.gi_srv,
-            },
-            hot_reload,
-        )?)
-    } else {
-        None
+        )?),
+        None => None,
     };
 
     // RT reflections: build the pipelines + output target only when authored AND

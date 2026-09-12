@@ -316,7 +316,7 @@ impl DxContext {
         //    (history is unreliable across a resize: the reprojection
         //    coordinates were generated at the old resolution).
         if let Some(mut taa) = self.taa.take() {
-            let r = taa.resize_to(&self.post_device(), render_w, render_h);
+            let r = taa.resize_to(&self.post_device(0), render_w, render_h);
             self.taa = Some(taa);
             r?;
         }
@@ -337,9 +337,11 @@ impl DxContext {
             )?;
         }
 
-        // 7) SSR: pre-pass G-buffer + roughness + private depth + resolve output.
-        if let Some(ssr) = self.ssr.as_mut() {
-            ssr.resize_to(&self.device, render_w, render_h, srv_cpu_base, srv_gpu_base)?;
+        // 7) SSR: the reflection target the resolve writes.
+        if let Some(mut ssr) = self.ssr.take() {
+            let r = ssr.resize_to(&self.post_device(0), render_w, render_h);
+            self.ssr = Some(ssr);
+            r?;
         }
 
         // 7-gbuffer) Unified G-buffer pre-pass: the three color targets are
@@ -358,11 +360,11 @@ impl DxContext {
             )?;
         }
 
-        // 7-ssgi) SSGI gather target. Re-uses its pre-reserved RTV/SRV slots;
-        // the live pass binding (which points at the SRV slot's GPU handle)
-        // stays valid after the in-place descriptor rewrite.
-        if let Some(ssgi) = self.ssgi.as_mut() {
-            ssgi.resize_to(&self.device, render_w, render_h, srv_cpu_base, srv_gpu_base)?;
+        // 7-ssgi) SSGI gather target.
+        if let Some(mut ssgi) = self.ssgi.take() {
+            let r = ssgi.resize_to(&self.post_device(0), render_w, render_h);
+            self.ssgi = Some(ssgi);
+            r?;
         }
 
         // 7-rt) RT reflections output target. Re-uses its pre-reserved RTV/SRV

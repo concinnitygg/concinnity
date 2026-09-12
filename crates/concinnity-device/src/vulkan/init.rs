@@ -33,7 +33,7 @@ use super::post::bloom::{
     BloomDeviceContext, MAX_BLOOM_MIPS, alloc_bloom_input_sets, compile_bloom_shaders,
     create_bloom_chain, create_bloom_framebuffers, create_bloom_pipeline, rebind_bloom_input0,
 };
-use super::post::post_device::{PostQueue, VkPostDevice};
+use super::post::post_device::{PostQueue, VkPostDevice, VkPostProbes};
 use super::post::taa::*;
 use super::render_pass::*;
 use super::resources::*;
@@ -1576,31 +1576,34 @@ impl VkContext {
         // G-buffer (like SSGI), so the pre-pass half is built whenever SSR, SSGI,
         // *or* RT (and the device supports it) is on. `rt_wanted` is derived up
         // with the transient pool's gates.
+        // The device every shared post pass builds its pipelines and targets
+        // through at init. Nothing encodes before the context exists, so it
+        // carries the global set's layout but none of its per-frame sets.
+        let post_support = super::post::PostSupport::new(&device, frames)?;
+        let init_post_device = VkPostDevice {
+            device: &device,
+            alloc: &alloc,
+            queue: PostQueue {
+                command_pool,
+                queue: graphics_queue,
+            },
+            cache: &post_support.cache,
+            arena: &post_support.arena,
+            sampler: composite_sampler.handle(),
+            cube_sampler: cube_sampler.handle(),
+            probes: Some(VkPostProbes {
+                layout: global_set_layout.handle(),
+                sets: &[],
+                cube_count: probe_cube_count,
+            }),
+            frame: 0,
+            hot_reload,
+        };
         let ssr_opt = if ssr_settings.is_some() || ssgi_settings.is_some() || rt_wanted {
-            let settings = ssr_build_settings;
-            let hdr_views: Vec<vk::ImageView> =
-                hdr_resolve_images.iter().map(|img| img.view).collect();
             Some(super::post::ssr::SsrResources::new(
-                &super::post::ssr::SsrGpuContext {
-                    alloc: &alloc,
-                    device: &device,
-                    command_pool,
-                    queue: graphics_queue,
-                },
-                super::post::ssr::SsrExtent {
-                    width: render_extent.width,
-                    height: render_extent.height,
-                },
-                frames,
-                super::post::ssr::SsrInitInputs {
-                    settings,
-                    hdr_resolve_views: &hdr_views,
-                    prefilter_view: env_map.prefilter.view,
-                    cube_sampler: cube_sampler.handle(),
-                    global_set_layout: global_set_layout.handle(),
-                    probe_cube_count,
-                },
-                hot_reload,
+                &init_post_device,
+                ssr_build_settings,
+                render_extent,
             )?)
         } else {
             None
@@ -1641,37 +1644,15 @@ impl VkContext {
 
         //  SSGI (screen-space global illumination): the hemisphere-gather +
         //  depth-aware-blur GI pass. Built only when the world selected
-        //  `indirect_lighting: ssgi`; it samples the unified pre-pass G-buffer
-        //  (`gbuffer_opt` is guaranteed `Some` here because SSGI forces `ssr_opt`
-        //  on, which the gbuffer gate ORs in). The gather samples each frame's
-        //  HDR resolve as the bounce-radiance source and the composite additively
-        //  blends the denoised indirect term back into the same image on the RMW
-        //  chain. Its G-buffer binding is re-pointed at the unified per-frame
-        //  views further down; the first view is the valid init placeholder.
-        let ssgi_opt = if let Some(settings) = ssgi_settings {
-            let gb = gbuffer_opt
-                .as_ref()
-                .expect("SSGI build forces the unified G-buffer pre-pass to exist");
-            let nd_views = gb.normal_depth_views();
-            let hdr_views: Vec<vk::ImageView> =
-                hdr_resolve_images.iter().map(|img| img.view).collect();
-            Some(super::post::ssgi::SsgiResources::new(
-                super::post::ssgi::SsgiDevice {
-                    alloc: &alloc,
-                    device: &device,
-                },
-                render_extent.width,
-                render_extent.height,
-                frames,
+        //  `indirect_lighting: ssgi`; it samples the unified pre-pass G-buffer,
+        //  which SSGI forces on, and each frame's HDR resolve.
+        let ssgi_opt = match ssgi_settings {
+            Some(settings) => Some(super::post::ssgi::SsgiResources::new(
+                &init_post_device,
                 settings,
-                super::post::ssgi::SsgiInputViews {
-                    hdr_resolve_views: &hdr_views,
-                    gbuffer_view: nd_views[0],
-                },
-                hot_reload,
-            )?)
-        } else {
-            None
+                render_extent,
+            )?),
+            None => None,
         };
 
         // Instanced props fold into the GPU-driven bindless cull buffers: each
@@ -3076,25 +3057,8 @@ impl VkContext {
         // raw HDR resolve, so their binding-0 descriptor is re-pointed at the
         // per-frame TAA output image. The resolve's own inputs need no wiring:
         // it allocates its set per frame from the shared post arena.
-        let post_support = super::post::PostSupport::new(&device, frames)?;
         let taa = if taa_enabled {
-            let taa = TaaResources::new(
-                &VkPostDevice {
-                    device: &device,
-                    alloc: &alloc,
-                    queue: PostQueue {
-                        command_pool,
-                        queue: graphics_queue,
-                    },
-                    cache: &post_support.cache,
-                    arena: &post_support.arena,
-                    sampler: composite_sampler.handle(),
-                    frame: 0,
-                    hot_reload,
-                },
-                frames,
-                render_extent,
-            )?;
+            let taa = TaaResources::new(&init_post_device, frames, render_extent)?;
             for (i, &set) in composite_sets.iter().enumerate() {
                 write_composite_set(
                     &device,
@@ -3148,32 +3112,12 @@ impl VkContext {
         }
 
         //  Unified G-buffer pre-pass reader re-wire
-        // Re-point every reader's G-buffer / roughness / velocity descriptor at
-        // the merged pre-pass's per-frame views now that the merged buffer + all
-        // readers exist. RT was already wired to the unified views at its
-        // construction; here we move the SSR resolve, SSGI, SSAO kernel/blur, and
-        // the TAA resolve's velocity input. The merged pre-pass produces the
-        // byte-identical normal+depth / roughness the separate pre-passes did, so
-        // the resolve / kernel maths is unchanged. Mirrors DirectX re-pointing
-        // every reader at `self.gbuffer` in init.
+        // Re-point the SSAO kernel/blur's G-buffer descriptors at the merged
+        // pre-pass's per-frame views now that the merged buffer exists. RT was
+        // already wired to the unified views at its construction, and the shared
+        // post passes read those views per frame, so they need no wiring.
         if let Some(gb) = gbuffer_opt.as_ref() {
             let nd_views = gb.normal_depth_views();
-            let rough_views = gb.roughness_views();
-            let hdr_views: Vec<vk::ImageView> =
-                hdr_resolve_images.iter().map(|img| img.view).collect();
-            if let Some(ssr) = ssr_opt.as_ref() {
-                ssr.wire_resolve_sets(
-                    &device,
-                    &hdr_views,
-                    &nd_views,
-                    &rough_views,
-                    env_map.prefilter.view,
-                    cube_sampler.handle(),
-                );
-            }
-            if let Some(ssgi) = ssgi_opt.as_ref() {
-                ssgi.wire_sets_gbuffer(&device, &hdr_views, &nd_views);
-            }
             if let Some(ssao) = ssao_opt.as_ref() {
                 ssao.wire_kernel_and_blur_sets_gbuffer(&device, &nd_views);
             }

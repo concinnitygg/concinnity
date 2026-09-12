@@ -17,8 +17,6 @@ use super::post::gbuffer::{GbufferDeviceCtx, GbufferExtent, GbufferQueueCtx};
 use super::post::reflection_composite::CompositeInputViews;
 use super::post::rt_reflections::RtStaticInputs;
 use super::post::ssao::SsaoDeviceCtx;
-use super::post::ssgi::SsgiDevice;
-use super::post::ssr::{SsrExtent, SsrGpuContext, SsrResolveInputs};
 use super::post::upscale::UpscalerGpu;
 use super::raymarch::RaymarchDeviceContext;
 use super::texture::*;
@@ -52,6 +50,9 @@ impl VkContext {
             };
         }
         self.framebuffers.clear();
+        // The shared post passes' cached framebuffers name views dropped here
+        // (the HDR scene the SSGI composite writes) or rebuilt along with them.
+        self.post.cache.forget_views();
         self.composite.framebuffers.clear();
         self.bloom.write_framebuffers.clear();
         self.bloom.blend_framebuffers.clear();
@@ -331,70 +332,20 @@ impl VkContext {
             self.gbuffer = Some(gb);
         }
 
-        // Rebuild the SSR targets at the new resolution. The G-buffer +
-        // roughness + private depth + output are all resolution-dependent;
-        // the resolve sets re-point automatically at the new HDR resolve +
-        // SSR targets via wire_resolve_sets. With SSR on, the bloom prefilter
-        // input 0 also moves to the new SSR output below; TAA (when on)
-        // overrides that in turn to the new TAA output.
+        // Rebuild the SSR reflection target and the SSGI gather target at the
+        // new resolution. Both passes read the rebuilt HDR resolve and G-buffer
+        // views per frame, so nothing else needs re-pointing. The bloom
+        // prefilter samples the reflection composite output (re-pointed in the
+        // composite rebuild below), not the raw resolve output.
         if let Some(mut ssr) = self.ssr.take() {
-            let hdr_views: Vec<vk::ImageView> =
-                self.hdr_resolve_images.iter().map(|img| img.view).collect();
-            // Per-frame unified G-buffer views (rebuilt above) when present, else
-            // empty so the SSR resolve falls back to its own pre-pass targets.
-            let (nd_views, rough_views) = match self.gbuffer.as_ref() {
-                Some(gb) => (gb.normal_depth_views(), gb.roughness_views()),
-                None => (Vec::new(), Vec::new()),
-            };
-            ssr.rebuild(
-                &SsrGpuContext {
-                    alloc: &self.alloc,
-                    device: &self.device,
-                    command_pool: self.commands.command_pool,
-                    queue: self.graphics_queue,
-                },
-                SsrExtent {
-                    width: render_ext.width,
-                    height: render_ext.height,
-                },
-                SsrResolveInputs {
-                    hdr_resolve_views: &hdr_views,
-                    gbuffer_views: &nd_views,
-                    roughness_views: &rough_views,
-                    prefilter_view: self.env_map.prefilter.view,
-                    cube_sampler: self.cube_sampler.handle(),
-                },
-            )?;
-            // The bloom prefilter samples the reflection composite output (re-pointed
-            // in the composite rebuild below), not the raw resolve output.
+            let rebuilt = ssr.rebuild(&self.post_device(0), render_ext);
             self.ssr = Some(ssr);
+            rebuilt?;
         }
-
-        // Rebuild the SSGI gi target + composite framebuffers and re-wire its
-        // descriptor sets to the rebuilt HDR resolves + SSR pre-pass G-buffer.
-        // The SSR rebuild above already ran, so `ssr.gbuffer` is current. The
-        // render passes, pipelines, sampler, and descriptor pool all survive.
         if let Some(mut ssgi) = self.ssgi.take() {
-            let hdr_views: Vec<vk::ImageView> =
-                self.hdr_resolve_images.iter().map(|img| img.view).collect();
-            // SSGI samples the unified G-buffer's per-frame normal+depth views.
-            // The merged pre-pass was rebuilt above, so they are current.
-            let nd_views = self
-                .gbuffer
-                .as_ref()
-                .expect("SSGI keeps the unified G-buffer pre-pass alive")
-                .normal_depth_views();
-            ssgi.rebuild(
-                SsgiDevice {
-                    alloc: &self.alloc,
-                    device: &self.device,
-                },
-                render_ext.width,
-                render_ext.height,
-                &hdr_views,
-                &nd_views,
-            )?;
+            let rebuilt = ssgi.rebuild(&self.post_device(0), render_ext);
             self.ssgi = Some(ssgi);
+            rebuilt?;
         }
 
         // Rebuild the RT-reflection output target + re-wire its static
@@ -481,9 +432,6 @@ impl VkContext {
         // holds then. `wait_idle()` above guarantees none of these are still in
         // flight.
         if let Some(mut taa) = self.taa.take() {
-            // The cached framebuffers name the views the rebuild is about to
-            // drop, and were sized at the old extent either way.
-            self.post.cache.forget_views();
             taa.rebuild(&self.post_device(0), render_ext)?;
             for (i, frame_sets) in self.bloom.input_sets.iter().enumerate() {
                 rebind_bloom_input0(

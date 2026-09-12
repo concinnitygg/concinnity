@@ -50,10 +50,9 @@ impl TaaResources {
         self.pass.target(self.output_index())
     }
 
-    // Rebuild the accumulation targets at a new resolution. Their descriptors
-    // come back on the same heap slots (the shared post block is rewound first),
-    // so the live composite and bloom-prefilter bindings keep working without a
-    // re-bind. History is unreliable across a resize -- the reprojection
+    // Rebuild the accumulation targets at a new resolution. The resolve drops
+    // its old targets before creating the new ones, so they come back on the
+    // slots they held. History is unreliable across a resize -- the reprojection
     // coordinates were generated at the old resolution -- so the resolve treats
     // the next frame as the first, and the jitter sequence restarts with it.
     pub(in crate::directx) fn resize_to(
@@ -62,7 +61,6 @@ impl TaaResources {
         width: u32,
         height: u32,
     ) -> Result<(), String> {
-        device.descriptors.rewind();
         self.pass.resize(device, PostExtent { width, height })?;
         self.frame.set(0);
         Ok(())
@@ -75,10 +73,10 @@ impl DxContext {
     // the current frame's neighborhood, and blends. Writes this frame's
     // ping-pong slot, reading the other as history. Called only when `self.taa`
     // is `Some`, after the unified G-buffer pre-pass.
-    pub(in crate::directx) fn encode_taa(&self, cmd: &ID3D12GraphicsCommandList) {
+    pub(in crate::directx) fn encode_taa(&self, cmd: &ID3D12GraphicsCommandList, frame_idx: usize) {
         let Some(taa) = &self.taa else { return };
         let Some(gbuffer) = &self.gbuffer else { return };
-        let device = self.post_device();
+        let device = self.post_device(frame_idx);
         if let Err(e) = taa.pass.encode(
             &device,
             cmd,

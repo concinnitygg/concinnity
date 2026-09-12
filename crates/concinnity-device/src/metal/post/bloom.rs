@@ -12,6 +12,8 @@ use objc2_metal::{
     MTLTextureUsage,
 };
 
+use concinnity_core::render::fullscreen;
+
 use crate::metal::context::MtlContext;
 use crate::metal::descriptors::TextureDesc;
 use crate::metal::encode::RenderEncode;
@@ -132,15 +134,116 @@ pub(crate) fn create_bloom_targets(
 
 // Encoder
 
-impl MtlContext {
-    // Encode the bloom prefilter, downsample, and additive upsample passes.
+// The bloom chain orchestration lives once in `gfx::fullscreen`; this impl opens
+// one render encoder per sub-pass in Metal. Every bind is per encoder here, so
+// the chain carries no shared preamble and needs no per-invocation argument:
+// what the sub-passes have in common is held on the struct instead.
+struct BloomChain<'a> {
+    ctx: &'a MtlContext,
+    pipelines: &'a BloomPipelines,
+    // The post-TAA scene color (or `hdr_resolve` when TAA is off) the prefilter
+    // thresholds.
+    scene_color: &'a ProtocolObject<dyn MTLTexture>,
+}
+
+impl fullscreen::BloomEncoder for BloomChain<'_> {
+    type Rec = ProtocolObject<dyn objc2_metal::MTLCommandBuffer>;
+    type Args = ();
+
+    fn bloom_mip_count(&self) -> usize {
+        self.ctx.bloom_targets.mips.len()
+    }
+
+    // Nothing to do: a Metal render encoder keeps no state across the sub-passes,
+    // so each one binds its own inputs below.
+    fn begin_bloom(&self, _cmd: &Self::Rec, _args: &()) -> Result<(), String> {
+        Ok(())
+    }
+
+    // Prefilter: scene color -> mips[0] (soft-knee threshold + Karis 13-tap).
     //
-    // Runs between the TAA resolve and the composite pass. Each pass is one
+    // Bloom's GPU-timing span runs from this prefilter through the final
+    // upsample, so this encoder records the start sample. With a single mip (no
+    // downsample / upsample) it is the only encoder and owns both.
+    fn bloom_prefilter(&self, cmd: &Self::Rec, _args: &()) -> Result<(), String> {
+        let timer = if self.bloom_mip_count() <= 1 {
+            PassTimer::Whole(crate::metal::pass_timing::PassId::Bloom)
+        } else {
+            PassTimer::First(crate::metal::pass_timing::PassId::Bloom)
+        };
+        self.ctx.fullscreen_pass(
+            cmd,
+            FullscreenPass {
+                target: self.ctx.bloom_targets.mips[0].as_ref(),
+                load: MTLLoadAction::DontCare,
+                timer,
+                pipeline: &self.pipelines.prefilter,
+                label: "bloom prefilter",
+            },
+            |enc| {
+                enc.set_fragment_texture(self.scene_color, 0);
+                enc.set_fragment_sampler(&self.ctx.post_sampler, 0);
+                enc.set_fragment_value(&self.ctx.post_process, 0);
+            },
+        )
+    }
+
+    // Downsample: mips[dst - 1] -> mips[dst].
+    fn bloom_downsample(&self, cmd: &Self::Rec, _args: &(), dst: usize) -> Result<(), String> {
+        let mips = &self.ctx.bloom_targets.mips;
+        self.ctx.fullscreen_pass(
+            cmd,
+            FullscreenPass {
+                target: mips[dst].as_ref(),
+                load: MTLLoadAction::DontCare,
+                timer: PassTimer::None,
+                pipeline: &self.pipelines.downsample,
+                label: "bloom downsample",
+            },
+            |enc| {
+                enc.set_fragment_texture(mips[dst - 1].as_ref(), 0);
+                enc.set_fragment_sampler(&self.ctx.post_sampler, 0);
+            },
+        )
+    }
+
+    // Upsample: mips[dst + 1] -> mips[dst], additively blended onto the
+    // downsampled content already there. The chain walks back down to mips[0],
+    // so that iteration is the span's last encoder and records its end sample.
+    fn bloom_upsample(&self, cmd: &Self::Rec, _args: &(), dst: usize) -> Result<(), String> {
+        let mips = &self.ctx.bloom_targets.mips;
+        let timer = if dst == 0 {
+            PassTimer::Last(crate::metal::pass_timing::PassId::Bloom)
+        } else {
+            PassTimer::None
+        };
+        self.ctx.fullscreen_pass(
+            cmd,
+            FullscreenPass {
+                target: mips[dst].as_ref(),
+                load: MTLLoadAction::Load,
+                timer,
+                pipeline: &self.pipelines.upsample,
+                label: "bloom upsample",
+            },
+            |enc| {
+                enc.set_fragment_texture(mips[dst + 1].as_ref(), 0);
+                enc.set_fragment_sampler(&self.ctx.post_sampler, 0);
+            },
+        )
+    }
+}
+
+impl MtlContext {
+    // Encode the bloom prefilter, downsample, and additive upsample passes
+    // through the shared `gfx::fullscreen` driver.
+    //
+    // Runs between the TAA resolve and the composite pass. Each sub-pass is one
     // fullscreen-triangle draw into a bloom mip; Metal inserts the texture
-    // read/write hazards between passes automatically. On return `mips[0]`
-    // holds the accumulated bloom that the composite pass samples.
-    // `scene_color` is the post-TAA scene color (or `hdr_resolve` when TAA
-    // is off) that the prefilter pass thresholds.
+    // read/write hazards between them automatically. On return `mips[0]` holds
+    // the accumulated bloom that the composite pass samples. `scene_color` is the
+    // post-TAA scene color (or `hdr_resolve` when TAA is off) that the prefilter
+    // pass thresholds.
     pub(in crate::metal) fn encode_bloom(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
@@ -148,82 +251,18 @@ impl MtlContext {
     ) -> Result<u32, String> {
         // Scene-less worlds build no bloom pipelines and the graph never
         // inserts the Bloom pass, so this is a defensive no-op there.
-        let Some(bloom_pipelines) = &self.bloom_pipelines else {
+        let Some(pipelines) = &self.bloom_pipelines else {
             return Ok(0);
         };
-        let mips = &self.bloom_targets.mips;
-        let n = mips.len();
-
-        // Prefilter: hdr_resolve -> mips[0] (soft-knee threshold + Karis 13-tap).
-        // Bloom's GPU-timing span runs from this prefilter through the final
-        // upsample: mark the start sample here (and the end on the last upsample
-        // below). With a single mip (no downsample / upsample) the prefilter is
-        // the only encoder and owns both samples.
-        let prefilter_timer = if n <= 1 {
-            PassTimer::Whole(crate::metal::pass_timing::PassId::Bloom)
-        } else {
-            PassTimer::First(crate::metal::pass_timing::PassId::Bloom)
-        };
-        self.fullscreen_pass(
+        fullscreen::encode_bloom_chain(
+            &BloomChain {
+                ctx: self,
+                pipelines,
+                scene_color,
+            },
             cmd_buf,
-            FullscreenPass {
-                target: mips[0].as_ref(),
-                load: MTLLoadAction::DontCare,
-                timer: prefilter_timer,
-                pipeline: &bloom_pipelines.prefilter,
-                label: "bloom prefilter",
-            },
-            |enc| {
-                enc.set_fragment_texture(scene_color, 0);
-                enc.set_fragment_sampler(&self.post_sampler, 0);
-                enc.set_fragment_value(&self.post_process, 0);
-            },
+            (),
         )?;
-
-        // Downsample chain: mips[i-1] -> mips[i].
-        for i in 1..n {
-            self.fullscreen_pass(
-                cmd_buf,
-                FullscreenPass {
-                    target: mips[i].as_ref(),
-                    load: MTLLoadAction::DontCare,
-                    timer: PassTimer::None,
-                    pipeline: &bloom_pipelines.downsample,
-                    label: "bloom downsample",
-                },
-                |enc| {
-                    enc.set_fragment_texture(mips[i - 1].as_ref(), 0);
-                    enc.set_fragment_sampler(&self.post_sampler, 0);
-                },
-            )?;
-        }
-
-        // Upsample chain: mips[i+1] -> mips[i], additively blended onto the
-        // downsampled content already in mips[i]. Walks back down to mips[0].
-        // The `i == 0` iteration is the chain's final encoder, so it records the
-        // end timing sample; the intermediate upsamples write none.
-        for i in (0..n - 1).rev() {
-            let timer = if i == 0 {
-                PassTimer::Last(crate::metal::pass_timing::PassId::Bloom)
-            } else {
-                PassTimer::None
-            };
-            self.fullscreen_pass(
-                cmd_buf,
-                FullscreenPass {
-                    target: mips[i].as_ref(),
-                    load: MTLLoadAction::Load,
-                    timer,
-                    pipeline: &bloom_pipelines.upsample,
-                    label: "bloom upsample",
-                },
-                |enc| {
-                    enc.set_fragment_texture(mips[i + 1].as_ref(), 0);
-                    enc.set_fragment_sampler(&self.post_sampler, 0);
-                },
-            )?;
-        }
-
         Ok(0)
     }
 }

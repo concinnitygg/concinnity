@@ -1,371 +1,66 @@
 // src/directx/post/ssgi.rs
 //
-// Screen-space global illumination for the D3D12 backend: a refinement of SSR.
-// It reuses the SSR depth + normal pre-pass G-buffer (so turning SSGI on forces
-// that pre-pass to run even when the SSR resolve is off) and runs two
-// fullscreen passes on the hdr_resolve RMW chain after the main pass:
-//
-//   * gather:    per pixel, a cone of cosine-weighted hemisphere rays marched
-//                against the G-buffer, accumulating the lit scene color at
-//                each on-screen hit into an off-screen `gi` target.
-//   * composite: a depth-aware blur of that noisy `gi` target, additively
-//                blended (ONE / ONE) into `hdr_resolve` so the near-field
-//                indirect bounce layers on top of the IBL ambient.
-//
-// Pipelines, the `gi` target, and the encoder live together so the effect is a
-// single unit. Mirrors src/metal/post/ssgi.rs.
+// DirectX's share of screen-space global illumination, which is its settings,
+// where the pass reads and writes this frame, and the one resource state the
+// graph cannot express for it. The gather and composite -- their pipelines, the
+// reduced gather target and both draws -- are written once in
+// `concinnity_core::render::post::ssgi` and reach D3D12 through `DxPostDevice`.
 
-use concinnity_core::gfx::render_types::SsgiParams;
 use concinnity_core::gfx::ssgi::SsgiSettings;
-use concinnity_core::render::fullscreen::{FullscreenPass, encode_fullscreen};
-use concinnity_core::render::post::device::PostBlend;
+use concinnity_core::render::post::device::PostExtent;
+use concinnity_core::render::post::ssgi::{SsgiPass, SsgiPipelines};
 use windows::Win32::Graphics::Direct3D12::*;
 
-use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
-use crate::directx::com;
-use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
-use crate::directx::pipeline::{create_blended_composite_pso, serialize_desc_and_create};
-use crate::directx::post::fullscreen::FullscreenExtent;
-use crate::directx::slang_builtins;
-use crate::directx::slang_builtins::SlangCompile;
+use crate::directx::context::DxContext;
+use crate::directx::post::post_device::{DxPostDevice, PostPipeline, PostTarget};
 use crate::directx::texture::transition_barrier;
-use crate::directx::texture::{
-    HDR_FORMAT, create_buffer, create_rt_target, write_format_rtv, write_format_srv,
-};
-
-// Size of the SSGI gather + composite fragment-shader uniform block. 32 bytes;
-// see `gfx::render_types::SsgiParams`.
-const SSGI_PARAMS_UBO_SIZE: u64 = 32;
-
-// Shader compilation
-
-struct SsgiShaders {
-    vs: Vec<u8>,
-    gather_ps: Vec<u8>,
-    composite_ps: Vec<u8>,
-}
-
-// Compile the shared fullscreen vertex shader and both fragment entry points.
-fn compile_ssgi_shaders(hot_reload: bool) -> Result<SsgiShaders, String> {
-    Ok(SsgiShaders {
-        vs: slang_builtins::FULLSCREEN_VERT.compile(hot_reload)?,
-        gather_ps: slang_builtins::SSGI_GATHER.compile(hot_reload)?,
-        composite_ps: slang_builtins::SSGI_COMPOSITE.compile(hot_reload)?,
-    })
-}
-
-// Root signature
-
-// Root signature shared by both SSGI passes: a root CBV at b0 (the 32-byte
-// `SsgiParams` block) and two 1-SRV descriptor tables: t0 (scene radiance for
-// the gather / the noisy gather output for the composite) and t1 (the SSR
-// pre-pass G-buffer). Static linear-clamp samplers at s0 / s1 -- one per source,
-// because slangc splits each combined sampler in the single source into its own
-// texture/sampler pair.
-fn create_ssgi_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignature, String> {
-    let t0_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 1,
-        BaseShaderRegister: 0, // t0
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    let t1_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 1,
-        BaseShaderRegister: 1, // t1
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    let params = [
-        // [0] Root CBV: SsgiParams at b0
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [1] scene / gi SRV (t0)
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &t0_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [2] G-buffer SRV (t1)
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &t1_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-    ];
-    // s0 / s1: linear-clamp for the scene / gi tap and the G-buffer. Identical
-    // descriptors; the split is the shader's, not the pass's.
-    let samplers = [0u32, 1].map(|reg| D3D12_STATIC_SAMPLER_DESC {
-        Filter: D3D12_FILTER_MIN_MAG_MIP_LINEAR,
-        AddressU: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        AddressV: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        AddressW: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        ComparisonFunc: D3D12_COMPARISON_FUNC_ALWAYS,
-        BorderColor: D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK,
-        MinLOD: 0.0,
-        MaxLOD: f32::MAX,
-        ShaderRegister: reg,
-        RegisterSpace: 0,
-        ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        ..Default::default()
-    });
-    let desc = D3D12_ROOT_SIGNATURE_DESC {
-        NumParameters: params.len() as u32,
-        pParameters: params.as_ptr(),
-        NumStaticSamplers: samplers.len() as u32,
-        pStaticSamplers: samplers.as_ptr(),
-        Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
-    };
-    serialize_desc_and_create(device, &desc, "ssgi root sig")
-}
-
-// Resources
 
 // SSGI resources held by `DxContext` when `PostProcessConfig.indirect_lighting`
-// is `ssgi`. Drops cleanly with the context: all D3D12 objects are
-// COM-refcounted.
+// is `ssgi`.
 pub(in crate::directx) struct SsgiResources {
-    // Resolved authored tunables; turned into a per-frame `SsgiParams` push.
+    // Resolved authored tunables; turned into a per-frame `SsgiParams` block.
     pub(in crate::directx) settings: SsgiSettings,
-
-    // Gathered indirect radiance (`HDR_FORMAT`), before the depth-aware blur the
-    // composite pass applies. The composite blends straight into `hdr_resolve`,
-    // so only this intermediate `gi` texture lives here.
-    gi: ID3D12Resource,
-    gi_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    gi_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-    // `gi`'s own dimensions, the gather's viewport. Kept in step with `gi` at
-    // create and resize so the pass does not query the resource for them.
-    gi_extent: FullscreenExtent,
-
-    // Per-frame params UBO (32-byte SsgiParams), persistently mapped.
-    params_ubo_resources: Vec<PooledBuffer>,
-    params_ubo_ptrs: Vec<*mut u8>,
-
-    // One root signature shared by both PSOs; gather (plain write) + composite
-    // (additive blend).
-    root_sig: ID3D12RootSignature,
-    gather_pso: ID3D12PipelineState,
-    composite_pso: ID3D12PipelineState,
-}
-
-// GPU device handles the SSGI builder needs: the device and the optional debug
-// info queue. They always travel together through `new`.
-#[derive(Clone, Copy)]
-pub(in crate::directx) struct SsgiDevice<'a> {
-    pub alloc: &'a DeviceAllocator,
-    pub info_queue: Option<&'a ID3D12InfoQueue>,
-}
-
-// Descriptor handles for the SSGI gather target: a CPU RTV plus the (CPU, GPU)
-// SRV pair the composite samples.
-#[derive(Clone, Copy)]
-pub(in crate::directx) struct SsgiDescriptors {
-    pub gi_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub gi_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE),
+    pass: SsgiPass<PostPipeline, PostTarget>,
 }
 
 impl SsgiResources {
-    // Build all SSGI resources. Called from `DxContext::new` only when the
-    // world's `PostProcessConfig` selects `indirect_lighting: ssgi`.
+    // Build both pipelines and the gather target for a render resolution of
+    // `width` x `height`.
     pub(in crate::directx) fn new(
-        dev: SsgiDevice,
+        device: &DxPostDevice,
         width: u32,
         height: u32,
         settings: SsgiSettings,
-        descriptors: SsgiDescriptors,
-        hot_reload: bool,
     ) -> Result<Self, String> {
-        let SsgiDevice { alloc, info_queue } = dev;
-        let device = alloc.device();
-        let SsgiDescriptors { gi_rtv, gi_srv } = descriptors;
-        // The gather runs at `gi_scale`-reduced resolution; the composite
-        // bilateral-upsamples it back to full resolution (it reads the gi
-        // texture's own dimensions for the tap stride). Mirrors metal/post/ssgi.
-        let (gw, gh) = settings.gi_dimensions(width, height);
-        let gi_extent = FullscreenExtent {
-            width: gw,
-            height: gh,
-        };
-        let gi = create_rt_target(device, gw, gh, HDR_FORMAT)?;
-        write_format_rtv(device, &gi, gi_rtv, HDR_FORMAT);
-        write_format_srv(device, &gi, gi_srv.0, HDR_FORMAT);
-
-        let params_size = align256(SSGI_PARAMS_UBO_SIZE);
-        let mut params_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
-        let mut params_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
-        for _ in 0..FRAMES {
-            let buf = create_buffer(
-                alloc,
-                params_size,
-                D3D12_HEAP_TYPE_UPLOAD,
-                D3D12_RESOURCE_STATE_GENERIC_READ,
-            )?;
-            let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
-            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
-            // local that receives the mapping.
-            unsafe { buf.Map(0, None, Some(&mut ptr)) }
-                .map_err(|e| format!("map ssgi params ubo: {e}"))?;
-            params_ubo_ptrs.push(ptr as *mut u8);
-            params_ubo_resources.push(buf);
-        }
-
-        let shaders = compile_ssgi_shaders(hot_reload)?;
-        let root_sig = dump_on_err(info_queue, create_ssgi_root_signature(device))?;
-        let gather_pso = dump_on_err(
-            info_queue,
-            create_blended_composite_pso(
-                device,
-                &root_sig,
-                &shaders.vs,
-                &shaders.gather_ps,
-                HDR_FORMAT,
-                PostBlend::Replace,
-                "ssgi gather",
-            ),
-        )?;
-        let composite_pso = dump_on_err(
-            info_queue,
-            create_blended_composite_pso(
-                device,
-                &root_sig,
-                &shaders.vs,
-                &shaders.composite_ps,
-                HDR_FORMAT,
-                PostBlend::Additive,
-                "ssgi composite",
-            ),
-        )?;
-
         Ok(Self {
             settings,
-            gi,
-            gi_rtv,
-            gi_srv_gpu: gi_srv.1,
-            gi_extent,
-            params_ubo_resources,
-            params_ubo_ptrs,
-            root_sig,
-            gather_pso,
-            composite_pso,
+            pass: SsgiPass::new(device, settings.gi_scale, PostExtent { width, height })?,
         })
     }
 
-    // Rebuild the `gi` target at a new resolution. The descriptor *slot* stays
-    // where it was; only the backing resource changes, so the live pass
-    // bindings (which point at the SRV slot's GPU handle) stay valid.
+    // Recreate the gather target at a new render resolution. The composite reads
+    // its descriptor per frame, so the slot it lands on is free to move.
     pub(in crate::directx) fn resize_to(
         &mut self,
-        device: &ID3D12Device,
+        device: &DxPostDevice,
         width: u32,
         height: u32,
-        srv_cpu_base: D3D12_CPU_DESCRIPTOR_HANDLE,
-        srv_gpu_base: D3D12_GPU_DESCRIPTOR_HANDLE,
     ) -> Result<(), String> {
-        let srv_cpu = |gpu: D3D12_GPU_DESCRIPTOR_HANDLE| D3D12_CPU_DESCRIPTOR_HANDLE {
-            ptr: srv_cpu_base.ptr + (gpu.ptr - srv_gpu_base.ptr) as usize,
-        };
-        // Reduced-res gather target (see `new`); the composite upsamples it.
-        let (gw, gh) = self.settings.gi_dimensions(width, height);
-        self.gi_extent = FullscreenExtent {
-            width: gw,
-            height: gh,
-        };
-        self.gi = create_rt_target(device, gw, gh, HDR_FORMAT)?;
-        write_format_rtv(device, &self.gi, self.gi_rtv, HDR_FORMAT);
-        write_format_srv(device, &self.gi, srv_cpu(self.gi_srv_gpu), HDR_FORMAT);
-        Ok(())
+        self.pass.resize(device, PostExtent { width, height })
+    }
+
+    // Swap in freshly built pipelines. Driven by shader hot reload; the caller
+    // has already idled the device.
+    pub(in crate::directx) fn swap_pipelines(&mut self, pipelines: SsgiPipelines<PostPipeline>) {
+        self.pass.swap_pipelines(pipelines);
     }
 }
 
-// Replacement SSGI PSOs returned by [`rebuild_ssgi_pipelines`]. The caller
-// swaps them into the live `SsgiResources` only if both builds succeeded.
-pub(in crate::directx) struct RebuiltSsgiPipelines {
-    pub gather_pso: ID3D12PipelineState,
-    pub composite_pso: ID3D12PipelineState,
-}
-
-// Rebuild both SSGI PSOs against fresh shader source, reusing the existing root
-// signature. Returns the new PSOs for the caller to swap into the live
-// `SsgiResources`.
-pub(in crate::directx) fn rebuild_ssgi_pipelines(
-    device: &ID3D12Device,
-    ssgi: &SsgiResources,
-    hot_reload: bool,
-    info_queue: Option<&ID3D12InfoQueue>,
-) -> Result<RebuiltSsgiPipelines, String> {
-    let shaders = compile_ssgi_shaders(hot_reload)?;
-    let gather_pso = dump_on_err(
-        info_queue,
-        create_blended_composite_pso(
-            device,
-            &ssgi.root_sig,
-            &shaders.vs,
-            &shaders.gather_ps,
-            HDR_FORMAT,
-            PostBlend::Replace,
-            "ssgi gather",
-        ),
-    )?;
-    let composite_pso = dump_on_err(
-        info_queue,
-        create_blended_composite_pso(
-            device,
-            &ssgi.root_sig,
-            &shaders.vs,
-            &shaders.composite_ps,
-            HDR_FORMAT,
-            PostBlend::Additive,
-            "ssgi composite",
-        ),
-    )?;
-    Ok(RebuiltSsgiPipelines {
-        gather_pso,
-        composite_pso,
-    })
-}
-
-// Swap freshly compiled SSGI PSOs into the live resources after a hot-reload.
-pub(in crate::directx) fn swap_ssgi_pipelines(
-    ssgi: &mut SsgiResources,
-    rebuilt: RebuiltSsgiPipelines,
-) {
-    ssgi.gather_pso = rebuilt.gather_pso;
-    ssgi.composite_pso = rebuilt.composite_pso;
-}
-
-// Encoder
-
 impl DxContext {
-    // Encode the SSGI gather + composite. The gather marches hemisphere rays
-    // over the SSR pre-pass G-buffer and writes the noisy indirect radiance into
-    // the `gi` target; the composite depth-aware-blurs it and additively blends
-    // it into `hdr_resolve` (or `hdr_color` with MSAA off). Runs on the
-    // hdr_resolve RMW chain after the main pass; only dispatched when SSGI is on
-    // (and the SSR pre-pass G-buffer therefore exists).
-    //
-    // Both sub-passes are single-draw fullscreen passes, so each runs through the
-    // shared `gfx::fullscreen` driver; the PSR<->RENDER_TARGET barrier bracket +
-    // render-target bind live once in `DxContext::begin/end_fullscreen_rt`.
+    // Encode the SSGI gather + composite: hemisphere rays marched over the
+    // G-buffer into the reduced gather target, then blurred and added into the
+    // scene spine (`hdr_resolve`, or `hdr_color` with MSAA off). Runs on the
+    // hdr_resolve read-modify-write chain after the main pass.
     pub(in crate::directx) fn encode_ssgi(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -373,156 +68,51 @@ impl DxContext {
         fov_y_radians: f32,
         aspect: f32,
     ) {
-        // Resolve the pass's resources up front, before constructing either
-        // encoder, so the driver never leaves a barrier bracket half-open. SSGI
-        // gathers against the unified G-buffer pre-pass (view normal + linear
-        // depth); if it is absent there is nothing to gather against, so skip
-        // rather than read a stale descriptor.
         let Some(ssgi) = &self.ssgi else { return };
-        let gbuffer_srv = match &self.gbuffer {
-            Some(g) => g.normal_depth_srv_gpu,
-            None => return,
-        };
-
-        // Build + upload this frame's SsgiParams; both sub-passes read the same
-        // block via its GPU virtual address.
+        // With no G-buffer there is nothing to gather against, so skip rather
+        // than read a stale descriptor.
+        let Some(gbuffer) = &self.gbuffer else { return };
         let params = ssgi.settings.params(fov_y_radians, aspect);
-        // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
-        // init sized for this payload, and the source is a separate live value, so the ranges
-        // cannot overlap.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                &params as *const SsgiParams as *const u8,
-                ssgi.params_ubo_ptrs[frame_idx],
-                std::mem::size_of::<SsgiParams>(),
-            );
-        }
-        let params_gva = com::gpu_va(&ssgi.params_ubo_resources[frame_idx]);
+        let device = self.post_device(frame_idx);
 
         // The gather samples the scene spine while the composite blends into it,
         // so this node reads and writes one resource. The graph models that as a
         // single write and leaves the spine in RENDER_TARGET; sampling it needs
         // the shader-resource state, so borrow it for the gather and hand it
         // back. Finer than one-state-per-resource, hence inline.
-        let gather_read = transition_barrier(
-            self.hdr_scene_target(),
+        let borrow = |from, to| {
+            // SAFETY: the command list is in the recording state, and the
+            // resource the barrier names is live for the call.
+            unsafe {
+                cmd.ResourceBarrier(&[transition_barrier(self.hdr_scene_target(), from, to)]);
+            }
+        };
+        borrow(
             D3D12_RESOURCE_STATE_RENDER_TARGET,
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
         );
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe { cmd.ResourceBarrier(&[gather_read]) };
-
-        // Gather: hemisphere ray-march over the G-buffer -> gi target. t0 = lit
-        // scene (the bounce-radiance source); t1 = pre-pass G-buffer.
-        encode_fullscreen(
-            &SsgiPass {
-                ctx: self,
-                ssgi,
-                output: &ssgi.gi,
-                output_rtv: ssgi.gi_rtv,
-                output_extent: ssgi.gi_extent,
-                graph_driven: false,
-                pso: &ssgi.gather_pso,
-                source_srv: self.hdr.srv_gpu,
-                gbuffer_srv,
-                params_gva,
-            },
+        let gathered = ssgi.pass.encode_gather(
+            &device,
             cmd,
+            self.hdr.srv_gpu,
+            gbuffer.normal_depth_srv_gpu,
+            &params,
         );
-
-        let gather_done = transition_barrier(
-            self.hdr_scene_target(),
+        borrow(
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
             D3D12_RESOURCE_STATE_RENDER_TARGET,
         );
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe { cmd.ResourceBarrier(&[gather_done]) };
-
-        // Composite: depth-aware blur of gi, additively blended into the scene
-        // spine, back in the RENDER_TARGET the graph left it in. t0 = noisy
-        // gather output; t1 = G-buffer for depth weighting.
-        encode_fullscreen(
-            &SsgiPass {
-                ctx: self,
-                ssgi,
-                output: self.hdr_scene_target(),
-                output_rtv: self.hdr_scene_rtv(),
-                output_extent: FullscreenExtent {
-                    width: self.extent.render_width,
-                    height: self.extent.render_height,
-                },
-                graph_driven: true,
-                pso: &ssgi.composite_pso,
-                source_srv: ssgi.gi_srv_gpu,
-                gbuffer_srv,
-                params_gva,
-            },
-            cmd,
-        );
-    }
-}
-
-// Encoder for one SSGI fullscreen sub-pass (gather or composite): the target +
-// pipeline + source SRV that distinguish the two, plus the shared G-buffer SRV
-// and per-frame SsgiParams address. The PSR<->RENDER_TARGET barrier bracket +
-// render-target bind live in `DxContext::begin/end_fullscreen_rt`
-// (post/fullscreen.rs); only the SSGI-specific bind + draw is here. Constructed
-// + driven by `encode_ssgi` through `gfx::fullscreen::encode_fullscreen`.
-struct SsgiPass<'a> {
-    ctx: &'a DxContext,
-    ssgi: &'a SsgiResources,
-    // Target this sub-pass writes (gi for the gather, the scene for the composite).
-    output: &'a ID3D12Resource,
-    output_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    output_extent: FullscreenExtent,
-    // Whether the executor owns `output`'s transitions. True for the composite
-    // (the scene spine is a graph resource); false for the gather, whose `gi`
-    // target lives entirely inside this node and so keeps its own bracket.
-    graph_driven: bool,
-    pso: &'a ID3D12PipelineState,
-    // t0: lit scene for the gather, the noisy gi target for the composite.
-    source_srv: D3D12_GPU_DESCRIPTOR_HANDLE,
-    // t1: the unified pre-pass G-buffer, shared by both sub-passes.
-    gbuffer_srv: D3D12_GPU_DESCRIPTOR_HANDLE,
-    params_gva: u64,
-}
-
-impl FullscreenPass for SsgiPass<'_> {
-    type Rec = ID3D12GraphicsCommandList;
-
-    fn begin(&self, cmd: &Self::Rec) {
-        if self.graph_driven {
-            self.ctx
-                .bind_fullscreen_rt(cmd, self.output_rtv, self.output_extent);
-        } else {
-            self.ctx
-                .begin_fullscreen_rt(cmd, self.output, self.output_rtv, self.output_extent);
-        }
-    }
-
-    fn draw(&self, cmd: &Self::Rec) {
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.SetPipelineState(self.pso);
-            cmd.SetGraphicsRootSignature(&self.ssgi.root_sig);
-            cmd.SetGraphicsRootConstantBufferView(0, self.params_gva);
-            cmd.SetGraphicsRootDescriptorTable(1, self.source_srv);
-            cmd.SetGraphicsRootDescriptorTable(2, self.gbuffer_srv);
-            cmd.IASetPrimitiveTopology(
-                windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
-            );
-            cmd.IASetVertexBuffers(0, None);
-            cmd.IASetIndexBuffer(None);
-            cmd.DrawInstanced(3, 1, 0, 0);
-        }
-    }
-
-    fn end(&self, cmd: &Self::Rec) {
-        if !self.graph_driven {
-            self.ctx.end_fullscreen_rt(cmd, self.output);
+        let result = gathered.and_then(|()| {
+            ssgi.pass.encode_composite(
+                &device,
+                cmd,
+                self.hdr_scene_attachment(),
+                gbuffer.normal_depth_srv_gpu,
+                &params,
+            )
+        });
+        if let Err(e) = result {
+            tracing::error!("SSGI: {e}");
         }
     }
 }

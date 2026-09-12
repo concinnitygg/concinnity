@@ -651,12 +651,16 @@ impl VkContext {
         // reflections), else this slot's HDR resolve target (also the SSGI-only
         // case, where `ssr` exists for the G-buffer but the resolve is off).
         // Both rest in SHADER_READ_ONLY_OPTIMAL after their writer.
-        let scene = match self.ssr.as_ref().filter(|_| self.ssr_resolve_active) {
-            Some(s) => &s.output,
-            None => self
-                .hdr_resolve_images
-                .get(frame)
-                .ok_or("upscale: hdr resolve slot out of range")?,
+        let (scene_image, scene_view) = match self.ssr.as_ref().filter(|_| self.ssr_resolve_active)
+        {
+            Some(s) => (s.output.image(), s.output.view()),
+            None => {
+                let hdr = self
+                    .hdr_resolve_images
+                    .get(frame)
+                    .ok_or("upscale: hdr resolve slot out of range")?;
+                (hdr.image, hdr.view)
+            }
         };
 
         let (rw, rh) = upscaler.render_dims();
@@ -670,7 +674,7 @@ impl VkContext {
         image_barrier(
             &self.device,
             cmd,
-            scene.image,
+            scene_image,
             vk::ImageAspectFlags::COLOR,
             LayoutTransition {
                 from: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
@@ -739,8 +743,8 @@ impl VkContext {
         }
 
         let color = UpscaleImage {
-            image: scene.image,
-            view: scene.view,
+            image: scene_image,
+            view: scene_view,
             format: HDR_FORMAT,
             width: rw,
             height: rh,

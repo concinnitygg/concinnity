@@ -13,11 +13,10 @@
 // previous frame's output either way.
 
 use ash::vk;
-use concinnity_core::render::post::device::PostExtent;
 use concinnity_core::render::post::taa::{TaaInputs, TaaPass, TaaRing};
 
 use crate::vulkan::context::VkContext;
-use crate::vulkan::post::post_device::{PostPipeline, PostTarget, VkPostDevice};
+use crate::vulkan::post::post_device::{PostPipeline, PostTarget, VkPostDevice, post_extent};
 
 // The shared temporal resolve, holding Vulkan's own pipeline and target types.
 pub(in crate::vulkan) type VkTaaPass = TaaPass<PostPipeline, PostTarget>;
@@ -71,13 +70,6 @@ impl TaaResources {
     // has already idled the device.
     pub(in crate::vulkan) fn swap_pipelines(&mut self, pipeline: PostPipeline) {
         self.pass.swap_pipeline(pipeline);
-    }
-}
-
-fn post_extent(extent: vk::Extent2D) -> PostExtent {
-    PostExtent {
-        width: extent.width,
-        height: extent.height,
     }
 }
 

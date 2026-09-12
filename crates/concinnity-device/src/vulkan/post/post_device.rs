@@ -1,21 +1,22 @@
 // src/vulkan/post/post_device.rs
 //
 // Vulkan's implementation of the shared fullscreen post-pass seam
-// (`gfx::post::PostPassDevice`).
+// (`render::post::device::PostPassDevice`).
 //
 // Everything a pass used to own per effect is derived here from what the single
 // source declares: the descriptor set layout is N combined image samplers, the
-// pipeline layout adds a fragment push-constant range of the declared size, and
-// the render pass comes from the target's format and load action. The sets
-// themselves are allocated per frame (post/set_arena.rs) rather than pre-wired
-// per effect, which is what removes the `rewire_*` a pass needed for every input
-// another effect might own.
+// pipeline layout adds a fragment push-constant range of the declared size and,
+// for a probe-reading program, the forward global set as set 1, and the render
+// pass comes from the target's format and load action. The sets themselves are
+// allocated per frame (post/set_arena.rs) rather than pre-wired per effect,
+// which is what removes the `rewire_*` a pass needed for every input another
+// effect might own.
 
 use ash::vk;
 use concinnity_core::render::post::device::{
     PostBlend, PostDraw, PostExtent, PostLoadOp, PostPassDevice, PostSampler, resolved_texture,
 };
-use concinnity_core::render::post::program::PostProgram;
+use concinnity_core::render::post::program::{PostProgram, PostProgramBindings};
 use concinnity_core::render::render_graph::{PixelFormat, TextureDesc};
 
 use crate::vulkan::allocator::DeviceAllocator;
@@ -29,6 +30,9 @@ use crate::vulkan::texture::{
 };
 use crate::vulkan::transient_pool::{image_format, image_usage, sample_count};
 
+// The set index a probe-reading program declares the forward global set at.
+const PROBE_SET_INDEX: u32 = 1;
+
 // A built fullscreen post pipeline plus the layouts a draw binds it through.
 // The two layouts travel with the pipeline because they are derived from the
 // same program declaration, so nothing else has to know the binding count.
@@ -37,8 +41,7 @@ pub(in crate::vulkan) struct PostPipeline {
     layout: OwnedPipelineLayout,
     set_layout: OwnedSetLayout,
     // What the program declares, so a draw can check what it was handed.
-    textures: usize,
-    constants: usize,
+    bindings: PostProgramBindings,
 }
 
 // A persistent post target: the image, its view, and the extent its
@@ -54,6 +57,33 @@ impl PostTarget {
     pub(in crate::vulkan) fn view(&self) -> vk::ImageView {
         self.image.view
     }
+
+    /// The image itself, for a consumer that barriers it.
+    pub(in crate::vulkan) fn image(&self) -> vk::Image {
+        self.image.image
+    }
+}
+
+// A draw's color target: the view a framebuffer binds, the extent it is sized
+// at, and the format its render pass is built for. A created target names
+// itself this way through `target_attachment`; an image another subsystem owns
+// (the HDR scene) is described directly.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct VkAttachment {
+    pub view: vk::ImageView,
+    pub extent: vk::Extent2D,
+    pub format: PixelFormat,
+}
+
+// The forward global set, as a probe-reading program binds it for the probe
+// records (binding 7) and the cube array (binding 8).
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct VkPostProbes<'a> {
+    pub layout: vk::DescriptorSetLayout,
+    // One set per frame in flight. Empty at init, where no draw is encoded.
+    pub sets: &'a [vk::DescriptorSet],
+    // The cube array's descriptor count, which the fragment is compiled to.
+    pub cube_count: u32,
 }
 
 // The one-shot submit a freshly created target's initial layout transition
@@ -79,17 +109,32 @@ pub(in crate::vulkan) struct VkPostDevice<'a> {
     // The linear clamp-to-edge state every screen-space source is sampled
     // through.
     pub sampler: vk::Sampler,
+    // The trilinear clamp-to-edge state an environment cube is sampled through.
+    pub cube_sampler: vk::Sampler,
+    // The global set a probe-reading program binds.
+    pub probes: Option<VkPostProbes<'a>>,
     // Which frame in flight is recording.
     pub frame: usize,
     pub hot_reload: bool,
 }
 
 // The SPIR-V a post program's two stages compile to: the one shared fullscreen
-// triangle vertex plus the program's own fragment.
-fn compile(program: PostProgram, hot_reload: bool) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let ctx = crate::vulkan::builtins::Ctx::plain(hot_reload);
+// triangle vertex plus the program's own fragment, whose probe cube array is
+// sized to `probe_count`.
+fn compile(
+    program: PostProgram,
+    hot_reload: bool,
+    probe_count: usize,
+) -> Result<(Vec<u8>, Vec<u8>), String> {
+    let ctx = crate::vulkan::builtins::Ctx {
+        probe_count,
+        ..crate::vulkan::builtins::Ctx::plain(hot_reload)
+    };
     let frag = match program {
         PostProgram::TaaResolve => &slang_builtins::TAA_FRAG,
+        PostProgram::SsrResolve => &slang_builtins::SSR_RESOLVE,
+        PostProgram::SsgiGather => &slang_builtins::SSGI_GATHER,
+        PostProgram::SsgiComposite => &slang_builtins::SSGI_COMPOSITE,
     };
     let vert = slang_builtins::FULLSCREEN_VERT.compile(&ctx)?;
     Ok((vert, frag.compile(&ctx)?))
@@ -131,21 +176,42 @@ impl VkPostDevice<'_> {
             .collect();
         crate::vulkan::resources::create_descriptor_set_layout(self.device, &bindings)
     }
-}
 
-impl VkPostDevice<'_> {
+    // The probe set a program that declares one binds, or an error naming the
+    // pass when this device holds none.
+    fn probes_for(
+        &self,
+        bindings: PostProgramBindings,
+        label: &str,
+    ) -> Result<Option<VkPostProbes<'_>>, String> {
+        match (bindings.probes, self.probes) {
+            (false, _) => Ok(None),
+            (true, Some(probes)) => Ok(Some(probes)),
+            (true, None) => Err(format!(
+                "{label}: the program reads the reflection-probe set, but this device holds none"
+            )),
+        }
+    }
+
+    fn sampler_for(&self, sampler: PostSampler) -> vk::Sampler {
+        match sampler {
+            PostSampler::LinearClamp => self.sampler,
+            PostSampler::LinearCube => self.cube_sampler,
+        }
+    }
+
     // The graphics pipeline itself: a vertex-buffer-less fullscreen triangle
     // into one color attachment, no depth, dynamic viewport and scissor. Every
     // fullscreen post pass has this shape, which is why it is built once here
     // instead of once per effect.
     fn build_pipeline(
         &self,
-        program: PostProgram,
+        shaders: (Vec<u8>, Vec<u8>),
         render_pass: vk::RenderPass,
         layout: vk::PipelineLayout,
         blend: PostBlend,
     ) -> Result<OwnedPipeline, String> {
-        let (vert_spv, frag_spv) = compile(program, self.hot_reload)?;
+        let (vert_spv, frag_spv) = shaders;
         let modules = GraphicsStages::new(self.device, &vert_spv, &frag_spv)?;
         let stages = modules.infos();
         let vert_input = vk::PipelineVertexInputStateCreateInfo::default();
@@ -199,6 +265,7 @@ impl PostPassDevice for VkPostDevice<'_> {
     type Pipeline = PostPipeline;
     type Target = PostTarget;
     type TextureRef<'a> = vk::ImageView;
+    type Attachment<'a> = VkAttachment;
 
     fn create_pipeline(
         &self,
@@ -207,8 +274,10 @@ impl PostPassDevice for VkPostDevice<'_> {
         blend: PostBlend,
     ) -> Result<Self::Pipeline, String> {
         let bindings = program.bindings();
+        let probes = self.probes_for(bindings, program.label())?;
         let set_layout = self.set_layout(bindings.textures)?;
-        let set_layouts = [set_layout.handle()];
+        let mut set_layouts = vec![set_layout.handle()];
+        set_layouts.extend(probes.map(|p| p.layout));
         let push = vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::FRAGMENT)
             .offset(0)
@@ -228,13 +297,14 @@ impl PostPassDevice for VkPostDevice<'_> {
         let render_pass = self
             .cache
             .render_pass(self.device, format, PostLoadOp::DontCare)?;
-        let pipeline = self.build_pipeline(program, render_pass, layout.handle(), blend)?;
+        let probe_count = probes.map_or(0, |p| p.cube_count as usize);
+        let shaders = compile(program, self.hot_reload, probe_count)?;
+        let pipeline = self.build_pipeline(shaders, render_pass, layout.handle(), blend)?;
         Ok(PostPipeline {
             pipeline,
             layout,
             set_layout,
-            textures: bindings.textures,
-            constants: bindings.constants,
+            bindings,
         })
     }
 
@@ -297,29 +367,33 @@ impl PostPassDevice for VkPostDevice<'_> {
         target.image.view
     }
 
+    fn target_attachment<'a>(&self, target: &'a Self::Target) -> Self::Attachment<'a> {
+        VkAttachment {
+            view: target.image.view,
+            extent: target.extent,
+            format: target.format,
+        }
+    }
+
     fn encode(&self, rec: &Self::Recorder, draw: &PostDraw<'_, '_, Self>) -> Result<(), String> {
         let cmd = *rec;
         let pipe = draw.pipeline;
-        if draw.binds.len() != pipe.textures || draw.constants.len() != pipe.constants {
-            return Err(format!(
-                "{}: the draw binds {} texture(s) and {} constant byte(s) where the program \
-                 declares {} and {}",
-                draw.label,
-                draw.binds.len(),
-                draw.constants.len(),
-                pipe.textures,
-                pipe.constants,
-            ));
-        }
+        draw.check(pipe.bindings)?;
+        // A render pass writes its attachment's layout in and out itself, so
+        // who owns the target's state between passes changes nothing here.
+        let probe_set = match self.probes_for(pipe.bindings, draw.label)? {
+            None => None,
+            Some(probes) => Some(*probes.sets.get(self.frame).ok_or_else(|| {
+                format!("{}: no global set for frame {}", draw.label, self.frame)
+            })?),
+        };
+        let target = draw.target;
         let render_pass = self
             .cache
-            .render_pass(self.device, draw.target.format, draw.load)?;
-        let framebuffer = self.cache.framebuffer(
-            self.device,
-            render_pass,
-            draw.target.image.view,
-            draw.target.extent,
-        )?;
+            .render_pass(self.device, target.format, draw.load)?;
+        let framebuffer =
+            self.cache
+                .framebuffer(self.device, render_pass, target.view, target.extent)?;
 
         // One set per draw from this frame's arena, written from what the pass
         // holds now. Nothing here is cached across frames, so no input needs a
@@ -334,9 +408,7 @@ impl PostPassDevice for VkPostDevice<'_> {
                 vk::DescriptorImageInfo::default()
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                     .image_view(b.texture)
-                    .sampler(match b.sampler {
-                        PostSampler::LinearClamp => self.sampler,
-                    })
+                    .sampler(self.sampler_for(b.sampler))
             })
             .collect();
         let writes: Vec<vk::WriteDescriptorSet> = infos
@@ -354,7 +426,7 @@ impl PostPassDevice for VkPostDevice<'_> {
         // resource it names belongs to this device.
         unsafe { self.device.update_descriptor_sets(&writes, &[]) };
 
-        let extent = draw.target.extent;
+        let extent = target.extent;
         let rp_begin = vk::RenderPassBeginInfo::default()
             .render_pass(render_pass)
             .framebuffer(framebuffer)
@@ -384,6 +456,16 @@ impl PostPassDevice for VkPostDevice<'_> {
                 std::slice::from_ref(&set),
                 &[],
             );
+            if let Some(global) = probe_set {
+                device.cmd_bind_descriptor_sets(
+                    cmd,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    pipe.layout.handle(),
+                    PROBE_SET_INDEX,
+                    std::slice::from_ref(&global),
+                    &[],
+                );
+            }
             if !draw.constants.is_empty() {
                 device.cmd_push_constants(
                     cmd,
@@ -402,6 +484,14 @@ impl PostPassDevice for VkPostDevice<'_> {
     }
 }
 
+// A post-pass extent from a Vulkan one.
+pub(in crate::vulkan) fn post_extent(extent: vk::Extent2D) -> PostExtent {
+    PostExtent {
+        width: extent.width,
+        height: extent.height,
+    }
+}
+
 impl crate::vulkan::context::VkContext {
     // The post-pass device over this context, recording into frame slot `frame`.
     pub(in crate::vulkan) fn post_device(&self, frame: usize) -> VkPostDevice<'_> {
@@ -415,8 +505,52 @@ impl crate::vulkan::context::VkContext {
             cache: &self.post.cache,
             arena: &self.post.arena,
             sampler: self.composite.sampler.handle(),
+            cube_sampler: self.cube_sampler.handle(),
+            probes: Some(VkPostProbes {
+                layout: self.descriptors.global_set_layout.handle(),
+                sets: &self.descriptors.global_sets,
+                cube_count: self.descriptors.probe_cube_count,
+            }),
             frame,
             hot_reload: self.hot_reload.enabled,
+        }
+    }
+
+    // This frame slot's HDR scene, as a post draw's target.
+    pub(in crate::vulkan) fn hdr_scene_attachment(&self, frame: usize) -> VkAttachment {
+        VkAttachment {
+            view: self.hdr_resolve_images[frame % self.hdr_resolve_images.len()].view,
+            extent: self.render_extent,
+            format: PixelFormat::Rgba16Float,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Every post program's fragment, and the shared vertex, compile to SPIR-V.
+    // The probe-reading resolve compiles against both a device-shortened cube
+    // array and the ceiling, since the array length is baked into the program.
+    #[test]
+    fn every_post_program_compiles() {
+        if !concinnity_slang::shader_tests_enabled() {
+            return;
+        }
+        let max = concinnity_core::render::uniforms::MAX_PROBES;
+        for program in [
+            PostProgram::TaaResolve,
+            PostProgram::SsrResolve,
+            PostProgram::SsgiGather,
+            PostProgram::SsgiComposite,
+        ] {
+            for probes in [1, max] {
+                let (vert, frag) = compile(program, false, probes)
+                    .unwrap_or_else(|e| panic!("{program:?} with {probes} probes: {e}"));
+                assert!(crate::vulkan::pipeline::is_spirv(&vert));
+                assert!(crate::vulkan::pipeline::is_spirv(&frag));
+            }
         }
     }
 }

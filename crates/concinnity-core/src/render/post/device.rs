@@ -7,19 +7,21 @@
 //! those (its own state, its target lifecycle, what it binds where) is portable
 //! and lives in the pass.
 //!
-//! Two associated types absorb the divergence without naming a backend type:
-//! `Recorder` is the per-backend command recorder, and `TextureRef` is whatever
-//! that backend binds a sampled source by (a texture object, an image view, a
-//! descriptor handle). `TextureRef` is borrowed from the value it names, so a
-//! pass can bind a target it created here beside one another subsystem owns,
-//! which is what every post pass actually does: its own accumulation buffers
-//! plus the scene and G-buffer channels somebody else produced.
+//! Three associated types absorb the divergence without naming a backend type:
+//! `Recorder` is the per-backend command recorder, `TextureRef` is whatever that
+//! backend binds a sampled source by (a texture object, an image view, a
+//! descriptor handle), and `Attachment` is whatever it writes a draw through.
+//! Both reference types borrow from the value they name, so a pass can bind or
+//! write a target it created here beside one another subsystem owns, which is
+//! what every post pass actually does: its own buffers plus the scene and
+//! G-buffer channels somebody else produced.
 
+use alloc::format;
 use alloc::string::String;
 
 use crate::render::render_graph::{PassId, PixelFormat, TextureDesc, TransientTexture};
 
-use super::program::PostProgram;
+use super::program::{PostProgram, PostProgramBindings};
 
 /// Blending on a post pass's single color attachment.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -45,16 +47,42 @@ pub enum PostLoadOp {
 /// Which sampler a bound source is read through.
 ///
 /// The seam names the kind rather than passing a backend sampler object across
-/// it, so a pass says what it needs and each host supplies its own state. One
-/// kind covers every screen-space post pass today; a second (nearest filtering,
-/// for a source whose texels must not be interpolated) is one sampler per
-/// backend to add, and is deliberately absent until a pass asks for it rather
-/// than present and silently resolving to this one.
+/// it, so a pass says what it needs and each host supplies its own state. A
+/// kind is added when a pass asks for one rather than present and silently
+/// resolving to another.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum PostSampler {
     /// Bilinear filtering, clamped to the edge. What every screen-space source
     /// is read through.
     LinearClamp,
+    /// Trilinear filtering across the whole mip chain, clamped to the edge.
+    /// What a prefiltered environment cube is read through, where the mip
+    /// level carries the surface roughness.
+    LinearCube,
+}
+
+/// Who moves a draw's target into its render state and back out.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum PostTargetState {
+    /// The render graph declares the target, so its executor has already put
+    /// it in the render state and the next consumer's transition takes it back.
+    Graph,
+    /// The target is private to the pass. It rests readable between passes, so
+    /// the draw moves it in and out itself.
+    Pass,
+}
+
+/// Where a draw sits within its effect's GPU-timing span.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum PostTiming {
+    /// The draw records no timing sample.
+    None,
+    /// The effect's only draw: both its start and end samples land here.
+    Whole(PassId),
+    /// The first draw of a multi-draw effect: the start sample.
+    First(PassId),
+    /// The last draw of a multi-draw effect: the end sample.
+    Last(PassId),
 }
 
 /// One sampled source of a post draw, at its slot in declaration order.
@@ -79,11 +107,13 @@ impl<D: PostPassDevice + ?Sized> Copy for PostBind<'_, D> {}
 /// what it binds, and where it sits in the GPU-timing span.
 pub struct PostDraw<'a, 't, D: PostPassDevice + ?Sized + 't> {
     /// The color target the draw writes.
-    pub target: &'a D::Target,
+    pub target: D::Attachment<'t>,
+    /// Who transitions that target around the draw.
+    pub state: PostTargetState,
     /// What happens to that target's contents on load.
     pub load: PostLoadOp,
-    /// The GPU-timing pass this draw is measured as, if any.
-    pub timing: Option<PassId>,
+    /// Where the draw sits in its effect's GPU-timing span.
+    pub timing: PostTiming,
     /// The pipeline to run.
     pub pipeline: &'a D::Pipeline,
     /// Sampled sources, in the program's declaration order. Its length must be
@@ -95,6 +125,26 @@ pub struct PostDraw<'a, 't, D: PostPassDevice + ?Sized + 't> {
     pub constants: &'a [u8],
     /// Debug label for the encoder / marker region.
     pub label: &'a str,
+}
+
+impl<D: PostPassDevice + ?Sized> PostDraw<'_, '_, D> {
+    /// Whether the draw hands over exactly the sources and constants `declared`
+    /// says its program binds. A mismatch would bind a slot the shader does not
+    /// read or leave one it does read unbound.
+    pub fn check(&self, declared: PostProgramBindings) -> Result<(), String> {
+        if self.binds.len() == declared.textures && self.constants.len() == declared.constants {
+            return Ok(());
+        }
+        Err(format!(
+            "{}: the draw binds {} texture(s) and {} constant byte(s) where the program \
+             declares {} and {}",
+            self.label,
+            self.binds.len(),
+            self.constants.len(),
+            declared.textures,
+            declared.constants,
+        ))
+    }
 }
 
 /// The pixel size a target is created at, after the graph's fractional sizes
@@ -118,8 +168,8 @@ impl PostExtent {
     }
 }
 
-/// A backend's implementation of the three operations a fullscreen post pass
-/// needs. Implemented once per backend; the passes above it are written once.
+/// A backend's implementation of the operations a fullscreen post pass needs.
+/// Implemented once per backend; the passes above it are written once.
 ///
 /// Every method takes `&self`, matching the read-only parallel-encode contract
 /// the graph executors record under: a backend that needs interior state (a
@@ -135,9 +185,15 @@ pub trait PostPassDevice {
     /// How this backend names a sampled source: whatever a bind takes, borrowed
     /// from the value that owns it.
     type TextureRef<'a>: Copy;
+    /// How this backend names a draw's color target: whatever a render pass
+    /// writes through, borrowed from the value that owns it.
+    type Attachment<'a>: Copy;
 
     /// Build a fullscreen-triangle pipeline running `program`'s fragment against
     /// a single color attachment of `format` with `blend`.
+    ///
+    /// A program that declares the reflection-probe set gets the backend's own
+    /// probe bindings laid out after its declared ones.
     fn create_pipeline(
         &self,
         program: PostProgram,
@@ -161,7 +217,14 @@ pub trait PostPassDevice {
     /// wrote last frame, so a created target has to be nameable as an input.
     fn target_ref<'a>(&self, target: &'a Self::Target) -> Self::TextureRef<'a>;
 
+    /// Name `target` as a draw's color attachment.
+    fn target_attachment<'a>(&self, target: &'a Self::Target) -> Self::Attachment<'a>;
+
     /// Encode one fullscreen draw.
+    ///
+    /// When the pipeline's program declares the reflection-probe set, the
+    /// device binds the one the world holds this frame: the probe records and
+    /// the cube array together, which no pass chooses between.
     fn encode(&self, rec: &Self::Recorder, draw: &PostDraw<'_, '_, Self>) -> Result<(), String>;
 }
 
@@ -207,6 +270,7 @@ pub fn resolved_texture(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::render::post::mock::{MockDevice, MockTexture};
     use crate::render::render_graph::{ClearValue, TextureSize, TextureUsage};
 
     fn desc(width: TextureSize, height: TextureSize) -> TextureDesc {
@@ -297,6 +361,70 @@ mod tests {
                 width: 1,
                 height: 1
             }
+        );
+    }
+
+    fn draw_with<'a>(
+        pipeline: &'a <MockDevice as PostPassDevice>::Pipeline,
+        binds: &'a [PostBind<'a, MockDevice>],
+        constants: &'a [u8],
+    ) -> PostDraw<'a, 'a, MockDevice> {
+        PostDraw {
+            target: MockTexture::External(0),
+            state: PostTargetState::Pass,
+            load: PostLoadOp::DontCare,
+            timing: PostTiming::None,
+            pipeline,
+            binds,
+            constants,
+            label: "probe",
+        }
+    }
+
+    #[test]
+    fn a_draw_matching_its_declaration_passes_the_check() {
+        let device = MockDevice::new();
+        let pipeline = device
+            .create_pipeline(
+                PostProgram::TaaResolve,
+                PixelFormat::Rgba16Float,
+                PostBlend::Replace,
+            )
+            .expect("mock pipeline");
+        let bind = PostBind {
+            texture: MockTexture::External(1),
+            sampler: PostSampler::LinearClamp,
+        };
+        let binds = [bind; 3];
+        let constants = [0u8; 4];
+        let draw = draw_with(&pipeline, &binds, &constants);
+        assert!(draw.check(PostProgram::TaaResolve.bindings()).is_ok());
+    }
+
+    #[test]
+    fn a_short_bind_list_or_constants_blob_fails_the_check() {
+        let device = MockDevice::new();
+        let pipeline = device
+            .create_pipeline(
+                PostProgram::TaaResolve,
+                PixelFormat::Rgba16Float,
+                PostBlend::Replace,
+            )
+            .expect("mock pipeline");
+        let bind = PostBind {
+            texture: MockTexture::External(1),
+            sampler: PostSampler::LinearClamp,
+        };
+        let declared = PostProgram::TaaResolve.bindings();
+        let two = [bind; 2];
+        let three = [bind; 3];
+        let err = draw_with(&pipeline, &two, &[0u8; 4])
+            .check(declared)
+            .expect_err("one source short");
+        assert!(err.contains("2 texture(s)"), "{err}");
+        assert!(
+            draw_with(&pipeline, &three, &[]).check(declared).is_err(),
+            "missing constants"
         );
     }
 }

@@ -11,16 +11,13 @@ use concinnity_core::render::post::device::PostExtent;
 use concinnity_core::render::post::taa::{TaaInputs, TaaPass, TaaRing};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_metal::{MTLRenderPipelineState, MTLTexture};
+use objc2_metal::MTLTexture;
 
 use crate::metal::context::MtlContext;
-use crate::metal::post::post_device::MtlPostDevice;
+use crate::metal::post::post_device::{MtlPostDevice, MtlPostPipeline, MtlPostProbes};
 
 // The shared temporal resolve, holding Metal's own pipeline and target handles.
-pub(crate) type MtlTaaPass = TaaPass<
-    Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
-    Retained<ProtocolObject<dyn MTLTexture>>,
->;
+pub(crate) type MtlTaaPass = TaaPass<MtlPostPipeline, Retained<ProtocolObject<dyn MTLTexture>>>;
 
 // Temporal-anti-aliasing state: whether the effect runs, the shared resolve when
 // it does, and the frame counter driving the Halton projection jitter. The
@@ -56,13 +53,19 @@ pub(crate) fn build_taa_pass(
 }
 
 impl MtlContext {
-    // The post-pass device over this context: the Metal device, the linear
-    // clamp-to-edge sampler every screen-space source is read through, and the
-    // GPU-timing resources.
+    // The post-pass device over this context: the Metal device, the samplers a
+    // screen-space source and an environment cube are read through, this
+    // frame's reflection-probe set, and the GPU-timing resources.
     pub(in crate::metal) fn post_device(&self) -> MtlPostDevice<'_> {
         MtlPostDevice {
             device: &self.device,
             sampler: &self.post_sampler,
+            cube_sampler: &self.cube_sampler,
+            probes: Some(MtlPostProbes {
+                set: &self.probe.set,
+                cube_args: self.probe.cube_args.as_deref(),
+                residency: &self.probe.cube_residency,
+            }),
             timing: self.diagnostics.pass_timing.as_ref(),
             hot_reload: self.hot_reload.enabled,
         }

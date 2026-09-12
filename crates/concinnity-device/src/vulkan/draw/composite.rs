@@ -157,6 +157,9 @@ impl fullscreen::CompositeEncoder for VkContext {
         &self,
         cmd: &Self::Rec,
         args: &Self::Args,
+        // This backend appends each call's geometry here, so its position in the
+        // frame's list carries nothing it needs.
+        _idx: usize,
         call: &TextDrawCall,
         binds: &mut TextBindCache,
     ) -> Result<(), String> {

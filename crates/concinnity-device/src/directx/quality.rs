@@ -49,10 +49,6 @@ pub(in crate::directx) struct QualitySlotHandles {
     pub ssao_ao_raw_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE),
     pub ssao_ao_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
     pub ssao_ao_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE),
-    pub ssr_output_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub ssr_output_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE),
-    pub ssgi_gi_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub ssgi_gi_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE),
     pub rt_output_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
     pub rt_output_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE),
     pub refl_composite: ReflectionCompositeSlots,
@@ -135,17 +131,15 @@ impl DxContext {
             self.gbuffer = Some(gbuffer);
         }
 
-        // TAA.
+        // TAA, SSR and SSGI take their targets' descriptors from the shared post
+        // block, which gets a dropped target's slots back and which every
+        // consumer reads per frame, so a toggle needs no re-bind.
         if desired_taa && self.taa.is_none() {
-            // The shared post block hands the rebuilt targets the same slots the
-            // torn-down ones held, so the composite and bloom-prefilter bindings
-            // survive a toggle without a re-bind.
-            self.post.rewind();
-            let taa = super::post::taa::TaaResources::new(&self.post_device(), render_w, render_h)?;
+            let taa =
+                super::post::taa::TaaResources::new(&self.post_device(0), render_w, render_h)?;
             self.taa = Some(taa);
         } else if !desired_taa && self.taa.is_some() {
             self.taa = None;
-            self.post.rewind();
         }
 
         // SSR pre-pass + resolve. `q.ssr` (Option) drives the resolve half:
@@ -153,16 +147,10 @@ impl DxContext {
         // RT-only build the pre-pass but no resolve), matching init.
         if ssr_needed && self.ssr.is_none() {
             let ssr = super::post::ssr::SsrResources::new(
-                &self.alloc,
+                &self.post_device(0),
                 render_w,
                 render_h,
-                super::post::ssr::SsrInitInputs {
-                    resolve_settings: q.ssr,
-                    output_rtv: slots.ssr_output_rtv,
-                    output_srv: slots.ssr_output_srv,
-                },
-                self.diagnostics.info_queue.as_ref(),
-                hot_reload,
+                q.ssr,
             )?;
             self.ssr = Some(ssr);
         } else if !ssr_needed && self.ssr.is_some() {
@@ -173,18 +161,10 @@ impl DxContext {
         if desired_ssgi && self.ssgi.is_none() {
             let settings = q.ssgi.expect("desired_ssgi implies ssgi settings");
             let ssgi = super::post::ssgi::SsgiResources::new(
-                super::post::ssgi::SsgiDevice {
-                    alloc: &self.alloc,
-                    info_queue: self.diagnostics.info_queue.as_ref(),
-                },
+                &self.post_device(0),
                 render_w,
                 render_h,
                 settings,
-                super::post::ssgi::SsgiDescriptors {
-                    gi_rtv: slots.ssgi_gi_rtv,
-                    gi_srv: slots.ssgi_gi_srv,
-                },
-                hot_reload,
             )?;
             self.ssgi = Some(ssgi);
         } else if !desired_ssgi && self.ssgi.is_some() {

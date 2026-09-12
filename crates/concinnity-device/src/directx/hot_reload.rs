@@ -502,32 +502,22 @@ impl DxContext {
             )
         );
 
-        // SSR (only when PostProcessConfig opted in).
+        // SSR (only when the resolve itself is authored).
         let ssr_rebuilt = rebuild_if_live!(
-            self.ssr.is_some(),
-            super::post::ssr::rebuild_ssr_pipelines(
-                device,
-                self.ssr.as_ref().expect("SSR resources are live"),
-                hr,
-                info_queue
-            )
+            self.ssr.as_ref().is_some_and(|s| s.resolve.is_some()),
+            concinnity_core::render::post::ssr::build_pipeline(&self.post_device(0))
         );
 
         // SSGI (only when PostProcessConfig.indirect_lighting == ssgi).
         let ssgi_rebuilt = rebuild_if_live!(
             self.ssgi.is_some(),
-            super::post::ssgi::rebuild_ssgi_pipelines(
-                device,
-                self.ssgi.as_ref().expect("SSGI resources are live"),
-                hr,
-                info_queue
-            )
+            concinnity_core::render::post::ssgi::build_pipelines(&self.post_device(0))
         );
 
         // TAA (only when PostProcessConfig.aa_mode).
         let taa_rebuilt = rebuild_if_live!(
             self.taa.is_some(),
-            concinnity_core::render::post::taa::build_pipeline(&self.post_device())
+            concinnity_core::render::post::taa::build_pipeline(&self.post_device(0))
         );
 
         // RT reflections (only when DXR + DXC compile + accel build all succeeded
@@ -609,10 +599,10 @@ impl DxContext {
             swap_ssao_pipelines(ssao, rebuilt);
         }
         if let (Some(rebuilt), Some(ssr)) = (ssr_rebuilt, self.ssr.as_mut()) {
-            swap_ssr_pipelines(ssr, rebuilt);
+            ssr.swap_pipeline(rebuilt);
         }
         if let (Some(rebuilt), Some(ssgi)) = (ssgi_rebuilt, self.ssgi.as_mut()) {
-            super::post::ssgi::swap_ssgi_pipelines(ssgi, rebuilt);
+            ssgi.swap_pipelines(rebuilt);
         }
         if let (Some(rebuilt), Some(rt)) = (rt_rebuilt, self.rt_reflections.as_mut()) {
             super::post::rt_reflections::swap_rt_reflections_pipelines(rt, rebuilt);
@@ -638,15 +628,6 @@ fn swap_ssao_pipelines(
 ) {
     ssao.kernel_pso = rebuilt.kernel_pso;
     ssao.blur_pso = rebuilt.blur_pso;
-}
-
-fn swap_ssr_pipelines(
-    ssr: &mut super::post::ssr::SsrResources,
-    rebuilt: super::post::ssr::RebuiltSsrPipelines,
-) {
-    if let (Some(pso), Some(resolve)) = (rebuilt.resolve_pso, ssr.resolve.as_mut()) {
-        resolve.resolve_pso = pso;
-    }
 }
 
 // World-Shader runtime hot-swap (RenderBackend::update_world_shader_pipelines)

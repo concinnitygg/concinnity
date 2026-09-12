@@ -143,7 +143,14 @@ impl MtlContext {
 
         let bundle = match build_quality_effects(
             &self.allocator,
-            &self.post_sampler,
+            &super::post::post_device::MtlPostDevice {
+                device: &self.device,
+                sampler: &self.post_sampler,
+                cube_sampler: &self.cube_sampler,
+                probes: None,
+                timing: None,
+                hot_reload: self.hot_reload.enabled,
+            },
             dims,
             EffectSettings {
                 ssao: &q.ssao,

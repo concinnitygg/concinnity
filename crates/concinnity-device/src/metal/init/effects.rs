@@ -14,6 +14,9 @@ use concinnity_core::gfx::ssgi::SsgiSettings;
 use concinnity_core::gfx::ssr::SsrSettings;
 use concinnity_core::render::decal::DecalRecord;
 use concinnity_core::render::particles::ParticleEmitterRecord;
+use concinnity_core::render::post::device::PostExtent;
+use concinnity_core::render::post::ssgi::SsgiPass;
+use concinnity_core::render::post::ssr::SsrPass;
 use concinnity_core::render::volumetric_fog::FogSettings;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -35,8 +38,7 @@ use crate::metal::post::{
     BloomPipelines, BloomTargets, GBufferState, SsaoState, SsgiState, SsrState,
     build_bloom_pipelines, build_gbuffer_bindless_pipeline, build_reflection_blur_pipeline,
     build_reflection_composite_pipeline, build_rt_reflection_pipeline, build_ssao_pipeline,
-    build_ssgi_composite_pipeline, build_ssgi_gather_pipeline, build_ssr_pipeline, build_taa_pass,
-    create_bloom_targets, create_gbuffer_targets, create_ssao_targets, create_ssgi_targets,
+    build_taa_pass, create_bloom_targets, create_gbuffer_targets, create_ssao_targets,
     create_ssr_targets,
 };
 use crate::metal::slang_builtins::{SSAO_BLUR, SSAO_KERNEL};
@@ -201,9 +203,9 @@ pub(crate) struct QualityEffectsBundle {
 // resident geometry buffers); this builds only the RT resolve pipelines.
 pub(crate) fn build_quality_effects(
     alloc: &DeviceAllocator,
-    // The linear clamp-to-edge state the shared post passes sample every
-    // screen-space source through.
-    post_sampler: &ProtocolObject<dyn MTLSamplerState>,
+    // The shared post-pass device, which builds every effect drawn through the
+    // seam.
+    post_device: &MtlPostDevice,
     dims: EffectDimensions,
     settings: EffectSettings,
     flags: EffectFlags,
@@ -234,14 +236,8 @@ pub(crate) fn build_quality_effects(
     // Built only when TAA is on; upscaling-on worlds skip the TAA pass entirely
     // (the MetalFX scaler does temporal accumulation itself). Its targets are
     // sized at render-resolution to match the scene texture they sample.
-    let post_device = MtlPostDevice {
-        device,
-        sampler: post_sampler,
-        timing: None,
-        hot_reload,
-    };
     let taa = if taa_enabled {
-        Some(build_taa_pass(&post_device, render_w, render_h)?)
+        Some(build_taa_pass(post_device, render_w, render_h)?)
     } else {
         None
     };
@@ -291,43 +287,43 @@ pub(crate) fn build_quality_effects(
         )?,
     )?;
 
-    // SSR resolve: the ray-march resolve pipeline + its output target, built when
-    // SSR *or* SSGI *or* RT reflections is on (all three need the G-buffer the
-    // unified pre-pass below produces; RT reuses `ssr_targets.output`). The
-    // fullscreen resolve pipeline is built only when SSR itself is on.
-    let (ssr_targets, ssr_resolve_pipeline, ssr_composite_pipeline, ssr_blur_pipeline) =
-        if needs_ssr_prepass {
-            let ssr_resolve = if ssr_settings.is_some() {
-                Some(build_ssr_pipeline(device, hot_reload)?)
-            } else {
-                None
-            };
-            // The reflection composite (roughness blur + blend over the scene)
-            // runs for both SSR and RT reflections; both write the reflection
-            // target it reads. SSGI alone needs the G-buffer but no composite.
-            // The blur is its reduced-resolution first pass.
-            let (composite, blur) = if ssr_settings.is_some() || rt_reflection_settings.is_some() {
-                (
-                    Some(build_reflection_composite_pipeline(device, hot_reload)?),
-                    Some(build_reflection_blur_pipeline(device, hot_reload)?),
-                )
-            } else {
-                (None, None)
-            };
+    // SSR: the reflection targets, built when SSR *or* SSGI *or* RT reflections
+    // is on (all three need the G-buffer the unified pre-pass below produces; RT
+    // reuses `ssr_targets.reflection`). The shared resolve is built only when
+    // SSR itself is on.
+    let (ssr_targets, ssr_resolve, ssr_composite_pipeline, ssr_blur_pipeline) = if needs_ssr_prepass
+    {
+        let ssr_resolve = if ssr_settings.is_some() {
+            Some(SsrPass::new(post_device)?)
+        } else {
+            None
+        };
+        // The reflection composite (roughness blur + blend over the scene)
+        // runs for both SSR and RT reflections; both write the reflection
+        // target it reads. SSGI alone needs the G-buffer but no composite.
+        // The blur is its reduced-resolution first pass.
+        let (composite, blur) = if ssr_settings.is_some() || rt_reflection_settings.is_some() {
             (
-                Some(create_ssr_targets(
-                    device,
-                    render_w,
-                    render_h,
-                    reflection_blur_scale,
-                )?),
-                ssr_resolve,
-                composite,
-                blur,
+                Some(build_reflection_composite_pipeline(device, hot_reload)?),
+                Some(build_reflection_blur_pipeline(device, hot_reload)?),
             )
         } else {
-            (None, None, None, None)
+            (None, None)
         };
+        (
+            Some(create_ssr_targets(
+                device,
+                render_w,
+                render_h,
+                reflection_blur_scale,
+            )?),
+            ssr_resolve,
+            composite,
+            blur,
+        )
+    } else {
+        (None, None, None, None)
+    };
 
     // Unified G-buffer pre-pass (Metal): the shared targets and the one
     // GPU-driven pipeline that fills them, built when any consumer (SSR / SSGI /
@@ -347,27 +343,24 @@ pub(crate) fn build_quality_effects(
         (None, None, None)
     };
 
-    // SSGI: the hemisphere-gather + depth-aware-blur composite pipelines and
-    // the intermediate `gi` target. Built only when SSGI is on; the gather
-    // reads the SSR pre-pass G-buffer built above.
-    let (ssgi_targets, ssgi_gather_pipeline, ssgi_composite_pipeline) =
-        if let Some(s) = ssgi_settings {
-            // The gather runs at `gi_scale`-reduced resolution; the composite
-            // bilateral-upsamples it back to full resolution.
-            let (gw, gh) = s.gi_dimensions(render_w, render_h);
-            (
-                Some(create_ssgi_targets(device, gw, gh)?),
-                Some(build_ssgi_gather_pipeline(device, hot_reload)?),
-                Some(build_ssgi_composite_pipeline(device, hot_reload)?),
-            )
-        } else {
-            (None, None, None)
-        };
+    // SSGI: the shared gather + composite. Built only when SSGI is on; the
+    // gather reads the G-buffer built above.
+    let ssgi_pass = match ssgi_settings {
+        Some(s) => Some(SsgiPass::new(
+            post_device,
+            s.gi_scale,
+            PostExtent {
+                width: render_w,
+                height: render_h,
+            },
+        )?),
+        None => None,
+    };
 
     let ssr = SsrState {
         settings: *ssr_settings,
         targets: ssr_targets,
-        resolve_pipeline: ssr_resolve_pipeline,
+        resolve: ssr_resolve,
         composite_pipeline: ssr_composite_pipeline,
         blur_pipeline: ssr_blur_pipeline,
         blur_scale: reflection_blur_scale.max(1),
@@ -379,9 +372,7 @@ pub(crate) fn build_quality_effects(
     };
     let ssgi = SsgiState {
         settings: *ssgi_settings,
-        targets: ssgi_targets,
-        gather_pipeline: ssgi_gather_pipeline,
-        composite_pipeline: ssgi_composite_pipeline,
+        pass: ssgi_pass,
     };
 
     // RT reflections: the inline ray-trace resolve pipelines. Built only when RT
@@ -464,7 +455,7 @@ pub(crate) fn build_quality_effects(
 
 pub(crate) fn build_effects(
     alloc: &DeviceAllocator,
-    post_sampler: &ProtocolObject<dyn MTLSamplerState>,
+    post_device: &MtlPostDevice,
     // False for a world with no 3D scene content: bloom pipelines are skipped
     // (the settings-gated features below are already trimmed by the
     // requirements derivation before they reach here).
@@ -511,7 +502,7 @@ pub(crate) fn build_effects(
         auto_exposure_outputs,
         auto_exposure_state,
         auto_exposure_bias_ev: auto_exposure_bias,
-    } = build_quality_effects(alloc, post_sampler, dims, settings, flags)?;
+    } = build_quality_effects(alloc, post_device, dims, settings, flags)?;
 
     // Bloom chain + pipelines. Bloom samples whatever scene_color the post
     // stack hands it: that's at output (drawable) resolution when MetalFX

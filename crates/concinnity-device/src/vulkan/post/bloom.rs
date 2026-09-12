@@ -370,7 +370,7 @@ impl fullscreen::BloomEncoder for VkContext {
     // All three bloom pipelines share one layout, so the tunables pushed here
     // survive the pipeline switches and the render-pass boundaries between the
     // sub-passes; the rest of the render-pass state is set per sub-pass.
-    fn begin_bloom(&self, cmd: &Self::Rec, _frame_idx: &Self::Args) {
+    fn begin_bloom(&self, cmd: &Self::Rec, _frame_idx: &Self::Args) -> Result<(), String> {
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
@@ -382,10 +382,11 @@ impl fullscreen::BloomEncoder for VkContext {
                 bytemuck::bytes_of(&self.post_process),
             );
         }
+        Ok(())
     }
 
     // Prefilter: HDR resolve (input set 0) -> mip 0 (soft-knee + Karis).
-    fn bloom_prefilter(&self, cmd: &Self::Rec, frame_idx: &Self::Args) {
+    fn bloom_prefilter(&self, cmd: &Self::Rec, frame_idx: &Self::Args) -> Result<(), String> {
         let f = *frame_idx;
         self.bloom_run_pass(
             *cmd,
@@ -395,10 +396,16 @@ impl fullscreen::BloomEncoder for VkContext {
             &self.bloom.pipeline_prefilter,
             self.bloom.input_sets[f][0],
         );
+        Ok(())
     }
 
     // Downsample: mip dst-1 -> mip dst. Input set for mip m is `m`.
-    fn bloom_downsample(&self, cmd: &Self::Rec, frame_idx: &Self::Args, dst: usize) {
+    fn bloom_downsample(
+        &self,
+        cmd: &Self::Rec,
+        frame_idx: &Self::Args,
+        dst: usize,
+    ) -> Result<(), String> {
         let f = *frame_idx;
         self.bloom_run_pass(
             *cmd,
@@ -408,10 +415,16 @@ impl fullscreen::BloomEncoder for VkContext {
             &self.bloom.pipeline_downsample,
             self.bloom.input_sets[f][dst],
         );
+        Ok(())
     }
 
     // Upsample: mip dst+1 -> mip dst, additively blended. Input set is `dst + 2`.
-    fn bloom_upsample(&self, cmd: &Self::Rec, frame_idx: &Self::Args, dst: usize) {
+    fn bloom_upsample(
+        &self,
+        cmd: &Self::Rec,
+        frame_idx: &Self::Args,
+        dst: usize,
+    ) -> Result<(), String> {
         let f = *frame_idx;
         self.bloom_run_pass(
             *cmd,
@@ -421,6 +434,7 @@ impl fullscreen::BloomEncoder for VkContext {
             &self.bloom.pipeline_upsample,
             self.bloom.input_sets[f][dst + 2],
         );
+        Ok(())
     }
 }
 
@@ -429,8 +443,10 @@ impl VkContext {
     // frame slot `frame_idx` via the shared `gfx::fullscreen` driver. On return
     // `bloom.mips[frame_idx][0]` holds the accumulated bloom the composite pass
     // samples. Called only when `post_process.bloom_intensity > 0`.
+    // Vulkan's sub-passes cannot fail (every framebuffer and set was wired at
+    // init), so the chain's Result is always Ok here.
     pub(in crate::vulkan) fn encode_bloom(&self, cmd: vk::CommandBuffer, frame_idx: usize) {
-        fullscreen::encode_bloom_chain(self, &cmd, frame_idx);
+        let _ = fullscreen::encode_bloom_chain(self, &cmd, frame_idx);
     }
 
     // One fullscreen-triangle bloom sub-pass: render into `framebuffer` (sized

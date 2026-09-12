@@ -142,67 +142,37 @@ impl VkContext {
             self.taa = None;
         }
 
-        // SSR pre-pass + resolve. Built whenever SSR / SSGI / RT is on; a
-        // SSGI-only or RT-only build has no authored SSR settings, so fall back
+        // SSR resolve + reflection target. Built whenever SSR / SSGI / RT is on;
+        // a SSGI-only or RT-only build has no authored SSR settings, so fall back
         // to the inert defaults (the resolve never runs, but `new` needs a
         // concrete `SsrSettings`).
         if ssr_needed && self.ssr.is_none() {
             let settings = q.ssr.unwrap_or_else(|| ssr::SsrSettings::resolve(0.0, 0.0));
             let ssr = super::post::ssr::SsrResources::new(
-                &super::post::ssr::SsrGpuContext {
-                    alloc: &self.alloc,
-                    device: &self.device,
-                    command_pool: self.commands.command_pool,
-                    queue: self.graphics_queue,
-                },
-                super::post::ssr::SsrExtent {
-                    width: self.render_extent.width,
-                    height: self.render_extent.height,
-                },
-                self.frames_in_flight,
-                super::post::ssr::SsrInitInputs {
-                    settings,
-                    hdr_resolve_views: &hdr_views,
-                    prefilter_view: self.env_map.prefilter.view,
-                    cube_sampler: self.cube_sampler.handle(),
-                    global_set_layout: self.descriptors.global_set_layout.handle(),
-                    probe_cube_count: self.descriptors.probe_cube_count,
-                },
-                self.hot_reload.enabled,
+                &self.post_device(0),
+                settings,
+                self.render_extent,
             )?;
             self.ssr = Some(ssr);
         } else if !ssr_needed && self.ssr.is_some() {
-            let mut ssr = self.ssr.take().expect("ssr present");
-            ssr.destroy(&self.device);
+            // The cached framebuffers name the reflection target's view, so they
+            // go before it does.
+            self.post.cache.forget_views();
+            self.ssr = None;
         }
 
         // SSGI (samples the unified G-buffer's per-frame normal+depth views).
         if desired_ssgi && self.ssgi.is_none() {
             let settings = q.ssgi.expect("desired_ssgi implies ssgi settings");
-            let nd_views = self
-                .gbuffer
-                .as_ref()
-                .expect("SSGI requires the unified G-buffer pre-pass")
-                .normal_depth_views();
             let ssgi = super::post::ssgi::SsgiResources::new(
-                super::post::ssgi::SsgiDevice {
-                    alloc: &self.alloc,
-                    device: &self.device,
-                },
-                self.render_extent.width,
-                self.render_extent.height,
-                self.frames_in_flight,
+                &self.post_device(0),
                 settings,
-                super::post::ssgi::SsgiInputViews {
-                    hdr_resolve_views: &hdr_views,
-                    gbuffer_view: nd_views[0],
-                },
-                self.hot_reload.enabled,
+                self.render_extent,
             )?;
             self.ssgi = Some(ssgi);
         } else if !desired_ssgi && self.ssgi.is_some() {
-            let mut ssgi = self.ssgi.take().expect("ssgi present");
-            ssgi.destroy(&self.device);
+            self.post.cache.forget_views();
+            self.ssgi = None;
         }
 
         // Auto-exposure. When it turns off the static authored EV drives exposure

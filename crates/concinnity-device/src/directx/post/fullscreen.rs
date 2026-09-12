@@ -1,11 +1,9 @@
 // src/directx/post/fullscreen.rs
 //
-// Shared lifecycle for single-draw fullscreen post passes (SSR resolve, TAA
-// resolve, ...): the PIXEL_SHADER_RESOURCE <-> RENDER_TARGET barrier bracket +
-// the render-target bind + full-resolution viewport / scissor that every such
-// pass repeats. The per-pass encoders (ssr.rs / taa.rs) implement
-// `gfx::fullscreen::FullscreenPass` and call these from their begin/end so the
-// bracket lives once. See gfx/fullscreen.rs for the cross-backend driver.
+// The PIXEL_SHADER_RESOURCE <-> RENDER_TARGET barrier bracket, render-target
+// bind, and viewport / scissor that a fullscreen pass not yet drawn through the
+// shared post seam (`render::post`) writes by hand: the reflection composite's
+// blur and composite.
 
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -29,10 +27,8 @@ impl DxContext {
     // index. Paired with `end_fullscreen_rt`.
     //
     // The viewport is the target size (not a fixed render resolution) so a pass
-    // writing a reduced-resolution target -- the SSGI gather's `gi_scale` gather,
-    // which the composite then bilateral-upsamples -- rasterizes the full
-    // fullscreen triangle across its smaller target. Every other caller (SSR /
-    // TAA resolve, the SSGI composite) writes a full-resolution target.
+    // writing a reduced-resolution target -- the reflection blur -- rasterizes
+    // the full fullscreen triangle across its smaller target.
     pub(in crate::directx) fn begin_fullscreen_rt(
         &self,
         cmd: &ID3D12GraphicsCommandList,

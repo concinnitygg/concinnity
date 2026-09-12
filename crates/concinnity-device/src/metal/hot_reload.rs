@@ -37,7 +37,6 @@ use super::post::post_device::MtlPostDevice;
 use super::post::{
     build_bloom_pipelines, build_gbuffer_bindless_pipeline, build_reflection_blur_pipeline,
     build_reflection_composite_pipeline, build_rt_reflection_pipeline, build_ssao_pipeline,
-    build_ssgi_composite_pipeline, build_ssgi_gather_pipeline, build_ssr_pipeline,
 };
 use super::resources::skinning::{build_skinned_shadow_pipeline, make_skinned_vertex_descriptor};
 use crate::metal::slang_builtins::{SSAO_BLUR, SSAO_KERNEL};
@@ -272,14 +271,18 @@ impl MtlContext {
             self.text.pipeline_state.is_some(),
             build_text_pipeline(device, self.swap_pixel_format, hr)
         );
+        // Pipelines only: nothing here encodes, so the device needs no probe set.
+        let post_device = MtlPostDevice {
+            device,
+            sampler: &self.post_sampler,
+            cube_sampler: &self.cube_sampler,
+            probes: None,
+            timing: None,
+            hot_reload: hr,
+        };
         let taa = rebuild_if_live!(
             self.taa.pass.is_some(),
-            concinnity_core::render::post::taa::build_pipeline(&MtlPostDevice {
-                device,
-                sampler: &self.post_sampler,
-                timing: None,
-                hot_reload: hr,
-            })
+            concinnity_core::render::post::taa::build_pipeline(&post_device)
         );
         // The main pass and the GPU cull come from one builder, because the
         // cull's argument encoder is derived from the pipeline it feeds. A
@@ -346,8 +349,8 @@ impl MtlContext {
             build_gbuffer_bindless_pipeline(device, hr)
         );
         let ssr_resolve = rebuild_if_live!(
-            self.ssr.resolve_pipeline.is_some(),
-            build_ssr_pipeline(device, hr)
+            self.ssr.resolve.is_some(),
+            concinnity_core::render::post::ssr::build_pipeline(&post_device)
         );
         // The probe cube argument encoder is read off the SSR resolve fragment,
         // so an edit to that shader's block has to reach it whether or not the
@@ -361,13 +364,9 @@ impl MtlContext {
             self.ssr.blur_pipeline.is_some(),
             build_reflection_blur_pipeline(device, hr)
         );
-        let ssgi_gather = rebuild_if_live!(
-            self.ssgi.gather_pipeline.is_some(),
-            build_ssgi_gather_pipeline(device, hr)
-        );
-        let ssgi_composite = rebuild_if_live!(
-            self.ssgi.composite_pipeline.is_some(),
-            build_ssgi_composite_pipeline(device, hr)
+        let ssgi = rebuild_if_live!(
+            self.ssgi.pass.is_some(),
+            concinnity_core::render::post::ssgi::build_pipelines(&post_device)
         );
         let rt_reflections = rebuild_if_live!(
             self.rt.pipeline.is_some(),
@@ -483,8 +482,8 @@ impl MtlContext {
         if let Some(p) = gbuffer_bindless {
             self.gbuffer.bindless_pipeline = Some(p);
         }
-        if let Some(p) = ssr_resolve {
-            self.ssr.resolve_pipeline = Some(p);
+        if let (Some(p), Some(resolve)) = (ssr_resolve, self.ssr.resolve.as_mut()) {
+            resolve.swap_pipeline(p);
         }
         self.probe_cube_arg_encoder = probe_cube_arg_encoder;
         if let Some(p) = reflection_composite {
@@ -493,11 +492,8 @@ impl MtlContext {
         if let Some(p) = reflection_blur {
             self.ssr.blur_pipeline = Some(p);
         }
-        if let Some(p) = ssgi_gather {
-            self.ssgi.gather_pipeline = Some(p);
-        }
-        if let Some(p) = ssgi_composite {
-            self.ssgi.composite_pipeline = Some(p);
+        if let (Some(p), Some(pass)) = (ssgi, self.ssgi.pass.as_mut()) {
+            pass.swap_pipelines(p);
         }
         if let Some(p) = rt_reflections {
             self.rt.pipeline = Some(p);

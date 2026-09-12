@@ -22,6 +22,7 @@ use crate::render::uniforms::TaaParams;
 
 use super::device::{
     PostBind, PostBlend, PostDraw, PostExtent, PostLoadOp, PostPassDevice, PostSampler,
+    PostTargetState, PostTiming,
 };
 use super::history::HistoryRing;
 use super::program::PostProgram;
@@ -222,11 +223,14 @@ impl<Pipeline, Target> TaaPass<Pipeline, Target> {
         device.encode(
             rec,
             &PostDraw {
-                target: &self.targets[write],
+                target: device.target_attachment(&self.targets[write]),
+                // The graph declares the history slot this frame writes as its
+                // post-TAA scene.
+                state: PostTargetState::Graph,
                 // The fullscreen triangle covers every pixel, so nothing the
                 // target already holds survives the draw.
                 load: PostLoadOp::DontCare,
-                timing: Some(PassId::TaaResolve),
+                timing: PostTiming::Whole(PassId::TaaResolve),
                 pipeline: &self.pipeline,
                 binds: &binds,
                 constants: bytemuck::bytes_of(&params),

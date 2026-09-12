@@ -565,7 +565,7 @@ impl VkContext {
         let view = if self.rt_reflections_active() {
             self.rt_reflections.as_ref().map(|rt| rt.output.view)
         } else {
-            self.ssr.as_ref().map(|ssr| ssr.output.view)
+            self.ssr.as_ref().map(|ssr| ssr.output.view())
         };
         let Some(view) = view else {
             return;
