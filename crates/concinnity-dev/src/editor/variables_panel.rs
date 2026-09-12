@@ -8,7 +8,7 @@
 //
 // The table is one asset, so this panel edits one asset's args the way the
 // Behavior panel edits one behavior's: directly, committing as it goes, with the
-// build's own checker reporting on the result. `hook/variables_edit.rs` owns the
+// build's own checker reporting on the result. `hook/edit/variables.rs` owns the
 // actions and `editor/variables.rs` turns the args into these rows.
 
 use concinnity_core::ecs::World;

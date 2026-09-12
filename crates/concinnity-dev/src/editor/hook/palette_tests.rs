@@ -1,6 +1,6 @@
 // src/editor/hook/palette_tests.rs
 //
-// The command palette's drive (`hook/palette_edit.rs`): the shortcut that opens
+// The command palette's drive (`hook/edit/palette.rs`): the shortcut that opens
 // it under either platform modifier, the query mirrored off its field, the
 // keyboard walk over the matches, and what committing a row does. The ranking
 // and the providers are tested beside them in `editor/palette/`.

@@ -5,7 +5,7 @@
 // prop colliders. This module is the pure policy half: the display categories
 // behind the Display menu's toggles and the per-type stroke styling. The
 // generators live in `shapes.rs`; the per-frame drive that reads live
-// components and publishes lines is `hook/outline_drive.rs`.
+// components and publishes lines is `hook/drive/outline.rs`.
 
 pub(crate) mod shapes;
 

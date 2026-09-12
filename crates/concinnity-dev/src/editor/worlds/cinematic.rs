@@ -5,7 +5,7 @@
 // and pure math -- the shot clock, the framing derived from the previewed
 // world's bounds, the pose each shot holds at a moment, and the fade envelope
 // -- plus the one full-viewport sprite the fade is drawn with. The hook's
-// `hook/cinematic_drive.rs` owns the wiring: the frame dt, the world's camera,
+// `hook/drive/cinematic.rs` owns the wiring: the frame dt, the world's camera,
 // and when the cycle runs at all.
 //
 // The camera it produces never reaches the authored world: it is written onto

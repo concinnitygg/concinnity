@@ -1,7 +1,7 @@
 // src/editor/hook/behavior_asset.rs
 //
 // EditorHook: the open Behavior as a whole asset -- naming it and taking it out
-// of the world. Editing what a behavior does lives in `behavior_edit.rs`; these
+// of the world. Editing what a behavior does lives in `edit/behavior.rs`; these
 // act on the authored line itself, so both go through `mark_changed` and land in
 // the undo history like any other entry edit.
 //

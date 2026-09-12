@@ -8,7 +8,7 @@
 // world behind the unsaved-changes guard.
 //
 // Layout half only: `geometry.rs` owns the rects and the hit test, `draw.rs`
-// the per-frame layout, and `hook/worlds_edit.rs` / `hook/worlds_start.rs` the
+// the per-frame layout, and `hook/edit/worlds.rs` / `hook/worlds_start.rs` the
 // actions. `cinematic.rs` is the start screen's attract camera over the world
 // the sidebar previews, and `loading.rs` the cover that stands over it while
 // that world is compiled.

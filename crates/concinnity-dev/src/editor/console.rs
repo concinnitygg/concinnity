@@ -5,7 +5,7 @@
 // crate's events into that sink, the slash-command parser, and the /del name
 // autocomplete matcher. Everything here is pure or lock-guarded state; the
 // panel layout lives in `console_panel.rs` and the actions in
-// `hook/console_edit.rs`.
+// `hook/edit/console.rs`.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -242,7 +242,7 @@ pub(crate) enum SnapSet {
 
 // One registered slash command: its /help row plus its argument parser.
 // Adding a command is one entry here (plus its `Command` variant and dispatch
-// arm in `hook/console_edit.rs`).
+// arm in `hook/edit/console.rs`).
 pub(crate) struct CommandSpec {
     pub name: &'static str,
     pub usage: &'static str,

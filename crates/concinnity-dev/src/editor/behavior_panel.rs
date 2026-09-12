@@ -12,7 +12,7 @@
 // expression never leaves the panel, and the checker's complaint floats over
 // the body's foot rather than sitting in the chrome -- a behavior that checks
 // out says nothing, and the body never moves under the user either way.
-// `hook/behavior_edit.rs` owns the actions.
+// `hook/edit/behavior.rs` owns the actions.
 
 use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;

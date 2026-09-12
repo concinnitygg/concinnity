@@ -2,7 +2,7 @@
 //
 // The palette's result sources. Each provider is a pure enumeration into
 // `PaletteItem`s: actions carry names and keys only, and executing them is the
-// drive's job (`hook/palette_edit.rs`), so a provider needs no world to be
+// drive's job (`hook/edit/palette.rs`), so a provider needs no world to be
 // exercised.
 
 use super::{Category, PaletteAction, PaletteItem};

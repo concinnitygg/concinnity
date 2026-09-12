@@ -1,0 +1,112 @@
+// src/editor/hook/drive/glide.rs
+//
+// EditorHook: frame-selected and the short eased camera glide it (and a
+// bookmark recall) rides on. F moves the camera so the whole selection fits
+// the view; the pose math lives in `editor/framing.rs`, this drive resolves
+// the selection's world bounds and steps the interpolation.
+
+use concinnity_core::components::{Camera3D, FrameInput, Transform};
+use concinnity_core::ecs::PickIndex;
+use concinnity_core::ecs::World;
+use concinnity_host::thread::asset_id;
+
+use crate::editor::framing::{self, CameraPose};
+use crate::editor::hook::EditorHook;
+use crate::editor::hook::camera_pose;
+
+const GLIDE_SECS: f32 = 0.25;
+
+// An in-flight camera glide: the fixed endpoints and the wall clock the
+// normalized parameter is derived from.
+pub(in crate::editor::hook) struct CameraGlide {
+    pub(super) from: CameraPose,
+    pub(super) to: CameraPose,
+    pub(in crate::editor::hook) start: std::time::Instant,
+}
+
+impl EditorHook {
+    // The selection's world-space bounds this frame: mesh members contribute
+    // their PickIndex AABB, billboard-backed members (no geometry) their
+    // seeded Transform position padded to a small box. `None` when nothing
+    // resolves.
+    pub(in crate::editor::hook) fn selection_bounds(
+        &self,
+        world: &World,
+    ) -> Option<([f32; 3], [f32; 3])> {
+        let index = world.resource::<PickIndex>();
+        let boxes = self.selection.iter().filter_map(|name| {
+            let id = asset_id::lookup(name)?;
+            if let Some(e) = index.and_then(|i| i.entries.iter().find(|e| e.asset_id == id)) {
+                return Some((e.bb_min, e.bb_max));
+            }
+            let entity = super::billboard::entity_by_name(world, name)?;
+            Some(framing::pad_point(world.get::<Transform>(entity)?.position))
+        });
+        framing::union_bounds(boxes)
+    }
+
+    // F: glide the camera so the selection's bounding sphere fills the view,
+    // keeping the current look direction. Takes the viewport rather than the
+    // frame input so panel presses (which resolve without input access) can
+    // frame too.
+    pub(in crate::editor::hook) fn frame_selection(&mut self, vp: [f32; 2], world: &World) {
+        let Some((mn, mx)) = self.selection_bounds(world) else {
+            return;
+        };
+        let Some(cam) = world.query::<Camera3D>().next() else {
+            return;
+        };
+        let aspect = if vp[1] > 0.0 { vp[0] / vp[1] } else { 1.0 };
+        let Some(current) = camera_pose::read(world) else {
+            return;
+        };
+        let (center, radius) = framing::bounding_sphere(mn, mx);
+        let to = framing::frame_pose(
+            &current,
+            center,
+            radius,
+            cam.fov_y_degrees.to_radians(),
+            aspect,
+        );
+        self.start_glide(current, to);
+    }
+
+    pub(in crate::editor::hook) fn start_glide(&mut self, from: CameraPose, to: CameraPose) {
+        self.glide = Some(CameraGlide {
+            from,
+            to,
+            start: std::time::Instant::now(),
+        });
+    }
+
+    // Step an in-flight glide, writing the camera exactly as the fly drive
+    // does. Any deliberate navigation input (only live while flying) hands
+    // control back immediately.
+    pub(in crate::editor::hook) fn drive_glide(&mut self, input: &FrameInput, world: &mut World) {
+        let Some(glide) = &self.glide else {
+            return;
+        };
+        let steered = input.forward
+            || input.backward
+            || input.left
+            || input.right
+            || input.mouse_dx != 0.0
+            || input.mouse_dy != 0.0;
+        if steered {
+            self.end_glide();
+            return;
+        }
+        let t = glide.start.elapsed().as_secs_f32() / GLIDE_SECS;
+        let pose = framing::lerp_pose(&glide.from, &glide.to, framing::ease(t));
+        camera_pose::write(world, &pose);
+        if t >= 1.0 {
+            self.end_glide();
+        }
+    }
+
+    pub(super) fn end_glide(&mut self) {
+        self.glide = None;
+        // A fly re-entry must not integrate the glide's wall time as one step.
+        self.fly_clock = None;
+    }
+}

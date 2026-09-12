@@ -4,7 +4,7 @@
 // name field, and a row of two or three buttons over a translucent dim covering
 // the whole screen.
 // Pure geometry and draw; the open / press / close flow lives in
-// `hook/modal_drive.rs`. Not a registered panel: the dialog has no title bar,
+// `hook/drive/modal.rs`. Not a registered panel: the dialog has no title bar,
 // drag, focus rank, or View toggle, and while open it is screen-modal -- the
 // hook routes every press and wheel to it before anything else, and its draw
 // layer sits above all other chrome.

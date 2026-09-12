@@ -4,7 +4,7 @@
 // editor (and its worker threads) pushes into, plus the pure lifetime and
 // stack policy the overlay draws from. The card geometry lives in
 // `toast_overlay.rs`; the per-frame drive and click routing in
-// `hook/notify_drive.rs`. The Console panel keeps the full history; a toast is
+// `hook/drive/notify.rs`. The Console panel keeps the full history; a toast is
 // the additional at-a-glance surface for a result the user should not need the
 // console open to see.
 

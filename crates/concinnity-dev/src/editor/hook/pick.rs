@@ -6,7 +6,7 @@
 // nearest hit resolves through the interner's name table into the selection
 // set (`editor/selection.rs`). A plain click replaces the selection; a
 // shift-click toggles the hit's membership; a press over empty space arms the
-// marquee (`hook/marquee_drag.rs`), whose still release clears. A repeat plain
+// marquee (`hook/drag/marquee.rs`), whose still release clears. A repeat plain
 // click on the same spot cycles through overlapping hits near-to-far, which is
 // the only way to reach an occluded object without gizmos.
 

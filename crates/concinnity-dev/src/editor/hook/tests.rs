@@ -4277,7 +4277,7 @@ fn align_rotation_maps_up_onto_every_face_normal() {
         (2, 1.0),
         (2, -1.0),
     ] {
-        let rotation_deg = super::content_drag::align_rotation(axis, sign);
+        let rotation_deg = super::drag::content::align_rotation(axis, sign);
         let m = Transform {
             position: [0.0; 3],
             rotation_deg,

@@ -1,8 +1,8 @@
 // src/editor/hook/camera_tests.rs
 //
 // The editor's camera navigation drives: the Alt+drag tumble
-// (`hook/orbit_drive.rs`), the eased glide that F-framing and a bookmark recall
-// ride on (`hook/glide_drive.rs`), and the numbered pose slots
+// (`hook/drive/orbit.rs`), the eased glide that F-framing and a bookmark recall
+// ride on (`hook/drive/glide.rs`), and the numbered pose slots
 // (`hook/bookmarks.rs`). The pose math each of these calls is pure and tested
 // beside it (`editor/orbit.rs`, `editor/framing.rs`); asserted here is what the
 // drives own -- when a drag or glide starts, what it writes to the live camera,

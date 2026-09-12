@@ -4,7 +4,7 @@
 // asset's origin as dotted screen-space lines (sprites cannot rotate, so each
 // line is a run of small square segments) ending in a draggable tip handle.
 // This module is the pure half: the screen layout, the handle hit test, and
-// the axis-drag math. The hook (`hook/gizmo_drag.rs`) owns the drag state and
+// the axis-drag math. The hook (`hook/drag/gizmo.rs`) owns the drag state and
 // the write-back.
 
 use concinnity_core::components::Sprite;

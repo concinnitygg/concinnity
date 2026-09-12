@@ -1,6 +1,6 @@
 // src/editor/hook/console_tests.rs
 //
-// The Console panel's drive (`hook/console_edit.rs`): the log window's pinned
+// The Console panel's drive (`hook/edit/console.rs`): the log window's pinned
 // tail and its scroll, the focus actions, the editing keys (submit and the
 // /del ghost completion), and the build command's worker handoff. The command
 // parsers themselves are tested in `editor/console.rs`, and the /add, /del,

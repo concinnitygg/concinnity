@@ -2,7 +2,7 @@
 //
 // The editor side of execution tracing: converting the engine's cross-boundary
 // forms (node paths, values) into the editor's path type and display text. The
-// hook's `trace_drive` owns the per-frame exchange; nothing here touches the
+// hook's `drive/trace` owns the per-frame exchange; nothing here touches the
 // world.
 
 use concinnity_core::ecs::{TraceStep, TraceVal};

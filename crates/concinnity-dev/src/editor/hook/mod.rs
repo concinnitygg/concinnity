@@ -1,4 +1,4 @@
-// src/editor/hook.rs
+// src/editor/hook/mod.rs
 //
 // The editor's per-frame drive. Implements the run loop's `DebugHook` seam: each
 // frame it hit-tests the editor HUD's controls against the live input, mutates
@@ -141,13 +141,13 @@ pub(crate) struct EditorHook {
     // count sampled once a frame (the rows come from the live world, which
     // the panel sizing cannot reach), the last rejected commit, the seed
     // counter behind Randomize, and a slider drag in flight
-    // (`hook/shape_drag.rs`).
+    // (`hook/drag/shape.rs`).
     shape_open: bool,
     shape_scroll: usize,
     shape_rows: usize,
     shape_status: Option<String>,
     shape_seed: u64,
-    shape_drag: Option<shape_drag::ShapeDrag>,
+    shape_drag: Option<drag::shape::ShapeDrag>,
     // The Story panel: shown state, the loaded source's lines / edit line /
     // window scroll, whether the edit line holds keyboard focus, the source
     // path shown in the header, and the last parse / IO error. `story_blur`
@@ -182,7 +182,7 @@ pub(crate) struct EditorHook {
     console_sink: ConsoleSink,
     console_build_running: std::sync::Arc<std::sync::atomic::AtomicBool>,
     // The toast queue (`editor/notify.rs`): result sites push, the per-frame
-    // drive (`hook/notify_drive.rs`) draws the stack. The latch skips the
+    // drive (`hook/drive/notify.rs`) draws the stack. The latch skips the
     // overlay's hide pass while nothing is live, so an idle queue costs one
     // lock check a frame.
     notifier: notify::Notifier,
@@ -231,7 +231,7 @@ pub(crate) struct EditorHook {
     behavior_overview_card: Option<usize>,
     // Live-debug state fed by the runtime's execution trace while a play
     // session runs with the Behavior or Variables panel open
-    // (`hook/trace_drive.rs`). Pulses cover the OPEN behavior only (paths are
+    // (`hook/drive/trace.rs`). Pulses cover the OPEN behavior only (paths are
     // per-body); breakpoints are held by behavior NAME + node path so they
     // survive preview rebuilds and body edits shifting node ids.
     behavior_pulses: Vec<crate::editor::behavior::pulse::NodePulse>,
@@ -285,19 +285,19 @@ pub(crate) struct EditorHook {
     // The Content panel (the visual-asset thumbnail grid): shown state, the
     // grid's first visible row, the type-chip cycle position (0 = All, i =
     // VISUAL_TYPES[i-1]), whether its search field holds keyboard focus, and
-    // an in-flight drag-out placement (`hook/content_drag.rs`), if any.
+    // an in-flight drag-out placement (`hook/drag/content.rs`), if any.
     content_open: bool,
     content_scroll: usize,
     content_type: usize,
     content_search_focus: bool,
-    content_drag: Option<content_drag::ContentDrag>,
-    // The right-click "Create here" menu (`hook/create_menu_drive.rs`), if open.
-    create_menu: Option<create_menu_drive::CreateMenu>,
-    // The confirmation dialog (`hook/modal_drive.rs`), if open. Screen-modal:
+    content_drag: Option<drag::content::ContentDrag>,
+    // The right-click "Create here" menu (`hook/drive/create_menu.rs`), if open.
+    create_menu: Option<drive::create_menu::CreateMenu>,
+    // The confirmation dialog (`hook/drive/modal.rs`), if open. Screen-modal:
     // while open every press and wheel is swallowed before any other routing,
     // and only one of its buttons closes it.
-    modal: Option<modal_drive::ModalState>,
-    // The Worlds panel (`hook/worlds_edit.rs`): shown state, the project's
+    modal: Option<drive::modal::ModalState>,
+    // The Worlds panel (`hook/edit/worlds.rs`): shown state, the project's
     // worlds as of the last refresh (the listing changes only when the panel
     // acts on it, so it is not re-read every frame), the row window's scroll,
     // the path of the row whose triple-dot menu is open, and why the last
@@ -329,14 +329,14 @@ pub(crate) struct EditorHook {
     // screen has been laid out for, which is what "up" means here.
     start_preview: Option<String>,
     start_drawn: u32,
-    // The start screen's attract camera (`hook/cinematic_drive.rs`): the shot
+    // The start screen's attract camera (`hook/drive/cinematic.rs`): the shot
     // cycle running over the previewed world, the clock it advances on, and the
     // pose that world's own camera held before the cycle took it -- put back
     // the moment the screen hands the session a world.
     cinematic: Option<worlds::cinematic::Cinematic>,
     cinematic_clock: Option<std::time::Instant>,
     cinematic_restore: Option<framing::CameraPose>,
-    // The command palette (`hook/palette_edit.rs`): shown state, a one-frame
+    // The command palette (`hook/edit/palette.rs`): shown state, a one-frame
     // focus blur after the Ctrl+K open, the query mirrored off its field once
     // a frame, the item list built on open with the matches the query keeps,
     // the highlighted match with its window scroll, and the labels of recent
@@ -360,14 +360,14 @@ pub(crate) struct EditorHook {
     health: HealthState,
     // Whether the View panel itself is shown (the top-bar View button toggles it).
     view_open: bool,
-    // The Display menu (`hook/view_menu_drive.rs`): open state, the viewport
+    // The Display menu (`hook/drive/view_menu.rs`): open state, the viewport
     // view mode, the show flags, and the editor-side billboard-icons toggle.
     display_menu_open: bool,
     view_mode: view_menu::ViewMode,
     show_flags: view_menu::ShowFlags,
     show_billboards: bool,
     // The Display menu's always-on extent-outline categories (selection
-    // outlines regardless; `hook/outline_drive.rs`).
+    // outlines regardless; `hook/drive/outline.rs`).
     extent_show: outlines::CategorySet,
     // The type of the open add / edit form; `None` means the form panel is
     // closed.
@@ -415,14 +415,14 @@ pub(crate) struct EditorHook {
     // repeat-click cycle; `marquee` an in-flight box select.
     selection: Selection,
     pick_last: Option<pick::PickLast>,
-    marquee: Option<marquee_drag::MarqueeDrag>,
+    marquee: Option<drag::marquee::MarqueeDrag>,
     // An in-flight Alt+drag tumble around the selection
-    // (`hook/orbit_drive.rs`), if any.
-    orbit: Option<orbit_drive::OrbitDrag>,
+    // (`hook/drive/orbit.rs`), if any.
+    orbit: Option<drive::orbit::OrbitDrag>,
     // The gizmo's edit mode (T/R/S keys) and an active drag
-    // (`hook/gizmo_drag.rs`), if any.
+    // (`hook/drag/gizmo.rs`), if any.
     gizmo_mode: gizmo::GizmoMode,
-    gizmo_drag: Option<gizmo_drag::GizmoDrag>,
+    gizmo_drag: Option<drag::gizmo::GizmoDrag>,
     // Grid / angle snapping for gizmo drags (Preview panel rows + /snap).
     snap: snap::SnapSettings,
     // Whether a drag-out placement orients the drop to the struck surface's
@@ -432,8 +432,8 @@ pub(crate) struct EditorHook {
     // its integration steps against.
     fly: bool,
     fly_clock: Option<std::time::Instant>,
-    // An in-flight framing / bookmark camera glide (`hook/glide_drive.rs`).
-    glide: Option<glide_drive::CameraGlide>,
+    // An in-flight framing / bookmark camera glide (`hook/drive/glide.rs`).
+    glide: Option<drive::glide::CameraGlide>,
     // Saved camera poses (`hook/bookmarks.rs`), loaded from the per-project
     // session store and persisted on save.
     bookmarks: [Option<framing::CameraPose>; session_store::BOOKMARK_SLOTS],
@@ -595,78 +595,41 @@ fn names_of_type(entries: &[serde_json::Value], ty: &str) -> Vec<String> {
         .collect()
 }
 
-// Named to avoid colliding with the `use super::asset_tree` module import.
-mod asset_tree_edit;
-mod axes_drive;
+// The three role groups: the authored-entry mutations behind each panel, the
+// per-frame drives of the live furniture, and the pointer gestures. Everything
+// else here is the shared spine they run on.
+mod drag;
+mod drive;
+mod edit;
+
 mod behavior_asset;
-// Named to avoid colliding with the `use super::behavior_panel` import.
-mod behavior_edit;
 mod behavior_keys;
-mod billboard_drive;
 mod bookmarks;
 mod browse;
 mod camera_pose;
-// Named to avoid colliding with the `use super::worlds::cinematic` import.
-mod cinematic_drive;
-// Named to avoid colliding with the `use super::console` module import.
-mod console_edit;
-mod content_drag;
-mod content_edit;
 mod cook_worker;
-// Named to avoid colliding with the `use super::create_menu` module import.
-mod create_menu_drive;
 mod drop_floor;
 mod duplicate;
 mod editing;
 mod edits;
-mod export_edit;
 mod fly;
-mod gizmo_drag;
-mod glide_drive;
 mod hide;
-mod import_edit;
 mod layout;
-mod marquee_drag;
-// Named to avoid colliding with the `use super::modal` module import.
-mod modal_drive;
-#[cfg(test)]
-mod modal_tests;
-mod orbit_drive;
-mod outline_drive;
-// Named to avoid colliding with the `use super::overrides` module import.
-mod override_edit;
-// Named to avoid colliding with the `use super::palette` module import.
-mod palette_edit;
-mod pick;
-// Named to avoid colliding with the `use super::lighting` module import.
-mod lighting_edit;
-// Named to avoid colliding with the `use super::character_shape_panel` import.
-mod character_shape_edit;
-mod shape_drag;
 // The per-panel `Panel` impls, reachable by the registry (`editor/registry.rs`).
-mod notify_drive;
 pub(super) mod panels;
+mod pick;
 mod routing;
-mod select_edit;
 mod sim_control;
-mod trace_drive;
-mod view_menu_drive;
-// Named to avoid colliding with the `use super::worlds` module import.
-mod worlds_edit;
 mod worlds_start;
-#[cfg(test)]
-mod worlds_start_tests;
-#[cfg(test)]
-mod worlds_tests;
-// Named to avoid colliding with the `use super::story` module import.
-mod story_edit;
-// Named to avoid colliding with the `use super::variables_panel` import.
+
 #[cfg(test)]
 mod camera_tests;
 #[cfg(test)]
 mod cinematic_tests;
 #[cfg(test)]
 mod console_tests;
+#[cfg(test)]
+mod modal_tests;
 #[cfg(test)]
 mod override_tests;
 #[cfg(test)]
@@ -677,7 +640,10 @@ mod panel_tests;
 mod select_tests;
 #[cfg(test)]
 mod tests;
-mod variables_edit;
+#[cfg(test)]
+mod worlds_start_tests;
+#[cfg(test)]
+mod worlds_tests;
 
 impl EditorHook {
     pub(crate) fn new(world_path: String, entries: Vec<serde_json::Value>) -> Self {

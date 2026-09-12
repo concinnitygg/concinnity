@@ -15,7 +15,7 @@ use concinnity_core::gfx::pick::{PickRay, ray_aabb};
 use concinnity_host::thread::asset_id::{self, AssetId};
 
 use super::EditorHook;
-use super::gizmo_drag;
+use super::drag;
 use crate::editor::gizmo::GizmoMode;
 
 // A member already resting within this distance of the floor is left alone
@@ -67,7 +67,7 @@ impl EditorHook {
                 &mut self.entries,
                 target.idx,
                 "position",
-                landed.map(gizmo_drag::round3),
+                landed.map(drag::gizmo::round3),
             );
             changed.push(target.idx);
         }

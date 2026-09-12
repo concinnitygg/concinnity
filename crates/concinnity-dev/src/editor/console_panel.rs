@@ -5,7 +5,7 @@
 // the bottom (the panel's one TextInput, which also carries the /del name
 // autocomplete as ghost text). Log lines color by severity (`theme::LOG_*`).
 // The log model and command dispatch live in `console.rs` and
-// `hook/console_edit.rs`.
+// `hook/edit/console.rs`.
 
 use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;

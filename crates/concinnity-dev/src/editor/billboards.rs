@@ -6,7 +6,7 @@
 // moved like anything else. This module is the pure half: the registry-driven
 // eligibility, the glyph / tint derivation, the projection and hit-test math,
 // the trigger-volume outline layout, and the injected sprite / label pools.
-// The hook (`hook/billboard_drive.rs`) resolves entries to live entities and
+// The hook (`hook/drive/billboard.rs`) resolves entries to live entities and
 // drives the per-frame placement.
 //
 // Occlusion: billboards live in the window-space overlay, so they always draw

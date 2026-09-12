@@ -6,7 +6,7 @@
 // world position -- the billboard-eligible set), plus a disclosure section
 // listing the world's Prefabs (each creates a Prop instancing that prefab).
 // Pure geometry, item derivation, and draw here; the open / click / commit
-// flow lives in `hook/create_menu_drive.rs`.
+// flow lives in `hook/drive/create_menu.rs`.
 
 use concinnity_core::ecs::World;
 use concinnity_host::thread::asset_id::AssetId;

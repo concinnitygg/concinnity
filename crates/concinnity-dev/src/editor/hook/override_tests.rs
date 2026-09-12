@@ -1,7 +1,7 @@
 // src/editor/hook/override_tests.rs
 //
 // The bulk and definition-level halves of the override loop
-// (`hook/override_edit.rs`): apply-all across a mixed patch, minimizing a patch
+// (`hook/edit/overrides.rs`): apply-all across a mixed patch, minimizing a patch
 // back down to what actually differs, materializing a preset-backed Prefab so
 // its entries become editable, and the jump that walks the form to its next
 // marked field. The single-field revert / apply pair is covered beside the form

@@ -10,7 +10,7 @@
 // complaint to the row it is about, and `trace` / `pulse` turn the runtime's
 // execution reports into the paths and fading highlights live debugging draws.
 // Nothing here touches the world or the HUD: the layout half is
-// `editor/behavior_panel.rs` and the actions live in `hook/behavior_edit.rs`.
+// `editor/behavior_panel.rs` and the actions live in `hook/edit/behavior.rs`.
 //
 // The panel edits the authored JSON directly rather than a typed twin, because
 // that JSON is exactly what `check_with_variables` reads -- so the status line
