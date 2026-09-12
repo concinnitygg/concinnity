@@ -8,7 +8,14 @@
 // on the click); text fields commit together on Apply, all-or-nothing across
 // the touched assets.
 
-use super::*;
+use concinnity_core::ecs::World;
+
+use super::{EditorHook, LightingData, entry_name, entry_type, short_status};
+use crate::editor::form::{self, FormField};
+use crate::editor::lighting;
+use crate::editor::lighting_panel::{self, LightingAction, LightingView};
+use crate::editor::registry::PanelKey;
+use crate::editor::widget;
 
 impl EditorHook {
     // The `entries` index of the first entry of type `ty` (the lighting assets

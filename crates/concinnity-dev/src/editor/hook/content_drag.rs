@@ -9,10 +9,19 @@
 // cursor. Escape cancels; a release back over the panel is just the click
 // that already selected the cell.
 
-use concinnity_core::components::{Camera3D, Transform};
+use concinnity_core::components::{Camera3D, FrameInput, Transform};
 use concinnity_core::ecs::PickIndex;
+use concinnity_core::ecs::World;
 
-use super::*;
+use super::gizmo_drag;
+use super::pick;
+use super::{EditorHook, entry_name, entry_type};
+use crate::editor::billboards;
+use crate::editor::content_panel;
+use crate::editor::registry::PanelKey;
+use crate::editor::snap;
+use crate::editor::theme;
+use crate::editor::widget;
 
 // Movement below this is a click, not a drag (the marquee's convention).
 const DRAG_START_PX: f32 = 4.0;
@@ -280,11 +289,7 @@ impl EditorHook {
 
     fn cursor_over_content_panel(&self, mouse: [f32; 2], vp: [f32; 2]) -> bool {
         let o = self.origin(PanelKey::Content, vp);
-        widget::point_in(
-            mouse[0],
-            mouse[1],
-            super::super::content_panel::panel_rect(o),
-        )
+        widget::point_in(mouse[0], mouse[1], content_panel::panel_rect(o))
     }
 
     // Whether a ghost is showing this frame (the drag left the panel and has
@@ -313,7 +318,7 @@ impl EditorHook {
             rotation_deg: pose.rotation_deg,
             scale: [1.0; 3],
         };
-        let tint = super::super::theme::ACCENT_TINT;
+        let tint = theme::ACCENT_TINT;
         if let Some(centers) =
             billboards::box_outline(&view, fov, vp, &transform.model_matrix(), GHOST_HALF)
         {

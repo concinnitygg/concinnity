@@ -9,11 +9,18 @@
 // the Display menu's state. The palette closes on commit, on Escape, and on a
 // click outside it.
 
+use concinnity_core::components::FrameInput;
 use concinnity_core::components::InputKey;
+use concinnity_core::ecs::World;
 
-use super::*;
+use super::{EditorHook, entry_name, scroll_step};
 use crate::editor::behavior::navigate;
-use crate::editor::palette::{PaletteAction, providers};
+use crate::editor::palette::providers;
+use crate::editor::palette::{self, PaletteAction};
+use crate::editor::palette_panel::{self, PaletteHit, PaletteView};
+use crate::editor::registry::{self, PanelKey};
+use crate::editor::view_menu;
+use crate::editor::widget::{self, point_in};
 
 // How many result rows a wheel step or arrow keeps in view.
 const WINDOW: usize = palette_panel::ROW_POOL;

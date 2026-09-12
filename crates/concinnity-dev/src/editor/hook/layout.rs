@@ -3,7 +3,23 @@
 // EditorHook: the floating panels' focus stack, published draw layers, and
 // each panel's on-screen origin -- all derived from the panel registry.
 
-use super::*;
+use concinnity_core::ecs::CursorShape;
+use concinnity_core::ecs::HudLayers;
+use concinnity_core::ecs::World;
+use concinnity_host::thread::asset_id::AssetId;
+
+use super::{EditorHook, TOP_BAR_LAYER};
+use crate::editor::asset_list::{self, ListRow};
+use crate::editor::create_menu;
+use crate::editor::hud;
+use crate::editor::list_panel::Row;
+use crate::editor::modal;
+use crate::editor::registry::{self, PanelKey};
+use crate::editor::resize;
+use crate::editor::toast_overlay;
+use crate::editor::view_menu;
+use crate::editor::widget::{self, point_in};
+use crate::editor::worlds;
 
 // Layers each panel's rank claims, so an overlay can draw above its own panel
 // without reaching the one in front of it.
@@ -227,7 +243,7 @@ impl EditorHook {
     // Template `i`'s assets as the shared grouped rows (types + names alphabetical,
     // identical to the Assets panel's list).
     pub(super) fn template_rows(&self, i: usize) -> Vec<ListRow> {
-        super::asset_list::grouped_rows(&self.template_entries(i), None)
+        asset_list::grouped_rows(&self.template_entries(i), None)
     }
 
     // The View panel's toggle rows: one checkbox per registered panel that opts

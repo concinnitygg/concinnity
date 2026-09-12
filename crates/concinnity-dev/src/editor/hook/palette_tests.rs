@@ -5,11 +5,16 @@
 // keyboard walk over the matches, and what committing a row does. The ranking
 // and the providers are tested beside them in `editor/palette/`.
 
+use concinnity_core::components::FrameInput;
 use concinnity_core::components::InputKey;
 use concinnity_core::components::TextInput;
+use concinnity_core::ecs::World;
 
-use super::*;
+use super::EditorHook;
 use crate::editor::palette::{Category, PaletteAction};
+use crate::editor::palette_panel;
+use crate::editor::registry::PanelKey;
+use crate::editor::widget;
 
 fn hook(entries: Vec<serde_json::Value>) -> EditorHook {
     EditorHook::new("unused.jsonl".to_string(), entries)

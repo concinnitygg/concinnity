@@ -7,9 +7,9 @@
 // the engine's own controller does, so the frame draws from what was written.
 
 use concinnity_core::components::Camera3D;
-use framing::CameraPose;
+use concinnity_core::ecs::World;
 
-use super::*;
+use crate::editor::framing::CameraPose;
 
 pub(super) fn read(world: &World) -> Option<CameraPose> {
     let cam = world.query::<Camera3D>().next()?;

@@ -8,8 +8,12 @@
 // drive in `hook/tests.rs`.
 
 use concinnity_core::components::TextInput;
+use concinnity_core::ecs::World;
 
-use super::*;
+use super::{EditorHook, entry_name};
+use crate::editor::form_panel::{self, FormAction};
+use crate::editor::overrides;
+use crate::editor::panel;
 use crate::test_support::isolate_state_dir;
 
 fn hook(entries: Vec<serde_json::Value>) -> EditorHook {

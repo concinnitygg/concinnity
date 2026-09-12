@@ -47,12 +47,15 @@
 // value field is the selection's and follows it from view to view, so it holds
 // only Left and Right, which are the caret's (`input::text_system`).
 
+use concinnity_core::components::FrameInput;
 use concinnity_core::components::InputKey;
+use concinnity_core::ecs::World;
 
-use super::*;
+use super::EditorHook;
 use crate::editor::behavior::graph::Card;
 use crate::editor::behavior::navigate::{self, Dir};
 use crate::editor::behavior_chart::CARD_POOL;
+use crate::editor::behavior_panel::{self, BehaviorAction, ViewMode};
 
 fn direction(key: InputKey) -> Option<Dir> {
     Some(match key {

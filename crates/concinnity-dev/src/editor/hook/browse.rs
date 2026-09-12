@@ -3,7 +3,14 @@
 // EditorHook: the Assets browse panel and header combo, plus the Templates
 // panel's actions (including applying a template and its detail view).
 
-use super::*;
+use concinnity_core::ecs::World;
+
+use super::{EditorHook, FormOverridesData, PanelData, TemplateDetailData, entry_name};
+use crate::editor::form_panel::{self, FormView};
+use crate::editor::hud::HudAction;
+use crate::editor::overrides;
+use crate::editor::registry::PanelKey;
+use crate::editor::template_panel::{TemplateAction, TemplateView};
 
 impl EditorHook {
     // Apply every entry of engine-owned template `i`, skipping any whose name

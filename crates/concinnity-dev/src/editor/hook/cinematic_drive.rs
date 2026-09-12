@@ -15,10 +15,13 @@
 
 use concinnity_core::components::Camera3D;
 use concinnity_core::ecs::PickIndex;
-use framing::CameraPose;
-use worlds::cinematic::{Cinematic, Framing};
+use concinnity_core::ecs::World;
 
-use super::*;
+use super::EditorHook;
+use super::camera_pose;
+use crate::editor::framing::CameraPose;
+use crate::editor::worlds;
+use crate::editor::worlds::cinematic::{Cinematic, Framing};
 
 impl EditorHook {
     // Advance the cycle and write its pose. Runs after the frame's routing, so

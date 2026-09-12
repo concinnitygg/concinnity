@@ -6,9 +6,13 @@
 // query; cells bind baked thumbnails through `editor/thumbs.rs` and fall back
 // to typed icon chips.
 
-use super::*;
+use concinnity_core::ecs::World;
+
+use super::{EditorHook, scroll_step};
 use crate::editor::content_panel::{self, ContentAction};
-use crate::editor::{filter, thumbs};
+use crate::editor::filter;
+use crate::editor::thumbs;
+use crate::editor::widget;
 
 // The asset types the grid shows, the type-chip cycle order. "All" leads.
 pub(super) const VISUAL_TYPES: [&str; 7] = [

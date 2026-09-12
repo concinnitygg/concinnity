@@ -5,7 +5,9 @@
 // which entry list each relationship is fed, that a hit replaces the selection
 // wholesale, and that a miss reports without disturbing what was selected.
 
-use super::*;
+use concinnity_core::ecs::World;
+
+use super::EditorHook;
 use crate::test_support::isolate_state_dir;
 
 fn hook(entries: Vec<serde_json::Value>) -> EditorHook {

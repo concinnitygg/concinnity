@@ -5,9 +5,10 @@
 // an isolate that keeps only the selection visible; Ctrl+H clears both. The
 // composition rule lives in `editor/visibility.rs`.
 
-use concinnity_host::thread::asset_id;
+use concinnity_host::thread::asset_id::{self, AssetId};
 
-use super::*;
+use super::{EditorHook, entry_name};
+use crate::editor::visibility;
 
 impl EditorHook {
     // H: manually hide every selected asset.

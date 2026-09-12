@@ -10,9 +10,14 @@
 // mode capture the cursor, so `left_click` never arms a marquee there.
 
 use concinnity_core::components::Camera3D;
+use concinnity_core::components::FrameInput;
 use concinnity_core::ecs::PickIndex;
+use concinnity_core::ecs::World;
 
-use super::*;
+use super::EditorHook;
+use super::pick;
+use crate::editor::highlight;
+use crate::editor::marquee;
 
 pub(super) struct MarqueeDrag {
     anchor: [f32; 2],

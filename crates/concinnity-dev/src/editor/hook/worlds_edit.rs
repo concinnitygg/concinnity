@@ -10,9 +10,16 @@
 // store's entry for it. Both switches run behind the confirmation dialog
 // whenever the open world has unsaved edits.
 
+use concinnity_core::ecs::World;
 use std::path::Path;
 
-use super::*;
+use super::worlds_start::Adopt;
+use super::{EditorHook, scroll_step};
+use crate::editor::history::History;
+use crate::editor::modal;
+use crate::editor::session_store;
+use crate::editor::world_files;
+use crate::editor::worlds::{WorldRow, WorldTarget, WorldsAction, WorldsConfirm, WorldsView};
 
 impl EditorHook {
     // Re-read the project's worlds. The listing changes only when the panel

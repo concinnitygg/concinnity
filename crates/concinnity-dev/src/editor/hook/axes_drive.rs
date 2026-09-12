@@ -7,9 +7,11 @@
 // off state, and the renderer drops the pass with it.
 
 use concinnity_core::components::Camera3D;
+use concinnity_core::ecs::World;
 use concinnity_core::gfx::lines::Line;
 
-use super::*;
+use super::EditorHook;
+use crate::editor::axes;
 
 impl EditorHook {
     // Append this frame's axis lines to the shared line buffer. Nothing while

@@ -6,8 +6,33 @@
 // the hidden pass -- lives on the registry consumers; each impl supplies only
 // what is panel-specific.
 
-use super::*;
+use concinnity_core::components::FrameInput;
+use concinnity_core::ecs::World;
+use concinnity_host::thread::asset_id::AssetId;
+
+use super::EditorHook;
+use crate::editor::behavior_panel::{self, ViewMode};
+use crate::editor::character_shape_panel;
+use crate::editor::console_panel;
+use crate::editor::content_panel;
+use crate::editor::form;
+use crate::editor::form_panel::{self, FormAction};
+use crate::editor::health_panel;
+use crate::editor::import_panel;
+use crate::editor::lighting;
+use crate::editor::lighting_panel;
+use crate::editor::palette_panel;
+use crate::editor::panel;
+use crate::editor::preview::{self, PreviewAction};
 use crate::editor::registry::{Panel, PanelKey};
+use crate::editor::snap;
+use crate::editor::story_panel;
+use crate::editor::template::{self, TemplatesAction};
+use crate::editor::template_panel;
+use crate::editor::variables_panel;
+use crate::editor::view::{self, ViewAction};
+use crate::editor::widget;
+use crate::editor::worlds;
 
 pub(crate) struct AssetsPanel;
 

@@ -6,7 +6,8 @@
 // name. The copies become the new selection (ready to move), and the whole
 // batch commits as ONE undo step.
 
-use super::*;
+use super::{EditorHook, entry_name, entry_type};
+use crate::editor::panel;
 
 impl EditorHook {
     // Duplicate every eligible selection member; the number of copies made.

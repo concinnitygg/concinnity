@@ -9,8 +9,9 @@ use concinnity_cook::authoring::world::write_world_jsonl;
 use concinnity_host::thread::jobs::pool;
 use std::sync::atomic::Ordering;
 
-use super::*;
+use super::EditorHook;
 use crate::editor::gltf_export;
+use crate::editor::notify;
 
 impl EditorHook {
     // /export: resolve the mesh (an explicit name, or the selection through

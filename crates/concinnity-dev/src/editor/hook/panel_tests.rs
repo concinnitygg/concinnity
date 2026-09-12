@@ -11,10 +11,14 @@
 use concinnity_core::components::Sprite;
 use concinnity_core::components::TextInput;
 use concinnity_core::components::TextLabel;
+use concinnity_core::ecs::World;
+use concinnity_host::thread::asset_id::AssetId;
 
-use super::*;
+use super::EditorHook;
+use crate::editor::hud;
 use crate::editor::inject;
-use crate::editor::registry::Panel;
+use crate::editor::registry::{self, Panel, PanelKey};
+use crate::editor::widget;
 use crate::test_support::isolate_state_dir;
 
 fn hook() -> EditorHook {

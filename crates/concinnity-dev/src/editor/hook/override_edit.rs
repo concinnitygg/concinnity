@@ -6,7 +6,12 @@
 // back into the authored Prefab definition (apply-to-template), or both in
 // bulk -- each as a single undo step.
 
-use super::*;
+use concinnity_core::ecs::World;
+
+use super::{EditorHook, FormTemplate, entry_name, entry_type, short_status};
+use crate::editor::form;
+use crate::editor::form_panel::FormFocus;
+use crate::editor::overrides;
 use crate::editor::overrides::prefab_map;
 
 // One resolved option of the per-field or entity-level override menu.

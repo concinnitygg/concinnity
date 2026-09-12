@@ -6,11 +6,12 @@
 // frame (no rebuild); releasing commits the working values to the entry as
 // ONE edit, so undo reverts the whole drag; Escape restores the start state.
 
-use concinnity_core::components::{CharacterCapsule, CharacterShape};
+use concinnity_core::components::{CharacterCapsule, CharacterShape, FrameInput};
+use concinnity_core::ecs::World;
 use concinnity_engine::gfx::shape_preview;
 use concinnity_host::thread::asset_id;
 
-use super::*;
+use super::EditorHook;
 use crate::editor::character_shape::{ShapeValues, SliderRow};
 use crate::editor::widget_slider;
 

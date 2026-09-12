@@ -4,9 +4,19 @@
 // wheel region, title-bar dragging, and click hit-testing across the top bar and
 // the registered panels (front-to-back).
 
+use concinnity_core::components::FrameInput;
 use concinnity_core::components::InputKey;
+use concinnity_core::ecs::World;
 
-use super::*;
+use super::bookmarks;
+use super::{Drag, EditorHook, scroll_step};
+use crate::editor::form_panel::{self, FormFocus};
+use crate::editor::gizmo;
+use crate::editor::hud::{self, HudState};
+use crate::editor::registry::{self, PanelKey};
+use crate::editor::resize;
+use crate::editor::template_panel;
+use crate::editor::widget::{self, point_in};
 
 impl EditorHook {
     // Scroll the edit form: an open value dropdown scrolls its own option list;

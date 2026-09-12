@@ -10,11 +10,13 @@
 
 use concinnity_core::components::Transform;
 use concinnity_core::ecs::PickIndex;
+use concinnity_core::ecs::World;
 use concinnity_core::gfx::pick::{PickRay, ray_aabb};
-use concinnity_host::thread::asset_id;
-use gizmo::GizmoMode;
+use concinnity_host::thread::asset_id::{self, AssetId};
 
-use super::*;
+use super::EditorHook;
+use super::gizmo_drag;
+use crate::editor::gizmo::GizmoMode;
 
 // A member already resting within this distance of the floor is left alone
 // (and a no-op drop records no undo step).

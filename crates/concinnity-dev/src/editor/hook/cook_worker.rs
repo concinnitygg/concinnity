@@ -7,7 +7,7 @@
 
 use concinnity_host::thread::jobs::pool;
 
-use super::*;
+use super::EditorHook;
 
 impl EditorHook {
     // Run one blob cook of `content` off-thread. The caller must already hold

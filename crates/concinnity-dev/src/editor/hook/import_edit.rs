@@ -8,10 +8,17 @@
 // same field from a native picker, so both routes end at the same Add. Listed
 // imports open in the standard edit form for full arg editing.
 
+use concinnity_core::components::FrameInput;
 use concinnity_core::components::InputKey;
+use concinnity_core::ecs::World;
 use std::path::Path;
 
-use super::*;
+use super::{EditorHook, FormTarget, entry_name, entry_type, scroll_step, short_status};
+use crate::editor::file_dialog;
+use crate::editor::import_panel::{self, ImportAction, ImportRow, ImportStatus, ImportView};
+use crate::editor::notify;
+use crate::editor::registry::PanelKey;
+use crate::editor::widget;
 
 impl EditorHook {
     // The world's file-backed entries, in entry order.
@@ -82,7 +89,7 @@ impl EditorHook {
     // `accept_browsed_path`.
     pub(super) fn browse_import(&mut self, world: &mut World) {
         let root = project_root();
-        if let Some(picked) = super::super::file_dialog::pick_import_file(&root) {
+        if let Some(picked) = file_dialog::pick_import_file(&root) {
             self.accept_browsed_path(world, &picked);
         }
     }
@@ -90,7 +97,7 @@ impl EditorHook {
     // Put a picked file's project-relative path in the field, ready to Add. Not
     // added outright: the user still sees what resolved before committing.
     pub(super) fn accept_browsed_path(&mut self, world: &mut World, picked: &Path) {
-        let text = super::super::file_dialog::project_path(picked, &project_root());
+        let text = file_dialog::project_path(picked, &project_root());
         widget::seed_field(world, import_panel::PATH_INPUT, &text);
         self.import_focus = true;
         self.import_status = None;

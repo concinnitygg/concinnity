@@ -12,12 +12,17 @@
 // authored entries as ONE undo step (`mark_changed` snapshots the pre-drag
 // entry list once); Escape cancels and restores the start state.
 
-use concinnity_core::components::{Camera3D, GlobalTransform, Parent, Transform};
+use concinnity_core::components::{Camera3D, FrameInput, GlobalTransform, Parent, Transform};
 use concinnity_core::ecs::Entity;
+use concinnity_core::ecs::World;
 use concinnity_host::thread::asset_id;
-use gizmo::GizmoMode;
 
-use super::*;
+use super::pick;
+use super::{EditorHook, entry_name, entry_type};
+use crate::editor::form;
+use crate::editor::gizmo::{self, GizmoMode};
+use crate::editor::group_transform;
+use crate::editor::snap;
 
 // Committed values are rounded so world.jsonl stays readable: positions and
 // scales to 3 decimals, angles to 1.

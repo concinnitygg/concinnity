@@ -42,69 +42,36 @@ use concinnity_core::ecs::{
 };
 use concinnity_engine::app::state::App;
 use concinnity_engine::ecs::PendingBackend;
-use concinnity_host::thread::asset_id::AssetId;
-use worlds_start::Adopt;
 
 use super::asset_list::ListRow;
-use super::asset_tree::{self, TreeGroup, TreeRow};
-use super::axes;
-use super::behavior_panel::{self, BehaviorAction, BehaviorView, Status, ViewMode};
-use super::billboards;
-use super::build_renderable;
-use super::character_shape_panel;
-use super::console::{self, ConsoleSink};
-use super::console_panel::{self, ConsoleAction, ConsoleView};
-use super::content_panel;
-use super::create_menu;
+use super::asset_tree::{TreeGroup, TreeRow};
+use super::behavior_panel::{self, Status, ViewMode};
+use super::console::ConsoleSink;
 use super::cursor;
-use super::form::{self, FormField};
-use super::form_panel::{self, FormAction, FormFocus, FormView};
+use super::form::FormField;
+use super::form_panel::FormFocus;
 use super::framing;
 use super::gizmo;
-use super::group_transform;
 use super::health::HealthState;
-use super::health_panel;
-use super::highlight;
 use super::history::History;
-use super::hud::{self, HudAction, HudState};
-use super::import_panel::{self, ImportAction, ImportRow, ImportStatus, ImportView};
+use super::hud;
+use super::import_panel::ImportStatus;
 use super::lighting;
-use super::lighting_panel::{self, LightingAction, LightingView};
-use super::list_panel::Row;
 use super::live;
-use super::marquee;
-use super::modal;
 use super::notify;
-use super::orbit;
 use super::outlines;
 use super::overrides;
 use super::palette;
-use super::palette_panel::{self, PaletteHit, PaletteView};
-use super::panel::{self, PanelAction, PanelView};
-use super::preview::{self, PreviewAction};
 use super::registry::{self, PANEL_COUNT, PanelKey};
 use super::resize;
 use super::selection::Selection;
 use super::session_store;
 use super::sim;
 use super::snap;
-use super::story;
-use super::story_panel::{self, StoryAction, StoryView};
-use super::template::{self, TemplatesAction};
-use super::template_panel::{self, TemplateAction, TemplateView};
-use super::toast_overlay;
-use super::variables;
-use super::variables_panel::{self, VariablesAction, VariablesView};
-use super::view::{self, ViewAction};
 use super::view_menu;
-use super::visibility;
-use super::widget::{self, point_in};
-use super::world_files;
-use super::worlds::{self, WorldRow, WorldTarget, WorldsAction, WorldsConfirm, WorldsView};
+use super::widget;
+use super::worlds::{self, WorldRow};
 use crate::debug_hook::DebugHook;
-// Re-exported for the hook's submodules (they reach these editor-level items as
-// `super::asset_list` / `super::seeded_content`).
-use super::asset_list;
 
 // Draw layer for the top bar: far above the floating panels' layers (which are a
 // small 1..=6 rank), so the bar always sits on top even under a dragged panel.

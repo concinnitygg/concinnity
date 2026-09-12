@@ -11,9 +11,12 @@
 // the jump, and the history is bounded, so the recovery is neither immediate nor
 // indefinite. Arming the chip keeps a stray press from needing it at all.
 
+use concinnity_core::ecs::World;
 use serde_json::Value;
 
-use super::*;
+use super::{EditorHook, entry_name};
+use crate::editor::behavior_panel::{self, Status};
+use crate::editor::widget;
 
 impl EditorHook {
     // Arm the removal, then carry it out. Any other press on the panel disarms

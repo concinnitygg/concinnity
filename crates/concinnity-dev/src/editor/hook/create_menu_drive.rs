@@ -7,7 +7,16 @@
 // entries + mark_changed path (one undo step) and selects it; any other press,
 // Escape, or a history jump dismisses it.
 
-use super::*;
+use concinnity_core::components::FrameInput;
+use concinnity_core::ecs::World;
+
+use super::content_drag;
+use super::gizmo_drag;
+use super::{EditorHook, names_of_type};
+use crate::editor::create_menu;
+use crate::editor::hud;
+use crate::editor::registry::{self, PanelKey};
+use crate::editor::widget::{self, point_in};
 
 // An open "Create here" menu.
 pub(super) struct CreateMenu {

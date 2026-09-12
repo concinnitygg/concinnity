@@ -8,12 +8,15 @@
 // drives own -- when a drag or glide starts, what it writes to the live camera,
 // and what hands control back.
 
-use concinnity_core::components::{Camera3D, InputKey, Transform};
+use concinnity_core::components::{Camera3D, FrameInput, InputKey, Transform};
 use concinnity_core::ecs::PickEntry;
 use concinnity_core::ecs::PickIndex;
-use concinnity_host::thread::asset_id;
+use concinnity_core::ecs::World;
+use concinnity_host::thread::asset_id::{self, AssetId};
 
-use super::*;
+use super::EditorHook;
+use super::bookmarks;
+use crate::editor::hud;
 use crate::test_support::isolate_state_dir;
 
 const VP: [f32; 2] = [1280.0, 720.0];

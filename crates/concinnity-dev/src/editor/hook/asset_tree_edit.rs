@@ -8,9 +8,15 @@
 // `hook/pick.rs` fills; a viewport pick unfolds and scrolls to its row).
 
 use concinnity_cook::authoring::world::write_world_jsonl;
+use concinnity_core::components::FrameInput;
 use concinnity_core::components::InputKey;
+use concinnity_core::ecs::World;
 
-use super::*;
+use super::{EditorHook, FormTarget, PanelData, entry_name, entry_type, scroll_step, short_status};
+use crate::editor::asset_tree::{self, TreeRow};
+use crate::editor::panel::{self, PanelAction, PanelView};
+use crate::editor::registry::PanelKey;
+use crate::editor::widget;
 
 impl EditorHook {
     // Rebuild the grouped tree from the working entries if it is out of date

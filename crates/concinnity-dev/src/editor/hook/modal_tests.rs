@@ -3,9 +3,18 @@
 // Tests for the confirmation dialog: the open / press / close flow, the
 // screen-modal press and wheel lockout, and its place in the draw layers.
 
-use concinnity_core::components::{Sprite, TextLabel};
+use concinnity_core::components::{FrameInput, Sprite, TextLabel};
+use concinnity_core::ecs::World;
 
-use super::*;
+use super::{EditorHook, TOP_BAR_LAYER};
+use crate::debug_hook::DebugHook;
+use crate::editor::asset_tree::{self, TreeGroup};
+use crate::editor::hud;
+use crate::editor::modal;
+use crate::editor::notify;
+use crate::editor::registry::{self, PanelKey};
+use crate::editor::toast_overlay;
+use crate::editor::widget;
 
 const VP: [f32; 2] = [1280.0, 720.0];
 

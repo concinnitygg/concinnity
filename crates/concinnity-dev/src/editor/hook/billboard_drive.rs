@@ -9,13 +9,17 @@
 // Selecting an icon goes through the same name-keyed selection the mesh pick
 // uses, so the form, tree, and gizmo all follow for free.
 
-use concinnity_core::components::{Camera3D, Transform};
+use concinnity_core::components::{Camera3D, FrameInput, Transform};
 use concinnity_core::ecs::Entity;
 use concinnity_core::ecs::PickIndex;
+use concinnity_core::ecs::World;
 use concinnity_core::gfx::pick::ray_aabb;
 use concinnity_host::thread::asset_id;
 
-use super::*;
+use super::pick;
+use super::{EditorHook, entry_name, entry_type};
+use crate::editor::billboards;
+use crate::editor::form;
 
 // One drawable / pickable billboard this frame: the authored entry it stands
 // for, its projected center, and its straight-line camera distance (the

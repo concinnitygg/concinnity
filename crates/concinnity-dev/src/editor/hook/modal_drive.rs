@@ -6,7 +6,12 @@
 // (`tick` checks it first), and only a button press closes it -- a click-away
 // is not a cancel, since the dialog guards destructive actions.
 
-use super::*;
+use concinnity_core::components::FrameInput;
+use concinnity_core::ecs::World;
+
+use super::EditorHook;
+use crate::editor::modal;
+use crate::editor::widget;
 
 // An open confirmation dialog.
 pub(super) struct ModalState {

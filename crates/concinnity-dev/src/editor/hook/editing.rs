@@ -3,7 +3,16 @@
 // EditorHook: the add / edit form lifecycle -- open, refresh from the working
 // args, capture the live controls, and validate / commit on confirm.
 
-use super::*;
+use concinnity_core::ecs::World;
+
+use super::{
+    EditorHook, FormTarget, FormTemplate, entry_name, names_of_type, short_status, visible_slot,
+};
+use crate::editor::form;
+use crate::editor::form_panel::{self, FormAction, FormFocus};
+use crate::editor::overrides;
+use crate::editor::registry::PanelKey;
+use crate::editor::widget;
 
 impl EditorHook {
     // Open the add / edit form for `ty`: derive its editable arg fields from the

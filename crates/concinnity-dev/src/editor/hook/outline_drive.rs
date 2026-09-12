@@ -13,10 +13,15 @@ use concinnity_core::components::{
     SPOT_MAX_ANGLE_DEG, SpotLight, SpotLightGeometry, Transform, TriggerVolume,
 };
 use concinnity_core::ecs::Entity;
+use concinnity_core::ecs::World;
 use concinnity_core::gfx::lines::Line;
-use outlines::shapes::{self, Stroke};
 
-use super::*;
+use super::billboard_drive;
+use super::{EditorHook, entry_name, entry_type};
+use crate::editor::billboards;
+use crate::editor::form;
+use crate::editor::outlines;
+use crate::editor::outlines::shapes::{self, Stroke};
 
 // What one entity's shape generator reads: its live entity, its authored
 // entry and type, the frame's viewport, and the stroke its row draws with.

@@ -9,8 +9,10 @@
 // pose, so entering play mode afterwards continues from there.
 
 use concinnity_core::components::Camera3D;
+use concinnity_core::components::FrameInput;
+use concinnity_core::ecs::World;
 
-use super::*;
+use super::EditorHook;
 
 const MOUSE_SENS: f32 = 0.003;
 const FLY_SPEED: f32 = 6.0;

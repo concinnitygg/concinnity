@@ -6,13 +6,22 @@
 // The fixtures are shared with `worlds_tests.rs`, which covers the switcher the
 // same panel becomes once a world is open.
 
-use concinnity_core::components::{Sprite, TextLabel};
+use concinnity_core::components::{FrameInput, Sprite, TextLabel};
+use concinnity_core::ecs::World;
 
+use super::EditorHook;
 use super::worlds_tests::{
     entry, hook_at, names, open_project, press_modal, row_index, set_name, world_with_name_field,
     write_world,
 };
-use super::*;
+use crate::debug_hook::DebugHook;
+use crate::editor::hud;
+use crate::editor::live;
+use crate::editor::modal;
+use crate::editor::registry::{self, PanelKey};
+use crate::editor::widget;
+use crate::editor::world_files;
+use crate::editor::worlds::{self, WorldRow, WorldsAction};
 
 const VP: [f32; 2] = [1280.0, 720.0];
 

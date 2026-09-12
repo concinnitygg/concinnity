@@ -4,8 +4,18 @@
 // world.jsonl write, and the in-memory live-preview world rebuild).
 
 use concinnity_cook::authoring::world::write_world_jsonl;
+use concinnity_core::ecs::World;
+use concinnity_host::thread::asset_id::AssetId;
 
-use super::*;
+use super::{EditorHook, FormTarget, entry_name};
+use crate::editor::behavior_panel;
+use crate::editor::build_renderable;
+use crate::editor::form_panel;
+use crate::editor::live;
+use crate::editor::modal;
+use crate::editor::notify;
+use crate::editor::panel;
+use crate::editor::widget;
 
 impl EditorHook {
     // Whether an entry with this name already exists.

@@ -9,13 +9,14 @@
 // the transport on the node that fired. Closing both panels withdraws the
 // request, so the running world records nothing.
 
-use concinnity_core::ecs::{ExecutionTrace, TraceEvent, TracePaths, TraceRequest};
+use concinnity_core::ecs::{ExecutionTrace, TraceEvent, TracePaths, TraceRequest, World};
 use concinnity_host::thread::asset_id;
 
-use super::*;
+use super::{EditorHook, entry_name};
 use crate::editor::behavior::path::Path;
 use crate::editor::behavior::pulse::{self, NodePulse};
 use crate::editor::behavior::trace;
+use crate::editor::sim;
 
 impl EditorHook {
     pub(super) fn drive_trace(&mut self, world: &mut World) {

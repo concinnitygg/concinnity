@@ -8,8 +8,13 @@
 // world's camera controller stays frozen.
 
 use concinnity_core::components::Camera3D;
+use concinnity_core::components::FrameInput;
+use concinnity_core::ecs::World;
 
-use super::*;
+use super::EditorHook;
+use crate::editor::framing;
+use crate::editor::hud;
+use crate::editor::orbit;
 
 pub(super) struct OrbitDrag {
     pivot: [f32; 3],

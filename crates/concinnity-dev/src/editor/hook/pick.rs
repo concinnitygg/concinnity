@@ -11,11 +11,14 @@
 // the only way to reach an occluded object without gizmos.
 
 use concinnity_core::components::Camera3D;
+use concinnity_core::components::FrameInput;
 use concinnity_core::ecs::PickIndex;
+use concinnity_core::ecs::World;
 use concinnity_core::gfx::pick::{PickRay, ray_aabb, screen_ray};
-use concinnity_host::thread::asset_id;
+use concinnity_host::thread::asset_id::{self, AssetId};
 
-use super::*;
+use super::EditorHook;
+use crate::editor::highlight;
 
 // A repeat click within this many pixels of the last one cycles the hit list
 // instead of restarting it.

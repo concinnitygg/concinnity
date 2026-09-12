@@ -17,10 +17,12 @@
 // a clip) resolve against the whole world, so those stay a build-time check.
 
 use concinnity_cook::authoring::registry::RegisteredType;
+use concinnity_core::components::FrameInput;
+use concinnity_core::ecs::World;
 use serde_json::Value;
 use std::sync::OnceLock;
 
-use super::*;
+use super::{EditorHook, entry_name, entry_type, scroll_step};
 use crate::editor::behavior::clip;
 use crate::editor::behavior::edit::{self, Pick};
 use crate::editor::behavior::fault;
@@ -32,6 +34,9 @@ use crate::editor::behavior::outline::{self, Row};
 use crate::editor::behavior::pulse;
 use crate::editor::behavior::relations;
 use crate::editor::behavior_chart;
+use crate::editor::behavior_panel::{self, BehaviorAction, BehaviorView, Status, ViewMode};
+use crate::editor::registry::PanelKey;
+use crate::editor::widget;
 
 // Owned per-tick data backing a `BehaviorView`: the open behavior's outline and
 // the palette its selected row offers.

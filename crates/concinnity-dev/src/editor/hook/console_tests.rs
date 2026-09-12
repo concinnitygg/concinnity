@@ -6,11 +6,16 @@
 // parsers themselves are tested in `editor/console.rs`, and the /add, /del,
 // /snap, /dup, /floor dispatches beside the rest of the drive in `tests.rs`.
 
+use concinnity_core::components::FrameInput;
 use concinnity_core::components::InputKey;
 use concinnity_core::components::TextInput;
+use concinnity_core::ecs::World;
 use std::sync::atomic::Ordering;
 
-use super::*;
+use super::EditorHook;
+use crate::editor::console_panel::{self, ConsoleAction};
+use crate::editor::registry::PanelKey;
+use crate::editor::widget;
 use crate::test_support::isolate_state_dir;
 
 fn hook(entries: Vec<serde_json::Value>) -> EditorHook {

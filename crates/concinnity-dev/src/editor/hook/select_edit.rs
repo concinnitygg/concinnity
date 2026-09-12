@@ -5,8 +5,12 @@
 // (or, for origin, a fresh cook so the grouping matches the outliner) and
 // replaces the selection with what comes back.
 
-use super::super::select_related;
-use super::*;
+use concinnity_core::ecs::World;
+
+use super::EditorHook;
+use crate::editor::asset_tree;
+use crate::editor::console;
+use crate::editor::select_related;
 
 impl EditorHook {
     pub(super) fn console_select(&mut self, cmd: console::SelectCmd, world: &mut World) {

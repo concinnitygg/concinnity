@@ -11,9 +11,16 @@
 // (join) from the frame's captured key, delivered only while the panel is the
 // frontmost open panel.
 
+use concinnity_core::components::FrameInput;
 use concinnity_core::components::InputKey;
+use concinnity_core::ecs::World;
 
-use super::*;
+use super::{EditorHook, entry_type, scroll_step, short_status};
+use crate::editor::notify;
+use crate::editor::registry::PanelKey;
+use crate::editor::story;
+use crate::editor::story_panel::{self, StoryAction, StoryView};
+use crate::editor::widget;
 
 impl EditorHook {
     // The `entries` index of the first StoryImport (the panel's subject).

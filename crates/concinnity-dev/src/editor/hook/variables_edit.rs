@@ -14,14 +14,19 @@
 // Escape gives it up. There is no navigation to add, because the panel is one
 // list and the arrows are already what the text fields use.
 
+use concinnity_core::components::FrameInput;
 use concinnity_core::components::InputKey;
+use concinnity_core::ecs::World;
 use serde_json::Value;
 
-use super::*;
+use super::{EditorHook, entry_name, entry_type, scroll_step};
 use crate::editor::behavior::edit;
 use crate::editor::behavior::palette;
 use crate::editor::behavior::relations;
-use crate::editor::variables::Row;
+use crate::editor::registry::{self, PanelKey};
+use crate::editor::variables::{self, Row};
+use crate::editor::variables_panel::{self, VariablesAction, VariablesView};
+use crate::editor::widget;
 
 // Owned per-tick data backing a `VariablesView`.
 pub(super) struct VariablesData {

@@ -11,12 +11,16 @@ use concinnity_core::components::{
 };
 use concinnity_core::ecs::PickEntry;
 use concinnity_core::ecs::PickIndex;
+use concinnity_core::ecs::World;
 use concinnity_host::thread::asset_id;
-use framing::CameraPose;
-use worlds::cinematic;
 
+use super::EditorHook;
+use super::camera_pose;
 use super::worlds_tests::{entry, open_project, world_with_name_field, write_world};
-use super::*;
+use crate::editor::framing::CameraPose;
+use crate::editor::registry::PanelKey;
+use crate::editor::worlds::cinematic;
+use crate::editor::worlds::{self, WorldsAction};
 
 const VP: [f32; 2] = [1280.0, 720.0];
 const AUTHORED: CameraPose = CameraPose {

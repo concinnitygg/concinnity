@@ -5,12 +5,15 @@
 // the view; the pose math lives in `editor/framing.rs`, this drive resolves
 // the selection's world bounds and steps the interpolation.
 
-use concinnity_core::components::{Camera3D, Transform};
+use concinnity_core::components::{Camera3D, FrameInput, Transform};
 use concinnity_core::ecs::PickIndex;
+use concinnity_core::ecs::World;
 use concinnity_host::thread::asset_id;
-use framing::CameraPose;
 
-use super::*;
+use super::EditorHook;
+use super::billboard_drive;
+use super::camera_pose;
+use crate::editor::framing::{self, CameraPose};
 
 const GLIDE_SECS: f32 = 0.25;
 

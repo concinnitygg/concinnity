@@ -6,6 +6,7 @@ use concinnity_cook::authoring::world::parse_world_jsonl;
 use concinnity_core::components::Behavior;
 use concinnity_core::components::BehaviorLiteral;
 use concinnity_core::components::Camera3D;
+use concinnity_core::components::FrameInput;
 use concinnity_core::components::InputKey;
 use concinnity_core::components::PointLight;
 use concinnity_core::components::Sprite;
@@ -20,13 +21,51 @@ use concinnity_core::ecs::HiddenAssets;
 use concinnity_core::ecs::PickEntry;
 use concinnity_core::ecs::PickIndex;
 use concinnity_core::ecs::TraceRequest;
+use concinnity_core::ecs::World;
 use concinnity_core::ecs::WorldLines;
 use concinnity_host::thread::asset_id;
 
-use super::*;
+use super::{Drag, EditorHook, FormTarget, entry_name, entry_type, visible_slot};
+use crate::debug_hook::DebugHook;
+use crate::editor::asset_tree::{self, TreeGroup, TreeRow};
 use crate::editor::behavior::graph::CardKind;
 use crate::editor::behavior::path;
+use crate::editor::behavior_panel::{self, BehaviorAction, Status, ViewMode};
+use crate::editor::billboards;
 use crate::editor::character_shape;
+use crate::editor::character_shape_panel;
+use crate::editor::console;
+use crate::editor::console_panel;
+use crate::editor::content_panel;
+use crate::editor::form::{self, FormField};
+use crate::editor::form_panel::{self, FormAction, FormFocus};
+use crate::editor::gizmo;
+use crate::editor::highlight;
+use crate::editor::hud::{self, HudAction};
+use crate::editor::import_panel::{self, ImportAction};
+use crate::editor::inject;
+use crate::editor::lighting;
+use crate::editor::lighting_panel;
+use crate::editor::list_panel;
+use crate::editor::marquee;
+use crate::editor::notify;
+use crate::editor::outlines;
+use crate::editor::overrides;
+use crate::editor::panel::{self, PanelAction};
+use crate::editor::preview;
+use crate::editor::registry::{self, PanelKey};
+use crate::editor::sim;
+use crate::editor::snap;
+use crate::editor::story;
+use crate::editor::story_panel;
+use crate::editor::template;
+use crate::editor::template_panel::{self, TemplateAction};
+use crate::editor::toast_overlay;
+use crate::editor::variables_panel::{self, VariablesAction};
+use crate::editor::view;
+use crate::editor::view_menu;
+use crate::editor::widget;
+use crate::editor::widget_slider;
 
 fn hook(entries: Vec<serde_json::Value>) -> EditorHook {
     EditorHook::new("unused.jsonl".to_string(), entries)
@@ -259,14 +298,14 @@ fn entry_changes_request_a_preview_rebuild() {
 #[test]
 fn field_snapshot_carries_typed_text_across_a_reinjection() {
     let mut old = World::new();
-    super::super::inject::editor_hud(&mut old);
+    inject::editor_hud(&mut old);
     widget::seed_field(&mut old, form_panel::NAME_INPUT, "my_light");
     widget::seed_field(&mut old, panel::SEARCH_INPUT, "Point");
     let snapshot = EditorHook::field_snapshot(&old);
 
     // A fresh HUD injection starts every field blank.
     let mut new = World::new();
-    super::super::inject::editor_hud(&mut new);
+    inject::editor_hud(&mut new);
     assert_eq!(widget::field_text(&new, form_panel::NAME_INPUT), "");
 
     EditorHook::restore_fields(&mut new, &snapshot);
@@ -657,7 +696,7 @@ fn preview_rows_toggle_play_mode_and_fly() {
     let vp = [1280.0, 720.0];
     let o = h.origin(PanelKey::Preview, vp);
     let row_mid = |i: usize| {
-        let r = super::super::list_panel::row_rect(o, 200.0, i);
+        let r = list_panel::row_rect(o, 200.0, i);
         [r[0] + 10.0, r[1] + r[3] * 0.5]
     };
     let click = |h: &mut EditorHook, world: &mut World, pos: [f32; 2]| {
@@ -844,7 +883,7 @@ fn clicking_a_list_row_opens_its_edit_form() {
     // clear of the hide toggle now heading the row.
     let row = panel::row_rect(po, panel::PANEL_W, 1);
     let mut world = World::new();
-    super::super::inject::editor_hud(&mut world);
+    inject::editor_hud(&mut world);
     world.add_component(FrameInput {
         viewport: vp,
         mouse_x: row[0] + 60.0,
@@ -907,7 +946,7 @@ fn deleting_entries_fixes_up_the_open_form_index() {
 fn edit_panel_drags_by_its_title_bar() {
     let mut h = hook(vec![entry("lamp", "PointLight")]);
     let mut world = World::new();
-    super::super::inject::editor_hud(&mut world);
+    inject::editor_hud(&mut world);
     h.panel_open = true;
     h.open_form(&mut world, "PointLight".to_string(), FormTarget::Entry(0));
     let vp = [1280.0, 720.0];
@@ -1169,7 +1208,7 @@ fn tick_view_button_opens_view_then_a_row_opens_templates() {
         [s.x, s.y, s.width, s.height]
     };
     let mut world = World::new();
-    super::super::inject::editor_hud(&mut world);
+    inject::editor_hud(&mut world);
     let vp = [1280.0, 720.0];
     let mut h = hook(Vec::new());
 
@@ -1235,7 +1274,7 @@ fn tick_picking_a_template_spawns_the_detail_panel_then_apply_adds() {
         [s.x, s.y, s.width, s.height]
     };
     let mut world = World::new();
-    super::super::inject::editor_hud(&mut world);
+    inject::editor_hud(&mut world);
     let vp = [1280.0, 720.0];
     let mut h = hook(Vec::new());
     // Start with the Templates list already open.
@@ -1860,7 +1899,7 @@ fn toggling_the_assets_panel_keeps_the_open_form_state() {
 #[test]
 fn a_hidden_assets_panel_hides_the_form_elements() {
     let mut world = World::new();
-    super::super::inject::editor_hud(&mut world);
+    inject::editor_hud(&mut world);
     world.add_component(FrameInput {
         viewport: [1280.0, 720.0],
         ..Default::default()
@@ -1933,7 +1972,7 @@ fn tick_lays_out_the_open_panel_in_every_state() {
     };
 
     let mut world = World::new();
-    super::super::inject::editor_hud(&mut world);
+    inject::editor_hud(&mut world);
     world.add_component(FrameInput {
         viewport: [1280.0, 720.0],
         mouse_x: 1200.0,
@@ -2224,7 +2263,7 @@ fn fog_density_binding() -> usize {
 #[test]
 fn lighting_opens_via_the_view_panel_and_seeds() {
     let mut world = World::new();
-    super::super::inject::editor_hud(&mut world);
+    inject::editor_hud(&mut world);
     world.add_component(FrameInput {
         viewport: [1280.0, 720.0],
         ..Default::default()
@@ -2233,7 +2272,7 @@ fn lighting_opens_via_the_view_panel_and_seeds() {
     h.view_open = true;
     let vp = [1280.0, 720.0];
     let vo = h.origin(PanelKey::View, vp);
-    let row = super::super::list_panel::row_rect(vo, 200.0, 3);
+    let row = list_panel::row_rect(vo, 200.0, 3);
     // Click the row's interior (clear of the edge resize band).
     assert!(h.try_panel_press(
         PanelKey::View,
@@ -2261,7 +2300,7 @@ fn lighting_opens_via_the_view_panel_and_seeds() {
 #[test]
 fn lighting_apply_commits_sun_intensity() {
     let mut world = World::new();
-    super::super::inject::editor_hud(&mut world);
+    inject::editor_hud(&mut world);
     let mut h = hook(vec![sun_entry()]);
     h.lighting_open = true;
     h.seed_lighting(&mut world);
@@ -2286,7 +2325,7 @@ fn lighting_apply_commits_sun_intensity() {
 #[test]
 fn lighting_apply_with_unparseable_text_keeps_the_authored_value() {
     let mut world = World::new();
-    super::super::inject::editor_hud(&mut world);
+    inject::editor_hud(&mut world);
     let mut h = hook(vec![sun_entry()]);
     h.lighting_open = true;
     h.seed_lighting(&mut world);
@@ -2302,7 +2341,7 @@ fn lighting_apply_with_unparseable_text_keeps_the_authored_value() {
 #[test]
 fn lighting_bool_toggle_commits_immediately_and_keeps_typed_text() {
     let mut world = World::new();
-    super::super::inject::editor_hud(&mut world);
+    inject::editor_hud(&mut world);
     let mut h = hook(vec![fog_entry(false)]);
     h.lighting_open = true;
     h.seed_lighting(&mut world);
@@ -2333,7 +2372,7 @@ fn lighting_bool_toggle_commits_immediately_and_keeps_typed_text() {
 #[test]
 fn lighting_add_row_appends_the_missing_singleton() {
     let mut world = World::new();
-    super::super::inject::editor_hud(&mut world);
+    inject::editor_hud(&mut world);
     let mut h = hook(vec![sun_entry()]);
     h.lighting_open = true;
     assert_eq!(h.lighting_present(), vec![true, false, false, false]);
@@ -2374,7 +2413,7 @@ fn story_import(source: &str) -> serde_json::Value {
 // line editor operates purely on the loaded lines until Apply).
 fn story_session(lines: &[&str]) -> (EditorHook, World) {
     let mut world = World::new();
-    super::super::inject::editor_hud(&mut world);
+    inject::editor_hud(&mut world);
     let mut h = hook(vec![story_import("unused.md")]);
     h.story_open = true;
     h.story_lines = lines.iter().map(|s| s.to_string()).collect();
@@ -2449,11 +2488,11 @@ fn story_up_down_commit_and_navigate() {
 #[test]
 fn story_apply_validates_then_writes() {
     let tree = concinnity_testing::TempTree::new();
-    let path = tree.write("tale.md", super::super::story::STARTER_STORY);
+    let path = tree.write("tale.md", story::STARTER_STORY);
     let src = path.to_string_lossy().to_string();
 
     let mut world = World::new();
-    super::super::inject::editor_hud(&mut world);
+    inject::editor_hud(&mut world);
     let mut h = hook(vec![story_import(&src)]);
     h.story_open = true;
     h.load_story(&mut world);
@@ -2469,15 +2508,11 @@ fn story_apply_validates_then_writes() {
     assert!(h.story_status.is_some(), "parse failure shown");
     assert!(!h.rebuild_preview);
     let on_disk = std::fs::read_to_string(&path).unwrap();
-    assert_eq!(
-        on_disk,
-        super::super::story::STARTER_STORY,
-        "file untouched"
-    );
+    assert_eq!(on_disk, story::STARTER_STORY, "file untouched");
 
     // A valid edit writes and requests the preview rebuild; the world.jsonl
     // dirty flag stays clear (no entry changed).
-    h.story_lines = super::super::story::lines_of(super::super::story::STARTER_STORY);
+    h.story_lines = story::lines_of(story::STARTER_STORY);
     let last = h.story_lines.len() - 1;
     h.story_line = last;
     h.seed_story_line(&mut world);
@@ -2495,7 +2530,7 @@ fn story_apply_validates_then_writes() {
 #[test]
 fn story_load_missing_file_shows_status() {
     let mut world = World::new();
-    super::super::inject::editor_hud(&mut world);
+    inject::editor_hud(&mut world);
     let mut h = hook(vec![story_import("/no/such/dir/story.md")]);
     h.story_open = true;
     h.load_story(&mut world);
@@ -2514,7 +2549,7 @@ fn story_create_writes_starter_and_adds_the_import() {
     std::env::set_current_dir(tree.path()).unwrap();
 
     let mut world = World::new();
-    super::super::inject::editor_hud(&mut world);
+    inject::editor_hud(&mut world);
     let mut h = hook(Vec::new());
     h.story_open = true;
     h.load_story(&mut world);
@@ -2531,7 +2566,7 @@ fn story_create_writes_starter_and_adds_the_import() {
     assert!(h.story_lines.len() > 5, "the starter story is loaded");
     assert!(!h.make_story_view([0.0, 0.0]).create);
     let written = std::fs::read_to_string(tree.join("story.md")).unwrap();
-    assert_eq!(written, super::super::story::STARTER_STORY);
+    assert_eq!(written, story::STARTER_STORY);
     // A second create is a no-op while an import exists.
     h.create_story(&mut world);
     assert_eq!(h.entries.len(), 1);
@@ -2543,7 +2578,7 @@ fn story_create_writes_starter_and_adds_the_import() {
 
 fn import_session() -> (EditorHook, World, concinnity_testing::TempTree) {
     let mut world = World::new();
-    super::super::inject::editor_hud(&mut world);
+    inject::editor_hud(&mut world);
     let mut h = hook(Vec::new());
     h.import_open = true;
     h.import_focus = true;
@@ -2586,7 +2621,7 @@ fn import_add_resolves_a_scene_file() {
 fn import_add_uniquifies_a_colliding_name() {
     let (mut h, mut world, dir) = import_session();
     let md = dir.join("tale.md");
-    std::fs::write(&md, super::super::story::STARTER_STORY).unwrap();
+    std::fs::write(&md, story::STARTER_STORY).unwrap();
     h.entries.push(entry("tale", "PointLight"));
     type_path(&mut world, &md.to_string_lossy());
     h.add_import(&mut world);
@@ -3388,7 +3423,7 @@ fn pick_world(cam_pos: [f32; 3], picks: Vec<(asset_id::AssetId, [f32; 3], [f32; 
     for s in highlight::outline_sprites() {
         world.add_component(s);
     }
-    world.add_component(super::super::marquee::rect_sprite());
+    world.add_component(marquee::rect_sprite());
     world.insert_resource(PickIndex {
         entries: picks
             .into_iter()
@@ -3660,7 +3695,7 @@ fn gizmo_drag_moves_the_prop_and_commits_one_undo_step() {
     let mut by_name = std::collections::BTreeMap::new();
     by_name.insert(id, entity);
     world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
-    for s in super::super::gizmo::sprites() {
+    for s in gizmo::sprites() {
         world.add_component(s);
     }
 
@@ -3748,7 +3783,7 @@ fn gizmo_rig(start: [f32; 3]) -> (World, Entity, EditorHook) {
     let mut by_name = std::collections::BTreeMap::new();
     by_name.insert(id, entity);
     world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
-    for s in super::super::gizmo::sprites() {
+    for s in gizmo::sprites() {
         world.add_component(s);
     }
     let h = hook(vec![serde_json::json!({
@@ -3860,7 +3895,7 @@ fn off_grid(v: f32, step: f32) -> f32 {
 fn gizmo_translate_drag_snaps_to_the_grid_and_ctrl_suspends_it() {
     let start = [-6.11f32, -3.3, -5.0];
     let (mut world, entity, mut h) = gizmo_rig(start);
-    h.snap.translate = super::super::snap::Snap {
+    h.snap.translate = snap::Snap {
         enabled: true,
         step: 0.25,
     };
@@ -3907,7 +3942,7 @@ fn gizmo_rotate_drag_snaps_the_applied_angle() {
     let start = [-6.11f32, -3.3, -5.0];
     let (mut world, entity, mut h) = gizmo_rig(start);
     h.gizmo_mode = gizmo::GizmoMode::Rotate;
-    h.snap.rotate = super::super::snap::Snap {
+    h.snap.rotate = snap::Snap {
         enabled: true,
         step: 45.0,
     };
@@ -4547,7 +4582,7 @@ fn two_prop_rig(s1: [f32; 3], s2: [f32; 3], half: f32) -> (World, Entity, Entity
     by_name.insert(a, e1);
     by_name.insert(b, e2);
     world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
-    for s in super::super::gizmo::sprites() {
+    for s in gizmo::sprites() {
         world.add_component(s);
     }
     let entry = |name: &str, p: [f32; 3]| serde_json::json!({ "name": name, "type": "Prop", "args": { "position": p } });
@@ -4598,7 +4633,7 @@ fn marquee_drag_selects_the_boxed_assets() {
     drag_to(&mut world, &mut h, [560.0, 700.0]);
     let rect = world
         .query::<Sprite>()
-        .find(|s| s.asset_id == super::super::marquee::RECT)
+        .find(|s| s.asset_id == marquee::RECT)
         .cloned()
         .expect("marquee sprite injected");
     assert!(rect.visible, "the rect shows once the drag clears the slop");
@@ -4616,7 +4651,7 @@ fn marquee_drag_selects_the_boxed_assets() {
     assert!(
         !world
             .query::<Sprite>()
-            .find(|s| s.asset_id == super::super::marquee::RECT)
+            .find(|s| s.asset_id == marquee::RECT)
             .unwrap()
             .visible,
         "the rect hides after release"
@@ -5096,7 +5131,7 @@ fn selected_trigger_volume_publishes_its_line_outline() {
     let published = world.resource::<WorldLines>().unwrap().0.len();
     assert_eq!(
         published,
-        6 + super::super::outlines::shapes::BOX_EDGES,
+        6 + outlines::shapes::BOX_EDGES,
         "axes plus the volume's box edges"
     );
     let ids: std::collections::HashSet<_> = billboards::all_sprite_ids().into_iter().collect();
@@ -7912,9 +7947,9 @@ fn shape_world_entries() -> Vec<serde_json::Value> {
 // ONE undo step, and undo restores the pre-drag args.
 #[test]
 fn shape_slider_drag_commits_one_undo_step() {
-    use super::super::character_shape_panel as sp;
+    use crate::editor::character_shape_panel as sp;
     let mut world = World::new();
-    super::super::inject::editor_hud(&mut world);
+    inject::editor_hud(&mut world);
     let vp = [1280.0, 720.0];
     set_input(
         &mut world,
@@ -7958,7 +7993,7 @@ fn shape_slider_drag_commits_one_undo_step() {
     let rect = sp::slider_rect(sp::row_rect(o, sp::SHAPE_W, jaw_row));
     let bipolar = (-1.0, 1.0);
     let y = rect[1] + rect[3] * 0.5;
-    let x_half = super::super::widget_slider::handle_x(rect, 0.5, bipolar);
+    let x_half = widget_slider::handle_x(rect, 0.5, bipolar);
     click_at(&mut world, &mut h, [x_half, y]);
     assert!(h.shape_drag.is_some(), "the press starts a drag");
     assert!(
@@ -7971,7 +8006,7 @@ fn shape_slider_drag_commits_one_undo_step() {
         "the working value follows"
     );
 
-    let x_neg = super::super::widget_slider::handle_x(rect, -0.25, bipolar);
+    let x_neg = widget_slider::handle_x(rect, -0.25, bipolar);
     drag_to(&mut world, &mut h, [x_neg, y]);
     assert!(!h.rebuild_preview, "dragging never rebuilds the preview");
     assert!(!h.can_undo(), "nothing recorded mid-drag");
@@ -8006,13 +8041,13 @@ fn shape_slider_drag_commits_one_undo_step() {
 #[test]
 fn shape_reset_and_randomize_commit_once_each() {
     let mut world = World::new();
-    super::super::inject::editor_hud(&mut world);
+    inject::editor_hud(&mut world);
     let mut h = hook(shape_world_entries());
     h.shape_open = true;
     h.selection.set(vec!["body".to_string()]);
     let data = h.shape_data(&world);
     h.apply_shape_action(
-        super::super::character_shape_panel::ShapeAction::Randomize,
+        character_shape_panel::ShapeAction::Randomize,
         &data,
         [0.0, 0.0],
         &mut world,
@@ -8038,7 +8073,7 @@ fn shape_reset_and_randomize_commit_once_each() {
     h.selection.set(vec!["body".to_string()]);
     let data = h.shape_data(&world);
     h.apply_shape_action(
-        super::super::character_shape_panel::ShapeAction::Reset,
+        character_shape_panel::ShapeAction::Reset,
         &data,
         [0.0, 0.0],
         &mut world,
@@ -8059,7 +8094,7 @@ fn shape_reset_and_randomize_commit_once_each() {
 #[test]
 fn shape_add_row_creates_a_shape_for_the_selected_mesh() {
     let mut world = World::new();
-    super::super::inject::editor_hud(&mut world);
+    inject::editor_hud(&mut world);
     let mut entries = shape_world_entries();
     entries.pop();
     let mut h = hook(entries);
@@ -8068,7 +8103,7 @@ fn shape_add_row_creates_a_shape_for_the_selected_mesh() {
     let data = h.shape_data(&world);
     assert_eq!(data.rows, [character_shape::Row::Add]);
     h.apply_shape_action(
-        super::super::character_shape_panel::ShapeAction::Add,
+        character_shape_panel::ShapeAction::Add,
         &data,
         [0.0, 0.0],
         &mut world,
@@ -8093,7 +8128,7 @@ fn shape_add_row_creates_a_shape_for_the_selected_mesh() {
 #[test]
 fn shape_panel_reads_a_character_models_schema_and_applies_presets() {
     let mut world = World::new();
-    super::super::inject::editor_hud(&mut world);
+    inject::editor_hud(&mut world);
     let entries = vec![
         serde_json::json!({"name": "sk", "type": "CharacterSchema", "args": {
             "joints": [{"name": "root"}, {"name": "tail", "parent": "root"}],
@@ -8142,7 +8177,7 @@ fn shape_panel_reads_a_character_models_schema_and_applies_presets() {
     assert_eq!(data.rows[0], character_shape::Row::PresetHeader);
     assert_eq!(data.rows[1], character_shape::Row::Preset(0));
     h.apply_shape_action(
-        super::super::character_shape_panel::ShapeAction::Preset(0),
+        character_shape_panel::ShapeAction::Preset(0),
         &data,
         [0.0, 0.0],
         &mut world,
@@ -8182,7 +8217,7 @@ fn gizmo_drag_moves_a_skinned_mesh_and_commits_its_position() {
     let mut by_name = std::collections::BTreeMap::new();
     by_name.insert(id, entity);
     world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
-    for s in super::super::gizmo::sprites() {
+    for s in gizmo::sprites() {
         world.add_component(s);
     }
     let mut h = hook(vec![serde_json::json!({

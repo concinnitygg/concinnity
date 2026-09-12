@@ -5,7 +5,12 @@
 // (view mode, show flags, the billboard toggle) are published to the renderer
 // each tick as the `ViewOverrides` resource.
 
-use super::*;
+use concinnity_core::components::FrameInput;
+use concinnity_core::ecs::World;
+
+use super::EditorHook;
+use crate::editor::hud;
+use crate::editor::view_menu;
 
 impl EditorHook {
     // The top bar's Display chip.
