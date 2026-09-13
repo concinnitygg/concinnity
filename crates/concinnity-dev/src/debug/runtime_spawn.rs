@@ -1,14 +1,14 @@
 //! Runtime decal / emitter / screenshot spawn queue + dispatch (`cn debug`
-//! only). Both halves live here so the library never compiles them:
+//! only). Both halves live here so the engine never compiles them:
 //!
-//!   queue     a process-wide command queue the debug WS handlers push onto
+//!   queue     a process-wide command queue the debug tool calls push onto
 //!             (`enqueue`) and the per-frame debug drive drains (`drain`).
 //!   dispatch  `dispatch_runtime_spawn`, run by `DebugServer::drive_runtime_commands`
 //!             against the live backend + the init-captured texture-name table.
 //!
-//! The WS server pushes commands off the engine thread; the drive applies them
+//! The debug endpoint pushes commands off the engine thread; the drive applies them
 //! at frame start on the main thread. Each command carries a reply channel so
-//! the WS handler can hand the new stable slot index back to its client
+//! the tool call can hand the new stable slot index back to its client
 //! synchronously: the wait is bounded by one frame (~16 ms at 60 Hz). `cn run`
 //! has no debug hook and never reaches any of this.
 
@@ -230,8 +230,8 @@ pub(crate) fn advance_pose(
 }
 
 // One runtime spawn / despawn command pushed onto [`enqueue`] by the debug
-// WS server and drained by the per-frame debug drive. Each variant carries a
-// `std::sync::mpsc::SyncSender` reply channel so the WS handler can block
+// endpoint and drained by the per-frame debug drive. Each variant carries a
+// `std::sync::mpsc::SyncSender` reply channel so the tool call can block
 // (with timeout) on the result and hand a JSON reply back to its client.
 pub(crate) enum RuntimeCommand {
     DecalAdd {
@@ -274,7 +274,7 @@ pub(crate) enum RuntimeCommand {
     // `CameraSet` it mutates the ECS, so the per-frame drive partitions it out
     // and installs it on the `DebugServer` rather than touching the backend.
     // The reply fires as soon as the motion is accepted (a Camera3D exists),
-    // not when it finishes, so a long move never outlasts the WS timeout.
+    // not when it finishes, so a long move never outlasts the reply timeout.
     CameraMove {
         args: CameraMoveArgs,
         reply: std::sync::mpsc::SyncSender<Result<(), String>>,
@@ -372,11 +372,11 @@ pub(crate) fn drain() -> Vec<RuntimeCommand> {
     std::mem::take(&mut *q)
 }
 
-// Process one runtime-spawn command (drained from the debug WS queue)
+// Process one runtime-spawn command (drained from the debug command queue)
 // against the live backend. Resolves texture-name strings via the init-time
 // interner snapshot + `world_reload.texture_name_to_slot` before building
 // the backend record, and sends the result back via the command's reply
-// channel. Reply-channel send failures are silently dropped: the WS thread
+// channel. Reply-channel send failures are silently dropped: the connection thread
 // may have already given up waiting (e.g. its client disconnected), and
 // that is not a renderer error.
 pub(crate) fn dispatch_runtime_spawn(
@@ -409,7 +409,7 @@ pub(crate) fn dispatch_runtime_spawn(
             let result = resolve_texture_slot(args.texture.as_deref(), world_reload)
                 .map(|slot| {
                     // Mirror the clamp / normalize rules used by
-                    // `build_particle_records` so a WS-spawned emitter and
+                    // `build_particle_records` so a tool-call-spawned emitter and
                     // an authored one behave identically. We do not call
                     // that helper directly because it takes a
                     // `&[&ParticleEmitter]` and a texture-id-keyed map;
@@ -722,11 +722,11 @@ pub(crate) fn apply_camera_move_step(motion: &CameraMotion, world: &mut World) -
 // Resolve an optional Texture asset name to its pool slot index. `None` (no
 // texture authored on the spawn request) maps to slot 0 (the renderer's
 // white fallback) so the tint / color gradient still stamps. An unknown
-// name returns `Err`; the WS client gets a clear error rather than a
+// name returns `Err`; the MCP client gets a clear error rather than a
 // silent fallback. Texture-name resolution leans on the init-time
 // `world_reload.texture_name_to_slot` snapshot, so it only succeeds under
 // `cn debug` worlds: that matches the current runtime-spawn use case
-// (debug WS, headless tests).
+// (debug tool calls, headless tests).
 fn resolve_texture_slot(
     texture: Option<&str>,
     world_reload: Option<&WorldReloadState>,
@@ -1144,7 +1144,7 @@ mod tests {
     // GPU. It implements the mandatory families only, so the runtime decal /
     // emitter / screenshot hooks fall through to the empty `SceneEffects` and
     // `BackendProbe` impls below and report the trait defaults' `Err` --
-    // exactly the failure arms the dispatch reply surfaces to a WS client.
+    // exactly the failure arms the dispatch reply surfaces to an MCP client.
     struct StubBackend;
 
     impl scene_flow::SceneControl for StubBackend {

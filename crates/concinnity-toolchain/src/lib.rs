@@ -1,7 +1,8 @@
 //! Shared build-script support for the workspace.
 //!
-//! Besides the Metal shader precompilation in `metal_shaders` and the source
-//! hashing in `source_hash`, two responsibilities, both previously copy-pasted
+//! Besides the Metal shader precompilation in `metal_shaders`, the emitted
+//! binding readers in `shader_abi` and the source hashing in `source_hash`, two
+//! responsibilities, both previously copy-pasted
 //! between the runtime crate's build script and the editor crate's build script
 //! (and missing entirely from the example binaries, which is why they failed to
 //! link against the runtime's DLSS code on Windows):
@@ -41,6 +42,7 @@ use std::path::{Path, PathBuf};
 mod embedded_shaders;
 mod metal_shaders;
 mod sdks;
+mod shader_abi;
 mod slang_artifacts;
 mod source_hash;
 mod targets;
@@ -49,6 +51,7 @@ mod version_stamp;
 
 pub use metal_shaders::{SlangLibSpec, precompile_metal_shaders};
 use sdks::SdkEnv;
+pub use shader_abi::{dxil_register_declared, msl_binds, msl_entry_params, msl_param_name};
 pub use slang_artifacts::{SlangArtifact, precompile_slang_artifacts};
 pub use version_stamp::emit_version_stamp;
 

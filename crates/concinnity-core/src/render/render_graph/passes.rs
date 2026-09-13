@@ -27,7 +27,7 @@ macro_rules! pass_ids {
         }
 
         /// Stable display name for each pass. Index = `PassId as usize`. Used by
-        /// the WS `profile.passes` reply and the per-pass timing readback.
+        /// the `profile` debug tool call's `passes` reply and the per-pass timing readback.
         pub const PASS_NAMES: [&str; PASS_COUNT] = [$($name,)*];
 
         /// Number of distinct passes the engine times. The per-pass timing array

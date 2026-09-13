@@ -706,8 +706,8 @@ pub(super) struct AutoExposureState {
 // routes every built-in GLSL source resolve through `pipeline::shader_source`'s
 // disk-first path and gates the `vulkan/shaders/` filesystem watcher. Under
 // `cn run` the `include_str!`-baked GLSL is the only source the binary sees.
-// `reload_pending` is the atomic flag set by the `notify` watcher or the debug
-// WS `reload-shaders` command, polled at the top of `draw_frame` to trigger a
+// `reload_pending` is the atomic flag set by the `notify` watcher or the
+// `reload-shaders` debug tool call, polled at the top of `draw_frame` to trigger a
 // pipeline rebuild. `watcher` is the live `notify` handle held purely for
 // lifetime; dropping it stops the watcher. Both are `Some` only when `enabled`.
 pub(super) struct HotReloadState {

@@ -1796,8 +1796,8 @@ impl DxContext {
             crate::directx::context::build_timestamp_resources(&alloc);
 
         // Shader hot-reload wiring. The atomic flag is shared between the
-        // notify watcher thread and `draw_frame`, plus the debug WS
-        // `reload-shaders` command path via `GraphicsSystem`. Watcher
+        // notify watcher thread and `draw_frame`, plus the `reload-shaders`
+        // debug tool call via `GraphicsSystem`. Watcher
         // creation is best-effort: a missing source dir or a notify error
         // logs a warning and disables only the watcher half -- the debug
         // command still works on the same flag.

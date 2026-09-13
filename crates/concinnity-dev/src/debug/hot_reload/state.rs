@@ -128,8 +128,8 @@ pub(crate) struct AssetHotReloadState {
     // `world.jsonl` reload pass re-reads from disk. `None` when init came
     // from a stream / blob and no on-disk path exists to watch.
     pub world_jsonl_path: Option<String>,
-    // Flipped to `true` by either the `notify` watcher or the debug WS
-    // `reload-assets` command. The next `GraphicsSystem::step` consumes
+    // Flipped to `true` by either the `notify` watcher or the
+    // `reload-assets` debug tool call. The next `GraphicsSystem::step` consumes
     // it and runs [`reload_assets`].
     pub pending: Arc<AtomicBool>,
     // In-flight EnvironmentMap convolution. `Some(receiver)` while a
@@ -219,8 +219,8 @@ impl AssetHotReloadState {
     // Build the state from the init-captured [`HotReloadSources`] bundle and
     // (best-effort) spawn the `notify` watcher over every unique parent
     // directory of the captured source paths. Watcher creation is best-effort:
-    // a missing path or notify error logs and continues; the debug-WS
-    // `reload-assets` command still works on the same flag. The `cn debug`
+    // a missing path or notify error logs and continues; the
+    // `reload-assets` debug tool call still works on the same flag. The `cn debug`
     // drive calls this on its first tick after taking the sources off the
     // `GraphicsSystem`.
     pub(crate) fn from_sources(sources: HotReloadSources) -> Self {
@@ -292,7 +292,7 @@ impl AssetHotReloadState {
 // a world.jsonl reload added that must enter the ECS so subsequent systems
 // see them. Returned by [`run_frame`] instead of applied in place because the
 // reload passes hold the backend + Prop-tracking borrow and have no `World`
-// access: the binary-only `DebugHook::tick` drive applies these once the
+// access: the `DebugHook::tick` drive applies these once the
 // system borrow is released.
 pub(crate) struct FrameHotReloadEffects {
     pub skeleton_updates: Vec<PendingSkeletonUpdate>,

@@ -80,7 +80,7 @@ pub(crate) fn start_app(
     runloop::install_ctrlc_handler(&app);
 
     // Hand the shutdown token to the debug hook so a debug client can request
-    // a clean exit (the `shutdown` WS command). No-op when no hook is present.
+    // a clean exit (the `shutdown` debug tool call). No-op when no hook is present.
     if let Some(hook) = debug.as_mut() {
         hook.attach_shutdown(shutdown.clone());
     }

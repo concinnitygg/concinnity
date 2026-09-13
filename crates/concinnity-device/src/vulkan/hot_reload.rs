@@ -533,8 +533,8 @@ impl VkContext {
 
     // Rebuild bucket 0 of the GPU-driven main pass from a freshly compiled world
     // Shader and hot-swap it. Driven by asset hot-reload (`cn debug` only) when
-    // one of the Shader's files is saved or the debug-WS `reload-assets`
-    // command fires. Mirrors the rebuild-then-swap safety pattern of
+    // one of the Shader's files is saved or the `reload-assets` debug tool
+    // call fires. Mirrors the rebuild-then-swap safety pattern of
     // `reload_shaders`: the replacement is constructed first and the swap only
     // runs when the build succeeds, so a typo in a shader edit leaves the live
     // pipeline untouched and the session keeps rendering. Sibling of

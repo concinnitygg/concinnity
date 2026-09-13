@@ -1,5 +1,5 @@
-//! Per-object cull-status readback for the Metal backend. The `cn debug` WS
-//! server's `cull-status` command routes here (via
+//! Per-object cull-status readback for the Metal backend. The `cull-status`
+//! debug tool call routes here (via
 //! `RenderBackend::read_cull_status`) to copy the GPU-driven cull's status
 //! buffer into a host-readable buffer and hand back one `CullStatus` value per
 //! live cull record.

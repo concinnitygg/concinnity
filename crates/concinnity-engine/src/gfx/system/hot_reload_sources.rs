@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 // Every unique parent directory across `paths`. The watcher subscribes to
 // these; a bare-filename source (no parent) is skipped and only reachable via
-// the debug-WS `reload-assets` command. Callers pass resolved paths.
+// the `reload-assets` debug tool call. Callers pass resolved paths.
 fn watch_dirs_of<'a>(paths: impl Iterator<Item = &'a str>) -> Vec<PathBuf> {
     let mut dirs: BTreeSet<PathBuf> = BTreeSet::new();
     for path in paths {
@@ -118,8 +118,8 @@ impl MeshSourceMap {
 }
 
 /// One `ProceduralMesh` reload entry. Procedural meshes have no source file,
-/// so their hot-reload trigger is a `world.jsonl` save (or the debug-WS
-/// `reload-assets` command): the renderer captures each mesh's args at init
+/// so their hot-reload trigger is a `world.jsonl` save (or the
+/// `reload-assets` debug tool call): the renderer captures each mesh's args at init
 /// and re-runs the generator when the on-disk args change. `draw_indices`
 /// mirrors [`MeshSourceEntry`]: one ProceduralMesh asset can map to many
 /// draw slots when several `Prop`s share it.

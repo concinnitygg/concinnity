@@ -103,8 +103,8 @@ pub struct AnimationSystem {
     // Ordered so per-frame iteration (and the RootMotionEvent events it emits) is
     // deterministic across runs.
     targets: BTreeMap<SkinnedMeshHandle, TargetState>,
-    // Interned-name -> handle index snapshotted at init, so the debug WS
-    // animation commands (which address a mesh by name) can find the bucket.
+    // Interned-name -> handle index snapshotted at init, so the animation
+    // debug tool calls (which address a mesh by name) can find the bucket.
     name_index: crate::gfx::skinned_mesh_map::SkinnedMeshNameIndex,
     // Wall-clock origin, captured on the first step.
     start: Option<Instant>,
@@ -224,7 +224,7 @@ impl System for AnimationSystem {
         let capture_sources = crate::app::dev_flags::enabled();
         // Interned-name -> handle index published by GraphicsSystem (which
         // loaded the SkinnedMesh table before this system inits), kept for the
-        // debug WS animation commands. The correlation web itself is keyed by
+        // animation debug tool calls. The correlation web itself is keyed by
         // the authored `target` handles directly.
         self.name_index = ctx
             .resource::<crate::gfx::skinned_mesh_map::SkinnedMeshNameIndex>()
@@ -364,8 +364,8 @@ impl System for AnimationSystem {
             }
         }
 
-        // Runtime commands (`cn debug` WS `anim-crossfade` / `anim-param` /
-        // `anim-state`) are drained from the binary's `DebugHook::tick` via
+        // Runtime commands (the `anim-crossfade` / `anim-param` / `anim-state`
+        // debug tool calls) are drained from the editor's `DebugHook::tick` via
         // `apply_runtime_commands`, not here.
 
         // Advance each bucket's driver before sampling: flat buckets move

@@ -1,8 +1,5 @@
-//! Binary-only runtime debug server.
-//!
-//! Declared by `main.rs` only, never by `lib.rs`, so it is compiled into the
-//! `cn-client` binary and excluded from `libconcinnity`: `cargo build --lib`
-//! never sees it.
+//! The localhost runtime debug server of the concinnity-dev library, declared in
+//! `lib.rs`.
 //!
 //! `cn debug` starts a localhost MCP server (see `crate::mcp`). The engine
 //! stays debug-agnostic: the only coupling is the `DebugHook` trait, which the
@@ -99,7 +96,7 @@
 //! its next loop iteration, which is how a script closes a headless session
 //! instead of leaving the window open.
 
-// Submodules (all binary-only):
+// Submodules:
 //   wire      the listener: accept loop + connection threads; coverage-excluded
 //   catalog   the verb table: description, access, and parameter schema per verb
 //   dispatch  the socket-free `handle_request` command dispatcher (testable)

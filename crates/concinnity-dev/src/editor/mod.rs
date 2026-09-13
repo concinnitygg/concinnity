@@ -165,8 +165,8 @@ pub fn run_editor(json_path: Option<&str>, debug_port: Option<u16>) -> std::io::
     inject::editor_hud(app.world_mut());
 
     // Every editor session hot-reloads file-backed assets; with a debug port
-    // the DebugServer owns the reload driver (so the WS `reload-assets`
-    // command reaches its flag), without one the driver runs as its own hook.
+    // the DebugServer owns the reload driver (so the `reload-assets` debug
+    // tool call reaches its flag), without one the driver runs as its own hook.
     // Either way the session holds exactly one driver, so a reload is never
     // applied twice.
     let mut editor_hook = EditorHook::new(world_path, entries).with_console_sink(console_sink);

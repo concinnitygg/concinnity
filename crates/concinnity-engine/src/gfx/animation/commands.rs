@@ -1,8 +1,8 @@
 //! Runtime debug-command drain: `anim-crossfade` (flat buckets), `anim-param`
 //! and `anim-state` (graph buckets). Commands arrive on the process-wide
-//! `crate::app::anim_runtime` queue from the debug WS server and each carries
+//! `crate::app::anim_runtime` queue from the debug endpoint and each carries
 //! a reply channel answered synchronously here. The drain is driven from the
-//! editor's per-frame `DebugHook::tick` (not from `step`) so a WS client
+//! editor's per-frame `DebugHook::tick` (not from `step`) so an MCP client
 //! blocked on a reply is never starved while a menu pauses playback.
 
 use concinnity_core::ecs::SkinnedMeshHandle;
@@ -31,7 +31,7 @@ impl AnimationSystem {
     // one; a command that does not fit its target's mode fails without
     // touching anything.
     fn drain_runtime_commands(&mut self, now_secs: f32) {
-        // Commands address a mesh by its interned NAME id (the WS server
+        // Commands address a mesh by its interned NAME id (the debug endpoint
         // resolves the typed name against the interner); the buckets are keyed
         // by handle, so translate through the name index captured at init.
         for cmd in crate::app::anim_runtime::drain() {
@@ -516,7 +516,7 @@ mod tests {
     }
 
     // The hook drive anchors the system's clock on its first call and answers
-    // whatever is queued, so a WS client blocked on a reply is never starved by
+    // whatever is queued, so an MCP client blocked on a reply is never starved by
     // a paused world.
     #[test]
     fn apply_runtime_commands_anchors_the_clock_and_answers() {

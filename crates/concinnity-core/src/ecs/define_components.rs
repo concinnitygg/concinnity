@@ -287,7 +287,7 @@ macro_rules! define_components {
             /// How many components of each type are stored: one `(tag, count)`
             /// entry per populated type, in tag order. A component type declared
             /// outside the engine is reported by its discriminant, since it has
-            /// no registry name. The debug WS snapshot
+            /// no registry name. The debug endpoint's snapshot
             /// reports these; nothing re-serializes stored components back to
             /// defs. Counted rather than listed per instance, so the snapshot
             /// is sized by the number of component types rather than by the

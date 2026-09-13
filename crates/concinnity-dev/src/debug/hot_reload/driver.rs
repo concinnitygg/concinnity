@@ -46,8 +46,8 @@ impl HotReloadDriver {
         self
     }
 
-    // The shared "reload requested" flag of the armed state, for the debug
-    // WS `reload-assets` command. `None` until a tick arms the state; the
+    // The shared "reload requested" flag of the armed state, for the
+    // `reload-assets` debug tool call. `None` until a tick arms the state; the
     // caller must re-query after ticks since a re-arm swaps the flag.
     pub(crate) fn pending(&self) -> Option<Arc<AtomicBool>> {
         self.state.as_ref().map(|s| Arc::clone(&s.pending))

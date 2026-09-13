@@ -1049,8 +1049,8 @@ impl MtlContext {
             };
 
         // Shader hot-reload wiring. The atomic flag is shared between the
-        // notify watcher thread and `draw_frame`, plus (eventually) the
-        // debug WS `reload-shaders` command path via `GraphicsSystem`.
+        // notify watcher thread and `draw_frame`, plus the `reload-shaders`
+        // debug tool call via `GraphicsSystem`.
         // Watcher creation is best-effort: a missing source dir or a notify
         // error logs a warning and disables only the watcher half -- the
         // debug command still works on the same flag.
@@ -1076,7 +1076,7 @@ impl MtlContext {
         );
 
         // Capture the resolved EDR multiplier (or None on SDR) so the HUD +
-        // debug WS can report it. The shader flag in `post_process.hdr_output`
+        // debug endpoint can report it. The shader flag in `post_process.hdr_output`
         // tracks "is HDR on" as a bool; this captures the multiplier itself.
         let max_edr = match hdr_mode {
             hdr_output::HdrOutputMode::Hdr { max_edr, .. } => Some(max_edr),

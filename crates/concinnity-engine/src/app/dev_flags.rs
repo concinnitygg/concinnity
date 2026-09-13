@@ -125,7 +125,7 @@ pub(crate) fn capture() -> bool {
 }
 
 /// Raise the "Animation source changed" flag. Called by the asset hot-reload
-/// watcher and the WS `reload-assets` handler; the library only reads it.
+/// watcher and the `reload-assets` debug tool call; the library only reads it.
 pub fn set_pending_animations() {
     PENDING_ANIMATIONS.store(true, Ordering::SeqCst);
 }

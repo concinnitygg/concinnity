@@ -948,7 +948,7 @@ impl MtlContext {
 
         // Retain this drawable's color texture so the headless `screenshot`
         // command can blit the last presented frame back to the host. Only
-        // under `hot_reload` (the `cn debug` path that runs the WS server able
+        // under `hot_reload` (the `cn debug` path that runs the debug endpoint able
         // to request a capture, and the only path where the MTKView has
         // `framebufferOnly` switched off so this texture is blit-readable);
         // production keeps this `None`. Reading it next frame is safe: the

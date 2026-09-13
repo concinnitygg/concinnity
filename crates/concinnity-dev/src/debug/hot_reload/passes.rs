@@ -458,7 +458,7 @@ pub(crate) struct ShaderStageReloadResult {
 
 // Recompile the world default Shader from its files and swap the live
 // pipelines. Fired by the asset watcher when one of the Shader's files
-// changes, or by the debug-WS `reload-assets` command.
+// changes, or by the `reload-assets` debug tool call.
 //
 // The files are read and compiled through the cook's own
 // [`concinnity_cook::compile::shader::compile_world_shader`], so a save

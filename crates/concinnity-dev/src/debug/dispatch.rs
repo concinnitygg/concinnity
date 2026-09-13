@@ -239,7 +239,7 @@ pub(crate) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> Str
                     // AnimationSystem, the GraphicsSystem world-reload pass,
                     // and the world-loaded shader reload pass each
                     // listen on their own sibling flags. Fire all four here
-                    // so a single WS command reloads every hot-reloadable
+                    // so a single tool call reloads every hot-reloadable
                     // surface in one shot.
                     dev_flags::set_pending_animations();
                     hot_reload::set_pending_world();
@@ -324,7 +324,7 @@ pub(crate) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> Str
         "camera-move" => {
             // Sustained-motion mutation: same drop-then-block shape as
             // camera-set. The reply fires when the motion is accepted, not when
-            // it finishes, so even a long move stays inside the WS timeout.
+            // it finishes, so even a long move stays inside the reply timeout.
             drop(state);
             return handle_camera_move(text);
         }

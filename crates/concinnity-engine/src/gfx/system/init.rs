@@ -825,8 +825,8 @@ impl GraphicsSystem {
             .unwrap_or_default();
         let mut skinned_geometry: Vec<SkinnedGeometry> = Vec::new();
         let mut skinned_blob_indices: Vec<u32> = Vec::new();
-        // Interned name -> handle, published for the debug WS animation
-        // commands, which address a mesh by its typed name.
+        // Interned name -> handle, published for the animation debug tool
+        // calls, which address a mesh by its typed name.
         let mut skinned_name_index: std::collections::HashMap<AssetId, SkinnedMeshHandle> =
             std::collections::HashMap::new();
         for (handle, entry) in skinned_table.0.iter().enumerate() {
@@ -891,7 +891,7 @@ impl GraphicsSystem {
             }
         }
         // Publish the name index before AnimationSystem inits (it runs after
-        // GraphicsSystem) so debug WS animation commands can resolve a typed
+        // GraphicsSystem) so animation debug tool calls can resolve a typed
         // mesh name to the handle keying the correlation web. The skin
         // selectors ride along for the animation reload catalog.
         ctx.insert_resource(crate::gfx::skinned_mesh_map::SkinnedMeshNameIndex(
@@ -2680,7 +2680,7 @@ impl GraphicsSystem {
         // World.jsonl path for the Prop transform reload pass. The dev host
         // (`cn debug` / `cn editor`) resolves the world path -- world.jsonl
         // discovery is authoring I/O in `concinnity-cook`, which the runtime does
-        // not link -- and hands it in via `dev_flags`. Embedded preview / WS-
+        // not link -- and hands it in via `dev_flags`. Embedded preview / MCP-
         // driven runs leave it None and the file watcher has no `.jsonl` to
         // subscribe to.
         let world_jsonl_path: Option<String> = if capture_sources {

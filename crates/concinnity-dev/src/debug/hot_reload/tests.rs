@@ -166,8 +166,8 @@ fn mesh_source_map_collects_unique_parent_dirs() {
 #[test]
 fn mesh_source_map_skips_bare_filenames_in_watch_dirs() {
     // A bare filename has no parent directory; the watcher would otherwise
-    // try to subscribe to "" which notify rejects. The debug-WS
-    // `reload-assets` command path still works for these.
+    // try to subscribe to "" which notify rejects. The `reload-assets`
+    // debug tool call still works for these.
     let mut m = MeshSourceMap::new();
     m.entries.push(MeshSourceEntry {
         source: "standalone.glb".to_string(),
@@ -545,8 +545,8 @@ fn shader_stage_source_map_collects_unique_parent_dirs() {
 #[test]
 fn shader_stage_source_map_skips_bare_filenames_in_watch_dirs() {
     // A bare filename has no parent directory; the watcher would try to
-    // subscribe to "" which notify rejects. The debug-WS `reload-assets`
-    // command still works for these.
+    // subscribe to "" which notify rejects. The `reload-assets` debug tool
+    // call still works for these.
     use concinnity_core::components::ShaderStage;
     let mut m = ShaderStageSourceMap::new();
     m.entries.push(ShaderStageSourceEntry {

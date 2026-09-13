@@ -237,7 +237,7 @@ pub trait BackendProbe {
     }
 
     /// Capture the last presented frame to a PNG at `path` and return the saved
-    /// path. Driven by the `cn debug` WS `screenshot` command for headless
+    /// path. Driven by the `screenshot` debug tool call for headless
     /// on-GPU render verification. Default [`RenderError::Unsupported`]; all
     /// current backends override this.
     fn screenshot(&mut self, path: &str) -> RenderResult<String> {
@@ -252,8 +252,8 @@ pub trait BackendProbe {
     /// The submitted draw-call count is a CPU-side number that does not move
     /// when the GPU rejects an object, and an object the Hi-Z test correctly
     /// occluded leaves no trace in the presented pixels, so this buffer is the
-    /// only observable record of what the cull decided. Driven by the `cn
-    /// debug` WS `cull-status` command; synchronous (it idles the device).
+    /// only observable record of what the cull decided. Driven by the
+    /// `cull-status` debug tool call; synchronous (it idles the device).
     ///
     /// Default [`RenderError::Unsupported`]: a backend with no GPU-driven cull,
     /// or one whose readback path is not implemented.

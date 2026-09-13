@@ -9,7 +9,7 @@
 // Maximum wait for `GraphicsSystem::step` to drain a runtime-spawn command
 // and reply. The drain runs once per frame, so a healthy 60 Hz engine
 // replies inside ~16 ms; 1 s gives plenty of headroom even on a slow boot
-// frame (4K HDR bake) without leaving a WS client hanging forever if the
+// frame (4K HDR bake) without leaving an MCP client hanging forever if the
 // engine has stalled.
 use concinnity_core::components::InputKey;
 use concinnity_core::components::SettingOp;

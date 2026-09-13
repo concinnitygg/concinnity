@@ -273,8 +273,8 @@ pub trait LiveEdit {
 
     /// Rebuild the live world-default pipelines (main, instanced, skinned)
     /// from a freshly compiled Shader payload. Driven by asset hot-reload
-    /// (`cn debug` only) when one of the Shader's files is saved or a debug-WS
-    /// `reload-assets` command fires. The backend builds every replacement
+    /// (`cn debug` only) when one of the Shader's files is saved or a
+    /// `reload-assets` debug tool call fires. The backend builds every replacement
     /// into a temporary first and only swaps when every build succeeds, so a
     /// compile error never overwrites a live pipeline with a half-built
     /// replacement.

@@ -393,7 +393,7 @@ pub(super) struct TextState {
 // embedded fallback, so a saved shader edit is picked up by
 // [`MtlContext::reload_shaders`]. Under `cn run` production keeps the static
 // `include_str!`-baked path. `reload_pending` is the atomic flag set by the
-// `notify` watcher or the debug WS `reload-shaders` command, polled at the top of
+// `notify` watcher or the `reload-shaders` debug tool call, polled at the top of
 // `draw_frame`; the debug server reads its `Arc` clone via `GraphicsSystem`.
 // Both it and `watcher` are `Some` only when `enabled`.
 pub(super) struct HotReloadState {
@@ -536,7 +536,7 @@ pub(crate) struct MtlContext {
     // Color texture of the most recently presented drawable, retained so the
     // `cn debug` `screenshot` command can blit it back to a host buffer and
     // PNG-encode it (see metal/screenshot.rs). Set each frame only under
-    // `hot_reload` (the path that runs the WS server able to request a
+    // `hot_reload` (the path that runs the debug endpoint able to request a
     // capture); `None` in production and before the first present, so a
     // capture then returns a clean error. The MTKView has `framebufferOnly`
     // switched off under the same gate so the drawable is blit-readable.
@@ -1441,7 +1441,7 @@ impl MtlContext {
     // Tombstone a runtime emitter slot. Drops the `ParticleEmitterGpuState`:
     // Metal keeps the underlying pool + counter buffers alive until any
     // in-flight command buffer referencing them completes, so this is safe
-    // to call mid-frame between encode passes (the debug-WS path runs in
+    // to call mid-frame between encode passes (a debug tool call runs in
     // the `DebugHook::tick` window before the world step). Returns an error
     // when the index is out of range or already tombstoned.
     pub(crate) fn remove_emitter(&mut self, emitter_id: usize) -> Result<(), String> {

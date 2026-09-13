@@ -7,7 +7,7 @@
 //! The debug server (binary-only, off the engine thread) pushes
 //! commands here; the editor's per-frame debug drive drains them via
 //! `AnimationSystem::apply_runtime_commands` every frame -- including while a
-//! menu pauses playback, so a blocked WS client always gets its reply. Each
+//! menu pauses playback, so a blocked MCP client always gets its reply. Each
 //! command carries a reply channel the drain fulfils synchronously.
 
 use concinnity_host::thread::asset_id::AssetId;
@@ -60,7 +60,7 @@ pub struct GraphStateReport {
     pub params: Vec<(String, f32)>,
 }
 
-/// One runtime command pushed onto [`enqueue`] by the debug WS server and
+/// One runtime command pushed onto [`enqueue`] by the debug endpoint and
 /// drained by `AnimationSystem::apply_runtime_commands`.
 pub enum AnimCommand {
     /// Crossfade a target's clip weights.

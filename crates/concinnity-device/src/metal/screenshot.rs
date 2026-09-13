@@ -1,5 +1,5 @@
-//! Headless frame capture for the Metal backend. The `cn debug` WS server's
-//! `screenshot` command routes here (via `RenderBackend::screenshot`) to copy
+//! Headless frame capture for the Metal backend. The `screenshot` debug tool
+//! call routes here (via `RenderBackend::screenshot`) to copy
 //! the most recently presented drawable's color texture into a host-readable
 //! texture and encode it to a PNG on disk. This is the on-GPU verification path
 //! the renderer otherwise leaves to a human eyeballing the live window: a

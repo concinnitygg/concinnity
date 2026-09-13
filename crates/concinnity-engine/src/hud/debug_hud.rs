@@ -21,7 +21,7 @@ const RSS_INTERVAL_SECS: f32 = 0.5;
 
 // How many per-pass entries the passes chip lists. Picked to fit comfortably
 // in the top-right debug column; passes past this count are dropped from the
-// chip (still visible via the debug WS `profile.passes` reply).
+// chip (still visible via the `profile` debug tool call's `passes` reply).
 const PASSES_CHIP_TOP_N: usize = 6;
 
 // Build the per-pass timing chip text from the active backend's

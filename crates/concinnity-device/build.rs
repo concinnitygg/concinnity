@@ -14,7 +14,8 @@
 
 use concinnity_slang as slang;
 use concinnity_toolchain::{
-    Backend, SlangLibSpec, hash_sources, precompile_metal_shaders, setup_graphics_backend,
+    Backend, SlangLibSpec, dxil_register_declared, hash_sources, msl_binds, msl_entry_params,
+    msl_param_name, precompile_metal_shaders, setup_graphics_backend,
 };
 use std::path::PathBuf;
 
@@ -1038,7 +1039,8 @@ fn assert_slang_metal_abi() {
         };
         let msl = slang::compile(&job, &out_dir).expect("slang ABI check compile");
         let msl = String::from_utf8_lossy(&msl);
-        assert_every_param_is_attributed(abi, &msl_entry_params(&msl, abi.entry));
+        let params = msl_entry_params(&msl, abi.entry).unwrap_or_else(|e| panic!("{e}"));
+        assert_every_param_is_attributed(abi, &params);
         for (param, attribute) in abi.slots {
             assert!(
                 msl_binds(&msl, param, attribute),
@@ -1078,73 +1080,6 @@ fn assert_every_param_is_attributed(abi: &MetalAbi, params: &[String]) {
         abi.file,
         abi.entry,
     );
-}
-
-// Whether the emitted MSL binds `param` at `attribute`. Emitted parameter names
-// carry a `_<n>` suffix whose number is the compiler's own (`joints_3`), so the
-// name is matched up to it.
-fn msl_binds(msl: &str, param: &str, attribute: &str) -> bool {
-    let marker = format!(" [[{attribute}]]");
-    msl.match_indices(&marker).any(|(at, _)| {
-        msl[..at]
-            .rsplit(|c: char| c.is_whitespace())
-            .next()
-            .and_then(|name| name.rsplit_once('_'))
-            .is_some_and(|(head, tail)| head == param && tail.chars().all(|c| c.is_ascii_digit()))
-    })
-}
-
-// The parameter list of the one entry point in an emitted MSL translation unit,
-// split at top-level commas.
-fn msl_entry_params(msl: &str, entry: &str) -> Vec<String> {
-    let stage = ["[[fragment]]", "[[vertex]]", "[[kernel]]"]
-        .iter()
-        .find_map(|tag| msl.find(tag))
-        .unwrap_or_else(|| panic!("emitted MSL declares no entry point for `{entry}`"));
-    let open = stage
-        + msl[stage..]
-            .find('(')
-            .unwrap_or_else(|| panic!("emitted MSL entry point `{entry}` has no parameter list"));
-    assert!(
-        msl[stage..open].trim_end().ends_with(entry),
-        "emitted MSL entry point is not `{entry}`: {}",
-        &msl[stage..open]
-    );
-
-    let mut params = Vec::new();
-    let mut depth = 0i32;
-    let mut start = open + 1;
-    for (at, ch) in msl[open..].char_indices().map(|(i, c)| (open + i, c)) {
-        match ch {
-            '(' | '<' | '[' => depth += 1,
-            ')' | '>' | ']' => {
-                depth -= 1;
-                if depth == 0 {
-                    params.push(msl[start..at].trim().to_string());
-                    break;
-                }
-            }
-            ',' if depth == 1 => {
-                params.push(msl[start..at].trim().to_string());
-                start = at + 1;
-            }
-            _ => {}
-        }
-    }
-    params
-}
-
-// An emitted parameter's source name. The `_<n>` suffix is the compiler's own
-// (`probe_cubes_texture_1`), so it is trimmed off.
-fn msl_param_name(param: &str) -> &str {
-    let name = param
-        .rsplit(|c: char| c.is_whitespace())
-        .next()
-        .unwrap_or(param);
-    match name.rsplit_once('_') {
-        Some((head, tail)) if !tail.is_empty() && tail.chars().all(|c| c.is_ascii_digit()) => head,
-        _ => name,
-    }
 }
 
 // One entry point and the Metal slots its host encoder writes, as
@@ -1603,15 +1538,8 @@ fn emit_dxil_hlsl(
 }
 
 fn assert_dxil_register(emitted: &str, param: &str, register: &str, remedy: &str) {
-    // Emitted parameter names carry a `_<n>` suffix (e.g. `view_cb_0`).
-    let expected = format!("{param}_0 : register({register})");
-    // Resource arrays emit as `name_0[int(N)] : register(...)`.
-    let expected_array = format!("{param}_0[");
     assert!(
-        emitted.contains(&expected)
-            || emitted.lines().any(
-                |l| l.contains(&expected_array) && l.contains(&format!("register({register})"))
-            ),
+        dxil_register_declared(emitted, param, register),
         "slang DXIL ABI drifted: expected `{param}` at register({register}). {remedy}"
     );
 }
