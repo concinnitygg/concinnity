@@ -19,6 +19,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::image_decode::{self, PixelLayout};
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::hdr_output::{HdrEncoding, HdrOutputMode};
 
 use super::context::VkContext;
@@ -29,7 +30,7 @@ impl VkContext {
     // success. Distinct name from the `RenderBackend::screenshot` trait method
     // so the backend forwarder is unambiguous. Reached through the
     // `RenderBackend` vtable (bin-only `cn debug`).
-    pub(in crate::vulkan) fn capture_screenshot(&mut self, path: &str) -> Result<String, String> {
+    pub(in crate::vulkan) fn capture_screenshot(&mut self, path: &str) -> RenderResult<String> {
         let Some(image_index) = self.swapchain.last_present_index else {
             return Err("screenshot: no frame has been presented yet".into());
         };
@@ -151,7 +152,7 @@ impl VkContext {
                 image_decode::decode_to_rgba8(raw, classify(self.swapchain.format, encoding));
             encode_png(path, width, height, &rgba)
         });
-        result.map(|()| path.to_string())
+        Ok(result.map(|()| path.to_string())?)
     }
 }
 

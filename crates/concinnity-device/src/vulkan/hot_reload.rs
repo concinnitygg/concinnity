@@ -14,6 +14,7 @@
 
 use ash::vk;
 use concinnity_core::render::backend_init;
+use concinnity_core::render::error::RenderResult;
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -208,7 +209,7 @@ impl VkContext {
     // pipelines remain out of scope; same split as DirectX. The caller
     // has already `device_wait_idle`'d so swapping pipelines out from
     // under in-flight command buffers is safe.
-    pub(in crate::vulkan) fn reload_shaders(&mut self) -> Result<(), String> {
+    pub(in crate::vulkan) fn reload_shaders(&mut self) -> RenderResult<()> {
         if !self.hot_reload.enabled {
             return Ok(());
         }

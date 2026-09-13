@@ -15,6 +15,7 @@ use ash::vk;
 use concinnity_core::components::GlassPanel;
 use concinnity_core::geometry::glass_quad::build_glass_quad;
 use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::render::error::RenderResult;
 // `GlassParams` (the per-panel UBO) is a GPU-free layout struct that lives in
 // `core::render`; re-export it so `crate::vulkan::glass::GlassParams` is
 // unchanged for the `glass_params_from` path.
@@ -108,7 +109,7 @@ fn build_panel_record(
     ctx: &ProducerCtx,
     panel: &GlassPanel,
     planar_slot: Option<usize>,
-) -> Result<TransparentRecord, String> {
+) -> RenderResult<TransparentRecord> {
     let (verts, idxs) = build_glass_quad(panel.center, panel.normal, panel.half_size);
 
     // Flatten into the standard engine `Vertex` layout. Tangent is a placeholder
@@ -151,7 +152,7 @@ pub(in crate::vulkan) fn build_glass_producer(
     // Per-pane planar resolve slot (aligned with `panels`); `None` panes keep the
     // probe/sky reflection. From `assign_planar_slots`.
     planar_slots: &[Option<usize>],
-) -> Result<TransparentProducer, String> {
+) -> RenderResult<TransparentProducer> {
     let (vert_spv, frag_spv) =
         compile_glass_shaders(ctx.hot_reload, ctx.msaa, ctx.probe_cube_count)?;
     let pipeline = create_transparent_pipeline(
@@ -267,7 +268,7 @@ pub(in crate::vulkan) fn build_glass_mesh_producer(
     ctx: ProducerCtx,
     flat_layout: vk::PipelineLayout,
     object_indices: &[usize],
-) -> Result<GlassMeshProducer, String> {
+) -> RenderResult<GlassMeshProducer> {
     let shaders = compile_glass_mesh_shaders(
         ctx.hot_reload,
         ctx.msaa,

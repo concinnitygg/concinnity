@@ -86,6 +86,7 @@ use concinnity_core::gfx::render_types::{
     ClusterParams, FogFroxelParams, FogParams, RtParams, SsaoParams, SsgiParams, SsrParams,
     TextDrawCall,
 };
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::planar_reflection;
 use concinnity_core::render::render_graph;
 use concinnity_core::render::render_graph::{CompiledGraph, PassId, PassQueue};
@@ -232,7 +233,7 @@ impl MtlContext {
         graph: &CompiledGraph,
         params: &GraphFrameParams<'_>,
         join: &std::sync::Arc<FrameJoin>,
-    ) -> Result<GraphSubmission, String> {
+    ) -> RenderResult<GraphSubmission> {
         #[cfg(debug_assertions)]
         render_graph::assert_slot_aliasing_sound(graph, self.transient_pool.slot_labels(), "metal");
         // Both submission paths need the compiled order to be a topological
@@ -283,7 +284,7 @@ impl MtlContext {
         // order, which is that queue's GPU execution order.
         let worker_slots: std::sync::Mutex<Vec<Option<SendableCmdBuf>>> =
             std::sync::Mutex::new((0..graph.passes.len()).map(|_| None).collect());
-        let first_error: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+        let first_error: std::sync::Mutex<Option<RenderError>> = std::sync::Mutex::new(None);
 
         // Cloned before the parallel borrow so the commit loop's per-pass
         // fault-logging handlers can share the throttle without re-borrowing
@@ -513,7 +514,7 @@ impl MtlContext {
         cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
         params: &GraphFrameParams<'_>,
         particle_frame: Option<&super::particle::ParticleFrame>,
-    ) -> Result<u32, String> {
+    ) -> RenderResult<u32> {
         Ok(match pass_id {
             PassId::Cull => {
                 let object_buffer = params.object_buffer.ok_or(
@@ -711,23 +712,23 @@ impl MtlContext {
                 // `diagnostics.pass_timing.attach_render` calls inside
                 // encode_ssao, but they must not appear as their
                 // own graph nodes.
-                return Err(format!(
+                return Err(RenderError::Other(format!(
                     "graph executor: pass {} is bundled inside SsaoBlur \
                          (encode_ssao encodes all three SSAO sub-passes); it \
                          should not appear as its own graph node",
                     pass_id.name()
-                ));
+                )));
             }
             PassId::ReflectionComposite => {
                 // Encoded inline at the tail of SsrResolve / RtReflections (it
                 // blurs + composites the reflection target they wrote). Keeps a
                 // timing slot via an inline `attach_render`, but is never a graph
                 // node of its own -- same pattern as the bundled SSAO sub-passes.
-                return Err(format!(
+                return Err(RenderError::Other(format!(
                     "graph executor: pass {} is encoded inline by SsrResolve / \
                          RtReflections; it should not appear as its own graph node",
                     pass_id.name()
-                ));
+                )));
             }
             PassId::Decals => {
                 self.encode_decals(cmd_buf, params.vp, params.inv_vp, params.frustum)?

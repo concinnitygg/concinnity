@@ -4,6 +4,7 @@
 //! policy on the class, never on prose. `Other` carries legacy string errors so
 //! interior call sites can migrate incrementally.
 
+use alloc::format;
 use alloc::string::String;
 use alloc::string::ToString;
 use thiserror::Error;
@@ -52,6 +53,13 @@ pub enum RenderError {
     /// A shader failed to compile or link into a pipeline.
     #[error("shader compile: {0}")]
     ShaderCompile(String),
+    /// The backend does not implement the operation. Nothing was changed, so
+    /// a caller that can proceed without it may treat this as a skip.
+    #[error("{op}: not supported on this backend")]
+    Unsupported {
+        /// The trait method that was called.
+        op: &'static str,
+    },
     /// An unclassified failure carrying the original message.
     #[error("{0}")]
     Other(String),
@@ -59,6 +67,25 @@ pub enum RenderError {
 
 /// A backend call's result.
 pub type RenderResult<T> = Result<T, RenderError>;
+
+impl RenderError {
+    /// Prefix the message with `what` (the resource or step that failed),
+    /// keeping the class so recovery policy still sees it.
+    pub fn context(self, what: impl core::fmt::Display) -> Self {
+        match self {
+            RenderError::DeviceLost { reason, detail } => RenderError::DeviceLost {
+                reason,
+                detail: format!("{what}: {detail}"),
+            },
+            RenderError::OutOfDeviceMemory(m) => {
+                RenderError::OutOfDeviceMemory(format!("{what}: {m}"))
+            }
+            RenderError::ShaderCompile(m) => RenderError::ShaderCompile(format!("{what}: {m}")),
+            RenderError::Other(m) => RenderError::Other(format!("{what}: {m}")),
+            e @ (RenderError::SwapchainOutOfDate | RenderError::Unsupported { .. }) => e,
+        }
+    }
+}
 
 impl From<String> for RenderError {
     fn from(message: String) -> Self {
@@ -69,15 +96,6 @@ impl From<String> for RenderError {
 impl From<&str> for RenderError {
     fn from(message: &str) -> Self {
         RenderError::Other(message.to_string())
-    }
-}
-
-// Bridge for interior call sites still reporting `Result<_, String>`: a typed
-// error crossing one decays to its message, so a detection site can go typed
-// before every caller above it has migrated.
-impl From<RenderError> for String {
-    fn from(error: RenderError) -> Self {
-        error.to_string()
     }
 }
 
@@ -101,5 +119,38 @@ mod tests {
             detail: "queue submit".to_string(),
         };
         assert_eq!(e.to_string(), "device lost (device hung): queue submit");
+    }
+
+    #[test]
+    fn unsupported_display_names_the_operation() {
+        let e = RenderError::Unsupported { op: "add_decal" };
+        assert_eq!(e.to_string(), "add_decal: not supported on this backend");
+    }
+
+    #[test]
+    fn context_prefixes_the_message_and_keeps_the_class() {
+        let oom = RenderError::OutOfDeviceMemory("create_image".to_string()).context("hiz image");
+        assert_eq!(
+            oom,
+            RenderError::OutOfDeviceMemory("hiz image: create_image".to_string())
+        );
+        let other = RenderError::Other("boom".to_string()).context(format_args!("texture[{}]", 3));
+        assert_eq!(other, RenderError::Other("texture[3]: boom".to_string()));
+        let lost = RenderError::DeviceLost {
+            reason: DeviceLostReason::Hung,
+            detail: "submit".to_string(),
+        }
+        .context("frame");
+        assert_eq!(
+            lost,
+            RenderError::DeviceLost {
+                reason: DeviceLostReason::Hung,
+                detail: "frame: submit".to_string(),
+            }
+        );
+        assert_eq!(
+            RenderError::SwapchainOutOfDate.context("present"),
+            RenderError::SwapchainOutOfDate
+        );
     }
 }

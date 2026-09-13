@@ -17,6 +17,7 @@
 // (post/descriptors.rs) instead of slots reserved for the effect by name in
 // `init/heap_layout.rs`.
 
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::post::device::{
     PostBlend, PostDraw, PostExtent, PostLoadOp, PostPassDevice, PostTargetState, resolved_texture,
 };
@@ -228,7 +229,7 @@ impl PostPassDevice for DxPostDevice<'_> {
         program: PostProgram,
         format: PixelFormat,
         blend: PostBlend,
-    ) -> Result<Self::Pipeline, String> {
+    ) -> RenderResult<Self::Pipeline> {
         let bindings = program.bindings();
         let root_sig = dump_on_err(
             self.info_queue,
@@ -259,7 +260,7 @@ impl PostPassDevice for DxPostDevice<'_> {
         label: &'static str,
         desc: &TextureDesc,
         extent: PostExtent,
-    ) -> Result<Self::Target, String> {
+    ) -> RenderResult<Self::Target> {
         let spec = resolved_texture(label, desc, extent);
         let format = dxgi_format(spec.format);
         let resource = create_rt_target(self.device, spec.width, spec.height, format)?;
@@ -288,17 +289,17 @@ impl PostPassDevice for DxPostDevice<'_> {
         }
     }
 
-    fn encode(&self, cmd: &Self::Recorder, draw: &PostDraw<'_, '_, Self>) -> Result<(), String> {
+    fn encode(&self, cmd: &Self::Recorder, draw: &PostDraw<'_, '_, Self>) -> RenderResult<()> {
         let pipe = draw.pipeline;
         draw.check(pipe.bindings)?;
         let probes = match (pipe.bindings.probes, self.probes) {
             (false, _) => None,
             (true, Some(probes)) => Some(probes),
             (true, None) => {
-                return Err(format!(
+                return Err(RenderError::Other(format!(
                     "{}: the program reads the reflection-probe set, but this device holds none",
                     draw.label
-                ));
+                )));
             }
         };
         let target = draw.target;

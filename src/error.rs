@@ -60,9 +60,9 @@ impl Error {
     fn io_kind(&self) -> std::io::ErrorKind {
         match self {
             Error::MissingData { .. } | Error::NoStateRoot => std::io::ErrorKind::NotFound,
-            Error::UnreadableData { .. } | Error::OverflowUnsupported { .. } => {
-                std::io::ErrorKind::InvalidData
-            }
+            Error::UnreadableData { .. }
+            | Error::OverflowUnsupported { .. }
+            | Error::Runtime(CnError::InvalidData) => std::io::ErrorKind::InvalidData,
             Error::Runtime(_) => std::io::ErrorKind::Other,
         }
     }
@@ -183,6 +183,7 @@ mod tests {
                     },
                     ErrorKind::InvalidData,
                 ),
+                (Error::Runtime(CnError::InvalidData), ErrorKind::InvalidData),
                 (Error::Runtime(CnError::InvalidState), ErrorKind::Other),
             ];
 

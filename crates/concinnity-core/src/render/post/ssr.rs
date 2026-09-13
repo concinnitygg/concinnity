@@ -12,9 +12,8 @@
 //! pass's place. The caller supplies it, and [`target_desc`] is its shape for a
 //! backend that creates it through the seam.
 
-use alloc::string::String;
-
 use crate::gfx::render_types::SsrParams;
+use crate::render::error::RenderResult;
 use crate::render::render_graph::{
     ClearValue, PassId, PixelFormat, TextureDesc, TextureSize, TextureUsage,
 };
@@ -57,7 +56,7 @@ pub fn target_desc() -> TextureDesc {
 
 /// Build the resolve pipeline on its own. What shader hot reload rebuilds and
 /// hands to [`SsrPass::swap_pipeline`].
-pub fn build_pipeline<D: PostPassDevice>(device: &D) -> Result<D::Pipeline, String> {
+pub fn build_pipeline<D: PostPassDevice>(device: &D) -> RenderResult<D::Pipeline> {
     device.create_pipeline(
         PostProgram::SsrResolve,
         target_desc().format,
@@ -72,7 +71,7 @@ pub struct SsrPass<Pipeline> {
 
 impl<Pipeline> SsrPass<Pipeline> {
     /// Build the resolve pipeline.
-    pub fn new<D>(device: &D) -> Result<Self, String>
+    pub fn new<D>(device: &D) -> RenderResult<Self>
     where
         D: PostPassDevice<Pipeline = Pipeline>,
     {
@@ -94,7 +93,7 @@ impl<Pipeline> SsrPass<Pipeline> {
         rec: &D::Recorder,
         inputs: SsrInputs<'t, D>,
         params: &SsrParams,
-    ) -> Result<(), String>
+    ) -> RenderResult<()>
     where
         D: PostPassDevice<Pipeline = Pipeline>,
     {

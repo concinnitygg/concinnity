@@ -10,6 +10,7 @@ use concinnity_core::gfx::mesh_payload;
 use concinnity_core::gfx::mesh_payload::SkinnedVertex;
 use concinnity_core::gfx::render_types::*;
 use concinnity_core::gfx::transform::IDENTITY;
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::rt_geom;
 
 use super::super::context::*;
@@ -23,7 +24,7 @@ impl VkContext {
         vertices: &[SkinnedVertex],
         indices: &[u32],
         draw_objects: Vec<SkinnedDrawObject>,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         if draw_objects.is_empty() || vertices.is_empty() || indices.is_empty() {
             return Ok(());
         }
@@ -194,7 +195,7 @@ impl VkContext {
         // skinned draw rides the GPU-driven pass, so a build failure is a
         // startup error, as on Metal. Mirrors the DirectX `upload_skinned`.
         self.build_main_skin(vertices.len())
-            .map_err(|e| format!("skinned: main-pass skin fold build failed: {e}"))?;
+            .map_err(|e| e.context("skinned: main-pass skin fold build failed"))?;
         Ok(())
     }
 
@@ -215,7 +216,7 @@ impl VkContext {
         vertex_base: u32,
         vertices: &[SkinnedVertex],
         indices: &[u16],
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let obj = self
             .skinned
             .slots
@@ -235,13 +236,16 @@ impl VkContext {
                 skinned_index,
                 obj.index_count,
                 indices.len()
-            ));
+            )
+            .into());
         }
         if self.skinned.vertex_buffer.is_null() || self.skinned.index_buffer.is_null() {
             return Err(
-                "update_skinned_mesh_geometry: no skinned vertex/index buffer (was \
+                concinnity_core::render::error::RenderError::OutOfDeviceMemory(
+                    "update_skinned_mesh_geometry: no skinned vertex/index buffer (was \
                  upload_skinned called?)"
-                    .to_string(),
+                        .to_string(),
+                ),
             );
         }
         let v_byte_off =
@@ -255,7 +259,8 @@ impl VkContext {
                 v_byte_off,
                 v_byte_off + v_byte_len,
                 v_buf_len
-            ));
+            )
+            .into());
         }
         let i_byte_off = (obj.index_offset * std::mem::size_of::<u32>()) as u64;
         let rebased: Vec<u32> = indices
@@ -330,7 +335,7 @@ impl VkContext {
     pub(in crate::vulkan) fn upload_skinned_morphs(
         &mut self,
         morphs: Vec<Option<std::sync::Arc<mesh_payload::PayloadMorphs>>>,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         use std::collections::HashMap;
 
         let n = self.skinned.slots.draw_objects.len();

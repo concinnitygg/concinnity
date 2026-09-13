@@ -21,6 +21,7 @@
 // binding is re-pointed to it per encode (the two paths are mutually exclusive).
 
 use ash::vk;
+use concinnity_core::render::error::RenderResult;
 
 use super::super::context::{HDR_FORMAT, VkContext};
 use super::super::pipeline::*;
@@ -202,7 +203,7 @@ impl CompositeInputs {
 
 // One full-screen color target pre-transitioned to SHADER_READ_ONLY_OPTIMAL so the
 // descriptor sets bound to it at init see a valid layout before the first encode.
-fn create_target(ctx: &GpuUploadContext, width: u32, height: u32) -> Result<GpuImage, String> {
+fn create_target(ctx: &GpuUploadContext, width: u32, height: u32) -> RenderResult<GpuImage> {
     let &GpuUploadContext {
         alloc,
         device,
@@ -306,7 +307,7 @@ impl ReflectionCompositeResources {
         blur_scale: u32,
         inputs: &CompositeInputs,
         hot_reload: bool,
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         let device = ctx.device;
         let blur_scale = blur_scale.max(1);
         let render_pass = create_composite_render_pass(device)?;
@@ -414,7 +415,7 @@ impl ReflectionCompositeResources {
         ctx: &GpuUploadContext,
         width: u32,
         height: u32,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let device = ctx.device;
         let w = width.max(1);
         let h = height.max(1);
@@ -505,7 +506,7 @@ impl ReflectionCompositeResources {
         width: u32,
         height: u32,
         inputs: &CompositeInputs,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         self.destroy_targets(ctx.device);
         self.build_targets(ctx, width, height)?;
         self.wire_sets(ctx.device, inputs);
@@ -619,7 +620,7 @@ impl VkContext {
     pub(in crate::vulkan) fn reconcile_reflection_composite(
         &mut self,
         blur_scale: u32,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         self.release_unfed_reflection_composite();
         if !self.reflection_path().composite || self.reflection_composite.is_some() {
             return Ok(());

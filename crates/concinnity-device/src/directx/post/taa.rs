@@ -6,6 +6,7 @@
 // and the draw -- is written once in `concinnity_core::render::post::taa` and
 // reaches D3D12 through `DxPostDevice`.
 
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::device::PostExtent;
 use concinnity_core::render::post::taa::{TaaInputs, TaaPass, TaaRing};
 use std::cell::Cell;
@@ -32,7 +33,7 @@ impl TaaResources {
         device: &DxPostDevice,
         width: u32,
         height: u32,
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         Ok(Self {
             pass: TaaPass::new(device, TaaRing::ping_pong(), PostExtent { width, height })?,
             frame: Cell::new(0),
@@ -60,7 +61,7 @@ impl TaaResources {
         device: &DxPostDevice,
         width: u32,
         height: u32,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         self.pass.resize(device, PostExtent { width, height })?;
         self.frame.set(0);
         Ok(())

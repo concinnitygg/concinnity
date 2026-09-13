@@ -16,6 +16,7 @@ use ash::vk;
 use concinnity_core::gfx::lod;
 use concinnity_core::gfx::render_types::{ShadowUniforms, SpotShadowData};
 use concinnity_core::render::csm;
+use concinnity_core::render::error::RenderResult;
 
 use crate::vulkan::allocator::{DeviceAllocator, PooledBuffer};
 use crate::vulkan::context::{VkContext, VkSpotShadow};
@@ -45,7 +46,7 @@ pub(in crate::vulkan) struct SpotShadowBuild<'a> {
 // storage buffer the forward pass indexes, and one `ShadowUniforms` slot per
 // slice with a descriptor set pointing at it. All static for the world's
 // lifetime; only the depth contents change per frame.
-pub(in crate::vulkan) fn build_spot_shadow(b: SpotShadowBuild<'_>) -> Result<VkSpotShadow, String> {
+pub(in crate::vulkan) fn build_spot_shadow(b: SpotShadowBuild<'_>) -> RenderResult<VkSpotShadow> {
     let SpotShadowBuild {
         alloc,
         instance,

@@ -14,6 +14,7 @@ use concinnity_core::gfx::transform::IDENTITY;
 use concinnity_core::render::backend_init;
 use concinnity_core::render::csm;
 use concinnity_core::render::decal;
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::hdr_output;
 use concinnity_core::render::lights;
 use concinnity_core::render::ltc;
@@ -48,7 +49,7 @@ use crate::vulkan::owned::{
 impl VkContext {
     // Construct a fresh context, acquiring its own OS window + Vulkan
     // instance / device / surface / swapchain.
-    pub(crate) fn new(init: backend_init::BackendInit<'_>) -> Result<Self, String> {
+    pub(crate) fn new(init: backend_init::BackendInit<'_>) -> RenderResult<Self> {
         Self::build(init, None)
     }
 
@@ -62,7 +63,7 @@ impl VkContext {
     // pool) is inherited from the outgoing context instead of acquired fresh,
     // and every per-world resource below is rebuilt on it. `None` acquires it
     // all fresh, the normal launch path.
-    fn build(init: backend_init::BackendInit<'_>, reuse: Option<VkReuse>) -> Result<Self, String> {
+    fn build(init: backend_init::BackendInit<'_>, reuse: Option<VkReuse>) -> RenderResult<Self> {
         use concinnity_core::render::backend_init::{
             BackendInit, MediaPayloads, PostSettings, SceneData, ShadowParams, WorldFx, WorldShader,
         };
@@ -815,7 +816,7 @@ impl VkContext {
                         },
                         image,
                     )
-                    .map_err(|e| format!("texture[{i}]: {e}"))
+                    .map_err(|e| e.context(format_args!("texture[{i}]")))
                 })
                 .collect::<Result<Vec<_>, _>>()?
         };
@@ -852,7 +853,7 @@ impl VkContext {
                     *h,
                     px,
                 )
-                .map_err(|e| format!("text_atlas[{i}]: {e}"))
+                .map_err(|e| e.context(format_args!("text_atlas[{i}]")))
             })
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -2190,7 +2191,8 @@ impl VkContext {
                     return Err(format!(
                         "world declares {} Shaders but at most {max} can be routed",
                         bucket_shaders.len() + 1
-                    ));
+                    )
+                    .into());
                 }
                 build_world_pipeline_table(
                     &device,
@@ -3908,7 +3910,7 @@ impl VkContext {
     pub(in crate::vulkan) fn apply_world_reload(
         &mut self,
         init: backend_init::BackendInit<'_>,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         self.wait_idle();
         // The loaders + `ash::{Entry,Instance,Device}` are dispatch-table clones
         // over the same underlying objects; the raw `vk::*` handles are `Copy`;

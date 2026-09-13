@@ -48,9 +48,9 @@ impl FramePolicy {
                 bump(&mut self.swapchain_streak, SWAPCHAIN_BOUND, error)
             }
             RenderError::OutOfDeviceMemory(_) => bump(&mut self.oom_streak, OOM_BOUND, error),
-            RenderError::ShaderCompile(_) | RenderError::Other(_) => {
-                bump(&mut self.other_streak, OTHER_BOUND, error)
-            }
+            RenderError::ShaderCompile(_)
+            | RenderError::Unsupported { .. }
+            | RenderError::Other(_) => bump(&mut self.other_streak, OTHER_BOUND, error),
         }
     }
 }

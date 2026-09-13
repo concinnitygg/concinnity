@@ -20,6 +20,7 @@ use concinnity_core::gfx::render_types::{LightUniforms, LineVertex, ShadowUnifor
 use concinnity_core::gfx::transform::mat4_inverse;
 use concinnity_core::gfx::transform::mat4_mul;
 use concinnity_core::render::csm;
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::lights;
 use concinnity_core::render::model_history::HistoryMode;
 use concinnity_core::render::render_graph;
@@ -316,7 +317,7 @@ impl VkContext {
         targets: RecordFrameTargets,
         view: RecordFrameView<'_>,
         world_hidden: bool,
-    ) -> Result<Vec<vk::CommandBuffer>, String> {
+    ) -> RenderResult<Vec<vk::CommandBuffer>> {
         let RecordFrameTargets {
             cmd,
             image_index,

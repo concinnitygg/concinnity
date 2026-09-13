@@ -13,9 +13,7 @@
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::MaterialUniforms;
 use crate::render::backend_init::WorldShader;
-use crate::render::error::RenderResult;
-use alloc::string::String;
-use alloc::string::ToString;
+use crate::render::error::{RenderError, RenderResult};
 
 /// One streamed chunk's geometry plus placement, supplied to
 /// [`DrawStreaming::add_chunk_mesh`]. `frame` reclaims retired deferred frees
@@ -42,14 +40,14 @@ pub struct ChunkMesh<'a> {
 /// streaming world drives, plus the world-shader buckets a scene pins.
 ///
 /// The upload and eviction paths are required: a backend that cannot fill a
-/// slot cannot draw a streamed world at all. The chunk-pool and world-shader
-/// paths default to a no-op or an `Err`, so a backend supports them only if it
-/// has them.
+/// slot cannot draw a streamed world at all. The runtime clone defaults to
+/// [`RenderError::Unsupported`]; the world-shader buckets default to success,
+/// since a backend without per-bucket pipelines has nothing to install.
 pub trait DrawStreaming {
     /// Release a texture slot's image, leaving a 1x1 placeholder in the slot so
     /// a draw still holding the handle has something to sample. `Err` when the
     /// slot is out of range.
-    fn evict_texture_slot(&mut self, slot: usize) -> Result<(), String>;
+    fn evict_texture_slot(&mut self, slot: usize) -> RenderResult<()>;
     /// Replace a texture slot's image after a streaming upload.
     fn update_texture_slot(
         &mut self,
@@ -61,7 +59,7 @@ pub trait DrawStreaming {
     /// and mark the draw slot non-resident. The regions are held against
     /// `retire_frame`, so a frame still in flight cannot have them reused
     /// underneath it. `Err` when the slot is out of range.
-    fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String>;
+    fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> RenderResult<()>;
     /// Upload a streamed mesh's geometry into a draw slot.
     fn upload_mesh(
         &mut self,
@@ -106,9 +104,9 @@ pub trait DrawStreaming {
         dst: crate::render::draw_slot::SlotAlloc,
     ) -> RenderResult<()>;
     /// Free a streamed chunk's geometry, retiring it after `retire_frame`.
-    fn remove_chunk_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String>;
+    fn remove_chunk_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> RenderResult<()>;
     /// Move a streamed chunk by replacing its placement matrix.
-    fn set_chunk_model(&mut self, draw_idx: usize, model: [[f32; 4]; 4]) -> Result<(), String>;
+    fn set_chunk_model(&mut self, draw_idx: usize, model: [[f32; 4]; 4]) -> RenderResult<()>;
 
     /// Instantiate a runtime copy of an existing draw object at a new transform:
     /// re-use the source slot's geometry region (`vertex_offset` / `vertex_count`
@@ -122,17 +120,18 @@ pub trait DrawStreaming {
     /// (`SpawnRequest`). The copy is non-cullable (sentinel AABB) and drawn
     /// every frame, since the init-time BVH cannot refit to admit a slot added
     /// at runtime; moving copies (the common case) opt out of the static BVH
-    /// exactly like streamed chunks and held items. Default no-op (returns
-    /// `Err`): backends without an implementation leave the spawn path
-    /// logged + skipped at the caller.
+    /// exactly like streamed chunks and held items. Default
+    /// [`RenderError::Unsupported`], which the spawn path logs and skips.
     fn clone_static_draw_object(
         &mut self,
         src_draw_idx: usize,
         model: [[f32; 4]; 4],
         dst: crate::render::draw_slot::SlotAlloc,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let _ = (src_draw_idx, model, dst);
-        Err("clone_static_draw_object: not implemented on this backend".to_string())
+        Err(RenderError::Unsupported {
+            op: "clone_static_draw_object",
+        })
     }
 
     /// Build the render pipeline for one shader bucket from its compiled stage

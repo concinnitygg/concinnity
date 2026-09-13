@@ -9,6 +9,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::cell::RefCell;
 
+use crate::render::error::RenderResult;
 use crate::render::render_graph::{PixelFormat, TextureDesc};
 
 use super::device::{
@@ -77,7 +78,7 @@ impl PostPassDevice for MockDevice {
         program: PostProgram,
         format: PixelFormat,
         blend: PostBlend,
-    ) -> Result<MockPipeline, String> {
+    ) -> RenderResult<MockPipeline> {
         Ok(MockPipeline {
             program,
             format,
@@ -90,7 +91,7 @@ impl PostPassDevice for MockDevice {
         label: &'static str,
         desc: &TextureDesc,
         extent: PostExtent,
-    ) -> Result<usize, String> {
+    ) -> RenderResult<usize> {
         let mut targets = self.targets.borrow_mut();
         targets.push(MockTarget {
             label,
@@ -107,7 +108,7 @@ impl PostPassDevice for MockDevice {
         MockTexture::Target(*target)
     }
 
-    fn encode(&self, _rec: &(), draw: &PostDraw<'_, '_, Self>) -> Result<(), String> {
+    fn encode(&self, _rec: &(), draw: &PostDraw<'_, '_, Self>) -> RenderResult<()> {
         draw.check(draw.pipeline.program.bindings())?;
         self.draws.borrow_mut().push(MockDraw {
             program: draw.pipeline.program,

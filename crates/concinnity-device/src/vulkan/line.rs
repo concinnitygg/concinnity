@@ -15,6 +15,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types::LineVertex;
+use concinnity_core::render::error::RenderResult;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
@@ -122,7 +123,7 @@ impl LineResources {
         frames: usize,
         msaa: bool,
         hot_reload: bool,
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         let LineDeviceContext { alloc, device } = ctx;
         let LinePassTargets {
             hdr_format,
@@ -246,7 +247,7 @@ impl LineResources {
 }
 
 // Allocate one persistently-mapped host-visible vertex slot of `capacity` bytes.
-fn new_vertex_slot(alloc: &DeviceAllocator, capacity: u64) -> Result<VertexSlot, String> {
+fn new_vertex_slot(alloc: &DeviceAllocator, capacity: u64) -> RenderResult<VertexSlot> {
     let buffer = alloc.create_buffer(
         capacity,
         vk::BufferUsageFlags::VERTEX_BUFFER,
@@ -597,7 +598,7 @@ impl VkContext {
     // Reallocate this frame slot's ribbon-vertex buffer when the frame's
     // expansion outgrows it. The replaced buffer retires through the
     // allocator.
-    fn grow_line_vertex_slot(&mut self, frame_idx: usize, needed: u64) -> Result<(), String> {
+    fn grow_line_vertex_slot(&mut self, frame_idx: usize, needed: u64) -> RenderResult<()> {
         let Some(lines) = self.lines.resources.as_mut() else {
             return Ok(());
         };

@@ -436,7 +436,7 @@ impl SkinnedDraws for MockBackend {
 }
 
 impl DrawStreaming for MockBackend {
-    fn evict_texture_slot(&mut self, slot: usize) -> Result<(), String> {
+    fn evict_texture_slot(&mut self, slot: usize) -> RenderResult<()> {
         self.record(Call::EvictTextureSlot(slot));
         Ok(())
     }
@@ -454,7 +454,7 @@ impl DrawStreaming for MockBackend {
         Ok(())
     }
 
-    fn evict_mesh(&mut self, draw_idx: usize, _retire_frame: u64) -> Result<(), String> {
+    fn evict_mesh(&mut self, draw_idx: usize, _retire_frame: u64) -> RenderResult<()> {
         self.record(Call::EvictMesh(draw_idx));
         Ok(())
     }
@@ -502,12 +502,12 @@ impl DrawStreaming for MockBackend {
         Ok(())
     }
 
-    fn remove_chunk_mesh(&mut self, draw_idx: usize, _retire_frame: u64) -> Result<(), String> {
+    fn remove_chunk_mesh(&mut self, draw_idx: usize, _retire_frame: u64) -> RenderResult<()> {
         self.record(Call::RemoveChunkMesh(draw_idx));
         Ok(())
     }
 
-    fn set_chunk_model(&mut self, draw_idx: usize, _model: [[f32; 4]; 4]) -> Result<(), String> {
+    fn set_chunk_model(&mut self, draw_idx: usize, _model: [[f32; 4]; 4]) -> RenderResult<()> {
         self.record(Call::SetChunkModel(draw_idx));
         Ok(())
     }
@@ -517,7 +517,7 @@ impl DrawStreaming for MockBackend {
         src_draw_idx: usize,
         _model: [[f32; 4]; 4],
         dst: draw_slot::SlotAlloc,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         use concinnity_core::render::draw_slot::SlotAlloc;
         let new_idx = match dst {
             SlotAlloc::Reuse(i) | SlotAlloc::Append(i) => i,

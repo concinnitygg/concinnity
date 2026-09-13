@@ -8,6 +8,7 @@ use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::DrawObject;
 use concinnity_core::render::backend::ChunkMesh;
 use concinnity_core::render::draw_slot;
+use concinnity_core::render::error::RenderResult;
 use objc2_metal::{MTLBuffer, MTLResourceOptions};
 
 use super::context::*;
@@ -71,7 +72,7 @@ impl MtlContext {
         &mut self,
         mesh: ChunkMesh<'_>,
         dst: draw_slot::SlotAlloc,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let ChunkMesh {
             verts: vertices,
             idxs: indices,
@@ -82,7 +83,7 @@ impl MtlContext {
             frame,
         } = mesh;
         if vertices.is_empty() || indices.is_empty() {
-            return Err("add_chunk_mesh: empty chunk geometry".to_string());
+            return Err("add_chunk_mesh: empty chunk geometry".into());
         }
         self.geometry_alloc.chunk_vtx.reclaim(frame);
         self.geometry_alloc.chunk_idx.reclaim(frame);
@@ -93,28 +94,13 @@ impl MtlContext {
         // stride. Sizing against the u16 source would alloc half the bytes the
         // write needs and corrupt the next chunk's indices.
         let i_len = indices.len() * std::mem::size_of::<u32>();
-        let v_off = self
-            .geometry_alloc
-            .chunk_vtx
-            .alloc(v_len as u64)
-            .ok_or_else(|| {
-                format!(
-                    "add_chunk_mesh: no free chunk vertex space for {} bytes",
-                    v_len
-                )
-            })? as usize;
-        let i_off = match self.geometry_alloc.chunk_idx.alloc(i_len as u64) {
-            Some(o) => o as usize,
-            None => {
-                self.geometry_alloc
-                    .chunk_vtx
-                    .free(v_off as u64, v_len as u64, 0);
-                return Err(format!(
-                    "add_chunk_mesh: no free chunk index space for {} bytes",
-                    i_len
-                ));
-            }
-        };
+        let (v_off, i_off) = crate::suballoc::geometry::place_mesh(
+            &mut self.geometry_alloc.chunk_vtx,
+            &mut self.geometry_alloc.chunk_idx,
+            v_len,
+            i_len,
+            || "add_chunk_mesh".to_string(),
+        )?;
 
         // Vertices copy verbatim. Indices stay mesh-relative (0-based): a chunk
         // can land far past the 65 535-vertex u16 index range, so rather than

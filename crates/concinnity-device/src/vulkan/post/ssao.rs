@@ -14,6 +14,7 @@
 use ash::vk;
 use concinnity_core::gfx::render_types::SsaoParams;
 use concinnity_core::gfx::ssao;
+use concinnity_core::render::error::RenderResult;
 
 use super::super::allocator::DeviceAllocator;
 use super::super::context::VkContext;
@@ -247,7 +248,7 @@ fn create_ao_target(
     device: &VkDevice,
     width: u32,
     height: u32,
-) -> Result<GpuImage, String> {
+) -> RenderResult<GpuImage> {
     let pooled = create_image(
         alloc,
         &super::super::texture::ImageSpec {
@@ -342,7 +343,7 @@ impl SsaoResources {
         settings: ssao::SsaoSettings,
         ao_views: &[vk::ImageView],
         hot_reload: bool,
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         let device = ctx.device;
         let fullscreen_render_pass = create_fullscreen_render_pass(device)?;
         let blur_render_pass = create_blur_render_pass(device)?;
@@ -472,7 +473,7 @@ impl SsaoResources {
         width: u32,
         height: u32,
         ao_views: &[vk::ImageView],
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let SsaoDeviceCtx { alloc, device } = ctx;
         let w = width.max(1);
         let h = height.max(1);
@@ -586,7 +587,7 @@ impl SsaoResources {
         height: u32,
         gbuffer_views: &[vk::ImageView],
         ao_views: &[vk::ImageView],
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let device = ctx.device;
         self.destroy_targets(device);
         self.build_targets(ctx, width, height, ao_views)?;

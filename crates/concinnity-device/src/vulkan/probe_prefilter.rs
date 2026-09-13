@@ -25,6 +25,7 @@
 // SHADER_READ_ONLY_OPTIMAL at install.
 
 use ash::vk;
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::reflection_probe::PrefilterPlan;
 use concinnity_core::render::uniforms::ProbePrefilterParams;
 
@@ -160,7 +161,7 @@ impl PrefilterGpu {
         alloc: &DeviceAllocator,
         pipelines: &ProbePrefilterPipelines,
         plan: &PrefilterPlan,
-    ) -> Result<PrefilterGpu, String> {
+    ) -> RenderResult<PrefilterGpu> {
         let mips = plan.mips();
         let capture = create_cube_image(
             alloc,
@@ -459,7 +460,7 @@ fn create_cube_image(
     face_size: u32,
     mips: u32,
     usage: vk::ImageUsageFlags,
-) -> Result<PooledImage, String> {
+) -> RenderResult<PooledImage> {
     let info = vk::ImageCreateInfo::default()
         .flags(vk::ImageCreateFlags::CUBE_COMPATIBLE)
         .image_type(vk::ImageType::TYPE_2D)
@@ -478,7 +479,7 @@ fn create_cube_image(
         .samples(vk::SampleCountFlags::TYPE_1);
     alloc
         .create_image(&info, vk::MemoryPropertyFlags::DEVICE_LOCAL)
-        .map_err(|e| format!("probe cube image: {e}"))
+        .map_err(|e| e.context("probe cube image"))
 }
 
 // All-mips CUBE view, the shape a sampler reads.

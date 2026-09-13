@@ -14,6 +14,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::cull_status;
+use concinnity_core::render::error::RenderResult;
 
 use super::context::VkContext;
 use super::texture::one_shot_submit;
@@ -23,7 +24,7 @@ impl VkContext {
     // u32 per live cull record. Distinct name from the
     // `RenderBackend::read_cull_status` trait method so the backend forwarder
     // is unambiguous.
-    pub(in crate::vulkan) fn read_cull_status_buffer(&mut self) -> Result<Vec<u32>, String> {
+    pub(in crate::vulkan) fn read_cull_status_buffer(&mut self) -> RenderResult<Vec<u32>> {
         if self.cull.cull_status_buffers.is_empty() {
             return Err("cull-status: this world does not run the GPU-driven cull".into());
         }
@@ -76,6 +77,6 @@ impl VkContext {
         // SAFETY: the buffer is HOST_COHERENT and at least `byte_size` bytes long, and the copy
         // above completed (one_shot_submit waits its fence).
         let raw = unsafe { std::slice::from_raw_parts(readback.mapped_ptr(), byte_size as usize) };
-        cull_status::decode(raw, count).map_err(|e| format!("cull-status: {e}"))
+        Ok(cull_status::decode(raw, count).map_err(|e| format!("cull-status: {e}"))?)
     }
 }

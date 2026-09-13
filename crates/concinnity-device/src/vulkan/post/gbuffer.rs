@@ -25,6 +25,7 @@
 use ash::vk;
 use concinnity_core::gfx::render_types::{GpuDrawArgs, GpuObjectData};
 use concinnity_core::gfx::transform::IDENTITY;
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::uniforms::{GBufferView, ModelHistoryParams};
 
 use super::super::allocator::{DeviceAllocator, PooledBuffer};
@@ -368,7 +369,7 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
     gb: &GbufferResources,
     scene: GbufferBindlessScene,
     hot_reload: bool,
-) -> Result<GbufferBindless, String> {
+) -> RenderResult<GbufferBindless> {
     use super::super::builtins;
 
     let GbufferDeviceCtx { alloc, device } = ctx;
@@ -520,7 +521,7 @@ fn build_model_history(
     object_buffers: &[PooledBuffer],
     scene: ModelHistoryScene,
     hot_reload: bool,
-) -> Result<ModelHistoryPipeline, String> {
+) -> RenderResult<ModelHistoryPipeline> {
     let GbufferDeviceCtx { alloc, device } = ctx;
     let ModelHistoryScene { n_cull, frames } = scene;
     let compile_ctx = super::super::builtins::Ctx::plain(hot_reload);
@@ -695,7 +696,7 @@ impl GbufferResources {
         queue: GbufferQueueCtx,
         extent: GbufferExtent,
         pooled: &GbufferPooled,
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         let GbufferDeviceCtx { alloc, device } = ctx;
         // Only the frame count is needed here (for the view-UBO ring); the
         // sized targets are built by `build_targets`, which takes the full
@@ -736,7 +737,7 @@ impl GbufferResources {
         queue: GbufferQueueCtx,
         extent: GbufferExtent,
         pooled: &GbufferPooled,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let GbufferDeviceCtx { alloc, device } = ctx;
         let GbufferQueueCtx {
             command_pool,
@@ -863,7 +864,7 @@ impl GbufferResources {
         queue: GbufferQueueCtx,
         extent: GbufferExtent,
         pooled: &GbufferPooled,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         self.destroy_targets(ctx.device);
         self.build_targets(ctx, queue, extent, pooled)?;
         Ok(())

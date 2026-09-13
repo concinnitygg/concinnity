@@ -8,6 +8,7 @@
 use ash::vk;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::render::error;
+use concinnity_core::render::error::RenderResult;
 
 use super::super::context::*;
 use super::super::texture;
@@ -25,7 +26,7 @@ impl VkContext {
         dest: vk::Buffer,
         offset: u64,
         data: &[u8],
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         if data.is_empty() {
             return Ok(());
         }
@@ -99,28 +100,13 @@ impl VkContext {
         self.geometry.mesh_idx_alloc.reclaim(frame);
         let v_len = std::mem::size_of_val(vertices);
         let i_len = indices.len() * std::mem::size_of::<u32>();
-        let v_off = self
-            .geometry
-            .mesh_vtx_alloc
-            .alloc(v_len as u64)
-            .ok_or_else(|| {
-                error::RenderError::OutOfDeviceMemory(format!(
-                    "upload_mesh: draw {}: no free vertex space for {} bytes",
-                    draw_idx, v_len
-                ))
-            })? as usize;
-        let i_off = match self.geometry.mesh_idx_alloc.alloc(i_len as u64) {
-            Some(o) => o as usize,
-            None => {
-                self.geometry
-                    .mesh_vtx_alloc
-                    .free(v_off as u64, v_len as u64, 0);
-                return Err(error::RenderError::OutOfDeviceMemory(format!(
-                    "upload_mesh: draw {}: no free index space for {} bytes",
-                    draw_idx, i_len
-                )));
-            }
-        };
+        let (v_off, i_off) = crate::suballoc::geometry::place_mesh(
+            &mut self.geometry.mesh_vtx_alloc,
+            &mut self.geometry.mesh_idx_alloc,
+            v_len,
+            i_len,
+            || format!("upload_mesh: draw {draw_idx}"),
+        )?;
 
         self.wait_idle();
 
@@ -162,7 +148,7 @@ impl VkContext {
         vertices: &[Vertex],
         indices: &[u16],
         lod_alternates: &[(f32, Vec<u16>)],
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let obj = self.draw.objects.get(draw_idx).ok_or_else(|| {
             format!(
                 "update_mesh_geometry: draw object {} out of range",
@@ -177,7 +163,8 @@ impl VkContext {
                 draw_idx,
                 obj.vertex_count,
                 vertices.len()
-            ));
+            )
+            .into());
         }
         if indices.len() != obj.index_count {
             return Err(format!(
@@ -187,7 +174,8 @@ impl VkContext {
                 draw_idx,
                 obj.index_count,
                 indices.len()
-            ));
+            )
+            .into());
         }
         if lod_alternates.len() != obj.lod_alternates.len() {
             return Err(format!(
@@ -196,7 +184,8 @@ impl VkContext {
                 draw_idx,
                 obj.lod_alternates.len(),
                 lod_alternates.len()
-            ));
+            )
+            .into());
         }
         for (lod_idx, ((_, alt_idx), slice)) in lod_alternates
             .iter()
@@ -211,7 +200,8 @@ impl VkContext {
                     lod_idx + 1,
                     slice.index_count,
                     alt_idx.len()
-                ));
+                )
+                .into());
             }
         }
 

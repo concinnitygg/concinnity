@@ -4,6 +4,7 @@
 
 use ash::vk;
 use concinnity_core::render::error;
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::mipmap;
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledImage};
@@ -746,19 +747,19 @@ pub(super) fn upload_texture(
     width: u32,
     height: u32,
     pixels: &[u8],
-) -> Result<GpuImage, String> {
+) -> RenderResult<GpuImage> {
     let (img, in_flight) = upload_texture_deferred(ctx, width, height, pixels)?;
     finish_upload(ctx, in_flight)?;
     Ok(img)
 }
 
 // Create a 1x1 opaque white RGBA texture (fallback when no albedo asset is present).
-pub(super) fn create_fallback_white(ctx: &GpuUploadContext) -> Result<GpuImage, String> {
+pub(super) fn create_fallback_white(ctx: &GpuUploadContext) -> RenderResult<GpuImage> {
     upload_texture(ctx, 1, 1, &[255u8, 255, 255, 255])
 }
 
 // Create a 1x1 flat-normal RGBA texture (tangent-space (0,0,1) = no perturbation).
-pub(super) fn create_fallback_flat_normal(ctx: &GpuUploadContext) -> Result<GpuImage, String> {
+pub(super) fn create_fallback_flat_normal(ctx: &GpuUploadContext) -> RenderResult<GpuImage> {
     upload_texture(ctx, 1, 1, &[128u8, 128, 255, 255])
 }
 
@@ -772,7 +773,7 @@ pub(super) fn upload_color_lut(
     ctx: &GpuUploadContext,
     size: u32,
     data: &[u8],
-) -> Result<GpuImage, String> {
+) -> RenderResult<GpuImage> {
     let &GpuUploadContext {
         alloc,
         device,
@@ -786,7 +787,8 @@ pub(super) fn upload_color_lut(
             size,
             data.len(),
             needed
-        ));
+        )
+        .into());
     }
 
     // Staging buffer (host visible).
@@ -817,7 +819,7 @@ pub(super) fn upload_color_lut(
         .samples(vk::SampleCountFlags::TYPE_1);
     let pooled = alloc
         .create_image(&img_info, vk::MemoryPropertyFlags::DEVICE_LOCAL)
-        .map_err(|e| format!("create_image (LUT): {e}"))?;
+        .map_err(|e| e.context("create_image (LUT)"))?;
     let image = pooled.image();
 
     one_shot_submit(device, command_pool, queue, |cmd| {
@@ -896,7 +898,7 @@ pub(super) fn upload_float_lut(
     size: u32,
     components: u32,
     texels: &[f32],
-) -> Result<GpuImage, String> {
+) -> RenderResult<GpuImage> {
     let GpuUploadContext {
         alloc,
         device,
@@ -908,12 +910,13 @@ pub(super) fn upload_float_lut(
         return Err(format!(
             "float LUT data too short for {size}x{size}x{components}: {} floats, need {needed}",
             texels.len()
-        ));
+        )
+        .into());
     }
     let format = match components {
         4 => vk::Format::R32G32B32A32_SFLOAT,
         2 => vk::Format::R32G32_SFLOAT,
-        other => return Err(format!("unsupported float LUT component count {other}")),
+        other => return Err(format!("unsupported float LUT component count {other}").into()),
     };
 
     let byte_size = (needed * std::mem::size_of::<f32>()) as vk::DeviceSize;
@@ -941,7 +944,7 @@ pub(super) fn upload_float_lut(
         .samples(vk::SampleCountFlags::TYPE_1);
     let pooled = alloc
         .create_image(&img_info, vk::MemoryPropertyFlags::DEVICE_LOCAL)
-        .map_err(|e| format!("create_image (float LUT): {e}"))?;
+        .map_err(|e| e.context("create_image (float LUT)"))?;
     let image = pooled.image();
 
     one_shot_submit(device, command_pool, queue, |cmd| {
@@ -1015,7 +1018,7 @@ pub(super) fn upload_float_lut(
 // Mirrors `metal/texture.rs::create_fallback_color_lut`. With the identity LUT
 // the composite grade is a no-op at any `lut_strength`, so the `sampler3D`
 // binding stays valid even when the world declares no `ColorLut`.
-pub(super) fn create_fallback_color_lut(ctx: &GpuUploadContext) -> Result<GpuImage, String> {
+pub(super) fn create_fallback_color_lut(ctx: &GpuUploadContext) -> RenderResult<GpuImage> {
     // Red-fastest, then green, then blue, matching the payload texel order.
     let mut data = Vec::with_capacity(2 * 2 * 2 * 4);
     for b in 0..2u8 {
@@ -1042,7 +1045,7 @@ pub(super) fn create_shadow_map_array(
     ctx: &GpuUploadContext,
     size: u32,
     layers: u32,
-) -> Result<GpuImage, String> {
+) -> RenderResult<GpuImage> {
     let &GpuUploadContext {
         alloc,
         device,
@@ -1071,7 +1074,7 @@ pub(super) fn create_shadow_map_array(
         .samples(vk::SampleCountFlags::TYPE_1);
     let pooled = alloc
         .create_image(&img_info, vk::MemoryPropertyFlags::DEVICE_LOCAL)
-        .map_err(|e| format!("create_image (shadow array): {e}"))?;
+        .map_err(|e| e.context("create_image (shadow array)"))?;
     let image = pooled.image();
 
     // Rest the cascades sampled. The graph's Shadow producer barrier transitions
@@ -1147,7 +1150,7 @@ pub(super) fn create_depth_image(
     width: u32,
     height: u32,
     samples: vk::SampleCountFlags,
-) -> Result<GpuImage, String> {
+) -> RenderResult<GpuImage> {
     let &GpuUploadContext {
         alloc,
         device,
@@ -1198,7 +1201,7 @@ pub(super) fn create_msaa_color_image(
     height: u32,
     format: vk::Format,
     samples: vk::SampleCountFlags,
-) -> Result<GpuImage, String> {
+) -> RenderResult<GpuImage> {
     let &GpuUploadContext {
         alloc,
         device,
@@ -1244,7 +1247,7 @@ pub(super) fn create_hdr_resolve_image(
     width: u32,
     height: u32,
     format: vk::Format,
-) -> Result<GpuImage, String> {
+) -> RenderResult<GpuImage> {
     let pooled = create_image(
         alloc,
         &ImageSpec {
@@ -1351,7 +1354,7 @@ fn create_cube_image(
     ctx: &GpuUploadContext,
     face_size: u32,
     mip_bytes: &[&[u8]],
-) -> Result<GpuImage, String> {
+) -> RenderResult<GpuImage> {
     let &GpuUploadContext {
         alloc,
         device,
@@ -1372,7 +1375,8 @@ fn create_cube_image(
             return Err(format!(
                 "cubemap mip {} would have zero face size (face_size {} too small)",
                 m, face_size
-            ));
+            )
+            .into());
         }
         let face_bytes = s * s * 16;
         let needed = 6 * face_bytes;
@@ -1382,7 +1386,8 @@ fn create_cube_image(
                 m,
                 bytes.len(),
                 needed
-            ));
+            )
+            .into());
         }
         mip_sizes.push(needed);
         total += needed;
@@ -1407,7 +1412,7 @@ fn create_cube_image(
         .samples(vk::SampleCountFlags::TYPE_1);
     let pooled = alloc
         .create_image(&img_info, vk::MemoryPropertyFlags::DEVICE_LOCAL)
-        .map_err(|e| format!("create_image (cube): {e}"))?;
+        .map_err(|e| e.context("create_image (cube)"))?;
     let image = pooled.image();
 
     // Build one packed staging buffer with mip 0..N concatenated.
@@ -1530,7 +1535,7 @@ fn create_cube_image(
 pub(super) fn create_fallback_cubemap(
     ctx: &GpuUploadContext,
     value: [f32; 4],
-) -> Result<GpuImage, String> {
+) -> RenderResult<GpuImage> {
     let mut face_bytes = Vec::with_capacity(6 * 16);
     for _ in 0..6 {
         for v in &value {
@@ -1549,14 +1554,14 @@ pub(super) fn upload_environment_map(
     irradiance_bytes: &[u8],
     prefilter_face: u32,
     mip_bytes: &[&[u8]],
-) -> Result<EnvironmentMapTextures, String> {
+) -> RenderResult<EnvironmentMapTextures> {
     if mip_bytes.is_empty() {
         return Err("envmap upload: prefilter mip_bytes must not be empty".into());
     }
     let irradiance = create_cube_image(ctx, irradiance_face, &[irradiance_bytes])
-        .map_err(|e| format!("envmap irradiance: {e}"))?;
+        .map_err(|e| e.context("envmap irradiance"))?;
     let prefilter = create_cube_image(ctx, prefilter_face, mip_bytes)
-        .map_err(|e| format!("envmap prefilter: {e}"))?;
+        .map_err(|e| e.context("envmap prefilter"))?;
     Ok(EnvironmentMapTextures {
         irradiance,
         prefilter,

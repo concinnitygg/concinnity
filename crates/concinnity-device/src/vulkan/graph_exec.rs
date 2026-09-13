@@ -36,6 +36,7 @@ use ash::Device;
 use ash::vk;
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types::{LineVertex, TextDrawCall};
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::render_graph;
 use concinnity_core::render::render_graph::{
     BarrierOp, CompiledGraph, CompiledPass, GraphResourceClass, PassId, final_states,
@@ -542,7 +543,7 @@ impl VkContext {
         &mut self,
         graph: &CompiledGraph,
         params: &GraphFrameParams<'_>,
-    ) -> Result<Vec<vk::CommandBuffer>, String> {
+    ) -> RenderResult<Vec<vk::CommandBuffer>> {
         // Particle per-frame state (dt / frame index / per-emitter spawn
         // budgets) is advanced here on `&mut self` before any pass encodes, so
         // the `&self` `encode_particles` (which may run on a parallel-recording
@@ -580,7 +581,7 @@ impl VkContext {
         // captures the first worker failure.
         let worker_slots: std::sync::Mutex<Vec<Option<vk::CommandBuffer>>> =
             std::sync::Mutex::new(vec![None; graph.passes.len()]);
-        let first_error: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+        let first_error: std::sync::Mutex<Option<RenderError>> = std::sync::Mutex::new(None);
 
         // Resolve every migrated resource's barrier target once, on the main
         // thread, then share the table read-only into the parallel pass workers.
@@ -636,10 +637,10 @@ impl VkContext {
                         let ctx = ctx_ref.as_ctx();
                         let pool_idx = frame_idx * render_graph::PASS_COUNT + pass_id as usize;
                         let buf = ctx.commands.pass_command_buffers[pool_idx];
-                        let set_err = |msg: String| {
+                        let set_err = |error: RenderError| {
                             let mut lock = first_error_ref.lock().unwrap();
                             if lock.is_none() {
-                                *lock = Some(msg);
+                                *lock = Some(error);
                             }
                         };
                         // Reset + begin this pass's own buffer (its own pool, so
@@ -651,7 +652,10 @@ impl VkContext {
                                 .reset_command_buffer(buf, vk::CommandBufferResetFlags::empty())
                         };
                         if let Err(e) = reset {
-                            set_err(format!("reset pass cmd buf ({}): {e}", pass_id.name()));
+                            set_err(super::error::map_vk_result(
+                                e,
+                                &format!("reset pass cmd buf ({})", pass_id.name()),
+                            ));
                             return;
                         }
                         let rec = match Recorder::begin(
@@ -661,7 +665,10 @@ impl VkContext {
                         ) {
                             Ok(rec) => rec,
                             Err(e) => {
-                                set_err(format!("begin pass cmd buf ({}): {e}", pass_id.name()));
+                                set_err(super::error::map_vk_result(
+                                    e,
+                                    &format!("begin pass cmd buf ({})", pass_id.name()),
+                                ));
                                 return;
                             }
                         };
@@ -700,7 +707,10 @@ impl VkContext {
                             );
                         }
                         if let Err(e) = rec.end() {
-                            set_err(format!("end pass cmd buf ({}): {e}", pass_id.name()));
+                            set_err(super::error::map_vk_result(
+                                e,
+                                &format!("end pass cmd buf ({})", pass_id.name()),
+                            ));
                             return;
                         }
                         worker_slots_ref.lock().unwrap()[idx] = Some(buf);
@@ -991,7 +1001,7 @@ impl VkContext {
         rec: &Recorder<'_>,
         params: &GraphFrameParams<'_>,
         particle_frame: Option<&(f32, u32, Vec<u32>)>,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let cmd = rec.raw();
         match pass_id {
             PassId::Cull => {
@@ -1023,7 +1033,8 @@ impl VkContext {
                      (encode_ssao encodes the SSAO kernel + blur sub-passes); it \
                      should not appear as its own graph node",
                     pass_id.name()
-                ));
+                )
+                .into());
             }
             PassId::ReflectionComposite => {
                 // Metal-only inline pass; never scheduled on Vulkan. Handled here
@@ -1032,7 +1043,8 @@ impl VkContext {
                     "graph executor (vulkan): pass {} is a Metal-only inline \
                      reflection composite and should not appear as a graph node",
                     pass_id.name()
-                ));
+                )
+                .into());
             }
             PassId::SsrResolve => {
                 self.encode_ssr_resolve(

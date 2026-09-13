@@ -32,6 +32,7 @@ use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::RtParams;
 use concinnity_core::gfx::rt_reflections::RtParamsInputs;
 use concinnity_core::gfx::transform::mat4_inverse;
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::lights;
 pub(in crate::vulkan) use concinnity_core::render::uniforms::TransparentView;
 // `TransparentView` (the per-frame view UBO) is a GPU-free layout struct that
@@ -136,7 +137,7 @@ impl TransparentRecord {
         alloc: &DeviceAllocator,
         descriptors: RecordDescriptors,
         upload: RecordUpload<'_>,
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         let host = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
         let vb_bytes = std::mem::size_of_val(upload.vertices) as u64;
         let ib_bytes = std::mem::size_of_val(upload.indices) as u64;
@@ -273,7 +274,7 @@ impl GlassMeshProducer {
         pipeline_flat: OwnedPipeline,
         pipeline_textured: Option<OwnedPipeline>,
         object_indices: Vec<usize>,
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         let device = ctx.device;
         let count = object_indices.len();
         let frames = ctx.frames;
@@ -609,7 +610,7 @@ fn build_transparent_rt(
     frames: usize,
     layouts: RtSetLayouts,
     geometry: TransparentRtGeometry,
-) -> Result<TransparentRt, String> {
+) -> RenderResult<TransparentRt> {
     let set_layout = create_rt_set_layout(device)?;
 
     let flat_layouts = [
@@ -1055,7 +1056,7 @@ fn create_snapshot(
     queue: vk::Queue,
     width: u32,
     height: u32,
-) -> Result<GpuImage, String> {
+) -> RenderResult<GpuImage> {
     let pooled = create_image(
         alloc,
         &ImageSpec {
@@ -1250,7 +1251,7 @@ impl TransparentResources {
         scene: TransparentSceneTargets,
         content: TransparentContent,
         rt_setup: TransparentRtSetup,
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         let TransparentDeviceCtx {
             alloc,
             instance,
@@ -1597,7 +1598,7 @@ impl TransparentResources {
         width: u32,
         height: u32,
         targets: TransparentRebuildTargets,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let TransparentDeviceCtx {
             alloc,
             device,

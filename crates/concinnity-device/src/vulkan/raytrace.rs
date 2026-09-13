@@ -58,6 +58,7 @@ use ash::vk;
 use concinnity_core::gfx::render_types::{
     DrawObject, InstancedCluster, RtGeomEntry, SkinnedDrawObject,
 };
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::rt_geom::{
     cluster_geom_entry, geom_entry, models_dirty, skinned_geom_entry,
 };
@@ -177,7 +178,7 @@ impl ScratchRing {
         frames: usize,
         required: u64,
         align: u64,
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         let mut slots = Vec::with_capacity(frames);
         for _ in 0..frames {
             slots.push(alloc_scratch(alloc, device, required, align)?);
@@ -202,7 +203,7 @@ impl ScratchRing {
         frame_idx: usize,
         required: u64,
         align: u64,
-    ) -> Result<u64, String> {
+    ) -> RenderResult<u64> {
         if !self.slots[frame_idx].fits(required, align) {
             self.slots[frame_idx] = alloc_scratch(alloc, device, required, align)?;
         }
@@ -216,7 +217,7 @@ fn alloc_scratch(
     device: &VkDevice,
     required: u64,
     align: u64,
-) -> Result<ScratchSlot, String> {
+) -> RenderResult<ScratchSlot> {
     let capacity = scratch_capacity(required, align);
     let pooled = alloc.create_buffer(
         capacity,
@@ -836,7 +837,7 @@ fn create_accel(
     as_loader: &ash::khr::acceleration_structure::Device,
     size: u64,
     ty: vk::AccelerationStructureTypeKHR,
-) -> Result<AccelBuffer, String> {
+) -> RenderResult<AccelBuffer> {
     let size = size.max(256);
     let pooled = alloc.create_buffer(
         size,
@@ -853,7 +854,7 @@ fn create_accel(
     // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
     // names belongs to this device.
     let accel = unsafe { as_loader.create_acceleration_structure(&info, None) }
-        .map_err(|e| format!("create acceleration structure: {e}"))?;
+        .map_err(|e| super::error::map_vk_result(e, "create acceleration structure"))?;
     Ok(AccelBuffer {
         accel,
         _pooled: pooled,
@@ -868,7 +869,7 @@ fn create_host_buffer<T: Copy>(
     data: &[T],
     usage: vk::BufferUsageFlags,
     _label: &str,
-) -> Result<HostBuffer, String> {
+) -> RenderResult<HostBuffer> {
     let size = (std::mem::size_of_val(data) as vk::DeviceSize).max(16);
     let pooled = alloc.create_buffer(
         size,
@@ -900,7 +901,7 @@ fn write_or_recreate_host<T: Copy>(
     usage: vk::BufferUsageFlags,
     label: &str,
     retire: RetireSink,
-) -> Result<(), String> {
+) -> RenderResult<()> {
     let needed = (std::mem::size_of_val(data) as vk::DeviceSize).max(16);
     if let Some(buf) = slot.as_ref()
         && buf.size >= needed
@@ -930,7 +931,7 @@ fn ensure_accel(
     size: u64,
     ty: vk::AccelerationStructureTypeKHR,
     retire: RetireSink,
-) -> Result<bool, String> {
+) -> RenderResult<bool> {
     if slot.as_ref().is_some_and(|b| b.size >= size) {
         return Ok(false);
     }
@@ -952,7 +953,7 @@ fn ensure_device_buffer(
     device: &VkDevice,
     size: u64,
     retire: RetireSink,
-) -> Result<bool, String> {
+) -> RenderResult<bool> {
     if slot.as_ref().is_some_and(|b| b.size >= size) {
         return Ok(false);
     }
@@ -971,7 +972,7 @@ fn create_device_buffer(
     alloc: &DeviceAllocator,
     device: &VkDevice,
     size: u64,
-) -> Result<DeviceBuffer, String> {
+) -> RenderResult<DeviceBuffer> {
     let size = size.max(VERTEX_STRIDE);
     let pooled = alloc.create_buffer(
         size,
@@ -1001,7 +1002,7 @@ pub(super) fn build_skin_pipeline(
     alloc: &DeviceAllocator,
     device: &VkDevice,
     hot_reload: bool,
-) -> Result<SkinPipeline, String> {
+) -> RenderResult<SkinPipeline> {
     let spv = super::slang_builtins::RT_SKIN.compile(&super::builtins::Ctx::plain(hot_reload))?;
     let module = spv_module(device, &spv)?;
 
@@ -1053,13 +1054,11 @@ pub(super) fn build_skin_pipeline(
 
     // Sized to one `MorphEntry` so even a stray read of slot 0 stays in
     // bounds; `target_count == 0` keeps it unread.
-    let morph_dummy_pooled = alloc
-        .create_buffer(
-            28,
-            vk::BufferUsageFlags::STORAGE_BUFFER,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        )
-        .map_err(|e| format!("rt skin morph dummy buffer: {e}"))?;
+    let morph_dummy_pooled = alloc.create_buffer(
+        28,
+        vk::BufferUsageFlags::STORAGE_BUFFER,
+        vk::MemoryPropertyFlags::DEVICE_LOCAL,
+    )?;
 
     Ok(SkinPipeline {
         set_layout,
@@ -1180,7 +1179,7 @@ pub(super) fn build_rt_accel(
     geometry: RtSceneGeometry,
     frames_in_flight: usize,
     hot_reload: bool,
-) -> Result<Option<RtAccelData>, String> {
+) -> RenderResult<Option<RtAccelData>> {
     let RtDeviceCtx {
         alloc,
         instance,
@@ -1712,7 +1711,7 @@ impl RtAccelData {
         cmd: vk::CommandBuffer,
         draw_objects: &[DrawObject],
         req: TopologyRefresh,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         // Advance to the next ring slot and take it out, which sidesteps the
         // `&mut self` borrow while the refresh reads the rest of the accel. It is
         // put back on every exit path, so a failed refresh leaves the ring -- and
@@ -1732,7 +1731,7 @@ impl RtAccelData {
         draw_objects: &[DrawObject],
         req: TopologyRefresh,
         slot: &mut StaticFrameRing,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let TopologyRefresh {
             exclude_seethrough,
             frame_idx,
@@ -2056,7 +2055,7 @@ impl RtAccelData {
         draw_objects: &[DrawObject],
         frame_idx: usize,
         scratch: &mut RtUpdateScratch,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         // Advance to the next ring slot and take it out (see `refresh_topology`);
         // it is put back on every exit path.
         self.static_cursor = next_slot(self.static_cursor, self.static_ring.len());
@@ -2075,7 +2074,7 @@ impl RtAccelData {
         frame_idx: usize,
         scratch: &mut RtUpdateScratch,
         slot: &mut StaticFrameRing,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let RtDeviceCtx {
             alloc,
             device,
@@ -2225,7 +2224,7 @@ impl RtAccelData {
         &mut self,
         req: SkinnedRebuild,
         scratch: &mut RtUpdateScratch,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         // This frame slot's resources, taken out for the duration (sidesteps the
         // `&mut self` borrow while the rebuild reads other fields) and put back on
         // every exit path, so a failed rebuild leaves the ring -- and the live
@@ -2242,7 +2241,7 @@ impl RtAccelData {
         req: SkinnedRebuild,
         scratch: &mut RtUpdateScratch,
         slot: &mut SkinnedFrameRing,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let SkinnedRebuild {
             ctx,
             cmd,
@@ -2819,7 +2818,7 @@ pub(super) fn ensure_skin_sets(
 pub(super) fn create_main_deformed_buffer(
     alloc: &DeviceAllocator,
     size: u64,
-) -> Result<DeviceBuffer, String> {
+) -> RenderResult<DeviceBuffer> {
     let size = size.max(VERTEX_STRIDE);
     let pooled = alloc.create_buffer(
         size,
@@ -2845,7 +2844,7 @@ impl super::context::VkContext {
     //
     // An empty scene or a failed build drops the BVH rather than keeping the
     // stale one, and the RT pass with it. The caller has already drained the device.
-    pub(in crate::vulkan) fn rebuild_rt_accel(&mut self) -> Result<(), String> {
+    pub(in crate::vulkan) fn rebuild_rt_accel(&mut self) -> RenderResult<()> {
         let fresh = match build_rt_accel(
             RtDeviceCtx {
                 alloc: &self.alloc,
@@ -2917,7 +2916,7 @@ impl super::context::VkContext {
     // per-frame re-point). Sets `self.draw.n_skinned`, which engages the fold. Called
     // from `upload_skinned` when the bindless cull path is active. Mirrors the
     // DirectX `upload_skinned` skin block.
-    pub(in crate::vulkan) fn build_main_skin(&mut self, vertex_total: usize) -> Result<(), String> {
+    pub(in crate::vulkan) fn build_main_skin(&mut self, vertex_total: usize) -> RenderResult<()> {
         let device = self.device.clone();
         let frames = self.frames_in_flight.max(1);
         let n = self.skinned.slots.draw_objects.len();
@@ -2985,7 +2984,7 @@ impl super::context::VkContext {
     pub(in crate::vulkan) fn refresh_main_skin_geometry(
         &mut self,
         vertex_total: usize,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let Some(skin) = self.skinned.skin.as_ref() else {
             return Ok(());
         };
@@ -3004,7 +3003,7 @@ impl super::context::VkContext {
         &self,
         sets: &[Vec<vk::DescriptorSet>],
         vertex_total: usize,
-    ) -> Result<Vec<DeviceBuffer>, String> {
+    ) -> RenderResult<Vec<DeviceBuffer>> {
         let frames = self.frames_in_flight.max(1);
         let n = self.skinned.slots.draw_objects.len();
 

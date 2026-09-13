@@ -13,6 +13,7 @@
 // previous frame's output either way.
 
 use ash::vk;
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::taa::{TaaInputs, TaaPass, TaaRing};
 
 use crate::vulkan::context::VkContext;
@@ -39,7 +40,7 @@ impl TaaResources {
         device: &VkPostDevice,
         frames: usize,
         extent: vk::Extent2D,
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         Ok(Self {
             pass: TaaPass::new(device, TaaRing::per_frame(frames), post_extent(extent))?,
             taa_frame: 0,
@@ -59,7 +60,7 @@ impl TaaResources {
         &mut self,
         device: &VkPostDevice,
         extent: vk::Extent2D,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         self.pass.resize(device, post_extent(extent))?;
         // Stale history cannot be reprojected onto the new resolution.
         self.taa_frame = 0;

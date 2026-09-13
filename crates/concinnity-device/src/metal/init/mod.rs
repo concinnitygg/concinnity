@@ -34,6 +34,7 @@ use concinnity_core::gfx::transform::IDENTITY;
 use concinnity_core::render::backend_init;
 use concinnity_core::render::csm;
 use concinnity_core::render::decal;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::hdr_output;
 use concinnity_core::render::lights;
 use concinnity_core::render::ltc;
@@ -74,7 +75,7 @@ impl MtlContext {
     // inputs (see `concinnity_core::render::backend_init::BackendInit` for per-field docs).
     // The shadow pass is engine-internal and enabled whenever
     // `shadows.map_size > 0`.
-    pub(crate) fn new(init: backend_init::BackendInit<'_>) -> Result<Self, String> {
+    pub(crate) fn new(init: backend_init::BackendInit<'_>) -> RenderResult<Self> {
         Self::build(init, None)
     }
 
@@ -87,7 +88,7 @@ impl MtlContext {
     fn build(
         init: backend_init::BackendInit<'_>,
         reuse: Option<ReuseHandles>,
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         use concinnity_core::render::backend_init::{
             BackendInit, MediaPayloads, PostSettings, SceneData, ShadowParams, WorldFx,
         };
@@ -260,16 +261,16 @@ impl MtlContext {
         let world_pipelines = if requirements.scene && world_shaders.len() > 1 {
             let max = render_types::MAX_SHADER_BUCKETS;
             if world_shaders.len() > max {
-                return Err(format!(
+                return Err(RenderError::Other(format!(
                     "world declares {} Shaders but at most {max} are supported",
                     world_shaders.len()
-                ));
+                )));
             }
             if !bindless {
                 return Err(
                     "material-referenced Shaders need the GPU-driven main pass, which a \
                             world with no 3D scene content does not build"
-                        .to_string(),
+                        .into(),
                 );
             }
             pipelines::build_world_pipeline_table(
@@ -1520,7 +1521,7 @@ impl MtlContext {
     pub(super) fn apply_world_reload(
         &mut self,
         init: backend_init::BackendInit<'_>,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         debug_assert_main_thread("apply_world_reload");
         self.wait_idle();
         let h = self.window.appkit.handles_for_reuse();

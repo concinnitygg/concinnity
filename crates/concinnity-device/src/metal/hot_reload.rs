@@ -13,6 +13,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::mesh_payload;
+use concinnity_core::render::error::RenderResult;
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use objc2::rc::Retained;
 use objc2_metal::{MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction};
@@ -250,7 +251,7 @@ impl MtlContext {
     // same single-source files as their static siblings under a different
     // entry. A world Shader's own pair still wins in the main build, so a save
     // to an engine template never swaps a world's program for the engine's.
-    pub(super) fn reload_shaders(&mut self) -> Result<(), String> {
+    pub(super) fn reload_shaders(&mut self) -> RenderResult<()> {
         if !self.hot_reload.enabled {
             return Ok(());
         }

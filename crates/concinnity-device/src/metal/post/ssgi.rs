@@ -8,6 +8,7 @@
 
 use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::ssgi::SsgiSettings;
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::ssgi::{SsgiInputs, SsgiPass};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -35,7 +36,7 @@ impl MtlContext {
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         ssgi_params: &render_types::SsgiParams,
-    ) -> Result<u32, String> {
+    ) -> RenderResult<u32> {
         // With no G-buffer there is nothing to gather against, so skip the pass.
         let (Some(pass), Some(normal_depth)) = (&self.ssgi.pass, self.gbuffer_normal_depth())
         else {

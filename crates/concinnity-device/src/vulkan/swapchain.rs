@@ -3,6 +3,7 @@
 // Vulkan swapchain, attachment, and framebuffer creation, plus the
 // swapchain rebuild path.
 use ash::vk;
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::hdr_output;
 
 use super::allocator::DeviceAllocator;
@@ -84,7 +85,7 @@ impl VkContext {
         ))
     }
 
-    pub(super) fn rebuild_swapchain(&mut self) -> Result<(), String> {
+    pub(super) fn rebuild_swapchain(&mut self) -> RenderResult<()> {
         // A minimized window has a 0x0 client area, and a zero-extent swapchain
         // (with every attachment / framebuffer sized from it) is invalid. Skip
         // the rebuild and leave the existing resources at their last non-zero
@@ -992,7 +993,7 @@ pub(super) fn create_attachments(
     height: u32,
     msaa: vk::SampleCountFlags,
     count: usize,
-) -> Result<FrameAttachments, String> {
+) -> RenderResult<FrameAttachments> {
     let &AttachmentDeviceCtx {
         alloc,
         device,

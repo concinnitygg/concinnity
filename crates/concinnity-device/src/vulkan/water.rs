@@ -17,6 +17,7 @@ use ash::vk;
 use concinnity_core::components::{MAX_WATER_WAVES, WaterSurface, WaterWave};
 use concinnity_core::geometry::water_grid::build_water_grid;
 use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::render::error::RenderResult;
 // `WaterParams` / `WaterWaveGpu` (the per-surface UBO and its wave lanes) are
 // GPU-free layout structs that live in `core::render`; re-export them so
 // `crate::vulkan::water::WaterParams` is unchanged for the `water_params_from`
@@ -141,7 +142,7 @@ fn build_surface_record(
     ctx: &ProducerCtx,
     surface: &WaterSurface,
     planar_slot: Option<usize>,
-) -> Result<TransparentRecord, String> {
+) -> RenderResult<TransparentRecord> {
     let (verts, idxs) =
         build_water_grid(surface.extent[0], surface.extent[1], surface.subdivisions)?;
 
@@ -185,7 +186,7 @@ pub(in crate::vulkan) fn build_water_producer(
     // Per-surface planar resolve slot (aligned with `surfaces`); `None` surfaces
     // keep the probe/sky reflection. From `assign_planar_slots`.
     planar_slots: &[Option<usize>],
-) -> Result<TransparentProducer, String> {
+) -> RenderResult<TransparentProducer> {
     let (vert_spv, frag_spv) =
         compile_water_shaders(ctx.hot_reload, ctx.msaa, ctx.probe_cube_count)?;
     let pipeline = create_transparent_pipeline(

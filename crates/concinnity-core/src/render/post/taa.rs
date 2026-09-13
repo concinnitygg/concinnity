@@ -12,9 +12,9 @@
 //! post pass encodes, and it drives the upscalers as well as this pass, so it
 //! belongs to each backend's frame setup rather than to the resolve.
 
-use alloc::string::String;
 use alloc::vec::Vec;
 
+use crate::render::error::RenderResult;
 use crate::render::render_graph::{
     ClearValue, PassId, PixelFormat, TextureDesc, TextureSize, TextureUsage,
 };
@@ -111,7 +111,7 @@ fn target_desc() -> TextureDesc {
 
 /// Build the resolve pipeline on its own, without touching the targets. What
 /// shader hot reload rebuilds and hands to [`TaaPass::swap_pipeline`].
-pub fn build_pipeline<D: PostPassDevice>(device: &D) -> Result<D::Pipeline, String> {
+pub fn build_pipeline<D: PostPassDevice>(device: &D) -> RenderResult<D::Pipeline> {
     device.create_pipeline(
         PostProgram::TaaResolve,
         target_desc().format,
@@ -121,7 +121,7 @@ pub fn build_pipeline<D: PostPassDevice>(device: &D) -> Result<D::Pipeline, Stri
 
 impl<Pipeline, Target> TaaPass<Pipeline, Target> {
     /// Build the resolve pipeline and the accumulation targets at `extent`.
-    pub fn new<D>(device: &D, ring: TaaRing, extent: PostExtent) -> Result<Self, String>
+    pub fn new<D>(device: &D, ring: TaaRing, extent: PostExtent) -> RenderResult<Self>
     where
         D: PostPassDevice<Pipeline = Pipeline, Target = Target>,
     {
@@ -164,7 +164,7 @@ impl<Pipeline, Target> TaaPass<Pipeline, Target> {
     /// Recreate the accumulation targets at a new extent and forget the
     /// accumulated history, which was rendered at a resolution this one cannot
     /// reproject from. The caller has already idled the device.
-    pub fn resize<D>(&mut self, device: &D, extent: PostExtent) -> Result<(), String>
+    pub fn resize<D>(&mut self, device: &D, extent: PostExtent) -> RenderResult<()>
     where
         D: PostPassDevice<Pipeline = Pipeline, Target = Target>,
     {
@@ -196,7 +196,7 @@ impl<Pipeline, Target> TaaPass<Pipeline, Target> {
         rec: &D::Recorder,
         write: usize,
         inputs: TaaInputs<'t, D>,
-    ) -> Result<(), String>
+    ) -> RenderResult<()>
     where
         D: PostPassDevice<Pipeline = Pipeline, Target = Target>,
     {
@@ -246,7 +246,7 @@ fn create_targets<D: PostPassDevice>(
     desc: &TextureDesc,
     extent: PostExtent,
     slots: usize,
-) -> Result<Vec<D::Target>, String> {
+) -> RenderResult<Vec<D::Target>> {
     let mut targets = Vec::with_capacity(slots);
     for _ in 0..slots {
         targets.push(device.create_target(TARGET_LABEL, desc, extent)?);

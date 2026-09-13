@@ -10,6 +10,10 @@
 //! is how a backend says it does not have that path, and the grouping is what
 //! tells a new backend author which subset is which.
 //!
+//! A fallible default returns [`RenderError::Unsupported`](crate::render::error::RenderError::Unsupported),
+//! never a silent `Ok`. An infallible setter defaults to a no-op; a caller that
+//! must know whether one lands gates on [`DeviceCapabilities`] first.
+//!
 //! Implementations are thin forwarders to the inherent methods on `MtlContext`
 //! / `DxContext` / `VkContext`; concinnity-device generates the 1:1 ones from
 //! a shared `forward!` macro, one invocation per family.
@@ -179,7 +183,7 @@ pub(crate) mod test_stub {
     }
 
     impl DrawStreaming for StubBackend {
-        fn evict_texture_slot(&mut self, _slot: usize) -> Result<(), alloc::string::String> {
+        fn evict_texture_slot(&mut self, _slot: usize) -> RenderResult<()> {
             Ok(())
         }
         fn update_texture_slot(
@@ -189,11 +193,7 @@ pub(crate) mod test_stub {
         ) -> RenderResult<()> {
             Ok(())
         }
-        fn evict_mesh(
-            &mut self,
-            _draw_idx: usize,
-            _retire_frame: u64,
-        ) -> Result<(), alloc::string::String> {
+        fn evict_mesh(&mut self, _draw_idx: usize, _retire_frame: u64) -> RenderResult<()> {
             Ok(())
         }
         fn upload_mesh(
@@ -219,18 +219,10 @@ pub(crate) mod test_stub {
         ) -> RenderResult<()> {
             Ok(())
         }
-        fn remove_chunk_mesh(
-            &mut self,
-            _draw_idx: usize,
-            _retire_frame: u64,
-        ) -> Result<(), alloc::string::String> {
+        fn remove_chunk_mesh(&mut self, _draw_idx: usize, _retire_frame: u64) -> RenderResult<()> {
             Ok(())
         }
-        fn set_chunk_model(
-            &mut self,
-            _draw_idx: usize,
-            _model: [[f32; 4]; 4],
-        ) -> Result<(), alloc::string::String> {
+        fn set_chunk_model(&mut self, _draw_idx: usize, _model: [[f32; 4]; 4]) -> RenderResult<()> {
             Ok(())
         }
     }
@@ -344,35 +336,91 @@ mod tests {
         backend.set_draw_material(0, MaterialUniforms::DEFAULT, 0, 0);
         backend.set_draw_cull_distance(0, 50.0);
 
-        // Fallible hot-reload hooks that succeed by default (no-op Ok).
-        assert!(backend.update_color_lut(2, &[0u8; 32]).is_ok());
-        assert!(backend.rebuild_static_geometry(vec![]).is_ok());
-        assert!(backend.update_skinned_mesh_geometry(0, 0, &[], &[]).is_ok());
-        assert!(backend.rebuild_skinned_geometry(vec![]).unwrap().is_empty());
-        assert!(backend.update_skinned_skeleton(0, 0).is_ok());
-        assert!(backend.update_mesh_geometry(0, &[], &[], &[]).is_ok());
-        assert!(backend.update_environment_map(&[]).is_ok());
-
-        // Fallible hooks a bare backend does not implement: they report Err.
-        assert!(backend.screenshot("unused.png").is_err());
+        // A bucket with no per-bucket pipeline to build is resident as-is.
         assert!(
             backend
-                .clone_static_draw_object(
+                .install_world_shader(
+                    1,
+                    crate::render::backend_init::WorldShader {
+                        programs: None,
+                        deferred: false,
+                    }
+                )
+                .is_ok()
+        );
+    }
+
+    // Every fallible operation a bare backend does not implement reports
+    // `Unsupported` naming itself, never a silent `Ok`.
+    #[test]
+    fn default_fallible_operations_report_unsupported() {
+        use crate::render::error::RenderError;
+
+        fn op<T>(result: RenderResult<T>) -> &'static str {
+            match result {
+                Err(RenderError::Unsupported { op }) => op,
+                Err(e) => panic!("expected Unsupported, got {e}"),
+                Ok(_) => panic!("expected Unsupported, got Ok"),
+            }
+        }
+
+        let mut backend = StubBackend;
+        let window = crate::components::Window::default();
+        let cases = [
+            (
+                "update_color_lut",
+                op(backend.update_color_lut(2, &[0u8; 32])),
+            ),
+            (
+                "rebuild_static_geometry",
+                op(backend.rebuild_static_geometry(vec![])),
+            ),
+            (
+                "update_skinned_mesh_geometry",
+                op(backend.update_skinned_mesh_geometry(0, 0, &[], &[])),
+            ),
+            (
+                "rebuild_skinned_geometry",
+                op(backend.rebuild_skinned_geometry(vec![])),
+            ),
+            (
+                "update_skinned_skeleton",
+                op(backend.update_skinned_skeleton(0, 0)),
+            ),
+            (
+                "update_mesh_geometry",
+                op(backend.update_mesh_geometry(0, &[], &[], &[])),
+            ),
+            (
+                "update_environment_map",
+                op(backend.update_environment_map(&[])),
+            ),
+            (
+                "update_world_shader_pipelines",
+                op(backend.update_world_shader_pipelines(&ShaderPrograms::default())),
+            ),
+            (
+                "reload_world",
+                op(backend.reload_world(empty_backend_init(&window))),
+            ),
+            ("screenshot", op(backend.screenshot("unused.png"))),
+            ("read_cull_status", op(backend.read_cull_status())),
+            (
+                "clone_static_draw_object",
+                op(backend.clone_static_draw_object(
                     0,
                     IDENTITY,
-                    crate::render::draw_slot::SlotAlloc::Append(0)
-                )
-                .is_err()
-        );
-        assert!(backend.add_decal(stub_decal()).is_err());
-        assert!(backend.remove_decal(0).is_err());
-        assert!(backend.add_emitter(stub_emitter()).is_err());
-        assert!(backend.remove_emitter(0).is_err());
-        assert!(
-            backend
-                .update_world_shader_pipelines(&ShaderPrograms::default())
-                .is_err()
-        );
+                    crate::render::draw_slot::SlotAlloc::Append(0),
+                )),
+            ),
+            ("add_decal", op(backend.add_decal(stub_decal()))),
+            ("remove_decal", op(backend.remove_decal(0))),
+            ("add_emitter", op(backend.add_emitter(stub_emitter()))),
+            ("remove_emitter", op(backend.remove_emitter(0))),
+        ];
+        for (expected, reported) in cases {
+            assert_eq!(reported, expected);
+        }
     }
 
     // A minimal empty-world BackendInit borrowing `window`, for exercising the
@@ -380,15 +428,6 @@ mod tests {
     // is the window args.
     fn empty_backend_init(window: &crate::components::Window) -> BackendInit<'_> {
         BackendInit::minimal(window, alloc::vec::Vec::new())
-    }
-
-    #[test]
-    fn default_reload_world_is_unsupported() {
-        // A backend without a real reload path reports the swap unsupported, so
-        // the caller falls back to a full rebuild.
-        let mut backend = StubBackend;
-        let window = crate::components::Window::default();
-        assert!(backend.reload_world(empty_backend_init(&window)).is_err());
     }
 
     fn stub_decal() -> crate::render::decal::DecalRecord {

@@ -15,6 +15,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types::{CompositeParams, TextDrawCall, TextUniforms};
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::fullscreen;
 use concinnity_core::render::fullscreen::TextBindCache;
 
@@ -249,7 +250,7 @@ impl VkContext {
         image_index: u32,
         frame_idx: usize,
         text_calls: &[TextDrawCall],
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         // Reset this slot's text-upload cursor and ensure its buffer holds the
         // whole frame's text up front, so each `text_draw` only appends (and
         // never reallocates out from under an already-bound sub-range). The
@@ -264,6 +265,8 @@ impl VkContext {
             image_index: image_index as usize,
             frame_idx,
         };
-        fullscreen::encode_composite_chain(self, &cmd, &args, text_calls)
+        Ok(fullscreen::encode_composite_chain(
+            self, &cmd, &args, text_calls,
+        )?)
     }
 }

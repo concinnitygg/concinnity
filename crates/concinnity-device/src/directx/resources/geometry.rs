@@ -6,6 +6,7 @@
 // streaming headroom.
 
 use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::render::error::RenderResult;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::super::context::*;
@@ -78,7 +79,7 @@ impl DxContext {
         vertices: &[Vertex],
         indices: &[u16],
         frame: u64,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let obj = self
             .draw
             .objects
@@ -91,7 +92,8 @@ impl DxContext {
                 draw_idx,
                 vertex_count,
                 vertices.len()
-            ));
+            )
+            .into());
         }
         if indices.len() != index_count {
             return Err(format!(
@@ -99,7 +101,8 @@ impl DxContext {
                 draw_idx,
                 index_count,
                 indices.len()
-            ));
+            )
+            .into());
         }
 
         // Reclaim frees whose in-flight frames have retired, then place the
@@ -113,30 +116,13 @@ impl DxContext {
         // build-time splitter) and get widened on write below. Size the
         // allocation against the u32 stride. Mirrors metal's upload_mesh.
         let i_len = indices.len() * std::mem::size_of::<u32>();
-        let v_off = self
-            .mesh_stream
-            .vtx_alloc
-            .alloc(v_len as u64)
-            .ok_or_else(|| {
-                format!(
-                    "upload_mesh: draw {}: no free vertex space for {} bytes",
-                    draw_idx, v_len
-                )
-            })? as usize;
-        let i_off = match self.mesh_stream.idx_alloc.alloc(i_len as u64) {
-            Some(o) => o as usize,
-            None => {
-                // hand the vertex region back so a half-failed upload leaks no
-                // space (frame 0: it was never written or drawn)
-                self.mesh_stream
-                    .vtx_alloc
-                    .free(v_off as u64, v_len as u64, 0);
-                return Err(format!(
-                    "upload_mesh: draw {}: no free index space for {} bytes",
-                    draw_idx, i_len
-                ));
-            }
-        };
+        let (v_off, i_off) = crate::suballoc::geometry::place_mesh(
+            &mut self.mesh_stream.vtx_alloc,
+            &mut self.mesh_stream.idx_alloc,
+            v_len,
+            i_len,
+            || format!("upload_mesh: draw {draw_idx}"),
+        )?;
 
         self.wait_idle();
 

@@ -11,6 +11,7 @@ use concinnity_core::bake;
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::draw_slot;
 use concinnity_core::render::error;
+use concinnity_core::render::error::RenderResult;
 
 use super::super::context::*;
 use super::super::texture::{
@@ -145,9 +146,9 @@ impl VkContext {
     }
 
     // Reset texture-pool `slot` to a 1x1 mid-gray placeholder.
-    pub(crate) fn evict_texture_slot(&mut self, slot: usize) -> Result<(), String> {
+    pub(crate) fn evict_texture_slot(&mut self, slot: usize) -> RenderResult<()> {
         let gray = bake::texture::TextureImage::rgba8(1, 1, vec![128, 128, 128, 255]);
-        Ok(self.update_texture_slot(slot, &gray)?)
+        self.update_texture_slot(slot, &gray)
     }
 
     // Per-frame streamed-texture upkeep, called at the top of `draw_frame`
@@ -203,7 +204,7 @@ impl VkContext {
     // `DxContext::update_color_lut` / `MtlContext::update_color_lut`. Reached
     // only through the bin's `cn debug` runtime-mutation path (dead in the FFI
     // lib, live in the bin).
-    pub(crate) fn update_color_lut(&mut self, size: u32, data: &[u8]) -> Result<(), String> {
+    pub(crate) fn update_color_lut(&mut self, size: u32, data: &[u8]) -> RenderResult<()> {
         self.wait_idle();
         let new_lut = super::super::texture::upload_color_lut(
             &GpuUploadContext {
@@ -255,7 +256,7 @@ impl VkContext {
     // `DxContext::update_environment_map`. Reached
     // only through the bin's `cn debug` runtime-mutation path (dead in the FFI
     // lib, live in the bin).
-    pub(crate) fn update_environment_map(&mut self, payload: &[u8]) -> Result<(), String> {
+    pub(crate) fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()> {
         let view = bake::environment_map::deserialize(payload)
             .map_err(|e| format!("envmap hot-reload payload malformed: {e}"))?;
         self.wait_idle();

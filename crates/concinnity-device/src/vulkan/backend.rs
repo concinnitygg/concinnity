@@ -31,6 +31,7 @@ use concinnity_core::render::decal;
 use concinnity_core::render::display_mode;
 use concinnity_core::render::draw_slot;
 use concinnity_core::render::error;
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::input::RenderInput;
 use concinnity_core::render::keymap::KeyMap;
 use concinnity_core::render::particles;
@@ -69,7 +70,7 @@ impl SkinnedDraws for VkContext {
         draw_objects: Vec<SkinnedDrawObject>,
     ) -> error::RenderResult<()> {
         debug_assert_main_thread("upload_skinned");
-        Ok(self.upload_skinned(vertices, indices, draw_objects)?)
+        self.upload_skinned(vertices, indices, draw_objects)
     }
 
     // Trait method returns unit; the inherent returns Result (buffer
@@ -87,16 +88,16 @@ impl SkinnedDraws for VkContext {
 
 impl DrawStreaming for VkContext {
     forward! { assert = debug_assert_main_thread;
-        fn evict_texture_slot(&mut self, slot: usize) -> Result<(), String>;
+        fn evict_texture_slot(&mut self, slot: usize) -> error::RenderResult<()>;
         fn update_texture_slot(&mut self, slot: usize, image: &bake::texture::TextureImage) -> error::RenderResult<()>;
-        fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String>;
+        fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> RenderResult<()>;
         fn upload_mesh(&mut self, draw_idx: usize, verts: &[Vertex], idxs: &[u16], frame: u64) -> error::RenderResult<()>;
         fn seed_mesh_streaming(&mut self, vtx_offset: u64, vtx_bytes: u64, idx_offset: u64, idx_bytes: u64);
         fn setup_chunk_streaming(&mut self, chunk_vtx_bytes: usize, chunk_idx_bytes: usize) -> error::RenderResult<()>;
         fn add_chunk_mesh(&mut self, mesh: ChunkMesh<'_>, dst: draw_slot::SlotAlloc) -> error::RenderResult<()>;
-        fn remove_chunk_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String>;
-        fn set_chunk_model(&mut self, draw_idx: usize, model: [[f32; 4]; 4]) -> Result<(), String>;
-        fn clone_static_draw_object(&mut self, src_draw_idx: usize, model: [[f32; 4]; 4], dst: draw_slot::SlotAlloc) -> Result<(), String>;
+        fn remove_chunk_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> RenderResult<()>;
+        fn set_chunk_model(&mut self, draw_idx: usize, model: [[f32; 4]; 4]) -> RenderResult<()>;
+        fn clone_static_draw_object(&mut self, src_draw_idx: usize, model: [[f32; 4]; 4], dst: draw_slot::SlotAlloc) -> RenderResult<()>;
         fn evict_world_shader(&mut self, bucket: u32);
     }
 
@@ -153,12 +154,12 @@ impl RenderTuning for VkContext {
 
 impl LiveEdit for VkContext {
     forward! { assert = debug_assert_main_thread;
-        fn update_color_lut(&mut self, size: u32, data: &[u8]) -> Result<(), String>;
-        fn update_mesh_geometry(&mut self, draw_idx: usize, verts: &[mesh_payload::Vertex], idxs: &[u16], lod_alternates: &[(f32, Vec<u16>)]) -> Result<(), String>;
-        fn update_world_shader_pipelines(&mut self, programs: &concinnity_core::components::ShaderPrograms) -> Result<(), String>;
-        fn update_skinned_mesh_geometry(&mut self, skinned_index: usize, vertex_base: u32, verts: &[mesh_payload::SkinnedVertex], idxs: &[u16]) -> Result<(), String>;
-        fn update_skinned_skeleton(&mut self, skinned_index: usize, new_joint_count: usize) -> Result<(), String>;
-        fn rebuild_skinned_geometry(&mut self, changes: Vec<backend::SkinnedDrawGeometryUpdate>) -> Result<Vec<backend::SkinnedSlotLayout>, String>;
+        fn update_color_lut(&mut self, size: u32, data: &[u8]) -> error::RenderResult<()>;
+        fn update_mesh_geometry(&mut self, draw_idx: usize, verts: &[mesh_payload::Vertex], idxs: &[u16], lod_alternates: &[(f32, Vec<u16>)]) -> error::RenderResult<()>;
+        fn update_world_shader_pipelines(&mut self, programs: &concinnity_core::components::ShaderPrograms) -> RenderResult<()>;
+        fn update_skinned_mesh_geometry(&mut self, skinned_index: usize, vertex_base: u32, verts: &[mesh_payload::SkinnedVertex], idxs: &[u16]) -> error::RenderResult<()>;
+        fn update_skinned_skeleton(&mut self, skinned_index: usize, new_joint_count: usize) -> RenderResult<()>;
+        fn rebuild_skinned_geometry(&mut self, changes: Vec<backend::SkinnedDrawGeometryUpdate>) -> error::RenderResult<Vec<backend::SkinnedSlotLayout>>;
     }
 
     fn shader_reload_flag(&self) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
@@ -192,12 +193,12 @@ impl LiveEdit for VkContext {
     // `apply_world_reload` so this forwarder does not shadow-and-recurse.
     fn reload_world(&mut self, init: backend_init::BackendInit<'_>) -> error::RenderResult<()> {
         debug_assert_main_thread("reload_world");
-        Ok(self.apply_world_reload(init)?)
+        self.apply_world_reload(init)
     }
 
     fn update_environment_map(&mut self, payload: &[u8]) -> error::RenderResult<()> {
         debug_assert_main_thread("update_environment_map");
-        Ok(VkContext::update_environment_map(self, payload)?)
+        VkContext::update_environment_map(self, payload)
     }
 
     fn rebuild_static_geometry(
@@ -205,26 +206,26 @@ impl LiveEdit for VkContext {
         changes: Vec<backend::DrawGeometryUpdate>,
     ) -> error::RenderResult<()> {
         debug_assert_main_thread("rebuild_static_geometry");
-        Ok(VkContext::rebuild_static_geometry(self, changes)?)
+        VkContext::rebuild_static_geometry(self, changes)
     }
 }
 
 impl SceneEffects for VkContext {
     forward! { assert = debug_assert_main_thread;
-        fn add_decal(&mut self, record: decal::DecalRecord) -> Result<usize, String>;
-        fn remove_decal(&mut self, decal_id: usize) -> Result<(), String>;
+        fn add_decal(&mut self, record: decal::DecalRecord) -> RenderResult<usize>;
+        fn remove_decal(&mut self, decal_id: usize) -> RenderResult<()>;
     }
 
     // Inherent particle methods carry the `_particle_` infix; the trait names
     // do not, so these stay out of the macro to avoid a name mismatch.
-    fn add_emitter(&mut self, record: particles::ParticleEmitterRecord) -> Result<usize, String> {
+    fn add_emitter(&mut self, record: particles::ParticleEmitterRecord) -> RenderResult<usize> {
         debug_assert_main_thread("add_emitter");
         self.add_particle_emitter(record)
     }
 
-    fn remove_emitter(&mut self, emitter_id: usize) -> Result<(), String> {
+    fn remove_emitter(&mut self, emitter_id: usize) -> RenderResult<()> {
         debug_assert_main_thread("remove_emitter");
-        self.remove_particle_emitter(emitter_id)
+        Ok(self.remove_particle_emitter(emitter_id)?)
     }
 }
 
@@ -238,7 +239,7 @@ impl BackendProbe for VkContext {
     // Inherent method is named `capture_screenshot` to keep the forwarder
     // unambiguous (an inherent `screenshot` would shadow the trait method and
     // recurse); kept explicit out of the `forward!` macro for that rename.
-    fn screenshot(&mut self, path: &str) -> Result<String, String> {
+    fn screenshot(&mut self, path: &str) -> RenderResult<String> {
         debug_assert_main_thread("screenshot");
         self.capture_screenshot(path)
     }
@@ -246,7 +247,7 @@ impl BackendProbe for VkContext {
     // Inherent method is named `read_cull_status_buffer` for the same reason
     // `capture_screenshot` is: an inherent `read_cull_status` would shadow the
     // trait method and recurse.
-    fn read_cull_status(&mut self) -> Result<Vec<u32>, String> {
+    fn read_cull_status(&mut self) -> RenderResult<Vec<u32>> {
         debug_assert_main_thread("read_cull_status");
         self.read_cull_status_buffer()
     }

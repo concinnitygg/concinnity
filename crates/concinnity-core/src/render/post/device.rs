@@ -17,8 +17,8 @@
 //! G-buffer channels somebody else produced.
 
 use alloc::format;
-use alloc::string::String;
 
+use crate::render::error::{RenderError, RenderResult};
 use crate::render::render_graph::{PassId, PixelFormat, TextureDesc, TransientTexture};
 
 use super::program::{PostProgram, PostProgramBindings};
@@ -131,11 +131,11 @@ impl<D: PostPassDevice + ?Sized> PostDraw<'_, '_, D> {
     /// Whether the draw hands over exactly the sources and constants `declared`
     /// says its program binds. A mismatch would bind a slot the shader does not
     /// read or leave one it does read unbound.
-    pub fn check(&self, declared: PostProgramBindings) -> Result<(), String> {
+    pub fn check(&self, declared: PostProgramBindings) -> RenderResult<()> {
         if self.binds.len() == declared.textures && self.constants.len() == declared.constants {
             return Ok(());
         }
-        Err(format!(
+        Err(RenderError::Other(format!(
             "{}: the draw binds {} texture(s) and {} constant byte(s) where the program \
              declares {} and {}",
             self.label,
@@ -143,7 +143,7 @@ impl<D: PostPassDevice + ?Sized> PostDraw<'_, '_, D> {
             self.constants.len(),
             declared.textures,
             declared.constants,
-        ))
+        )))
     }
 }
 
@@ -199,7 +199,7 @@ pub trait PostPassDevice {
         program: PostProgram,
         format: PixelFormat,
         blend: PostBlend,
-    ) -> Result<Self::Pipeline, String>;
+    ) -> RenderResult<Self::Pipeline>;
 
     /// Create one persistent target from a render-graph texture description,
     /// with its fractional sizes resolved against `extent`. Persistent rather
@@ -211,7 +211,7 @@ pub trait PostPassDevice {
         label: &'static str,
         desc: &TextureDesc,
         extent: PostExtent,
-    ) -> Result<Self::Target, String>;
+    ) -> RenderResult<Self::Target>;
 
     /// Bind `target` as a sampled source. A temporal pass reads the slot it
     /// wrote last frame, so a created target has to be nameable as an input.
@@ -225,7 +225,7 @@ pub trait PostPassDevice {
     /// When the pipeline's program declares the reflection-probe set, the
     /// device binds the one the world holds this frame: the probe records and
     /// the cube array together, which no pass chooses between.
-    fn encode(&self, rec: &Self::Recorder, draw: &PostDraw<'_, '_, Self>) -> Result<(), String>;
+    fn encode(&self, rec: &Self::Recorder, draw: &PostDraw<'_, '_, Self>) -> RenderResult<()>;
 }
 
 /// Resolve a render-graph texture description's fractional sizes against a
@@ -421,7 +421,10 @@ mod tests {
         let err = draw_with(&pipeline, &two, &[0u8; 4])
             .check(declared)
             .expect_err("one source short");
-        assert!(err.contains("2 texture(s)"), "{err}");
+        assert!(
+            matches!(&err, RenderError::Other(m) if m.contains("2 texture(s)")),
+            "{err}"
+        );
         assert!(
             draw_with(&pipeline, &three, &[]).check(declared).is_err(),
             "missing constants"

@@ -24,6 +24,7 @@
 use ash::vk;
 use concinnity_core::gfx::render_types::RtParams;
 use concinnity_core::gfx::rt_reflections::{RtParamsInputs, RtReflectionSettings};
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::planar_reflection;
 
 use super::super::allocator::{DeviceAllocator, PooledBuffer};
@@ -346,7 +347,7 @@ impl RtReflectionsResources {
         static_inputs: RtStaticInputs,
         accel: RtAccelHandles,
         layout: RtLayoutConfig,
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         let RtBuild {
             alloc,
             device,
@@ -591,7 +592,7 @@ impl RtReflectionsResources {
         device: &VkDevice,
         width: u32,
         height: u32,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let w = width.max(1);
         let h = height.max(1);
         let pooled = create_image(
@@ -869,7 +870,7 @@ impl RtReflectionsResources {
         width: u32,
         height: u32,
         inputs: RtStaticInputs,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         self.destroy_targets(device);
         self.build_targets(alloc, device, width, height)?;
         self.wire_static(device, inputs);

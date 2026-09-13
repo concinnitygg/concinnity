@@ -27,6 +27,7 @@
 use ash::vk;
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::reflection_probe::{
     self, BakeAction, BakePhase, BakeSignals, PrefilterPlan, ProbePlacement,
 };
@@ -209,7 +210,7 @@ impl VkContext {
     //     RECEIVE probe reflections.
     //   * Cold lighting -- shadows may be unpopulated on the first frames, exactly
     //     like the DX / Metal first-frame bake.
-    pub(super) fn bake_pending_probes(&mut self) -> Result<(), String> {
+    pub(super) fn bake_pending_probes(&mut self) -> RenderResult<()> {
         // Nothing queued and nothing in flight: cheap early-out once the bake drains.
         if !self.probe.bake_queue.pending()
             && self.probe.rendering.is_none()
@@ -263,13 +264,17 @@ impl VkContext {
         ) {
             BakeAction::PrefilterMip => {
                 if let Err(e) = self.probe_prefilter_next_mip() {
-                    self.fail_bake(e);
+                    self.fail_bake(
+                        concinnity_core::render::error::RenderError::OutOfDeviceMemory(e),
+                    );
                     return Ok(());
                 }
             }
             BakeAction::Install => {
                 if let Err(e) = self.probe_install() {
-                    self.fail_bake(e);
+                    self.fail_bake(
+                        concinnity_core::render::error::RenderError::OutOfDeviceMemory(e),
+                    );
                     return Ok(());
                 }
             }
@@ -348,7 +353,7 @@ impl VkContext {
     // Abandon the rest of the bake after an unrecoverable error, keeping the cubes
     // already installed. The queue cursor advanced when the current probe started, so
     // aborting (cursor -> end) keeps `probe.maps` aligned with the placement list.
-    fn fail_bake(&mut self, e: String) {
+    fn fail_bake(&mut self, e: RenderError) {
         tracing::warn!(
             "reflection probe bake failed, keeping {} baked: {e}",
             self.probe.maps.len()
@@ -365,7 +370,7 @@ impl VkContext {
     // buffers + the six per-face view uniforms ONCE (frustum-independent; each face
     // re-runs only the cull with its own frustum). No face is submitted here; the six
     // follow one per frame via `probe_render_next_face`.
-    fn probe_start_next(&mut self) -> Result<(), String> {
+    fn probe_start_next(&mut self) -> RenderResult<()> {
         let Some(index) = self.probe.bake_queue.take_next() else {
             return Ok(());
         };
@@ -475,7 +480,7 @@ impl VkContext {
     // the convolution starts, so the last face's fence retiring means the whole
     // capture is done. One face per frame spreads the capture so no frame pays the
     // whole cost.
-    fn probe_render_next_face(&mut self) -> Result<(), String> {
+    fn probe_render_next_face(&mut self) -> RenderResult<()> {
         let device = self.device.clone();
         let extent = vk::Extent2D {
             width: PROBE_FACE_SIZE,
@@ -551,7 +556,7 @@ impl VkContext {
                         std::slice::from_ref(&cmd),
                     );
                 }
-                return Err(format!("probe face fence: {e}"));
+                return Err(format!("probe face fence: {e}").into());
             }
         };
         {
@@ -728,7 +733,7 @@ impl VkContext {
     // ownership of the two cubes, and submit the cheap half of the convolution --
     // the firefly-clamped mirror mip plus the capture's source pyramid. The bake
     // moves to the Prefiltering slot with the mip cursor at 1.
-    fn probe_begin_prefilter(&mut self) -> Result<(), String> {
+    fn probe_begin_prefilter(&mut self) -> RenderResult<()> {
         let rendering = self
             .probe
             .rendering
@@ -771,7 +776,7 @@ impl VkContext {
             self.submit_prefilter_command(cmd, fence)
         })();
         self.probe.prefiltering = Some(bake);
-        result
+        Ok(result?)
     }
 
     // Convolve one destination mip of the in-flight probe cube (one per frame, so
@@ -1247,7 +1252,7 @@ impl BakeResources {
         }
     }
 
-    fn new(ctx: &VkContext) -> Result<BakeResources, String> {
+    fn new(ctx: &VkContext) -> RenderResult<BakeResources> {
         use concinnity_core::gfx::render_types::{
             GpuDrawArgs, GpuObjectData, LightUniforms, ShadowUniforms,
         };
@@ -1673,7 +1678,7 @@ impl BakeResources {
 fn make_ubo_bytes(
     alloc: &super::allocator::DeviceAllocator,
     bytes: &[u8],
-) -> Result<PooledBuffer, String> {
+) -> RenderResult<PooledBuffer> {
     let host = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
     let buf = alloc.create_buffer(
         bytes.len() as u64,

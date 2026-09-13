@@ -9,4 +9,5 @@
 // performs the bind, which is why frees are keyed on a retire frame rather than
 // released here.
 pub(crate) mod block_alloc;
+pub(crate) mod geometry;
 pub(crate) mod range_alloc;

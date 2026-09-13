@@ -9,6 +9,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::ssr;
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::device::PostPassDevice;
 use concinnity_core::render::post::ssr::{SsrInputs, SsrPass, target_desc};
 
@@ -37,7 +38,7 @@ impl SsrResources {
         device: &VkPostDevice,
         settings: Option<ssr::SsrSettings>,
         extent: vk::Extent2D,
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         Ok(Self {
             settings,
             pass: SsrPass::new(device)?,
@@ -51,7 +52,7 @@ impl SsrResources {
         &mut self,
         device: &VkPostDevice,
         extent: vk::Extent2D,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         self.output = device.create_target(TARGET_LABEL, &target_desc(), post_extent(extent))?;
         Ok(())
     }

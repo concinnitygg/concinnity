@@ -8,6 +8,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIGHT_LIST_STRIDE, ClusterParams};
+use concinnity_core::render::error::RenderResult;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
@@ -98,7 +99,7 @@ pub(in crate::vulkan) fn build_light_cull(
     local_light_size: vk::DeviceSize,
     has_local_lights: bool,
     hot_reload: bool,
-) -> Result<VkLightCull, String> {
+) -> RenderResult<VkLightCull> {
     // Per-cluster light lists: device-local, written by compute, read by the
     // fragment stage.
     let cluster_buffer = alloc.create_buffer(

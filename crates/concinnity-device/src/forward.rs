@@ -40,6 +40,16 @@ macro_rules! forward {
         fn $name(&self $(, $arg: $ty)*) { self $($recv)* .$name($($arg),*) }
         $crate::forward::forward!(@each $assert, [$($recv)*], $($rest)*);
     };
+    // A `RenderResult` return lifts the inherent method's error through `?`, so
+    // an inherent method still reporting `String` lands as `RenderError::Other`.
+    (@each $assert:path, [$($recv:tt)*],
+     fn $name:ident(&mut self $(, $arg:ident: $ty:ty)* $(,)?) -> RenderResult<$ok:ty>; $($rest:tt)*) => {
+        fn $name(&mut self $(, $arg: $ty)*) -> concinnity_core::render::error::RenderResult<$ok> {
+            $assert(stringify!($name));
+            Ok(self $($recv)* .$name($($arg),*)?)
+        }
+        $crate::forward::forward!(@each $assert, [$($recv)*], $($rest)*);
+    };
     (@each $assert:path, [$($recv:tt)*],
      fn $name:ident(&mut self $(, $arg:ident: $ty:ty)* $(,)?) -> $ret:ty; $($rest:tt)*) => {
         fn $name(&mut self $(, $arg: $ty)*) -> $ret {

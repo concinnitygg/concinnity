@@ -6,6 +6,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::render::error::RenderResult;
 
 use crate::metal::context::{MtlContext, bytes_of_slice, write_buffer_region, zero_buffer_region};
 
@@ -31,7 +32,7 @@ impl MtlContext {
         vertices: &[Vertex],
         indices: &[u16],
         frame: u64,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let obj = self
             .draw
             .objects
@@ -43,7 +44,8 @@ impl MtlContext {
                 draw_idx,
                 obj.vertex_count,
                 vertices.len()
-            ));
+            )
+            .into());
         }
         if indices.len() != obj.index_count {
             return Err(format!(
@@ -51,7 +53,8 @@ impl MtlContext {
                 draw_idx,
                 obj.index_count,
                 indices.len()
-            ));
+            )
+            .into());
         }
 
         // Reclaim frees whose in-flight frames have retired, then place the
@@ -65,30 +68,13 @@ impl MtlContext {
         // stride. Sizing against the u16 source would alloc half the bytes the
         // write needs and corrupt whatever sub-allocation followed.
         let i_len = indices.len() * std::mem::size_of::<u32>();
-        let v_off = self
-            .geometry_alloc
-            .mesh_vtx
-            .alloc(v_len as u64)
-            .ok_or_else(|| {
-                format!(
-                    "upload_mesh: draw {}: no free vertex space for {} bytes",
-                    draw_idx, v_len
-                )
-            })? as usize;
-        let i_off = match self.geometry_alloc.mesh_idx.alloc(i_len as u64) {
-            Some(o) => o as usize,
-            None => {
-                // hand the vertex region back so a half-failed upload leaks no
-                // space (frame 0: it was never written or drawn)
-                self.geometry_alloc
-                    .mesh_vtx
-                    .free(v_off as u64, v_len as u64, 0);
-                return Err(format!(
-                    "upload_mesh: draw {}: no free index space for {} bytes",
-                    draw_idx, i_len
-                ));
-            }
-        };
+        let (v_off, i_off) = crate::suballoc::geometry::place_mesh(
+            &mut self.geometry_alloc.mesh_vtx,
+            &mut self.geometry_alloc.mesh_idx,
+            v_len,
+            i_len,
+            || format!("upload_mesh: draw {draw_idx}"),
+        )?;
 
         // Vertices copy verbatim. Indices are mesh-relative, so rebase them to
         // the vertex region the allocator chose: v_off is always a multiple of

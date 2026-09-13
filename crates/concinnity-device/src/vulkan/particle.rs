@@ -25,6 +25,7 @@
 use ash::vk;
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types::ParticleParams;
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::particles::{ParticleEmitterRecord, ParticleSpawnState};
 use concinnity_core::render::uniforms::GpuParticle;
 use concinnity_core::render::uniforms::ParticleView;
@@ -155,7 +156,7 @@ impl ParticleResources {
         hdr_resolve_views: &[vk::ImageView],
         extent: vk::Extent2D,
         hot_reload: bool,
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         let &GpuUploadContext { alloc, device, .. } = gpu;
         let render_pass = create_render_pass(device, HDR_FORMAT)?;
         let compute_set_layout = create_compute_set_layout(device)?;
@@ -312,7 +313,7 @@ pub(in crate::vulkan) fn build_emitter_gpu_state(
     gpu: GpuUploadContext,
     resources: &ParticleResources,
     record: &ParticleEmitterRecord,
-) -> Result<ParticleEmitterGpuState, String> {
+) -> RenderResult<ParticleEmitterGpuState> {
     // Destructure the handles the buffer allocations need directly; the
     // one-shot zero-fills below take the whole `gpu` context (it is Copy).
     let GpuUploadContext { alloc, device, .. } = gpu;
@@ -1131,7 +1132,7 @@ impl VkContext {
     pub(in crate::vulkan) fn add_particle_emitter(
         &mut self,
         record: ParticleEmitterRecord,
-    ) -> Result<usize, String> {
+    ) -> RenderResult<usize> {
         if self.particle.resources.is_none() {
             let hdr_resolve_views: Vec<vk::ImageView> =
                 self.hdr_resolve_images.iter().map(|img| img.view).collect();
@@ -1154,9 +1155,7 @@ impl VkContext {
         // The cap check is independent of slot availability.
         let live_count = self.particle.records.iter().filter(|s| s.is_some()).count();
         if live_count >= MAX_EMITTERS {
-            return Err(format!(
-                "add_emitter: MAX_EMITTERS ({MAX_EMITTERS}) exceeded"
-            ));
+            return Err(format!("add_emitter: MAX_EMITTERS ({MAX_EMITTERS}) exceeded").into());
         }
 
         let gpu_state = build_emitter_gpu_state(
@@ -1262,7 +1261,7 @@ impl VkContext {
     pub(in crate::vulkan) fn upload_initial_particles(
         &mut self,
         records: Vec<ParticleEmitterRecord>,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         if records.is_empty() {
             return Ok(());
         }
@@ -1271,7 +1270,8 @@ impl VkContext {
                 "particles: {} authored emitters exceed MAX_EMITTERS ({})",
                 records.len(),
                 MAX_EMITTERS
-            ));
+            )
+            .into());
         }
         for record in records {
             self.add_particle_emitter(record)?;

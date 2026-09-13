@@ -6,6 +6,7 @@
 // the per-frame `encode_bloom` encoder. Mirrors src/metal/post/bloom.rs.
 
 use ash::vk;
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::fullscreen;
 
 use super::super::allocator::DeviceAllocator;
@@ -162,7 +163,7 @@ pub(in crate::vulkan) fn create_bloom_mips(
     height: u32,
     format: vk::Format,
     mip0_override: Option<(vk::Image, vk::ImageView)>,
-) -> Result<(Vec<GpuImage>, Vec<vk::Extent2D>), String> {
+) -> RenderResult<(Vec<GpuImage>, Vec<vk::Extent2D>)> {
     let &BloomDeviceContext {
         alloc,
         device,
@@ -231,7 +232,7 @@ pub(in crate::vulkan) fn create_bloom_chain(
     extent: vk::Extent2D,
     frames: usize,
     bloom_top: &[(vk::Image, vk::ImageView)],
-) -> Result<(Vec<Vec<GpuImage>>, Vec<vk::Extent2D>), String> {
+) -> RenderResult<(Vec<Vec<GpuImage>>, Vec<vk::Extent2D>)> {
     let mut mips = Vec::with_capacity(frames);
     let mut extents = Vec::new();
     for f in 0..frames {

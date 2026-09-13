@@ -10,6 +10,7 @@
 
 use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::ssr::SsrSettings;
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::ssr::{SsrInputs, SsrPass};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -157,7 +158,7 @@ impl MtlContext {
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         ssr_params: &render_types::SsrParams,
-    ) -> Result<u32, String> {
+    ) -> RenderResult<u32> {
         // The pre-pass channels are pool-owned, so they are fetched here rather
         // than cached: a pool rebuild repacks every slot.
         let (Some(targets), Some(resolve), Some(normal_depth), Some(roughness)) = (

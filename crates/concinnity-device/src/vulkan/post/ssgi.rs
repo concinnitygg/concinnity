@@ -7,6 +7,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::ssgi::SsgiSettings;
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::ssgi::{SsgiInputs, SsgiPass, SsgiPipelines};
 
 use crate::vulkan::context::VkContext;
@@ -27,7 +28,7 @@ impl SsgiResources {
         device: &VkPostDevice,
         settings: SsgiSettings,
         extent: vk::Extent2D,
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         Ok(Self {
             settings,
             pass: SsgiPass::new(device, settings.gi_scale, post_extent(extent))?,
@@ -40,7 +41,7 @@ impl SsgiResources {
         &mut self,
         device: &VkPostDevice,
         extent: vk::Extent2D,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         self.pass.resize(device, post_extent(extent))
     }
 

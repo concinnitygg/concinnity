@@ -17,6 +17,7 @@
 // SRV/RTV heap layout stable so everything past the bloom block stays at its
 // originally-allocated slot.
 
+use concinnity_core::render::error::RenderResult;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::*;
 
@@ -35,7 +36,7 @@ impl DxContext {
     // minimized (one or both dimensions zero: we just skip the frame's
     // resize cycle and leave the targets at their previous size; the next
     // non-zero size restores them).
-    pub(super) fn maybe_handle_resize(&mut self) -> Result<(), String> {
+    pub(super) fn maybe_handle_resize(&mut self) -> RenderResult<()> {
         let new_w = self.win().width.max(0) as u32;
         let new_h = self.win().height.max(0) as u32;
         if new_w == 0 || new_h == 0 {
@@ -81,7 +82,7 @@ impl DxContext {
     // rebuild: `wait_idle`, drop the old resources, recreate at the new
     // resolution, rewrite every dependent SRV/RTV/DSV at its existing heap
     // slot, and refresh `extent.render_width` / `extent.render_height`.
-    fn handle_resize(&mut self, new_w: u32, new_h: u32) -> Result<(), String> {
+    fn handle_resize(&mut self, new_w: u32, new_h: u32) -> RenderResult<()> {
         self.wait_idle();
 
         // 0) Temporal upscaler. `new_w`/`new_h` are the new drawable dims;
@@ -172,7 +173,7 @@ impl DxContext {
             // an empty `swapchain.back_buffers` (a panic) on the next frame; the resize
             // poll retries on the following frame.
             self.populate_back_buffers()?;
-            return Err(format!("ResizeBuffers: {e}"));
+            return Err(super::error::map_hresult(e.code(), "ResizeBuffers"));
         }
         self.populate_back_buffers()?;
         // The recreated back buffers invalidate any previously captured present

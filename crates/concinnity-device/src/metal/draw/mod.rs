@@ -62,11 +62,11 @@ impl MtlContext {
     // until unified memory is exhausted and the GPU faults / the host panics.
     // Draining per frame frees each frame's command buffers once the GPU
     // retires them, bounding VRAM to the work actually in flight.
-    pub(crate) fn draw_frame(&mut self, params: FrameParams<'_>) -> Result<(), String> {
+    pub(crate) fn draw_frame(&mut self, params: FrameParams<'_>) -> error::RenderResult<()> {
         objc2::rc::autoreleasepool(|_| self.draw_frame_inner(params))
     }
 
-    fn draw_frame_inner(&mut self, params: FrameParams<'_>) -> Result<(), String> {
+    fn draw_frame_inner(&mut self, params: FrameParams<'_>) -> error::RenderResult<()> {
         let FrameParams {
             elapsed,
             fov_y_radians,
@@ -1383,7 +1383,7 @@ impl MtlContext {
     // draws) is `output * upscale_scale`, smaller than the drawable. Bloom
     // and the MetalFX output texture stay at the drawable (output)
     // resolution so the final composite reads cleanly into the swapchain.
-    fn resize_targets_if_needed(&mut self, want_w: u32, want_h: u32) -> Result<(), String> {
+    fn resize_targets_if_needed(&mut self, want_w: u32, want_h: u32) -> error::RenderResult<()> {
         // A MetalFX scaler is bound to one (input, output) size pair at
         // construction, so a changed output needs a fresh instance. Rebuild
         // before deriving the render resolution below, which reads the sizes

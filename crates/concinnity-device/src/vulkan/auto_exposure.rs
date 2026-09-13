@@ -15,6 +15,7 @@
 use ash::vk;
 use concinnity_core::gfx::auto_exposure;
 use concinnity_core::gfx::auto_exposure::HISTOGRAM_BINS;
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::uniforms::AutoExposureParams;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
@@ -85,7 +86,7 @@ impl AutoExposureResources {
         hdr_resolve_views: &[vk::ImageView],
         linear_sampler: vk::Sampler,
         hot_reload: bool,
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         // Build descriptor set layout: 0 = HDR combined image sampler,
         // 1 = histogram SSBO.
         let build_set_layout = create_build_set_layout(device)?;

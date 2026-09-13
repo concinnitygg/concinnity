@@ -141,28 +141,13 @@ impl DxContext {
         // Static IB is u32; chunk indices come in as u16 and get widened on
         // write. Size the allocation against the u32 stride.
         let i_len = indices.len() * std::mem::size_of::<u32>();
-        let v_off = self
-            .chunk_stream
-            .vtx_alloc
-            .alloc(v_len as u64)
-            .ok_or_else(|| {
-                error::RenderError::OutOfDeviceMemory(format!(
-                    "add_chunk_mesh: no free chunk vertex space for {} bytes",
-                    v_len
-                ))
-            })? as usize;
-        let i_off = match self.chunk_stream.idx_alloc.alloc(i_len as u64) {
-            Some(o) => o as usize,
-            None => {
-                self.chunk_stream
-                    .vtx_alloc
-                    .free(v_off as u64, v_len as u64, 0);
-                return Err(error::RenderError::OutOfDeviceMemory(format!(
-                    "add_chunk_mesh: no free chunk index space for {} bytes",
-                    i_len
-                )));
-            }
-        };
+        let (v_off, i_off) = crate::suballoc::geometry::place_mesh(
+            &mut self.chunk_stream.vtx_alloc,
+            &mut self.chunk_stream.idx_alloc,
+            v_len,
+            i_len,
+            || "add_chunk_mesh".to_string(),
+        )?;
 
         self.wait_idle();
 

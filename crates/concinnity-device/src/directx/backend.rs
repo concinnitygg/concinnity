@@ -31,6 +31,7 @@ use concinnity_core::render::decal;
 use concinnity_core::render::display_mode;
 use concinnity_core::render::draw_slot;
 use concinnity_core::render::error;
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::input::RenderInput;
 use concinnity_core::render::keymap::KeyMap;
 use concinnity_core::render::particles;
@@ -90,12 +91,12 @@ impl SkinnedDraws for DxContext {
 
 impl DrawStreaming for DxContext {
     forward! { assert = debug_assert_main_thread;
-        fn evict_texture_slot(&mut self, slot: usize) -> Result<(), String>;
-        fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String>;
+        fn evict_texture_slot(&mut self, slot: usize) -> RenderResult<()>;
+        fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> RenderResult<()>;
         fn seed_mesh_streaming(&mut self, vtx_offset: u64, vtx_bytes: u64, idx_offset: u64, idx_bytes: u64);
-        fn remove_chunk_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String>;
-        fn set_chunk_model(&mut self, draw_idx: usize, model: [[f32; 4]; 4]) -> Result<(), String>;
-        fn clone_static_draw_object(&mut self, src_draw_idx: usize, model: [[f32; 4]; 4], dst: draw_slot::SlotAlloc) -> Result<(), String>;
+        fn remove_chunk_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> RenderResult<()>;
+        fn set_chunk_model(&mut self, draw_idx: usize, model: [[f32; 4]; 4]) -> RenderResult<()>;
+        fn clone_static_draw_object(&mut self, src_draw_idx: usize, model: [[f32; 4]; 4], dst: draw_slot::SlotAlloc) -> RenderResult<()>;
         fn evict_world_shader(&mut self, bucket: u32);
     }
 
@@ -119,7 +120,7 @@ impl DrawStreaming for DxContext {
         frame: u64,
     ) -> error::RenderResult<()> {
         debug_assert_main_thread("upload_mesh");
-        Ok(DxContext::upload_mesh(self, draw_idx, verts, idxs, frame)?)
+        DxContext::upload_mesh(self, draw_idx, verts, idxs, frame)
     }
 
     fn setup_chunk_streaming(
@@ -192,12 +193,12 @@ impl RenderTuning for DxContext {
 
 impl LiveEdit for DxContext {
     forward! { assert = debug_assert_main_thread;
-        fn update_color_lut(&mut self, size: u32, data: &[u8]) -> Result<(), String>;
-        fn update_mesh_geometry(&mut self, draw_idx: usize, verts: &[mesh_payload::Vertex], idxs: &[u16], lod_alternates: &[(f32, Vec<u16>)]) -> Result<(), String>;
-        fn update_world_shader_pipelines(&mut self, programs: &concinnity_core::components::ShaderPrograms) -> Result<(), String>;
-        fn update_skinned_mesh_geometry(&mut self, skinned_index: usize, vertex_base: u32, verts: &[mesh_payload::SkinnedVertex], idxs: &[u16]) -> Result<(), String>;
-        fn update_skinned_skeleton(&mut self, skinned_index: usize, new_joint_count: usize) -> Result<(), String>;
-        fn rebuild_skinned_geometry(&mut self, changes: Vec<backend::SkinnedDrawGeometryUpdate>) -> Result<Vec<backend::SkinnedSlotLayout>, String>;
+        fn update_color_lut(&mut self, size: u32, data: &[u8]) -> RenderResult<()>;
+        fn update_mesh_geometry(&mut self, draw_idx: usize, verts: &[mesh_payload::Vertex], idxs: &[u16], lod_alternates: &[(f32, Vec<u16>)]) -> RenderResult<()>;
+        fn update_world_shader_pipelines(&mut self, programs: &concinnity_core::components::ShaderPrograms) -> RenderResult<()>;
+        fn update_skinned_mesh_geometry(&mut self, skinned_index: usize, vertex_base: u32, verts: &[mesh_payload::SkinnedVertex], idxs: &[u16]) -> RenderResult<()>;
+        fn update_skinned_skeleton(&mut self, skinned_index: usize, new_joint_count: usize) -> RenderResult<()>;
+        fn rebuild_skinned_geometry(&mut self, changes: Vec<backend::SkinnedDrawGeometryUpdate>) -> RenderResult<Vec<backend::SkinnedSlotLayout>>;
     }
 
     // The swapchain config this live context was built with. A live `cn editor`
@@ -211,7 +212,7 @@ impl LiveEdit for DxContext {
     // Inherent method named `apply_world_reload` so this forwarder does not
     // shadow-and-recurse (mirrors the Metal backend).
     fn reload_world(&mut self, init: backend_init::BackendInit<'_>) -> error::RenderResult<()> {
-        Ok(self.apply_world_reload(init)?)
+        self.apply_world_reload(init)
     }
 
     fn update_environment_map(&mut self, payload: &[u8]) -> error::RenderResult<()> {
@@ -248,10 +249,10 @@ impl LiveEdit for DxContext {
 
 impl SceneEffects for DxContext {
     forward! { assert = debug_assert_main_thread;
-        fn add_decal(&mut self, record: decal::DecalRecord) -> Result<usize, String>;
-        fn remove_decal(&mut self, decal_id: usize) -> Result<(), String>;
-        fn add_emitter(&mut self, record: particles::ParticleEmitterRecord) -> Result<usize, String>;
-        fn remove_emitter(&mut self, emitter_id: usize) -> Result<(), String>;
+        fn add_decal(&mut self, record: decal::DecalRecord) -> RenderResult<usize>;
+        fn remove_decal(&mut self, decal_id: usize) -> RenderResult<()>;
+        fn add_emitter(&mut self, record: particles::ParticleEmitterRecord) -> RenderResult<usize>;
+        fn remove_emitter(&mut self, emitter_id: usize) -> RenderResult<()>;
     }
 }
 
@@ -265,16 +266,16 @@ impl BackendProbe for DxContext {
     // Inherent method is named `capture_screenshot` to keep the forwarder
     // unambiguous (an inherent `screenshot` would shadow the trait method and
     // recurse); kept explicit out of the `forward!` macro for that rename.
-    fn screenshot(&mut self, path: &str) -> Result<String, String> {
+    fn screenshot(&mut self, path: &str) -> RenderResult<String> {
         debug_assert_main_thread("screenshot");
-        self.capture_screenshot(path)
+        Ok(self.capture_screenshot(path)?)
     }
 
     // Inherent method is named `read_cull_status_buffer` for the same reason
     // `capture_screenshot` is: an inherent `read_cull_status` would shadow the
     // trait method and recurse.
-    fn read_cull_status(&mut self) -> Result<Vec<u32>, String> {
+    fn read_cull_status(&mut self) -> RenderResult<Vec<u32>> {
         debug_assert_main_thread("read_cull_status");
-        self.read_cull_status_buffer()
+        Ok(self.read_cull_status_buffer()?)
     }
 }

@@ -13,6 +13,7 @@
 // effect might own.
 
 use ash::vk;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::post::device::{
     PostBlend, PostDraw, PostExtent, PostLoadOp, PostPassDevice, PostSampler, resolved_texture,
 };
@@ -20,6 +21,7 @@ use concinnity_core::render::post::program::{PostProgram, PostProgramBindings};
 use concinnity_core::render::render_graph::{PixelFormat, TextureDesc};
 
 use crate::vulkan::allocator::DeviceAllocator;
+use crate::vulkan::error::map_vk_result;
 use crate::vulkan::owned::{OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout, VkDevice};
 use crate::vulkan::pipeline::GraphicsStages;
 use crate::vulkan::post::pass_cache::PostPassCache;
@@ -178,13 +180,13 @@ impl VkPostDevice<'_> {
         &self,
         bindings: PostProgramBindings,
         label: &str,
-    ) -> Result<Option<VkPostProbes<'_>>, String> {
+    ) -> RenderResult<Option<VkPostProbes<'_>>> {
         match (bindings.probes, self.probes) {
             (false, _) => Ok(None),
             (true, Some(probes)) => Ok(Some(probes)),
-            (true, None) => Err(format!(
+            (true, None) => Err(RenderError::Other(format!(
                 "{label}: the program reads the reflection-probe set, but this device holds none"
-            )),
+            ))),
         }
     }
 
@@ -205,7 +207,7 @@ impl VkPostDevice<'_> {
         render_pass: vk::RenderPass,
         layout: vk::PipelineLayout,
         blend: PostBlend,
-    ) -> Result<OwnedPipeline, String> {
+    ) -> RenderResult<OwnedPipeline> {
         let (vert_spv, frag_spv) = shaders;
         let modules = GraphicsStages::new(self.device, &vert_spv, &frag_spv)?;
         let stages = modules.infos();
@@ -251,7 +253,7 @@ impl VkPostDevice<'_> {
             .render_pass(render_pass)
             .subpass(0);
         crate::vulkan::pipeline_cache::create_graphics_pipeline(self.device, &info)
-            .map_err(|e| format!("create post pipeline: {e}"))
+            .map_err(|e| map_vk_result(e, "create post pipeline"))
     }
 }
 
@@ -267,7 +269,7 @@ impl PostPassDevice for VkPostDevice<'_> {
         program: PostProgram,
         format: PixelFormat,
         blend: PostBlend,
-    ) -> Result<Self::Pipeline, String> {
+    ) -> RenderResult<Self::Pipeline> {
         let bindings = program.bindings();
         let probes = self.probes_for(bindings, program.label())?;
         let set_layout = self.set_layout(bindings.textures)?;
@@ -284,7 +286,7 @@ impl PostPassDevice for VkPostDevice<'_> {
         let layout = self
             .device
             .create_pipeline_layout(&layout_info)
-            .map_err(|e| format!("post pipeline layout: {e}"))?;
+            .map_err(|e| map_vk_result(e, "post pipeline layout"))?;
 
         // A pipeline is created against a render pass but is compatible with any
         // pass of the same attachment shape, so the cached one for this format
@@ -308,7 +310,7 @@ impl PostPassDevice for VkPostDevice<'_> {
         label: &'static str,
         desc: &TextureDesc,
         extent: PostExtent,
-    ) -> Result<Self::Target, String> {
+    ) -> RenderResult<Self::Target> {
         let spec = resolved_texture(label, desc, extent);
         let pooled = create_image(
             self.alloc,
@@ -322,7 +324,7 @@ impl PostPassDevice for VkPostDevice<'_> {
                 samples: sample_count(spec.sample_count),
             },
         )
-        .map_err(|e| format!("{label} post target: {e}"))?;
+        .map_err(|e| e.context(format_args!("{label} post target")))?;
         let image = pooled.image();
         // Pre-transitioned so the first frame can sample a slot before anything
         // has rendered into it: a temporal pass binds its history on the very
@@ -370,7 +372,7 @@ impl PostPassDevice for VkPostDevice<'_> {
         }
     }
 
-    fn encode(&self, rec: &Self::Recorder, draw: &PostDraw<'_, '_, Self>) -> Result<(), String> {
+    fn encode(&self, rec: &Self::Recorder, draw: &PostDraw<'_, '_, Self>) -> RenderResult<()> {
         let cmd = *rec;
         let pipe = draw.pipeline;
         draw.check(pipe.bindings)?;
@@ -379,7 +381,10 @@ impl PostPassDevice for VkPostDevice<'_> {
         let probe_set = match self.probes_for(pipe.bindings, draw.label)? {
             None => None,
             Some(probes) => Some(*probes.sets.get(self.frame).ok_or_else(|| {
-                format!("{}: no global set for frame {}", draw.label, self.frame)
+                RenderError::Other(format!(
+                    "{}: no global set for frame {}",
+                    draw.label, self.frame
+                ))
             })?),
         };
         let target = draw.target;

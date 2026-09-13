@@ -13,6 +13,7 @@
 // Mirrors src/metal/hot_reload.rs.
 
 use concinnity_core::render::backend_init;
+use concinnity_core::render::error::RenderResult;
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -200,7 +201,7 @@ impl DxContext {
     // pass when it is live (rebuilt from the world default Shader's pair where
     // the world declares one). The shadow and skinned-shadow PSOs are out of
     // scope here.
-    pub(super) fn reload_shaders(&mut self) -> Result<(), String> {
+    pub(super) fn reload_shaders(&mut self) -> RenderResult<()> {
         if !self.hot_reload.enabled {
             return Ok(());
         }

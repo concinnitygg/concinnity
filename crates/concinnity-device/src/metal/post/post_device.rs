@@ -8,6 +8,7 @@
 // translation, not a mechanism.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::post::device::{
     PostBlend, PostDraw, PostExtent, PostLoadOp, PostPassDevice, PostSampler, PostTiming,
     resolved_texture,
@@ -129,7 +130,7 @@ impl PostPassDevice for MtlPostDevice<'_> {
         program: PostProgram,
         format: PixelFormat,
         blend_mode: PostBlend,
-    ) -> Result<Self::Pipeline, String> {
+    ) -> RenderResult<Self::Pipeline> {
         let state = build_slang_fullscreen_pipeline(
             self.device,
             library(program),
@@ -148,12 +149,12 @@ impl PostPassDevice for MtlPostDevice<'_> {
         label: &'static str,
         desc: &TextureDesc,
         extent: PostExtent,
-    ) -> Result<Self::Target, String> {
+    ) -> RenderResult<Self::Target> {
         let spec = resolved_texture(label, desc, extent);
         let desc = texture_descriptor_for(&spec);
         self.device
             .newTextureWithDescriptor(&desc)
-            .ok_or_else(|| format!("failed to create the {label} post target"))
+            .ok_or_else(|| RenderError::Other(format!("failed to create the {label} post target")))
     }
 
     fn target_ref<'a>(&self, target: &'a Self::Target) -> Self::TextureRef<'a> {
@@ -164,17 +165,17 @@ impl PostPassDevice for MtlPostDevice<'_> {
         target.as_ref()
     }
 
-    fn encode(&self, rec: &Self::Recorder, draw: &PostDraw<'_, '_, Self>) -> Result<(), String> {
+    fn encode(&self, rec: &Self::Recorder, draw: &PostDraw<'_, '_, Self>) -> RenderResult<()> {
         let bindings = draw.pipeline.bindings;
         draw.check(bindings)?;
         let probes = match (bindings.probes, self.probes) {
             (false, _) => None,
             (true, Some(probes)) => Some(probes),
             (true, None) => {
-                return Err(format!(
+                return Err(RenderError::Other(format!(
                     "{}: the program reads the reflection-probe set, but this device holds none",
                     draw.label
-                ));
+                )));
             }
         };
         encode_fullscreen_pass(
@@ -211,6 +212,7 @@ impl PostPassDevice for MtlPostDevice<'_> {
                     }
                 }
             },
-        )
+        )?;
+        Ok(())
     }
 }

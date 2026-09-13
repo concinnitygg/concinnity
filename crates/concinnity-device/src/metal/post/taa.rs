@@ -7,6 +7,7 @@
 // `MtlPostDevice`.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::device::PostExtent;
 use concinnity_core::render::post::taa::{TaaInputs, TaaPass, TaaRing};
 use objc2::rc::Retained;
@@ -48,7 +49,7 @@ pub(crate) fn build_taa_pass(
     device: &MtlPostDevice,
     width: u32,
     height: u32,
-) -> Result<MtlTaaPass, String> {
+) -> RenderResult<MtlTaaPass> {
     TaaPass::new(device, TaaRing::ping_pong(), PostExtent { width, height })
 }
 
@@ -80,7 +81,7 @@ impl MtlContext {
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         scene_input: &ProtocolObject<dyn objc2_metal::MTLTexture>,
-    ) -> Result<u32, String> {
+    ) -> RenderResult<u32> {
         let pass = self
             .taa
             .pass

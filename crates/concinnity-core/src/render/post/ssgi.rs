@@ -10,9 +10,8 @@
 //! resource states follow the graph has to move the scene between those two
 //! draws, which is why each draw is also encodable on its own.
 
-use alloc::string::String;
-
 use crate::gfx::render_types::SsgiParams;
+use crate::render::error::RenderResult;
 use crate::render::render_graph::{
     ClearValue, PassId, PixelFormat, TextureDesc, TextureSize, TextureUsage,
 };
@@ -43,9 +42,7 @@ pub struct SsgiPipelines<Pipeline> {
 }
 
 /// Build both pipelines on their own, without touching the target.
-pub fn build_pipelines<D: PostPassDevice>(
-    device: &D,
-) -> Result<SsgiPipelines<D::Pipeline>, String> {
+pub fn build_pipelines<D: PostPassDevice>(device: &D) -> RenderResult<SsgiPipelines<D::Pipeline>> {
     let format = PixelFormat::Rgba16Float;
     Ok(SsgiPipelines {
         gather: device.create_pipeline(PostProgram::SsgiGather, format, PostBlend::Replace)?,
@@ -94,7 +91,7 @@ pub struct SsgiPass<Pipeline, Target> {
 impl<Pipeline, Target> SsgiPass<Pipeline, Target> {
     /// Build both pipelines and the gather target for a render resolution of
     /// `extent`.
-    pub fn new<D>(device: &D, gi_scale: u32, extent: PostExtent) -> Result<Self, String>
+    pub fn new<D>(device: &D, gi_scale: u32, extent: PostExtent) -> RenderResult<Self>
     where
         D: PostPassDevice<Pipeline = Pipeline, Target = Target>,
     {
@@ -113,7 +110,7 @@ impl<Pipeline, Target> SsgiPass<Pipeline, Target> {
 
     /// Recreate the gather target for a new render resolution. The caller has
     /// already idled the device.
-    pub fn resize<D>(&mut self, device: &D, extent: PostExtent) -> Result<(), String>
+    pub fn resize<D>(&mut self, device: &D, extent: PostExtent) -> RenderResult<()>
     where
         D: PostPassDevice<Pipeline = Pipeline, Target = Target>,
     {
@@ -134,7 +131,7 @@ impl<Pipeline, Target> SsgiPass<Pipeline, Target> {
         rec: &D::Recorder,
         inputs: SsgiInputs<'t, D>,
         params: &SsgiParams,
-    ) -> Result<(), String>
+    ) -> RenderResult<()>
     where
         D: PostPassDevice<Pipeline = Pipeline, Target = Target> + 't,
     {
@@ -157,7 +154,7 @@ impl<Pipeline, Target> SsgiPass<Pipeline, Target> {
         scene: D::TextureRef<'t>,
         normal_depth: D::TextureRef<'t>,
         params: &SsgiParams,
-    ) -> Result<(), String>
+    ) -> RenderResult<()>
     where
         D: PostPassDevice<Pipeline = Pipeline, Target = Target> + 't,
     {
@@ -188,7 +185,7 @@ impl<Pipeline, Target> SsgiPass<Pipeline, Target> {
         scene_target: D::Attachment<'t>,
         normal_depth: D::TextureRef<'t>,
         params: &SsgiParams,
-    ) -> Result<(), String>
+    ) -> RenderResult<()>
     where
         D: PostPassDevice<Pipeline = Pipeline, Target = Target> + 't,
     {

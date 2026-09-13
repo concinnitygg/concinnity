@@ -30,6 +30,7 @@ use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::{LightUniforms, ShadowUniforms};
 use concinnity_core::gfx::transform::mat4_inverse;
 use concinnity_core::platform::Platform;
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::slang_programs::raymarch::{self, Family};
 use concinnity_slang::SlangTarget;
 
@@ -284,7 +285,7 @@ fn cube_vertex(pos: [f32; 3]) -> Vertex {
 // pipeline culls front faces so only back faces fire). Host-visible buffers,
 // written once. Mirrors `directx::raymarch::build_cube_buffers`.
 type CubeBuffers = (PooledBuffer, PooledBuffer);
-fn build_cube_buffers(alloc: &DeviceAllocator) -> Result<CubeBuffers, String> {
+fn build_cube_buffers(alloc: &DeviceAllocator) -> RenderResult<CubeBuffers> {
     #[rustfmt::skip]
     let corners: [Vertex; 8] = [
         cube_vertex([-1.0, -1.0, -1.0]),
@@ -878,7 +879,7 @@ fn create_snapshot(
     queue: vk::Queue,
     width: u32,
     height: u32,
-) -> Result<GpuImage, String> {
+) -> RenderResult<GpuImage> {
     let pooled = create_image(
         alloc,
         &ImageSpec {
@@ -966,7 +967,7 @@ impl RaymarchResources {
         bindings: RaymarchSharedBindings,
         sdf_volumes: &[(SdfVolume, Vec<u8>, String)],
         hot_reload: bool,
-    ) -> Result<Option<Self>, String> {
+    ) -> RenderResult<Option<Self>> {
         let RaymarchDeviceContext {
             alloc,
             device,
@@ -1232,7 +1233,7 @@ impl RaymarchResources {
         ctx: RaymarchDeviceContext,
         width: u32,
         height: u32,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let RaymarchDeviceContext {
             alloc,
             device,

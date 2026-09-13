@@ -401,11 +401,11 @@ pub(crate) fn dispatch_runtime_spawn(
                         tint: args.tint,
                     })
                 })
-                .and_then(|rec| backend.add_decal(rec));
+                .and_then(|rec| backend.add_decal(rec).map_err(|e| e.to_string()));
             let _ = reply.send(result);
         }
         RuntimeCommand::DecalRemove { id, reply } => {
-            let _ = reply.send(backend.remove_decal(id));
+            let _ = reply.send(backend.remove_decal(id).map_err(|e| e.to_string()));
         }
         RuntimeCommand::EmitterAdd { args, reply } => {
             let result = resolve_texture_slot(args.texture.as_deref(), world_reload)
@@ -451,17 +451,17 @@ pub(crate) fn dispatch_runtime_spawn(
                         color_end: args.color_end,
                     }
                 })
-                .and_then(|rec| backend.add_emitter(rec));
+                .and_then(|rec| backend.add_emitter(rec).map_err(|e| e.to_string()));
             let _ = reply.send(result);
         }
         RuntimeCommand::EmitterRemove { id, reply } => {
-            let _ = reply.send(backend.remove_emitter(id));
+            let _ = reply.send(backend.remove_emitter(id).map_err(|e| e.to_string()));
         }
         RuntimeCommand::Screenshot { path, reply } => {
-            let _ = reply.send(backend.screenshot(&path));
+            let _ = reply.send(backend.screenshot(&path).map_err(|e| e.to_string()));
         }
         RuntimeCommand::CullStatus { reply } => {
-            let _ = reply.send(backend.read_cull_status());
+            let _ = reply.send(backend.read_cull_status().map_err(|e| e.to_string()));
         }
         RuntimeCommand::CameraSet { reply, .. } => {
             // CameraSet mutates the ECS, not the backend; the per-frame drive
@@ -1184,7 +1184,7 @@ mod tests {
     }
 
     impl backend::DrawStreaming for StubBackend {
-        fn evict_texture_slot(&mut self, _slot: usize) -> Result<(), String> {
+        fn evict_texture_slot(&mut self, _slot: usize) -> error::RenderResult<()> {
             Ok(())
         }
         fn update_texture_slot(
@@ -1194,7 +1194,7 @@ mod tests {
         ) -> error::RenderResult<()> {
             Ok(())
         }
-        fn evict_mesh(&mut self, _draw_idx: usize, _retire_frame: u64) -> Result<(), String> {
+        fn evict_mesh(&mut self, _draw_idx: usize, _retire_frame: u64) -> error::RenderResult<()> {
             Ok(())
         }
         fn upload_mesh(
@@ -1224,14 +1224,14 @@ mod tests {
             &mut self,
             _draw_idx: usize,
             _retire_frame: u64,
-        ) -> Result<(), String> {
+        ) -> error::RenderResult<()> {
             Ok(())
         }
         fn set_chunk_model(
             &mut self,
             _draw_idx: usize,
             _model: [[f32; 4]; 4],
-        ) -> Result<(), String> {
+        ) -> error::RenderResult<()> {
             Ok(())
         }
     }
@@ -1453,10 +1453,7 @@ mod tests {
             &mut backend,
         );
         let err = rx.recv().unwrap().unwrap_err();
-        assert!(
-            err.contains("screenshot capture not supported"),
-            "got: {err}"
-        );
+        assert!(err.contains("screenshot: not supported"), "got: {err}");
     }
 
     #[test]
@@ -1466,7 +1463,7 @@ mod tests {
         dispatch_runtime_spawn(RuntimeCommand::CullStatus { reply: tx }, None, &mut backend);
         let err = rx.recv().unwrap().unwrap_err();
         assert!(
-            err.contains("cull-status readback not supported"),
+            err.contains("read_cull_status: not supported"),
             "got: {err}"
         );
     }

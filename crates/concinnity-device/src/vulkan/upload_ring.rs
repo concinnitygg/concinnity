@@ -18,6 +18,7 @@
 // against one `StorageModeShared` buffer per slot.
 
 use ash::vk;
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::fullscreen::align_up;
 use std::cell::RefCell;
 
@@ -88,7 +89,7 @@ impl UploadRing {
         alloc: &DeviceAllocator,
         frame: usize,
         needed: u64,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let mut slot = self.slots[frame % self.slots.len()].borrow_mut();
         slot.cursor = 0;
         if needed <= slot.capacity {
@@ -101,7 +102,11 @@ impl UploadRing {
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         )?;
         if buffer.mapped_ptr().is_null() {
-            return Err("text upload buffer is not host-mapped".to_string());
+            return Err(
+                concinnity_core::render::error::RenderError::OutOfDeviceMemory(
+                    "text upload buffer is not host-mapped".to_string(),
+                ),
+            );
         }
         // Replacing `buffer` retires the old one through the allocator, which
         // withholds its range until every in-flight frame has passed.

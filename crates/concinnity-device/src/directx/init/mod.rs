@@ -36,6 +36,7 @@ use concinnity_core::gfx::transform::IDENTITY;
 use concinnity_core::render::backend_init;
 use concinnity_core::render::csm;
 use concinnity_core::render::decal;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::hdr_output;
 use concinnity_core::render::lights;
 use concinnity_core::render::ltc;
@@ -72,7 +73,7 @@ pub(in crate::directx) const HIZ_MAX_MIPS: usize = 15;
 impl DxContext {
     // Construct a fresh context (new device + window + swapchain) from the
     // assembled backend inputs (see `concinnity_core::render::backend_init::BackendInit`).
-    pub(crate) fn new(init: backend_init::BackendInit<'_>) -> Result<Self, String> {
+    pub(crate) fn new(init: backend_init::BackendInit<'_>) -> RenderResult<Self> {
         Self::build(init, None)
     }
 
@@ -86,7 +87,7 @@ impl DxContext {
     fn build(
         init: backend_init::BackendInit<'_>,
         reuse: Option<window::DeviceAndWindow>,
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         use concinnity_core::render::backend_init::{
             BackendInit, MediaPayloads, PostSettings, SceneData, ShadowParams, WorldFx, WorldShader,
         };
@@ -1606,11 +1607,11 @@ impl DxContext {
         // heap slot. Runtime adds via `DxContext::add_decal` follow the same
         // pattern.
         if decals.len() > crate::directx::decal::MAX_DECALS {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "decals: {} authored decals exceed MAX_DECALS ({})",
                 decals.len(),
                 crate::directx::decal::MAX_DECALS
-            ));
+            )));
         }
         let last_tex = gpu_textures.len().saturating_sub(1);
         for (i, rec) in decals.iter().enumerate() {
@@ -1667,11 +1668,11 @@ impl DxContext {
         // pipelines lazily the same way. The emitter cap matches the SRV-heap
         // reservation made above.
         if particles.len() > crate::directx::particle::MAX_EMITTERS {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "particles: {} authored emitters exceed MAX_EMITTERS ({})",
                 particles.len(),
                 crate::directx::particle::MAX_EMITTERS
-            ));
+            )));
         }
         let (particle_resources, particle_records, particle_emitter_states) =
             if !particles.is_empty() {
@@ -2454,7 +2455,7 @@ impl DxContext {
     pub(in crate::directx) fn apply_world_reload(
         &mut self,
         init: backend_init::BackendInit<'_>,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         self.wait_idle();
         let reuse = window::DeviceAndWindow {
             win_state: self

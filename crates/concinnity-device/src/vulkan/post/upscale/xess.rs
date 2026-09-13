@@ -23,6 +23,7 @@
 )]
 
 use ash::vk;
+use concinnity_core::render::error::RenderResult;
 use std::cell::Cell;
 use std::ffi::{CString, c_char, c_void};
 use std::ptr;
@@ -387,7 +388,7 @@ impl XessUpscaler {
         output_width: u32,
         output_height: u32,
         upscale_scale: f32,
-    ) -> Result<Option<Self>, String> {
+    ) -> RenderResult<Option<Self>> {
         let super::UpscalerGpu {
             alloc,
             instance,

@@ -41,6 +41,7 @@
 // before this frame's write.
 
 use ash::vk;
+use concinnity_core::render::error::RenderResult;
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledImage};
 use super::pipeline::{SHADER_ENTRY, spv_module};
@@ -149,7 +150,7 @@ fn create_hiz_image(
     width: u32,
     height: u32,
     mip_count: u32,
-) -> Result<PooledImage, String> {
+) -> RenderResult<PooledImage> {
     let img_info = vk::ImageCreateInfo::default()
         .image_type(vk::ImageType::TYPE_2D)
         .extent(vk::Extent3D {
@@ -167,7 +168,7 @@ fn create_hiz_image(
         .samples(vk::SampleCountFlags::TYPE_1);
     alloc
         .create_image(&img_info, vk::MemoryPropertyFlags::DEVICE_LOCAL)
-        .map_err(|e| format!("hiz image: {e}"))
+        .map_err(|e| e.context("hiz image"))
 }
 
 // A single-level (`mip`) or all-mips (`base_mip = 0`, `count = mip_count`) 2D
@@ -280,7 +281,7 @@ impl HiZResources {
         // occlusion (`Cull2`). Gated on the world's `occlusion_two_pass`.
         two_pass: bool,
         hot_reload: bool,
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         // `command_pool`, `queue`, and `depth_views` are only needed by the
         // `create_image_and_sets` call below, which takes `ctx` / `target` whole.
         let HiZDeviceCtx { alloc, device, .. } = ctx;
@@ -334,17 +335,15 @@ impl HiZResources {
         // Per-frame cull-read uniform buffers (host-mapped). The phase-2 set
         // gets its own ring (`cull_ubos2`) when two-pass occlusion is active.
         let ubo_size = std::mem::size_of::<CullHizParams>() as u64;
-        let alloc_ubo_ring = |count: usize| -> Result<Vec<PooledBuffer>, String> {
+        let alloc_ubo_ring = |count: usize| -> RenderResult<Vec<PooledBuffer>> {
             (0..count)
                 .map(|_| {
-                    alloc
-                        .create_buffer(
-                            ubo_size,
-                            vk::BufferUsageFlags::UNIFORM_BUFFER,
-                            vk::MemoryPropertyFlags::HOST_VISIBLE
-                                | vk::MemoryPropertyFlags::HOST_COHERENT,
-                        )
-                        .map_err(String::from)
+                    alloc.create_buffer(
+                        ubo_size,
+                        vk::BufferUsageFlags::UNIFORM_BUFFER,
+                        vk::MemoryPropertyFlags::HOST_VISIBLE
+                            | vk::MemoryPropertyFlags::HOST_COHERENT,
+                    )
                 })
                 .collect()
         };
@@ -383,11 +382,7 @@ impl HiZResources {
     // to it. Resets the descriptor pool, so all Hi-Z sets are freshly
     // allocated; the cull-read UBO buffers themselves survive (only their
     // descriptors are rewritten). The caller must have idled the GPU.
-    fn create_image_and_sets(
-        &mut self,
-        ctx: HiZDeviceCtx,
-        target: HiZTarget,
-    ) -> Result<(), String> {
+    fn create_image_and_sets(&mut self, ctx: HiZDeviceCtx, target: HiZTarget) -> RenderResult<()> {
         let HiZDeviceCtx {
             alloc,
             device,
@@ -528,7 +523,7 @@ impl HiZResources {
     // pyramid retires through the allocator when the new one replaces it. The
     // caller flips `hiz_valid` to false so the next cull dispatch ignores the
     // now-stale pyramid.
-    pub(super) fn resize_to(&mut self, ctx: HiZDeviceCtx, target: HiZTarget) -> Result<(), String> {
+    pub(super) fn resize_to(&mut self, ctx: HiZDeviceCtx, target: HiZTarget) -> RenderResult<()> {
         self.create_image_and_sets(ctx, target)
     }
 

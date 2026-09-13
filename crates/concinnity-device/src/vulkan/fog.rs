@@ -22,6 +22,7 @@
 use ash::vk;
 use concinnity_core::gfx::render_types::{FogFroxelParams, FogParams, ShadowUniforms};
 use concinnity_core::gfx::transform::mat4_inverse;
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
 use concinnity_core::render::volumetric_fog;
 
@@ -137,7 +138,7 @@ impl FogResources {
         targets: FogFrameTargets,
         shadow: FogShadowResources<'_>,
         hot_reload: bool,
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         let FogDeviceContext {
             alloc,
             device,
@@ -348,16 +349,14 @@ fn alloc_ubo_ring(
     alloc: &DeviceAllocator,
     count: usize,
     size: u64,
-) -> Result<Vec<PooledBuffer>, String> {
+) -> RenderResult<Vec<PooledBuffer>> {
     (0..count)
         .map(|_| {
-            alloc
-                .create_buffer(
-                    size,
-                    vk::BufferUsageFlags::UNIFORM_BUFFER,
-                    vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-                )
-                .map_err(String::from)
+            alloc.create_buffer(
+                size,
+                vk::BufferUsageFlags::UNIFORM_BUFFER,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            )
         })
         .collect()
 }
@@ -694,7 +693,7 @@ fn write_froxel_set(device: &VkDevice, set: vk::DescriptorSet, bindings: FogFrox
 }
 
 // Create the shared 3D RGBA16F froxel volume (STORAGE | SAMPLED, GPU-local).
-fn create_volume_image(alloc: &DeviceAllocator) -> Result<PooledImage, String> {
+fn create_volume_image(alloc: &DeviceAllocator) -> RenderResult<PooledImage> {
     let img_info = vk::ImageCreateInfo::default()
         .image_type(vk::ImageType::TYPE_3D)
         .extent(vk::Extent3D {
@@ -710,9 +709,7 @@ fn create_volume_image(alloc: &DeviceAllocator) -> Result<PooledImage, String> {
         .usage(vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED)
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
         .samples(vk::SampleCountFlags::TYPE_1);
-    alloc
-        .create_image(&img_info, vk::MemoryPropertyFlags::DEVICE_LOCAL)
-        .map_err(|e| format!("fog volume image: {e}"))
+    alloc.create_image(&img_info, vk::MemoryPropertyFlags::DEVICE_LOCAL)
 }
 
 // A whole-image 3D view of the froxel volume (used for both the compute

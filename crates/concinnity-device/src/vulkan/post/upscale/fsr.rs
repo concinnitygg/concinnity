@@ -31,6 +31,7 @@
 
 use ash::vk;
 use ash::vk::Handle;
+use concinnity_core::render::error::RenderResult;
 use std::cell::Cell;
 use std::ffi::c_void;
 use std::ptr;
@@ -380,7 +381,7 @@ impl FsrUpscaler {
         output_width: u32,
         output_height: u32,
         upscale_scale: f32,
-    ) -> Result<Option<Self>, String> {
+    ) -> RenderResult<Option<Self>> {
         let UpscalerGpu {
             alloc,
             instance,

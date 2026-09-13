@@ -9,6 +9,7 @@ use concinnity_core::gfx::rt_reflections;
 use concinnity_core::gfx::ssao;
 use concinnity_core::gfx::ssgi;
 use concinnity_core::gfx::ssr;
+use concinnity_core::render::error::RenderResult;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::allocator::{DeviceAllocator, PooledTexture};
@@ -127,7 +128,7 @@ pub(super) fn build_effects(
     settings: EffectSettings,
     flags: EffectFlags,
     slots: EffectDescriptorSlots<'_>,
-) -> Result<EffectsBundle, String> {
+) -> RenderResult<EffectsBundle> {
     let device = alloc.device();
     let EffectDimensions {
         width,

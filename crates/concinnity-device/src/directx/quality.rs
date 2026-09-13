@@ -29,6 +29,7 @@
 use concinnity_core::gfx::auto_exposure;
 use concinnity_core::gfx::rt_reflections;
 use concinnity_core::render::backend::QualitySettings;
+use concinnity_core::render::error::RenderResult;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::context::DxContext;
@@ -65,7 +66,7 @@ impl DxContext {
         }
     }
 
-    fn apply_quality_settings_inner(&mut self, q: QualitySettings) -> Result<(), String> {
+    fn apply_quality_settings_inner(&mut self, q: QualitySettings) -> RenderResult<()> {
         // Every build / teardown below frees or replaces GPU resources a prior
         // frame may still reference; drain the device first so the swap is safe.
         self.wait_idle();

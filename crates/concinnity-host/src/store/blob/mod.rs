@@ -109,7 +109,8 @@ fn read_file(path: &str) -> Result<Vec<u8>, CnError> {
 }
 
 // Log a format failure against the file it came from. The format crate has no
-// path to name, so the diagnostic belongs here.
+// path to name, so the diagnostic belongs here. The file was read, so none of
+// these is an I/O failure.
 fn report(path: &str, e: BlobError) -> CnError {
     match e {
         BlobError::TooShort => tracing::error!("{}: file too short", path),
@@ -125,9 +126,12 @@ fn report(path: &str, e: BlobError) -> CnError {
             path,
             n
         ),
-        BlobError::Encode => tracing::error!("{}: failed to serialize metadata", path),
+        BlobError::Encode => {
+            tracing::error!("{}: failed to serialize metadata", path);
+            return CnError::InvalidArgument;
+        }
     }
-    CnError::FileIo
+    CnError::InvalidData
 }
 
 /// Load the blob file at `primary` and the payload store around it, anchoring
@@ -222,13 +226,29 @@ mod tests {
         assert_eq!(resolve_blob_path(None, 3), None);
     }
 
+    // A file that was read but cannot be used is not a disk failure, so a
+    // version mismatch must not read as one.
     #[test]
-    fn format_failures_fold_onto_file_io() {
-        assert_eq!(report("x.cnb", BlobError::BadMagic), CnError::FileIo);
-        assert_eq!(
-            report("x.cnb", BlobError::ValidityMismatch(99)),
-            CnError::FileIo
-        );
+    fn format_failures_report_invalid_data() {
+        for e in [
+            BlobError::TooShort,
+            BlobError::BadMagic,
+            BlobError::ValidityMismatch(99),
+            BlobError::TruncatedMeta,
+            BlobError::Decode,
+            BlobError::TrailingMeta(4),
+        ] {
+            assert_eq!(report("x.cnb", e), CnError::InvalidData, "{e:?}");
+        }
+        assert_eq!(report("x.cnb", BlobError::Encode), CnError::InvalidArgument);
+    }
+
+    #[test]
+    fn read_cnb_reports_invalid_data_for_a_foreign_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("0").to_string_lossy().into_owned();
+        std::fs::write(&path, vec![0xabu8; HEADER_SIZE * 2]).unwrap();
+        assert_eq!(read_cnb(&path).unwrap_err(), CnError::InvalidData);
     }
 
     #[test]
@@ -263,7 +283,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("bad").to_string_lossy().into_owned();
         std::fs::write(&path, vec![0u8; HEADER_SIZE]).unwrap();
-        assert_eq!(payload_section_start(&path), Err(CnError::FileIo));
+        assert_eq!(payload_section_start(&path), Err(CnError::InvalidData));
     }
 
     #[test]

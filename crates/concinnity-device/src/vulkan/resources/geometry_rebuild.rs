@@ -21,6 +21,7 @@ use concinnity_core::gfx::render_types::LodSlice;
 use concinnity_core::render::backend::{
     DrawGeometryUpdate, SkinnedDrawGeometryUpdate, SkinnedSlotLayout,
 };
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::rt_geom;
 use std::collections::HashMap;
 
@@ -48,7 +49,7 @@ impl VkContext {
     pub(crate) fn rebuild_static_geometry(
         &mut self,
         changes: Vec<DrawGeometryUpdate>,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         // Stop GPU + CPU pipelines so the readback + swap can run safely.
         self.wait_idle();
 
@@ -129,7 +130,8 @@ impl VkContext {
                         v_start,
                         v_end,
                         old_vertices.len()
-                    ));
+                    )
+                    .into());
                 }
                 new_vertices.extend_from_slice(&old_vertices[v_start..v_end]);
                 let old_base_u32 = if absolute_indices {
@@ -146,7 +148,8 @@ impl VkContext {
                         obj.index_offset,
                         i_end,
                         old_indices.len()
-                    ));
+                    )
+                    .into());
                 }
                 if absolute_indices {
                     for &idx in &old_indices[obj.index_offset..i_end] {
@@ -166,7 +169,8 @@ impl VkContext {
                             slice.index_offset,
                             alt_end,
                             old_indices.len()
-                        ));
+                        )
+                        .into());
                     }
                     let alt_off = new_indices.len();
                     if absolute_indices {
@@ -288,7 +292,7 @@ impl VkContext {
     pub(crate) fn rebuild_skinned_geometry(
         &mut self,
         changes: Vec<SkinnedDrawGeometryUpdate>,
-    ) -> Result<Vec<SkinnedSlotLayout>, String> {
+    ) -> RenderResult<Vec<SkinnedSlotLayout>> {
         if self.skinned.vertex_buffer.is_null() || self.skinned.index_buffer.is_null() {
             return Err(
                 "rebuild_skinned_geometry: no skinned vertex/index buffer (was \
@@ -357,7 +361,8 @@ impl VkContext {
                         v_start,
                         v_end,
                         old_vertices.len()
-                    ));
+                    )
+                    .into());
                 }
                 new_vertices.extend_from_slice(&old_vertices[v_start..v_end]);
                 let i_end = obj.index_offset + obj.index_count;
@@ -369,7 +374,8 @@ impl VkContext {
                         obj.index_offset,
                         i_end,
                         old_indices.len()
-                    ));
+                    )
+                    .into());
                 }
                 let old_base = obj.vertex_base;
                 for &abs in &old_indices[obj.index_offset..i_end] {
@@ -473,7 +479,7 @@ impl VkContext {
 // and `copy_nonoverlapping`s into the Vec. `T`'s stride must match the
 // buffer's stride exactly. Only reached through the (bin-only) geometry-rebuild
 // path, so dead in the FFI lib.
-fn readback_typed<T: Copy>(ctx: &VkContext, src: vk::Buffer, bytes: u64) -> Result<Vec<T>, String> {
+fn readback_typed<T: Copy>(ctx: &VkContext, src: vk::Buffer, bytes: u64) -> RenderResult<Vec<T>> {
     if bytes == 0 {
         return Ok(Vec::new());
     }
@@ -482,7 +488,8 @@ fn readback_typed<T: Copy>(ctx: &VkContext, src: vk::Buffer, bytes: u64) -> Resu
         return Err(format!(
             "readback_typed: buffer size {} not a multiple of T stride {}",
             bytes, stride
-        ));
+        )
+        .into());
     }
     let count = (bytes / stride) as usize;
     let staging = ctx.alloc.create_buffer(

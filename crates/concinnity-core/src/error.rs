@@ -23,6 +23,11 @@ pub enum CnError {
     /// A file could not be read or written.
     FileIo,
 
+    #[error("Invalid world data")]
+    /// World data was read but is corrupt, truncated, or was built by a
+    /// different version of the engine.
+    InvalidData,
+
     #[error("No state directory installed")]
     /// Project state was read by a caller that was handed no state tree. See
     /// `concinnity_host::store::paths::StateTree`.
@@ -56,6 +61,7 @@ mod tests {
         assert_eq!(CnError::InvalidState.to_string(), "Invalid state");
         assert_eq!(CnError::InvalidArgument.to_string(), "Invalid argument");
         assert_eq!(CnError::FileIo.to_string(), "File I/O error");
+        assert_eq!(CnError::InvalidData.to_string(), "Invalid world data");
         assert_eq!(
             CnError::NoStateRoot.to_string(),
             "No state directory installed"

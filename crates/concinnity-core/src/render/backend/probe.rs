@@ -8,8 +8,8 @@
 //! one.
 
 use crate::gfx::profile::RenderStats;
+use crate::render::error::{RenderError, RenderResult};
 use alloc::string::String;
-use alloc::string::ToString;
 use alloc::vec::Vec;
 
 /// GPU/device capability flags, queried from the backend once it is built.
@@ -238,11 +238,11 @@ pub trait BackendProbe {
 
     /// Capture the last presented frame to a PNG at `path` and return the saved
     /// path. Driven by the `cn debug` WS `screenshot` command for headless
-    /// on-GPU render verification. Default `Err`: a backend without a capture
-    /// path reports it unsupported (all current backends override this).
-    fn screenshot(&mut self, path: &str) -> Result<String, String> {
+    /// on-GPU render verification. Default [`RenderError::Unsupported`]; all
+    /// current backends override this.
+    fn screenshot(&mut self, path: &str) -> RenderResult<String> {
         let _ = path;
-        Err("screenshot capture not supported on this backend".to_string())
+        Err(RenderError::Unsupported { op: "screenshot" })
     }
 
     /// Read the GPU-driven cull's per-object status buffer back to the host,
@@ -255,10 +255,12 @@ pub trait BackendProbe {
     /// only observable record of what the cull decided. Driven by the `cn
     /// debug` WS `cull-status` command; synchronous (it idles the device).
     ///
-    /// Default `Err`: a backend with no GPU-driven cull, or one whose readback
-    /// path is not implemented, reports it unsupported.
-    fn read_cull_status(&mut self) -> Result<Vec<u32>, String> {
-        Err("cull-status readback not supported on this backend".to_string())
+    /// Default [`RenderError::Unsupported`]: a backend with no GPU-driven cull,
+    /// or one whose readback path is not implemented.
+    fn read_cull_status(&mut self) -> RenderResult<Vec<u32>> {
+        Err(RenderError::Unsupported {
+            op: "read_cull_status",
+        })
     }
 }
 

@@ -21,6 +21,7 @@
 // because every submodule + `init.rs` needs them.
 
 use ash::vk;
+use concinnity_core::render::error::RenderResult;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::texture;
@@ -96,7 +97,7 @@ pub(in crate::vulkan) fn upload_geometry_buffer<T: bytemuck::NoUninit>(
     queue: vk::Queue,
     data: &[T],
     usage: vk::BufferUsageFlags,
-) -> Result<PooledBuffer, String> {
+) -> RenderResult<PooledBuffer> {
     upload_geometry_buffer_raw(
         alloc,
         device,
@@ -114,7 +115,7 @@ pub(in crate::vulkan) fn upload_geometry_buffer_raw(
     queue: vk::Queue,
     data: &[u8],
     usage: vk::BufferUsageFlags,
-) -> Result<PooledBuffer, String> {
+) -> RenderResult<PooledBuffer> {
     // TRANSFER_SRC lets `setup_chunk_streaming` copy the build-time geometry
     // out of these buffers when it grows them for chunk-streaming headroom;
     // TRANSFER_DST lets the staging copy below and `write_geometry_region`
@@ -123,7 +124,7 @@ pub(in crate::vulkan) fn upload_geometry_buffer_raw(
     let size = data.len() as u64;
     if size == 0 {
         // Return a minimal 4-byte buffer to keep Vulkan happy.
-        return Ok(alloc.create_buffer(4, usage, vk::MemoryPropertyFlags::DEVICE_LOCAL)?);
+        return alloc.create_buffer(4, usage, vk::MemoryPropertyFlags::DEVICE_LOCAL);
     }
     let staging = alloc.create_buffer(
         size,

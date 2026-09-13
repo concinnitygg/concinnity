@@ -25,6 +25,7 @@
 use ash::vk;
 use concinnity_core::components::UpscalerBackend;
 use concinnity_core::gfx::jitter;
+use concinnity_core::render::error::RenderResult;
 use std::cell::Cell;
 use std::ffi::{CStr, CString, c_char};
 
@@ -231,7 +232,7 @@ pub(super) fn create_output_image(
     queue: vk::Queue,
     (width, height): (u32, u32),
     writes: OutputWrites,
-) -> Result<GpuImage, String> {
+) -> RenderResult<GpuImage> {
     let pooled = create_image(
         alloc,
         &crate::vulkan::texture::ImageSpec {
@@ -412,7 +413,7 @@ pub(in crate::vulkan) fn build_upscaler(
     output_height: u32,
     upscale_scale: f32,
     requested: UpscalerBackend,
-) -> Result<(Option<Box<dyn VkUpscaleBackend>>, ResolvedBackend), String> {
+) -> RenderResult<(Option<Box<dyn VkUpscaleBackend>>, ResolvedBackend)> {
     for cand in backend_order(
         requested,
         dlss_available(),

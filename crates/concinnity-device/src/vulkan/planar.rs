@@ -28,6 +28,7 @@ use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::transform::mat4_inverse;
 use concinnity_core::gfx::transform::mat4_mul;
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::planar_reflection;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
@@ -162,7 +163,7 @@ struct PlanarTargetDims {
 fn create_targets(
     gpu: PlanarDevice<'_>,
     dims: PlanarTargetDims,
-) -> Result<(Option<GpuImage>, GpuImage, Vec<GpuImage>), String> {
+) -> RenderResult<(Option<GpuImage>, GpuImage, Vec<GpuImage>)> {
     let PlanarDevice { alloc, device } = gpu;
     let PlanarTargetDims {
         sample_count,
@@ -256,7 +257,7 @@ struct PlanarFramebufferInputs<'a> {
 fn create_framebuffers(
     device: &VkDevice,
     inputs: PlanarFramebufferInputs<'_>,
-) -> Result<Vec<OwnedFramebuffer>, String> {
+) -> RenderResult<Vec<OwnedFramebuffer>> {
     let PlanarFramebufferInputs {
         main_render_pass,
         sample_count,
@@ -376,7 +377,7 @@ impl PlanarReflectionSet {
         global_set: PlanarGlobalSet,
         lighting: PlanarLightingBindings,
         cull: PlanarCullSources<'_>,
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         use concinnity_core::render::uniforms::ProbeSet;
 
         let PlanarGlobalSet {
@@ -751,7 +752,7 @@ impl PlanarReflectionSet {
         device: &VkDevice,
         width: u32,
         height: u32,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         // Build the new targets + framebuffers first, then retire the old ones, so
         // a failure leaves the existing set intact.
         let (color, depth, targets) = create_targets(

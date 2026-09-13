@@ -13,6 +13,7 @@ use concinnity_core::gfx::ssao::SsaoSettings;
 use concinnity_core::gfx::ssgi::SsgiSettings;
 use concinnity_core::gfx::ssr::SsrSettings;
 use concinnity_core::render::decal::DecalRecord;
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::particles::ParticleEmitterRecord;
 use concinnity_core::render::post::device::PostExtent;
 use concinnity_core::render::post::ssgi::SsgiPass;
@@ -209,7 +210,7 @@ pub(crate) fn build_quality_effects(
     dims: EffectDimensions,
     settings: EffectSettings,
     flags: EffectFlags,
-) -> Result<QualityEffectsBundle, String> {
+) -> RenderResult<QualityEffectsBundle> {
     let device = alloc.device();
     let EffectDimensions {
         render_w,
@@ -464,7 +465,7 @@ pub(crate) fn build_effects(
     settings: EffectSettings,
     flags: EffectFlags,
     world_content: WorldContentEffects,
-) -> Result<EffectsBundle, String> {
+) -> RenderResult<EffectsBundle> {
     let device = alloc.device();
     // Render dimensions ride `dims` into `build_quality_effects`; only the
     // output pair is used directly here, by the bloom chain.

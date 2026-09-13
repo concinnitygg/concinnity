@@ -717,7 +717,7 @@ fn reload_shader_stages_on_empty_map_is_a_no_op() {
     }
 
     impl backend::DrawStreaming for DummyBackend {
-        fn evict_texture_slot(&mut self, _: usize) -> Result<(), String> {
+        fn evict_texture_slot(&mut self, _: usize) -> error::RenderResult<()> {
             Ok(())
         }
         fn update_texture_slot(
@@ -727,7 +727,7 @@ fn reload_shader_stages_on_empty_map_is_a_no_op() {
         ) -> error::RenderResult<()> {
             Ok(())
         }
-        fn evict_mesh(&mut self, _: usize, _: u64) -> Result<(), String> {
+        fn evict_mesh(&mut self, _: usize, _: u64) -> error::RenderResult<()> {
             Ok(())
         }
         fn upload_mesh(
@@ -749,10 +749,10 @@ fn reload_shader_stages_on_empty_map_is_a_no_op() {
         ) -> error::RenderResult<()> {
             Ok(())
         }
-        fn remove_chunk_mesh(&mut self, _: usize, _: u64) -> Result<(), String> {
+        fn remove_chunk_mesh(&mut self, _: usize, _: u64) -> error::RenderResult<()> {
             Ok(())
         }
-        fn set_chunk_model(&mut self, _: usize, _: [[f32; 4]; 4]) -> Result<(), String> {
+        fn set_chunk_model(&mut self, _: usize, _: [[f32; 4]; 4]) -> error::RenderResult<()> {
             Ok(())
         }
     }
@@ -873,7 +873,7 @@ impl backend::SkinnedDraws for RecordingBackend {
 }
 
 impl backend::DrawStreaming for RecordingBackend {
-    fn evict_texture_slot(&mut self, _: usize) -> Result<(), String> {
+    fn evict_texture_slot(&mut self, _: usize) -> error::RenderResult<()> {
         Ok(())
     }
     fn update_texture_slot(
@@ -888,7 +888,7 @@ impl backend::DrawStreaming for RecordingBackend {
         }
         Ok(())
     }
-    fn evict_mesh(&mut self, _: usize, _: u64) -> Result<(), String> {
+    fn evict_mesh(&mut self, _: usize, _: u64) -> error::RenderResult<()> {
         Ok(())
     }
     fn upload_mesh(
@@ -910,10 +910,10 @@ impl backend::DrawStreaming for RecordingBackend {
     ) -> error::RenderResult<()> {
         Ok(())
     }
-    fn remove_chunk_mesh(&mut self, _: usize, _: u64) -> Result<(), String> {
+    fn remove_chunk_mesh(&mut self, _: usize, _: u64) -> error::RenderResult<()> {
         Ok(())
     }
-    fn set_chunk_model(&mut self, _: usize, _: [[f32; 4]; 4]) -> Result<(), String> {
+    fn set_chunk_model(&mut self, _: usize, _: [[f32; 4]; 4]) -> error::RenderResult<()> {
         Ok(())
     }
 }
@@ -927,10 +927,10 @@ impl backend::RenderTuning for RecordingBackend {
 }
 
 impl backend::LiveEdit for RecordingBackend {
-    fn update_color_lut(&mut self, size: u32, _: &[u8]) -> Result<(), String> {
+    fn update_color_lut(&mut self, size: u32, _: &[u8]) -> error::RenderResult<()> {
         self.lut_updates.push(size);
         if self.fail_lut_updates {
-            return Err("lut update rejected".to_string());
+            return Err("lut update rejected".into());
         }
         Ok(())
     }
@@ -946,10 +946,10 @@ impl backend::LiveEdit for RecordingBackend {
         _: &[mesh_payload::Vertex],
         _: &[u16],
         _: &[(f32, Vec<u16>)],
-    ) -> Result<(), String> {
+    ) -> error::RenderResult<()> {
         self.mesh_updates.push(draw_idx);
         if self.fail_mesh_updates {
-            return Err("mesh update rejected".to_string());
+            return Err("mesh update rejected".into());
         }
         Ok(())
     }
@@ -969,20 +969,20 @@ impl backend::LiveEdit for RecordingBackend {
         _: u32,
         _: &[mesh_payload::SkinnedVertex],
         _: &[u16],
-    ) -> Result<(), String> {
+    ) -> error::RenderResult<()> {
         self.skinned_updates.push(skinned_index);
         if self.fail_skinned_updates {
-            return Err("skinned update rejected".to_string());
+            return Err("skinned update rejected".into());
         }
         Ok(())
     }
     fn rebuild_skinned_geometry(
         &mut self,
         changes: Vec<backend::SkinnedDrawGeometryUpdate>,
-    ) -> Result<Vec<backend::SkinnedSlotLayout>, String> {
+    ) -> error::RenderResult<Vec<backend::SkinnedSlotLayout>> {
         self.skinned_rebuild_change_counts.push(changes.len());
         if self.fail_skinned_rebuild {
-            return Err("skinned rebuild rejected".to_string());
+            return Err("skinned rebuild rejected".into());
         }
         Ok(self
             .skinned_layouts
@@ -1001,10 +1001,10 @@ impl backend::LiveEdit for RecordingBackend {
         &mut self,
         skinned_index: usize,
         new_joint_count: usize,
-    ) -> Result<(), String> {
+    ) -> error::RenderResult<()> {
         self.skeleton_updates.push((skinned_index, new_joint_count));
         if self.fail_skeleton_update {
-            return Err("skeleton update rejected".to_string());
+            return Err("skeleton update rejected".into());
         }
         Ok(())
     }
