@@ -177,7 +177,7 @@ impl VkContext {
                 && let Some(f) = self.device.debug_filter()
             {
                 f.store(
-                    super::init::DLSS_FIRST_FRAME_LAYOUT_SUPPRESS,
+                    super::init::bootstrap::DLSS_FIRST_FRAME_LAYOUT_SUPPRESS,
                     std::sync::atomic::Ordering::Relaxed,
                 );
             }
