@@ -1,12 +1,11 @@
-//! Process-wide "world.jsonl changed" / "world-loaded Shader stage changed"
-//! signals (`cn debug` only). Set by the asset hot-reload watcher and the
-//! `reload-assets` debug tool call; consumed by the per-frame reload poll in
-//! `super::state::run_frame`. They live in the debug tree rather than the engine
-//! because nothing in the engine references them: the reload passes that read them
-//! (`super::passes`) are driven entirely from `DebugHook::tick`.
-//!
-//! The sibling "Animation source changed" flag stays in `concinnity_engine::app::dev_flags`
-//! instead, because `AnimationSystem` (library) names it directly.
+//! Process-wide "world.jsonl changed" / "world-loaded Shader stage changed" /
+//! "Markdown story source changed" / "Animation source changed" signals (dev
+//! sessions only). Set by the asset hot-reload watcher and the `reload-assets`
+//! debug tool call; consumed by the per-frame reload poll in
+//! `super::state::run_frame` and, for animations, by `super::animation`. They
+//! live in the debug tree rather than the engine because nothing in the engine
+//! references them: the reload passes that read them (`super::passes`,
+//! `super::animation`) are driven entirely from `DebugHook::tick`.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -34,6 +33,23 @@ pub(crate) fn set_pending_world() {
 // Prop-transform re-apply pass.
 pub(crate) fn take_pending_world() -> bool {
     PENDING_WORLD.swap(false, Ordering::SeqCst)
+}
+
+// "Animation source changed" signal. Consumed by the animation clip reload in
+// `super::animation`, which re-imports every file-backed clip from source.
+static PENDING_ANIMATIONS: AtomicBool = AtomicBool::new(false);
+
+// Raise the "Animation source changed" flag. Called by the asset hot-reload
+// watcher and the `reload-assets` debug tool call.
+pub(crate) fn set_pending_animations() {
+    PENDING_ANIMATIONS.store(true, Ordering::SeqCst);
+}
+
+// Swap the "Animation source changed" flag to `false`, returning whether it
+// was set. `super::animation::reload_clips_if_pending` calls this; a `true`
+// result kicks the per-clip re-import pass.
+pub(crate) fn take_pending_animations() -> bool {
+    PENDING_ANIMATIONS.swap(false, Ordering::SeqCst)
 }
 
 // "Markdown story source changed" signal. Consumed by the story reload poll

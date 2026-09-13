@@ -22,8 +22,7 @@ pub fn cook_platform() -> concinnity_core::platform::Platform {
 mod authoring;
 
 // The in-engine editor HUD, the localhost debug server, the MCP transport it
-// speaks, the interpreted run loop, and animation clip hot-reload.
-mod anim_reload;
+// speaks, and the interpreted run loop.
 mod debug;
 mod debug_hook;
 mod editor;

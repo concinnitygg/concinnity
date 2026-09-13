@@ -31,7 +31,7 @@ use screen::{ScreenMeta, ScreenRegistry};
 use scroll_layout::RowSpec;
 use std::collections::HashMap;
 
-use crate::gfx::settings;
+use crate::settings;
 
 // How many reference-space pixels one unit of scroll-wheel delta moves a panel.
 const WHEEL_SCROLL_SPEED: f32 = 2.0;
@@ -379,8 +379,8 @@ impl System for UiInputSystem {
                     .unwrap_or((None, None)),
             };
             let screen = region.screen;
-            let slider_key = crate::gfx::setting_action::key_with_verb(&region.action, "drag")
-                .map(str::to_string);
+            let slider_key =
+                crate::settings::action::key_with_verb(&region.action, "drag").map(str::to_string);
             let group_toggle = group_toggle_from_action(&region.action);
             let region_base_y = region.y;
             // A follow-label region captures the y offset to its label now, so
@@ -917,13 +917,12 @@ impl System for UiInputSystem {
                 if let Some(gid) = group_toggle {
                     toggle_group = Some(gid);
                 } else if let Some(key) =
-                    crate::gfx::setting_action::key_with_verb(&r.action, "rebind")
+                    crate::settings::action::key_with_verb(&r.action, "rebind")
                 {
                     // A rebind row enters capture (started after the loop)
                     // instead of firing an action immediately.
                     start_capture = Some((key.to_string(), r.label));
-                } else if let Some(key) =
-                    crate::gfx::setting_action::key_with_verb(&r.action, "open")
+                } else if let Some(key) = crate::settings::action::key_with_verb(&r.action, "open")
                 {
                     // A dropdown row opens its floating list (started after the
                     // loop) instead of firing an action. Snapshot the control

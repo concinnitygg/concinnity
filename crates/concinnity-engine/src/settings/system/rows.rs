@@ -6,7 +6,7 @@ use concinnity_core::components::{HitRegion, ScrollPanel, Sprite, TextLabel};
 use concinnity_core::ecs::PipelineContext;
 use concinnity_host::thread::asset_id::AssetId;
 
-use crate::gfx::setting_action;
+use crate::settings::action;
 
 // Muted gray applied to the labels of a capability-disabled settings row, so it
 // reads as unavailable next to the live rows.
@@ -65,7 +65,7 @@ pub(crate) fn capture_row_labels(
     // prev/next or a dropdown's open -- references its value label).
     let mut anchors: std::collections::HashSet<AssetId> = std::collections::HashSet::new();
     for r in ctx.query::<HitRegion>() {
-        let Some((key, _)) = setting_action::parse(&r.action) else {
+        let Some((key, _)) = action::parse(&r.action) else {
             continue;
         };
         if keys.contains(&key)

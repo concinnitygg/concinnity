@@ -5,7 +5,7 @@
 
 use concinnity_core::components::NavDirection;
 
-use crate::gfx::setting_action;
+use crate::settings::action;
 
 // Weight of the perpendicular offset in the directional score, so a target
 // straight ahead beats a nearer one far off to the side (tabs above a row
@@ -54,24 +54,24 @@ pub(crate) fn targets(candidates: &[Candidate]) -> Vec<Target> {
     candidates
         .iter()
         .filter_map(|c| {
-            if setting_action::key_with_verb(&c.action, "prev").is_some() {
+            if action::key_with_verb(&c.action, "prev").is_some() {
                 return None;
             }
-            if let Some(key) = setting_action::key_with_verb(&c.action, "next") {
+            if let Some(key) = action::key_with_verb(&c.action, "next") {
                 return Some(Target {
                     index: c.index,
                     rect: c.rect,
                     setting: Some(key.to_string()),
                 });
             }
-            if let Some(key) = setting_action::key_with_verb(&c.action, "open") {
+            if let Some(key) = action::key_with_verb(&c.action, "open") {
                 return Some(Target {
                     index: c.index,
                     rect: c.rect,
                     setting: Some(key.to_string()),
                 });
             }
-            if let Some(key) = setting_action::key_with_verb(&c.action, "drag") {
+            if let Some(key) = action::key_with_verb(&c.action, "drag") {
                 return Some(Target {
                     index: c.index,
                     rect: c.rect,

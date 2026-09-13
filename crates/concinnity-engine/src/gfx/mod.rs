@@ -1,6 +1,5 @@
-//! The client's render layer: the runtime render systems (the renderer driver,
-//! animation, camera controllers, draw list) and the client-only settings /
-//! quality-preset resolution.
+//! The client's render layer: the renderer driver, draw list, 2D overlay, asset
+//! streaming, live previews, and quality-preset / render-config resolution.
 //!
 //! What these drive lives below the client, in concinnity-core: the GPU data
 //! layouts and render math in `concinnity_core::gfx`, and the
@@ -13,15 +12,6 @@
 // screen draws with, and the fallback for a world whose labels name no Font.
 pub(crate) mod builtin_font;
 
-/// Skeletal animation playback. Internal system, constructed by `World::start`
-/// when the world declares any `Animation`; produces per-frame skinning matrices.
-/// `pub` so the editor crate can drive the clip hot-reload through the
-/// `AnimationSystem` setter API.
-pub mod animation;
-/// First-person / fly-through camera controller. Internal system, constructed by
-/// `World::start` from a `Camera3D`'s controller settings. `pub` so the editor
-/// crate can zero the controller's velocity behind an externally driven pose.
-pub mod camera_controller;
 pub(crate) mod draw_list;
 /// Live reassignment of a running world's draw slots (their material and cull
 /// distance), for an editor previewing a Prop edit without a rebuild.
@@ -53,18 +43,12 @@ pub mod streaming;
 // compiled only into the unit-test binary. Implements `core::render`'s
 // RenderBackend seam on a client-local type and carries a `config::Settings`,
 // so it stays with the GraphicsSystem tests that consume it.
-pub(crate) mod look_controls;
 #[cfg(test)]
 pub(crate) mod mock_backend;
 pub(crate) mod quality_preset;
 // How the world's authored render settings resolve against the user's persisted
 // settings-menu choices and the active quality preset's ceiling.
 pub(crate) mod render_config;
-pub(crate) mod setting_action;
-pub(crate) mod settings;
 // Handle -> asset id bridge for SkinnedMesh correlation references, published by
 // GraphicsSystem and read by the animation / third-person systems.
 pub(crate) mod skinned_mesh_map;
-// Third-person character controller. Internal system, constructed instead of
-// Camera3DSystem when the controlling camera's controller has a `follow` block.
-pub(crate) mod third_person;

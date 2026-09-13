@@ -77,7 +77,7 @@ impl ThirdPersonSystem {
             move_speed: controller.move_speed,
             sprint_multiplier: controller.sprint_multiplier,
             mouse_sensitivity: controller.mouse_sensitivity,
-            gamepad_look_sensitivity: crate::gfx::settings::DEFAULT_GAMEPAD_LOOK_SENSITIVITY,
+            gamepad_look_sensitivity: crate::settings::DEFAULT_GAMEPAD_LOOK_SENSITIVITY,
             target: follow.target,
             distance: follow.distance.max(0.1),
             height: follow.height,
@@ -110,9 +110,9 @@ impl System for ThirdPersonSystem {
     fn init(&mut self, ctx: &mut PipelineContext) {
         self.last_step = Some(Instant::now());
 
-        crate::gfx::look_controls::apply_persisted(
+        super::look_controls::apply_persisted(
             ctx,
-            crate::gfx::look_controls::Look {
+            super::look_controls::Look {
                 mouse_sensitivity: &mut self.mouse_sensitivity,
                 gamepad_look_sensitivity: &mut self.gamepad_look_sensitivity,
             },
@@ -168,10 +168,10 @@ impl System for ThirdPersonSystem {
         // Live settings-menu changes sent this tick by GraphicsSystem, which runs
         // first. FOV is written in the camera loop below, which holds the
         // mutable Camera3D borrow.
-        let pending_fov = crate::gfx::look_controls::drain_commands(
+        let pending_fov = super::look_controls::drain_commands(
             ctx,
             &mut self.controls_cursor,
-            crate::gfx::look_controls::Look {
+            super::look_controls::Look {
                 mouse_sensitivity: &mut self.mouse_sensitivity,
                 gamepad_look_sensitivity: &mut self.gamepad_look_sensitivity,
             },

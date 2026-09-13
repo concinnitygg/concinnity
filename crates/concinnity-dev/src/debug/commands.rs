@@ -2,7 +2,7 @@
 //! `emitter-add`, `anim-crossfade`, …) plus their request-body structs and the
 //! shared `error_reply` helper. Each parses its JSON body, enqueues onto the
 //! matching process-wide queue (`super::runtime_spawn` /
-//! `concinnity_engine::app::anim_runtime`), and blocks on a one-shot reply channel the
+//! `concinnity_engine::animation::runtime_queue`), and blocks on a one-shot reply channel the
 //! per-frame debug drive fulfils. The query commands + dispatch live in
 //! `super::dispatch::handle_request`.
 
@@ -14,7 +14,7 @@
 use concinnity_core::components::InputKey;
 use concinnity_core::components::SettingOp;
 use concinnity_core::components::StoryCommand;
-use concinnity_engine::app::anim_runtime;
+use concinnity_engine::animation::runtime_queue;
 use concinnity_host::thread::asset_id;
 const SPAWN_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
@@ -249,8 +249,8 @@ pub(super) fn handle_anim_crossfade(text: &str, names: &[String]) -> String {
         "anim-crossfade",
         SPAWN_REPLY_TIMEOUT,
         |reply| {
-            anim_runtime::enqueue(anim_runtime::AnimCommand::Crossfade {
-                req: anim_runtime::CrossfadeRequest {
+            runtime_queue::enqueue(runtime_queue::AnimCommand::Crossfade {
+                req: runtime_queue::CrossfadeRequest {
                     target,
                     weights: req.weights,
                     duration_secs: req.duration_secs,
@@ -302,8 +302,8 @@ pub(super) fn handle_anim_param(text: &str, names: &[String]) -> String {
         "anim-param",
         SPAWN_REPLY_TIMEOUT,
         |reply| {
-            anim_runtime::enqueue(anim_runtime::AnimCommand::SetParam {
-                req: anim_runtime::SetParamRequest {
+            runtime_queue::enqueue(runtime_queue::AnimCommand::SetParam {
+                req: runtime_queue::SetParamRequest {
                     target,
                     name: req.name,
                     value: req.value,
@@ -334,7 +334,7 @@ pub(super) fn handle_anim_state(text: &str, names: &[String]) -> String {
         "anim-state",
         SPAWN_REPLY_TIMEOUT,
         |reply| {
-            anim_runtime::enqueue(anim_runtime::AnimCommand::QueryState { target, reply });
+            runtime_queue::enqueue(runtime_queue::AnimCommand::QueryState { target, reply });
         },
         |report| {
             let params: serde_json::Map<String, serde_json::Value> = report
@@ -877,7 +877,7 @@ mod tests {
     use concinnity_core::components::Animation;
     use concinnity_core::components::AnimationGraph;
     use concinnity_core::ecs::World;
-    use concinnity_engine::gfx::animation;
+    use concinnity_engine::animation;
 
     #[test]
     fn camera_set_request_parses_full_payload() {

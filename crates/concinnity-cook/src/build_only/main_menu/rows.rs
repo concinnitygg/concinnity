@@ -1,6 +1,6 @@
 // Which rows a settings tab shows, and how one row is emitted. The tables name
 // the setting keys and labels; the runtime
-// (`concinnity_engine::gfx::settings`) knows each key's options and how to
+// (`concinnity_engine::settings`) knows each key's options and how to
 // apply it.
 
 use crate::authoring::registry::build_only::{MainMenu, SettingsProfile};
@@ -25,7 +25,7 @@ pub(super) fn settings_tabs(profile: SettingsProfile) -> &'static [(&'static str
 }
 
 // Setting rows per tab, top to bottom: (setting key, display label). The runtime
-// (`concinnity_engine::gfx::settings`) knows each key's options and how to apply
+// (`concinnity_engine::settings`) knows each key's options and how to apply
 // it; this only chooses which rows appear.
 const VIDEO_ROWS: [(&str, &str); 7] = [
     ("vsync", "Vsync"),
@@ -70,7 +70,7 @@ const VIDEO_ADVANCED_ROWS: [(&str, &str); 8] = [
     ("texture_quality", "Texture Quality"),
 ];
 // Live post-process sliders in the Advanced group. Each key's value range,
-// display format, and apply path live in the client (`concinnity_engine::gfx::settings` +
+// display format, and apply path live in the client (`concinnity_engine::settings` +
 // graphics system); a row here only chooses which sliders appear. All but
 // `ambient_intensity` are pure `PostProcessParams` fields applied via
 // `update_post_process`; `ambient_intensity` rides a dedicated backend setter
@@ -88,7 +88,7 @@ const VIDEO_ADVANCED_SLIDERS: [(&str, &str); 8] = [
 ];
 // Quality toggles in the Video "Quality" collapsible group (collapsed by
 // default): the heavier render features. Each is an Off/On cycle row. The
-// client (`concinnity_engine::gfx::settings` + its system) knows each key's options and
+// client (`concinnity_engine::settings` + its system) knows each key's options and
 // applies it live by rebuilding the affected render resources; on backends
 // without a live path the choice persists and applies at the next launch.
 const VIDEO_QUALITY_ROWS: [(&str, &str); 15] = [

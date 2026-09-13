@@ -32,8 +32,8 @@ use super::writer::SettingsWriter;
 use crate::config::Settings;
 use crate::gfx::mock_backend::{Call, MockBackend, MockState, recording_backend};
 use crate::gfx::quality_preset::QualityPreset;
-use crate::gfx::settings;
 use crate::gfx::system::{RebindViz, SliderViz};
+use crate::settings;
 
 // The value label ids the fixture wires up, so a test can assert a row relabeled
 // without standing up a whole menu.

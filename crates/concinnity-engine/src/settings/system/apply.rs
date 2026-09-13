@@ -16,8 +16,8 @@ use concinnity_core::render::ops::RenderOps;
 
 use super::SettingsState;
 use super::rows::{set_cached_row_label, set_label_content, set_rows_grayed, set_sprite_x};
-use crate::gfx::settings;
 use crate::gfx::system as gsys;
+use crate::settings;
 
 impl SettingsState {
     pub(super) fn apply_setting_commands(

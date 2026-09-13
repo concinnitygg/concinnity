@@ -56,8 +56,16 @@ mod device;
 /// Whether this build links a rendering backend. A build with no backend
 /// feature has none, so the only loop that can run a world is a headless one.
 pub use device::AVAILABLE as HAS_RENDER_BACKEND;
+/// Skeletal animation playback. Internal system, constructed by `World::start`
+/// when the world declares any `Animation`; produces per-frame skinning matrices.
+/// `pub` so the editor crate can drive the clip hot-reload through the
+/// `AnimationSystem` setter API.
+pub mod animation;
 pub(crate) mod cbor_file;
 pub(crate) mod config;
+/// Camera controllers: the internal systems that turn input into camera and
+/// player motion. `pub` so the editor crate can name the first-person controller.
+pub mod controller;
 /// Crash reporting: panic hook, native fault capture, local report files.
 /// `pub` so the binaries install the hooks and the editor composes the
 /// recent-log ring layer into its tracing subscriber.
@@ -76,6 +84,9 @@ pub(crate) mod input;
 // The rigid-body simulation driver: builds a `concinnity_core::physics::Simulation`
 // from the world's physics content and steps it on the fixed tick.
 pub(crate) mod physics;
+// The user-facing settings registry, the `setting:<key>:<verb>` action grammar,
+// and the system that applies setting changes.
+pub(crate) mod settings;
 // Declarative logic (Behavior components + the shared world variables
 // store), scheduled before SpawnSystem so its requests apply the same tick.
 pub(crate) mod behavior;
@@ -88,8 +99,3 @@ pub mod resource;
 pub(crate) mod spawn;
 pub(crate) mod story;
 pub(crate) mod ui;
-
-// The asset vocabulary a world is authored from. Declared in concinnity-core;
-// re-exported at this crate's root because a host that embeds the runtime
-// names both through one crate.
-pub use concinnity_core::components::*;

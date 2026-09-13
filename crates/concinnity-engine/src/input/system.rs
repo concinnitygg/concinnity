@@ -48,7 +48,7 @@ pub(crate) struct InputSystem {
 impl InputSystem {
     pub(crate) fn new() -> Self {
         Self {
-            deadzone: crate::gfx::settings::DEFAULT_GAMEPAD_DEADZONE,
+            deadzone: crate::settings::DEFAULT_GAMEPAD_DEADZONE,
             ..Self::default()
         }
     }

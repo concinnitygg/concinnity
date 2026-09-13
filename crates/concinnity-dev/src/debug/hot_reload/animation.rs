@@ -6,16 +6,14 @@
 //! build time, so a hot-reloaded clip is byte-identical to a fresh `cn build`.
 
 use concinnity_core::gfx::skeleton::{AnimationClip, JointTrack, Keyframe};
-use concinnity_engine::gfx::animation::AnimationSystem;
+use concinnity_engine::animation::AnimationSystem;
 use std::collections::HashMap;
 
 // Re-import every file-backed clip when an asset-source change is pending.
 // Driven by the debug server's per-frame tick. No-op when no file-backed clips
 // were captured or no source change is pending.
 pub(crate) fn reload_clips_if_pending(anim: &mut AnimationSystem) {
-    if anim.reload_entries().is_empty()
-        || !concinnity_engine::app::dev_flags::take_pending_animations()
-    {
+    if anim.reload_entries().is_empty() || !super::pending::take_pending_animations() {
         return;
     }
     reload_clips(anim);
@@ -137,7 +135,7 @@ mod tests {
     use concinnity_core::components::Animation;
     use concinnity_core::ecs::SkinnedMeshHandle;
     use concinnity_core::ecs::World;
-    use concinnity_engine::gfx::animation;
+    use concinnity_engine::animation;
     use concinnity_host::thread::asset_id::intern;
 
     // Minimal in-memory GLB fixture: a one-triangle skinned mesh with a
@@ -306,15 +304,15 @@ mod tests {
 
     #[test]
     fn reload_if_pending_gates_on_entries_and_the_flag() {
-        use concinnity_engine::app::dev_flags;
+        use super::super::pending::{set_pending_animations, take_pending_animations};
         let _guard = test_support::lock();
 
         // No entries: the early-out fires before the flag is consumed.
         let mut empty = AnimationSystem::new();
-        dev_flags::set_pending_animations();
+        set_pending_animations();
         reload_clips_if_pending(&mut empty);
         assert!(
-            dev_flags::take_pending_animations(),
+            take_pending_animations(),
             "empty catalog must not consume the pending flag"
         );
 
@@ -327,12 +325,12 @@ mod tests {
         });
 
         // Entries present and the flag raised: the reload consumes it.
-        dev_flags::set_pending_animations();
+        set_pending_animations();
         with_anim(&mut world, |anim| {
             reload_clips_if_pending(anim);
         });
         assert!(
-            !dev_flags::take_pending_animations(),
+            !take_pending_animations(),
             "a reload pass must consume the pending flag"
         );
     }

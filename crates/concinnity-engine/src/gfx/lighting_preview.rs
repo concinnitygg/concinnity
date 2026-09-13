@@ -24,7 +24,7 @@ use concinnity_core::sky::SkyOrientation;
 
 use crate::ecs::ActiveRenderQueues;
 use crate::gfx::render_config as resolve;
-use crate::gfx::settings::system::{SettingsSlot, SettingsState};
+use crate::settings::system::{SettingsSlot, SettingsState};
 
 /// The `GraphicsConfig` fields this module can apply to a running world. The
 /// rest (shadow map resolution, frames in flight, the sampler's anisotropy)

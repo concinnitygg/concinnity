@@ -85,7 +85,7 @@ pub(crate) struct ChunkStreamState {
 
 /// `(resident, pending, unloaded)` counts for each streaming pool, or `None`
 /// when that pool is not streaming. Read by the debug server's `streaming`
-/// command for headless verification. Only the `cn debug` binary consumes it,
+/// command for headless verification. Only concinnity-dev consumes it,
 /// so it reads as dead code in a plain library build.
 #[derive(Debug, Clone, Default)]
 pub struct StreamingStats {
@@ -894,7 +894,7 @@ impl StreamingState {
     }
 
     // `(resident, pending, unloaded)` counts for each active streaming pool.
-    // Consumed only by the `cn debug` binary's `streaming` command, so it reads
+    // Consumed only by concinnity-dev's `streaming` command, so it reads
     // as dead code in a plain library build.
     pub(crate) fn streaming_stats(&self) -> StreamingStats {
         StreamingStats {

@@ -25,7 +25,7 @@ use concinnity_core::gfx::camera;
 use concinnity_core::render::backend;
 use concinnity_core::render::decal;
 use concinnity_core::render::particles;
-use concinnity_engine::gfx::camera_controller;
+use concinnity_engine::controller::camera::Camera3DSystem;
 use concinnity_engine::gfx::system::WorldReloadState;
 use concinnity_host::thread::asset_id;
 use std::sync::Mutex;
@@ -688,7 +688,7 @@ pub(crate) fn apply_camera_set(args: &CameraSetArgs, world: &mut World) -> Resul
     camera.view_matrix = camera::view_matrix(camera.position, camera.yaw, camera.pitch);
 
     for system in world.systems_mut() {
-        if let Some(c) = system.downcast_mut::<camera_controller::Camera3DSystem>() {
+        if let Some(c) = system.downcast_mut::<Camera3DSystem>() {
             c.reset_velocity();
         }
     }
@@ -712,7 +712,7 @@ pub(crate) fn apply_camera_move_step(motion: &CameraMotion, world: &mut World) -
     camera.view_matrix = camera::view_matrix(pos, yaw, pitch);
 
     for system in world.systems_mut() {
-        if let Some(c) = system.downcast_mut::<camera_controller::Camera3DSystem>() {
+        if let Some(c) = system.downcast_mut::<Camera3DSystem>() {
             c.reset_velocity();
         }
     }

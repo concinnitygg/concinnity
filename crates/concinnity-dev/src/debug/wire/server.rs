@@ -9,8 +9,8 @@
 
 use concinnity_core::components::Camera3D;
 use concinnity_core::ecs::World;
+use concinnity_engine::animation::AnimationSystem;
 use concinnity_engine::ecs::ActiveRenderBackend;
-use concinnity_engine::gfx::animation::AnimationSystem;
 use concinnity_engine::gfx::system::GraphicsSystem;
 use concinnity_engine::shutdown::ShutdownToken;
 use concinnity_host::thread::asset_id;

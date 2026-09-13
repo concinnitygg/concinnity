@@ -668,8 +668,7 @@ impl GraphicsSystem {
         // (with the baseline default when unset); their owning systems apply the
         // value at their own init.
         let user_settings = self.persisted_settings();
-        let volume_of =
-            |stored: Option<f32>| stored.unwrap_or(crate::gfx::settings::DEFAULT_VOLUME);
+        let volume_of = |stored: Option<f32>| stored.unwrap_or(crate::settings::DEFAULT_VOLUME);
         let master_volume = volume_of(user_settings.audio.master_volume);
         let music_volume = volume_of(user_settings.audio.music_volume);
         let sfx_volume = volume_of(user_settings.audio.sfx_volume);
@@ -688,18 +687,16 @@ impl GraphicsSystem {
         let quality_cfg = self.post_config.clone();
         sync_setting_value_labels(ctx, |key| match key {
             "vsync" => Some(vsync as usize),
-            "fps_cap" => Some(crate::gfx::settings::fps_cap_index(fps_cap_val)),
-            "window_mode" => Some(crate::gfx::settings::window_mode_index(mode)),
+            "fps_cap" => Some(crate::settings::fps_cap_index(fps_cap_val)),
+            "window_mode" => Some(crate::settings::window_mode_index(mode)),
             // "resolution" is a dynamic dropdown; its label is set from the
             // enumerated mode list after the backend is built.
-            "render_scale" => Some(crate::gfx::settings::render_scale_index(scale)),
-            "upscale_backend" => Some(crate::gfx::settings::upscale_backend_index(
-                upscale_backend_sel,
-            )),
-            "master_volume" => Some(crate::gfx::settings::volume_index(master_volume)),
-            "music_volume" => Some(crate::gfx::settings::volume_index(music_volume)),
-            "sfx_volume" => Some(crate::gfx::settings::volume_index(sfx_volume)),
-            "voice_volume" => Some(crate::gfx::settings::volume_index(voice_volume)),
+            "render_scale" => Some(crate::settings::render_scale_index(scale)),
+            "upscale_backend" => Some(crate::settings::upscale_backend_index(upscale_backend_sel)),
+            "master_volume" => Some(crate::settings::volume_index(master_volume)),
+            "music_volume" => Some(crate::settings::volume_index(music_volume)),
+            "sfx_volume" => Some(crate::settings::volume_index(sfx_volume)),
+            "voice_volume" => Some(crate::settings::volume_index(voice_volume)),
             // Display-output / upscaling toggles (Off/On), held on self.
             "temporal_upscaling" => Some(display_upscaling as usize),
             "hdr_display" => Some(display_hdr as usize),
@@ -709,24 +706,18 @@ impl GraphicsSystem {
             "show_fps" => Some(show_fps_val as usize),
             "show_vram" => Some(show_vram_val as usize),
             // Shadow quality knobs (resolution restart-required, cadence live).
-            "shadow_map_size" => Some(crate::gfx::settings::shadow_resolution_index(shadow_size)),
-            "shadow_update" => Some(crate::gfx::settings::shadow_update_index(shadow_update_val)),
-            "shadow_distance" => Some(crate::gfx::settings::shadow_distance_index(
-                shadow_distance_val,
-            )),
-            "shadow_cascades" => Some(crate::gfx::settings::shadow_cascades_index(
-                shadow_cascades_val,
-            )),
-            "anisotropy" => Some(crate::gfx::settings::anisotropy_index(anisotropy_val)),
+            "shadow_map_size" => Some(crate::settings::shadow_resolution_index(shadow_size)),
+            "shadow_update" => Some(crate::settings::shadow_update_index(shadow_update_val)),
+            "shadow_distance" => Some(crate::settings::shadow_distance_index(shadow_distance_val)),
+            "shadow_cascades" => Some(crate::settings::shadow_cascades_index(shadow_cascades_val)),
+            "anisotropy" => Some(crate::settings::anisotropy_index(anisotropy_val)),
             // System / streaming restart rows.
-            "frames_in_flight" => Some(crate::gfx::settings::frames_in_flight_index(
-                frames_in_flight_n,
-            )),
+            "frames_in_flight" => Some(crate::settings::frames_in_flight_index(frames_in_flight_n)),
             "occlusion_two_pass" => Some(occlusion_two_pass as usize),
-            "texture_quality" => Some(crate::gfx::settings::texture_quality_index(texture_cap_n)),
+            "texture_quality" => Some(crate::settings::texture_quality_index(texture_cap_n)),
             // mouse_sensitivity is a slider now, synced by `init_sliders`.
             // Quality toggles: index 0 = Off, 1 = On, matching OFF_ON_OPTIONS.
-            key if crate::gfx::settings::is_quality_toggle(key) => {
+            key if crate::settings::is_quality_toggle(key) => {
                 super::quality_toggle_on(&quality_cfg, key).map(|on| on as usize)
             }
             // SSGI gather sub-quality dropdowns.
@@ -1445,8 +1436,8 @@ impl GraphicsSystem {
     // system resolves the values (world config + persisted overrides + device
     // capabilities) at init and never re-reads its copies afterward.
     fn publish_settings_state(&mut self, ctx: &mut PipelineContext) {
-        ctx.insert_resource(crate::gfx::settings::system::SettingsSlot(Some(
-            crate::gfx::settings::system::SettingsState {
+        ctx.insert_resource(crate::settings::system::SettingsSlot(Some(
+            crate::settings::system::SettingsState {
                 keymap: self.keymap,
                 rebind_rows: std::mem::take(&mut self.rebind_rows),
                 gamepad_map: self.gamepad_map,
@@ -3023,8 +3014,7 @@ fn sync_setting_value_labels(
         .collect();
 
     for (key, label_id) in rows {
-        let (Some(opts), Some(idx)) = (crate::gfx::settings::options(&key), current_index(&key))
-        else {
+        let (Some(opts), Some(idx)) = (crate::settings::options(&key), current_index(&key)) else {
             continue;
         };
         if let Some(text) = opts.get(idx).copied() {

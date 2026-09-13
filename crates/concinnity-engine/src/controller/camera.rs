@@ -50,7 +50,7 @@ impl Camera3DSystem {
             move_speed: c.move_speed,
             sprint_multiplier: c.sprint_multiplier,
             mouse_sensitivity: c.mouse_sensitivity,
-            gamepad_look_sensitivity: crate::gfx::settings::DEFAULT_GAMEPAD_LOOK_SENSITIVITY,
+            gamepad_look_sensitivity: crate::settings::DEFAULT_GAMEPAD_LOOK_SENSITIVITY,
             player_radius: c.player_radius,
             bounds_min: c.bounds_min,
             bounds_max: c.bounds_max,
@@ -64,7 +64,7 @@ impl Camera3DSystem {
     /// Zero the smoothed movement velocity. Called when an external source (the
     /// cn debug `camera-set` command) teleports the camera, so free-fly velocity
     /// integration does not drift the new pose on the next step. Only reached
-    /// from the binary-only debug drive, hence dead in a `--lib` build.
+    /// from the dev tooling crate's debug drive, hence dead in a `--lib` build.
     pub fn reset_velocity(&mut self) {
         self.velocity = [0.0; 3];
     }
@@ -85,9 +85,9 @@ impl System for Camera3DSystem {
     fn init(&mut self, ctx: &mut PipelineContext) {
         self.last_step = Some(Instant::now());
 
-        crate::gfx::look_controls::apply_persisted(
+        super::look_controls::apply_persisted(
             ctx,
-            crate::gfx::look_controls::Look {
+            super::look_controls::Look {
                 mouse_sensitivity: &mut self.mouse_sensitivity,
                 gamepad_look_sensitivity: &mut self.gamepad_look_sensitivity,
             },
@@ -112,10 +112,10 @@ impl System for Camera3DSystem {
         // Live settings-menu changes sent this tick by GraphicsSystem, which runs
         // first. FOV is written in the camera loop below, which holds the
         // mutable Camera3D borrow.
-        let pending_fov = crate::gfx::look_controls::drain_commands(
+        let pending_fov = super::look_controls::drain_commands(
             ctx,
             &mut self.controls_cursor,
-            crate::gfx::look_controls::Look {
+            super::look_controls::Look {
                 mouse_sensitivity: &mut self.mouse_sensitivity,
                 gamepad_look_sensitivity: &mut self.gamepad_look_sensitivity,
             },

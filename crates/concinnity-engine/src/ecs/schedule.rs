@@ -82,11 +82,11 @@ pub(crate) fn spawn(world: &World) -> Option<crate::spawn::SpawnSystem> {
 // settings/scene command batches against the backend graphics owns and holds
 // the settings snapshot GraphicsSystem's init resolves. Scheduled just before
 // GraphicsSystem so a change lands for this frame's submit.
-pub(crate) fn settings(world: &World) -> Option<crate::gfx::settings::system::SettingsSystem> {
+pub(crate) fn settings(world: &World) -> Option<crate::settings::system::SettingsSystem> {
     world
         .query::<GraphicsConfig>()
         .next()
-        .map(|_| crate::gfx::settings::system::SettingsSystem::new())
+        .map(|_| crate::settings::system::SettingsSystem::new())
 }
 
 // StreamingSystem: paired with GraphicsSystem (same gate) -- it drives the
@@ -198,20 +198,22 @@ pub(crate) fn physics(world: &World) -> Option<concinnity_core::physics::Physics
 // block selects this first-person / fly controller, a `follow` block selects
 // the adjacent ThirdPersonSystem entry instead (a camera never gets both). A
 // `controller: null` camera opts out entirely (cutscene cameras).
-pub(crate) fn camera3d(world: &World) -> Option<crate::gfx::camera_controller::Camera3DSystem> {
+pub(crate) fn camera3d(world: &World) -> Option<crate::controller::camera::Camera3DSystem> {
     let ctrl = controlled_camera(world)?;
     ctrl.follow
         .is_none()
-        .then(|| crate::gfx::camera_controller::Camera3DSystem::new(ctrl))
+        .then(|| crate::controller::camera::Camera3DSystem::new(ctrl))
 }
 
 // Counterpart of `camera3d`: the first controlled camera declares a `follow`
 // block, so the third-person controller drives it.
-pub(crate) fn third_person(world: &World) -> Option<crate::gfx::third_person::ThirdPersonSystem> {
+pub(crate) fn third_person(
+    world: &World,
+) -> Option<crate::controller::third_person::ThirdPersonSystem> {
     let ctrl = controlled_camera(world)?;
     ctrl.follow
         .is_some()
-        .then(|| crate::gfx::third_person::ThirdPersonSystem::new(&ctrl))
+        .then(|| crate::controller::third_person::ThirdPersonSystem::new(&ctrl))
 }
 
 // A declared CameraTrack owns the camera, so neither input controller is
@@ -259,10 +261,10 @@ pub(crate) fn fps_counter(world: &World) -> Option<crate::hud::fps_counter::FpsC
 // `AnimationGraph`. It drains both at init and writes `SkeletonPose` each
 // frame. (A graph without clips is a build error, so the second check
 // only matters for hand-assembled worlds.)
-pub(crate) fn animation(world: &World) -> Option<crate::gfx::animation::AnimationSystem> {
+pub(crate) fn animation(world: &World) -> Option<crate::animation::AnimationSystem> {
     let declared = world.query::<Animation>().next().is_some()
         || world.query::<AnimationGraph>().next().is_some();
-    declared.then(crate::gfx::animation::AnimationSystem::new)
+    declared.then(crate::animation::AnimationSystem::new)
 }
 
 // StorySystem: present whenever the world declares a `Story` (a compiled

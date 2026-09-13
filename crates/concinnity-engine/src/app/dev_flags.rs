@@ -1,24 +1,16 @@
-//! Process-wide flags shared between the engine loop (library) and the
-//! binary-only `cn debug` subsystem. Only the flags the library itself names
-//! live here; the world.jsonl / shader-stage "changed" flags and the decal /
-//! emitter spawn queue moved fully into the binary-only debug tree
-//! (`crate::debug`), since nothing in the library references them.
+//! Process-wide launch and dev-session flags. The concinnity CLI
+//! (`src/bin/concinnity/dispatch.rs`) and concinnity-dev write them before
+//! `App::start`; the engine reads them at system init.
 //!
 //!   ENABLED              "are we running under a dev-loop entry point?" Set
-//!                        once by main.rs's `Commands::Debug` / `Commands::Editor`
-//!                        arms before world build; read by `GraphicsSystem::init`
+//!                        once by the CLI's `debug` and `editor` dispatch arms
+//!                        before world build; read by `GraphicsSystem::init`
 //!                        / `AnimationSystem` / the draw list builder to enable
 //!                        disk-first shader loading + the hot-reload source
-//!                        capture. `cn run` leaves it false so production keeps
+//!                        capture, and by the debug HUD gate in the ECS
+//!                        schedule. `cn run` leaves it false so production keeps
 //!                        the static `include_str!`-baked path with no
 //!                        filesystem dependency.
-//!   PENDING_ANIMATIONS   "an Animation source changed." Set by the cn debug
-//!                        watcher / WS `reload-assets` handler; consumed by the
-//!                        editor crate's `anim_reload::reload_clips_if_pending`,
-//!                        which the debug drive calls each frame to re-import
-//!                        file-backed clips. The flag lives here (in the runtime
-//!                        crate) because it bridges the runtime AnimationSystem,
-//!                        which reads ENABLED, and the editor-driven hot-reload.
 //!   VALIDATION           "did the launch request graphics validation?" Set by
 //!                        the CLI `--validation` flag (`cn run` / `cn debug`).
 //!                        Tri-state: unset defers to the build profile (on for
@@ -45,9 +37,10 @@
 //!                        flag; travels to the backends through
 //!                        `PostSettings::rt_skinned_geometry`. Unset leaves them
 //!                        in, so clearing it isolates the skinned trace path.
-//!   WORLD_JSONL_PATH     the world.jsonl the dev host is running. Set by the
-//!                        editor's `cn debug` / `cn editor` entry once the world
-//!                        path is resolved; read by `GraphicsSystem::init` (only
+//!   WORLD_JSONL_PATH     the world.jsonl the dev host is running. Set by
+//!                        concinnity-dev's `run_interpreted`, its editor entry
+//!                        and editor world switching once the world path is
+//!                        resolved; read by `GraphicsSystem::init` (only
 //!                        under ENABLED) so the Prop-transform hot-reload watcher
 //!                        knows which file to subscribe to. world.jsonl discovery
 //!                        is authoring I/O that lives in `concinnity-cook`, which
@@ -55,10 +48,8 @@
 //!                        path and hands it in rather than the engine looking it
 //!                        up. Left None for `cn run` and embedded preview.
 //!
-//! A static is the pragmatic shape here: the flags are process-wide because the
-//! rendering backend is too (a single context per process owns the GPU), and
-//! plumbing them through the public `App` / `run_interpreted` signatures would
-//! touch far more code for the same observable behavior.
+//! The setters live in crates the engine does not depend on and run before the
+//! world is built.
 
 pub use concinnity_core::render::rt_geom::RtDynamicMode;
 use std::sync::Mutex;
@@ -68,7 +59,6 @@ pub use crate::gfx::quality_preset::QualityPreset;
 use crate::gfx::quality_preset::{preset_at, preset_index};
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
-static PENDING_ANIMATIONS: AtomicBool = AtomicBool::new(false);
 // "keep the presented frame blit-readable for an exit screenshot." Set by
 // `cn run --screenshot` before world build; read by `GraphicsSystem::init`.
 // The dev loop's ENABLED implies capture without this flag.
@@ -122,19 +112,6 @@ pub(crate) fn set_capture(v: bool) {
 // True when a production run armed frame capture (`cn run --screenshot`).
 pub(crate) fn capture() -> bool {
     CAPTURE.load(Ordering::SeqCst)
-}
-
-/// Raise the "Animation source changed" flag. Called by the asset hot-reload
-/// watcher and the `reload-assets` debug tool call; the library only reads it.
-pub fn set_pending_animations() {
-    PENDING_ANIMATIONS.store(true, Ordering::SeqCst);
-}
-
-/// Swap the "Animation source changed" flag to `false`, returning whether it
-/// was set. The editor crate's `anim_reload::reload_clips_if_pending` calls
-/// this; a `true` result kicks the per-clip re-import pass.
-pub fn take_pending_animations() -> bool {
-    PENDING_ANIMATIONS.swap(false, Ordering::SeqCst)
 }
 
 /// Record the CLI `--validation` request. `None` leaves the build-profile

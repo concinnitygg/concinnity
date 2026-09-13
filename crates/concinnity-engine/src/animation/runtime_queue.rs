@@ -1,10 +1,10 @@
 //! Process-wide command queue for runtime animation control (crossfades,
 //! graph parameter writes, graph state queries). Mirrors the shape of
-//! `crate::debug::runtime_spawn`, but separate so the AnimationSystem can
+//! `concinnity_dev::debug::runtime_spawn`, but separate so the AnimationSystem can
 //! drain its own commands without contending with GraphicsSystem's decal /
 //! particle queue.
 //!
-//! The debug server (binary-only, off the engine thread) pushes
+//! The concinnity-dev debug server (off the engine thread) pushes
 //! commands here; the editor's per-frame debug drive drains them via
 //! `AnimationSystem::apply_runtime_commands` every frame -- including while a
 //! menu pauses playback, so a blocked MCP client always gets its reply. Each

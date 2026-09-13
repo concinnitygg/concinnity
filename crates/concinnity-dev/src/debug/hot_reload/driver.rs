@@ -9,7 +9,7 @@ use concinnity_core::components::SkeletonPose;
 use concinnity_core::components::StoryReload;
 use concinnity_core::ecs::World;
 use concinnity_core::gfx::skeleton;
-use concinnity_engine::gfx::animation::AnimationSystem;
+use concinnity_engine::animation::AnimationSystem;
 use concinnity_engine::gfx::system;
 use concinnity_engine::gfx::system::GraphicsSystem;
 use std::sync::Arc;
@@ -80,7 +80,7 @@ impl HotReloadDriver {
                     effects = Some(run_frame(state, &mut apply, self.notifier.as_ref()));
                 }
             } else if let Some(anim) = system.downcast_mut::<AnimationSystem>() {
-                crate::anim_reload::reload_clips_if_pending(anim);
+                super::animation::reload_clips_if_pending(anim);
             }
         }
         if let Some(effects) = effects {

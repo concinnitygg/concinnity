@@ -6,7 +6,6 @@
 //! the connection loop in `super::wire::server` feeds; the spawn / crossfade
 //! command handlers live in `super::commands`.
 
-use concinnity_engine::app::dev_flags;
 use std::sync::{Arc, Mutex};
 
 use super::commands::{
@@ -241,7 +240,7 @@ pub(crate) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> Str
                     // listen on their own sibling flags. Fire all four here
                     // so a single tool call reloads every hot-reloadable
                     // surface in one shot.
-                    dev_flags::set_pending_animations();
+                    hot_reload::set_pending_animations();
                     hot_reload::set_pending_world();
                     hot_reload::set_pending_shader_stages();
                     serde_json::json!({ "ok": true, "reload_queued": true })
@@ -665,7 +664,7 @@ mod tests {
         hot_reload::take_pending_world();
         hot_reload::take_pending_shader_stages();
         hot_reload::take_pending_stories();
-        dev_flags::take_pending_animations();
+        hot_reload::take_pending_animations();
 
         let flag = Arc::new(AtomicBool::new(false));
         let st = DebugState {
@@ -680,7 +679,7 @@ mod tests {
         // drain them so they do not leak.
         assert!(hot_reload::take_pending_world());
         assert!(hot_reload::take_pending_shader_stages());
-        assert!(dev_flags::take_pending_animations());
+        assert!(hot_reload::take_pending_animations());
         // Stories reload only on their own `.md` watch, so reload-assets leaves
         // that flag clear.
         assert!(!hot_reload::take_pending_stories());

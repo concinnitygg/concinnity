@@ -3,8 +3,8 @@
 // scheduled just before it.
 pub(crate) mod system;
 
-// src/gfx/settings.rs
-//
+pub(crate) mod action;
+
 // The engine-side registry of user-facing settings a cycle row can change. The
 // ordered option labels live in `concinnity_core::gfx::settings` (shared with
 // the build pipeline, which reads a key's label count to pick a stepper vs a

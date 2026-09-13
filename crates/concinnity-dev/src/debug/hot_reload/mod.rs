@@ -8,13 +8,15 @@
 //! Prop-tracking handle comes from `GraphicsSystem::hot_reload_apply_parts`.
 //!
 //! Split by responsibility:
-//!   driver   `HotReloadDriver`, the per-frame drive + ECS effect apply
-//!   state    `AssetHotReloadState` + decode result types + `run_frame` entry
-//!   watcher  the `notify` filesystem watcher
-//!   decode   off-thread payload decode + poll/apply (textures, meshes, IBL)
-//!   passes   world.jsonl / ProceduralMesh / VolumetricFog / Shader reload
-//!   pending  process-wide world.jsonl / Shader "changed" flags
+//!   driver     `HotReloadDriver`, the per-frame drive + ECS effect apply
+//!   state      `AssetHotReloadState` + decode result types + `run_frame` entry
+//!   watcher    the `notify` filesystem watcher
+//!   decode     off-thread payload decode + poll/apply (textures, meshes, IBL)
+//!   passes     world.jsonl / ProceduralMesh / VolumetricFog / Shader reload
+//!   animation  file-backed Animation clip re-import into the AnimationSystem
+//!   pending    process-wide world.jsonl / Shader / story / Animation "changed" flags
 
+mod animation;
 mod decode;
 mod driver;
 mod passes;
@@ -26,8 +28,12 @@ mod watcher;
 mod tests;
 
 pub(crate) use driver::HotReloadDriver;
-pub(crate) use pending::{set_pending_shader_stages, set_pending_stories, set_pending_world};
+pub(crate) use pending::{
+    set_pending_animations, set_pending_shader_stages, set_pending_stories, set_pending_world,
+};
 // The `reload-assets` dispatch test drains the sibling reload flags the handler
 // raises so they don't leak into other tests; only that test needs them.
 #[cfg(test)]
-pub(crate) use pending::{take_pending_shader_stages, take_pending_stories, take_pending_world};
+pub(crate) use pending::{
+    take_pending_animations, take_pending_shader_stages, take_pending_stories, take_pending_world,
+};

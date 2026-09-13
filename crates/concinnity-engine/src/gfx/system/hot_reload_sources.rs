@@ -2,7 +2,7 @@
 //! `cn debug`) describing every file-backed asset the renderer can hot-reload:
 //! the on-disk source path plus the GPU slot / draw indices it owns. These are
 //! plain data: the filesystem watcher, off-thread decode, and reload passes
-//! that consume them live in the `cn debug` binary (`crate::debug::hot_reload`),
+//! that consume them live in the dev tooling crate (`concinnity_dev::debug::hot_reload`),
 //! out of the library. `init` fills these maps and hands them off as a
 //! `HotReloadSources` bundle through `GraphicsSystem::take_hot_reload_sources`.
 
@@ -353,7 +353,7 @@ impl TextureSourceMap {
 }
 
 /// Bundle of every captured source catalog, handed from `GraphicsSystem`
-/// init to the `cn debug` binary's hot-reload drive, which builds the
+/// init to concinnity-dev's hot-reload drive, which builds the
 /// filesystem watcher + `AssetHotReloadState` from it. Empty / `None` under
 /// `cn run`, which never captures sources.
 #[derive(Default)]

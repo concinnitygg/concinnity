@@ -23,10 +23,11 @@ use concinnity_host::thread::asset_id::AssetId;
 
 use super::sky_follow;
 use super::*;
-use crate::gfx::{setting_action, settings};
+use crate::settings;
+use crate::settings::action;
 // The settings-row helpers this system's init-time captures share with the
-// SettingCommand drain (which now lives in `gfx::settings::system`).
-use crate::gfx::settings::system::rows::{
+// SettingCommand drain (which now lives in `settings::system`).
+use crate::settings::system::rows::{
     DISABLED_ROW_COLOR, capture_row_labels, expand_dim_set, set_label_content, set_rows_grayed,
     set_sprite_x,
 };
@@ -560,7 +561,7 @@ impl GraphicsSystem {
             .collect();
         let mut sliders: Vec<SliderViz> = Vec::new();
         for r in ctx.query::<HitRegion>() {
-            let Some(key) = setting_action::key_with_verb(&r.action, "drag") else {
+            let Some(key) = action::key_with_verb(&r.action, "drag") else {
                 continue;
             };
             let (Some(handle_id), Some(value_id)) = (r.drag_handle, r.label) else {
@@ -604,8 +605,7 @@ impl GraphicsSystem {
         let mut rows: Vec<RebindViz> = Vec::new();
         let mut pad_rows: Vec<super::PadRebindViz> = Vec::new();
         for r in ctx.query::<HitRegion>() {
-            let (Some(key), Some(value_id)) =
-                (setting_action::key_with_verb(&r.action, "rebind"), r.label)
+            let (Some(key), Some(value_id)) = (action::key_with_verb(&r.action, "rebind"), r.label)
             else {
                 continue;
             };
@@ -638,7 +638,7 @@ impl GraphicsSystem {
     pub(super) fn init_cycle_value_labels(&mut self, ctx: &mut PipelineContext) {
         let mut labels = std::collections::HashMap::new();
         for r in ctx.query::<HitRegion>() {
-            if let (Some(key), Some(value_id)) = (setting_action::cycle_key(&r.action), r.label) {
+            if let (Some(key), Some(value_id)) = (action::cycle_key(&r.action), r.label) {
                 labels.insert(key.to_string(), value_id);
             }
         }

@@ -10,8 +10,8 @@ use concinnity_core::gfx::render_types::PostProcessTunables;
 
 use crate::config::GraphicsSettings;
 use crate::gfx::quality_preset::{QualityCeiling, clamp_shadow_update};
-use crate::gfx::settings::slider_apply_value;
 use crate::gfx::system::{clamp_quality_cycle, set_quality_toggle};
+use crate::settings::slider_apply_value;
 
 /// Shadow map resolution. Restart-required: the cascade array is sized once at
 /// backend init.
@@ -200,7 +200,7 @@ pub(crate) fn clamp_quality_under_ceiling(
             set_quality_toggle(cfg, key, false);
         }
     }
-    for key in crate::gfx::settings::QUALITY_CYCLE_KEYS {
+    for key in crate::settings::QUALITY_CYCLE_KEYS {
         let overridden = match key {
             "aa_mode" => user.aa_mode.is_some(),
             "ssgi_resolution" => user.ssgi_resolution.is_some(),

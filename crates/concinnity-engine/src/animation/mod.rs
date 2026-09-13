@@ -16,6 +16,7 @@ mod graph;
 mod ik;
 mod morph;
 mod root;
+pub mod runtime_queue;
 #[cfg(test)]
 mod tests;
 
@@ -56,8 +57,7 @@ enum TargetMode {
 
 /// One hot-reload entry for a file-backed `Animation`. Captured at init
 /// alongside the runtime clip; consulted by the per-step reload pass when the
-/// shared `PENDING_ANIMATIONS` flag fires (see
-/// [`crate::app::dev_flags::take_pending_animations`]). Inline-authored
+/// dev tooling raises its pending-animations flag. Inline-authored
 /// animations (no `source`) carry no entry; there's no file to watch and
 /// the build pipeline never expanded one.
 ///

@@ -123,7 +123,7 @@ pub(crate) fn coarser_ssgi_resolution(a: SsgiResolution, b: SsgiResolution) -> S
 // world's mode and the cap, by the ascending-cost rank `aa_mode_index` defines
 // (Off < FXAA < TAA). Never makes AA more aggressive than the world authored.
 pub(crate) fn clamp_aa_mode(authored: AaMode, cap: AaMode) -> AaMode {
-    use crate::gfx::settings::aa_mode_index;
+    use crate::settings::aa_mode_index;
     if aa_mode_index(authored) <= aa_mode_index(cap) {
         authored
     } else {
@@ -308,7 +308,7 @@ pub(crate) fn resolve_ceiling(preset: QualityPreset, profile: &GpuProfile) -> Qu
 // UltraPerformance). Used to clamp a world's render scale under a ceiling's
 // `min_upscale` without ever raising it.
 pub(crate) fn more_aggressive_upscale(a: UpscaleQuality, b: UpscaleQuality) -> UpscaleQuality {
-    use crate::gfx::settings::render_scale_index;
+    use crate::settings::render_scale_index;
     if render_scale_index(a) >= render_scale_index(b) {
         a
     } else {
@@ -318,7 +318,7 @@ pub(crate) fn more_aggressive_upscale(a: UpscaleQuality, b: UpscaleQuality) -> U
 
 impl QualityPreset {
     /// The presets in menu-cycle order. The settings-menu master row cycles
-    /// through these; `GRAPHICS_QUALITY_OPTIONS` in `gfx::settings` holds the
+    /// through these; `GRAPHICS_QUALITY_OPTIONS` in `settings` holds the
     /// matching display labels in the same order (locked by a test there).
     pub const ALL: [QualityPreset; 6] = [
         Self::Auto,
@@ -482,8 +482,8 @@ mod tests {
             // The AA-mode cap rises (or holds) with the tier: a higher tier
             // never permits a less aggressive (cheaper) anti-aliasing mode.
             assert!(
-                crate::gfx::settings::aa_mode_index(lo.aa_mode)
-                    <= crate::gfx::settings::aa_mode_index(hi.aa_mode),
+                crate::settings::aa_mode_index(lo.aa_mode)
+                    <= crate::settings::aa_mode_index(hi.aa_mode),
                 "a higher tier capped AA at a cheaper mode"
             );
             // And never forces more aggressive upscaling than a lower tier.

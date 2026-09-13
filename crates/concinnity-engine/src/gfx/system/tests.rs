@@ -355,7 +355,7 @@ fn step(gs: &mut GraphicsSystem, world: &mut TestWorld) -> StepResult {
     let mut ctx = world.ctx();
     crate::gfx::overlay::OverlaySystem::new().step(&mut ctx);
     crate::spawn::SpawnSystem::new().step(&mut ctx);
-    crate::gfx::settings::system::SettingsSystem::new().step(&mut ctx);
+    crate::settings::system::SettingsSystem::new().step(&mut ctx);
     crate::gfx::streaming::system::StreamingSystem::new().step(&mut ctx);
     let result = gs.run_step(&mut ctx);
     if result != StepResult::Stop {
@@ -1933,7 +1933,7 @@ fn system_trait_delegates_to_init_and_step() {
 // desync the settings menu from the backend.
 #[test]
 fn quality_toggle_and_cycle_helpers_round_trip() {
-    use crate::gfx::settings::QUALITY_CYCLE_KEYS;
+    use crate::settings::QUALITY_CYCLE_KEYS;
     use concinnity_core::components::{AaMode, ReflectionBlurResolution, SsgiResolution};
 
     let mut cfg = PostProcessConfig::default();
@@ -2017,10 +2017,10 @@ fn post_config_scene(cfg: PostProcessConfig) -> WorldBuilder {
 // The resolved settings snapshot init hands to SettingsSystem: the live values
 // every settings row displays and cycles, after the world's config, the
 // persisted overrides, and the preset ceiling have all settled.
-fn settings_state(world: &TestWorld) -> &crate::gfx::settings::system::SettingsState {
+fn settings_state(world: &TestWorld) -> &crate::settings::system::SettingsState {
     world
         .resources
-        .get::<crate::gfx::settings::system::SettingsSlot>()
+        .get::<crate::settings::system::SettingsSlot>()
         .expect("SettingsSlot parked at init")
         .0
         .as_ref()
@@ -2966,7 +2966,7 @@ fn a_capability_gated_row_grays_out_its_whole_scroll_row() {
 }
 
 // The muted gray a disabled settings row is recolored to.
-const DISABLED: [f32; 3] = crate::gfx::settings::system::rows::DISABLED_ROW_COLOR;
+const DISABLED: [f32; 3] = crate::settings::system::rows::DISABLED_ROW_COLOR;
 
 // The master "Display performance stats" toggle grays its two sub-rows when it
 // is off, and the Resolution row grays outside fullscreen (windowed sizes come
@@ -4268,7 +4268,7 @@ fn a_spawn_naming_a_skinned_template_takes_the_instance_pool_path() {
     );
 }
 
-// The hot-reload seams the `cn debug` binary drives through. The library never
+// The hot-reload seams concinnity-dev drives through. The library never
 // calls them, so they are exercised here: the source catalogs are captured
 // only under `cn debug` (this world is a plain build, so there are none), and the
 // apply parts hand out a disjoint mutable screen of the backend + bookkeeping.

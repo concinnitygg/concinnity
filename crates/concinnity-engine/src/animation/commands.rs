@@ -1,6 +1,6 @@
 //! Runtime debug-command drain: `anim-crossfade` (flat buckets), `anim-param`
 //! and `anim-state` (graph buckets). Commands arrive on the process-wide
-//! `crate::app::anim_runtime` queue from the debug endpoint and each carries
+//! `super::runtime_queue` queue from the debug endpoint and each carries
 //! a reply channel answered synchronously here. The drain is driven from the
 //! editor's per-frame `DebugHook::tick` (not from `step`) so an MCP client
 //! blocked on a reply is never starved while a menu pauses playback.
@@ -10,13 +10,13 @@ use concinnity_core::gfx::anim_graph::normalized_time;
 
 use super::flat::Transition;
 use super::graph::GraphTarget;
+use super::runtime_queue::{AnimCommand, GraphStateReport};
 use super::{AnimationSystem, TargetMode};
-use crate::app::anim_runtime::{AnimCommand, GraphStateReport};
 
 impl AnimationSystem {
     /// Drain pending runtime commands against the system's own clock. Uses the
-    /// same `start` / elapsed bookkeeping `step` uses, so the binary-only
-    /// `DebugHook::tick` drive can apply commands from outside the per-system
+    /// same `start` / elapsed bookkeeping `step` uses, so the dev tooling crate's
+    /// debug drive can apply commands from outside the per-system
     /// step. The library never calls this; `step` runs after the hook on the
     /// same frame, so the `start` anchor set here is shared.
     pub fn apply_runtime_commands(&mut self) {
@@ -34,7 +34,7 @@ impl AnimationSystem {
         // Commands address a mesh by its interned NAME id (the debug endpoint
         // resolves the typed name against the interner); the buckets are keyed
         // by handle, so translate through the name index captured at init.
-        for cmd in crate::app::anim_runtime::drain() {
+        for cmd in super::runtime_queue::drain() {
             match cmd {
                 AnimCommand::Crossfade { req, reply } => {
                     let target = self.name_index.get(req.target);
@@ -168,7 +168,7 @@ mod tests {
     use super::super::TargetState;
     use super::super::flat::{ClipEntry, FlatState};
     use super::*;
-    use crate::app::anim_runtime::{CrossfadeRequest, SetParamRequest};
+    use crate::animation::runtime_queue::{CrossfadeRequest, SetParamRequest};
     use crate::gfx::skinned_mesh_map::SkinnedMeshNameIndex;
     use concinnity_core::components::AnimationGraph;
     use concinnity_core::gfx::anim_graph::GraphCursor;
@@ -280,10 +280,10 @@ mod tests {
     // tests that drive it serialize on a shared lock rather than stealing each
     // other's commands. Any leftovers from a panicking earlier test are not ours.
     fn queue_guard() -> std::sync::MutexGuard<'static, ()> {
-        let g = crate::app::anim_runtime::TEST_LOCK
+        let g = crate::animation::runtime_queue::TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let _ = crate::app::anim_runtime::drain();
+        let _ = crate::animation::runtime_queue::drain();
         g
     }
 
@@ -457,7 +457,7 @@ mod tests {
         let mut sys = flat_system(2);
         sys.name_index = name_index();
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        crate::app::anim_runtime::enqueue(AnimCommand::Crossfade {
+        crate::animation::runtime_queue::enqueue(AnimCommand::Crossfade {
             req: CrossfadeRequest {
                 target: NAME,
                 weights: vec![0.0, 1.0],
@@ -481,7 +481,7 @@ mod tests {
         let mut sys = graph_system(0.0);
         sys.name_index = name_index();
         let (param_tx, param_rx) = std::sync::mpsc::sync_channel(1);
-        crate::app::anim_runtime::enqueue(AnimCommand::SetParam {
+        crate::animation::runtime_queue::enqueue(AnimCommand::SetParam {
             req: SetParamRequest {
                 target: NAME,
                 name: "speed".to_string(),
@@ -490,7 +490,7 @@ mod tests {
             reply: param_tx,
         });
         let (query_tx, query_rx) = std::sync::mpsc::sync_channel(1);
-        crate::app::anim_runtime::enqueue(AnimCommand::QueryState {
+        crate::animation::runtime_queue::enqueue(AnimCommand::QueryState {
             target: NAME,
             reply: query_tx,
         });
@@ -507,7 +507,7 @@ mod tests {
         let _guard = queue_guard();
         let mut sys = AnimationSystem::new();
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        crate::app::anim_runtime::enqueue(AnimCommand::QueryState {
+        crate::animation::runtime_queue::enqueue(AnimCommand::QueryState {
             target: NAME,
             reply: tx,
         });
@@ -524,7 +524,7 @@ mod tests {
         let mut sys = graph_system(0.0);
         sys.name_index = name_index();
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        crate::app::anim_runtime::enqueue(AnimCommand::QueryState {
+        crate::animation::runtime_queue::enqueue(AnimCommand::QueryState {
             target: NAME,
             reply: tx,
         });

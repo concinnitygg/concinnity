@@ -202,7 +202,7 @@ pub struct GraphicsSystem {
     // can claim it as a member.
     deferred_shader_scenes: Vec<(u32, AssetId)>,
     // Source catalogs captured at init for asset hot-reload, handed off to
-    // the `cn debug` binary's reload machinery (which owns the watcher + the
+    // concinnity-dev's reload machinery (which owns the watcher + the
     // live `AssetHotReloadState`). `Some` only under `cn debug` with at least
     // one file-backed asset / world.jsonl; taken once by the debug drive via
     // `take_hot_reload_sources`. `cn run` never captures these; production
@@ -396,7 +396,7 @@ pub(crate) struct SliderViz {
 /// Materials / Textures / Meshes / Models on the fly (those need a process
 /// restart), but every authored Prop that points at an asset already in the
 /// init world resolves through these maps without re-running build.
-/// Built by init, read only by the `cn debug` binary's world.jsonl reload pass,
+/// Built by init, read only by concinnity-dev's world.jsonl reload pass,
 /// so its fields read as dead under `cargo check --lib`.
 pub struct WorldReloadState {
     /// Texture asset name -> live pool slot, so runtime decal / emitter spawn
@@ -408,10 +408,10 @@ pub struct WorldReloadState {
 /// edit in one tick: the active backend, the texture-name map for runtime
 /// decal / emitter spawn, and the fog bookkeeping the world.jsonl reload pass
 /// dedupes against. Returned by [`GraphicsSystem::hot_reload_apply_parts`] so the
-/// binary-only `DebugHook::tick` drive can apply the reload passes from outside
+/// concinnity-dev `DebugHook::tick` drive can apply the reload passes from outside
 /// the per-system step without the library depending on it. The reload
 /// catalog and in-flight state live on the debug side
-/// (`crate::debug::hot_reload`), built from
+/// (`concinnity_dev::debug::hot_reload`), built from
 /// [`HotReloadSources`](crate::gfx::system::hot_reload_sources::HotReloadSources).
 /// The library never constructs this; the fields are read from the debug
 /// drive alone.
@@ -602,11 +602,11 @@ impl System for GraphicsSystem {
 
 impl GraphicsSystem {
     /// Disjoint mutable screen of the backend + hot-reload bookkeeping the
-    /// binary-only `DebugHook::tick` reload drive applies changes through. The
+    /// dev tooling crate's `DebugHook::tick` reload drive applies changes through. The
     /// caller supplies the backend (borrowed from the world's parked slot via
     /// `World::systems_and_render_backend`) since this system yields it after
     /// init. The library never calls this (the asset hot-reload drive lives in
-    /// the `cn debug` binary), so it reads as dead code under
+    /// the dev tooling crate), so it reads as dead code under
     /// `cargo check --lib`.
     pub fn hot_reload_apply_parts<'a>(
         &'a mut self,
@@ -676,13 +676,13 @@ pub(crate) fn set_quality_toggle(cfg: &mut PostProcessConfig, key: &str, on: boo
 // preset ceiling like the boolean toggles (a manual change flips the preset to
 // Custom). The set lives in `settings::QUALITY_CYCLE_KEYS`.
 pub(crate) fn is_quality_cycle(key: &str) -> bool {
-    crate::gfx::settings::QUALITY_CYCLE_KEYS.contains(&key)
+    crate::settings::QUALITY_CYCLE_KEYS.contains(&key)
 }
 
 // The current menu option index of cycle quality knob `key` in `cfg`, or `None`
 // for a key that is not a cycle quality knob.
 pub(crate) fn quality_cycle_index(cfg: &PostProcessConfig, key: &str) -> Option<usize> {
-    use crate::gfx::settings;
+    use crate::settings;
     match key {
         "aa_mode" => Some(settings::aa_mode_index(cfg.aa_mode)),
         "ssgi_resolution" => Some(settings::ssgi_resolution_index(cfg.ssgi_resolution)),
@@ -698,7 +698,7 @@ pub(crate) fn quality_cycle_index(cfg: &PostProcessConfig, key: &str) -> Option<
 // Set cycle quality knob `key` in `cfg` from a menu option index. Unknown keys
 // are ignored.
 pub(crate) fn set_quality_cycle(cfg: &mut PostProcessConfig, key: &str, index: usize) {
-    use crate::gfx::settings;
+    use crate::settings;
     match key {
         "aa_mode" => cfg.aa_mode = settings::aa_mode_at(index),
         "ssgi_resolution" => cfg.ssgi_resolution = settings::ssgi_resolution_at(index),

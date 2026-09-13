@@ -95,7 +95,7 @@ crate::define_systems! {
         after: [BehaviorSystem],
         before: [GraphicsSystem],
     },
-    SettingsSystem => crate::gfx::settings::system::SettingsSystem {
+    SettingsSystem => crate::settings::system::SettingsSystem {
         gate: schedule::settings,
         present_when: "the world declares a GraphicsConfig",
         phase: PreRender,
@@ -151,14 +151,14 @@ crate::define_systems! {
         after: [OverlaySystem],
         before: [Camera3DSystem, ThirdPersonSystem],
     },
-    Camera3DSystem => crate::gfx::camera_controller::Camera3DSystem {
+    Camera3DSystem => crate::controller::camera::Camera3DSystem {
         gate: schedule::camera3d,
         present_when: "the first controlled Camera3D has no follow block",
         phase: Late,
         after: [PhysicsSystem],
         before: [AudioSystem],
     },
-    ThirdPersonSystem => crate::gfx::third_person::ThirdPersonSystem {
+    ThirdPersonSystem => crate::controller::third_person::ThirdPersonSystem {
         gate: schedule::third_person,
         present_when: "the first controlled Camera3D has a follow block",
         phase: Late,
@@ -179,7 +179,7 @@ crate::define_systems! {
         after: [],
         before: [],
     },
-    AnimationSystem => crate::gfx::animation::AnimationSystem {
+    AnimationSystem => crate::animation::AnimationSystem {
         gate: schedule::animation,
         present_when: "the world declares any Animation or AnimationGraph",
         phase: Late,

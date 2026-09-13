@@ -2,7 +2,6 @@
 //! source path and flips the shared atomic on a relevant change. Mirrors the
 //! per-backend shader watcher.
 
-use concinnity_engine::app::dev_flags;
 use concinnity_engine::gfx::system::hot_reload_sources::*;
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use std::collections::BTreeSet;
@@ -189,11 +188,7 @@ fn signal(kind: ReloadKind, flag: &AtomicBool) {
         ReloadKind::Stories => super::set_pending_stories(),
         ReloadKind::Assets => {
             flag.store(true, Ordering::SeqCst);
-            // AnimationSystem subscribes via a sibling static flag in
-            // concinnity_engine::app::dev_flags; the asset map lives on GraphicsSystem so
-            // a separate signal is the simplest way to notify the animation
-            // graph of the same `.glb` save without plumbing a shared Arc.
-            dev_flags::set_pending_animations();
+            super::set_pending_animations();
         }
     }
 }
