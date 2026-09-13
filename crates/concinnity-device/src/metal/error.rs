@@ -36,6 +36,13 @@ pub(super) fn classify_command_buffer_error(code: usize, detail: String) -> Rend
     }
 }
 
+// A nil result from a Metal allocation call (`newBuffer*`, `newTexture*`,
+// `newHeap*`, an indirect command buffer), which Metal returns when the device
+// cannot back the request.
+pub(super) fn allocation_failed(what: impl core::fmt::Display) -> RenderError {
+    RenderError::OutOfDeviceMemory(format!("failed to allocate {what}"))
+}
+
 // Classify a completed command buffer's NSError. Only errors in the Metal
 // command-buffer domain carry a meaningful code; anything else stays `Other`.
 pub(super) fn classify_ns_error(error: &NSError) -> RenderError {
@@ -102,6 +109,14 @@ mod tests {
         assert_eq!(
             classify(MTLCommandBufferError::OutOfMemory),
             RenderError::OutOfDeviceMemory("gpu fault".to_string())
+        );
+    }
+
+    #[test]
+    fn allocation_failure_is_typed_oom() {
+        assert_eq!(
+            allocation_failed(format_args!("bloom mip {} texture", 2)),
+            RenderError::OutOfDeviceMemory("failed to allocate bloom mip 2 texture".to_string())
         );
     }
 

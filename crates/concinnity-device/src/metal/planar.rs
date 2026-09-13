@@ -24,9 +24,11 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use super::error::allocation_failed;
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::transform::mat4_inverse;
 use concinnity_core::gfx::transform::mat4_mul;
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::planar_reflection;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -79,7 +81,7 @@ pub(in crate::metal) fn create_planar_targets(
     width: u32,
     height: u32,
     sample_count: u32,
-) -> Result<PlanarReflectionTargets, String> {
+) -> RenderResult<PlanarReflectionTargets> {
     let multisampled = sample_count > 1;
     let color = if multisampled {
         let desc = TextureDesc {
@@ -95,7 +97,7 @@ pub(in crate::metal) fn create_planar_targets(
         Some(
             device
                 .newTextureWithDescriptor(&desc)
-                .ok_or("planar: failed to create MSAA color target")?,
+                .ok_or_else(|| allocation_failed("planar MSAA color target"))?,
         )
     } else {
         None
@@ -117,7 +119,7 @@ pub(in crate::metal) fn create_planar_targets(
         .build();
         device
             .newTextureWithDescriptor(&desc)
-            .ok_or("planar: failed to create depth target")?
+            .ok_or_else(|| allocation_failed("planar depth target"))?
     };
     let resolve = {
         let desc = TextureDesc {
@@ -130,7 +132,7 @@ pub(in crate::metal) fn create_planar_targets(
         .build();
         device
             .newTextureWithDescriptor(&desc)
-            .ok_or("planar: failed to create resolve target")?
+            .ok_or_else(|| allocation_failed("planar resolve target"))?
     };
     Ok(PlanarReflectionTargets {
         msaa_color: color,
@@ -148,7 +150,7 @@ pub(in crate::metal) fn create_planar_set(
     height: u32,
     sample_count: u32,
     planes: &[[f32; 4]],
-) -> Result<PlanarReflectionSet, String> {
+) -> RenderResult<PlanarReflectionSet> {
     let mut targets = Vec::with_capacity(planes.len());
     for _ in planes {
         targets.push(create_planar_targets(device, width, height, sample_count)?);

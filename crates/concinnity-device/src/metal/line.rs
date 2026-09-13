@@ -13,6 +13,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::render_types::LineVertex;
+use concinnity_core::render::error::RenderResult;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
@@ -78,7 +79,7 @@ impl MtlContext {
         &mut self,
         slot: usize,
         vertices: &[LineVertex],
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         self.lines.frame = None;
         if self.lines.pipeline.is_none() || vertices.is_empty() {
             return Ok(());

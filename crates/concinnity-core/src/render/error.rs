@@ -1,8 +1,9 @@
 //! The typed error vocabulary of the `RenderBackend` boundary. Backends map
 //! their native failure codes (VkResult, HRESULT, MTLCommandBuffer status) into
 //! these classes at the detection sites; the frame loop dispatches recovery
-//! policy on the class, never on prose. `Other` carries legacy string errors so
-//! interior call sites can migrate incrementally.
+//! policy on the class, never on prose. `Other` is the unclassified bucket: a
+//! failure no detection site classified, including any `String` error lifted
+//! through `?`.
 
 use alloc::format;
 use alloc::string::String;

@@ -1,5 +1,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use super::error::allocation_failed;
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::mipmap;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -612,7 +614,7 @@ pub(super) fn create_hdr_targets(
     width: u32,
     height: u32,
     sample_count: u32,
-) -> Result<HdrTargets, String> {
+) -> RenderResult<HdrTargets> {
     let w = width.max(1) as usize;
     let h = height.max(1) as usize;
 
@@ -634,7 +636,7 @@ pub(super) fn create_hdr_targets(
         Some(
             device
                 .newTextureWithDescriptor(&color_desc)
-                .ok_or("failed to create MSAA HDR color texture")?,
+                .ok_or_else(|| allocation_failed("MSAA HDR color texture"))?,
         )
     } else {
         None
@@ -651,7 +653,7 @@ pub(super) fn create_hdr_targets(
     .build();
     let hdr_resolve = device
         .newTextureWithDescriptor(&resolve_desc)
-        .ok_or("failed to create HDR resolve texture")?;
+        .ok_or_else(|| allocation_failed("HDR resolve texture"))?;
 
     // Scene-copy sibling of `hdr_resolve`. The raymarch pass blits
     // `hdr_resolve` here before drawing so user SDF shaders can sample
@@ -660,7 +662,7 @@ pub(super) fn create_hdr_targets(
     // is a plain copy_from_texture.
     let hdr_resolve_copy = device
         .newTextureWithDescriptor(&resolve_desc)
-        .ok_or("failed to create HDR resolve-copy texture")?;
+        .ok_or_else(|| allocation_failed("HDR resolve-copy texture"))?;
 
     // Scene snapshot for the transparent pass. The transparent encoder blits
     // `scene_pre_taa` here before drawing so water / glass refraction reads a
@@ -668,7 +670,7 @@ pub(super) fn create_hdr_targets(
     // or it aliases `hdr_resolve`. Same descriptor as `hdr_resolve`.
     let transparent_scene_copy = device
         .newTextureWithDescriptor(&resolve_desc)
-        .ok_or("failed to create transparent scene-copy texture")?;
+        .ok_or_else(|| allocation_failed("transparent scene-copy texture"))?;
 
     // MSAA depth: matches the color sample count. `ShaderRead` is enabled so
     // the Hi-Z build and the raymarch early-out can sample it after the main
@@ -688,7 +690,7 @@ pub(super) fn create_hdr_targets(
         Some(
             device
                 .newTextureWithDescriptor(&depth_desc)
-                .ok_or("failed to create MSAA depth texture")?,
+                .ok_or_else(|| allocation_failed("MSAA depth texture"))?,
         )
     } else {
         None
@@ -709,13 +711,13 @@ pub(super) fn create_hdr_targets(
     .build();
     let depth_resolve = device
         .newTextureWithDescriptor(&depth_resolve_desc)
-        .ok_or("failed to create single-sample depth resolve texture")?;
+        .ok_or_else(|| allocation_failed("single-sample depth resolve texture"))?;
 
     // Raymarch's read-only depth snapshot. Same descriptor as `depth_resolve`
     // so the blit is a plain copy_from_texture.
     let depth_copy = device
         .newTextureWithDescriptor(&depth_resolve_desc)
-        .ok_or("failed to create depth-copy texture")?;
+        .ok_or_else(|| allocation_failed("depth-copy texture"))?;
 
     Ok(HdrTargets {
         hdr_color,

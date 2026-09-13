@@ -47,6 +47,7 @@
 //! dereferences a pooled resource to bind it, which touches no refcount; every
 //! allocation, clone and drop happens on the main thread.
 
+use concinnity_core::render::error::{RenderError, RenderResult};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ops::Deref;
@@ -387,7 +388,7 @@ impl DeviceAllocator {
         size: u64,
         heap_type: D3D12_HEAP_TYPE,
         initial_state: D3D12_RESOURCE_STATES,
-    ) -> Result<PooledBuffer, String> {
+    ) -> RenderResult<PooledBuffer> {
         let desc = buffer_desc(size.max(1));
         let (resource, heap, lease) = self.place(&desc, heap_type, initial_state)?;
         Ok(PooledBuffer {
@@ -412,7 +413,9 @@ impl DeviceAllocator {
                 desc.Flags.0
             ));
         }
-        let (resource, heap, lease) = self.place(desc, heap_type, initial_state)?;
+        let (resource, heap, lease) = self
+            .place(desc, heap_type, initial_state)
+            .map_err(|e| e.to_string())?;
         Ok(PooledTexture {
             resource,
             heap,
@@ -456,7 +459,7 @@ impl DeviceAllocator {
         desc: &D3D12_RESOURCE_DESC,
         heap_type: D3D12_HEAP_TYPE,
         initial_state: D3D12_RESOURCE_STATES,
-    ) -> Result<(ID3D12Resource, ID3D12Heap, Rc<Lease>), String> {
+    ) -> RenderResult<(ID3D12Resource, ID3D12Heap, Rc<Lease>)> {
         let key = PoolKey {
             kind: HeapKind::from_d3d12(heap_type)?,
             class: HeapClass::for_desc(desc, self.heap_tier),
@@ -481,11 +484,16 @@ impl DeviceAllocator {
             Ok(Some(resource)) => resource,
             Ok(None) => {
                 self.release(reservation);
-                return Err("allocator: CreatePlacedResource returned None".to_string());
+                return Err(RenderError::Other(
+                    "allocator: CreatePlacedResource returned None".to_string(),
+                ));
             }
             Err(e) => {
                 self.release(reservation);
-                return Err(format!("allocator: place {} bytes: {e}", info.SizeInBytes));
+                return Err(super::error::map_hresult(
+                    e.code(),
+                    &format!("allocator: place {} bytes", info.SizeInBytes),
+                ));
             }
         };
 
@@ -533,7 +541,7 @@ impl DeviceAllocator {
 
     // Reserve `size` bytes at `align` in `key`'s pool, opening a heap when no
     // existing block can host them.
-    fn reserve(&self, key: PoolKey, size: u64, align: u64) -> Result<Reservation, String> {
+    fn reserve(&self, key: PoolKey, size: u64, align: u64) -> RenderResult<Reservation> {
         let mut inner = self.inner.borrow_mut();
         let pool = inner.pools.entry(key).or_insert_with(Pool::new);
 
@@ -669,7 +677,7 @@ fn resource_heap_tier(device: &ID3D12Device) -> D3D12_RESOURCE_HEAP_TIER {
 }
 
 // One placement heap of `size` bytes for `key`'s pool.
-fn new_heap(device: &ID3D12Device, key: PoolKey, size: u64) -> Result<ID3D12Heap, String> {
+fn new_heap(device: &ID3D12Device, key: PoolKey, size: u64) -> RenderResult<ID3D12Heap> {
     let desc = D3D12_HEAP_DESC {
         SizeInBytes: size.max(HEAP_GRANULARITY),
         Properties: D3D12_HEAP_PROPERTIES {
@@ -682,9 +690,10 @@ fn new_heap(device: &ID3D12Device, key: PoolKey, size: u64) -> Result<ID3D12Heap
     let mut heap: Option<ID3D12Heap> = None;
     // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
     // COM object lands in a binding that owns it.
-    unsafe { device.CreateHeap(&desc, &mut heap) }
-        .map_err(|e| format!("allocator: create a {size}-byte heap: {e}"))?;
-    heap.ok_or_else(|| "allocator: CreateHeap returned None".to_string())
+    unsafe { device.CreateHeap(&desc, &mut heap) }.map_err(|e| {
+        super::error::map_hresult(e.code(), &format!("allocator: create a {size}-byte heap"))
+    })?;
+    heap.ok_or_else(|| RenderError::Other("allocator: CreateHeap returned None".to_string()))
 }
 
 #[cfg(test)]

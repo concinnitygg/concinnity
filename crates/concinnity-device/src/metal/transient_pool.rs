@@ -33,6 +33,8 @@
 //! before (the main pass samples a 1x1 white texture when SSAO is off).
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use super::error::allocation_failed;
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::render_graph::{
     PixelFormat, PoolGates, TextureUsage, TransientSlot, TransientTexture, plan_pool_slots,
 };
@@ -80,7 +82,7 @@ impl TransientTexturePool {
     pub(super) fn build(
         device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
         slots: &[TransientSlot],
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         let mut heaps = Vec::with_capacity(slots.len());
         let mut textures = Vec::new();
         // What the members would cost with one allocation each; the heaps' real
@@ -107,7 +109,7 @@ impl TransientTexturePool {
                 // SAFETY: the heap is sized to its largest member, so offset 0 is in bounds, and
                 // every alignment divides 0.
                 let texture = unsafe { heap.newTextureWithDescriptor_offset(&desc, 0) }
-                    .ok_or_else(|| format!("failed to place transient texture {label}"))?;
+                    .ok_or_else(|| allocation_failed(format_args!("transient texture {label}")))?;
                 textures.push(PooledTexture { label, texture });
             }
             heaps.push(heap);
@@ -171,7 +173,7 @@ impl TransientTexturePool {
         &mut self,
         device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
         slots: &[TransientSlot],
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         *self = Self::build(device, slots)?;
         Ok(())
     }
@@ -184,7 +186,7 @@ impl TransientTexturePool {
 fn new_slot_heap(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     size: usize,
-) -> Result<Retained<ProtocolObject<dyn MTLHeap>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLHeap>>> {
     let desc = MTLHeapDescriptor::new();
     desc.setType(MTLHeapType::Placement);
     desc.setStorageMode(MTLStorageMode::Private);
@@ -192,7 +194,7 @@ fn new_slot_heap(
     desc.setSize(size.max(1));
     device
         .newHeapWithDescriptor(&desc)
-        .ok_or_else(|| format!("failed to create {size}-byte transient slot heap"))
+        .ok_or_else(|| allocation_failed(format_args!("{size}-byte transient slot heap")))
 }
 
 // Translate one graph-declared transient into its Metal descriptor. This is the

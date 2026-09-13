@@ -1647,7 +1647,7 @@ impl DxContext {
         // SAFETY: the fence for this frame slot was already waited on, so no submission still
         // references what is being reset.
         unsafe { self.commands.command_allocators[frame].Reset() }
-            .map_err(|e| format!("start allocator reset: {e}"))?;
+            .map_err(|e| super::error::map_hresult(e.code(), "start allocator reset"))?;
         // Owned clone (COM refcount bump) so the per-frame RT acceleration-
         // structure update below can take `&mut self` without holding a borrow
         // of `self.commands.command_lists`.
@@ -1655,7 +1655,7 @@ impl DxContext {
         // SAFETY: the fence for this frame slot was already waited on, so no submission still
         // references what is being reset.
         unsafe { start_cmd.Reset(&self.commands.command_allocators[frame], None) }
-            .map_err(|e| format!("start cmd reset: {e}"))?;
+            .map_err(|e| super::error::map_hresult(e.code(), "start cmd reset"))?;
 
         // Timestamp the start of this frame's GPU work + pre-initialize
         // every per-pass slot in this frame's block. The end-of-frame
@@ -1699,7 +1699,8 @@ impl DxContext {
 
         // SAFETY: the command list is live and in the recording state, which is what `Close`
         // requires.
-        unsafe { start_cmd.Close() }.map_err(|e| format!("start cmd close: {e}"))?;
+        unsafe { start_cmd.Close() }
+            .map_err(|e| super::error::map_hresult(e.code(), "start cmd close"))?;
 
         // Line resources: built on the first frame that publishes lines, so
         // the graph gate inside `record_frame` can see them live this same
@@ -1714,12 +1715,12 @@ impl DxContext {
         // SAFETY: the fence for this frame slot was already waited on, so no submission still
         // references what is being reset.
         unsafe { self.commands.end_command_allocators[frame].Reset() }
-            .map_err(|e| format!("end allocator reset: {e}"))?;
+            .map_err(|e| super::error::map_hresult(e.code(), "end allocator reset"))?;
         let end_cmd = &self.commands.end_command_lists[frame];
         // SAFETY: the fence for this frame slot was already waited on, so no submission still
         // references what is being reset.
         unsafe { end_cmd.Reset(&self.commands.end_command_allocators[frame], None) }
-            .map_err(|e| format!("end cmd reset: {e}"))?;
+            .map_err(|e| super::error::map_hresult(e.code(), "end cmd reset"))?;
 
         // SAFETY: a property query on a live COM object; it only reads.
         let back_idx = unsafe { self.swapchain.handle.GetCurrentBackBufferIndex() } as usize;

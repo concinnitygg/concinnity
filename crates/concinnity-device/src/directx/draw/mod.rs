@@ -17,6 +17,7 @@ use concinnity_core::gfx::render_types::{
 };
 use concinnity_core::gfx::transform::mat4_inverse;
 use concinnity_core::gfx::transform::mat4_mul;
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::lights;
 use concinnity_core::render::render_graph;
 use concinnity_core::render::render_graph::{FrameGraphInputs, build_frame_graph};
@@ -90,7 +91,7 @@ impl DxContext {
         view: RecordFrameView<'_>,
         resolution: RecordFrameResolution,
         world_hidden: bool,
-    ) -> Result<Vec<ID3D12GraphicsCommandList>, String> {
+    ) -> RenderResult<Vec<ID3D12GraphicsCommandList>> {
         let RecordFrameTargets {
             cmd: end_cmd,
             back_buffer,

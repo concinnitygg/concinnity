@@ -12,6 +12,7 @@
 //! Mirrors src/metal/line.rs.
 
 use concinnity_core::gfx::render_types::LineVertex;
+use concinnity_core::render::error::RenderResult;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -337,7 +338,7 @@ impl DxContext {
         frame_idx: usize,
         vp: [[f32; 4]; 4],
         vertices: &[LineVertex],
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let Some(lines) = self.lines.resources.as_ref() else {
             return Ok(());
         };

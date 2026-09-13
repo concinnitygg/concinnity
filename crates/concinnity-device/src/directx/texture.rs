@@ -110,7 +110,9 @@ pub(super) fn create_buffer(
     heap_type: D3D12_HEAP_TYPE,
     initial_state: D3D12_RESOURCE_STATES,
 ) -> Result<PooledBuffer, String> {
-    alloc.alloc_buffer(size, heap_type, initial_state)
+    alloc
+        .alloc_buffer(size, heap_type, initial_state)
+        .map_err(|e| e.to_string())
 }
 
 // Create a default-heap buffer with `ALLOW_UNORDERED_ACCESS`, suitable for a

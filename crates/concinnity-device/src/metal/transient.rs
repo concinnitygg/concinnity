@@ -12,6 +12,8 @@
 //! Each slot grows power-of-two on demand (like `ensure_icb_capacity`) and is
 //! never shrunk, so steady state does zero allocation.
 
+use super::error::allocation_failed;
+use concinnity_core::render::error::RenderResult;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLDevice, MTLResourceOptions};
@@ -115,7 +117,7 @@ impl TransientRing {
         device: &ProtocolObject<dyn MTLDevice>,
         slot: usize,
         min_len: usize,
-    ) -> Result<Retained<ProtocolObject<dyn MTLBuffer>>, String> {
+    ) -> RenderResult<Retained<ProtocolObject<dyn MTLBuffer>>> {
         Ok(self.slot_fresh(device, slot, min_len)?.0)
     }
 
@@ -127,14 +129,14 @@ impl TransientRing {
         device: &ProtocolObject<dyn MTLDevice>,
         slot: usize,
         min_len: usize,
-    ) -> Result<(Retained<ProtocolObject<dyn MTLBuffer>>, bool), String> {
+    ) -> RenderResult<(Retained<ProtocolObject<dyn MTLBuffer>>, bool)> {
         let idx = slot % self.slots.len();
         let have = self.slots[idx].as_ref().map_or(0, |buf| buf.length());
         let grown = grow_to(have, min_len);
         if let Some(cap) = grown {
             let buf = device
                 .newBufferWithLength_options(cap, MTLResourceOptions::StorageModeShared)
-                .ok_or("failed to allocate transient ring buffer")?;
+                .ok_or_else(|| allocation_failed("transient ring buffer"))?;
             self.slots[idx] = Some(buf);
         }
         Ok((
@@ -155,7 +157,7 @@ impl TransientRing {
         device: &ProtocolObject<dyn MTLDevice>,
         slot: usize,
         bytes: &[u8],
-    ) -> Result<Retained<ProtocolObject<dyn MTLBuffer>>, String> {
+    ) -> RenderResult<Retained<ProtocolObject<dyn MTLBuffer>>> {
         let buf = self.slot(device, slot, bytes.len().max(1))?;
         write_buffer_region(&buf, 0, bytes)?;
         Ok(buf)
@@ -207,7 +209,7 @@ impl JointRing {
         device: &ProtocolObject<dyn MTLDevice>,
         slot: usize,
         palettes: &[Vec<[[f32; 4]; 4]>],
-    ) -> Result<Vec<Retained<ProtocolObject<dyn MTLBuffer>>>, String> {
+    ) -> RenderResult<Vec<Retained<ProtocolObject<dyn MTLBuffer>>>> {
         self.objects(slot, palettes.len())
             .iter_mut()
             .zip(palettes)
@@ -224,7 +226,7 @@ impl JointRing {
         device: &ProtocolObject<dyn MTLDevice>,
         slot: usize,
         weights: &[Vec<f32>],
-    ) -> Result<Vec<Retained<ProtocolObject<dyn MTLBuffer>>>, String> {
+    ) -> RenderResult<Vec<Retained<ProtocolObject<dyn MTLBuffer>>>> {
         self.objects(slot, weights.len())
             .iter_mut()
             .zip(weights)
@@ -250,12 +252,12 @@ fn fill(
     cell: &mut ObjectBuffer,
     bytes: &[u8],
     what: &str,
-) -> Result<Retained<ProtocolObject<dyn MTLBuffer>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLBuffer>>> {
     let have = cell.as_ref().map_or(0, |buf| buf.length());
     if let Some(cap) = grow_to(have, bytes.len()) {
         let buf = device
             .newBufferWithLength_options(cap, MTLResourceOptions::StorageModeShared)
-            .ok_or_else(|| format!("failed to allocate {what} ring buffer"))?;
+            .ok_or_else(|| allocation_failed(format_args!("{what} ring buffer")))?;
         *cell = Some(buf);
     }
     let buf = cell.as_ref().expect("ring slot was just ensured");

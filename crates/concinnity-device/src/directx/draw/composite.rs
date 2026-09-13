@@ -7,6 +7,7 @@
 //! GPU buffers are allocated.
 
 use concinnity_core::gfx::render_types::{CompositeParams, TextDrawCall, TextUniforms, TextVertex};
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::fullscreen;
 use concinnity_core::render::fullscreen::TextBindCache;
 use windows::Win32::Foundation::RECT;
@@ -268,7 +269,7 @@ impl DxContext {
         text_calls: &[TextDrawCall],
         scene_srv: D3D12_GPU_DESCRIPTOR_HANDLE,
         resolution: CompositeResolution,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let CompositeRenderTarget {
             back_buffer,
             back_buffer_rtv,
@@ -297,6 +298,6 @@ impl DxContext {
                 0
             },
         };
-        fullscreen::encode_composite_chain(self, cmd, &args, text_calls)
+        fullscreen::encode_composite_chain(self, cmd, &args, text_calls).map_err(RenderError::Other)
     }
 }

@@ -6,6 +6,7 @@
 //! `MtlPostDevice`.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use crate::metal::error::allocation_failed;
 use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::ssr::SsrSettings;
 use concinnity_core::render::error::RenderResult;
@@ -119,7 +120,7 @@ pub(crate) fn create_ssr_targets(
     width: u32,
     height: u32,
     blur_scale: u32,
-) -> Result<SsrTargets, String> {
+) -> RenderResult<SsrTargets> {
     let blur_scale = blur_scale.max(1);
     let make_at = |w: usize, h: usize| -> Option<Retained<ProtocolObject<dyn MTLTexture>>> {
         let desc = TextureDesc {
@@ -136,9 +137,9 @@ pub(crate) fn create_ssr_targets(
     let h = height.max(1) as usize;
     let bw = (width / blur_scale).max(1) as usize;
     let bh = (height / blur_scale).max(1) as usize;
-    let reflection = make_at(w, h).ok_or("failed to create reflection texture")?;
-    let output = make_at(w, h).ok_or("failed to create SSR output texture")?;
-    let blur = make_at(bw, bh).ok_or("failed to create reflection blur texture")?;
+    let reflection = make_at(w, h).ok_or_else(|| allocation_failed("reflection texture"))?;
+    let output = make_at(w, h).ok_or_else(|| allocation_failed("SSR output texture"))?;
+    let blur = make_at(bw, bh).ok_or_else(|| allocation_failed("reflection blur texture"))?;
     Ok(SsrTargets {
         reflection,
         output,

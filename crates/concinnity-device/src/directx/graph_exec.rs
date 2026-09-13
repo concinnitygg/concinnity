@@ -45,6 +45,7 @@
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types::{LineVertex, TextDrawCall};
 use concinnity_core::gfx::transform::mat4_inverse;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::lights;
 use concinnity_core::render::render_graph;
 use concinnity_core::render::render_graph::{
@@ -606,7 +607,7 @@ impl DxContext {
         &self,
         graph: &CompiledGraph,
         params: &GraphFrameParams<'_>,
-    ) -> Result<Vec<ID3D12GraphicsCommandList>, String> {
+    ) -> RenderResult<Vec<ID3D12GraphicsCommandList>> {
         // Particle per-frame state (dt / frame index / per-emitter spawn budgets
         // and their upload-ring slots) is advanced here, once, before any pass
         // encodes, so the sim and draw halves record on separate workers against
@@ -624,7 +625,7 @@ impl DxContext {
         // collects them into the return Vec in order after the join.
         let worker_slots: Mutex<Vec<Option<SendableCmdList>>> =
             Mutex::new((0..graph.passes.len()).map(|_| None).collect());
-        let first_error: Mutex<Option<String>> = Mutex::new(None);
+        let first_error: Mutex<Option<RenderError>> = Mutex::new(None);
 
         let ctx_ref = ParallelCtxRef::new(self);
         // Resolve every migrated resource's barrier target once, on the main
@@ -682,9 +683,9 @@ impl DxContext {
                         if let Err(e) = unsafe { alloc.Reset() } {
                             let mut lock = first_error_ref.lock().unwrap();
                             if lock.is_none() {
-                                *lock = Some(format!(
-                                    "per-pass allocator reset ({}): {e}",
-                                    pass_id.name()
+                                *lock = Some(super::error::map_hresult(
+                                    e.code(),
+                                    &format!("per-pass allocator reset ({})", pass_id.name()),
                                 ));
                             }
                             return;
@@ -694,9 +695,9 @@ impl DxContext {
                         if let Err(e) = unsafe { cmd.Reset(alloc, None) } {
                             let mut lock = first_error_ref.lock().unwrap();
                             if lock.is_none() {
-                                *lock = Some(format!(
-                                    "per-pass cmd list reset ({}): {e}",
-                                    pass_id.name()
+                                *lock = Some(super::error::map_hresult(
+                                    e.code(),
+                                    &format!("per-pass cmd list reset ({})", pass_id.name()),
                                 ));
                             }
                             return;
@@ -743,9 +744,9 @@ impl DxContext {
                         if let Err(e) = unsafe { cmd.Close() } {
                             let mut lock = first_error_ref.lock().unwrap();
                             if lock.is_none() {
-                                *lock = Some(format!(
-                                    "per-pass cmd list close ({}): {e}",
-                                    pass_id.name()
+                                *lock = Some(super::error::map_hresult(
+                                    e.code(),
+                                    &format!("per-pass cmd list close ({})", pass_id.name()),
                                 ));
                             }
                             return;
@@ -836,9 +837,9 @@ impl DxContext {
         // order. The empty slots (composite, plus any skipped no-op
         // pass that returned without stashing) drop out; workers only
         // stash on success.
-        let slots = worker_slots
-            .into_inner()
-            .map_err(|_| "graph executor (directx): worker slot mutex poisoned".to_string())?;
+        let slots = worker_slots.into_inner().map_err(|_| {
+            RenderError::Other("graph executor (directx): worker slot mutex poisoned".into())
+        })?;
         let mut ordered = Vec::with_capacity(graph.passes.len());
         for cb in slots.into_iter().flatten() {
             ordered.push(cb.0);
@@ -1145,7 +1146,7 @@ impl DxContext {
         cmd: &ID3D12GraphicsCommandList,
         params: &GraphFrameParams<'_>,
         particle_frame: Option<&super::particle::ParticleFrame>,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         match pass_id {
             PassId::Cull => {
                 self.encode_cull(cmd, params.frame_idx, params.frustum, params.cam_pos);
@@ -1158,21 +1159,21 @@ impl DxContext {
                 self.encode_ssao(cmd, params.fov_y_radians, params.aspect);
             }
             PassId::SsaoPrepass | PassId::SsaoKernel => {
-                return Err(format!(
+                return Err(RenderError::Other(format!(
                     "graph executor (directx): pass {} is bundled inside SsaoBlur \
                      (encode_ssao encodes all three SSAO sub-passes); it \
                      should not appear as its own graph node",
                     pass_id.name()
-                ));
+                )));
             }
             PassId::ReflectionComposite => {
                 // Metal-only inline pass; never scheduled on DirectX. Handled
                 // here only to keep the dispatch match exhaustive.
-                return Err(format!(
+                return Err(RenderError::Other(format!(
                     "graph executor (directx): pass {} is a Metal-only inline \
                      reflection composite and should not appear as a graph node",
                     pass_id.name()
-                ));
+                )));
             }
             PassId::LightCull => {
                 // Bins the local lights into per-cluster index lists. The
@@ -1281,11 +1282,11 @@ impl DxContext {
                 // with the trailing timestamp + resolve. This arm is
                 // unreachable through the worker fan-out; see the
                 // method docstring.
-                return Err(
+                return Err(RenderError::Other(
                     "graph executor (directx): Composite must run on the outer cmd \
                      list: encode_pass_into is not the right entry point"
-                        .into(),
-                );
+                        .to_string(),
+                ));
             }
             PassId::Raymarch => {
                 let view = self.build_raymarch_view(params);

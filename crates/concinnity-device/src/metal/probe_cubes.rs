@@ -14,6 +14,7 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::uniforms::MAX_PROBES;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -66,7 +67,7 @@ impl MtlContext {
     pub(super) fn build_probe_cube_args(
         &mut self,
         ring_slot: usize,
-    ) -> Result<Retained<ProtocolObject<dyn MTLBuffer>>, String> {
+    ) -> RenderResult<Retained<ProtocolObject<dyn MTLBuffer>>> {
         let sig = self.probe_cube_signature();
         // Cloned so no borrow of `self` outlives the mutable ring borrow below.
         let enc = self.probe_cube_arg_encoder.clone();

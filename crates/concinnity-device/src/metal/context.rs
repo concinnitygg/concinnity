@@ -933,7 +933,7 @@ impl MtlContext {
     // buffer(5) binding) and (under two-pass occlusion) the phase-2 ICB
     // `cull_icb_2` + its argument buffer are grown in lockstep on the same
     // trigger, so all three stay sized to the live draw-object count.
-    pub(super) fn ensure_icb_capacity(&mut self, count: usize) -> Result<(), String> {
+    pub(super) fn ensure_icb_capacity(&mut self, count: usize) -> error::RenderResult<()> {
         // Retained is reference-counted; cloning the handle lets the rest of
         // the method mutate `self` without holding a borrow on the encoder.
         let arg_encoder = match &self.cull.icb_arg_encoder {
@@ -958,7 +958,7 @@ impl MtlContext {
             let buf = self
                 .device
                 .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
-                .ok_or("failed to create ICB argument buffer")?;
+                .ok_or_else(|| super::error::allocation_failed("ICB argument buffer"))?;
             self.cull.icb_arg_buffer = Some(buf);
         }
         let arg_buf = self
@@ -986,7 +986,7 @@ impl MtlContext {
                 new_cap * std::mem::size_of::<u32>(),
                 MTLResourceOptions::StorageModePrivate,
             )
-            .ok_or("failed to create cull status buffer")?;
+            .ok_or_else(|| super::error::allocation_failed("cull status buffer"))?;
         self.cull.status_buffer = Some(status);
 
         // Second-pass ICB + argument buffer, only when two-pass occlusion is on.
@@ -1000,7 +1000,9 @@ impl MtlContext {
                 let buf = self
                     .device
                     .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
-                    .ok_or("failed to create phase-2 ICB argument buffer")?;
+                    .ok_or_else(|| {
+                        super::error::allocation_failed("phase-2 ICB argument buffer")
+                    })?;
                 self.cull.icb_2_arg_buffer = Some(buf);
             }
             let arg_buf2 = self
@@ -1034,7 +1036,7 @@ impl MtlContext {
     // does not rebuild the ICB every frame. Called from `draw_frame` (where
     // `&mut self` is available) right after `ensure_icb_capacity`, so the encode
     // pass only ever reads the sized ICB.
-    pub(super) fn ensure_shadow_icb_capacity(&mut self, count: usize) -> Result<(), String> {
+    pub(super) fn ensure_shadow_icb_capacity(&mut self, count: usize) -> error::RenderResult<()> {
         let arg_encoder = match (&self.cull.shadow_pipeline, &self.cull.icb_arg_encoder) {
             (Some(_), Some(e)) => e.clone(),
             _ => return Ok(()),
@@ -1050,7 +1052,7 @@ impl MtlContext {
             let buf = self
                 .device
                 .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
-                .ok_or("failed to create shadow ICB argument buffer")?;
+                .ok_or_else(|| super::error::allocation_failed("shadow ICB argument buffer"))?;
             self.cull.shadow_icb_arg_buffer = Some(buf);
         }
         let arg_buf = self
@@ -1073,7 +1075,7 @@ impl MtlContext {
                 new_cap * std::mem::size_of::<u32>(),
                 MTLResourceOptions::StorageModePrivate,
             )
-            .ok_or("failed to create shadow cull status buffer")?;
+            .ok_or_else(|| super::error::allocation_failed("shadow cull status buffer"))?;
         self.cull.shadow_status = Some(status);
         self.cull.shadow_icb = Some(icb);
         self.cull.shadow_icb_capacity = new_cap;
@@ -1093,7 +1095,7 @@ impl MtlContext {
         &mut self,
         slot_count: usize,
         count: usize,
-    ) -> Result<(), String> {
+    ) -> error::RenderResult<()> {
         if slot_count == 0 {
             self.cull.mirror_slots.clear();
             self.cull.mirror_status = None;
@@ -1118,7 +1120,7 @@ impl MtlContext {
             let arg_buffer = self
                 .device
                 .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
-                .ok_or("failed to create mirror ICB argument buffer")?;
+                .ok_or_else(|| super::error::allocation_failed("mirror ICB argument buffer"))?;
             // SAFETY: the argument buffer is sized to `encodedLength()` and the
             // ICB is encoded at slot 0, exactly like the main + shadow ICBs. Each
             // slot re-points the shared encoder at its own (arg buffer, ICB) pair;
@@ -1138,7 +1140,7 @@ impl MtlContext {
                 new_cap * std::mem::size_of::<u32>(),
                 MTLResourceOptions::StorageModePrivate,
             )
-            .ok_or("failed to create mirror cull status buffer")?;
+            .ok_or_else(|| super::error::allocation_failed("mirror cull status buffer"))?;
         self.cull.mirror_status = Some(status);
         self.cull.mirror_slots = slots;
         self.cull.mirror_icb_capacity = new_cap;
@@ -1154,7 +1156,7 @@ impl MtlContext {
     fn build_cull_icb(
         &self,
         cap: usize,
-    ) -> Result<Retained<ProtocolObject<dyn MTLIndirectCommandBuffer>>, String> {
+    ) -> error::RenderResult<Retained<ProtocolObject<dyn MTLIndirectCommandBuffer>>> {
         let desc = MTLIndirectCommandBufferDescriptor::new();
         desc.setCommandTypes(MTLIndirectCommandType::DrawIndexed);
         desc.setInheritBuffers(true);
@@ -1170,7 +1172,7 @@ impl MtlContext {
                     MTLResourceOptions::StorageModePrivate,
                 )
         }
-        .ok_or_else(|| "failed to create indirect command buffer".to_string())
+        .ok_or_else(|| super::error::allocation_failed("indirect command buffer"))
     }
 
     // Device capability flags for the settings menu. Ray tracing is queried

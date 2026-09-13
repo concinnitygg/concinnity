@@ -416,21 +416,26 @@ impl MtlContext {
         // frustum-independent (only the per-face view/projection differs), so they are
         // built once and reused by every face.
         let object_buffer = self
-            .build_object_buffer(slot)?
+            .build_object_buffer(slot)
+            .map_err(|e| e.to_string())?
             .ok_or("probe: no static geometry to bake")?;
         let draw_args = self
             .build_draw_args_buffer(
                 eye,
                 slot,
                 concinnity_core::render::model_history::HistoryMode::Untracked,
-            )?
+            )
+            .map_err(|e| e.to_string())?
             .ok_or("probe: no draw args to bake")?;
         let counts = self.draw_record_counts();
         let tex_args = self
-            .build_bindless_texture_args(slot)?
+            .build_bindless_texture_args(slot)
+            .map_err(|e| e.to_string())?
             .ok_or("probe: no bindless texture args")?;
-        let joint_bufs = self.build_joint_buffers(slot)?;
-        let morph_weight_bufs = self.build_morph_weight_buffers(slot)?;
+        let joint_bufs = self.build_joint_buffers(slot).map_err(|e| e.to_string())?;
+        let morph_weight_bufs = self
+            .build_morph_weight_buffers(slot)
+            .map_err(|e| e.to_string())?;
         // The folded skinned tail draws compute-deformed vertices. The frame's
         // deformed ring is overwritten every frame, so an async capture needs its
         // OWN deformed buffer (Shared storage -- a Private one page-faults in this
@@ -513,7 +518,8 @@ impl MtlContext {
         // The shared ICB is otherwise sized from the frame's live draw list, which
         // this capture's snapshot does not follow; size it for the snapshot before
         // the face's cull encodes into it.
-        self.ensure_icb_capacity(counts.total)?;
+        self.ensure_icb_capacity(counts.total)
+            .map_err(|e| e.to_string())?;
 
         let vp = reflection_probe::face_view_projection(eye, face, near, far);
         let view = reflection_probe::face_view_matrix(eye, face);

@@ -7,7 +7,9 @@
 //! effect is a single unit the other backends can mirror.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use crate::metal::error::allocation_failed;
 use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::uniforms::GBufferView;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -72,7 +74,7 @@ pub(crate) fn create_gbuffer_targets(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     width: u32,
     height: u32,
-) -> Result<GBufferTargets, String> {
+) -> RenderResult<GBufferTargets> {
     let desc = TextureDesc {
         format: MTLPixelFormat::Depth32Float,
         width: width.max(1) as usize,
@@ -84,7 +86,7 @@ pub(crate) fn create_gbuffer_targets(
     .build();
     let depth = device
         .newTextureWithDescriptor(&desc)
-        .ok_or("failed to create G-buffer depth texture")?;
+        .ok_or_else(|| allocation_failed("G-buffer depth texture"))?;
     Ok(GBufferTargets { depth })
 }
 

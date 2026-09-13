@@ -7,8 +7,10 @@
 //! pre-pass over the visible static, instanced, and skinned geometry.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use crate::metal::error::allocation_failed;
 use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::ssao::SsaoSettings;
+use concinnity_core::render::error::RenderResult;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -80,12 +82,12 @@ pub(crate) fn create_ssao_targets(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     width: u32,
     height: u32,
-) -> Result<SsaoTargets, String> {
+) -> RenderResult<SsaoTargets> {
     let w = width.max(1) as usize;
     let h = height.max(1) as usize;
 
     let sampled = MTLTextureUsage(MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0);
-    let make = |label: &str| -> Result<Retained<ProtocolObject<dyn MTLTexture>>, String> {
+    let make = |label: &str| -> RenderResult<Retained<ProtocolObject<dyn MTLTexture>>> {
         let desc = TextureDesc {
             format: SSAO_OCCLUSION_FORMAT,
             width: w,
@@ -96,7 +98,7 @@ pub(crate) fn create_ssao_targets(
         .build();
         device
             .newTextureWithDescriptor(&desc)
-            .ok_or_else(|| format!("failed to create SSAO {} texture", label))
+            .ok_or_else(|| allocation_failed(format_args!("SSAO {label} texture")))
     };
 
     let ao_raw = make("raw occlusion")?;

@@ -34,6 +34,8 @@
 //! the downsample chain stays correct.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use super::error::allocation_failed;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSRange;
@@ -138,7 +140,7 @@ fn create_hiz_texture_and_views(
     width: u32,
     height: u32,
     mip_count: u32,
-) -> Result<HizTextureAndViews, String> {
+) -> RenderResult<HizTextureAndViews> {
     let desc = TextureDesc {
         format: MTLPixelFormat::R32Float,
         width: width.max(1) as usize,
@@ -150,7 +152,7 @@ fn create_hiz_texture_and_views(
     .build();
     let texture = device
         .newTextureWithDescriptor(&desc)
-        .ok_or("failed to create hiz texture")?;
+        .ok_or_else(|| allocation_failed("hiz texture"))?;
 
     let mut mip_views = Vec::with_capacity(mip_count as usize);
     for mip in 0..mip_count {
@@ -165,7 +167,7 @@ fn create_hiz_texture_and_views(
                 NSRange::new(0, 1),
             )
         }
-        .ok_or_else(|| format!("failed to create hiz mip {} view", mip))?;
+        .ok_or_else(|| RenderError::Other(format!("failed to create hiz mip {mip} view")))?;
         mip_views.push(view);
     }
     Ok((texture, mip_views))
@@ -185,7 +187,8 @@ impl HiZResources {
         let mip_count = hiz_mip_count(width, height);
         let (init_pipeline, downsample_pipeline) =
             build_hiz_pipelines(device, hot_reload, sample_count)?;
-        let (texture, mip_views) = create_hiz_texture_and_views(device, width, height, mip_count)?;
+        let (texture, mip_views) = create_hiz_texture_and_views(device, width, height, mip_count)
+            .map_err(|e| e.to_string())?;
         Ok(Self {
             init_pipeline,
             downsample_pipeline,
@@ -206,7 +209,7 @@ impl HiZResources {
         device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
         width: u32,
         height: u32,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let mip_count = hiz_mip_count(width, height);
         let (texture, mip_views) = create_hiz_texture_and_views(device, width, height, mip_count)?;
         self.texture = texture;

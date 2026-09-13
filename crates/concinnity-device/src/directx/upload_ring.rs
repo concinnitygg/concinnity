@@ -12,6 +12,7 @@
 //! fence (waited before a slot is reused) guarantees the GPU has finished
 //! reading a slot's buffer before the CPU overwrites or grows it.
 
+use concinnity_core::render::error::RenderResult;
 use std::cell::RefCell;
 use windows::Win32::Graphics::Direct3D12::*;
 // Sub-range offset rounding, shared with the other backends' text uploads.
@@ -19,7 +20,6 @@ pub(in crate::directx) use concinnity_core::render::fullscreen::align_up;
 
 use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
 use crate::directx::com;
-use crate::directx::texture::create_buffer;
 
 // Sub-allocation alignment. 16 bytes satisfies the index-buffer address
 // requirement (a multiple of the R16 element size) and keeps each vertex
@@ -87,15 +87,14 @@ impl UploadRing {
         alloc: &DeviceAllocator,
         frame: usize,
         needed: u64,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let mut slot = self.slots[frame].borrow_mut();
         slot.cursor = 0;
         if needed <= slot.capacity {
             return Ok(());
         }
         let new_cap = grow_capacity(slot.capacity, needed);
-        let buffer = create_buffer(
-            alloc,
+        let buffer = alloc.alloc_buffer(
             new_cap,
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -103,7 +102,8 @@ impl UploadRing {
         let mut base = std::ptr::null_mut::<std::ffi::c_void>();
         // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local
         // that receives the mapping.
-        unsafe { buffer.Map(0, None, Some(&mut base)) }.map_err(|e| format!("upload map: {e}"))?;
+        unsafe { buffer.Map(0, None, Some(&mut base)) }
+            .map_err(|e| super::error::map_hresult(e.code(), "upload map"))?;
         let gpu_va = com::gpu_va(&buffer);
         // Replacing `buffer` drops the old resource (and unmaps it); the frame
         // fence already proved the GPU finished reading it.

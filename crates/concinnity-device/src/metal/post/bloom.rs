@@ -3,6 +3,8 @@
 //! effect is a single unit Vulkan / DirectX can mirror.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use crate::metal::error::allocation_failed;
+use concinnity_core::render::error::RenderResult;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -99,7 +101,7 @@ pub(crate) fn create_bloom_targets(
     width: u32,
     height: u32,
     bloom_top: Retained<ProtocolObject<dyn MTLTexture>>,
-) -> Result<BloomTargets, String> {
+) -> RenderResult<BloomTargets> {
     let full_w = width.max(1);
     let full_h = height.max(1);
     let count = bloom_mip_count(full_w, full_h);
@@ -119,7 +121,7 @@ pub(crate) fn create_bloom_targets(
         .build();
         let tex = device
             .newTextureWithDescriptor(&desc)
-            .ok_or_else(|| format!("failed to create bloom mip {} texture", i))?;
+            .ok_or_else(|| allocation_failed(format_args!("bloom mip {i} texture")))?;
         mips.push(tex);
     }
 

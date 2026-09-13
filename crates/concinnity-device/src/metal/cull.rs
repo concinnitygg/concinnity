@@ -8,6 +8,7 @@ use concinnity_core::gfx::frustum::{Frustum, transform_aabb};
 use concinnity_core::gfx::lod;
 use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::transform::IDENTITY;
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::model_history::HistoryMode;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -312,7 +313,7 @@ impl MtlContext {
     pub(super) fn build_joint_buffers(
         &mut self,
         ring_slot: usize,
-    ) -> Result<Vec<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>, String> {
+    ) -> RenderResult<Vec<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>> {
         self.rings
             .joint
             .write_all(&self.device, ring_slot, &self.skinned.slots.joint_matrices)
@@ -328,7 +329,7 @@ impl MtlContext {
     pub(super) fn build_morph_weight_buffers(
         &mut self,
         ring_slot: usize,
-    ) -> Result<Vec<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>, String> {
+    ) -> RenderResult<Vec<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>> {
         self.rings
             .joint
             .write_weights(&self.device, ring_slot, &self.skinned.slots.morph_weights)
@@ -344,7 +345,7 @@ impl MtlContext {
     pub(super) fn build_object_buffer(
         &mut self,
         ring_slot: usize,
-    ) -> Result<Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>, String> {
+    ) -> RenderResult<Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>> {
         use concinnity_core::gfx::render_types::GpuObjectData;
         if self.cull_count() == 0 {
             return Ok(None);
@@ -422,7 +423,7 @@ impl MtlContext {
         cam_pos: [f32; 3],
         ring_slot: usize,
         history: HistoryMode,
-    ) -> Result<Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>, String> {
+    ) -> RenderResult<Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>> {
         use concinnity_core::gfx::render_types::{GpuDrawArgs, draw_args_flags};
         if self.cull_count() == 0 {
             return Ok(None);
@@ -1014,7 +1015,7 @@ impl MtlContext {
     pub(super) fn build_bindless_texture_args(
         &mut self,
         ring_slot: usize,
-    ) -> Result<Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>, String> {
+    ) -> RenderResult<Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>> {
         use objc2_metal::MTLArgumentEncoder as _;
         // Clone the encoder handle (cheap refcount bump) so no borrow of `self`
         // is held while the ring (a different field) is borrowed mutably below.
