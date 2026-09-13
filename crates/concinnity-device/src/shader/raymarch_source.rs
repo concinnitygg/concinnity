@@ -86,7 +86,12 @@ fn source(family: Family, platform: Platform, field: &str, hot_reload: bool) -> 
     if !hot_reload {
         return raymarch::source(family, platform, field);
     }
-    raymarch::source_with(family, platform, field, crate::slang_source::from_checkout)
+    raymarch::source_with(
+        family,
+        platform,
+        field,
+        crate::shader::slang_source::from_checkout,
+    )
 }
 
 #[cfg(test)]

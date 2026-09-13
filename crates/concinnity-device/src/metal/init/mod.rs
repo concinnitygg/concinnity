@@ -1497,8 +1497,8 @@ impl MtlContext {
         );
         // Tally the raymarch metallib cache (the only shader-cache client on
         // Metal; everything else precompiles at build time).
-        crate::shader_cache::report_init();
-        crate::runtime_cache::checkpoint();
+        crate::shader::cache::report_init();
+        crate::shader::runtime_cache::checkpoint();
         Ok(ctx)
     }
 

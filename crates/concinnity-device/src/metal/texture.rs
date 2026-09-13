@@ -84,20 +84,18 @@ pub(super) fn upload_texture_image(
     image: &concinnity_core::bake::texture::TextureImage,
 ) -> Result<PooledTexture, String> {
     use concinnity_core::bake::texture::TextureFormat;
-    if image.format == TextureFormat::Rgba8 {
-        let mip = image
-            .mips
-            .first()
-            .ok_or("RGBA8 texture image has no mip level")?;
-        return upload_texture(alloc, mip.width, mip.height, &mip.data);
-    }
-
     let (pixel_format, block_bytes) = match image.format {
         TextureFormat::Bc1 => (MTLPixelFormat::BC1_RGBA, 8usize),
         TextureFormat::Bc3 => (MTLPixelFormat::BC3_RGBA, 16),
         TextureFormat::Bc5 => (MTLPixelFormat::BC5_RGUnorm, 16),
         TextureFormat::Bc7 => (MTLPixelFormat::BC7_RGBAUnorm, 16),
-        TextureFormat::Rgba8 => unreachable!("RGBA8 handled above"),
+        TextureFormat::Rgba8 => {
+            let mip = image
+                .mips
+                .first()
+                .ok_or("RGBA8 texture image has no mip level")?;
+            return upload_texture(alloc, mip.width, mip.height, &mip.data);
+        }
     };
 
     let base = image

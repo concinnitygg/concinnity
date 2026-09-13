@@ -49,7 +49,6 @@ mod rt_ring;
 mod scoped_encoder;
 mod screenshot;
 mod slang_builtins;
-mod streaming;
 mod text_upload;
 mod texture;
 mod transient;

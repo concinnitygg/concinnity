@@ -927,8 +927,6 @@ pub(super) struct SwapchainState {
     pub last_present_index: Option<u32>,
 }
 
-//  Public struct
-
 pub(crate) struct VkContext {
     // Vulkan core
     pub(super) instance: ash::Instance,
@@ -1059,9 +1057,9 @@ pub(crate) struct VkContext {
     // Backing store for the render graph's transient images (the resources the
     // aliasing planner manages). Owns each managed transient's image + memory;
     // features read them back by label and the executor's barrier registry
-    // resolves them the same way. Rebuilt on swapchain resize. Today it manages
-    // `ao_output`; the set grows as more transients migrate off their feature
-    // structs.
+    // resolves them the same way. Rebuilt on swapchain resize. It manages the
+    // transients the planner in crates/concinnity-core/src/render/render_graph/transient.rs
+    // declares.
     pub(super) transient_pool: super::transient_pool::TransientImagePool,
 
     // Screen-space reflections. `Some` whenever SSR, SSGI or RT reflections are on,
@@ -1372,8 +1370,6 @@ pub(super) fn debug_assert_main_thread(entry: &str) {
          thread races the GLFW window + Vulkan queue submission",
     );
 }
-
-//  Public API
 
 impl VkContext {
     pub(crate) fn draw_frame(&mut self, params: FrameParams<'_>) -> error::RenderResult<()> {

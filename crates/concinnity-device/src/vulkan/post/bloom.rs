@@ -20,8 +20,6 @@ use crate::vulkan::slang_builtins::SlangCompile;
 // changes the octave count never has to resize the pool.
 pub(in crate::vulkan) const MAX_BLOOM_MIPS: u32 = 6;
 
-//  Bloom shaders
-
 // SPIR-V for the bloom chain: the shared fullscreen-triangle vertex shader
 // plus the prefilter / downsample / upsample fragment shaders.
 pub(in crate::vulkan) struct BloomShaders {
@@ -41,8 +39,6 @@ pub(in crate::vulkan) fn compile_bloom_shaders(hot_reload: bool) -> Result<Bloom
         upsample: slang_builtins::BLOOM_UPSAMPLE.compile(&ctx)?,
     })
 }
-
-//  Pipeline builder
 
 // Build a bloom-chain pipeline: a vertex-buffer-less fullscreen triangle into
 // a single-sample HDR mip, no depth. With `additive` set the color blend is
@@ -124,8 +120,6 @@ pub(in crate::vulkan) fn create_bloom_pipeline(
 
     Ok(pipeline)
 }
-
-//  Target builder
 
 // Number of mip levels in the bloom chain for an HDR target of the given
 // resolution. Clamped to 4..=6: enough octaves for a wide soft glow without
@@ -351,8 +345,6 @@ pub(in crate::vulkan) fn alloc_bloom_input_sets(
     }
     Ok(out)
 }
-
-//  Per-frame encoder
 
 // The bloom chain orchestration lives once in `gfx::fullscreen`; this impl binds
 // + draws each sub-pass in Vulkan. `Args` is the frame-in-flight index selecting

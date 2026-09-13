@@ -16,7 +16,7 @@ use concinnity_host::store::cache::{CACHE_BUDGET_BYTES, Segment};
 use concinnity_host::store::paths::StateTree;
 use std::path::Path;
 
-use crate::shader_cache::Ensured;
+use crate::shader::cache::Ensured;
 
 /// Outcome of a built-in shader precompile: how many artifacts were already in
 /// place or copied from the local cache, how many compiled fresh, and the
@@ -71,7 +71,7 @@ pub fn precompile_builtin_shaders(state_dir: &Path) -> Report {
     bundle.write_to(&path, CACHE_BUDGET_BYTES);
     // `ensure_in` also keeps a copy in this machine's own cache segment, so
     // repeated exports stay warm. That copy is memory until a checkpoint.
-    crate::runtime_cache::checkpoint();
+    crate::shader::runtime_cache::checkpoint();
     report
 }
 

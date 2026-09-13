@@ -2064,14 +2064,14 @@ impl DxContext {
             None
         };
 
-        crate::shader_cache::report_init();
+        crate::shader::cache::report_init();
         // Serialize the pipeline library now that every init-built PSO has
         // populated it, then write the segment holding it and every shader
         // artifact this init compiled; a crash mid-session then still leaves
         // the next launch warm.
         super::pso_library::serialize();
-        crate::pipeline_cache::report_init(super::pso_library::disk_state());
-        crate::runtime_cache::checkpoint();
+        crate::shader::pipeline_cache::report_init(super::pso_library::disk_state());
+        crate::shader::runtime_cache::checkpoint();
 
         let pooled = alloc.stats();
         tracing::info!(

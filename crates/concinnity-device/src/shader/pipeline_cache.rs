@@ -52,7 +52,7 @@ pub(crate) fn report_init(disk: &str) {
 // Read the persisted blob for `key`. An empty or over-budget entry is dropped
 // and reads as absent.
 pub(crate) fn load(key: &str) -> Option<Vec<u8>> {
-    let bytes = crate::runtime_cache::load(KIND, key)?;
+    let bytes = crate::shader::runtime_cache::load(KIND, key)?;
     if within_budget(&bytes) {
         Some(bytes)
     } else {
@@ -67,12 +67,12 @@ pub(crate) fn load(key: &str) -> Option<Vec<u8>> {
 // entry order run to run), so a byte compare would rewrite an unchanged cache
 // every launch. Returns whether the segment took them.
 pub(crate) fn store(key: &str, bytes: &[u8]) -> bool {
-    crate::runtime_cache::store(KIND, key, bytes)
+    crate::shader::runtime_cache::store(KIND, key, bytes)
 }
 
 // Drop the persisted blob for `key`; used when the driver rejects it.
 pub(crate) fn delete(key: &str) {
-    crate::runtime_cache::delete(KIND, key);
+    crate::shader::runtime_cache::delete(KIND, key);
 }
 
 // Whether an entry is worth keeping: a truncated write reads back empty, and a
@@ -96,7 +96,7 @@ mod tests {
     // Under `cargo test` nothing reaches the state dir, in either direction.
     #[test]
     fn the_cache_is_off_under_test() {
-        assert!(!crate::runtime_cache::enabled());
+        assert!(!crate::shader::runtime_cache::enabled());
         assert_eq!(load("vk-probe"), None);
         assert!(!store("vk-probe", &[1, 2, 3]));
     }

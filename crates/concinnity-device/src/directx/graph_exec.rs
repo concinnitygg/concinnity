@@ -22,7 +22,7 @@
 //! list -- batched, so a pass costs one `ResourceBarrier` call -- and
 //! `emit_graph_restores` returns any that the frame left off their resting state
 //! at the end of the outer "end" list. Every other resource still owns its
-//! transitions inline in its encoder; `barrier_audit.rs` classifies each
+//! transitions inline in its encoder; `audit/barrier.rs` classifies each
 //! remaining site.
 //!
 //! The registry decides two things per resource: which D3D12 resource backs it,
@@ -85,13 +85,12 @@ enum DxTargetObject<'a> {
     Set { first: usize, count: usize },
 }
 
-// `ResourceId`-indexed table of barrier targets for the migrated graph resources
+// `ResourceId`-indexed table of barrier targets for the graph-driven resources
 // (`None` for every resource the executor doesn't graph-drive). A resource is
 // graph-driven iff it has a `Some` entry, so this table is the single source of
-// truth that replaced the old label allowlist + per-label resolver. Built on the
-// main thread by `build_barrier_registry`, where the only field-naming of the
-// migrated resources lives (so it is what re-cuts when those fields move into
-// sub-structs); the parallel emit path stays field-agnostic.
+// truth. Built on the main thread by `build_barrier_registry`, where the only
+// field-naming of the graph-driven resources lives; the parallel emit path stays
+// field-agnostic.
 struct DxBarrierRegistry<'a> {
     targets: Vec<Option<DxBarrierTarget<'a>>>,
     // Backing store for the `DxTargetObject::Set` ranges.
@@ -537,9 +536,7 @@ pub(in crate::directx) struct GraphFrameParams<'a> {
     pub output_height: u32,
     // Camera world-space position. Shadow uses it for CSM cascade
     // distance bookkeeping inside `encode_shadow_pass`; Main uses it
-    // for per-cluster distance culling and the SSAO bundle's pre-pass;
-    // future migrating passes (SSAO standalone, SSR pre-pass,
-    // Velocity) will share it.
+    // for per-cluster distance culling and the SSAO bundle's pre-pass.
     pub cam_pos: [f32; 3],
     // GPU virtual address of this frame's `ShadowUniforms` constant
     // buffer (the cached cascade VPs + light direction). Consumed by
@@ -557,7 +554,7 @@ pub(in crate::directx) struct GraphFrameParams<'a> {
     pub local_lights_gva: u64,
     // Jittered camera view-projection matrix (sub-pixel Halton jitter
     // applied when TAA is on). Consumed by Main and Velocity (the
-    // jittered VP path); when SSR-prepass migrates it shares this.
+    // jittered VP path).
     pub vp_mat: [[f32; 4]; 4],
     // Un-jittered camera view-projection matrix. Velocity uses it
     // alongside `vp_mat` (jittered) and the prior frame's `prev_vp`
@@ -628,7 +625,7 @@ impl DxContext {
         let first_error: Mutex<Option<RenderError>> = Mutex::new(None);
 
         let ctx_ref = ParallelCtxRef::new(self);
-        // Resolve every migrated resource's barrier target once, on the main
+        // Resolve every graph-driven resource's barrier target once, on the main
         // thread, then share the table read-only into the parallel pass workers.
         let registry = self.build_barrier_registry(graph, params.frame_idx);
         #[cfg(debug_assertions)]
@@ -847,13 +844,12 @@ impl DxContext {
         Ok(ordered)
     }
 
-    // Resolve every migrated graph resource to its barrier target, indexed by
+    // Resolve every graph-driven resource to its barrier target, indexed by
     // `ResourceId` (its position in `graph.resources`), so the parallel emit path
     // can look a target up by `BarrierOp::resource_index()`. This is the single
-    // place that names the migrated resources' backing `DxContext` fields;
+    // place that names the graph-driven resources' backing `DxContext` fields;
     // field-grouping re-cuts here, not in the executor. A resource the owning
-    // feature disabled (or one never migrated) gets `None`, and the graph carries
-    // no barrier for it either.
+    // feature disabled gets `None`, and the graph carries no barrier for it either.
     fn build_barrier_registry(
         &self,
         graph: &CompiledGraph,

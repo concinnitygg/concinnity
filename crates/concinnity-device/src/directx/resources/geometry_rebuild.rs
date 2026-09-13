@@ -1,6 +1,6 @@
 //! Hot-reload rebuild of the shared static + skinned vertex / index buffers
 //! when a re-imported `.glb` no longer fits in its init-time slot. Mirrors
-//! metal/resources/geometry.rs + metal/resources/skinning.rs's
+//! metal/resources/geometry_rebuild.rs + metal/resources/skinning.rs's
 //! `rebuild_skinned_geometry`; the DEFAULT-heap buffers force a CPU
 //! round-trip (READBACK staging for the old contents, UPLOAD staging for
 //! the new ones) where Metal can just read `StorageModeShared` `contents()`.

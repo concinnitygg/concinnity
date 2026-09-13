@@ -23,8 +23,6 @@ use super::texture::*;
 use super::transparent::{TransparentDeviceCtx, TransparentRebuildTargets};
 use crate::vulkan::owned::{OwnedFramebuffer, VkDevice};
 
-//  Swapchain rebuild
-
 impl VkContext {
     pub(super) fn destroy_swapchain_resources(&mut self) {
         let device = &self.device;

@@ -97,7 +97,7 @@ mod tests {
         }
         for lib in crate::metal::slang_builtins::ALL {
             let (digest, _) = embedded_metallib(lib.name).expect("embedded");
-            let source = crate::slang_source::assemble(true, lib.file, lib.defines, &[]);
+            let source = crate::shader::slang_source::assemble(true, lib.file, lib.defines, &[]);
             assert_eq!(digest, source_digest(&source), "{}", lib.name);
         }
         let source = crate::metal::pipeline::shader_source(true, TOOLCHAIN_SENTINEL);

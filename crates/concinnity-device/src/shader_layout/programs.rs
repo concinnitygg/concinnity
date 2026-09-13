@@ -17,8 +17,8 @@
 use concinnity_slang as slang;
 use std::collections::BTreeMap;
 
+use crate::shader::slang_source;
 use crate::shader_layout::reflect::{self, ShaderStruct};
-use crate::slang_source;
 
 type Defines = &'static [(&'static str, &'static str)];
 
@@ -95,7 +95,7 @@ pub(super) fn reflection(program: &Program, target: Target) -> Result<String, St
         entries: &[program.entry],
         target: target.slang_target(program.profile),
     };
-    let work = crate::compiler_work::dir()?;
+    let work = crate::shader::compiler_work::dir()?;
     slang::reflect(&job, work.path())
         .map_err(|e| format!("{} ({}): {e}", program.entry, target.label()))
 }

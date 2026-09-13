@@ -283,83 +283,58 @@ pub(super) fn setup(
     // reporting HDR headroom, so the format itself works; only the precise
     // encoding hand-off may be wrong.
     if hdr_mode.is_hdr() {
-        let want_pq = matches!(
-            hdr_mode,
+        let pq_max_edr = match hdr_mode {
             HdrOutputMode::Hdr {
+                max_edr,
                 encoding: hdr_output::HdrEncoding::Pq,
-                ..
-            }
-        );
-        let primary = if want_pq {
-            HDR_PQ_COLOR_SPACE
-        } else {
-            HDR_LINEAR_COLOR_SPACE
+            } => Some(max_edr),
+            _ => None,
         };
-        let primary_label = if want_pq { "HDR10 PQ" } else { "scRGB linear" };
-        // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters it
-        // fills are live locals that outlive the call.
-        let primary_support = unsafe { swapchain.CheckColorSpaceSupport(primary) }.unwrap_or(0);
-        let primary_ok =
-            (primary_support & DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT.0 as u32) != 0;
-        let mut applied = false;
-        if primary_ok {
-            // SAFETY: the swapchain is live and the color space is a plain enum value.
-            if let Err(e) = unsafe { swapchain.SetColorSpace1(primary) } {
-                tracing::warn!(
-                    "HDR display enabled but SetColorSpace1({primary_label}) failed ({e}); \
-                     the compositor may still treat the RGBA16Float swapchain as sRGB; HDR \
-                     output may look desaturated"
-                );
-            } else {
-                applied = true;
-            }
+        let (primary, primary_label) = if pq_max_edr.is_some() {
+            (HDR_PQ_COLOR_SPACE, "HDR10 PQ")
+        } else {
+            (HDR_LINEAR_COLOR_SPACE, "scRGB linear")
+        };
+        // A PQ failure goes on to try scRGB linear; any other failure is final.
+        let outcome = if pq_max_edr.is_some() {
+            ""
+        } else {
+            "; leaving the swapchain at its default color space"
+        };
+        let primary_attempt = try_color_space(&swapchain, primary);
+        match &primary_attempt {
+            ColorSpaceAttempt::Applied => {}
+            ColorSpaceAttempt::Unsupported(flags) => tracing::warn!(
+                "HDR display enabled but the swapchain does not advertise {primary_label} \
+                 support (CheckColorSpaceSupport flags = {flags:#x}){outcome}"
+            ),
+            ColorSpaceAttempt::SetFailed(e) => tracing::warn!(
+                "HDR display enabled but SetColorSpace1({primary_label}) failed ({e}); the \
+                 compositor may still treat the RGBA16Float swapchain as sRGB{outcome}"
+            ),
         }
-        if !applied && want_pq {
-            // PQ requested but unsupported: fall back to scRGB linear so
-            // the renderer still drives the panel's HDR headroom (the
-            // encoding is rewritten below, so `pq_output` never lights up).
-            let fallback_support =
-                // SAFETY: a query on a live COM object; the descriptor it reads and the out-
-                // parameters it fills are live locals that outlive the call.
-                unsafe { swapchain.CheckColorSpaceSupport(HDR_LINEAR_COLOR_SPACE) }.unwrap_or(0);
-            if (fallback_support & DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT.0 as u32) != 0 {
-                tracing::warn!(
-                    "HDR display + hdr_pq:true requested but the swapchain does not advertise \
-                     HDR10 PQ support (CheckColorSpaceSupport flags = {primary_support:#x}); \
-                     falling back to scRGB linear extended-range output"
-                );
-                // SAFETY: the swapchain is live and the color space is a plain enum value.
-                if let Err(e) = unsafe { swapchain.SetColorSpace1(HDR_LINEAR_COLOR_SPACE) } {
-                    tracing::warn!(
-                        "scRGB linear fallback also failed ({e}); leaving the swapchain at \
-                         its default color space"
-                    );
-                } else {
-                    // Rewrite the encoding so the caller's
-                    // `post_process.pq_output` flag stays in sync with what
-                    // the swapchain is actually expecting.
+        if !matches!(primary_attempt, ColorSpaceAttempt::Applied)
+            && let Some(max_edr) = pq_max_edr
+        {
+            match try_color_space(&swapchain, HDR_LINEAR_COLOR_SPACE) {
+                ColorSpaceAttempt::Applied => {
+                    tracing::warn!("falling back to scRGB linear extended-range output");
+                    // Keep the caller's `pq_output` in sync with the swapchain encoding.
                     hdr_mode = HdrOutputMode::Hdr {
-                        max_edr: match hdr_mode {
-                            HdrOutputMode::Hdr { max_edr, .. } => max_edr,
-                            HdrOutputMode::Sdr => unreachable!(),
-                        },
+                        max_edr,
                         encoding: hdr_output::HdrEncoding::ExtendedLinear,
                     };
                 }
-            } else {
-                tracing::warn!(
-                    "HDR display + hdr_pq:true requested but neither HDR10 PQ \
-                     (flags={primary_support:#x}) nor scRGB linear (flags={fallback_support:#x}) \
-                     are advertised by this swapchain; leaving the swapchain at its default \
-                     color space"
-                );
+                ColorSpaceAttempt::Unsupported(flags) => tracing::warn!(
+                    "the swapchain does not advertise the scRGB linear fallback either \
+                     (CheckColorSpaceSupport flags = {flags:#x}); leaving the swapchain at its \
+                     default color space"
+                ),
+                ColorSpaceAttempt::SetFailed(e) => tracing::warn!(
+                    "scRGB linear fallback also failed ({e}); leaving the swapchain at its \
+                     default color space"
+                ),
             }
-        } else if !applied {
-            tracing::warn!(
-                "HDR display enabled but the swapchain does not advertise {primary_label} \
-                 support (CheckColorSpaceSupport flags = {primary_support:#x}); leaving the \
-                 swapchain at its default color space"
-            );
         }
     }
 
@@ -398,6 +373,28 @@ const HDR_LINEAR_COLOR_SPACE: DXGI_COLOR_SPACE_TYPE = DXGI_COLOR_SPACE_RGB_FULL_
 // PQ-encoded values directly; the panel decodes via the PQ EOTF. SDR
 // reference white maps to 203 nits per BT.2408.
 const HDR_PQ_COLOR_SPACE: DXGI_COLOR_SPACE_TYPE = DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
+
+// Outcome of tagging the swapchain with one color space.
+enum ColorSpaceAttempt {
+    Applied,
+    // The swapchain does not advertise present support; carries the support flags.
+    Unsupported(u32),
+    SetFailed(windows::core::Error),
+}
+
+fn try_color_space(swapchain: &IDXGISwapChain3, space: DXGI_COLOR_SPACE_TYPE) -> ColorSpaceAttempt {
+    // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters it
+    // fills are live locals that outlive the call.
+    let support = unsafe { swapchain.CheckColorSpaceSupport(space) }.unwrap_or(0);
+    if (support & DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT.0 as u32) == 0 {
+        return ColorSpaceAttempt::Unsupported(support);
+    }
+    // SAFETY: the swapchain is live and the color space is a plain enum value.
+    match unsafe { swapchain.SetColorSpace1(space) } {
+        Ok(()) => ColorSpaceAttempt::Applied,
+        Err(e) => ColorSpaceAttempt::SetFailed(e),
+    }
+}
 
 // Largest extended-range color-component multiplier any output on this
 // adapter reports. Returns `1.0` on an SDR-only adapter (or when no output

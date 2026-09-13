@@ -105,12 +105,12 @@ pub(super) fn world_library(
     programs: &concinnity_core::components::ShaderPrograms,
     entry: &str,
 ) -> Result<Retained<ProtocolObject<dyn objc2_metal::MTLLibrary>>, String> {
-    let req = crate::surface_source::Request {
+    let req = crate::shader::surface_source::Request {
         platform: concinnity_core::platform::Platform::Metal,
         probe_count: concinnity_core::render::uniforms::MAX_PROBES,
         hot_reload,
     };
-    let msl = crate::surface_source::artifact(programs, entry, &req)?;
+    let msl = crate::shader::surface_source::artifact(programs, entry, &req)?;
     let msl = std::str::from_utf8(&msl)
         .map_err(|e| format!("world shader {entry}: artifact is not MSL text: {e}"))?;
     super::msl_cache::compiled_library(device, msl, &format!("world shader {entry}"))

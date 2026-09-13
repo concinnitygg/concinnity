@@ -191,7 +191,7 @@ impl Drop for DeviceInner {
         // blob already on disk. The checkpoint after it also writes whatever
         // shader artifacts were compiled lazily since init's own.
         super::pipeline_cache::shutdown(&self.raw);
-        crate::runtime_cache::checkpoint();
+        crate::shader::runtime_cache::checkpoint();
         // SAFETY: destroyed exactly once, when the last handle to it drops; every object created
         // from it has been destroyed above or by the context's own teardown, which runs first.
         unsafe { self.raw.destroy_device(None) };

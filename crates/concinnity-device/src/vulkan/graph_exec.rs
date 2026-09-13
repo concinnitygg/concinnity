@@ -15,7 +15,7 @@
 //! producing side), and `emit_graph_restores` returns any that the frame left off
 //! their resting layout at the end of the outer "end" buffer. A resource
 //! with no registry entry keeps whatever transitions its encoder or render pass
-//! owns; `barrier_audit.rs` classifies every one of those remaining sites.
+//! owns; `audit/barrier.rs` classifies every one of those remaining sites.
 //!
 //! The registry decides two things per resource: which GPU object backs it, and
 //! what layout it rests in between frames. Its class -- what a `Write` means --
@@ -82,12 +82,12 @@ struct VkBarrierTarget {
     resting: VkResting,
 }
 
-// `ResourceId`-indexed table of barrier targets for the migrated graph resources
+// `ResourceId`-indexed table of barrier targets for the graph-driven resources
 // (`None` for every resource the executor doesn't graph-drive). A resource is
 // graph-driven iff it has a `Some` entry, so this table is the single source of
-// truth that replaced the old label allowlist + per-label resolver. Built on the
-// main thread by `build_barrier_registry`, where the only field-naming of the
-// migrated resources lives; the parallel emit path stays field-agnostic.
+// truth. Built on the main thread by `build_barrier_registry`, where the only
+// field-naming of the graph-driven resources lives; the parallel emit path stays
+// field-agnostic.
 struct VkBarrierRegistry {
     targets: Vec<Option<VkBarrierTarget>>,
     // Backing store for the `VkTargetObject::BufferSet` ranges, so a label that
@@ -134,7 +134,7 @@ impl VkBarrierScratch {
     }
 }
 
-// Emit the explicit image-layout transitions for the migrated graph resources
+// Emit the explicit image-layout transitions for the graph-driven resources
 // in one of a pass's barrier lists, resolved through the registry. A resource
 // with no registry entry is skipped and keeps its render-pass-driven
 // transition; a transition whose layout does not change (e.g. the depth
@@ -472,10 +472,9 @@ fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &VkBarrierRegistry
 }
 
 // Per-frame params the executor threads into each pass's `encode_*`
-// method. The set grows as more passes migrate; Composite needs the
-// swapchain image index + text calls, Shadow needs neither (it reads
-// per-frame state straight off `&self`), Cull needs the frustum + camera
-// position. New fields land here when a pass that needs them migrates.
+// method. Composite needs the swapchain image index + text calls, Shadow
+// needs neither (it reads per-frame state straight off `&self`), Cull needs
+// the frustum + camera position.
 pub(in crate::vulkan) struct GraphFrameParams<'a> {
     pub cmd: vk::CommandBuffer,
     pub image_index: u32,
@@ -535,8 +534,8 @@ impl VkContext {
     // the per-pass buffers in graph (toposort) order; the caller submits
     // `[start, ...returned, end]` in one `vkQueueSubmit`, so submission order =
     // GPU order and every encoder's inline barrier still synchronizes against
-    // the prior pass across the command-buffer boundary. Any not-yet-migrated
-    // `PassId` returns a clear error.
+    // the prior pass across the command-buffer boundary. A timing-only `PassId`
+    // (SsaoPrepass, SsaoKernel, ReflectionComposite) returns an error.
     pub(in crate::vulkan) fn execute_graph(
         &mut self,
         graph: &CompiledGraph,
@@ -581,7 +580,7 @@ impl VkContext {
             std::sync::Mutex::new(vec![None; graph.passes.len()]);
         let first_error: std::sync::Mutex<Option<RenderError>> = std::sync::Mutex::new(None);
 
-        // Resolve every migrated resource's barrier target once, on the main
+        // Resolve every graph-driven resource's barrier target once, on the main
         // thread, then share the table read-only into the parallel pass workers.
         let mut scratch = self
             .draw
@@ -789,13 +788,12 @@ impl VkContext {
         Ok(ordered)
     }
 
-    // Resolve every migrated graph resource to its barrier target, indexed by
+    // Resolve every graph-driven resource to its barrier target, indexed by
     // `ResourceId` (its position in `graph.resources`), so the parallel emit path
     // can look a target up by `BarrierOp::resource_index()`. This is the single
-    // place that names the migrated resources' backing `VkContext` fields;
+    // place that names the graph-driven resources' backing `VkContext` fields;
     // field-grouping re-cuts here, not in the executor. A resource the owning
-    // feature disabled (or one never migrated) gets `None`, and the graph carries
-    // no barrier for it either.
+    // feature disabled gets `None`, and the graph carries no barrier for it either.
     fn refill_barrier_registry(
         &self,
         registry: &mut VkBarrierRegistry,

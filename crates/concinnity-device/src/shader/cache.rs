@@ -21,7 +21,7 @@
 //
 // Artifacts live in the runtime cache segment, so an init that misses fifty
 // times writes one file at its checkpoint rather than fifty as it goes -- see
-// `crate::runtime_cache`. A bundle ships a segment of the same kind, warmed by
+// `crate::shader::runtime_cache`. A bundle ships a segment of the same kind, warmed by
 // `cn export` and read after the writable one; both tiers are read once, so a
 // lookup in either is a memory lookup.
 //
@@ -177,7 +177,7 @@ pub(crate) fn report_init() {
 // Off under `cargo test` so the suite neither writes into a developer's state dir
 // nor lets an entry from a previous run mask a compile change.
 fn enabled() -> bool {
-    crate::runtime_cache::enabled()
+    crate::shader::runtime_cache::enabled()
 }
 
 // Discard the segment's artifacts when the shader toolchain changes. An entry
@@ -197,7 +197,7 @@ fn verify_toolchain() {
     static ONCE: OnceLock<()> = OnceLock::new();
     ONCE.get_or_init(|| {
         let current = concinnity_slang::compiler_id();
-        if crate::runtime_cache::verify_toolchain(current) {
+        if crate::shader::runtime_cache::verify_toolchain(current) {
             tracing::info!("shader cache: {current} did not write it, discarding entries");
         }
     });
@@ -213,13 +213,13 @@ fn verify_toolchain() {
 // pipeline creation with an empty bytecode blob.
 fn load(digest: &str) -> Option<Vec<u8>> {
     let usable = |bytes: Vec<u8>| (!bytes.is_empty()).then_some(bytes);
-    crate::runtime_cache::load(KIND, digest)
+    crate::shader::runtime_cache::load(KIND, digest)
         .and_then(usable)
-        .or_else(|| crate::runtime_cache::load_bundled(KIND, digest).and_then(usable))
+        .or_else(|| crate::shader::runtime_cache::load_bundled(KIND, digest).and_then(usable))
 }
 
 fn store(digest: &str, bytes: &[u8]) {
-    crate::runtime_cache::store(KIND, digest, bytes);
+    crate::shader::runtime_cache::store(KIND, digest, bytes);
 }
 
 #[cfg(test)]

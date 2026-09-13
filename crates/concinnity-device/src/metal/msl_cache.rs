@@ -8,7 +8,7 @@
 // source compile. Without the toolchain (a machine with no Xcode) every path
 // falls back to `newLibraryWithSource`, the previous behavior.
 //
-// The toolchain's release is part of the key. `shader_cache::verify_toolchain`
+// The toolchain's release is part of the key. `shader::cache::verify_toolchain`
 // discards the segment when slangc changes, but the Metal toolchain upgrades
 // independently of it -- since Xcode 16 it is a separately versioned
 // downloadable component, so it moves without a byte of slangc, of source, or
@@ -36,14 +36,14 @@ pub(super) fn compiled_library(
         tracing::debug!("{label}: no Metal toolchain, compiling from source");
         return source_library(device, source);
     };
-    let key = crate::shader_cache::Key {
+    let key = crate::shader::cache::Key {
         compiler,
         source,
         entry: "main",
         target: "metallib",
         options: 0,
     };
-    match crate::shader_cache::cached(&key, label, || compile_to_metallib(source, label)) {
+    match crate::shader::cache::cached(&key, label, || compile_to_metallib(source, label)) {
         Ok(bytes) => match super::pipeline::load_library(device, &bytes) {
             Ok(library) => Ok(library),
             Err(e) => {

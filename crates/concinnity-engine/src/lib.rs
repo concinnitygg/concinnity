@@ -49,7 +49,7 @@ pub mod platform;
 // bundle ships, for backends that compile them at renderer init. Re-exported
 // so `cn export` reaches it without a direct device dependency.
 #[cfg(any(backend_dx, backend_vk))]
-pub use concinnity_device::precompile::{
+pub use concinnity_device::shader::precompile::{
     Report as ShaderPrecompileReport, precompile_builtin_shaders,
 };
 mod device;

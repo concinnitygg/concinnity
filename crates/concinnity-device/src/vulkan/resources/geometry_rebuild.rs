@@ -1,6 +1,6 @@
 //! Hot-reload rebuild of the shared static + skinned vertex / index buffers
 //! when a re-imported `.glb` no longer fits in its init-time slot. Mirrors
-//! `directx/geometry_rebuild.rs` and `metal/resources/geometry.rs +
+//! `directx/resources/geometry_rebuild.rs` and `metal/resources/geometry_rebuild.rs +
 //! metal/resources/skinning.rs`'s rebuild paths.
 //!
 //! Vulkan's DEVICE_LOCAL buffers are not host-visible, so the rebuild forces

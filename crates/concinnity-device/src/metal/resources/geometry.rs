@@ -1,265 +1,286 @@
-//! Hot-reload rebuild of the shared static-mesh vertex + index buffers when
-//! re-imported `.glb` source no longer fits each draw's init-time slot.
+//! Per-mesh upload / eviction into the shared static-mesh vertex + index
+//! buffers via the sub-allocators, plus in-place per-slot updates for asset
+//! hot-reload.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::gfx::render_types::LodSlice;
-use concinnity_core::render::backend;
-use objc2_metal::{MTLBuffer as _, MTLResourceOptions};
+use concinnity_core::render::error::RenderResult;
 
-use crate::metal::context::{MtlContext, bytes_of_slice};
+use crate::metal::context::{MtlContext, bytes_of_slice, write_buffer_region, zero_buffer_region};
 
 impl MtlContext {
-    // Rebuild the shared static-mesh vertex + index buffers, swapping in
-    // new geometry for the draws named in `changes`. Driven by asset
-    // hot-reload (`cn debug` only) when a Mesh's re-imported `.glb` no
-    // longer fits in its init-time slot. Walks every `DrawObject` in
-    // order: for each draw in `changes`, the new vertices / indices /
-    // LOD alternates are appended to a fresh CPU buffer; for unchanged
-    // draws, the current geometry is read back from the live
-    // `vertex_buffer` / `index_buffer` (both `StorageModeShared` so the
-    // pointers are CPU-readable) and copied with index rebasing. New
-    // `MTLBuffer`s are created at the post-rebuild size and swapped in
-    // after `wait_idle` so no in-flight command buffer touches the old
-    // resource pair. Streaming sub-allocators (`geometry_alloc.mesh_vtx`,
-    // `geometry_alloc.mesh_idx`) are reset to the new buffer's full extent -- any
-    // streaming uploads in flight would be invalidated by the swap, so
-    // the caller is expected to gate this on a quiet renderer (the
-    // asset-hot-reload path already is -- it runs at frame start before
-    // the streaming poll).
-    pub(crate) fn rebuild_static_geometry(
+    // Upload a streamed mesh's geometry into the shared vertex and index
+    // buffers, place it via the sub-allocators, and mark the draw resident.
+    //
+    // The mesh-streaming subsystem calls this to bring a mesh resident after
+    // init. The geometry is placed wherever the allocators find free space
+    // (not the build-time region), so `DrawObject::vertex_offset` /
+    // `index_offset` are rewritten here. `vertices` / `indices` must match the
+    // fixed `vertex_count` / `index_count` recorded by `build_draw_list`.
+    //
+    // `indices` are mesh-relative (0-based); they are rebased onto the chosen
+    // vertex region before upload. `frame` is the current frame: deferred
+    // frees that have retired by then are reclaimed first, so freed space
+    // becomes reusable. The chosen region was not drawn while the mesh was
+    // non-resident, so no in-flight command buffer reads it -- the write is
+    // race-free.
+    pub(crate) fn upload_mesh(
         &mut self,
-        changes: Vec<backend::DrawGeometryUpdate>,
+        draw_idx: usize,
+        vertices: &[Vertex],
+        indices: &[u16],
+        frame: u64,
+    ) -> RenderResult<()> {
+        let obj = self
+            .draw
+            .objects
+            .get(draw_idx)
+            .ok_or_else(|| format!("upload_mesh: draw object {} out of range", draw_idx))?;
+        if vertices.len() != obj.vertex_count {
+            return Err(format!(
+                "upload_mesh: draw {} expects {} vertices, got {}",
+                draw_idx,
+                obj.vertex_count,
+                vertices.len()
+            )
+            .into());
+        }
+        if indices.len() != obj.index_count {
+            return Err(format!(
+                "upload_mesh: draw {} expects {} indices, got {}",
+                draw_idx,
+                obj.index_count,
+                indices.len()
+            )
+            .into());
+        }
+
+        // Reclaim frees whose in-flight frames have retired, then place the
+        // geometry. A zero-length mesh would not occupy the buffers, but
+        // build_draw_list never emits one, so treat it as a hard error.
+        self.geometry_alloc.mesh_vtx.reclaim(frame);
+        self.geometry_alloc.mesh_idx.reclaim(frame);
+        let v_len = std::mem::size_of_val(vertices);
+        // The shared index buffer is u32-typed; the input `indices` are u16 and
+        // get widened on write below, so size the allocation against the u32
+        // stride. Sizing against the u16 source would alloc half the bytes the
+        // write needs and corrupt whatever sub-allocation followed.
+        let i_len = indices.len() * std::mem::size_of::<u32>();
+        let (v_off, i_off) = crate::suballoc::geometry::place_mesh(
+            &mut self.geometry_alloc.mesh_vtx,
+            &mut self.geometry_alloc.mesh_idx,
+            v_len,
+            i_len,
+            || format!("upload_mesh: draw {draw_idx}"),
+        )?;
+
+        // Vertices copy verbatim. Indices are mesh-relative, so rebase them to
+        // the vertex region the allocator chose: v_off is always a multiple of
+        // size_of::<Vertex>() (every seed region and allocation is), so the
+        // base is an exact vertex index.
+        write_buffer_region(&self.vertex_buffer, v_off, bytes_of_slice(vertices))?;
+        // Static IB is u32 (per-scene total can exceed u16); per-mesh indices
+        // are u16 (each mesh fits in u16, enforced by the build-time splitter).
+        let base = (v_off / std::mem::size_of::<Vertex>()) as u32;
+        let rebased: Vec<u32> = indices.iter().map(|&i| u32::from(i) + base).collect();
+        write_buffer_region(&self.index_buffer, i_off, bytes_of_slice(&rebased))?;
+
+        let obj = &mut self.draw.objects[draw_idx];
+        obj.vertex_offset = v_off;
+        obj.index_offset = i_off / std::mem::size_of::<u32>();
+        obj.resident = true;
+        // The mesh joins the RT-relevant draw set at a freshly allocated region;
+        // the next RT update builds its BLAS over the new slice.
+        self.rt.topology_dirty = true;
+        Ok(())
+    }
+
+    // Seed the streamed-mesh sub-allocators with the reserved headroom block
+    // (byte ranges in the shared vertex / index buffers), for the
+    // shrinkable-seed path.
+    //
+    // The streamed geometry is not baked into the buffers at build time;
+    // instead the buffers carry one zeroed headroom region (sized to the
+    // cap-many resident meshes) at these offsets. `retire_frame 0`: nothing
+    // has been drawn yet, so the space is allocatable immediately -- mirrors
+    // `setup_chunk_streaming`'s seeding. From then on `upload_mesh` /
+    // `evict_mesh` place and free streamed meshes within it.
+    pub(crate) fn seed_mesh_streaming(
+        &mut self,
+        vtx_offset: u64,
+        vtx_bytes: u64,
+        idx_offset: u64,
+        idx_bytes: u64,
+    ) {
+        self.geometry_alloc.mesh_vtx.free(vtx_offset, vtx_bytes, 0);
+        self.geometry_alloc.mesh_vtx.reclaim(0);
+        self.geometry_alloc.mesh_idx.free(idx_offset, idx_bytes, 0);
+        self.geometry_alloc.mesh_idx.reclaim(0);
+    }
+
+    // Clear a streamed mesh's geometry region to zero, return its space to the
+    // sub-allocators, and mark the draw non-resident so it is skipped in every
+    // pass.
+    //
+    // `retire_frame` is the frame from which the freed region may be reused:
+    // pass `current_frame + frames_in_flight` for a runtime eviction so a
+    // still-in-flight command buffer never has its geometry overwritten, and
+    // `0` at init, where nothing has been drawn. A later `upload_mesh` brings
+    // the mesh back, wherever the allocators then place it. Zeroing makes the
+    // region carry no geometry, so a stray draw renders nothing rather than
+    // stale triangles.
+    pub(crate) fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String> {
+        let obj = self
+            .draw
+            .objects
+            .get(draw_idx)
+            .ok_or_else(|| format!("evict_mesh: draw object {} out of range", draw_idx))?;
+        let v_off = obj.vertex_offset;
+        let v_len = obj.vertex_count * std::mem::size_of::<Vertex>();
+        let i_off = obj.index_offset * std::mem::size_of::<u32>();
+        let i_len = obj.index_count * std::mem::size_of::<u32>();
+        zero_buffer_region(&self.vertex_buffer, v_off, v_len)?;
+        zero_buffer_region(&self.index_buffer, i_off, i_len)?;
+        self.geometry_alloc
+            .mesh_vtx
+            .free(v_off as u64, v_len as u64, retire_frame);
+        self.geometry_alloc
+            .mesh_idx
+            .free(i_off as u64, i_len as u64, retire_frame);
+        self.draw.objects[draw_idx].resident = false;
+        // The mesh leaves the RT-relevant draw set; the next RT update drops its
+        // BLAS (deferred-freed once in-flight traces retire).
+        self.rt.topology_dirty = true;
+        Ok(())
+    }
+
+    // Overwrite a `Mesh` draw slot's vertex / index data in place. Driven by
+    // asset hot-reload (`cn debug` only).
+    //
+    // Unlike the steady-state streaming paths (`upload_mesh` / `evict_mesh`),
+    // which gate reuse of a region on `current_frame + frames_in_flight` so no
+    // in-flight command buffer can still be reading it, this rewrites a live
+    // region with no such fence. That is sound only because hot-reload is a
+    // human-paced `cn debug` action: the editor stalls for the reload, so a
+    // frame racing this write is not plausibly in flight. Production (non-debug)
+    // callers must not take this path.
+    //
+    // The new geometry is written at the
+    // draw object's existing offsets in the shared vertex / index buffers, so
+    // every other draw sharing those offsets (a `Prop`-instanced clone of the
+    // same `Mesh` always gets its own copy) is updated by the per-`draw_idx`
+    // caller loop, not by this call. New `verts` / `idxs` must match the
+    // slot's init-time count; this is the in-place fast path. A reload that
+    // changes the count cannot fit the fixed slot, so the hot-reload driver
+    // routes it through [`Self::rebuild_static_geometry`] instead, which
+    // repacks the shared buffers from scratch. Each entry in
+    // `lod_alternates` is written to the matching slot's pre-allocated LOD
+    // region; the per-LOD index counts must match init-time counts too, and
+    // the per-LOD `switch_distance`s are re-stored so JSON-side tweaks to
+    // `lod_distances` propagate without restart.
+    pub(crate) fn update_mesh_geometry(
+        &mut self,
+        draw_idx: usize,
+        vertices: &[Vertex],
+        indices: &[u16],
+        lod_alternates: &[(f32, Vec<u16>)],
     ) -> Result<(), String> {
-        use std::collections::HashMap;
-
-        // Stop the GPU + CPU pipelines so we can safely read the old
-        // buffers and atomically swap. Costs a frame-time stall but only
-        // fires under `cn debug` and only when the source `.glb` size
-        // actually changed.
-        self.wait_idle();
-
-        let mut change_map: HashMap<usize, backend::DrawGeometryUpdate> =
-            changes.into_iter().map(|c| (c.draw_idx, c)).collect();
-
-        // Read views over the current shared buffers. `StorageModeShared`
-        // means `contents()` is a CPU-addressable pointer aliasing the GPU
-        // data; safe after `wait_idle`.
-        let old_v_len = self.vertex_buffer.length() / std::mem::size_of::<Vertex>();
-        // SAFETY: the buffer is `StorageModeShared`, so `contents()` is a live CPU mapping of its
-        // bytes, and the length was derived from that buffer's own byte length divided by the
-        // element size. The preceding `wait_idle` means the GPU is not writing it.
-        let old_v_slice: &[Vertex] = unsafe {
-            let ptr = self.vertex_buffer.contents().as_ptr() as *const Vertex;
-            std::slice::from_raw_parts(ptr, old_v_len)
-        };
-        let old_i_len = self.index_buffer.length() / std::mem::size_of::<u32>();
-        // SAFETY: the buffer is `StorageModeShared`, so `contents()` is a live CPU mapping of its
-        // bytes, and the length was derived from that buffer's own byte length divided by the
-        // element size. The preceding `wait_idle` means the GPU is not writing it.
-        let old_i_slice: &[u32] = unsafe {
-            let ptr = self.index_buffer.contents().as_ptr() as *const u32;
-            std::slice::from_raw_parts(ptr, old_i_len)
-        };
-
-        let mut new_vertices: Vec<Vertex> = Vec::new();
-        let mut new_indices: Vec<u32> = Vec::new();
-        // Captured per-draw new layout (applied to `draw.objects` after the
-        // read-only walk to avoid aliasing `self`).
-        type DrawLayout = (usize, usize, usize, usize, i32, Vec<LodSlice>);
-        let mut new_layouts: Vec<DrawLayout> = Vec::with_capacity(self.draw.objects.len());
-
-        for (draw_idx, obj) in self.draw.objects.iter().enumerate() {
-            let new_v_byte_off = new_vertices.len() * std::mem::size_of::<Vertex>();
-            let new_i_elem_off = new_indices.len();
-            let new_base_u32 = new_vertices.len() as u32;
-            // base_vertex == 0 means "absolute indices" (the static draws);
-            // non-zero means "mesh-relative indices, GPU adds base_vertex
-            // at fetch time" (voxel chunks). We preserve each draw's
-            // semantics on rebuild.
-            let absolute_indices = obj.base_vertex == 0;
-            let new_base_vertex = if absolute_indices {
-                0
-            } else {
-                (new_v_byte_off / std::mem::size_of::<Vertex>()) as i32
-            };
-
-            if let Some(change) = change_map.remove(&draw_idx) {
-                new_vertices.extend_from_slice(&change.vertices);
-                if absolute_indices {
-                    new_indices.extend(change.indices.iter().map(|i| u32::from(*i) + new_base_u32));
-                } else {
-                    new_indices.extend(change.indices.iter().map(|i| u32::from(*i)));
-                }
-                let mut new_lods: Vec<LodSlice> = Vec::with_capacity(change.lod_alternates.len());
-                for (switch_distance, alt_idx) in &change.lod_alternates {
-                    let alt_off = new_indices.len();
-                    if absolute_indices {
-                        new_indices.extend(alt_idx.iter().map(|i| u32::from(*i) + new_base_u32));
-                    } else {
-                        new_indices.extend(alt_idx.iter().map(|i| u32::from(*i)));
-                    }
-                    new_lods.push(LodSlice {
-                        index_offset: alt_off,
-                        index_count: alt_idx.len(),
-                        switch_distance: *switch_distance,
-                    });
-                }
-                new_layouts.push((
-                    new_v_byte_off,
-                    change.vertices.len(),
-                    new_i_elem_off,
-                    change.indices.len(),
-                    new_base_vertex,
-                    new_lods,
-                ));
-            } else {
-                // Unchanged draw -- copy current geometry verbatim, rebasing
-                // indices onto the new vertex region.
-                let v_start = obj.vertex_offset / std::mem::size_of::<Vertex>();
-                let v_end = v_start + obj.vertex_count;
-                if v_end > old_v_slice.len() {
-                    return Err(format!(
-                        "rebuild_static_geometry: draw {} vertex region [{}, {}) out \
-                         of bounds (buffer has {} vertices)",
-                        draw_idx,
-                        v_start,
-                        v_end,
-                        old_v_slice.len()
-                    ));
-                }
-                new_vertices.extend_from_slice(&old_v_slice[v_start..v_end]);
-                let old_base_u32 = if absolute_indices {
-                    v_start as u32
-                } else {
-                    obj.base_vertex as u32
-                };
-                let i_end = obj.index_offset + obj.index_count;
-                if i_end > old_i_slice.len() {
-                    return Err(format!(
-                        "rebuild_static_geometry: draw {} index region [{}, {}) out \
-                         of bounds (buffer has {} indices)",
-                        draw_idx,
-                        obj.index_offset,
-                        i_end,
-                        old_i_slice.len()
-                    ));
-                }
-                if absolute_indices {
-                    for &idx in &old_i_slice[obj.index_offset..i_end] {
-                        new_indices.push(idx.wrapping_sub(old_base_u32) + new_base_u32);
-                    }
-                } else {
-                    new_indices.extend_from_slice(&old_i_slice[obj.index_offset..i_end]);
-                }
-                let mut new_lods: Vec<LodSlice> = Vec::with_capacity(obj.lod_alternates.len());
-                for slice in &obj.lod_alternates {
-                    let alt_end = slice.index_offset + slice.index_count;
-                    if alt_end > old_i_slice.len() {
-                        return Err(format!(
-                            "rebuild_static_geometry: draw {} LOD slice [{}, {}) out \
-                             of bounds (buffer has {} indices)",
-                            draw_idx,
-                            slice.index_offset,
-                            alt_end,
-                            old_i_slice.len()
-                        ));
-                    }
-                    let alt_off = new_indices.len();
-                    if absolute_indices {
-                        for &idx in &old_i_slice[slice.index_offset..alt_end] {
-                            new_indices.push(idx.wrapping_sub(old_base_u32) + new_base_u32);
-                        }
-                    } else {
-                        new_indices.extend_from_slice(&old_i_slice[slice.index_offset..alt_end]);
-                    }
-                    new_lods.push(LodSlice {
-                        index_offset: alt_off,
-                        index_count: slice.index_count,
-                        switch_distance: slice.switch_distance,
-                    });
-                }
-                new_layouts.push((
-                    new_v_byte_off,
-                    obj.vertex_count,
-                    new_i_elem_off,
-                    obj.index_count,
-                    new_base_vertex,
-                    new_lods,
-                ));
-            }
-        }
-
-        if !change_map.is_empty() {
-            tracing::warn!(
-                "rebuild_static_geometry: {} change(s) targeted draw indices not in \
-                 draw_objects (ignored)",
-                change_map.len()
-            );
-        }
-
-        if new_vertices.is_empty() || new_indices.is_empty() {
-            return Err(
-                "rebuild_static_geometry: post-rebuild buffers would be empty (no \
-                 static draws to ship)"
-                    .into(),
-            );
-        }
-
-        // Place new buffers sized to the rebuilt layout. The outgoing pair is
-        // replaced below; its ranges return to the pool on drop, withheld until
-        // the frames the `wait_idle` above drained can no longer reference them.
-        let new_vertex_buffer = self
-            .allocator
-            .alloc_buffer_with_bytes(
-                bytes_of_slice(new_vertices.as_slice()),
-                MTLResourceOptions::StorageModeShared,
+        let obj = self.draw.objects.get(draw_idx).ok_or_else(|| {
+            format!(
+                "update_mesh_geometry: draw object {} out of range",
+                draw_idx
             )
-            .map_err(|e| format!("rebuild_static_geometry: vertex buffer: {e}"))?;
-        let new_index_buffer = self
-            .allocator
-            .alloc_buffer_with_bytes(
-                bytes_of_slice(new_indices.as_slice()),
-                MTLResourceOptions::StorageModeShared,
-            )
-            .map_err(|e| format!("rebuild_static_geometry: index buffer: {e}"))?;
-
-        // Apply the new per-draw layout.
-        for (i, (v_off, v_count, i_off, i_count, base_v, lods)) in
-            new_layouts.into_iter().enumerate()
+        })?;
+        if vertices.len() != obj.vertex_count {
+            return Err(format!(
+                "update_mesh_geometry: draw {} expects {} vertices, got {} \
+                 (in-place path is size-matched only; size changes route through \
+                 rebuild_static_geometry)",
+                draw_idx,
+                obj.vertex_count,
+                vertices.len()
+            ));
+        }
+        if indices.len() != obj.index_count {
+            return Err(format!(
+                "update_mesh_geometry: draw {} expects {} indices, got {} \
+                 (in-place path is size-matched only; size changes route through \
+                 rebuild_static_geometry)",
+                draw_idx,
+                obj.index_count,
+                indices.len()
+            ));
+        }
+        if lod_alternates.len() != obj.lod_alternates.len() {
+            return Err(format!(
+                "update_mesh_geometry: draw {} expects {} LOD alternate(s), got {} \
+                 (LOD-count changes need rebuild_static_geometry)",
+                draw_idx,
+                obj.lod_alternates.len(),
+                lod_alternates.len()
+            ));
+        }
+        for (lod_idx, ((_, alt_idx), slice)) in lod_alternates
+            .iter()
+            .zip(obj.lod_alternates.iter())
+            .enumerate()
         {
-            let obj = &mut self.draw.objects[i];
-            obj.vertex_offset = v_off;
-            obj.vertex_count = v_count;
-            obj.index_offset = i_off;
-            obj.index_count = i_count;
-            obj.base_vertex = base_v;
-            obj.lod_alternates = lods;
-        }
-
-        self.vertex_buffer = new_vertex_buffer;
-        self.index_buffer = new_index_buffer;
-
-        // The RT acceleration structure (if any) was built against the OLD
-        // vertex/index buffers + draw-object offsets. After this swap its static
-        // BLAS hold the stale geometry and its geometry table carries stale
-        // offsets, so reflections would trace mismatched data -- and the RT shader
-        // reads the (possibly smaller) new vertex buffer at old offsets, risking
-        // an out-of-bounds fetch. Rebuild the BVH from the new geometry now. We
-        // are past `wait_idle` on the editor-only hot-reload path, so a synchronous
-        // full rebuild (the same path the init build + `Rebuild` diagnostic use) is
-        // appropriate. Rebuild regardless of `dynamic_mode` -- even a build-once
-        // (`Off`) BVH is invalid once its source buffers are replaced. A rebuild
-        // failure leaves the prior BVH in place (`rebuild_rt_accel` only swaps on
-        // success) and must NOT fail the geometry reload, which already succeeded.
-        if self.rt.accel.is_some() {
-            let albedo_count = self.textures.len();
-            if let Err(e) = self.rebuild_rt_accel(albedo_count) {
-                tracing::warn!(
-                    "rebuild_static_geometry: RT BVH rebuild failed, reflections may be stale: {e}"
-                );
+            if alt_idx.len() != slice.index_count {
+                return Err(format!(
+                    "update_mesh_geometry: draw {} LOD{} expects {} indices, got {} \
+                     (LOD size changes need rebuild_static_geometry)",
+                    draw_idx,
+                    lod_idx + 1,
+                    slice.index_count,
+                    alt_idx.len()
+                ));
             }
         }
+        let v_off = obj.vertex_offset;
+        let i_off_bytes = obj.index_offset * std::mem::size_of::<u32>();
+        // Static draws keep indices absolute (base_vertex == 0), so rebase
+        // the mesh-relative indices onto the slot's vertex_offset before
+        // writing. v_off is always a multiple of size_of::<Vertex>() since
+        // every region the build_draw_list appender produced started on a
+        // vertex boundary.
+        let base = (v_off / std::mem::size_of::<Vertex>()) as u32;
+        // Snapshot the per-LOD index offsets while `obj` is still borrowed
+        // so the buffer writes below can drop the borrow before mutating
+        // each slice's switch_distance.
+        let lod_byte_offsets: Vec<usize> = obj
+            .lod_alternates
+            .iter()
+            .map(|s| s.index_offset * std::mem::size_of::<u32>())
+            .collect();
+        let rebased: Vec<u32> = indices.iter().map(|&i| u32::from(i) + base).collect();
+        write_buffer_region(&self.vertex_buffer, v_off, bytes_of_slice(vertices))?;
+        write_buffer_region(&self.index_buffer, i_off_bytes, bytes_of_slice(&rebased))?;
+        // LOD alternate slots were laid out at init-time alongside LOD0 in
+        // the same shared index buffer. Rebase each alternate onto the same
+        // `base` as LOD0 since LOD decimation shares the LOD0 vertex region.
+        for ((_, alt_idx), &alt_off_bytes) in lod_alternates.iter().zip(lod_byte_offsets.iter()) {
+            let alt_rebased: Vec<u32> = alt_idx.iter().map(|&i| u32::from(i) + base).collect();
+            write_buffer_region(
+                &self.index_buffer,
+                alt_off_bytes,
+                bytes_of_slice(&alt_rebased),
+            )?;
+        }
+        // Refresh the per-LOD switch distances so JSON-side tweaks to
+        // `lod_distances` propagate without a process restart.
+        let slot = &mut self.draw.objects[draw_idx];
+        for ((switch_distance, _), slice) in
+            lod_alternates.iter().zip(slot.lod_alternates.iter_mut())
+        {
+            slice.switch_distance = *switch_distance;
+        }
+        // The slot now holds different triangles at the same offsets, so its RT
+        // BLAS traces the pre-reload positions. Nothing else in the geometry
+        // signature moved, so bump the generation (which the signature carries)
+        // and flag the topology: the next RT update rebuilds this slot's BLAS
+        // rather than reusing the stale one.
+        slot.geometry_generation = slot.geometry_generation.wrapping_add(1);
+        self.rt.topology_dirty = true;
         Ok(())
     }
 }

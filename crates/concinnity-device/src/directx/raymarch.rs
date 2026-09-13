@@ -187,9 +187,9 @@ fn family_dxil(
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
     let mut stages = raymarch::ALL.iter().filter(|p| p.family == family);
     let dxil = |entry: &str, profile: &'static str| -> Result<Vec<u8>, String> {
-        crate::raymarch_source::artifact(
+        crate::shader::raymarch_source::artifact(
             programs,
-            &crate::raymarch_source::Request {
+            &crate::shader::raymarch_source::Request {
                 family,
                 platform: Platform::Hlsl,
                 entries: &[entry],
@@ -1021,7 +1021,7 @@ impl RaymarchResources {
         // volume is a developer-time bug, not a graceful fallback.
         let mut volumes: Vec<RaymarchVolumeRecord> = Vec::with_capacity(active.len());
         for (vol, payload, label) in &active {
-            let programs = crate::raymarch_source::decode(payload, label)?;
+            let programs = crate::shader::raymarch_source::decode(payload, label)?;
             let pso = dump_on_err(
                 info_queue,
                 if vol.volumetric {
@@ -1092,7 +1092,7 @@ impl RaymarchResources {
                 volume_cbuffer_gva: gva,
                 visible: vol.visible,
                 cast_shadows: vol.cast_shadows,
-                refractive: crate::raymarch_source::taps_scene(&programs),
+                refractive: crate::shader::raymarch_source::taps_scene(&programs),
             });
         }
 

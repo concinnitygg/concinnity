@@ -54,7 +54,7 @@ pub(in crate::vulkan) fn create_graphics_pipelines(
     // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
     // they name belongs to this device.
     let result = unsafe { device.create_graphics_pipelines(current(), infos, None) };
-    crate::pipeline_cache::note_creation(started.elapsed().as_micros() as u64);
+    crate::shader::pipeline_cache::note_creation(started.elapsed().as_micros() as u64);
     own(device, result)
 }
 
@@ -78,7 +78,7 @@ pub(in crate::vulkan) fn create_compute_pipelines(
     // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
     // they name belongs to this device.
     let result = unsafe { device.create_compute_pipelines(current(), infos, None) };
-    crate::pipeline_cache::note_creation(started.elapsed().as_micros() as u64);
+    crate::shader::pipeline_cache::note_creation(started.elapsed().as_micros() as u64);
     own(device, result)
 }
 
@@ -139,7 +139,7 @@ pub(in crate::vulkan) fn install(device: &Device, props: &vk::PhysicalDeviceProp
         return;
     }
     let key = entry_key(&props.pipeline_cache_uuid);
-    let disk = crate::pipeline_cache::load(&key).filter(|blob| {
+    let disk = crate::shader::pipeline_cache::load(&key).filter(|blob| {
         let ok = header_matches(
             blob,
             props.vendor_id,
@@ -148,7 +148,7 @@ pub(in crate::vulkan) fn install(device: &Device, props: &vk::PhysicalDeviceProp
         );
         if !ok {
             tracing::warn!("pipeline cache: {key} does not match this device, rebuilding cold");
-            crate::pipeline_cache::delete(&key);
+            crate::shader::pipeline_cache::delete(&key);
         }
         ok
     });
@@ -160,7 +160,7 @@ pub(in crate::vulkan) fn install(device: &Device, props: &vk::PhysicalDeviceProp
         // truncated tail, a driver update with an unchanged UUID). Drop the
         // blob and retry empty.
         tracing::warn!("pipeline cache: driver rejected {key} ({e}), rebuilding cold");
-        crate::pipeline_cache::delete(&key);
+        crate::shader::pipeline_cache::delete(&key);
         let empty = vk::PipelineCacheCreateInfo::default();
         // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
         // it names belongs to this device.
@@ -205,7 +205,7 @@ pub(in crate::vulkan) fn serialize(device: &Device) {
     let Ok(data) = (unsafe { device.get_pipeline_cache_data(current()) }) else {
         return;
     };
-    crate::pipeline_cache::store(&persisted.key, &data);
+    crate::shader::pipeline_cache::store(&persisted.key, &data);
 }
 
 // Serialize, then destroy the cache and clear the global. Called from the

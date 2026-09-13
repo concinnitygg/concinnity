@@ -76,7 +76,7 @@ pub(crate) fn artifact<'a>(
         entries: &entries,
         target: target(req.platform, program.stage),
     };
-    let work = crate::compiler_work::dir()
+    let work = crate::shader::compiler_work::dir()
         .map_err(|e| format!("Shader '{label}': no scratch directory: {e}"))?;
     concinnity_slang::compile(&job, work.path())
         .map(Cow::Owned)
@@ -94,7 +94,7 @@ fn source(program: &surface::Program, req: &Request, sources: &Sources<'_>) -> S
         req.platform,
         req.probe_count,
         sources,
-        crate::slang_source::from_checkout,
+        crate::shader::slang_source::from_checkout,
     )
 }
 

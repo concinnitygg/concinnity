@@ -12,7 +12,7 @@
 //! failure this scan exists to make impossible.
 //!
 //! It reads the workspace's own test code, in the same style as
-//! `configuration_surface.rs`, `double_drive_audit.rs` and
+//! `configuration_surface.rs`, `audit/double_drive.rs` and
 //! `headless_discipline.rs`.
 
 use std::collections::HashMap;

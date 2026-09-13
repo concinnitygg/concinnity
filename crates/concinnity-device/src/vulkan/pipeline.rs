@@ -13,8 +13,6 @@ use crate::vulkan::slang_builtins::SlangCompile;
 // The uniform and push-constant layouts are the `.slang` sources' own, held
 // to the `#[repr(C)]` mirrors by `crate::shader_layout`.
 
-//  Shader compilation
-
 #[cfg(test)]
 pub(super) fn is_spirv(bytes: &[u8]) -> bool {
     bytes.len() >= 4 && u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) == 0x07230203
@@ -207,12 +205,12 @@ pub(super) fn world_entry(
     hot_reload: bool,
     probe_count: usize,
 ) -> Result<Vec<u8>, String> {
-    let req = crate::surface_source::Request {
+    let req = crate::shader::surface_source::Request {
         platform: concinnity_core::platform::Platform::Glsl,
         probe_count,
         hot_reload,
     };
-    crate::surface_source::artifact(world, entry, &req).map(|c| c.into_owned())
+    crate::shader::surface_source::artifact(world, entry, &req).map(|c| c.into_owned())
 }
 
 // The depth-only skinned shadow vertex, the engine's own: skinned main-pass
@@ -241,8 +239,6 @@ pub(super) fn compile_composite_shaders(hot_reload: bool) -> Result<(Vec<u8>, Ve
     let frag = super::slang_builtins::COMPOSITE_FRAG.compile(&ctx)?;
     Ok((vert, frag))
 }
-
-//  Pipeline creation
 
 // Vertex binding and attribute descriptions for the full Vertex struct (56 bytes).
 fn main_vertex_input() -> (

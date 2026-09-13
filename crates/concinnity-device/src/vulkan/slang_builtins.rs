@@ -15,7 +15,7 @@ use super::builtins::Ctx;
 // declarations moved.
 pub(crate) trait SlangCompile {
     fn source(&self, ctx: &Ctx) -> String;
-    fn cache_key<'a>(&self, source: &'a str) -> crate::shader_cache::Key<'a>;
+    fn cache_key<'a>(&self, source: &'a str) -> crate::shader::cache::Key<'a>;
     fn compile(&self, ctx: &Ctx) -> Result<Vec<u8>, String>;
 }
 
@@ -35,13 +35,13 @@ impl SlangCompile for SlangProgram {
             );
             defines.push(("MAX_PROBES", probes.as_str()));
         }
-        crate::slang_source::assemble(ctx.hot_reload, self.file, &defines, &[])
+        crate::shader::slang_source::assemble(ctx.hot_reload, self.file, &defines, &[])
     }
 
     // The shader-cache key for `source`. Shared by the runtime compile path
     // and the export-time precompile so the two can never key differently.
-    fn cache_key<'a>(&self, source: &'a str) -> crate::shader_cache::Key<'a> {
-        crate::shader_cache::Key {
+    fn cache_key<'a>(&self, source: &'a str) -> crate::shader::cache::Key<'a> {
+        crate::shader::cache::Key {
             compiler: "slang",
             source,
             entry: self.entry,
@@ -71,7 +71,7 @@ impl SlangCompile for SlangProgram {
             return Ok(bytes.to_vec());
         }
         let key = self.cache_key(&source);
-        crate::shader_cache::cached(&key, self.label, || compile_uncached(self, &source))
+        crate::shader::cache::cached(&key, self.label, || compile_uncached(self, &source))
             .map_err(|e| format!("{}: {e}", self.label))
     }
 }
@@ -100,7 +100,7 @@ pub(super) fn compile_uncached(program: &SlangProgram, source: &str) -> Result<V
         entries: &[program.entry],
         target: slang::SlangTarget::Spirv,
     };
-    let work = crate::compiler_work::dir()?;
+    let work = crate::shader::compiler_work::dir()?;
     slang::compile(&job, work.path())
 }
 

@@ -897,9 +897,9 @@ const SLANG_WATER_RT_TEXTURED_DEFINES: &[(&str, &str)] = &[
 // rather than being read out of that crate's directory: a registry checkout of
 // this crate has no sibling copy to read.
 const SHADER_COMPILE_SOURCES: &[&str] = &[
-    "src/shader_cache.rs",
-    "src/runtime_cache.rs",
-    "src/slang_source.rs",
+    "src/shader/cache.rs",
+    "src/shader/runtime_cache.rs",
+    "src/shader/slang_source.rs",
     "src/directx/pipeline.rs",
     "src/directx/slang_builtins.rs",
     "src/metal/msl_cache.rs",

@@ -51,12 +51,12 @@ pub(in crate::directx) fn world_entry(
     entry: &str,
     hot_reload: bool,
 ) -> Result<Vec<u8>, String> {
-    let req = crate::surface_source::Request {
+    let req = crate::shader::surface_source::Request {
         platform: concinnity_core::platform::Platform::Hlsl,
         probe_count: concinnity_core::render::uniforms::MAX_PROBES,
         hot_reload,
     };
-    crate::surface_source::artifact(world, entry, &req).map(|c| c.into_owned())
+    crate::shader::surface_source::artifact(world, entry, &req).map(|c| c.into_owned())
 }
 
 // Compile the engine-internal stages the init path needs outside the

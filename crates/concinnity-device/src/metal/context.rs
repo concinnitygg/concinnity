@@ -1513,7 +1513,7 @@ impl Drop for MtlContext {
         // Write whatever metallibs were compiled lazily since init's own
         // checkpoint. Ahead of the reload guard below: the artifacts belong to
         // the process, not to the window this context may have handed on.
-        crate::runtime_cache::checkpoint();
+        crate::shader::runtime_cache::checkpoint();
         // A context whose window was transplanted to a successor (a live editor
         // reload) must tear nothing down: the successor owns the window, view,
         // and cursor state now, so closing the window here would order the reused

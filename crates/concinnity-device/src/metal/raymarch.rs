@@ -148,9 +148,9 @@ fn family_library(
         .filter(|p| p.family == family)
         .map(|p| p.entry)
         .collect();
-    let msl = crate::raymarch_source::artifact(
+    let msl = crate::shader::raymarch_source::artifact(
         programs,
-        &crate::raymarch_source::Request {
+        &crate::shader::raymarch_source::Request {
             family,
             platform: Platform::Metal,
             entries: &entries,
@@ -370,7 +370,7 @@ pub(in crate::metal) fn build_raymarch_volume_record(
     hot_reload: bool,
     asset_label: &str,
 ) -> Result<RaymarchVolumeRecord, String> {
-    let programs = crate::raymarch_source::decode(payload, asset_label)?;
+    let programs = crate::shader::raymarch_source::decode(payload, asset_label)?;
     // A medium is integrated rather than surfaced, so it builds the blended
     // pipeline and nothing else: its field defines `sampleVolume` and no
     // `map`, which the surface entries would fail to link against.
@@ -396,7 +396,7 @@ pub(in crate::metal) fn build_raymarch_volume_record(
         visible: volume.visible,
         volumetric: volume.volumetric,
         cast_shadows: volume.cast_shadows,
-        refractive: crate::raymarch_source::taps_scene(&programs),
+        refractive: crate::shader::raymarch_source::taps_scene(&programs),
         world_center: volume.center,
         world_extent: volume.extent,
     })

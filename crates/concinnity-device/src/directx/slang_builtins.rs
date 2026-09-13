@@ -14,14 +14,14 @@ use concinnity_slang as slang;
 pub(crate) trait SlangCompile {
     fn source(&self, hot_reload: bool) -> String;
     fn target(&self) -> slang::SlangTarget;
-    fn cache_key<'a>(&self, source: &'a str) -> crate::shader_cache::Key<'a>;
+    fn cache_key<'a>(&self, source: &'a str) -> crate::shader::cache::Key<'a>;
     fn compile(&self, hot_reload: bool) -> Result<Vec<u8>, String>;
 }
 
 impl SlangCompile for SlangProgram {
     // Assemble the exact source text this program compiles.
     fn source(&self, hot_reload: bool) -> String {
-        crate::slang_source::assemble(hot_reload, self.file, self.defines, &[])
+        crate::shader::slang_source::assemble(hot_reload, self.file, self.defines, &[])
     }
 
     fn target(&self) -> slang::SlangTarget {
@@ -30,8 +30,8 @@ impl SlangCompile for SlangProgram {
 
     // The shader-cache key for `source`. Shared by the runtime compile path
     // and the export-time precompile so the two can never key differently.
-    fn cache_key<'a>(&self, source: &'a str) -> crate::shader_cache::Key<'a> {
-        crate::shader_cache::Key {
+    fn cache_key<'a>(&self, source: &'a str) -> crate::shader::cache::Key<'a> {
+        crate::shader::cache::Key {
             compiler: "slang",
             source,
             entry: self.entry,
@@ -59,7 +59,7 @@ impl SlangCompile for SlangProgram {
             return Ok(bytes.to_vec());
         }
         let key = self.cache_key(&source);
-        crate::shader_cache::cached(&key, self.label, || compile_uncached(self, &source))
+        crate::shader::cache::cached(&key, self.label, || compile_uncached(self, &source))
             .map_err(|e| format!("{}: {e}", self.label))
     }
 }
@@ -83,7 +83,7 @@ pub(super) fn compile_uncached(program: &SlangProgram, source: &str) -> Result<V
         entries: &[program.entry],
         target: program.target(),
     };
-    let work = crate::compiler_work::dir()?;
+    let work = crate::shader::compiler_work::dir()?;
     slang::compile(&job, work.path())
 }
 
@@ -91,14 +91,14 @@ pub(super) fn compile_uncached(program: &SlangProgram, source: &str) -> Result<V
 // where present. Called by the export-time precompile alongside the HLSL table.
 pub(crate) fn precompile(
     bundle: &mut concinnity_host::store::cache::Segment,
-    report: &mut crate::precompile::Report,
+    report: &mut crate::shader::precompile::Report,
 ) {
     for program in ALL {
         let source = program.source(false);
         let key = program.cache_key(&source);
         report.record(
             &format!("{} {}", program.entry, program.profile),
-            crate::shader_cache::ensure_in(bundle, &key, || compile_uncached(program, &source)),
+            crate::shader::cache::ensure_in(bundle, &key, || compile_uncached(program, &source)),
         );
     }
 }

@@ -1,286 +1,190 @@
-//! Per-mesh upload / eviction into the shared static-mesh vertex + index
-//! buffers via the sub-allocators, plus in-place per-slot updates for asset
-//! hot-reload.
+//! VoxelWorld chunk streaming for MtlContext: sub-allocator setup and the
+//! add / remove / move-chunk-mesh operations driven after init.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::gfx::render_types::DrawObject;
+use concinnity_core::render::backend::ChunkMesh;
+use concinnity_core::render::draw_slot;
 use concinnity_core::render::error::RenderResult;
+use objc2_metal::{MTLBuffer, MTLResourceOptions};
 
-use crate::metal::context::{MtlContext, bytes_of_slice, write_buffer_region, zero_buffer_region};
+use crate::metal::context::*;
 
 impl MtlContext {
-    // Upload a streamed mesh's geometry into the shared vertex and index
-    // buffers, place it via the sub-allocators, and mark the draw resident.
+    // `VoxelWorld` chunks and seed the chunk sub-allocators with it.
     //
-    // The mesh-streaming subsystem calls this to bring a mesh resident after
-    // init. The geometry is placed wherever the allocators find free space
-    // (not the build-time region), so `DrawObject::vertex_offset` /
-    // `index_offset` are rewritten here. `vertices` / `indices` must match the
-    // fixed `vertex_count` / `index_count` recorded by `build_draw_list`.
-    //
-    // `indices` are mesh-relative (0-based); they are rebased onto the chosen
-    // vertex region before upload. `frame` is the current frame: deferred
-    // frees that have retired by then are reclaimed first, so freed space
-    // becomes reusable. The chosen region was not drawn while the mesh was
-    // non-resident, so no in-flight command buffer reads it -- the write is
-    // race-free.
-    pub(crate) fn upload_mesh(
+    // Called once at init by `GraphicsSystem` when a `VoxelWorld` is present.
+    // The build-time geometry is copied verbatim into the start of the new
+    // (larger) buffers; chunks are placed in the appended headroom by
+    // `add_chunk_mesh`. This runs before the first frame, so no in-flight
+    // command buffer references the replaced buffers.
+    pub(crate) fn setup_chunk_streaming(
         &mut self,
-        draw_idx: usize,
-        vertices: &[Vertex],
-        indices: &[u16],
-        frame: u64,
-    ) -> RenderResult<()> {
-        let obj = self
-            .draw
-            .objects
-            .get(draw_idx)
-            .ok_or_else(|| format!("upload_mesh: draw object {} out of range", draw_idx))?;
-        if vertices.len() != obj.vertex_count {
-            return Err(format!(
-                "upload_mesh: draw {} expects {} vertices, got {}",
-                draw_idx,
-                obj.vertex_count,
-                vertices.len()
-            )
-            .into());
-        }
-        if indices.len() != obj.index_count {
-            return Err(format!(
-                "upload_mesh: draw {} expects {} indices, got {}",
-                draw_idx,
-                obj.index_count,
-                indices.len()
-            )
-            .into());
-        }
+        chunk_vtx_bytes: usize,
+        chunk_idx_bytes: usize,
+    ) -> Result<(), String> {
+        let old_v_len = self.vertex_buffer.length();
+        let old_i_len = self.index_buffer.length();
 
-        // Reclaim frees whose in-flight frames have retired, then place the
-        // geometry. A zero-length mesh would not occupy the buffers, but
-        // build_draw_list never emits one, so treat it as a hard error.
-        self.geometry_alloc.mesh_vtx.reclaim(frame);
-        self.geometry_alloc.mesh_idx.reclaim(frame);
+        let new_vbuf = self
+            .allocator
+            .alloc_buffer(
+                old_v_len + chunk_vtx_bytes,
+                MTLResourceOptions::StorageModeShared,
+            )
+            .map_err(|e| format!("setup_chunk_streaming: chunk vertex buffer: {e}"))?;
+        let new_ibuf = self
+            .allocator
+            .alloc_buffer(
+                old_i_len + chunk_idx_bytes,
+                MTLResourceOptions::StorageModeShared,
+            )
+            .map_err(|e| format!("setup_chunk_streaming: chunk index buffer: {e}"))?;
+
+        // Copy the build-time geometry into the start of the grown buffers so
+        // every existing draw's offsets stay valid.
+        copy_buffer_prefix(&self.vertex_buffer, &new_vbuf, old_v_len);
+        copy_buffer_prefix(&self.index_buffer, &new_ibuf, old_i_len);
+        self.vertex_buffer = new_vbuf;
+        self.index_buffer = new_ibuf;
+
+        // Seed the chunk allocators with the appended headroom. retire_frame 0:
+        // nothing has been drawn, so the space is reusable immediately.
+        self.geometry_alloc
+            .chunk_vtx
+            .free(old_v_len as u64, chunk_vtx_bytes as u64, 0);
+        self.geometry_alloc
+            .chunk_idx
+            .free(old_i_len as u64, chunk_idx_bytes as u64, 0);
+        Ok(())
+    }
+
+    // Place one streamed chunk's geometry in the chunk headroom region and
+    // write its `DrawObject` at the engine-allocated destination slot.
+    //
+    // The chunk is non-cullable (sentinel AABB): the streaming window already
+    // bounds the resident chunk count, so the renderer draws every resident
+    // chunk. `frame` reclaims retired deferred frees first.
+    pub(crate) fn add_chunk_mesh(
+        &mut self,
+        mesh: ChunkMesh<'_>,
+        dst: draw_slot::SlotAlloc,
+    ) -> RenderResult<()> {
+        let ChunkMesh {
+            verts: vertices,
+            idxs: indices,
+            model,
+            texture_slot,
+            normal_map_slot,
+            material,
+            frame,
+        } = mesh;
+        if vertices.is_empty() || indices.is_empty() {
+            return Err("add_chunk_mesh: empty chunk geometry".into());
+        }
+        self.geometry_alloc.chunk_vtx.reclaim(frame);
+        self.geometry_alloc.chunk_idx.reclaim(frame);
+
         let v_len = std::mem::size_of_val(vertices);
         // The shared index buffer is u32-typed; the input `indices` are u16 and
         // get widened on write below, so size the allocation against the u32
         // stride. Sizing against the u16 source would alloc half the bytes the
-        // write needs and corrupt whatever sub-allocation followed.
+        // write needs and corrupt the next chunk's indices.
         let i_len = indices.len() * std::mem::size_of::<u32>();
         let (v_off, i_off) = crate::suballoc::geometry::place_mesh(
-            &mut self.geometry_alloc.mesh_vtx,
-            &mut self.geometry_alloc.mesh_idx,
+            &mut self.geometry_alloc.chunk_vtx,
+            &mut self.geometry_alloc.chunk_idx,
             v_len,
             i_len,
-            || format!("upload_mesh: draw {draw_idx}"),
+            || "add_chunk_mesh".to_string(),
         )?;
 
-        // Vertices copy verbatim. Indices are mesh-relative, so rebase them to
-        // the vertex region the allocator chose: v_off is always a multiple of
-        // size_of::<Vertex>() (every seed region and allocation is), so the
-        // base is an exact vertex index.
+        // Vertices copy verbatim. Indices stay mesh-relative (0-based): a chunk
+        // can land far past the 65 535-vertex u16 index range, so rather than
+        // rebasing the indices the draw passes the vertex region's base as
+        // `baseVertex`. v_off is a multiple of size_of::<Vertex>() (the
+        // headroom start and every alloc are), so the base is an exact index.
+        // The shared index_buffer is u32-typed, so widen the per-mesh u16
+        // indices before writing.
         write_buffer_region(&self.vertex_buffer, v_off, bytes_of_slice(vertices))?;
-        // Static IB is u32 (per-scene total can exceed u16); per-mesh indices
-        // are u16 (each mesh fits in u16, enforced by the build-time splitter).
-        let base = (v_off / std::mem::size_of::<Vertex>()) as u32;
-        let rebased: Vec<u32> = indices.iter().map(|&i| u32::from(i) + base).collect();
-        write_buffer_region(&self.index_buffer, i_off, bytes_of_slice(&rebased))?;
+        let indices_u32: Vec<u32> = indices.iter().map(|&i| u32::from(i)).collect();
+        write_buffer_region(&self.index_buffer, i_off, bytes_of_slice(&indices_u32))?;
+        let base_vertex = (v_off / std::mem::size_of::<Vertex>()) as i32;
 
-        let obj = &mut self.draw.objects[draw_idx];
-        obj.vertex_offset = v_off;
-        obj.index_offset = i_off / std::mem::size_of::<u32>();
-        obj.resident = true;
-        // The mesh joins the RT-relevant draw set at a freshly allocated region;
-        // the next RT update builds its BLAS over the new slice.
+        let obj = DrawObject {
+            vertex_offset: v_off,
+            vertex_count: vertices.len(),
+            index_offset: i_off / std::mem::size_of::<u32>(),
+            index_count: indices.len(),
+            base_vertex,
+            geometry_generation: 0,
+            model,
+            texture_slot,
+            normal_map_slot,
+            material,
+            // Streamed chunks always render under the world default shader.
+            shader_bucket: 0,
+            visible: true,
+            resident: true,
+            // Non-cullable: degenerate AABB disables frustum/distance culling.
+            bb_min: [f32::NAN; 3],
+            bb_max: [f32::NAN; 3],
+            cull_distance: 0.0,
+            // Streamed `VoxelWorld` chunks do not run through the build-time
+            // per-draw LOD decimator: distance LOD is handled by the streaming
+            // window instead, which meshes a near chunk at full voxel detail
+            // and a distant one as a coarse impostor (`ChunkDetail`), each a
+            // single resolution. So no per-draw `lod_alternates` here.
+            lod_alternates: Vec::new(),
+        };
+
+        self.place_draw_object(obj, dst);
+        // A new resident chunk changes the RT-relevant draw set; the next RT
+        // update folds it into the BVH (building just this chunk's BLAS).
         self.rt.topology_dirty = true;
         Ok(())
     }
 
-    // Seed the streamed-mesh sub-allocators with the reserved headroom block
-    // (byte ranges in the shared vertex / index buffers), for the
-    // shrinkable-seed path.
+    // Free a streamed chunk's geometry region and retire its `DrawObject`
+    // slot for reuse.
     //
-    // The streamed geometry is not baked into the buffers at build time;
-    // instead the buffers carry one zeroed headroom region (sized to the
-    // cap-many resident meshes) at these offsets. `retire_frame 0`: nothing
-    // has been drawn yet, so the space is allocatable immediately -- mirrors
-    // `setup_chunk_streaming`'s seeding. From then on `upload_mesh` /
-    // `evict_mesh` place and free streamed meshes within it.
-    pub(crate) fn seed_mesh_streaming(
-        &mut self,
-        vtx_offset: u64,
-        vtx_bytes: u64,
-        idx_offset: u64,
-        idx_bytes: u64,
-    ) {
-        self.geometry_alloc.mesh_vtx.free(vtx_offset, vtx_bytes, 0);
-        self.geometry_alloc.mesh_vtx.reclaim(0);
-        self.geometry_alloc.mesh_idx.free(idx_offset, idx_bytes, 0);
-        self.geometry_alloc.mesh_idx.reclaim(0);
-    }
-
-    // Clear a streamed mesh's geometry region to zero, return its space to the
-    // sub-allocators, and mark the draw non-resident so it is skipped in every
-    // pass.
-    //
-    // `retire_frame` is the frame from which the freed region may be reused:
-    // pass `current_frame + frames_in_flight` for a runtime eviction so a
-    // still-in-flight command buffer never has its geometry overwritten, and
-    // `0` at init, where nothing has been drawn. A later `upload_mesh` brings
-    // the mesh back, wherever the allocators then place it. Zeroing makes the
-    // region carry no geometry, so a stray draw renders nothing rather than
-    // stale triangles.
-    pub(crate) fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String> {
-        let obj = self
-            .draw
-            .objects
-            .get(draw_idx)
-            .ok_or_else(|| format!("evict_mesh: draw object {} out of range", draw_idx))?;
-        let v_off = obj.vertex_offset;
-        let v_len = obj.vertex_count * std::mem::size_of::<Vertex>();
-        let i_off = obj.index_offset * std::mem::size_of::<u32>();
-        let i_len = obj.index_count * std::mem::size_of::<u32>();
-        zero_buffer_region(&self.vertex_buffer, v_off, v_len)?;
-        zero_buffer_region(&self.index_buffer, i_off, i_len)?;
-        self.geometry_alloc
-            .mesh_vtx
-            .free(v_off as u64, v_len as u64, retire_frame);
-        self.geometry_alloc
-            .mesh_idx
-            .free(i_off as u64, i_len as u64, retire_frame);
-        self.draw.objects[draw_idx].resident = false;
-        // The mesh leaves the RT-relevant draw set; the next RT update drops its
-        // BLAS (deferred-freed once in-flight traces retire).
-        self.rt.topology_dirty = true;
-        Ok(())
-    }
-
-    // Overwrite a `Mesh` draw slot's vertex / index data in place. Driven by
-    // asset hot-reload (`cn debug` only).
-    //
-    // Unlike the steady-state streaming paths (`upload_mesh` / `evict_mesh`),
-    // which gate reuse of a region on `current_frame + frames_in_flight` so no
-    // in-flight command buffer can still be reading it, this rewrites a live
-    // region with no such fence. That is sound only because hot-reload is a
-    // human-paced `cn debug` action: the editor stalls for the reload, so a
-    // frame racing this write is not plausibly in flight. Production (non-debug)
-    // callers must not take this path.
-    //
-    // The new geometry is written at the
-    // draw object's existing offsets in the shared vertex / index buffers, so
-    // every other draw sharing those offsets (a `Prop`-instanced clone of the
-    // same `Mesh` always gets its own copy) is updated by the per-`draw_idx`
-    // caller loop, not by this call. New `verts` / `idxs` must match the
-    // slot's init-time count; this is the in-place fast path. A reload that
-    // changes the count cannot fit the fixed slot, so the hot-reload driver
-    // routes it through [`Self::rebuild_static_geometry`] instead, which
-    // repacks the shared buffers from scratch. Each entry in
-    // `lod_alternates` is written to the matching slot's pre-allocated LOD
-    // region; the per-LOD index counts must match init-time counts too, and
-    // the per-LOD `switch_distance`s are re-stored so JSON-side tweaks to
-    // `lod_distances` propagate without restart.
-    pub(crate) fn update_mesh_geometry(
+    // `retire_frame` is `current_frame + frames_in_flight` so an in-flight
+    // command buffer never has the freed region overwritten by a later
+    // `add_chunk_mesh`.
+    pub(crate) fn remove_chunk_mesh(
         &mut self,
         draw_idx: usize,
-        vertices: &[Vertex],
-        indices: &[u16],
-        lod_alternates: &[(f32, Vec<u16>)],
+        retire_frame: u64,
     ) -> Result<(), String> {
-        let obj = self.draw.objects.get(draw_idx).ok_or_else(|| {
-            format!(
-                "update_mesh_geometry: draw object {} out of range",
-                draw_idx
-            )
-        })?;
-        if vertices.len() != obj.vertex_count {
-            return Err(format!(
-                "update_mesh_geometry: draw {} expects {} vertices, got {} \
-                 (in-place path is size-matched only; size changes route through \
-                 rebuild_static_geometry)",
-                draw_idx,
-                obj.vertex_count,
-                vertices.len()
-            ));
-        }
-        if indices.len() != obj.index_count {
-            return Err(format!(
-                "update_mesh_geometry: draw {} expects {} indices, got {} \
-                 (in-place path is size-matched only; size changes route through \
-                 rebuild_static_geometry)",
-                draw_idx,
-                obj.index_count,
-                indices.len()
-            ));
-        }
-        if lod_alternates.len() != obj.lod_alternates.len() {
-            return Err(format!(
-                "update_mesh_geometry: draw {} expects {} LOD alternate(s), got {} \
-                 (LOD-count changes need rebuild_static_geometry)",
-                draw_idx,
-                obj.lod_alternates.len(),
-                lod_alternates.len()
-            ));
-        }
-        for (lod_idx, ((_, alt_idx), slice)) in lod_alternates
-            .iter()
-            .zip(obj.lod_alternates.iter())
-            .enumerate()
-        {
-            if alt_idx.len() != slice.index_count {
-                return Err(format!(
-                    "update_mesh_geometry: draw {} LOD{} expects {} indices, got {} \
-                     (LOD size changes need rebuild_static_geometry)",
-                    draw_idx,
-                    lod_idx + 1,
-                    slice.index_count,
-                    alt_idx.len()
-                ));
-            }
-        }
-        let v_off = obj.vertex_offset;
-        let i_off_bytes = obj.index_offset * std::mem::size_of::<u32>();
-        // Static draws keep indices absolute (base_vertex == 0), so rebase
-        // the mesh-relative indices onto the slot's vertex_offset before
-        // writing. v_off is always a multiple of size_of::<Vertex>() since
-        // every region the build_draw_list appender produced started on a
-        // vertex boundary.
-        let base = (v_off / std::mem::size_of::<Vertex>()) as u32;
-        // Snapshot the per-LOD index offsets while `obj` is still borrowed
-        // so the buffer writes below can drop the borrow before mutating
-        // each slice's switch_distance.
-        let lod_byte_offsets: Vec<usize> = obj
-            .lod_alternates
-            .iter()
-            .map(|s| s.index_offset * std::mem::size_of::<u32>())
-            .collect();
-        let rebased: Vec<u32> = indices.iter().map(|&i| u32::from(i) + base).collect();
-        write_buffer_region(&self.vertex_buffer, v_off, bytes_of_slice(vertices))?;
-        write_buffer_region(&self.index_buffer, i_off_bytes, bytes_of_slice(&rebased))?;
-        // LOD alternate slots were laid out at init-time alongside LOD0 in
-        // the same shared index buffer. Rebase each alternate onto the same
-        // `base` as LOD0 since LOD decimation shares the LOD0 vertex region.
-        for ((_, alt_idx), &alt_off_bytes) in lod_alternates.iter().zip(lod_byte_offsets.iter()) {
-            let alt_rebased: Vec<u32> = alt_idx.iter().map(|&i| u32::from(i) + base).collect();
-            write_buffer_region(
-                &self.index_buffer,
-                alt_off_bytes,
-                bytes_of_slice(&alt_rebased),
-            )?;
-        }
-        // Refresh the per-LOD switch distances so JSON-side tweaks to
-        // `lod_distances` propagate without a process restart.
-        let slot = &mut self.draw.objects[draw_idx];
-        for ((switch_distance, _), slice) in
-            lod_alternates.iter().zip(slot.lod_alternates.iter_mut())
-        {
-            slice.switch_distance = *switch_distance;
-        }
-        // The slot now holds different triangles at the same offsets, so its RT
-        // BLAS traces the pre-reload positions. Nothing else in the geometry
-        // signature moved, so bump the generation (which the signature carries)
-        // and flag the topology: the next RT update rebuilds this slot's BLAS
-        // rather than reusing the stale one.
-        slot.geometry_generation = slot.geometry_generation.wrapping_add(1);
+        let region = draw_slot::retire_chunk_slot(&mut self.draw.objects, draw_idx)?;
+        zero_buffer_region(
+            &self.vertex_buffer,
+            region.vertex_offset as usize,
+            region.vertex_bytes as usize,
+        )?;
+        zero_buffer_region(
+            &self.index_buffer,
+            region.index_offset as usize,
+            region.index_bytes as usize,
+        )?;
+        self.geometry_alloc
+            .chunk_vtx
+            .free(region.vertex_offset, region.vertex_bytes, retire_frame);
+        self.geometry_alloc
+            .chunk_idx
+            .free(region.index_offset, region.index_bytes, retire_frame);
+        // The removed chunk leaves the RT-relevant draw set; the next RT update
+        // drops its BLAS (deferred-freed once in-flight traces retire).
         self.rt.topology_dirty = true;
         Ok(())
+    }
+
+    pub(crate) fn set_chunk_model(
+        &mut self,
+        draw_idx: usize,
+        model: [[f32; 4]; 4],
+    ) -> Result<(), String> {
+        draw_slot::set_chunk_model(&mut self.draw.objects, draw_idx, model)
     }
 }

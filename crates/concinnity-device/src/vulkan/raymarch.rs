@@ -239,9 +239,9 @@ fn family_spirv(
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
     let mut stages = raymarch::ALL.iter().filter(|p| p.family == family);
     let spirv = |entry: &str| -> Result<Vec<u8>, String> {
-        crate::raymarch_source::artifact(
+        crate::shader::raymarch_source::artifact(
             programs,
-            &crate::raymarch_source::Request {
+            &crate::shader::raymarch_source::Request {
                 family,
                 platform: Platform::Glsl,
                 entries: &[entry],
@@ -1113,7 +1113,7 @@ impl RaymarchResources {
         // developer-time bug, so it aborts init (unlike the .glsl filter above).
         let mut volumes: Vec<RaymarchVolumeRecord> = Vec::with_capacity(active.len());
         for (vol, payload, label) in &active {
-            let programs = crate::raymarch_source::decode(payload, label)?;
+            let programs = crate::shader::raymarch_source::decode(payload, label)?;
             // A medium authors `sampleVolume` and renders alpha-blended without a
             // depth write; a surface volume authors `map` and `shade` and
             // sphere-traces an opaque surface. The asset's flag selects which.
@@ -1176,7 +1176,7 @@ impl RaymarchResources {
                 _volume_ubo: volume_ubo,
                 volume_set,
                 visible: vol.visible,
-                refractive: crate::raymarch_source::taps_scene(&programs),
+                refractive: crate::shader::raymarch_source::taps_scene(&programs),
             });
         }
 

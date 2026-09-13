@@ -46,7 +46,7 @@ impl Ctx {
 // and compiles these at first launch.
 pub(crate) fn precompile(
     bundle: &mut concinnity_host::store::cache::Segment,
-    report: &mut crate::precompile::Report,
+    report: &mut crate::shader::precompile::Report,
 ) {
     // A program whose source reads the main pass's sample count gets both
     // variants: which one a device runs is a property of its MSAA mode, not of
@@ -67,7 +67,7 @@ pub(crate) fn precompile(
             let key = program.cache_key(&source);
             report.record(
                 program.label,
-                crate::shader_cache::ensure_in(bundle, &key, || {
+                crate::shader::cache::ensure_in(bundle, &key, || {
                     super::slang_builtins::compile_uncached(program, &source)
                 }),
             );

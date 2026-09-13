@@ -3874,14 +3874,14 @@ impl VkContext {
             me.alloc.stats(),
             me.alloc.max_allocations(),
         );
-        crate::shader_cache::report_init();
+        crate::shader::cache::report_init();
         // Serialize the pipeline cache now that every init-built pipeline has
         // populated it, then write the segment holding it and every shader
         // artifact this init compiled; a crash mid-session then still leaves
         // the next launch warm.
         super::pipeline_cache::serialize(&me.device);
-        crate::pipeline_cache::report_init(super::pipeline_cache::disk_state());
-        crate::runtime_cache::checkpoint();
+        crate::shader::pipeline_cache::report_init(super::pipeline_cache::disk_state());
+        crate::shader::runtime_cache::checkpoint();
         Ok(me)
     }
 

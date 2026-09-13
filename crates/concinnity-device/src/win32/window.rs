@@ -14,8 +14,6 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use super::chrome::windowed_style;
 use super::input::*;
 
-//  Parked window for editor live-swap reuse
-//
 // The `cn editor` live world-swap drops the old render backend and builds a new
 // one on the same thread (see the client `run_init` `PendingBackend` fallback).
 // A full rebuild would otherwise call `create_window` again and pop a brand-new
@@ -37,8 +35,6 @@ fn park_window(hwnd: HWND) {
 fn take_parked_window() -> Option<HWND> {
     PARKED_WINDOW.with(|p| p.take())
 }
-
-//  Window proc state (thread-local)
 
 // Because Win32 window procs are global C callbacks, we stash the mutable input
 // state as a raw pointer in the window's GWLP_USERDATA slot so the proc can
@@ -600,10 +596,6 @@ unsafe extern "system" fn wnd_proc(
         }
     }
 }
-
-//  DxContext
-
-//  Win32 helpers
 
 // Build a fresh `WindowState` for `hwnd` at its default (uncaptured, windowed)
 // state. Shared by fresh window creation and parked-window adoption.

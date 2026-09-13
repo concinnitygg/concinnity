@@ -2496,7 +2496,7 @@ impl Drop for DxContext {
             super::pso_library::shutdown();
             // Also writes whatever shader artifacts were compiled lazily since
             // init's own checkpoint.
-            crate::runtime_cache::checkpoint();
+            crate::shader::runtime_cache::checkpoint();
         }
         // Restore cursor clip + visibility so the OS isn't left in a bad state
         // if the caller didn't release explicitly. `None` on the outgoing context
@@ -2515,8 +2515,6 @@ impl Drop for DxContext {
     }
 }
 
-//  D3D12 debug-layer message draining
-//
 // Standalone version of the per-frame flush_validation so init paths can dump
 // validation messages before bailing; without this, PSO/root-sig failures
 // surface only as the bare `E_INVALIDARG` HRESULT from CreateGraphicsPipelineState.

@@ -98,6 +98,8 @@ use std::sync::atomic::Ordering;
 use super::context::MtlContext;
 use super::frame_pacing::FrameJoin;
 use super::graph_events;
+use super::graph_events::PassSync;
+use super::graph_queues::GraphQueues;
 use super::parallel_encoder::{ParallelCtxRef, SendableCmdBuf};
 use super::uniforms::VelocityUniforms;
 
@@ -111,9 +113,8 @@ pub(in crate::metal) struct GraphSubmission {
 }
 
 // Per-frame params the executor threads into each pass's `encode_*`
-// method. The set is the union of what every currently-migrated pass
-// needs; fields that a given pass does not consume are simply ignored.
-// `scene_color` is `Option` because the pre-graph runs before TAA /
+// method. The union of what every graph pass reads; a pass ignores the fields
+// it does not consume. `scene_color` is `Option` because the pre-graph runs before TAA /
 // SSR resolve has produced it; the post-graph (which contains
 // Composite) supplies it.
 //
@@ -139,10 +140,7 @@ pub(in crate::metal) struct GraphFrameParams<'a> {
     // clear (it is the only surviving world pass in the masked graph), skipping
     // every geometry sub-path so nothing of the world draws behind the menu.
     pub world_hidden: bool,
-    // Main-pass params. Built by draw_frame between the un-migrated
-    // pre-main legacy work and the pre-graph dispatch, then handed in
-    // here so the executor can call encode_main_pass with the same
-    // shape it had inline.
+    // Main-pass params, computed by draw_frame before the graph dispatch.
     pub elapsed: f32,
     pub vp: [[f32; 4]; 4],
     // Inverse of `vp`, computed once in `draw_frame` and shared by every pass
@@ -215,6 +213,27 @@ pub(in crate::metal) struct GraphFrameParams<'a> {
 unsafe impl<'a> Send for GraphFrameParams<'a> {}
 // SAFETY: as for `Send` above.
 unsafe impl<'a> Sync for GraphFrameParams<'a> {}
+
+fn encode_waits(
+    cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+    queues: &GraphQueues,
+    sync: &PassSync,
+) {
+    for &(event_queue, value) in &sync.waits {
+        cmd_buf.encodeWaitForEvent_value(queues.event(event_queue), value);
+    }
+}
+
+fn encode_signals(
+    cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+    queues: &GraphQueues,
+    sync: &PassSync,
+    queue: PassQueue,
+) {
+    for &value in &sync.signals {
+        cmd_buf.encodeSignalEvent_value(queues.event(queue), value);
+    }
+}
 
 impl MtlContext {
     // Walk a compiled render graph and dispatch each pass to its
@@ -296,12 +315,6 @@ impl MtlContext {
                     if Some(idx) == composite_idx {
                         continue;
                     }
-                    // No Metal-side barrier work: Apple's implicit
-                    // hazard tracking covers it within a queue, and every
-                    // cross-queue edge is carried by an event instead. Touched
-                    // here so the unused fields don't lint when this loop is the
-                    // only consumer.
-                    let _ = (&pass.barriers_before, &pass.barriers_after);
                     let pass_id = pass.id;
                     let pass_queue = pass.queue;
                     let particle_ref = particle_frame.as_ref();
@@ -337,20 +350,17 @@ impl MtlContext {
                             // while the command buffer has no open encoder.
                             let sync = ctx.graph_queues.as_ref().zip(plan_ref);
                             if let Some((queues, plan)) = sync {
-                                for &(event_queue, value) in &plan.pass(idx).waits {
-                                    cmd_buf
-                                        .encodeWaitForEvent_value(queues.event(event_queue), value);
-                                }
+                                encode_waits(&cmd_buf, queues, plan.pass(idx));
                             }
                             match ctx.encode_pass_into(pass_id, &cmd_buf, params, particle_ref) {
                                 Ok(count) => {
                                     if let Some((queues, plan)) = sync {
-                                        for &value in &plan.pass(idx).signals {
-                                            cmd_buf.encodeSignalEvent_value(
-                                                queues.event(pass_queue),
-                                                value,
-                                            );
-                                        }
+                                        encode_signals(
+                                            &cmd_buf,
+                                            queues,
+                                            plan.pass(idx),
+                                            pass_queue,
+                                        );
                                     }
                                     ctx.diagnostics
                                         .draw_calls_accum
@@ -438,15 +448,10 @@ impl MtlContext {
         // that writes to the drawable. It is committed by `draw_frame` after
         // this returns; every other graphics-queue cmd buf has already
         // committed, so the queue order places it strictly after them.
-        if composite_idx.is_some() {
-            if let (Some(queues), Some(plan), Some(idx)) =
-                (self.graph_queues.as_ref(), plan.as_ref(), composite_idx)
-            {
-                for &(event_queue, value) in &plan.pass(idx).waits {
-                    params
-                        .cmd_buf
-                        .encodeWaitForEvent_value(queues.event(event_queue), value);
-                }
+        if let Some(idx) = composite_idx {
+            let sync = self.graph_queues.as_ref().zip(plan.as_ref());
+            if let Some((queues, plan)) = sync {
+                encode_waits(params.cmd_buf, queues, plan.pass(idx));
             }
             let count = self.encode_pass_into(
                 PassId::Composite,
@@ -454,14 +459,8 @@ impl MtlContext {
                 params,
                 particle_frame.as_ref(),
             )?;
-            if let (Some(queues), Some(plan), Some(idx)) =
-                (self.graph_queues.as_ref(), plan.as_ref(), composite_idx)
-            {
-                for &value in &plan.pass(idx).signals {
-                    params
-                        .cmd_buf
-                        .encodeSignalEvent_value(queues.event(PassQueue::Graphics), value);
-                }
+            if let Some((queues, plan)) = sync {
+                encode_signals(params.cmd_buf, queues, plan.pass(idx), PassQueue::Graphics);
             }
             self.diagnostics
                 .draw_calls_accum

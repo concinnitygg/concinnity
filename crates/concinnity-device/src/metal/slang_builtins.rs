@@ -5,7 +5,7 @@
 // loads the metallib the build script precompiled; source compilation remains
 // for hot-reload (disk edits must win) and for binaries built on a host
 // without slangc, whose embedded lookup misses these names. The runtime
-// compile assembles its source through `crate::slang_source`, invokes slangc
+// compile assembles its source through `crate::shader::slang_source`, invokes slangc
 // through `concinnity-slang`, and caches the metallib in the content-addressed
 // shader cache, so a given source text compiles at most once per machine.
 //
@@ -548,7 +548,7 @@ impl SlangLib {
     // The exact source text this variant compiles, assembled the way every
     // backend assembles it.
     fn source(&self, hot_reload: bool) -> String {
-        crate::slang_source::assemble(hot_reload, self.file, self.defines, &[])
+        crate::shader::slang_source::assemble(hot_reload, self.file, self.defines, &[])
     }
 
     // Produce this variant's MTLLibrary. Fast path: the metallib the build
@@ -573,21 +573,21 @@ impl SlangLib {
                 .map_err(|e| format!("{}: failed to load precompiled metallib: {e}", self.name));
         }
         let entry = self.entries.join("+");
-        let key = crate::shader_cache::Key {
+        let key = crate::shader::cache::Key {
             compiler: "slang",
             source: &source,
             entry: &entry,
             target: "metallib",
             options: 0,
         };
-        let bytes = crate::shader_cache::cached(&key, self.name, || {
+        let bytes = crate::shader::cache::cached(&key, self.name, || {
             let job = slang::SlangJob {
                 source: &source,
                 file_name: self.name,
                 entries: self.entries,
                 target: slang::SlangTarget::Metallib,
             };
-            let work = crate::compiler_work::dir()?;
+            let work = crate::shader::compiler_work::dir()?;
             slang::compile(&job, work.path())
         })
         .map_err(|e| format!("{}: {e}", self.name))?;

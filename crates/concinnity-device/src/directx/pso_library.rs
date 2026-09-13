@@ -71,7 +71,7 @@ pub(super) fn install(device: &ID3D12Device, adapter: Option<&IDXGIAdapter3>) {
             "dx-{:04x}-{:04x}-{:02x}",
             desc.VendorId, desc.DeviceId, desc.Revision
         );
-        let mut disk = crate::pipeline_cache::load(&key);
+        let mut disk = crate::shader::pipeline_cache::load(&key);
         let mut created = create_library(&device1, disk.as_deref());
         // E_INVALIDARG covers a corrupt blob; the two mismatch codes are a
         // driver update or a GPU swap that kept the entry key. All three drop
@@ -86,7 +86,7 @@ pub(super) fn install(device: &ID3D12Device, adapter: Option<&IDXGIAdapter3>) {
         );
         if rejected {
             tracing::warn!("pipeline library: driver rejected {key}, rebuilding cold");
-            crate::pipeline_cache::delete(&key);
+            crate::shader::pipeline_cache::delete(&key);
             disk = None;
             created = create_library(&device1, None);
         }
@@ -158,7 +158,7 @@ pub(super) unsafe fn create_graphics(
             })
         }
     });
-    crate::pipeline_cache::note_creation(started.elapsed().as_micros() as u64);
+    crate::shader::pipeline_cache::note_creation(started.elapsed().as_micros() as u64);
     result
 }
 
@@ -197,7 +197,7 @@ pub(super) unsafe fn create_compute(
             })
         }
     });
-    crate::pipeline_cache::note_creation(started.elapsed().as_micros() as u64);
+    crate::shader::pipeline_cache::note_creation(started.elapsed().as_micros() as u64);
     result
 }
 
@@ -230,7 +230,7 @@ pub(super) fn serialize() {
         // SAFETY: `bytes` is a live local the `GetSerializedSize` query above sized for the whole
         // blob.
         if unsafe { state.library.Serialize(&mut bytes) }.is_ok() {
-            crate::pipeline_cache::store(&state.key, &bytes);
+            crate::shader::pipeline_cache::store(&state.key, &bytes);
         }
     });
 }
