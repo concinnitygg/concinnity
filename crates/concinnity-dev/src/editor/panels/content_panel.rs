@@ -1,11 +1,9 @@
-// src/editor/panels/content_panel.rs
-//
-// The Content panel: a thumbnail grid over the world's visual assets
-// (textures, materials, meshes, models, environment maps, prefabs). Cells show
-// the baked thumbnail when one exists (`editor/thumbs.rs`) and a typed icon
-// chip otherwise; a search field ranks matches (`editor/filter.rs`) and a type
-// chip cycles the kind filter. Pure geometry + draw here; the item assembly
-// and click handling live in `hook/edit/content.rs`.
+//! The Content panel: a thumbnail grid over the world's visual assets
+//! (textures, materials, meshes, models, environment maps, prefabs). Cells show
+//! the baked thumbnail when one exists (`editor/thumbs.rs`) and a typed icon
+//! chip otherwise; a search field ranks matches (`editor/filter.rs`) and a type
+//! chip cycles the kind filter. Pure geometry + draw here; the item assembly
+//! and click handling live in `hook/edit/content.rs`.
 
 use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;

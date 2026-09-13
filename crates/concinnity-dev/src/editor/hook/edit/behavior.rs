@@ -1,20 +1,18 @@
-// src/editor/hook/edit/behavior.rs
-//
-// EditorHook: the Behavior panel's actions. The panel opens one `Behavior`
-// entry at a time and edits its authored args directly, so every change is an
-// ordinary world edit -- the live preview rebuilds from the in-memory entries
-// and SAVE persists them, like any other panel. What the keyboard does with
-// these actions is `behavior_keys.rs`.
-//
-// A behavior body has no unbounded loop and no recursion, so it always
-// terminates; that is what makes running an edited body in the live world safe
-// and why edits commit as they are made rather than behind an Apply button.
-//
-// Validation is not repeated here: the world's own checker runs against the
-// same args after each commit and its message goes straight to the status line,
-// with the world's `Variables` table supplied so a misspelled variable is
-// caught the way the build would catch it. Cross-asset names (a spawn template,
-// a clip) resolve against the whole world, so those stay a build-time check.
+//! EditorHook: the Behavior panel's actions. The panel opens one `Behavior`
+//! entry at a time and edits its authored args directly, so every change is an
+//! ordinary world edit -- the live preview rebuilds from the in-memory entries
+//! and SAVE persists them, like any other panel. What the keyboard does with
+//! these actions is `behavior_keys.rs`.
+//!
+//! A behavior body has no unbounded loop and no recursion, so it always
+//! terminates; that is what makes running an edited body in the live world safe
+//! and why edits commit as they are made rather than behind an Apply button.
+//!
+//! Validation is not repeated here: the world's own checker runs against the
+//! same args after each commit and its message goes straight to the status line,
+//! with the world's `Variables` table supplied so a misspelled variable is
+//! caught the way the build would catch it. Cross-asset names (a spawn template,
+//! a clip) resolve against the whole world, so those stay a build-time check.
 
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_core::components::FrameInput;

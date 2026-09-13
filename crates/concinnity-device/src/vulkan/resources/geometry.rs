@@ -1,9 +1,7 @@
-// src/vulkan/resources/geometry.rs
-//
-// Streamed-mesh upload + eviction for VkContext, plus the shared
-// `write_geometry_region` helper that copies a sub-region into the static
-// vertex / index buffers via a host-visible staging buffer + one-shot command
-// buffer. Used by mesh streaming (here), chunk streaming, and skinned upload.
+//! Streamed-mesh upload + eviction for VkContext, plus the shared
+//! `write_geometry_region` helper that copies a sub-region into the static
+//! vertex / index buffers via a host-visible staging buffer + one-shot command
+//! buffer. Used by mesh streaming (here), chunk streaming, and skinned upload.
 
 use ash::vk;
 use concinnity_core::gfx::mesh_payload::Vertex;

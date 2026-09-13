@@ -1,5 +1,3 @@
-// src/components/ground_probes.rs
-
 use alloc::vec::Vec;
 
 use crate::ecs::SkinnedMeshHandle;

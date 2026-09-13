@@ -1,7 +1,5 @@
-// src/components/room.rs
-//
-// The `Room` asset: the authored args a world declares, and the runtime
-// component they bake into.
+//! The `Room` asset: the authored args a world declares, and the runtime
+//! component they bake into.
 
 use crate::ecs::TextureHandle;
 use crate::ecs::asset_id::AssetId;

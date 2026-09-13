@@ -1,14 +1,12 @@
-// src/editor/behavior/fields.rs
-//
-// Which outline rows belong to one node. The chart draws a node as a card, and
-// selecting a card shows that node's settings beside it -- so the chart needs
-// the node's own fields without the nodes nested inside it, which the outline
-// lists inline.
-//
-// One rule answers both questions: a row belongs to the card with the longest
-// `settles` containing it. The trigger settles the whole asset, each node its
-// own subtree, and each chain's tail its list -- so every row of the outline
-// has exactly one card that reaches it, and no row is reachable twice.
+//! Which outline rows belong to one node. The chart draws a node as a card, and
+//! selecting a card shows that node's settings beside it -- so the chart needs
+//! the node's own fields without the nodes nested inside it, which the outline
+//! lists inline.
+//!
+//! One rule answers both questions: a row belongs to the card with the longest
+//! `settles` containing it. The trigger settles the whole asset, each node its
+//! own subtree, and each chain's tail its list -- so every row of the outline
+//! has exactly one card that reaches it, and no row is reachable twice.
 
 use super::graph::Card;
 use super::outline::Row;

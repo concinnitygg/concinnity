@@ -1,10 +1,8 @@
-// src/editor/hook/tests/behavior_keys_tests.rs
-//
-// The Behavior panel's keyboard (`hook/behavior_keys.rs`): the arrows stepping
-// the outline, the chart chain and the overview, Enter opening the palette and
-// picking from it, Escape unwinding one waiting state at a time, Tab cycling
-// the views, and the clipboard verbs. Each also asserts what the keys stand
-// down for: a focused field keeps them.
+//! The Behavior panel's keyboard (`hook/behavior_keys.rs`): the arrows stepping
+//! the outline, the chart chain and the overview, Enter opening the palette and
+//! picking from it, Escape unwinding one waiting state at a time, Tab cycling
+//! the views, and the clipboard verbs. Each also asserts what the keys stand
+//! down for: a focused field keeps them.
 
 use concinnity_core::components::FrameInput;
 use concinnity_core::components::InputKey;

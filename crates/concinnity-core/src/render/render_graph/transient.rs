@@ -1,36 +1,34 @@
-// src/render/render_graph/transient.rs
-//
-// The slot list a backend's transient pool is built from, and the check that
-// keeps that list sound.
-//
-// A pool takes one [`TransientSlot`] per aliasing-plan slot and makes one
-// allocation for it, sized to its largest member, with every member placed at
-// offset 0. Each member arrives as a resolved [`TransientTexture`] -- concrete
-// pixel extents and the graph's own format / usage / sample count -- so a
-// backend translates one description into its native descriptor rather than
-// keeping a per-label table of its own. That is the point: a table restating
-// what the graph already declares can disagree with it, and a disagreement
-// about a format or an extent is silent.
-//
-// Pools are built at init / resize; graphs compile per frame. So the plan a
-// pool is built from describes ONE graph, and reusing its grouping for the
-// frames that follow is safe only while no slot has two members live at once in
-// any of them. That is not free: a resource whose lifetime a pass *extends*
-// looks more disjoint in a graph missing that pass, and there is no single
-// maximal graph to plan against -- `rt_reflections_enabled` and
-// `upscale_enabled` substitute passes rather than adding them, and
-// `gbuffer_prepass_enabled` follows what the backend actually built, so no one
-// graph contains every lifetime. Three things cover it,
-// and each catches what the others cannot:
-//
-//   1. The pool plans against its build configuration, and treats every input
-//      it cannot rebuild on as live. [`planning_inputs`].
-//   2. `slot_conflicts_over_reachable_graphs` in this module's tests sweeps the
-//      reachable input space and fails on any slot with two overlapping
-//      members.
-//   3. Each executor asserts [`slot_conflicts`] per frame under
-//      `debug_assertions`, over the graph it is about to run -- which covers
-//      the combinations the sweep did not reach.
+//! The slot list a backend's transient pool is built from, and the check that
+//! keeps that list sound.
+//!
+//! A pool takes one [`TransientSlot`] per aliasing-plan slot and makes one
+//! allocation for it, sized to its largest member, with every member placed at
+//! offset 0. Each member arrives as a resolved [`TransientTexture`] -- concrete
+//! pixel extents and the graph's own format / usage / sample count -- so a
+//! backend translates one description into its native descriptor rather than
+//! keeping a per-label table of its own. That is the point: a table restating
+//! what the graph already declares can disagree with it, and a disagreement
+//! about a format or an extent is silent.
+//!
+//! Pools are built at init / resize; graphs compile per frame. So the plan a
+//! pool is built from describes ONE graph, and reusing its grouping for the
+//! frames that follow is safe only while no slot has two members live at once in
+//! any of them. That is not free: a resource whose lifetime a pass *extends*
+//! looks more disjoint in a graph missing that pass, and there is no single
+//! maximal graph to plan against -- `rt_reflections_enabled` and
+//! `upscale_enabled` substitute passes rather than adding them, and
+//! `gbuffer_prepass_enabled` follows what the backend actually built, so no one
+//! graph contains every lifetime. Three things cover it,
+//! and each catches what the others cannot:
+//!
+//!   1. The pool plans against its build configuration, and treats every input
+//!      it cannot rebuild on as live. [`planning_inputs`].
+//!   2. `slot_conflicts_over_reachable_graphs` in this module's tests sweeps the
+//!      reachable input space and fails on any slot with two overlapping
+//!      members.
+//!   3. Each executor asserts [`slot_conflicts`] per frame under
+//!      `debug_assertions`, over the graph it is about to run -- which covers
+//!      the combinations the sweep did not reach.
 
 use super::alias::plan_aliasing_for;
 use super::compile::CompiledGraph;

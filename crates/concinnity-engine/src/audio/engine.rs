@@ -1,15 +1,13 @@
-// src/audio/engine.rs
-//
-// The kira-backed mixer behind the crate's facade. Owns one kira
-// `AudioManager`, a listener, three mix buses (music / sfx / voice) under the
-// main track, one spatial track per emitter, the one-shot voice pool, and the
-// decode worker with its clip cache. Generic over the kira backend so tests
-// drive the real mixer through kira's mock backend; production uses the
-// default (cpal) backend.
-//
-// When no audio output device is available the engine is built in a disabled
-// state and every method becomes a no-op. This keeps headless / CI runs
-// (which may have no sound card) from failing.
+//! The kira-backed mixer behind the crate's facade. Owns one kira
+//! `AudioManager`, a listener, three mix buses (music / sfx / voice) under the
+//! main track, one spatial track per emitter, the one-shot voice pool, and the
+//! decode worker with its clip cache. Generic over the kira backend so tests
+//! drive the real mixer through kira's mock backend; production uses the
+//! default (cpal) backend.
+//!
+//! When no audio output device is available the engine is built in a disabled
+//! state and every method becomes a no-op. This keeps headless / CI runs
+//! (which may have no sound card) from failing.
 
 use concinnity_core::components::{AudioBus, AudioTarget, Rolloff};
 use kira::backend::{Backend, DefaultBackend};

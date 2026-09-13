@@ -1,16 +1,14 @@
-// src/vulkan/decal.rs
-//
-// Projected (deferred) decals for the Vulkan backend. Each decal is drawn
-// as a unit cube (positions in `[-0.5, 0.5]^3`) transformed by its world
-// model matrix and the camera VP; the fragment shader samples the main
-// pass's depth attachment to reconstruct the world-space sample point at
-// each pixel and tests it against the decal's local bounding box,
-// stamping the texture onto whatever fills the box.
-//
-// Runs after the main HDR resolve and before SSR resolve / TAA, so
-// decals are reflected and tracked by the temporal history just like
-// the rest of the scene. Mirrors `src/directx/decal.rs` and
-// `src/metal/decal.rs`.
+//! Projected (deferred) decals for the Vulkan backend. Each decal is drawn
+//! as a unit cube (positions in `[-0.5, 0.5]^3`) transformed by its world
+//! model matrix and the camera VP; the fragment shader samples the main
+//! pass's depth attachment to reconstruct the world-space sample point at
+//! each pixel and tests it against the decal's local bounding box,
+//! stamping the texture onto whatever fills the box.
+//!
+//! Runs after the main HDR resolve and before SSR resolve / TAA, so
+//! decals are reflected and tracked by the temporal history just like
+//! the rest of the scene. Mirrors `src/directx/decal.rs` and
+//! `src/metal/decal.rs`.
 
 use ash::vk;
 use concinnity_core::gfx::frustum::Frustum;

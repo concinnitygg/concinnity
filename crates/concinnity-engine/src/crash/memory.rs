@@ -1,14 +1,12 @@
-// src/crash/memory.rs
-//
-// The memory figures a crash report carries: the tracked Rust heap and the
-// process resident set. Neither number means much alone. Together they say
-// whose growth it was -- 400 MiB of heap inside a 6 GiB resident set is the
-// driver, the mapped assets or the binary, and the same 6 GiB with a 5 GiB heap
-// is ours.
-//
-// Capture is a sum of relaxed atomics plus one platform query: no locks, no
-// allocation, and nothing that can block on a thread the fault suspended.
-// Rendering allocates and runs later, with the report's other sections.
+//! The memory figures a crash report carries: the tracked Rust heap and the
+//! process resident set. Neither number means much alone. Together they say
+//! whose growth it was -- 400 MiB of heap inside a 6 GiB resident set is the
+//! driver, the mapped assets or the binary, and the same 6 GiB with a 5 GiB heap
+//! is ours.
+//!
+//! Capture is a sum of relaxed atomics plus one platform query: no locks, no
+//! allocation, and nothing that can block on a thread the fault suspended.
+//! Rendering allocates and runs later, with the report's other sections.
 
 use concinnity_core::memory::MemStats;
 

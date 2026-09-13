@@ -1,8 +1,6 @@
-// src/crash/report.rs
-//
-// The crash report data and its plain-text rendering. Rendering is pure and
-// section-based: the writer emits sections in order of forensic value and
-// flushes between them, so a partial report still leads with what matters.
+//! The crash report data and its plain-text rendering. Rendering is pure and
+//! section-based: the writer emits sections in order of forensic value and
+//! flushes between them, so a partial report still leads with what matters.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 

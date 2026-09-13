@@ -1,9 +1,7 @@
-// src/gfx/streaming/system/stats_log.rs
-//
-// Change gate for the streaming pools' periodic counter line. The counters are
-// sampled on a fixed frame interval, but a settled pool holds the same numbers
-// for as long as the world runs, so a sample is logged only when it moved since
-// the last one logged.
+//! Change gate for the streaming pools' periodic counter line. The counters are
+//! sampled on a fixed frame interval, but a settled pool holds the same numbers
+//! for as long as the world runs, so a sample is logged only when it moved since
+//! the last one logged.
 
 // Frames between counter samples (~2s near 60 fps).
 const SAMPLE_INTERVAL: u64 = 120;

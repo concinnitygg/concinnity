@@ -1,16 +1,14 @@
-// src/editor/live/lighting.rs
-//
-// The lighting live path. Unlike a Sprite or a TextLabel, none of these assets
-// is data the running world re-reads each frame: the sun is packed into the
-// renderer's light uniforms at load and the fog / shadow / post-process assets
-// are consumed there outright, so writing their columns would apply nothing.
-// The engine's `gfx::lighting_preview` seam is what actually reaches the
-// renderer; this module decides whether an edit can go through it and bakes the
-// component it takes.
-//
-// What a rebuild would show is the standard: a knob the renderer sizes a GPU
-// resource from, and fog on a world that started without it, are declined here
-// so the caller rebuilds rather than showing a change that does not stick.
+//! The lighting live path. Unlike a Sprite or a TextLabel, none of these assets
+//! is data the running world re-reads each frame: the sun is packed into the
+//! renderer's light uniforms at load and the fog / shadow / post-process assets
+//! are consumed there outright, so writing their columns would apply nothing.
+//! The engine's `gfx::lighting_preview` seam is what actually reaches the
+//! renderer; this module decides whether an edit can go through it and bakes the
+//! component it takes.
+//!
+//! What a rebuild would show is the standard: a knob the renderer sizes a GPU
+//! resource from, and fog on a world that started without it, are declined here
+//! so the caller rebuilds rather than showing a change that does not stick.
 
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_core::components::DirectionalLight;

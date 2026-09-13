@@ -1,12 +1,10 @@
-// src/editor/hook/tests/edit/overrides_tests.rs
-//
-// The override loop (`hook/edit/overrides.rs`): the minimal patch an edit to a
-// generated asset writes, the origin a patched asset relists under, the
-// single-field revert and apply pair and the bulk apply-all across a mixed
-// patch, minimizing a patch back down to what actually differs, materializing
-// a preset-backed Prefab so its entries become editable, the jump that walks
-// the form to its next marked field, and the unapplied markers that follow an
-// edit and an apply.
+//! The override loop (`hook/edit/overrides.rs`): the minimal patch an edit to a
+//! generated asset writes, the origin a patched asset relists under, the
+//! single-field revert and apply pair and the bulk apply-all across a mixed
+//! patch, minimizing a patch back down to what actually differs, materializing
+//! a preset-backed Prefab so its entries become editable, the jump that walks
+//! the form to its next marked field, and the unapplied markers that follow an
+//! edit and an apply.
 
 // The injected typed fields the form reads its controls back from.
 // One Prefab with a single prop entry, one instance of it, and the patch line

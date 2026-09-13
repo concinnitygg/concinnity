@@ -1,9 +1,7 @@
-// src/components/gamepad_button.rs
-
-// Declare the button enum from one table, so the variant list, the serde
-// spelling, the short label, and the exhaustive `ALL` slice cannot drift
-// apart. Each entry is `Variant`, or `Variant => "label"` when the settings
-// menu shows something shorter.
+//! Declare the button enum from one table, so the variant list, the serde
+//! spelling, the short label, and the exhaustive `ALL` slice cannot drift
+//! apart. Each entry is `Variant`, or `Variant => "label"` when the settings
+//! menu shows something shorter.
 
 macro_rules! button_label {
     ($variant:ident) => {

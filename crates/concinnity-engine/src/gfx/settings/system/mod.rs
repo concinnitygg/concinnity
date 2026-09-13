@@ -1,24 +1,22 @@
-// src/gfx/settings/system/mod.rs
-//
-// SettingsSystem: applies the runtime command batches UiInputSystem produces
-// -- SettingCommand (settings-menu changes: graphics toggles, sliders, key
-// rebinds, volume) and SceneCommand (imperative scene jumps) -- recording
-// their backend effects into the frame's op queue, owns the in-memory
-// settings snapshot + the background disk writer, and publishes the per-frame
-// HUD-preference state:
-//   mod.rs    system + state + scene jumps + HUD-state publish
-//   apply.rs  the SettingCommand drain (one arm per settings row)
-//   rows.rs   row helpers shared with GraphicsSystem's init-time captures
-//   writer.rs background disk writer for settings changes
-//
-// Scheduled after SpawnSystem and before GraphicsSystem, so a change's
-// recorded op lands on the backend before this frame's draw (visible the same
-// frame, as it was when the drain called the backend directly) and the
-// HUD-preference resources are fresh for StatHud / UiInput later this tick.
-// The state is resolved by GraphicsSystem's init (world config + persisted
-// overrides + backend capabilities) and parked here as the `SettingsState`
-// resource; each step takes it and puts it back, so the state and the
-// `PipelineContext` are never borrowed together.
+//! SettingsSystem: applies the runtime command batches UiInputSystem produces
+//! -- SettingCommand (settings-menu changes: graphics toggles, sliders, key
+//! rebinds, volume) and SceneCommand (imperative scene jumps) -- recording
+//! their backend effects into the frame's op queue, owns the in-memory
+//! settings snapshot + the background disk writer, and publishes the per-frame
+//! HUD-preference state:
+//!   mod.rs    system + state + scene jumps + HUD-state publish
+//!   apply.rs  the SettingCommand drain (one arm per settings row)
+//!   rows.rs   row helpers shared with GraphicsSystem's init-time captures
+//!   writer.rs background disk writer for settings changes
+//!
+//! Scheduled after SpawnSystem and before GraphicsSystem, so a change's
+//! recorded op lands on the backend before this frame's draw (visible the same
+//! frame, as it was when the drain called the backend directly) and the
+//! HUD-preference resources are fresh for StatHud / UiInput later this tick.
+//! The state is resolved by GraphicsSystem's init (world config + persisted
+//! overrides + backend capabilities) and parked here as the `SettingsState`
+//! resource; each step takes it and puts it back, so the state and the
+//! `PipelineContext` are never borrowed together.
 
 use concinnity_core::components::GamepadMap;
 use concinnity_core::components::PostProcessConfig;

@@ -1,7 +1,6 @@
-// src/vulkan/swapchain.rs
-//
-// Vulkan swapchain, attachment, and framebuffer creation, plus the
-// swapchain rebuild path.
+//! Vulkan swapchain, attachment, and framebuffer creation, plus the
+//! swapchain rebuild path.
+
 use ash::vk;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::hdr_output;

@@ -1,6 +1,5 @@
-// src/vulkan/device.rs
-//
-// Vulkan physical/logical device selection and queue-family queries.
+//! Vulkan physical/logical device selection and queue-family queries.
+
 use ash::{Device, vk};
 use std::ffi::{CStr, CString, c_void};
 

@@ -1,17 +1,15 @@
-// src/editor/sim.rs
-//
-// The editor's simulation transport: the Play / Pause / Step / Stop state
-// machine over the live preview world. Pure state -- the hook's drive
-// (`hook/sim_control.rs`) maps it onto the engine's freeze gate
-// (`MenuOverride`) each frame and onto the preview rebuild on Stop.
-//
-// Stopped is the editing baseline: the world sits frozen at its authored
-// state. Play unfreezes it (and hands the cursor to the world, like the old
-// capture toggle). Pause freezes mid-state for inspection with the cursor
-// free. Stop rebuilds the preview world from the in-memory entries, which is
-// the same restore-to-authored path every committed edit already takes --
-// so a committed edit while playing or paused also drops the transport to
-// Stopped (`on_edit`).
+//! The editor's simulation transport: the Play / Pause / Step / Stop state
+//! machine over the live preview world. Pure state -- the hook's drive
+//! (`hook/sim_control.rs`) maps it onto the engine's freeze gate
+//! (`MenuOverride`) each frame and onto the preview rebuild on Stop.
+//!
+//! Stopped is the editing baseline: the world sits frozen at its authored
+//! state. Play unfreezes it (and hands the cursor to the world, like the old
+//! capture toggle). Pause freezes mid-state for inspection with the cursor
+//! free. Stop rebuilds the preview world from the in-memory entries, which is
+//! the same restore-to-authored path every committed edit already takes --
+//! so a committed edit while playing or paused also drops the transport to
+//! Stopped (`on_edit`).
 
 // Where the transport stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

@@ -1,11 +1,9 @@
-// src/editor/hook/tests/editing_tests.rs
-//
-// The add / edit form's lifecycle (`hook/editing.rs`): the type picker and its
-// search, opening the form from a row or the "+", the name rules a confirm
-// applies, and every field kind the form writes back -- scalars, colors,
-// nested objects, enums, asset references and their dropdowns, arrays, and a
-// disclosed vector. Also what survives a reinjection, a panel toggle, and a
-// delete that shifts the open form's index.
+//! The add / edit form's lifecycle (`hook/editing.rs`): the type picker and its
+//! search, opening the form from a row or the "+", the name rules a confirm
+//! applies, and every field kind the form writes back -- scalars, colors,
+//! nested objects, enums, asset references and their dropdowns, arrays, and a
+//! disclosed vector. Also what survives a reinjection, a panel toggle, and a
+//! delete that shifts the open form's index.
 
 use concinnity_core::components::FrameInput;
 use concinnity_core::components::Sprite;

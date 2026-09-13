@@ -1,16 +1,14 @@
-// src/editor/panels/preview.rs
-//
-// The editor "Preview" panel: a small floating panel holding the controls that
-// affect how the running world is previewed: the play checkbox (the simulation
-// transport's Play / Pause, mirroring the top-bar chip), the fly-camera
-// checkbox (navigate the frozen world; also the F key), the world-axes
-// checkbox (the origin axis lines drawn in the viewport), and the two snap
-// rows (grid / angle snapping for gizmo drags; the row toggles, its value
-// strip cycles the step). Escape leaves either camera mode. Like the rest of
-// the editor HUD it is plain `Sprite` / `TextLabel` components at reserved ids
-// (injected by `inject.rs`), driven each frame by the editor hook. The title
-// bar, close button, and row draw come from the shared `list_panel`; this
-// module only names the ids, width, and its row actions.
+//! The editor "Preview" panel: a small floating panel holding the controls that
+//! affect how the running world is previewed: the play checkbox (the simulation
+//! transport's Play / Pause, mirroring the top-bar chip), the fly-camera
+//! checkbox (navigate the frozen world; also the F key), the world-axes
+//! checkbox (the origin axis lines drawn in the viewport), and the two snap
+//! rows (grid / angle snapping for gizmo drags; the row toggles, its value
+//! strip cycles the step). Escape leaves either camera mode. Like the rest of
+//! the editor HUD it is plain `Sprite` / `TextLabel` components at reserved ids
+//! (injected by `inject.rs`), driven each frame by the editor hook. The title
+//! bar, close button, and row draw come from the shared `list_panel`; this
+//! module only names the ids, width, and its row actions.
 
 use concinnity_core::ecs::World;
 use concinnity_host::thread::asset_id::AssetId;

@@ -1,17 +1,15 @@
-// src/editor/panels/asset_tree.rs
-//
-// The data half of the Assets panel: every asset of the expanded world grouped
-// by origin -- the world's own lines first, then each scene import's /
-// injection pass's output under the line that produced it, and the
-// unattributed macro expansions last. Grouping by origin rather than by type
-// keeps the tree usable: a single scene import expands to thousands of assets,
-// so collapsed it is one header. Each asset carries a provenance badge and,
-// when the build generates it, the entry that promoting it would append.
-//
-// Everything here is pure: `groups_from` builds the grouped model from a cooked
-// `LoadedWorld`, and `rows` flattens it against the fold state and the live
-// search filter. The panel draws the rows; the hook owns when to re-cook and
-// the per-session hide / lock sets.
+//! The data half of the Assets panel: every asset of the expanded world grouped
+//! by origin -- the world's own lines first, then each scene import's /
+//! injection pass's output under the line that produced it, and the
+//! unattributed macro expansions last. Grouping by origin rather than by type
+//! keeps the tree usable: a single scene import expands to thousands of assets,
+//! so collapsed it is one header. Each asset carries a provenance badge and,
+//! when the build generates it, the entry that promoting it would append.
+//!
+//! Everything here is pure: `groups_from` builds the grouped model from a cooked
+//! `LoadedWorld`, and `rows` flattens it against the fold state and the live
+//! search filter. The panel draws the rows; the hook owns when to re-cook and
+//! the per-session hide / lock sets.
 
 use concinnity_cook::build_only::LoadedWorld;
 

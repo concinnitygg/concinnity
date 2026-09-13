@@ -1,12 +1,10 @@
-// src/editor/viewport/group_transform.rs
-//
-// Pure math for gizmo edits over a multi-member selection, anchored at the
-// selection centroid. Translate applies one shared world-space delta; rotate
-// orbits member positions about the centroid (and spins each member the same
-// amount, the standard group-rotate behavior); scale pushes member positions
-// away from the centroid along the dragged axis while stretching each member.
-// With a single member every pivot operation degenerates to the in-place edit
-// the single-selection gizmo always did.
+//! Pure math for gizmo edits over a multi-member selection, anchored at the
+//! selection centroid. Translate applies one shared world-space delta; rotate
+//! orbits member positions about the centroid (and spins each member the same
+//! amount, the standard group-rotate behavior); scale pushes member positions
+//! away from the centroid along the dragged axis while stretching each member.
+//! With a single member every pivot operation degenerates to the in-place edit
+//! the single-selection gizmo always did.
 
 // Mean of the member origins: the gizmo anchor and the rotate / scale pivot.
 pub(crate) fn centroid(points: &[[f32; 3]]) -> [f32; 3] {

@@ -1,10 +1,8 @@
-// src/editor/hook/drive/modal.rs
-//
-// EditorHook: the confirmation dialog's open state, click routing, and draw.
-// The geometry lives in `editor/modal.rs`. While open the dialog is
-// screen-modal: every press and wheel is swallowed before any other routing
-// (`tick` checks it first), and only a button press closes it -- a click-away
-// is not a cancel, since the dialog guards destructive actions.
+//! EditorHook: the confirmation dialog's open state, click routing, and draw.
+//! The geometry lives in `editor/modal.rs`. While open the dialog is
+//! screen-modal: every press and wheel is swallowed before any other routing
+//! (`tick` checks it first), and only a button press closes it -- a click-away
+//! is not a cancel, since the dialog guards destructive actions.
 
 use concinnity_core::components::FrameInput;
 use concinnity_core::ecs::World;

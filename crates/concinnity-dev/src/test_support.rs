@@ -1,13 +1,11 @@
-// src/test_support.rs
-//
-// Tests that touch process-global state -- the session's open project, the
-// debug/hot-reload statics, and the engine's development flags -- must not run
-// concurrently, because Cargo runs a binary's tests in parallel threads within
-// one process.
-//
-// The guard is the workspace's one process-global lock, so a test here writing
-// a development flag excludes the engine's own readers of that same flag
-// rather than racing them under a second, private lock.
+//! Tests that touch process-global state -- the session's open project, the
+//! debug/hot-reload statics, and the engine's development flags -- must not run
+//! concurrently, because Cargo runs a binary's tests in parallel threads within
+//! one process.
+//!
+//! The guard is the workspace's one process-global lock, so a test here writing
+//! a development flag excludes the engine's own readers of that same flag
+//! rather than racing them under a second, private lock.
 
 use concinnity_core::ecs::World;
 use concinnity_host::thread::asset_id;

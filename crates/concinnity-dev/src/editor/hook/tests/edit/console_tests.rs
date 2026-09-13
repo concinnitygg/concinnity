@@ -1,10 +1,8 @@
-// src/editor/hook/tests/edit/console_tests.rs
-//
-// The Console panel's drive (`hook/edit/console.rs`): the log window's pinned
-// tail and its scroll, the focus actions, the editing keys (submit and the
-// /del ghost completion), the build command's worker handoff, and what the
-// /add, /del, /snap and /dup commands do to the working entries. The command
-// parsers themselves are tested beside them in `editor/panels/console.rs`.
+//! The Console panel's drive (`hook/edit/console.rs`): the log window's pinned
+//! tail and its scroll, the focus actions, the editing keys (submit and the
+//! /del ghost completion), the build command's worker handoff, and what the
+//! /add, /del, /snap and /dup commands do to the working entries. The command
+//! parsers themselves are tested beside them in `editor/panels/console.rs`.
 
 // A world holding the console's command-line field.
 

@@ -1,4 +1,4 @@
-//! src/geometry/water_grid.rs: flat tessellated quad for a WaterSurface.
+//! Flat tessellated quad for a WaterSurface.
 //!
 //! The mesh sits in the XZ plane at Y = 0. All vertical motion comes from the
 //! per-frame Gerstner displacement applied by the water vertex shader; the

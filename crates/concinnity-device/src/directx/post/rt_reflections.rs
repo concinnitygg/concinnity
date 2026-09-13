@@ -1,20 +1,18 @@
-// src/directx/post/rt_reflections.rs
-//
-// Hardware ray-traced reflection pass for the D3D12 backend. A fullscreen pixel
-// pass that, per glossy pixel, rebuilds a world-space surface point + normal
-// from the SSR pre-pass G-buffer, traces a reflection ray against the scene's
-// DXR top-level acceleration structure ([`crate::directx::raytrace`]) with
-// `RayQuery`, shades the hit (sun + IBL split-sum, optionally textured) or the
-// IBL prefilter cube on a miss, and composites the result over the scene with
-// the same Fresnel/gloss weighting SSR uses.
-//
-// It occupies the `SsrResolve` slot in the frame graph (reads `hdr_resolve`,
-// writes its own output target) and is mutually exclusive with SSR resolve.
-// Like SSGI it relies on the SSR pre-pass G-buffer, so the pre-pass is forced on
-// whenever RT reflections are enabled. The shader is the shared
-// `shaders/rt_reflections.slang`, compiled to a shader-model 6.5 DXIL container
-// (the floor for the inline ray query) through `slang_builtins`; the Metal and
-// Vulkan hosts bind the same source at their own slots.
+//! Hardware ray-traced reflection pass for the D3D12 backend. A fullscreen pixel
+//! pass that, per glossy pixel, rebuilds a world-space surface point + normal
+//! from the SSR pre-pass G-buffer, traces a reflection ray against the scene's
+//! DXR top-level acceleration structure ([`crate::directx::raytrace`]) with
+//! `RayQuery`, shades the hit (sun + IBL split-sum, optionally textured) or the
+//! IBL prefilter cube on a miss, and composites the result over the scene with
+//! the same Fresnel/gloss weighting SSR uses.
+//!
+//! It occupies the `SsrResolve` slot in the frame graph (reads `hdr_resolve`,
+//! writes its own output target) and is mutually exclusive with SSR resolve.
+//! Like SSGI it relies on the SSR pre-pass G-buffer, so the pre-pass is forced on
+//! whenever RT reflections are enabled. The shader is the shared
+//! `shaders/rt_reflections.slang`, compiled to a shader-model 6.5 DXIL container
+//! (the floor for the inline ray query) through `slang_builtins`; the Metal and
+//! Vulkan hosts bind the same source at their own slots.
 
 use concinnity_core::gfx::render_types::RtParams;
 use concinnity_core::gfx::rt_reflections::{RtParamsInputs, RtReflectionSettings};

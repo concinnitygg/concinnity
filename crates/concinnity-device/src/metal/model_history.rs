@@ -1,13 +1,11 @@
-// src/metal/model_history.rs
-//
-// Model-history snapshot compute pass. Once per frame, after the G-buffer
-// pre-pass has read the previous frame's slot, copies this frame's model
-// matrices out of the bindless object buffer into this frame's slot of the
-// model-history ring. Next frame's pre-pass reprojects through what this wrote.
-//
-// The snapshot is a GPU copy rather than a host-built parallel table because
-// the object buffer already carries every model: a host table would write the
-// same 64 bytes per record a second time.
+//! Model-history snapshot compute pass. Once per frame, after the G-buffer
+//! pre-pass has read the previous frame's slot, copies this frame's model
+//! matrices out of the bindless object buffer into this frame's slot of the
+//! model-history ring. Next frame's pre-pass reprojects through what this wrote.
+//!
+//! The snapshot is a GPU copy rather than a host-built parallel table because
+//! the object buffer already carries every model: a host table would write the
+//! same 64 bytes per record a second time.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::render::uniforms::ModelHistoryParams;

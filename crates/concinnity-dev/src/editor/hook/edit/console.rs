@@ -1,13 +1,11 @@
-// src/editor/hook/edit/console.rs
-//
-// EditorHook: the Console panel's actions. The backtick toggle (with a
-// one-frame focus blur so the opening keypress never types into the command
-// line), the log window's pinned-tail scroll, the /del ghost autocomplete, and
-// the command dispatch: /add and /del mutate the working entries exactly like
-// their panel counterparts, the build command compiles the in-memory entries
-// on a worker thread (in-process -- a separate `cn build` process would leave
-// this editor's name table empty), and everything reports through the shared
-// log sink.
+//! EditorHook: the Console panel's actions. The backtick toggle (with a
+//! one-frame focus blur so the opening keypress never types into the command
+//! line), the log window's pinned-tail scroll, the /del ghost autocomplete, and
+//! the command dispatch: /add and /del mutate the working entries exactly like
+//! their panel counterparts, the build command compiles the in-memory entries
+//! on a worker thread (in-process -- a separate `cn build` process would leave
+//! this editor's name table empty), and everything reports through the shared
+//! log sink.
 
 use concinnity_cook::authoring::world::write_world_jsonl;
 use concinnity_core::components::FrameInput;

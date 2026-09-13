@@ -1,12 +1,10 @@
-// src/gfx/mock_backend.rs
-//
-// Test-only recording RenderBackend plus the GraphicsSystem injection hooks.
-// Compiled solely into the unit-test binary (the `mod` declaration in gfx is
-// `#[cfg(test)]`). The mock records every call GraphicsSystem makes (with its
-// key parameters) into a shared `MockState` the test holds an Arc to, returns
-// plausible fabricated values where the trait needs one, and captures a
-// snapshot of the `BackendInit` the system assembled so tests can assert on
-// the built draw lists and resolved settings without any GPU.
+//! Test-only recording RenderBackend plus the GraphicsSystem injection hooks.
+//! Compiled solely into the unit-test binary (the `mod` declaration in gfx is
+//! `#[cfg(test)]`). The mock records every call GraphicsSystem makes (with its
+//! key parameters) into a shared `MockState` the test holds an Arc to, returns
+//! plausible fabricated values where the trait needs one, and captures a
+//! snapshot of the `BackendInit` the system assembled so tests can assert on
+//! the built draw lists and resolved settings without any GPU.
 
 use concinnity_core::bake::texture;
 use concinnity_core::components::DirectionalLight;

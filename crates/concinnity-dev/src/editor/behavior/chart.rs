@@ -1,14 +1,12 @@
-// src/editor/behavior/chart.rs
-//
-// The Behavior panel's chart view: the open behavior's body as cards flowing
-// left to right, wired parent to child. `behavior/graph.rs` decides where each
-// card sits; this places them and resolves a click back to the card under the
-// cursor. The panel's toolbar, palette, and value field are unchanged, because
-// a card stands for the same path its outline row does.
-//
-// Nothing scissors an editor element (clip bands are captured once at init from
-// the authored ScrollPanels), so a card panned past the canvas edge is drawn as
-// the part still inside it and drops its text once too little is left to read.
+//! The Behavior panel's chart view: the open behavior's body as cards flowing
+//! left to right, wired parent to child. `behavior/graph.rs` decides where each
+//! card sits; this places them and resolves a click back to the card under the
+//! cursor. The panel's toolbar, palette, and value field are unchanged, because
+//! a card stands for the same path its outline row does.
+//!
+//! Nothing scissors an editor element (clip bands are captured once at init from
+//! the authored ScrollPanels), so a card panned past the canvas edge is drawn as
+//! the part still inside it and drops its text once too little is left to read.
 
 use concinnity_core::ecs::World;
 use concinnity_host::thread::asset_id::AssetId;

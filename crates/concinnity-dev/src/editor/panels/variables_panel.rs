@@ -1,15 +1,13 @@
-// src/editor/panels/variables_panel.rs
-//
-// The Variables panel's layout half: the world's variable table as one row per
-// variable, name and type and starting value in their own columns. The header
-// adds a variable and says whether the table is authoritative; the toolbar acts
-// on the selected row (retype it, type its value, remove it), and a row for a
-// name the behaviors use but the table leaves out offers to declare it instead.
-//
-// The table is one asset, so this panel edits one asset's args the way the
-// Behavior panel edits one behavior's: directly, committing as it goes, with the
-// build's own checker reporting on the result. `hook/edit/variables.rs` owns the
-// actions and `editor/panels/variables.rs` turns the args into these rows.
+//! The Variables panel's layout half: the world's variable table as one row per
+//! variable, name and type and starting value in their own columns. The header
+//! adds a variable and says whether the table is authoritative; the toolbar acts
+//! on the selected row (retype it, type its value, remove it), and a row for a
+//! name the behaviors use but the table leaves out offers to declare it instead.
+//!
+//! The table is one asset, so this panel edits one asset's args the way the
+//! Behavior panel edits one behavior's: directly, committing as it goes, with the
+//! build's own checker reporting on the result. `hook/edit/variables.rs` owns the
+//! actions and `editor/panels/variables.rs` turns the args into these rows.
 
 use concinnity_core::ecs::World;
 use concinnity_host::thread::asset_id::AssetId;

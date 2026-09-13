@@ -1,28 +1,26 @@
-// src/directx/post/upscale/fsr.rs
-//
-// AMD FidelityFX FSR3 temporal upscaling for the D3D12 backend. Mirrors
-// `metal/post/upscale.rs` (which wraps `MTLFXTemporalScaler`). The engine
-// renders the 3D scene at a fraction of drawable size and this pass
-// reconstructs a drawable-resolution image the bloom + composite stack
-// consumes.
-//
-// **FFX SDK integration.** This module wraps the
-// [AMD FidelityFX SDK v1.1.x unified `ffx_api`](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK)
-// at runtime. The runtime DLL is `amd_fidelityfx_dx12.dll`; we
-// `LoadLibraryA` it on demand (it must be on `PATH`, the SDK's `bin/`
-// directory) and load the five C entry points (`ffxCreateContext` /
-// `ffxDestroyContext` / `ffxConfigure` / `ffxQuery` / `ffxDispatch`) via
-// `GetProcAddress`. Failure to find the DLL or any entry point logs a
-// warning and the caller falls back to native-resolution rendering. The
-// FFI bindings live inline at the top of this file because the API
-// surface is small (five entry points, ~10 structs) and concentrated.
-//
-// The scaler does temporal accumulation itself, so the existing TAA pass
-// is bypassed while upscaling is on (`PostProcessConfig.aa_mode` is
-// ignored). The unified G-buffer pre-pass still runs; FSR consumes its
-// motion + depth targets. Projection jitter is still applied, but per FSR's
-// `ffxQueryDescUpscaleGetJitterOffset`, not the engine's stock Halton
-// sequence (FSR's jitter sequence is tuned to its temporal kernel).
+//! AMD FidelityFX FSR3 temporal upscaling for the D3D12 backend. Mirrors
+//! `metal/post/upscale.rs` (which wraps `MTLFXTemporalScaler`). The engine
+//! renders the 3D scene at a fraction of drawable size and this pass
+//! reconstructs a drawable-resolution image the bloom + composite stack
+//! consumes.
+//!
+//! **FFX SDK integration.** This module wraps the
+//! [AMD FidelityFX SDK v1.1.x unified `ffx_api`](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK)
+//! at runtime. The runtime DLL is `amd_fidelityfx_dx12.dll`; we
+//! `LoadLibraryA` it on demand (it must be on `PATH`, the SDK's `bin/`
+//! directory) and load the five C entry points (`ffxCreateContext` /
+//! `ffxDestroyContext` / `ffxConfigure` / `ffxQuery` / `ffxDispatch`) via
+//! `GetProcAddress`. Failure to find the DLL or any entry point logs a
+//! warning and the caller falls back to native-resolution rendering. The
+//! FFI bindings live inline at the top of this file because the API
+//! surface is small (five entry points, ~10 structs) and concentrated.
+//!
+//! The scaler does temporal accumulation itself, so the existing TAA pass
+//! is bypassed while upscaling is on (`PostProcessConfig.aa_mode` is
+//! ignored). The unified G-buffer pre-pass still runs; FSR consumes its
+//! motion + depth targets. Projection jitter is still applied, but per FSR's
+//! `ffxQueryDescUpscaleGetJitterOffset`, not the engine's stock Halton
+//! sequence (FSR's jitter sequence is tuned to its temporal kernel).
 #![expect(
     non_camel_case_types,
     reason = "inline FFX bindings keep the SDK's own C type names"

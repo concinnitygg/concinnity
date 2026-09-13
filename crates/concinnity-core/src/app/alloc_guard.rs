@@ -1,23 +1,21 @@
-// src/app/alloc_guard.rs
-//
-// The headless loop's steady-state allocation invariant, checked in dev builds.
-//
-// A world allocates while it is built and started; a tick of a world that has
-// settled must allocate nothing, or the cost recurs every frame for as long as
-// the app runs. That is the property this asserts.
-//
-// The counters behind it are process-wide, so a tick's delta is an upper bound
-// on what the loop itself allocated: another thread's allocation can only ADD
-// to it. One tick that allocates nothing therefore proves the loop's own cost
-// is nothing, and a window of ticks that all allocate proves a per-tick cost
-// only where the loop is the one allocating thread. Two things keep the check
-// on the sound side of that:
-//
-//   - it reads nothing until some binary installs the tracking allocator, so a
-//     host that opts out of counting is never judged;
-//   - none of the loop's own work happens between two ticks, so allocations
-//     counted in that gap are another thread's, and a window holding one is
-//     abandoned rather than reported.
+//! The headless loop's steady-state allocation invariant, checked in dev builds.
+//!
+//! A world allocates while it is built and started; a tick of a world that has
+//! settled must allocate nothing, or the cost recurs every frame for as long as
+//! the app runs. That is the property this asserts.
+//!
+//! The counters behind it are process-wide, so a tick's delta is an upper bound
+//! on what the loop itself allocated: another thread's allocation can only ADD
+//! to it. One tick that allocates nothing therefore proves the loop's own cost
+//! is nothing, and a window of ticks that all allocate proves a per-tick cost
+//! only where the loop is the one allocating thread. Two things keep the check
+//! on the sound side of that:
+//!
+//!   - it reads nothing until some binary installs the tracking allocator, so a
+//!     host that opts out of counting is never judged;
+//!   - none of the loop's own work happens between two ticks, so allocations
+//!     counted in that gap are another thread's, and a window holding one is
+//!     abandoned rather than reported.
 
 use crate::memory::alloc_count;
 

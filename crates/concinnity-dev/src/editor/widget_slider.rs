@@ -1,10 +1,8 @@
-// src/editor/widget_slider.rs
-//
-// A drag slider for the editor HUD: a track, a fill from the track's neutral
-// point to the handle, the handle, and a value label. Plain `Sprite` /
-// `TextLabel` components at reserved ids, placed each frame by the owning
-// panel; the hook owns the drag (press on the track, follow the cursor,
-// release). The settings-menu `Slider` asset is a different thing.
+//! A drag slider for the editor HUD: a track, a fill from the track's neutral
+//! point to the handle, the handle, and a value label. Plain `Sprite` /
+//! `TextLabel` components at reserved ids, placed each frame by the owning
+//! panel; the hook owns the drag (press on the track, follow the cursor,
+//! release). The settings-menu `Slider` asset is a different thing.
 
 use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;

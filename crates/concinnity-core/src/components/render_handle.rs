@@ -1,5 +1,3 @@
-// src/components/render_handle.rs
-
 use crate::memory::InlineVec;
 
 /// The backend draw-object slot(s) an entity occupies.

@@ -1,7 +1,5 @@
-// src/components/file.rs
-//
-// Runtime `File` component. Its authored args and `FileKind` live in the schema
-// crate (concinnity_core::components::file).
+//! Runtime `File` component. Its authored args and `FileKind` live in the schema
+//! crate (concinnity_core::components::file).
 
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Component, PayloadLocator};

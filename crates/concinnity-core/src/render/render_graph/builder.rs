@@ -1,11 +1,9 @@
-// src/render/render_graph/builder.rs
-//
-// Builder API for the render graph. A `GraphBuilder` collects resource
-// declarations and pass declarations; once every pass has been added,
-// the caller hands the builder to `compile()` (see [`super::compile`])
-// to produce a frozen, topologically-sorted `CompiledGraph`.
-//
-// All state mutation happens here; the compile pass is a pure read.
+//! Builder API for the render graph. A `GraphBuilder` collects resource
+//! declarations and pass declarations; once every pass has been added,
+//! the caller hands the builder to `compile()` (see [`super::compile`])
+//! to produce a frozen, topologically-sorted `CompiledGraph`.
+//!
+//! All state mutation happens here; the compile pass is a pure read.
 
 use super::passes::PassId;
 use super::types::{

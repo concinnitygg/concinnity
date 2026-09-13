@@ -1,24 +1,22 @@
-// src/metal/transparent.rs
-//
-// The engine's `PassId::Transparent` slot: one shared pass that draws every
-// translucent surface in the world (water, glass, and future ice / holograms /
-// force fields). It runs after `SsrResolve` (so translucents see the resolved
-// opaque scene + SSR reflections) and before `TaaResolve` / `Upscale` (so they
-// pick up temporal accumulation). Output blends over `scene_pre_taa` with
-// SRC_ALPHA / ONE_MINUS_SRC_ALPHA.
-//
-// The pass owns no pipeline of its own. Each translucent subsystem contributes
-// a list of [`TransparentDraw`]s (a bound pipeline + buffers + per-draw
-// uniforms + texture bindings + a camera distance); `encode_transparent`
-// aggregates them, sorts back-to-front, and issues them into a single render
-// encoder. This is a fixed sorted draw list, not order-independent
-// transparency.
-//
-// Refraction read-back: at the head of the pass a blit snapshots the current
-// `scene_pre_taa` into `hdr_targets.transparent_scene_copy`, which the draws
-// sample. This makes refraction work whether or not SSR produced a distinct
-// `scene_pre_taa` (with SSR off it aliases `hdr_resolve`, so sampling the
-// destination directly would be reading the attachment being written).
+//! The engine's `PassId::Transparent` slot: one shared pass that draws every
+//! translucent surface in the world (water, glass, and future ice / holograms /
+//! force fields). It runs after `SsrResolve` (so translucents see the resolved
+//! opaque scene + SSR reflections) and before `TaaResolve` / `Upscale` (so they
+//! pick up temporal accumulation). Output blends over `scene_pre_taa` with
+//! SRC_ALPHA / ONE_MINUS_SRC_ALPHA.
+//!
+//! The pass owns no pipeline of its own. Each translucent subsystem contributes
+//! a list of [`TransparentDraw`]s (a bound pipeline + buffers + per-draw
+//! uniforms + texture bindings + a camera distance); `encode_transparent`
+//! aggregates them, sorts back-to-front, and issues them into a single render
+//! encoder. This is a fixed sorted draw list, not order-independent
+//! transparency.
+//!
+//! Refraction read-back: at the head of the pass a blit snapshots the current
+//! `scene_pre_taa` into `hdr_targets.transparent_scene_copy`, which the draws
+//! sample. This makes refraction work whether or not SSR produced a distinct
+//! `scene_pre_taa` (with SSR off it aliases `hdr_resolve`, so sampling the
+//! destination directly would be reading the attachment being written).
 
 #![deny(unsafe_op_in_unsafe_fn)]
 

@@ -1,21 +1,19 @@
-// src/directx/resize.rs
-//
-// D3D12 swapchain + render-target resize handler. Polls `win_state.width/height`
-// at the top of each frame and, when the dimensions diverged from the live
-// render-target sizing, rebuilds every render-resolution-sized GPU resource and
-// rewrites the descriptors that point at them. The descriptor *slots* never move
-// (only the resources they point at) so the live root signatures + pipelines +
-// pre-bound GPU descriptor handles keep working without a re-bind.
-//
-// Mirrors the Vulkan `rebuild_swapchain` flow in src/vulkan/swapchain.rs: a
-// `wait_idle` gate, a wholesale drop + recreate, then per-effect resource
-// rebuilds (TAA / SSAO / SSR / bloom).
-//
-// Bloom mip count is held fixed at init's value rather than recomputed at the
-// new resolution. `bloom_mip_count` only changes for very small windows (<128
-// pixels in the smaller dimension), and keeping the count stable keeps the
-// SRV/RTV heap layout stable so everything past the bloom block stays at its
-// originally-allocated slot.
+//! D3D12 swapchain + render-target resize handler. Polls `win_state.width/height`
+//! at the top of each frame and, when the dimensions diverged from the live
+//! render-target sizing, rebuilds every render-resolution-sized GPU resource and
+//! rewrites the descriptors that point at them. The descriptor *slots* never move
+//! (only the resources they point at) so the live root signatures + pipelines +
+//! pre-bound GPU descriptor handles keep working without a re-bind.
+//!
+//! Mirrors the Vulkan `rebuild_swapchain` flow in src/vulkan/swapchain.rs: a
+//! `wait_idle` gate, a wholesale drop + recreate, then per-effect resource
+//! rebuilds (TAA / SSAO / SSR / bloom).
+//!
+//! Bloom mip count is held fixed at init's value rather than recomputed at the
+//! new resolution. `bloom_mip_count` only changes for very small windows (<128
+//! pixels in the smaller dimension), and keeping the count stable keeps the
+//! SRV/RTV heap layout stable so everything past the bloom block stays at its
+//! originally-allocated slot.
 
 use concinnity_core::render::error::RenderResult;
 use windows::Win32::Graphics::Direct3D12::*;

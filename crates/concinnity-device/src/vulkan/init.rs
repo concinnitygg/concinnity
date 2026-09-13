@@ -1,7 +1,6 @@
-// src/vulkan/init.rs
-//
-// VkContext construction: platform window creation and the one-time GPU
-// resource setup performed by VkContext::new.
+//! VkContext construction: platform window creation and the one-time GPU
+//! resource setup performed by VkContext::new.
+
 use ash::vk;
 use concinnity_core::bake;
 use concinnity_core::components;

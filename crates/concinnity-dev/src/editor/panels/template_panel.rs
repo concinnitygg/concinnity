@@ -1,18 +1,16 @@
-// src/editor/panels/template_panel.rs
-//
-// The editor's Template detail panel: a floating preview of one engine-owned
-// world template, spawned by clicking a row in the Templates list (`templates.rs`).
-// It mirrors the edit-form panel's shape -- a draggable title bar ("Template
-// <name>") with an "X" close button, a header row carrying the template's
-// description on the left and an "Apply" button pinned to the top-right, then a
-// scrollable list of the template's assets underneath. Applying layers the
-// template's assets into the world (the hook owns that, idempotently).
-//
-// The asset list is the shared grouped list (`asset_list.rs`): assets grouped
-// under a type sub-header, names indented and alphabetized -- identical to the
-// Assets browse panel's list. Like the rest of the editor HUD the panel is plain
-// `Sprite` / `TextLabel` components at reserved ids driven each frame by the hook;
-// it is read-only (no per-row interaction), so it needs no typed fields.
+//! The editor's Template detail panel: a floating preview of one engine-owned
+//! world template, spawned by clicking a row in the Templates list (`templates.rs`).
+//! It mirrors the edit-form panel's shape -- a draggable title bar ("Template
+//! <name>") with an "X" close button, a header row carrying the template's
+//! description on the left and an "Apply" button pinned to the top-right, then a
+//! scrollable list of the template's assets underneath. Applying layers the
+//! template's assets into the world (the hook owns that, idempotently).
+//!
+//! The asset list is the shared grouped list (`asset_list.rs`): assets grouped
+//! under a type sub-header, names indented and alphabetized -- identical to the
+//! Assets browse panel's list. Like the rest of the editor HUD the panel is plain
+//! `Sprite` / `TextLabel` components at reserved ids driven each frame by the hook;
+//! it is read-only (no per-row interaction), so it needs no typed fields.
 
 use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;

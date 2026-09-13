@@ -1,5 +1,3 @@
-// src/command/new.rs
-
 use concinnity_cook::authoring::world::WORLD_JSONL;
 use concinnity_cook::build_from_path;
 use concinnity_host::store::paths::StateTree;

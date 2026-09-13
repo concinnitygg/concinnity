@@ -1,17 +1,15 @@
-// src/debug/catalog.rs
-//
-// The single source of truth for the debug protocol's verb surface: every
-// command `super::dispatch::handle_request` answers, with a one-line
-// description, whether it only reads the world snapshot or mutates the running
-// world, and a JSON Schema for its parameters.
-//
-// Schemas describe the request body's parameters only. The transport adds the
-// `"cmd"` field, so it is not a property here and `additionalProperties` stays
-// closed. A parameter is `required` when the server rejects the request without
-// it; every other parameter carries its default in its description.
-//
-// A drift test below scrapes the dispatcher's own match arms, so a new verb
-// without a catalog entry (or an entry without a verb) fails to build green.
+//! The single source of truth for the debug protocol's verb surface: every
+//! command `super::dispatch::handle_request` answers, with a one-line
+//! description, whether it only reads the world snapshot or mutates the running
+//! world, and a JSON Schema for its parameters.
+//!
+//! Schemas describe the request body's parameters only. The transport adds the
+//! `"cmd"` field, so it is not a property here and `additionalProperties` stays
+//! closed. A parameter is `required` when the server rejects the request without
+//! it; every other parameter carries its default in its description.
+//!
+//! A drift test below scrapes the dispatcher's own match arms, so a new verb
+//! without a catalog entry (or an entry without a verb) fails to build green.
 
 use serde_json::{Value, json};
 

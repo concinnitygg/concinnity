@@ -1,9 +1,7 @@
-// src/editor/hook/tests/drive/create_menu_tests.rs
-//
-// The right-click "Create here" menu (`hook/drive/create_menu.rs`): the
-// positioned entry a type row creates at the surface point, the instance a
-// prefab row creates, and the dismissal rules -- a click away closes it, a
-// claimed region does not reach it.
+//! The right-click "Create here" menu (`hook/drive/create_menu.rs`): the
+//! positioned entry a type row creates at the surface point, the instance a
+//! prefab row creates, and the dismissal rules -- a click away closes it, a
+//! claimed region does not reach it.
 
 use concinnity_core::components::FrameInput;
 use concinnity_core::ecs::World;

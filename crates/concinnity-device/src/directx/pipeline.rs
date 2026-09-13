@@ -1,19 +1,17 @@
-// src/directx/pipeline.rs
-//
-// Cross-cutting D3D12 pipeline helpers shared by every pass:
-//   * Shader-compile + root-signature serialization helpers (`compile_hlsl`,
-//     `serialize_and_create_root_sig`, `serialize_desc_and_create`).
-//   * Vertex input layouts referenced by main + shadow + velocity + SSAO
-//     pre-pass + text pipelines (`main_input_layout`, `skinned_input_layout`,
-//     `text_input_layout`).
-//   * The text overlay pipeline (`create_text_root_signature`,
-//     `create_text_pso`) and the composite (post-process) pipeline
-//     (`create_composite_root_signature`, `create_composite_pso`).
-//
-// Mirrors src/metal/pipeline.rs (trimmed in the audit to the equivalent set:
-// shared helpers + text + composite). Per-effect pipelines live in their
-// own files: bloom/TAA/SSAO in directx/post/, cull at directx/cull.rs,
-// main + shadow in directx/init/pipelines.rs.
+//! Cross-cutting D3D12 pipeline helpers shared by every pass:
+//!   * Shader-compile + root-signature serialization helpers (`compile_hlsl`,
+//!     `serialize_and_create_root_sig`, `serialize_desc_and_create`).
+//!   * Vertex input layouts referenced by main + shadow + velocity + SSAO
+//!     pre-pass + text pipelines (`main_input_layout`, `skinned_input_layout`,
+//!     `text_input_layout`).
+//!   * The text overlay pipeline (`create_text_root_signature`,
+//!     `create_text_pso`) and the composite (post-process) pipeline
+//!     (`create_composite_root_signature`, `create_composite_pso`).
+//!
+//! Mirrors src/metal/pipeline.rs (trimmed in the audit to the equivalent set:
+//! shared helpers + text + composite). Per-effect pipelines live in their
+//! own files: bloom/TAA/SSAO in directx/post/, cull at directx/cull.rs,
+//! main + shadow in directx/init/pipelines.rs.
 
 use concinnity_core::gfx::render_types;
 use windows::Win32::Graphics::Direct3D12::*;

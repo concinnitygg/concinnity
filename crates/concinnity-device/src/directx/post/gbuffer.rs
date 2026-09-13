@@ -1,19 +1,17 @@
-// src/directx/post/gbuffer.rs
-//
-// Unified geometry G-buffer pre-pass for the D3D12 backend. One jittered
-// traversal of the GPU cull's records rasterizes into a single MRT:
-//
-//   target 0  RGBA16F  view-space normal (rgb) + positive linear view depth (a)
-//   target 1  R8       perceptual roughness
-//   target 2  RG16F    screen-space motion (prev_uv - cur_uv)
-//
-// plus a private single-sample depth buffer. Every screen-space consumer (SSR
-// resolve, SSAO kernel/blur, SSGI gather/composite, TAA resolve, FSR upscaler)
-// reads this one output instead of re-rasterizing, replacing the separate
-// SSR, SSAO and velocity pre-passes. Rasterization uses the jittered
-// VP (matching the main pass coverage); the motion vector derives from the
-// un-jittered current / previous VPs in-shader so projection jitter never
-// contaminates motion. Mirrors src/metal/post/gbuffer.rs.
+//! Unified geometry G-buffer pre-pass for the D3D12 backend. One jittered
+//! traversal of the GPU cull's records rasterizes into a single MRT:
+//!
+//!   target 0  RGBA16F  view-space normal (rgb) + positive linear view depth (a)
+//!   target 1  R8       perceptual roughness
+//!   target 2  RG16F    screen-space motion (prev_uv - cur_uv)
+//!
+//! plus a private single-sample depth buffer. Every screen-space consumer (SSR
+//! resolve, SSAO kernel/blur, SSGI gather/composite, TAA resolve, FSR upscaler)
+//! reads this one output instead of re-rasterizing, replacing the separate
+//! SSR, SSAO and velocity pre-passes. Rasterization uses the jittered
+//! VP (matching the main pass coverage); the motion vector derives from the
+//! un-jittered current / previous VPs in-shader so projection jitter never
+//! contaminates motion. Mirrors src/metal/post/gbuffer.rs.
 
 use concinnity_core::gfx::transform::IDENTITY;
 use std::cell::RefCell;

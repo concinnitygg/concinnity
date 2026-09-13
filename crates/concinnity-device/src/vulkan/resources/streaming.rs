@@ -1,9 +1,7 @@
-// src/vulkan/resources/streaming.rs
-//
-// VoxelWorld chunk streaming for VkContext: appends a headroom region to the
-// shared vertex/index buffers, builds the chunk descriptor set from the
-// world's chunk material, then allocates / frees per-chunk geometry from that
-// headroom on demand.
+//! VoxelWorld chunk streaming for VkContext: appends a headroom region to the
+//! shared vertex/index buffers, builds the chunk descriptor set from the
+//! world's chunk material, then allocates / frees per-chunk geometry from that
+//! headroom on demand.
 
 use ash::vk;
 use concinnity_core::gfx::mesh_payload::Vertex;

@@ -1,18 +1,16 @@
-// src/app/pipeline.rs
-//
-// Pipelined frame driver: simulation of frame N+1 overlaps rendering of frame
-// N. The main thread keeps everything the OS and GPU pin to it -- the event
-// pumps (which run inside draw_frame / window_closed), the backend, frame
-// submission, and swapchain recreation -- while a "sim" thread owns the App
-// (pacer, fixed-tick clock, World::step) and produces RenderSnapshots.
-//
-// The snapshot channel is a rendezvous (bound 0): exactly one frame is in
-// flight, every snapshot is consumed exactly once in order (the contract the
-// model-push dedupe and the slot-allocation ops rely on), and vsync
-// backpressure propagates into the sim's blocked send -- where the fixed-tick
-// accumulator counts it as ordinary frame time. The feedback channel returns
-// the sampled input, render stats, op-replay results, and the consumed
-// snapshot for buffer reuse.
+//! Pipelined frame driver: simulation of frame N+1 overlaps rendering of frame
+//! N. The main thread keeps everything the OS and GPU pin to it -- the event
+//! pumps (which run inside draw_frame / window_closed), the backend, frame
+//! submission, and swapchain recreation -- while a "sim" thread owns the App
+//! (pacer, fixed-tick clock, World::step) and produces RenderSnapshots.
+//!
+//! The snapshot channel is a rendezvous (bound 0): exactly one frame is in
+//! flight, every snapshot is consumed exactly once in order (the contract the
+//! model-push dedupe and the slot-allocation ops rely on), and vsync
+//! backpressure propagates into the sim's blocked send -- where the fixed-tick
+//! accumulator counts it as ordinary frame time. The feedback channel returns
+//! the sampled input, render stats, op-replay results, and the consumed
+//! snapshot for buffer reuse.
 
 use concinnity_core::ecs::StepResult;
 use concinnity_core::render::backend::RenderBackend;

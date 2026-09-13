@@ -1,8 +1,6 @@
-// src/debug/hot_reload/watcher.rs
-//
-// Filesystem watcher: subscribes to the parent directories of every captured
-// source path and flips the shared atomic on a relevant change. Mirrors the
-// per-backend shader watcher.
+//! Filesystem watcher: subscribes to the parent directories of every captured
+//! source path and flips the shared atomic on a relevant change. Mirrors the
+//! per-backend shader watcher.
 
 use concinnity_engine::app::dev_flags;
 use concinnity_engine::gfx::system::hot_reload_sources::*;

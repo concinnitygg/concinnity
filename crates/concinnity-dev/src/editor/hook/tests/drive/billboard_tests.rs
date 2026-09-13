@@ -1,9 +1,7 @@
-// src/editor/hook/tests/drive/billboard_tests.rs
-//
-// The billboard drive's picking (`hook/drive/billboard.rs`): the light a
-// billboard click selects and the transform it seeds, which hit wins when a
-// billboard and a mesh overlap, and the session's hide and lock flags applying
-// to billboards as they do to meshes.
+//! The billboard drive's picking (`hook/drive/billboard.rs`): the light a
+//! billboard click selects and the transform it seeds, which hit wins when a
+//! billboard and a mesh overlap, and the session's hide and lock flags applying
+//! to billboards as they do to meshes.
 
 use concinnity_core::components::PointLight;
 use concinnity_core::components::Transform;

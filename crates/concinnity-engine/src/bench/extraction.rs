@@ -1,12 +1,10 @@
-// src/bench/extraction.rs
-//
-// Per-frame render extraction: the pass GraphicsSystem runs to fill the
-// RenderSnapshot from world state before submission. The pairs that matter
-// are static-vs-moved: a static scene must cost only the change-gated join
-// walk and allocate nothing, and a scene where everything moved pays the
-// snapshot copy the boundary introduces. The pose row measures the one real
-// copy extraction added over the old borrow-through path (joint matrices
-// into the snapshot's span buffer).
+//! Per-frame render extraction: the pass GraphicsSystem runs to fill the
+//! RenderSnapshot from world state before submission. The pairs that matter
+//! are static-vs-moved: a static scene must cost only the change-gated join
+//! walk and allocate nothing, and a scene where everything moved pays the
+//! snapshot copy the boundary introduces. The pose row measures the one real
+//! copy extraction added over the old borrow-through path (joint matrices
+//! into the snapshot's span buffer).
 
 use concinnity_core::components::{GlobalTransform, Prop, RenderHandle, SkeletonPose};
 use concinnity_core::ecs::{Entity, SkinnedMeshHandle};

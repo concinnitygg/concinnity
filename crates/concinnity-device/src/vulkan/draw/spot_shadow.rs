@@ -1,16 +1,14 @@
-// src/vulkan/spot_shadow.rs
-//
-// Spot shadow pass: one depth-only render per shadow-casting spot light into
-// its layer of the spot shadow array. Structurally the cascade pass with a
-// different projection source -- each slice reuses the same depth-only shadow
-// render pass, pipeline, and caster sub-encoders, driven by a per-slice
-// descriptor set whose `ShadowUniforms` holds that spot's light-space matrix in
-// slot 0 rather than the CSM cascade set.
-//
-// Local lights are static, so the matrices are built once here and only the
-// depth contents refresh. `spot_shadow.render_mask` (from `SpotShadowScheduler`)
-// picks which slices redraw; a skipped slice keeps the depth it last rendered,
-// which stays correct until a caster moves.
+//! Spot shadow pass: one depth-only render per shadow-casting spot light into
+//! its layer of the spot shadow array. Structurally the cascade pass with a
+//! different projection source -- each slice reuses the same depth-only shadow
+//! render pass, pipeline, and caster sub-encoders, driven by a per-slice
+//! descriptor set whose `ShadowUniforms` holds that spot's light-space matrix in
+//! slot 0 rather than the CSM cascade set.
+//!
+//! Local lights are static, so the matrices are built once here and only the
+//! depth contents refresh. `spot_shadow.render_mask` (from `SpotShadowScheduler`)
+//! picks which slices redraw; a skipped slice keeps the depth it last rendered,
+//! which stays correct until a caster moves.
 
 use ash::vk;
 use concinnity_core::gfx::lod;

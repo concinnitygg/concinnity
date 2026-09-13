@@ -1,11 +1,9 @@
-// src/gfx/animation/commands.rs
-//
-// Runtime debug-command drain: `anim-crossfade` (flat buckets), `anim-param`
-// and `anim-state` (graph buckets). Commands arrive on the process-wide
-// `crate::app::anim_runtime` queue from the debug WS server and each carries
-// a reply channel answered synchronously here. The drain is driven from the
-// editor's per-frame `DebugHook::tick` (not from `step`) so a WS client
-// blocked on a reply is never starved while a menu pauses playback.
+//! Runtime debug-command drain: `anim-crossfade` (flat buckets), `anim-param`
+//! and `anim-state` (graph buckets). Commands arrive on the process-wide
+//! `crate::app::anim_runtime` queue from the debug WS server and each carries
+//! a reply channel answered synchronously here. The drain is driven from the
+//! editor's per-frame `DebugHook::tick` (not from `step`) so a WS client
+//! blocked on a reply is never starved while a menu pauses playback.
 
 use concinnity_core::ecs::SkinnedMeshHandle;
 use concinnity_core::gfx::anim_graph::normalized_time;

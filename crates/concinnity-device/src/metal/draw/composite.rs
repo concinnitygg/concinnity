@@ -1,18 +1,16 @@
-// src/metal/draw/composite.rs
-//
-// Composite (post-process) pass + text overlay. The post-process pipeline
-// reads `scene_color`, the bloom mip-0 target, and the 3D color-grading LUT,
-// then writes ACES tonemap + gamma + FXAA into the drawable. Text is drawn
-// after in the same render pass so it sits on top of the tonemapped image in
-// display-referred LDR space; its geometry comes from sub-ranges of this
-// frame's text-upload slot, filled by `draw_frame` before the graph ran (see
-// [`crate::metal::text_upload::TextUploadRing`]).
-//
-// The order of the two halves lives once in `gfx::fullscreen`; this file is
-// Metal's implementation of each step. Metal's recorder is the render encoder
-// itself, which is why `encode_composite_and_text` opens it before handing the
-// chain over: the encoder is the open pass, so beginning and ending the pass
-// are its construction and its drop rather than driver steps.
+//! Composite (post-process) pass + text overlay. The post-process pipeline
+//! reads `scene_color`, the bloom mip-0 target, and the 3D color-grading LUT,
+//! then writes ACES tonemap + gamma + FXAA into the drawable. Text is drawn
+//! after in the same render pass so it sits on top of the tonemapped image in
+//! display-referred LDR space; its geometry comes from sub-ranges of this
+//! frame's text-upload slot, filled by `draw_frame` before the graph ran (see
+//! [`crate::metal::text_upload::TextUploadRing`]).
+//!
+//! The order of the two halves lives once in `gfx::fullscreen`; this file is
+//! Metal's implementation of each step. Metal's recorder is the render encoder
+//! itself, which is why `encode_composite_and_text` opens it before handing the
+//! chain over: the encoder is the open pass, so beginning and ending the pass
+//! are its construction and its drop rather than driver steps.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use std::cell::Cell;

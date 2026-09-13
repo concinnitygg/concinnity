@@ -1,18 +1,16 @@
-// src/editor/behavior/panel.rs
-//
-// The Behavior panel's layout half: a floating node-graph editor over one
-// `Behavior` asset. The header cycles through the world's behaviors and adds
-// new ones; the toolbar acts on the selected row (open its palette, delete it,
-// move it, or type its value). The body is the asset either way: the outline
-// lists every field of every node (`behavior/outline.rs`), while the chart
-// draws the control flow as cards with the selected node's own settings in the
-// inspector column beside it (`behavior/fields.rs`).
-//
-// The palette opens as a floating list over the body, so picking a node or an
-// expression never leaves the panel, and the checker's complaint floats over
-// the body's foot rather than sitting in the chrome -- a behavior that checks
-// out says nothing, and the body never moves under the user either way.
-// `hook/edit/behavior.rs` owns the actions.
+//! The Behavior panel's layout half: a floating node-graph editor over one
+//! `Behavior` asset. The header cycles through the world's behaviors and adds
+//! new ones; the toolbar acts on the selected row (open its palette, delete it,
+//! move it, or type its value). The body is the asset either way: the outline
+//! lists every field of every node (`behavior/outline.rs`), while the chart
+//! draws the control flow as cards with the selected node's own settings in the
+//! inspector column beside it (`behavior/fields.rs`).
+//!
+//! The palette opens as a floating list over the body, so picking a node or an
+//! expression never leaves the panel, and the checker's complaint floats over
+//! the body's foot rather than sitting in the chrome -- a behavior that checks
+//! out says nothing, and the body never moves under the user either way.
+//! `hook/edit/behavior.rs` owns the actions.
 
 use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;

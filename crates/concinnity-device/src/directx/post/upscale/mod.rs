@@ -1,18 +1,16 @@
-// src/directx/post/upscale/mod.rs
-//
-// Temporal upscaling for the D3D12 backend. The engine renders the 3D scene at
-// a fraction of drawable size and the `PassId::Upscale` pass reconstructs a
-// drawable-resolution image the bloom + composite stack consumes.
-//
-// Three interchangeable backends sit behind the `UpscaleBackend` trait:
-//   fsr   AMD FidelityFX FSR3 (cross-vendor; the default fallback)
-//   dlss  NVIDIA DLSS via raw NGX (RTX only; cfg(ngx_sdk_bundled))
-//   xess  Intel XeSS (cross-vendor DP4a + Arc XMX)
-// `build_upscaler` resolves the requested `UpscalerBackend` against runtime
-// availability and constructs the first that initializes, falling back to
-// native-resolution rendering when none is available. The shared per-frame
-// `encode_upscale` (in fsr.rs) drives whichever backend is active through the
-// trait; only the inner vendor evaluate differs.
+//! Temporal upscaling for the D3D12 backend. The engine renders the 3D scene at
+//! a fraction of drawable size and the `PassId::Upscale` pass reconstructs a
+//! drawable-resolution image the bloom + composite stack consumes.
+//!
+//! Three interchangeable backends sit behind the `UpscaleBackend` trait:
+//!   fsr   AMD FidelityFX FSR3 (cross-vendor; the default fallback)
+//!   dlss  NVIDIA DLSS via raw NGX (RTX only; cfg(ngx_sdk_bundled))
+//!   xess  Intel XeSS (cross-vendor DP4a + Arc XMX)
+//! `build_upscaler` resolves the requested `UpscalerBackend` against runtime
+//! availability and constructs the first that initializes, falling back to
+//! native-resolution rendering when none is available. The shared per-frame
+//! `encode_upscale` (in fsr.rs) drives whichever backend is active through the
+//! trait; only the inner vendor evaluate differs.
 
 use concinnity_core::components::UpscalerBackend;
 use concinnity_core::gfx::jitter;

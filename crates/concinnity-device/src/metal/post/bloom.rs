@@ -1,8 +1,6 @@
-// src/metal/post/bloom.rs
-//
-// Bloom pass: prefilter + downsample chain + additive upsample. Pipelines,
-// mip-chain target allocation, and per-frame encoder live together so the
-// effect is a single unit Vulkan / DirectX can mirror.
+//! Bloom pass: prefilter + downsample chain + additive upsample. Pipelines,
+//! mip-chain target allocation, and per-frame encoder live together so the
+//! effect is a single unit Vulkan / DirectX can mirror.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use objc2::rc::Retained;

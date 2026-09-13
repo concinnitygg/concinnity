@@ -1,10 +1,8 @@
-// src/editor/behavior/palette.rs
-//
-// The closed vocabulary a behavior is built from: its event sources, its
-// nodes, and its expressions, each with the JSON a fresh one starts as. The
-// schema fixes this set (`concinnity-core/src/components/behavior.rs`), so the panel
-// offers a fixed palette rather than free text and the checker never sees an
-// invented verb.
+//! The closed vocabulary a behavior is built from: its event sources, its
+//! nodes, and its expressions, each with the JSON a fresh one starts as. The
+//! schema fixes this set (`concinnity-core/src/components/behavior.rs`), so the panel
+//! offers a fixed palette rather than free text and the checker never sees an
+//! invented verb.
 
 use serde_json::{Value, json};
 

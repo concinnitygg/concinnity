@@ -1,13 +1,11 @@
-// src/hud/stat_hud.rs
-//
-// Default stats-HUD overlay behavior. An internal system (not a declarable
-// asset): `World::start` constructs one from the world's `StatHud` component
-// and it writes live engine stats into that component's `TextLabel` chips.
-//
-// The frame-rate and GPU-memory chips are gated by the in-game video setting
-// "Display performance stats" (published by `GraphicsSystem` as the `HudPrefs`
-// resource); the exposure and HDR chips show whenever their feature is active.
-// Developer readouts (passes / cursor / camera) live on `DebugHud`.
+//! Default stats-HUD overlay behavior. An internal system (not a declarable
+//! asset): `World::start` constructs one from the world's `StatHud` component
+//! and it writes live engine stats into that component's `TextLabel` chips.
+//!
+//! The frame-rate and GPU-memory chips are gated by the in-game video setting
+//! "Display performance stats" (published by `GraphicsSystem` as the `HudPrefs`
+//! resource); the exposure and HDR chips show whenever their feature is active.
+//! Developer readouts (passes / cursor / camera) live on `DebugHud`.
 
 use concinnity_core::components::StatHud;
 use concinnity_core::components::TextLabel;

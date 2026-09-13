@@ -1,8 +1,6 @@
-// src/editor/overrides/prefab_map.rs
-//
-// Mapping between a prefab-generated asset's fields and the Prefab definition
-// entry that produced them, including the inverse of the instance-transform
-// composition the expansion applies. Pure: the hook owns the entry mutations.
+//! Mapping between a prefab-generated asset's fields and the Prefab definition
+//! entry that produced them, including the inverse of the instance-transform
+//! composition the expansion applies. Pure: the hook owns the entry mutations.
 
 use concinnity_core::math::vec3::add;
 use serde_json::Value;

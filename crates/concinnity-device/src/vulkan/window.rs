@@ -1,16 +1,14 @@
-// src/vulkan/window.rs
-//
-// GLFW window and input for the Vulkan backend on Linux. (On Windows the
-// backend uses the shared native Win32 layer instead -- see win32_window.rs;
-// this module is compiled only off-Windows.)
-//
-// Input design mirrors metal.rs: events accumulate into an RenderInput between
-// poll() calls; GraphicsSystem drains the state each step via take_input()
-// and deposits it as a FrameInput component for Camera3DSystem to consume.
-//
-// Cursor capture is enabled by GraphicsSystem::init() when a Camera3D
-// component is present. GLFW's CursorDisabled mode delivers raw relative
-// deltas directly via CursorPos events, so no manual warping is needed.
+//! GLFW window and input for the Vulkan backend on Linux. (On Windows the
+//! backend uses the shared native Win32 layer instead -- see win32_window.rs;
+//! this module is compiled only off-Windows.)
+//!
+//! Input design mirrors metal.rs: events accumulate into an RenderInput between
+//! poll() calls; GraphicsSystem drains the state each step via take_input()
+//! and deposits it as a FrameInput component for Camera3DSystem to consume.
+//!
+//! Cursor capture is enabled by GraphicsSystem::init() when a Camera3D
+//! component is present. GLFW's CursorDisabled mode delivers raw relative
+//! deltas directly via CursorPos events, so no manual warping is needed.
 
 use concinnity_core::components::{InputKey, WindowMode};
 use concinnity_core::render::display_mode;

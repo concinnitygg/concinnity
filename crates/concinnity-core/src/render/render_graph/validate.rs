@@ -1,28 +1,26 @@
-// src/render/render_graph/validate.rs
-//
-// Barrier-coverage check over a `CompiledGraph`. The compile pass derives each
-// pass's barrier lists by walking each resource's timeline; this module replays
-// those barriers in execution order -- `barriers_before` ahead of the pass's own
-// accesses, `barriers_after` once they have been checked -- and checks the
-// resulting state against what each pass's read / write declarations require.
-// The two directions are structurally independent -- a per-resource timeline
-// versus a per-pass replay -- so a deriver bug (a dropped transition, a
-// mis-ordered run, a read-run stage union that misses a consumer) shows up as a
-// gap here.
-//
-// The replay respects the schedule's partial order, not just the serial index
-// order: a state has to hold along every path to the pass that relies on it, so
-// the transition that established it must be ordered before that pass and no
-// pass free to run concurrently with it may touch the resource.
-//
-// [`sync_point_gaps`] is the other half: it checks the cross-queue signal / wait
-// pairs actually order every dependency that crosses queues, rather than
-// trusting the derivation that produced them.
-//
-// The checks are pure and GPU-free, so they run both as a headless sweep over
-// the `FrameGraphInputs` space and as a per-frame `debug_assertions` assertion
-// inside each backend executor, where they cover the graphs a test sweep never
-// builds.
+//! Barrier-coverage check over a `CompiledGraph`. The compile pass derives each
+//! pass's barrier lists by walking each resource's timeline; this module replays
+//! those barriers in execution order -- `barriers_before` ahead of the pass's own
+//! accesses, `barriers_after` once they have been checked -- and checks the
+//! resulting state against what each pass's read / write declarations require.
+//! The two directions are structurally independent -- a per-resource timeline
+//! versus a per-pass replay -- so a deriver bug (a dropped transition, a
+//! mis-ordered run, a read-run stage union that misses a consumer) shows up as a
+//! gap here.
+//!
+//! The replay respects the schedule's partial order, not just the serial index
+//! order: a state has to hold along every path to the pass that relies on it, so
+//! the transition that established it must be ordered before that pass and no
+//! pass free to run concurrently with it may touch the resource.
+//!
+//! [`sync_point_gaps`] is the other half: it checks the cross-queue signal / wait
+//! pairs actually order every dependency that crosses queues, rather than
+//! trusting the derivation that produced them.
+//!
+//! The checks are pure and GPU-free, so they run both as a headless sweep over
+//! the `FrameGraphInputs` space and as a per-frame `debug_assertions` assertion
+//! inside each backend executor, where they cover the graphs a test sweep never
+//! builds.
 
 use super::compile::CompiledGraph;
 use super::passes::PassId;

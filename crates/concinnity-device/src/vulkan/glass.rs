@@ -1,15 +1,13 @@
-// src/vulkan/glass.rs
-//
-// GlassPanel: one producer of the engine's transparent pass on the Vulkan
-// backend (`transparent.rs` owns the render pass itself, the scene snapshot, the
-// shared descriptor / pipeline layouts and the combined back-to-front draw
-// order; `water.rs` is the other producer). Each panel is a flat world-space
-// quad, built once at init; the fragment shader refracts the pass's scene
-// snapshot, tints it, and mixes a reflection over it by a Schlick Fresnel term
-// (see shaders/glass.slang, the single source all three backends compile).
-//
-// Same uniform layouts, back-to-front ordering and manual depth-occlusion test
-// as the DirectX and Metal hosts.
+//! GlassPanel: one producer of the engine's transparent pass on the Vulkan
+//! backend (`transparent.rs` owns the render pass itself, the scene snapshot, the
+//! shared descriptor / pipeline layouts and the combined back-to-front draw
+//! order; `water.rs` is the other producer). Each panel is a flat world-space
+//! quad, built once at init; the fragment shader refracts the pass's scene
+//! snapshot, tints it, and mixes a reflection over it by a Schlick Fresnel term
+//! (see shaders/glass.slang, the single source all three backends compile).
+//!
+//! Same uniform layouts, back-to-front ordering and manual depth-occlusion test
+//! as the DirectX and Metal hosts.
 
 use ash::vk;
 use concinnity_core::components::GlassPanel;

@@ -1,12 +1,10 @@
-// src/debug/memory.rs
-//
-// The `memory` query: what the process is holding, and who reports holding it.
-//
-// The same numbers the Health panel draws, on a surface that needs no window --
-// a headless check can read the heap counters, the per-tag ledger, and the
-// allocation histogram straight out of a running engine. Built from values
-// passed in rather than read from the globals here, so the reply shape is
-// testable without a live process.
+//! The `memory` query: what the process is holding, and who reports holding it.
+//!
+//! The same numbers the Health panel draws, on a surface that needs no window --
+//! a headless check can read the heap counters, the per-tag ledger, and the
+//! allocation histogram straight out of a running engine. Built from values
+//! passed in rather than read from the globals here, so the reply shape is
+//! testable without a live process.
 
 use concinnity_core::ecs::ScratchStats;
 use concinnity_core::memory::{LedgerSnapshot, MemStats, Realm, SizeClass};

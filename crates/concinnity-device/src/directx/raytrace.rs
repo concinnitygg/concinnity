@@ -1,40 +1,38 @@
-// src/directx/raytrace.rs
-//
-// DXR (DirectX Raytracing) acceleration structures for the hardware ray-traced
-// reflection pass. Builds, from the shared static vertex / index buffers and the
-// `DrawObject` + `InstancedCluster` lists, the bottom- and top-level
-// acceleration structures (BLAS / TLAS) the inline-`RayQuery` reflection shader
-// traces against, plus a per-instance geometry table the shader uses to fetch
-// the hit triangle and shade it.
-//
-// One triangle BLAS per participating static object (over its slice of the
-// shared buffers) and one per instanced cluster; one TLAS instance per object
-// and one per cluster instance (transform = the object/instance model matrix,
-// `InstanceID` = the geometry-table index). The BLAS describe object-space
-// geometry and never change for a rigid transform; only the TLAS instance
-// transforms (and the geometry table's per-instance model matrices the shader
-// shades with) move when a prop moves.
-//
-// Mirrors `metal/raytrace.rs`. Skinned geometry is added per frame
-// (`rebuild_skinned`): a compute pass deforms each skinned object's bind-pose
-// vertices into a model-space buffer, one BLAS per skinned object is
-// built or refit over it, and the TLAS + geometry table are rebuilt over the
-// persistent static/cluster BLAS plus the skinned tail.
-//
-// Every resource those two per-frame paths write lives in a ring rather than
-// being allocated fresh: `skinned_ring` is one slot per frame in flight, keyed on
-// `frame_idx`, `static_ring` advances a cursor one slot per dynamic-transform
-// rebuild, and the build scratch both paths record over is one buffer per frame
-// in flight too (see `ScratchRing`). All are rewritten in place and grown only on
-// demand, so a steady scene allocates nothing after warm-up. The ring rule they
-// rest on is that the frame-begin fence wait retires a slot's previous writer
-// before the next one touches it -- sound for the skinned path because it runs on
-// EVERY frame, and for the static path because its cursor advances per rebuild
-// rather than per frame (a sparsely-moving scene traces one TLAS across many
-// frames, so a frame-keyed slot could be reused while a live trace still reads
-// it). See `SkinnedFrameRing` / `StaticFrameRing`. Only the rare incremental
-// topology refresh still allocates fresh and parks its orphans (and its own
-// dedicated scratch) in `retire`.
+//! DXR (DirectX Raytracing) acceleration structures for the hardware ray-traced
+//! reflection pass. Builds, from the shared static vertex / index buffers and the
+//! `DrawObject` + `InstancedCluster` lists, the bottom- and top-level
+//! acceleration structures (BLAS / TLAS) the inline-`RayQuery` reflection shader
+//! traces against, plus a per-instance geometry table the shader uses to fetch
+//! the hit triangle and shade it.
+//!
+//! One triangle BLAS per participating static object (over its slice of the
+//! shared buffers) and one per instanced cluster; one TLAS instance per object
+//! and one per cluster instance (transform = the object/instance model matrix,
+//! `InstanceID` = the geometry-table index). The BLAS describe object-space
+//! geometry and never change for a rigid transform; only the TLAS instance
+//! transforms (and the geometry table's per-instance model matrices the shader
+//! shades with) move when a prop moves.
+//!
+//! Mirrors `metal/raytrace.rs`. Skinned geometry is added per frame
+//! (`rebuild_skinned`): a compute pass deforms each skinned object's bind-pose
+//! vertices into a model-space buffer, one BLAS per skinned object is
+//! built or refit over it, and the TLAS + geometry table are rebuilt over the
+//! persistent static/cluster BLAS plus the skinned tail.
+//!
+//! Every resource those two per-frame paths write lives in a ring rather than
+//! being allocated fresh: `skinned_ring` is one slot per frame in flight, keyed on
+//! `frame_idx`, `static_ring` advances a cursor one slot per dynamic-transform
+//! rebuild, and the build scratch both paths record over is one buffer per frame
+//! in flight too (see `ScratchRing`). All are rewritten in place and grown only on
+//! demand, so a steady scene allocates nothing after warm-up. The ring rule they
+//! rest on is that the frame-begin fence wait retires a slot's previous writer
+//! before the next one touches it -- sound for the skinned path because it runs on
+//! EVERY frame, and for the static path because its cursor advances per rebuild
+//! rather than per frame (a sparsely-moving scene traces one TLAS across many
+//! frames, so a frame-keyed slot could be reused while a live trace still reads
+//! it). See `SkinnedFrameRing` / `StaticFrameRing`. Only the rare incremental
+//! topology refresh still allocates fresh and parks its orphans (and its own
+//! dedicated scratch) in `retire`.
 
 use concinnity_core::gfx::render_types::{
     DrawObject, InstancedCluster, RtGeomEntry, SkinnedDrawObject,

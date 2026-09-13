@@ -1,53 +1,51 @@
-// src/vulkan/allocator.rs
-//
-// The device-memory allocator every persistent Vulkan resource is created
-// through. Buffers and images are suballocated out of a few large
-// `VkDeviceMemory` blocks instead of each owning one.
-//
-// `vkAllocateMemory` is a scarce call. `maxMemoryAllocationCount` is commonly
-// 4096 on desktop drivers and lower elsewhere, and it is a hard cap: past it
-// allocation fails outright, however much memory is free. One allocation per
-// resource spends that budget on resource count, so a world within the byte
-// budget can still fail to load. Blocks make the cap a function of bytes
-// rather than of how many things the world holds.
-//
-// `block_alloc::BlockAllocator` decides which block and what offset; this file
-// is what makes those decisions Vulkan. The split is the same one the transient
-// image pool uses: shared placement policy, backend-specific binding.
-//
-// Blocks are separated into pools by three properties, because each is fixed
-// for the lifetime of an allocation and cannot be mixed within one:
-//
-//   memory type      what `vkAllocateMemory` was given; a resource can only
-//                    bind to memory of a type its requirements permit
-//   tiling class     Vulkan requires linear and optimal-tiling resources
-//                    sharing an allocation to be separated by
-//                    `bufferImageGranularity`. Separate pools remove the
-//                    constraint rather than paying to honor it.
-//   device address   `VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT` is a property of
-//                    the allocation, not the buffer, so ray-tracing buffers
-//                    that need `vkGetBufferDeviceAddress` need their own blocks
-//
-// Host-visible blocks are mapped once, at block creation, and stay mapped.
-// Vulkan forbids mapping one allocation twice, so a per-resource map is not
-// even available once resources share a block; each resource carries a pointer
-// to its own bytes at its own offset into the block's mapping. Every
-// host-visible memory type this backend allocates is coherent, so the pointers
-// need no flush discipline.
-//
-// Lifetime is RAII, like the Metal and D3D12 pools. Dropping a `PooledBuffer` /
-// `PooledImage` returns its range to the pool and queues its Vulkan handles for
-// destruction, both withheld until `frames_in_flight + 1` frame ticks have
-// passed, which covers any command buffer that could still reference them. A
-// caller therefore never destroys, frees, or reasons about GPU progress on
-// teardown; assignment and drop are the whole discipline. The leases are
-// cloneable so a resource can be held by a ring slot and the live field that
-// reads it at once.
-//
-// The `Rc` behind the leases is main-thread state, on the same invariant as
-// `unsafe impl Send for VkContext`: the context migrates between threads but is
-// only ever used from one at a time, and workers given `&VkContext` only read
-// handles, never drop or allocate.
+//! The device-memory allocator every persistent Vulkan resource is created
+//! through. Buffers and images are suballocated out of a few large
+//! `VkDeviceMemory` blocks instead of each owning one.
+//!
+//! `vkAllocateMemory` is a scarce call. `maxMemoryAllocationCount` is commonly
+//! 4096 on desktop drivers and lower elsewhere, and it is a hard cap: past it
+//! allocation fails outright, however much memory is free. One allocation per
+//! resource spends that budget on resource count, so a world within the byte
+//! budget can still fail to load. Blocks make the cap a function of bytes
+//! rather than of how many things the world holds.
+//!
+//! `block_alloc::BlockAllocator` decides which block and what offset; this file
+//! is what makes those decisions Vulkan. The split is the same one the transient
+//! image pool uses: shared placement policy, backend-specific binding.
+//!
+//! Blocks are separated into pools by three properties, because each is fixed
+//! for the lifetime of an allocation and cannot be mixed within one:
+//!
+//!   memory type      what `vkAllocateMemory` was given; a resource can only
+//!                    bind to memory of a type its requirements permit
+//!   tiling class     Vulkan requires linear and optimal-tiling resources
+//!                    sharing an allocation to be separated by
+//!                    `bufferImageGranularity`. Separate pools remove the
+//!                    constraint rather than paying to honor it.
+//!   device address   `VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT` is a property of
+//!                    the allocation, not the buffer, so ray-tracing buffers
+//!                    that need `vkGetBufferDeviceAddress` need their own blocks
+//!
+//! Host-visible blocks are mapped once, at block creation, and stay mapped.
+//! Vulkan forbids mapping one allocation twice, so a per-resource map is not
+//! even available once resources share a block; each resource carries a pointer
+//! to its own bytes at its own offset into the block's mapping. Every
+//! host-visible memory type this backend allocates is coherent, so the pointers
+//! need no flush discipline.
+//!
+//! Lifetime is RAII, like the Metal and D3D12 pools. Dropping a `PooledBuffer` /
+//! `PooledImage` returns its range to the pool and queues its Vulkan handles for
+//! destruction, both withheld until `frames_in_flight + 1` frame ticks have
+//! passed, which covers any command buffer that could still reference them. A
+//! caller therefore never destroys, frees, or reasons about GPU progress on
+//! teardown; assignment and drop are the whole discipline. The leases are
+//! cloneable so a resource can be held by a ring slot and the live field that
+//! reads it at once.
+//!
+//! The `Rc` behind the leases is main-thread state, on the same invariant as
+//! `unsafe impl Send for VkContext`: the context migrates between threads but is
+//! only ever used from one at a time, and workers given `&VkContext` only read
+//! handles, never drop or allocate.
 
 use ash::{Device, vk};
 use concinnity_core::render::error;

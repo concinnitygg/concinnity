@@ -1,5 +1,3 @@
-// src/components/collider.rs
-
 use crate::components::PropCollider;
 
 /// Collision volume attached to an entity, in local space scaled by the

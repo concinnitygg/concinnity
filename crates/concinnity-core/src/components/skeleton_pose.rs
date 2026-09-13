@@ -1,5 +1,3 @@
-// src/components/skeleton_pose.rs
-
 use alloc::vec::Vec;
 
 use crate::ecs::SkinnedMeshHandle;

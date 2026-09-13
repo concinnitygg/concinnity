@@ -1,11 +1,9 @@
-// src/editor/hook/edit/asset_tree.rs
-//
-// EditorHook: the Assets panel's drive. Owns when the cooked tree is rebuilt
-// (an expansion is far too costly per frame, so it is recomputed only when the
-// panel is up and something changed), the fold state, the search field, the "+"
-// type picker, the editor-session hide / lock sets, and the two-way selection
-// sync with the viewport (a row click drives the same selection set
-// `hook/pick.rs` fills; a viewport pick unfolds and scrolls to its row).
+//! EditorHook: the Assets panel's drive. Owns when the cooked tree is rebuilt
+//! (an expansion is far too costly per frame, so it is recomputed only when the
+//! panel is up and something changed), the fold state, the search field, the "+"
+//! type picker, the editor-session hide / lock sets, and the two-way selection
+//! sync with the viewport (a row click drives the same selection set
+//! `hook/pick.rs` fills; a viewport pick unfolds and scrolls to its row).
 
 use concinnity_cook::authoring::world::write_world_jsonl;
 use concinnity_core::components::FrameInput;

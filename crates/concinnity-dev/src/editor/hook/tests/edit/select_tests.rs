@@ -1,9 +1,7 @@
-// src/editor/hook/tests/edit/select_tests.rs
-//
-// The /select console command's dispatch. Resolution itself is pure
-// (`editor/select_related.rs`); what is asserted here is what the dispatch adds:
-// which entry list each relationship is fed, that a hit replaces the selection
-// wholesale, and that a miss reports without disturbing what was selected.
+//! The /select console command's dispatch. Resolution itself is pure
+//! (`editor/select_related.rs`); what is asserted here is what the dispatch adds:
+//! which entry list each relationship is fed, that a hit replaces the selection
+//! wholesale, and that a miss reports without disturbing what was selected.
 
 use concinnity_core::ecs::World;
 

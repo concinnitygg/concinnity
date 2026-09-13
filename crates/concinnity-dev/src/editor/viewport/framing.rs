@@ -1,9 +1,7 @@
-// src/editor/viewport/framing.rs
-//
-// Pure camera-framing math: selection bounds union, the distance that fits a
-// bounding sphere in the view frustum, and the eased pose interpolation the
-// glide drive steps through. No world or hook access, so all of it is
-// unit-tested directly.
+//! Pure camera-framing math: selection bounds union, the distance that fits a
+//! bounding sphere in the view frustum, and the eased pose interpolation the
+//! glide drive steps through. No world or hook access, so all of it is
+//! unit-tested directly.
 
 // A free camera pose, the unit the glide and the bookmarks move around.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]

@@ -1,8 +1,6 @@
-// src/metal/resources/streaming.rs
-//
-// Per-mesh upload / eviction into the shared static-mesh vertex + index
-// buffers via the sub-allocators, plus in-place per-slot updates for asset
-// hot-reload.
+//! Per-mesh upload / eviction into the shared static-mesh vertex + index
+//! buffers via the sub-allocators, plus in-place per-slot updates for asset
+//! hot-reload.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::mesh_payload::Vertex;

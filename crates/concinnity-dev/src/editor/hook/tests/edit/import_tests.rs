@@ -1,9 +1,7 @@
-// src/editor/hook/tests/edit/import_tests.rs
-//
-// The Import panel's actions (`hook/edit/import.rs`): the entry a resolved
-// file adds, the name collision it works around, what it refuses, the
-// environment map an HDR resolves to and the retarget of an existing one, and
-// the relative path the native browse fills in.
+//! The Import panel's actions (`hook/edit/import.rs`): the entry a resolved
+//! file adds, the name collision it works around, what it refuses, the
+//! environment map an HDR resolves to and the retarget of an existing one, and
+//! the relative path the native browse fills in.
 
 use concinnity_core::components::InputKey;
 use concinnity_core::ecs::World;

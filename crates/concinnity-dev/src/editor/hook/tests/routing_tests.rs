@@ -1,10 +1,8 @@
-// src/editor/hook/tests/routing_tests.rs
-//
-// What a frame's input reaches (`hook/routing.rs`): the state a session opens
-// in, Escape handing the cursor back, F1 hiding the HUD, a drag that crosses a
-// control without triggering it, and the panel actions each apply path
-// consumes. What those actions then do to the world is asserted beside the
-// module that does it.
+//! What a frame's input reaches (`hook/routing.rs`): the state a session opens
+//! in, Escape handing the cursor back, F1 hiding the HUD, a drag that crosses a
+//! control without triggering it, and the panel actions each apply path
+//! consumes. What those actions then do to the world is asserted beside the
+//! module that does it.
 
 use concinnity_core::components::FrameInput;
 

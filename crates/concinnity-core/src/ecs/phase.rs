@@ -1,14 +1,12 @@
-// src/ecs/phase.rs
-//
-// Where in a tick a system runs. Every table row carries one, and a system
-// registered from outside the engine names one instead of naming a table entry:
-// the table stays the one document, its entries stay internal, and its order is
-// free to change as long as each row keeps its phase.
-//
-// The merge rule is one line: phases run in declaration order, and within a
-// phase every table row runs before every registered system. Table order is
-// therefore unchanged by any registration, which is what keeps a table
-// readable as the tick.
+//! Where in a tick a system runs. Every table row carries one, and a system
+//! registered from outside the engine names one instead of naming a table entry:
+//! the table stays the one document, its entries stay internal, and its order is
+//! free to change as long as each row keeps its phase.
+//!
+//! The merge rule is one line: phases run in declaration order, and within a
+//! phase every table row runs before every registered system. Table order is
+//! therefore unchanged by any registration, which is what keeps a table
+//! readable as the tick.
 
 /// Where in a tick a system runs.
 ///

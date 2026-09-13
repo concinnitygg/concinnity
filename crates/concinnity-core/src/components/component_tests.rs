@@ -1,13 +1,11 @@
-// src/components/component_tests.rs
-//
-// Serde / default / round-trip coverage for the data-only components whose
-// `Component` impls are generated centrally (see `cn_impl_components!`). These
-// checks are uniform in shape and were kept beside each type before its
-// hand-written impl was removed; they live together here now that the per-type
-// modules are gone. One submodule per component.
-//
-// The authoring-only vocabulary is not covered here: those types are not
-// components, and their schema checks live beside them in their own modules.
+//! Serde / default / round-trip coverage for the data-only components whose
+//! `Component` impls are generated centrally (see `cn_impl_components!`). These
+//! checks are uniform in shape and were kept beside each type before its
+//! hand-written impl was removed; they live together here now that the per-type
+//! modules are gone. One submodule per component.
+//!
+//! The authoring-only vocabulary is not covered here: those types are not
+//! components, and their schema checks live beside them in their own modules.
 
 use alloc::string::ToString;
 use alloc::vec;

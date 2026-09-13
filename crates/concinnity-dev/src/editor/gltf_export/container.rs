@@ -1,8 +1,6 @@
-// src/editor/gltf_export/container.rs
-//
-// The GLB container: 12-byte header, then a JSON chunk and a BIN chunk, each
-// padded to a 4-byte boundary as the glTF 2.0 spec requires (JSON with spaces,
-// BIN with zeros).
+//! The GLB container: 12-byte header, then a JSON chunk and a BIN chunk, each
+//! padded to a 4-byte boundary as the glTF 2.0 spec requires (JSON with spaces,
+//! BIN with zeros).
 
 // Wrap serialized glTF JSON and its binary buffer into a GLB byte stream.
 pub(crate) fn wrap_glb(mut json: Vec<u8>, mut bin: Vec<u8>) -> Vec<u8> {

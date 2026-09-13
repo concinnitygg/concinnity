@@ -1,5 +1,3 @@
-// src/gfx/anim_graph/tests.rs
-
 use super::*;
 use crate::gfx::pose_scratch::PoseScratch;
 use crate::gfx::skeleton::{AnimationClip, Joint, JointPose, JointTrack, Keyframe, Skeleton};

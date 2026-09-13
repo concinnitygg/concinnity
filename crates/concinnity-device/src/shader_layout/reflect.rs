@@ -1,16 +1,14 @@
-// src/shader_layout/reflect.rs
-//
-// slangc's `-reflection-json` for one program, reduced to the byte layout of
-// every struct it declares. The JSON nests a struct wherever it is used -- as a
-// constant buffer's element, a structured buffer's record, or the type of
-// another struct's field -- so the reader walks the whole tree and keys what it
-// finds by struct name.
-//
-// A struct's fields carry `{"kind": "uniform", "offset", "size"}`; a constant
-// buffer additionally states the block size its element occupies, which a
-// structured-buffer record has no equivalent for. Vertex inputs carry
-// `varyingInput` bindings with attribute indices instead of byte offsets, so
-// they never appear here.
+//! slangc's `-reflection-json` for one program, reduced to the byte layout of
+//! every struct it declares. The JSON nests a struct wherever it is used -- as a
+//! constant buffer's element, a structured buffer's record, or the type of
+//! another struct's field -- so the reader walks the whole tree and keys what it
+//! finds by struct name.
+//!
+//! A struct's fields carry `{"kind": "uniform", "offset", "size"}`; a constant
+//! buffer additionally states the block size its element occupies, which a
+//! structured-buffer record has no equivalent for. Vertex inputs carry
+//! `varyingInput` bindings with attribute indices instead of byte offsets, so
+//! they never appear here.
 
 use serde_json::Value;
 use std::collections::BTreeMap;

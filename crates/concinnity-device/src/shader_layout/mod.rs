@@ -1,38 +1,36 @@
-// src/shader_layout/mod.rs
-//
-// Layout drift guard for the `#[repr(C)]` structs the CPU uploads into the
-// single-source `.slang` shaders. The expected offsets and sizes are not
-// written down here: they come from `slangc -reflection-json` over the same
-// source the renderer compiles, per target, so an edit on either side of the
-// boundary fails the check.
-//
-// That is the difference from a hand-written assert. A hand assert pins the
-// Rust struct against a number and a comment describing what the shader is
-// believed to do, and nothing checks the comment; a shader-side edit -- the
-// direction that actually broke things during the single-source migration --
-// slides straight past it.
-//
-// The reflection is taken per target because the three do not agree. MSL sizes
-// a `float3` at 16 bytes -- in a structured buffer as much as in a constant
-// buffer -- where SPIR-V and DXIL pack a scalar after it at 12, and SPIR-V
-// aligns a following `float2` to 16 where neither of the others does. The
-// engine's `.slang` sources avoid both shapes on purpose (`float4` lanes
-// instead of `float3` + scalar), so today the three agree on every mirrored
-// struct -- which is itself worth asserting rather than assuming. The block
-// sizes already differ: DirectX reports a 276-byte `ShadowUniforms` block where
-// Metal and SPIR-V round it to 288.
-//
-// Not every layout assert can move here. The Metal ICB encode kernel is
-// hand-written, so its parameter block has no `.slang` to reflect and its hand
-// assert is the only check it has. Vertex
-// payloads are the other exclusion: slangc binds a vertex input by attribute
-// index, not byte offset, so `Vertex` / `SkinnedVertex` / `MorphEntry` /
-// `TextVertex` / `LineVertex` reflect no layout at all -- where a kernel
-// byte-addresses those payloads instead, `byte_offsets` locks its constants to
-// the mirrors, which reflection cannot do.
-//
-// World Shaders declare no layout of their own: they compile from the engine's
-// own main-pass files with their hooks spliced in, so these mirrors cover them.
+//! Layout drift guard for the `#[repr(C)]` structs the CPU uploads into the
+//! single-source `.slang` shaders. The expected offsets and sizes are not
+//! written down here: they come from `slangc -reflection-json` over the same
+//! source the renderer compiles, per target, so an edit on either side of the
+//! boundary fails the check.
+//!
+//! That is the difference from a hand-written assert. A hand assert pins the
+//! Rust struct against a number and a comment describing what the shader is
+//! believed to do, and nothing checks the comment; a shader-side edit -- the
+//! direction that actually broke things during the single-source migration --
+//! slides straight past it.
+//!
+//! The reflection is taken per target because the three do not agree. MSL sizes
+//! a `float3` at 16 bytes -- in a structured buffer as much as in a constant
+//! buffer -- where SPIR-V and DXIL pack a scalar after it at 12, and SPIR-V
+//! aligns a following `float2` to 16 where neither of the others does. The
+//! engine's `.slang` sources avoid both shapes on purpose (`float4` lanes
+//! instead of `float3` + scalar), so today the three agree on every mirrored
+//! struct -- which is itself worth asserting rather than assuming. The block
+//! sizes already differ: DirectX reports a 276-byte `ShadowUniforms` block where
+//! Metal and SPIR-V round it to 288.
+//!
+//! Not every layout assert can move here. The Metal ICB encode kernel is
+//! hand-written, so its parameter block has no `.slang` to reflect and its hand
+//! assert is the only check it has. Vertex
+//! payloads are the other exclusion: slangc binds a vertex input by attribute
+//! index, not byte offset, so `Vertex` / `SkinnedVertex` / `MorphEntry` /
+//! `TextVertex` / `LineVertex` reflect no layout at all -- where a kernel
+//! byte-addresses those payloads instead, `byte_offsets` locks its constants to
+//! the mirrors, which reflection cannot do.
+//!
+//! World Shaders declare no layout of their own: they compile from the engine's
+//! own main-pass files with their hooks spliced in, so these mirrors cover them.
 
 mod byte_offsets;
 mod mirror;

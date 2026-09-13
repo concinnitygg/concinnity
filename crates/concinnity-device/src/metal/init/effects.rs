@@ -1,9 +1,7 @@
-// src/metal/init/effects.rs
-//
-// Post-process pipeline + target construction extracted from MtlContext::new:
-// bloom, TAA + velocity pre-pass, SSAO, SSR, projected decals, volumetric fog,
-// and auto-exposure. Each block is gated on the relevant world setting so a
-// world that disables an effect pays zero construction cost.
+//! Post-process pipeline + target construction extracted from MtlContext::new:
+//! bloom, TAA + velocity pre-pass, SSAO, SSR, projected decals, volumetric fog,
+//! and auto-exposure. Each block is gated on the relevant world setting so a
+//! world that disables an effect pays zero construction cost.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::auto_exposure;

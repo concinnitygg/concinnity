@@ -1,27 +1,25 @@
-// src/metal/rt_ring.rs
-//
-// Per-in-flight-frame storage for the ray-tracing structures the skinned update
-// rewrites every frame: the deformed-vertex buffer, one BLAS per skinned object,
-// the TLAS, and the instance / geometry-table / build-scratch buffers.
-//
-// The skinned update used to allocate all of those fresh every frame and park
-// the outgoing set in the `RetirePool`. That is correct but it is device-
-// allocator traffic at frame rate. Because the skinned update runs on EVERY
-// frame, its outputs fit the ring rule the upload buffers in `transient.rs`
-// already follow: frame `R` writes slot `R % depth` and is the only frame that
-// binds it, and the frames-in-flight fence guarantees the previous writer of
-// that slot (frame `R - depth`) has retired on the GPU. So a slot's storage can
-// simply be rebuilt in place.
-//
-// The rule does NOT extend to the static `rebuild_tlas` path. A sparsely-moving
-// scene keeps tracing one TLAS across many frames without rebuilding, so that
-// structure is read by frames the fence does not pair with its writer; see the
-// `RetirePool` doc comment. Anything published from a ring slot must therefore
-// be unpublished the moment the skinned path stops running, which is what
-// `RtFrameSlot::release` is for.
-//
-// Sizes are high-water: a slot never shrinks, so a steady scene allocates once
-// and then does nothing.
+//! Per-in-flight-frame storage for the ray-tracing structures the skinned update
+//! rewrites every frame: the deformed-vertex buffer, one BLAS per skinned object,
+//! the TLAS, and the instance / geometry-table / build-scratch buffers.
+//!
+//! The skinned update used to allocate all of those fresh every frame and park
+//! the outgoing set in the `RetirePool`. That is correct but it is device-
+//! allocator traffic at frame rate. Because the skinned update runs on EVERY
+//! frame, its outputs fit the ring rule the upload buffers in `transient.rs`
+//! already follow: frame `R` writes slot `R % depth` and is the only frame that
+//! binds it, and the frames-in-flight fence guarantees the previous writer of
+//! that slot (frame `R - depth`) has retired on the GPU. So a slot's storage can
+//! simply be rebuilt in place.
+//!
+//! The rule does NOT extend to the static `rebuild_tlas` path. A sparsely-moving
+//! scene keeps tracing one TLAS across many frames without rebuilding, so that
+//! structure is read by frames the fence does not pair with its writer; see the
+//! `RetirePool` doc comment. Anything published from a ring slot must therefore
+//! be unpublished the moment the skinned path stops running, which is what
+//! `RtFrameSlot::release` is for.
+//!
+//! Sizes are high-water: a slot never shrinks, so a steady scene allocates once
+//! and then does nothing.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use objc2::rc::Retained;

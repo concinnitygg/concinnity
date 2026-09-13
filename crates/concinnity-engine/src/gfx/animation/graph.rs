@@ -1,10 +1,8 @@
-// src/gfx/animation/graph.rs
-//
-// The state-machine drive for a clip bucket: an `AnimationGraph` compiled at init
-// owns the target, playing one state at a time and crossfading over
-// transitions. Transition conditions read the target's `AnimationParams`
-// component, which gameplay systems (or the `anim-param` debug command)
-// write; the graph math itself lives in `concinnity_core::gfx::anim_graph`.
+//! The state-machine drive for a clip bucket: an `AnimationGraph` compiled at init
+//! owns the target, playing one state at a time and crossfading over
+//! transitions. Transition conditions read the target's `AnimationParams`
+//! component, which gameplay systems (or the `anim-param` debug command)
+//! write; the graph math itself lives in `concinnity_core::gfx::anim_graph`.
 
 use concinnity_core::components::{AnimationGraph, AnimationParams, GroundProbes, SkeletonPose};
 use concinnity_core::ecs::{PipelineContext, SkinnedMeshHandle};

@@ -1,8 +1,6 @@
-// src/editor/hook/bookmarks.rs
-//
-// EditorHook: camera bookmarks. Ctrl+1..9 saves the current camera pose to a
-// numbered slot, 1..9 glides back to it. Slots persist per world in the
-// project's editor session store (`editor/session_store.rs`).
+//! EditorHook: camera bookmarks. Ctrl+1..9 saves the current camera pose to a
+//! numbered slot, 1..9 glides back to it. Slots persist per world in the
+//! project's editor session store (`editor/session_store.rs`).
 
 use concinnity_core::components::InputKey;
 use concinnity_core::ecs::World;

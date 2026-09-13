@@ -1,7 +1,5 @@
-// src/editor/hook/tests/drive/modal_tests.rs
-//
-// Tests for the confirmation dialog: the open / press / close flow, the
-// screen-modal press and wheel lockout, and its place in the draw layers.
+//! Tests for the confirmation dialog: the open / press / close flow, the
+//! screen-modal press and wheel lockout, and its place in the draw layers.
 
 use concinnity_core::components::{FrameInput, Sprite, TextLabel};
 use concinnity_core::ecs::World;

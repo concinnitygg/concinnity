@@ -1,9 +1,7 @@
-// src/editor/session_store.rs
-//
-// Persisted editor session state: one small CBOR file per project at
-// `<writable state dir>/editor`, keyed by world file stem so several worlds in
-// a project keep separate entries. Load tolerates a missing or unreadable
-// file (fresh default); save is whole-file, the store is tiny.
+//! Persisted editor session state: one small CBOR file per project at
+//! `<writable state dir>/editor`, keyed by world file stem so several worlds in
+//! a project keep separate entries. Load tolerates a missing or unreadable
+//! file (fresh default); save is whole-file, the store is tiny.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

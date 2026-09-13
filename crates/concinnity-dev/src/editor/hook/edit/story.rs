@@ -1,15 +1,13 @@
-// src/editor/hook/edit/story.rs
-//
-// EditorHook: the Story panel's actions. The panel is a line editor over the
-// Markdown source file of the world's first `StoryImport` entry (`story.rs`
-// owns the text model). Because the cook reads story sources from disk, Apply
-// VALIDATES the joined text with the real story parser and then writes the
-// file (the one editor action that persists outside SAVE -- an in-memory
-// preview of a file-backed source is impossible), then refreshes the live
-// preview. Line editing rides the engine's single-line `TextInput`: the hook
-// handles Enter (split), Up / Down (navigate), and Backspace at column 0
-// (join) from the frame's captured key, delivered only while the panel is the
-// frontmost open panel.
+//! EditorHook: the Story panel's actions. The panel is a line editor over the
+//! Markdown source file of the world's first `StoryImport` entry (`story.rs`
+//! owns the text model). Because the cook reads story sources from disk, Apply
+//! VALIDATES the joined text with the real story parser and then writes the
+//! file (the one editor action that persists outside SAVE -- an in-memory
+//! preview of a file-backed source is impossible), then refreshes the live
+//! preview. Line editing rides the engine's single-line `TextInput`: the hook
+//! handles Enter (split), Up / Down (navigate), and Backspace at column 0
+//! (join) from the frame's captured key, delivered only while the panel is the
+//! frontmost open panel.
 
 use concinnity_core::components::FrameInput;
 use concinnity_core::components::InputKey;

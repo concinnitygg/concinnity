@@ -1,19 +1,17 @@
-// src/editor/viewport/billboards.rs
-//
-// Editor-only viewport billboards: a constant screen-size icon over every
-// authored asset that has a world position but no rendered geometry (lights,
-// trigger volumes, probes, cameras), so those assets can be seen, picked, and
-// moved like anything else. This module is the pure half: the registry-driven
-// eligibility, the glyph / tint derivation, the projection and hit-test math,
-// the trigger-volume outline layout, and the injected sprite / label pools.
-// The hook (`hook/drive/billboard.rs`) resolves entries to live entities and
-// drives the per-frame placement.
-//
-// Occlusion: billboards live in the window-space overlay, so they always draw
-// on top of the 3D scene (no depth test against it) and under the floating
-// panels. Always-on-top is the v1 choice; a depth-aware fade would need the
-// scene depth buffer on the CPU or a shader change, neither of which an icon
-// earns yet.
+//! Editor-only viewport billboards: a constant screen-size icon over every
+//! authored asset that has a world position but no rendered geometry (lights,
+//! trigger volumes, probes, cameras), so those assets can be seen, picked, and
+//! moved like anything else. This module is the pure half: the registry-driven
+//! eligibility, the glyph / tint derivation, the projection and hit-test math,
+//! the trigger-volume outline layout, and the injected sprite / label pools.
+//! The hook (`hook/drive/billboard.rs`) resolves entries to live entities and
+//! drives the per-frame placement.
+//!
+//! Occlusion: billboards live in the window-space overlay, so they always draw
+//! on top of the 3D scene (no depth test against it) and under the floating
+//! panels. Always-on-top is the v1 choice; a depth-aware fade would need the
+//! scene depth buffer on the CPU or a shader change, neither of which an icon
+//! earns yet.
 
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_core::components::Sprite;

@@ -1,13 +1,11 @@
-// src/editor/hook/drag/content.rs
-//
-// EditorHook: drag-out placement from the Content panel. A press on a grid
-// cell arms a drag; once the cursor travels past the slop and leaves the
-// panel, a dotted ghost box follows the surface under the cursor (nearest
-// pick-index hit, else the ground plane); release commits one authored entry
-// through the same path every other creation uses -- one undo step -- and
-// selects it. Dragging a Material instead assigns it to the Prop under the
-// cursor. Escape cancels; a release back over the panel is just the click
-// that already selected the cell.
+//! EditorHook: drag-out placement from the Content panel. A press on a grid
+//! cell arms a drag; once the cursor travels past the slop and leaves the
+//! panel, a dotted ghost box follows the surface under the cursor (nearest
+//! pick-index hit, else the ground plane); release commits one authored entry
+//! through the same path every other creation uses -- one undo step -- and
+//! selects it. Dragging a Material instead assigns it to the Prop under the
+//! cursor. Escape cancels; a release back over the panel is just the click
+//! that already selected the cell.
 
 use concinnity_core::components::{Camera3D, FrameInput, Transform};
 use concinnity_core::ecs::PickIndex;

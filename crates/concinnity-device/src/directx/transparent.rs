@@ -1,39 +1,37 @@
-// src/directx/transparent.rs
-//
-// The engine's `PassId::Transparent` slot on the D3D12 backend: one pass, drawn
-// after the SSR resolve and before TAA, with three producers -- glass panes
-// (`glass.rs`), water surfaces (`water.rs`), and see-through glass meshes
-// (`glass.rs` as well, since a mesh is the same material family as a pane). The
-// pass snapshots the pre-transparent scene, orders every record of every
-// producer back-to-front by camera distance, and draws them into the post-SSR
-// scene target with straight-alpha blending.
-//
-// The pane and water producers contribute records built once at init. The mesh
-// producer cannot: a see-through mesh draws from the SHARED scene vertex / index
-// buffers at the offsets its `DrawObject` carries, and both those offsets (LOD
-// picks per frame) and its params (model matrix, material tint) change at
-// runtime. So it owns only its pipelines plus a per-frame params ring, and the
-// encoder rebuilds its draw list each frame.
-//
-// One pass rather than one per producer, mirroring the Metal backend: the scene
-// snapshot the refraction taps is a full render-resolution HDR image and a copy
-// of it every frame, so a second one would be pure waste; and a single ordering
-// over both producers is what puts a pane standing in a pool on the correct side
-// of the water.
-//
-// The producers also share their root signatures, because `glass.slang`,
-// `water.slang` and `glass_mesh.slang` declare the same registers on purpose.
-// There are two: the base
-// signature (probe / planar reflection) and the RT one, whose ray-tracing SRVs
-// at t4..t10 push the probe cube array to t20. Which one runs is a per-frame
-// choice, not a per-producer one -- see `DxContext::rt_transparent_active`.
-//
-// The shaders are the shared `shaders/{glass,glass_mesh,water}.slang`, compiled
-// through `slang_builtins`; the ray-traced fragments need shader model 6.5 for
-// their inline ray query, the base pairs 6.0. The mesh producer is ray-traced
-// only -- the per-pixel trace is what makes it see-through rather than the
-// opaque reflective glass the main pass draws -- so it runs only under the RT
-// root signature and is inert while RT is off.
+//! The engine's `PassId::Transparent` slot on the D3D12 backend: one pass, drawn
+//! after the SSR resolve and before TAA, with three producers -- glass panes
+//! (`glass.rs`), water surfaces (`water.rs`), and see-through glass meshes
+//! (`glass.rs` as well, since a mesh is the same material family as a pane). The
+//! pass snapshots the pre-transparent scene, orders every record of every
+//! producer back-to-front by camera distance, and draws them into the post-SSR
+//! scene target with straight-alpha blending.
+//!
+//! The pane and water producers contribute records built once at init. The mesh
+//! producer cannot: a see-through mesh draws from the SHARED scene vertex / index
+//! buffers at the offsets its `DrawObject` carries, and both those offsets (LOD
+//! picks per frame) and its params (model matrix, material tint) change at
+//! runtime. So it owns only its pipelines plus a per-frame params ring, and the
+//! encoder rebuilds its draw list each frame.
+//!
+//! One pass rather than one per producer, mirroring the Metal backend: the scene
+//! snapshot the refraction taps is a full render-resolution HDR image and a copy
+//! of it every frame, so a second one would be pure waste; and a single ordering
+//! over both producers is what puts a pane standing in a pool on the correct side
+//! of the water.
+//!
+//! The producers also share their root signatures, because `glass.slang`,
+//! `water.slang` and `glass_mesh.slang` declare the same registers on purpose.
+//! There are two: the base
+//! signature (probe / planar reflection) and the RT one, whose ray-tracing SRVs
+//! at t4..t10 push the probe cube array to t20. Which one runs is a per-frame
+//! choice, not a per-producer one -- see `DxContext::rt_transparent_active`.
+//!
+//! The shaders are the shared `shaders/{glass,glass_mesh,water}.slang`, compiled
+//! through `slang_builtins`; the ray-traced fragments need shader model 6.5 for
+//! their inline ray query, the base pairs 6.0. The mesh producer is ray-traced
+//! only -- the per-pixel trace is what makes it see-through rather than the
+//! opaque reflective glass the main pass draws -- so it runs only under the RT
+//! root signature and is inert while RT is off.
 
 use concinnity_core::components::{GlassPanel, WaterSurface};
 use concinnity_core::gfx::lod;

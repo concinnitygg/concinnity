@@ -1,8 +1,6 @@
-// src/appkit/chrome.rs
-//
-// NSWindow creation and chrome styling, shared by both macOS backends and by
-// the settings-menu mode switch (`window::set_window_mode`), so all three agree
-// on what a windowed window looks like.
+//! NSWindow creation and chrome styling, shared by both macOS backends and by
+//! the settings-menu mode switch (`window::set_window_mode`), so all three agree
+//! on what a windowed window looks like.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use objc2::MainThreadOnly;

@@ -1,10 +1,8 @@
-// src/editor/gltf_export/mod.rs
-//
-// glTF 2.0 (.glb) export of a skinned mesh: geometry, skeleton, and the full
-// morph-target set, written so Blender and the engine's own glTF importer read
-// back the same joint order, joint names, and shape-key names. The writer is
-// pure data-to-bytes; `source.rs` feeds it from a compiled world and the
-// console's /export command writes the result beside the project.
+//! glTF 2.0 (.glb) export of a skinned mesh: geometry, skeleton, and the full
+//! morph-target set, written so Blender and the engine's own glTF importer read
+//! back the same joint order, joint names, and shape-key names. The writer is
+//! pure data-to-bytes; `source.rs` feeds it from a compiled world and the
+//! console's /export command writes the result beside the project.
 
 mod bake;
 mod buffer;

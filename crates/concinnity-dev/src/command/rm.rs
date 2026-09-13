@@ -1,4 +1,4 @@
-// src/cli/rm.rs: discovery wrapper around crate::rm_at_path
+//! Discovery wrapper around `crate::rm_at_path`.
 
 use concinnity_cook::authoring::world::find_world_jsonl;
 

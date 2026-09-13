@@ -1,9 +1,7 @@
-// src/gfx/anim_graph/blend.rs
-//
-// What a graph state plays: a single clip or a blendspace over one or two
-// parameters. Blendspace weights are pure functions of the parameter values,
-// so the same math serves the cursor's clock (effective duration), the pose
-// sampler, and the `anim-state` debug report.
+//! What a graph state plays: a single clip or a blendspace over one or two
+//! parameters. Blendspace weights are pure functions of the parameter values,
+//! so the same math serves the cursor's clock (effective duration), the pose
+//! sampler, and the `anim-state` debug report.
 
 use alloc::vec::Vec;
 

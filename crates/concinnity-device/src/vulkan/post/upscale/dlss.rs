@@ -1,24 +1,22 @@
-// src/vulkan/post/upscale/dlss.rs
-//
-// NVIDIA DLSS temporal upscaling for the Vulkan backend, via the raw NGX API
-// (`NVSDK_NGX_VULKAN_*`). One of the three `VkUpscaleBackend` implementations;
-// RTX-only. Compiled only when `build.rs` finds the NGX SDK and emits
-// `cfg(ngx_sdk_bundled)` (which also links `nvsdk_ngx_d.lib` and bundles
-// `nvngx_dlss.dll` next to the .exe). When the SDK is absent the whole module
-// is cfg'd out and `build_upscaler` never resolves to DLSS.
-//
-// Mirrors `directx/post/upscale/dlss.rs`: same NGX parameter-bag flow
-// (CreateFeature / EvaluateFeature record onto a command buffer), same engine
-// identity, same perf-quality mapping. The Vulkan deltas are the
-// `NVSDK_NGX_VULKAN_*` entry points (vs `NVSDK_NGX_D3D12_*`), the device /
-// instance extensions DLSS needs at creation time (queried via
-// `required_extensions`, enabled by `UpscaleSdk`), and resources passed as
-// `NVSDK_NGX_Resource_VK` through `SetVoidPointer` (vs `SetD3d12Resource`). It
-// also differs in exposure handling: it supplies an explicit 1.0 exposure
-// texture (NVIDIA's recommended path over auto-exposure) instead of the
-// auto-exposure flag the D3D12 path uses. The scene is un-exposed pre-upscale
-// (exposure + tonemap run after the upscale), so 1.0 is the identity value.
-// Validated against NGX SDK 1.5.0 by the constant + layout asserts in the tests.
+//! NVIDIA DLSS temporal upscaling for the Vulkan backend, via the raw NGX API
+//! (`NVSDK_NGX_VULKAN_*`). One of the three `VkUpscaleBackend` implementations;
+//! RTX-only. Compiled only when `build.rs` finds the NGX SDK and emits
+//! `cfg(ngx_sdk_bundled)` (which also links `nvsdk_ngx_d.lib` and bundles
+//! `nvngx_dlss.dll` next to the .exe). When the SDK is absent the whole module
+//! is cfg'd out and `build_upscaler` never resolves to DLSS.
+//!
+//! Mirrors `directx/post/upscale/dlss.rs`: same NGX parameter-bag flow
+//! (CreateFeature / EvaluateFeature record onto a command buffer), same engine
+//! identity, same perf-quality mapping. The Vulkan deltas are the
+//! `NVSDK_NGX_VULKAN_*` entry points (vs `NVSDK_NGX_D3D12_*`), the device /
+//! instance extensions DLSS needs at creation time (queried via
+//! `required_extensions`, enabled by `UpscaleSdk`), and resources passed as
+//! `NVSDK_NGX_Resource_VK` through `SetVoidPointer` (vs `SetD3d12Resource`). It
+//! also differs in exposure handling: it supplies an explicit 1.0 exposure
+//! texture (NVIDIA's recommended path over auto-exposure) instead of the
+//! auto-exposure flag the D3D12 path uses. The scene is un-exposed pre-upscale
+//! (exposure + tonemap run after the upscale), so 1.0 is the identity value.
+//! Validated against NGX SDK 1.5.0 by the constant + layout asserts in the tests.
 
 use ash::vk;
 use concinnity_core::render::error::RenderResult;

@@ -1,18 +1,16 @@
-// src/editor/hook/edit/variables.rs
-//
-// EditorHook: the Variables panel's actions. The panel edits the world's one
-// `Variables` entry the way the Behavior panel edits one behavior -- its authored
-// args directly, committing as each change is made, so the live preview rebuilds
-// and SAVE persists it like any other panel edit.
-//
-// Declaring the table is what makes it authoritative, so creating the asset is
-// never a blank act: the first declaration creates it holding that variable, and
-// a name the behaviors already use is declared with the type it is given rather
-// than being left out of a table that now has to account for it.
-//
-// The keyboard is Enter and Escape only: Enter commits the field holding it, and
-// Escape gives it up. There is no navigation to add, because the panel is one
-// list and the arrows are already what the text fields use.
+//! EditorHook: the Variables panel's actions. The panel edits the world's one
+//! `Variables` entry the way the Behavior panel edits one behavior -- its authored
+//! args directly, committing as each change is made, so the live preview rebuilds
+//! and SAVE persists it like any other panel edit.
+//!
+//! Declaring the table is what makes it authoritative, so creating the asset is
+//! never a blank act: the first declaration creates it holding that variable, and
+//! a name the behaviors already use is declared with the type it is given rather
+//! than being left out of a table that now has to account for it.
+//!
+//! The keyboard is Enter and Escape only: Enter commits the field holding it, and
+//! Escape gives it up. There is no navigation to add, because the panel is one
+//! list and the arrows are already what the text fields use.
 
 use concinnity_core::components::FrameInput;
 use concinnity_core::components::InputKey;

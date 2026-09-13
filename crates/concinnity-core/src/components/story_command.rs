@@ -1,5 +1,3 @@
-// src/components/story_command.rs
-
 /// Runtime-only event sent by UiInputSystem when a `story:*` action fires (a
 /// stage click, a Space press, a choice button, a Start / Restart button). The
 /// story system reads these and moves through the story graph. World authors

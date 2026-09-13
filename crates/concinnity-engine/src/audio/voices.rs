@@ -1,9 +1,7 @@
-// src/audio/voices.rs
-//
-// One-shot voice ledger: caps how many one-shot sounds play at once and
-// decides which playing voice a new sound may silence. Pure bookkeeping,
-// generic over the playback handle so the policy is testable without a
-// device; the engine stores kira sound handles in it.
+//! One-shot voice ledger: caps how many one-shot sounds play at once and
+//! decides which playing voice a new sound may silence. Pure bookkeeping,
+//! generic over the playback handle so the policy is testable without a
+//! device; the engine stores kira sound handles in it.
 
 // Playing one-shot voices, capped at `cap`. Looping emitters and the single
 // music track are not voices and never count against the cap.

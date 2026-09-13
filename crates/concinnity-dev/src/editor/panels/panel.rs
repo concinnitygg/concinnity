@@ -1,32 +1,30 @@
-// src/editor/panels/panel.rs
-//
-// The editor "Assets" panel: every asset of the expanded world as one
-// collapsible tree grouped by origin (built by `asset_tree.rs`), a search field
-// over it, and the per-row editor-session hide / lock toggles. Like the rest of
-// the editor HUD it is plain `Sprite` / `TextLabel` / `TextInput` components at
-// reserved ids (injected by `inject.rs`), driven each frame by the editor hook --
-// nothing here reaches the shipped runtime. This module owns the panel's pure
-// geometry, its click resolution, and the per-frame layout that shows /
-// positions the elements; the hook owns the state and the option list.
-//
-// The panel is a floating column: a draggable title bar ("Assets") across its
-// top, defaulting to below the top bar's buttons; the hook owns its position and
-// clamps a drag so the panel stays fully on screen. Under the title bar the
-// header is a square "+" (add) button and the search field, then a status line
-// (the asset count, or a cook failure), then the tree.
-//
-// Clicking a name selects the asset in the viewport and opens its add / edit
-// form -- a separate floating panel (`form_panel.rs`). An asset the build
-// generates has no world.jsonl line of its own; its form is seeded from the
-// entry the expansion produced and only confirming it appends that line, which
-// then overrides the expansion. The passes that emit unconditionally (menu,
-// story, and prefab primitives) cannot be overridden that way, so their rows
-// select but open no form. Hovering a name also reveals a triple-dot button
-// opening a small Delete menu.
-//
-// While the type picker is open, the "+" becomes a gray "X" that returns to the
-// tree and the search field narrows the picker's option list, which floats over
-// the body; picking a type opens the add form.
+//! The editor "Assets" panel: every asset of the expanded world as one
+//! collapsible tree grouped by origin (built by `asset_tree.rs`), a search field
+//! over it, and the per-row editor-session hide / lock toggles. Like the rest of
+//! the editor HUD it is plain `Sprite` / `TextLabel` / `TextInput` components at
+//! reserved ids (injected by `inject.rs`), driven each frame by the editor hook --
+//! nothing here reaches the shipped runtime. This module owns the panel's pure
+//! geometry, its click resolution, and the per-frame layout that shows /
+//! positions the elements; the hook owns the state and the option list.
+//!
+//! The panel is a floating column: a draggable title bar ("Assets") across its
+//! top, defaulting to below the top bar's buttons; the hook owns its position and
+//! clamps a drag so the panel stays fully on screen. Under the title bar the
+//! header is a square "+" (add) button and the search field, then a status line
+//! (the asset count, or a cook failure), then the tree.
+//!
+//! Clicking a name selects the asset in the viewport and opens its add / edit
+//! form -- a separate floating panel (`form_panel.rs`). An asset the build
+//! generates has no world.jsonl line of its own; its form is seeded from the
+//! entry the expansion produced and only confirming it appends that line, which
+//! then overrides the expansion. The passes that emit unconditionally (menu,
+//! story, and prefab primitives) cannot be overridden that way, so their rows
+//! select but open no form. Hovering a name also reveals a triple-dot button
+//! opening a small Delete menu.
+//!
+//! While the type picker is open, the "+" becomes a gray "X" that returns to the
+//! tree and the search field narrows the picker's option list, which floats over
+//! the body; picking a type opens the add form.
 
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_core::components::TextAlign;

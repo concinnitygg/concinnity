@@ -1,26 +1,24 @@
-// src/directx/parallel_encoder.rs
-//
-// Send/Sync shims for parallel per-pass command-list recording. The
-// render-graph executor in `directx/graph_exec.rs` fans non-composite
-// passes onto rayon workers; each worker resets its assigned pass's
-// allocator + cmd list, encodes its pass, and closes the cmd list. The
-// main thread then submits every closed cmd list in topological pass
-// order via `ExecuteCommandLists`.
-//
-// `DxContext` and the windows-crate COM smart pointers it stores are
-// not Send/Sync in Rust's type system; Microsoft's API contract makes
-// shared, read-only access to D3D12 resources thread-safe (commands
-// being recorded against *separate* command lists with *separate*
-// allocators is the canonical free-threaded pattern), but the windows
-// crate cannot encode that without a hand claim. The wrappers below
-// adopt that claim at the parallel-dispatch boundary. Workers reach
-// `&DxContext` through `ParallelCtxRef::as_ctx()` for strictly
-// read-only encode work; the only mutations during encode are bumps to
-// `diagnostics.draw_calls_accum` (atomic), the `deformed_primed` velocity-priming
-// store (atomic), and inline command-list recording into the worker's
-// own dedicated cmd list (single-writer per allocator).
-//
-// Mirrors `metal/parallel_encoder.rs`.
+//! Send/Sync shims for parallel per-pass command-list recording. The
+//! render-graph executor in `directx/graph_exec.rs` fans non-composite
+//! passes onto rayon workers; each worker resets its assigned pass's
+//! allocator + cmd list, encodes its pass, and closes the cmd list. The
+//! main thread then submits every closed cmd list in topological pass
+//! order via `ExecuteCommandLists`.
+//!
+//! `DxContext` and the windows-crate COM smart pointers it stores are
+//! not Send/Sync in Rust's type system; Microsoft's API contract makes
+//! shared, read-only access to D3D12 resources thread-safe (commands
+//! being recorded against *separate* command lists with *separate*
+//! allocators is the canonical free-threaded pattern), but the windows
+//! crate cannot encode that without a hand claim. The wrappers below
+//! adopt that claim at the parallel-dispatch boundary. Workers reach
+//! `&DxContext` through `ParallelCtxRef::as_ctx()` for strictly
+//! read-only encode work; the only mutations during encode are bumps to
+//! `diagnostics.draw_calls_accum` (atomic), the `deformed_primed` velocity-priming
+//! store (atomic), and inline command-list recording into the worker's
+//! own dedicated cmd list (single-writer per allocator).
+//!
+//! Mirrors `metal/parallel_encoder.rs`.
 
 use concinnity_core::render::parallel_ctx;
 use concinnity_core::render::render_graph;

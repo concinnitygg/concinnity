@@ -1,12 +1,10 @@
-// src/debug/dispatch.rs
-//
-// The query-command dispatcher. `handle_request` takes one raw JSON request and
-// the shared world snapshot and returns the JSON reply string. It is socket-free
-// (`&str` in, `String` out over a `DebugState`), so the whole command surface is
-// unit-testable against a hand-built snapshot without a live engine or a live
-// socket. Each MCP tool call reaches it through `crate::mcp::AppServer`, which
-// the connection loop in `super::wire::server` feeds; the spawn / crossfade
-// command handlers live in `super::commands`.
+//! The query-command dispatcher. `handle_request` takes one raw JSON request and
+//! the shared world snapshot and returns the JSON reply string. It is socket-free
+//! (`&str` in, `String` out over a `DebugState`), so the whole command surface is
+//! unit-testable against a hand-built snapshot without a live engine or a live
+//! socket. Each MCP tool call reaches it through `crate::mcp::AppServer`, which
+//! the connection loop in `super::wire::server` feeds; the spawn / crossfade
+//! command handlers live in `super::commands`.
 
 use concinnity_engine::app::dev_flags;
 use std::sync::{Arc, Mutex};

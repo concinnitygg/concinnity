@@ -1,10 +1,8 @@
-// src/editor/hook/tests/sim_control_tests.rs
-//
-// The simulation transport (`hook/sim_control.rs`): the keys and the top bar's
-// chips that play, pause, step and stop, and which edits the transport
-// survives -- a body or table edit written into the running world leaves it
-// running, one that moves a reference rebuilds and stops it. Also the fly
-// camera's exchange with play, and the trace request the live panels ask for.
+//! The simulation transport (`hook/sim_control.rs`): the keys and the top bar's
+//! chips that play, pause, step and stop, and which edits the transport
+//! survives -- a body or table edit written into the running world leaves it
+//! running, one that moves a reference rebuilds and stops it. Also the fly
+//! camera's exchange with play, and the trace request the live panels ask for.
 
 use concinnity_core::components::Behavior;
 use concinnity_core::components::BehaviorLiteral;

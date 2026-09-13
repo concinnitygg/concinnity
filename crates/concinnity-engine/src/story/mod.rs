@@ -1,12 +1,10 @@
-// src/story/mod.rs
-//
-// Story playback: drives a compiled `Story` graph through the stage screen its
-// build expansion generated. An internal system (not a declarable asset):
-// `World::start` constructs one whenever the world contains a `Story`. The
-// whole story plays inside one screen: this system fills the dialogue and
-// name-plate labels (revealing text at the story's speed), swaps the backdrop
-// and portrait sprite textures, shows the choice menu when a node ends in
-// one, and asks the audio system to play page music and one-shots.
+//! Story playback: drives a compiled `Story` graph through the stage screen its
+//! build expansion generated. An internal system (not a declarable asset):
+//! `World::start` constructs one whenever the world contains a `Story`. The
+//! whole story plays inside one screen: this system fills the dialogue and
+//! name-plate labels (revealing text at the story's speed), swaps the backdrop
+//! and portrait sprite textures, shows the choice menu when a node ends in
+//! one, and asks the audio system to play page music and one-shots.
 
 use concinnity_core::components::FrameInput;
 use concinnity_core::components::PlayCue;

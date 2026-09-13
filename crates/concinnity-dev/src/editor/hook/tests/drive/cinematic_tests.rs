@@ -1,10 +1,8 @@
-// src/editor/hook/tests/drive/cinematic_tests.rs
-//
-// The start screen's attract camera, from the hook's side. The shot cycle, its
-// poses, and its fade envelope are pure and tested beside them
-// (`editor/worlds/cinematic.rs`); asserted here is the wiring -- when the cycle
-// takes the preview's camera, what it refuses to take, when it hands the pose
-// back, and that a shot never reaches the authored world.
+//! The start screen's attract camera, from the hook's side. The shot cycle, its
+//! poses, and its fade envelope are pure and tested beside them
+//! (`editor/worlds/cinematic.rs`); asserted here is the wiring -- when the cycle
+//! takes the preview's camera, what it refuses to take, when it hands the pose
+//! back, and that a shot never reaches the authored world.
 
 use concinnity_core::components::{
     Camera3D, CameraController, FollowController, Sprite, TextLabel,

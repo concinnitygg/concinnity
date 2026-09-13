@@ -1,16 +1,14 @@
-// src/metal/post/rt_reflections.rs
-//
-// Hardware ray-traced reflection pass. A fullscreen-triangle fragment shader
-// that, per glossy pixel, rebuilds a world-space surface point + normal from the
-// SSR pre-pass G-buffer, traces a reflection ray against the scene acceleration
-// structure ([`crate::metal::raytrace`]), shades the hit (sun Lambert + IBL
-// ambient * material tint) or the IBL prefilter cube on a miss, and composites
-// the result over the scene with the same Fresnel/gloss weighting SSR uses.
-//
-// It occupies the SSR-resolve slot in the frame graph (reads hdr_resolve, writes
-// scene_pre_taa, which aliases `ssr_targets.output`) and is mutually exclusive
-// with SSR resolve. Like SSGI it relies on the SSR pre-pass G-buffer, so the
-// pre-pass is forced on whenever RT reflections are enabled.
+//! Hardware ray-traced reflection pass. A fullscreen-triangle fragment shader
+//! that, per glossy pixel, rebuilds a world-space surface point + normal from the
+//! SSR pre-pass G-buffer, traces a reflection ray against the scene acceleration
+//! structure ([`crate::metal::raytrace`]), shades the hit (sun Lambert + IBL
+//! ambient * material tint) or the IBL prefilter cube on a miss, and composites
+//! the result over the scene with the same Fresnel/gloss weighting SSR uses.
+//!
+//! It occupies the SSR-resolve slot in the frame graph (reads hdr_resolve, writes
+//! scene_pre_taa, which aliases `ssr_targets.output`) and is mutually exclusive
+//! with SSR resolve. Like SSGI it relies on the SSR pre-pass G-buffer, so the
+//! pre-pass is forced on whenever RT reflections are enabled.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::render_types;

@@ -1,9 +1,7 @@
-// src/editor/select_related.rs
-//
-// Pure resolution for the /select console command: which working entries share
-// an origin group with a name, reference a given asset, or are of a type. The
-// origin rule reuses the outliner's grouping (`asset_tree::groups_from`), so
-// "same origin" always means exactly what the Assets tree shows.
+//! Pure resolution for the /select console command: which working entries share
+//! an origin group with a name, reference a given asset, or are of a type. The
+//! origin rule reuses the outliner's grouping (`asset_tree::groups_from`), so
+//! "same origin" always means exactly what the Assets tree shows.
 
 use super::panels::asset_tree::TreeGroup;
 

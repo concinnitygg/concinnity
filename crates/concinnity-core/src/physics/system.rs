@@ -1,7 +1,7 @@
-// The rigid-body simulation driver. An internal system (not a declarable
-// asset): a schedule constructs one when the world declares a `PhysicsConfig`,
-// a `RigidBody`, a `PropBody`, or a `TriggerVolume`, reading the optional
-// `PhysicsConfig` for the floor / terrain.
+//! The rigid-body simulation driver. An internal system (not a declarable
+//! asset): a schedule constructs one when the world declares a `PhysicsConfig`,
+//! a `RigidBody`, a `PropBody`, or a `TriggerVolume`, reading the optional
+//! `PhysicsConfig` for the floor / terrain.
 
 use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, BTreeSet};

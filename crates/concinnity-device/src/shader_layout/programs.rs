@@ -1,20 +1,18 @@
-// src/shader_layout/programs.rs
-//
-// The single-source programs the layout check reflects, and the per-target
-// invocation that reads their layouts back.
-//
-// One program per family is enough: a struct's declaration is shared by every
-// entry in its file, so the smallest entry that declares it reports the same
-// bytes the heaviest one does. Where two files declare the same struct name
-// (`ShadowUniforms` is in both `main_bindless.slang` and `fog.slang`) both are
-// listed, because they are separate declarations that can drift apart.
-//
-// The defines mirror the backends' own program tables
-// (`{vulkan,directx}/slang_builtins.rs`, `metal/slang_builtins.rs`): a variant
-// compiles only with its gate, and each backend adds its own host-shape gate on
-// top -- `METAL_ABI` or `METAL_BINDINGS` where the Metal slots are pinned,
-// `DXIL_ABI` where the root signature is. Reflecting a family without its gate
-// would read a declaration no backend compiles.
+//! The single-source programs the layout check reflects, and the per-target
+//! invocation that reads their layouts back.
+//!
+//! One program per family is enough: a struct's declaration is shared by every
+//! entry in its file, so the smallest entry that declares it reports the same
+//! bytes the heaviest one does. Where two files declare the same struct name
+//! (`ShadowUniforms` is in both `main_bindless.slang` and `fog.slang`) both are
+//! listed, because they are separate declarations that can drift apart.
+//!
+//! The defines mirror the backends' own program tables
+//! (`{vulkan,directx}/slang_builtins.rs`, `metal/slang_builtins.rs`): a variant
+//! compiles only with its gate, and each backend adds its own host-shape gate on
+//! top -- `METAL_ABI` or `METAL_BINDINGS` where the Metal slots are pinned,
+//! `DXIL_ABI` where the root signature is. Reflecting a family without its gate
+//! would read a declaration no backend compiles.
 
 use concinnity_slang as slang;
 use std::collections::BTreeMap;

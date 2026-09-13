@@ -1,20 +1,18 @@
-// src/directx/draw/shadow.rs
-//
-// Cascaded shadow-map pass: one depth-only render per CSM cascade slice.
-// Draws static objects, instanced clusters, and (when present) skinned
-// meshes into each slice of the shadow map array. Caller has already
-// uploaded this frame's `ShadowUniforms` into `shadow_ubo_gva`; this pass
-// just binds it once per shadow pipeline and pushes the cascade index per
-// draw. Skipped entirely when no shadow pipeline is configured or the
-// fallback 1x1 shadow array is bound.
-//
-// The cascades are GPU-driven: a per-cascade cull dispatch writes one
-// `ExecuteIndirect` region per cascade and each cascade is issued with a single
-// `ExecuteIndirect` over the static + skinned records (the same cull buffers the
-// main pass uses). Everything appearing after init -- streamed chunks and
-// spawned clones -- folds into those same records, so the whole scene is
-// covered. Spot slices keep the per-object caster encoders below: the indirect
-// buffer is laid out per cascade and has no slots for them.
+//! Cascaded shadow-map pass: one depth-only render per CSM cascade slice.
+//! Draws static objects, instanced clusters, and (when present) skinned
+//! meshes into each slice of the shadow map array. Caller has already
+//! uploaded this frame's `ShadowUniforms` into `shadow_ubo_gva`; this pass
+//! just binds it once per shadow pipeline and pushes the cascade index per
+//! draw. Skipped entirely when no shadow pipeline is configured or the
+//! fallback 1x1 shadow array is bound.
+//!
+//! The cascades are GPU-driven: a per-cascade cull dispatch writes one
+//! `ExecuteIndirect` region per cascade and each cascade is issued with a single
+//! `ExecuteIndirect` over the static + skinned records (the same cull buffers the
+//! main pass uses). Everything appearing after init -- streamed chunks and
+//! spawned clones -- folds into those same records, so the whole scene is
+//! covered. Spot slices keep the per-object caster encoders below: the indirect
+//! buffer is laid out per cascade and has no slots for them.
 
 use concinnity_core::gfx::lod;
 use concinnity_core::gfx::render_types::NUM_SHADOW_CASCADES;

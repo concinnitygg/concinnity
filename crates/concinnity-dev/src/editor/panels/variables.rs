@@ -1,13 +1,11 @@
-// src/editor/panels/variables.rs
-//
-// The world's variable table as the panel's rows. A row is one variable: its
-// name, its type, and the value it starts the world with.
-//
-// Declaring the table is what makes it authoritative, so a name a behavior uses
-// and the table does not declare is a build error waiting to happen. Those names
-// get rows of their own -- undeclared, so the panel can say what is missing and
-// declare it in one press -- because a table that leaves one out is worse than no
-// table at all.
+//! The world's variable table as the panel's rows. A row is one variable: its
+//! name, its type, and the value it starts the world with.
+//!
+//! Declaring the table is what makes it authoritative, so a name a behavior uses
+//! and the table does not declare is a build error waiting to happen. Those names
+//! get rows of their own -- undeclared, so the panel can say what is missing and
+//! declare it in one press -- because a table that leaves one out is worse than no
+//! table at all.
 
 use serde_json::Value;
 

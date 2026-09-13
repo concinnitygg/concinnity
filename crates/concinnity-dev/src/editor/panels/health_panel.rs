@@ -1,18 +1,16 @@
-// src/editor/panels/health_panel.rs
-//
-// The Health panel's layout: one meter per resource, each a track scaled to
-// capacity with two nested fills over it -- the dim one is what the process
-// uses, the bright one inside it is what the engine's own accounting explains.
-// Under them, one line per tag something reports holding. The model (and what
-// those numbers mean) is `health.rs`; this module only places elements.
-//
-// The panel grows with the breakdown: a world that streams nothing has no rows
-// and no space reserved for them, so it never shows an empty region. Every
-// caller that needs the footprint (the drag clamp, the hit test) takes the
-// snapshot and asks for the size that goes with it.
-//
-// Read-only: the panel has no controls beyond its close button, so a body press
-// is swallowed rather than resolved to an action.
+//! The Health panel's layout: one meter per resource, each a track scaled to
+//! capacity with two nested fills over it -- the dim one is what the process
+//! uses, the bright one inside it is what the engine's own accounting explains.
+//! Under them, one line per tag something reports holding. The model (and what
+//! those numbers mean) is `health.rs`; this module only places elements.
+//!
+//! The panel grows with the breakdown: a world that streams nothing has no rows
+//! and no space reserved for them, so it never shows an empty region. Every
+//! caller that needs the footprint (the drag clamp, the hit test) takes the
+//! snapshot and asks for the size that goes with it.
+//!
+//! Read-only: the panel has no controls beyond its close button, so a body press
+//! is swallowed rather than resolved to an action.
 
 use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;

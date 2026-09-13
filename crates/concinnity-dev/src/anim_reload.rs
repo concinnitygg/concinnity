@@ -1,11 +1,9 @@
-// src/anim_reload.rs
-//
-// Animation clip hot-reload: re-import each captured file-backed Animation from
-// its source .glb and push the rebuilt clip into the live AnimationSystem. The
-// GLB decode lives here (editor side) because the runtime crate links no image
-// decoders; the runtime crate exposes only the catalog (`reload_entries`) and
-// the setter (`apply_reloaded_clip`). Mirrors the path the desugar pass takes at
-// build time, so a hot-reloaded clip is byte-identical to a fresh `cn build`.
+//! Animation clip hot-reload: re-import each captured file-backed Animation from
+//! its source .glb and push the rebuilt clip into the live AnimationSystem. The
+//! GLB decode lives here (editor side) because the runtime crate links no image
+//! decoders; the runtime crate exposes only the catalog (`reload_entries`) and
+//! the setter (`apply_reloaded_clip`). Mirrors the path the desugar pass takes at
+//! build time, so a hot-reloaded clip is byte-identical to a fresh `cn build`.
 
 use concinnity_core::gfx::skeleton::{AnimationClip, JointTrack, Keyframe};
 use concinnity_engine::gfx::animation::AnimationSystem;

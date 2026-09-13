@@ -1,5 +1,3 @@
-// src/asset_impls/procedural_mesh.rs
-
 use concinnity_core::components::ProceduralMesh;
 
 impl crate::asset::BuildAsset for ProceduralMesh {

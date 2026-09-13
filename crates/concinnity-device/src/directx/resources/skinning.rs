@@ -1,9 +1,7 @@
-// src/directx/resources/skinning.rs
-//
-// Skinned-mesh resources for DxContext: the skinned shadow pipeline (built
-// lazily by `upload_skinned` the first time a SkinnedMesh is uploaded), the
-// skinned geometry upload, and the per-frame joint / morph-weight uploads.
-// The per-slot CPU records these uploads read live in `gfx::skinned_slots`.
+//! Skinned-mesh resources for DxContext: the skinned shadow pipeline (built
+//! lazily by `upload_skinned` the first time a SkinnedMesh is uploaded), the
+//! skinned geometry upload, and the per-frame joint / morph-weight uploads.
+//! The per-slot CPU records these uploads read live in `gfx::skinned_slots`.
 
 use concinnity_core::gfx::mesh_payload;
 use concinnity_core::gfx::mesh_payload::{SkinnedVertex, Vertex};

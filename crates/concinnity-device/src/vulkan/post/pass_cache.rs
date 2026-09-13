@@ -1,16 +1,14 @@
-// src/vulkan/post/pass_cache.rs
-//
-// The render passes and framebuffers a shared fullscreen post pass needs, keyed
-// so a pass never builds its own. Vulkan is the only backend where a draw's
-// target has to be named by an object built ahead of it (this device has no
-// dynamic rendering), which is most of why its post directory was the largest of
-// the three; caching that object here is what lets the passes above the seam
-// stop owning one each.
-//
-// A render pass is compatible with any target of the same format and load
-// action, so it keys on those two alone; a framebuffer binds one image view, so
-// it keys on the view. Both caches are append-only for the life of a swapchain,
-// which bounds them at one entry per (format, load) and one per live target.
+//! The render passes and framebuffers a shared fullscreen post pass needs, keyed
+//! so a pass never builds its own. Vulkan is the only backend where a draw's
+//! target has to be named by an object built ahead of it (this device has no
+//! dynamic rendering), which is most of why its post directory was the largest of
+//! the three; caching that object here is what lets the passes above the seam
+//! stop owning one each.
+//!
+//! A render pass is compatible with any target of the same format and load
+//! action, so it keys on those two alone; a framebuffer binds one image view, so
+//! it keys on the view. Both caches are append-only for the life of a swapchain,
+//! which bounds them at one entry per (format, load) and one per live target.
 
 use ash::vk;
 use concinnity_core::render::post::device::PostLoadOp;

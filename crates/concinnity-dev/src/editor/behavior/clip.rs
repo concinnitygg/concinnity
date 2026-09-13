@@ -1,14 +1,12 @@
-// src/editor/behavior/clip.rs
-//
-// Carrying part of a body from one place to another. The unit is a list member,
-// which is the same thing the toolbar's delete and reorder already act on
-// (`Row::element`), so a node comes with its whole subtree -- branches, their
-// nodes, and the expressions inside them -- for free.
-//
-// A clip remembers which kind of list it came out of, and a paste only lands in
-// a list of that kind. Nothing here consults the checker: refusing the pastes
-// that could never type-check is about not offering a move that visibly does
-// nothing, while whether the result is valid stays the checker's answer.
+//! Carrying part of a body from one place to another. The unit is a list member,
+//! which is the same thing the toolbar's delete and reorder already act on
+//! (`Row::element`), so a node comes with its whole subtree -- branches, their
+//! nodes, and the expressions inside them -- for free.
+//!
+//! A clip remembers which kind of list it came out of, and a paste only lands in
+//! a list of that kind. Nothing here consults the checker: refusing the pastes
+//! that could never type-check is about not offering a move that visibly does
+//! nothing, while whether the result is valid stays the checker's answer.
 
 use serde_json::Value;
 

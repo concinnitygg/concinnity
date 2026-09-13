@@ -1,21 +1,19 @@
-// src/editor/hud.rs
-//
-// The editor HUD's top bar: a slim full-width strip in the shared chrome tint
-// (matching the floating panels, like a modern macOS toolbar) holding the Save
-// and View buttons as compact rounded chips at its right end. This lives in the
-// editor crate (not in a client ECS system) so no editor code is compiled into
-// the shipped runtime: the HUD is driven from the editor's `DebugHook` tick,
-// which runs only under `cn editor`.
-//
-// These are plain `Sprite` + `TextLabel` components (injected by `inject.rs` at
-// reserved ids). Each frame the hook re-anchors the bar to the window width
-// from the live viewport and hit-tests clicks. Save persists + live-swaps the
-// world; View opens / closes the View panel (`view.rs`), which in turn toggles
-// the Assets, Preview, and Templates panels. The simulation transport
-// (Play / Pause, Step, Stop -- `editor/sim.rs`) sits centered in the bar.
-// Running in the tick (before the world step) means the layout applies the
-// same frame GraphicsSystem draws it. The whole HUD toggles with F1 (see
-// `hook.rs`).
+//! The editor HUD's top bar: a slim full-width strip in the shared chrome tint
+//! (matching the floating panels, like a modern macOS toolbar) holding the Save
+//! and View buttons as compact rounded chips at its right end. This lives in the
+//! editor crate (not in a client ECS system) so no editor code is compiled into
+//! the shipped runtime: the HUD is driven from the editor's `DebugHook` tick,
+//! which runs only under `cn editor`.
+//!
+//! These are plain `Sprite` + `TextLabel` components (injected by `inject.rs` at
+//! reserved ids). Each frame the hook re-anchors the bar to the window width
+//! from the live viewport and hit-tests clicks. Save persists + live-swaps the
+//! world; View opens / closes the View panel (`view.rs`), which in turn toggles
+//! the Assets, Preview, and Templates panels. The simulation transport
+//! (Play / Pause, Step, Stop -- `editor/sim.rs`) sits centered in the bar.
+//! Running in the tick (before the world step) means the layout applies the
+//! same frame GraphicsSystem draws it. The whole HUD toggles with F1 (see
+//! `hook.rs`).
 
 use concinnity_core::components::{FrameInput, TextAlign};
 use concinnity_core::ecs::World;

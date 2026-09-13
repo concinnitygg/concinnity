@@ -1,11 +1,9 @@
-// src/vulkan/loader.rs
-//
-// Acquiring the Vulkan loader library. `ash::Entry::load` resolves the loader by
-// its bare file name through the platform's dynamic linker, which finds it on
-// Windows and Linux. It does not on macOS: the LunarG SDK installs
-// `libvulkan.dylib` under /usr/local/lib, and dyld searches neither that nor
-// Homebrew's prefix for a leaf name. So the plain load is followed by the known
-// install paths, tried in order.
+//! Acquiring the Vulkan loader library. `ash::Entry::load` resolves the loader by
+//! its bare file name through the platform's dynamic linker, which finds it on
+//! Windows and Linux. It does not on macOS: the LunarG SDK installs
+//! `libvulkan.dylib` under /usr/local/lib, and dyld searches neither that nor
+//! Homebrew's prefix for a leaf name. So the plain load is followed by the known
+//! install paths, tried in order.
 
 use std::path::Path;
 

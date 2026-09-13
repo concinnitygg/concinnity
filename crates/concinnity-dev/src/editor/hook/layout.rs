@@ -1,7 +1,5 @@
-// src/editor/hook/layout.rs
-//
-// EditorHook: the floating panels' focus stack, published draw layers, and
-// each panel's on-screen origin -- all derived from the panel registry.
+//! EditorHook: the floating panels' focus stack, published draw layers, and
+//! each panel's on-screen origin -- all derived from the panel registry.
 
 use concinnity_core::ecs::CursorShape;
 use concinnity_core::ecs::HudLayers;

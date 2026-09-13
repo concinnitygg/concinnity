@@ -1,11 +1,9 @@
-// src/gfx/animation/ik.rs
-//
-// Foot-pinning IK for graph targets. At install time each authored
-// `AnimationIkChain` resolves its joint names against the target's skeleton and
-// its weight parameter against the graph's declaration order; per frame the
-// chain's ground probe (answered by PhysicsSystem, one frame behind) turns
-// into a mesh-space target for the analytic two-bone solve, applied to the
-// sampled locals just before the skinning matrices.
+//! Foot-pinning IK for graph targets. At install time each authored
+//! `AnimationIkChain` resolves its joint names against the target's skeleton and
+//! its weight parameter against the graph's declaration order; per frame the
+//! chain's ground probe (answered by PhysicsSystem, one frame behind) turns
+//! into a mesh-space target for the analytic two-bone solve, applied to the
+//! sampled locals just before the skinning matrices.
 
 use concinnity_core::components::AnimationParam;
 use concinnity_core::components::SkeletonPose;

@@ -1,10 +1,8 @@
-// src/editor/hook/tests/drag/gizmo_tests.rs
-//
-// The transform manipulator's drags (`hook/drag/gizmo.rs`): translate, rotate
-// and scale over a single prop, the grid and angle snapping each applies and
-// what Ctrl suspends, the same over a multi-member selection about its
-// centroid, the mode keys, and a skinned mesh's position surviving the round
-// trip. Each asserts one undo step per drag.
+//! The transform manipulator's drags (`hook/drag/gizmo.rs`): translate, rotate
+//! and scale over a single prop, the grid and angle snapping each applies and
+//! what Ctrl suspends, the same over a multi-member selection about its
+//! centroid, the mode keys, and a skinned mesh's position surviving the round
+//! trip. Each asserts one undo step per drag.
 
 use concinnity_core::components::FrameInput;
 use concinnity_core::components::InputKey;

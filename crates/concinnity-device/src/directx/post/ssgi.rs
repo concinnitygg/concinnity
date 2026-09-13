@@ -1,10 +1,8 @@
-// src/directx/post/ssgi.rs
-//
-// DirectX's share of screen-space global illumination, which is its settings,
-// where the pass reads and writes this frame, and the one resource state the
-// graph cannot express for it. The gather and composite -- their pipelines, the
-// reduced gather target and both draws -- are written once in
-// `concinnity_core::render::post::ssgi` and reach D3D12 through `DxPostDevice`.
+//! DirectX's share of screen-space global illumination, which is its settings,
+//! where the pass reads and writes this frame, and the one resource state the
+//! graph cannot express for it. The gather and composite -- their pipelines, the
+//! reduced gather target and both draws -- are written once in
+//! `concinnity_core::render::post::ssgi` and reach D3D12 through `DxPostDevice`.
 
 use concinnity_core::gfx::ssgi::SsgiSettings;
 use concinnity_core::render::error::RenderResult;

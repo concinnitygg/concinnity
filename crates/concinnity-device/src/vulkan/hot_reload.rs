@@ -1,16 +1,14 @@
-// src/vulkan/hot_reload.rs
-//
-// Filesystem watcher driving Vulkan shader hot-reload. A background notify
-// watcher tails `<CARGO_MANIFEST_DIR>/src/vulkan/shaders/` and, on any modify
-// event for a known shader-source extension, flips a shared
-// `Arc<AtomicBool>`. The main thread polls that flag at the top of
-// `draw_frame` and calls `VkContext::reload_shaders` when it is set. The
-// same flag is also set by the `reload-shaders` debug command, so
-// the two trigger paths converge.
-//
-// Entirely a dev-loop concern, only constructed when `VkContext::new` is
-// called with `hot_reload = true`. Production `cn run` never instantiates
-// it. Mirrors `directx/hot_reload.rs` and `metal/hot_reload.rs`.
+//! Filesystem watcher driving Vulkan shader hot-reload. A background notify
+//! watcher tails `<CARGO_MANIFEST_DIR>/src/vulkan/shaders/` and, on any modify
+//! event for a known shader-source extension, flips a shared
+//! `Arc<AtomicBool>`. The main thread polls that flag at the top of
+//! `draw_frame` and calls `VkContext::reload_shaders` when it is set. The
+//! same flag is also set by the `reload-shaders` debug command, so
+//! the two trigger paths converge.
+//!
+//! Entirely a dev-loop concern, only constructed when `VkContext::new` is
+//! called with `hot_reload = true`. Production `cn run` never instantiates
+//! it. Mirrors `directx/hot_reload.rs` and `metal/hot_reload.rs`.
 
 use ash::vk;
 use concinnity_core::render::backend_init;

@@ -1,13 +1,11 @@
-// src/editor/behavior/edit.rs
-//
-// The edits an outline row answers: picking a verb from the palette, typing a
-// value, and removing or reordering a list member. Every one rewrites the
-// authored args in place, so what the checker reads afterwards is exactly what
-// the panel shows.
-//
-// Selecting a row never changes it. Every field, down to a boolean, offers its
-// options through the palette instead, so a value only ever moves when the user
-// picks one or types one.
+//! The edits an outline row answers: picking a verb from the palette, typing a
+//! value, and removing or reordering a list member. Every one rewrites the
+//! authored args in place, so what the checker reads afterwards is exactly what
+//! the panel shows.
+//!
+//! Selecting a row never changes it. Every field, down to a boolean, offers its
+//! options through the palette instead, so a value only ever moves when the user
+//! picks one or types one.
 
 use serde_json::{Map, Value, json};
 

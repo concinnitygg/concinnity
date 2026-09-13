@@ -1,16 +1,14 @@
-// src/vulkan/cull_readback.rs
-//
-// Per-object cull-status readback for the Vulkan backend. The `cn debug` WS
-// server's `cull-status` command routes here (via
-// `RenderBackend::read_cull_status`) to copy the GPU-driven cull's status
-// buffer for the most recently submitted frame into a host-visible buffer and
-// hand back one `CullStatus` value per live cull record.
-//
-// This is the only observable record of what the cull decided: the submitted
-// draw-call count is CPU-side and does not move when the GPU rejects an object,
-// and an object the Hi-Z test correctly occluded leaves no trace in the
-// presented pixels. Readback is synchronous (it idles the device), so it is a
-// probe-only path, never a per-frame one. Mirrors src/directx/cull_readback.rs.
+//! Per-object cull-status readback for the Vulkan backend. The `cn debug` WS
+//! server's `cull-status` command routes here (via
+//! `RenderBackend::read_cull_status`) to copy the GPU-driven cull's status
+//! buffer for the most recently submitted frame into a host-visible buffer and
+//! hand back one `CullStatus` value per live cull record.
+//!
+//! This is the only observable record of what the cull decided: the submitted
+//! draw-call count is CPU-side and does not move when the GPU rejects an object,
+//! and an object the Hi-Z test correctly occluded leaves no trace in the
+//! presented pixels. Readback is synchronous (it idles the device), so it is a
+//! probe-only path, never a per-frame one. Mirrors src/directx/cull_readback.rs.
 
 use ash::vk;
 use concinnity_core::gfx::cull_status;

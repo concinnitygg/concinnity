@@ -1,5 +1,3 @@
-// src/components/lifetime.rs
-
 /// Runtime-only countdown on an entity: seconds remaining before it is
 /// automatically removed. A spawn carries it onto short-lived instances
 /// (projectiles, debris, timed effects); the graphics step decrements it each

@@ -1,16 +1,14 @@
-// src/directx/hot_reload.rs
-//
-// Filesystem watcher driving D3D12 shader hot-reload. A background notify
-// watcher tails `<CARGO_MANIFEST_DIR>/src/directx/shaders/` and the
-// single-source `src/shaders/` beside it and, on any modify event for a known
-// shader source, flips a shared `Arc<AtomicBool>`. The main thread
-// polls that flag at the top of `draw_frame` and calls
-// `DxContext::reload_shaders` when it's set. Same flag is also set by the
-// `reload-shaders` debug command, so the two trigger paths converge.
-//
-// Entirely a dev-loop concern; only constructed when `DxContext::new` is
-// called with `hot_reload = true`. Production `cn run` never instantiates it.
-// Mirrors src/metal/hot_reload.rs.
+//! Filesystem watcher driving D3D12 shader hot-reload. A background notify
+//! watcher tails `<CARGO_MANIFEST_DIR>/src/directx/shaders/` and the
+//! single-source `src/shaders/` beside it and, on any modify event for a known
+//! shader source, flips a shared `Arc<AtomicBool>`. The main thread
+//! polls that flag at the top of `draw_frame` and calls
+//! `DxContext::reload_shaders` when it's set. Same flag is also set by the
+//! `reload-shaders` debug command, so the two trigger paths converge.
+//!
+//! Entirely a dev-loop concern; only constructed when `DxContext::new` is
+//! called with `hot_reload = true`. Production `cn run` never instantiates it.
+//! Mirrors src/metal/hot_reload.rs.
 
 use concinnity_core::render::backend_init;
 use concinnity_core::render::error::RenderResult;

@@ -1,10 +1,8 @@
-// src/editor/visibility.rs
-//
-// Pure composition of the editor's two hide mechanisms: the manual per-asset
-// hide set (outliner eye, H) and an active isolate (Shift+H), which keeps a
-// snapshot of names visible and hides everything else. The manual set is
-// never mutated by isolate, so leaving isolate restores exactly the
-// manually-hidden state, and a name in both stays hidden.
+//! Pure composition of the editor's two hide mechanisms: the manual per-asset
+//! hide set (outliner eye, H) and an active isolate (Shift+H), which keeps a
+//! snapshot of names visible and hides everything else. The manual set is
+//! never mutated by isolate, so leaving isolate restores exactly the
+//! manually-hidden state, and a name in both stays hidden.
 
 use std::collections::BTreeSet;
 

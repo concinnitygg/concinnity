@@ -1,4 +1,4 @@
-// src/build.rs: shared in-memory build orchestration
+//! Shared in-memory build orchestration
 
 pub(crate) use concinnity_cook::build_compiled;
 use concinnity_cook::build_only::LoadedWorld;

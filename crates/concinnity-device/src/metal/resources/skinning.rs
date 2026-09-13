@@ -1,8 +1,6 @@
-// src/metal/resources/skinning.rs
-//
-// Skinned-mesh GPU resources: pipeline + buffer setup (`upload_skinned`),
-// per-frame pose updates, hot-reload of skinned geometry, and skeleton
-// joint-count changes.
+//! Skinned-mesh GPU resources: pipeline + buffer setup (`upload_skinned`),
+//! per-frame pose updates, hot-reload of skinned geometry, and skeleton
+//! joint-count changes.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::mesh_payload;

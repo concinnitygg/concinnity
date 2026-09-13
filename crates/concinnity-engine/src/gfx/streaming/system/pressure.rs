@@ -1,17 +1,15 @@
-// src/gfx/streaming/system/pressure.rs
-//
-// Process-RAM back-off valve: the pure decision half of the streaming memory
-// safety loop. StreamingSystem samples live process RSS against the world's
-// `MemoryBudget` a few times a second and feeds the pair here; this module
-// decides whether streaming keeps running normally, stops dispatching new
-// loads, or actively shrinks residency. It performs no syscalls and holds no
-// state of its own, so the whole policy is unit-testable from synthetic
-// rss/budget pairs.
-//
-// The VRAM-bounded byte budgets (StreamPlanner's `byte_budget`) remain the
-// primary residency control; this valve only backs streaming off when process
-// RSS nears the RAM ceiling, with hysteresis so it does not flap at the
-// threshold.
+//! Process-RAM back-off valve: the pure decision half of the streaming memory
+//! safety loop. StreamingSystem samples live process RSS against the world's
+//! `MemoryBudget` a few times a second and feeds the pair here; this module
+//! decides whether streaming keeps running normally, stops dispatching new
+//! loads, or actively shrinks residency. It performs no syscalls and holds no
+//! state of its own, so the whole policy is unit-testable from synthetic
+//! rss/budget pairs.
+//!
+//! The VRAM-bounded byte budgets (StreamPlanner's `byte_budget`) remain the
+//! primary residency control; this valve only backs streaming off when process
+//! RSS nears the RAM ceiling, with hysteresis so it does not flap at the
+//! threshold.
 
 // Back-off engages when RSS exceeds this percentage of the memory budget and
 // releases below `RELEASE_PCT`; the gap between them is the hysteresis band that

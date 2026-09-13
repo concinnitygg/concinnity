@@ -1,10 +1,8 @@
-// src/editor/hook/camera_pose.rs
-//
-// EditorHook: reading and writing the live world's camera pose. The first
-// `Camera3D` is the one the renderer draws, so every editor drive that moves
-// the view (the glide, a bookmark recall, the start screen's attract camera)
-// goes through this one seam -- and writes the view matrix with the pose, as
-// the engine's own controller does, so the frame draws from what was written.
+//! EditorHook: reading and writing the live world's camera pose. The first
+//! `Camera3D` is the one the renderer draws, so every editor drive that moves
+//! the view (the glide, a bookmark recall, the start screen's attract camera)
+//! goes through this one seam -- and writes the view matrix with the pose, as
+//! the engine's own controller does, so the frame draws from what was written.
 
 use concinnity_core::components::Camera3D;
 use concinnity_core::ecs::World;

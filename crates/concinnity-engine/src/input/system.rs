@@ -1,19 +1,17 @@
-// src/input/system.rs
-//
-// Consumes the frame's `InputMailbox` packet (sampled beside the backend
-// right after the draw, whose event pump produced it), merges the active
-// gamepad's state, and publishes the `FrameInput` snapshot (as a resource and
-// as the component column) plus the `CursorState` resource. Runs immediately
-// after GraphicsSystem in the schedule, so the packet it takes is the one
-// that system just deposited -- the same freshness the sample had when this
-// system polled the backend itself. Every input consumer (camera controllers,
-// UI, text input) runs later in the same tick.
-//
-// The gamepad is polled here, not per render backend, so all backends share
-// one implementation. Digital buttons merge into the existing boolean fields
-// (d-pad onto the movement keys, the bound buttons onto sprint / jump /
-// interact, Start onto escape); the sticks publish as the analog
-// `move_axis` / `look_axis` fields.
+//! Consumes the frame's `InputMailbox` packet (sampled beside the backend
+//! right after the draw, whose event pump produced it), merges the active
+//! gamepad's state, and publishes the `FrameInput` snapshot (as a resource and
+//! as the component column) plus the `CursorState` resource. Runs immediately
+//! after GraphicsSystem in the schedule, so the packet it takes is the one
+//! that system just deposited -- the same freshness the sample had when this
+//! system polled the backend itself. Every input consumer (camera controllers,
+//! UI, text input) runs later in the same tick.
+//!
+//! The gamepad is polled here, not per render backend, so all backends share
+//! one implementation. Digital buttons merge into the existing boolean fields
+//! (d-pad onto the movement keys, the bound buttons onto sprint / jump /
+//! interact, Start onto escape); the sticks publish as the analog
+//! `move_axis` / `look_axis` fields.
 
 use concinnity_core::components::{
     ControlsCommand, FrameInput, GamepadButton, GamepadMap, NavDirection,

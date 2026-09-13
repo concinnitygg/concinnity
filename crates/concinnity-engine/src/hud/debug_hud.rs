@@ -1,12 +1,10 @@
-// src/hud/debug_hud.rs
-//
-// Developer debug-HUD overlay behavior. An internal system (not a declarable
-// asset): `World::start` constructs one from the world's `DebugHud` component
-// and it writes diagnostic readouts into that component's `TextLabel` chips.
-//
-// The chips are toggled together with F1 (hidden by default) and anchored to
-// the top-right of the window by `GraphicsSystem` (it owns the font metrics and
-// live window size needed to right-align and stack them).
+//! Developer debug-HUD overlay behavior. An internal system (not a declarable
+//! asset): `World::start` constructs one from the world's `DebugHud` component
+//! and it writes diagnostic readouts into that component's `TextLabel` chips.
+//!
+//! The chips are toggled together with F1 (hidden by default) and anchored to
+//! the top-right of the window by `GraphicsSystem` (it owns the font metrics and
+//! live window size needed to right-align and stack them).
 
 use concinnity_core::components::Camera3D;
 use concinnity_core::components::DebugHud;

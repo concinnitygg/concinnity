@@ -1,12 +1,10 @@
-// src/shader_layout/mirrors/geometry.rs
-//
-// The G-buffer pre-pass, the shadow pass, and the passes that draw their own
-// geometry: decals, world-space lines, particles and the text overlay.
-//
-// The shadow pass is where the hosts still diverge: Vulkan carries the per-draw
-// constants in one push-constant block, while Metal and DirectX split them
-// across separate buffers. Each leg mirrors the struct its own host binds;
-// everything else is one declaration for all three.
+//! The G-buffer pre-pass, the shadow pass, and the passes that draw their own
+//! geometry: decals, world-space lines, particles and the text overlay.
+//!
+//! The shadow pass is where the hosts still diverge: Vulkan carries the per-draw
+//! constants in one push-constant block, while Metal and DirectX split them
+//! across separate buffers. Each leg mirrors the struct its own host binds;
+//! everything else is one declaration for all three.
 
 use concinnity_core::gfx::render_types::{ParticleParams, ShadowPassPush, TextUniforms};
 use concinnity_core::render::directx::uniforms::CullParams as DxCullParams;

@@ -1,11 +1,9 @@
-// src/editor/outlines/mod.rs
-//
-// Extent outlines for assets with spatial reach but no rendered geometry:
-// trigger volumes, light ranges and cones, camera frusta, probe bounds, and
-// prop colliders. This module is the pure policy half: the display categories
-// behind the Display menu's toggles and the per-type stroke styling. The
-// generators live in `shapes.rs`; the per-frame drive that reads live
-// components and publishes lines is `hook/drive/outline.rs`.
+//! Extent outlines for assets with spatial reach but no rendered geometry:
+//! trigger volumes, light ranges and cones, camera frusta, probe bounds, and
+//! prop colliders. This module is the pure policy half: the display categories
+//! behind the Display menu's toggles and the per-type stroke styling. The
+//! generators live in `shapes.rs`; the per-frame drive that reads live
+//! components and publishes lines is `hook/drive/outline.rs`.
 
 pub(crate) mod shapes;
 

@@ -1,8 +1,6 @@
-// src/vulkan/post/fullscreen.rs
-//
-// The render-pass bracket and viewport / scissor that a fullscreen pass not yet
-// drawn through the shared post seam (`render::post`) writes by hand: the
-// reflection composite's blur and composite.
+//! The render-pass bracket and viewport / scissor that a fullscreen pass not yet
+//! drawn through the shared post seam (`render::post`) writes by hand: the
+//! reflection composite's blur and composite.
 
 use ash::vk;
 

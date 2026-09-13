@@ -1,9 +1,7 @@
-// src/metal/init/window.rs
-//
-// NSWindow + MTKView setup for MtlContext::new, plus the initial HDR target
-// sizing decision (geometry-less worlds clamp to 1x1; otherwise the drawable
-// size wins, falling back to the requested width/height before the drawable
-// exists).
+//! NSWindow + MTKView setup for MtlContext::new, plus the initial HDR target
+//! sizing decision (geometry-less worlds clamp to 1x1; otherwise the drawable
+//! size wins, falling back to the requested width/height before the drawable
+//! exists).
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::render::hdr_output;

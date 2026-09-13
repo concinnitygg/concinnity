@@ -1,24 +1,22 @@
-// src/forward.rs
-//
-// The one forwarding macro the three backends' RenderBackend impls share.
-//
-// Almost every method of the trait families is a mechanical 1:1 call into the
-// inherent method of the same name, so each family's impl block states the
-// signatures and this macro writes the bodies. Inherent methods shadow trait
-// methods in resolution, so `self.$name(...)` binds the inherent one and there
-// is no recursion. Forwarders that rename, drop args, or need a custom body
-// stay hand-written beside the invocation.
-//
-// The main-thread assertion is a parameter rather than a name resolved at the
-// expansion site, so the backend that owns the invariant names the function
-// that proves it. The `&mut self` arms assert first: every mutation reached
-// through the boxed trait object proves the main-thread invariant the
-// `unsafe impl Send` on each context rests on. The `&self` arms are read-only
-// and skip it.
-//
-// Metal's window entry points live on the shared AppKit layer rather than on
-// the context, which is what `via` is for: `via = self.window.appkit` forwards
-// the block to that receiver instead of to `self`.
+//! The one forwarding macro the three backends' RenderBackend impls share.
+//!
+//! Almost every method of the trait families is a mechanical 1:1 call into the
+//! inherent method of the same name, so each family's impl block states the
+//! signatures and this macro writes the bodies. Inherent methods shadow trait
+//! methods in resolution, so `self.$name(...)` binds the inherent one and there
+//! is no recursion. Forwarders that rename, drop args, or need a custom body
+//! stay hand-written beside the invocation.
+//!
+//! The main-thread assertion is a parameter rather than a name resolved at the
+//! expansion site, so the backend that owns the invariant names the function
+//! that proves it. The `&mut self` arms assert first: every mutation reached
+//! through the boxed trait object proves the main-thread invariant the
+//! `unsafe impl Send` on each context rests on. The `&self` arms are read-only
+//! and skip it.
+//!
+//! Metal's window entry points live on the shared AppKit layer rather than on
+//! the context, which is what `via` is for: `via = self.window.appkit` forwards
+//! the block to that receiver instead of to `self`.
 
 // Recurses token-by-token over the signature list, threading the assert and the
 // receiver prefix through each step.

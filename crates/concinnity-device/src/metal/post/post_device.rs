@@ -1,11 +1,9 @@
-// src/metal/post/post_device.rs
-//
-// Metal's implementation of the shared fullscreen post-pass seam
-// (`render::post::device::PostPassDevice`). Thin, because Metal's own API is
-// already close to the seam's shape: a pipeline is a program plus an attachment
-// format plus a blend, a target is a texture descriptor, and a draw is one
-// render encoder with slot-indexed fragment binds. Everything here is a
-// translation, not a mechanism.
+//! Metal's implementation of the shared fullscreen post-pass seam
+//! (`render::post::device::PostPassDevice`). Thin, because Metal's own API is
+//! already close to the seam's shape: a pipeline is a program plus an attachment
+//! format plus a blend, a target is a texture descriptor, and a draw is one
+//! render encoder with slot-indexed fragment binds. Everything here is a
+//! translation, not a mechanism.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::render::error::{RenderError, RenderResult};

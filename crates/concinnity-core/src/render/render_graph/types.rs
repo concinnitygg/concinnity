@@ -1,10 +1,8 @@
-// src/render/render_graph/types.rs
-//
-// Shared, backend-agnostic types for the render graph: resource handles,
-// resource descriptions, state / access enums, and the small structs the
-// compile pass emits. The graph tracks *order*, *barriers*, and
-// *lifetimes*: it does not allocate transient GPU resources (those stay
-// backend-owned).
+//! Shared, backend-agnostic types for the render graph: resource handles,
+//! resource descriptions, state / access enums, and the small structs the
+//! compile pass emits. The graph tracks *order*, *barriers*, and
+//! *lifetimes*: it does not allocate transient GPU resources (those stay
+//! backend-owned).
 
 use crate::math::floor;
 use core::num::NonZeroU32;

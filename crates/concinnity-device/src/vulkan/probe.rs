@@ -1,28 +1,26 @@
-// src/vulkan/probe.rs
-//
-// Scene-captured reflection probes on Vulkan. Each declared `ReflectionProbe`
-// (or an auto-seeded grid when a world declares none) describes a cube to bake
-// DISTINCT from `env_map`: the specular reflection term box-projects against the
-// probe's influence box and samples its cube, so glossy surfaces reflect the
-// actual surrounding geometry instead of the imported HDR sky, while the skybox +
-// diffuse irradiance keep sampling `env_map` so the visible sky is never replaced.
-//
-// The cube math + the staggered-bake state machine are backend-agnostic
-// (`concinnity_core::render::reflection_probe`); this module drives the placement intake + the
-// GPU capture, mirroring `crate::directx::probe` / `crate::metal::probe`.
-//
-// `set_reflection_probes` converts the graphics-system placements (auto-seeding a
-// grid from the scene bounds when a world declares none) into the stored placement
-// list + an EMPTY `ProbeSet`, then enqueues them. `bake_pending_probes` (driven each
-// frame from `draw_frame`) advances the shared `next_bake_action` transition table:
-// it renders one cube face per frame into a bake-owned target on a per-face fence
-// and copies it into a cube layer, convolves that capture into the probe cube with
-// the compute kernels in `probe_prefilter.slang` (the source pyramid in one frame,
-// then one GGX mip per frame), and installs the finished cube into the forward /
-// SSR / RT cube array -- all without blocking the render loop (the sky reflection
-// covers a probe until its cube installs). Nothing is read back and no convolution
-// runs on the CPU. The forward / SSR / RT sampling lives in the main / resolve
-// shaders (see the reflection_probes.md DX/VK port checklist).
+//! Scene-captured reflection probes on Vulkan. Each declared `ReflectionProbe`
+//! (or an auto-seeded grid when a world declares none) describes a cube to bake
+//! DISTINCT from `env_map`: the specular reflection term box-projects against the
+//! probe's influence box and samples its cube, so glossy surfaces reflect the
+//! actual surrounding geometry instead of the imported HDR sky, while the skybox +
+//! diffuse irradiance keep sampling `env_map` so the visible sky is never replaced.
+//!
+//! The cube math + the staggered-bake state machine are backend-agnostic
+//! (`concinnity_core::render::reflection_probe`); this module drives the placement intake + the
+//! GPU capture, mirroring `crate::directx::probe` / `crate::metal::probe`.
+//!
+//! `set_reflection_probes` converts the graphics-system placements (auto-seeding a
+//! grid from the scene bounds when a world declares none) into the stored placement
+//! list + an EMPTY `ProbeSet`, then enqueues them. `bake_pending_probes` (driven each
+//! frame from `draw_frame`) advances the shared `next_bake_action` transition table:
+//! it renders one cube face per frame into a bake-owned target on a per-face fence
+//! and copies it into a cube layer, convolves that capture into the probe cube with
+//! the compute kernels in `probe_prefilter.slang` (the source pyramid in one frame,
+//! then one GGX mip per frame), and installs the finished cube into the forward /
+//! SSR / RT cube array -- all without blocking the render loop (the sky reflection
+//! covers a probe until its cube installs). Nothing is read back and no convolution
+//! runs on the CPU. The forward / SSR / RT sampling lives in the main / resolve
+//! shaders (see the reflection_probes.md DX/VK port checklist).
 
 use ash::vk;
 use concinnity_core::gfx::frustum::Frustum;

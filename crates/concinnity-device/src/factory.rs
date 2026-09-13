@@ -1,11 +1,9 @@
-// src/factory.rs
-//
-// The backend factory: route the assembled inputs to the backend selected at
-// compile time. The three backend_* cfgs are mutually exclusive, so at most one
-// arm compiles; a build with no backend feature compiles none and reports the
-// same "no backend" the callers already handle. This is the single construction
-// choke point - the client holds only a `Box<dyn RenderBackend>` and never names
-// a concrete backend context.
+//! The backend factory: route the assembled inputs to the backend selected at
+//! compile time. The three backend_* cfgs are mutually exclusive, so at most one
+//! arm compiles; a build with no backend feature compiles none and reports the
+//! same "no backend" the callers already handle. This is the single construction
+//! choke point - the client holds only a `Box<dyn RenderBackend>` and never names
+//! a concrete backend context.
 
 use concinnity_core::render::backend;
 use concinnity_core::render::backend_init;

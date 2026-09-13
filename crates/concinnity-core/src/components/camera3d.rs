@@ -1,7 +1,5 @@
-// src/components/camera3d.rs
-//
-// Runtime 3D camera component. Its authored args and controller config live in
-// this file, alongside the runtime component they bake into.
+//! Runtime 3D camera component. Its authored args and controller config live in
+//! this file, alongside the runtime component they bake into.
 
 use crate::ecs::Component;
 use crate::ecs::SkinnedMeshHandle;

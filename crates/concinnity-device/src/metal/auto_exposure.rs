@@ -1,23 +1,21 @@
-// src/metal/auto_exposure.rs
-//
-// Auto-exposure (EV adaptation) on Metal: a per-frame CPU readback of the
-// previous frame's average log-luminance, an EMA step that updates the adapted
-// EV, and the histogram build + average compute dispatches that produce next
-// frame's average. The compute passes are encoded after the main HDR resolve
-// (where `hdr_resolve` carries this frame's scene color) and read CPU-side at
-// the top of the next frame, so there is one frame of latency between the
-// scene's actual luminance and the exposure applied to it: invisible at
-// human-scale eye-adaptation rates.
-//
-// The readback is a ring of one buffer per frame-in-flight rather than a single
-// shared one. Frame `R` writes slot `R % depth` and reads that same slot before
-// encoding, which the frames-in-flight fence guarantees frame `R - depth` wrote
-// and the GPU has retired -- so the value read is always exactly `depth` frames
-// old. A single shared buffer instead yields whichever frame the GPU happened to
-// have finished, which varies with how far ahead the CPU is running and makes
-// the adaptation jitter. Mirrors `vulkan/auto_exposure.rs` and
-// `directx/auto_exposure.rs`, on the argument `metal/transient.rs` already
-// makes for the transient rings.
+//! Auto-exposure (EV adaptation) on Metal: a per-frame CPU readback of the
+//! previous frame's average log-luminance, an EMA step that updates the adapted
+//! EV, and the histogram build + average compute dispatches that produce next
+//! frame's average. The compute passes are encoded after the main HDR resolve
+//! (where `hdr_resolve` carries this frame's scene color) and read CPU-side at
+//! the top of the next frame, so there is one frame of latency between the
+//! scene's actual luminance and the exposure applied to it: invisible at
+//! human-scale eye-adaptation rates.
+//!
+//! The readback is a ring of one buffer per frame-in-flight rather than a single
+//! shared one. Frame `R` writes slot `R % depth` and reads that same slot before
+//! encoding, which the frames-in-flight fence guarantees frame `R - depth` wrote
+//! and the GPU has retired -- so the value read is always exactly `depth` frames
+//! old. A single shared buffer instead yields whichever frame the GPU happened to
+//! have finished, which varies with how far ahead the CPU is running and makes
+//! the adaptation jitter. Mirrors `vulkan/auto_exposure.rs` and
+//! `directx/auto_exposure.rs`, on the argument `metal/transient.rs` already
+//! makes for the transient rings.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::auto_exposure;

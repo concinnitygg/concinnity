@@ -1,58 +1,57 @@
-// src/metal/probe.rs
-//
-// Scene-captured reflection probes. Each declared `ReflectionProbe` (or an
-// auto-seeded grid when a world declares none) is baked into its own cube,
-// DISTINCT from `env_map`: the specular reflection term box-projects against the
-// probe's influence box and samples its cube, so glossy surfaces and windows
-// reflect the actual surrounding geometry instead of the imported (often foreign)
-// HDR sky, while the skybox + diffuse irradiance keep sampling `env_map` so the
-// visible sky is never replaced by a capture.
-//
-// Each cube mirrors the main pass exactly -- it reuses the GPU-driven bindless
-// cull + the three main-pass geometry sub-paths (`encode_main_into_face`) so the
-// folded static + instanced + skinned geometry, and the skybox (a non-cullable
-// draw object), all render into each face. The six faces are rendered through
-// the cube view-projections in `gfx::reflection_probe` (orientation unit-tested
-// there) into the six slices of a capture cube, then convolved into the probe's
-// prefiltered radiance cube by the compute kernels in `probe_prefilter.slang`.
-// Nothing is read back: the whole bake stays on the GPU timeline. The build-time
-// CPU convolution in `bake::environment_map` still serves imported HDR environment
-// maps, and the two agree on the roughness ramp and the firefly clamp through the
-// shared `PrefilterPlan`.
-//
-// The bake is STAGGERED, ASYNCHRONOUS, and PIPELINED across frames so the render
-// thread NEVER blocks on a capture, walking a `ProbeBakeQueue` cursor so a not-yet-
-// baked probe falls back to the sky until its turn. Each probe passes through three
-// phases (`gfx::reflection_probe::BakePhase`, driven by the pure `next_bake_action`
-// transition table, called once per pipeline slot per frame):
-//   * Rendering    -- six cube faces submitted to the GPU WITHOUT
-//                     `waitUntilCompleted`; a completion handler flags GPU
-//                     completion. The faces draw from a RESERVED ring slot
-//                     (`bake_ring_slot`) the frame never overwrites, so the bake's
-//                     CPU-written bindless buffers stay valid across the async work.
-//   * Prefiltering -- the capture's draw resources are released, the probe cube is
-//                     allocated, and the convolution runs as compute dispatches: the
-//                     clamped mirror mip plus the capture's source pyramid in the
-//                     first frame (all cheap), then ONE GGX mip per frame after it,
-//                     so no frame pays the whole convolution.
-//   * (install)    -- the finished cube is installed into `probe.maps` +
-//                     `probe.set`. No upload: the cube was written in place.
-// The Rendering and Prefiltering phases run in PARALLEL across two slots
-// (`probe.rendering` / `probe.prefiltering`): once a probe's faces are captured its
-// draw resources (the reserved ring slot included) are freed, so the NEXT probe starts
-// rendering while the prior probe's cube convolves -- shortening the warm-up vs
-// serializing render-then-convolve per probe. Only ONE probe renders at a time (so a
-// single reserved ring slot suffices, GPU lifetime unchanged) and only ONE convolves
-// at a time (so installs stay in queue order, keeping `probe.maps` aligned with the
-// placement list). A re-placement (`set_reflection_probes`) parks BOTH slots' GPU
-// resources in a frame-tagged retire pool so they outlive any still-running work.
-//
-// Known simplifications (documented intentionally):
-//   * The scene is captured lit by whatever environment is live at bake time
-//     (single bounce): surfaces carry the old env's ambient. The dominant,
-//     visible change is that reflections now show real geometry.
-//   * Captured before that frame's shadow map is populated, so the probe bakes
-//     direct + ambient lighting without contact shadows.
+//! Scene-captured reflection probes. Each declared `ReflectionProbe` (or an
+//! auto-seeded grid when a world declares none) is baked into its own cube,
+//! DISTINCT from `env_map`: the specular reflection term box-projects against the
+//! probe's influence box and samples its cube, so glossy surfaces and windows
+//! reflect the actual surrounding geometry instead of the imported (often foreign)
+//! HDR sky, while the skybox + diffuse irradiance keep sampling `env_map` so the
+//! visible sky is never replaced by a capture.
+//!
+//! Each cube mirrors the main pass exactly -- it reuses the GPU-driven bindless
+//! cull + the three main-pass geometry sub-paths (`encode_main_into_face`) so the
+//! folded static + instanced + skinned geometry, and the skybox (a non-cullable
+//! draw object), all render into each face. The six faces are rendered through
+//! the cube view-projections in `gfx::reflection_probe` (orientation unit-tested
+//! there) into the six slices of a capture cube, then convolved into the probe's
+//! prefiltered radiance cube by the compute kernels in `probe_prefilter.slang`.
+//! Nothing is read back: the whole bake stays on the GPU timeline. The build-time
+//! CPU convolution in `bake::environment_map` still serves imported HDR environment
+//! maps, and the two agree on the roughness ramp and the firefly clamp through the
+//! shared `PrefilterPlan`.
+//!
+//! The bake is STAGGERED, ASYNCHRONOUS, and PIPELINED across frames so the render
+//! thread NEVER blocks on a capture, walking a `ProbeBakeQueue` cursor so a not-yet-
+//! baked probe falls back to the sky until its turn. Each probe passes through three
+//! phases (`gfx::reflection_probe::BakePhase`, driven by the pure `next_bake_action`
+//! transition table, called once per pipeline slot per frame):
+//!   * Rendering    -- six cube faces submitted to the GPU WITHOUT
+//!     `waitUntilCompleted`; a completion handler flags GPU
+//!     completion. The faces draw from a RESERVED ring slot
+//!     (`bake_ring_slot`) the frame never overwrites, so the bake's
+//!     CPU-written bindless buffers stay valid across the async work.
+//!   * Prefiltering -- the capture's draw resources are released, the probe cube is
+//!     allocated, and the convolution runs as compute dispatches: the
+//!     clamped mirror mip plus the capture's source pyramid in the
+//!     first frame (all cheap), then ONE GGX mip per frame after it,
+//!     so no frame pays the whole convolution.
+//!   * (install)    -- the finished cube is installed into `probe.maps` +
+//!     `probe.set`. No upload: the cube was written in place.
+//!
+//! The Rendering and Prefiltering phases run in PARALLEL across two slots
+//! (`probe.rendering` / `probe.prefiltering`): once a probe's faces are captured its
+//! draw resources (the reserved ring slot included) are freed, so the NEXT probe starts
+//! rendering while the prior probe's cube convolves -- shortening the warm-up vs
+//! serializing render-then-convolve per probe. Only ONE probe renders at a time (so a
+//! single reserved ring slot suffices, GPU lifetime unchanged) and only ONE convolves
+//! at a time (so installs stay in queue order, keeping `probe.maps` aligned with the
+//! placement list). A re-placement (`set_reflection_probes`) parks BOTH slots' GPU
+//! resources in a frame-tagged retire pool so they outlive any still-running work.
+//!
+//! Known simplifications (documented intentionally):
+//!   * The scene is captured lit by whatever environment is live at bake time
+//!     (single bounce): surfaces carry the old env's ambient. The dominant,
+//!     visible change is that reflections now show real geometry.
+//!   * Captured before that frame's shadow map is populated, so the probe bakes
+//!     direct + ambient lighting without contact shadows.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::frustum::Frustum;

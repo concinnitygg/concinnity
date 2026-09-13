@@ -1,9 +1,7 @@
-// src/directx/post/fullscreen.rs
-//
-// The PIXEL_SHADER_RESOURCE <-> RENDER_TARGET barrier bracket, render-target
-// bind, and viewport / scissor that a fullscreen pass not yet drawn through the
-// shared post seam (`render::post`) writes by hand: the reflection composite's
-// blur and composite.
+//! The PIXEL_SHADER_RESOURCE <-> RENDER_TARGET barrier bracket, render-target
+//! bind, and viewport / scissor that a fullscreen pass not yet drawn through the
+//! shared post seam (`render::post`) writes by hand: the reflection composite's
+//! blur and composite.
 
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;

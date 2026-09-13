@@ -1,8 +1,6 @@
-// src/shader_layout/mirrors/forward.rs
-//
-// The bindless forward pass and the clustered light-binning kernel. Both files
-// declare `ClusterParams` and `GpuLight`; they are separate declarations that
-// can drift apart, so each is checked against the same Rust mirror.
+//! The bindless forward pass and the clustered light-binning kernel. Both files
+//! declare `ClusterParams` and `GpuLight`; they are separate declarations that
+//! can drift apart, so each is checked against the same Rust mirror.
 
 use concinnity_core::gfx::render_types::{
     AreaLightData, ClusterParams, DirectionalLightData, GpuLight, GpuObjectData, LightUniforms,

@@ -1,8 +1,6 @@
-// src/editor/hook/tests/drag/marquee_tests.rs
-//
-// Box-select (`hook/drag/marquee.rs`): the assets a swept rectangle replaces
-// the selection with, the rings every member draws, and the shift-click that
-// toggles one member in or out.
+//! Box-select (`hook/drag/marquee.rs`): the assets a swept rectangle replaces
+//! the selection with, the rings every member draws, and the shift-click that
+//! toggles one member in or out.
 
 use concinnity_core::components::Sprite;
 use concinnity_core::ecs::World;

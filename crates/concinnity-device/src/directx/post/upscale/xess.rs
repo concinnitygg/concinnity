@@ -1,13 +1,11 @@
-// src/directx/post/upscale/xess.rs
-//
-// Intel XeSS temporal upscaling for the D3D12 backend. One of the three
-// `UpscaleBackend` implementations; runs cross-vendor (Arc XMX + the DP4a
-// fallback on other GPUs). The runtime DLL is `libxess.dll`, loaded on demand
-// via `LoadLibraryA` (bundled next to the .exe by `build.rs` when the XeSS SDK
-// is found, else searched on PATH). Failure to load logs a warning and the
-// caller falls through to the next backend / native rendering. The FFI
-// bindings are inline (small, concentrated API), validated against XeSS SDK
-// 3.0.1 by the size/offset asserts in the tests.
+//! Intel XeSS temporal upscaling for the D3D12 backend. One of the three
+//! `UpscaleBackend` implementations; runs cross-vendor (Arc XMX + the DP4a
+//! fallback on other GPUs). The runtime DLL is `libxess.dll`, loaded on demand
+//! via `LoadLibraryA` (bundled next to the .exe by `build.rs` when the XeSS SDK
+//! is found, else searched on PATH). Failure to load logs a warning and the
+//! caller falls through to the next backend / native rendering. The FFI
+//! bindings are inline (small, concentrated API), validated against XeSS SDK
+//! 3.0.1 by the size/offset asserts in the tests.
 #![expect(
     non_camel_case_types,
     reason = "inline XeSS bindings keep the SDK's own C type names"

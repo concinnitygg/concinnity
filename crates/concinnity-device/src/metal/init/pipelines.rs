@@ -1,10 +1,8 @@
-// src/metal/init/pipelines.rs
-//
-// Core render-pipeline construction extracted from MtlContext::new:
-//   * The shared vertex descriptor (interleaved [pos, normal, tangent, color, uv]).
-//   * The main static pipeline (with its GPU-driven cull pipeline and the
-//     bindless texture argument encoder).
-//   * The shared depth-stencil state used by main + shadow passes.
+//! Core render-pipeline construction extracted from MtlContext::new:
+//!   * The shared vertex descriptor (interleaved [pos, normal, tangent, color, uv]).
+//!   * The main static pipeline (with its GPU-driven cull pipeline and the
+//!     bindless texture argument encoder).
+//!   * The shared depth-stencil state used by main + shadow passes.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::components::ShaderPrograms;

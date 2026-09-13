@@ -1,16 +1,14 @@
-// src/directx/wireframe.rs
-//
-// Wireframe view-mode pipeline variants. D3D12 fill mode lives in the PSO, so
-// unlike Metal (where it is one encoder flag every inherited indirect draw
-// picks up) the mode needs a second pipeline per main-pass path. They are built
-// on the first wireframe frame and dropped whenever the shaders they were built
-// from are rebuilt, so a shipped runtime never pays for them.
-//
-// The twin renders the engine's own bindless pair rather than a world Shader's:
-// a world fragment is free to ignore the fill mode's intent and the edges only
-// need to be visible. Every shader bucket shares the bindless root signature,
-// so the one twin stands in for every bucket's PSO while the mode is on, as
-// Metal's encoder-state fill mode does.
+//! Wireframe view-mode pipeline variants. D3D12 fill mode lives in the PSO, so
+//! unlike Metal (where it is one encoder flag every inherited indirect draw
+//! picks up) the mode needs a second pipeline per main-pass path. They are built
+//! on the first wireframe frame and dropped whenever the shaders they were built
+//! from are rebuilt, so a shipped runtime never pays for them.
+//!
+//! The twin renders the engine's own bindless pair rather than a world Shader's:
+//! a world fragment is free to ignore the fill mode's intent and the edges only
+//! need to be visible. Every shader bucket shares the bindless root signature,
+//! so the one twin stands in for every bucket's PSO while the mode is on, as
+//! Metal's encoder-state fill mode does.
 
 use windows::Win32::Graphics::Direct3D12::*;
 

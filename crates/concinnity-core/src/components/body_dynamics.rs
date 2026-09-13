@@ -1,5 +1,3 @@
-// src/components/body_dynamics.rs
-
 use crate::ecs::AudioClipHandle;
 
 /// Dynamic-body parameters attached to an entity with a `Collider`.

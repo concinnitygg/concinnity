@@ -1,9 +1,7 @@
-// src/editor/hook/tests/pick_tests.rs
-//
-// Picking in the viewport (`hook/pick.rs`): the nearest hit a click resolves
-// to, the cycle a repeat click walks, the clear on empty space, the ring the
-// selection draws, and the rows the session's hide and lock flags make
-// unpickable.
+//! Picking in the viewport (`hook/pick.rs`): the nearest hit a click resolves
+//! to, the cycle a repeat click walks, the clear on empty space, the ring the
+//! selection draws, and the rows the session's hide and lock flags make
+//! unpickable.
 
 use concinnity_core::components::FrameInput;
 use concinnity_core::components::Sprite;

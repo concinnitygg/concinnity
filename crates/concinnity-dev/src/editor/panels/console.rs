@@ -1,11 +1,9 @@
-// src/editor/panels/console.rs
-//
-// The Console panel's core: the bounded log ring, the shared sink other editor
-// code (and worker threads) push lines into, a tracing layer mirroring this
-// crate's events into that sink, the slash-command parser, and the /del name
-// autocomplete matcher. Everything here is pure or lock-guarded state; the
-// panel layout lives in `console_panel.rs` and the actions in
-// `hook/edit/console.rs`.
+//! The Console panel's core: the bounded log ring, the shared sink other editor
+//! code (and worker threads) push lines into, a tracing layer mirroring this
+//! crate's events into that sink, the slash-command parser, and the /del name
+//! autocomplete matcher. Everything here is pure or lock-guarded state; the
+//! panel layout lives in `console_panel.rs` and the actions in
+//! `hook/edit/console.rs`.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};

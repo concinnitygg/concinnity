@@ -1,9 +1,7 @@
-// src/editor/hook/tests/drive/trace_tests.rs
-//
-// The execution-trace exchange (`hook/drive/trace.rs`): the pulses and live
-// values a frame of trace events becomes, the pause a breakpoint hit lands on
-// its node, the state a stop clears, and the Ctrl+click that toggles a card's
-// breakpoint.
+//! The execution-trace exchange (`hook/drive/trace.rs`): the pulses and live
+//! values a frame of trace events becomes, the pause a breakpoint hit lands on
+//! its node, the state a stop clears, and the Ctrl+click that toggles a card's
+//! breakpoint.
 
 use concinnity_core::ecs::World;
 use concinnity_host::thread::asset_id;

@@ -1,11 +1,9 @@
-// src/editor/hook/worlds_start.rs
-//
-// EditorHook: the start screen. A session that named no world on the command
-// line opens on the Worlds panel alone, and picking a row there previews that
-// world live -- compiled in memory and swapped under the running backend by the
-// same rebuild every edit takes, but without retargeting the session or leaving
-// the screen. Opening then commits what is already showing, so the world the
-// user picked is not compiled twice.
+//! EditorHook: the start screen. A session that named no world on the command
+//! line opens on the Worlds panel alone, and picking a row there previews that
+//! world live -- compiled in memory and swapped under the running backend by the
+//! same rebuild every edit takes, but without retargeting the session or leaving
+//! the screen. Opening then commits what is already showing, so the world the
+//! user picked is not compiled twice.
 
 use concinnity_core::components::FrameInput;
 use concinnity_core::ecs::World;

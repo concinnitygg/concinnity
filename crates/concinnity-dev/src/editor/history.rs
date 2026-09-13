@@ -1,9 +1,7 @@
-// src/editor/history.rs
-//
-// Bounded undo/redo stacks over the editor's authored entry list. Pure data:
-// the hook records the pre-edit list on every committed entry mutation
-// (`mark_changed`) and swaps whole lists back in on undo/redo. Worlds are a
-// few dozen JSON lines, so whole-list snapshots stay cheap.
+//! Bounded undo/redo stacks over the editor's authored entry list. Pure data:
+//! the hook records the pre-edit list on every committed entry mutation
+//! (`mark_changed`) and swaps whole lists back in on undo/redo. Worlds are a
+//! few dozen JSON lines, so whole-list snapshots stay cheap.
 
 type Snapshot = Vec<serde_json::Value>;
 

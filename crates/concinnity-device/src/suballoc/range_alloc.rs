@@ -1,26 +1,24 @@
-// src/suballoc/range_alloc.rs
-//
-// A byte-range sub-allocator: it hands out offsets into a larger span it does
-// not own. Streamed meshes place their geometry in the renderer's shared vertex
-// and index buffers with it, and `block_alloc` stacks it into a block pool to
-// place resources inside device-memory blocks.
-//
-// Mesh streaming evicts and re-uploads geometry after init. Before this, every
-// streamed mesh re-filled its fixed build-time region, so the buffers had to
-// be sized for every streamed mesh at once. `RangeAllocator` lets a streamed
-// mesh be placed at any free block of the right size, so an evicted mesh's
-// space can be reused by a different one -- the prerequisite for streaming
-// more mesh geometry than the buffers hold at once.
-//
-// This is pure policy: no backend types, no I/O, no threads.
-//
-// Free space is a sorted, coalesced free list; allocation is best-fit, so an
-// exact-size block is consumed whole with no split. Frees are *deferred*: a
-// region freed for frame N is not handed back out until `reclaim` runs for a
-// frame at or past the caller-supplied `retire_frame`. The caller passes
-// `retire_frame = frame + frames_in_flight` for a runtime eviction, so a
-// region a still-in-flight command buffer references is never overwritten;
-// at init it passes 0, since nothing has been drawn yet.
+//! A byte-range sub-allocator: it hands out offsets into a larger span it does
+//! not own. Streamed meshes place their geometry in the renderer's shared vertex
+//! and index buffers with it, and `block_alloc` stacks it into a block pool to
+//! place resources inside device-memory blocks.
+//!
+//! Mesh streaming evicts and re-uploads geometry after init. Before this, every
+//! streamed mesh re-filled its fixed build-time region, so the buffers had to
+//! be sized for every streamed mesh at once. `RangeAllocator` lets a streamed
+//! mesh be placed at any free block of the right size, so an evicted mesh's
+//! space can be reused by a different one -- the prerequisite for streaming
+//! more mesh geometry than the buffers hold at once.
+//!
+//! This is pure policy: no backend types, no I/O, no threads.
+//!
+//! Free space is a sorted, coalesced free list; allocation is best-fit, so an
+//! exact-size block is consumed whole with no split. Frees are *deferred*: a
+//! region freed for frame N is not handed back out until `reclaim` runs for a
+//! frame at or past the caller-supplied `retire_frame`. The caller passes
+//! `retire_frame = frame + frames_in_flight` for a runtime eviction, so a
+//! region a still-in-flight command buffer references is never overwritten;
+//! at init it passes 0, since nothing has been drawn yet.
 
 // A contiguous free byte range `[offset, offset + size)`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

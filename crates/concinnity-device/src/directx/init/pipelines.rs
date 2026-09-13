@@ -1,18 +1,16 @@
-// src/directx/init/pipelines.rs
-//
-// Core render-pipeline construction extracted from DxContext::new:
-//   * Shader compilation (`compile_all_shaders`, `compile_main_bindless_shaders`),
-//     from the program declarations in `directx/slang_builtins.rs`.
-//   * Root-signature + PSO builders for the GPU-driven main pass, its shader
-//     buckets, and the depth-only shadow pass.
-//   * High-level `build_main_pipelines`/`build_shadow_pipeline`/etc.
-//     orchestration helpers consumed by init/mod.rs.
-//
-// Mirrors src/metal/init/pipelines.rs (the same set of pipelines built at
-// init time). Text + composite pipelines live in `directx/pipeline.rs`;
-// bloom/TAA/SSAO live in `directx/post/`; the GPU-cull compute pipeline lives
-// in `directx/cull.rs`; the skinned shadow pipeline (built lazily once a
-// `SkinnedMesh` is uploaded) lives in `directx/resources.rs`.
+//! Core render-pipeline construction extracted from DxContext::new:
+//!   * Shader compilation (`compile_all_shaders`, `compile_main_bindless_shaders`),
+//!     from the program declarations in `directx/slang_builtins.rs`.
+//!   * Root-signature + PSO builders for the GPU-driven main pass, its shader
+//!     buckets, and the depth-only shadow pass.
+//!   * High-level `build_main_pipelines`/`build_shadow_pipeline`/etc.
+//!     orchestration helpers consumed by init/mod.rs.
+//!
+//! Mirrors src/metal/init/pipelines.rs (the same set of pipelines built at
+//! init time). Text + composite pipelines live in `directx/pipeline.rs`;
+//! bloom/TAA/SSAO live in `directx/post/`; the GPU-cull compute pipeline lives
+//! in `directx/cull.rs`; the skinned shadow pipeline (built lazily once a
+//! `SkinnedMesh` is uploaded) lives in `directx/resources.rs`.
 
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::backend_init;

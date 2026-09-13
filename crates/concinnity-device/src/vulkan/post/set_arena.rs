@@ -1,20 +1,18 @@
-// src/vulkan/post/set_arena.rs
-//
-// Descriptor sets for the shared fullscreen post passes, allocated per frame
-// rather than per pass.
-//
-// The pattern this replaces is a pool and a pre-wired set per frame in flight
-// owned by every effect, plus a `rewire_*` for each input that can change which
-// image it points at. That is where a Vulkan post pass grew its bulk and its
-// coupling: an effect had to be told about every other effect that might own its
-// scene input. A set allocated at encode time is written from what the pass
-// actually holds this frame, so there is nothing to rewire and no effect has to
-// know about another.
-//
-// One pool per frame in flight, reset when the frame comes round again. The
-// reset is safe without a fence of its own: `begin_frame` is called from the top
-// of the frame, after that slot's fence wait, so every set the pool handed out
-// last time round has retired.
+//! Descriptor sets for the shared fullscreen post passes, allocated per frame
+//! rather than per pass.
+//!
+//! The pattern this replaces is a pool and a pre-wired set per frame in flight
+//! owned by every effect, plus a `rewire_*` for each input that can change which
+//! image it points at. That is where a Vulkan post pass grew its bulk and its
+//! coupling: an effect had to be told about every other effect that might own its
+//! scene input. A set allocated at encode time is written from what the pass
+//! actually holds this frame, so there is nothing to rewire and no effect has to
+//! know about another.
+//!
+//! One pool per frame in flight, reset when the frame comes round again. The
+//! reset is safe without a fence of its own: `begin_frame` is called from the top
+//! of the frame, after that slot's fence wait, so every set the pool handed out
+//! last time round has retired.
 
 use ash::vk;
 use std::sync::Mutex;

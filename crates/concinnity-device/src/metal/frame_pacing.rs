@@ -1,31 +1,29 @@
-// src/metal/frame_pacing.rs
-//
-// Frames-in-flight CPU↔GPU pacing. Without it the render loop's only
-// backpressure is `currentDrawable()` blocking, so the CPU can queue frames
-// arbitrarily far ahead of the GPU: the per-frame transient buffers (object /
-// draw-args / joint / bindless-texture / instance) pile up, and the per-frame
-// autorelease pool is the only thing keeping VRAM from running away. A
-// counting semaphore seeded to the frames-in-flight depth bounds that queue:
-// `draw_frame` acquires a slot before encoding, and the frame command buffer's
-// completion handler releases it once the GPU has retired the frame, so at most
-// `depth` frames are ever in flight. This is the foundation that lets the
-// per-frame buffers move from fresh-allocation to ring-buffered reuse.
-//
-// "The GPU has retired the frame" is a join over both command queues, not one
-// command buffer's completion. The render graph submits its async-compute
-// passes on a second queue (`metal/graph_queues.rs`), and the terminal one
-// (`HizFinal`, which writes the pyramid the *next* frame's cull reads) is not
-// an ancestor of the presenting composite pass, so it can still be running when
-// the composite command buffer retires. Every per-frame ring the slot guards
-// -- the transient buffers, the argument buffers, the pass-timing sample
-// buffers -- is written from both queues, so releasing on the composite alone
-// would hand a slot back while the async queue was still reading it.
-// [`FrameJoin`] is that join: each participating command buffer registers a
-// part before it is committed and arrives from its completion handler, and the
-// last arrival runs the frame's completion work and releases the slot exactly
-// once. The alternative -- having the composite wait on the async queue's
-// terminal event before presenting -- would also be correct, but it puts the
-// present behind `HizFinal` and so pays for the slot with latency.
+//! Frames-in-flight CPU↔GPU pacing. Without it the render loop's only
+//! backpressure is `currentDrawable()` blocking, so the CPU can queue frames
+//! arbitrarily far ahead of the GPU: the per-frame transient buffers (object /
+//! draw-args / joint / bindless-texture / instance) pile up, and the per-frame
+//! autorelease pool is the only thing keeping VRAM from running away. A
+//! counting semaphore seeded to the frames-in-flight depth bounds that queue:
+//! `draw_frame` acquires a slot before encoding, and the frame command buffer's
+//! completion handler releases it once the GPU has retired the frame, so at most
+//! `depth` frames are ever in flight. This is the foundation that lets the
+//! per-frame buffers move from fresh-allocation to ring-buffered reuse.
+//!
+//! "The GPU has retired the frame" is a join over both command queues, not one
+//! command buffer's completion. The render graph submits its async-compute
+//! passes on a second queue (`metal/graph_queues.rs`), and the terminal one
+//! (`HizFinal`, which writes the pyramid the *next* frame's cull reads) is not
+//! an ancestor of the presenting composite pass, so it can still be running when
+//! the composite command buffer retires. Every per-frame ring the slot guards
+//! -- the transient buffers, the argument buffers, the pass-timing sample
+//! buffers -- is written from both queues, so releasing on the composite alone
+//! would hand a slot back while the async queue was still reading it.
+//! [`FrameJoin`] is that join: each participating command buffer registers a
+//! part before it is committed and arrives from its completion handler, and the
+//! last arrival runs the frame's completion work and releases the slot exactly
+//! once. The alternative -- having the composite wait on the async queue's
+//! terminal event before presenting -- would also be correct, but it puts the
+//! present behind `HizFinal` and so pays for the slot with latency.
 
 use dispatch2::{DispatchRetained, DispatchSemaphore, DispatchTime};
 use std::sync::Mutex;

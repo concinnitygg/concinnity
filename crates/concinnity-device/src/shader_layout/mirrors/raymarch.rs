@@ -1,13 +1,11 @@
-// src/shader_layout/mirrors/raymarch.rs
-//
-// The raymarched SDF volume pass. Both blocks are bound by every backend, so
-// both mirror everywhere.
-//
-// `SdfVolumeUniforms` is the reason this file exists. Its center and extent were
-// spelled as a `float3` beside a `float` pad, which is what the CPU uploads and
-// what SPIR-V and DXIL lay out -- but Metal sizes a constant-buffer `float3` at
-// 16 bytes, so every field after the first pair sat four bytes late there and
-// the volume marched a box it was never given. Reflection is what says so.
+//! The raymarched SDF volume pass. Both blocks are bound by every backend, so
+//! both mirror everywhere.
+//!
+//! `SdfVolumeUniforms` is the reason this file exists. Its center and extent were
+//! spelled as a `float3` beside a `float` pad, which is what the CPU uploads and
+//! what SPIR-V and DXIL lay out -- but Metal sizes a constant-buffer `float3` at
+//! 16 bytes, so every field after the first pair sat four bytes late there and
+//! the volume marched a box it was never given. Reflection is what says so.
 
 use concinnity_core::render::uniforms::{
     RaymarchShadowCascade, RaymarchView, RaymarchVolumeUniforms,

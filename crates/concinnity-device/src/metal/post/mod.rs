@@ -1,20 +1,18 @@
-// src/metal/post/mod.rs
-//
-// Screen-space and post-process passes for the Metal frame encoder. Each
-// effect lives in its own file with its pipeline builder(s), target
-// allocator(s), and per-frame encoder(s) co-located:
-//
-//   gbuffer.rs unified normal+depth / roughness / velocity G-buffer pre-pass
-//   ssao.rs   GTAO depth+normal pre-pass + horizon-search kernel + blur
-//   ssr.rs    reflection targets + composite, and the inputs to the shared resolve
-//   ssgi.rs   the inputs to the shared gather + composite
-//   taa.rs    the TAA toggle + jitter counter over the shared resolve
-//   bloom.rs  prefilter + downsample/upsample mip chain
-//
-// `post_device.rs` is the shared fullscreen post-pass seam's Metal half.
-//
-// Pipeline builders / targets that any other module reaches are re-exported
-// here so call sites have a single `crate::metal::post::*` import.
+//! Screen-space and post-process passes for the Metal frame encoder. Each
+//! effect lives in its own file with its pipeline builder(s), target
+//! allocator(s), and per-frame encoder(s) co-located:
+//!
+//!   gbuffer.rs unified normal+depth / roughness / velocity G-buffer pre-pass
+//!   ssao.rs   GTAO depth+normal pre-pass + horizon-search kernel + blur
+//!   ssr.rs    reflection targets + composite, and the inputs to the shared resolve
+//!   ssgi.rs   the inputs to the shared gather + composite
+//!   taa.rs    the TAA toggle + jitter counter over the shared resolve
+//!   bloom.rs  prefilter + downsample/upsample mip chain
+//!
+//! `post_device.rs` is the shared fullscreen post-pass seam's Metal half.
+//!
+//! Pipeline builders / targets that any other module reaches are re-exported
+//! here so call sites have a single `crate::metal::post::*` import.
 
 pub(super) mod bloom;
 pub(super) mod fullscreen;

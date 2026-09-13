@@ -1,17 +1,15 @@
-// src/metal/line.rs
-//
-// Per-frame encoder for the world-space line pass. Runs at the tail of
-// the hdr_resolve decoration chain, after the main pass resolved color into
-// `hdr_targets.hdr_resolve` and depth into `hdr_targets.depth_resolve`, so the
-// lines layer over the lit scene and SSR / TAA treat them like any other scene
-// content.
-//
-// The ribbons arrive already expanded (`gfx::lines::build_vertices`):
-// world-space quads whose width was sized off each corner's depth, so a line
-// holds its pixel thickness at any distance. Like the decal pass this one
-// attaches no depth buffer and instead samples the resolved depth, so an
-// occluded line fades to `OCCLUDED_ALPHA` rather than being clipped by
-// hardware.
+//! Per-frame encoder for the world-space line pass. Runs at the tail of
+//! the hdr_resolve decoration chain, after the main pass resolved color into
+//! `hdr_targets.hdr_resolve` and depth into `hdr_targets.depth_resolve`, so the
+//! lines layer over the lit scene and SSR / TAA treat them like any other scene
+//! content.
+//!
+//! The ribbons arrive already expanded (`gfx::lines::build_vertices`):
+//! world-space quads whose width was sized off each corner's depth, so a line
+//! holds its pixel thickness at any distance. Like the decal pass this one
+//! attaches no depth buffer and instead samples the resolved depth, so an
+//! occluded line fades to `OCCLUDED_ALPHA` rather than being clipped by
+//! hardware.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::render_types::LineVertex;

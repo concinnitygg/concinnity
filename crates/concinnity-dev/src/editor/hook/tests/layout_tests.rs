@@ -1,10 +1,8 @@
-// src/editor/hook/tests/layout_tests.rs
-//
-// The floating panels' geometry and stacking (`hook/layout.rs`): a title-bar
-// drag that moves a panel and clamps it on screen, the focus order a press
-// changes, the draw layers a publish ranks, the close button, what a hidden
-// panel stops answering, each region's scroll, and where the secondary panels
-// park while a drag is in flight.
+//! The floating panels' geometry and stacking (`hook/layout.rs`): a title-bar
+//! drag that moves a panel and clamps it on screen, the focus order a press
+//! changes, the draw layers a publish ranks, the close button, what a hidden
+//! panel stops answering, each region's scroll, and where the secondary panels
+//! park while a drag is in flight.
 
 use concinnity_core::components::FrameInput;
 use concinnity_core::components::Sprite;

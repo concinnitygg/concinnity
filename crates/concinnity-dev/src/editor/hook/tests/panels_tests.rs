@@ -1,16 +1,14 @@
-// src/editor/hook/tests/panels_tests.rs
-//
-// Contract tests over the panel registry. Each floating panel supplies only its
-// own `Panel` impl (`hook/panels.rs`) and the shared machinery drives the rest,
-// so the invariants that machinery relies on -- a footprint inside its own max,
-// an on-screen origin, a toggle that round-trips, a `hide` that blanks exactly
-// what the panel declared for injection, presses and wheels that fall through
-// outside the footprint, and scrolling that stays in bounds at either end --
-// are asserted here once for every registered panel rather than per panel.
-//
-// Beside them are the drives of the two panels that are only lists of the
-// others: the View panel's rows toggling what shows, and the Templates panel's
-// pick opening a detail panel whose apply adds the template's entries.
+//! Contract tests over the panel registry. Each floating panel supplies only its
+//! own `Panel` impl (`hook/panels.rs`) and the shared machinery drives the rest,
+//! so the invariants that machinery relies on -- a footprint inside its own max,
+//! an on-screen origin, a toggle that round-trips, a `hide` that blanks exactly
+//! what the panel declared for injection, presses and wheels that fall through
+//! outside the footprint, and scrolling that stays in bounds at either end --
+//! are asserted here once for every registered panel rather than per panel.
+//!
+//! Beside them are the drives of the two panels that are only lists of the
+//! others: the View panel's rows toggling what shows, and the Templates panel's
+//! pick opening a detail panel whose apply adds the template's entries.
 
 use concinnity_core::components::{FrameInput, Sprite, TextInput, TextLabel};
 use concinnity_core::ecs::World;

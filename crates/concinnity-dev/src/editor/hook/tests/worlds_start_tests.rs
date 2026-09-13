@@ -1,10 +1,8 @@
-// src/editor/hook/tests/worlds_start_tests.rs
-//
-// Tests for the start screen: the chrome it suppresses, the larger presentation
-// it draws, previewing a world without retargeting the session, committing that
-// preview without compiling it twice, and the fallbacks a delete leaves behind.
-// The subject is shared with `edit/worlds_tests.rs`, which covers the switcher the
-// same panel becomes once a world is open.
+//! Tests for the start screen: the chrome it suppresses, the larger presentation
+//! it draws, previewing a world without retargeting the session, committing that
+//! preview without compiling it twice, and the fallbacks a delete leaves behind.
+//! The subject is shared with `edit/worlds_tests.rs`, which covers the switcher the
+//! same panel becomes once a world is open.
 
 use concinnity_core::components::{FrameInput, Sprite, TextLabel};
 use concinnity_core::ecs::World;

@@ -1,11 +1,9 @@
-// src/appkit/window.rs
-//
-// The AppKit window + input state every macOS backend owns, extracted from what
-// used to be a block of `MtlContext` fields plus `metal/input.rs`. It works
-// entirely through `NSView`, never the concrete view subclass, so the Metal
-// backend can hand it its `MTKView` (kept for drawable acquisition) and the
-// Vulkan backend a plain `CAMetalLayer`-backed view, and both get one
-// window/input/display-mode implementation. Mirrors `win32/window.rs`.
+//! The AppKit window + input state every macOS backend owns, extracted from what
+//! used to be a block of `MtlContext` fields plus `metal/input.rs`. It works
+//! entirely through `NSView`, never the concrete view subclass, so the Metal
+//! backend can hand it its `MTKView` (kept for drawable acquisition) and the
+//! Vulkan backend a plain `CAMetalLayer`-backed view, and both get one
+//! window/input/display-mode implementation. Mirrors `win32/window.rs`.
 
 #![deny(unsafe_op_in_unsafe_fn)]
 

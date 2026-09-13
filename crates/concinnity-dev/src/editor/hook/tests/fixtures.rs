@@ -1,9 +1,7 @@
-// src/editor/hook/tests/fixtures.rs
-//
-// The fixtures every hook test companion shares: a hook over a given entry
-// list, the worlds a tick reads its input and typed fields from, the entry
-// literals, and the seeded asset tree the panel rows come from. Nothing here
-// asserts anything -- each companion brings in what it needs.
+//! The fixtures every hook test companion shares: a hook over a given entry
+//! list, the worlds a tick reads its input and typed fields from, the entry
+//! literals, and the seeded asset tree the panel rows come from. Nothing here
+//! asserts anything -- each companion brings in what it needs.
 
 use crate::editor::modal;
 use concinnity_cook::authoring::world::write_world_jsonl;

@@ -1,13 +1,11 @@
-// src/editor/behavior/graph.rs
-//
-// Laying a behavior's body out as a left-to-right chart. The body is a tree --
-// `do` is an ordered list and a branching node owns child lists -- so a card's
-// place is computed from the asset each time rather than stored in it, and a
-// node carries no authored position. Sequence runs left to right, one column
-// per node; a branching node stacks its branches in the columns to its right,
-// and the node after it resumes past the whole branch. Every card addresses a
-// path the outline addresses too, so selecting a card selects its row and the
-// toolbar, palette, and value field act on it unchanged.
+//! Laying a behavior's body out as a left-to-right chart. The body is a tree --
+//! `do` is an ordered list and a branching node owns child lists -- so a card's
+//! place is computed from the asset each time rather than stored in it, and a
+//! node carries no authored position. Sequence runs left to right, one column
+//! per node; a branching node stacks its branches in the columns to its right,
+//! and the node after it resumes past the whole branch. Every card addresses a
+//! path the outline addresses too, so selecting a card selects its row and the
+//! toolbar, palette, and value field act on it unchanged.
 
 use serde_json::Value;
 

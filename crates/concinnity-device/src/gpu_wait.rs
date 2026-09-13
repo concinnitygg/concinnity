@@ -1,16 +1,14 @@
-// src/gpu_wait.rs
-//
-// The CPU's blocked-on-GPU time within one frame's draw call. Every backend
-// blocks in the same two places: the frames-in-flight fence or semaphore that
-// paces the CPU against GPU retirement, and the swapchain / drawable acquire.
-// Both sit inside the per-frame `draw_frame` the engine times its graphics
-// system around, so without a separate reading a GPU-bound frame reports as a
-// CPU-bound one -- the graphics system's span tracks the GPU frame time because
-// it is mostly waiting for it.
-//
-// The accumulator is a frame-local value the backend hands to
-// `RenderStats::gpu_wait_us`, so the shape is identical across Metal, Vulkan
-// and DirectX and the field means the same thing on each.
+//! The CPU's blocked-on-GPU time within one frame's draw call. Every backend
+//! blocks in the same two places: the frames-in-flight fence or semaphore that
+//! paces the CPU against GPU retirement, and the swapchain / drawable acquire.
+//! Both sit inside the per-frame `draw_frame` the engine times its graphics
+//! system around, so without a separate reading a GPU-bound frame reports as a
+//! CPU-bound one -- the graphics system's span tracks the GPU frame time because
+//! it is mostly waiting for it.
+//!
+//! The accumulator is a frame-local value the backend hands to
+//! `RenderStats::gpu_wait_us`, so the shape is identical across Metal, Vulkan
+//! and DirectX and the field means the same thing on each.
 
 /// Blocked-on-GPU microseconds accumulated across one frame's waits.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]

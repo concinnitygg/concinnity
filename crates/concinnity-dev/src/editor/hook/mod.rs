@@ -1,39 +1,37 @@
-// src/editor/hook/mod.rs
-//
-// The editor's per-frame drive. Implements the run loop's `DebugHook` seam: each
-// frame it hit-tests the editor HUD's controls against the live input, mutates
-// the working authored entry list, persists on SAVE, drives the world's cursor /
-// freeze state, and re-anchors + recolors the HUD. This is the whole editor: it
-// lives in the editor crate (never linked by the shipped runtime), so no editor
-// code is compiled into a shipped game.
-//
-// The top bar (`hud.rs`) owns SAVE and the Templates dropdown. The Assets button
-// opens the assets panel (`panel.rs`): a search field over every asset of the
-// expanded world, grouped by origin into one collapsible tree (`asset_tree.rs`),
-// and a "+" that opens a typed autocomplete of the addable types. Clicking a row
-// (or picking a type from the "+" picker) opens the add / edit form in its own
-// floating panel (`form_panel.rs`). A row the build generates has no world.jsonl
-// line of its own: its form is seeded from what the expansion produced, and only
-// confirming appends the line -- which then overrides the expansion. The search
-// field and the form's name heading are real `TextInput` assets edited by the
-// engine's text-input system; the hook reads them back. All three panels
-// (Assets, edit form, Preview) are floating: holding their title bars drags them
-// (the hook owns each origin, clamped so a panel can never leave the screen).
-//
-// Cursor control follows the simulation transport (`editor/sim.rs`): while
-// Stopped or Paused the editor holds the cursor and the world sits frozen
-// (`MenuOverride(Some(true))`); Play hands the cursor to the running world
-// (`Some(false)`); Escape pauses and takes it back. Stop restores the authored
-// state through the same preview rebuild every committed edit takes. F1 hides /
-// shows the whole HUD.
-//
-// An edit shows in the preview the frame after it is committed, and SAVE only
-// persists: `apply_world_swap` writes the change into the running world where
-// the running world can express it (`editor/live/`), and otherwise recompiles
-// and swaps a fresh world under the live render backend, which is transplanted
-// across as a `PendingBackend` so the OS window is never recreated. SAVE
-// re-serializes the entry list to world.jsonl and stops there: the compiled
-// blobs are refreshed by an explicit build, not by editing.
+//! The editor's per-frame drive. Implements the run loop's `DebugHook` seam: each
+//! frame it hit-tests the editor HUD's controls against the live input, mutates
+//! the working authored entry list, persists on SAVE, drives the world's cursor /
+//! freeze state, and re-anchors + recolors the HUD. This is the whole editor: it
+//! lives in the editor crate (never linked by the shipped runtime), so no editor
+//! code is compiled into a shipped game.
+//!
+//! The top bar (`hud.rs`) owns SAVE and the Templates dropdown. The Assets button
+//! opens the assets panel (`panel.rs`): a search field over every asset of the
+//! expanded world, grouped by origin into one collapsible tree (`asset_tree.rs`),
+//! and a "+" that opens a typed autocomplete of the addable types. Clicking a row
+//! (or picking a type from the "+" picker) opens the add / edit form in its own
+//! floating panel (`form_panel.rs`). A row the build generates has no world.jsonl
+//! line of its own: its form is seeded from what the expansion produced, and only
+//! confirming appends the line -- which then overrides the expansion. The search
+//! field and the form's name heading are real `TextInput` assets edited by the
+//! engine's text-input system; the hook reads them back. All three panels
+//! (Assets, edit form, Preview) are floating: holding their title bars drags them
+//! (the hook owns each origin, clamped so a panel can never leave the screen).
+//!
+//! Cursor control follows the simulation transport (`editor/sim.rs`): while
+//! Stopped or Paused the editor holds the cursor and the world sits frozen
+//! (`MenuOverride(Some(true))`); Play hands the cursor to the running world
+//! (`Some(false)`); Escape pauses and takes it back. Stop restores the authored
+//! state through the same preview rebuild every committed edit takes. F1 hides /
+//! shows the whole HUD.
+//!
+//! An edit shows in the preview the frame after it is committed, and SAVE only
+//! persists: `apply_world_swap` writes the change into the running world where
+//! the running world can express it (`editor/live/`), and otherwise recompiles
+//! and swaps a fresh world under the live render backend, which is transplanted
+//! across as a `PendingBackend` so the OS window is never recreated. SAVE
+//! re-serializes the entry list to world.jsonl and stops there: the compiled
+//! blobs are refreshed by an explicit build, not by editing.
 
 use concinnity_core::components::FrameInput;
 use concinnity_core::ecs::{

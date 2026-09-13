@@ -1,9 +1,7 @@
-// src/editor/hook/hide.rs
-//
-// EditorHook: hide-selected, isolate, and unhide-all. H adds the selection to
-// the manual hide set (the same one the outliner eye edits); Shift+H toggles
-// an isolate that keeps only the selection visible; Ctrl+H clears both. The
-// composition rule lives in `editor/visibility.rs`.
+//! EditorHook: hide-selected, isolate, and unhide-all. H adds the selection to
+//! the manual hide set (the same one the outliner eye edits); Shift+H toggles
+//! an isolate that keeps only the selection visible; Ctrl+H clears both. The
+//! composition rule lives in `editor/visibility.rs`.
 
 use concinnity_host::thread::asset_id::{self, AssetId};
 

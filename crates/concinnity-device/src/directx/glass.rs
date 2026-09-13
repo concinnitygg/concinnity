@@ -1,21 +1,19 @@
-// src/directx/glass.rs
-//
-// The glass producers of the engine's transparent pass on the D3D12 backend
-// (`transparent.rs` owns the pass itself, the scene snapshot, the shared root
-// signatures and the combined back-to-front draw order; `water.rs` is the third
-// producer). Two live here because they are the same material family:
-//
-//   * `GlassPanel` -- a flat world-space quad built once at init. The fragment
-//     refracts the pass's scene snapshot, tints it, and mixes a reflection over
-//     it by a Schlick Fresnel term.
-//   * A see-through glass MESH -- an imported `Material` flagged `see_through`,
-//     drawn from the shared scene buffers with a per-pixel reflection ray. It is
-//     ray-traced only, so it builds nothing without DXR and its meshes then
-//     rasterize opaque in the main pass instead.
-//
-// The shaders are the shared `shaders/glass.slang` and `shaders/glass_mesh.slang`,
-// compiled through `slang_builtins`; the ray-traced fragments need shader model
-// 6.5 for their inline ray query, the base pair 6.0.
+//! The glass producers of the engine's transparent pass on the D3D12 backend
+//! (`transparent.rs` owns the pass itself, the scene snapshot, the shared root
+//! signatures and the combined back-to-front draw order; `water.rs` is the third
+//! producer). Two live here because they are the same material family:
+//!
+//!   * `GlassPanel` -- a flat world-space quad built once at init. The fragment
+//!     refracts the pass's scene snapshot, tints it, and mixes a reflection over
+//!     it by a Schlick Fresnel term.
+//!   * A see-through glass MESH -- an imported `Material` flagged `see_through`,
+//!     drawn from the shared scene buffers with a per-pixel reflection ray. It is
+//!     ray-traced only, so it builds nothing without DXR and its meshes then
+//!     rasterize opaque in the main pass instead.
+//!
+//! The shaders are the shared `shaders/glass.slang` and `shaders/glass_mesh.slang`,
+//! compiled through `slang_builtins`; the ray-traced fragments need shader model
+//! 6.5 for their inline ray query, the base pair 6.0.
 
 use concinnity_core::components::GlassPanel;
 use concinnity_core::geometry::glass_quad::build_glass_quad;

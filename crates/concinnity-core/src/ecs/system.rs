@@ -1,10 +1,8 @@
-// src/ecs/system.rs
-//
-// The runtime behavior trait every engine system implements, plus its per-step
-// control signal. Renderer-free: `System` names only `PipelineContext` (which is
-// core), so it lives here where the physics / audio subsystem crates can name it
-// without depending on the renderer. The client's `define_systems!` table names
-// each system's gate; a world holds the built systems as trait objects.
+//! The runtime behavior trait every engine system implements, plus its per-step
+//! control signal. Renderer-free: `System` names only `PipelineContext` (which is
+//! core), so it lives here where the physics / audio subsystem crates can name it
+//! without depending on the renderer. The client's `define_systems!` table names
+//! each system's gate; a world holds the built systems as trait objects.
 
 use crate::ecs::{Access, PipelineContext};
 

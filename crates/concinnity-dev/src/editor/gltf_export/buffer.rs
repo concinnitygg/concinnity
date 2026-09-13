@@ -1,9 +1,7 @@
-// src/editor/gltf_export/buffer.rs
-//
-// Binary-buffer packing for glTF export: each accessor's data is appended to
-// one BIN buffer in its own 4-byte-aligned bufferView, and the JSON half
-// (bufferViews / accessors) is described alongside so `json.rs` can emit it
-// without re-deriving offsets.
+//! Binary-buffer packing for glTF export: each accessor's data is appended to
+//! one BIN buffer in its own 4-byte-aligned bufferView, and the JSON half
+//! (bufferViews / accessors) is described alongside so `json.rs` can emit it
+//! without re-deriving offsets.
 
 // glTF componentType codes.
 pub(crate) const FLOAT: u32 = 5126;

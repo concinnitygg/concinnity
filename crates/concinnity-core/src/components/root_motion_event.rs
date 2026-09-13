@@ -1,5 +1,3 @@
-// src/components/root_motion_event.rs
-
 use crate::ecs::SkinnedMeshHandle;
 
 /// Per-frame character displacement extracted from root-motion clips.

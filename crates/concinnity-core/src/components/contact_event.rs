@@ -1,5 +1,3 @@
-// src/components/contact_event.rs
-
 use crate::ecs::Entity;
 
 /// Runtime-only event published by the physics system when two bodies collide

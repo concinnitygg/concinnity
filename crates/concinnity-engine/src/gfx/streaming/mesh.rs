@@ -1,20 +1,18 @@
-// src/gfx/streaming/mesh.rs
-//
-// The `std`-side driver for mesh-geometry streaming.
-//
-// This is the geometry counterpart of `super::texture`: it owns a
-// background payload-fetch thread and the channels that carry work to it, and
-// wraps the `no_std` policy core in `crate::gfx::streaming`. The split:
-// `gfx::streaming::StreamPlanner` decides *what* to stream using only
-// `core` + `alloc`; everything OS-coupled -- threads, payload I/O --
-// lives here so a future `no_std` client runtime only has to replace
-// this file.
-//
-// `MeshPayloadSource` is the seam. `MemMeshSource` serves mesh geometry kept
-// resident in RAM (used by `cn debug`, which builds geometry in memory with no
-// disk artifacts); `DiskMeshSource` re-reads it from a scratch file written by
-// `write_mesh_scratch` (used by `cn run`, so the geometry never stays a second
-// RAM copy past GPU upload). Both plug into the same planner and renderer.
+//! The `std`-side driver for mesh-geometry streaming.
+//!
+//! This is the geometry counterpart of `super::texture`: it owns a
+//! background payload-fetch thread and the channels that carry work to it, and
+//! wraps the `no_std` policy core in `crate::gfx::streaming`. The split:
+//! `gfx::streaming::StreamPlanner` decides *what* to stream using only
+//! `core` + `alloc`; everything OS-coupled -- threads, payload I/O --
+//! lives here so a future `no_std` client runtime only has to replace
+//! this file.
+//!
+//! `MeshPayloadSource` is the seam. `MemMeshSource` serves mesh geometry kept
+//! resident in RAM (used by `cn debug`, which builds geometry in memory with no
+//! disk artifacts); `DiskMeshSource` re-reads it from a scratch file written by
+//! `write_mesh_scratch` (used by `cn run`, so the geometry never stays a second
+//! RAM copy past GPU upload). Both plug into the same planner and renderer.
 
 use concinnity_core::decode::ByteReader;
 use concinnity_core::gfx::mesh_payload;

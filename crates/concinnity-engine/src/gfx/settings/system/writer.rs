@@ -1,11 +1,9 @@
-// src/gfx/settings/system/writer.rs
-//
-// Background writer for the persisted `Settings` file. Settings changes are
-// applied live on the render thread, but the disk write is handed to this
-// dedicated thread so a slow filesystem never stalls a frame. A burst of
-// snapshots coalesces: only the newest one queued hits the disk. The thread
-// is joined on Drop, after draining the queue, so the final change is always
-// flushed before shutdown.
+//! Background writer for the persisted `Settings` file. Settings changes are
+//! applied live on the render thread, but the disk write is handed to this
+//! dedicated thread so a slow filesystem never stalls a frame. A burst of
+//! snapshots coalesces: only the newest one queued hits the disk. The thread
+//! is joined on Drop, after draining the queue, so the final change is always
+//! flushed before shutdown.
 
 use concinnity_host::store::paths::StateTree;
 use std::sync::mpsc;

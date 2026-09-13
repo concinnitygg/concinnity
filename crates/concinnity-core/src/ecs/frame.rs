@@ -1,8 +1,6 @@
-// src/ecs/frame.rs
-//
-// Per-frame state handed to every system, carried as one field on
-// `PipelineContext` so later frame-scoped facilities arrive without touching
-// every system and every context construction again.
+//! Per-frame state handed to every system, carried as one field on
+//! `PipelineContext` so later frame-scoped facilities arrive without touching
+//! every system and every context construction again.
 
 use alloc::vec::Vec;
 

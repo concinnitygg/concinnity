@@ -1,10 +1,8 @@
-// src/crash/hook.rs
-//
-// The process panic hook: writes a crash report (and a minidump where
-// supported), then chains to the previously installed hook so the standard
-// stderr message and unwind behavior are unchanged. A reentry guard plus
-// catch_unwind keep a fault inside the reporting path from recursing; its
-// allocations are bounded by the report caps.
+//! The process panic hook: writes a crash report (and a minidump where
+//! supported), then chains to the previously installed hook so the standard
+//! stderr message and unwind behavior are unchanged. A reentry guard plus
+//! catch_unwind keep a fault inside the reporting path from recursing; its
+//! allocations are bounded by the report caps.
 
 use std::panic::PanicHookInfo;
 use std::sync::Once;

@@ -1,11 +1,9 @@
-// src/editor/panels/character_shape.rs
-//
-// The data half of the CharacterShape panel: the slider rows a schema lays
-// out over what the target mesh exposes (its morph-target and joint names),
-// the panel sections, and the value mapping between a row and the
-// `ShapeSlider` / `JointProportion` entries it reads and writes. Pure and
-// world-free; the hook owns the entries and `character_shape_panel.rs` the
-// layout.
+//! The data half of the CharacterShape panel: the slider rows a schema lays
+//! out over what the target mesh exposes (its morph-target and joint names),
+//! the panel sections, and the value mapping between a row and the
+//! `ShapeSlider` / `JointProportion` entries it reads and writes. Pure and
+//! world-free; the hook owns the entries and `character_shape_panel.rs` the
+//! layout.
 
 use concinnity_cook::authoring::registry::build_only::CharacterSchema;
 use concinnity_cook::authoring::registry::build_only::ShapePreset;

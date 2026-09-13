@@ -1,9 +1,7 @@
-// src/editor/worlds/draw.rs
-//
-// The Worlds panel's per-frame layout. One pass drives both presentations: the
-// rects come from `geometry.rs` at the view's metrics, and every caption is
-// drawn at that presentation's text scale, so switching from the start screen
-// to the switcher resizes the panel's text with it.
+//! The Worlds panel's per-frame layout. One pass drives both presentations: the
+//! rects come from `geometry.rs` at the view's metrics, and every caption is
+//! drawn at that presentation's text scale, so switching from the start screen
+//! to the switcher resizes the panel's text with it.
 
 use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;

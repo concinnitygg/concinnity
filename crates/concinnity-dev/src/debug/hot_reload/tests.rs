@@ -1,7 +1,5 @@
-// src/debug/hot_reload/tests.rs
-//
-// Unit tests for the hot-reload machinery (moved here from the single-file
-// module). Pull each submodule's items in explicitly.
+//! Unit tests for the hot-reload machinery (moved here from the single-file
+//! module). Pull each submodule's items in explicitly.
 
 use concinnity_core::components::ProceduralMesh;
 use concinnity_core::components::SkeletonJoint;

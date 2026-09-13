@@ -1,51 +1,50 @@
-// src/ecs/registry.rs
-//
-// The system table: the one place a system is registered and the one schedule
-// document. `define_systems!` generates the entries from it; table order is run
-// order. Every system is internal: it has no declarable asset and carries no
-// discriminant. `World::start` runs each entry's gate against the world's
-// content and pushes the systems the gates return, in table order. To add a
-// system: implement `System` on it, write its gate in `schedule`, and add one
-// entry here in its run position with its phase and its ordering edges.
-//
-// `phase` is the only thing this table owes the world outside it. Entries are
-// in phase order, and a system registered with `World::add_system` runs after
-// every entry sharing its phase, so an outside registration anchors to a phase
-// and never to an entry. The four bands:
-//   * Early     -- the menu gate and the sky, before any logic runs.
-//   * Logic     -- the world's behaviors, whose requests drain later this tick.
-//   * PreRender -- the request drains and the streaming, before the frame goes.
-//   * Late      -- the frame itself and everything downstream of it (input,
-//                  physics, cameras, animation, story, audio, UI).
-//
-// `after`/`before` are the cross-system ordering constraints, validated
-// against table order when the world's schedule is built.
-// Each edge's rationale:
-//   * Overlay first: publishes the menu state (`MenuActive`) that gates
-//     simulation, input, and the draw this same tick.
-//   * SkyRotation before Graphics: the orientation it publishes is what the
-//     frame's transform propagation, directional-light push and cubemap
-//     samples are taken at.
-//   * Behavior before Spawn/Settings/Story/Audio: the requests its firing
-//     rules emit (spawn/despawn, scene, story, audio) drain the same tick.
-//   * Spawn/Settings/Streaming before Graphics: despawns leave the transform
-//     push, setting and streaming ops land before this frame's submit, and
-//     `CameraRelativeView` is ready for the draw.
-//   * Input after Graphics: on Metal the OS event pump runs inside
-//     draw_frame, so sampling right after the draw snapshots the freshest
-//     events (the mailbox deposit happens in Graphics' step).
-//   * LoadingOverlay after Streaming (reads the residency status published
-//     this tick) and before UiInput (its screen commands apply same tick).
-//   * Physics before the camera controllers: physics consumes the camera's
-//     previous-frame `desired_move` (a one-frame-lagged resolution).
-//   * CameraTrack after Physics, before Audio: it sits where the input
-//     controllers sit, and replaces them when a world declares a track.
-//   * FrameReport last: it records the frame that just went, so everything
-//     it reads has to have run.
-//   * Cameras and Story before Audio: the listener reads the camera, and a
-//     `PlayCue` page audio is heard the same tick.
-// Event-carried couplings (RootMotionEvent, GroundProbes, SettingCommand) are
-// order-robust thanks to the event store's two-frame retention.
+//! The system table: the one place a system is registered and the one schedule
+//! document. `define_systems!` generates the entries from it; table order is run
+//! order. Every system is internal: it has no declarable asset and carries no
+//! discriminant. `World::start` runs each entry's gate against the world's
+//! content and pushes the systems the gates return, in table order. To add a
+//! system: implement `System` on it, write its gate in `schedule`, and add one
+//! entry here in its run position with its phase and its ordering edges.
+//!
+//! `phase` is the only thing this table owes the world outside it. Entries are
+//! in phase order, and a system registered with `World::add_system` runs after
+//! every entry sharing its phase, so an outside registration anchors to a phase
+//! and never to an entry. The four bands:
+//!   * Early     -- the menu gate and the sky, before any logic runs.
+//!   * Logic     -- the world's behaviors, whose requests drain later this tick.
+//!   * PreRender -- the request drains and the streaming, before the frame goes.
+//!   * Late      -- the frame itself and everything downstream of it (input,
+//!     physics, cameras, animation, story, audio, UI).
+//!
+//! `after`/`before` are the cross-system ordering constraints, validated
+//! against table order when the world's schedule is built.
+//! Each edge's rationale:
+//!   * Overlay first: publishes the menu state (`MenuActive`) that gates
+//!     simulation, input, and the draw this same tick.
+//!   * SkyRotation before Graphics: the orientation it publishes is what the
+//!     frame's transform propagation, directional-light push and cubemap
+//!     samples are taken at.
+//!   * Behavior before Spawn/Settings/Story/Audio: the requests its firing
+//!     rules emit (spawn/despawn, scene, story, audio) drain the same tick.
+//!   * Spawn/Settings/Streaming before Graphics: despawns leave the transform
+//!     push, setting and streaming ops land before this frame's submit, and
+//!     `CameraRelativeView` is ready for the draw.
+//!   * Input after Graphics: on Metal the OS event pump runs inside
+//!     draw_frame, so sampling right after the draw snapshots the freshest
+//!     events (the mailbox deposit happens in Graphics' step).
+//!   * LoadingOverlay after Streaming (reads the residency status published
+//!     this tick) and before UiInput (its screen commands apply same tick).
+//!   * Physics before the camera controllers: physics consumes the camera's
+//!     previous-frame `desired_move` (a one-frame-lagged resolution).
+//!   * CameraTrack after Physics, before Audio: it sits where the input
+//!     controllers sit, and replaces them when a world declares a track.
+//!   * FrameReport last: it records the frame that just went, so everything
+//!     it reads has to have run.
+//!   * Cameras and Story before Audio: the listener reads the camera, and a
+//!     `PlayCue` page audio is heard the same tick.
+//!
+//! Event-carried couplings (RootMotionEvent, GroundProbes, SettingCommand) are
+//! order-robust thanks to the event store's two-frame retention.
 
 use concinnity_core::ecs::PipelineContext;
 

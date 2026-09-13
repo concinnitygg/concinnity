@@ -1,9 +1,7 @@
-// src/editor/hook/tests/drag/content_tests.rs
-//
-// Drag-out placement from the Content panel (`hook/drag/content.rs`): the entry
-// a release commits where the ghost landed, the rotation that aligns a drop to
-// the struck face, the still press that places nothing, and the material drag
-// that assigns to the prop under the cursor instead.
+//! Drag-out placement from the Content panel (`hook/drag/content.rs`): the entry
+//! a release commits where the ghost landed, the rotation that aligns a drop to
+//! the struck face, the still press that places nothing, and the material drag
+//! that assigns to the prop under the cursor instead.
 
 use concinnity_core::components::Transform;
 use concinnity_host::thread::asset_id;

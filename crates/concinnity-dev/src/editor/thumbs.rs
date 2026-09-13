@@ -1,20 +1,18 @@
-// src/editor/thumbs.rs
-//
-// The editor's view of the baked thumbnail set (entries of the build cache
-// segment, `cache/1`, written by the cook's disk-build tail): reads the set's
-// name -> key map, seeks to the PNG each key addresses, assigns every decoded
-// image a reserved `TextureHandle`, and hands them to HUD injection as the
-// `OverlayImages` resource so the Content panel's cell sprites can sample
-// them. Loads are cached and re-checked by the set's own revision, not by the
-// segment file: the payload cache shares that file, so a build would bump it
-// whether or not a thumbnail moved. The set actually resident in the atlas is
-// the one captured at the last injection (the pool is built once per world
-// rebuild), so panels bind through `injected()`, never the raw disk state.
-//
-// Best effort throughout: a build replaces the segment by rename while this
-// may be reading it, so a key that resolves to nothing (or to bytes of the
-// file that replaced it) costs that asset its preview and leaves the panel to
-// its typed icon.
+//! The editor's view of the baked thumbnail set (entries of the build cache
+//! segment, `cache/1`, written by the cook's disk-build tail): reads the set's
+//! name -> key map, seeks to the PNG each key addresses, assigns every decoded
+//! image a reserved `TextureHandle`, and hands them to HUD injection as the
+//! `OverlayImages` resource so the Content panel's cell sprites can sample
+//! them. Loads are cached and re-checked by the set's own revision, not by the
+//! segment file: the payload cache shares that file, so a build would bump it
+//! whether or not a thumbnail moved. The set actually resident in the atlas is
+//! the one captured at the last injection (the pool is built once per world
+//! rebuild), so panels bind through `injected()`, never the raw disk state.
+//!
+//! Best effort throughout: a build replaces the segment by rename while this
+//! may be reading it, so a key that resolves to nothing (or to bytes of the
+//! file that replaced it) costs that asset its preview and leaves the panel to
+//! its typed icon.
 
 use concinnity_cook::cache::thumbnails::Thumbnails;
 use concinnity_core::ecs::{OverlayImage, OverlayImages, TextureHandle};

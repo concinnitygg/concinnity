@@ -1,14 +1,12 @@
-// src/appkit/display_mode.rs
-//
-// Display-mode enumeration and fullscreen mode switching via CoreGraphics.
-// `enumerate` lists the modes (pixel resolution + refresh rate) the window's
-// display supports, feeding the Resolution settings row. While the window is
-// in native fullscreen, `FullscreenDisplayMode` holds the display to the
-// user's chosen mode with `CGDisplaySetDisplayMode` and restores the desktop's
-// original mode when the window leaves fullscreen (including OS-driven exits:
-// the reconcile runs once per frame off the delegate-tracked flag) or the
-// context is dropped. Outside fullscreen the choice is only remembered; the
-// windowed resize path is unaffected.
+//! Display-mode enumeration and fullscreen mode switching via CoreGraphics.
+//! `enumerate` lists the modes (pixel resolution + refresh rate) the window's
+//! display supports, feeding the Resolution settings row. While the window is
+//! in native fullscreen, `FullscreenDisplayMode` holds the display to the
+//! user's chosen mode with `CGDisplaySetDisplayMode` and restores the desktop's
+//! original mode when the window leaves fullscreen (including OS-driven exits:
+//! the reconcile runs once per frame off the delegate-tracked flag) or the
+//! context is dropped. Outside fullscreen the choice is only remembered; the
+//! windowed resize path is unaffected.
 
 use concinnity_core::render::display_mode::DisplayMode;
 use objc2_app_kit::{NSScreen, NSWindow};

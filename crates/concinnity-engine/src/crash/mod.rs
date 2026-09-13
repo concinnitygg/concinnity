@@ -1,12 +1,10 @@
-// src/crash/mod.rs
-//
-// Crash reporting: a panic hook, native fault capture, and local report files
-// under the crashes directory a host names at install. Reports
-// are plain text written section by section, so a partial report still leads
-// with what matters; macOS and Windows also write a minidump beside the
-// report. The directory is pruned to the newest reports after each write.
-// Local files only: nothing is uploaded, and no hostname or username is
-// recorded.
+//! Crash reporting: a panic hook, native fault capture, and local report files
+//! under the crashes directory a host names at install. Reports
+//! are plain text written section by section, so a partial report still leads
+//! with what matters; macOS and Windows also write a minidump beside the
+//! report. The directory is pruned to the newest reports after each write.
+//! Local files only: nothing is uploaded, and no hostname or username is
+//! recorded.
 
 mod hook;
 mod memory;

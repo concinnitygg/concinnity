@@ -1,18 +1,16 @@
-// src/ecs/ext_columns.rs
-//
-// Columns for component types the engine's registry does not list.
-//
-// The registered set is closed on purpose: one `Column<T>` field per type, so a
-// query resolves to a column at compile time and the whole storage is one
-// struct. That property is worth keeping, and it is why an unregistered type
-// does not get a field: it gets an entry here, keyed by the same `ComponentId`
-// the join index uses, holding the same `Column<T>` behind an erased pointer.
-//
-// Everything above this module is unchanged by that. `ComponentSlot` resolves a
-// type to its column either way, so `query`, `join2`, `get_mut`, `despawn` and
-// the rest are the same generic code over both halves. The one difference the
-// rest of the storage has to carry is that a column here may not exist yet: a
-// type nothing has pushed has no entry, which reads as an empty column.
+//! Columns for component types the engine's registry does not list.
+//!
+//! The registered set is closed on purpose: one `Column<T>` field per type, so a
+//! query resolves to a column at compile time and the whole storage is one
+//! struct. That property is worth keeping, and it is why an unregistered type
+//! does not get a field: it gets an entry here, keyed by the same `ComponentId`
+//! the join index uses, holding the same `Column<T>` behind an erased pointer.
+//!
+//! Everything above this module is unchanged by that. `ComponentSlot` resolves a
+//! type to its column either way, so `query`, `join2`, `get_mut`, `despawn` and
+//! the rest are the same generic code over both halves. The one difference the
+//! rest of the storage has to carry is that a column here may not exist yet: a
+//! type nothing has pushed has no entry, which reads as an empty column.
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;

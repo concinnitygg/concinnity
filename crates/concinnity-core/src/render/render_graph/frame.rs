@@ -1,43 +1,41 @@
-// src/render/render_graph/frame.rs
-//
-// Per-frame graph builder. On Metal, every pass that ran inline
-// through `draw_frame` now dispatches through a single
-// `build_frame_graph()` → `execute_graph()` pair.
-//
-// The frame builder declares conditional passes based on the
-// `FrameGraphInputs` struct (one bool per gated pass). Read / write
-// declarations on each pass let the compile pass derive:
-//
-//   * Execution order (toposort over RAW / WAW / WAR edges, ties broken
-//     by declaration order).
-//   * Per-pass barriers (`pass.barriers_before` per resource state
-//     transition). Metal mostly ignores these (Apple GPUs handle most
-//     hazards implicitly); the Vulkan / DirectX executors emit
-//     `vkCmdPipelineBarrier` / `D3D12_RESOURCE_BARRIER` from them.
-//   * Transient resource lifetimes (`PassRange` per resource), the
-//     aliasing input.
-//
-// Resources split into two origins. `import_texture` = engine-owned: the
-// resource outlives the frame (the cross-frame shadow map, the TAA history
-// `scene_color`, the froxel volume, the cross-frame Hi-Z pyramid) and the
-// backend always owns its GPU object.
-//
-// A resource is declared only where a pass actually writes it. Several engine
-// bindings point two names at one texture depending on configuration --
-// `scene_pre_taa` is `hdr_resolve` without a reflection resolve, `scene_color`
-// is the pre-TAA scene without TAA, `hdr_color` is the resolve target without
-// MSAA -- and declaring the second name anyway would give one GPU object two
-// independent barrier timelines. The builder threads the upstream handle
-// through instead, so one texture is always one resource. `create_texture` =
-// transient: single-frame intermediates (hdr intermediates excepted)
-// the aliasing planner ([`super::alias`]) may pack into shared physical memory,
-// since their `[first, last]` lifetimes are disjoint. In practice only
-// `ao_output` and `bloom_top` are independently poolable today; the other
-// `create_texture` intermediates fold into the long-lived gbuffer MRT
-// (`velocity`, `ssr_gbuffer`) or are themselves long-lived (`gbuffer`), so a
-// backend pool leaves them backend-owned. The planner sizes each transient
-// from its desc; the origin marks aliasing candidacy and has no effect on pass
-// order or barriers.
+//! Per-frame graph builder. On Metal, every pass that ran inline
+//! through `draw_frame` now dispatches through a single
+//! `build_frame_graph()` → `execute_graph()` pair.
+//!
+//! The frame builder declares conditional passes based on the
+//! `FrameGraphInputs` struct (one bool per gated pass). Read / write
+//! declarations on each pass let the compile pass derive:
+//!
+//!   * Execution order (toposort over RAW / WAW / WAR edges, ties broken
+//!     by declaration order).
+//!   * Per-pass barriers (`pass.barriers_before` per resource state
+//!     transition). Metal mostly ignores these (Apple GPUs handle most
+//!     hazards implicitly); the Vulkan / DirectX executors emit
+//!     `vkCmdPipelineBarrier` / `D3D12_RESOURCE_BARRIER` from them.
+//!   * Transient resource lifetimes (`PassRange` per resource), the
+//!     aliasing input.
+//!
+//! Resources split into two origins. `import_texture` = engine-owned: the
+//! resource outlives the frame (the cross-frame shadow map, the TAA history
+//! `scene_color`, the froxel volume, the cross-frame Hi-Z pyramid) and the
+//! backend always owns its GPU object.
+//!
+//! A resource is declared only where a pass actually writes it. Several engine
+//! bindings point two names at one texture depending on configuration --
+//! `scene_pre_taa` is `hdr_resolve` without a reflection resolve, `scene_color`
+//! is the pre-TAA scene without TAA, `hdr_color` is the resolve target without
+//! MSAA -- and declaring the second name anyway would give one GPU object two
+//! independent barrier timelines. The builder threads the upstream handle
+//! through instead, so one texture is always one resource. `create_texture` =
+//! transient: single-frame intermediates (hdr intermediates excepted)
+//! the aliasing planner ([`super::alias`]) may pack into shared physical memory,
+//! since their `[first, last]` lifetimes are disjoint. In practice only
+//! `ao_output` and `bloom_top` are independently poolable today; the other
+//! `create_texture` intermediates fold into the long-lived gbuffer MRT
+//! (`velocity`, `ssr_gbuffer`) or are themselves long-lived (`gbuffer`), so a
+//! backend pool leaves them backend-owned. The planner sizes each transient
+//! from its desc; the origin marks aliasing candidacy and has no effect on pass
+//! order or barriers.
 
 use crate::gfx::render_types::NUM_SHADOW_CASCADES;
 

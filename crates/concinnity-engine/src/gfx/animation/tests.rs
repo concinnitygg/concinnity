@@ -1,5 +1,3 @@
-// src/gfx/animation/tests.rs
-
 use concinnity_core::components::{
     Animation, AnimationGraph, AnimationParams, CharacterRig, PhysicsConfig, Prop, PropCollider,
     RootMotionEvent, SkeletonPose,

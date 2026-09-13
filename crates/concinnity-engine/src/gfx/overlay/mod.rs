@@ -1,19 +1,17 @@
-// src/gfx/overlay/mod.rs
-//
-// OverlaySystem: builds the 2D overlay draw list (sprites, text, dropdown,
-// text-input fields, cursor) from the world's UI components and publishes the
-// per-frame menu state. Runs first in the schedule, before GraphicsSystem
-// submits the frame:
-//   mod.rs        system + the per-frame draw-list build
-//   widgets.rs    transient dropdown / text-input element synthesis
-//   hud_layout.rs LayoutContainer reflow + DebugHud / StatHud chip anchoring
-//
-// The font atlases and texture slots the build measures against are uploaded
-// by GraphicsSystem's init, which parks them here as the `OverlayAssets`
-// resource; the build's output is parked as the `OverlayFrame` resource that
-// GraphicsSystem consumes for this same frame's submit. HUD content is what
-// the HUD systems wrote last tick (they run after the build), so what is
-// measured is exactly what is drawn.
+//! OverlaySystem: builds the 2D overlay draw list (sprites, text, dropdown,
+//! text-input fields, cursor) from the world's UI components and publishes the
+//! per-frame menu state. Runs first in the schedule, before GraphicsSystem
+//! submits the frame:
+//!   mod.rs        system + the per-frame draw-list build
+//!   widgets.rs    transient dropdown / text-input element synthesis
+//!   hud_layout.rs LayoutContainer reflow + DebugHud / StatHud chip anchoring
+//!
+//! The font atlases and texture slots the build measures against are uploaded
+//! by GraphicsSystem's init, which parks them here as the `OverlayAssets`
+//! resource; the build's output is parked as the `OverlayFrame` resource that
+//! GraphicsSystem consumes for this same frame's submit. HUD content is what
+//! the HUD systems wrote last tick (they run after the build), so what is
+//! measured is exactly what is drawn.
 
 use concinnity_core::components::FrameInput;
 use concinnity_core::components::LayoutContainer;

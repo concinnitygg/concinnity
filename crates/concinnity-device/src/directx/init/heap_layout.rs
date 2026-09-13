@@ -1,50 +1,48 @@
-// src/directx/init/heap_layout.rs
-//
-// CBV/SRV/UAV heap slot layout for the DirectX backend. The shader-visible
-// descriptor heap is a flat array of fixed slots assigned in a positional
-// cascade: each block's base is the previous block's base plus its
-// reservation. Keeping the cascade in one function (instead of two dozen
-// inline `let x_slot = prev_slot + prev_extra` bindings) lets a unit test
-// assert it stays gap-free and that the total matches the created heap size,
-// so a stray offset edit fails a test instead of silently misbinding a
-// descriptor at shader time (a visual glitch or an out-of-bounds heap write
-// with no compile-time signal).
-//
-// Heap order:
-//   [0]                            shadow map array SRV (Texture2DArray)
-//   [1]                            IBL irradiance cube SRV
-//   [2]                            IBL prefilter cube SRV
-//   [atlas_base_slot..]            text atlas SRVs
-//   [hdr_srv_slot]                 HDR scene target SRV (composite pass)
-//   [bloom_srv_base_slot..]        bloom mip SRVs
-//   [lut_srv_slot]                 3D color-grading LUT SRV
-//   [post_srv_base_slot..]         POST_TARGET_SLOTS shared post-pass target SRVs
-//   [ssao_srv_base_slot..]         (SSAO) ao_raw + ao_blurred
-//   [ssao_white_srv_slot]          1x1 white occlusion fallback (always)
-//   [decal_depth_srv_slot]         main-depth SRV (decal + glass + line passes)
-//   [decal_srv_base_slot..]        MAX_DECALS per-decal albedo SRVs
-//   [particle_srv_base_slot..]     MAX_EMITTERS emitter albedo SRVs
-//   [fog_froxel_uav_slot]          froxel-volume UAV
-//   [fog_froxel_srv_slot]          froxel-volume SRV
-//   [upscale_uav_slot]             temporal-upscale output UAV
-//   [upscale_srv_slot]             temporal-upscale output SRV
-//   [raymarch_srv_base_slot..+4]   raymarch t0..t3 (shadow, irr, prefilter, scene)
-//   [hiz_srv_slot]                 Hi-Z pyramid SRV (covers every mip)
-//   [hiz_uav_base_slot..]          HIZ_MAX_MIPS per-mip UAVs
-//   [probe_capture_srv_slot]       reflection-probe capture pyramid SRV
-//   [probe_capture_uav_base_slot..] PROBE_MAX_MIPS capture per-mip UAVs
-//   [probe_cube_uav_base_slot..]   PROBE_MAX_MIPS probe-cube per-mip UAVs
-//   [probe_mip0_pair_slot..+2]     the mirror copy's (capture mip 0, probe mip 0)
-//   [transparent_scene_copy_srv_slot] pre-transparent scene snapshot SRV
-//   [gbuffer_srv_base_slot..]      (G-buffer) normal+depth, roughness, velocity
-//   [rt_output_srv_slot]           (RT) reflection output
-//   [refl_composite_srv_base_slot..] (reflections) composited output + blur
-//   [planar_resolve_srv_base_slot..] planar reflector resolves
-//   [flat_pool_base_slot..]        bindless albedo + normal pool, per frame
-//   [probe_cube_base_slot..]       MAX_PROBES reflection-probe cubes
-//   [spot_shadow_srv_slot]         spot shadow depth array SRV (Texture2DArray)
-//   [ltc_srv_base_slot..+2]        area-light LTC tables (matrix, magnitude)
-//   srv_slots                      total descriptor count (heap size)
+//! CBV/SRV/UAV heap slot layout for the DirectX backend. The shader-visible
+//! descriptor heap is a flat array of fixed slots assigned in a positional
+//! cascade: each block's base is the previous block's base plus its
+//! reservation. Keeping the cascade in one function (instead of two dozen
+//! inline `let x_slot = prev_slot + prev_extra` bindings) lets a unit test
+//! assert it stays gap-free and that the total matches the created heap size,
+//! so a stray offset edit fails a test instead of silently misbinding a
+//! descriptor at shader time (a visual glitch or an out-of-bounds heap write
+//! with no compile-time signal).
+//!
+//! Heap order:
+//!   [0]                            shadow map array SRV (Texture2DArray)
+//!   [1]                            IBL irradiance cube SRV
+//!   [2]                            IBL prefilter cube SRV
+//!   [atlas_base_slot..]            text atlas SRVs
+//!   [hdr_srv_slot]                 HDR scene target SRV (composite pass)
+//!   [bloom_srv_base_slot..]        bloom mip SRVs
+//!   [lut_srv_slot]                 3D color-grading LUT SRV
+//!   [post_srv_base_slot..]         POST_TARGET_SLOTS shared post-pass target SRVs
+//!   [ssao_srv_base_slot..]         (SSAO) ao_raw + ao_blurred
+//!   [ssao_white_srv_slot]          1x1 white occlusion fallback (always)
+//!   [decal_depth_srv_slot]         main-depth SRV (decal + glass + line passes)
+//!   [decal_srv_base_slot..]        MAX_DECALS per-decal albedo SRVs
+//!   [particle_srv_base_slot..]     MAX_EMITTERS emitter albedo SRVs
+//!   [fog_froxel_uav_slot]          froxel-volume UAV
+//!   [fog_froxel_srv_slot]          froxel-volume SRV
+//!   [upscale_uav_slot]             temporal-upscale output UAV
+//!   [upscale_srv_slot]             temporal-upscale output SRV
+//!   [raymarch_srv_base_slot..+4]   raymarch t0..t3 (shadow, irr, prefilter, scene)
+//!   [hiz_srv_slot]                 Hi-Z pyramid SRV (covers every mip)
+//!   [hiz_uav_base_slot..]          HIZ_MAX_MIPS per-mip UAVs
+//!   [probe_capture_srv_slot]       reflection-probe capture pyramid SRV
+//!   [probe_capture_uav_base_slot..] PROBE_MAX_MIPS capture per-mip UAVs
+//!   [probe_cube_uav_base_slot..]   PROBE_MAX_MIPS probe-cube per-mip UAVs
+//!   [probe_mip0_pair_slot..+2]     the mirror copy's (capture mip 0, probe mip 0)
+//!   [transparent_scene_copy_srv_slot] pre-transparent scene snapshot SRV
+//!   [gbuffer_srv_base_slot..]      (G-buffer) normal+depth, roughness, velocity
+//!   [rt_output_srv_slot]           (RT) reflection output
+//!   [refl_composite_srv_base_slot..] (reflections) composited output + blur
+//!   [planar_resolve_srv_base_slot..] planar reflector resolves
+//!   [flat_pool_base_slot..]        bindless albedo + normal pool, per frame
+//!   [probe_cube_base_slot..]       MAX_PROBES reflection-probe cubes
+//!   [spot_shadow_srv_slot]         spot shadow depth array SRV (Texture2DArray)
+//!   [ltc_srv_base_slot..+2]        area-light LTC tables (matrix, magnitude)
+//!   srv_slots                      total descriptor count (heap size)
 
 use super::HIZ_MAX_MIPS;
 use crate::directx::context::FRAMES;

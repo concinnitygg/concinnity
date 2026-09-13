@@ -1,9 +1,7 @@
-// src/vulkan/post/ssgi.rs
-//
-// Vulkan's share of screen-space global illumination, which is its settings and
-// where the pass reads and writes this frame. The gather and composite -- their
-// pipelines, the reduced gather target and both draws -- are written once in
-// `concinnity_core::render::post::ssgi` and reach Vulkan through `VkPostDevice`.
+//! Vulkan's share of screen-space global illumination, which is its settings and
+//! where the pass reads and writes this frame. The gather and composite -- their
+//! pipelines, the reduced gather target and both draws -- are written once in
+//! `concinnity_core::render::post::ssgi` and reach Vulkan through `VkPostDevice`.
 
 use ash::vk;
 use concinnity_core::gfx::ssgi::SsgiSettings;

@@ -1,13 +1,11 @@
-// src/editor/modal.rs
-//
-// The confirmation dialog: a centered panel with a wrapped message, an optional
-// name field, and a row of two or three buttons over a translucent dim covering
-// the whole screen.
-// Pure geometry and draw; the open / press / close flow lives in
-// `hook/drive/modal.rs`. Not a registered panel: the dialog has no title bar,
-// drag, focus rank, or View toggle, and while open it is screen-modal -- the
-// hook routes every press and wheel to it before anything else, and its draw
-// layer sits above all other chrome.
+//! The confirmation dialog: a centered panel with a wrapped message, an optional
+//! name field, and a row of two or three buttons over a translucent dim covering
+//! the whole screen.
+//! Pure geometry and draw; the open / press / close flow lives in
+//! `hook/drive/modal.rs`. Not a registered panel: the dialog has no title bar,
+//! drag, focus rank, or View toggle, and while open it is screen-modal -- the
+//! hook routes every press and wheel to it before anything else, and its draw
+//! layer sits above all other chrome.
 
 use concinnity_core::ecs::World;
 use concinnity_host::thread::asset_id::AssetId;

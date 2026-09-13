@@ -1,16 +1,14 @@
-// src/editor/live/mod.rs
-//
-// Applying an authored edit to the running preview world instead of rebuilding
-// it. The rebuild recompiles every asset and stands the GPU context back up
-// from scratch, which is the right answer when the world's shape changed and
-// far too much when a slider moved: the data being edited is ECS data, and the
-// running world already draws it.
-//
-// The path is all-or-nothing and planned before anything is written. Every
-// change in the edit is turned into an `Apply` first; a single one that cannot
-// be expressed against the live world abandons the whole attempt and the
-// caller rebuilds. So the world is never left holding half of an edit, and a
-// type this module does not understand degrades to exactly the old behavior.
+//! Applying an authored edit to the running preview world instead of rebuilding
+//! it. The rebuild recompiles every asset and stands the GPU context back up
+//! from scratch, which is the right answer when the world's shape changed and
+//! far too much when a slider moved: the data being edited is ECS data, and the
+//! running world already draws it.
+//!
+//! The path is all-or-nothing and planned before anything is written. Every
+//! change in the edit is turned into an `Apply` first; a single one that cannot
+//! be expressed against the live world abandons the whole attempt and the
+//! caller rebuilds. So the world is never left holding half of an edit, and a
+//! type this module does not understand degrades to exactly the old behavior.
 
 mod component;
 mod diff;

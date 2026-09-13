@@ -1,17 +1,15 @@
-// src/vulkan/appkit_window.rs
-//
-// The Vulkan backend's macOS window: a thin adapter over the shared native
-// AppKit layer (crate::appkit) the Metal backend also uses, so the two
-// NSView-rendering backends share one window/input/display-mode implementation
-// with identical behavior (event pump, cursor capture/confinement, window modes,
-// Resolution-row mode switching). GLFW (window.rs) remains the windowing layer
-// on Linux only.
-//
-// Metal renders through an `MTKView`, which owns its `CAMetalLayer` and sizes
-// the drawable itself. Vulkan has no MTKView: it hosts a bare `CAMetalLayer` on
-// a plain `NSView` and hands that layer to `vkCreateMetalSurfaceEXT`. The layer
-// is therefore ours to size, which `framebuffer_size` does from the view bounds
-// and the window's backing scale each time the swapchain asks.
+//! The Vulkan backend's macOS window: a thin adapter over the shared native
+//! AppKit layer (crate::appkit) the Metal backend also uses, so the two
+//! NSView-rendering backends share one window/input/display-mode implementation
+//! with identical behavior (event pump, cursor capture/confinement, window modes,
+//! Resolution-row mode switching). GLFW (window.rs) remains the windowing layer
+//! on Linux only.
+//!
+//! Metal renders through an `MTKView`, which owns its `CAMetalLayer` and sizes
+//! the drawable itself. Vulkan has no MTKView: it hosts a bare `CAMetalLayer` on
+//! a plain `NSView` and hands that layer to `vkCreateMetalSurfaceEXT`. The layer
+//! is therefore ours to size, which `framebuffer_size` does from the view bounds
+//! and the window's backing scale each time the swapchain asks.
 
 use ash::vk;
 use concinnity_core::components::WindowMode;

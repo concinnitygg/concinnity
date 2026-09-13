@@ -1,16 +1,16 @@
-// src/config.rs: the persistent runtime settings store.
-//
-// `Settings` (runtime choices made in the in-engine settings menu: graphics,
-// audio, controls) lives in the project at the state root's `settings` (the
-// `settings` file under the state directory), the mutable sibling of the
-// build-regenerated `data`. It is
-// stored as CBOR: binary like the data blobs, but self-describing, so adding
-// or removing a setting never invalidates an existing file (a missing field
-// falls back to its default, an unknown field is ignored). bincode, which the
-// data blobs use, would be wrong here: it is positional, so it is safe only
-// because the data blobs are regenerated each build, whereas settings persist.
-//
-// Unknown fields are ignored on load so future additions are forwards-compatible.
+//! The persistent runtime settings store.
+//!
+//! `Settings` (runtime choices made in the in-engine settings menu: graphics,
+//! audio, controls) lives in the project at the state root's `settings` (the
+//! `settings` file under the state directory), the mutable sibling of the
+//! build-regenerated `data`. It is
+//! stored as CBOR: binary like the data blobs, but self-describing, so adding
+//! or removing a setting never invalidates an existing file (a missing field
+//! falls back to its default, an unknown field is ignored). bincode, which the
+//! data blobs use, would be wrong here: it is positional, so it is safe only
+//! because the data blobs are regenerated each build, whereas settings persist.
+//!
+//! Unknown fields are ignored on load so future additions are forwards-compatible.
 
 use concinnity_core::components::AaMode;
 use concinnity_core::components::GamepadMap;

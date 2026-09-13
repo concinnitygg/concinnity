@@ -1,5 +1,3 @@
-// src/components/interactable.rs
-
 /// Marks an entity the player can interact with (press the interact key while
 /// close and facing it to trigger its behavior).
 ///

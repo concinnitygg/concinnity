@@ -1,12 +1,10 @@
-// src/editor/hook/edit/import.rs
-//
-// EditorHook: the Import panel's actions. Adding resolves the typed path
-// through `authoring::add::entry_from_path` -- the exact dispatch `cn add
-// <file>` runs -- so a panel import and a CLI import produce identical
-// entries; resolution failures (missing file, unknown extension, invalid
-// content) land on the status line and nothing is committed. Browse fills the
-// same field from a native picker, so both routes end at the same Add. Listed
-// imports open in the standard edit form for full arg editing.
+//! EditorHook: the Import panel's actions. Adding resolves the typed path
+//! through `authoring::add::entry_from_path` -- the exact dispatch `cn add
+//! <file>` runs -- so a panel import and a CLI import produce identical
+//! entries; resolution failures (missing file, unknown extension, invalid
+//! content) land on the status line and nothing is committed. Browse fills the
+//! same field from a native picker, so both routes end at the same Add. Listed
+//! imports open in the standard edit form for full arg editing.
 
 use concinnity_core::components::FrameInput;
 use concinnity_core::components::InputKey;

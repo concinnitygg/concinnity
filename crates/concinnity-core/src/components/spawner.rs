@@ -1,7 +1,5 @@
-// src/components/spawner.rs
-//
-// The `Spawner` asset: the authored args a world declares, and the runtime
-// component (with its spawn accumulator) they bake into.
+//! The `Spawner` asset: the authored args a world declares, and the runtime
+//! component (with its spawn accumulator) they bake into.
 
 use crate::ecs::Component;
 use crate::ecs::asset_id::AssetId;

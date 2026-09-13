@@ -1,19 +1,17 @@
-// src/barrier_audit.rs
-//
-// Ownership guard for the explicit backends' resource barriers. The render graph
-// derives every inter-pass frame-path transition and the per-backend graph
-// executor is the one place that emits it; a barrier written anywhere else is
-// either one of the categories below or a hazard the graph no longer reasons
-// about.
-//
-// Only one backend compiles per build, so the call sites are counted as plain
-// text rather than through any backend module: a macOS build still catches a
-// stray `ResourceBarrier` added to the DirectX path, which is otherwise verified
-// only on Windows.
-//
-// The table is exact in both directions. Adding a barrier fails until it is
-// classified here; removing one fails until the count is corrected, so the table
-// cannot drift out of date while still passing.
+//! Ownership guard for the explicit backends' resource barriers. The render graph
+//! derives every inter-pass frame-path transition and the per-backend graph
+//! executor is the one place that emits it; a barrier written anywhere else is
+//! either one of the categories below or a hazard the graph no longer reasons
+//! about.
+//!
+//! Only one backend compiles per build, so the call sites are counted as plain
+//! text rather than through any backend module: a macOS build still catches a
+//! stray `ResourceBarrier` added to the DirectX path, which is otherwise verified
+//! only on Windows.
+//!
+//! The table is exact in both directions. Adding a barrier fails until it is
+//! classified here; removing one fails until the count is corrected, so the table
+//! cannot drift out of date while still passing.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

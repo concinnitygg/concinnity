@@ -1,11 +1,9 @@
-// src/editor/overrides/
-//
-// Per-field override state for template-derived assets. A generated or
-// injected asset's authored world.jsonl line is a sparse patch over what the
-// expansion produces (cook's patch-merge shadowing); everything here derives
-// field-level state from that patch, purely, so nothing persisted can go
-// stale: template, patch, and classification are all recomputed from the
-// working entries on every cook.
+//! Per-field override state for template-derived assets. A generated or
+//! injected asset's authored world.jsonl line is a sparse patch over what the
+//! expansion produces (cook's patch-merge shadowing); everything here derives
+//! field-level state from that patch, purely, so nothing persisted can go
+//! stale: template, patch, and classification are all recomputed from the
+//! working entries on every cook.
 
 pub(crate) mod prefab_map;
 

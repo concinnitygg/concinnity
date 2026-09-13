@@ -1,7 +1,5 @@
-// src/gfx/draw_list.rs
-//
-// Render-prep helpers that consume asset components and produce GPU-ready data.
-// None of these functions hold or borrow a backend handle.
+//! Render-prep helpers that consume asset components and produce GPU-ready data.
+//! None of these functions hold or borrow a backend handle.
 
 use concinnity_core::components::InstancedProp;
 use concinnity_core::components::{

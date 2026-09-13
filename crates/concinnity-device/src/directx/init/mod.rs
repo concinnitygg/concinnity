@@ -1,29 +1,27 @@
-// src/directx/init/mod.rs
-//
-// DxContext construction. The constructor is intentionally a flat top-to-
-// bottom sequence so the order of dependencies stays obvious; helpers for
-// self-contained sub-phases live in sibling modules:
-//
-//   window.rs    Win32 window + raw input + DXGI factory + adapter +
-//                D3D12 device + info-queue + command queue + swapchain
-//                + MSAA support query.
-//   pipelines.rs Shader compile + main / shadow / instanced / text /
-//                composite PSOs + bindless main pass + GPU-cull compute
-//                pipeline and its per-frame UAV / upload buffers.
-//   effects.rs   Bloom mip targets + pipelines, TAA velocity + history,
-//                SSAO pre-pass + kernel + blur, SSAO white fallback.
-//                Each gated on per-world settings.
-//
-// What still lives inline here:
-//   * Descriptor heap creation (RTV / DSV / CBV+SRV+UAV / sampler) with
-//     the cross-cutting slot layout.
-//   * Sampler creation.
-//   * Texture pool uploads, flat bindless pool SRV writes,
-//     text atlas uploads, shadow map array, IBL cubes, color LUT,
-//     main-depth + HDR scene targets.
-//   * Geometry + per-frame view / light / shadow constant buffers.
-//   * Per-frame command infrastructure (allocator/list/fence), per-cluster
-//     instance upload buffers, and the final `Self { ... }` literal.
+//! DxContext construction. The constructor is intentionally a flat top-to-
+//! bottom sequence so the order of dependencies stays obvious; helpers for
+//! self-contained sub-phases live in sibling modules:
+//!
+//!   window.rs    Win32 window + raw input + DXGI factory + adapter +
+//!                D3D12 device + info-queue + command queue + swapchain
+//!                + MSAA support query.
+//!   pipelines.rs Shader compile + main / shadow / instanced / text /
+//!                composite PSOs + bindless main pass + GPU-cull compute
+//!                pipeline and its per-frame UAV / upload buffers.
+//!   effects.rs   Bloom mip targets + pipelines, TAA velocity + history,
+//!                SSAO pre-pass + kernel + blur, SSAO white fallback.
+//!                Each gated on per-world settings.
+//!
+//! What still lives inline here:
+//!   * Descriptor heap creation (RTV / DSV / CBV+SRV+UAV / sampler) with
+//!     the cross-cutting slot layout.
+//!   * Sampler creation.
+//!   * Texture pool uploads, flat bindless pool SRV writes,
+//!     text atlas uploads, shadow map array, IBL cubes, color LUT,
+//!     main-depth + HDR scene targets.
+//!   * Geometry + per-frame view / light / shadow constant buffers.
+//!   * Per-frame command infrastructure (allocator/list/fence), per-cluster
+//!     instance upload buffers, and the final `Self { ... }` literal.
 
 use concinnity_core::bake;
 use concinnity_core::gfx::auto_exposure;

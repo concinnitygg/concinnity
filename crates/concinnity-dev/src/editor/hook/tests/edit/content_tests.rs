@@ -1,8 +1,6 @@
-// src/editor/hook/tests/edit/content_tests.rs
-//
-// The Content panel's grid (`hook/edit/content.rs`): the visual assets it
-// lists, the filter over them, and what a cell click selects. Carrying a cell
-// out into the world is `tests/drag/content_tests.rs`.
+//! The Content panel's grid (`hook/edit/content.rs`): the visual assets it
+//! lists, the filter over them, and what a cell click selects. Carrying a cell
+//! out into the world is `tests/drag/content_tests.rs`.
 
 use concinnity_core::components::TextInput;
 use concinnity_core::ecs::World;

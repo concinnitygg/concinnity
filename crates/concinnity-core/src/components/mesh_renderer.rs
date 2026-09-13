@@ -1,5 +1,3 @@
-// src/components/mesh_renderer.rs
-
 use crate::ecs::{MaterialHandle, MeshHandle};
 
 /// Single-mesh render description for an entity: which mesh and material to

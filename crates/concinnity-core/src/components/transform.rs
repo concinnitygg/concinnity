@@ -1,5 +1,3 @@
-// src/components/transform.rs
-
 /// World-space placement of an entity: translation, rotation, and scale.
 ///
 /// Runtime-only placement state. Physics and interaction systems mutate it and

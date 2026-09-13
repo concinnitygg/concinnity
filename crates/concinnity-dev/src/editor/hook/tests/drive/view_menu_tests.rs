@@ -1,7 +1,5 @@
-// src/editor/hook/tests/drive/view_menu_tests.rs
-//
-// The Display menu (`hook/drive/view_menu.rs`): the render mode and the
-// viewport flags its rows set.
+//! The Display menu (`hook/drive/view_menu.rs`): the render mode and the
+//! viewport flags its rows set.
 
 use concinnity_core::components::FrameInput;
 

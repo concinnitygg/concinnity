@@ -1,23 +1,21 @@
-// src/metal/init/mod.rs
-//
-// MtlContext construction. The constructor is intentionally a flat top-to-
-// bottom sequence so the order of dependencies stays obvious; helpers for
-// self-contained sub-phases live in sibling modules:
-//
-//   window.rs    NSWindow + MTKView setup + initial HDR target sizing
-//   pipelines.rs Vertex descriptor, main pipeline (+cull/bindless), instanced
-//                pipeline, depth-stencil state
-//   effects.rs   Bloom, TAA, velocity, SSAO, SSR, decal, volumetric fog,
-//                auto-exposure (everything gated on per-world settings)
-//
-// What still lives inline here:
-//   * Device + command queue creation
-//   * Geometry, texture, sampler, IBL and LUT uploads (they share local state
-//     with shadow + text + post-pipeline setup)
-//   * Shadow pipeline + shadow map (depends on the shared vertex descriptor)
-//   * Text + post-process pipelines + their samplers
-//   * BVH partition + previous-model snapshot + hot-reload watcher
-//   * The final `Self { ... }` literal
+//! MtlContext construction. The constructor is intentionally a flat top-to-
+//! bottom sequence so the order of dependencies stays obvious; helpers for
+//! self-contained sub-phases live in sibling modules:
+//!
+//!   window.rs    NSWindow + MTKView setup + initial HDR target sizing
+//!   pipelines.rs Vertex descriptor, main pipeline (+cull/bindless), instanced
+//!                pipeline, depth-stencil state
+//!   effects.rs   Bloom, TAA, velocity, SSAO, SSR, decal, volumetric fog,
+//!                auto-exposure (everything gated on per-world settings)
+//!
+//! What still lives inline here:
+//!   * Device + command queue creation
+//!   * Geometry, texture, sampler, IBL and LUT uploads (they share local state
+//!     with shadow + text + post-pipeline setup)
+//!   * Shadow pipeline + shadow map (depends on the shared vertex descriptor)
+//!   * Text + post-process pipelines + their samplers
+//!   * BVH partition + previous-model snapshot + hot-reload watcher
+//!   * The final `Self { ... }` literal
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub(super) mod effects;

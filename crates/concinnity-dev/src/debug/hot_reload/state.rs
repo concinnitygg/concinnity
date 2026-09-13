@@ -1,9 +1,7 @@
-// src/debug/hot_reload/state.rs
-//
-// `AssetHotReloadState` (the debug-owned reload catalog + in-flight decode
-// handles + live watcher) plus the off-thread decode result types, the ECS
-// side-effect bundle, and `run_frame`, the per-frame entry the debug drive
-// calls. Built from `HotReloadSources` (captured in the lib at init).
+//! `AssetHotReloadState` (the debug-owned reload catalog + in-flight decode
+//! handles + live watcher) plus the off-thread decode result types, the ECS
+//! side-effect bundle, and `run_frame`, the per-frame entry the debug drive
+//! calls. Built from `HotReloadSources` (captured in the lib at init).
 
 use concinnity_core::components::SkeletonJoint;
 use concinnity_core::components::Story;

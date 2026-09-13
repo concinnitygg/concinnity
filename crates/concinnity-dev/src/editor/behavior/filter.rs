@@ -1,7 +1,5 @@
-// src/editor/behavior/filter.rs
-//
-// Which of a row's options a typed query keeps, and in what order: the shared
-// ranked filter (`editor::filter`) applied to the palette's picks.
+//! Which of a row's options a typed query keeps, and in what order: the shared
+//! ranked filter (`editor::filter`) applied to the palette's picks.
 
 use super::edit::{self, Pick};
 

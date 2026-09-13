@@ -1,18 +1,16 @@
-// src/directx/upload_ring.rs
-//
-// Persistent per-frame-slot upload buffers for transient per-frame geometry
-// (HUD text labels, expanded line ribbons). Allocating those with
-// `CreateCommittedResource` per draw per frame is the classic D3D12 hot-path
-// anti-pattern (each commit is hundreds of micros); for the bistro HUD that was
-// the single largest slice of per-frame CPU.
-//
-// Instead each frame-in-flight slot keeps one persistently-mapped upload buffer.
-// Every frame the slot's cursor is reset to zero and each block of geometry is
-// appended at a rolling, aligned offset; the draw binds a sub-view into the
-// shared buffer. The buffer is grown (reallocated larger) only when a frame
-// exceeds the current capacity, which after warm-up never happens. The frame
-// fence (waited before a slot is reused) guarantees the GPU has finished
-// reading a slot's buffer before the CPU overwrites or grows it.
+//! Persistent per-frame-slot upload buffers for transient per-frame geometry
+//! (HUD text labels, expanded line ribbons). Allocating those with
+//! `CreateCommittedResource` per draw per frame is the classic D3D12 hot-path
+//! anti-pattern (each commit is hundreds of micros); for the bistro HUD that was
+//! the single largest slice of per-frame CPU.
+//!
+//! Instead each frame-in-flight slot keeps one persistently-mapped upload buffer.
+//! Every frame the slot's cursor is reset to zero and each block of geometry is
+//! appended at a rolling, aligned offset; the draw binds a sub-view into the
+//! shared buffer. The buffer is grown (reallocated larger) only when a frame
+//! exceeds the current capacity, which after warm-up never happens. The frame
+//! fence (waited before a slot is reused) guarantees the GPU has finished
+//! reading a slot's buffer before the CPU overwrites or grows it.
 
 use std::cell::RefCell;
 use windows::Win32::Graphics::Direct3D12::*;

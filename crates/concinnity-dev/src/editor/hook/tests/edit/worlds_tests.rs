@@ -1,10 +1,8 @@
-// src/editor/hook/tests/edit/worlds_tests.rs
-//
-// Tests for the Worlds panel's actions: the listing the hook builds, what
-// opening a world retargets, the naming rules a New has to pass, and the two
-// confirmations (delete, and switching away from unsaved edits). The start
-// screen's own behavior is next door in `worlds_start_tests.rs`, which shares
-// these fixtures.
+//! Tests for the Worlds panel's actions: the listing the hook builds, what
+//! opening a world retargets, the naming rules a New has to pass, and the two
+//! confirmations (delete, and switching away from unsaved edits). The start
+//! screen's own behavior is next door in `worlds_start_tests.rs`, which shares
+//! these fixtures.
 
 use concinnity_cook::authoring::world::parse_world_jsonl;
 

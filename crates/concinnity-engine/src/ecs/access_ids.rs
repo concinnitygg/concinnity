@@ -1,21 +1,19 @@
-// src/ecs/access_ids.rs
-//
-// The schedule's resource-id registry and the debug-build access validator.
-//
-// Component access ids are the component registry's discriminants; resources
-// and event types have no such number, so this module assigns them one (by
-// list position) in the `Access` resource-id space. A type absent from the
-// list cannot be declared: a system touching it must stay exclusive, or the
-// type gets registered here. Event send is a resource write of the event
-// type's id, event read a resource read, which is what lets the schedule
-// serialize same-queue systems in table order and keep event order
-// bit-identical to serial.
-//
-// The validator half installs the core `access_check` hooks: `World::step`
-// announces the stepping system through one, and every context accessor's touch
-// is asserted against that system's declared access through the other.
-// Exclusive systems pass everything; structural change and blob access require
-// exclusivity. Debug builds only.
+//! The schedule's resource-id registry and the debug-build access validator.
+//!
+//! Component access ids are the component registry's discriminants; resources
+//! and event types have no such number, so this module assigns them one (by
+//! list position) in the `Access` resource-id space. A type absent from the
+//! list cannot be declared: a system touching it must stay exclusive, or the
+//! type gets registered here. Event send is a resource write of the event
+//! type's id, event read a resource read, which is what lets the schedule
+//! serialize same-queue systems in table order and keep event order
+//! bit-identical to serial.
+//!
+//! The validator half installs the core `access_check` hooks: `World::step`
+//! announces the stepping system through one, and every context accessor's touch
+//! is asserted against that system's declared access through the other.
+//! Exclusive systems pass everything; structural change and blob access require
+//! exclusivity. Debug builds only.
 
 use concinnity_core::components::AudioCommand;
 use concinnity_core::components::ControlsCommand;

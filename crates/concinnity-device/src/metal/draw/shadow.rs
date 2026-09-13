@@ -1,18 +1,16 @@
-// src/metal/draw/shadow.rs
-//
-// Cascaded shadow-map pass: one depth-only render per CSM cascade slice. Every
-// caster (static, instanced, and the folded skinned tail) draws through that
-// cascade's slice of the shadow ICB the cull's encode dispatch filled, so the
-// pass issues at most two indirect draws per cascade and walks no draw list.
-// Skipped entirely when no shadow pipeline is configured.
-//
-// Each cascade is its own render pass (`setSlice` targets a different
-// shadow.map array slice) on a single `MTLRenderCommandEncoder`; see
-// [`encode_main_pass`](../draw/main.rs) for why the earlier
-// `MTLParallelRenderCommandEncoder` landing was reverted.
-//
-// Spot shadows cannot share the ICB (its slots are laid out per cascade), so
-// their per-draw caster body lives in [`spot_shadow`](spot_shadow.rs).
+//! Cascaded shadow-map pass: one depth-only render per CSM cascade slice. Every
+//! caster (static, instanced, and the folded skinned tail) draws through that
+//! cascade's slice of the shadow ICB the cull's encode dispatch filled, so the
+//! pass issues at most two indirect draws per cascade and walks no draw list.
+//! Skipped entirely when no shadow pipeline is configured.
+//!
+//! Each cascade is its own render pass (`setSlice` targets a different
+//! shadow.map array slice) on a single `MTLRenderCommandEncoder`; see
+//! [`encode_main_pass`](../draw/main.rs) for why the earlier
+//! `MTLParallelRenderCommandEncoder` landing was reverted.
+//!
+//! Spot shadows cannot share the ICB (its slots are laid out per cascade), so
+//! their per-draw caster body lives in [`spot_shadow`](spot_shadow.rs).
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::render_types::{NUM_SHADOW_CASCADES, ShadowPassPush};

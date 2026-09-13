@@ -1,14 +1,12 @@
-// src/editor/panels/template.rs
-//
-// The editor "Templates" panel: a floating list of the engine's built-in world
-// templates; clicking a row applies that template's assets to the world (skipping
-// any whose name already exists, so re-applying is idempotent -- the hook owns
-// that). It is a draggable floating panel toggled from the View panel. Plain
-// `Sprite` / `TextLabel` components at reserved ids (injected by `inject.rs`),
-// driven each frame by the editor hook, so nothing here reaches the shipped
-// runtime. The title bar, close button, and row draw come from the shared
-// `list_panel`; the rows are label-only (no checkbox) and read from the templates
-// crate.
+//! The editor "Templates" panel: a floating list of the engine's built-in world
+//! templates; clicking a row applies that template's assets to the world (skipping
+//! any whose name already exists, so re-applying is idempotent -- the hook owns
+//! that). It is a draggable floating panel toggled from the View panel. Plain
+//! `Sprite` / `TextLabel` components at reserved ids (injected by `inject.rs`),
+//! driven each frame by the editor hook, so nothing here reaches the shipped
+//! runtime. The title bar, close button, and row draw come from the shared
+//! `list_panel`; the rows are label-only (no checkbox) and read from the templates
+//! crate.
 
 use concinnity_core::ecs::World;
 use concinnity_host::thread::asset_id::AssetId;

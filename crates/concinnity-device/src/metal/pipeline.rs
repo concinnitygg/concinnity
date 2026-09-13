@@ -1,11 +1,9 @@
-// src/metal/pipeline.rs
-//
-// Shader-source helpers shared across every Metal pipeline builder plus the
-// two genuinely cross-effect pipelines: the text overlay and the post-process
-// composite. Per-effect pipeline builders (bloom, TAA, velocity, SSAO, SSR,
-// decal, fog, auto-exposure, cull) live next to their encoders in the
-// matching `post/*.rs` / `decal.rs` / `fog.rs` / `auto_exposure.rs` /
-// `cull.rs` files so each effect is a single unit.
+//! Shader-source helpers shared across every Metal pipeline builder plus the
+//! two genuinely cross-effect pipelines: the text overlay and the post-process
+//! composite. Per-effect pipeline builders (bloom, TAA, velocity, SSAO, SSR,
+//! decal, fog, auto-exposure, cull) live next to their encoders in the
+//! matching `post/*.rs` / `decal.rs` / `fog.rs` / `auto_exposure.rs` /
+//! `cull.rs` files so each effect is a single unit.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use dispatch2::DispatchData;

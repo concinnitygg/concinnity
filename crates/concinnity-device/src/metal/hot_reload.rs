@@ -1,15 +1,13 @@
-// src/metal/hot_reload.rs
-//
-// Filesystem watcher driving Metal shader hot-reload. A background notify
-// watcher tails `<CARGO_MANIFEST_DIR>/src/metal/shaders/` and, on any modify
-// event for a `.metal` file, flips a shared `Arc<AtomicBool>`. The main thread
-// polls that flag at the top of `draw_frame` and calls
-// `MtlContext::reload_shaders` when it's set. Same flag is also set by the
-// `reload-shaders` debug command, so the two trigger paths converge.
-//
-// All entirely a dev-loop concern: only constructed when
-// `MtlContext::new` is called with `hot_reload = true`. Production `cn run`
-// never instantiates it.
+//! Filesystem watcher driving Metal shader hot-reload. A background notify
+//! watcher tails `<CARGO_MANIFEST_DIR>/src/metal/shaders/` and, on any modify
+//! event for a `.metal` file, flips a shared `Arc<AtomicBool>`. The main thread
+//! polls that flag at the top of `draw_frame` and calls
+//! `MtlContext::reload_shaders` when it's set. Same flag is also set by the
+//! `reload-shaders` debug command, so the two trigger paths converge.
+//!
+//! All entirely a dev-loop concern: only constructed when
+//! `MtlContext::new` is called with `hot_reload = true`. Production `cn run`
+//! never instantiates it.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::mesh_payload;

@@ -1,10 +1,8 @@
-// src/editor/hook/duplicate.rs
-//
-// EditorHook: duplicate the selection in place (Ctrl+D, /dup). Each selected
-// authored entry is cloned with all its args -- position included, so the copy
-// sits exactly on the original until it is dragged away -- under a unique
-// name. The copies become the new selection (ready to move), and the whole
-// batch commits as ONE undo step.
+//! EditorHook: duplicate the selection in place (Ctrl+D, /dup). Each selected
+//! authored entry is cloned with all its args -- position included, so the copy
+//! sits exactly on the original until it is dragged away -- under a unique
+//! name. The copies become the new selection (ready to move), and the whole
+//! batch commits as ONE undo step.
 
 use super::{EditorHook, entry_name, entry_type};
 use crate::editor::panels::panel;

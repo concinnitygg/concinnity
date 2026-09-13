@@ -1,5 +1,3 @@
-// src/components/audio_command.rs
-
 /// Runtime-only event sent by GraphicsSystem when a volume setting changes,
 /// read by AudioSystem from its `Events<AudioCommand>` queue.
 ///

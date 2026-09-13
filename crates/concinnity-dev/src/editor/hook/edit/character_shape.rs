@@ -1,12 +1,10 @@
-// src/editor/hook/edit/character_shape.rs
-//
-// EditorHook: the CharacterShape panel's actions. The panel edits the shape
-// whose target is the selected skinned mesh or character model (or the
-// selected shape entry); its rows are the target's schema laid over what
-// that mesh exposes in the live world (`character_shape.rs`). Every commit
-// (a slider release, Reset, Randomize, a preset) writes the entry's args
-// through `form::assemble` + `form::validate` and `mark_changed` once; the
-// per-frame drag preview lives in `drag/shape.rs`.
+//! EditorHook: the CharacterShape panel's actions. The panel edits the shape
+//! whose target is the selected skinned mesh or character model (or the
+//! selected shape entry); its rows are the target's schema laid over what
+//! that mesh exposes in the live world (`character_shape.rs`). Every commit
+//! (a slider release, Reset, Randomize, a preset) writes the entry's args
+//! through `form::assemble` + `form::validate` and `mark_changed` once; the
+//! per-frame drag preview lives in `drag/shape.rs`.
 
 use concinnity_cook::authoring::registry::build_only::CharacterSchema;
 use concinnity_cook::authoring::registry::build_only::ShapePreset;

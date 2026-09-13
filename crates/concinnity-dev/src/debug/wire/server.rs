@@ -1,13 +1,11 @@
-// src/debug/wire/server.rs
-//
-// The localhost debug listener: `DebugServer` (the `DebugHook` the run loop
-// ticks), the accept / per-connection threads, and the per-frame drive of the
-// runtime commands plus the owned hot-reload driver. Each connection is handed
-// to `crate::mcp::AppServer`, which parses the HTTP request and answers the
-// MCP message it carried. The shared snapshot lives in `super::super::state`;
-// the query-command dispatcher `AppServer` runs each call against is
-// `super::super::dispatch::handle_request`; spawn / crossfade command handlers
-// live in `super::super::commands`.
+//! The localhost debug listener: `DebugServer` (the `DebugHook` the run loop
+//! ticks), the accept / per-connection threads, and the per-frame drive of the
+//! runtime commands plus the owned hot-reload driver. Each connection is handed
+//! to `crate::mcp::AppServer`, which parses the HTTP request and answers the
+//! MCP message it carried. The shared snapshot lives in `super::super::state`;
+//! the query-command dispatcher `AppServer` runs each call against is
+//! `super::super::dispatch::handle_request`; spawn / crossfade command handlers
+//! live in `super::super::commands`.
 
 use concinnity_core::components::Camera3D;
 use concinnity_core::ecs::World;

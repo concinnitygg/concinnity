@@ -1,5 +1,3 @@
-// src/asset_impls/sdf_volume.rs
-
 use concinnity_core::components::SdfVolume;
 
 use crate::asset::BuildCtx;

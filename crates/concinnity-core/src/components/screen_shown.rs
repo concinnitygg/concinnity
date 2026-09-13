@@ -1,5 +1,3 @@
-// src/components/screen_shown.rs
-
 use crate::ecs::asset_id::AssetId;
 
 /// Runtime-only event sent by UiInputSystem whenever a screen reaches the top

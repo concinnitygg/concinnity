@@ -1,5 +1,3 @@
-// src/components/interact_event.rs
-
 use crate::ecs::asset_id::AssetId;
 
 /// Runtime-only event published by the camera controller when the interact

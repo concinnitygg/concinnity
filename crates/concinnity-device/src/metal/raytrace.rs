@@ -1,43 +1,41 @@
-// src/metal/raytrace.rs
-//
-// Hardware ray-tracing acceleration structures for the Metal backend. Builds,
-// from the shared static vertex / index buffers and the `DrawObject` list, the
-// bottom- and top-level acceleration structures (BLAS / TLAS) the RT-reflection
-// kernel traces against, plus a per-instance geometry table the kernel uses to
-// fetch the hit triangle and shade it.
-//
-// One primitive BLAS per object over its slice of the shared buffers, one
-// instance in the TLAS per object (transform = the object's model matrix,
-// instance_id = the object index). The BLAS describe object-space geometry and
-// never change for a rigid transform; only the TLAS instance transforms (and
-// the geometry table's per-instance model matrices the kernel shades with) move
-// when a prop moves.
-//
-// Dynamic transforms (`RtDynamicMode`) update the structures per frame. The
-// per-frame skinned update (`rebuild_skinned`) keeps the persistent static +
-// cluster BLAS, re-skins the current pose, and rebuilds only the skinned BLAS +
-// TLAS + geometry table. It is fully asynchronous: NO `waitUntilCompleted`. The
-// three GPU steps are committed on the one shared queue in dependency order: skin
-// compute (writes the deformed buffer), then the BLAS/TLAS build (reads it), all
-// in `rt_dynamic_update`, strictly before the reflection-trace command buffer
-// (committed later in `execute_graph`). Same-queue FIFO commit order runs them
-// skin → build → trace; the render graph already depends on exactly this
-// event-free ordering for every cross-pass read. Faults (which can no longer be
-// caught synchronously) are surfaced from completion handlers.
-//
-// (Historical note: an earlier bisect concluded no GPU-side primitive orders these
-// steps and kept the rebuild synchronous. That predated the fix for the actual
-// fault (a CPU/GPU `RtGeomEntry` struct-layout mismatch that made the trace read
-// out of bounds), so those fault observations were the layout bug, not an ordering
-// failure. With it fixed, same-queue commit order alone orders the rebuild.)
-//
-// The one-time seed build and the incremental topology refresh allocate fresh
-// and park the outgoing structures / Shared buffers in a frame-tagged
-// deferred-free pool (`RetirePool`) until the frames-in-flight fence retires the
-// frames whose still-in-flight trace could read them. The per-frame skinned
-// update instead rebuilds in place in a ring slot (`rt_ring`), which is sound
-// precisely because it runs on every frame: see that module's header for why the
-// static paths cannot use the same trick.
+//! Hardware ray-tracing acceleration structures for the Metal backend. Builds,
+//! from the shared static vertex / index buffers and the `DrawObject` list, the
+//! bottom- and top-level acceleration structures (BLAS / TLAS) the RT-reflection
+//! kernel traces against, plus a per-instance geometry table the kernel uses to
+//! fetch the hit triangle and shade it.
+//!
+//! One primitive BLAS per object over its slice of the shared buffers, one
+//! instance in the TLAS per object (transform = the object's model matrix,
+//! instance_id = the object index). The BLAS describe object-space geometry and
+//! never change for a rigid transform; only the TLAS instance transforms (and
+//! the geometry table's per-instance model matrices the kernel shades with) move
+//! when a prop moves.
+//!
+//! Dynamic transforms (`RtDynamicMode`) update the structures per frame. The
+//! per-frame skinned update (`rebuild_skinned`) keeps the persistent static +
+//! cluster BLAS, re-skins the current pose, and rebuilds only the skinned BLAS +
+//! TLAS + geometry table. It is fully asynchronous: NO `waitUntilCompleted`. The
+//! three GPU steps are committed on the one shared queue in dependency order: skin
+//! compute (writes the deformed buffer), then the BLAS/TLAS build (reads it), all
+//! in `rt_dynamic_update`, strictly before the reflection-trace command buffer
+//! (committed later in `execute_graph`). Same-queue FIFO commit order runs them
+//! skin → build → trace; the render graph already depends on exactly this
+//! event-free ordering for every cross-pass read. Faults (which can no longer be
+//! caught synchronously) are surfaced from completion handlers.
+//!
+//! (Historical note: an earlier bisect concluded no GPU-side primitive orders these
+//! steps and kept the rebuild synchronous. That predated the fix for the actual
+//! fault (a CPU/GPU `RtGeomEntry` struct-layout mismatch that made the trace read
+//! out of bounds), so those fault observations were the layout bug, not an ordering
+//! failure. With it fixed, same-queue commit order alone orders the rebuild.)
+//!
+//! The one-time seed build and the incremental topology refresh allocate fresh
+//! and park the outgoing structures / Shared buffers in a frame-tagged
+//! deferred-free pool (`RetirePool`) until the frames-in-flight fence retires the
+//! frames whose still-in-flight trace could read them. The per-frame skinned
+//! update instead rebuilds in place in a ring slot (`rt_ring`), which is sound
+//! precisely because it runs on every frame: see that module's header for why the
+//! static paths cannot use the same trick.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::render_types::{

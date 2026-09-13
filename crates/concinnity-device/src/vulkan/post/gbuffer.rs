@@ -1,26 +1,24 @@
-// src/vulkan/post/gbuffer.rs
-//
-// Unified geometry G-buffer pre-pass for the Vulkan backend. One jittered
-// traversal of the visible set (static + instanced + skinned) rasterizes into a
-// single MRT:
-//
-//   target 0  RGBA16F  view-space normal (rgb) + positive linear view depth (a)
-//   target 1  R8       perceptual roughness
-//   target 2  RG16F    screen-space motion (prev_uv - cur_uv)
-//
-// plus a private single-sample depth buffer. Every screen-space consumer (SSR
-// resolve, SSAO, SSGI, TAA, FSR) reads this one output instead of
-// re-rasterizing, replacing the separate SSR pre-pass + SSAO pre-pass +
-// velocity pre-pass. Rasterization uses the jittered VP (matching the main pass
-// coverage); the motion vector derives from the un-jittered current / previous
-// VPs in-shader so projection jitter never contaminates motion. Fuses the
-// former SSR depth+normal pre-pass and TAA velocity pre-pass into one node;
-// mirrors src/directx/post/gbuffer.rs.
-//
-// Unlike DirectX's single-resource G-buffer, the Vulkan unified buffer holds a
-// per-frame `Vec<GpuImage>` for every MRT target (and per-frame framebuffers),
-// because the temporal resolve reads `velocity_images[frame_idx]` and the engine
-// pipelines frames-in-flight deep.
+//! Unified geometry G-buffer pre-pass for the Vulkan backend. One jittered
+//! traversal of the visible set (static + instanced + skinned) rasterizes into a
+//! single MRT:
+//!
+//!   target 0  RGBA16F  view-space normal (rgb) + positive linear view depth (a)
+//!   target 1  R8       perceptual roughness
+//!   target 2  RG16F    screen-space motion (prev_uv - cur_uv)
+//!
+//! plus a private single-sample depth buffer. Every screen-space consumer (SSR
+//! resolve, SSAO, SSGI, TAA, FSR) reads this one output instead of
+//! re-rasterizing, replacing the separate SSR pre-pass + SSAO pre-pass +
+//! velocity pre-pass. Rasterization uses the jittered VP (matching the main pass
+//! coverage); the motion vector derives from the un-jittered current / previous
+//! VPs in-shader so projection jitter never contaminates motion. Fuses the
+//! former SSR depth+normal pre-pass and TAA velocity pre-pass into one node;
+//! mirrors src/directx/post/gbuffer.rs.
+//!
+//! Unlike DirectX's single-resource G-buffer, the Vulkan unified buffer holds a
+//! per-frame `Vec<GpuImage>` for every MRT target (and per-frame framebuffers),
+//! because the temporal resolve reads `velocity_images[frame_idx]` and the engine
+//! pipelines frames-in-flight deep.
 
 use ash::vk;
 use concinnity_core::gfx::render_types::{GpuDrawArgs, GpuObjectData};

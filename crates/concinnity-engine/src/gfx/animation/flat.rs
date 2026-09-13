@@ -1,8 +1,6 @@
-// src/gfx/animation/flat.rs
-//
-// The weighted-blend drive for a clip bucket: every clip targeting the mesh
-// plays simultaneously, mixed by a live weight vector. Startup fade-ins and
-// runtime `anim-crossfade` commands are both ramps between weight vectors.
+//! The weighted-blend drive for a clip bucket: every clip targeting the mesh
+//! plays simultaneously, mixed by a live weight vector. Startup fade-ins and
+//! runtime `anim-crossfade` commands are both ramps between weight vectors.
 
 use concinnity_core::gfx::skeleton::AnimationClip;
 

@@ -1,17 +1,15 @@
-// src/geometry/voxel.rs
-//
-// Hidden-face mesher for VoxelChunk assets.
-//
-// For each block whose palette entry has solid=true, emit a quad for any of
-// its six faces whose neighbor is either outside the chunk or non-solid.
-// Faces between two solid blocks are skipped entirely, so the interior of a
-// filled volume contributes no triangles.
-//
-// UVs come from the BlockType palette: per-face overrides (uv_top, uv_bottom,
-// uv_side) fall back to uv_min/uv_max when None.
-//
-// Greedy merging of adjacent same-block faces into larger quads is a future
-// optimization; this pass only does hidden-face culling.
+//! Hidden-face mesher for VoxelChunk assets.
+//!
+//! For each block whose palette entry has solid=true, emit a quad for any of
+//! its six faces whose neighbor is either outside the chunk or non-solid.
+//! Faces between two solid blocks are skipped entirely, so the interior of a
+//! filled volume contributes no triangles.
+//!
+//! UVs come from the BlockType palette: per-face overrides (uv_top, uv_bottom,
+//! uv_side) fall back to uv_min/uv_max when None.
+//!
+//! Greedy merging of adjacent same-block faces into larger quads is a future
+//! optimization; this pass only does hidden-face culling.
 
 use alloc::format;
 use alloc::string::String;

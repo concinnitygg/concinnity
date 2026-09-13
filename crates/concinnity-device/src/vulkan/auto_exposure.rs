@@ -1,16 +1,14 @@
-// src/vulkan/auto_exposure.rs
-//
-// Auto-exposure (EV adaptation) on Vulkan: a per-frame CPU readback of a
-// previous frame's average log-luminance, an EMA step that updates the
-// adapted EV, and the histogram build + average compute dispatches that
-// produce next frame's average. The compute passes are encoded after the
-// main HDR resolve (where `hdr_resolve_images[frame_idx]` carries this
-// frame's scene color in SHADER_READ_ONLY_OPTIMAL) and the result is
-// copied into a per-frame HOST_VISIBLE readback buffer that the CPU reads
-// at the top of a later frame, so there is `frames_in_flight` frames of
-// latency between the scene's actual luminance and the exposure applied,
-// invisible at human-scale eye-adaptation rates. Mirrors
-// `metal/auto_exposure.rs` and `directx/auto_exposure.rs`.
+//! Auto-exposure (EV adaptation) on Vulkan: a per-frame CPU readback of a
+//! previous frame's average log-luminance, an EMA step that updates the
+//! adapted EV, and the histogram build + average compute dispatches that
+//! produce next frame's average. The compute passes are encoded after the
+//! main HDR resolve (where `hdr_resolve_images[frame_idx]` carries this
+//! frame's scene color in SHADER_READ_ONLY_OPTIMAL) and the result is
+//! copied into a per-frame HOST_VISIBLE readback buffer that the CPU reads
+//! at the top of a later frame, so there is `frames_in_flight` frames of
+//! latency between the scene's actual luminance and the exposure applied,
+//! invisible at human-scale eye-adaptation rates. Mirrors
+//! `metal/auto_exposure.rs` and `directx/auto_exposure.rs`.
 
 use ash::vk;
 use concinnity_core::gfx::auto_exposure;

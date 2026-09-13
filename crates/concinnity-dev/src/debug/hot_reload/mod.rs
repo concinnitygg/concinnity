@@ -1,21 +1,19 @@
-// src/debug/hot_reload/mod.rs
-//
-// Asset / shader / world.jsonl hot-reload machinery for dev sessions
-// (`cn debug` and `cn editor`). Moved out of the library into the binary
-// tree: the watcher, off-thread decode, and the reload passes are driven once
-// per frame from a `DebugHook::tick` (see `driver::HotReloadDriver`). The
-// passive source catalogs these consume are captured at
-// `GraphicsSystem::init` and live in the library
-// (`concinnity_engine::gfx::system::hot_reload_sources`); the per-frame backend
-// + Prop-tracking handle comes from `GraphicsSystem::hot_reload_apply_parts`.
-//
-// Split by responsibility:
-//   driver   `HotReloadDriver`, the per-frame drive + ECS effect apply
-//   state    `AssetHotReloadState` + decode result types + `run_frame` entry
-//   watcher  the `notify` filesystem watcher
-//   decode   off-thread payload decode + poll/apply (textures, meshes, IBL)
-//   passes   world.jsonl / ProceduralMesh / VolumetricFog / Shader reload
-//   pending  process-wide world.jsonl / Shader "changed" flags
+//! Asset / shader / world.jsonl hot-reload machinery for dev sessions
+//! (`cn debug` and `cn editor`). Moved out of the library into the binary
+//! tree: the watcher, off-thread decode, and the reload passes are driven once
+//! per frame from a `DebugHook::tick` (see `driver::HotReloadDriver`). The
+//! passive source catalogs these consume are captured at
+//! `GraphicsSystem::init` and live in the library
+//! (`concinnity_engine::gfx::system::hot_reload_sources`); the per-frame backend +
+//! Prop-tracking handle comes from `GraphicsSystem::hot_reload_apply_parts`.
+//!
+//! Split by responsibility:
+//!   driver   `HotReloadDriver`, the per-frame drive + ECS effect apply
+//!   state    `AssetHotReloadState` + decode result types + `run_frame` entry
+//!   watcher  the `notify` filesystem watcher
+//!   decode   off-thread payload decode + poll/apply (textures, meshes, IBL)
+//!   passes   world.jsonl / ProceduralMesh / VolumetricFog / Shader reload
+//!   pending  process-wide world.jsonl / Shader "changed" flags
 
 mod decode;
 mod driver;

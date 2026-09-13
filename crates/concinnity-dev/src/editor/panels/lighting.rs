@@ -1,13 +1,11 @@
-// src/editor/panels/lighting.rs
-//
-// The data half of the Lighting panel: a curated view over the lighting-related
-// fields of several existing world assets (the sun, fog, shadows, and ambient /
-// GI settings), each section bound to one asset type. The panel does not invent
-// its own field machinery -- every binding resolves to a `form::FormField`
-// derived from the type's registered args (`form::fields_for_with`), and edits
-// commit through the same `form::assemble` + `form::validate` path the add /
-// edit form uses, so the panel can never write an invalid entry. Pure and
-// world-free; the hook owns the entries and the panel module owns the layout.
+//! The data half of the Lighting panel: a curated view over the lighting-related
+//! fields of several existing world assets (the sun, fog, shadows, and ambient /
+//! GI settings), each section bound to one asset type. The panel does not invent
+//! its own field machinery -- every binding resolves to a `form::FormField`
+//! derived from the type's registered args (`form::fields_for_with`), and edits
+//! commit through the same `form::assemble` + `form::validate` path the add /
+//! edit form uses, so the panel can never write an invalid entry. Pure and
+//! world-free; the hook owns the entries and the panel module owns the layout.
 
 use serde_json::{Map, Value};
 

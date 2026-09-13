@@ -1,5 +1,3 @@
-// src/asset_impls/shader.rs
-
 use concinnity_core::components::{Shader, ShaderPrograms, ShaderStage};
 use concinnity_core::render::slang_programs::surface::Sources;
 

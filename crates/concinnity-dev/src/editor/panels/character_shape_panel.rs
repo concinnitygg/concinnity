@@ -1,12 +1,10 @@
-// src/editor/panels/character_shape_panel.rs
-//
-// The CharacterShape panel's layout half: a floating panel of the schema's
-// sections (see `character_shape.rs` for the rows), preset rows, Reset /
-// Randomize buttons and a status line in its header row. Each slider row is a caption plus one drag
-// slider (`widget_slider.rs`) backed by a per-visible-row control pool at
-// reserved ids; the row list scrolls through a window sized by the panel
-// height. Plain `Sprite` / `TextLabel` components driven each frame by the
-// editor hook, which owns the drag, the commit path, and the selection.
+//! The CharacterShape panel's layout half: a floating panel of the schema's
+//! sections (see `character_shape.rs` for the rows), preset rows, Reset /
+//! Randomize buttons and a status line in its header row. Each slider row is a caption plus one drag
+//! slider (`widget_slider.rs`) backed by a per-visible-row control pool at
+//! reserved ids; the row list scrolls through a window sized by the panel
+//! height. Plain `Sprite` / `TextLabel` components driven each frame by the
+//! editor hook, which owns the drag, the commit path, and the selection.
 
 use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;

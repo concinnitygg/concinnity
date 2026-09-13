@@ -1,14 +1,12 @@
-// src/editor/viewport/axes.rs
-//
-// The viewport's world-origin axes: one line per world axis, running from the
-// origin out along its positive direction and fading to nothing at the camera's
-// far plane, so the axis reads as unbounded without ending in a hard edge.
-// Unlike the rest of the editor's viewport furniture these are world geometry,
-// not overlay sprites: they go through the renderer's line pass, so
-// scene geometry in front of an axis occludes it.
-//
-// Colors match the translate gizmo's handles (X red, Y green, Z blue), so the
-// two teach the same axis mapping.
+//! The viewport's world-origin axes: one line per world axis, running from the
+//! origin out along its positive direction and fading to nothing at the camera's
+//! far plane, so the axis reads as unbounded without ending in a hard edge.
+//! Unlike the rest of the editor's viewport furniture these are world geometry,
+//! not overlay sprites: they go through the renderer's line pass, so
+//! scene geometry in front of an axis occludes it.
+//!
+//! Colors match the translate gizmo's handles (X red, Y green, Z blue), so the
+//! two teach the same axis mapping.
 
 use concinnity_core::gfx::lines::Line;
 

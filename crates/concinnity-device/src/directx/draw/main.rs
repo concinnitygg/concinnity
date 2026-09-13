@@ -1,11 +1,9 @@
-// src/directx/draw/main.rs
-//
-// Main HDR scene pass: two GPU-driven `ExecuteIndirect`s per shader bucket, the
-// static + instance + runtime prefix and the skinned tail. Renders linear-light
-// HDR into `hdr_color`; the composite pass tonemaps that down
-// onto the swapchain backbuffer. Ends by transitioning (or MSAA-resolving)
-// `hdr_color` to `PIXEL_SHADER_RESOURCE` so post-process passes can sample
-// it.
+//! Main HDR scene pass: two GPU-driven `ExecuteIndirect`s per shader bucket, the
+//! static + instance + runtime prefix and the skinned tail. Renders linear-light
+//! HDR into `hdr_color`; the composite pass tonemaps that down
+//! onto the swapchain backbuffer. Ends by transitioning (or MSAA-resolving)
+//! `hdr_color` to `PIXEL_SHADER_RESOURCE` so post-process passes can sample
+//! it.
 
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;

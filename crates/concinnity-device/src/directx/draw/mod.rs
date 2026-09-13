@@ -1,14 +1,12 @@
-// src/directx/draw/mod.rs
-//
-// `DxContext::record_frame` -- the per-frame orchestration. The per-pass GPU
-// encoders live in sibling files (shadow / main / composite) plus the
-// post-process effects in `directx/post/` (bloom / TAA / SSAO):
-//
-//   shadow.rs              cascaded shadow map (depth-only, per cascade)
-//   main.rs                SSAO pre-pass + main HDR pass (bindless indirect,
-//                          skinned tail, phase-2 re-issue) + HDR resolve barriers
-//   composite.rs           ACES tonemap + composite + text overlay
-//   ../post/{bloom,taa,ssao}.rs    pipeline + targets + encoder, co-located
+//! `DxContext::record_frame` -- the per-frame orchestration. The per-pass GPU
+//! encoders live in sibling files (shadow / main / composite) plus the
+//! post-process effects in `directx/post/` (bloom / TAA / SSAO):
+//!
+//!   shadow.rs              cascaded shadow map (depth-only, per cascade)
+//!   main.rs                SSAO pre-pass + main HDR pass (bindless indirect,
+//!                          skinned tail, phase-2 re-issue) + HDR resolve barriers
+//!   composite.rs           ACES tonemap + composite + text overlay
+//!   ../post/{bloom,taa,ssao}.rs    pipeline + targets + encoder, co-located
 
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::jitter;

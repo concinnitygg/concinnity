@@ -1,9 +1,7 @@
-// src/editor/hook/edit/select.rs
-//
-// EditorHook: the /select console command. Resolution is pure
-// (`editor/select_related.rs`); this dispatch feeds it the working entries
-// (or, for origin, a fresh cook so the grouping matches the outliner) and
-// replaces the selection with what comes back.
+//! EditorHook: the /select console command. Resolution is pure
+//! (`editor/select_related.rs`); this dispatch feeds it the working entries
+//! (or, for origin, a fresh cook so the grouping matches the outliner) and
+//! replaces the selection with what comes back.
 
 use concinnity_core::ecs::World;
 

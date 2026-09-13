@@ -1,36 +1,34 @@
-// src/vulkan/graph_exec.rs
-//
-// Vulkan-side executor for the render graph. `VkContext::execute_graph`
-// walks the `CompiledGraph` produced by the shared
-// [`gfx::render_graph::build_frame_graph`](../gfx/render_graph/frame.rs)
-// and dispatches each pass to its `encode_*` method. Mirrors the Metal
-// + DirectX executors: every backend now drives the same builder.
-//
-// The catch-all arm at the bottom returns a clear error if any not-yet-ported
-// `PassId` slips into the compiled graph.
-//
-// Both of a pass's barrier lists are consumed for every resource the executor's
-// barrier registry resolves: `emit_graph_barriers` translates their graph state
-// transitions into explicit `vkCmdPipelineBarrier` calls, `barriers_before` at
-// the start of each pass's command buffer and `barriers_after` at its end (a
-// read run whose readers span the schedule's two queues transitions on the
-// producing side), and `emit_graph_restores` returns any that the frame left off
-// their resting layout at the end of the outer "end" buffer. A resource
-// with no registry entry keeps whatever transitions its encoder or render pass
-// owns; `barrier_audit.rs` classifies every one of those remaining sites.
-//
-// The registry decides two things per resource: which GPU object backs it, and
-// what layout it rests in between frames. Its class -- what a `Write` means --
-// comes from the usage the graph declares, so this executor and the DirectX one
-// cannot disagree about it. Resting cannot: `shadow_map` and `hdr_depth` are both
-// depth targets, and the first rests sampled (its staggered cascades keep the
-// depth they were last rendered with) while the second discards.
-//
-// Bundled passes:
-//   * `PassId::SsaoBlur` dispatches the bundled `encode_ssao` (GTAO
-//     kernel + depth-aware blur over the unified pre-pass normal+depth).
-//     `PassId::SsaoPrepass` / `PassId::SsaoKernel` stay timing-only and
-//     the executor rejects them as graph nodes.
+//! Vulkan-side executor for the render graph. `VkContext::execute_graph`
+//! walks the `CompiledGraph` produced by the shared
+//! `concinnity_core::render::render_graph::build_frame_graph`
+//! and dispatches each pass to its `encode_*` method. Mirrors the Metal +
+//! DirectX executors: every backend now drives the same builder.
+//!
+//! The catch-all arm at the bottom returns a clear error if any not-yet-ported
+//! `PassId` slips into the compiled graph.
+//!
+//! Both of a pass's barrier lists are consumed for every resource the executor's
+//! barrier registry resolves: `emit_graph_barriers` translates their graph state
+//! transitions into explicit `vkCmdPipelineBarrier` calls, `barriers_before` at
+//! the start of each pass's command buffer and `barriers_after` at its end (a
+//! read run whose readers span the schedule's two queues transitions on the
+//! producing side), and `emit_graph_restores` returns any that the frame left off
+//! their resting layout at the end of the outer "end" buffer. A resource
+//! with no registry entry keeps whatever transitions its encoder or render pass
+//! owns; `barrier_audit.rs` classifies every one of those remaining sites.
+//!
+//! The registry decides two things per resource: which GPU object backs it, and
+//! what layout it rests in between frames. Its class -- what a `Write` means --
+//! comes from the usage the graph declares, so this executor and the DirectX one
+//! cannot disagree about it. Resting cannot: `shadow_map` and `hdr_depth` are both
+//! depth targets, and the first rests sampled (its staggered cascades keep the
+//! depth they were last rendered with) while the second discards.
+//!
+//! Bundled passes:
+//!   * `PassId::SsaoBlur` dispatches the bundled `encode_ssao` (GTAO
+//!     kernel + depth-aware blur over the unified pre-pass normal+depth).
+//!     `PassId::SsaoPrepass` / `PassId::SsaoKernel` stay timing-only and
+//!     the executor rejects them as graph nodes.
 
 use ash::Device;
 use ash::vk;

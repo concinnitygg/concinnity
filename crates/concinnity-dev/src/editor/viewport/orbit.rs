@@ -1,11 +1,9 @@
-// src/editor/viewport/orbit.rs
-//
-// Pure orbit (tumble) math: a camera position expressed as spherical
-// coordinates around a pivot, in the same yaw/pitch convention as the fly
-// camera (yaw 0 faces -Z, positive pitch looks up). The drag drive keeps the
-// camera's orientation offset from the orbit angles constant, so a camera
-// that was looking at the pivot keeps looking at it, and one that was not
-// keeps its subject at the same place on screen while circling.
+//! Pure orbit (tumble) math: a camera position expressed as spherical
+//! coordinates around a pivot, in the same yaw/pitch convention as the fly
+//! camera (yaw 0 faces -Z, positive pitch looks up). The drag drive keeps the
+//! camera's orientation offset from the orbit angles constant, so a camera
+//! that was looking at the pivot keeps looking at it, and one that was not
+//! keeps its subject at the same place on screen while circling.
 
 use super::framing;
 

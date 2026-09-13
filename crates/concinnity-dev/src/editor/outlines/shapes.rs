@@ -1,10 +1,8 @@
-// src/editor/outlines/shapes.rs
-//
-// Pure line-segment generators for the extent outlines: each function appends
-// a shape's wireframe to a caller-owned buffer, so a frame's outlines build
-// into one reused allocation. All shapes are world-space `Line`s for the
-// renderer's line pass; oriented shapes take a column-major model matrix
-// (`Transform::model_matrix` convention, `m[col][row]`).
+//! Pure line-segment generators for the extent outlines: each function appends
+//! a shape's wireframe to a caller-owned buffer, so a frame's outlines build
+//! into one reused allocation. All shapes are world-space `Line`s for the
+//! renderer's line pass; oriented shapes take a column-major model matrix
+//! (`Transform::model_matrix` convention, `m[col][row]`).
 
 use concinnity_core::geometry::glass_quad::plane_basis;
 use concinnity_core::gfx::lines::Line;

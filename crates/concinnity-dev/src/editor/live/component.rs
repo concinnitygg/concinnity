@@ -1,18 +1,16 @@
-// src/editor/live/component.rs
-//
-// The general live path: rebake one component from its edited args and write
-// it over the running world's copy. Open only to types the registry marks
-// `live` -- the running world re-reads those columns every frame, so the
-// overwrite shows on the next draw. A type whose column is read once at load
-// would swallow the write silently, which is worse than the rebuild it
-// replaces, so everything else declines here and rebuilds instead.
-//
-// A live type may still name other assets, and those names are the build's to
-// resolve: they are edges in the reference graph that decides which scene each
-// referenced payload packs into, and a name resolving to nothing is a build
-// error rather than a reference that quietly does nothing. An in-place write
-// runs neither, so an edit that moves one declines and only the values between
-// them apply live.
+//! The general live path: rebake one component from its edited args and write
+//! it over the running world's copy. Open only to types the registry marks
+//! `live` -- the running world re-reads those columns every frame, so the
+//! overwrite shows on the next draw. A type whose column is read once at load
+//! would swallow the write silently, which is worse than the rebuild it
+//! replaces, so everything else declines here and rebuilds instead.
+//!
+//! A live type may still name other assets, and those names are the build's to
+//! resolve: they are edges in the reference graph that decides which scene each
+//! referenced payload packs into, and a name resolving to nothing is a build
+//! error rather than a reference that quietly does nothing. An in-place write
+//! runs neither, so an edit that moves one declines and only the values between
+//! them apply live.
 
 use concinnity_cook::authoring::refs::referenced_names;
 use concinnity_cook::authoring::registry::{self, RegisteredType};

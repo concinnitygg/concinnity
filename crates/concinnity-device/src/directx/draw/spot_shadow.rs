@@ -1,16 +1,14 @@
-// src/directx/draw/spot_shadow.rs
-//
-// Spot shadow pass: one depth-only render per shadow-casting spot light into
-// its slice of the spot shadow array. Structurally the cascade pass with a
-// different projection source -- each slice reuses the same depth-only shadow
-// pipeline and the same static / instanced / skinned caster sub-encoders,
-// driven by a `ShadowPassBinding` whose uniforms hold that spot's light-space
-// matrix in slot 0 rather than the CSM cascade set.
-//
-// Local lights are static, so the matrices are built once at init and only the
-// depth contents refresh here. `spot_shadow.render_mask` (from
-// `SpotShadowScheduler`) picks which slices redraw; a skipped slice keeps the
-// depth it last rendered, which stays correct until a caster moves.
+//! Spot shadow pass: one depth-only render per shadow-casting spot light into
+//! its slice of the spot shadow array. Structurally the cascade pass with a
+//! different projection source -- each slice reuses the same depth-only shadow
+//! pipeline and the same static / instanced / skinned caster sub-encoders,
+//! driven by a `ShadowPassBinding` whose uniforms hold that spot's light-space
+//! matrix in slot 0 rather than the CSM cascade set.
+//!
+//! Local lights are static, so the matrices are built once at init and only the
+//! depth contents refresh here. `spot_shadow.render_mask` (from
+//! `SpotShadowScheduler`) picks which slices redraw; a skipped slice keeps the
+//! depth it last rendered, which stays correct until a caster moves.
 
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;

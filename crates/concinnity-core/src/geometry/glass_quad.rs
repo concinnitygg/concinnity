@@ -1,4 +1,4 @@
-//! src/geometry/glass_quad.rs: flat rectangular quad for a GlassPanel.
+//! Flat rectangular quad for a GlassPanel.
 //!
 //! Builds a single 4-vertex / 6-index quad centered at `center`, facing
 //! `normal`, sized by `half_size` (half-width along the panel tangent,

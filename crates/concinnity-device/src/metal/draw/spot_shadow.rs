@@ -1,15 +1,13 @@
-// src/metal/draw/spot_shadow.rs
-//
-// Spot shadow pass: one depth-only render per shadow-casting spot light into its
-// slice of `spot_shadow.map`, plus the per-draw caster body it is the only
-// caller of. The shadow ICB the bindless cull fills is laid out per CSM cascade,
-// so it has no slots for these slices; the casters are walked on the CPU here,
-// once per slice, through the same depth-only pipelines the cascade pass binds.
-//
-// Local lights are static, so the matrices are built once at init and only the
-// depth contents refresh here. `spot_shadow.render_mask` (from
-// `SpotShadowScheduler`) picks which slices redraw; a skipped slice keeps the
-// depth it last rendered, which stays correct until a caster moves.
+//! Spot shadow pass: one depth-only render per shadow-casting spot light into its
+//! slice of `spot_shadow.map`, plus the per-draw caster body it is the only
+//! caller of. The shadow ICB the bindless cull fills is laid out per CSM cascade,
+//! so it has no slots for these slices; the casters are walked on the CPU here,
+//! once per slice, through the same depth-only pipelines the cascade pass binds.
+//!
+//! Local lights are static, so the matrices are built once at init and only the
+//! depth contents refresh here. `spot_shadow.render_mask` (from
+//! `SpotShadowScheduler`) picks which slices redraw; a skipped slice keeps the
+//! depth it last rendered, which stays correct until a caster moves.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::components;

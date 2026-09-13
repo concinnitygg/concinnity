@@ -1,9 +1,7 @@
-// src/spawn/despawn.rs
-//
-// Runtime entity despawn: remove an authored placement (and its descendants)
-// from the live world and reclaim the GPU draw slots it occupied, so nothing it
-// contributed lingers in any pass. Driven by DespawnRequest events SpawnSystem
-// drains each step (see mod.rs), and by the Lifetime expiries it ticks.
+//! Runtime entity despawn: remove an authored placement (and its descendants)
+//! from the live world and reclaim the GPU draw slots it occupied, so nothing it
+//! contributed lingers in any pass. Driven by DespawnRequest events SpawnSystem
+//! drains each step (see mod.rs), and by the Lifetime expiries it ticks.
 
 use concinnity_core::components::{Children, RenderHandle, SkeletonPose};
 use concinnity_core::ecs::{Entity, PipelineContext};

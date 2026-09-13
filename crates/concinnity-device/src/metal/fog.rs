@@ -1,17 +1,15 @@
-// src/metal/fog.rs
-//
-// Per-frame encoder for the volumetric-fog pass. Runs after the main HDR
-// pass (and after the decal pass, so fog sits on top of decals just like it
-// does for any other resolved scene color) and before SSR / TAA, so the
-// reflections and history reproject through the integrated fog color and
-// transmittance.
-//
-// The pass is a single fullscreen triangle: the fragment shader samples the
-// main pass's MSAA depth attachment, reconstructs each pixel's world-space
-// surface point via the inverse VP, ray-marches a sun-lit homogeneous
-// medium with exponential height falloff, and writes `(scattered_rgb, 1 -
-// transmittance)` so the pipeline's `over` blend yields
-// `scene * T + scattered` automatically.
+//! Per-frame encoder for the volumetric-fog pass. Runs after the main HDR
+//! pass (and after the decal pass, so fog sits on top of decals just like it
+//! does for any other resolved scene color) and before SSR / TAA, so the
+//! reflections and history reproject through the integrated fog color and
+//! transmittance.
+//!
+//! The pass is a single fullscreen triangle: the fragment shader samples the
+//! main pass's MSAA depth attachment, reconstructs each pixel's world-space
+//! surface point via the inverse VP, ray-marches a sun-lit homogeneous
+//! medium with exponential height falloff, and writes `(scattered_rgb, 1 -
+//! transmittance)` so the pipeline's `over` blend yields
+//! `scene * T + scattered` automatically.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::render_types::{FogFroxelParams, FogParams};

@@ -1,9 +1,7 @@
-// src/editor/hook/tests/edit/asset_tree_tests.rs
-//
-// The Assets panel's tree (`hook/edit/asset_tree.rs`): the rows an origin
-// grouping produces and how a search narrows them, when the tree is cooked and
-// what restales it, folding a group, and the select-and-edit a row click
-// performs.
+//! The Assets panel's tree (`hook/edit/asset_tree.rs`): the rows an origin
+//! grouping produces and how a search narrows them, when the tree is cooked and
+//! what restales it, folding a group, and the select-and-edit a row click
+//! performs.
 
 use concinnity_core::ecs::World;
 

@@ -1,8 +1,6 @@
-// src/metal/resources/textures.rs
-//
-// Texture-pool slot updates + IBL / color-grading hot-swap. Driven both by
-// the streaming subsystem (per-slot upload + eviction placeholders) and by
-// asset hot-reload (`cn debug` only) for envmaps + LUTs.
+//! Texture-pool slot updates + IBL / color-grading hot-swap. Driven both by
+//! the streaming subsystem (per-slot upload + eviction placeholders) and by
+//! asset hot-reload (`cn debug` only) for envmaps + LUTs.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::bake;

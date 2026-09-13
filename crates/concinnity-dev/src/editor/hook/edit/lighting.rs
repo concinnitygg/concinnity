@@ -1,12 +1,10 @@
-// src/editor/hook/edit/lighting.rs
-//
-// EditorHook: the Lighting panel's actions. The panel is a curated view over
-// the first world entry of each lighting section's asset type (`lighting.rs`);
-// every commit flows through `form::assemble` + `form::validate`, the same
-// path the add / edit form uses, so nothing invalid ever reaches the entries.
-// Checkbox toggles commit immediately (parse-free, so the live preview updates
-// on the click); text fields commit together on Apply, all-or-nothing across
-// the touched assets.
+//! EditorHook: the Lighting panel's actions. The panel is a curated view over
+//! the first world entry of each lighting section's asset type (`lighting.rs`);
+//! every commit flows through `form::assemble` + `form::validate`, the same
+//! path the add / edit form uses, so nothing invalid ever reaches the entries.
+//! Checkbox toggles commit immediately (parse-free, so the live preview updates
+//! on the click); text fields commit together on Apply, all-or-nothing across
+//! the touched assets.
 
 use concinnity_core::ecs::World;
 

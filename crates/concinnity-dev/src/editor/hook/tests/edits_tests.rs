@@ -1,10 +1,8 @@
-// src/editor/hook/tests/edits_tests.rs
-//
-// Committing and persisting an edit (`hook/edits.rs`): the preview rebuild an
-// entry change requests, the world a rebuild compiles in memory, the atomic
-// world.jsonl write SAVE performs, and the undo / redo stacks over the entry
-// list -- what a mark records, what a jump drops, and how the dirty flag
-// tracks the saved list across one.
+//! Committing and persisting an edit (`hook/edits.rs`): the preview rebuild an
+//! entry change requests, the world a rebuild compiles in memory, the atomic
+//! world.jsonl write SAVE performs, and the undo / redo stacks over the entry
+//! list -- what a mark records, what a jump drops, and how the dirty flag
+//! tracks the saved list across one.
 
 use concinnity_cook::authoring::world::parse_world_jsonl;
 use concinnity_core::components::FrameInput;

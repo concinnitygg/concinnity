@@ -1,5 +1,3 @@
-// src/components/animation_params.rs
-
 use alloc::vec::Vec;
 
 use crate::ecs::SkinnedMeshHandle;

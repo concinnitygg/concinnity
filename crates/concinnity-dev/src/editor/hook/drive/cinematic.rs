@@ -1,17 +1,15 @@
-// src/editor/hook/drive/cinematic.rs
-//
-// EditorHook: the start screen's attract camera. While the sidebar is
-// previewing a world, a cycle of slow shots (`editor/worlds/cinematic.rs`)
-// takes the view: it frames the previewed world's renderable bounds, writes a
-// pose onto the live `Camera3D` each frame, and draws the black fade its shots
-// hand over through. Everything here is wiring -- the frame dt, the bounds, the
-// camera, and when the cycle runs at all.
-//
-// It is a start-screen presentation and nothing more. The world's own pose is
-// held from the frame the cycle takes over and put straight back when the
-// screen hands the session a world, so the editing session opens on the camera
-// the world declared. Nothing here touches the authored entries, so no shot can
-// reach the world file or the session store.
+//! EditorHook: the start screen's attract camera. While the sidebar is
+//! previewing a world, a cycle of slow shots (`editor/worlds/cinematic.rs`)
+//! takes the view: it frames the previewed world's renderable bounds, writes a
+//! pose onto the live `Camera3D` each frame, and draws the black fade its shots
+//! hand over through. Everything here is wiring -- the frame dt, the bounds, the
+//! camera, and when the cycle runs at all.
+//!
+//! It is a start-screen presentation and nothing more. The world's own pose is
+//! held from the frame the cycle takes over and put straight back when the
+//! screen hands the session a world, so the editing session opens on the camera
+//! the world declared. Nothing here touches the authored entries, so no shot can
+//! reach the world file or the session store.
 
 use concinnity_core::components::Camera3D;
 use concinnity_core::ecs::PickIndex;

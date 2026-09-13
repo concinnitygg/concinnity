@@ -1,12 +1,10 @@
-// src/directx/post/bloom.rs
-//
-// Bloom post-process: prefilter + downsample chain + additive upsample chain.
-// Owns the per-mip render targets, the three PSOs they share (all using the
-// shared single-source fullscreen-triangle VS), the root signature, and the
-// `encode_bloom` per-frame encoder.
-//
-// Mirrors src/metal/post/bloom.rs: same mip-count clamp (4..=6), same
-// Karis 13-tap prefilter, same plain 13-tap downsample + 9-tap tent upsample.
+//! Bloom post-process: prefilter + downsample chain + additive upsample chain.
+//! Owns the per-mip render targets, the three PSOs they share (all using the
+//! shared single-source fullscreen-triangle VS), the root signature, and the
+//! `encode_bloom` per-frame encoder.
+//!
+//! Mirrors src/metal/post/bloom.rs: same mip-count clamp (4..=6), same
+//! Karis 13-tap prefilter, same plain 13-tap downsample + 9-tap tent upsample.
 
 use concinnity_core::gfx::render_types::PostProcessParams;
 use concinnity_core::render::fullscreen;

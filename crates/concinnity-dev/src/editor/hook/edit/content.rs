@@ -1,10 +1,8 @@
-// src/editor/hook/edit/content.rs
-//
-// EditorHook: the Content panel's data assembly and click handling. Items come
-// from the cooked asset tree (authored + expansion assets), narrowed to the
-// visual types, filtered by the panel's type chip, and ranked by the search
-// query; cells bind baked thumbnails through `editor/thumbs.rs` and fall back
-// to typed icon chips.
+//! EditorHook: the Content panel's data assembly and click handling. Items come
+//! from the cooked asset tree (authored + expansion assets), narrowed to the
+//! visual types, filtered by the panel's type chip, and ranked by the search
+//! query; cells bind baked thumbnails through `editor/thumbs.rs` and fall back
+//! to typed icon chips.
 
 use concinnity_core::ecs::World;
 

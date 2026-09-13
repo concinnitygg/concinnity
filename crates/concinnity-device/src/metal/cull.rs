@@ -1,8 +1,6 @@
-// src/metal/cull.rs
-//
-// GPU-driven cull support for the Metal frame encoder: per-frame object /
-// draw-args / joint buffer construction, the cull compute pass, and the
-// bindless texture argument buffer.
+//! GPU-driven cull support for the Metal frame encoder: per-frame object /
+//! draw-args / joint buffer construction, the cull compute pass, and the
+//! bindless texture argument buffer.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::cull_status::CullStatus;

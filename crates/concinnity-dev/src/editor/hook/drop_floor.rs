@@ -1,12 +1,10 @@
-// src/editor/hook/drop_floor.rs
-//
-// EditorHook: drop the selection to the floor (Ctrl+Down, /floor, Preview
-// panel row). Each eligible member casts a ray straight down from its bounds'
-// bottom-center (its position, for types without indexed bounds) against the
-// pick index -- excluding the selection itself, so stacked members never rest
-// on each other mid-drop -- and lands its bottom on the nearest surface, or on
-// the world ground plane y=0 when nothing is below. The whole batch commits as
-// ONE undo step.
+//! EditorHook: drop the selection to the floor (Ctrl+Down, /floor, Preview
+//! panel row). Each eligible member casts a ray straight down from its bounds'
+//! bottom-center (its position, for types without indexed bounds) against the
+//! pick index -- excluding the selection itself, so stacked members never rest
+//! on each other mid-drop -- and lands its bottom on the nearest surface, or on
+//! the world ground plane y=0 when nothing is below. The whole batch commits as
+//! ONE undo step.
 
 use concinnity_core::components::Transform;
 use concinnity_core::ecs::PickIndex;

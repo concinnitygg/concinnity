@@ -1,9 +1,7 @@
-// src/components/app_config.rs
-//
-// The `AppConfig` asset. Only what the running process needs survives
-// the bake: the state-tree location and the resource budgets. The distribution
-// metadata (name, id, version, author, icon) is read at build / export time
-// from the authored world, so it never ships in the blob.
+//! The `AppConfig` asset. Only what the running process needs survives
+//! the bake: the state-tree location and the resource budgets. The distribution
+//! metadata (name, id, version, author, icon) is read at build / export time
+//! from the authored world, so it never ships in the blob.
 
 use crate::ecs::Component;
 use alloc::string::{String, ToString};

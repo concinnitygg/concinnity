@@ -1,12 +1,10 @@
-// src/debug/commands.rs
-//
-// Runtime spawn / crossfade command handlers (`decal-add`,
-// `emitter-add`, `anim-crossfade`, …) plus their request-body structs and the
-// shared `error_reply` helper. Each parses its JSON body, enqueues onto the
-// matching process-wide queue (`super::runtime_spawn` /
-// `concinnity_engine::app::anim_runtime`), and blocks on a one-shot reply channel the
-// per-frame debug drive fulfils. The query commands + dispatch live in
-// `super::dispatch::handle_request`.
+//! Runtime spawn / crossfade command handlers (`decal-add`,
+//! `emitter-add`, `anim-crossfade`, …) plus their request-body structs and the
+//! shared `error_reply` helper. Each parses its JSON body, enqueues onto the
+//! matching process-wide queue (`super::runtime_spawn` /
+//! `concinnity_engine::app::anim_runtime`), and blocks on a one-shot reply channel the
+//! per-frame debug drive fulfils. The query commands + dispatch live in
+//! `super::dispatch::handle_request`.
 
 // Maximum wait for `GraphicsSystem::step` to drain a runtime-spawn command
 // and reply. The drain runs once per frame, so a healthy 60 Hz engine

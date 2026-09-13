@@ -1,7 +1,5 @@
-// src/editor/hook/edits.rs
-//
-// EditorHook: unique-name generation and edit persistence (SAVE, the atomic
-// world.jsonl write, and the in-memory live-preview world rebuild).
+//! EditorHook: unique-name generation and edit persistence (SAVE, the atomic
+//! world.jsonl write, and the in-memory live-preview world rebuild).
 
 use concinnity_cook::authoring::world::write_world_jsonl;
 use concinnity_core::ecs::World;

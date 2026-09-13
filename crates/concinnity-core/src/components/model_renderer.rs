@@ -1,5 +1,3 @@
-// src/components/model_renderer.rs
-
 use crate::ecs::asset_id::AssetId;
 
 /// Multi-mesh render description for an entity: a `Model` whose sub-meshes all

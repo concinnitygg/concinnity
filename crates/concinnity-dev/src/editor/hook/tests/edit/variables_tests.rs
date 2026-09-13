@@ -1,11 +1,9 @@
-// src/editor/hook/tests/edit/variables_tests.rs
-//
-// The Variables panel's actions (`hook/edit/variables.rs`): the rows the
-// behaviors' usage supplies before any table exists, the table a first
-// declaration creates, the warning a declared table earns for a name it leaves
-// out, retyping and renaming a variable, the starting values it accepts, what
-// removing a declaration leaves behind, and the re-check each change runs over
-// the behaviors reading it.
+//! The Variables panel's actions (`hook/edit/variables.rs`): the rows the
+//! behaviors' usage supplies before any table exists, the table a first
+//! declaration creates, the warning a declared table earns for a name it leaves
+//! out, retyping and renaming a variable, the starting values it accepts, what
+//! removing a declaration leaves behind, and the re-check each change runs over
+//! the behaviors reading it.
 
 use concinnity_core::components::InputKey;
 use concinnity_core::components::TextInput;

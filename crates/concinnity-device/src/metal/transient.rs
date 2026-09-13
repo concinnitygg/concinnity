@@ -1,18 +1,16 @@
-// src/metal/transient.rs
-//
-// Ring-buffered per-frame upload buffers. The bindless object / draw-args /
-// texture-argument buffers (and skinned joint palettes) used to be freshly
-// `newBufferWith*`'d every frame: one driver allocation per buffer per frame,
-// retained by the committed command buffer until the GPU retired it. With the
-// frames-in-flight fence (`metal/frame_pacing.rs`) bounding the CPU to at most
-// `frames_in_flight` frames ahead of the GPU, those allocations collapse into a
-// small ring of persistent `StorageModeShared` buffers: frame `R` writes ring
-// slot `R % depth` and binds it, and because the fence guarantees frame `R −
-// depth` has already retired before frame `R` can acquire a slot, the slot the
-// CPU is about to overwrite is provably no longer being read by the GPU.
-//
-// Each slot grows power-of-two on demand (like `ensure_icb_capacity`) and is
-// never shrunk, so steady state does zero allocation.
+//! Ring-buffered per-frame upload buffers. The bindless object / draw-args /
+//! texture-argument buffers (and skinned joint palettes) used to be freshly
+//! `newBufferWith*`'d every frame: one driver allocation per buffer per frame,
+//! retained by the committed command buffer until the GPU retired it. With the
+//! frames-in-flight fence (`metal/frame_pacing.rs`) bounding the CPU to at most
+//! `frames_in_flight` frames ahead of the GPU, those allocations collapse into a
+//! small ring of persistent `StorageModeShared` buffers: frame `R` writes ring
+//! slot `R % depth` and binds it, and because the fence guarantees frame `R −
+//! depth` has already retired before frame `R` can acquire a slot, the slot the
+//! CPU is about to overwrite is provably no longer being read by the GPU.
+//!
+//! Each slot grows power-of-two on demand (like `ensure_icb_capacity`) and is
+//! never shrunk, so steady state does zero allocation.
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;

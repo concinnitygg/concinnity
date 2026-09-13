@@ -1,10 +1,9 @@
-// src/debug_hook.rs
-// Per-frame injection point for the debug subsystem.
-//
-// The run loop (`crate::run`) owns the world loop but knows nothing about
-// debugging. A `DebugHook` is an optional per-frame callback it invokes on the
-// main thread; the only implementation is `crate::debug::DebugServer`. The
-// trait stays `pub(crate)` so it is not part of any public surface.
+//! Per-frame injection point for the debug subsystem.
+//!
+//! The run loop (`crate::run`) owns the world loop but knows nothing about
+//! debugging. A `DebugHook` is an optional per-frame callback it invokes on the
+//! main thread; the only implementation is `crate::debug::DebugServer`. The
+//! trait stays `pub(crate)` so it is not part of any public surface.
 
 use concinnity_core::ecs::World;
 use concinnity_engine::app::state::App;

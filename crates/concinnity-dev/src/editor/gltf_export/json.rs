@@ -1,9 +1,7 @@
-// src/editor/gltf_export/json.rs
-//
-// glTF 2.0 JSON emission: nodes for the joint hierarchy, one skinned mesh
-// with its morph targets (named via the `extras.targetNames` convention the
-// engine's importer and Blender both read), a skin, and the bufferView /
-// accessor tables packed by `buffer.rs`.
+//! glTF 2.0 JSON emission: nodes for the joint hierarchy, one skinned mesh
+//! with its morph targets (named via the `extras.targetNames` convention the
+//! engine's importer and Blender both read), a skin, and the bufferView /
+//! accessor tables packed by `buffer.rs`.
 
 use concinnity_core::components::SkeletonJoint;
 use concinnity_core::gfx::transform::{decompose, trs_matrix};

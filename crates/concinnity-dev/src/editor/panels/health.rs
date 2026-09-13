@@ -1,36 +1,34 @@
-// src/editor/panels/health.rs
-//
-// The Health panel's model: what the engine knows about its own resource use,
-// sampled off the world and shaped into meters. The layout half is
-// `health_panel.rs`; nothing here draws.
-//
-// Every meter reads the same way -- what our accounting explains, inside what
-// the process actually uses, inside what the machine has:
-//
-//   RAM   Heap (tracked allocator) < process RSS < physical RAM
-//   VRAM  streaming pools          < device allocated < GPU budget
-//   CPU   engine systems           < process CPU      < core count
-//
-// The gap between the first two is the point of the panel: it is everything our
-// accounting does not explain. Read it per row, because each row's gap means
-// something different. For RAM it is allocations Rust never made (GPU driver,
-// mapped assets, stacks, the binary). For VRAM it is device memory outside the
-// streaming pools (render targets, shader resources, the swapchain).
-//
-// Under the meters, the tag breakdown names the part of each realm that *is*
-// explained: what every subsystem reports holding, host rows then device ones.
-// It is a floor on real usage, never a total, since it holds only what someone
-// reported.
-//
-// CPU is the one row whose nesting is approximate. System timings are wall-clock
-// spans around each system's step on the main thread, not CPU time across every
-// thread, so a system parked on a GPU fence bills wall time it never spent
-// computing. Tracked can exceed used in a GPU-bound frame; that reads as "the
-// main thread is blocked, not busy", which is worth seeing rather than hiding.
-//
-// Sampling is throttled: RSS and process CPU are syscalls, and the pool walk
-// sums every resident item. The per-frame system timings are the one thing
-// accumulated every tick, because a rate needs the whole window.
+//! The Health panel's model: what the engine knows about its own resource use,
+//! sampled off the world and shaped into meters. The layout half is
+//! `health_panel.rs`; nothing here draws.
+//!
+//! Every meter reads the same way -- what our accounting explains, inside what
+//! the process actually uses, inside what the machine has:
+//!
+//!   RAM   Heap (tracked allocator) < process RSS < physical RAM
+//!   VRAM  streaming pools          < device allocated < GPU budget
+//!   CPU   engine systems           < process CPU      < core count
+//!
+//! The gap between the first two is the point of the panel: it is everything our
+//! accounting does not explain. Read it per row, because each row's gap means
+//! something different. For RAM it is allocations Rust never made (GPU driver,
+//! mapped assets, stacks, the binary). For VRAM it is device memory outside the
+//! streaming pools (render targets, shader resources, the swapchain).
+//!
+//! Under the meters, the tag breakdown names the part of each realm that *is*
+//! explained: what every subsystem reports holding, host rows then device ones.
+//! It is a floor on real usage, never a total, since it holds only what someone
+//! reported.
+//!
+//! CPU is the one row whose nesting is approximate. System timings are wall-clock
+//! spans around each system's step on the main thread, not CPU time across every
+//! thread, so a system parked on a GPU fence bills wall time it never spent
+//! computing. Tracked can exceed used in a GPU-bound frame; that reads as "the
+//! main thread is blocked, not busy", which is worth seeing rather than hiding.
+//!
+//! Sampling is throttled: RSS and process CPU are syscalls, and the pool walk
+//! sums every resident item. The per-frame system timings are the one thing
+//! accumulated every tick, because a rate needs the whole window.
 
 use concinnity_core::ecs::World;
 use concinnity_core::memory::{LedgerSnapshot, MemStats, MemTag, Realm, SizeClass};

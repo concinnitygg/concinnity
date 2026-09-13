@@ -1,9 +1,7 @@
-// src/editor/behavior/trace.rs
-//
-// The editor side of execution tracing: converting the engine's cross-boundary
-// forms (node paths, values) into the editor's path type and display text. The
-// hook's `drive/trace` owns the per-frame exchange; nothing here touches the
-// world.
+//! The editor side of execution tracing: converting the engine's cross-boundary
+//! forms (node paths, values) into the editor's path type and display text. The
+//! hook's `drive/trace` owns the per-frame exchange; nothing here touches the
+//! world.
 
 use concinnity_core::ecs::{TraceStep, TraceVal};
 use concinnity_host::thread::asset_id;

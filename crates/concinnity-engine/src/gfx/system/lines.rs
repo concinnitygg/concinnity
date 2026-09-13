@@ -1,10 +1,8 @@
-// src/gfx/system/lines.rs
-//
-// The per-frame bridge between the `WorldLines` resource a system publishes
-// (world-space segments, in absolute world coordinates) and the ribbon
-// geometry the backend's line pass rasterizes. Producers stay ignorant
-// of the camera and of camera-relative rendering; this is where both are
-// applied.
+//! The per-frame bridge between the `WorldLines` resource a system publishes
+//! (world-space segments, in absolute world coordinates) and the ribbon
+//! geometry the backend's line pass rasterizes. Producers stay ignorant
+//! of the camera and of camera-relative rendering; this is where both are
+//! applied.
 
 use concinnity_core::ecs::PipelineContext;
 use concinnity_core::ecs::WorldLines;

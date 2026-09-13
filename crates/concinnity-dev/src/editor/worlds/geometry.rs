@@ -1,10 +1,8 @@
-// src/editor/worlds/geometry.rs
-//
-// The Worlds panel's rects and its hit test, for both presentations. Every
-// metric a presentation differs by lives in one `Metrics` value, and the window
-// facts a presentation is resolved against (its size, and the chrome floating
-// over the top of the frame) live in one `Layout`, so the panel is laid out and
-// hit-tested by the same arithmetic whichever one is up.
+//! The Worlds panel's rects and its hit test, for both presentations. Every
+//! metric a presentation differs by lives in one `Metrics` value, and the window
+//! facts a presentation is resolved against (its size, and the chrome floating
+//! over the top of the frame) live in one `Layout`, so the panel is laid out and
+//! hit-tested by the same arithmetic whichever one is up.
 
 use super::{POOL, WorldsAction, WorldsView};
 use crate::editor::hud;

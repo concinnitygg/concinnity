@@ -1,9 +1,7 @@
-// src/ecs/declared_component_tests.rs
-//
-// A component type declared outside the engine's registry, through the whole
-// component API. The point of these is that nothing in them is special: the
-// same operations a registered component gets, over a type the registry has
-// never heard of, including where the two are mixed on one entity.
+//! A component type declared outside the engine's registry, through the whole
+//! component API. The point of these is that nothing in them is special: the
+//! same operations a registered component gets, over a type the registry has
+//! never heard of, including where the two are mixed on one entity.
 
 use alloc::string::ToString;
 use alloc::vec::Vec;

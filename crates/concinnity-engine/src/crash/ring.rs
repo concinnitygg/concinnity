@@ -1,10 +1,8 @@
-// src/crash/ring.rs
-//
-// Bounded in-memory capture of recent tracing events for crash reports. A
-// fixed ring of recycled line buffers behind a mutex: the write path formats
-// into an existing buffer with byte-capped output, so steady state allocates
-// nothing and the lock is held only while one line is formatted. Purely
-// passive: it sees only events other code already emits.
+//! Bounded in-memory capture of recent tracing events for crash reports. A
+//! fixed ring of recycled line buffers behind a mutex: the write path formats
+//! into an existing buffer with byte-capped output, so steady state allocates
+//! nothing and the lock is held only while one line is formatted. Purely
+//! passive: it sees only events other code already emits.
 
 use std::collections::VecDeque;
 use std::fmt::Write as _;

@@ -1,8 +1,6 @@
-// src/hud/fps_counter.rs
-//
-// FPS-counter overlay behavior. An internal system (not a declarable asset):
-// `World::start` constructs one from the world's `FpsCounter` component and it
-// updates that component's `label` with the current rate once per second.
+//! FPS-counter overlay behavior. An internal system (not a declarable asset):
+//! `World::start` constructs one from the world's `FpsCounter` component and it
+//! updates that component's `label` with the current rate once per second.
 
 use concinnity_core::components::FpsCounter;
 use concinnity_core::components::TextLabel;

@@ -1,27 +1,25 @@
-// src/vulkan/raymarch.rs
-//
-// Raymarched SDF volume pass for the Vulkan backend. Runs at `PassId::Raymarch`
-// between `AutoExposure` and `Decals` on the hdr_resolve RMW chain. Each
-// `SdfVolume` rasterizes the back faces of its world-space bounding box and runs
-// a user-authored GLSL fragment shader that sphere-traces the SDF inside the
-// box. GLSL/Vulkan port of `src/directx/raymarch.rs`: same shader interface,
-// same depth-compositing rules.
-//
-// MSAA depth write-back. MSAA is on by default, so the pass renders the proxy
-// into the multisampled HDR color + the writable scene depth (the shader
-// writes hit depth via `gl_FragDepth` redeclared `depth_less`), then the render
-// pass resolves the combined color into `hdr_resolve` so the single-sample
-// post stack picks up the raymarched pixels and the raymarched-surface depth.
-// This reuses the two-pass-occlusion main render passes (`load = false` STOREs
-// the MSAA color at the main pass so this pass can `load = true` it back), and
-// the existing main framebuffers, which are render-pass-compatible. The main
-// pass selects the STORE-color variant whenever raymarch is active (see
-// `vulkan/main.rs`). When single-sampled the main pass already leaves the scene
-// in `hdr_resolve`, so the pass loads it directly and re-stores it (no resolve).
-//
-// Backend filter. The asset's `fragment_shader` path picks the backend: Vulkan
-// consumes `.glsl` payloads; `.metal` / `.hlsl` SDFs are skipped at init with a
-// logged warning and the rest of the world renders unchanged.
+//! Raymarched SDF volume pass for the Vulkan backend. Runs at `PassId::Raymarch`
+//! between `AutoExposure` and `Decals` on the hdr_resolve RMW chain. Each
+//! `SdfVolume` rasterizes the back faces of its world-space bounding box and runs
+//! a user-authored GLSL fragment shader that sphere-traces the SDF inside the
+//! box. GLSL/Vulkan port of `src/directx/raymarch.rs`: same shader interface,
+//! same depth-compositing rules.
+//!
+//! MSAA depth write-back. MSAA is on by default, so the pass renders the proxy
+//! into the multisampled HDR color + the writable scene depth (the shader
+//! writes hit depth via `gl_FragDepth` redeclared `depth_less`), then the render
+//! pass resolves the combined color into `hdr_resolve` so the single-sample
+//! post stack picks up the raymarched pixels and the raymarched-surface depth.
+//! This reuses the two-pass-occlusion main render passes (`load = false` STOREs
+//! the MSAA color at the main pass so this pass can `load = true` it back), and
+//! the existing main framebuffers, which are render-pass-compatible. The main
+//! pass selects the STORE-color variant whenever raymarch is active (see
+//! `vulkan/main.rs`). When single-sampled the main pass already leaves the scene
+//! in `hdr_resolve`, so the pass loads it directly and re-stores it (no resolve).
+//!
+//! Backend filter. The asset's `fragment_shader` path picks the backend: Vulkan
+//! consumes `.glsl` payloads; `.metal` / `.hlsl` SDFs are skipped at init with a
+//! logged warning and the rest of the world renders unchanged.
 
 use ash::vk;
 use concinnity_core::components::SdfVolume;

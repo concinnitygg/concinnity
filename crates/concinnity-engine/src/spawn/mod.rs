@@ -1,23 +1,21 @@
-// src/spawn/mod.rs
-//
-// SpawnSystem: the per-frame entity churn. Ticks Lifetime countdowns and
-// Spawner cadences, and drains the runtime DespawnRequest / ReparentRequest /
-// SpawnRequest events. GPU slot decisions come from the engine's `RenderSlots`
-// allocator; the backend effects are recorded into the frame's op queue and
-// replayed at submission:
-//   mod.rs      system + the per-frame drains
-//   despawn.rs  subtree removal + draw-slot retirement
-//
-// Instantiating a copy of a placement is `concinnity_core::spawn`: what a copy
-// carries and when one is due is the world's, and the draw slot it lands in is
-// this crate's, handed over through the seams that module's builders take.
-//
-// Scheduled immediately before GraphicsSystem so a despawned entity is
-// already gone from the GlobalTransform x RenderHandle join when transforms
-// are pushed (it contributes nothing to any pass this same frame), and so a
-// spawn reuses slots freed this same frame before the backend grows its draw
-// list. The world clock (Lifetime + Spawner) freezes while a menu is open
-// (`MenuActive`, published by OverlaySystem earlier this tick).
+//! SpawnSystem: the per-frame entity churn. Ticks Lifetime countdowns and
+//! Spawner cadences, and drains the runtime DespawnRequest / ReparentRequest /
+//! SpawnRequest events. GPU slot decisions come from the engine's `RenderSlots`
+//! allocator; the backend effects are recorded into the frame's op queue and
+//! replayed at submission:
+//!   mod.rs      system + the per-frame drains
+//!   despawn.rs  subtree removal + draw-slot retirement
+//!
+//! Instantiating a copy of a placement is `concinnity_core::spawn`: what a copy
+//! carries and when one is due is the world's, and the draw slot it lands in is
+//! this crate's, handed over through the seams that module's builders take.
+//!
+//! Scheduled immediately before GraphicsSystem so a despawned entity is
+//! already gone from the GlobalTransform x RenderHandle join when transforms
+//! are pushed (it contributes nothing to any pass this same frame), and so a
+//! spawn reuses slots freed this same frame before the backend grows its draw
+//! list. The world clock (Lifetime + Spawner) freezes while a menu is open
+//! (`MenuActive`, published by OverlaySystem earlier this tick).
 
 use concinnity_core::components::SkeletonPose;
 use concinnity_core::components::{

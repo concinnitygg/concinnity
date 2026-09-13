@@ -1,8 +1,7 @@
-// src/command/explain.rs
-// Print one asset's effective entry from the expanded world: the full JSONL
-// line as the build sees it, pasteable into world.jsonl verbatim. This is the
-// override path for injected defaults and expanded assets, which have no line
-// in the authored file to copy from.
+//! Print one asset's effective entry from the expanded world: the full JSONL
+//! line as the build sees it, pasteable into world.jsonl verbatim. This is the
+//! override path for injected defaults and expanded assets, which have no line
+//! in the authored file to copy from.
 
 use crate::command::{provenance, resolve_world_path};
 

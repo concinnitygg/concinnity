@@ -1,10 +1,8 @@
-// src/vulkan/light_cull.rs
-//
-// Clustered light-binning compute pass. Once per frame, before the Main pass,
-// bins the scene's local lights (the `GpuLight` SSBO at global set 0 binding 9)
-// into per-cluster index lists over a screen-tiled, exponential-depth froxel
-// grid. The forward pass then shades each fragment from only its cluster's
-// lights instead of iterating every light. Mirrors src/metal/light_cull.rs.
+//! Clustered light-binning compute pass. Once per frame, before the Main pass,
+//! bins the scene's local lights (the `GpuLight` SSBO at global set 0 binding 9)
+//! into per-cluster index lists over a screen-tiled, exponential-depth froxel
+//! grid. The forward pass then shades each fragment from only its cluster's
+//! lights instead of iterating every light. Mirrors src/metal/light_cull.rs.
 
 use ash::vk;
 use concinnity_core::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIGHT_LIST_STRIDE, ClusterParams};

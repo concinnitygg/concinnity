@@ -1,10 +1,8 @@
-// src/input/gamepad.rs
-//
-// Gamepad state folding and the gilrs adapter. The OS-facing gilrs context is
-// isolated in `GamepadSource`; everything below it operates on the small
-// `PadEvent` enum, so the fold and snapshot logic is driven synthetically in
-// tests without hardware. One gamepad is active at a time: the most recently
-// used pad wins, and a disconnect zeroes the state so no input sticks.
+//! Gamepad state folding and the gilrs adapter. The OS-facing gilrs context is
+//! isolated in `GamepadSource`; everything below it operates on the small
+//! `PadEvent` enum, so the fold and snapshot logic is driven synthetically in
+//! tests without hardware. One gamepad is active at a time: the most recently
+//! used pad wins, and a disconnect zeroes the state so no input sticks.
 
 use concinnity_core::components::GamepadButton;
 

@@ -1,14 +1,12 @@
-// src/vulkan/gpu_profile.rs
-//
-// Pre-backend GPU performance probe for Vulkan. Loads the Vulkan entry, creates a
-// throwaway surface-free / extension-free / layer-free instance, picks a physical
-// device (preferring a discrete GPU), classifies it, and destroys the instance --
-// all WITHOUT a surface, swapchain, logical device, or validation layer, so the
-// auto-config quality ceiling can be resolved before the backend (and its render
-// targets) are built. Mirrors `VkContext::gpu_profile` exactly (vendor id, device
-// type, summed DEVICE_LOCAL heaps) and the standalone `metal/gpu_profile.rs`
-// pattern. Returns `UNKNOWN` on any failure (no loader, instance-create fails, no
-// physical device), which the resolver treats as "no clamp".
+//! Pre-backend GPU performance probe for Vulkan. Loads the Vulkan entry, creates a
+//! throwaway surface-free / extension-free / layer-free instance, picks a physical
+//! device (preferring a discrete GPU), classifies it, and destroys the instance --
+//! all WITHOUT a surface, swapchain, logical device, or validation layer, so the
+//! auto-config quality ceiling can be resolved before the backend (and its render
+//! targets) are built. Mirrors `VkContext::gpu_profile` exactly (vendor id, device
+//! type, summed DEVICE_LOCAL heaps) and the standalone `metal/gpu_profile.rs`
+//! pattern. Returns `UNKNOWN` on any failure (no loader, instance-create fails, no
+//! physical device), which the resolver treats as "no clamp".
 
 use ash::vk;
 use concinnity_core::render::backend::{

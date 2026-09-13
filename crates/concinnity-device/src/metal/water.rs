@@ -1,32 +1,31 @@
-// src/metal/water.rs
-//
-// Water is a producer for the engine's transparent pass (`PassId::Transparent`:
-// after SsrResolve, before TaaResolve / Upscale). It contributes one
-// `TransparentDraw` per `WaterSurface`; the shared `encode_transparent`
-// encoder owns the render pass, the scene snapshot, and back-to-front sorting.
-//
-// For each surface the vertex shader displaces a flat tessellated quad by a sum
-// of Gerstner waves; the fragment shader composites:
-//   * Refraction: sample the pre-transparent scene snapshot at a
-//     normal-perturbed screen UV.
-//   * Tint: shallow to deep color mix by water-column thickness derived from
-//     the difference between the main depth and the water surface depth.
-//   * Foam: a soft mask where the seabed is just below the surface.
-//   * Reflection: the sharp planar reflection where the surface has one, else
-//     the box-projected reflection-probe set, else the IBL prefilter cubemap,
-//     else a hand-tuned sky gradient.
-//   * Fresnel: Schlick-power mix of refraction-tinted vs. reflected color.
-// Output blends with SRC_ALPHA / ONE_MINUS_SRC_ALPHA into `scene_pre_taa`.
-//
-// The shaders are the shared `shaders/water.slang`, the single source all three
-// backends compile; the pipeline state matches the glass panes exactly, because
-// the same transparent encoder feeds both.
-//
-// Refraction samples `hdr_targets.transparent_scene_copy` (the snapshot the
-// transparent encoder blits from the current scene-pre-taa before drawing) so
-// water renders correctly whether or not SSR produced a distinct scene texture
-// (with SSR off, scene-pre-taa aliases `hdr_resolve`, and sampling it directly
-// would be reading the attachment being written).
+//! Water is a producer for the engine's transparent pass (`PassId::Transparent`:
+//! after SsrResolve, before TaaResolve / Upscale). It contributes one
+//! `TransparentDraw` per `WaterSurface`; the shared `encode_transparent`
+//! encoder owns the render pass, the scene snapshot, and back-to-front sorting.
+//!
+//! For each surface the vertex shader displaces a flat tessellated quad by a sum
+//! of Gerstner waves; the fragment shader composites:
+//!   * Refraction: sample the pre-transparent scene snapshot at a
+//!     normal-perturbed screen UV.
+//!   * Tint: shallow to deep color mix by water-column thickness derived from
+//!     the difference between the main depth and the water surface depth.
+//!   * Foam: a soft mask where the seabed is just below the surface.
+//!   * Reflection: the sharp planar reflection where the surface has one, else
+//!     the box-projected reflection-probe set, else the IBL prefilter cubemap,
+//!     else a hand-tuned sky gradient.
+//!   * Fresnel: Schlick-power mix of refraction-tinted vs. reflected color.
+//!
+//! Output blends with SRC_ALPHA / ONE_MINUS_SRC_ALPHA into `scene_pre_taa`.
+//!
+//! The shaders are the shared `shaders/water.slang`, the single source all three
+//! backends compile; the pipeline state matches the glass panes exactly, because
+//! the same transparent encoder feeds both.
+//!
+//! Refraction samples `hdr_targets.transparent_scene_copy` (the snapshot the
+//! transparent encoder blits from the current scene-pre-taa before drawing) so
+//! water renders correctly whether or not SSR produced a distinct scene texture
+//! (with SSR off, scene-pre-taa aliases `hdr_resolve`, and sampling it directly
+//! would be reading the attachment being written).
 
 #![deny(unsafe_op_in_unsafe_fn)]
 

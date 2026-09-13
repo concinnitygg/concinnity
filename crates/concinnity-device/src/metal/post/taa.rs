@@ -1,10 +1,8 @@
-// src/metal/post/taa.rs
-//
-// Metal's share of temporal anti-aliasing, which is the toggle and the jitter
-// counter. The resolve itself -- its pipeline, its ping-pong accumulation
-// targets, the history-validity gate and the draw -- is written once in
-// `concinnity_core::render::post::taa` and reaches Metal through
-// `MtlPostDevice`.
+//! Metal's share of temporal anti-aliasing, which is the toggle and the jitter
+//! counter. The resolve itself -- its pipeline, its ping-pong accumulation
+//! targets, the history-validity gate and the draw -- is written once in
+//! `concinnity_core::render::post::taa` and reaches Metal through
+//! `MtlPostDevice`.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::render::error::RenderResult;

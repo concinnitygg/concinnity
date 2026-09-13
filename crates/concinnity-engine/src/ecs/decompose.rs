@@ -1,19 +1,17 @@
-// src/ecs/decompose.rs
-//
-// Load-time pass that gives each Prop's entity the per-instance components it
-// is composed of: a Transform, a mesh- or model-renderer, an optional collider,
-// gameplay tags, scene membership, and parent/child links. Runs once at world
-// start, after every Prop has been loaded (so each already owns an Entity) and
-// before systems init.
-//
-// It then drains the Prop column: every renderer and gameplay system reads the
-// per-instance components, so the source Props are no longer needed. drain<Prop>
-// clears only the Prop component, so each entity survives on its Transform /
-// renderer / tag components. A `PropInstance` marker among them keeps the
-// entity identifiable as a prop, which is what a behavior scoped to "Prop"
-// resolves against. Cross-references between placements (a Prop's
-// parent) resolve through a name -> Entity index this pass also publishes as a
-// resource.
+//! Load-time pass that gives each Prop's entity the per-instance components it
+//! is composed of: a Transform, a mesh- or model-renderer, an optional collider,
+//! gameplay tags, scene membership, and parent/child links. Runs once at world
+//! start, after every Prop has been loaded (so each already owns an Entity) and
+//! before systems init.
+//!
+//! It then drains the Prop column: every renderer and gameplay system reads the
+//! per-instance components, so the source Props are no longer needed. drain<Prop>
+//! clears only the Prop component, so each entity survives on its Transform /
+//! renderer / tag components. A `PropInstance` marker among them keeps the
+//! entity identifiable as a prop, which is what a behavior scoped to "Prop"
+//! resolves against. Cross-references between placements (a Prop's
+//! parent) resolve through a name -> Entity index this pass also publishes as a
+//! resource.
 
 use concinnity_core::components::PropBody;
 use concinnity_core::components::{

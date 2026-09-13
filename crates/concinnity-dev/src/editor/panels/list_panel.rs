@@ -1,14 +1,12 @@
-// src/editor/panels/list_panel.rs
-//
-// Shared chrome for the editor's simple "row list" floating panels (Preview,
-// View, Templates). Each is one rounded surface: a draggable title area with a
-// close button over a vertical stack of fixed-height rows, and each row is a
-// hover / selection highlight plus a label with an optional checkbox. The three
-// panels differ only in their reserved-id base, their width, and how a row
-// index maps to their own action; the row geometry, the id-family layout, the
-// per-row draw, and the hit-test / hide bookkeeping are identical, so they live
-// here once. (The Assets and Template detail panels use the richer grouped list
-// in `asset_list.rs` instead.)
+//! Shared chrome for the editor's simple "row list" floating panels (Preview,
+//! View, Templates). Each is one rounded surface: a draggable title area with a
+//! close button over a vertical stack of fixed-height rows, and each row is a
+//! hover / selection highlight plus a label with an optional checkbox. The three
+//! panels differ only in their reserved-id base, their width, and how a row
+//! index maps to their own action; the row geometry, the id-family layout, the
+//! per-row draw, and the hit-test / hide bookkeeping are identical, so they live
+//! here once. (The Assets and Template detail panels use the richer grouped list
+//! in `asset_list.rs` instead.)
 
 use concinnity_core::ecs::World;
 use concinnity_host::thread::asset_id::AssetId;

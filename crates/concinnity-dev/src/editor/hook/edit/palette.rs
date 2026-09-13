@@ -1,13 +1,11 @@
-// src/editor/hook/edit/palette.rs
-//
-// EditorHook: the command palette's drive. Ctrl+K toggles it (with a one-frame
-// focus blur so the opening press never types into the query); the item list
-// is built from the providers on open; the query is mirrored off the field
-// once a frame, re-ranking through `palette::matches`. A committed row acts
-// through the editor's existing paths only: panel toggles, the selection (plus
-// the framing glide), the Behavior panel's open path, console dispatch, and
-// the Display menu's state. The palette closes on commit, on Escape, and on a
-// click outside it.
+//! EditorHook: the command palette's drive. Ctrl+K toggles it (with a one-frame
+//! focus blur so the opening press never types into the query); the item list
+//! is built from the providers on open; the query is mirrored off the field
+//! once a frame, re-ranking through `palette::matches`. A committed row acts
+//! through the editor's existing paths only: panel toggles, the selection (plus
+//! the framing glide), the Behavior panel's open path, console dispatch, and
+//! the Display menu's state. The palette closes on commit, on Escape, and on a
+//! click outside it.
 
 use concinnity_core::components::FrameInput;
 use concinnity_core::components::InputKey;

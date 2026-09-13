@@ -1,11 +1,9 @@
-// src/editor/hook/drive/create_menu.rs
-//
-// EditorHook: the right-click "Create here" menu flow. An unclaimed viewport
-// right press opens the menu at the cursor, capturing the world position under
-// it (surface hit, ground-plane fallback -- the drag-out landing rules) at
-// open time; picking a row creates one entry at that point through the shared
-// entries + mark_changed path (one undo step) and selects it; any other press,
-// Escape, or a history jump dismisses it.
+//! EditorHook: the right-click "Create here" menu flow. An unclaimed viewport
+//! right press opens the menu at the cursor, capturing the world position under
+//! it (surface hit, ground-plane fallback -- the drag-out landing rules) at
+//! open time; picking a row creates one entry at that point through the shared
+//! entries + mark_changed path (one undo step) and selects it; any other press,
+//! Escape, or a history jump dismisses it.
 
 use concinnity_core::components::FrameInput;
 use concinnity_core::ecs::World;

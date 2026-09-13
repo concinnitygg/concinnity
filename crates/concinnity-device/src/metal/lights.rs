@@ -1,10 +1,8 @@
-// src/metal/lights.rs
-//
-// Runtime replacement of the directional-light set. The lights are packed into
-// `LightUniforms` at init and pushed to the fragment shader every frame, so a
-// new sun is a field rewrite rather than a buffer rebuild. What init derived
-// from the first light and cached -- the cascade shadow direction -- is
-// re-derived here, since nothing else refreshes it.
+//! Runtime replacement of the directional-light set. The lights are packed into
+//! `LightUniforms` at init and pushed to the fragment shader every frame, so a
+//! new sun is a field rewrite rather than a buffer rebuild. What init derived
+//! from the first light and cached -- the cascade shadow direction -- is
+//! re-derived here, since nothing else refreshes it.
 
 use concinnity_core::components::DirectionalLight;
 use concinnity_core::render::lights;

@@ -1,25 +1,23 @@
-// src/render/render_graph/compile.rs
-//
-// Frozen `CompiledGraph` produced by `GraphBuilder::compile`. The compile
-// pass:
-//
-//   1. Validates exactly one pass declares `presents()`.
-//   2. Validates every declared read has a producer (write) in the graph.
-//   3. Topologically sorts passes by read-after-write + write-after-write
-//      edges. Cycles are an error.
-//   4. Derives a `barriers_before` list per pass from the per-resource
-//      state machine (Undefined → Read → Write transitions).
-//   5. Hands the sorted passes and their edges to [`super::schedule`], which
-//      assigns each pass a queue, moves a read run's transition onto its
-//      producer's `barriers_after` when the run spans both queues (see
-//      [`super::barrier_place`]), derives the cross-queue signal / wait pairs,
-//      and returns the schedule's happens-before relations.
-//   6. Computes a `[first, last]` pass-index lifetime and the touching-pass set
-//      per resource, which [`super::alias`] packs against the schedule's
-//      partial order.
-//
-// The graph allocates no GPU resources and interprets no barriers per
-// backend. This module only produces the data the backend executor consumes.
+//! Frozen `CompiledGraph` produced by `GraphBuilder::compile`. The compile
+//! pass:
+//!
+//!   1. Validates exactly one pass declares `presents()`.
+//!   2. Validates every declared read has a producer (write) in the graph.
+//!   3. Topologically sorts passes by read-after-write + write-after-write
+//!      edges. Cycles are an error.
+//!   4. Derives a `barriers_before` list per pass from the per-resource
+//!      state machine (Undefined → Read → Write transitions).
+//!   5. Hands the sorted passes and their edges to [`super::schedule`], which
+//!      assigns each pass a queue, moves a read run's transition onto its
+//!      producer's `barriers_after` when the run spans both queues (see
+//!      [`super::barrier_place`]), derives the cross-queue signal / wait pairs,
+//!      and returns the schedule's happens-before relations.
+//!   6. Computes a `[first, last]` pass-index lifetime and the touching-pass set
+//!      per resource, which [`super::alias`] packs against the schedule's
+//!      partial order.
+//!
+//! The graph allocates no GPU resources and interprets no barriers per
+//! backend. This module only produces the data the backend executor consumes.
 
 use alloc::collections::BinaryHeap;
 use alloc::vec;

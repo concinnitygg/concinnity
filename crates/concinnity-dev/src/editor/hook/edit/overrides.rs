@@ -1,10 +1,8 @@
-// src/editor/hook/edit/overrides.rs
-//
-// EditorHook: the override loop for template-derived assets. Field state is
-// derived from the committed patch (`editor/overrides/`); the actions here
-// mutate the working entries -- remove a patch key (revert), write a value
-// back into the authored Prefab definition (apply-to-template), or both in
-// bulk -- each as a single undo step.
+//! EditorHook: the override loop for template-derived assets. Field state is
+//! derived from the committed patch (`editor/overrides/`); the actions here
+//! mutate the working entries -- remove a patch key (revert), write a value
+//! back into the authored Prefab definition (apply-to-template), or both in
+//! bulk -- each as a single undo step.
 
 use concinnity_core::ecs::World;
 

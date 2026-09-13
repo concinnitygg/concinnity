@@ -1,19 +1,17 @@
-// src/gfx/streaming/texture.rs
-//
-// The `std`-side half of the asset-streaming subsystem.
-//
-// This owns the background payload-fetch thread and the channels that carry
-// work to it, and wraps the `no_std` policy core in `crate::gfx::streaming`.
-// The split is deliberate: `gfx::streaming::StreamPlanner` decides *what* to
-// stream using only `core` + `alloc`; everything OS-coupled (threads,
-// payload I/O) is confined here so a future `no_std` client runtime only has
-// to replace this file.
-//
-// `PayloadSource` is the seam. `MemPayloadSource` serves compiled texture
-// payloads already resident in RAM (used by `cn debug`, which builds payloads
-// in memory); `DiskPayloadSource` re-reads them from their blob files on disk
-// (used by `cn run`, so the bytes never stay RAM-resident). Both plug into the
-// same planner and renderer.
+//! The `std`-side half of the asset-streaming subsystem.
+//!
+//! This owns the background payload-fetch thread and the channels that carry
+//! work to it, and wraps the `no_std` policy core in `crate::gfx::streaming`.
+//! The split is deliberate: `gfx::streaming::StreamPlanner` decides *what* to
+//! stream using only `core` + `alloc`; everything OS-coupled (threads,
+//! payload I/O) is confined here so a future `no_std` client runtime only has
+//! to replace this file.
+//!
+//! `PayloadSource` is the seam. `MemPayloadSource` serves compiled texture
+//! payloads already resident in RAM (used by `cn debug`, which builds payloads
+//! in memory); `DiskPayloadSource` re-reads them from their blob files on disk
+//! (used by `cn run`, so the bytes never stay RAM-resident). Both plug into the
+//! same planner and renderer.
 
 use concinnity_core::bake::texture;
 use concinnity_core::bake::texture::TextureImage;

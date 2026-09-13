@@ -1,39 +1,37 @@
-// src/metal/hiz.rs
-//
-// Hi-Z (depth-mip pyramid) build pass used by the GPU-cull compute kernel for
-// occlusion culling. Each frame, after the main depth buffer has been written
-// by the graph, we reduce it into a `R32Float` mip chain (MAX reduction:
-// standard depth, so larger = farther). The *next* frame's `Cull` kernel
-// projects each `DrawObject` AABB through the previous frame's un-jittered
-// view-projection, picks the Hi-Z mip whose texels are ~the size of the
-// projected rect, 4-tap-samples the max occluder depth, and culls the AABB when
-// its nearest projected NDC depth is strictly behind.
-//
-// DirectX and Vulkan build the same pyramid from the SPD kernels, two dispatches
-// over 64x64 tiles. Metal keeps the per-mip init + downsample chain because the
-// tile win those two measured did not reproduce on this backend.
-//
-// Two compute kernels come from the single-source `src/shaders/hiz_build.slang`
-// (one precompiled variant library each):
-//
-//   * `hiz_init_msaa` / `hiz_init_single`: reduce the main-depth resource into
-//                      mip 0. The multisample variant takes the MAX over every
-//                      sample so the result is conservative; a world that
-//                      resolved to one sample builds the single-sample variant
-//                      instead.
-//   * `hiz_downsample`: MAX-reduce 2x2 source texels into the next mip.
-//
-// The pyramid is *not* a graph node: it runs inline on the outer command
-// buffer at the end of `draw_frame`, after `execute_graph` returns (which
-// already committed the Main pass's cmd buf, so the depth attachment is
-// written). Treating it as an end-of-frame action keeps it off the per-pass
-// worker fan-out and off the graph's RMW chain on the main depth attachment
-// (decals, fog, water, and the SSAO/SSR pre-passes already share that target).
-//
-// Source and destination mips are both bound as single-level texture views.
-// Reading mip M while writing mip M+1 never aliases the same texels, and
-// Metal auto-barriers successive dispatches in the serial compute encoder, so
-// the downsample chain stays correct.
+//! Hi-Z (depth-mip pyramid) build pass used by the GPU-cull compute kernel for
+//! occlusion culling. Each frame, after the main depth buffer has been written
+//! by the graph, we reduce it into a `R32Float` mip chain (MAX reduction:
+//! standard depth, so larger = farther). The *next* frame's `Cull` kernel
+//! projects each `DrawObject` AABB through the previous frame's un-jittered
+//! view-projection, picks the Hi-Z mip whose texels are ~the size of the
+//! projected rect, 4-tap-samples the max occluder depth, and culls the AABB when
+//! its nearest projected NDC depth is strictly behind.
+//!
+//! DirectX and Vulkan build the same pyramid from the SPD kernels, two dispatches
+//! over 64x64 tiles. Metal keeps the per-mip init + downsample chain because the
+//! tile win those two measured did not reproduce on this backend.
+//!
+//! Two compute kernels come from the single-source `src/shaders/hiz_build.slang`
+//! (one precompiled variant library each):
+//!
+//!   * `hiz_init_msaa` / `hiz_init_single`: reduce the main-depth resource into
+//!     mip 0. The multisample variant takes the MAX over every
+//!     sample so the result is conservative; a world that
+//!     resolved to one sample builds the single-sample variant
+//!     instead.
+//!   * `hiz_downsample`: MAX-reduce 2x2 source texels into the next mip.
+//!
+//! The pyramid is *not* a graph node: it runs inline on the outer command
+//! buffer at the end of `draw_frame`, after `execute_graph` returns (which
+//! already committed the Main pass's cmd buf, so the depth attachment is
+//! written). Treating it as an end-of-frame action keeps it off the per-pass
+//! worker fan-out and off the graph's RMW chain on the main depth attachment
+//! (decals, fog, water, and the SSAO/SSR pre-passes already share that target).
+//!
+//! Source and destination mips are both bound as single-level texture views.
+//! Reading mip M while writing mip M+1 never aliases the same texels, and
+//! Metal auto-barriers successive dispatches in the serial compute encoder, so
+//! the downsample chain stays correct.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use objc2::rc::Retained;

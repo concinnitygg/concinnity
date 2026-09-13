@@ -1,11 +1,9 @@
-// src/resource.rs
-//
-// Engine-side resource-table wiring. The per-kind, handle-indexed tables
-// themselves (an audio clip today; meshes / textures / materials on the Windows
-// follow-up) are renderer-free and live in concinnity-core; what is here is the
-// engine-only glue: `install_resource_tables`, which builds every table from a
-// compiled blob's resource stream and inserts it as a World resource, plus the
-// dev-only source catalogs the hot-reload path captures.
+//! Engine-side resource-table wiring. The per-kind, handle-indexed tables
+//! themselves (an audio clip today; meshes / textures / materials on the Windows
+//! follow-up) are renderer-free and live in concinnity-core; what is here is the
+//! engine-only glue: `install_resource_tables`, which builds every table from a
+//! compiled blob's resource stream and inserts it as a World resource, plus the
+//! dev-only source catalogs the hot-reload path captures.
 
 use concinnity_core::ecs::ResourceRecord;
 use concinnity_core::ecs::World;

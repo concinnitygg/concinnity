@@ -1,5 +1,3 @@
-// src/components/character_rig.rs
-
 use crate::ecs::SkinnedMeshHandle;
 use crate::gfx::transform::Mat4;
 use crate::math::sin_cos;

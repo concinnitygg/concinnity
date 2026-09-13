@@ -1,12 +1,10 @@
-// src/editor/panels/asset_list.rs
-//
-// The editor's "grouped asset list": the world's assets shown under a type
-// sub-header with the names indented and alphabetized. Both the Assets browse
-// panel (`panel.rs`) and the Template detail panel (`template_panel.rs`) render
-// this identical list, so the row model, the grouping, the row geometry / style,
-// and the per-row + scrollbar draw all live here once. The two panels differ only
-// in their extra chrome (the Assets panel adds hover / selection tints, a
-// triple-dot menu, and delete); that stays in `panel.rs`, layered over this base.
+//! The editor's "grouped asset list": the world's assets shown under a type
+//! sub-header with the names indented and alphabetized. Both the Assets browse
+//! panel (`panel.rs`) and the Template detail panel (`template_panel.rs`) render
+//! this identical list, so the row model, the grouping, the row geometry / style,
+//! and the per-row + scrollbar draw all live here once. The two panels differ only
+//! in their extra chrome (the Assets panel adds hover / selection tints, a
+//! triple-dot menu, and delete); that stays in `panel.rs`, layered over this base.
 
 use concinnity_core::ecs::World;
 use concinnity_host::thread::asset_id::AssetId;

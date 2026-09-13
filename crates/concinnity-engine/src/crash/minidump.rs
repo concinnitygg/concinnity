@@ -1,10 +1,8 @@
-// src/crash/minidump.rs
-//
-// Minidump emission via minidump-writer, macOS and Windows only: both have a
-// supported in-process dump path. Linux would need an external dumper process
-// (ptrace cannot target the running process itself), so it ships text reports
-// only. Failures are swallowed after cleaning up the partial file; the text
-// report already landed.
+//! Minidump emission via minidump-writer, macOS and Windows only: both have a
+//! supported in-process dump path. Linux would need an external dumper process
+//! (ptrace cannot target the running process itself), so it ships text reports
+//! only. Failures are swallowed after cleaning up the partial file; the text
+//! report already landed.
 
 use std::path::Path;
 

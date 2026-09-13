@@ -1,9 +1,7 @@
-// src/vulkan/instance_exts.rs
-//
-// Which optional instance extensions to enable, resolved against the names the
-// Vulkan loader advertises. Separated from the instance creation in `init.rs` so
-// the decision is a pure function over an extension-name list and can be tested
-// without a loader.
+//! Which optional instance extensions to enable, resolved against the names the
+//! Vulkan loader advertises. Separated from the instance creation in `init.rs` so
+//! the decision is a pure function over an extension-name list and can be tested
+//! without a loader.
 
 use ash::vk;
 use std::ffi::CStr;

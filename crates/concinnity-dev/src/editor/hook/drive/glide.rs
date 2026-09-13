@@ -1,9 +1,7 @@
-// src/editor/hook/drive/glide.rs
-//
-// EditorHook: frame-selected and the short eased camera glide it (and a
-// bookmark recall) rides on. F moves the camera so the whole selection fits
-// the view; the pose math lives in `editor/viewport/framing.rs`, this drive resolves
-// the selection's world bounds and steps the interpolation.
+//! EditorHook: frame-selected and the short eased camera glide it (and a
+//! bookmark recall) rides on. F moves the camera so the whole selection fits
+//! the view; the pose math lives in `editor/viewport/framing.rs`, this drive resolves
+//! the selection's world bounds and steps the interpolation.
 
 use concinnity_core::components::{Camera3D, FrameInput, Transform};
 use concinnity_core::ecs::PickIndex;

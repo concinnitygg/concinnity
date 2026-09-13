@@ -1,7 +1,5 @@
-// src/editor/hook/editing.rs
-//
-// EditorHook: the add / edit form lifecycle -- open, refresh from the working
-// args, capture the live controls, and validate / commit on confirm.
+//! EditorHook: the add / edit form lifecycle -- open, refresh from the working
+//! args, capture the live controls, and validate / commit on confirm.
 
 use concinnity_core::ecs::World;
 

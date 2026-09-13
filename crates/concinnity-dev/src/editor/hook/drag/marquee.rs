@@ -1,13 +1,11 @@
-// src/editor/hook/drag/marquee.rs
-//
-// EditorHook: the marquee (box-select) drive. A press over empty viewport
-// space -- already past the top bar, the panels, and the gizmo handles by the
-// time it reaches the pick -- arms a marquee; while the button is held the
-// rect follows the cursor once it clears the start slop. Releasing selects
-// every asset whose projected AABB intersects the rect (shift adds to the
-// selection instead of replacing it); a release inside the slop is the plain
-// empty-space click, which clears. Escape cancels. The fly camera and play
-// mode capture the cursor, so `left_click` never arms a marquee there.
+//! EditorHook: the marquee (box-select) drive. A press over empty viewport
+//! space -- already past the top bar, the panels, and the gizmo handles by the
+//! time it reaches the pick -- arms a marquee; while the button is held the
+//! rect follows the cursor once it clears the start slop. Releasing selects
+//! every asset whose projected AABB intersects the rect (shift adds to the
+//! selection instead of replacing it); a release inside the slop is the plain
+//! empty-space click, which clears. Escape cancels. The fly camera and play
+//! mode capture the cursor, so `left_click` never arms a marquee there.
 
 use concinnity_core::components::Camera3D;
 use concinnity_core::components::FrameInput;

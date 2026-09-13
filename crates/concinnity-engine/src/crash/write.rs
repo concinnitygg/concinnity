@@ -1,9 +1,7 @@
-// src/crash/write.rs
-//
-// Report emission and retention. Reports land in the directory `crash::install`
-// was given; each section is written and flushed before the next begins, so a report
-// interrupted mid-write still carries its most valuable sections. The
-// directory is pruned to the newest reports, minidump siblings included.
+//! Report emission and retention. Reports land in the directory `crash::install`
+//! was given; each section is written and flushed before the next begins, so a report
+//! interrupted mid-write still carries its most valuable sections. The
+//! directory is pruned to the newest reports, minidump siblings included.
 
 use std::fs::OpenOptions;
 use std::io::Write as _;

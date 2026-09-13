@@ -1,12 +1,10 @@
-// src/gfx/streaming/system/accounting.rs
-//
-// Streaming's report into the shared memory ledger: what each pool holds in
-// device memory, and the budget it holds it against.
-//
-// The pools already track resident bytes and byte budgets to drive their own
-// residency policy. Publishing those under the shared tags costs a few atomic
-// stores a frame and is what lets one readout break device memory down by what
-// is holding it, beside the process RAM the tracking allocator counts.
+//! Streaming's report into the shared memory ledger: what each pool holds in
+//! device memory, and the budget it holds it against.
+//!
+//! The pools already track resident bytes and byte budgets to drive their own
+//! residency policy. Publishing those under the shared tags costs a few atomic
+//! stores a frame and is what lets one readout break device memory down by what
+//! is holding it, beside the process RAM the tracking allocator counts.
 
 use concinnity_core::memory::{Ledger, MemTag, Realm};
 

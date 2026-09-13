@@ -1,18 +1,16 @@
-// src/vulkan/main.rs
-//
-// Main scene pass for the Vulkan backend: linear-light HDR off-screen
-// render that draws every static / instanced / skinned object into the
-// multisampled HDR color + depth attachments (resolved into
-// `hdr_resolve` for the post stack). One Vulkan render pass, two indirect
-// draws over the GPU-cull-written indirect buffer per shader bucket: the
-// static + instance + runtime prefix against the shared VB/IB, then the skinned
-// tail against this frame's deformed vertices.
-//
-// The shape mirrors `metal/draw/main.rs::encode_main_pass`; the graph
-// executor in [`graph_exec.rs`](graph_exec.rs) dispatches
-// `PassId::Main` here. The Shadow → Main `shadow_map` read edge in
-// the frame graph pins Shadow before Main via toposort; the encoder
-// itself only deals with the HDR pass.
+//! Main scene pass for the Vulkan backend: linear-light HDR off-screen
+//! render that draws every static / instanced / skinned object into the
+//! multisampled HDR color + depth attachments (resolved into
+//! `hdr_resolve` for the post stack). One Vulkan render pass, two indirect
+//! draws over the GPU-cull-written indirect buffer per shader bucket: the
+//! static + instance + runtime prefix against the shared VB/IB, then the skinned
+//! tail against this frame's deformed vertices.
+//!
+//! The shape mirrors `metal/draw/main.rs::encode_main_pass`; the graph
+//! executor in [`graph_exec.rs`](graph_exec.rs) dispatches
+//! `PassId::Main` here. The Shadow → Main `shadow_map` read edge in
+//! the frame graph pins Shadow before Main via toposort; the encoder
+//! itself only deals with the HDR pass.
 
 use ash::vk;
 

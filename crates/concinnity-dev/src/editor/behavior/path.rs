@@ -1,9 +1,7 @@
-// src/editor/behavior/path.rs
-//
-// Addressing one place inside a Behavior's args. The panel edits the authored
-// JSON directly (the same value the checker reads), so every outline row
-// carries the path of the value it edits and the structural edits below are
-// the only thing that mutates it.
+//! Addressing one place inside a Behavior's args. The panel edits the authored
+//! JSON directly (the same value the checker reads), so every outline row
+//! carries the path of the value it edits and the structural edits below are
+//! the only thing that mutates it.
 
 use serde_json::Value;
 

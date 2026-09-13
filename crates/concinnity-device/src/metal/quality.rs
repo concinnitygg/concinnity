@@ -1,16 +1,14 @@
-// src/metal/quality.rs
-//
-// Runtime application of the Quality-group settings (TAA / SSAO / SSR / RT
-// reflections / SSGI / auto-exposure). Each gates a render pass whose GPU
-// resources (pipelines, render targets, the ray-tracing acceleration structure)
-// are built once at init from the world's PostProcessConfig, so applying a
-// change at runtime means rebuilding those resources, not flipping a uniform.
-//
-// The rebuild reuses `init::effects::build_quality_effects` -- the exact path
-// `MtlContext::new` runs -- so a live toggle produces resources byte-identical
-// to a launch with the same config. Only the toggle-controlled subset is rebuilt;
-// bloom, decals, fog, particles, and the uploaded geometry are untouched (so no
-// particle-sim reset and no multi-second geometry re-upload).
+//! Runtime application of the Quality-group settings (TAA / SSAO / SSR / RT
+//! reflections / SSGI / auto-exposure). Each gates a render pass whose GPU
+//! resources (pipelines, render targets, the ray-tracing acceleration structure)
+//! are built once at init from the world's PostProcessConfig, so applying a
+//! change at runtime means rebuilding those resources, not flipping a uniform.
+//!
+//! The rebuild reuses `init::effects::build_quality_effects` -- the exact path
+//! `MtlContext::new` runs -- so a live toggle produces resources byte-identical
+//! to a launch with the same config. Only the toggle-controlled subset is rebuilt;
+//! bloom, decals, fog, particles, and the uploaded geometry are untouched (so no
+//! particle-sim reset and no multi-second geometry re-upload).
 
 use concinnity_core::components;
 use concinnity_core::gfx::render_types;

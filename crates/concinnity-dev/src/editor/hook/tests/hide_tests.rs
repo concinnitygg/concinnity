@@ -1,8 +1,6 @@
-// src/editor/hook/tests/hide_tests.rs
-//
-// The editor's two hide mechanisms (`hook/hide.rs`): the per-asset hide and
-// lock that are session state rather than edits, and how an isolate composes
-// with them and with unhide.
+//! The editor's two hide mechanisms (`hook/hide.rs`): the per-asset hide and
+//! lock that are session state rather than edits, and how an isolate composes
+//! with them and with unhide.
 
 use concinnity_core::components::FrameInput;
 use concinnity_core::ecs::HiddenAssets;

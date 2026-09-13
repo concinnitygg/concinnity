@@ -1,5 +1,3 @@
-// src/components/gamepad_map.rs
-
 use crate::components::GamepadButton;
 
 /// A rebindable gamepad action. Movement and look come from the sticks (with

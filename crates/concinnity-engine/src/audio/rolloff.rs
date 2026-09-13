@@ -1,8 +1,6 @@
-// src/audio/rolloff.rs
-//
-// Maps authored AudioEmitter attenuation onto kira's spatial-track
-// parameters, sanitizing degenerate values (the cook rejects them, but a
-// hand-edited blob or hot-reloaded world must not produce NaN volume).
+//! Maps authored AudioEmitter attenuation onto kira's spatial-track
+//! parameters, sanitizing degenerate values (the cook rejects them, but a
+//! hand-edited blob or hot-reloaded world must not produce NaN volume).
 
 use concinnity_core::components::Rolloff;
 use kira::Easing;

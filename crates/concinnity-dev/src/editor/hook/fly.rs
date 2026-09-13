@@ -1,12 +1,10 @@
-// src/editor/hook/fly.rs
-//
-// EditorHook: the edit-mode fly camera. Toggled with Shift+F (or the Preview
-// panel's row); while on, the editor publishes the `FlyCam` resource so
-// InputSystem keeps the navigation keys and mouse deltas live and the backend
-// captures the cursor -- the world stays frozen behind the menu override, and
-// this drive integrates Camera3D directly (free-fly: W flies where you look).
-// Escape exits back to the free-cursor edit mode. The camera keeps its flown
-// pose, so entering play mode afterwards continues from there.
+//! EditorHook: the edit-mode fly camera. Toggled with Shift+F (or the Preview
+//! panel's row); while on, the editor publishes the `FlyCam` resource so
+//! InputSystem keeps the navigation keys and mouse deltas live and the backend
+//! captures the cursor -- the world stays frozen behind the menu override, and
+//! this drive integrates Camera3D directly (free-fly: W flies where you look).
+//! Escape exits back to the free-cursor edit mode. The camera keeps its flown
+//! pose, so entering play mode afterwards continues from there.
 
 use concinnity_core::components::Camera3D;
 use concinnity_core::components::FrameInput;

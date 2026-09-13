@@ -1,8 +1,6 @@
-// src/input/stick.rs
-//
-// Pure stick-shaping math: radial deadzone and look response curve. Both
-// operate on a whole [x, y] vector so direction is preserved (a per-component
-// deadzone would snap diagonals toward the axes).
+//! Pure stick-shaping math: radial deadzone and look response curve. Both
+//! operate on a whole [x, y] vector so direction is preserved (a per-component
+//! deadzone would snap diagonals toward the axes).
 
 // Clamp a stick vector to the unit disc. Cheap pads overshoot slightly past
 // 1.0 on the diagonals; everything downstream assumes magnitude <= 1.

@@ -1,30 +1,28 @@
-// src/directx/planar.rs
-//
-// Planar reflection for flat glass panes on the D3D12 backend. Each frame the
-// scene is rendered a second time from the camera reflected across each pane's
-// plane (mirror view + oblique near-plane clip so geometry behind the plane
-// never leaks in) into a dedicated render-resolution target; the pane's
-// fragment shader then samples that target projectively for a sharp,
-// scene-correct reflection instead of the blurry box-projected probe cube.
-//
-// Mirrors src/metal/planar.rs. One
-// mirror render per DISTINCT plane: near-coplanar panes (one wall of windows)
-// share a render, and panes past the budget (`MAX_PLANAR_PLANES`) fall back to
-// the probe cube. The plane -> slot grouping + the mirror matrices come from the
-// pure, unit-tested `gfx::planar_reflection`.
-//
-// Each plane gets a DEDICATED reflected-frustum mirror cull (`encode_planar_culls`,
-// mirroring `metal::cull::encode_mirror_cull`): the GPU cull re-runs against the
-// reflected-camera frustum into that plane's region of a per-frame indirect buffer,
-// reading the frame's camera-independent object + draw-args buffers. So geometry
-// visible only in the reflection (behind / beside the main camera, outside its
-// frustum) is captured, not just the main camera's visible set; the reflected
-// view-proj's oblique near-plane clip also rejects geometry behind the reflector.
-// The face render then executes that region.
-//
-// V1 scope (documented, matches the probe capture's own simplification): static +
-// instanced + chunk geometry only -- skinned meshes are not drawn into the mirror
-// (the bindless face render omits the skinned tail), exactly like the probe capture.
+//! Planar reflection for flat glass panes on the D3D12 backend. Each frame the
+//! scene is rendered a second time from the camera reflected across each pane's
+//! plane (mirror view + oblique near-plane clip so geometry behind the plane
+//! never leaks in) into a dedicated render-resolution target; the pane's
+//! fragment shader then samples that target projectively for a sharp,
+//! scene-correct reflection instead of the blurry box-projected probe cube.
+//!
+//! Mirrors src/metal/planar.rs. One
+//! mirror render per DISTINCT plane: near-coplanar panes (one wall of windows)
+//! share a render, and panes past the budget (`MAX_PLANAR_PLANES`) fall back to
+//! the probe cube. The plane -> slot grouping + the mirror matrices come from the
+//! pure, unit-tested `gfx::planar_reflection`.
+//!
+//! Each plane gets a DEDICATED reflected-frustum mirror cull (`encode_planar_culls`,
+//! mirroring `metal::cull::encode_mirror_cull`): the GPU cull re-runs against the
+//! reflected-camera frustum into that plane's region of a per-frame indirect buffer,
+//! reading the frame's camera-independent object + draw-args buffers. So geometry
+//! visible only in the reflection (behind / beside the main camera, outside its
+//! frustum) is captured, not just the main camera's visible set; the reflected
+//! view-proj's oblique near-plane clip also rejects geometry behind the reflector.
+//! The face render then executes that region.
+//!
+//! V1 scope (documented, matches the probe capture's own simplification): static +
+//! instanced + chunk geometry only -- skinned meshes are not drawn into the mirror
+//! (the bindless face render omits the skinned tail), exactly like the probe capture.
 
 use concinnity_core::gfx::frustum::{Frustum, Plane};
 use concinnity_core::gfx::transform::mat4_inverse;

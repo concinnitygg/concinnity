@@ -1,17 +1,15 @@
-// src/editor/live/diff.rs
-//
-// What changed between the entry list the live preview world was built from
-// and the working one. Only an args-only change on entries that kept their
-// place, name, and type can be applied to a running world; a line added,
-// removed, renamed, retyped, or reordered changes what the expansion produces
-// and needs the world rebuilt.
-//
-// Both sides are compared as EFFECTIVE args -- the authored line merged over
-// its template baseline, over the type's defaults -- not as written. An
-// authoring form writes back every field it knows, so a line gains keys that
-// were only ever holding their default; comparing what the asset actually
-// amounts to keeps those out of the change set, and lets a key going away
-// register as the move back to the value it uncovers.
+//! What changed between the entry list the live preview world was built from
+//! and the working one. Only an args-only change on entries that kept their
+//! place, name, and type can be applied to a running world; a line added,
+//! removed, renamed, retyped, or reordered changes what the expansion produces
+//! and needs the world rebuilt.
+//!
+//! Both sides are compared as EFFECTIVE args -- the authored line merged over
+//! its template baseline, over the type's defaults -- not as written. An
+//! authoring form writes back every field it knows, so a line gains keys that
+//! were only ever holding their default; comparing what the asset actually
+//! amounts to keeps those out of the change set, and lets a key going away
+//! register as the move back to the value it uncovers.
 
 use serde_json::{Map, Value};
 

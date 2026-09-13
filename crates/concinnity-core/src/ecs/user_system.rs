@@ -1,13 +1,11 @@
-// src/ecs/user_system.rs
-//
-// A system registered on a world from outside the engine's table, and the name
-// check that keeps it addressable.
-//
-// The schedule keys everything on the entry name -- the profile row, the log
-// line, and the `after` / `before` edges the table's rows declare against each
-// other. A registered system reusing a table entry's name would inherit that
-// entry's edges and shadow it in every name lookup, so the merge refuses the
-// collision rather than resolving it.
+//! A system registered on a world from outside the engine's table, and the name
+//! check that keeps it addressable.
+//!
+//! The schedule keys everything on the entry name -- the profile row, the log
+//! line, and the `after` / `before` edges the table's rows declare against each
+//! other. A registered system reusing a table entry's name would inherit that
+//! entry's edges and shadow it in every name lookup, so the merge refuses the
+//! collision rather than resolving it.
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;

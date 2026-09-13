@@ -1,25 +1,23 @@
-// src/vulkan/post/rt_reflections.rs
-//
-// Hardware ray-traced reflection pass for the Vulkan backend. A fullscreen
-// fragment pass that, per glossy pixel, rebuilds a world-space surface point +
-// normal from the SSR pre-pass G-buffer, traces a reflection ray against the
-// scene's top-level acceleration structure ([`crate::vulkan::raytrace`]) with
-// inline `rayQueryEXT`, shades the hit (sun + IBL split-sum, optionally textured)
-// or the IBL prefilter cube on a miss, and writes the reflected radiance with the
-// same Fresnel/gloss weight SSR uses for the reflection composite to blend.
-//
-// It occupies the `SsrResolve` slot in the frame graph (reads the HDR scene,
-// writes its own `output` target) and is mutually exclusive with the SSR
-// resolve. Like SSGI it reuses the SSR depth + normal + roughness pre-pass
-// G-buffer, so that pre-pass is forced on whenever RT reflections are enabled.
-// Mirrors src/directx/post/rt_reflections.rs (DXR inline `RayQuery`); the GLSL
-// is compiled with the Vulkan-1.2 / SPIR-V-1.4 target ray query needs.
-//
-// Unlike DirectX (which binds the TLAS + geometry table as root SRVs by GPU
-// virtual address each frame), Vulkan binds them through a descriptor set, so
-// `VkContext::rt_update_descriptors` re-points the current frame's set at the
-// live TLAS + geometry-table handles every frame (they change on a dynamic
-// rebuild; see `crate::vulkan::raytrace`).
+//! Hardware ray-traced reflection pass for the Vulkan backend. A fullscreen
+//! fragment pass that, per glossy pixel, rebuilds a world-space surface point +
+//! normal from the SSR pre-pass G-buffer, traces a reflection ray against the
+//! scene's top-level acceleration structure ([`crate::vulkan::raytrace`]) with
+//! inline `rayQueryEXT`, shades the hit (sun + IBL split-sum, optionally textured)
+//! or the IBL prefilter cube on a miss, and writes the reflected radiance with the
+//! same Fresnel/gloss weight SSR uses for the reflection composite to blend.
+//!
+//! It occupies the `SsrResolve` slot in the frame graph (reads the HDR scene,
+//! writes its own `output` target) and is mutually exclusive with the SSR
+//! resolve. Like SSGI it reuses the SSR depth + normal + roughness pre-pass
+//! G-buffer, so that pre-pass is forced on whenever RT reflections are enabled.
+//! Mirrors src/directx/post/rt_reflections.rs (DXR inline `RayQuery`); the GLSL
+//! is compiled with the Vulkan-1.2 / SPIR-V-1.4 target ray query needs.
+//!
+//! Unlike DirectX (which binds the TLAS + geometry table as root SRVs by GPU
+//! virtual address each frame), Vulkan binds them through a descriptor set, so
+//! `VkContext::rt_update_descriptors` re-points the current frame's set at the
+//! live TLAS + geometry-table handles every frame (they change on a dynamic
+//! rebuild; see `crate::vulkan::raytrace`).
 
 use ash::vk;
 use concinnity_core::gfx::render_types::RtParams;

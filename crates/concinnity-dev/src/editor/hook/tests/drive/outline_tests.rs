@@ -1,7 +1,5 @@
-// src/editor/hook/tests/drive/outline_tests.rs
-//
-// The extent-outline drive (`hook/drive/outline.rs`): the lines a selected
-// TriggerVolume publishes for its own shape.
+//! The extent-outline drive (`hook/drive/outline.rs`): the lines a selected
+//! TriggerVolume publishes for its own shape.
 
 use concinnity_core::components::Sprite;
 use concinnity_core::components::TriggerVolume;

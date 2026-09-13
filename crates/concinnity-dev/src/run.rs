@@ -1,8 +1,6 @@
-// src/run.rs
-//
-// The interpreted (`cn debug`) run path: compiles world.jsonl fully in memory
-// and drives the system loop with the per-frame debug hook. The production
-// `cn run` path (compiled-blob playback) lives in the runtime crate's `app::run`.
+//! The interpreted (`cn debug`) run path: compiles world.jsonl fully in memory
+//! and drives the system loop with the per-frame debug hook. The production
+//! `cn run` path (compiled-blob playback) lives in the runtime crate's `app::run`.
 
 use concinnity_cook::authoring::world::find_world_jsonl;
 use concinnity_engine::app::state::App;

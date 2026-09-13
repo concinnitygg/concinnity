@@ -1,15 +1,13 @@
-// src/metal/decal.rs
-//
-// Per-frame encoder for the projected (deferred) decal pass. Runs after the
-// main HDR pass has resolved into `hdr_targets.hdr_resolve` and before SSR /
-// TAA pick the resolved scene up: so a decal is reflected by SSR and tracked
-// by TAA's history just like the rest of the scene.
-//
-// Each decal is drawn as a unit cube (positions in `[-0.5, 0.5]^3`) transformed
-// by its world model matrix and the camera VP; the fragment shader samples the
-// main pass's MSAA depth attachment to reconstruct the world-space sample
-// point at each pixel and tests it against the decal's local bounding box,
-// stamping the texture onto whatever surface fills the box.
+//! Per-frame encoder for the projected (deferred) decal pass. Runs after the
+//! main HDR pass has resolved into `hdr_targets.hdr_resolve` and before SSR /
+//! TAA pick the resolved scene up: so a decal is reflected by SSR and tracked
+//! by TAA's history just like the rest of the scene.
+//!
+//! Each decal is drawn as a unit cube (positions in `[-0.5, 0.5]^3`) transformed
+//! by its world model matrix and the camera VP; the fragment shader samples the
+//! main pass's MSAA depth attachment to reconstruct the world-space sample
+//! point at each pixel and tests it against the decal's local bounding box,
+//! stamping the texture onto whatever surface fills the box.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::frustum::Frustum;

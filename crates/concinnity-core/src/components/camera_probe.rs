@@ -1,5 +1,3 @@
-// src/components/camera_probe.rs
-
 use crate::ecs::SkinnedMeshHandle;
 
 /// Runtime-only occlusion probe for the third-person follow camera.

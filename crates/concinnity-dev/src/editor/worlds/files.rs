@@ -1,12 +1,10 @@
-// src/editor/worlds/files.rs
-//
-// The world files a project offers the Worlds panel, and the naming rules a
-// new one has to pass. Pure filesystem work over paths the caller resolves, so
-// the panel's listing, creation, and deletion are testable without a session.
-//
-// A project keeps its worlds in `worlds/*.jsonl`. A `world.jsonl` sitting at
-// the project root is where worlds lived before that, and is still listed so a
-// legacy project stays openable from the panel.
+//! The world files a project offers the Worlds panel, and the naming rules a
+//! new one has to pass. Pure filesystem work over paths the caller resolves, so
+//! the panel's listing, creation, and deletion are testable without a session.
+//!
+//! A project keeps its worlds in `worlds/*.jsonl`. A `world.jsonl` sitting at
+//! the project root is where worlds lived before that, and is still listed so a
+//! legacy project stays openable from the panel.
 
 use concinnity_cook::authoring::world::WORLD_JSONL;
 use concinnity_cook::authoring::world::parse_world_jsonl;

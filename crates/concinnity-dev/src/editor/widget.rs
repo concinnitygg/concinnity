@@ -1,11 +1,9 @@
-// src/editor/widget.rs
-//
-// Small shared helpers for the editor HUD's injected overlay elements. The whole
-// HUD (top bar in `hud.rs`, Assets panel in `panel.rs`) is built from plain
-// Sprite / TextLabel / TextInput components at reserved ids, driven each frame by
-// the editor hook. Both modules repeatedly need to look up one element by its
-// reserved id and mutate it; these keep that lookup -- and the identical
-// place-a-sprite / point-in-rect logic -- in one place instead of two copies.
+//! Small shared helpers for the editor HUD's injected overlay elements. The whole
+//! HUD (top bar in `hud.rs`, Assets panel in `panel.rs`) is built from plain
+//! Sprite / TextLabel / TextInput components at reserved ids, driven each frame by
+//! the editor hook. Both modules repeatedly need to look up one element by its
+//! reserved id and mutate it; these keep that lookup -- and the identical
+//! place-a-sprite / point-in-rect logic -- in one place instead of two copies.
 
 use concinnity_core::components::{Sprite, TextAlign, TextInput, TextLabel};
 use concinnity_core::ecs::World;

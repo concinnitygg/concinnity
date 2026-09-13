@@ -1,23 +1,21 @@
-// src/metal/graph_events.rs
-//
-// Event values for a two-queue graph submission, as a pure function of the
-// compiled graph. `metal/graph_queues.rs` owns the `MTLEvent` objects and the
-// running value counter; `metal/graph_exec.rs` encodes what this module plans.
-//
-// One event per queue, not one shared event. Apple's `MTLEvent` documentation
-// is explicit that "you can signal an event only with a new value that's
-// greater than its current value" and that "multiple producing workloads can't
-// combine their signals with one event ... Instead, signal when each producing
-// workload finishes by updating its own separate event". Two queues signaling
-// one event race on that monotonicity, so each queue signals only its own
-// event and a consumer waits on the producing queue's event.
-//
-// The value space is a frame-major slice: one value per compiled pass index,
-// then one terminal value per queue. Within a frame a queue signals in
-// ascending compiled-index order, which is the order the executor commits that
-// queue's command buffers in, so a queue's own signals increase monotonically;
-// the terminals are above every pass value, and the next frame's slice starts
-// above every value this frame reserved.
+//! Event values for a two-queue graph submission, as a pure function of the
+//! compiled graph. `metal/graph_queues.rs` owns the `MTLEvent` objects and the
+//! running value counter; `metal/graph_exec.rs` encodes what this module plans.
+//!
+//! One event per queue, not one shared event. Apple's `MTLEvent` documentation
+//! is explicit that "you can signal an event only with a new value that's
+//! greater than its current value" and that "multiple producing workloads can't
+//! combine their signals with one event ... Instead, signal when each producing
+//! workload finishes by updating its own separate event". Two queues signaling
+//! one event race on that monotonicity, so each queue signals only its own
+//! event and a consumer waits on the producing queue's event.
+//!
+//! The value space is a frame-major slice: one value per compiled pass index,
+//! then one terminal value per queue. Within a frame a queue signals in
+//! ascending compiled-index order, which is the order the executor commits that
+//! queue's command buffers in, so a queue's own signals increase monotonically;
+//! the terminals are above every pass value, and the next frame's slice starts
+//! above every value this frame reserved.
 
 use concinnity_core::render::render_graph::{CompiledGraph, PassQueue};
 

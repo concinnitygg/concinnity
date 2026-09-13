@@ -1,11 +1,9 @@
-// src/editor/panels/story.rs
-//
-// The data half of the Story panel: a plain line-based text model over the
-// Markdown source file a `StoryImport` entry references. The panel edits one
-// line at a time through a real `TextInput` (the engine's existing single-line
-// primitive), so multiline editing needs no new runtime asset: these helpers
-// own the line structure (split / join / navigation bounds) and the panel and
-// hook stay thin. Pure and world-free.
+//! The data half of the Story panel: a plain line-based text model over the
+//! Markdown source file a `StoryImport` entry references. The panel edits one
+//! line at a time through a real `TextInput` (the engine's existing single-line
+//! primitive), so multiline editing needs no new runtime asset: these helpers
+//! own the line structure (split / join / navigation bounds) and the panel and
+//! hook stay thin. Pure and world-free.
 
 // The story text as editable lines. Always at least one (possibly empty) line,
 // so the panel has a current line to edit even for a new / empty file.

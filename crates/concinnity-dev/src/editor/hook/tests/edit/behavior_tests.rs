@@ -1,11 +1,9 @@
-// src/editor/hook/tests/edit/behavior_tests.rs
-//
-// The Behavior panel's actions (`hook/edit/behavior.rs`): opening a behavior
-// and stepping between them, appending and removing one, the palette that
-// fills a node's fields, the value and name fields' commit rules, the checker
-// message the status line carries and the row it blames, the three views and
-// the cards each draws, and the palette's filter. What the keyboard does with
-// these actions is `tests/behavior_keys_tests.rs`.
+//! The Behavior panel's actions (`hook/edit/behavior.rs`): opening a behavior
+//! and stepping between them, appending and removing one, the palette that
+//! fills a node's fields, the value and name fields' commit rules, the checker
+//! message the status line carries and the row it blames, the three views and
+//! the cards each draws, and the palette's filter. What the keyboard does with
+//! these actions is `tests/behavior_keys_tests.rs`.
 
 use concinnity_core::components::InputKey;
 use concinnity_core::components::TextInput;

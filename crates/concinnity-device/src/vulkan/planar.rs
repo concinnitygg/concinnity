@@ -1,27 +1,25 @@
-// src/vulkan/planar.rs
-//
-// Planar reflection for flat glass panes on the Vulkan backend. Each frame the
-// scene is rendered a second time from the camera reflected across each pane's
-// plane (mirror view + oblique near-plane clip so geometry behind the plane
-// never leaks in) into a render-resolution target; the pane's fragment shader
-// then samples that target projectively for a sharp, scene-correct reflection
-// instead of the box-projected probe cube.
-//
-// GLSL/Vulkan port of src/directx/planar.rs (itself a port of src/metal/planar.rs),
-// One mirror render per DISTINCT
-// plane: near-coplanar panes (one wall of windows) share a render, and panes past
-// the budget (MAX_PLANAR_PLANES) fall back to the probe cube. The plane -> slot
-// grouping + the mirror matrices come from the pure, unit-tested
-// gfx::planar_reflection.
-//
-// Each plane gets a DEDICATED reflected-frustum cull (the shared probe-bake
-// encode_probe_cull): the GPU cull re-runs against the reflected-camera frustum
-// into that plane's own indirect buffer, reading the FRAME's camera-independent
-// object + draw-args SSBOs. So geometry visible only in the reflection (behind /
-// beside the main camera) is captured, not just the main camera's visible set; the
-// reflected view-proj's oblique near-plane clip also rejects geometry behind the
-// reflector. The face render then draws that indirect. Like the probe capture, the
-// skinned tail is not drawn into a mirror (static + instance + chunk only).
+//! Planar reflection for flat glass panes on the Vulkan backend. Each frame the
+//! scene is rendered a second time from the camera reflected across each pane's
+//! plane (mirror view + oblique near-plane clip so geometry behind the plane
+//! never leaks in) into a render-resolution target; the pane's fragment shader
+//! then samples that target projectively for a sharp, scene-correct reflection
+//! instead of the box-projected probe cube.
+//!
+//! GLSL/Vulkan port of src/directx/planar.rs (itself a port of src/metal/planar.rs),
+//! One mirror render per DISTINCT
+//! plane: near-coplanar panes (one wall of windows) share a render, and panes past
+//! the budget (MAX_PLANAR_PLANES) fall back to the probe cube. The plane -> slot
+//! grouping + the mirror matrices come from the pure, unit-tested
+//! gfx::planar_reflection.
+//!
+//! Each plane gets a DEDICATED reflected-frustum cull (the shared probe-bake
+//! encode_probe_cull): the GPU cull re-runs against the reflected-camera frustum
+//! into that plane's own indirect buffer, reading the FRAME's camera-independent
+//! object + draw-args SSBOs. So geometry visible only in the reflection (behind /
+//! beside the main camera) is captured, not just the main camera's visible set; the
+//! reflected view-proj's oblique near-plane clip also rejects geometry behind the
+//! reflector. The face render then draws that indirect. Like the probe capture, the
+//! skinned tail is not drawn into a mirror (static + instance + chunk only).
 
 use ash::vk;
 use concinnity_core::gfx::frustum::Frustum;

@@ -1,12 +1,10 @@
-// src/editor/hook/drive/outline.rs
-//
-// EditorHook: the extent-outline drive. Each frame it appends the wireframes
-// of the selection's spatial extents (and any category the Display menu keeps
-// always-on) to the frame's world-space line buffer: trigger-volume colliders,
-// light ranges and cones, camera frusta, probe bounds, prop colliders. Shapes
-// read the live components (and the seeded Transform, so a gizmo drag moves
-// the outline), so form edits and drags update immediately. The lines ride
-// the renderer's line pass, which handles depth: occluded runs draw faint.
+//! EditorHook: the extent-outline drive. Each frame it appends the wireframes
+//! of the selection's spatial extents (and any category the Display menu keeps
+//! always-on) to the frame's world-space line buffer: trigger-volume colliders,
+//! light ranges and cones, camera frusta, probe bounds, prop colliders. Shapes
+//! read the live components (and the seeded Transform, so a gizmo drag moves
+//! the outline), so form edits and drags update immediately. The lines ride
+//! the renderer's line pass, which handles depth: occluded runs draw faint.
 
 use concinnity_core::components::{
     Collider, PointLight, RectAreaLight, RectAreaLightGeometry, ReflectionProbe,

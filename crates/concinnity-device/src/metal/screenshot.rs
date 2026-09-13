@@ -1,24 +1,22 @@
-// src/metal/screenshot.rs
-//
-// Headless frame capture for the Metal backend. The `cn debug` WS server's
-// `screenshot` command routes here (via `RenderBackend::screenshot`) to copy
-// the most recently presented drawable's color texture into a host-readable
-// texture and encode it to a PNG on disk. This is the on-GPU verification path
-// the renderer otherwise leaves to a human eyeballing the live window: a
-// headless probe can now assert on actual pixels. Mirrors
-// src/directx/screenshot.rs / src/vulkan/screenshot.rs.
-//
-// Metal has no persistent swapchain image array to read back the way D3D12 /
-// Vulkan do; `CAMetalDrawable`s are transient. So `draw_frame` retains the last
-// presented drawable's texture in `last_present_texture` (only under
-// `hot_reload`, the path that also switches the MTKView's `framebufferOnly`
-// off so the drawable can be a blit source). Capture is synchronous: a one-shot
-// blit copies that texture into a `StorageModeShared` staging texture, waits,
-// then `getBytes` + decode + PNG-encode on the CPU. The blit's own command
-// buffer commits after every frame command buffer on the same queue, so
-// same-queue FIFO order guarantees the drawable is fully rendered before the
-// copy reads it. The decode follows the swapchain format (4-byte SDR `BGRA8` or
-// 8-byte HDR `RGBA16Float`), not a fixed texel size.
+//! Headless frame capture for the Metal backend. The `cn debug` WS server's
+//! `screenshot` command routes here (via `RenderBackend::screenshot`) to copy
+//! the most recently presented drawable's color texture into a host-readable
+//! texture and encode it to a PNG on disk. This is the on-GPU verification path
+//! the renderer otherwise leaves to a human eyeballing the live window: a
+//! headless probe can now assert on actual pixels. Mirrors
+//! src/directx/screenshot.rs / src/vulkan/screenshot.rs.
+//!
+//! Metal has no persistent swapchain image array to read back the way D3D12 /
+//! Vulkan do; `CAMetalDrawable`s are transient. So `draw_frame` retains the last
+//! presented drawable's texture in `last_present_texture` (only under
+//! `hot_reload`, the path that also switches the MTKView's `framebufferOnly`
+//! off so the drawable can be a blit source). Capture is synchronous: a one-shot
+//! blit copies that texture into a `StorageModeShared` staging texture, waits,
+//! then `getBytes` + decode + PNG-encode on the CPU. The blit's own command
+//! buffer commits after every frame command buffer on the same queue, so
+//! same-queue FIFO order guarantees the drawable is fully rendered before the
+//! copy reads it. The decode follows the swapchain format (4-byte SDR `BGRA8` or
+//! 8-byte HDR `RGBA16Float`), not a fixed texel size.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::image_decode::{self, PixelLayout};

@@ -1,12 +1,10 @@
-// src/editor/panels/import_panel.rs
-//
-// The Import panel: a front end over the same file resolution `cn add <file>`
-// uses (`authoring/add.rs::entry_from_path`), so importing from the panel and
-// from the CLI produce identical entries. The header takes a source path and
-// an Add button (Enter also adds); a status line shows resolution errors; the
-// body lists the world's existing file-backed entries (scene / story imports,
-// textures, audio, fonts, shaders, ...) and clicking one opens it in the
-// standard edit form. Layout half only; `hook/edit/import.rs` owns the actions.
+//! The Import panel: a front end over the same file resolution `cn add <file>`
+//! uses (`authoring/add.rs::entry_from_path`), so importing from the panel and
+//! from the CLI produce identical entries. The header takes a source path and
+//! an Add button (Enter also adds); a status line shows resolution errors; the
+//! body lists the world's existing file-backed entries (scene / story imports,
+//! textures, audio, fonts, shaders, ...) and clicking one opens it in the
+//! standard edit form. Layout half only; `hook/edit/import.rs` owns the actions.
 
 use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;

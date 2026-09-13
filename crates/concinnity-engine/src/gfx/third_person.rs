@@ -1,14 +1,12 @@
-// src/gfx/third_person.rs
-//
-// Third-person character controller. An internal system (not a declarable
-// asset): `World::start` constructs one instead of `Camera3DSystem` when the
-// controlling `Camera3D`'s controller carries a `follow` block. The mouse
-// orbits the camera around the followed character's `CharacterRig`; WASD
-// steers the character camera-relative, turning its facing yaw and feeding
-// the travel speed to its `AnimationGraph` parameter so a locomotion blendspace
-// picks the gait. Displacement comes from the clips' root motion, or from
-// the controller itself in `direct` drive; either way `PhysicsSystem`
-// resolves it against the scene on the next step.
+//! Third-person character controller. An internal system (not a declarable
+//! asset): `World::start` constructs one instead of `Camera3DSystem` when the
+//! controlling `Camera3D`'s controller carries a `follow` block. The mouse
+//! orbits the camera around the followed character's `CharacterRig`; WASD
+//! steers the character camera-relative, turning its facing yaw and feeding
+//! the travel speed to its `AnimationGraph` parameter so a locomotion blendspace
+//! picks the gait. Displacement comes from the clips' root motion, or from
+//! the controller itself in `direct` drive; either way `PhysicsSystem`
+//! resolves it against the scene on the next step.
 
 use concinnity_core::components::{
     AnimationGraph, AnimationParams, Camera3D, CameraController, CameraProbe, CharacterRig,

@@ -1,12 +1,10 @@
-// src/editor/notify.rs
-//
-// Editor notifications: the queue of transient toast messages the rest of the
-// editor (and its worker threads) pushes into, plus the pure lifetime and
-// stack policy the overlay draws from. The card geometry lives in
-// `toast_overlay.rs`; the per-frame drive and click routing in
-// `hook/drive/notify.rs`. The Console panel keeps the full history; a toast is
-// the additional at-a-glance surface for a result the user should not need the
-// console open to see.
+//! Editor notifications: the queue of transient toast messages the rest of the
+//! editor (and its worker threads) pushes into, plus the pure lifetime and
+//! stack policy the overlay draws from. The card geometry lives in
+//! `toast_overlay.rs`; the per-frame drive and click routing in
+//! `hook/drive/notify.rs`. The Console panel keeps the full history; a toast is
+//! the additional at-a-glance surface for a result the user should not need the
+//! console open to see.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};

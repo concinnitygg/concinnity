@@ -1,10 +1,8 @@
-// src/editor/selection.rs
-//
-// The viewport selection: an ordered set of asset names. Names, not AssetIds,
-// because every live-preview rebuild resets the interner and re-interns, so a
-// stored id could silently drift to a different asset; members are re-resolved
-// by name each frame. The last member is the "active" one: the edit form
-// follows it and its highlight ring is drawn brighter.
+//! The viewport selection: an ordered set of asset names. Names, not AssetIds,
+//! because every live-preview rebuild resets the interner and re-interns, so a
+//! stored id could silently drift to a different asset; members are re-resolved
+//! by name each frame. The last member is the "active" one: the edit form
+//! follows it and its highlight ring is drawn brighter.
 
 #[derive(Default)]
 pub(crate) struct Selection {

@@ -1,16 +1,14 @@
-// src/vulkan/post/taa.rs
-//
-// Vulkan's share of temporal anti-aliasing, which is the jitter counter and
-// where the resolve's two inputs come from this frame. The resolve itself --
-// its pipeline, its accumulation ring, the history-validity gate and the draw --
-// is written once in `concinnity_core::render::post::taa` and reaches Vulkan
-// through `VkPostDevice`.
-//
-// The accumulation ring is one image per frame in flight rather than a bare
-// ping-pong, because the bloom prefilter and the composite bind their scene
-// input per frame slot: a frame's target has to be the one its consumers were
-// wired to. Frame slot `f` writes image `f` and samples `f - 1`, which is the
-// previous frame's output either way.
+//! Vulkan's share of temporal anti-aliasing, which is the jitter counter and
+//! where the resolve's two inputs come from this frame. The resolve itself --
+//! its pipeline, its accumulation ring, the history-validity gate and the draw --
+//! is written once in `concinnity_core::render::post::taa` and reaches Vulkan
+//! through `VkPostDevice`.
+//!
+//! The accumulation ring is one image per frame in flight rather than a bare
+//! ping-pong, because the bloom prefilter and the composite bind their scene
+//! input per frame slot: a frame's target has to be the one its consumers were
+//! wired to. Frame slot `f` writes image `f` and samples `f - 1`, which is the
+//! previous frame's output either way.
 
 use ash::vk;
 use concinnity_core::render::error::RenderResult;

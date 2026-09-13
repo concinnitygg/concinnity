@@ -1,27 +1,25 @@
-// src/directx/barrier_translate.rs
-//
-// Translate the render graph's coarse `ResourceState`, for a given resource
-// class, into the concrete `D3D12_RESOURCE_STATES` the executor passes to
-// `transition_barrier`. The graph tracks only Undefined / Read / Write; the
-// resource class (assigned by the executor's resolver) disambiguates what a
-// `Write` means: a color render target writes `RENDER_TARGET`, a depth target
-// writes `DEPTH_WRITE`.
-//
-// A `Read` maps by the consuming-stage union (`ReadStages`) carried on the
-// barrier, not the class: a fragment consumer needs `PIXEL_SHADER_RESOURCE`, a
-// compute or vertex consumer `NON_PIXEL_SHADER_RESOURCE`, and a resource read
-// in both kinds of stage on one version needs both bits so the single
-// transition makes the write visible to each. The class is irrelevant once a
-// resource is being read.
-//
-// The `StorageImage` class covers a compute-written, fragment-sampled UAV
-// resource (`fog_froxel_volume`): its `Write` is `UNORDERED_ACCESS` and its
-// `Read` resolves through the same stage union (today fragment-only).
-//
-// `Undefined` never reaches here as a real transition: the executor resolves a
-// barrier whose `from` is Undefined to the resource's resting state (returned
-// by the resolver) before translating, so the first per-frame transition has a
-// `from` matching the resource's actual state. The arm below is a fallback.
+//! Translate the render graph's coarse `ResourceState`, for a given resource
+//! class, into the concrete `D3D12_RESOURCE_STATES` the executor passes to
+//! `transition_barrier`. The graph tracks only Undefined / Read / Write; the
+//! resource class (assigned by the executor's resolver) disambiguates what a
+//! `Write` means: a color render target writes `RENDER_TARGET`, a depth target
+//! writes `DEPTH_WRITE`.
+//!
+//! A `Read` maps by the consuming-stage union (`ReadStages`) carried on the
+//! barrier, not the class: a fragment consumer needs `PIXEL_SHADER_RESOURCE`, a
+//! compute or vertex consumer `NON_PIXEL_SHADER_RESOURCE`, and a resource read
+//! in both kinds of stage on one version needs both bits so the single
+//! transition makes the write visible to each. The class is irrelevant once a
+//! resource is being read.
+//!
+//! The `StorageImage` class covers a compute-written, fragment-sampled UAV
+//! resource (`fog_froxel_volume`): its `Write` is `UNORDERED_ACCESS` and its
+//! `Read` resolves through the same stage union (today fragment-only).
+//!
+//! `Undefined` never reaches here as a real transition: the executor resolves a
+//! barrier whose `from` is Undefined to the resource's resting state (returned
+//! by the resolver) before translating, so the first per-frame transition has a
+//! `from` matching the resource's actual state. The arm below is a fallback.
 
 use concinnity_core::render::render_graph::{GraphResourceClass, ReadStages, ResourceState};
 use windows::Win32::Graphics::Direct3D12::*;

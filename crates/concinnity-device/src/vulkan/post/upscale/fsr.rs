@@ -1,29 +1,27 @@
-// src/vulkan/post/upscale/fsr.rs
-//
-// AMD FidelityFX FSR temporal upscaling for the Vulkan backend. Mirrors
-// `directx/post/upscale/fsr.rs` (the FFX `ffx_api` is shared between the DX12
-// and Vulkan backends; only the backend-create descriptor and the resource
-// handle types differ). One of the three `VkUpscaleBackend` implementations;
-// the cross-vendor default that every other backend falls back to.
-//
-// **FFX SDK integration.** Wraps the AMD FidelityFX SDK v1.1.x unified
-// `ffx_api` at runtime. The runtime library is `amd_fidelityfx_vk.dll`
-// (Windows) / `libamd_fidelityfx_vk.so` (Linux); it is loaded on demand via
-// `libloading` and the five C entry points (`ffxCreateContext` /
-// `ffxDestroyContext` / `ffxConfigure` / `ffxQuery` / `ffxDispatch`) are
-// resolved by symbol. Failure to find the library or any entry point logs a
-// warning and `try_new` returns `None`; `build_upscaler` then falls back to the
-// next backend / native-resolution rendering. The FFI bindings live inline
-// because the surface is small (five entry points, ~10 structs); the only delta
-// from the DX module is `ffxCreateBackendVKDesc` and the handles being
-// `VkDevice` / `VkPhysicalDevice` / `VkImage` / `VkCommandBuffer`.
-//
-// The scaler does temporal accumulation itself, so the TAA resolve is bypassed
-// while upscaling is on (the frame graph drops `TaaResolve` and runs `Upscale`
-// in its slot). The velocity pre-pass still runs; FSR consumes its
-// render-resolution motion + depth targets. Projection jitter is still applied,
-// but per FSR's `ffxQueryDescUpscaleGetJitterOffset`, not the engine's stock
-// Halton sequence (FSR's jitter is tuned to its temporal kernel).
+//! AMD FidelityFX FSR temporal upscaling for the Vulkan backend. Mirrors
+//! `directx/post/upscale/fsr.rs` (the FFX `ffx_api` is shared between the DX12
+//! and Vulkan backends; only the backend-create descriptor and the resource
+//! handle types differ). One of the three `VkUpscaleBackend` implementations;
+//! the cross-vendor default that every other backend falls back to.
+//!
+//! **FFX SDK integration.** Wraps the AMD FidelityFX SDK v1.1.x unified
+//! `ffx_api` at runtime. The runtime library is `amd_fidelityfx_vk.dll`
+//! (Windows) / `libamd_fidelityfx_vk.so` (Linux); it is loaded on demand via
+//! `libloading` and the five C entry points (`ffxCreateContext` /
+//! `ffxDestroyContext` / `ffxConfigure` / `ffxQuery` / `ffxDispatch`) are
+//! resolved by symbol. Failure to find the library or any entry point logs a
+//! warning and `try_new` returns `None`; `build_upscaler` then falls back to the
+//! next backend / native-resolution rendering. The FFI bindings live inline
+//! because the surface is small (five entry points, ~10 structs); the only delta
+//! from the DX module is `ffxCreateBackendVKDesc` and the handles being
+//! `VkDevice` / `VkPhysicalDevice` / `VkImage` / `VkCommandBuffer`.
+//!
+//! The scaler does temporal accumulation itself, so the TAA resolve is bypassed
+//! while upscaling is on (the frame graph drops `TaaResolve` and runs `Upscale`
+//! in its slot). The velocity pre-pass still runs; FSR consumes its
+//! render-resolution motion + depth targets. Projection jitter is still applied,
+//! but per FSR's `ffxQueryDescUpscaleGetJitterOffset`, not the engine's stock
+//! Halton sequence (FSR's jitter is tuned to its temporal kernel).
 #![expect(
     non_camel_case_types,
     reason = "inline FFX bindings keep the SDK's own C type names"

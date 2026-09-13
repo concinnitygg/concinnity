@@ -1,10 +1,8 @@
-// src/gfx/animation/root.rs
-//
-// Root-motion publication for flat clip buckets: the displacement the
-// bucket's weighted blend covered between two absolute clip times. Graph
-// buckets get the equivalent from `gfx::anim_graph::cursor_root_delta`;
-// both feed the per-frame `RootMotionEvent` events consumed by the rig drive in
-// PhysicsSystem.
+//! Root-motion publication for flat clip buckets: the displacement the
+//! bucket's weighted blend covered between two absolute clip times. Graph
+//! buckets get the equivalent from `gfx::anim_graph::cursor_root_delta`;
+//! both feed the per-frame `RootMotionEvent` events consumed by the rig drive in
+//! PhysicsSystem.
 
 use concinnity_core::math::vec3::{add, scale};
 

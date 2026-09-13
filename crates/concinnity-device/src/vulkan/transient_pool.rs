@@ -1,26 +1,24 @@
-// src/vulkan/transient_pool.rs
-//
-// Backing store for the render graph's transient images. Stage 1's
-// `gfx::render_graph::alias` planner decides which transient resources may
-// share physical memory; this pool is where the Vulkan backend realizes that
-// plan. Features stop owning these images and read them back by label, so the
-// pool can repoint several labels at one shared allocation without touching the
-// features. This mirrors how the graph plans barriers while each backend emits
-// them.
-//
-// Structure: the pool is organized into alias *slots*. A slot owns one
-// `VkDeviceMemory` per frame in flight; every member image of a slot binds into
-// that one allocation at offset 0. Members of a slot must have pairwise-disjoint
-// lifetimes (they are never live at the same time), so reusing the bytes is
-// safe within a frame; the per-frame copies keep the reuse safe across frames in
-// flight (the single-frame planner does not model frames-in-flight, so the
-// backend supplies the per-frame buffering). A single-member slot is just a
-// per-frame target with its own memory (no sharing); a multi-member slot is a
-// realized alias.
-//
-// A resource is "managed" iff its owning feature is enabled at build time (e.g.
-// `ao_output` only when SSAO is on); the `*_for` lookups return `None`
-// otherwise and the consumer falls back exactly as it did before.
+//! Backing store for the render graph's transient images. Stage 1's
+//! `gfx::render_graph::alias` planner decides which transient resources may
+//! share physical memory; this pool is where the Vulkan backend realizes that
+//! plan. Features stop owning these images and read them back by label, so the
+//! pool can repoint several labels at one shared allocation without touching the
+//! features. This mirrors how the graph plans barriers while each backend emits
+//! them.
+//!
+//! Structure: the pool is organized into alias *slots*. A slot owns one
+//! `VkDeviceMemory` per frame in flight; every member image of a slot binds into
+//! that one allocation at offset 0. Members of a slot must have pairwise-disjoint
+//! lifetimes (they are never live at the same time), so reusing the bytes is
+//! safe within a frame; the per-frame copies keep the reuse safe across frames in
+//! flight (the single-frame planner does not model frames-in-flight, so the
+//! backend supplies the per-frame buffering). A single-member slot is just a
+//! per-frame target with its own memory (no sharing); a multi-member slot is a
+//! realized alias.
+//!
+//! A resource is "managed" iff its owning feature is enabled at build time (e.g.
+//! `ao_output` only when SSAO is on); the `*_for` lookups return `None`
+//! otherwise and the consumer falls back exactly as it did before.
 
 use ash::vk;
 use concinnity_core::render::render_graph::{

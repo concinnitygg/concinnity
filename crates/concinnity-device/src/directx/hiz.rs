@@ -1,30 +1,28 @@
-// src/directx/hiz.rs
-//
-// Hi-Z (depth-mip pyramid) build pass used by the GPU-cull compute kernel for
-// occlusion culling. Each frame, after the main depth buffer has been written
-// by the graph, we copy/reduce it into a Texture2D mip chain (R32_FLOAT, MAX
-// reduction). The *next* frame's `Cull` pass projects each `DrawObject` AABB
-// through the previous frame's view-projection, picks the Hi-Z mip whose
-// texels are roughly the size of the projected rect, and culls the AABB when
-// its nearest projected depth is behind the rasterized occluder depth.
-//
-// Three compute kernels build it (see `src/shaders/hiz_build.slang`):
-//
-//   * `hiz_spd_single`: reduce a single-sample main depth into mips 0..6.
-//   * `hiz_spd_msaa`  : the same for an MSAA main depth, taking the MAX over
-//                       every sample so the result is conservative.
-//   * `hiz_spd_tail`  : continue from mip 6 into mips 7..12.
-//
-// Each workgroup reduces a 64x64 tile through seven levels, so the whole
-// pyramid is two dispatches with one barrier between them rather than one
-// dispatch and one barrier per mip. `core::render::hiz_spd::Plan` decides the
-// dispatch geometry; Vulkan builds its pyramid from the same plan.
-//
-// The pyramid is *not* a graph node; it runs inline on the outer "end" cmd
-// list after `execute_graph` returns (see `directx/draw/mod.rs`). Treating
-// it as an end-of-frame action keeps it off the graph's RMW chain on the
-// main depth attachment (decals, fog, and SSAO/SSR pre-passes already share
-// that target).
+//! Hi-Z (depth-mip pyramid) build pass used by the GPU-cull compute kernel for
+//! occlusion culling. Each frame, after the main depth buffer has been written
+//! by the graph, we copy/reduce it into a Texture2D mip chain (R32_FLOAT, MAX
+//! reduction). The *next* frame's `Cull` pass projects each `DrawObject` AABB
+//! through the previous frame's view-projection, picks the Hi-Z mip whose
+//! texels are roughly the size of the projected rect, and culls the AABB when
+//! its nearest projected depth is behind the rasterized occluder depth.
+//!
+//! Three compute kernels build it (see `src/shaders/hiz_build.slang`):
+//!
+//!   * `hiz_spd_single`: reduce a single-sample main depth into mips 0..6.
+//!   * `hiz_spd_msaa`  : the same for an MSAA main depth, taking the MAX over
+//!     every sample so the result is conservative.
+//!   * `hiz_spd_tail`  : continue from mip 6 into mips 7..12.
+//!
+//! Each workgroup reduces a 64x64 tile through seven levels, so the whole
+//! pyramid is two dispatches with one barrier between them rather than one
+//! dispatch and one barrier per mip. `core::render::hiz_spd::Plan` decides the
+//! dispatch geometry; Vulkan builds its pyramid from the same plan.
+//!
+//! The pyramid is *not* a graph node; it runs inline on the outer "end" cmd
+//! list after `execute_graph` returns (see `directx/draw/mod.rs`). Treating
+//! it as an end-of-frame action keeps it off the graph's RMW chain on the
+//! main depth attachment (decals, fog, and SSAO/SSR pre-passes already share
+//! that target).
 
 use concinnity_core::render::hiz_spd::{self, Plan};
 use concinnity_core::render::uniforms::HizSpdParams;

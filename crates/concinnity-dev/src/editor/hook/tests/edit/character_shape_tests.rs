@@ -1,9 +1,7 @@
-// src/editor/hook/tests/edit/character_shape_tests.rs
-//
-// The CharacterShape panel's actions (`hook/edit/character_shape.rs`): the
-// single commit a reset or a randomize makes, the shape an add row creates for
-// the selected mesh, and the schema a character model supplies its presets
-// from. The slider drag itself is `tests/drag/shape_tests.rs`.
+//! The CharacterShape panel's actions (`hook/edit/character_shape.rs`): the
+//! single commit a reset or a randomize makes, the shape an add row creates for
+//! the selected mesh, and the schema a character model supplies its presets
+//! from. The slider drag itself is `tests/drag/shape_tests.rs`.
 
 use concinnity_core::ecs::World;
 

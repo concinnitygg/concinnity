@@ -1,12 +1,10 @@
-// src/vulkan/builtins.rs
-//
-// The Vulkan backend's shader-capacity policy and its export-time precompile.
-//
-// There is no GLSL left to declare: this was the table of hand-written GLSL
-// programs, and the raymarch proxy vertex shaders were the last two entries on
-// it. They compile from `raymarch.slang` now, alongside every other program
-// this backend runs, so what remains here is the pool sizing the single-source
-// shaders bake in and the loop that warms a bundle's cache with them.
+//! The Vulkan backend's shader-capacity policy and its export-time precompile.
+//!
+//! There is no GLSL left to declare: this was the table of hand-written GLSL
+//! programs, and the raymarch proxy vertex shaders were the last two entries on
+//! it. They compile from `raymarch.slang` now, alongside every other program
+//! this backend runs, so what remains here is the pool sizing the single-source
+//! shaders bake in and the loop that warms a bundle's cache with them.
 
 // Slots a world with `texture_count` table entries needs: one image per slot (a
 // single fallback when the table is empty) plus the reserved fallbacks,

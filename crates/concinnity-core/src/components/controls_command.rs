@@ -1,5 +1,3 @@
-// src/components/controls_command.rs
-
 /// Runtime-only event sent by GraphicsSystem when a live camera setting changes,
 /// read by Camera3DSystem from its `Events<ControlsCommand>` queue.
 ///

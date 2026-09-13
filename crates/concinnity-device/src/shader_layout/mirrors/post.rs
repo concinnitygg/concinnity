@@ -1,8 +1,6 @@
-// src/shader_layout/mirrors/post.rs
-//
-// The fullscreen post stack and the two compute helpers that feed it. These
-// params blocks carry no host-shape gate, so each is checked against all three
-// targets.
+//! The fullscreen post stack and the two compute helpers that feed it. These
+//! params blocks carry no host-shape gate, so each is checked against all three
+//! targets.
 
 use concinnity_core::gfx::render_types::{
     CompositeParams, PostProcessParams, SsaoParams, SsgiParams, SsrParams,

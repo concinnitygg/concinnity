@@ -1,17 +1,15 @@
-// src/editor/worlds/mod.rs
-//
-// The Worlds panel: the project's worlds, most recently edited first, a `+`
-// that starts an untitled one, and a per-row triple-dot menu. It has two
-// presentations of the same list (`Mode`): the start screen a session with no
-// world named opens on, a sidebar docked down the window's left edge over the
-// world it previews, and the in-session switcher, where a row click opens that
-// world behind the unsaved-changes guard.
-//
-// Layout half only: `geometry.rs` owns the rects and the hit test, `draw.rs`
-// the per-frame layout, and `hook/edit/worlds.rs` / `hook/worlds_start.rs` the
-// actions. `cinematic.rs` is the start screen's attract camera over the world
-// the sidebar previews, and `loading.rs` the cover that stands over it while
-// that world is compiled.
+//! The Worlds panel: the project's worlds, most recently edited first, a `+`
+//! that starts an untitled one, and a per-row triple-dot menu. It has two
+//! presentations of the same list (`Mode`): the start screen a session with no
+//! world named opens on, a sidebar docked down the window's left edge over the
+//! world it previews, and the in-session switcher, where a row click opens that
+//! world behind the unsaved-changes guard.
+//!
+//! Layout half only: `geometry.rs` owns the rects and the hit test, `draw.rs`
+//! the per-frame layout, and `hook/edit/worlds.rs` / `hook/worlds_start.rs` the
+//! actions. `cinematic.rs` is the start screen's attract camera over the world
+//! the sidebar previews, and `loading.rs` the cover that stands over it while
+//! that world is compiled.
 
 pub(crate) mod cinematic;
 mod draw;

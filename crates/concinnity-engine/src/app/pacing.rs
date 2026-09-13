@@ -1,12 +1,10 @@
-// src/app/pacing.rs
-//
-// CPU frame pacer for the FPS cap. Runs at the App level, before the world
-// steps, so no system pays the sleep inside its own step time and the cap
-// applies whichever systems the world built. The cap value comes from the
-// `FrameRateCap` resource (published by GraphicsSystem from GraphicsConfig +
-// the live settings row); the menu clamp reads the previous frame's
-// `MenuActive` resource, which is exactly the one-frame-lagged view the
-// in-step pacer used to read from its own field.
+//! CPU frame pacer for the FPS cap. Runs at the App level, before the world
+//! steps, so no system pays the sleep inside its own step time and the cap
+//! applies whichever systems the world built. The cap value comes from the
+//! `FrameRateCap` resource (published by GraphicsSystem from GraphicsConfig +
+//! the live settings row); the menu clamp reads the previous frame's
+//! `MenuActive` resource, which is exactly the one-frame-lagged view the
+//! in-step pacer used to read from its own field.
 
 use concinnity_core::ecs::FrameRateCap;
 use concinnity_core::ecs::MenuActive;

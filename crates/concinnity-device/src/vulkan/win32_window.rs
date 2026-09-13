@@ -1,12 +1,10 @@
-// src/vulkan/win32_window.rs
-//
-// The Vulkan backend's Windows window: a thin adapter over the shared native
-// Win32 layer (crate::win32) the DirectX backend also uses, so the two
-// HWND-rendering backends share one window/input/display-mode implementation
-// with identical behavior (wnd_proc, raw-input camera deltas, cursor
-// capture/confinement, window modes, Resolution-row mode switching). GLFW
-// (window.rs) remains the windowing layer on Linux only; the surface is
-// created directly through VK_KHR_win32_surface.
+//! The Vulkan backend's Windows window: a thin adapter over the shared native
+//! Win32 layer (crate::win32) the DirectX backend also uses, so the two
+//! HWND-rendering backends share one window/input/display-mode implementation
+//! with identical behavior (wnd_proc, raw-input camera deltas, cursor
+//! capture/confinement, window modes, Resolution-row mode switching). GLFW
+//! (window.rs) remains the windowing layer on Linux only; the surface is
+//! created directly through VK_KHR_win32_surface.
 
 use ash::vk;
 use concinnity_core::components::WindowMode;

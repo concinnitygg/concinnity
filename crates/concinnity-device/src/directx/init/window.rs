@@ -1,9 +1,7 @@
-// src/directx/init/window.rs
-//
-// Bootstrap for DxContext: Win32 window registration, DXGI factory, adapter
-// selection, D3D12 device + (optional) debug info-queue, command queue, MSAA
-// support query, and swapchain creation. Returns a `DeviceAndWindow` bundle
-// that init/mod.rs unpacks into the constructor's local state.
+//! Bootstrap for DxContext: Win32 window registration, DXGI factory, adapter
+//! selection, D3D12 device + (optional) debug info-queue, command queue, MSAA
+//! support query, and swapchain creation. Returns a `DeviceAndWindow` bundle
+//! that init/mod.rs unpacks into the constructor's local state.
 
 use concinnity_core::render::hdr_output;
 use concinnity_core::render::hdr_output::HdrOutputMode;

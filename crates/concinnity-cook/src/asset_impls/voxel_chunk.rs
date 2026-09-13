@@ -1,5 +1,3 @@
-// src/asset_impls/voxel_chunk.rs
-
 use concinnity_core::components::VoxelChunk;
 
 impl crate::asset::BuildAsset for VoxelChunk {

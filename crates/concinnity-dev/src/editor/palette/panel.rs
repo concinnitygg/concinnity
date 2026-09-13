@@ -1,9 +1,7 @@
-// src/editor/palette/panel.rs
-//
-// The command palette's layout half: a centered floating panel with one text
-// input and a ranked result window under it, each row a caption, a dimmed
-// hint, and its category tag. The data model and ranking live in
-// `editor/palette/`; the drive in `hook/edit/palette.rs`.
+//! The command palette's layout half: a centered floating panel with one text
+//! input and a ranked result window under it, each row a caption, a dimmed
+//! hint, and its category tag. The data model and ranking live in
+//! `editor/palette/`; the drive in `hook/edit/palette.rs`.
 
 use concinnity_core::ecs::World;
 use concinnity_host::thread::asset_id::AssetId;

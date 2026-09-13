@@ -1,10 +1,8 @@
-// src/spawn/visibility.rs
-//
-// Runtime show/hide: switch a subtree's draw slots off and on without
-// despawning anything. Driven by the VisibilityRequest events SpawnSystem
-// drains each step. The Hidden tag records the state, and the scene-switch
-// visibility snapshot skips tagged entities, so a scene jump never relights
-// a hidden entity.
+//! Runtime show/hide: switch a subtree's draw slots off and on without
+//! despawning anything. Driven by the VisibilityRequest events SpawnSystem
+//! drains each step. The Hidden tag records the state, and the scene-switch
+//! visibility snapshot skips tagged entities, so a scene jump never relights
+//! a hidden entity.
 
 use concinnity_core::components::{Hidden, RenderHandle};
 use concinnity_core::ecs::{Entity, PipelineContext};

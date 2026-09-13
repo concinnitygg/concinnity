@@ -1,9 +1,7 @@
-// src/ecs/world_queries.rs
-//
-// Queries over a world that only a renderer-bearing runtime can answer. The
-// world itself is concinnity-core's and names no backend, no GPU profile, and
-// no streaming pool; each of these reads one of the resources this crate's
-// render band parks there, or the systems it built.
+//! Queries over a world that only a renderer-bearing runtime can answer. The
+//! world itself is concinnity-core's and names no backend, no GPU profile, and
+//! no streaming pool; each of these reads one of the resources this crate's
+//! render band parks there, or the systems it built.
 
 use concinnity_core::components::GraphicsConfig;
 use concinnity_core::ecs::BuiltSystem;

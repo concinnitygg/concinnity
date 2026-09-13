@@ -1,20 +1,18 @@
-// src/directx/cull.rs
-//
-// Compute-driven GPU culling: one thread per build-time `DrawObject`
-// frustum/distance-tests the object's `GpuObjectData` AABB against the six
-// CPU-extracted frustum planes, optionally Hi-Z-occlusion-tests it against the
-// previous frame's depth pyramid (see `directx/hiz.rs`), and writes one
-// `ExecuteIndirect` command into the per-frame argument buffer: survivors get
-// `instance_count = 1`, culled or disabled objects get `instance_count = 0`
-// (a no-op draw). The main bindless pass then issues the whole buffer with a
-// single `ExecuteIndirect`, so the CPU never walks the draw list.
-//
-// The frustum and distance maths mirror `gfx::frustum` exactly (the six
-// planes are extracted CPU-side already normalized) so the GPU path culls
-// identically to the CPU BVH path it replaces. `GpuObjectData` / `GpuDrawArgs`
-// mirror `gfx::render_types`; `IndirectCommand` is a b0 root constant (the
-// object id) followed by `D3D12_DRAW_INDEXED_ARGUMENTS`, matching the command
-// signature built by `create_cull_command_signature`. Mirrors src/metal/cull.rs.
+//! Compute-driven GPU culling: one thread per build-time `DrawObject`
+//! frustum/distance-tests the object's `GpuObjectData` AABB against the six
+//! CPU-extracted frustum planes, optionally Hi-Z-occlusion-tests it against the
+//! previous frame's depth pyramid (see `directx/hiz.rs`), and writes one
+//! `ExecuteIndirect` command into the per-frame argument buffer: survivors get
+//! `instance_count = 1`, culled or disabled objects get `instance_count = 0`
+//! (a no-op draw). The main bindless pass then issues the whole buffer with a
+//! single `ExecuteIndirect`, so the CPU never walks the draw list.
+//!
+//! The frustum and distance maths mirror `gfx::frustum` exactly (the six
+//! planes are extracted CPU-side already normalized) so the GPU path culls
+//! identically to the CPU BVH path it replaces. `GpuObjectData` / `GpuDrawArgs`
+//! mirror `gfx::render_types`; `IndirectCommand` is a b0 root constant (the
+//! object id) followed by `D3D12_DRAW_INDEXED_ARGUMENTS`, matching the command
+//! signature built by `create_cull_command_signature`. Mirrors src/metal/cull.rs.
 
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::lod;

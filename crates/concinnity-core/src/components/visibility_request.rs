@@ -1,5 +1,3 @@
-// src/components/visibility_request.rs
-
 use crate::components::EntityTarget;
 
 /// Runtime-only event requesting that an entity (and its descendants)

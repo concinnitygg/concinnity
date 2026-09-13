@@ -1,15 +1,13 @@
-// src/editor/worlds/loading.rs
-//
-// The start screen's loading cover: the black field and caption that stand
-// over the preview area while the world the sidebar picked is compiled. The
-// editor's own window comes up first and the listing with it, so the wait is
-// spent on a screen the user can already read and click, and only the render
-// side of it is covered.
-//
-// Styled after the engine's own scene-loading overlay
-// (`concinnity-core/src/defaults/loading.rs`): a black field with the word
-// over it. There is no progress bar, because there is no progress to report --
-// the compile is one call, and a bar frozen mid-sweep reads as a hang.
+//! The start screen's loading cover: the black field and caption that stand
+//! over the preview area while the world the sidebar picked is compiled. The
+//! editor's own window comes up first and the listing with it, so the wait is
+//! spent on a screen the user can already read and click, and only the render
+//! side of it is covered.
+//!
+//! Styled after the engine's own scene-loading overlay
+//! (`concinnity-core/src/defaults/loading.rs`): a black field with the word
+//! over it. There is no progress bar, because there is no progress to report --
+//! the compile is one call, and a bar frozen mid-sweep reads as a hang.
 
 use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;

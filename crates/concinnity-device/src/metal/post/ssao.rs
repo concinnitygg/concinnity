@@ -1,12 +1,10 @@
-// src/metal/post/ssao.rs
-//
-// SSAO (GTAO): a depth + normal pre-pass, the horizon-search kernel, and a
-// depth-aware blur. Pipelines, targets, and encoders live together so the
-// effect is a single unit Vulkan / DirectX can mirror.
-//
-// When SSR is also enabled the kernel shares the SSR pre-pass G-buffer and
-// SSAO skips its own pre-pass entirely; with SSR off SSAO runs its own
-// pre-pass over the visible static, instanced, and skinned geometry.
+//! SSAO (GTAO): a depth + normal pre-pass, the horizon-search kernel, and a
+//! depth-aware blur. Pipelines, targets, and encoders live together so the
+//! effect is a single unit Vulkan / DirectX can mirror.
+//!
+//! When SSR is also enabled the kernel shares the SSR pre-pass G-buffer and
+//! SSAO skips its own pre-pass entirely; with SSR off SSAO runs its own
+//! pre-pass over the visible static, instanced, and skinned geometry.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::render_types;

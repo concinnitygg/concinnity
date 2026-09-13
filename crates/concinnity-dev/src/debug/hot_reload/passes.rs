@@ -1,9 +1,7 @@
-// src/debug/hot_reload/passes.rs
-//
-// The world.jsonl / ProceduralMesh / VolumetricFog / world-loaded Shader stage
-// reload passes: re-read the on-disk source, diff against the captured state,
-// and apply changes through the backend. Each returns a small tally the drive
-// logs.
+//! The world.jsonl / ProceduralMesh / VolumetricFog / world-loaded Shader stage
+//! reload passes: re-read the on-disk source, diff against the captured state,
+//! and apply changes through the backend. Each returns a small tally the drive
+//! logs.
 
 use concinnity_core::components::ProceduralMesh;
 use concinnity_core::components::Story;

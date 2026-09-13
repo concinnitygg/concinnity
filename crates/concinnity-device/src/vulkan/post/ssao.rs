@@ -1,15 +1,13 @@
-// src/vulkan/post/ssao.rs
-//
-// SSAO (GTAO) for the Vulkan backend. Owns the GTAO horizon-search kernel
-// pipeline, the depth-aware blur pipeline, and the `encode_ssao` per-frame
-// encoder. The depth + normal the kernel / blur sample come from the unified
-// G-buffer pre-pass; the kernel / blur sets are wired to its per-frame views
-// by `init.rs`.
-//
-// The main pass samples `SsaoResources::ao` (the blurred occlusion) at set 0
-// binding 6 to modulate its ambient term; when SSAO is disabled the renderer
-// binds the 1×1 `ssao_white` fallback at that slot so the multiplier is a
-// pass-through 1.0. Mirrors src/directx/post/ssao.rs.
+//! SSAO (GTAO) for the Vulkan backend. Owns the GTAO horizon-search kernel
+//! pipeline, the depth-aware blur pipeline, and the `encode_ssao` per-frame
+//! encoder. The depth + normal the kernel / blur sample come from the unified
+//! G-buffer pre-pass; the kernel / blur sets are wired to its per-frame views
+//! by `init.rs`.
+//!
+//! The main pass samples `SsaoResources::ao` (the blurred occlusion) at set 0
+//! binding 6 to modulate its ambient term; when SSAO is disabled the renderer
+//! binds the 1×1 `ssao_white` fallback at that slot so the multiplier is a
+//! pass-through 1.0. Mirrors src/directx/post/ssao.rs.
 
 use ash::vk;
 use concinnity_core::gfx::render_types::SsaoParams;

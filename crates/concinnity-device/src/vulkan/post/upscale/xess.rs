@@ -1,22 +1,20 @@
-// src/vulkan/post/upscale/xess.rs
-//
-// Intel XeSS temporal upscaling for the Vulkan backend. One of the three
-// `VkUpscaleBackend` implementations; runs cross-vendor (Arc XMX + the DP4a
-// fallback on other GPUs). The runtime DLL is `libxess.dll` (it carries the
-// `xessVK*` entry points alongside the D3D12 ones), loaded on demand via
-// `libloading` (cross-platform, mirroring the FSR module's choice over the DX
-// path's `LoadLibraryA`). Failure to load logs a warning and `try_new` returns
-// `None`; `build_upscaler` then falls through.
-//
-// Unlike FSR, XeSS needs Vulkan instance + device extensions (and a device
-// feature chain) enabled at instance / device creation. Those are queried up
-// front through `XessExtQuery` (held by `UpscaleSdk`, see `mod.rs`); this module
-// only creates the upscale context after the device exists.
-//
-// The FFI bindings are inline (small, concentrated API), validated against XeSS
-// SDK 3.0.1 (`inc/xess/{xess.h,xess_vk.h}`) by the size/offset asserts in the
-// tests. `XESS_PACK_B()` is `pack(8)`, a no-op on x86_64 where every field is
-// already <= 8-aligned, so `#[repr(C)]` matches byte-for-byte.
+//! Intel XeSS temporal upscaling for the Vulkan backend. One of the three
+//! `VkUpscaleBackend` implementations; runs cross-vendor (Arc XMX + the DP4a
+//! fallback on other GPUs). The runtime DLL is `libxess.dll` (it carries the
+//! `xessVK*` entry points alongside the D3D12 ones), loaded on demand via
+//! `libloading` (cross-platform, mirroring the FSR module's choice over the DX
+//! path's `LoadLibraryA`). Failure to load logs a warning and `try_new` returns
+//! `None`; `build_upscaler` then falls through.
+//!
+//! Unlike FSR, XeSS needs Vulkan instance + device extensions (and a device
+//! feature chain) enabled at instance / device creation. Those are queried up
+//! front through `XessExtQuery` (held by `UpscaleSdk`, see `mod.rs`); this module
+//! only creates the upscale context after the device exists.
+//!
+//! The FFI bindings are inline (small, concentrated API), validated against XeSS
+//! SDK 3.0.1 (`inc/xess/{xess.h,xess_vk.h}`) by the size/offset asserts in the
+//! tests. `XESS_PACK_B()` is `pack(8)`, a no-op on x86_64 where every field is
+//! already <= 8-aligned, so `#[repr(C)]` matches byte-for-byte.
 #![expect(
     non_camel_case_types,
     reason = "inline XeSS bindings keep the SDK's own C type names"

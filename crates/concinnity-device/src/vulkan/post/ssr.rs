@@ -1,11 +1,9 @@
-// src/vulkan/post/ssr.rs
-//
-// Vulkan's share of screen-space reflections: the settings, the reflection
-// target the resolve writes, and where the resolve's inputs come from this
-// frame. The resolve itself -- its pipeline and its draw -- is written once in
-// `concinnity_core::render::post::ssr` and reaches Vulkan through
-// `VkPostDevice`, which also binds the forward global set it reads the
-// reflection probes from.
+//! Vulkan's share of screen-space reflections: the settings, the reflection
+//! target the resolve writes, and where the resolve's inputs come from this
+//! frame. The resolve itself -- its pipeline and its draw -- is written once in
+//! `concinnity_core::render::post::ssr` and reaches Vulkan through
+//! `VkPostDevice`, which also binds the forward global set it reads the
+//! reflection probes from.
 
 use ash::vk;
 use concinnity_core::gfx::ssr;

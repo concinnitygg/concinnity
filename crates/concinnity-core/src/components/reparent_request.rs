@@ -1,5 +1,3 @@
-// src/components/reparent_request.rs
-
 use crate::components::EntityTarget;
 
 /// Runtime-only event requesting that an authored placement be re-parented at

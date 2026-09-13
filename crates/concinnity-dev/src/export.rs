@@ -1,17 +1,15 @@
-// src/export.rs
-//
-// `cn export`: package a built world into a distributable app. Builds the world
-// (reusing the normal build cache), then assembles a self-contained bundle: the
-// runtime player executable beside the world's compiled `data/` blobs, in a
-// flat layout the shipped runtime resolves relative to its own executable. On
-// macOS the bundle is a proper `.app` (optionally wrapped in a `.dmg`);
-// elsewhere it is a folder. The result is archived to a `.zip` by default.
-//
-// The player is the prebuilt `concinnity-run` binary that ships beside the
-// `cn`/`concinnity` executable; export copies it rather than compiling, so a
-// user needs no build toolchain and no engine source. Because the runtime is a
-// single compiled binary, a bundle targets exactly the platform this `cn` was
-// built for (host-only for now; see the --platform check).
+//! `cn export`: package a built world into a distributable app. Builds the world
+//! (reusing the normal build cache), then assembles a self-contained bundle: the
+//! runtime player executable beside the world's compiled `data/` blobs, in a
+//! flat layout the shipped runtime resolves relative to its own executable. On
+//! macOS the bundle is a proper `.app` (optionally wrapped in a `.dmg`);
+//! elsewhere it is a folder. The result is archived to a `.zip` by default.
+//!
+//! The player is the prebuilt `concinnity-run` binary that ships beside the
+//! `cn`/`concinnity` executable; export copies it rather than compiling, so a
+//! user needs no build toolchain and no engine source. Because the runtime is a
+//! single compiled binary, a bundle targets exactly the platform this `cn` was
+//! built for (host-only for now; see the --platform check).
 
 use concinnity_cook::authoring::world::WorldJsonlAsset;
 use concinnity_cook::build_from_path;

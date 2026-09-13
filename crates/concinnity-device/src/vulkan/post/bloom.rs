@@ -1,9 +1,7 @@
-// src/vulkan/post/bloom.rs
-//
-// Bloom for the Vulkan backend. Co-locates the bloom GLSL sources, the
-// prefilter / downsample / upsample pipeline builders, the bloom mip-chain
-// target allocator (per frame slot), the framebuffer + descriptor wiring, and
-// the per-frame `encode_bloom` encoder. Mirrors src/metal/post/bloom.rs.
+//! Bloom for the Vulkan backend. Co-locates the bloom GLSL sources, the
+//! prefilter / downsample / upsample pipeline builders, the bloom mip-chain
+//! target allocator (per frame slot), the framebuffer + descriptor wiring, and
+//! the per-frame `encode_bloom` encoder. Mirrors src/metal/post/bloom.rs.
 
 use ash::vk;
 use concinnity_core::render::error::RenderResult;

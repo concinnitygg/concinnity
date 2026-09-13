@@ -1,14 +1,12 @@
-// src/directx/post/ssao.rs
-//
-// SSAO (GTAO) for the D3D12 backend. Owns the GTAO horizon-search kernel
-// pipeline, the depth-aware blur pipeline, and the `encode_ssao` per-frame
-// encoder. The view normal + linear depth it samples come from the unified
-// G-buffer pre-pass (post/gbuffer.rs).
-//
-// The main pass samples `ssao.ao_srv_gpu` (the blurred occlusion) to modulate
-// its ambient term; when SSAO is disabled the renderer binds the 1×1 white
-// fallback (built once in init/effects.rs) so the multiplier is a pass-through
-// 1.0. Mirrors src/metal/post/ssao.rs.
+//! SSAO (GTAO) for the D3D12 backend. Owns the GTAO horizon-search kernel
+//! pipeline, the depth-aware blur pipeline, and the `encode_ssao` per-frame
+//! encoder. The view normal + linear depth it samples come from the unified
+//! G-buffer pre-pass (post/gbuffer.rs).
+//!
+//! The main pass samples `ssao.ao_srv_gpu` (the blurred occlusion) to modulate
+//! its ambient term; when SSAO is disabled the renderer binds the 1×1 white
+//! fallback (built once in init/effects.rs) so the multiplier is a pass-through
+//! 1.0. Mirrors src/metal/post/ssao.rs.
 
 use concinnity_core::gfx::render_types::SsaoParams;
 use concinnity_core::gfx::ssao;

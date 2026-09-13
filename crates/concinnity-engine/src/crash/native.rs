@@ -1,11 +1,9 @@
-// src/crash/native.rs
-//
-// Native fault capture (macOS mach exceptions, Windows SEH) via
-// crash-handler. Faults in unsafe or driver code never reach the panic hook;
-// this path writes the minidump first (the artifact that matters most, with
-// the writer designed for a compromised context) and then attempts a sidecar
-// text report with nonblocking snapshots. The fault is reported as unhandled
-// so the OS default crash behavior still runs.
+//! Native fault capture (macOS mach exceptions, Windows SEH) via
+//! crash-handler. Faults in unsafe or driver code never reach the panic hook;
+//! this path writes the minidump first (the artifact that matters most, with
+//! the writer designed for a compromised context) and then attempts a sidecar
+//! text report with nonblocking snapshots. The fault is reported as unhandled
+//! so the OS default crash behavior still runs.
 
 use crash_handler::{CrashContext, CrashEventResult, CrashHandler};
 use std::sync::OnceLock;

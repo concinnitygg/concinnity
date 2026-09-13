@@ -1,11 +1,9 @@
-// src/components/skinned_mesh.rs
-//
-// Runtime behavior for the SkinnedMesh asset. The authored schema (SkinnedMesh,
-// its SkinnedVertexData / SkeletonJoint / CharacterCapsule, and their Defaults) lives
-// above; SkinnedMesh is a resource (compiled by cook into the
-// blob's resource stream, no `Component` impl), so this file keeps only the
-// skeleton builder and the `SkinnedMeshGeometry` extension trait that needs
-// `gfx::skeleton`.
+//! Runtime behavior for the SkinnedMesh asset. The authored schema (SkinnedMesh,
+//! its SkinnedVertexData / SkeletonJoint / CharacterCapsule, and their Defaults) lives
+//! above; SkinnedMesh is a resource (compiled by cook into the
+//! blob's resource stream, no `Component` impl), so this file keeps only the
+//! skeleton builder and the `SkinnedMeshGeometry` extension trait that needs
+//! `gfx::skeleton`.
 
 use crate::ecs::MaterialHandle;
 use crate::ecs::PayloadLocator;

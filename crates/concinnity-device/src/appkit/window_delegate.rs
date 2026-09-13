@@ -1,16 +1,14 @@
-// src/appkit/window_delegate.rs
-//
-// NSWindowDelegate that tracks native-fullscreen state authoritatively.
-//
-// macOS native fullscreen is an animated, asynchronous transition: the
-// NSWindow `FullScreen` style-mask bit lags it, so reading the bit right after
-// issuing `toggleFullScreen:` (or stepping the settings menu's Window Mode row
-// faster than the ~1s animation) can momentarily report the wrong state and
-// toggle in the wrong direction. This delegate observes the will / did enter /
-// exit fullscreen notifications and keeps a shared flag in sync, which
-// `set_window_mode` / `set_window_size` read instead of the lagging style mask.
-// It also captures OS-driven transitions (the green traffic-light button,
-// Mission Control) that never go through the settings menu.
+//! NSWindowDelegate that tracks native-fullscreen state authoritatively.
+//!
+//! macOS native fullscreen is an animated, asynchronous transition: the
+//! NSWindow `FullScreen` style-mask bit lags it, so reading the bit right after
+//! issuing `toggleFullScreen:` (or stepping the settings menu's Window Mode row
+//! faster than the ~1s animation) can momentarily report the wrong state and
+//! toggle in the wrong direction. This delegate observes the will / did enter /
+//! exit fullscreen notifications and keeps a shared flag in sync, which
+//! `set_window_mode` / `set_window_size` read instead of the lagging style mask.
+//! It also captures OS-driven transitions (the green traffic-light button,
+//! Mission Control) that never go through the settings menu.
 
 #![deny(unsafe_op_in_unsafe_fn)]
 

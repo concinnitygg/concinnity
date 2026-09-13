@@ -1,9 +1,7 @@
-// src/directx/init/effects.rs
-//
-// Post-process pipeline + target construction extracted from DxContext::new:
-// bloom (always built), TAA history-resolve (gated on `taa_enabled`), and
-// SSAO (gated on `ssao_settings.is_some()`). Each gated block pays zero cost
-// when its setting is off.
+//! Post-process pipeline + target construction extracted from DxContext::new:
+//! bloom (always built), TAA history-resolve (gated on `taa_enabled`), and
+//! SSAO (gated on `ssao_settings.is_some()`). Each gated block pays zero cost
+//! when its setting is off.
 
 use concinnity_core::gfx::rt_reflections;
 use concinnity_core::gfx::ssao;

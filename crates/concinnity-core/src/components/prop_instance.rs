@@ -1,5 +1,3 @@
-// src/components/prop_instance.rs
-
 /// Marks an entity that was authored as a `Prop`.
 ///
 /// Runtime-only zero-size tag. The `Prop` column is drained once its

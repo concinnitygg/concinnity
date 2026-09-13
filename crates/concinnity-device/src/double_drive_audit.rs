@@ -1,31 +1,29 @@
-// src/double_drive_audit.rs
-//
-// Guard against a resource being transitioned twice: once by the graph executor's
-// barrier registry and again by an encoder that kept its inline half.
-//
-// This is the one failure the barrier audit cannot see. That table proves every
-// barrier is *classified*; it says nothing about whether a classified barrier is
-// still *needed*. When a resource joins the registry, deleting its inline
-// transitions is a separate manual step, and a table left describing barriers
-// that are now redundant is perfectly self-consistent. What that leaves is a
-// frame announcing a before-state the resource has already left, once per
-// barrier per frame: a debug-layer error on every frame, and only on the backend
-// whose debug layer runs.
-//
-// The check is textual, for the same reason as `barrier_audit`: only one backend
-// compiles per build, so a macOS run has to audit the DirectX source as source if
-// it is to audit it at all. It works by naming, per backend, the context field
-// that backs each registry-resolved resource, then finding every barrier whose
-// *target expression* mentions one of those fields outside the executor. Anything
-// it finds is either a bug of the shape above or belongs in `ALLOWED` with a
-// reason.
-//
-// Its reach ends where the target stops being named at the barrier: a pass that
-// picks between two resources into a local and transitions that local (the
-// translucent pass, whose target is the reflection composite's output or the HDR
-// spine depending on whether a resolve ran) is invisible here. `barrier_audit`
-// still counts and classifies those files, which is what keeps a new barrier in
-// one of them from passing unnoticed.
+//! Guard against a resource being transitioned twice: once by the graph executor's
+//! barrier registry and again by an encoder that kept its inline half.
+//!
+//! This is the one failure the barrier audit cannot see. That table proves every
+//! barrier is *classified*; it says nothing about whether a classified barrier is
+//! still *needed*. When a resource joins the registry, deleting its inline
+//! transitions is a separate manual step, and a table left describing barriers
+//! that are now redundant is perfectly self-consistent. What that leaves is a
+//! frame announcing a before-state the resource has already left, once per
+//! barrier per frame: a debug-layer error on every frame, and only on the backend
+//! whose debug layer runs.
+//!
+//! The check is textual, for the same reason as `barrier_audit`: only one backend
+//! compiles per build, so a macOS run has to audit the DirectX source as source if
+//! it is to audit it at all. It works by naming, per backend, the context field
+//! that backs each registry-resolved resource, then finding every barrier whose
+//! *target expression* mentions one of those fields outside the executor. Anything
+//! it finds is either a bug of the shape above or belongs in `ALLOWED` with a
+//! reason.
+//!
+//! Its reach ends where the target stops being named at the barrier: a pass that
+//! picks between two resources into a local and transitions that local (the
+//! translucent pass, whose target is the reflection composite's output or the HDR
+//! spine depending on whether a resolve ran) is invisible here. `barrier_audit`
+//! still counts and classifies those files, which is what keeps a new barrier in
+//! one of them from passing unnoticed.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

@@ -1,30 +1,28 @@
-// src/vulkan/record.rs
-//
-// Safe command recording. [`Recorder`] is a command buffer that is known to be
-// in the recording state, and the surface over it that every pass records
-// through.
-//
-// The `unsafe` on `vkCmd*` carries two obligations: the command buffer is in
-// the recording state, and every handle and slice the command names is live for
-// the call. Both were restated verbatim at every recording site in this backend,
-// which is how they stop being checked. `Recorder` discharges the first by
-// construction -- the only safe way to get one is [`Recorder::begin`], which
-// puts the buffer into that state itself -- and the second by taking the owning
-// wrappers from `owned.rs` by reference, so a pipeline or layout cannot be bound
-// unless its owner is alive at the call.
-//
-// Passes convert to this surface one at a time: `encode_pass_into` hands each
-// arm the recorder, and an arm that has not converted reads the raw buffer back
-// out with [`Recorder::raw`]. Growing the surface is what converting the next
-// pass costs; it carries only the commands its callers use.
-//
-// What is left raw is stated rather than hidden: descriptor sets, buffers and
-// image views are still `vk::*` handles here, because they are owned by a
-// descriptor pool, the device allocator or a swapchain rather than by a wrapper
-// of their own. Those keep the liveness argument they always had, and
-// [`Recorder::raw`] exists for the commands this surface does not cover (the
-// extension loaders: acceleration-structure builds and the upscaler SDKs), so a
-// pass that needs one does not have to abandon the type.
+//! Safe command recording. [`Recorder`] is a command buffer that is known to be
+//! in the recording state, and the surface over it that every pass records
+//! through.
+//!
+//! The `unsafe` on `vkCmd*` carries two obligations: the command buffer is in
+//! the recording state, and every handle and slice the command names is live for
+//! the call. Both were restated verbatim at every recording site in this backend,
+//! which is how they stop being checked. `Recorder` discharges the first by
+//! construction -- the only safe way to get one is [`Recorder::begin`], which
+//! puts the buffer into that state itself -- and the second by taking the owning
+//! wrappers from `owned.rs` by reference, so a pipeline or layout cannot be bound
+//! unless its owner is alive at the call.
+//!
+//! Passes convert to this surface one at a time: `encode_pass_into` hands each
+//! arm the recorder, and an arm that has not converted reads the raw buffer back
+//! out with [`Recorder::raw`]. Growing the surface is what converting the next
+//! pass costs; it carries only the commands its callers use.
+//!
+//! What is left raw is stated rather than hidden: descriptor sets, buffers and
+//! image views are still `vk::*` handles here, because they are owned by a
+//! descriptor pool, the device allocator or a swapchain rather than by a wrapper
+//! of their own. Those keep the liveness argument they always had, and
+//! [`Recorder::raw`] exists for the commands this surface does not cover (the
+//! extension loaders: acceleration-structure builds and the upscaler SDKs), so a
+//! pass that needs one does not have to abandon the type.
 
 use ash::vk;
 

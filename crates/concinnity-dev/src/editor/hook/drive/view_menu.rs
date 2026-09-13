@@ -1,9 +1,7 @@
-// src/editor/hook/drive/view_menu.rs
-//
-// EditorHook: the Display menu's open state, click routing, and draw. The
-// menu's geometry lives in `editor/view_menu.rs`; the selections it edits
-// (view mode, show flags, the billboard toggle) are published to the renderer
-// each tick as the `ViewOverrides` resource.
+//! EditorHook: the Display menu's open state, click routing, and draw. The
+//! menu's geometry lives in `editor/view_menu.rs`; the selections it edits
+//! (view mode, show flags, the billboard toggle) are published to the renderer
+//! each tick as the `ViewOverrides` resource.
 
 use concinnity_core::components::FrameInput;
 use concinnity_core::ecs::World;

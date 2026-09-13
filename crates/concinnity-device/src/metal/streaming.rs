@@ -1,7 +1,5 @@
-// src/metal/streaming.rs
-//
-// VoxelWorld chunk streaming for MtlContext: sub-allocator setup and the
-// add / remove / move-chunk-mesh operations driven after init.
+//! VoxelWorld chunk streaming for MtlContext: sub-allocator setup and the
+//! add / remove / move-chunk-mesh operations driven after init.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::mesh_payload::Vertex;

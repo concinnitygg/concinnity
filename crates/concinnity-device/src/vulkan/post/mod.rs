@@ -1,22 +1,20 @@
-// src/vulkan/post/mod.rs
-//
-// Screen-space and post-process passes for the Vulkan frame encoder. Each
-// effect lives in its own file with its pipeline builder(s), target
-// allocator(s), and per-frame encoder(s) co-located; mirrors the Metal
-// `metal/post/` shape:
-//
-//   bloom.rs    prefilter + downsample/upsample mip chain
-//   reflection_composite.rs  roughness blur + composite of the SSR/RT reflection
-//   ssao.rs     GTAO depth+normal pre-pass + horizon-search kernel + blur
-//   ssgi.rs     the settings + inputs of the shared SSGI gather and composite
-//   ssr.rs      the reflection target + inputs of the shared SSR resolve
-//   taa.rs      the TAA jitter counter + inputs over the shared resolve
-//
-// The three files below the effects are the shared fullscreen post-pass seam's
-// Vulkan half: `post_device.rs` implements `gfx::post::PostPassDevice`,
-// `pass_cache.rs` caches the render passes and framebuffers a draw needs, and
-// `set_arena.rs` hands out descriptor sets per frame instead of per effect.
-//   upscale/    temporal upscaling (FSR / DLSS / XeSS) behind VkUpscaleBackend
+//! Screen-space and post-process passes for the Vulkan frame encoder. Each
+//! effect lives in its own file with its pipeline builder(s), target
+//! allocator(s), and per-frame encoder(s) co-located; mirrors the Metal
+//! `metal/post/` shape:
+//!
+//!   bloom.rs    prefilter + downsample/upsample mip chain
+//!   reflection_composite.rs  roughness blur + composite of the SSR/RT reflection
+//!   ssao.rs     GTAO depth+normal pre-pass + horizon-search kernel + blur
+//!   ssgi.rs     the settings + inputs of the shared SSGI gather and composite
+//!   ssr.rs      the reflection target + inputs of the shared SSR resolve
+//!   taa.rs      the TAA jitter counter + inputs over the shared resolve
+//!
+//! The three files below the effects are the shared fullscreen post-pass seam's
+//! Vulkan half: `post_device.rs` implements `gfx::post::PostPassDevice`,
+//! `pass_cache.rs` caches the render passes and framebuffers a draw needs, and
+//! `set_arena.rs` hands out descriptor sets per frame instead of per effect.
+//!   upscale/    temporal upscaling (FSR / DLSS / XeSS) behind VkUpscaleBackend
 
 pub(in crate::vulkan) mod bloom;
 pub(in crate::vulkan) mod fullscreen;

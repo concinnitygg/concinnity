@@ -1,17 +1,15 @@
-// src/directx/water.rs
-//
-// WaterSurface: one producer of the engine's transparent pass on the D3D12
-// backend (`transparent.rs` owns the pass itself, the scene snapshot, the shared
-// root signatures and the combined back-to-front draw order; `glass.rs` is the
-// other producer). Each surface is a flat tessellated XZ grid built once at init
-// and displaced per frame by the vertex stage's Gerstner sum; the fragment
-// refracts the pass's scene snapshot, tints and foams it by the water-column
-// thickness the main depth gives, and mixes a reflection over it by a Schlick
-// Fresnel term.
-//
-// The shaders are the shared `shaders/water.slang`, compiled through
-// `slang_builtins`; the ray-traced fragment needs shader model 6.5 for its
-// inline ray query, the base pair 6.0.
+//! WaterSurface: one producer of the engine's transparent pass on the D3D12
+//! backend (`transparent.rs` owns the pass itself, the scene snapshot, the shared
+//! root signatures and the combined back-to-front draw order; `glass.rs` is the
+//! other producer). Each surface is a flat tessellated XZ grid built once at init
+//! and displaced per frame by the vertex stage's Gerstner sum; the fragment
+//! refracts the pass's scene snapshot, tints and foams it by the water-column
+//! thickness the main depth gives, and mixes a reflection over it by a Schlick
+//! Fresnel term.
+//!
+//! The shaders are the shared `shaders/water.slang`, compiled through
+//! `slang_builtins`; the ray-traced fragment needs shader model 6.5 for its
+//! inline ray query, the base pair 6.0.
 
 use concinnity_core::components::{MAX_WATER_WAVES, WaterSurface, WaterWave};
 use concinnity_core::geometry::water_grid::build_water_grid;

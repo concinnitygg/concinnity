@@ -1,5 +1,3 @@
-// src/components/setting_command.rs
-
 use alloc::string::String;
 
 use crate::components::InputKey;

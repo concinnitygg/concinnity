@@ -1,19 +1,17 @@
-// src/bench/alloc_budget.rs
-//
-// The per-frame allocation-regression gate. The 2026-08 allocation audit cut
-// the engine's steady-state heap churn to a small floor; these tests pin that
-// floor so a change that reintroduces per-frame allocation (a rebuilt HashMap,
-// a fresh Vec per tick) fails loudly instead of eroding it back.
-//
-// Unlike the microbenches beside this file, the pins are NOT ignored: they run
-// in every `cargo test`. The allocation counters are process-wide and other
-// test threads allocate concurrently, so a single frame's delta is only an
-// upper bound on the world's own cost. Concurrency can only ADD allocations,
-// never hide them, so each pin keeps stepping until one frame lands at or
-// under its budget: that frame proves the world's own cost is within it. A
-// regression can never produce such a frame, while a run polluted by parallel
-// tests finds its quiet frame as the rest of the suite drains -- only a whole
-// deadline with no quiet frame fails.
+//! The per-frame allocation-regression gate. The 2026-08 allocation audit cut
+//! the engine's steady-state heap churn to a small floor; these tests pin that
+//! floor so a change that reintroduces per-frame allocation (a rebuilt HashMap,
+//! a fresh Vec per tick) fails loudly instead of eroding it back.
+//!
+//! Unlike the microbenches beside this file, the pins are NOT ignored: they run
+//! in every `cargo test`. The allocation counters are process-wide and other
+//! test threads allocate concurrently, so a single frame's delta is only an
+//! upper bound on the world's own cost. Concurrency can only ADD allocations,
+//! never hide them, so each pin keeps stepping until one frame lands at or
+//! under its budget: that frame proves the world's own cost is within it. A
+//! regression can never produce such a frame, while a run polluted by parallel
+//! tests finds its quiet frame as the rest of the suite drains -- only a whole
+//! deadline with no quiet frame fails.
 
 use concinnity_core::components::{
     Behavior, BehaviorExpr, BehaviorNode, BehaviorSource, Collider, GlobalTransform, PhysicsConfig,

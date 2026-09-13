@@ -1,38 +1,36 @@
-// src/metal/transient_pool.rs
-//
-// Backing store for the render graph's transient textures on Metal. The shared
-// `gfx::render_graph::alias` planner decides which transient resources may share
-// physical memory; this pool is where the Metal backend realizes that plan.
-// Features stop owning these textures and read them back by label, so the pool
-// repoints several labels at one aliased allocation without touching the
-// features. This mirrors how the graph plans barriers while each backend emits
-// them, and the Vulkan / DirectX `transient_pool.rs`.
-//
-// Structure: the pool is organized into alias slots. Each slot owns one
-// `MTLHeap` sized to its largest member, and every member is placed at offset 0.
-// Members of a slot have pairwise-disjoint lifetimes (they are never live at the
-// same time), so reusing the bytes is safe. A single-member slot is a plain
-// placed target; a multi-member slot is a realized alias.
-//
-// The heaps are `Placement` so the pool picks the offset (0 for every member),
-// which maps onto the planner's slot abstraction directly. They are explicitly
-// `Tracked`: on a tracked heap Metal delays reads and writes of every resource
-// suballocated on it until in-flight modifications of any of them complete,
-// which is exactly the ordering aliased members need at both the within-frame
-// and the cross-frame reuse boundary. `MTLHazardTrackingMode::Default` is
-// treated as `Untracked` for heaps and would silently drop the automatic
-// tracking the rest of the backend assumes. One heap per slot keeps that
-// heap-granularity tracking scoped to members that genuinely alias.
-//
-// Slots are single-buffered, like DirectX and unlike Vulkan: the tracked heap
-// orders a frame's writes against the previous frame's reads of the same bytes,
-// so one heap per slot (rather than one per slot per frame) is safe. Per-frame
-// slots would multiply an already single-buffered footprint by the
-// frames-in-flight depth and cost more than aliasing saves.
-//
-// A texture is "managed" iff its owning feature is enabled at build time;
-// `texture_for` returns `None` otherwise and the consumer falls back exactly as
-// before (the main pass samples a 1x1 white texture when SSAO is off).
+//! Backing store for the render graph's transient textures on Metal. The shared
+//! `gfx::render_graph::alias` planner decides which transient resources may share
+//! physical memory; this pool is where the Metal backend realizes that plan.
+//! Features stop owning these textures and read them back by label, so the pool
+//! repoints several labels at one aliased allocation without touching the
+//! features. This mirrors how the graph plans barriers while each backend emits
+//! them, and the Vulkan / DirectX `transient_pool.rs`.
+//!
+//! Structure: the pool is organized into alias slots. Each slot owns one
+//! `MTLHeap` sized to its largest member, and every member is placed at offset 0.
+//! Members of a slot have pairwise-disjoint lifetimes (they are never live at the
+//! same time), so reusing the bytes is safe. A single-member slot is a plain
+//! placed target; a multi-member slot is a realized alias.
+//!
+//! The heaps are `Placement` so the pool picks the offset (0 for every member),
+//! which maps onto the planner's slot abstraction directly. They are explicitly
+//! `Tracked`: on a tracked heap Metal delays reads and writes of every resource
+//! suballocated on it until in-flight modifications of any of them complete,
+//! which is exactly the ordering aliased members need at both the within-frame
+//! and the cross-frame reuse boundary. `MTLHazardTrackingMode::Default` is
+//! treated as `Untracked` for heaps and would silently drop the automatic
+//! tracking the rest of the backend assumes. One heap per slot keeps that
+//! heap-granularity tracking scoped to members that genuinely alias.
+//!
+//! Slots are single-buffered, like DirectX and unlike Vulkan: the tracked heap
+//! orders a frame's writes against the previous frame's reads of the same bytes,
+//! so one heap per slot (rather than one per slot per frame) is safe. Per-frame
+//! slots would multiply an already single-buffered footprint by the
+//! frames-in-flight depth and cost more than aliasing saves.
+//!
+//! A texture is "managed" iff its owning feature is enabled at build time;
+//! `texture_for` returns `None` otherwise and the consumer falls back exactly as
+//! before (the main pass samples a 1x1 white texture when SSAO is off).
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::render::render_graph::{

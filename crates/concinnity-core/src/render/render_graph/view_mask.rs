@@ -1,10 +1,8 @@
-// src/render/render_graph/view_mask.rs
-//
-// Per-frame masking of the graph inputs by the viewport's view mode + show
-// flags: the runtime counterpart to the init-time requirement trims. Pure
-// like `build_frame_graph`, so every backend makes identical decisions, and
-// the compiled-graph cache (keyed on the masked inputs) absorbs the cost of a
-// toggle as one rebuild.
+//! Per-frame masking of the graph inputs by the viewport's view mode + show
+//! flags: the runtime counterpart to the init-time requirement trims. Pure
+//! like `build_frame_graph`, so every backend makes identical decisions, and
+//! the compiled-graph cache (keyed on the masked inputs) absorbs the cost of a
+//! toggle as one rebuild.
 
 use super::frame::FrameGraphInputs;
 use crate::gfx::view_modes::{ShowFlags, ViewMode};

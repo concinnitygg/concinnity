@@ -1,13 +1,11 @@
-// src/editor/file_dialog.rs
-//
-// The native file picker behind the Import panel's Browse button, and the
-// project-relative rewrite its result needs. `pick_import_file` is a thin
-// wrapper over `rfd` (NSOpenPanel on macOS, IFileDialog on Windows, the XDG
-// desktop portal on Linux) and is the one part here that cannot be tested
-// headlessly -- it opens a modal OS dialog. Everything done with the result
-// goes through `project_path`, which is pure but for its canonicalization and
-// is unit tested. Nothing in this module reaches a shipped game: the runtime
-// never links the editor crate.
+//! The native file picker behind the Import panel's Browse button, and the
+//! project-relative rewrite its result needs. `pick_import_file` is a thin
+//! wrapper over `rfd` (NSOpenPanel on macOS, IFileDialog on Windows, the XDG
+//! desktop portal on Linux) and is the one part here that cannot be tested
+//! headlessly -- it opens a modal OS dialog. Everything done with the result
+//! goes through `project_path`, which is pure but for its canonicalization and
+//! is unit tested. Nothing in this module reaches a shipped game: the runtime
+//! never links the editor crate.
 
 use std::path::{Path, PathBuf};
 

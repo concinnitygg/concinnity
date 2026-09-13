@@ -1,20 +1,18 @@
-// src/directx/post/reflection_composite.rs
-//
-// Roughness-aware reflection composite for the D3D12 backend. The SSR and RT
-// resolves now write reflected radiance (.rgb) + a Fresnel/gloss weight (.a) into
-// their output target instead of compositing inline; this two-pass effect blurs
-// that reflection by surface roughness and composites it over the scene into a
-// shared output the TAA / bloom / composite passes consume.
-//
-//   reflection_blur      (half-res): weight-averages the reflection over a
-//       roughness-scaled cone into `blur`. The expensive multi-tap part, run at a
-//       fraction of the pixels.
-//   reflection_composite (full-res): lerps the sharp full-res reflection against
-//       the upsampled half-res blur by roughness, then composites over the scene.
-//
-// Shared by both reflection paths: `encode_ssr_resolve` / `encode_rt_reflections`
-// each render their reflection target, then call `encode_reflection_composite` with
-// that target's SRV. Mirrors src/metal/post/ssr.rs (the composite half).
+//! Roughness-aware reflection composite for the D3D12 backend. The SSR and RT
+//! resolves now write reflected radiance (.rgb) + a Fresnel/gloss weight (.a) into
+//! their output target instead of compositing inline; this two-pass effect blurs
+//! that reflection by surface roughness and composites it over the scene into a
+//! shared output the TAA / bloom / composite passes consume.
+//!
+//!   reflection_blur      (half-res): weight-averages the reflection over a
+//!       roughness-scaled cone into `blur`. The expensive multi-tap part, run at a
+//!       fraction of the pixels.
+//!   reflection_composite (full-res): lerps the sharp full-res reflection against
+//!       the upsampled half-res blur by roughness, then composites over the scene.
+//!
+//! Shared by both reflection paths: `encode_ssr_resolve` / `encode_rt_reflections`
+//! each render their reflection target, then call `encode_reflection_composite` with
+//! that target's SRV. Mirrors src/metal/post/ssr.rs (the composite half).
 
 use concinnity_core::render::post::device::PostBlend;
 use windows::Win32::Graphics::Direct3D12::*;

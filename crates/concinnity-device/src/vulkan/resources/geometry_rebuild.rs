@@ -1,19 +1,17 @@
-// src/vulkan/resources/geometry_rebuild.rs
-//
-// Hot-reload rebuild of the shared static + skinned vertex / index buffers
-// when a re-imported `.glb` no longer fits in its init-time slot. Mirrors
-// `directx/geometry_rebuild.rs` and `metal/resources/geometry.rs +
-// metal/resources/skinning.rs`'s rebuild paths.
-//
-// Vulkan's DEVICE_LOCAL buffers are not host-visible, so the rebuild forces
-// a CPU round-trip: a one-shot `cmd_copy_buffer` reads the live VB/IB into
-// HOST_VISIBLE staging, the new contents are spliced CPU-side, fresh
-// DEVICE_LOCAL buffers are allocated at the post-rebuild size, and the
-// rebuilt data is uploaded via the existing `write_geometry_region` helper.
-// Streamed-mesh sub-allocators (`mesh_vtx_alloc`, `mesh_idx_alloc`) are
-// **not** preserved: the rebuilt buffer is sized exactly for the current
-// draws, so any subsequent `upload_mesh` will fail allocation. `cn debug`-
-// only by design; matches DirectX + Metal.
+//! Hot-reload rebuild of the shared static + skinned vertex / index buffers
+//! when a re-imported `.glb` no longer fits in its init-time slot. Mirrors
+//! `directx/geometry_rebuild.rs` and `metal/resources/geometry.rs +
+//! metal/resources/skinning.rs`'s rebuild paths.
+//!
+//! Vulkan's DEVICE_LOCAL buffers are not host-visible, so the rebuild forces
+//! a CPU round-trip: a one-shot `cmd_copy_buffer` reads the live VB/IB into
+//! HOST_VISIBLE staging, the new contents are spliced CPU-side, fresh
+//! DEVICE_LOCAL buffers are allocated at the post-rebuild size, and the
+//! rebuilt data is uploaded via the existing `write_geometry_region` helper.
+//! Streamed-mesh sub-allocators (`mesh_vtx_alloc`, `mesh_idx_alloc`) are
+//! **not** preserved: the rebuilt buffer is sized exactly for the current
+//! draws, so any subsequent `upload_mesh` will fail allocation. `cn debug`-
+//! only by design; matches DirectX + Metal.
 
 use ash::vk;
 use concinnity_core::gfx::mesh_payload::{SkinnedVertex, Vertex};

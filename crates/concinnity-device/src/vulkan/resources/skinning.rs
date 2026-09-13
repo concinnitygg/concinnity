@@ -1,9 +1,7 @@
-// src/vulkan/resources/skinning.rs
-//
-// Skinned-mesh upload, per-frame joint upload, and helpers for VkContext.
-// Builds the skinned pipelines + per-(frame, object) joint storage buffers
-// once at init; per-frame `update_skinned_pose` + `upload_joint_matrices`
-// keep the matrices fresh from the gameplay-side pose update.
+//! Skinned-mesh upload, per-frame joint upload, and helpers for VkContext.
+//! Builds the skinned pipelines + per-(frame, object) joint storage buffers
+//! once at init; per-frame `update_skinned_pose` + `upload_joint_matrices`
+//! keep the matrices fresh from the gameplay-side pose update.
 
 use ash::vk;
 use concinnity_core::gfx::mesh_payload;

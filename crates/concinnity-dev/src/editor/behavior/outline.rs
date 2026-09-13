@@ -1,11 +1,9 @@
-// src/editor/behavior/outline.rs
-//
-// Flattening a Behavior's args into the panel's row list. Everything the asset
-// declares -- its source, its scope, locals, queries, and the whole node body
-// with its expression trees -- becomes one indented outline, so a node graph
-// and its operands are browsed and edited the same way. Each row carries the
-// path of the value it edits and, when it is a list member, the path the
-// delete / reorder buttons act on.
+//! Flattening a Behavior's args into the panel's row list. Everything the asset
+//! declares -- its source, its scope, locals, queries, and the whole node body
+//! with its expression trees -- becomes one indented outline, so a node graph
+//! and its operands are browsed and edited the same way. Each row carries the
+//! path of the value it edits and, when it is a list member, the path the
+//! delete / reorder buttons act on.
 
 use serde_json::Value;
 

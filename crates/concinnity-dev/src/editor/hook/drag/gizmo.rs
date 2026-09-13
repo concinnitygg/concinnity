@@ -1,16 +1,14 @@
-// src/editor/hook/drag/gizmo.rs
-//
-// EditorHook: the gizmo drive over the whole selection. One handle skeleton,
-// three modes (T/R/S keys), anchored at the selection centroid: translate
-// applies one shared world-space delta to every member; rotate orbits member
-// positions about the centroid while spinning each member the same amount
-// (the standard group rotate); scale stretches each member and pushes its
-// position away from the centroid along the dragged axis. While the button is
-// held every member's live `Transform` changes (the renderer, pick index, and
-// selection rings all follow, so the scene previews the edit without a
-// rebuild); releasing commits the changed args of ALL members to their
-// authored entries as ONE undo step (`mark_changed` snapshots the pre-drag
-// entry list once); Escape cancels and restores the start state.
+//! EditorHook: the gizmo drive over the whole selection. One handle skeleton,
+//! three modes (T/R/S keys), anchored at the selection centroid: translate
+//! applies one shared world-space delta to every member; rotate orbits member
+//! positions about the centroid while spinning each member the same amount
+//! (the standard group rotate); scale stretches each member and pushes its
+//! position away from the centroid along the dragged axis. While the button is
+//! held every member's live `Transform` changes (the renderer, pick index, and
+//! selection rings all follow, so the scene previews the edit without a
+//! rebuild); releasing commits the changed args of ALL members to their
+//! authored entries as ONE undo step (`mark_changed` snapshots the pre-drag
+//! entry list once); Escape cancels and restores the start state.
 
 use concinnity_core::components::{Camera3D, FrameInput, GlobalTransform, Parent, Transform};
 use concinnity_core::ecs::Entity;

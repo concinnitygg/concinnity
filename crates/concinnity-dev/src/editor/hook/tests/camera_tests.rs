@@ -1,12 +1,10 @@
-// src/editor/hook/tests/camera_tests.rs
-//
-// The editor's camera navigation drives: the Alt+drag tumble
-// (`hook/drive/orbit.rs`), the eased glide that F-framing and a bookmark recall
-// ride on (`hook/drive/glide.rs`), and the numbered pose slots
-// (`hook/bookmarks.rs`). The pose math each of these calls is pure and tested
-// beside it (`editor/viewport/orbit.rs`, `editor/viewport/framing.rs`); asserted here is what the
-// drives own -- when a drag or glide starts, what it writes to the live camera,
-// and what hands control back.
+//! The editor's camera navigation drives: the Alt+drag tumble
+//! (`hook/drive/orbit.rs`), the eased glide that F-framing and a bookmark recall
+//! ride on (`hook/drive/glide.rs`), and the numbered pose slots
+//! (`hook/bookmarks.rs`). The pose math each of these calls is pure and tested
+//! beside it (`editor/viewport/orbit.rs`, `editor/viewport/framing.rs`); asserted here is what the
+//! drives own -- when a drag or glide starts, what it writes to the live camera,
+//! and what hands control back.
 
 use concinnity_core::components::{Camera3D, FrameInput, InputKey, Transform};
 use concinnity_core::ecs::PickEntry;

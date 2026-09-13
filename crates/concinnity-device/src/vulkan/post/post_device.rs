@@ -1,16 +1,14 @@
-// src/vulkan/post/post_device.rs
-//
-// Vulkan's implementation of the shared fullscreen post-pass seam
-// (`render::post::device::PostPassDevice`).
-//
-// Everything a pass used to own per effect is derived here from what the single
-// source declares: the descriptor set layout is N combined image samplers, the
-// pipeline layout adds a fragment push-constant range of the declared size and,
-// for a probe-reading program, the forward global set as set 1, and the render
-// pass comes from the target's format and load action. The sets themselves are
-// allocated per frame (post/set_arena.rs) rather than pre-wired per effect,
-// which is what removes the `rewire_*` a pass needed for every input another
-// effect might own.
+//! Vulkan's implementation of the shared fullscreen post-pass seam
+//! (`render::post::device::PostPassDevice`).
+//!
+//! Everything a pass used to own per effect is derived here from what the single
+//! source declares: the descriptor set layout is N combined image samplers, the
+//! pipeline layout adds a fragment push-constant range of the declared size and,
+//! for a probe-reading program, the forward global set as set 1, and the render
+//! pass comes from the target's format and load action. The sets themselves are
+//! allocated per frame (post/set_arena.rs) rather than pre-wired per effect,
+//! which is what removes the `rewire_*` a pass needed for every input another
+//! effect might own.
 
 use ash::vk;
 use concinnity_core::render::error::{RenderError, RenderResult};

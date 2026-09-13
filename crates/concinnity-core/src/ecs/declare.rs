@@ -1,17 +1,15 @@
-// src/ecs/declare.rs
-//
-// The macro an application declares its own component types with.
-//
-// The engine's registry is a closed list, and stays one: its entries have blob
-// discriminants, authoring names, and a column each in the storage struct. A
-// type declared here has none of that. It gets a discriminant past the last
-// registered one, a column in `ExtColumns`, and the `ComponentSlot` impl that
-// makes the two reachable -- which is the whole of what the ECS asks of a
-// component type.
-//
-// Discriminants come from list position, exactly as the registry's do, so
-// nothing is hand-numbered. That is also why one invocation has to cover an
-// application's whole set: a second would start counting from the same base.
+//! The macro an application declares its own component types with.
+//!
+//! The engine's registry is a closed list, and stays one: its entries have blob
+//! discriminants, authoring names, and a column each in the storage struct. A
+//! type declared here has none of that. It gets a discriminant past the last
+//! registered one, a column in `ExtColumns`, and the `ComponentSlot` impl that
+//! makes the two reachable -- which is the whole of what the ECS asks of a
+//! component type.
+//!
+//! Discriminants come from list position, exactly as the registry's do, so
+//! nothing is hand-numbered. That is also why one invocation has to cover an
+//! application's whole set: a second would start counting from the same base.
 
 /// The first discriminant no registered component uses, and so where a
 /// [`declare_components!`](crate::declare_components) list starts counting.

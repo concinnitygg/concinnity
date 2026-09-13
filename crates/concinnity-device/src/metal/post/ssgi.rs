@@ -1,9 +1,7 @@
-// src/metal/post/ssgi.rs
-//
-// Metal's share of screen-space global illumination, which is its settings and
-// where the pass reads and writes this frame. The gather and composite -- their
-// pipelines, the reduced gather target and both draws -- are written once in
-// `concinnity_core::render::post::ssgi` and reach Metal through `MtlPostDevice`.
+//! Metal's share of screen-space global illumination, which is its settings and
+//! where the pass reads and writes this frame. The gather and composite -- their
+//! pipelines, the reduced gather target and both draws -- are written once in
+//! `concinnity_core::render::post::ssgi` and reach Metal through `MtlPostDevice`.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::render_types;

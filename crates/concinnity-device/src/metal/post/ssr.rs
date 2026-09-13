@@ -1,11 +1,9 @@
-// src/metal/post/ssr.rs
-//
-// Screen-space reflections: the reflection targets the SSR and ray-traced
-// resolves write, the roughness-aware blur + composite that blends them over
-// the scene, and where the resolve's inputs come from this frame. The resolve
-// itself -- its pipeline and its draw -- is written once in
-// `concinnity_core::render::post::ssr` and reaches Metal through
-// `MtlPostDevice`.
+//! Screen-space reflections: the reflection targets the SSR and ray-traced
+//! resolves write, the roughness-aware blur + composite that blends them over
+//! the scene, and where the resolve's inputs come from this frame. The resolve
+//! itself -- its pipeline and its draw -- is written once in
+//! `concinnity_core::render::post::ssr` and reaches Metal through
+//! `MtlPostDevice`.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::render_types;

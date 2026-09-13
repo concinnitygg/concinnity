@@ -1,18 +1,16 @@
-// src/directx/backend.rs
-//
-// RenderBackend impl for DxContext. Thin forwarders to the inherent
-// methods scattered across directx/{context,resources}.rs.
-//
-// The trait splits into one supertrait per operation family, so this is one
-// impl block per family, in the order they are declared on `RenderBackend`.
-//
-// Most forwarders are a mechanical 1:1 call into the inherent method of the
-// same name, so each block states the signatures and the shared `forward!`
-// macro writes the bodies. `assert = debug_assert_main_thread` guards the
-// generated `&mut self` arms, so every mutation reached through the boxed
-// trait object proves the main-thread invariant the `unsafe impl Send for
-// DxContext` rests on. Forwarders that rename, drop args, or have a custom body
-// stay hand-written beside the invocation. Mirrors src/metal/backend.rs.
+//! RenderBackend impl for DxContext. Thin forwarders to the inherent
+//! methods scattered across directx/{context,resources}.rs.
+//!
+//! The trait splits into one supertrait per operation family, so this is one
+//! impl block per family, in the order they are declared on `RenderBackend`.
+//!
+//! Most forwarders are a mechanical 1:1 call into the inherent method of the
+//! same name, so each block states the signatures and the shared `forward!`
+//! macro writes the bodies. `assert = debug_assert_main_thread` guards the
+//! generated `&mut self` arms, so every mutation reached through the boxed
+//! trait object proves the main-thread invariant the `unsafe impl Send for
+//! DxContext` rests on. Forwarders that rename, drop args, or have a custom body
+//! stay hand-written beside the invocation. Mirrors src/metal/backend.rs.
 
 use concinnity_core::bake;
 use concinnity_core::components;

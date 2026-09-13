@@ -1,8 +1,6 @@
-// src/directx/error.rs
-//
-// Classify D3D12 / DXGI HRESULTs into the RenderError boundary vocabulary.
-// Device removal is detected at Present; `classify_present_failure` refines
-// the loss class with the device's own `GetDeviceRemovedReason` verdict.
+//! Classify D3D12 / DXGI HRESULTs into the RenderError boundary vocabulary.
+//! Device removal is detected at Present; `classify_present_failure` refines
+//! the loss class with the device's own `GetDeviceRemovedReason` verdict.
 
 use concinnity_core::render::error::{DeviceLostReason, RenderError};
 use windows::Win32::Foundation::E_OUTOFMEMORY;

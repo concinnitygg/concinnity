@@ -1,9 +1,7 @@
-// src/debug/hot_reload/decode.rs
-//
-// Off-thread asset decode + apply: spawns the decode + envmap-convolution
-// worker threads, then `poll_pending_assets` / `poll_pending_envmap` drain the
-// completed work on a later frame and push it through the backend `update_*`
-// calls. Keeps the (seconds-long) decode off the render thread.
+//! Off-thread asset decode + apply: spawns the decode + envmap-convolution
+//! worker threads, then `poll_pending_assets` / `poll_pending_envmap` drain the
+//! completed work on a later frame and push it through the backend `update_*`
+//! calls. Keeps the (seconds-long) decode off the render thread.
 
 use concinnity_core::components::build_skeleton_from_joint_defs;
 use concinnity_core::gfx::render_types;

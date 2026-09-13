@@ -1,5 +1,3 @@
-// src/components/screen_command.rs
-
 use crate::ecs::asset_id::AssetId;
 
 /// Runtime-only event sent by UiInputSystem when a `screen:*` action fires.

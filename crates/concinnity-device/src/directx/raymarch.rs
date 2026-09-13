@@ -1,44 +1,42 @@
-// src/directx/raymarch.rs
-//
-// Per-frame encoder for the raymarched SDF volume pass on D3D12. Runs at
-// `PassId::Raymarch`, between `AutoExposure` and `Decals` on the
-// hdr_resolve RMW chain. Each `SdfVolume` rasterizes the back faces of
-// its world-space bounding box and runs a user-authored HLSL fragment
-// shader that sphere-traces the SDF inside the box. HLSL port of
-// `src/metal/raymarch.rs`: same shader interface, same
-// depth-compositing rules.
-//
-// DX architecture:
-//   * One `ID3D12PipelineState` per `SdfVolume` (built at init from the
-//     engine-shipped helpers + the user's HLSL bytes + the engine-shipped
-//     template). The wrap order is helpers → user → template so the
-//     template's `raymarch_fragment` can call the user's `map` / `shade`
-//     through the forward declarations in the helpers.
-//   * One shared unit-cube VB + IB for the proxy geometry; 8 corners /
-//     36 indices, allocated once at init. The encoder draws back faces
-//     only (cull mode = Front) so we get exactly one fragment per pixel
-//     inside the box regardless of camera position.
-//   * Per-volume `SdfVolumeUniforms` cbuffer (static: `center`, `extent`,
-//     `params`, ... don't change frame-to-frame) allocated once at init.
-//   * Per-frame `RaymarchView` cbuffer ring (triple-buffered).
-//   * Color attachment = `hdr_resolve` (LOAD, opaque write). Depth
-//     attachment = the main depth buffer in `DEPTH_WRITE`: the fragment
-//     writes hit depth via `SV_DepthLessEqual` so downstream passes
-//     (decals, fog, SSR, TAA, ...) see the raymarched surface.
-//
-// Backend filter. The asset's `fragment_shader` field holds a path
-// to the user shader; the build pipeline packs the file bytes verbatim
-// into the payload. On D3D12 we can only consume `.hlsl` payloads:
-// `.metal` SDFs (the Metal-first authoring path) are skipped at init
-// with a logged warning, and the rest of the world renders unchanged.
-// Authors who want cross-backend SDFs ship parallel `.metal` + `.hlsl`
-// files and declare one `SdfVolume` per backend.
-//
-// Currently unimplemented on DirectX:
-//   * No `depth_copy` snapshot, so no in-shader rasterized-depth early-
-//     out (hardware depth test still composites correctly: see the
-//     template's caveat). Volumes whose bbox sits fully behind
-//     rasterized geometry pay the full march cost.
+//! Per-frame encoder for the raymarched SDF volume pass on D3D12. Runs at
+//! `PassId::Raymarch`, between `AutoExposure` and `Decals` on the
+//! hdr_resolve RMW chain. Each `SdfVolume` rasterizes the back faces of
+//! its world-space bounding box and runs a user-authored HLSL fragment
+//! shader that sphere-traces the SDF inside the box. HLSL port of
+//! `src/metal/raymarch.rs`: same shader interface, same
+//! depth-compositing rules.
+//!
+//! DX architecture:
+//!   * One `ID3D12PipelineState` per `SdfVolume` (built at init from the
+//!     engine-shipped helpers + the user's HLSL bytes + the engine-shipped
+//!     template). The wrap order is helpers → user → template so the
+//!     template's `raymarch_fragment` can call the user's `map` / `shade`
+//!     through the forward declarations in the helpers.
+//!   * One shared unit-cube VB + IB for the proxy geometry; 8 corners /
+//!     36 indices, allocated once at init. The encoder draws back faces
+//!     only (cull mode = Front) so we get exactly one fragment per pixel
+//!     inside the box regardless of camera position.
+//!   * Per-volume `SdfVolumeUniforms` cbuffer (static: `center`, `extent`,
+//!     `params`, ... don't change frame-to-frame) allocated once at init.
+//!   * Per-frame `RaymarchView` cbuffer ring (triple-buffered).
+//!   * Color attachment = `hdr_resolve` (LOAD, opaque write). Depth
+//!     attachment = the main depth buffer in `DEPTH_WRITE`: the fragment
+//!     writes hit depth via `SV_DepthLessEqual` so downstream passes
+//!     (decals, fog, SSR, TAA, ...) see the raymarched surface.
+//!
+//! Backend filter. The asset's `fragment_shader` field holds a path
+//! to the user shader; the build pipeline packs the file bytes verbatim
+//! into the payload. On D3D12 we can only consume `.hlsl` payloads:
+//! `.metal` SDFs (the Metal-first authoring path) are skipped at init
+//! with a logged warning, and the rest of the world renders unchanged.
+//! Authors who want cross-backend SDFs ship parallel `.metal` + `.hlsl`
+//! files and declare one `SdfVolume` per backend.
+//!
+//! Currently unimplemented on DirectX:
+//!   * No `depth_copy` snapshot, so no in-shader rasterized-depth early-
+//!     out (hardware depth test still composites correctly: see the
+//!     template's caveat). Volumes whose bbox sits fully behind
+//!     rasterized geometry pay the full march cost.
 
 use concinnity_core::components::sdf_programs::SdfPrograms;
 use concinnity_core::components::sdf_volume::SdfVolume;

@@ -1,28 +1,26 @@
-// src/editor/behavior/relations.rs
-//
-// The world's behaviors as one map, so what a body does is legible next to what
-// it sets off. A behavior on its own says what it runs; it does not say what
-// started it or what it starts, and that is the part a panel showing one
-// behavior at a time cannot answer.
-//
-// Behaviors reach each other through the world, never directly: one writes a
-// variable another fires on, spawns an entity another picks up, or sends the
-// world somewhere a third is waiting. So the map draws those middlemen as cards
-// of their own -- a trigger, a variable, a world asset -- and a chain reads left
-// to right, from what starts something to what it starts.
-//
-// An asset earns a card where reaching it is itself a relation. What fires a
-// behavior (a trigger volume, an interactable prop) and where a behavior sends
-// the world (a scene, a screen, the story) always are. An entity a body merely
-// acts on is one only once a second behavior reaches the same entity: a card per
-// named prop would bury the couplings worth reading under the ones that are just
-// one body's own business.
-//
-// Naming an asset is not declaring one, so a name the world does not answer is
-// drawn as its own kind of card rather than passed off as real: it is a build
-// error waiting to happen, and two behaviors sharing a typo still share it.
-//
-// The result is an ordinary `Chart`, so the chart view draws it unchanged.
+//! The world's behaviors as one map, so what a body does is legible next to what
+//! it sets off. A behavior on its own says what it runs; it does not say what
+//! started it or what it starts, and that is the part a panel showing one
+//! behavior at a time cannot answer.
+//!
+//! Behaviors reach each other through the world, never directly: one writes a
+//! variable another fires on, spawns an entity another picks up, or sends the
+//! world somewhere a third is waiting. So the map draws those middlemen as cards
+//! of their own -- a trigger, a variable, a world asset -- and a chain reads left
+//! to right, from what starts something to what it starts.
+//!
+//! An asset earns a card where reaching it is itself a relation. What fires a
+//! behavior (a trigger volume, an interactable prop) and where a behavior sends
+//! the world (a scene, a screen, the story) always are. An entity a body merely
+//! acts on is one only once a second behavior reaches the same entity: a card per
+//! named prop would bury the couplings worth reading under the ones that are just
+//! one body's own business.
+//!
+//! Naming an asset is not declaring one, so a name the world does not answer is
+//! drawn as its own kind of card rather than passed off as real: it is a build
+//! error waiting to happen, and two behaviors sharing a typo still share it.
+//!
+//! The result is an ordinary `Chart`, so the chart view draws it unchanged.
 
 use serde_json::Value;
 

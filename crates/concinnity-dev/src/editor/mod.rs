@@ -1,30 +1,28 @@
-// src/editor/mod.rs
-//
-// The `cn editor` run path. Like `cn debug`, the editor compiles world.jsonl in
-// memory: the session boots from the authored entries, not from the blobs a
-// build left under the state tree, so what opens is always what the world file
-// says. It overlays an injected editor HUD and persists edits by writing
-// world.jsonl. The blobs are refreshed only by an explicit build (`cn build`,
-// or the console's cook command). An optional debug port reuses the existing
-// debug server so an MCP client can inspect and drive a session.
-//
-// `cn editor -f <world>` opens that world. With no world named the session
-// opens an empty scene under the Worlds panel (`editor/worlds/`), which lists
-// the project's worlds and opens, creates, or deletes one.
-//
-// The subsystem splits in one place and splits there all the way down. `hook/`
-// is the editor as a single per-frame drive: it holds every piece of session
-// state, and it is the only module here that reads a frame's input or decides
-// that the world changes. Every module below is what it drives. The panels and
-// the viewport are pure -- geometry, a model, or math over state handed in --
-// which is what lets them be tested without a window; the few that do reach
-// outside (`session_store`, `file_dialog`, `thumbs`, `gltf_export/`, and
-// `live/` writing the running world) say so on their own line.
-//
-// Where a concern lives follows from how big it got. A panel is one or two
-// files under `panels/`; a panel whose model outgrew that keeps its own
-// directory (`behavior/`, `palette/`, `worlds/`). What each module holds is on
-// the line above its declaration.
+//! The `cn editor` run path. Like `cn debug`, the editor compiles world.jsonl in
+//! memory: the session boots from the authored entries, not from the blobs a
+//! build left under the state tree, so what opens is always what the world file
+//! says. It overlays an injected editor HUD and persists edits by writing
+//! world.jsonl. The blobs are refreshed only by an explicit build (`cn build`,
+//! or the console's cook command). An optional debug port reuses the existing
+//! debug server so an MCP client can inspect and drive a session.
+//!
+//! `cn editor -f <world>` opens that world. With no world named the session
+//! opens an empty scene under the Worlds panel (`editor/worlds/`), which lists
+//! the project's worlds and opens, creates, or deletes one.
+//!
+//! The subsystem splits in one place and splits there all the way down. `hook/`
+//! is the editor as a single per-frame drive: it holds every piece of session
+//! state, and it is the only module here that reads a frame's input or decides
+//! that the world changes. Every module below is what it drives. The panels and
+//! the viewport are pure -- geometry, a model, or math over state handed in --
+//! which is what lets them be tested without a window; the few that do reach
+//! outside (`session_store`, `file_dialog`, `thumbs`, `gltf_export/`, and
+//! `live/` writing the running world) say so on their own line.
+//!
+//! Where a concern lives follows from how big it got. A panel is one or two
+//! files under `panels/`; a panel whose model outgrew that keeps its own
+//! directory (`behavior/`, `palette/`, `worlds/`). What each module holds is on
+//! the line above its declaration.
 
 // The Behavior panel's model half: one behavior's authored args as an editable
 // node graph, plus the palette, outline and chart views over it.

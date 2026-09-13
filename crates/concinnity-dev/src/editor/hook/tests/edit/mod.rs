@@ -1,6 +1,4 @@
-// src/editor/hook/tests/edit/mod.rs
-//
-// The companions for `hook/edit/`, one per module there.
+//! The companions for `hook/edit/`, one per module there.
 
 mod asset_tree_tests;
 mod behavior_tests;

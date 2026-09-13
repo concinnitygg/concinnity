@@ -1,61 +1,59 @@
-// src/metal/pass_timing.rs
-//
-// Per-pass GPU timing on Metal via `MTLCounterSampleBuffer`. The whole-frame
-// timer in `MtlContext.diagnostics.gpu_time_us` only captures `GPUStartTime` /
-// `GPUEndTime`; this module supplements it with one start + end timestamp
-// per pass so the profiler overlay can attribute milliseconds to shadow /
-// main / SSAO / SSR / etc.
-//
-// Wiring. Each pass calls
-// [`PassTimingResources::attach_render`] (or `attach_compute`) on its
-// `MTLRenderPassDescriptor` / `MTLComputePassDescriptor` before creating
-// the encoder. The helper writes start- and end-of-encoder sample indices
-// into the descriptor's `sampleBufferAttachments[0]` and reserves a unique
-// pair of slots for that pass. Multi-encoder passes (the four shadow
-// cascades, the bloom mip chain) call `attach_render_first` on the first
-// encoder and `attach_render_last` on the last; intermediate encoders
-// don't write any timestamps and so don't contribute.
-//
-// Which stage boundary a render pass samples. Apple GPUs are tile-based
-// deferred: a render pass runs as a vertex/tiling phase and then a
-// fragment/rendering phase, and the tiling phase of one pass overlaps the
-// fragment phase of the passes before it. A pass's vertex phase therefore
-// starts near the top of the frame whenever nothing gates it, so
-// end-of-fragment minus start-of-vertex is time-to-end-of-pass, not the pass's
-// cost: the render passes then read monotonically through graph order and their
-// sum runs well past the frame's own GPU span. Render passes are bracketed
-// start-of-fragment to end-of-fragment instead, which is the pass's occupancy
-// of the fragment pipeline -- the phase that serializes across passes on one
-// queue, and where the work is on this hardware. Compute passes have one stage
-// and keep their encoder boundaries.
-//
-// The four stage boundaries are one capability, `AtStageBoundary`, which
-// [`PassTimingResources::new`] requires; a device without it reports no per-pass
-// timing rather than zeroes. Every boundary this module names reports a real
-// timestamp on Apple silicon (measured: vertex and fragment phases resolve to
-// distinct, ordered values), so there is no boundary to work around here.
-//
-// Summing. Fragment phases serialize on a queue in the common case, so the
-// graphics queue's per-pass sum is bounded by the frame's GPU span and falls
-// short of it by the vertex/tiling bubbles no fragment phase covers. Two things
-// break the bound rather than the measurement: the async-compute queue's passes
-// overlap the graphics ones, so the relation holds per queue and not overall,
-// and the GPU may run two independent render passes' fragment phases at once
-// (a depth-only shadow pass alongside a shading pass), which is a real overlap
-// both spans report honestly.
-//
-// Race avoidance. The sample buffer is per-frame: a ring of
-// `FRAMES_IN_FLIGHT` buffers is rotated each frame so the CPU-side resolve
-// of frame N-1's buffer never overlaps frame N's GPU writes. The completion
-// handler for frame N reads frame-N's buffer and publishes the results into
-// `MtlContext.pass_times_us_atomic[..]`; `render_stats()` then copies the
-// atomics into the `RenderStats.pass_times_us` array.
-//
-// Calibration. Apple Silicon's `MTLCommonCounterSetTimestamp` reports
-// the GPU clock in mach absolute time units, which on Apple Silicon
-// matches nanoseconds 1:1. We treat the raw u64 as nanoseconds and divide
-// by 1000 for microseconds. A proper `sampleTimestamps:gpuTimestamp:`
-// calibration would be needed for a future Intel Mac path.
+//! Per-pass GPU timing on Metal via `MTLCounterSampleBuffer`. The whole-frame
+//! timer in `MtlContext.diagnostics.gpu_time_us` only captures `GPUStartTime` /
+//! `GPUEndTime`; this module supplements it with one start + end timestamp
+//! per pass so the profiler overlay can attribute milliseconds to shadow /
+//! main / SSAO / SSR / etc.
+//!
+//! Wiring. Each pass calls
+//! [`PassTimingResources::attach_render`] (or `attach_compute`) on its
+//! `MTLRenderPassDescriptor` / `MTLComputePassDescriptor` before creating
+//! the encoder. The helper writes start- and end-of-encoder sample indices
+//! into the descriptor's `sampleBufferAttachments[0]` and reserves a unique
+//! pair of slots for that pass. Multi-encoder passes (the four shadow
+//! cascades, the bloom mip chain) call `attach_render_first` on the first
+//! encoder and `attach_render_last` on the last; intermediate encoders
+//! don't write any timestamps and so don't contribute.
+//!
+//! Which stage boundary a render pass samples. Apple GPUs are tile-based
+//! deferred: a render pass runs as a vertex/tiling phase and then a
+//! fragment/rendering phase, and the tiling phase of one pass overlaps the
+//! fragment phase of the passes before it. A pass's vertex phase therefore
+//! starts near the top of the frame whenever nothing gates it, so
+//! end-of-fragment minus start-of-vertex is time-to-end-of-pass, not the pass's
+//! cost: the render passes then read monotonically through graph order and their
+//! sum runs well past the frame's own GPU span. Render passes are bracketed
+//! start-of-fragment to end-of-fragment instead, which is the pass's occupancy
+//! of the fragment pipeline -- the phase that serializes across passes on one
+//! queue, and where the work is on this hardware. Compute passes have one stage
+//! and keep their encoder boundaries.
+//!
+//! The four stage boundaries are one capability, `AtStageBoundary`, which
+//! [`PassTimingResources::new`] requires; a device without it reports no per-pass
+//! timing rather than zeroes. Every boundary this module names reports a real
+//! timestamp on Apple silicon (measured: vertex and fragment phases resolve to
+//! distinct, ordered values), so there is no boundary to work around here.
+//!
+//! Summing. Fragment phases serialize on a queue in the common case, so the
+//! graphics queue's per-pass sum is bounded by the frame's GPU span and falls
+//! short of it by the vertex/tiling bubbles no fragment phase covers. Two things
+//! break the bound rather than the measurement: the async-compute queue's passes
+//! overlap the graphics ones, so the relation holds per queue and not overall,
+//! and the GPU may run two independent render passes' fragment phases at once
+//! (a depth-only shadow pass alongside a shading pass), which is a real overlap
+//! both spans report honestly.
+//!
+//! Race avoidance. The sample buffer is per-frame: a ring of
+//! `FRAMES_IN_FLIGHT` buffers is rotated each frame so the CPU-side resolve
+//! of frame N-1's buffer never overlaps frame N's GPU writes. The completion
+//! handler for frame N reads frame-N's buffer and publishes the results into
+//! `MtlContext.pass_times_us_atomic[..]`; `render_stats()` then copies the
+//! atomics into the `RenderStats.pass_times_us` array.
+//!
+//! Calibration. Apple Silicon's `MTLCommonCounterSetTimestamp` reports
+//! the GPU clock in mach absolute time units, which on Apple Silicon
+//! matches nanoseconds 1:1. We treat the raw u64 as nanoseconds and divide
+//! by 1000 for microseconds. A proper `sampleTimestamps:gpuTimestamp:`
+//! calibration would be needed for a future Intel Mac path.
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;

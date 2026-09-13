@@ -1,25 +1,23 @@
-// src/suballoc/block_alloc.rs
-//
-// A block pool: many small resources placed inside a few large blocks.
-//
-// A graphics API caps how many discrete allocations a device may hold at once
-// (Vulkan's `maxMemoryAllocationCount` is commonly 4096), and every allocation
-// carries driver-side page and bookkeeping overhead besides. A backend that
-// allocates once per resource spends that budget on the resource count rather
-// than the byte count, and runs out on a world the byte budget would have held
-// comfortably. Placing resources inside a handful of blocks decouples the two.
-//
-// This is pure policy: no backend types, no device handles, no I/O. It decides
-// *which block and what offset*; the caller owns the blocks and performs the
-// API-specific bind. `RangeAllocator` places
-// resources within one block, so blocks inherit its best-fit placement,
-// coalescing free list, and deferred frees keyed on a retire frame.
-//
-// The pool never allocates a block itself. `alloc` returns `None` when nothing
-// fits, and the caller sizes a block, hands it back via `add_block`, and
-// retries -- which is what keeps the device call out of this layer. Each
-// backend picks its own block size (geometric growth up to a cap), so the pool
-// only requires that a fresh block cover the request plus its alignment slack.
+//! A block pool: many small resources placed inside a few large blocks.
+//!
+//! A graphics API caps how many discrete allocations a device may hold at once
+//! (Vulkan's `maxMemoryAllocationCount` is commonly 4096), and every allocation
+//! carries driver-side page and bookkeeping overhead besides. A backend that
+//! allocates once per resource spends that budget on the resource count rather
+//! than the byte count, and runs out on a world the byte budget would have held
+//! comfortably. Placing resources inside a handful of blocks decouples the two.
+//!
+//! This is pure policy: no backend types, no device handles, no I/O. It decides
+//! *which block and what offset*; the caller owns the blocks and performs the
+//! API-specific bind. `RangeAllocator` places
+//! resources within one block, so blocks inherit its best-fit placement,
+//! coalescing free list, and deferred frees keyed on a retire frame.
+//!
+//! The pool never allocates a block itself. `alloc` returns `None` when nothing
+//! fits, and the caller sizes a block, hands it back via `add_block`, and
+//! retries -- which is what keeps the device call out of this layer. Each
+//! backend picks its own block size (geometric growth up to a cap), so the pool
+//! only requires that a fresh block cover the request plus its alignment slack.
 
 use super::range_alloc::RangeAllocator;
 

@@ -1,5 +1,3 @@
-// src/components/despawn_request.rs
-
 use crate::components::EntityTarget;
 
 /// Runtime-only event requesting that an authored placement be removed from the

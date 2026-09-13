@@ -1,29 +1,27 @@
-// src/vulkan/quality.rs
-//
-// Runtime application of the Quality-group settings (TAA / SSAO / SSR / SSGI /
-// auto-exposure). Each gates a render pass whose GPU resources (pipelines,
-// render targets, descriptor sets) are built once at init from the world's
-// PostProcessConfig, so applying a change at runtime means building or tearing
-// down those resources, not flipping a uniform.
-//
-// The reconcile below brings each feature's `Option` field to the desired state
-// (constructing a turning-on feature with the same `*Resources::new` the init
-// path runs, tearing down a turning-off one), then defers the whole target
-// rebuild + descriptor rewire to `rebuild_swapchain` -- the exact path a window
-// resize takes. Reusing it means a live toggle produces resources rewired
-// identically to a launch with the same config, with no second copy of the
-// intricate per-reader rewiring to drift. Bloom, decals, fog, particles, and
-// the uploaded geometry are untouched.
-//
-// Ray-traced reflections toggle the same way, with two extra costs: turning
-// them on builds the scene acceleration structure (`build_rt_accel`, a one-shot
-// fence-waited BLAS + TLAS over current geometry) plus the inline-`rayQueryEXT`
-// reflection pass, so a live enable hitches once proportional to triangle count.
-// And RT is only live-toggleable when the device is RT-capable -- the ray-query
-// device extensions are enabled at creation whenever capable (see
-// `create_logical_device`), since an extension cannot be added later; on an
-// RT-incapable GPU or under XeSS the toggle no-ops with a warning and RT stays
-// whatever it launched as (persisted for the next launch).
+//! Runtime application of the Quality-group settings (TAA / SSAO / SSR / SSGI /
+//! auto-exposure). Each gates a render pass whose GPU resources (pipelines,
+//! render targets, descriptor sets) are built once at init from the world's
+//! PostProcessConfig, so applying a change at runtime means building or tearing
+//! down those resources, not flipping a uniform.
+//!
+//! The reconcile below brings each feature's `Option` field to the desired state
+//! (constructing a turning-on feature with the same `*Resources::new` the init
+//! path runs, tearing down a turning-off one), then defers the whole target
+//! rebuild + descriptor rewire to `rebuild_swapchain` -- the exact path a window
+//! resize takes. Reusing it means a live toggle produces resources rewired
+//! identically to a launch with the same config, with no second copy of the
+//! intricate per-reader rewiring to drift. Bloom, decals, fog, particles, and
+//! the uploaded geometry are untouched.
+//!
+//! Ray-traced reflections toggle the same way, with two extra costs: turning
+//! them on builds the scene acceleration structure (`build_rt_accel`, a one-shot
+//! fence-waited BLAS + TLAS over current geometry) plus the inline-`rayQueryEXT`
+//! reflection pass, so a live enable hitches once proportional to triangle count.
+//! And RT is only live-toggleable when the device is RT-capable -- the ray-query
+//! device extensions are enabled at creation whenever capable (see
+//! `create_logical_device`), since an extension cannot be added later; on an
+//! RT-incapable GPU or under XeSS the toggle no-ops with a warning and RT stays
+//! whatever it launched as (persisted for the next launch).
 
 use ash::vk;
 use concinnity_core::gfx::auto_exposure;

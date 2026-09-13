@@ -1,5 +1,3 @@
-// src/components/volume_event.rs
-
 use crate::ecs::asset_id::AssetId;
 
 /// Runtime-only event published by the physics system when something crossing

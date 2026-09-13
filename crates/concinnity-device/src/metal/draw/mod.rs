@@ -1,16 +1,14 @@
-// src/metal/draw/mod.rs
-//
-// `MtlContext::draw_frame` -- the per-frame orchestration. The per-pass GPU
-// encoders live in sibling files:
-//
-//   shadow.rs    cascaded shadow map (depth-only, one render pass per cascade)
-//   main.rs      main HDR pass, GPU-driven bindless geometry
-//   composite.rs ACES tonemap + FXAA composite + text overlay
-//
-// Other passes (SSAO, SSR pre + resolve, decals, fog, velocity, TAA, bloom,
-// auto-exposure) live in their own files at the `metal/` level alongside
-// `decal.rs`, `fog.rs`, `post.rs`, etc., and are invoked through the
-// `self.encode_*` methods defined there.
+//! `MtlContext::draw_frame` -- the per-frame orchestration. The per-pass GPU
+//! encoders live in sibling files:
+//!
+//!   shadow.rs    cascaded shadow map (depth-only, one render pass per cascade)
+//!   main.rs      main HDR pass, GPU-driven bindless geometry
+//!   composite.rs ACES tonemap + FXAA composite + text overlay
+//!
+//! Other passes (SSAO, SSR pre + resolve, decals, fog, velocity, TAA, bloom,
+//! auto-exposure) live in their own files at the `metal/` level alongside
+//! `decal.rs`, `fog.rs`, `post.rs`, etc., and are invoked through the
+//! `self.encode_*` methods defined there.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 mod composite;

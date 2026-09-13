@@ -1,14 +1,12 @@
-// src/render/render_graph/reach.rs
-//
-// Transitive-closure bitset over a DAG whose edges all point from a lower
-// index to a higher one, which is what a topologically sorted pass list gives
-// us. One `u64` word per 64 passes per row, so the whole relation for a ~30
-// pass frame graph is 30 words: cheap enough to precompute once per compile and
-// answer every "is A ordered before B?" query in constant time.
-//
-// Two relations are built from it (see `super::schedule`): the dependency
-// closure, which is what correctness requires, and the schedule closure, which
-// is what the per-queue order plus the cross-queue signal / wait pairs deliver.
+//! Transitive-closure bitset over a DAG whose edges all point from a lower
+//! index to a higher one, which is what a topologically sorted pass list gives
+//! us. One `u64` word per 64 passes per row, so the whole relation for a ~30
+//! pass frame graph is 30 words: cheap enough to precompute once per compile and
+//! answer every "is A ordered before B?" query in constant time.
+//!
+//! Two relations are built from it (see `super::schedule`): the dependency
+//! closure, which is what correctness requires, and the schedule closure, which
+//! is what the per-queue order plus the cross-queue signal / wait pairs deliver.
 
 use alloc::vec;
 use alloc::vec::Vec;

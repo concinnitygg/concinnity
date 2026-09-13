@@ -1,23 +1,21 @@
-// src/metal/cull_readback.rs
-//
-// Per-object cull-status readback for the Metal backend. The `cn debug` WS
-// server's `cull-status` command routes here (via
-// `RenderBackend::read_cull_status`) to copy the GPU-driven cull's status
-// buffer into a host-readable buffer and hand back one `CullStatus` value per
-// live cull record.
-//
-// This is the only observable record of what the cull decided: the submitted
-// draw-call count is CPU-side and does not move when the GPU rejects an object,
-// and an object the Hi-Z test correctly occluded leaves no trace in the
-// presented pixels. Readback is synchronous, so it is a probe-only path, never
-// a per-frame one. Mirrors src/vulkan/cull_readback.rs.
-//
-// Metal's status buffer is a single `StorageModePrivate` allocation rather than
-// a per-frame ring (the decision and encode kernels of one frame are the only
-// readers), so this blits it into a `StorageModeShared` staging buffer on the
-// shared queue. Same-queue FIFO order puts that blit behind the frame command
-// buffer that wrote the statuses, and `waitUntilCompleted` puts the host read
-// behind the blit.
+//! Per-object cull-status readback for the Metal backend. The `cn debug` WS
+//! server's `cull-status` command routes here (via
+//! `RenderBackend::read_cull_status`) to copy the GPU-driven cull's status
+//! buffer into a host-readable buffer and hand back one `CullStatus` value per
+//! live cull record.
+//!
+//! This is the only observable record of what the cull decided: the submitted
+//! draw-call count is CPU-side and does not move when the GPU rejects an object,
+//! and an object the Hi-Z test correctly occluded leaves no trace in the
+//! presented pixels. Readback is synchronous, so it is a probe-only path, never
+//! a per-frame one. Mirrors src/vulkan/cull_readback.rs.
+//!
+//! Metal's status buffer is a single `StorageModePrivate` allocation rather than
+//! a per-frame ring (the decision and encode kernels of one frame are the only
+//! readers), so this blits it into a `StorageModeShared` staging buffer on the
+//! shared queue. Same-queue FIFO order puts that blit behind the frame command
+//! buffer that wrote the statuses, and `waitUntilCompleted` puts the host read
+//! behind the blit.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::cull_status;

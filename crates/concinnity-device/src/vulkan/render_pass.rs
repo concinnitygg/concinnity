@@ -1,7 +1,6 @@
-// src/vulkan/render_pass.rs
-//
-// Vulkan render-pass construction for the main, shadow, composite, and
-// bloom passes.
+//! Vulkan render-pass construction for the main, shadow, composite, and
+//! bloom passes.
+
 use ash::vk;
 
 use crate::vulkan::owned::{OwnedRenderPass, VkDevice};

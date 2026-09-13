@@ -1,18 +1,16 @@
-// src/vulkan/descriptor_layout.rs
-//
-// Canonical descriptor-set binding tables for the geometry render path, kept in
-// one place so the `layout(set = N, binding = M)` indices the GLSL shaders use
-// stay greppable and locked. `init.rs` builds the real `OwnedSetLayout`s
-// from these via `create_descriptor_set_layout`, and the per-frame descriptor
-// writes target the same binding numbers. The unit tests below assert each table
-// is gap-free + unique and pin the binding -> (type, stage) contract, so a
-// reordering, retype, or stage-flag change that would silently desync from the
-// shaders fails `cargo test` instead of reading garbage on the GPU. Vulkan
-// analogue of `directx/init/heap_layout.rs`'s slot tests.
-//
-// Only the geometry-path sets (global / per-object / shadow) are centralized
-// here; the post-process sets (composite, bloom, text) are simpler 1-3 binding
-// layouts still declared inline in `init.rs`.
+//! Canonical descriptor-set binding tables for the geometry render path, kept in
+//! one place so the `layout(set = N, binding = M)` indices the GLSL shaders use
+//! stay greppable and locked. `init.rs` builds the real `OwnedSetLayout`s
+//! from these via `create_descriptor_set_layout`, and the per-frame descriptor
+//! writes target the same binding numbers. The unit tests below assert each table
+//! is gap-free + unique and pin the binding -> (type, stage) contract, so a
+//! reordering, retype, or stage-flag change that would silently desync from the
+//! shaders fails `cargo test` instead of reading garbage on the GPU. Vulkan
+//! analogue of `directx/init/heap_layout.rs`'s slot tests.
+//!
+//! Only the geometry-path sets (global / per-object / shadow) are centralized
+//! here; the post-process sets (composite, bloom, text) are simpler 1-3 binding
+//! layouts still declared inline in `init.rs`.
 
 use ash::vk;
 use concinnity_core::render::uniforms::MAX_PROBES;

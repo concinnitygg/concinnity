@@ -1,28 +1,26 @@
-// src/vulkan/probe_prefilter.rs
-//
-// The convolution half of a runtime reflection-probe bake on Vulkan: the three
-// compute pipelines built from `probe_prefilter.slang`, the two cube images one
-// bake works between, and the dispatches that turn six captured faces into the
-// prefiltered radiance cube the specular term samples. Mirrors
-// `metal::probe_prefilter` and `directx::probe_prefilter`.
-//
-// The capture cube collects the six rendered faces (one array layer each) and
-// carries a mip chain the `probe_downsample` kernel fills; the probe cube is the
-// result, mip 0 a firefly-clamped copy of the capture and every mip after it a
-// GGX convolution at that mip's roughness. Both are R16G16B16A16_SFLOAT: the
-// faces are rendered as halfs, the clamp caps luminance well inside the format's
-// range, and it halves what a probe costs against the R32G32B32A32 cube the CPU
-// convolution used to upload.
-//
-// Nothing reads back. The whole convolution stays on the graphics queue, so the
-// frames that sample the finished cube are ordered after the dispatches that
-// wrote it by submission order alone.
-//
-// Layouts, which the barriers below are the whole of: the capture arrives in
-// TRANSFER_DST (the per-face copies write it), moves to GENERAL for the pyramid
-// build, then to SHADER_READ_ONLY_OPTIMAL for the GGX dispatches that sample it.
-// The probe cube sits in GENERAL for every dispatch that writes it and moves to
-// SHADER_READ_ONLY_OPTIMAL at install.
+//! The convolution half of a runtime reflection-probe bake on Vulkan: the three
+//! compute pipelines built from `probe_prefilter.slang`, the two cube images one
+//! bake works between, and the dispatches that turn six captured faces into the
+//! prefiltered radiance cube the specular term samples. Mirrors
+//! `metal::probe_prefilter` and `directx::probe_prefilter`.
+//!
+//! The capture cube collects the six rendered faces (one array layer each) and
+//! carries a mip chain the `probe_downsample` kernel fills; the probe cube is the
+//! result, mip 0 a firefly-clamped copy of the capture and every mip after it a
+//! GGX convolution at that mip's roughness. Both are R16G16B16A16_SFLOAT: the
+//! faces are rendered as halfs, the clamp caps luminance well inside the format's
+//! range, and it halves what a probe costs against the R32G32B32A32 cube the CPU
+//! convolution used to upload.
+//!
+//! Nothing reads back. The whole convolution stays on the graphics queue, so the
+//! frames that sample the finished cube are ordered after the dispatches that
+//! wrote it by submission order alone.
+//!
+//! Layouts, which the barriers below are the whole of: the capture arrives in
+//! TRANSFER_DST (the per-face copies write it), moves to GENERAL for the pyramid
+//! build, then to SHADER_READ_ONLY_OPTIMAL for the GGX dispatches that sample it.
+//! The probe cube sits in GENERAL for every dispatch that writes it and moves to
+//! SHADER_READ_ONLY_OPTIMAL at install.
 
 use ash::vk;
 use concinnity_core::render::error::RenderResult;

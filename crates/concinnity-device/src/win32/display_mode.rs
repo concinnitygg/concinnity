@@ -1,15 +1,13 @@
-// src/win32/display_mode.rs
-//
-// Display-mode enumeration and fullscreen mode switching via the Win32
-// ChangeDisplaySettings family. `enumerate` lists the modes (resolution +
-// refresh rate) of the monitor the window sits on, feeding the Resolution
-// settings row. While the window is in (borderless) fullscreen,
-// `FullscreenDisplayMode` holds the monitor to the user's chosen mode with
-// `ChangeDisplaySettingsExW` and restores the monitor's original mode when the
-// window leaves fullscreen or the context is dropped (`CDS_FULLSCREEN` marks
-// the switch temporary, so the OS also restores it if the process dies).
-// Outside fullscreen the choice is only remembered. Mirrors
-// `metal/display_mode.rs`.
+//! Display-mode enumeration and fullscreen mode switching via the Win32
+//! ChangeDisplaySettings family. `enumerate` lists the modes (resolution +
+//! refresh rate) of the monitor the window sits on, feeding the Resolution
+//! settings row. While the window is in (borderless) fullscreen,
+//! `FullscreenDisplayMode` holds the monitor to the user's chosen mode with
+//! `ChangeDisplaySettingsExW` and restores the monitor's original mode when the
+//! window leaves fullscreen or the context is dropped (`CDS_FULLSCREEN` marks
+//! the switch temporary, so the OS also restores it if the process dies).
+//! Outside fullscreen the choice is only remembered. Mirrors
+//! `metal/display_mode.rs`.
 
 use concinnity_core::render::display_mode::{DisplayMode, best_native_index};
 use windows::Win32::Foundation::HWND;

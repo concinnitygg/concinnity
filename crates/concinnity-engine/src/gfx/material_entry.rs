@@ -1,11 +1,9 @@
-// src/gfx/material_entry.rs
-//
-// One decoded Material as the draw list consumes it: the GPU uniforms plus the
-// shared-pool slots each texture reference resolves to. The translation from a
-// compiled `Material` to this is the renderer's own reading of the asset, so it
-// lives here rather than inside the init pass that first needed it: init bakes
-// the whole table at load, and the editor's live draw seam bakes one material
-// again when an edit reassigns it.
+//! One decoded Material as the draw list consumes it: the GPU uniforms plus the
+//! shared-pool slots each texture reference resolves to. The translation from a
+//! compiled `Material` to this is the renderer's own reading of the asset, so it
+//! lives here rather than inside the init pass that first needed it: init bakes
+//! the whole table at load, and the editor's live draw seam bakes one material
+//! again when an edit reassigns it.
 
 use concinnity_core::components::Material;
 use concinnity_core::ecs::{MaterialHandle, TextureHandle};

@@ -1,48 +1,46 @@
-// src/directx/graph_exec.rs
-//
-// DirectX-side executor for the render graph. `DxContext::execute_graph`
-// walks the `CompiledGraph` produced by the shared
-// [`gfx::render_graph::build_frame_graph`](../gfx/render_graph/frame.rs)
-// and dispatches each pass to its `encode_*` method. Mirrors the Metal
-// + Vulkan executors; every backend now drives the same builder.
-//
-// **Per-pass command lists.** Each non-composite pass records into its
-// own `ID3D12GraphicsCommandList` (drawn from the `pass_cmd_lists` pool
-// on `DxContext`). The fan-out runs on `jobs::pool()` via `rayon::scope`
-// so workers encode in parallel; each worker resets its assigned
-// allocator + cmd list, brackets the encode with start/end TIMESTAMP
-// queries, encodes the pass, and closes the cmd list. The main thread
-// then submits every closed cmd list in topological pass order via
-// `ExecuteCommandLists`. The Composite pass keeps using the outer
-// "end" cmd list that `draw_frame` owns (so the final timestamp +
-// `ResolveQueryData` ride the same submission). Mirrors
-// `metal/graph_exec.rs`.
-//
-// Both of a pass's barrier lists are consumed for every resource the registry
-// resolves: `emit_pass_prologue` translates their graph state transitions into
-// `D3D12_RESOURCE_BARRIER` transitions at the start of each pass's own command
-// list -- batched, so a pass costs one `ResourceBarrier` call -- and
-// `emit_graph_restores` returns any that the frame left off their resting state
-// at the end of the outer "end" list. Every other resource still owns its
-// transitions inline in its encoder; `barrier_audit.rs` classifies each
-// remaining site.
-//
-// The registry decides two things per resource: which D3D12 resource backs it,
-// and what state it rests in between frames. Its class -- what a `Write` means --
-// comes from the usage the graph declares, so this executor and the Vulkan one
-// cannot disagree about it. Resting cannot: `shadow_map` and `hdr_depth` are both
-// depth targets, and the first rests sampled while the second rests DEPTH_WRITE.
-//
-// Bundled passes:
-//   * `PassId::SsaoBlur` dispatches the bundled `encode_ssao` (which
-//     internally encodes the SSAO pre-pass + GTAO kernel + depth-aware
-//     blur). `PassId::SsaoPrepass` / `PassId::SsaoKernel` stay
-//     timing-only and the executor rejects them as graph nodes.
-//
-// `PassId::ParticlesSim` and `PassId::ParticlesDraw` are two nodes with their
-// own command lists: the sim integrates every live emitter's pool and the draw
-// reads those pools in its vertex stage, with the transition between them
-// derived from the graph rather than emitted inline.
+//! DirectX-side executor for the render graph. `DxContext::execute_graph`
+//! walks the `CompiledGraph` produced by the shared
+//! `concinnity_core::render::render_graph::build_frame_graph`
+//! and dispatches each pass to its `encode_*` method. Mirrors the Metal +
+//! Vulkan executors; every backend now drives the same builder.
+//!
+//! **Per-pass command lists.** Each non-composite pass records into its
+//! own `ID3D12GraphicsCommandList` (drawn from the `pass_cmd_lists` pool
+//! on `DxContext`). The fan-out runs on `jobs::pool()` via `rayon::scope`
+//! so workers encode in parallel; each worker resets its assigned
+//! allocator + cmd list, brackets the encode with start/end TIMESTAMP
+//! queries, encodes the pass, and closes the cmd list. The main thread
+//! then submits every closed cmd list in topological pass order via
+//! `ExecuteCommandLists`. The Composite pass keeps using the outer
+//! "end" cmd list that `draw_frame` owns (so the final timestamp +
+//! `ResolveQueryData` ride the same submission). Mirrors
+//! `metal/graph_exec.rs`.
+//!
+//! Both of a pass's barrier lists are consumed for every resource the registry
+//! resolves: `emit_pass_prologue` translates their graph state transitions into
+//! `D3D12_RESOURCE_BARRIER` transitions at the start of each pass's own command
+//! list -- batched, so a pass costs one `ResourceBarrier` call -- and
+//! `emit_graph_restores` returns any that the frame left off their resting state
+//! at the end of the outer "end" list. Every other resource still owns its
+//! transitions inline in its encoder; `barrier_audit.rs` classifies each
+//! remaining site.
+//!
+//! The registry decides two things per resource: which D3D12 resource backs it,
+//! and what state it rests in between frames. Its class -- what a `Write` means --
+//! comes from the usage the graph declares, so this executor and the Vulkan one
+//! cannot disagree about it. Resting cannot: `shadow_map` and `hdr_depth` are both
+//! depth targets, and the first rests sampled while the second rests DEPTH_WRITE.
+//!
+//! Bundled passes:
+//!   * `PassId::SsaoBlur` dispatches the bundled `encode_ssao` (which
+//!     internally encodes the SSAO pre-pass + GTAO kernel + depth-aware
+//!     blur). `PassId::SsaoPrepass` / `PassId::SsaoKernel` stay
+//!     timing-only and the executor rejects them as graph nodes.
+//!
+//! `PassId::ParticlesSim` and `PassId::ParticlesDraw` are two nodes with their
+//! own command lists: the sim integrates every live emitter's pool and the draw
+//! reads those pools in its vertex stage, with the transition between them
+//! derived from the graph rather than emitted inline.
 
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types::{LineVertex, TextDrawCall};

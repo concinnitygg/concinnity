@@ -1,11 +1,9 @@
-// src/editor/panels/console_panel.rs
-//
-// The Console panel's layout half: a terminal-style floating panel with a
-// scrollable log window filling the body and a single command line pinned to
-// the bottom (the panel's one TextInput, which also carries the /del name
-// autocomplete as ghost text). Log lines color by severity (`theme::LOG_*`).
-// The log model and command dispatch live in `console.rs` and
-// `hook/edit/console.rs`.
+//! The Console panel's layout half: a terminal-style floating panel with a
+//! scrollable log window filling the body and a single command line pinned to
+//! the bottom (the panel's one TextInput, which also carries the /del name
+//! autocomplete as ghost text). Log lines color by severity (`theme::LOG_*`).
+//! The log model and command dispatch live in `console.rs` and
+//! `hook/edit/console.rs`.
 
 use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;

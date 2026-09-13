@@ -1,23 +1,21 @@
-// src/metal/particle.rs
-//
-// GPU-compute particle system on Metal. Each `ParticleEmitter` declared in
-// the world produces one persistent `ParticleEmitterGpuState` carrying a pool
-// of `Particle` slots and an atomic spawn-counter buffer. Each frame the
-// renderer:
-//
-//   1. Computes the per-emitter spawn budget CPU-side (a fractional
-//      accumulator drives integer particle spawns per dispatch).
-//   2. Writes that budget into this frame's slot of the atomic counter
-//      buffer.
-//   3. Dispatches the `particle_simulate` compute kernel to age + integrate +
-//      respawn the pool.
-//   4. Dispatches the `particle_vertex`/`particle_fragment` render pipeline
-//      with `instance_count = max_particles`, drawing one camera-facing
-//      billboard quad per live particle.
-//
-// The render pass alpha-blends into `hdr_resolve` after the volumetric fog
-// pass and before SSR, so particles appear in screen-space reflections and
-// are temporally stabilized by TAA.
+//! GPU-compute particle system on Metal. Each `ParticleEmitter` declared in
+//! the world produces one persistent `ParticleEmitterGpuState` carrying a pool
+//! of `Particle` slots and an atomic spawn-counter buffer. Each frame the
+//! renderer:
+//!
+//!   1. Computes the per-emitter spawn budget CPU-side (a fractional
+//!      accumulator drives integer particle spawns per dispatch).
+//!   2. Writes that budget into this frame's slot of the atomic counter
+//!      buffer.
+//!   3. Dispatches the `particle_simulate` compute kernel to age + integrate +
+//!      respawn the pool.
+//!   4. Dispatches the `particle_vertex`/`particle_fragment` render pipeline
+//!      with `instance_count = max_particles`, drawing one camera-facing
+//!      billboard quad per live particle.
+//!
+//! The render pass alpha-blends into `hdr_resolve` after the volumetric fog
+//! pass and before SSR, so particles appear in screen-space reflections and
+//! are temporally stabilized by TAA.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::frustum::Frustum;

@@ -1,26 +1,24 @@
-// src/vulkan/shadow.rs
-//
-// Shadow pass for the Vulkan backend: one depth-only render pass per
-// cascade slice of the shadow-map array. Both of shadow_map's transitions are
-// graph-driven: shadow_map is the render graph's `shadow_map` resource, so the
-// executor emits (over every cascade layer) the Shadow producer barrier
-// (`SHADER_READ_ONLY_OPTIMAL` -> `DEPTH_STENCIL_ATTACHMENT_OPTIMAL`, the
-// cross-frame reset for this frame's shadow loop) before this pass and the Main
-// consumer barrier (`DEPTH_STENCIL_ATTACHMENT_OPTIMAL` -> `SHADER_READ_ONLY_OPTIMAL`,
-// letting the main pass sample the cascades) before the Main pass. The map rests
-// sampled between frames, so there is no inline reset.
-//
-// The cascades are GPU-driven: a per-cascade cull dispatch writes one indirect
-// buffer per cascade and each cascade is issued with one
-// `cmd_draw_indexed_indirect` (static + instance prefix) + one for the skinned
-// tail. Streamed chunks and runtime clones ride the same records, so the CPU
-// never walks a caster list here. Spot slices keep their own per-object encoder
-// in [`spot_shadow.rs`](spot_shadow.rs): the indirect buffer is laid out per
-// cascade and has no slots for them.
-//
-// The shape mirrors `metal/draw/shadow.rs::encode_shadow_pass`; the
-// graph executor in [`graph_exec.rs`](graph_exec.rs) dispatches
-// `PassId::Shadow` here.
+//! Shadow pass for the Vulkan backend: one depth-only render pass per
+//! cascade slice of the shadow-map array. Both of shadow_map's transitions are
+//! graph-driven: shadow_map is the render graph's `shadow_map` resource, so the
+//! executor emits (over every cascade layer) the Shadow producer barrier
+//! (`SHADER_READ_ONLY_OPTIMAL` -> `DEPTH_STENCIL_ATTACHMENT_OPTIMAL`, the
+//! cross-frame reset for this frame's shadow loop) before this pass and the Main
+//! consumer barrier (`DEPTH_STENCIL_ATTACHMENT_OPTIMAL` -> `SHADER_READ_ONLY_OPTIMAL`,
+//! letting the main pass sample the cascades) before the Main pass. The map rests
+//! sampled between frames, so there is no inline reset.
+//!
+//! The cascades are GPU-driven: a per-cascade cull dispatch writes one indirect
+//! buffer per cascade and each cascade is issued with one
+//! `cmd_draw_indexed_indirect` (static + instance prefix) + one for the skinned
+//! tail. Streamed chunks and runtime clones ride the same records, so the CPU
+//! never walks a caster list here. Spot slices keep their own per-object encoder
+//! in [`spot_shadow.rs`](spot_shadow.rs): the indirect buffer is laid out per
+//! cascade and has no slots for them.
+//!
+//! The shape mirrors `metal/draw/shadow.rs::encode_shadow_pass`; the
+//! graph executor in [`graph_exec.rs`](graph_exec.rs) dispatches
+//! `PassId::Shadow` here.
 
 use ash::vk;
 use concinnity_core::gfx::render_types;

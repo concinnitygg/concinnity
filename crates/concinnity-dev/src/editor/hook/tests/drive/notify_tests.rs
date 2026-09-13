@@ -1,9 +1,7 @@
-// src/editor/hook/tests/drive/notify_tests.rs
-//
-// The toast stack's drive (`hook/drive/notify.rs`): the presses a card claims
-// and the ones that fall through to what is behind it, the hidden state the
-// drive settles into once the queue empties, and the new-fault latch that
-// keeps a behavior fault from toasting every frame.
+//! The toast stack's drive (`hook/drive/notify.rs`): the presses a card claims
+//! and the ones that fall through to what is behind it, the hidden state the
+//! drive settles into once the queue empties, and the new-fault latch that
+//! keeps a behavior fault from toasting every frame.
 
 use concinnity_core::ecs::World;
 

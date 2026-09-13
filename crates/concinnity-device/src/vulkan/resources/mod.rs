@@ -1,24 +1,22 @@
-// src/vulkan/resources/mod.rs
-//
-// Runtime GPU resource management for VkContext, split per-category to mirror
-// the Metal reference shape (`metal/resources/`):
-//
-//   textures.rs   Texture-pool slot updates + descriptor rewires (`update_*`,
-//                 `evict_*`, `write_object_image`, `write_pool_image`)
-//   geometry.rs   Streamed-mesh upload + eviction (`upload_mesh`,
-//                 `evict_mesh`, the shared `write_geometry_region` helper)
-//   streaming.rs  VoxelWorld chunk streaming (`setup_chunk_streaming`,
-//                 `add_chunk_mesh`, `remove_chunk_mesh`, `set_chunk_model`)
-//   skinning.rs   Skinned-mesh upload + per-frame joint upload
-//                 (`upload_skinned`, `update_skinned_pose`,
-//                 `upload_joint_matrices`, `skinned_geometry`)
-//   geometry_rebuild.rs  Size-changing static + skinned VB/IB rebuilds
-//                 driven by asset hot-reload (`rebuild_static_geometry`,
-//                 `rebuild_skinned_geometry`)
-//
-// The shared low-level helpers (`create_descriptor_set_layout`,
-// `alloc_descriptor_sets`, `upload_geometry_buffer{,_raw}`) live in this file
-// because every submodule + `init.rs` needs them.
+//! Runtime GPU resource management for VkContext, split per-category to mirror
+//! the Metal reference shape (`metal/resources/`):
+//!
+//!   textures.rs   Texture-pool slot updates + descriptor rewires (`update_*`,
+//!                 `evict_*`, `write_object_image`, `write_pool_image`)
+//!   geometry.rs   Streamed-mesh upload + eviction (`upload_mesh`,
+//!                 `evict_mesh`, the shared `write_geometry_region` helper)
+//!   streaming.rs  VoxelWorld chunk streaming (`setup_chunk_streaming`,
+//!                 `add_chunk_mesh`, `remove_chunk_mesh`, `set_chunk_model`)
+//!   skinning.rs   Skinned-mesh upload + per-frame joint upload
+//!                 (`upload_skinned`, `update_skinned_pose`,
+//!                 `upload_joint_matrices`, `skinned_geometry`)
+//!   geometry_rebuild.rs  Size-changing static + skinned VB/IB rebuilds
+//!                 driven by asset hot-reload (`rebuild_static_geometry`,
+//!                 `rebuild_skinned_geometry`)
+//!
+//! The shared low-level helpers (`create_descriptor_set_layout`,
+//! `alloc_descriptor_sets`, `upload_geometry_buffer{,_raw}`) live in this file
+//! because every submodule + `init.rs` needs them.
 
 use ash::vk;
 use concinnity_core::render::error::RenderResult;

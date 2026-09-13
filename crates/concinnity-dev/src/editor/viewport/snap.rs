@@ -1,10 +1,8 @@
-// src/editor/viewport/snap.rs
-//
-// Grid and angle snapping for viewport editing: the step math plus the
-// editor's snap settings. The gizmo drag snaps its translate delta and its
-// applied rotate angle, so a group drag keeps the members' relative offsets;
-// holding Ctrl during a drag temporarily inverts the enabled state. Session
-// state like panel layout: not undoable, not saved.
+//! Grid and angle snapping for viewport editing: the step math plus the
+//! editor's snap settings. The gizmo drag snaps its translate delta and its
+//! applied rotate angle, so a group drag keeps the members' relative offsets;
+//! holding Ctrl during a drag temporarily inverts the enabled state. Session
+//! state like panel layout: not undoable, not saved.
 
 // The step presets the Preview panel rows cycle through. The console's /snap
 // accepts any positive step.

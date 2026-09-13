@@ -1,50 +1,48 @@
-// src/metal/allocator.rs
-//
-// The device-memory allocator persistent Metal resources are placed through.
-// Buffers and textures are suballocated out of a few large placement `MTLHeap`s
-// instead of each owning its own `newBufferWithLength` / `newTextureWithDescriptor`
-// allocation.
-//
-// Metal has no `maxMemoryAllocationCount`, so unlike Vulkan this is not a
-// scalability cliff. What it buys is footprint and overhead: every discrete
-// allocation is rounded up to a page and carries driver-side bookkeeping, and a
-// world whose texture pool is thousands of small entries pays that per entry.
-// Placing them inside a handful of heaps makes the cost track bytes instead.
-//
-// `block_alloc::BlockAllocator` decides which block and what offset; this file
-// is what makes those decisions Metal. The split is the one `transient_pool.rs`
-// and the Vulkan `allocator.rs` already use: shared placement policy,
-// backend-specific binding.
-//
-// Blocks are separated into pools by storage mode and CPU cache mode, because
-// `newBufferWithLength:options:offset:` requires both to match the heap's, and
-// `MTLHeapDescriptor` fixes both for the heap's lifetime. `Managed` and
-// `Memoryless` cannot back a heap at all, so they are rejected rather than
-// silently mispooled.
-//
-// Heaps are `Tracked`. Metal tracks hazards at heap granularity: a GPU write to
-// any resource on a tracked heap delays reads and writes of every other
-// resource on it. That is why only CPU-written, GPU-read-only resources are
-// placed here -- with no GPU writes there is never a modification to serialize
-// against, so the coarse granularity costs nothing while keeping the automatic
-// tracking the rest of the backend assumes. Render targets, cull scratch and
-// acceleration structures are GPU-written and stay on their own allocations;
-// pooling them would trade a handful of allocations for false dependencies
-// between unrelated passes.
-//
-// Frees are deferred and leases are RAII. Dropping a `PooledBuffer` /
-// `PooledTexture` returns its range to the pool tagged with a retire frame
-// `frames_in_flight + 1` ticks out, so the bytes are not handed to another
-// resource until no in-flight command buffer can still reference them. This
-// matters more than it did before pooling: a discrete allocation released early
-// is merely undefined, whereas a range released early is reused almost
-// immediately, and a placement heap explicitly aliases resources whose ranges
-// overlap.
-//
-// The `Rc` behind the leases is main-thread state. `MtlContext` is `Send` and
-// the parallel encoder hands workers a `&MtlContext`, but a worker only ever
-// dereferences a pooled resource to bind it, which does not touch the lease;
-// every allocation and drop happens on the main thread.
+//! The device-memory allocator persistent Metal resources are placed through.
+//! Buffers and textures are suballocated out of a few large placement `MTLHeap`s
+//! instead of each owning its own `newBufferWithLength` / `newTextureWithDescriptor`
+//! allocation.
+//!
+//! Metal has no `maxMemoryAllocationCount`, so unlike Vulkan this is not a
+//! scalability cliff. What it buys is footprint and overhead: every discrete
+//! allocation is rounded up to a page and carries driver-side bookkeeping, and a
+//! world whose texture pool is thousands of small entries pays that per entry.
+//! Placing them inside a handful of heaps makes the cost track bytes instead.
+//!
+//! `block_alloc::BlockAllocator` decides which block and what offset; this file
+//! is what makes those decisions Metal. The split is the one `transient_pool.rs`
+//! and the Vulkan `allocator.rs` already use: shared placement policy,
+//! backend-specific binding.
+//!
+//! Blocks are separated into pools by storage mode and CPU cache mode, because
+//! `newBufferWithLength:options:offset:` requires both to match the heap's, and
+//! `MTLHeapDescriptor` fixes both for the heap's lifetime. `Managed` and
+//! `Memoryless` cannot back a heap at all, so they are rejected rather than
+//! silently mispooled.
+//!
+//! Heaps are `Tracked`. Metal tracks hazards at heap granularity: a GPU write to
+//! any resource on a tracked heap delays reads and writes of every other
+//! resource on it. That is why only CPU-written, GPU-read-only resources are
+//! placed here -- with no GPU writes there is never a modification to serialize
+//! against, so the coarse granularity costs nothing while keeping the automatic
+//! tracking the rest of the backend assumes. Render targets, cull scratch and
+//! acceleration structures are GPU-written and stay on their own allocations;
+//! pooling them would trade a handful of allocations for false dependencies
+//! between unrelated passes.
+//!
+//! Frees are deferred and leases are RAII. Dropping a `PooledBuffer` /
+//! `PooledTexture` returns its range to the pool tagged with a retire frame
+//! `frames_in_flight + 1` ticks out, so the bytes are not handed to another
+//! resource until no in-flight command buffer can still reference them. This
+//! matters more than it did before pooling: a discrete allocation released early
+//! is merely undefined, whereas a range released early is reused almost
+//! immediately, and a placement heap explicitly aliases resources whose ranges
+//! overlap.
+//!
+//! The `Rc` behind the leases is main-thread state. `MtlContext` is `Send` and
+//! the parallel encoder hands workers a `&MtlContext`, but a worker only ever
+//! dereferences a pooled resource to bind it, which does not touch the lease;
+//! every allocation and drop happens on the main thread.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use objc2::Message as _;

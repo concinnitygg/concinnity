@@ -1,13 +1,11 @@
-// src/directx/gpu_profile.rs
-//
-// Pre-backend GPU performance probe for DirectX. Enumerates the DXGI adapter the
-// renderer would pick (the first non-software adapter that supports D3D12) and
-// classifies it WITHOUT creating a device, swapchain, or pipelines, so the
-// auto-config quality ceiling can be resolved before the backend (and its render
-// targets) are built. Mirrors `DxContext::gpu_profile` exactly (vendor id +
-// dedicated VRAM) and the standalone `metal/gpu_profile.rs` pattern. Returns
-// `UNKNOWN` on any failure (no factory, no suitable adapter, desc query fails),
-// which the resolver treats as "no clamp".
+//! Pre-backend GPU performance probe for DirectX. Enumerates the DXGI adapter the
+//! renderer would pick (the first non-software adapter that supports D3D12) and
+//! classifies it WITHOUT creating a device, swapchain, or pipelines, so the
+//! auto-config quality ceiling can be resolved before the backend (and its render
+//! targets) are built. Mirrors `DxContext::gpu_profile` exactly (vendor id +
+//! dedicated VRAM) and the standalone `metal/gpu_profile.rs` pattern. Returns
+//! `UNKNOWN` on any failure (no factory, no suitable adapter, desc query fails),
+//! which the resolver treats as "no clamp".
 
 use concinnity_core::render::backend::{GpuClassInput, GpuProfile, GpuVendor, classify_tier};
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;

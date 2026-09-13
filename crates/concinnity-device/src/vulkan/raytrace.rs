@@ -1,58 +1,56 @@
-// src/vulkan/raytrace.rs
-//
-// Vulkan ray-query acceleration structures for the hardware ray-traced
-// reflection pass. Builds, from the shared static vertex / index buffers and the
-// `DrawObject` + `InstancedCluster` lists, the bottom- and top-level
-// acceleration structures (BLAS / TLAS) the inline-`rayQueryEXT` reflection
-// shader traces against, plus a per-instance geometry table the shader uses to
-// fetch the hit triangle and shade it.
-//
-// One triangle BLAS per participating static object (over its slice of the
-// shared buffers) and one per instanced cluster; one TLAS instance per object
-// and one per cluster instance (transform = the object/instance model matrix,
-// `instanceCustomIndex` = the geometry-table index). The BLAS describe
-// object-space geometry and never change for a rigid transform; only the TLAS
-// instance transforms (and the geometry table's per-instance model matrices the
-// shader shades with) move when a prop moves.
-//
-// Mirrors `directx/raytrace.rs` (DXR inline ray tracing). Skinned geometry is
-// added per frame (`rebuild_skinned`): a compute pass deforms each skinned
-// object's bind-pose vertices into a model-space buffer, one BLAS
-// per skinned object is built or updated over it, and the TLAS + geometry table
-// are rebuilt over the persistent static/cluster BLAS plus the skinned tail.
-//
-// Every resource those two per-frame paths write lives in a ring rather than
-// being allocated fresh: `skinned_ring` is one slot per frame in flight, keyed on
-// `frame_idx`, `static_ring` advances a cursor one slot per dynamic-transform
-// rebuild, and the build scratch every path records over is one slot per frame in
-// flight too (see `ScratchRing`). Each slot OWNS its resources for the accel's
-// lifetime and rebuilds them in place, growing them only on demand, so a steady
-// scene allocates nothing after warm-up. `RtAccelData`'s `live_*` fields are plain handle copies of
-// whichever slot last built -- Vulkan has no refcount, so the ownership split has
-// to be explicit. Nothing rotates between slots: a slot handing its buffer to the
-// next one would make every handle-keyed cache (`SkinPipeline::wired`) miss on
-// every visit. The ring rule they rest on is that the `in_flight` fence wait
-// retires a slot's previous writer before the next one touches it -- sound for
-// the skinned path because it runs on EVERY frame, and for the static path
-// because its cursor advances per rebuild rather than per frame (a sparsely-moving
-// scene traces one TLAS across many frames, so a frame-keyed slot could be reused
-// while a live trace still reads it). See `SkinnedFrameRing` / `StaticFrameRing`.
-// Only a topology refresh's orphaned draw BLAS still go through the deferred-free
-// `Retired` pool.
-//
-// Unlike DXR (which binds the TLAS as a root SRV by GPU virtual address each
-// frame), Vulkan binds the TLAS + geometry table through a descriptor set, so the
-// RT pass re-points the current frame's set at the live handles every frame; see
-// `post::rt_reflections::VkContext::rt_update_descriptors`. That re-point is
-// unconditional, so ring slot reuse needs nothing extra from it: the set for
-// frame `R` is written while frame `R` is the only frame that can bind it, the
-// same fence window the ring itself relies on.
-//
-// TODO(rt-pipeline-vulkan): this uses `VK_KHR_ray_query` (inline tracing in the
-// reflection fragment shader), the direct analog of the DXR 1.1 `RayQuery` path.
-// A future `VK_KHR_ray_tracing_pipeline` path (raygen/closest-hit/miss + a shader
-// binding table) would only be worth it if a feature needs recursive tracing or
-// per-material hit shaders, which screen-space reflections do not.
+//! Vulkan ray-query acceleration structures for the hardware ray-traced
+//! reflection pass. Builds, from the shared static vertex / index buffers and the
+//! `DrawObject` + `InstancedCluster` lists, the bottom- and top-level
+//! acceleration structures (BLAS / TLAS) the inline-`rayQueryEXT` reflection
+//! shader traces against, plus a per-instance geometry table the shader uses to
+//! fetch the hit triangle and shade it.
+//!
+//! One triangle BLAS per participating static object (over its slice of the
+//! shared buffers) and one per instanced cluster; one TLAS instance per object
+//! and one per cluster instance (transform = the object/instance model matrix,
+//! `instanceCustomIndex` = the geometry-table index). The BLAS describe
+//! object-space geometry and never change for a rigid transform; only the TLAS
+//! instance transforms (and the geometry table's per-instance model matrices the
+//! shader shades with) move when a prop moves.
+//!
+//! Mirrors `directx/raytrace.rs` (DXR inline ray tracing). Skinned geometry is
+//! added per frame (`rebuild_skinned`): a compute pass deforms each skinned
+//! object's bind-pose vertices into a model-space buffer, one BLAS
+//! per skinned object is built or updated over it, and the TLAS + geometry table
+//! are rebuilt over the persistent static/cluster BLAS plus the skinned tail.
+//!
+//! Every resource those two per-frame paths write lives in a ring rather than
+//! being allocated fresh: `skinned_ring` is one slot per frame in flight, keyed on
+//! `frame_idx`, `static_ring` advances a cursor one slot per dynamic-transform
+//! rebuild, and the build scratch every path records over is one slot per frame in
+//! flight too (see `ScratchRing`). Each slot OWNS its resources for the accel's
+//! lifetime and rebuilds them in place, growing them only on demand, so a steady
+//! scene allocates nothing after warm-up. `RtAccelData`'s `live_*` fields are plain handle copies of
+//! whichever slot last built -- Vulkan has no refcount, so the ownership split has
+//! to be explicit. Nothing rotates between slots: a slot handing its buffer to the
+//! next one would make every handle-keyed cache (`SkinPipeline::wired`) miss on
+//! every visit. The ring rule they rest on is that the `in_flight` fence wait
+//! retires a slot's previous writer before the next one touches it -- sound for
+//! the skinned path because it runs on EVERY frame, and for the static path
+//! because its cursor advances per rebuild rather than per frame (a sparsely-moving
+//! scene traces one TLAS across many frames, so a frame-keyed slot could be reused
+//! while a live trace still reads it). See `SkinnedFrameRing` / `StaticFrameRing`.
+//! Only a topology refresh's orphaned draw BLAS still go through the deferred-free
+//! `Retired` pool.
+//!
+//! Unlike DXR (which binds the TLAS as a root SRV by GPU virtual address each
+//! frame), Vulkan binds the TLAS + geometry table through a descriptor set, so the
+//! RT pass re-points the current frame's set at the live handles every frame; see
+//! `post::rt_reflections::VkContext::rt_update_descriptors`. That re-point is
+//! unconditional, so ring slot reuse needs nothing extra from it: the set for
+//! frame `R` is written while frame `R` is the only frame that can bind it, the
+//! same fence window the ring itself relies on.
+//!
+//! TODO(rt-pipeline-vulkan): this uses `VK_KHR_ray_query` (inline tracing in the
+//! reflection fragment shader), the direct analog of the DXR 1.1 `RayQuery` path.
+//! A future `VK_KHR_ray_tracing_pipeline` path (raygen/closest-hit/miss + a shader
+//! binding table) would only be worth it if a feature needs recursive tracing or
+//! per-material hit shaders, which screen-space reflections do not.
 
 use ash::vk;
 use concinnity_core::gfx::render_types::{

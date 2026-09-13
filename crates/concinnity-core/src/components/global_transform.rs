@@ -1,5 +1,3 @@
-// src/components/global_transform.rs
-
 /// Composed world matrix for an entity, after parent transforms are applied.
 ///
 /// Runtime-only. A transform-propagation pass writes it from an entity's

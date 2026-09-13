@@ -1,11 +1,9 @@
-// src/components/input_key.rs
-
-// Declare a key enum from one table, so the variant list, the serde spelling,
-// the short label, and the exhaustive `ALL` array cannot drift apart. Each
-// entry is `Variant` (its label is the variant name) or `Variant => "label"`
-// when the settings menu shows something shorter.
-// The settings-menu label for one table entry: the override when given, the
-// variant name otherwise.
+//! Declare a key enum from one table, so the variant list, the serde spelling,
+//! the short label, and the exhaustive `ALL` array cannot drift apart. Each
+//! entry is `Variant` (its label is the variant name) or `Variant => "label"`
+//! when the settings menu shows something shorter.
+//! The settings-menu label for one table entry: the override when given, the
+//! variant name otherwise.
 
 macro_rules! key_label {
     ($variant:ident) => {

@@ -1,14 +1,12 @@
-// src/debug/hot_reload/pending.rs
-//
-// Process-wide "world.jsonl changed" / "world-loaded Shader stage changed"
-// signals (`cn debug` only). Set by the asset hot-reload watcher and the WS
-// `reload-assets` command; consumed by the per-frame reload poll in
-// `super::state::run_frame`. They live in the binary-only debug tree because
-// nothing in the library references them: the reload passes that read them
-// (`super::passes`) are driven entirely from `DebugHook::tick`.
-//
-// The sibling "Animation source changed" flag stays in `concinnity_engine::app::dev_flags`
-// instead, because `AnimationSystem` (library) names it directly.
+//! Process-wide "world.jsonl changed" / "world-loaded Shader stage changed"
+//! signals (`cn debug` only). Set by the asset hot-reload watcher and the WS
+//! `reload-assets` command; consumed by the per-frame reload poll in
+//! `super::state::run_frame`. They live in the binary-only debug tree because
+//! nothing in the library references them: the reload passes that read them
+//! (`super::passes`) are driven entirely from `DebugHook::tick`.
+//!
+//! The sibling "Animation source changed" flag stays in `concinnity_engine::app::dev_flags`
+//! instead, because `AnimationSystem` (library) names it directly.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 

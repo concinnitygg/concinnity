@@ -1,9 +1,7 @@
-// src/audio/clips.rs
-//
-// Clip decode bookkeeping: which clips are in flight on the decode worker,
-// which are ready, and the play requests waiting on each. Pure state machine,
-// generic over the decoded payload so the request/complete/apply flow is
-// testable without kira; the engine stores decoded kira sound data in it.
+//! Clip decode bookkeeping: which clips are in flight on the decode worker,
+//! which are ready, and the play requests waiting on each. Pure state machine,
+//! generic over the decoded payload so the request/complete/apply flow is
+//! testable without kira; the engine stores decoded kira sound data in it.
 
 use concinnity_core::components::AudioBus;
 use std::collections::HashMap;

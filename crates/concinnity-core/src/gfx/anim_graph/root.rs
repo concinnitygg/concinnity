@@ -1,9 +1,7 @@
-// src/gfx/anim_graph/root.rs
-//
-// Root-motion deltas for a graph cursor: the displacement covered by the
-// active state's members (and a fading outgoing state) between two cursor
-// snapshots. Mirrors the pose sampler's weighting exactly, so the character
-// moves at the speed the blended feet imply.
+//! Root-motion deltas for a graph cursor: the displacement covered by the
+//! active state's members (and a fading outgoing state) between two cursor
+//! snapshots. Mirrors the pose sampler's weighting exactly, so the character
+//! moves at the speed the blended feet imply.
 
 use crate::gfx::skeleton::AnimationClip;
 use crate::math::vec3::{add, scale};

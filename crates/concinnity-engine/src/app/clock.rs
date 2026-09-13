@@ -1,11 +1,9 @@
-// src/app/clock.rs
-//
-// Fixed-timestep accumulator for the simulation. Runs at the App level, after
-// the frame pacer and before the world steps: wall-clock time accumulates into
-// whole fixed ticks, and the remainder becomes the interpolation alpha the
-// simulation systems blend render transforms with. While a menu holds the
-// world paused the clock emits zero ticks and stops accumulating, so resuming
-// costs nothing -- no catch-up burst by construction.
+//! Fixed-timestep accumulator for the simulation. Runs at the App level, after
+//! the frame pacer and before the world steps: wall-clock time accumulates into
+//! whole fixed ticks, and the remainder becomes the interpolation alpha the
+//! simulation systems blend render transforms with. While a menu holds the
+//! world paused the clock emits zero ticks and stops accumulating, so resuming
+//! costs nothing -- no catch-up burst by construction.
 
 use concinnity_core::ecs::SimTiming;
 use std::sync::OnceLock;

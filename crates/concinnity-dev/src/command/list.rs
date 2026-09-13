@@ -1,4 +1,3 @@
-// src/command/list.rs
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::{find_world_jsonl, parse_world_jsonl, resolve_includes};
 

@@ -1,35 +1,33 @@
-// src/vulkan/owned.rs
-//
-// Owning handles for the Vulkan objects the backend creates once and keeps:
-// pipelines, pipeline layouts, descriptor set layouts, descriptor pools, render
-// passes, framebuffers and samplers.
-//
-// ash spells every one of those as a `Copy` u64 newtype. That is why the
-// `destroy_*` family and the command-recording family could not be given safe
-// wrappers: with a `Copy` handle a safe `destroy(handle)` permits a second
-// destroy, and a safe `bind(handle)` permits binding one that was already
-// destroyed. Both are reachable from safe code, so both APIs would be lying.
-// Wrapping each handle in a single-owner, non-`Copy` value is what removes the
-// obligation from the call site, and it removes it for both families at once:
-// destruction happens in `Drop`, and a recorded bind borrows the owner.
-//
-// Destruction is deferred, not immediate. Dropping an owned handle queues it on
-// the device's retire list, and the queue destroys it once `frames_in_flight +
-// 1` frame ticks have passed, by which point no submission that could still
-// name it is in flight. That is the discipline `allocator.rs` already applies to
-// pooled buffers and images, and it is what makes replacing a live pipeline
-// (shader hot-reload, lazily built wireframe twins, a quality-toggle rebuild)
-// correct without the caller reasoning about GPU progress. The alternative --
-// destroying in `Drop` and leaning on the existing "wait_idle, then tear down"
-// ordering -- would have left the safe API still lying: `drop(pipeline)`
-// followed by `submit(cmd)` compiles either way, and only the deferred queue
-// makes it harmless.
-//
-// [`VkDevice`] owns the logical device, so the device outlives every handle by
-// construction rather than by field ordering: the last owner to drop drains the
-// retire queue and only then calls `vkDestroyDevice`. A live editor
-// `reload_world` inherits the device by cloning the handle, so the outgoing
-// context's retiring objects are drained by its successor.
+//! Owning handles for the Vulkan objects the backend creates once and keeps:
+//! pipelines, pipeline layouts, descriptor set layouts, descriptor pools, render
+//! passes, framebuffers and samplers.
+//!
+//! ash spells every one of those as a `Copy` u64 newtype. That is why the
+//! `destroy_*` family and the command-recording family could not be given safe
+//! wrappers: with a `Copy` handle a safe `destroy(handle)` permits a second
+//! destroy, and a safe `bind(handle)` permits binding one that was already
+//! destroyed. Both are reachable from safe code, so both APIs would be lying.
+//! Wrapping each handle in a single-owner, non-`Copy` value is what removes the
+//! obligation from the call site, and it removes it for both families at once:
+//! destruction happens in `Drop`, and a recorded bind borrows the owner.
+//!
+//! Destruction is deferred, not immediate. Dropping an owned handle queues it on
+//! the device's retire list, and the queue destroys it once `frames_in_flight +
+//! 1` frame ticks have passed, by which point no submission that could still
+//! name it is in flight. That is the discipline `allocator.rs` already applies to
+//! pooled buffers and images, and it is what makes replacing a live pipeline
+//! (shader hot-reload, lazily built wireframe twins, a quality-toggle rebuild)
+//! correct without the caller reasoning about GPU progress. The alternative --
+//! destroying in `Drop` and leaning on the existing "wait_idle, then tear down"
+//! ordering -- would have left the safe API still lying: `drop(pipeline)`
+//! followed by `submit(cmd)` compiles either way, and only the deferred queue
+//! makes it harmless.
+//!
+//! [`VkDevice`] owns the logical device, so the device outlives every handle by
+//! construction rather than by field ordering: the last owner to drop drains the
+//! retire queue and only then calls `vkDestroyDevice`. A live editor
+//! `reload_world` inherits the device by cloning the handle, so the outgoing
+//! context's retiring objects are drained by its successor.
 
 use ash::vk;
 use concinnity_core::render::shadow_bias;

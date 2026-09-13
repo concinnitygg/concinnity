@@ -1,25 +1,23 @@
-// src/render/render_graph/barrier_place.rs
-//
-// Where a read run's `* -> Read` transition is recorded, and who relies on it.
-//
-// `super::compile::derive_barriers` emits one transition per read run and puts
-// it on the run's first reader, which is correct as long as one serial order
-// covers the whole run. Once the run's readers sit on different queues that
-// stops being true: a continuation reader on the other queue carries no
-// transition of its own and nothing orders it after the first reader's.
-//
-// The fix is to record such a run's transition on the *producer* instead, as a
-// barrier that runs once the producing pass's own work has completed. Every
-// reader of the run reads the version that pass wrote, so the producer is an
-// ancestor of all of them and its signal orders the transition for consumers on
-// either queue. A run whose readers all share one queue keeps the first-reader
-// placement, so a graph that schedules nothing asynchronously compiles to the
-// barrier lists it always did.
-//
-// The queue assignment and the placement depend on each other, so
-// `super::schedule` resolves them as a fixed point over the calls here (see
-// `read_runs`, `spans_queues` and `reliance`) and applies the result once with
-// `apply`.
+//! Where a read run's `* -> Read` transition is recorded, and who relies on it.
+//!
+//! `super::compile::derive_barriers` emits one transition per read run and puts
+//! it on the run's first reader, which is correct as long as one serial order
+//! covers the whole run. Once the run's readers sit on different queues that
+//! stops being true: a continuation reader on the other queue carries no
+//! transition of its own and nothing orders it after the first reader's.
+//!
+//! The fix is to record such a run's transition on the *producer* instead, as a
+//! barrier that runs once the producing pass's own work has completed. Every
+//! reader of the run reads the version that pass wrote, so the producer is an
+//! ancestor of all of them and its signal orders the transition for consumers on
+//! either queue. A run whose readers all share one queue keeps the first-reader
+//! placement, so a graph that schedules nothing asynchronously compiles to the
+//! barrier lists it always did.
+//!
+//! The queue assignment and the placement depend on each other, so
+//! `super::schedule` resolves them as a fixed point over the calls here (see
+//! `read_runs`, `spans_queues` and `reliance`) and applies the result once with
+//! `apply`.
 
 use alloc::vec;
 use alloc::vec::Vec;

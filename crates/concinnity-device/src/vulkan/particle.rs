@@ -1,26 +1,24 @@
-// src/vulkan/particle.rs
-//
-// GPU-compute particle system for the Vulkan backend. Each `ParticleEmitter`
-// declared in the world produces one persistent `ParticleEmitterGpuState`
-// carrying a device-local pool SSBO (read-write in the compute pass, read-only
-// in the vertex pass) and a device-local 4-byte atomic spawn-counter SSBO.
-// Each frame the renderer:
-//
-//   1. Computes the per-emitter spawn budget CPU-side (a fractional
-//      accumulator drives integer particle spawns per dispatch).
-//   2. Writes that budget into the per-emitter counter buffer via a
-//      `vkCmdUpdateBuffer` (the value fits in the inline-update 64 KiB cap).
-//   3. Dispatches the `particle_simulate` compute kernel to age + integrate +
-//      respawn each pool.
-//   4. Rasterizes one alpha-blended billboard quad per live particle into
-//      `hdr_resolve_images[frame_idx]`, its vertex stage reading the pool the
-//      dispatch wrote. The compute -> vertex transition is the graph's: the two
-//      halves are the `ParticlesSim` and `ParticlesDraw` nodes, and the pool set
-//      is the `particle_pool` graph resource.
-//
-// Runs after the volumetric-fog pass and before SSR / TAA so particles
-// appear in screen-space reflections and are temporally stabilized by the
-// TAA history. Mirrors src/directx/particle.rs and src/metal/particle.rs.
+//! GPU-compute particle system for the Vulkan backend. Each `ParticleEmitter`
+//! declared in the world produces one persistent `ParticleEmitterGpuState`
+//! carrying a device-local pool SSBO (read-write in the compute pass, read-only
+//! in the vertex pass) and a device-local 4-byte atomic spawn-counter SSBO.
+//! Each frame the renderer:
+//!
+//!   1. Computes the per-emitter spawn budget CPU-side (a fractional
+//!      accumulator drives integer particle spawns per dispatch).
+//!   2. Writes that budget into the per-emitter counter buffer via a
+//!      `vkCmdUpdateBuffer` (the value fits in the inline-update 64 KiB cap).
+//!   3. Dispatches the `particle_simulate` compute kernel to age + integrate +
+//!      respawn each pool.
+//!   4. Rasterizes one alpha-blended billboard quad per live particle into
+//!      `hdr_resolve_images[frame_idx]`, its vertex stage reading the pool the
+//!      dispatch wrote. The compute -> vertex transition is the graph's: the two
+//!      halves are the `ParticlesSim` and `ParticlesDraw` nodes, and the pool set
+//!      is the `particle_pool` graph resource.
+//!
+//! Runs after the volumetric-fog pass and before SSR / TAA so particles
+//! appear in screen-space reflections and are temporally stabilized by the
+//! TAA history. Mirrors src/directx/particle.rs and src/metal/particle.rs.
 
 use ash::vk;
 use concinnity_core::gfx::frustum::Frustum;

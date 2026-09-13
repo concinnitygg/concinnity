@@ -1,9 +1,7 @@
-// src/input/nav.rs
-//
-// Pure navigation-pulse shaping: the held d-pad directions and the left-stick
-// deflection become one-frame directional pulses with hold auto-repeat, for
-// menu focus movement. No OS or clock access -- the caller feeds held state
-// and a frame dt, so the fold is driven synthetically in tests.
+//! Pure navigation-pulse shaping: the held d-pad directions and the left-stick
+//! deflection become one-frame directional pulses with hold auto-repeat, for
+//! menu focus movement. No OS or clock access -- the caller feeds held state
+//! and a frame dt, so the fold is driven synthetically in tests.
 
 use concinnity_core::components::NavDirection;
 

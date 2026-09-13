@@ -1,16 +1,14 @@
-// src/metal/graph_queues.rs
-//
-// The command queues and events the render-graph executor submits a frame over:
-// one `MTLCommandQueue` per [`PassQueue`], and one `MTLEvent` per queue that
-// only that queue signals (see `metal/graph_events.rs` for why the events are
-// not shared).
-//
-// Capability gate. The whole two-queue path hangs off `MtlContext::graph_queues`
-// being `Some`: if the second queue or either event cannot be created,
-// [`GraphQueues::new`] returns `None` and the executor records every pass onto
-// the one graphics queue in compiled order, exactly as it did before this
-// existed. There is no knob for it; every Metal device that reaches this code
-// supports a second queue, so a runtime toggle would only ever be dead weight.
+//! The command queues and events the render-graph executor submits a frame over:
+//! one `MTLCommandQueue` per [`PassQueue`], and one `MTLEvent` per queue that
+//! only that queue signals (see `metal/graph_events.rs` for why the events are
+//! not shared).
+//!
+//! Capability gate. The whole two-queue path hangs off `MtlContext::graph_queues`
+//! being `Some`: if the second queue or either event cannot be created,
+//! [`GraphQueues::new`] returns `None` and the executor records every pass onto
+//! the one graphics queue in compiled order, exactly as it did before this
+//! existed. There is no knob for it; every Metal device that reaches this code
+//! supports a second queue, so a runtime toggle would only ever be dead weight.
 
 use concinnity_core::render::render_graph::PassQueue;
 use objc2::rc::Retained;

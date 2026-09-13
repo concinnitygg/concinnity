@@ -1,12 +1,10 @@
-// src/editor/panels/lighting_panel.rs
-//
-// The Lighting panel's layout half: a floating panel of themed sections (see
-// `lighting.rs` for the bindings) with a status line + Apply button in its
-// header row. Each field row is a caption plus one control -- a text input, a
-// checkbox, or a text input with a color swatch -- backed by a per-binding
-// control pool at reserved ids. Like the rest of the editor HUD it is plain
-// `Sprite` / `TextLabel` / `TextInput` components driven each frame by the
-// editor hook; the hook owns seeding, focus, and the commit path.
+//! The Lighting panel's layout half: a floating panel of themed sections (see
+//! `lighting.rs` for the bindings) with a status line + Apply button in its
+//! header row. Each field row is a caption plus one control -- a text input, a
+//! checkbox, or a text input with a color swatch -- backed by a per-binding
+//! control pool at reserved ids. Like the rest of the editor HUD it is plain
+//! `Sprite` / `TextLabel` / `TextInput` components driven each frame by the
+//! editor hook; the hook owns seeding, focus, and the commit path.
 
 use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;

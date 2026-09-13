@@ -1,23 +1,21 @@
-// src/metal/parallel_encoder.rs
-//
-// Send/Sync shims for parallel per-pass command-buffer recording. The
-// render-graph executor in `metal/graph_exec.rs` fans non-composite
-// passes onto rayon workers; each worker mints its own
-// `MTLCommandBuffer`, encodes its pass, and hands the
-// encoded-but-uncommitted buffer back through a per-pass slot. The main
-// thread then commits the slots in topological pass order, so the single
-// command queue's FIFO commit order is the GPU execution order; no
-// `MTLEvent` wait/signal pairs are involved.
-//
-// `MtlContext` and the objc2 protocol objects it stores are not Send/Sync
-// in Rust's type system: Apple's API contract makes shared, read-only
-// access to Metal resources thread-safe, but objc2 cannot encode that
-// without a hand claim. The wrappers below adopt that claim at the
-// parallel-dispatch boundary. Workers reach `&MtlContext` through
-// `ParallelCtxRef::as_ctx()` for strictly read-only encode work; the
-// lone `&mut self` mutations (`diagnostics.frame_stats.draw_calls`,
-// `particle.last_elapsed`, `particle.frame_index`, the per-emitter
-// `spawn_state`) all happen on the main thread before the fan-out.
+//! Send/Sync shims for parallel per-pass command-buffer recording. The
+//! render-graph executor in `metal/graph_exec.rs` fans non-composite
+//! passes onto rayon workers; each worker mints its own
+//! `MTLCommandBuffer`, encodes its pass, and hands the
+//! encoded-but-uncommitted buffer back through a per-pass slot. The main
+//! thread then commits the slots in topological pass order, so the single
+//! command queue's FIFO commit order is the GPU execution order; no
+//! `MTLEvent` wait/signal pairs are involved.
+//!
+//! `MtlContext` and the objc2 protocol objects it stores are not Send/Sync
+//! in Rust's type system: Apple's API contract makes shared, read-only
+//! access to Metal resources thread-safe, but objc2 cannot encode that
+//! without a hand claim. The wrappers below adopt that claim at the
+//! parallel-dispatch boundary. Workers reach `&MtlContext` through
+//! `ParallelCtxRef::as_ctx()` for strictly read-only encode work; the
+//! lone `&mut self` mutations (`diagnostics.frame_stats.draw_calls`,
+//! `particle.last_elapsed`, `particle.frame_index`, the per-emitter
+//! `spawn_state`) all happen on the main thread before the fan-out.
 
 use concinnity_core::render::parallel_ctx;
 use objc2::rc::Retained;

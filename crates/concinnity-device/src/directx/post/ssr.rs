@@ -1,12 +1,10 @@
-// src/directx/post/ssr.rs
-//
-// DirectX's share of screen-space reflections: the settings, the reflection
-// target the resolve writes, where the resolve's inputs come from this frame,
-// and which scene texture the post stack consumes once a reflection path has
-// run. The resolve itself -- its pipeline and its draw -- is written once in
-// `concinnity_core::render::post::ssr` and reaches D3D12 through
-// `DxPostDevice`, which also binds the probe cube table and the frame's
-// ProbeSet a missed ray falls back to.
+//! DirectX's share of screen-space reflections: the settings, the reflection
+//! target the resolve writes, where the resolve's inputs come from this frame,
+//! and which scene texture the post stack consumes once a reflection path has
+//! run. The resolve itself -- its pipeline and its draw -- is written once in
+//! `concinnity_core::render::post::ssr` and reaches D3D12 through
+//! `DxPostDevice`, which also binds the probe cube table and the frame's
+//! ProbeSet a missed ray falls back to.
 
 use concinnity_core::gfx::ssr;
 use concinnity_core::render::error::RenderResult;

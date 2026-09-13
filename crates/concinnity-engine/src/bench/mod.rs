@@ -1,23 +1,23 @@
-// src/bench/mod.rs
-//
-// In-crate microbenchmarks for engine internals, the fixture they share, and
-// the per-frame allocation pins (`alloc_budget`, which DO run un-ignored).
-//
-// These live inside the crate rather than in `benches/` because what is worth
-// measuring here is `pub(crate)`: the per-frame transform propagation and the
-// behavior tick are not part of the engine's public surface, and widening them
-// for a benchmark would be the wrong trade. Ignored by default, so a normal
-// test run never pays for them. `--test-threads=1` is required rather than
-// tidy: the allocation counters are process-global, so a benchmark running
-// beside another reads the other's allocations as its own:
-//
-//     cargo test -p concinnity-engine --release -- --ignored --nocapture \
-//         --test-threads=1 bench
-//
-// The timing helper is deliberately not `concinnity-bench`: that crate installs
-// a global allocator and depends on this one, so importing it here would both
-// collide with this test binary's allocator and close a dependency cycle. The
-// numbers come from the same instruments either way.
+//! In-crate microbenchmarks for engine internals, the fixture they share, and
+//! the per-frame allocation pins (`alloc_budget`, which DO run un-ignored).
+//!
+//! These live inside the crate rather than in `benches/` because what is worth
+//! measuring here is `pub(crate)`: the per-frame transform propagation and the
+//! behavior tick are not part of the engine's public surface, and widening them
+//! for a benchmark would be the wrong trade. Ignored by default, so a normal
+//! test run never pays for them. `--test-threads=1` is required rather than
+//! tidy: the allocation counters are process-global, so a benchmark running
+//! beside another reads the other's allocations as its own:
+//!
+//! ```text
+//! cargo test -p concinnity-engine --release -- --ignored --nocapture \
+//!     --test-threads=1 bench
+//! ```
+//!
+//! The timing helper is deliberately not `concinnity-bench`: that crate installs
+//! a global allocator and depends on this one, so importing it here would both
+//! collide with this test binary's allocator and close a dependency cycle. The
+//! numbers come from the same instruments either way.
 
 pub(crate) mod alloc_budget;
 pub(crate) mod extraction;

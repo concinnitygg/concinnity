@@ -1,9 +1,7 @@
-// src/audio/system.rs
-//
-// Audio playback: 3D positional emitters and screen-triggered cues. An internal
-// system (not a declarable asset): the engine schedule constructs one whenever
-// the world contains any `AudioEmitter` or `AudioCue`, so a world with neither
-// never opens an audio device.
+//! Audio playback: 3D positional emitters and screen-triggered cues. An internal
+//! system (not a declarable asset): the engine schedule constructs one whenever
+//! the world contains any `AudioEmitter` or `AudioCue`, so a world with neither
+//! never opens an audio device.
 
 use concinnity_core::components::{
     AudioBus, AudioCommand, AudioCue, AudioEmitter, AudioOcclusionProbe, AudioTarget, Behavior,

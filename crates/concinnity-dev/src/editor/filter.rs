@@ -1,14 +1,12 @@
-// src/editor/filter.rs
-//
-// The ranked substring filter shared by the editor's pick lists (the Behavior
-// palette, the Content browser). The point of typing is that the first answer
-// is the one wanted, so matches are ranked rather than merely collected: a
-// caption the query starts is offered before one that merely contains it, and
-// before an entry whose hint mentions it at all.
-//
-// Underscores are dropped from both sides of a caption comparison, so
-// "foreach" reaches `for_each` without the author having to remember where the
-// engine puts its separators. Hints are sentences, so those match as written.
+//! The ranked substring filter shared by the editor's pick lists (the Behavior
+//! palette, the Content browser). The point of typing is that the first answer
+//! is the one wanted, so matches are ranked rather than merely collected: a
+//! caption the query starts is offered before one that merely contains it, and
+//! before an entry whose hint mentions it at all.
+//!
+//! Underscores are dropped from both sides of a caption comparison, so
+//! "foreach" reaches `for_each` without the author having to remember where the
+//! engine puts its separators. Hints are sentences, so those match as written.
 
 // Ranks, best first. Kept as an enum-free scale because the only thing that
 // reads them is the sort.

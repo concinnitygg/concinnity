@@ -1,21 +1,19 @@
-// src/render/render_graph/passes.rs
-//
-// Stable identity for every render-graph pass. Used by:
-//
-//   - The graph itself, as the dispatch key the executor matches on.
-//   - The per-pass GPU timer (`crate::render::pass_timing`), which keys its
-//     sample-buffer slots off the same integer.
-//
-// The `pass_ids!` invocation below is the single registration point: one line
-// per pass names the variant and its stable timing name, and the macro derives
-// the enum, [`PASS_NAMES`], [`PASS_COUNT`], and [`PassId::ALL`] from it. A pass
-// therefore cannot exist without a timing name (which would otherwise report
-// zero GPU time), and the name table cannot drift out of index order.
-//
-// Variants are `#[repr(u32)]` so a `PassId` round-trips through `as usize` into
-// [`PASS_NAMES`] and any `[T; PASS_COUNT]` companion array. The list is
-// append-only: inserting in the middle renumbers later variants and silently
-// shifts every timing slot.
+//! Stable identity for every render-graph pass. Used by:
+//!
+//!   - The graph itself, as the dispatch key the executor matches on.
+//!   - The per-pass GPU timer (`crate::render::pass_timing`), which keys its
+//!     sample-buffer slots off the same integer.
+//!
+//! The `pass_ids!` invocation below is the single registration point: one line
+//! per pass names the variant and its stable timing name, and the macro derives
+//! the enum, [`PASS_NAMES`], [`PASS_COUNT`], and [`PassId::ALL`] from it. A pass
+//! therefore cannot exist without a timing name (which would otherwise report
+//! zero GPU time), and the name table cannot drift out of index order.
+//!
+//! Variants are `#[repr(u32)]` so a `PassId` round-trips through `as usize` into
+//! [`PASS_NAMES`] and any `[T; PASS_COUNT]` companion array. The list is
+//! append-only: inserting in the middle renumbers later variants and silently
+//! shifts every timing slot.
 
 /// Declare the pass vocabulary. Each entry is `Variant => "timing_name"`.
 macro_rules! pass_ids {

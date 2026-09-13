@@ -1,13 +1,11 @@
-// src/editor/panels/registry.rs
-//
-// The floating-panel registry. Every editor panel is one `Panel` implementation
-// (in `hook/panels.rs`) plus one entry in `PANELS` below; everything that used
-// to be hand-wired per panel derives from the registry instead: the reserved-id
-// allocation, the View panel's toggle rows, HUD injection (`inject.rs`), the
-// focus-stack draw layers, title-bar dragging, close buttons, click / wheel
-// routing, and the hidden pass (`hook/routing.rs` / `hook/layout.rs`). Adding a
-// panel means a `PanelKey` variant, a `Panel` impl, and its `PANELS` entry --
-// none of the shared machinery is touched.
+//! The floating-panel registry. Every editor panel is one `Panel` implementation
+//! (in `hook/panels.rs`) plus one entry in `PANELS` below; everything that used
+//! to be hand-wired per panel derives from the registry instead: the reserved-id
+//! allocation, the View panel's toggle rows, HUD injection (`inject.rs`), the
+//! focus-stack draw layers, title-bar dragging, close buttons, click / wheel
+//! routing, and the hidden pass (`hook/routing.rs` / `hook/layout.rs`). Adding a
+//! panel means a `PanelKey` variant, a `Panel` impl, and its `PANELS` entry --
+//! none of the shared machinery is touched.
 
 use concinnity_core::components::FrameInput;
 use concinnity_core::ecs::World;

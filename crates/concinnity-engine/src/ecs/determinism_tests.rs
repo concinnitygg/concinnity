@@ -1,15 +1,13 @@
-// src/ecs/determinism_tests.rs
-//
-// The schedule-determinism gate: the same world stepped N ticks under the
-// serial and parallel schedule modes must land in bit-identical state. This
-// is the acceptance test every parallel execution path (behavior evaluation,
-// physics solve) must keep green; a hash mismatch here means completion order
-// leaked into world state.
-//
-// The hash covers component state (transforms), the entity population, and
-// the event traffic. Change ticks are excluded by design: their values are
-// interleaving-dependent under the atomic counter and must never be treated
-// as world state.
+//! The schedule-determinism gate: the same world stepped N ticks under the
+//! serial and parallel schedule modes must land in bit-identical state. This
+//! is the acceptance test every parallel execution path (behavior evaluation,
+//! physics solve) must keep green; a hash mismatch here means completion order
+//! leaked into world state.
+//!
+//! The hash covers component state (transforms), the entity population, and
+//! the event traffic. Change ticks are excluded by design: their values are
+//! interleaving-dependent under the atomic counter and must never be treated
+//! as world state.
 
 use concinnity_core::components::BehaviorQuery;
 use concinnity_core::components::ContactEvent;

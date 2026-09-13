@@ -1,13 +1,11 @@
-// src/directx/init/adapter.rs
-//
-// Which adapter the renderer runs on, and whether it can run there at all.
-//
-// Selection and the capability gate are one decision rather than two: an
-// adapter is only a candidate once a device made on it reports a resource
-// binding tier the texture pool can bind, so rejecting one has to leave the
-// next one free to be tried. Hardware is always preferred; the DXGI software
-// adapter is the last candidate, so a machine whose GPU is below the
-// renderer's floor gets a picture instead of an exit.
+//! Which adapter the renderer runs on, and whether it can run there at all.
+//!
+//! Selection and the capability gate are one decision rather than two: an
+//! adapter is only a candidate once a device made on it reports a resource
+//! binding tier the texture pool can bind, so rejecting one has to leave the
+//! next one free to be tried. Hardware is always preferred; the DXGI software
+//! adapter is the last candidate, so a machine whose GPU is below the
+//! renderer's floor gets a picture instead of an exit.
 
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 use windows::Win32::Graphics::Direct3D12::*;

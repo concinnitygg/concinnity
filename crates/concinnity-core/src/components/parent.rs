@@ -1,5 +1,3 @@
-// src/components/parent.rs
-
 use crate::ecs::Entity;
 
 /// The entity whose world transform this entity inherits.

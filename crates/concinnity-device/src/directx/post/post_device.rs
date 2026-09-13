@@ -1,21 +1,19 @@
-// src/directx/post/post_device.rs
-//
-// DirectX's implementation of the shared fullscreen post-pass seam
-// (`render::post::device::PostPassDevice`).
-//
-// The root signature is derived from what the single source declares rather
-// than hand-written per pass: N single-SRV descriptor tables at t0..tN-1, a
-// 32-bit constant block at b0 when the program declares constants, and N static
-// samplers at s0..sN-1. A probe-reading program adds the reflection-probe cube
-// array at tN.. with its one static sampler at sN, and the ProbeSet at b1. The
-// tables are single-SRV and separate because slangc numbers each top-level
-// combined sampler into its own texture and sampler slot from declaration
-// order, and because a pass's sources come from unrelated owners, so nothing
-// makes them contiguous in the heap.
-//
-// Targets take their SRV and RTV from the shared post descriptor block
-// (post/descriptors.rs) instead of slots reserved for the effect by name in
-// `init/heap_layout.rs`.
+//! DirectX's implementation of the shared fullscreen post-pass seam
+//! (`render::post::device::PostPassDevice`).
+//!
+//! The root signature is derived from what the single source declares rather
+//! than hand-written per pass: N single-SRV descriptor tables at t0..tN-1, a
+//! 32-bit constant block at b0 when the program declares constants, and N static
+//! samplers at s0..sN-1. A probe-reading program adds the reflection-probe cube
+//! array at tN.. with its one static sampler at sN, and the ProbeSet at b1. The
+//! tables are single-SRV and separate because slangc numbers each top-level
+//! combined sampler into its own texture and sampler slot from declaration
+//! order, and because a pass's sources come from unrelated owners, so nothing
+//! makes them contiguous in the heap.
+//!
+//! Targets take their SRV and RTV from the shared post descriptor block
+//! (post/descriptors.rs) instead of slots reserved for the effect by name in
+//! `init/heap_layout.rs`.
 
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::post::device::{

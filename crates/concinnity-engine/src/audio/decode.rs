@@ -1,11 +1,9 @@
-// src/audio/decode.rs
-//
-// Background clip decoding. One named worker thread receives encoded clip
-// bytes over a channel, decodes them with kira, and sends the result back;
-// the engine drains completions once per tick. Decode failures travel in the
-// result message, so the thread itself never fails. Shutdown lives entirely
-// in Drop: dropping the request sender ends the worker's recv loop, then the
-// thread is joined, so a world rebuild never leaks the thread.
+//! Background clip decoding. One named worker thread receives encoded clip
+//! bytes over a channel, decodes them with kira, and sends the result back;
+//! the engine drains completions once per tick. Decode failures travel in the
+//! result message, so the thread itself never fails. Shutdown lives entirely
+//! in Drop: dropping the request sender ends the worker's recv loop, then the
+//! thread is joined, so a world rebuild never leaks the thread.
 
 use kira::sound::static_sound::StaticSoundData;
 use std::io::Cursor;

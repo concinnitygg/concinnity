@@ -1,9 +1,7 @@
-// src/editor/palette/mod.rs
-//
-// The command palette's data model: every actionable thing the editor can
-// reach -- panels, world assets, console commands, display options -- as one
-// ranked list. Pure data and ranking only; the overlay's geometry lives in
-// `editor/palette/panel.rs` and the drive in `hook/edit/palette.rs`.
+//! The command palette's data model: every actionable thing the editor can
+//! reach -- panels, world assets, console commands, display options -- as one
+//! ranked list. Pure data and ranking only; the overlay's geometry lives in
+//! `editor/palette/panel.rs` and the drive in `hook/edit/palette.rs`.
 
 pub(crate) mod panel;
 pub(crate) mod providers;

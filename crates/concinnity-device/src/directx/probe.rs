@@ -1,42 +1,40 @@
-// src/directx/probe.rs
-//
-// Scene-captured reflection probes on DirectX. Each declared `ReflectionProbe`
-// (or an auto-seeded grid when a world declares none) is baked into its own cube,
-// DISTINCT from `env_map`: the specular reflection term box-projects against the
-// probe's influence box and samples its cube, so glossy surfaces reflect the
-// actual surrounding geometry instead of the imported HDR sky, while the skybox +
-// diffuse irradiance keep sampling `env_map` so the visible sky is never replaced.
-//
-// The cube math + the staggered-bake state machine are backend-agnostic
-// (`concinnity_core::render::reflection_probe`); this module drives the GPU capture, mirroring
-// `crate::metal::probe`. The bake is STAGGERED + ASYNCHRONOUS across frames so the
-// render thread never blocks: one probe is in flight at a time, its six cube faces
-// submitted one per frame into a capture cube, then convolved into the probe cube
-// by the compute kernels in `probe_prefilter.slang`. Nothing is read back and no
-// convolution runs on the CPU.
-//
-// DirectX simplification vs Metal: a per-face fence VALUE gives ordered GPU
-// completion for free (the queue is FIFO), so there is no completion handler / atomic
-// -- a face is done when `frame_sync.fence` reaches the value signaled after it. The
-// bake never calls `wait_idle` (that would reintroduce a multi-hundred-ms freeze);
-// the convolution is deferred until the fence reaches the last face's value.
-//
-// Each probe passes through three phases (`gfx::reflection_probe::BakePhase`, driven by
-// the pure `next_bake_action` transition table called once per pipeline slot per frame):
-//   * Rendering    -- six cube faces submitted to the GPU (one per frame) into a RESERVED
-//                     ring slot (`bake_ring_slot`) the frame never overwrites, each
-//                     copied into its slice of the capture cube.
-//   * Prefiltering -- the convolution runs as compute dispatches: the clamped mirror
-//                     mip plus the capture's source pyramid in the first frame (all
-//                     cheap), then ONE GGX mip per frame after it.
-//   * (install)    -- the finished cube is installed into `probe.maps` + `probe.set`.
-//                     No upload: the cube was written in place.
-//
-// Known V1 simplifications (documented intentionally; mirror Metal where noted):
-//   * Static + instanced geometry only -- skinned meshes are not captured into the
-//     probe (no per-bake deformed buffer yet). They still receive probe reflections.
-//   * Single bounce + cold-first-frame lighting (the shadow map may be unpopulated when
-//     a probe bakes on an early frame), exactly like Metal.
+//! Scene-captured reflection probes on DirectX. Each declared `ReflectionProbe`
+//! (or an auto-seeded grid when a world declares none) is baked into its own cube,
+//! DISTINCT from `env_map`: the specular reflection term box-projects against the
+//! probe's influence box and samples its cube, so glossy surfaces reflect the
+//! actual surrounding geometry instead of the imported HDR sky, while the skybox +
+//! diffuse irradiance keep sampling `env_map` so the visible sky is never replaced.
+//!
+//! The cube math + the staggered-bake state machine are backend-agnostic
+//! (`concinnity_core::render::reflection_probe`); this module drives the GPU capture, mirroring
+//! `crate::metal::probe`. The bake is STAGGERED + ASYNCHRONOUS across frames so the
+//! render thread never blocks: one probe is in flight at a time, its six cube faces
+//! submitted one per frame into a capture cube, then convolved into the probe cube
+//! by the compute kernels in `probe_prefilter.slang`. Nothing is read back and no
+//! convolution runs on the CPU.
+//!
+//! DirectX simplification vs Metal: a per-face fence VALUE gives ordered GPU
+//! completion for free (the queue is FIFO), so there is no completion handler / atomic
+//! -- a face is done when `frame_sync.fence` reaches the value signaled after it. The
+//! bake never calls `wait_idle` (that would reintroduce a multi-hundred-ms freeze);
+//! the convolution is deferred until the fence reaches the last face's value.
+//!
+//! Each probe passes through three phases (`gfx::reflection_probe::BakePhase`, driven by
+//! the pure `next_bake_action` transition table called once per pipeline slot per frame):
+//!   * Rendering    -- six cube faces submitted to the GPU (one per frame) into a RESERVED
+//!     ring slot (`bake_ring_slot`) the frame never overwrites, each
+//!     copied into its slice of the capture cube.
+//!   * Prefiltering -- the convolution runs as compute dispatches: the clamped mirror
+//!     mip plus the capture's source pyramid in the first frame (all
+//!     cheap), then ONE GGX mip per frame after it.
+//!   * (install)    -- the finished cube is installed into `probe.maps` + `probe.set`.
+//!     No upload: the cube was written in place.
+//!
+//! Known V1 simplifications (documented intentionally; mirror Metal where noted):
+//!   * Static + instanced geometry only -- skinned meshes are not captured into the
+//!     probe (no per-bake deformed buffer yet). They still receive probe reflections.
+//!   * Single bounce + cold-first-frame lighting (the shadow map may be unpopulated when
+//!     a probe bakes on an early frame), exactly like Metal.
 
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types;

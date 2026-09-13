@@ -1,10 +1,8 @@
-// src/editor/viewport/cursor.rs
-//
-// The editor's in-engine mouse cursor: a single `follow_cursor` Sprite the
-// overlay draws as an arrow, or as a resize cursor over a resizable panel's edge
-// (the hook publishes the shape through the `DesiredCursor` resource). While it
-// is visible the overlay hides the OS cursor for it (its `want_ui_cursor` path),
-// so the pointer stays managed in-engine and looks identical on every backend.
+//! The editor's in-engine mouse cursor: a single `follow_cursor` Sprite the
+//! overlay draws as an arrow, or as a resize cursor over a resizable panel's edge
+//! (the hook publishes the shape through the `DesiredCursor` resource). While it
+//! is visible the overlay hides the OS cursor for it (its `want_ui_cursor` path),
+//! so the pointer stays managed in-engine and looks identical on every backend.
 
 use concinnity_core::components::Sprite;
 use concinnity_core::ecs::World;

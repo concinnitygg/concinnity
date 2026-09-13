@@ -1,13 +1,11 @@
-// src/app/run_tests.rs
-//
-// The headless driver over a small world: what one tick publishes, the bounded
-// and unbounded runs, a system halting the world, and the steady-state
-// allocation invariant holding across a long run.
-//
-// The systems here move a `Transform` rather than pushing components, so a
-// settled tick allocates nothing and the invariant has something honest to
-// judge. The tracking allocator this crate's test binary installs (see
-// `alloc_guard`) is what arms it.
+//! The headless driver over a small world: what one tick publishes, the bounded
+//! and unbounded runs, a system halting the world, and the steady-state
+//! allocation invariant holding across a long run.
+//!
+//! The systems here move a `Transform` rather than pushing components, so a
+//! settled tick allocates nothing and the invariant has something honest to
+//! judge. The tracking allocator this crate's test binary installs (see
+//! `alloc_guard`) is what arms it.
 
 use alloc::boxed::Box;
 

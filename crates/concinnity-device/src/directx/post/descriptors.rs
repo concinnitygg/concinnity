@@ -1,16 +1,14 @@
-// src/directx/post/descriptors.rs
-//
-// The descriptor slots the shared fullscreen post passes allocate from, in
-// place of the per-pass reservations `init/heap_layout.rs` used to carve for
-// each effect by name.
-//
-// A block of the shader-visible CBV/SRV/UAV heap and a block of the RTV heap,
-// handed out a slot at a time and returned when the target holding the slot is
-// dropped. A post target is persistent, so the descriptors describing one are
-// too; a pass that recreates its targets drops the old ones first and gets the
-// same slots back. What the block removes is the per-pass naming: a new post
-// pass takes what it needs from here instead of adding a `<effect>_srv_extra`
-// to the heap cascade.
+//! The descriptor slots the shared fullscreen post passes allocate from, in
+//! place of the per-pass reservations `init/heap_layout.rs` used to carve for
+//! each effect by name.
+//!
+//! A block of the shader-visible CBV/SRV/UAV heap and a block of the RTV heap,
+//! handed out a slot at a time and returned when the target holding the slot is
+//! dropped. A post target is persistent, so the descriptors describing one are
+//! too; a pass that recreates its targets drops the old ones first and gets the
+//! same slots back. What the block removes is the per-pass naming: a new post
+//! pass takes what it needs from here instead of adding a `<effect>_srv_extra`
+//! to the heap cascade.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};

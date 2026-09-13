@@ -1,17 +1,15 @@
-// src/vulkan/water.rs
-//
-// WaterSurface: one producer of the engine's transparent pass on the Vulkan
-// backend (`transparent.rs` owns the render pass itself, the scene snapshot, the
-// shared descriptor / pipeline layouts and the combined back-to-front draw
-// order; `glass.rs` is the other producer). Each surface is a flat tessellated
-// XZ grid built once at init and displaced per frame by the vertex stage's
-// Gerstner sum; the fragment refracts the pass's scene snapshot, tints and foams
-// it by the water-column thickness the main depth gives, and mixes a reflection
-// over it by a Schlick Fresnel term (see shaders/water.slang, the single source
-// all three backends compile).
-//
-// Same uniform layouts, back-to-front ordering and manual depth-occlusion test
-// as the DirectX and Metal hosts.
+//! WaterSurface: one producer of the engine's transparent pass on the Vulkan
+//! backend (`transparent.rs` owns the render pass itself, the scene snapshot, the
+//! shared descriptor / pipeline layouts and the combined back-to-front draw
+//! order; `glass.rs` is the other producer). Each surface is a flat tessellated
+//! XZ grid built once at init and displaced per frame by the vertex stage's
+//! Gerstner sum; the fragment refracts the pass's scene snapshot, tints and foams
+//! it by the water-column thickness the main depth gives, and mixes a reflection
+//! over it by a Schlick Fresnel term (see shaders/water.slang, the single source
+//! all three backends compile).
+//!
+//! Same uniform layouts, back-to-front ordering and manual depth-occlusion test
+//! as the DirectX and Metal hosts.
 
 use ash::vk;
 use concinnity_core::components::{MAX_WATER_WAVES, WaterSurface, WaterWave};

@@ -1,18 +1,16 @@
-// src/gfx/streaming/chunk.rs
-//
-// The `std`-side driver for infinite-world voxel chunk streaming.
-//
-// This is the chunk counterpart of `super::mesh`: it owns a
-// background generation thread and the channels that carry work to it, and
-// wraps the `no_std` policy core in `concinnity_core::render::chunk_window`. The split is
-// the same one the rest of the streaming subsystem uses: `ChunkWindow` decides
-// *which* chunks to stream using only `core` + `alloc`; everything OS-coupled
-// -- the thread, the channels -- lives here so a future `no_std` client
-// runtime only has to replace this file.
-//
-// `ChunkSource` is the seam. The shipped `ProceduralChunkSource` generates a
-// chunk's geometry from a seed on demand, so chunks are never RAM- or
-// disk-resident: an evicted chunk is simply regenerated if the camera returns.
+//! The `std`-side driver for infinite-world voxel chunk streaming.
+//!
+//! This is the chunk counterpart of `super::mesh`: it owns a
+//! background generation thread and the channels that carry work to it, and
+//! wraps the `no_std` policy core in `concinnity_core::render::chunk_window`. The split is
+//! the same one the rest of the streaming subsystem uses: `ChunkWindow` decides
+//! *which* chunks to stream using only `core` + `alloc`; everything OS-coupled
+//! -- the thread, the channels -- lives here so a future `no_std` client
+//! runtime only has to replace this file.
+//!
+//! `ChunkSource` is the seam. The shipped `ProceduralChunkSource` generates a
+//! chunk's geometry from a seed on demand, so chunks are never RAM- or
+//! disk-resident: an evicted chunk is simply regenerated if the camera returns.
 
 use concinnity_core::geometry::{
     ChunkBlockType, ChunkGenerator, build_chunk_impostor_mesh, build_chunk_mesh,

@@ -1,85 +1,83 @@
-// src/metal/graph_exec.rs
-//
-// Metal-side executor for the render graph. `MtlContext::execute_graph`
-// walks a `CompiledGraph` and dispatches each pass by `PassId` to the
-// existing `encode_*` method. Every Metal pass that ever ran inline is
-// now in the graph. Composite plus Shadow, Main, Cull, AutoExposure,
-// Bloom, Velocity, TaaResolve, SsrResolve, ParticlesSim, ParticlesDraw,
-// Fog, Decals, GBufferPrepass, and SsaoBlur are the dispatchable PassIds.
-// PassIds `SsaoPrepass` and `SsaoKernel` are timing-only: their per-pass
-// timing slots fire from `diagnostics.pass_timing.attach_*` calls inside
-// the bundled `encode_ssao` Rust function, but they must never appear as
-// graph nodes (the executor rejects them with a clear error if mis-added).
-//
-// Per-pass command buffers, two queues. Each non-composite pass runs on its own
-// freshly-minted `MTLCommandBuffer`, encoded on a rayon worker and committed by
-// the main thread onto the queue the graph's schedule assigned it
-// (`CompiledPass::queue`). Each queue's buffers commit in ascending compiled
-// index, so a queue's own commit order is that queue's graph order; the two
-// queues are ordered against each other only by the `MTLEvent` signal / wait
-// pairs the schedule derived, laid out by `metal/graph_events.rs` and carried
-// by `metal/graph_queues.rs`.
-//
-// The `Composite` pass keeps using the outer cmd_buf that `draw_frame` owns (so
-// `presentDrawable` + the completion handler stay attached to the cmd buf that
-// actually writes to the drawable). It is the last graphics pass, so it also
-// carries that queue's frame terminal signal, and `draw_frame` records the
-// terminal only once it has committed the buffer.
-//
-// Ordering within a queue is still submission order, never events. An earlier
-// draft had workers commit their own cmd bufs in arbitrary thread-schedule
-// order with an `MTLEvent` chain enforcing GPU ordering, and the renderer drew
-// into a black drawable: Apple's command queue executes cmd bufs FIFO in commit
-// order regardless of events, so committing out of order broke the dependency
-// chain (later passes ran while earlier passes' writes were still queued behind
-// them). That is exactly why the asynchronous passes need a *second* queue
-// rather than out-of-order commits on one, and why events only ever cross
-// between the two.
-//
-// Per-pass command buffers also sidestep the `MTLParallelRenderCommandEncoder`
-// abort that reliably trips G14X (M2/M3 Pro/Max-class GPUs) on macOS 26.4 after
-// ~20-90 s of rendering, regardless of how few sub-encoders we minted.
-//
-// The executor is a `&mut self` method on `MtlContext` taking the
-// concrete per-frame params.
-//
-// Per-pass barriers (`pass.barriers_before` and `pass.barriers_after`) are not
-// applied on Metal: the DX/VK seam (`barrier_translate` + a per-resource
-// registry + `emit_graph_barriers`) emits explicit resource-state TRANSITIONS,
-// and Metal has none to emit.
-//
-//   1. Hazards are tracked automatically -- within a queue. Every resource here
-//      uses the default tracked hazard mode (no `MTLHeap` / untracked
-//      resources). Apple documents that mode as "delay write operations until
-//      all previous read operations finish" and "prevent subsequent commands
-//      from running until write operations finish", without claiming a scope
-//      wider than the queue; the resource-synchronization overview places the
-//      mechanisms in a ladder where a fence "synchronizes resource memory
-//      operations across different passes within a command queue" and only an
-//      `MTLEvent` "synchronizes resource memory operations in passes across all
-//      command queues". So automatic tracking is taken to cover encoders and
-//      command buffers on ONE queue only, and every cross-queue edge is carried
-//      by an event instead: the in-frame ones the schedule derived, plus the
-//      frame-start wait that closes the cross-frame hazard on the persistent
-//      resources both queues touch (see `metal/graph_events.rs`).
-//   2. Same-queue cross-pass ordering is free. A queue's passes commit in that
-//      queue's graph order, so the producer -> consumer ordering the two barrier
-//      lists encode is already guaranteed by submission order, whichever side of
-//      a pass the graph chose to record a read run's transition on.
-//   3. The only Metal "barrier-analogue" is `useResource` residency, and it is
-//      a DIFFERENT concern the graph cannot drive: it is per-encoder (every
-//      encoder reaching a resource INDIRECTLY -- through an ICB, an argument
-//      buffer, or an acceleration structure -- must declare it), not a one-shot
-//      producer -> consumer transition, and it covers resources the graph does
-//      not model (the bindless texture pool, the env maps, the accel BLAS). So
-//      it stays inline and comprehensive at each indirect-access encoder: the
-//      ICB write residency + the bindless main pass `use_bindless_textures`
-//      (cull.rs), and the RT trace (rt_reflections.rs / raytrace.rs).
-//
-// The Vulkan / DirectX executors consume the same `BarrierOp` list; Metal reads
-// the graph for ordering + resource lifetimes only. (If untracked / heap
-// resources are ever introduced, the point-1 assumption breaks even within a
-// queue, and explicit `MTLFence`s become necessary.)
+//! Metal-side executor for the render graph. `MtlContext::execute_graph`
+//! walks a `CompiledGraph` and dispatches each pass by `PassId` to the
+//! existing `encode_*` method. Every Metal pass that ever ran inline is
+//! now in the graph. Composite plus Shadow, Main, Cull, AutoExposure,
+//! Bloom, Velocity, TaaResolve, SsrResolve, ParticlesSim, ParticlesDraw,
+//! Fog, Decals, GBufferPrepass, and SsaoBlur are the dispatchable PassIds.
+//! PassIds `SsaoPrepass` and `SsaoKernel` are timing-only: their per-pass
+//! timing slots fire from `diagnostics.pass_timing.attach_*` calls inside
+//! the bundled `encode_ssao` Rust function, but they must never appear as
+//! graph nodes (the executor rejects them with a clear error if mis-added).
+//!
+//! Per-pass command buffers, two queues. Each non-composite pass runs on its own
+//! freshly-minted `MTLCommandBuffer`, encoded on a rayon worker and committed by
+//! the main thread onto the queue the graph's schedule assigned it
+//! (`CompiledPass::queue`). Each queue's buffers commit in ascending compiled
+//! index, so a queue's own commit order is that queue's graph order; the two
+//! queues are ordered against each other only by the `MTLEvent` signal / wait
+//! pairs the schedule derived, laid out by `metal/graph_events.rs` and carried
+//! by `metal/graph_queues.rs`.
+//!
+//! The `Composite` pass keeps using the outer cmd_buf that `draw_frame` owns (so
+//! `presentDrawable` + the completion handler stay attached to the cmd buf that
+//! actually writes to the drawable). It is the last graphics pass, so it also
+//! carries that queue's frame terminal signal, and `draw_frame` records the
+//! terminal only once it has committed the buffer.
+//!
+//! Ordering within a queue is still submission order, never events. An earlier
+//! draft had workers commit their own cmd bufs in arbitrary thread-schedule
+//! order with an `MTLEvent` chain enforcing GPU ordering, and the renderer drew
+//! into a black drawable: Apple's command queue executes cmd bufs FIFO in commit
+//! order regardless of events, so committing out of order broke the dependency
+//! chain (later passes ran while earlier passes' writes were still queued behind
+//! them). That is exactly why the asynchronous passes need a *second* queue
+//! rather than out-of-order commits on one, and why events only ever cross
+//! between the two.
+//!
+//! Per-pass command buffers also sidestep the `MTLParallelRenderCommandEncoder`
+//! abort that reliably trips G14X (M2/M3 Pro/Max-class GPUs) on macOS 26.4 after
+//! ~20-90 s of rendering, regardless of how few sub-encoders we minted.
+//!
+//! The executor is a `&mut self` method on `MtlContext` taking the
+//! concrete per-frame params.
+//!
+//! Per-pass barriers (`pass.barriers_before` and `pass.barriers_after`) are not
+//! applied on Metal: the DX/VK seam (`barrier_translate` + a per-resource
+//! registry + `emit_graph_barriers`) emits explicit resource-state TRANSITIONS,
+//! and Metal has none to emit.
+//!
+//!   1. Hazards are tracked automatically -- within a queue. Every resource here
+//!      uses the default tracked hazard mode (no `MTLHeap` / untracked
+//!      resources). Apple documents that mode as "delay write operations until
+//!      all previous read operations finish" and "prevent subsequent commands
+//!      from running until write operations finish", without claiming a scope
+//!      wider than the queue; the resource-synchronization overview places the
+//!      mechanisms in a ladder where a fence "synchronizes resource memory
+//!      operations across different passes within a command queue" and only an
+//!      `MTLEvent` "synchronizes resource memory operations in passes across all
+//!      command queues". So automatic tracking is taken to cover encoders and
+//!      command buffers on ONE queue only, and every cross-queue edge is carried
+//!      by an event instead: the in-frame ones the schedule derived, plus the
+//!      frame-start wait that closes the cross-frame hazard on the persistent
+//!      resources both queues touch (see `metal/graph_events.rs`).
+//!   2. Same-queue cross-pass ordering is free. A queue's passes commit in that
+//!      queue's graph order, so the producer -> consumer ordering the two barrier
+//!      lists encode is already guaranteed by submission order, whichever side of
+//!      a pass the graph chose to record a read run's transition on.
+//!   3. The only Metal "barrier-analogue" is `useResource` residency, and it is
+//!      a DIFFERENT concern the graph cannot drive: it is per-encoder (every
+//!      encoder reaching a resource INDIRECTLY -- through an ICB, an argument
+//!      buffer, or an acceleration structure -- must declare it), not a one-shot
+//!      producer -> consumer transition, and it covers resources the graph does
+//!      not model (the bindless texture pool, the env maps, the accel BLAS). So
+//!      it stays inline and comprehensive at each indirect-access encoder: the
+//!      ICB write residency + the bindless main pass `use_bindless_textures`
+//!      (cull.rs), and the RT trace (rt_reflections.rs / raytrace.rs).
+//!
+//! The Vulkan / DirectX executors consume the same `BarrierOp` list; Metal reads
+//! the graph for ordering + resource lifetimes only. (If untracked / heap
+//! resources are ever introduced, the point-1 assumption breaks even within a
+//! queue, and explicit `MTLFence`s become necessary.)
 
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types::{

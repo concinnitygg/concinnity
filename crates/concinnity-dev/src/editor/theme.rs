@@ -1,9 +1,7 @@
-// src/editor/theme.rs
-//
-// The editor chrome's shared visual theme: one palette and metric set so the
-// top bar and every floating panel read as a single surface. Panels keep local
-// tints only for colors that are truly their own (e.g. the delete-red row);
-// anything that repeats across panels lives here.
+//! The editor chrome's shared visual theme: one palette and metric set so the
+//! top bar and every floating panel read as a single surface. Panels keep local
+//! tints only for colors that are truly their own (e.g. the delete-red row);
+//! anything that repeats across panels lives here.
 
 // The HUD font is 20px; editor labels draw a step smaller for a denser, cleaner
 // read. `TEXT_HALF` is half the scaled line height, used to vertically center a

@@ -1,9 +1,7 @@
-// src/editor/hook/tests/edit/lighting_tests.rs
-//
-// The Lighting panel's actions (`hook/edit/lighting.rs`): the seeding an open
-// performs, the commit an apply makes and what it does with text that will not
-// parse, the immediate commit a bool toggle makes, the missing singleton an add
-// row appends, and the focus it yields when it is not frontmost.
+//! The Lighting panel's actions (`hook/edit/lighting.rs`): the seeding an open
+//! performs, the commit an apply makes and what it does with text that will not
+//! parse, the immediate commit a bool toggle makes, the missing singleton an add
+//! row appends, and the focus it yields when it is not frontmost.
 
 use concinnity_core::components::FrameInput;
 use concinnity_core::components::Sprite;

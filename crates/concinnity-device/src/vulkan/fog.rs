@@ -1,23 +1,21 @@
-// src/vulkan/fog.rs
-//
-// Volumetric fog for the Vulkan backend. Frostbite-style froxel volume:
-//
-//   * The `fog_froxel_kernel` compute pass (`encode_fog_froxel`) populates a
-//     screen-aligned `(80 x 45 x 64)` 3D `RGBA16F` volume of
-//     `(scattered_rgb, 1 - T)` across the view frustum. One thread per
-//     (x, y) tile; each thread walks Z front-to-back, accumulating the
-//     per-slab scatter + transmittance with a CSM shadow tap per slice.
-//
-//   * The fullscreen `Fog` render pass (`encode_fog`) samples the volume by
-//     `(screen_uv, view_z)` instead of marching per pixel and composites
-//     `(scattered, 1 - T)` over the resolved HDR target with the standard
-//     `over` blend (`final = scene * T + scattered`).
-//
-// Runs between the projected-decal pass and the SSR resolve so the fog wraps
-// the decal-stamped scene and SSR reflects through it; TAA history then
-// reprojects the integrated fog color and transmittance.
-//
-// Mirrors src/directx/fog.rs and src/metal/fog.rs.
+//! Volumetric fog for the Vulkan backend. Frostbite-style froxel volume:
+//!
+//!   * The `fog_froxel_kernel` compute pass (`encode_fog_froxel`) populates a
+//!     screen-aligned `(80 x 45 x 64)` 3D `RGBA16F` volume of
+//!     `(scattered_rgb, 1 - T)` across the view frustum. One thread per
+//!     (x, y) tile; each thread walks Z front-to-back, accumulating the
+//!     per-slab scatter + transmittance with a CSM shadow tap per slice.
+//!
+//!   * The fullscreen `Fog` render pass (`encode_fog`) samples the volume by
+//!     `(screen_uv, view_z)` instead of marching per pixel and composites
+//!     `(scattered, 1 - T)` over the resolved HDR target with the standard
+//!     `over` blend (`final = scene * T + scattered`).
+//!
+//! Runs between the projected-decal pass and the SSR resolve so the fog wraps
+//! the decal-stamped scene and SSR reflects through it; TAA history then
+//! reprojects the integrated fog color and transmittance.
+//!
+//! Mirrors src/directx/fog.rs and src/metal/fog.rs.
 
 use ash::vk;
 use concinnity_core::gfx::render_types::{FogFroxelParams, FogParams, ShadowUniforms};

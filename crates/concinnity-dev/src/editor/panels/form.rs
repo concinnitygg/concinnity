@@ -1,28 +1,26 @@
-// src/editor/panels/form.rs
-//
-// Derives an add / edit form's editable fields from an asset type's registered
-// default args, and coerces the edited text / toggle values back into a JSON args
-// object. This is the data half of the panel's form (the panel owns the layout
-// and the hook owns the live field state); it is pure and world-free, so it unit
-// tests without a running engine.
-//
-// The field list is the type's `default_args` object (which is
-// `serde_json::to_value(Args::default())`, keys in declaration order) -- no
-// per-type descriptor to maintain. Editable kinds: string / integer / float /
-// bool; a fixed-length numeric array of 2..=4 elements (a vector or a color),
-// edited as comma-separated numbers; a string-enum, cycled through its variants
-// (declared per field path by its type, via `RegisteredType::field_enum_variants`); and an
-// asset-reference field (`RegisteredType::ref_fields`), cycled through `(none)` +
-// the world's assets of the target type (the hook fills the options via
-// `set_ref_options`). A plain nested OBJECT is flattened into its leaves, keyed by
-// a dotted path (`controller.move_speed`), up to `MAX_NEST_DEPTH` levels; the leaf
-// edits like any scalar and `assemble` writes it back into the sub-object via
-// `set_at_path`. A variable-length (non-vector) ARRAY becomes an `Array` header
-// field (add / remove elements) followed by each element's fields keyed by index
-// (`waves.0.amplitude`); `set_at_path` / `get_at_path` navigate the numeric index
-// segments. Every other kind (deeper objects / arrays past the depth cap, undeclared
-// nulls) is left at its default and round-trips untouched. The assembled object is
-// validated by the caller via `RegisteredType::reserialize_args`.
+//! Derives an add / edit form's editable fields from an asset type's registered
+//! default args, and coerces the edited text / toggle values back into a JSON args
+//! object. This is the data half of the panel's form (the panel owns the layout
+//! and the hook owns the live field state); it is pure and world-free, so it unit
+//! tests without a running engine.
+//!
+//! The field list is the type's `default_args` object (which is
+//! `serde_json::to_value(Args::default())`, keys in declaration order) -- no
+//! per-type descriptor to maintain. Editable kinds: string / integer / float /
+//! bool; a fixed-length numeric array of 2..=4 elements (a vector or a color),
+//! edited as comma-separated numbers; a string-enum, cycled through its variants
+//! (declared per field path by its type, via `RegisteredType::field_enum_variants`); and an
+//! asset-reference field (`RegisteredType::ref_fields`), cycled through `(none)` +
+//! the world's assets of the target type (the hook fills the options via
+//! `set_ref_options`). A plain nested OBJECT is flattened into its leaves, keyed by
+//! a dotted path (`controller.move_speed`), up to `MAX_NEST_DEPTH` levels; the leaf
+//! edits like any scalar and `assemble` writes it back into the sub-object via
+//! `set_at_path`. A variable-length (non-vector) ARRAY becomes an `Array` header
+//! field (add / remove elements) followed by each element's fields keyed by index
+//! (`waves.0.amplitude`); `set_at_path` / `get_at_path` navigate the numeric index
+//! segments. Every other kind (deeper objects / arrays past the depth cap, undeclared
+//! nulls) is left at its default and round-trips untouched. The assembled object is
+//! validated by the caller via `RegisteredType::reserialize_args`.
 
 use concinnity_cook::authoring::registry::RegisteredType;
 use serde_json::{Map, Value};

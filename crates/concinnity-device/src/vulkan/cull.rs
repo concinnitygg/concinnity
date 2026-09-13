@@ -1,22 +1,20 @@
-// src/vulkan/cull.rs
-//
-// Compute-driven cull pass for the Vulkan backend. One compute
-// invocation per build-time `DrawObject` frustum / distance-tests the
-// object and writes its `VkDrawIndexedIndirectCommand` (with
-// `instance_count` 0 for culled / disabled objects) into this frame's
-// indirect buffer. The bindless Main pass then consumes the buffer via
-// one `cmd_draw_indexed_indirect`. Must run outside any render pass
-// (Vulkan disallows compute dispatch inside a render pass), which is
-// why the graph dispatch site in `vulkan/draw.rs::record_frame` sits
-// before `cmd_begin_render_pass` for Shadow / Main.
-//
-// The shape mirrors `metal/cull.rs::encode_cull`; the graph executor
-// in [`graph_exec.rs`](graph_exec.rs) dispatches `PassId::Cull` here.
-//
-// CPU-side per-frame buffer rebuilds (`build_object_buffer` +
-// `build_draw_args_buffer`) stay in `record_frame`: they're host
-// writes to mapped GPU memory, not part of the GPU command stream the
-// graph orders.
+//! Compute-driven cull pass for the Vulkan backend. One compute
+//! invocation per build-time `DrawObject` frustum / distance-tests the
+//! object and writes its `VkDrawIndexedIndirectCommand` (with
+//! `instance_count` 0 for culled / disabled objects) into this frame's
+//! indirect buffer. The bindless Main pass then consumes the buffer via
+//! one `cmd_draw_indexed_indirect`. Must run outside any render pass
+//! (Vulkan disallows compute dispatch inside a render pass), which is
+//! why the graph dispatch site in `vulkan/draw.rs::record_frame` sits
+//! before `cmd_begin_render_pass` for Shadow / Main.
+//!
+//! The shape mirrors `metal/cull.rs::encode_cull`; the graph executor
+//! in [`graph_exec.rs`](graph_exec.rs) dispatches `PassId::Cull` here.
+//!
+//! CPU-side per-frame buffer rebuilds (`build_object_buffer` +
+//! `build_draw_args_buffer`) stay in `record_frame`: they're host
+//! writes to mapped GPU memory, not part of the GPU command stream the
+//! graph orders.
 
 use ash::vk;
 use concinnity_core::gfx::frustum::Frustum;

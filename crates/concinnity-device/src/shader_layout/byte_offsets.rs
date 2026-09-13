@@ -1,18 +1,16 @@
-// src/shader_layout/byte_offsets.rs
-//
-// The layout lock for a kernel that byte-addresses its buffers.
-//
-// Reflection cannot reach these. `slangc -reflection-json` reports the layout of
-// a struct a shader declares, and a `ByteAddressBuffer` declares none: the
-// strides and field offsets live in the kernel as plain constants. So the check
-// reads those constants back out of the same `.slang` text the renderer
-// compiles and compares them to the `#[repr(C)]` mirror, which locks both sides
-// the way the reflected mirrors do.
-//
-// A byte-addressed buffer is not a workaround here, it is the only shape that
-// survives all three targets: a structured-buffer `float3` packs to 12 bytes on
-// Metal and DXIL but pads to 16 on SPIR-V, which would stride `SkinnedVertex` at
-// 96 instead of 80.
+//! The layout lock for a kernel that byte-addresses its buffers.
+//!
+//! Reflection cannot reach these. `slangc -reflection-json` reports the layout of
+//! a struct a shader declares, and a `ByteAddressBuffer` declares none: the
+//! strides and field offsets live in the kernel as plain constants. So the check
+//! reads those constants back out of the same `.slang` text the renderer
+//! compiles and compares them to the `#[repr(C)]` mirror, which locks both sides
+//! the way the reflected mirrors do.
+//!
+//! A byte-addressed buffer is not a workaround here, it is the only shape that
+//! survives all three targets: a structured-buffer `float3` packs to 12 bytes on
+//! Metal and DXIL but pads to 16 on SPIR-V, which would stride `SkinnedVertex` at
+//! 96 instead of 80.
 
 // Value of a `static const uint <name> = <value>;` declaration in `source`.
 // Panics when the constant is missing or unparsable, because a renamed constant

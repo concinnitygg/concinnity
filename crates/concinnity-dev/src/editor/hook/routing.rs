@@ -1,8 +1,6 @@
-// src/editor/hook/routing.rs
-//
-// EditorHook: per-frame pointer routing -- the scroll steps behind each panel's
-// wheel region, title-bar dragging, and click hit-testing across the top bar and
-// the registered panels (front-to-back).
+//! EditorHook: per-frame pointer routing -- the scroll steps behind each panel's
+//! wheel region, title-bar dragging, and click hit-testing across the top bar and
+//! the registered panels (front-to-back).
 
 use concinnity_core::components::FrameInput;
 use concinnity_core::components::InputKey;

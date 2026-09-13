@@ -1,13 +1,11 @@
-// src/ecs/waves.rs
-//
-// The executable schedule, built once per world start (after system init, so
-// data-dependent access declarations are final) and rebuilt only when the
-// system set changes. It validates the table's declared before/after edges
-// against table order, derives conflict edges from each system's declared
-// `Access` (conflicting pairs keep their table order), and groups systems
-// into waves: sets whose members neither conflict nor have an ordering edge
-// between them. Execution walks waves in level order, members in table order,
-// so the serial walk is byte-identical to the plain table iteration.
+//! The executable schedule, built once per world start (after system init, so
+//! data-dependent access declarations are final) and rebuilt only when the
+//! system set changes. It validates the table's declared before/after edges
+//! against table order, derives conflict edges from each system's declared
+//! `Access` (conflicting pairs keep their table order), and groups systems
+//! into waves: sets whose members neither conflict nor have an ordering edge
+//! between them. Execution walks waves in level order, members in table order,
+//! so the serial walk is byte-identical to the plain table iteration.
 
 use alloc::vec;
 use alloc::vec::Vec;

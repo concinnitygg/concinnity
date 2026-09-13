@@ -1,30 +1,28 @@
-// src/directx/quality.rs
-//
-// Runtime application of the Quality-group settings (TAA / SSAO / SSR / SSGI /
-// auto-exposure). Each gates a render pass whose GPU resources (pipelines,
-// render targets) are built once at init from the world's PostProcessConfig, so
-// applying a change at runtime means building or tearing down those resources.
-//
-// Unlike the Vulkan backend, DirectX picks its scene-input + occlusion sources
-// DYNAMICALLY every frame (`scene_srv_for_post`, `ssao_ao_srv_gpu`, and each
-// feature's render-graph gate read the live `Option` state at encode time), so a
-// toggle needs no descriptor rewrite and no swapchain rebuild: it just builds the
-// effect into its pre-reserved fixed heap slot (the slots are reserved
-// unconditionally at init, see `init/mod.rs`) or drops it. The next frame's draw
-// adapts. The one coupling is SSAO's `ao_output`, which lives in the transient
-// pool only while SSAO is on and shares a heap region with `bloom_top`; toggling
-// it rebuilds the pool + the bloom mip chain, mirroring the resize path.
-//
-// Ray-traced reflections toggle the same way, with two extra costs: turning them
-// on builds the scene acceleration structure (`build_rt_accel`, a one-shot
-// fence-waited BLAS + TLAS over current geometry) plus the DXR reflection pass,
-// so a live enable hitches once proportional to triangle count; and RT is only
-// live-toggleable on a GPU that reports the DXR 1.1 tier (queried once at init
-// into `rt_capable`), else the toggle no-ops with a warning and RT stays whatever
-// it launched as. The RT output reserves its fixed heap slot unconditionally like
-// the other five features, so an enable builds into it without shifting any other
-// slot; the dynamic `scene_srv_for_post` picks the RT output over SSR each frame,
-// so no rewire or rebuild is needed.
+//! Runtime application of the Quality-group settings (TAA / SSAO / SSR / SSGI /
+//! auto-exposure). Each gates a render pass whose GPU resources (pipelines,
+//! render targets) are built once at init from the world's PostProcessConfig, so
+//! applying a change at runtime means building or tearing down those resources.
+//!
+//! Unlike the Vulkan backend, DirectX picks its scene-input + occlusion sources
+//! DYNAMICALLY every frame (`scene_srv_for_post`, `ssao_ao_srv_gpu`, and each
+//! feature's render-graph gate read the live `Option` state at encode time), so a
+//! toggle needs no descriptor rewrite and no swapchain rebuild: it just builds the
+//! effect into its pre-reserved fixed heap slot (the slots are reserved
+//! unconditionally at init, see `init/mod.rs`) or drops it. The next frame's draw
+//! adapts. The one coupling is SSAO's `ao_output`, which lives in the transient
+//! pool only while SSAO is on and shares a heap region with `bloom_top`; toggling
+//! it rebuilds the pool + the bloom mip chain, mirroring the resize path.
+//!
+//! Ray-traced reflections toggle the same way, with two extra costs: turning them
+//! on builds the scene acceleration structure (`build_rt_accel`, a one-shot
+//! fence-waited BLAS + TLAS over current geometry) plus the DXR reflection pass,
+//! so a live enable hitches once proportional to triangle count; and RT is only
+//! live-toggleable on a GPU that reports the DXR 1.1 tier (queried once at init
+//! into `rt_capable`), else the toggle no-ops with a warning and RT stays whatever
+//! it launched as. The RT output reserves its fixed heap slot unconditionally like
+//! the other five features, so an enable builds into it without shifting any other
+//! slot; the dynamic `scene_srv_for_post` picks the RT output over SSR each frame,
+//! so no rewire or rebuild is needed.
 
 use concinnity_core::gfx::auto_exposure;
 use concinnity_core::gfx::rt_reflections;

@@ -1,22 +1,20 @@
-// src/editor/panels/form_panel.rs
-//
-// The editor's add / edit form, in its own floating panel (separate from the
-// Assets browse panel, which stays on its list while this is open). Spawned by
-// clicking an asset in the browse list (or picking a type from the "+" picker):
-// a draggable title bar ("Edit <type>" / "New <type>") with an "X" close button
-// in its top-right corner, then a header row with the asset's editable NAME as a
-// large heading and the Apply button pinned to the panel's top-right, then the
-// scrollable arg-field area. Like the rest of the editor HUD it is plain
-// `Sprite` / `TextLabel` / `TextInput` components at reserved ids driven each
-// frame by the hook; the field model itself lives in `form.rs` and the hook owns
-// all state.
-//
-// The field area renders a scrolling window over ALL of the type's fields into
-// a fixed pool of `form::FIELD_POOL` control slots: visible slot `r` shows
-// logical field `form_scroll + r`, and hit-test actions carry the LOGICAL index.
-// An enum / ref field with a large variant set opens a floating value dropdown
-// below the field (its own row pool here, so it can coexist with the Assets
-// panel's combo).
+//! The editor's add / edit form, in its own floating panel (separate from the
+//! Assets browse panel, which stays on its list while this is open). Spawned by
+//! clicking an asset in the browse list (or picking a type from the "+" picker):
+//! a draggable title bar ("Edit <type>" / "New <type>") with an "X" close button
+//! in its top-right corner, then a header row with the asset's editable NAME as a
+//! large heading and the Apply button pinned to the panel's top-right, then the
+//! scrollable arg-field area. Like the rest of the editor HUD it is plain
+//! `Sprite` / `TextLabel` / `TextInput` components at reserved ids driven each
+//! frame by the hook; the field model itself lives in `form.rs` and the hook owns
+//! all state.
+//!
+//! The field area renders a scrolling window over ALL of the type's fields into
+//! a fixed pool of `form::FIELD_POOL` control slots: visible slot `r` shows
+//! logical field `form_scroll + r`, and hit-test actions carry the LOGICAL index.
+//! An enum / ref field with a large variant set opens a floating value dropdown
+//! below the field (its own row pool here, so it can coexist with the Assets
+//! panel's combo).
 
 use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;

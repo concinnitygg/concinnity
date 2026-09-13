@@ -1,10 +1,8 @@
-// src/editor/hook/drive/notify.rs
-//
-// EditorHook: the toast stack's per-frame drive and click routing. The queue
-// and lifetime policy live in `editor/notify.rs`, the card geometry in
-// `editor/toast_overlay.rs`; here the hook draws the live stack each frame and
-// resolves presses (a card runs its action and dismisses, the overflow row
-// opens the Console, where the full history lives).
+//! EditorHook: the toast stack's per-frame drive and click routing. The queue
+//! and lifetime policy live in `editor/notify.rs`, the card geometry in
+//! `editor/toast_overlay.rs`; here the hook draws the live stack each frame and
+//! resolves presses (a card runs its action and dismisses, the overflow row
+//! opens the Console, where the full history lives).
 
 use concinnity_core::ecs::World;
 

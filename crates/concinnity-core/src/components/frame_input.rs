@@ -1,5 +1,3 @@
-// src/components/frame_input.rs
-
 /// Per-frame keyboard and mouse input state.
 ///
 /// One `FrameInput` is updated each frame from the window's keyboard and mouse

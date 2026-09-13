@@ -1,11 +1,9 @@
-// src/ecs/registration_tests.rs
-//
-// Systems registered on a world from outside its table: where in the tick they
-// land, and what the merge refuses.
-//
-// The table under test is synthetic -- one entry per phase, each gated on the
-// world holding a TextLabel -- so the placement rule is read off the run order
-// directly rather than through the engine's twenty-entry schedule.
+//! Systems registered on a world from outside its table: where in the tick they
+//! land, and what the merge refuses.
+//!
+//! The table under test is synthetic -- one entry per phase, each gated on the
+//! world holding a TextLabel -- so the placement rule is read off the run order
+//! directly rather than through the engine's twenty-entry schedule.
 
 use alloc::boxed::Box;
 use alloc::string::ToString;

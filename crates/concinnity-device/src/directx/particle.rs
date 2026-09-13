@@ -1,24 +1,22 @@
-// src/directx/particle.rs
-//
-// GPU-compute particle system for the D3D12 backend. Each `ParticleEmitter`
-// declared in the world produces one persistent `ParticleEmitterGpuState`
-// carrying a default-heap pool buffer (UAV in the compute pass, SRV in the
-// vertex pass) and a default-heap atomic spawn-counter buffer. Each frame the
-// renderer:
-//
-//   1. Computes the per-emitter spawn budget CPU-side (a fractional
-//      accumulator drives integer particle spawns per dispatch).
-//   2. Copies the integer budgets into the per-emitter counter buffers from a
-//      single per-frame upload ring.
-//   3. Dispatches the `particle_simulate` compute kernel to age + integrate +
-//      respawn each pool.
-//   4. Transitions visible pools to NON_PIXEL_SHADER_RESOURCE and rasterizes
-//      one alpha-blended billboard quad per live particle into `hdr_resolve`.
-//
-// The render pass alpha-blends into the resolved HDR target after the
-// volumetric-fog pass and before SSR / TAA so particles appear in screen-
-// space reflections and are temporally stabilized by TAA history. Mirrors
-// src/metal/particle.rs.
+//! GPU-compute particle system for the D3D12 backend. Each `ParticleEmitter`
+//! declared in the world produces one persistent `ParticleEmitterGpuState`
+//! carrying a default-heap pool buffer (UAV in the compute pass, SRV in the
+//! vertex pass) and a default-heap atomic spawn-counter buffer. Each frame the
+//! renderer:
+//!
+//!   1. Computes the per-emitter spawn budget CPU-side (a fractional
+//!      accumulator drives integer particle spawns per dispatch).
+//!   2. Copies the integer budgets into the per-emitter counter buffers from a
+//!      single per-frame upload ring.
+//!   3. Dispatches the `particle_simulate` compute kernel to age + integrate +
+//!      respawn each pool.
+//!   4. Transitions visible pools to NON_PIXEL_SHADER_RESOURCE and rasterizes
+//!      one alpha-blended billboard quad per live particle into `hdr_resolve`.
+//!
+//! The render pass alpha-blends into the resolved HDR target after the
+//! volumetric-fog pass and before SSR / TAA so particles appear in screen-
+//! space reflections and are temporally stabilized by TAA history. Mirrors
+//! src/metal/particle.rs.
 
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types::ParticleParams;

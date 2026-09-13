@@ -1,18 +1,16 @@
-// src/debug/runtime_spawn.rs
-//
-// Runtime decal / emitter / screenshot spawn queue + dispatch (`cn debug`
-// only). Both halves live here so the library never compiles them:
-//
-//   queue     a process-wide command queue the debug WS handlers push onto
-//             (`enqueue`) and the per-frame debug drive drains (`drain`).
-//   dispatch  `dispatch_runtime_spawn`, run by `DebugServer::drive_runtime_commands`
-//             against the live backend + the init-captured texture-name table.
-//
-// The WS server pushes commands off the engine thread; the drive applies them
-// at frame start on the main thread. Each command carries a reply channel so
-// the WS handler can hand the new stable slot index back to its client
-// synchronously: the wait is bounded by one frame (~16 ms at 60 Hz). `cn run`
-// has no debug hook and never reaches any of this.
+//! Runtime decal / emitter / screenshot spawn queue + dispatch (`cn debug`
+//! only). Both halves live here so the library never compiles them:
+//!
+//!   queue     a process-wide command queue the debug WS handlers push onto
+//!             (`enqueue`) and the per-frame debug drive drains (`drain`).
+//!   dispatch  `dispatch_runtime_spawn`, run by `DebugServer::drive_runtime_commands`
+//!             against the live backend + the init-captured texture-name table.
+//!
+//! The WS server pushes commands off the engine thread; the drive applies them
+//! at frame start on the main thread. Each command carries a reply channel so
+//! the WS handler can hand the new stable slot index back to its client
+//! synchronously: the wait is bounded by one frame (~16 ms at 60 Hz). `cn run`
+//! has no debug hook and never reaches any of this.
 
 use concinnity_core::components::DespawnRequest;
 use concinnity_core::components::InputKey;

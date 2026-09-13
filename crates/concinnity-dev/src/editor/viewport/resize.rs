@@ -1,11 +1,9 @@
-// src/editor/viewport/resize.rs
-//
-// Panel resizing: the pure edge/corner hit-test and its cursor-shape mapping,
-// shared by every resizable floating panel. A panel is grabbed for a resize
-// when the pointer lands in the inner border band of its footprint; which edges
-// the band covers picks the resize cursor and, once a drag is under way, which
-// dimensions grow. The hook owns the drag state and the per-panel size override;
-// this module is stateless geometry so it stays unit-testable.
+//! Panel resizing: the pure edge/corner hit-test and its cursor-shape mapping,
+//! shared by every resizable floating panel. A panel is grabbed for a resize
+//! when the pointer lands in the inner border band of its footprint; which edges
+//! the band covers picks the resize cursor and, once a drag is under way, which
+//! dimensions grow. The hook owns the drag state and the per-panel size override;
+//! this module is stateless geometry so it stays unit-testable.
 
 use concinnity_core::ecs::CursorShape;
 

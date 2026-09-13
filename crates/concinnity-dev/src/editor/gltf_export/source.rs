@@ -1,11 +1,9 @@
-// src/editor/gltf_export/source.rs
-//
-// Feeding the writer from the working world: prepare + compile the entries in
-// memory and pull the named SkinnedMesh's compiled payload, which is the
-// composed mesh (glTF import, CharacterModel expansion, synthesized targets).
-// A `bake: true` CharacterShape targeting the mesh is compiled with the flag
-// disarmed so the morph targets survive into the payload; the export-time bake
-// then folds the same shape into the vertices on request.
+//! Feeding the writer from the working world: prepare + compile the entries in
+//! memory and pull the named SkinnedMesh's compiled payload, which is the
+//! composed mesh (glTF import, CharacterModel expansion, synthesized targets).
+//! A `bake: true` CharacterShape targeting the mesh is compiled with the flag
+//! disarmed so the morph targets survive into the payload; the export-time bake
+//! then folds the same shape into the vertices on request.
 
 use concinnity_cook::authoring::world::WorldJsonlAsset;
 use concinnity_core::components::CharacterShape;

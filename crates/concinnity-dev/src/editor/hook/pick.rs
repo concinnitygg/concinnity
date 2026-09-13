@@ -1,14 +1,12 @@
-// src/editor/hook/pick.rs
-//
-// EditorHook: viewport click-to-select. A press that missed the top bar and
-// every floating panel is offered to the 3D view: the mouse ray (built from
-// the live Camera3D) is tested against the engine-published PickIndex, and the
-// nearest hit resolves through the interner's name table into the selection
-// set (`editor/selection.rs`). A plain click replaces the selection; a
-// shift-click toggles the hit's membership; a press over empty space arms the
-// marquee (`hook/drag/marquee.rs`), whose still release clears. A repeat plain
-// click on the same spot cycles through overlapping hits near-to-far, which is
-// the only way to reach an occluded object without gizmos.
+//! EditorHook: viewport click-to-select. A press that missed the top bar and
+//! every floating panel is offered to the 3D view: the mouse ray (built from
+//! the live Camera3D) is tested against the engine-published PickIndex, and the
+//! nearest hit resolves through the interner's name table into the selection
+//! set (`editor/selection.rs`). A plain click replaces the selection; a
+//! shift-click toggles the hit's membership; a press over empty space arms the
+//! marquee (`hook/drag/marquee.rs`), whose still release clears. A repeat plain
+//! click on the same spot cycles through overlapping hits near-to-far, which is
+//! the only way to reach an occluded object without gizmos.
 
 use concinnity_core::components::Camera3D;
 use concinnity_core::components::FrameInput;

@@ -1,37 +1,35 @@
-// src/render/render_graph/schedule.rs
-//
-// Two-queue schedule derived from the compiled pass order. The compile pass
-// hands this module the topologically sorted passes plus the dependency edges
-// in compiled-index space; this module:
-//
-//   1. Assigns each pass a [`PassQueue`] and, jointly with it, decides where
-//      each read run's transition is recorded. A `Compute` pass moves to the
-//      async queue when the graph shows work it could actually overlap with (at
-//      least one render pass that is neither its ancestor nor its descendant)
-//      and when every transition it takes part in is ordered by a data
-//      dependency; a read run whose readers end up split across queues has its
-//      transition recorded on the producing side, which is what makes the
-//      second condition reachable for a continuation reader (see
-//      [`super::barrier_place`]). Everything else stays on the graphics queue,
-//      so its position in the serial order is unchanged.
-//   2. Derives the cross-queue signal / wait pairs from the same edges, one
-//      wait per (consumer, producing queue) naming the latest producer on that
-//      queue: waiting on it covers every earlier producer there, because a
-//      queue runs its own passes in order.
-//   3. Builds the two happens-before relations the rest of the graph reasons
-//      with: `dependency`, the closure of the dependency DAG (what correctness
-//      requires), and `realized`, the closure of each queue's serial order plus
-//      the wait edges (what the schedule delivers). `super::validate` checks the
-//      first is contained in the second; the aliasing planner packs against the
-//      second, so a missing sync point makes it more conservative rather than
-//      quietly unsound.
-//
-// The assignment is a pure function of the compiled graph, so a graph cached by
-// `FrameGraphInputs` stays valid. Creating the native queues is per-backend work
-// this module does not do. The Metal executor submits both queues; the Vulkan
-// and DirectX ones still flatten the schedule back into one serial order, which
-// stays legal because the compiled order is a topological order for both queues
-// at once.
+//! Two-queue schedule derived from the compiled pass order. The compile pass
+//! hands this module the topologically sorted passes plus the dependency edges
+//! in compiled-index space; this module:
+//!
+//!   1. Assigns each pass a [`PassQueue`] and, jointly with it, decides where
+//!      each read run's transition is recorded. A `Compute` pass moves to the
+//!      async queue when the graph shows work it could actually overlap with (at
+//!      least one render pass that is neither its ancestor nor its descendant)
+//!      and when every transition it takes part in is ordered by a data
+//!      dependency; a read run whose readers end up split across queues has its
+//!      transition recorded on the producing side, which is what makes the
+//!      second condition reachable for a continuation reader (see
+//!      [`super::barrier_place`]). Everything else stays on the graphics queue,
+//!      so its position in the serial order is unchanged.
+//!   2. Derives the cross-queue signal / wait pairs from the same edges, one
+//!      wait per (consumer, producing queue) naming the latest producer on that
+//!      queue: waiting on it covers every earlier producer there, because a
+//!      queue runs its own passes in order.
+//!   3. Builds the two happens-before relations the rest of the graph reasons
+//!      with: `dependency`, the closure of the dependency DAG (what correctness
+//!      requires), and `realized`, the closure of each queue's serial order plus
+//!      the wait edges (what the schedule delivers). `super::validate` checks the
+//!      first is contained in the second; the aliasing planner packs against the
+//!      second, so a missing sync point makes it more conservative rather than
+//!      quietly unsound.
+//!
+//! The assignment is a pure function of the compiled graph, so a graph cached by
+//! `FrameGraphInputs` stays valid. Creating the native queues is per-backend work
+//! this module does not do. The Metal executor submits both queues; the Vulkan
+//! and DirectX ones still flatten the schedule back into one serial order, which
+//! stays legal because the compiled order is a topological order for both queues
+//! at once.
 
 use alloc::vec;
 use alloc::vec::Vec;

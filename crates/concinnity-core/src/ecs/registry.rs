@@ -1,49 +1,47 @@
-// src/ecs/registry.rs
-//
-// Single source of truth for the renderer-free half of the engine's asset
-// registry: every Component type paired with its stable u8 discriminant.
-//
-// The list lives in one macro, `for_each_component!`, so both registries built
-// from it stay in lockstep: the runtime value enum + ECS storage
-// (`define_components!`, invoked below in this crate) and the authoring metadata
-// registry (`RegisteredType`, invoked in the build crate from the same list).
-//
-// It arrives in two groups, and which group an entry is in is the whole of what
-// separates a component from a resource:
-//
-//   stored    has a `ComponentTag`, a `ComponentAsset` variant, a column, an
-//             `impl Component`, and an `impl RuntimeComponent`, so a world can
-//             hold one. Split further by the entry's own origin flag into
-//             `external` (declared in a world, survives into a blob) and
-//             `runtime` (only ever minted by a running world).
-//   resource  declared in a world and compiled into the blob's resource stream,
-//             addressed at runtime by a per-kind handle rather than a column.
-//             `impl ResourceAsset`; the entry names its `ResourceKind`. Carries
-//             no origin flag, because being in the group is the origin.
-//
-// A third group -- the types a world declares and the cook expands away before a
-// blob is written -- is the authoring vocabulary, which this crate does not
-// name: its list lives in `concinnity_cook::authoring::registry::build_only`, and the
-// authoring registry composes the two by passing it through the `$extra` tail
-// below.
-//
-// Components are pure data, registered with one entry each. Systems are not in
-// this list at all: a system is code, never declared in a world or serialized to
-// a blob. An engine system is constructed at runtime from world content by its
-// table entry's gate (see `World::start`) -- this crate's headless table, or the
-// client crate's `ecs::registry` -- and a system written outside the engine is
-// registered on the world with `World::add_system`, which is why neither needs a
-// discriminant here.
-//
-// Each component's discriminant (its on-disk blob tag and in-memory
-// `ComponentId`) is assigned by its position in this list: the runtime
-// `define_components!` builds a `#[repr(u8)] ComponentTag` enum whose variants
-// are these entries in order, so the tag is the list position. Discriminants are
-// therefore not hand-written and not a stable on-disk contract: a build
-// regenerates the blob, so the blob and the engine that loads it always agree.
-// Reordering the list changes every tag, which is only safe alongside a rebuild
-// (`cn build`), which the workflow always does. The tag must stay in 0..128 (the
-// `ComponentMask` ceiling); the list is far shorter, so position keeps it there.
+//! Single source of truth for the renderer-free half of the engine's asset
+//! registry: every Component type paired with its stable u8 discriminant.
+//!
+//! The list lives in one macro, `for_each_component!`, so both registries built
+//! from it stay in lockstep: the runtime value enum + ECS storage
+//! (`define_components!`, invoked below in this crate) and the authoring metadata
+//! registry (`RegisteredType`, invoked in the build crate from the same list).
+//!
+//! It arrives in two groups, and which group an entry is in is the whole of what
+//! separates a component from a resource:
+//!
+//!   stored    has a `ComponentTag`, a `ComponentAsset` variant, a column, an
+//!             `impl Component`, and an `impl RuntimeComponent`, so a world can
+//!             hold one. Split further by the entry's own origin flag into
+//!             `external` (declared in a world, survives into a blob) and
+//!             `runtime` (only ever minted by a running world).
+//!   resource  declared in a world and compiled into the blob's resource stream,
+//!             addressed at runtime by a per-kind handle rather than a column.
+//!             `impl ResourceAsset`; the entry names its `ResourceKind`. Carries
+//!             no origin flag, because being in the group is the origin.
+//!
+//! A third group -- the types a world declares and the cook expands away before a
+//! blob is written -- is the authoring vocabulary, which this crate does not
+//! name: its list lives in `concinnity_cook::authoring::registry::build_only`, and the
+//! authoring registry composes the two by passing it through the `$extra` tail
+//! below.
+//!
+//! Components are pure data, registered with one entry each. Systems are not in
+//! this list at all: a system is code, never declared in a world or serialized to
+//! a blob. An engine system is constructed at runtime from world content by its
+//! table entry's gate (see `World::start`) -- this crate's headless table, or the
+//! client crate's `ecs::registry` -- and a system written outside the engine is
+//! registered on the world with `World::add_system`, which is why neither needs a
+//! discriminant here.
+//!
+//! Each component's discriminant (its on-disk blob tag and in-memory
+//! `ComponentId`) is assigned by its position in this list: the runtime
+//! `define_components!` builds a `#[repr(u8)] ComponentTag` enum whose variants
+//! are these entries in order, so the tag is the list position. Discriminants are
+//! therefore not hand-written and not a stable on-disk contract: a build
+//! regenerates the blob, so the blob and the engine that loads it always agree.
+//! Reordering the list changes every tag, which is only safe alongside a rebuild
+//! (`cn build`), which the workflow always does. The tag must stay in 0..128 (the
+//! `ComponentMask` ceiling); the list is far shorter, so position keeps it there.
 
 use crate::define_components;
 use crate::ecs::{BlobAssetDef, Component, PayloadLocator};

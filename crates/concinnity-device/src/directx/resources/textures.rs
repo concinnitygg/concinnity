@@ -1,9 +1,7 @@
-// src/directx/resources/textures.rs
-//
-// Texture-pool slot updates for DxContext: streamed and hot-reloaded albedo /
-// normal-map slots, the IBL environment map and the color-grading LUT, plus
-// the runtime clone of a static draw object (which reuses the source's
-// descriptors).
+//! Texture-pool slot updates for DxContext: streamed and hot-reloaded albedo /
+//! normal-map slots, the IBL environment map and the color-grading LUT, plus
+//! the runtime clone of a static draw object (which reuses the source's
+//! descriptors).
 
 use concinnity_core::bake;
 use concinnity_core::gfx::render_types::*;

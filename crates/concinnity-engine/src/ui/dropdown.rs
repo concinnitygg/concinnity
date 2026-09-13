@@ -1,14 +1,12 @@
-// src/ui/dropdown.rs
-//
-// Reference-space layout for a settings dropdown's floating option list, shared
-// by the input hit-test and the overlay renderer so the two agree on where
-// each option sits. A dropdown row's control button is the anchor; the list is
-// a stack of equal-height option rows placed directly below it, or flipped
-// above when it would spill past the bottom of the reference canvas. A list
-// with more options than `MAX_VISIBLE` shows a scrolling window: the layout
-// places only the visible rows, and the caller maps a row index to an option
-// index by adding its scroll position (the `first` shown option). Purely
-// geometric: no colors, fonts, or draw state.
+//! Reference-space layout for a settings dropdown's floating option list, shared
+//! by the input hit-test and the overlay renderer so the two agree on where
+//! each option sits. A dropdown row's control button is the anchor; the list is
+//! a stack of equal-height option rows placed directly below it, or flipped
+//! above when it would spill past the bottom of the reference canvas. A list
+//! with more options than `MAX_VISIBLE` shows a scrolling window: the layout
+//! places only the visible rows, and the caller maps a row index to an option
+//! index by adding its scroll position (the `first` shown option). Purely
+//! geometric: no colors, fonts, or draw state.
 
 use concinnity_core::gfx::overlay::UI_REFERENCE_SIZE;
 

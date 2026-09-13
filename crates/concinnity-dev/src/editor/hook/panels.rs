@@ -1,10 +1,8 @@
-// src/editor/hook/panels.rs
-//
-// The `Panel` registry implementations: one stateless unit per floating panel,
-// binding its module (geometry + draw) to the hook state that backs it. The
-// shared machinery -- dragging, focus, close buttons, injection, draw layers,
-// the hidden pass -- lives on the registry consumers; each impl supplies only
-// what is panel-specific.
+//! The `Panel` registry implementations: one stateless unit per floating panel,
+//! binding its module (geometry + draw) to the hook state that backs it. The
+//! shared machinery -- dragging, focus, close buttons, injection, draw layers,
+//! the hidden pass -- lives on the registry consumers; each impl supplies only
+//! what is panel-specific.
 
 use concinnity_core::components::FrameInput;
 use concinnity_core::ecs::World;

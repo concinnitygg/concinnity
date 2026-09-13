@@ -1,15 +1,13 @@
-// src/editor/hook/behavior_asset.rs
-//
-// EditorHook: the open Behavior as a whole asset -- naming it and taking it out
-// of the world. Editing what a behavior does lives in `edit/behavior.rs`; these
-// act on the authored line itself, so both go through `mark_changed` and land in
-// the undo history like any other entry edit.
-//
-// Removing one takes two presses. `mark_changed` does record the pre-edit list,
-// so Undo brings a removed behavior back, but an undo restores the entry list
-// alone: the checker's verdict is left standing from whatever was open before
-// the jump, and the history is bounded, so the recovery is neither immediate nor
-// indefinite. Arming the chip keeps a stray press from needing it at all.
+//! EditorHook: the open Behavior as a whole asset -- naming it and taking it out
+//! of the world. Editing what a behavior does lives in `edit/behavior.rs`; these
+//! act on the authored line itself, so both go through `mark_changed` and land in
+//! the undo history like any other entry edit.
+//!
+//! Removing one takes two presses. `mark_changed` does record the pre-edit list,
+//! so Undo brings a removed behavior back, but an undo restores the entry list
+//! alone: the checker's verdict is left standing from whatever was open before
+//! the jump, and the history is bounded, so the recovery is neither immediate nor
+//! indefinite. Arming the chip keeps a stray press from needing it at all.
 
 use concinnity_core::ecs::World;
 use serde_json::Value;

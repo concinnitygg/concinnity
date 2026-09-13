@@ -1,22 +1,20 @@
-// src/directx/screenshot.rs
-//
-// Headless frame capture for the D3D12 backend. The `cn debug` WS server's
-// `screenshot` command routes here (via `RenderBackend::screenshot`) to copy
-// the most recently presented swapchain back-buffer into a readback buffer and
-// encode it to a PNG on disk. This is the on-GPU verification path the renderer
-// otherwise leaves to a human eyeballing the live window: a headless probe can
-// now assert on actual pixels. Mirrors src/vulkan/screenshot.rs.
-//
-// Capture is synchronous: it idles the GPU (so the last-presented buffer is
-// stable and no in-flight command list still references it), copies the
-// last-presented back-buffer (still in `PRESENT`) into a `READBACK` buffer on a
-// one-shot DIRECT command list, restores the buffer to `PRESENT`, then maps +
-// de-pads + decodes + PNG-encodes on the CPU. The readback buffer is sized from
-// `GetCopyableFootprints` (D3D12 aligns each row to
-// `D3D12_TEXTURE_DATA_PITCH_ALIGNMENT` = 256), so the per-row de-pad below
-// strips that padding back to a tight RGBA8 image. A swapchain rebuild clears
-// `swapchain.last_present_index`, so a capture in the brief window before the next
-// present returns a clean error rather than reading an unrendered buffer.
+//! Headless frame capture for the D3D12 backend. The `cn debug` WS server's
+//! `screenshot` command routes here (via `RenderBackend::screenshot`) to copy
+//! the most recently presented swapchain back-buffer into a readback buffer and
+//! encode it to a PNG on disk. This is the on-GPU verification path the renderer
+//! otherwise leaves to a human eyeballing the live window: a headless probe can
+//! now assert on actual pixels. Mirrors src/vulkan/screenshot.rs.
+//!
+//! Capture is synchronous: it idles the GPU (so the last-presented buffer is
+//! stable and no in-flight command list still references it), copies the
+//! last-presented back-buffer (still in `PRESENT`) into a `READBACK` buffer on a
+//! one-shot DIRECT command list, restores the buffer to `PRESENT`, then maps +
+//! de-pads + decodes + PNG-encodes on the CPU. The readback buffer is sized from
+//! `GetCopyableFootprints` (D3D12 aligns each row to
+//! `D3D12_TEXTURE_DATA_PITCH_ALIGNMENT` = 256), so the per-row de-pad below
+//! strips that padding back to a tight RGBA8 image. A swapchain rebuild clears
+//! `swapchain.last_present_index`, so a capture in the brief window before the next
+//! present returns a clean error rather than reading an unrendered buffer.
 
 use concinnity_core::gfx::image_decode::{self, PixelLayout};
 use concinnity_core::render::hdr_output::HdrEncoding;

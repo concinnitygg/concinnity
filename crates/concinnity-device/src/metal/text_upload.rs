@@ -1,25 +1,23 @@
-// src/metal/text_upload.rs
-//
-// Persistent per-frame-slot upload buffer for the composite pass's transient
-// HUD text geometry. Every label used to mint a vertex and an index buffer with
-// `newBufferWithBytes` during the composite encode: two driver allocations per
-// label per frame, each retained by the committed command buffer until the GPU
-// retired the frame.
-//
-// Instead each frame-in-flight slot keeps one `StorageModeShared` buffer. The
-// frame's whole text geometry is written into this frame's slot before the
-// render graph runs, each label's vertex and index block at a rolling aligned
-// offset, and the composite pass binds sub-ranges of that one buffer. A slot
-// grows power-of-two on demand and is never shrunk, so steady state does zero
-// allocation. The frames-in-flight fence guarantees frame `R - depth` retired
-// before frame `R` reuses slot `R % depth`, so overwriting a slot never races
-// an in-flight GPU read -- the same argument as `TransientRing` in
-// `metal/transient.rs`.
-//
-// Mirrors `directx/upload_ring.rs` and `vulkan/upload_ring.rs`. Metal writes the
-// frame's geometry up front rather than appending during the encode because the
-// pass encoders run through `&MtlContext`, whose parallel-encode contract is
-// read-only field access (see `metal/parallel_encoder.rs`).
+//! Persistent per-frame-slot upload buffer for the composite pass's transient
+//! HUD text geometry. Every label used to mint a vertex and an index buffer with
+//! `newBufferWithBytes` during the composite encode: two driver allocations per
+//! label per frame, each retained by the committed command buffer until the GPU
+//! retired the frame.
+//!
+//! Instead each frame-in-flight slot keeps one `StorageModeShared` buffer. The
+//! frame's whole text geometry is written into this frame's slot before the
+//! render graph runs, each label's vertex and index block at a rolling aligned
+//! offset, and the composite pass binds sub-ranges of that one buffer. A slot
+//! grows power-of-two on demand and is never shrunk, so steady state does zero
+//! allocation. The frames-in-flight fence guarantees frame `R - depth` retired
+//! before frame `R` reuses slot `R % depth`, so overwriting a slot never races
+//! an in-flight GPU read -- the same argument as `TransientRing` in
+//! `metal/transient.rs`.
+//!
+//! Mirrors `directx/upload_ring.rs` and `vulkan/upload_ring.rs`. Metal writes the
+//! frame's geometry up front rather than appending during the encode because the
+//! pass encoders run through `&MtlContext`, whose parallel-encode contract is
+//! read-only field access (see `metal/parallel_encoder.rs`).
 
 use concinnity_core::gfx::render_types::TextDrawCall;
 use concinnity_core::render::fullscreen;

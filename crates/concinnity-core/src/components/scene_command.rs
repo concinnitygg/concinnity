@@ -1,5 +1,3 @@
-// src/components/scene_command.rs
-
 use crate::components::SceneTransition;
 use crate::ecs::asset_id::AssetId;
 

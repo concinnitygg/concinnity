@@ -1,7 +1,5 @@
-// src/editor/hook/browse.rs
-//
-// EditorHook: the Assets browse panel and header combo, plus the Templates
-// panel's actions (including applying a template and its detail view).
+//! EditorHook: the Assets browse panel and header combo, plus the Templates
+//! panel's actions (including applying a template and its detail view).
 
 use concinnity_core::ecs::World;
 

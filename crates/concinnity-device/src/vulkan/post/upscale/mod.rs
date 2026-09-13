@@ -1,26 +1,24 @@
-// src/vulkan/post/upscale/mod.rs
-//
-// Temporal upscaling for the Vulkan backend. The engine renders the 3D scene at
-// a fraction of the swapchain extent (`render_extent`) and the
-// `PassId::Upscale` pass reconstructs a swapchain-resolution image the bloom +
-// composite stack consumes.
-//
-// Three interchangeable backends sit behind the `VkUpscaleBackend` trait,
-// mirroring the DirectX `directx/post/upscale/` split:
-//   fsr   AMD FidelityFX FSR (cross-vendor; the default fallback; ffx_api VK)
-//   dlss  NVIDIA DLSS via raw NGX (RTX only; cfg(ngx_sdk_bundled))
-//   xess  Intel XeSS (cross-vendor; runtime libxess.dll)
-// `build_upscaler` resolves the requested `UpscalerBackend` against runtime
-// availability and constructs the first that initializes, falling back to
-// native-resolution rendering when none is available. The shared per-frame
-// `VkContext::encode_upscale` (below) drives whichever backend is active through
-// the trait; only the inner vendor dispatch differs.
-//
-// DLSS and XeSS additionally need Vulkan instance / device extensions (and, for
-// XeSS, device features) enabled at instance / device creation, before the
-// upscaler context exists. `UpscaleSdk` is queried up front (in `init.rs`,
-// before `create_instance`) and threaded into `device::create_logical_device`;
-// see its docs.
+//! Temporal upscaling for the Vulkan backend. The engine renders the 3D scene at
+//! a fraction of the swapchain extent (`render_extent`) and the
+//! `PassId::Upscale` pass reconstructs a swapchain-resolution image the bloom +
+//! composite stack consumes.
+//!
+//! Three interchangeable backends sit behind the `VkUpscaleBackend` trait,
+//! mirroring the DirectX `directx/post/upscale/` split:
+//!   fsr   AMD FidelityFX FSR (cross-vendor; the default fallback; ffx_api VK)
+//!   dlss  NVIDIA DLSS via raw NGX (RTX only; cfg(ngx_sdk_bundled))
+//!   xess  Intel XeSS (cross-vendor; runtime libxess.dll)
+//! `build_upscaler` resolves the requested `UpscalerBackend` against runtime
+//! availability and constructs the first that initializes, falling back to
+//! native-resolution rendering when none is available. The shared per-frame
+//! `VkContext::encode_upscale` (below) drives whichever backend is active through
+//! the trait; only the inner vendor dispatch differs.
+//!
+//! DLSS and XeSS additionally need Vulkan instance / device extensions (and, for
+//! XeSS, device features) enabled at instance / device creation, before the
+//! upscaler context exists. `UpscaleSdk` is queried up front (in `init.rs`,
+//! before `create_instance`) and threaded into `device::create_logical_device`;
+//! see its docs.
 
 use ash::vk;
 use concinnity_core::components::UpscalerBackend;

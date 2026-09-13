@@ -1,11 +1,9 @@
-// src/hud/loading_overlay.rs
-//
-// Scene-loading overlay: shows the LoadingOverlay's screen while the scene a
-// jump targets still streams content, drives its progress bar and label, and
-// fades the backdrop out to reveal the scene once it is resident. Runs after
-// StreamingSystem (it reads the residency status published this tick) and
-// before UiInputSystem (its screen commands apply the same tick); the elements
-// it writes are drawn by the next overlay build, like every HUD system.
+//! Scene-loading overlay: shows the LoadingOverlay's screen while the scene a
+//! jump targets still streams content, drives its progress bar and label, and
+//! fades the backdrop out to reveal the scene once it is resident. Runs after
+//! StreamingSystem (it reads the residency status published this tick) and
+//! before UiInputSystem (its screen commands apply the same tick); the elements
+//! it writes are drawn by the next overlay build, like every HUD system.
 
 use concinnity_core::components::LoadingOverlay;
 use concinnity_core::components::ScreenCommand;

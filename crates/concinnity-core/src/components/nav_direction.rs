@@ -1,5 +1,3 @@
-// src/components/nav_direction.rs
-
 /// A directional UI-navigation pulse, carried by
 /// [FrameInput::nav](#structfield.nav) for one frame.
 ///

@@ -1,17 +1,15 @@
-// src/vulkan/line.rs
-//
-// World-space line pass for the Vulkan backend. Runs at the tail of the
-// hdr_resolve decoration chain, after the main pass resolved color into the
-// HDR scene target and depth into the main depth image, so the lines layer over
-// the lit scene and SSR / TAA treat them like any other scene content.
-//
-// The ribbons arrive already expanded (`gfx::lines::build_vertices`):
-// world-space quads whose width was sized off each corner's depth, so a line
-// holds its pixel thickness at any distance. Like the decal pass this one
-// attaches no depth buffer and instead samples the scene depth, so an occluded
-// line fades to `OCCLUDED_ALPHA` rather than being clipped by hardware.
-//
-// Mirrors src/directx/line.rs and src/metal/line.rs.
+//! World-space line pass for the Vulkan backend. Runs at the tail of the
+//! hdr_resolve decoration chain, after the main pass resolved color into the
+//! HDR scene target and depth into the main depth image, so the lines layer over
+//! the lit scene and SSR / TAA treat them like any other scene content.
+//!
+//! The ribbons arrive already expanded (`gfx::lines::build_vertices`):
+//! world-space quads whose width was sized off each corner's depth, so a line
+//! holds its pixel thickness at any distance. Like the decal pass this one
+//! attaches no depth buffer and instead samples the scene depth, so an occluded
+//! line fades to `OCCLUDED_ALPHA` rather than being clipped by hardware.
+//!
+//! Mirrors src/directx/line.rs and src/metal/line.rs.
 
 use ash::vk;
 use concinnity_core::gfx::render_types::LineVertex;

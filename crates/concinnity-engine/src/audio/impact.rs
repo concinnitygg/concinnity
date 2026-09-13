@@ -1,8 +1,6 @@
-// src/audio/impact.rs
-//
-// Maps a physics contact impulse to a one-shot gain. Physics already gates
-// contacts on the world's minimum impulse and debounces repeating pairs, so
-// everything arriving here is worth hearing; this only decides how loud.
+//! Maps a physics contact impulse to a one-shot gain. Physics already gates
+//! contacts on the world's minimum impulse and debounces repeating pairs, so
+//! everything arriving here is worth hearing; this only decides how loud.
 
 // Impulse at which an impact reaches full volume. The default contact gate
 // is 1.0, so audible impacts span roughly two decades below this.

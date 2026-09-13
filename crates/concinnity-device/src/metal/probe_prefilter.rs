@@ -1,21 +1,19 @@
-// src/metal/probe_prefilter.rs
-//
-// The convolution half of a runtime reflection-probe bake: the compute
-// pipelines built from `probe_prefilter.slang`, the two cubes one bake works
-// between, and the dispatches that turn six captured faces into the prefiltered
-// radiance mip chain the specular term samples.
-//
-// The capture cube is the render target the six faces resolve into, one cube
-// slice each, with a mip chain the `probe_downsample` kernel fills. The probe
-// cube is the result: mip 0 a firefly-clamped copy of the capture, every mip
-// after it a GGX convolution at that mip's roughness. Both are RGBA16Float --
-// the faces are captured as halfs, the clamp caps luminance well inside the
-// format's range, and it halves what a probe costs in memory against the
-// RGBA32Float cube the CPU convolution used to upload.
-//
-// Nothing here reads back. A dispatch per destination mip, one mip per frame,
-// is what replaced the readback plus the off-thread CPU convolution; the whole
-// bake now stays on the GPU timeline.
+//! The convolution half of a runtime reflection-probe bake: the compute
+//! pipelines built from `probe_prefilter.slang`, the two cubes one bake works
+//! between, and the dispatches that turn six captured faces into the prefiltered
+//! radiance mip chain the specular term samples.
+//!
+//! The capture cube is the render target the six faces resolve into, one cube
+//! slice each, with a mip chain the `probe_downsample` kernel fills. The probe
+//! cube is the result: mip 0 a firefly-clamped copy of the capture, every mip
+//! after it a GGX convolution at that mip's roughness. Both are RGBA16Float --
+//! the faces are captured as halfs, the clamp caps luminance well inside the
+//! format's range, and it halves what a probe costs in memory against the
+//! RGBA32Float cube the CPU convolution used to upload.
+//!
+//! Nothing here reads back. A dispatch per destination mip, one mip per frame,
+//! is what replaced the readback plus the off-thread CPU convolution; the whole
+//! bake now stays on the GPU timeline.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::render::reflection_probe::PrefilterPlan;

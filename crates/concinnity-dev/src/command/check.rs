@@ -1,7 +1,7 @@
-// src/cli/check.rs: discovery wrapper around crate::check_at_path
-//
-// `cn test` accepts an optional --file path. When the path is missing or
-// doesn't exist on disk, fall back to discovery via find_world_jsonl.
+//! Discovery wrapper around `crate::check_at_path`.
+//!
+//! `cn test` accepts an optional --file path. When the path is missing or
+//! doesn't exist on disk, fall back to discovery via find_world_jsonl.
 
 use concinnity_cook::authoring::world::find_world_jsonl;
 

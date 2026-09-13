@@ -1,11 +1,9 @@
-// src/gfx/render_slots.rs
-//
-// Engine-side allocation authority for backend draw slots and pre-reserved
-// skinned instances. Systems allocate here and record the destination into
-// their backend ops, so slot decisions never require a synchronous backend
-// round trip; the backend only writes at the slot an op names. Correct
-// because ops replay exactly once, in record order: an `Append` index always
-// matches the backend's draw-object count when its op applies.
+//! Engine-side allocation authority for backend draw slots and pre-reserved
+//! skinned instances. Systems allocate here and record the destination into
+//! their backend ops, so slot decisions never require a synchronous backend
+//! round trip; the backend only writes at the slot an op names. Correct
+//! because ops replay exactly once, in record order: an `Append` index always
+//! matches the backend's draw-object count when its op applies.
 
 use concinnity_core::render::draw_slot::{DrawSlotAllocator, SlotAlloc};
 use concinnity_core::render::skinned_pool::SkinnedInstancePool;

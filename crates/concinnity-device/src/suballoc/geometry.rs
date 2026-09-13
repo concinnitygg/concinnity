@@ -1,8 +1,6 @@
-// src/suballoc/geometry.rs
-//
-// Placement of one mesh's vertex and index ranges in a pair of range
-// allocators, all or nothing. Every backend's streamed-mesh and chunk upload
-// places through here, so pool exhaustion is classified the same everywhere.
+//! Placement of one mesh's vertex and index ranges in a pair of range
+//! allocators, all or nothing. Every backend's streamed-mesh and chunk upload
+//! places through here, so pool exhaustion is classified the same everywhere.
 
 use concinnity_core::render::error::{RenderError, RenderResult};
 

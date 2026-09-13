@@ -1,19 +1,18 @@
-// src/authoring/add.rs
-// Add an asset to a world JSONL and rebuild.
-//
-// The CLI and FFI both funnel through `add_to_path`, which:
-//   - bootstraps a missing world from a `.glb` / `.txt` / `.md` target (a
-//     text target becomes a `TextLabel` whose content is the file body); the
-//     renderer stack itself is injected at build time from the entries'
-//     companions, so no scaffold lines are written,
-//   - appends a named content template's entries (`--template minimal-3d-world`)
-//     when one is requested for a `.glb` landing in a renderer-less world,
-//   - resolves `target` as a file path, a known asset type name, or inline
-//     JSON, building one or more asset entries,
-//   - patches the world JSONL atomically (via a tmp file) and reruns the
-//     build pipeline so blobs and the lock file stay in sync. Only the
-//     requested entries are written; injected companions and engine defaults
-//     stay build-time only (see world-lock.json).
+//! Add an asset to a world JSONL and rebuild.
+//!
+//! The CLI and FFI both funnel through `add_to_path`, which:
+//!   - bootstraps a missing world from a `.glb` / `.txt` / `.md` target (a
+//!     text target becomes a `TextLabel` whose content is the file body); the
+//!     renderer stack itself is injected at build time from the entries'
+//!     companions, so no scaffold lines are written,
+//!   - appends a named content template's entries (`--template minimal-3d-world`)
+//!     when one is requested for a `.glb` landing in a renderer-less world,
+//!   - resolves `target` as a file path, a known asset type name, or inline
+//!     JSON, building one or more asset entries,
+//!   - patches the world JSONL atomically (via a tmp file) and reruns the
+//!     build pipeline so blobs and the lock file stay in sync. Only the
+//!     requested entries are written; injected companions and engine defaults
+//!     stay build-time only (see world-lock.json).
 
 use concinnity_cook::asset_api::{AssetRequest, create_asset_def};
 use concinnity_cook::authoring::registry::RegisteredType;

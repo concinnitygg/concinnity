@@ -1,10 +1,8 @@
-// src/appkit/input.rs
-//
-// InputKey-event decoding and the persistent per-frame input state for the AppKit
-// window layer. The pieces here are pure (no window, no view, no Objective-C
-// state beyond reading an NSEvent), so they are unit-testable and shared by
-// every backend that renders into an NSView; `window.rs` owns the event pump
-// that drives them. Mirrors `win32/input.rs`.
+//! InputKey-event decoding and the persistent per-frame input state for the AppKit
+//! window layer. The pieces here are pure (no window, no view, no Objective-C
+//! state beyond reading an NSEvent), so they are unit-testable and shared by
+//! every backend that renders into an NSView; `window.rs` owns the event pump
+//! that drives them. Mirrors `win32/input.rs`.
 
 use concinnity_core::components::InputKey;
 use objc2_app_kit::NSEvent;

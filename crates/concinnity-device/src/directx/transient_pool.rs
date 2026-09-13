@@ -1,26 +1,24 @@
-// src/directx/transient_pool.rs
-//
-// Backing store for the render graph's transient render targets on D3D12. The
-// shared `gfx::render_graph::alias` planner decides which transients can share
-// physical memory; this pool realizes that on D3D12 with placed resources on an
-// `ID3D12Heap` (the analogue of Vulkan's aliased `VkImage`s on a shared
-// `VkDeviceMemory`). Features stop owning these resources and read them back by
-// label, so the pool can repoint several labels at one heap region without
-// touching the features.
-//
-// Buffering: D3D12 is single-buffered for these targets. The command queue runs
-// frames in submission order and the per-resource state-transition barriers
-// serialize a frame's writes against a prior frame's reads of the same resource,
-// so a single resource is safe across frames in flight (unlike Vulkan, whose
-// explicit-layout model led that backend to per-frame buffer its bloom chain).
-// So a DX alias slot is ONE shared heap region (not per-frame): making the
-// members per-frame would multiply already-single-buffered resources and cost
-// more memory than aliasing saves. The cross-frame reuse ordering is carried by
-// aliasing barriers at both reuse boundaries (added when sharing lands).
-//
-// A resource is "managed" iff its owning feature is enabled at build time (e.g.
-// `ao_output` only when SSAO is on); `resource_for` returns `None` otherwise and
-// the consumer keeps its disabled-feature fallback.
+//! Backing store for the render graph's transient render targets on D3D12. The
+//! shared `gfx::render_graph::alias` planner decides which transients can share
+//! physical memory; this pool realizes that on D3D12 with placed resources on an
+//! `ID3D12Heap` (the analogue of Vulkan's aliased `VkImage`s on a shared
+//! `VkDeviceMemory`). Features stop owning these resources and read them back by
+//! label, so the pool can repoint several labels at one heap region without
+//! touching the features.
+//!
+//! Buffering: D3D12 is single-buffered for these targets. The command queue runs
+//! frames in submission order and the per-resource state-transition barriers
+//! serialize a frame's writes against a prior frame's reads of the same resource,
+//! so a single resource is safe across frames in flight (unlike Vulkan, whose
+//! explicit-layout model led that backend to per-frame buffer its bloom chain).
+//! So a DX alias slot is ONE shared heap region (not per-frame): making the
+//! members per-frame would multiply already-single-buffered resources and cost
+//! more memory than aliasing saves. The cross-frame reuse ordering is carried by
+//! aliasing barriers at both reuse boundaries (added when sharing lands).
+//!
+//! A resource is "managed" iff its owning feature is enabled at build time (e.g.
+//! `ao_output` only when SSAO is on); `resource_for` returns `None` otherwise and
+//! the consumer keeps its disabled-feature fallback.
 
 use concinnity_core::render::render_graph::{
     ClearValue, PixelFormat, PoolGates, TextureUsage, TransientSlot, TransientTexture,

@@ -1,12 +1,10 @@
-// src/metal/post/fullscreen.rs
-//
-// Shared builders for fullscreen-triangle post-process passes. Every
-// screen-space effect (SSAO, SSR, SSGI, TAA, bloom, fog, RT reflections, the
-// final composite) draws one `[[vertex_id]]`-generated triangle into a single
-// color attachment with no vertex descriptor and no depth, differing only in
-// shader source, attachment format, and blend. These helpers fold that shared
-// pipeline-descriptor boilerplate into one place so each effect file keeps only
-// what is unique to it.
+//! Shared builders for fullscreen-triangle post-process passes. Every
+//! screen-space effect (SSAO, SSR, SSGI, TAA, bloom, fog, RT reflections, the
+//! final composite) draws one `[[vertex_id]]`-generated triangle into a single
+//! color attachment with no vertex descriptor and no depth, differing only in
+//! shader source, attachment format, and blend. These helpers fold that shared
+//! pipeline-descriptor boilerplate into one place so each effect file keeps only
+//! what is unique to it.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use objc2::rc::Retained;

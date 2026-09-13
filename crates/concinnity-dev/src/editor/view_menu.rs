@@ -1,10 +1,8 @@
-// src/editor/view_menu.rs
-//
-// The Display menu: a compact dropdown under the top bar's Display chip
-// selecting the viewport view mode (radio rows) and the per-session show
-// flags (toggle rows), plus the editor-side billboard toggle. Pure geometry
-// and draw, on the same non-panel overlay pattern as `create_menu.rs`; the
-// hook (`hook/drive/view_menu.rs`) owns the open state and routing.
+//! The Display menu: a compact dropdown under the top bar's Display chip
+//! selecting the viewport view mode (radio rows) and the per-session show
+//! flags (toggle rows), plus the editor-side billboard toggle. Pure geometry
+//! and draw, on the same non-panel overlay pattern as `create_menu.rs`; the
+//! hook (`hook/drive/view_menu.rs`) owns the open state and routing.
 
 use concinnity_core::ecs::World;
 pub(crate) use concinnity_core::gfx::view_modes::{ShowFlags, ViewMode};

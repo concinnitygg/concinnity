@@ -1,8 +1,6 @@
-// src/ecs/world_run_tests.rs
-//
-// Starting and stepping a world from a table, with no host beyond this crate:
-// the gates build the systems, the load-time pass runs before their init, the
-// clock seam times each step, and a finished system leaves the set.
+//! Starting and stepping a world from a table, with no host beyond this crate:
+//! the gates build the systems, the load-time pass runs before their init, the
+//! clock seam times each step, and a finished system leaves the set.
 
 use alloc::boxed::Box;
 use alloc::string::{String, ToString};

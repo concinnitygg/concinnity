@@ -1,9 +1,7 @@
-// src/editor/hook/tests/edit/story_tests.rs
-//
-// The Story panel's actions (`hook/edit/story.rs`): the line model's splits and
-// joins, the caret's navigation and what it commits on the way, the validation
-// an apply runs before writing, the status a missing file reports, and the
-// starter file a create writes along with the import that names it.
+//! The Story panel's actions (`hook/edit/story.rs`): the line model's splits and
+//! joins, the caret's navigation and what it commits on the way, the validation
+//! an apply runs before writing, the status a missing file reports, and the
+//! starter file a create writes along with the import that names it.
 
 use concinnity_core::components::InputKey;
 use concinnity_core::ecs::World;

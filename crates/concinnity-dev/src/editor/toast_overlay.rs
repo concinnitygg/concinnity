@@ -1,12 +1,10 @@
-// src/editor/toast_overlay.rs
-//
-// The toast stack's card geometry and draw: transient message cards anchored
-// above the viewport's bottom-right corner, newest nearest the corner, with a
-// "+N more" row above the stack when the queue outgrows the visible cap. Pure
-// placement over the queue state in `editor/notify.rs`; the per-frame drive
-// and click routing live in `hook/drive/notify.rs`. Not a registered panel:
-// toasts have no title bar, drag, focus rank, or View toggle, and they draw
-// above all of that chrome.
+//! The toast stack's card geometry and draw: transient message cards anchored
+//! above the viewport's bottom-right corner, newest nearest the corner, with a
+//! "+N more" row above the stack when the queue outgrows the visible cap. Pure
+//! placement over the queue state in `editor/notify.rs`; the per-frame drive
+//! and click routing live in `hook/drive/notify.rs`. Not a registered panel:
+//! toasts have no title bar, drag, focus rank, or View toggle, and they draw
+//! above all of that chrome.
 
 use concinnity_core::ecs::World;
 use concinnity_host::thread::asset_id::AssetId;

@@ -1,5 +1,3 @@
-// src/components/entity_target.rs
-
 use crate::ecs::Entity;
 use crate::ecs::asset_id::AssetId;
 

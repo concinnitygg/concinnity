@@ -1,9 +1,7 @@
-// src/audio/occlusion.rs
-//
-// Per-emitter occlusion response: smooths the physics probe's blocked /
-// clear answer over time and maps the smoothed factor to a volume dip and a
-// lowpass cutoff, so an emitter passing behind a wall muffles instead of
-// popping.
+//! Per-emitter occlusion response: smooths the physics probe's blocked /
+//! clear answer over time and maps the smoothed factor to a volume dip and a
+//! lowpass cutoff, so an emitter passing behind a wall muffles instead of
+//! popping.
 
 // Smoothing time constant: roughly how long a transition takes to settle.
 const TAU_SECONDS: f32 = 0.1;

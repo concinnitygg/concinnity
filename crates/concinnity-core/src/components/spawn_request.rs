@@ -1,5 +1,3 @@
-// src/components/spawn_request.rs
-
 use crate::components::Transform;
 use crate::ecs::asset_id::AssetId;
 

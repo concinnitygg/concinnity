@@ -1,8 +1,6 @@
-// src/editor/viewport/marquee.rs
-//
-// The marquee (box-select) rectangle: the pure screen-rect math and the one
-// injected sprite drawn while a drag is in flight. The hook
-// (`hook/drag/marquee.rs`) owns the drag state and the release-time selection.
+//! The marquee (box-select) rectangle: the pure screen-rect math and the one
+//! injected sprite drawn while a drag is in flight. The hook
+//! (`hook/drag/marquee.rs`) owns the drag state and the release-time selection.
 
 use concinnity_core::components::Sprite;
 use concinnity_core::ecs::World;

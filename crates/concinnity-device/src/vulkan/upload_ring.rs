@@ -1,21 +1,19 @@
-// src/vulkan/upload_ring.rs
-//
-// Persistent per-frame-slot upload buffers for the composite pass's transient
-// HUD text geometry. Creating a vertex and an index buffer per label per frame
-// put two suballocator allocations (and two `VkBuffer` creations) on the hot
-// path for every line of HUD text; a bistro-sized overlay pays that dozens of
-// times a frame.
-//
-// Instead each frame-in-flight slot keeps one host-visible, persistently mapped
-// buffer. Every frame the slot's cursor resets to zero and each block of
-// geometry is appended at a rolling, aligned offset; the draw binds a sub-range
-// of the shared buffer. A slot is reallocated only when a frame's geometry
-// exceeds its capacity, which after warm-up never happens. The frame fence
-// (waited before a slot is reused) guarantees the GPU has finished reading a
-// slot's buffer before the CPU overwrites or replaces it.
-//
-// Mirrors `directx/upload_ring.rs`; `metal/text_upload.rs` does the same job
-// against one `StorageModeShared` buffer per slot.
+//! Persistent per-frame-slot upload buffers for the composite pass's transient
+//! HUD text geometry. Creating a vertex and an index buffer per label per frame
+//! put two suballocator allocations (and two `VkBuffer` creations) on the hot
+//! path for every line of HUD text; a bistro-sized overlay pays that dozens of
+//! times a frame.
+//!
+//! Instead each frame-in-flight slot keeps one host-visible, persistently mapped
+//! buffer. Every frame the slot's cursor resets to zero and each block of
+//! geometry is appended at a rolling, aligned offset; the draw binds a sub-range
+//! of the shared buffer. A slot is reallocated only when a frame's geometry
+//! exceeds its capacity, which after warm-up never happens. The frame fence
+//! (waited before a slot is reused) guarantees the GPU has finished reading a
+//! slot's buffer before the CPU overwrites or replaces it.
+//!
+//! Mirrors `directx/upload_ring.rs`; `metal/text_upload.rs` does the same job
+//! against one `StorageModeShared` buffer per slot.
 
 use ash::vk;
 use concinnity_core::render::error::RenderResult;

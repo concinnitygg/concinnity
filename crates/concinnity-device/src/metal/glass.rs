@@ -1,11 +1,9 @@
-// src/metal/glass.rs
-//
-// GlassPanel: the simplest producer for the engine's transparent pass. Each
-// panel is a flat world-space quad (built once at init) that contributes one
-// [`TransparentDraw`] per frame. The shared `encode_transparent` encoder sorts
-// it back-to-front against water + other panels and draws it; the fragment
-// shader refracts the pre-transparent scene snapshot, tints it, and adds a
-// Fresnel rim (see shaders/glass.slang).
+//! GlassPanel: the simplest producer for the engine's transparent pass. Each
+//! panel is a flat world-space quad (built once at init) that contributes one
+//! [`TransparentDraw`] per frame. The shared `encode_transparent` encoder sorts
+//! it back-to-front against water + other panels and draws it; the fragment
+//! shader refracts the pre-transparent scene snapshot, tints it, and adds a
+//! Fresnel rim (see shaders/glass.slang).
 
 #![deny(unsafe_op_in_unsafe_fn)]
 

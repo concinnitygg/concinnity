@@ -1,9 +1,7 @@
-// src/editor/palette/providers.rs
-//
-// The palette's result sources. Each provider is a pure enumeration into
-// `PaletteItem`s: actions carry names and keys only, and executing them is the
-// drive's job (`hook/edit/palette.rs`), so a provider needs no world to be
-// exercised.
+//! The palette's result sources. Each provider is a pure enumeration into
+//! `PaletteItem`s: actions carry names and keys only, and executing them is the
+//! drive's job (`hook/edit/palette.rs`), so a provider needs no world to be
+//! exercised.
 
 use super::{Category, PaletteAction, PaletteItem};
 use crate::editor::panels::asset_tree::TreeGroup;

@@ -1,27 +1,25 @@
-// src/metal/raymarch.rs
-//
-// Per-frame encoder for the raymarched SDF volume pass. Runs at
-// `PassId::Raymarch`, between `AutoExposure` and `Decals` on the
-// hdr_resolve RMW chain. Each `SdfVolume` rasterizes the back faces of
-// its world-space bounding box and runs a user-authored fragment
-// shader that sphere-traces the SDF inside the box.
-//
-// Architecture:
-//   * One MTLRenderPipelineState per `SdfVolume` (built lazily at init
-//     from the engine-shipped helpers + the user's source bytes + the
-//     engine-shipped template). The wrap order is helpers → user →
-//     template so the template's `fragment_main` can call the user's
-//     `map` and `shade` functions through the forward declarations the
-//     helpers expose.
-//   * One shared unit-cube VB+IB for the proxy geometry; 8 corners /
-//     36 indices, allocated once at init. The encoder draws back faces
-//     only (cull mode = Front) so we get exactly one fragment per pixel
-//     inside the box regardless of whether the camera is outside or
-//     inside it.
-//   * Color attachment = `hdr_resolve` (LoadAction::Load, opaque write).
-//     No depth attachment, matching the projected-decal pass. Depth
-//     compositing is shader-side via the early-out against
-//     `main_depth` (texture(0)).
+//! Per-frame encoder for the raymarched SDF volume pass. Runs at
+//! `PassId::Raymarch`, between `AutoExposure` and `Decals` on the
+//! hdr_resolve RMW chain. Each `SdfVolume` rasterizes the back faces of
+//! its world-space bounding box and runs a user-authored fragment
+//! shader that sphere-traces the SDF inside the box.
+//!
+//! Architecture:
+//!   * One MTLRenderPipelineState per `SdfVolume` (built lazily at init
+//!     from the engine-shipped helpers + the user's source bytes + the
+//!     engine-shipped template). The wrap order is helpers → user →
+//!     template so the template's `fragment_main` can call the user's
+//!     `map` and `shade` functions through the forward declarations the
+//!     helpers expose.
+//!   * One shared unit-cube VB+IB for the proxy geometry; 8 corners /
+//!     36 indices, allocated once at init. The encoder draws back faces
+//!     only (cull mode = Front) so we get exactly one fragment per pixel
+//!     inside the box regardless of whether the camera is outside or
+//!     inside it.
+//!   * Color attachment = `hdr_resolve` (LoadAction::Load, opaque write).
+//!     No depth attachment, matching the projected-decal pass. Depth
+//!     compositing is shader-side via the early-out against
+//!     `main_depth` (texture(0)).
 
 #![deny(unsafe_op_in_unsafe_fn)]
 

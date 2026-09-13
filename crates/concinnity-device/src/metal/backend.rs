@@ -1,9 +1,7 @@
-// src/metal/backend.rs
-//
-// RenderBackend impl for MtlContext. Thin forwarders to the inherent
-// methods scattered across metal/{context,resources,streaming,draw}.rs.
-// Method resolution picks the inherent over the trait method when both
-// have the same name, so `self.draw_frame(...)` calls the inherent here.
+//! RenderBackend impl for MtlContext. Thin forwarders to the inherent
+//! methods scattered across metal/{context,resources,streaming,draw}.rs.
+//! Method resolution picks the inherent over the trait method when both
+//! have the same name, so `self.draw_frame(...)` calls the inherent here.
 
 use concinnity_core::bake;
 use concinnity_core::components;

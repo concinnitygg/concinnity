@@ -1,7 +1,5 @@
-// src/editor/hook/tests/drag/shape_tests.rs
-//
-// The character-shape slider drag (`hook/drag/shape.rs`): the values a drag
-// writes as it is held, and the single undo step the release commits.
+//! The character-shape slider drag (`hook/drag/shape.rs`): the values a drag
+//! writes as it is held, and the single undo step the release commits.
 
 use concinnity_core::components::FrameInput;
 use concinnity_core::ecs::World;

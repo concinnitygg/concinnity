@@ -1,18 +1,16 @@
-// src/vulkan/wireframe.rs
-//
-// Wireframe view-mode pipeline variants. Without
-// `VK_EXT_extended_dynamic_state3` the polygon mode lives in the pipeline, so
-// unlike Metal (where it is one encoder flag) the mode needs a second pipeline
-// per main-pass path. They are built on the first wireframe frame and destroyed
-// whenever the shaders they were built from are rebuilt, so a shipped runtime
-// never pays for them.
-//
-// The twin renders the engine's own bindless pair rather than a world Shader's:
-// a world fragment is free to ignore the fill mode's intent and the edges only
-// need to be visible. Every shader bucket shares the bindless pipeline layout,
-// so the one twin stands in for every bucket's pipeline while the mode is on,
-// as Metal's encoder-state fill mode does. A device without `fillModeNonSolid`
-// gets no twin and keeps solid fill.
+//! Wireframe view-mode pipeline variants. Without
+//! `VK_EXT_extended_dynamic_state3` the polygon mode lives in the pipeline, so
+//! unlike Metal (where it is one encoder flag) the mode needs a second pipeline
+//! per main-pass path. They are built on the first wireframe frame and destroyed
+//! whenever the shaders they were built from are rebuilt, so a shipped runtime
+//! never pays for them.
+//!
+//! The twin renders the engine's own bindless pair rather than a world Shader's:
+//! a world fragment is free to ignore the fill mode's intent and the edges only
+//! need to be visible. Every shader bucket shares the bindless pipeline layout,
+//! so the one twin stands in for every bucket's pipeline while the mode is on,
+//! as Metal's encoder-state fill mode does. A device without `fillModeNonSolid`
+//! gets no twin and keeps solid fill.
 
 use super::context::VkContext;
 use super::pipeline::{MeshPipelineTargets, create_main_pipeline_wireframe};

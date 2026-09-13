@@ -1,17 +1,15 @@
-// src/geometry/chunk_gen.rs
-//
-// Deterministic procedural generation of voxel chunks for an infinite
-// `VoxelWorld`.
-//
-// A `ChunkGenerator` turns a `ChunkCoord` + a world seed into the dense block
-// array a chunk mesher consumes. Generation is a pure function of the seed and
-// the chunk coordinate, so a chunk that streams out and back in regenerates
-// byte-identically. Terrain height comes from multi-octave value noise keyed
-// on *world* block coordinates, so adjacent chunks line up seamlessly across
-// their shared edge.
-//
-// The lattice hash is integer arithmetic and interpolation is a polynomial
-// smoothstep, so generation involves no transcendentals at all.
+//! Deterministic procedural generation of voxel chunks for an infinite
+//! `VoxelWorld`.
+//!
+//! A `ChunkGenerator` turns a `ChunkCoord` + a world seed into the dense block
+//! array a chunk mesher consumes. Generation is a pure function of the seed and
+//! the chunk coordinate, so a chunk that streams out and back in regenerates
+//! byte-identically. Terrain height comes from multi-octave value noise keyed
+//! on *world* block coordinates, so adjacent chunks line up seamlessly across
+//! their shared edge.
+//!
+//! The lattice hash is integer arithmetic and interpolation is a polynomial
+//! smoothstep, so generation involves no transcendentals at all.
 
 use crate::gfx::chunk_coord::ChunkCoord;
 use alloc::vec;

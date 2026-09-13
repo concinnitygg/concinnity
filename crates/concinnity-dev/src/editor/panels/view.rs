@@ -1,14 +1,12 @@
-// src/editor/panels/view.rs
-//
-// The editor "View" panel: the hub that toggles the visibility of the other
-// floating editor panels. Its rows come from the panel registry (every panel
-// with a `view_row` caption, in registry order), so a new panel gets its toggle
-// here without touching this module. Like the rest of the editor HUD it is
-// plain `Sprite` / `TextLabel` components at reserved ids (injected by
-// `inject.rs`), driven each frame by the editor hook -- nothing here reaches
-// the shipped runtime. Each row is a checkbox that reflects, and toggles, one
-// panel's shown state; the top-bar "View" button opens / closes this panel.
-// The title bar, close button, and row draw come from the shared `list_panel`.
+//! The editor "View" panel: the hub that toggles the visibility of the other
+//! floating editor panels. Its rows come from the panel registry (every panel
+//! with a `view_row` caption, in registry order), so a new panel gets its toggle
+//! here without touching this module. Like the rest of the editor HUD it is
+//! plain `Sprite` / `TextLabel` components at reserved ids (injected by
+//! `inject.rs`), driven each frame by the editor hook -- nothing here reaches
+//! the shipped runtime. Each row is a checkbox that reflects, and toggles, one
+//! panel's shown state; the top-bar "View" button opens / closes this panel.
+//! The title bar, close button, and row draw come from the shared `list_panel`.
 
 use concinnity_core::ecs::World;
 use concinnity_host::thread::asset_id::AssetId;

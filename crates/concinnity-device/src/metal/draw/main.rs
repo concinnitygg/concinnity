@@ -1,23 +1,21 @@
-// src/metal/draw/main.rs
-//
-// Main pass (off-screen HDR + 4x MSAA). Renders the visible scene into the
-// HDR color + depth attachments, multisample-resolving to `hdr_resolve`.
-//
-// One geometry path: the GPU-driven bindless pass, issued through the cull's
-// indirect command buffers. Static objects, folded instances and the folded
-// skinned tail are all cull records, so the encode is one prefix range per
-// shader bucket plus the skinned tail. `object_buffer` / `bindless_tex_args`
-// are `Some` exactly when the world has something to draw.
-//
-// The pass is encoded on a single `MTLRenderCommandEncoder`. Two
-// `MTLParallelRenderCommandEncoder` attempts (one full-fat with parallel
-// encoders on every shadow cascade, one scoped to just this main pass with 3
-// sub-encoders + no pass-timing) both tripped G14X (M2/M3 Pro/Max class) into
-// an abort inside `IOGPUMetalCommandBufferStorageAllocResourceAtIndex`: the
-// crash window scaled with parallel-encoder usage rate (~20 s with shadow
-// split, ~90 s with main-only) but never went away. The mechanism appears
-// fundamentally incompatible with our usage on this hardware / macOS 26.4
-// combo.
+//! Main pass (off-screen HDR + 4x MSAA). Renders the visible scene into the
+//! HDR color + depth attachments, multisample-resolving to `hdr_resolve`.
+//!
+//! One geometry path: the GPU-driven bindless pass, issued through the cull's
+//! indirect command buffers. Static objects, folded instances and the folded
+//! skinned tail are all cull records, so the encode is one prefix range per
+//! shader bucket plus the skinned tail. `object_buffer` / `bindless_tex_args`
+//! are `Some` exactly when the world has something to draw.
+//!
+//! The pass is encoded on a single `MTLRenderCommandEncoder`. Two
+//! `MTLParallelRenderCommandEncoder` attempts (one full-fat with parallel
+//! encoders on every shadow cascade, one scoped to just this main pass with 3
+//! sub-encoders + no pass-timing) both tripped G14X (M2/M3 Pro/Max class) into
+//! an abort inside `IOGPUMetalCommandBufferStorageAllocResourceAtIndex`: the
+//! crash window scaled with parallel-encoder usage rate (~20 s with shadow
+//! split, ~90 s with main-only) but never went away. The mechanism appears
+//! fundamentally incompatible with our usage on this hardware / macOS 26.4
+//! combo.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::render_types;

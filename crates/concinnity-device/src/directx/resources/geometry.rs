@@ -1,9 +1,7 @@
-// src/directx/resources/geometry.rs
-//
-// Streamed-mesh upload + eviction for DxContext: placement in the shared
-// vertex / index buffers through the mesh sub-allocators, in-place per-slot
-// geometry replacement for hot-reload, and the init-time seeding of the
-// streaming headroom.
+//! Streamed-mesh upload + eviction for DxContext: placement in the shared
+//! vertex / index buffers through the mesh sub-allocators, in-place per-slot
+//! geometry replacement for hot-reload, and the init-time seeding of the
+//! streaming headroom.
 
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::render::error::RenderResult;

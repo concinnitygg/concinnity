@@ -1,13 +1,11 @@
-// src/editor/hook/drive/trace.rs
-//
-// EditorHook: the execution-trace exchange with the behavior system. While the
-// Behavior or Variables panel is open, a `TraceRequest` is published each frame
-// (naming the selected entity and the resolved breakpoints) and the
-// `ExecutionTrace` the last simulated tick reported is ingested: executed
-// nodes refresh the open behavior's pulses, world variables and the selected
-// entity's locals become the panels' live values, and a breakpoint hit pauses
-// the transport on the node that fired. Closing both panels withdraws the
-// request, so the running world records nothing.
+//! EditorHook: the execution-trace exchange with the behavior system. While the
+//! Behavior or Variables panel is open, a `TraceRequest` is published each frame
+//! (naming the selected entity and the resolved breakpoints) and the
+//! `ExecutionTrace` the last simulated tick reported is ingested: executed
+//! nodes refresh the open behavior's pulses, world variables and the selected
+//! entity's locals become the panels' live values, and a breakpoint hit pauses
+//! the transport on the node that fired. Closing both panels withdraws the
+//! request, so the running world records nothing.
 
 use concinnity_core::ecs::{ExecutionTrace, TraceEvent, TracePaths, TraceRequest, World};
 use concinnity_host::thread::asset_id;

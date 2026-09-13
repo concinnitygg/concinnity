@@ -1,12 +1,10 @@
-// src/metal/post/gbuffer.rs
-//
-// The unified geometry G-buffer pre-pass. One jittered traversal of the cull
-// records (static + instanced + skinned) writes the view-space normal + linear
-// depth, perceptual roughness, and screen-space motion vector that SSR, SSAO,
-// SSGI, RT reflections, TAA, and the MetalFX upscaler all consume, replacing
-// the three separate SSR / SSAO / velocity pre-passes that each re-rasterized
-// the same geometry. Pipeline, targets, and the encoder live together so the
-// effect is a single unit the other backends can mirror.
+//! The unified geometry G-buffer pre-pass. One jittered traversal of the cull
+//! records (static + instanced + skinned) writes the view-space normal + linear
+//! depth, perceptual roughness, and screen-space motion vector that SSR, SSAO,
+//! SSGI, RT reflections, TAA, and the MetalFX upscaler all consume, replacing
+//! the three separate SSR / SSAO / velocity pre-passes that each re-rasterized
+//! the same geometry. Pipeline, targets, and the encoder live together so the
+//! effect is a single unit the other backends can mirror.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::mesh_payload::Vertex;

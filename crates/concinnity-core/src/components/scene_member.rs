@@ -1,5 +1,3 @@
-// src/components/scene_member.rs
-
 use crate::ecs::asset_id::AssetId;
 
 /// The `Scene` an entity belongs to, for per-scene show/hide.

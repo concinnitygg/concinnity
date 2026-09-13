@@ -1,10 +1,8 @@
-// src/metal/light_cull.rs
-//
-// Clustered light-binning compute pass. Once per frame, before the Main pass,
-// bins the scene's local lights (the GpuLight buffer bound at fragment buffer(8))
-// into per-cluster index lists over a screen-tiled, exponential-depth froxel
-// grid. The forward pass then shades each fragment from only its cluster's
-// lights instead of iterating every light.
+//! Clustered light-binning compute pass. Once per frame, before the Main pass,
+//! bins the scene's local lights (the GpuLight buffer bound at fragment buffer(8))
+//! into per-cluster index lists over a screen-tiled, exponential-depth froxel
+//! grid. The forward pass then shades each fragment from only its cluster's
+//! lights instead of iterating every light.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIGHT_LIST_STRIDE, ClusterParams};

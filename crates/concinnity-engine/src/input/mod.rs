@@ -1,10 +1,8 @@
-// src/input/mod.rs
-//
-// Input for the engine: the two systems that consume a frame's raw input, and
-// the gamepad vocabulary they share. `gamepad` folds backend-agnostic pad
-// events into a per-frame snapshot (with the OS-facing gilrs adapter isolated
-// at its edge); `stick` is the pure deadzone / response-curve math; `nav`
-// shapes the held d-pad + stick state into auto-repeating UI navigation pulses.
+//! Input for the engine: the two systems that consume a frame's raw input, and
+//! the gamepad vocabulary they share. `gamepad` folds backend-agnostic pad
+//! events into a per-frame snapshot (with the OS-facing gilrs adapter isolated
+//! at its edge); `stick` is the pure deadzone / response-curve math; `nav`
+//! shapes the held d-pad + stick state into auto-repeating UI navigation pulses.
 
 pub(crate) mod gamepad;
 pub(crate) mod nav;

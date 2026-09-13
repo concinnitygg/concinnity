@@ -1,39 +1,37 @@
-// src/vulkan/barrier_translate.rs
-//
-// Translate the render graph's coarse `ResourceState`, for a given resource
-// class, into the concrete Vulkan (layout, access, stage) triple the executor
-// feeds into an image memory barrier. The graph tracks only Undefined / Read /
-// Write; the resource class (assigned by the executor's resolver) disambiguates
-// what a `Write` means: a color target writes COLOR_ATTACHMENT, a depth target
-// writes DEPTH_STENCIL_ATTACHMENT. Both are sampled (SHADER_READ_ONLY) when
-// read.
-//
-// For a barrier `from -> to`, the executor uses `from`'s triple for the source
-// and `to`'s triple for the destination, and skips the barrier when the two
-// layouts match (a no-op).
-//
-// A `Read`'s layout is SHADER_READ_ONLY either way, but its pipeline stage
-// follows the consuming-stage union (`ReadStages`) carried on the barrier: a
-// fragment consumer waits in FRAGMENT_SHADER, a compute consumer in
-// COMPUTE_SHADER, a vertex consumer (the particle billboards pulling their
-// particle out of the simulated pool) in VERTEX_SHADER, and a resource read in
-// several stages on one version waits in all of them so the single transition
-// makes the producing write visible to each.
-//
-// `Undefined` never reaches the class mapping as a real transition: the executor
-// resolves a barrier whose `from` is Undefined to the resource's *resting* layout
-// (carried per-resource in the registry, not derived from the class) before
-// translating, so the first per-frame transition names the layout the image is
-// really in. Resting is per-resource because class does not determine it:
-// `shadow_map` and `hdr_depth` are both depth targets, but the first rests
-// sampled between frames -- its staggered cascades keep the depth they were last
-// rendered with, and its producer barrier is the real SHADER_READ_ONLY ->
-// DEPTH_STENCIL_ATTACHMENT reset -- while main depth carries nothing across the
-// frame boundary and its first use discards.
-//
-// The reverse direction is `vk_restore`: a frame that leaves a resource somewhere
-// other than its resting layout gets one transition back at the end of the frame,
-// so the next frame's producer opens from the layout it names.
+//! Translate the render graph's coarse `ResourceState`, for a given resource
+//! class, into the concrete Vulkan (layout, access, stage) triple the executor
+//! feeds into an image memory barrier. The graph tracks only Undefined / Read /
+//! Write; the resource class (assigned by the executor's resolver) disambiguates
+//! what a `Write` means: a color target writes COLOR_ATTACHMENT, a depth target
+//! writes DEPTH_STENCIL_ATTACHMENT. Both are sampled (SHADER_READ_ONLY) when
+//! read.
+//!
+//! For a barrier `from -> to`, the executor uses `from`'s triple for the source
+//! and `to`'s triple for the destination, and skips the barrier when the two
+//! layouts match (a no-op).
+//!
+//! A `Read`'s layout is SHADER_READ_ONLY either way, but its pipeline stage
+//! follows the consuming-stage union (`ReadStages`) carried on the barrier: a
+//! fragment consumer waits in FRAGMENT_SHADER, a compute consumer in
+//! COMPUTE_SHADER, a vertex consumer (the particle billboards pulling their
+//! particle out of the simulated pool) in VERTEX_SHADER, and a resource read in
+//! several stages on one version waits in all of them so the single transition
+//! makes the producing write visible to each.
+//!
+//! `Undefined` never reaches the class mapping as a real transition: the executor
+//! resolves a barrier whose `from` is Undefined to the resource's *resting* layout
+//! (carried per-resource in the registry, not derived from the class) before
+//! translating, so the first per-frame transition names the layout the image is
+//! really in. Resting is per-resource because class does not determine it:
+//! `shadow_map` and `hdr_depth` are both depth targets, but the first rests
+//! sampled between frames -- its staggered cascades keep the depth they were last
+//! rendered with, and its producer barrier is the real SHADER_READ_ONLY ->
+//! DEPTH_STENCIL_ATTACHMENT reset -- while main depth carries nothing across the
+//! frame boundary and its first use discards.
+//!
+//! The reverse direction is `vk_restore`: a frame that leaves a resource somewhere
+//! other than its resting layout gets one transition back at the end of the frame,
+//! so the next frame's producer opens from the layout it names.
 
 use ash::vk;
 use concinnity_core::render::render_graph::{GraphResourceClass, ReadStages, ResourceState};

@@ -1,11 +1,9 @@
-// src/editor/hook/drive/orbit.rs
-//
-// EditorHook: the Alt+drag tumble around the selection. The pivot is the
-// selection's bounds center; angles and the camera's orientation offset are
-// captured at press time (math in `editor/viewport/orbit.rs`) and stepped from the
-// cursor's own frame-to-frame movement, so the drag needs neither cursor
-// capture nor the gameplay input gate -- the cursor stays visible and the
-// world's camera controller stays frozen.
+//! EditorHook: the Alt+drag tumble around the selection. The pivot is the
+//! selection's bounds center; angles and the camera's orientation offset are
+//! captured at press time (math in `editor/viewport/orbit.rs`) and stepped from the
+//! cursor's own frame-to-frame movement, so the drag needs neither cursor
+//! capture nor the gameplay input gate -- the cursor stays visible and the
+//! world's camera controller stays frozen.
 
 use concinnity_core::components::Camera3D;
 use concinnity_core::components::FrameInput;

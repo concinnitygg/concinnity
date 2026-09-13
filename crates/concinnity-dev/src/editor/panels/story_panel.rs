@@ -1,13 +1,11 @@
-// src/editor/panels/story_panel.rs
-//
-// The Story panel's layout half: a floating line editor over the Markdown
-// source of the world's `StoryImport` (see `story.rs` for the text model and
-// `hook/edit/story.rs` for the actions). The header carries the source path
-// and the Apply button, a reserved status line shows parse / IO errors, and
-// the body is a fixed window of line rows: the current line is the panel's
-// single real `TextInput` (the engine's existing primitive -- no multiline
-// runtime asset), every other visible line a clipped `TextLabel`. A world
-// with no `StoryImport` shows a single "+ Create story" row instead.
+//! The Story panel's layout half: a floating line editor over the Markdown
+//! source of the world's `StoryImport` (see `story.rs` for the text model and
+//! `hook/edit/story.rs` for the actions). The header carries the source path
+//! and the Apply button, a reserved status line shows parse / IO errors, and
+//! the body is a fixed window of line rows: the current line is the panel's
+//! single real `TextInput` (the engine's existing primitive -- no multiline
+//! runtime asset), every other visible line a clipped `TextLabel`. A world
+//! with no `StoryImport` shows a single "+ Create story" row instead.
 
 use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;

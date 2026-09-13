@@ -1,10 +1,8 @@
-// src/editor/gltf_export/bake.rs
-//
-// Baking a CharacterShape into an ExportMesh before writing: slider weights
-// are folded into the vertex positions and normals, the morph targets dropped,
-// and the bind pose rewritten through the proportion layer with the vertices
-// re-skinned onto it. Mirrors the cook's bake pass (character/bake.rs) on the
-// export form so a baked file needs no shape work in the target tool.
+//! Baking a CharacterShape into an ExportMesh before writing: slider weights
+//! are folded into the vertex positions and normals, the morph targets dropped,
+//! and the bind pose rewritten through the proportion layer with the vertices
+//! re-skinned onto it. Mirrors the cook's bake pass (character/bake.rs) on the
+//! export form so a baked file needs no shape work in the target tool.
 
 use concinnity_core::components::{CharacterShape, SkeletonJoint, build_skeleton_from_joint_defs};
 use concinnity_core::gfx::proportions::ProportionLayer;

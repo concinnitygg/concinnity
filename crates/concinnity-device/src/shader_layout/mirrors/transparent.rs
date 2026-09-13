@@ -1,11 +1,9 @@
-// src/shader_layout/mirrors/transparent.rs
-//
-// The transparent pass's three producers, the ray-traced reflection resolve, and
-// the fog pair. `TransparentView` is declared by glass.slang, glass_mesh.slang
-// and water.slang alike, so all three are mirrored: they are separate
-// declarations that can drift apart. The fog froxel kernel carries the third declaration of
-// `ShadowUniforms` -- the only one that spells out the trailing pad the CPU
-// uploads.
+//! The transparent pass's three producers, the ray-traced reflection resolve, and
+//! the fog pair. `TransparentView` is declared by glass.slang, glass_mesh.slang
+//! and water.slang alike, so all three are mirrored: they are separate
+//! declarations that can drift apart. The fog froxel kernel carries the third declaration of
+//! `ShadowUniforms` -- the only one that spells out the trailing pad the CPU
+//! uploads.
 
 use concinnity_core::gfx::render_types::{
     FogFroxelParams, FogParams, RtGeomEntry, RtParams, ShadowUniforms,

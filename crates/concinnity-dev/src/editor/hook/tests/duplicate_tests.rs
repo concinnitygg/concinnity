@@ -1,8 +1,6 @@
-// src/editor/hook/tests/duplicate_tests.rs
-//
-// Duplicating the selection (`hook/duplicate.rs`): the entries a clone appends
-// and selects, and the Ctrl+D that stands down while the Behavior panel owns
-// the keyboard.
+//! Duplicating the selection (`hook/duplicate.rs`): the entries a clone appends
+//! and selects, and the Ctrl+D that stands down while the Behavior panel owns
+//! the keyboard.
 
 use concinnity_core::components::FrameInput;
 use concinnity_core::components::InputKey;

@@ -1,51 +1,49 @@
-// src/editor/hook/behavior_keys.rs
-//
-// EditorHook: the Behavior panel's keyboard. `frame_keys` reaches the frontmost
-// open panel only, so these bindings never compete with another panel's, and a
-// key is one press rather than a held state -- one press is one step.
-//
-// The palette, while it is open, is modal over everything below it:
-//   typing       narrows it to what the query answers, best match first
-//   Up / Down    move the highlighted option, bringing it into the window
-//   Enter        insert the highlighted option
-//   Escape       close the palette without picking
-// Characters reach the palette's own field, so the keys below act on the options
-// the query keeps rather than on the whole vocabulary. Narrowing puts the
-// highlight back at the top, which is what makes typing and then committing land
-// on the best answer. Escape closes outright rather than first clearing the
-// query: one press, one meaning, and Backspace already clears.
-//
-// Escape (its own `FrameInput` pulse rather than a `InputKey`) otherwise answers
-// whichever state is waiting on a press, most consequential first: an armed
-// removal is canceled, and failing that the field holding the keyboard gives
-// it up, the name field reverting to what the world holds.
-//
-// Enter commits the field holding the keyboard -- the name onto the open
-// behavior, or the value into the selected row. With no field focused it acts on
-// the selection instead: opening its palette in the outline and the chart, and
-// in the overview opening the behavior a card stands for (a trigger, variable,
-// or asset card has none).
-//
-// Tab steps to the next view, the same cycle the header's own button walks.
-//
-// Ctrl carries a list member between places, whole subtree and all:
-//   Ctrl+C       hold the selected member
-//   Ctrl+V       put it into the list the selection addresses, after the
-//                selected member or at the end of the list itself
-//   Ctrl+D       duplicate the selected member in place, leaving what is held
-// What is held outlives the open behavior, so a node can be carried to another
-// one. These act only while no field holds the keyboard, since a copy is about
-// the selected node rather than the text being typed.
-//
-// The arrows move the selection through whichever view is showing:
-//   Outline      Up / Down step one row
-//   Chart        Left / Right follow the chain, Up / Down cross between a
-//                branching node's stacked branches
-//   Overview     the same, over the map's cards
-// The name field is the asset's rather than the selection's, so it holds the
-// keyboard -- arrows and Tab alike -- until Enter or Escape gives it up. The
-// value field is the selection's and follows it from view to view, so it holds
-// only Left and Right, which are the caret's (`input::text_system`).
+//! EditorHook: the Behavior panel's keyboard. `frame_keys` reaches the frontmost
+//! open panel only, so these bindings never compete with another panel's, and a
+//! key is one press rather than a held state -- one press is one step.
+//!
+//! The palette, while it is open, is modal over everything below it:
+//!   typing       narrows it to what the query answers, best match first
+//!   Up / Down    move the highlighted option, bringing it into the window
+//!   Enter        insert the highlighted option
+//!   Escape       close the palette without picking
+//! Characters reach the palette's own field, so the keys below act on the options
+//! the query keeps rather than on the whole vocabulary. Narrowing puts the
+//! highlight back at the top, which is what makes typing and then committing land
+//! on the best answer. Escape closes outright rather than first clearing the
+//! query: one press, one meaning, and Backspace already clears.
+//!
+//! Escape (its own `FrameInput` pulse rather than a `InputKey`) otherwise answers
+//! whichever state is waiting on a press, most consequential first: an armed
+//! removal is canceled, and failing that the field holding the keyboard gives
+//! it up, the name field reverting to what the world holds.
+//!
+//! Enter commits the field holding the keyboard -- the name onto the open
+//! behavior, or the value into the selected row. With no field focused it acts on
+//! the selection instead: opening its palette in the outline and the chart, and
+//! in the overview opening the behavior a card stands for (a trigger, variable,
+//! or asset card has none).
+//!
+//! Tab steps to the next view, the same cycle the header's own button walks.
+//!
+//! Ctrl carries a list member between places, whole subtree and all:
+//!   Ctrl+C       hold the selected member
+//!   Ctrl+V       put it into the list the selection addresses, after the
+//!                selected member or at the end of the list itself
+//!   Ctrl+D       duplicate the selected member in place, leaving what is held
+//! What is held outlives the open behavior, so a node can be carried to another
+//! one. These act only while no field holds the keyboard, since a copy is about
+//! the selected node rather than the text being typed.
+//!
+//! The arrows move the selection through whichever view is showing:
+//!   Outline      Up / Down step one row
+//!   Chart        Left / Right follow the chain, Up / Down cross between a
+//!                branching node's stacked branches
+//!   Overview     the same, over the map's cards
+//! The name field is the asset's rather than the selection's, so it holds the
+//! keyboard -- arrows and Tab alike -- until Enter or Escape gives it up. The
+//! value field is the selection's and follows it from view to view, so it holds
+//! only Left and Right, which are the caret's (`input::text_system`).
 
 use concinnity_core::components::FrameInput;
 use concinnity_core::components::InputKey;

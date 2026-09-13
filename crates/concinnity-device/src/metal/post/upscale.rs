@@ -1,16 +1,14 @@
-// src/metal/post/upscale.rs
-//
-// MetalFX temporal upscaling: the engine renders the 3D scene at a fraction
-// of drawable size and this pass reconstructs a drawable-resolution image
-// the bloom + composite stack consumes. Lives in `metal/post/` next to TAA
-// + bloom + SSAO + SSR; the scaler descriptor, the output texture, and the
-// per-frame encoder all live together so the effect is a single unit.
-//
-// The scaler does temporal accumulation itself, so the existing TAA pass is
-// bypassed while upscaling is on (`PostProcessConfig.aa_mode` is ignored). The
-// existing velocity pre-pass still runs: the scaler consumes its motion
-// vectors. The existing projection jitter still runs: the scaler consumes
-// its sub-pixel offset.
+//! MetalFX temporal upscaling: the engine renders the 3D scene at a fraction
+//! of drawable size and this pass reconstructs a drawable-resolution image
+//! the bloom + composite stack consumes. Lives in `metal/post/` next to TAA +
+//! bloom + SSAO + SSR; the scaler descriptor, the output texture, and the
+//! per-frame encoder all live together so the effect is a single unit.
+//!
+//! The scaler does temporal accumulation itself, so the existing TAA pass is
+//! bypassed while upscaling is on (`PostProcessConfig.aa_mode` is ignored). The
+//! existing velocity pre-pass still runs: the scaler consumes its motion
+//! vectors. The existing projection jitter still runs: the scaler consumes
+//! its sub-pixel offset.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use objc2::rc::Retained;

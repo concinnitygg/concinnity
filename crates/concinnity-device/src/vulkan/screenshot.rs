@@ -1,21 +1,19 @@
-// src/vulkan/screenshot.rs
-//
-// Headless frame capture for the Vulkan backend. The `cn debug` WS server's
-// `screenshot` command routes here (via `RenderBackend::screenshot`) to copy
-// the most recently presented swapchain image into a host-visible buffer and
-// encode it to a PNG on disk. This is the on-GPU verification path the renderer
-// otherwise leaves to a human eyeballing the live window: a headless probe can
-// now assert on actual pixels.
-//
-// The swapchain images are created with `TRANSFER_SRC` usage (see
-// `swapchain.rs`) so the presented image can be copied. Capture is synchronous:
-// it idles the device, copies the last-presented image (still in
-// `PRESENT_SRC_KHR`) into the buffer, restores the image to `PRESENT_SRC_KHR`,
-// then maps + decodes + PNG-encodes on the CPU. The read-back buffer and the
-// per-pixel decode both follow the swapchain format (4-byte SDR `BGRA8` or
-// 8-byte HDR `RGBA16F`), not a fixed texel size. A swapchain rebuild clears
-// `swapchain.last_present_index`, so a capture in the brief window before the next present
-// returns a clean error rather than reading an unrendered image.
+//! Headless frame capture for the Vulkan backend. The `cn debug` WS server's
+//! `screenshot` command routes here (via `RenderBackend::screenshot`) to copy
+//! the most recently presented swapchain image into a host-visible buffer and
+//! encode it to a PNG on disk. This is the on-GPU verification path the renderer
+//! otherwise leaves to a human eyeballing the live window: a headless probe can
+//! now assert on actual pixels.
+//!
+//! The swapchain images are created with `TRANSFER_SRC` usage (see
+//! `swapchain.rs`) so the presented image can be copied. Capture is synchronous:
+//! it idles the device, copies the last-presented image (still in
+//! `PRESENT_SRC_KHR`) into the buffer, restores the image to `PRESENT_SRC_KHR`,
+//! then maps + decodes + PNG-encodes on the CPU. The read-back buffer and the
+//! per-pixel decode both follow the swapchain format (4-byte SDR `BGRA8` or
+//! 8-byte HDR `RGBA16F`), not a fixed texel size. A swapchain rebuild clears
+//! `swapchain.last_present_index`, so a capture in the brief window before the next present
+//! returns a clean error rather than reading an unrendered image.
 
 use ash::vk;
 use concinnity_core::gfx::image_decode::{self, PixelLayout};

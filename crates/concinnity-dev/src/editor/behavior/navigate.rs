@@ -1,11 +1,9 @@
-// src/editor/behavior/navigate.rs
-//
-// Where a step of the selection lands. A list is stepped one place at a time; a
-// chart is not a list, so a step there is the nearest card in the direction
-// pressed -- measured along that axis first and across it only to break a tie,
-// which is what makes a sideways step follow the chain and a vertical one cross
-// between the branches stacked under a branching node. Both rules read
-// positions alone, so neither needs a panel to be exercised.
+//! Where a step of the selection lands. A list is stepped one place at a time; a
+//! chart is not a list, so a step there is the nearest card in the direction
+//! pressed -- measured along that axis first and across it only to break a tie,
+//! which is what makes a sideways step follow the chain and a vertical one cross
+//! between the branches stacked under a branching node. Both rules read
+//! positions alone, so neither needs a panel to be exercised.
 
 use super::graph::Card;
 

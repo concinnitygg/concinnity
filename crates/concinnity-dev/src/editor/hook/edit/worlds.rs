@@ -1,14 +1,12 @@
-// src/editor/hook/edit/worlds.rs
-//
-// EditorHook: the Worlds panel's actions. Opening a world retargets the whole
-// session -- the path SAVE writes, the working entries and their history, the
-// hot-reload watcher, and the per-world session state -- then asks for the
-// preview rebuild that swaps the compiled world under the live backend, the
-// same machinery every other rebuild takes. `+` retargets the same way onto an
-// empty world that is not on disk yet, so the editor comes up in full on it and
-// the first SAVE asks for a name; deleting removes the file and the session
-// store's entry for it. Both switches run behind the confirmation dialog
-// whenever the open world has unsaved edits.
+//! EditorHook: the Worlds panel's actions. Opening a world retargets the whole
+//! session -- the path SAVE writes, the working entries and their history, the
+//! hot-reload watcher, and the per-world session state -- then asks for the
+//! preview rebuild that swaps the compiled world under the live backend, the
+//! same machinery every other rebuild takes. `+` retargets the same way onto an
+//! empty world that is not on disk yet, so the editor comes up in full on it and
+//! the first SAVE asks for a name; deleting removes the file and the session
+//! store's entry for it. Both switches run behind the confirmation dialog
+//! whenever the open world has unsaved edits.
 
 use concinnity_core::ecs::World;
 use std::path::Path;

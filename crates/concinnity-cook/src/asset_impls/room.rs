@@ -1,5 +1,3 @@
-// src/asset_impls/room.rs
-
 use concinnity_core::components::Room;
 
 impl crate::asset::BuildAsset for Room {

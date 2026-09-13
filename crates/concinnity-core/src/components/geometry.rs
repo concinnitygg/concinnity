@@ -1,10 +1,8 @@
-// src/components/geometry.rs
-//
-// Model matrices and normals computed from asset data. These live here rather
-// than with the schema types because those stay serde-only data:
-// anything that computes over an authored struct belongs on this side of the
-// line. Exposed as extension traits so call sites keep method syntax
-// (`prop.model_matrix()`).
+//! Model matrices and normals computed from asset data. These live here rather
+//! than with the schema types because those stay serde-only data:
+//! anything that computes over an authored struct belongs on this side of the
+//! line. Exposed as extension traits so call sites keep method syntax
+//! (`prop.model_matrix()`).
 
 use crate::components::{GlassPanel, InstancedProp, RectAreaLight, SpotLight};
 use crate::math::{cos, sqrt};

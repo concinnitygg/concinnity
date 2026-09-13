@@ -1,5 +1,3 @@
-// src/components/held.rs
-
 /// Marks an entity currently being carried by the player.
 ///
 /// Runtime-only zero-size tag, added and removed by the physics system on

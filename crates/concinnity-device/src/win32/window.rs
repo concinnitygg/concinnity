@@ -1,8 +1,7 @@
-// src/win32/window.rs
-//
-// Win32 window creation, the window proc, cursor capture/release, and the
-// message pump, shared by the DirectX backend and the Vulkan backend's
-// Windows window (vulkan/win32_window.rs).
+//! Win32 window creation, the window proc, cursor capture/release, and the
+//! message pump, shared by the DirectX backend and the Vulkan backend's
+//! Windows window (vulkan/win32_window.rs).
+
 use concinnity_core::components::WindowMode;
 use concinnity_core::render::input;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};

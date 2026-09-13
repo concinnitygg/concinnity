@@ -1,12 +1,10 @@
-// src/metal/metallib.rs
-//
-// Precompiled engine shader libraries. The build script compiles every static
-// `.metal` under src/metal/shaders/ to a metallib and generates the
-// `embedded_metallib` lookup included here, pairing each name with the digest
-// of the source it was built from; `shader_library` in pipeline.rs takes these
-// bytes whenever that digest matches the source it assembled. When the build
-// host lacked the Metal toolchain the generated lookup returns `None` for every
-// name and the source path takes over.
+//! Precompiled engine shader libraries. The build script compiles every static
+//! `.metal` under src/metal/shaders/ to a metallib and generates the
+//! `embedded_metallib` lookup included here, pairing each name with the digest
+//! of the source it was built from; `shader_library` in pipeline.rs takes these
+//! bytes whenever that digest matches the source it assembled. When the build
+//! host lacked the Metal toolchain the generated lookup returns `None` for every
+//! name and the source path takes over.
 
 include!(concat!(env!("OUT_DIR"), "/engine_metallibs.rs"));
 

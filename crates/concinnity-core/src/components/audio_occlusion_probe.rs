@@ -1,5 +1,3 @@
-// src/components/audio_occlusion_probe.rs
-
 /// Runtime-only occlusion probe for a positional audio emitter.
 ///
 /// The audio system attaches one to each emitter's entity and refreshes

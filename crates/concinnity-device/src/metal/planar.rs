@@ -1,28 +1,26 @@
-// src/metal/planar.rs
-//
-// Planar reflection for flat reflectors (water surfaces + glass panes). Each
-// frame, when ray tracing is off, the scene is rendered a second time from the
-// camera reflected across each reflector plane (mirror view + oblique near-plane
-// clip so geometry behind the plane never leaks in) into a dedicated target; the
-// reflective surface then samples that target projectively for a sharp,
-// scene-correct reflection instead of the blurry box-projected probe cube.
-//
-// One mirror render per DISTINCT plane. Water is a single horizontal plane; glass
-// panes can be vertical or angled, and a world can hold several at different
-// planes. Each is a full scene re-render, so the number of mirror renders is
-// budgeted (`MAX_PLANAR_PLANES`): near-coplanar reflectors share one render (one
-// wall of windows = one plane), and reflectors past the budget fall back to the
-// probe cube (logged at init, see `metal/init`). The plane -> slot grouping is
-// the pure, unit-tested `gfx::planar_reflection::assign_planar_slots`.
-//
-// Each plane gets a DEDICATED mirror cull against its reflected-camera frustum,
-// so geometry visible only in the reflection (behind or beside the main camera,
-// outside its frustum) is captured, not just the main camera's visible set. The
-// reflected view-proj carries the oblique near-plane clip, so the extracted
-// frustum also rejects geometry behind the reflector. The GPU cull kernel
-// re-runs into that plane's own mirror ICB (`encode_mirror_cull`), which the
-// face render executes. The matrices + frustum come from the pure, unit-tested
-// `gfx::planar_reflection` + `gfx::frustum`.
+//! Planar reflection for flat reflectors (water surfaces + glass panes). Each
+//! frame, when ray tracing is off, the scene is rendered a second time from the
+//! camera reflected across each reflector plane (mirror view + oblique near-plane
+//! clip so geometry behind the plane never leaks in) into a dedicated target; the
+//! reflective surface then samples that target projectively for a sharp,
+//! scene-correct reflection instead of the blurry box-projected probe cube.
+//!
+//! One mirror render per DISTINCT plane. Water is a single horizontal plane; glass
+//! panes can be vertical or angled, and a world can hold several at different
+//! planes. Each is a full scene re-render, so the number of mirror renders is
+//! budgeted (`MAX_PLANAR_PLANES`): near-coplanar reflectors share one render (one
+//! wall of windows = one plane), and reflectors past the budget fall back to the
+//! probe cube (logged at init, see `metal/init`). The plane -> slot grouping is
+//! the pure, unit-tested `gfx::planar_reflection::assign_planar_slots`.
+//!
+//! Each plane gets a DEDICATED mirror cull against its reflected-camera frustum,
+//! so geometry visible only in the reflection (behind or beside the main camera,
+//! outside its frustum) is captured, not just the main camera's visible set. The
+//! reflected view-proj carries the oblique near-plane clip, so the extracted
+//! frustum also rejects geometry behind the reflector. The GPU cull kernel
+//! re-runs into that plane's own mirror ICB (`encode_mirror_cull`), which the
+//! face render executes. The matrices + frustum come from the pure, unit-tested
+//! `gfx::planar_reflection` + `gfx::frustum`.
 
 #![deny(unsafe_op_in_unsafe_fn)]
 

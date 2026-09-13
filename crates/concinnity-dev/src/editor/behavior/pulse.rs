@@ -1,9 +1,7 @@
-// src/editor/behavior/pulse.rs
-//
-// Execution pulses: while the world simulates, nodes the behavior system
-// reports as executed light their chart card / outline row with a warm blend
-// that fades over a fixed window, so a single-frame firing stays visible.
-// The decay is pure math over an age; the hook owns the clock.
+//! Execution pulses: while the world simulates, nodes the behavior system
+//! reports as executed light their chart card / outline row with a warm blend
+//! that fades over a fixed window, so a single-frame firing stays visible.
+//! The decay is pure math over an age; the hook owns the clock.
 
 use super::path::Path;
 

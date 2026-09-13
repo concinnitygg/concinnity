@@ -1,10 +1,8 @@
-// src/editor/hook/sim_control.rs
-//
-// EditorHook: the simulation transport's per-frame drive. The pure state
-// machine lives in `editor/sim.rs`; this maps it onto the engine's freeze
-// gate (`MenuOverride`), onto the preview rebuild that restores the authored
-// state on Stop, and onto the transport's keyboard shortcuts. The tick runs
-// before the world step, so a publish here gates that same frame's systems.
+//! EditorHook: the simulation transport's per-frame drive. The pure state
+//! machine lives in `editor/sim.rs`; this maps it onto the engine's freeze
+//! gate (`MenuOverride`), onto the preview rebuild that restores the authored
+//! state on Stop, and onto the transport's keyboard shortcuts. The tick runs
+//! before the world step, so a publish here gates that same frame's systems.
 
 use concinnity_core::components::FrameInput;
 use concinnity_core::components::InputKey;

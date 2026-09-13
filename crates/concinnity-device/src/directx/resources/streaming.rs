@@ -1,8 +1,6 @@
-// src/directx/resources/streaming.rs
-//
-// `VoxelWorld` chunk streaming for DxContext: the init-time headroom growth
-// that seeds the chunk sub-allocators, then per-chunk add / remove / move
-// within that headroom.
+//! `VoxelWorld` chunk streaming for DxContext: the init-time headroom growth
+//! that seeds the chunk sub-allocators, then per-chunk add / remove / move
+//! within that headroom.
 
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::*;

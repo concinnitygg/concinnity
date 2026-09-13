@@ -1,44 +1,42 @@
-// src/vulkan/hiz.rs
-//
-// Hi-Z (depth-mip pyramid) build pass used by the GPU-cull compute kernel for
-// occlusion culling. Each frame, after the main depth buffer has been written
-// by the graph, we reduce it into an `R32_SFLOAT` mip chain (MAX reduction:
-// standard depth, so larger = farther). The *next* frame's `Cull` kernel
-// projects each `DrawObject` AABB through the previous frame's un-jittered
-// view-projection, picks the Hi-Z mip whose texels are ~the size of the
-// projected rect, 4-tap-samples the max occluder depth, and culls the AABB when
-// its nearest projected NDC depth is strictly behind. Mirrors the DirectX
-// implementation in `directx/hiz.rs`; Metal keeps the older per-mip chain (see
-// `metal/hiz.rs`). Every backend's kernels ship from the single-source
-// `src/shaders/hiz_build.slang` (one variant compile per kernel):
-//
-//   * `hiz_spd_single`: reduce a single-sample main depth into mips 0..6.
-//   * `hiz_spd_msaa`  : the same for an MSAA main depth, taking the MAX over
-//                       every sample so the result is conservative.
-//   * `hiz_spd_tail`  : continue from mip 6 into mips 7..12.
-//
-// Each workgroup reduces a 64x64 tile through seven levels, so the whole
-// pyramid is two dispatches with one barrier between them rather than one
-// dispatch and one barrier per mip. `core::render::hiz_spd::Plan` decides the
-// dispatch geometry; DirectX builds its pyramid from the same plan.
-//
-// The build is a graph node: `HizFinal` (terminal, reducing the frame's last
-// depth version for the next frame's cull) and, under two-pass occlusion,
-// `HizBuild` (mid-frame, reducing phase-1 depth for `Cull2`). Both dispatch this
-// encoder, so the graph owns the pyramid's lifetime and the main depth's layout
-// chain reaches the end of the frame.
-//
-// Each mip is written through its own single-level R32F storage-image view; the
-// whole Hi-Z image stays in GENERAL during the build, with a compute
-// write -> read memory barrier between each step. That per-mip chain is finer
-// than the graph's one-state-per-resource granularity, so it stays inline here;
-// the open and close around it are graph-derived. Between frames the image rests
-// in `SHADER_READ_ONLY_OPTIMAL` so the cull kernel samples it via a `sampler2D`
-// (set 1). A single shared image read one frame and written the next is
-// hazard-free on a single queue: the executor's end-of-frame restore (GENERAL ->
-// SHADER_READ_ONLY) orders the write before the next frame's cull read, and the
-// producer barrier derived from `Cull`'s declared pyramid read orders that read
-// before this frame's write.
+//! Hi-Z (depth-mip pyramid) build pass used by the GPU-cull compute kernel for
+//! occlusion culling. Each frame, after the main depth buffer has been written
+//! by the graph, we reduce it into an `R32_SFLOAT` mip chain (MAX reduction:
+//! standard depth, so larger = farther). The *next* frame's `Cull` kernel
+//! projects each `DrawObject` AABB through the previous frame's un-jittered
+//! view-projection, picks the Hi-Z mip whose texels are ~the size of the
+//! projected rect, 4-tap-samples the max occluder depth, and culls the AABB when
+//! its nearest projected NDC depth is strictly behind. Mirrors the DirectX
+//! implementation in `directx/hiz.rs`; Metal keeps the older per-mip chain (see
+//! `metal/hiz.rs`). Every backend's kernels ship from the single-source
+//! `src/shaders/hiz_build.slang` (one variant compile per kernel):
+//!
+//!   * `hiz_spd_single`: reduce a single-sample main depth into mips 0..6.
+//!   * `hiz_spd_msaa`  : the same for an MSAA main depth, taking the MAX over
+//!     every sample so the result is conservative.
+//!   * `hiz_spd_tail`  : continue from mip 6 into mips 7..12.
+//!
+//! Each workgroup reduces a 64x64 tile through seven levels, so the whole
+//! pyramid is two dispatches with one barrier between them rather than one
+//! dispatch and one barrier per mip. `core::render::hiz_spd::Plan` decides the
+//! dispatch geometry; DirectX builds its pyramid from the same plan.
+//!
+//! The build is a graph node: `HizFinal` (terminal, reducing the frame's last
+//! depth version for the next frame's cull) and, under two-pass occlusion,
+//! `HizBuild` (mid-frame, reducing phase-1 depth for `Cull2`). Both dispatch this
+//! encoder, so the graph owns the pyramid's lifetime and the main depth's layout
+//! chain reaches the end of the frame.
+//!
+//! Each mip is written through its own single-level R32F storage-image view; the
+//! whole Hi-Z image stays in GENERAL during the build, with a compute
+//! write -> read memory barrier between each step. That per-mip chain is finer
+//! than the graph's one-state-per-resource granularity, so it stays inline here;
+//! the open and close around it are graph-derived. Between frames the image rests
+//! in `SHADER_READ_ONLY_OPTIMAL` so the cull kernel samples it via a `sampler2D`
+//! (set 1). A single shared image read one frame and written the next is
+//! hazard-free on a single queue: the executor's end-of-frame restore (GENERAL ->
+//! SHADER_READ_ONLY) orders the write before the next frame's cull read, and the
+//! producer barrier derived from `Cull`'s declared pyramid read orders that read
+//! before this frame's write.
 
 use ash::vk;
 use concinnity_core::render::error::RenderResult;

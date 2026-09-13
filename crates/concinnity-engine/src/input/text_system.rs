@@ -1,11 +1,9 @@
-// src/input/text_system.rs
-//
-// Drives editable TextInput fields: click-to-focus, character entry from the
-// frame's typed character, and caret editing / movement from the Backspace /
-// Delete / Left / Right keys. Present whenever the world has any `TextInput`
-// (see `World::build_text_input`). Focus and caret live on the component itself
-// (runtime-only fields), so the renderer and any reader see the edited text in
-// place.
+//! Drives editable TextInput fields: click-to-focus, character entry from the
+//! frame's typed character, and caret editing / movement from the Backspace /
+//! Delete / Left / Right keys. Present whenever the world has any `TextInput`
+//! (see `World::build_text_input`). Focus and caret live on the component itself
+//! (runtime-only fields), so the renderer and any reader see the edited text in
+//! place.
 
 use concinnity_core::components::{FrameInput, InputKey, SpriteFit, TextInput};
 use concinnity_core::ecs::{Access, PipelineContext, StepResult, System};

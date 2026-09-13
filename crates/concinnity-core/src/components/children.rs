@@ -1,5 +1,3 @@
-// src/components/children.rs
-
 use crate::memory::InlineVec;
 
 use crate::ecs::Entity;

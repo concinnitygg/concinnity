@@ -1,18 +1,16 @@
-// src/directx/post/upscale/dlss.rs
-//
-// NVIDIA DLSS temporal upscaling for the D3D12 backend, via the raw NGX API
-// (`NVSDK_NGX_D3D12_*`). One of the three `UpscaleBackend` implementations;
-// RTX-only. Compiled only when `build.rs` finds the NGX SDK and emits
-// `cfg(ngx_sdk_bundled)` (which also links `nvsdk_ngx_d.lib` and bundles
-// `nvngx_dlss.dll` next to the .exe). When the SDK is absent the whole module
-// is cfg'd out and `build_upscaler` never resolves to DLSS.
-//
-// NGX is a parameter-bag API: a feature is created + evaluated by setting
-// named parameters on an `NVSDK_NGX_Parameter` and calling CreateFeature /
-// EvaluateFeature, both of which record onto a command list (mirroring the FFX
-// "evaluate on a command list" model). The bindings are inline `extern "C"`
-// (linked from the static lib), validated against NGX SDK 1.5.0 by the
-// constant asserts in the tests.
+//! NVIDIA DLSS temporal upscaling for the D3D12 backend, via the raw NGX API
+//! (`NVSDK_NGX_D3D12_*`). One of the three `UpscaleBackend` implementations;
+//! RTX-only. Compiled only when `build.rs` finds the NGX SDK and emits
+//! `cfg(ngx_sdk_bundled)` (which also links `nvsdk_ngx_d.lib` and bundles
+//! `nvngx_dlss.dll` next to the .exe). When the SDK is absent the whole module
+//! is cfg'd out and `build_upscaler` never resolves to DLSS.
+//!
+//! NGX is a parameter-bag API: a feature is created + evaluated by setting
+//! named parameters on an `NVSDK_NGX_Parameter` and calling CreateFeature /
+//! EvaluateFeature, both of which record onto a command list (mirroring the FFX
+//! "evaluate on a command list" model). The bindings are inline `extern "C"`
+//! (linked from the static lib), validated against NGX SDK 1.5.0 by the
+//! constant asserts in the tests.
 
 use std::ffi::c_void;
 use std::ptr;

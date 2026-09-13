@@ -1,17 +1,15 @@
-// src/render/ltc/polygon.rs
-//
-// The closed-form clamped-cosine polygon integral that area-light shading is
-// built on, plus the horizon clipping it needs.
-//
-// This is the CPU twin of the shader code in `main_shading.slang`. It exists so the
-// integral can be checked against brute-force Monte Carlo in a unit test: the
-// clipping in particular is easy to get subtly wrong in a way that still renders
-// a plausible-looking highlight, and shader code cannot be tested directly.
-// Keep the two in step -- the shader mirrors these functions line for line.
-//
-// The result is the fraction of the clamped-cosine distribution the polygon
-// covers, in [0, 1]: 1 means the polygon fills the hemisphere. Multiply by a
-// light's radiance to get outgoing radiance.
+//! The closed-form clamped-cosine polygon integral that area-light shading is
+//! built on, plus the horizon clipping it needs.
+//!
+//! This is the CPU twin of the shader code in `main_shading.slang`. It exists so the
+//! integral can be checked against brute-force Monte Carlo in a unit test: the
+//! clipping in particular is easy to get subtly wrong in a way that still renders
+//! a plausible-looking highlight, and shader code cannot be tested directly.
+//! Keep the two in step -- the shader mirrors these functions line for line.
+//!
+//! The result is the fraction of the clamped-cosine distribution the polygon
+//! covers, in [0, 1]: 1 means the polygon fills the hemisphere. Multiply by a
+//! light's radiance to get outgoing radiance.
 
 use crate::math::vec3::{cross, dot, length, sub};
 

@@ -1,9 +1,7 @@
-// src/ecs/built_system.rs
-//
-// What a world holds once a table gate has run: the constructed system behind a
-// `dyn System` pointer, paired with the name of the table entry that built it.
-// A trait object carries no name of its own, and the name is what the profile,
-// the log, and the schedule's ordering edges all key on.
+//! What a world holds once a table gate has run: the constructed system behind a
+//! `dyn System` pointer, paired with the name of the table entry that built it.
+//! A trait object carries no name of its own, and the name is what the profile,
+//! the log, and the schedule's ordering edges all key on.
 
 use alloc::boxed::Box;
 

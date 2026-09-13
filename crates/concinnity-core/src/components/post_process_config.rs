@@ -1,9 +1,7 @@
-// src/components/post_process_config.rs
-//
-// The PostProcessConfig asset: the authored schema (the struct, its enums and
-// their `Default`), the `Component` impl, and the `PostProcessResolve` extension
-// trait that resolves the authored tunables into the renderer's clamped `gfx`
-// settings.
+//! The PostProcessConfig asset: the authored schema (the struct, its enums and
+//! their `Default`), the `Component` impl, and the `PostProcessResolve` extension
+//! trait that resolves the authored tunables into the renderer's clamped `gfx`
+//! settings.
 
 use crate::components::vocabulary;
 use crate::ecs::Component;

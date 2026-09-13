@@ -1,12 +1,10 @@
-// src/directx/draw/composite.rs
-//
-// Composite + text overlay: tonemap (and optionally LUT-grade) the HDR scene
-// target onto the swapchain backbuffer, then layer the text vertices on top.
-// The composite pass samples `scene_srv` (the post-TAA image when TAA is on,
-// the HDR scene SRV otherwise) plus bloom mip 0; the text pass appends each
-// label's vertex / index geometry into this frame slot's persistent upload
-// buffer (see [`TextUploadRing`]) and binds sub-views into it, so no per-frame
-// GPU buffers are allocated.
+//! Composite + text overlay: tonemap (and optionally LUT-grade) the HDR scene
+//! target onto the swapchain backbuffer, then layer the text vertices on top.
+//! The composite pass samples `scene_srv` (the post-TAA image when TAA is on,
+//! the HDR scene SRV otherwise) plus bloom mip 0; the text pass appends each
+//! label's vertex / index geometry into this frame slot's persistent upload
+//! buffer (see [`TextUploadRing`]) and binds sub-views into it, so no per-frame
+//! GPU buffers are allocated.
 
 use concinnity_core::gfx::render_types::{CompositeParams, TextDrawCall, TextUniforms, TextVertex};
 use concinnity_core::render::fullscreen;

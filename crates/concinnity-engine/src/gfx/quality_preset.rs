@@ -1,16 +1,14 @@
-// src/gfx/quality_preset.rs
-//
-// The master "Graphics Quality" preset and how it resolves to a performance
-// ceiling over a world's authored look. The preset is persisted in
-// GraphicsSettings; at init it produces a QualityCeiling that clamps the
-// perf-relevant Tier-A settings DOWN where the chosen tier (or detected GPU,
-// under Auto) cannot honor them. A ceiling never turns a feature on -- it only
-// reduces -- so a world authored conservatively is never "upgraded", and an
-// explicit per-row user override always wins over the ceiling (applied by the
-// caller). The component defaults author the top-tier look, so under `Auto`
-// this is what actually picks a world's quality: every tier below Ultra is
-// reached by clamping, not by opting in. This keeps the per-field `None = use the world's value` contract: the
-// only thing persisted is the one preset marker, not a bake of every field.
+//! The master "Graphics Quality" preset and how it resolves to a performance
+//! ceiling over a world's authored look. The preset is persisted in
+//! GraphicsSettings; at init it produces a QualityCeiling that clamps the
+//! perf-relevant Tier-A settings DOWN where the chosen tier (or detected GPU,
+//! under Auto) cannot honor them. A ceiling never turns a feature on -- it only
+//! reduces -- so a world authored conservatively is never "upgraded", and an
+//! explicit per-row user override always wins over the ceiling (applied by the
+//! caller). The component defaults author the top-tier look, so under `Auto`
+//! this is what actually picks a world's quality: every tier below Ultra is
+//! reached by clamping, not by opting in. This keeps the per-field `None = use the world's value` contract: the
+//! only thing persisted is the one preset marker, not a bake of every field.
 
 use concinnity_core::components::{
     AaMode, ReflectionBlurResolution, ShadowUpdate, SsgiResolution, UpscaleQuality,

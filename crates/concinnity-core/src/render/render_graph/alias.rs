@@ -1,41 +1,39 @@
-// src/render/render_graph/alias.rs
-//
-// Transient-resource memory aliasing planner. The compile pass records which
-// passes touch each resource and the schedule's happens-before relation over
-// those passes; this module turns them into a physical-memory plan: transient
-// resources the schedule never leaves live at the same time can share one
-// backing allocation.
-//
-// The planner is backend-agnostic and pure. It only decides *which resources
-// share a slot* and *how big each slot must be*; the per-backend executor
-// realizes the plan (allocates a pool, creates the aliased resources, binds
-// them, and inserts aliasing barriers at the slot's reuse boundaries). This
-// mirrors how the graph plans barriers (`barriers_before`) while each backend
-// emits them.
-//
-// Only `Transient` textures are candidates: `Imported` resources are
-// engine-owned and outlive the frame (cross-frame TAA history, the resting
-// shadow map, the `scene_pre_taa` alias), so the graph never reuses their
-// memory. Buffers are not aliased yet (none of today's graph buffers are large
-// or short-lived enough to matter).
-//
-// The packing is a linear scan over lifetime-start order (the classic
-// interval-graph greedy, kept for the slot *count*): each resource takes the
-// first compatible slot every member of which the schedule orders strictly
-// before it, else opens a new slot. A slot is sized to its largest member.
-// Compatibility is [`SlotClass`]: resources that differ on it never share,
-// whatever their lifetimes.
-//
-// The disjointness test is the schedule's happens-before relation
-// (`CompiledGraph::resource_precedes`), not a `[first, last]` index comparison.
-// An index interval is a disjointness test only under a total order: once a
-// compute pass runs on the async queue, two resources with disjoint index
-// ranges can be concurrently live on two queues. The relation the planner asks
-// is "does every reader and writer of A complete before every reader and writer
-// of B starts?", answered over the dependency DAG plus each queue's own serial
-// order -- so two graphics passes with no data dependency are still ordered
-// (their queue runs them in order) while a graphics pass and an unsynchronized
-// async pass are not.
+//! Transient-resource memory aliasing planner. The compile pass records which
+//! passes touch each resource and the schedule's happens-before relation over
+//! those passes; this module turns them into a physical-memory plan: transient
+//! resources the schedule never leaves live at the same time can share one
+//! backing allocation.
+//!
+//! The planner is backend-agnostic and pure. It only decides *which resources
+//! share a slot* and *how big each slot must be*; the per-backend executor
+//! realizes the plan (allocates a pool, creates the aliased resources, binds
+//! them, and inserts aliasing barriers at the slot's reuse boundaries). This
+//! mirrors how the graph plans barriers (`barriers_before`) while each backend
+//! emits them.
+//!
+//! Only `Transient` textures are candidates: `Imported` resources are
+//! engine-owned and outlive the frame (cross-frame TAA history, the resting
+//! shadow map, the `scene_pre_taa` alias), so the graph never reuses their
+//! memory. Buffers are not aliased yet (none of today's graph buffers are large
+//! or short-lived enough to matter).
+//!
+//! The packing is a linear scan over lifetime-start order (the classic
+//! interval-graph greedy, kept for the slot *count*): each resource takes the
+//! first compatible slot every member of which the schedule orders strictly
+//! before it, else opens a new slot. A slot is sized to its largest member.
+//! Compatibility is [`SlotClass`]: resources that differ on it never share,
+//! whatever their lifetimes.
+//!
+//! The disjointness test is the schedule's happens-before relation
+//! (`CompiledGraph::resource_precedes`), not a `[first, last]` index comparison.
+//! An index interval is a disjointness test only under a total order: once a
+//! compute pass runs on the async queue, two resources with disjoint index
+//! ranges can be concurrently live on two queues. The relation the planner asks
+//! is "does every reader and writer of A complete before every reader and writer
+//! of B starts?", answered over the dependency DAG plus each queue's own serial
+//! order -- so two graphics passes with no data dependency are still ordered
+//! (their queue runs them in order) while a graphics pass and an unsynchronized
+//! async pass are not.
 
 use super::compile::CompiledGraph;
 use super::types::{ResourceOrigin, TextureDesc};

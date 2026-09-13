@@ -1,9 +1,7 @@
-// src/editor/hook/edit/export.rs
-//
-// EditorHook: the console's /export action. Compiles the working entries in
-// memory on a worker thread (under the one-cook-at-a-time guard), writes the
-// named skinned mesh as `<name>.glb` beside the project's world file, and
-// reports through the log sink and a toast.
+//! EditorHook: the console's /export action. Compiles the working entries in
+//! memory on a worker thread (under the one-cook-at-a-time guard), writes the
+//! named skinned mesh as `<name>.glb` beside the project's world file, and
+//! reports through the log sink and a toast.
 
 use concinnity_cook::authoring::world::write_world_jsonl;
 use concinnity_host::thread::jobs::pool;

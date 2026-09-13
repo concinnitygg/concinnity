@@ -1,29 +1,27 @@
-// src/vulkan/transparent.rs
-//
-// The engine's `PassId::Transparent` slot on the Vulkan backend: one render
-// pass, drawn after the SSR resolve and before TAA, with two producers -- glass
-// panes (`glass.rs`) and water surfaces (`water.rs`). Each contributes records
-// built once at init; the pass snapshots the pre-transparent scene, orders every
-// record of both producers back-to-front by camera distance, and draws them into
-// the post-SSR scene image (`SsrResources::output` when SSR is on, else
-// `hdr_resolve_images[frame]`), alpha-blending over it. Downstream TAA / bloom /
-// composite pick the translucent geometry up unchanged.
-//
-// One pass rather than one per producer, mirroring the Metal and DirectX
-// backends: the scene snapshot the refraction taps is a full render-resolution
-// HDR image and a copy of it every frame, so a second one would be pure waste;
-// and a single ordering over both producers is what puts a pane standing in a
-// pool on the correct side of the water.
-//
-// The producers also share every descriptor set layout and pipeline layout,
-// because `glass.slang` and `water.slang` declare the same bindings on purpose:
-// the view set (0) carries the per-frame view UBO plus the snapshot and main
-// depth, the params set (1) one record's uniforms plus its planar reflection
-// target, the global set (2) is the forward one the probe / sky taps read, and
-// the RT variants add the trace's geometry (3) and the bindless pool (4).
-//
-// Same uniform layouts, back-to-front ordering and manual depth-occlusion test
-// as the DirectX and Metal hosts.
+//! The engine's `PassId::Transparent` slot on the Vulkan backend: one render
+//! pass, drawn after the SSR resolve and before TAA, with two producers -- glass
+//! panes (`glass.rs`) and water surfaces (`water.rs`). Each contributes records
+//! built once at init; the pass snapshots the pre-transparent scene, orders every
+//! record of both producers back-to-front by camera distance, and draws them into
+//! the post-SSR scene image (`SsrResources::output` when SSR is on, else
+//! `hdr_resolve_images[frame]`), alpha-blending over it. Downstream TAA / bloom /
+//! composite pick the translucent geometry up unchanged.
+//!
+//! One pass rather than one per producer, mirroring the Metal and DirectX
+//! backends: the scene snapshot the refraction taps is a full render-resolution
+//! HDR image and a copy of it every frame, so a second one would be pure waste;
+//! and a single ordering over both producers is what puts a pane standing in a
+//! pool on the correct side of the water.
+//!
+//! The producers also share every descriptor set layout and pipeline layout,
+//! because `glass.slang` and `water.slang` declare the same bindings on purpose:
+//! the view set (0) carries the per-frame view UBO plus the snapshot and main
+//! depth, the params set (1) one record's uniforms plus its planar reflection
+//! target, the global set (2) is the forward one the probe / sky taps read, and
+//! the RT variants add the trace's geometry (3) and the bindless pool (4).
+//!
+//! Same uniform layouts, back-to-front ordering and manual depth-occlusion test
+//! as the DirectX and Metal hosts.
 
 use ash::vk;
 use concinnity_core::components::{GlassPanel, WaterSurface};

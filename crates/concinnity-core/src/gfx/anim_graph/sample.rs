@@ -1,9 +1,7 @@
-// src/gfx/anim_graph/sample.rs
-//
-// Pose sampling for a graph cursor: the current state's members are sampled
-// at their clock-derived times, blended by the state's blendspace weights,
-// then crossfaded with the outgoing state while a transition fade is in
-// flight.
+//! Pose sampling for a graph cursor: the current state's members are sampled
+//! at their clock-derived times, blended by the state's blendspace weights,
+//! then crossfaded with the outgoing state while a transition fade is in
+//! flight.
 
 use crate::gfx::pose_blend::{PoseBlend, blend_locals_in_place};
 use crate::gfx::pose_scratch::PoseScratch;

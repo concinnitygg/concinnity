@@ -1,11 +1,9 @@
-// src/editor/live/placement.rs
-//
-// Where an asset sits. A placement type's own column is drained at load (the
-// decomposition turns a Prop into a Transform plus its renderer and physics
-// parts), so its `position` / `rotation_deg` / `scale` args are applied to the
-// live `Transform` the decomposition left behind -- the same component the
-// gizmo writes while a drag is in flight. Propagation, the pick index, the
-// selection rings, and the renderer all follow it.
+//! Where an asset sits. A placement type's own column is drained at load (the
+//! decomposition turns a Prop into a Transform plus its renderer and physics
+//! parts), so its `position` / `rotation_deg` / `scale` args are applied to the
+//! live `Transform` the decomposition left behind -- the same component the
+//! gizmo writes while a drag is in flight. Propagation, the pick index, the
+//! selection rings, and the renderer all follow it.
 
 use concinnity_core::components::Transform;
 use concinnity_core::ecs::World;

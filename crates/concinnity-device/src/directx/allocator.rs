@@ -1,53 +1,51 @@
-// src/directx/allocator.rs
-//
-// The device-memory allocator persistent D3D12 resources are placed through.
-// Buffers and textures are suballocated out of a few large `ID3D12Heap`s with
-// `CreatePlacedResource` instead of each owning a `CreateCommittedResource`
-// allocation of its own.
-//
-// D3D12 caps nothing here the way Vulkan's `maxMemoryAllocationCount` does, so
-// this is not a scalability cliff. What it buys is creation cost and
-// fragmentation: a committed resource is a kernel-mode video-memory allocation
-// and a separately residency-managed object, which a streaming world pays for
-// on every texture swap, while a placed resource is a user-mode operation
-// against memory its heap already owns.
-//
-// `block_alloc::BlockAllocator` decides which block and what offset; this file
-// is what makes those decisions D3D12. The split is the one `transient_pool.rs`
-// and the Metal / Vulkan `allocator.rs` already use: shared placement policy,
-// backend-specific binding.
-//
-// Blocks are separated into pools by heap type, and below resource-heap tier 2
-// also by heap class: tier 1 hardware cannot host buffers, RT/DS textures and
-// plain textures in one heap, so each gets its own `ALLOW_ONLY_*` pool. Tier 2
-// and above collapse the three into one `ALLOW_ALL_BUFFERS_AND_TEXTURES` pool.
-//
-// Only CPU-written, GPU-read-only resources are placed here. A GPU-written
-// placed resource (render target, depth-stencil, UAV) must be re-initialized by
-// a Clear / Discard / Copy every time it claims memory, and its compression
-// metadata is what makes the aliasing rules bite; those are also a fixed
-// handful rather than something that scales with world size. The render graph's
-// transients already share memory through `transient_pool.rs`, which does that
-// dance properly.
-//
-// Frees are deferred and leases are RAII. Dropping a `PooledBuffer` /
-// `PooledTexture` returns its byte range to the pool tagged with a retire frame
-// `FRAMES + 1` ticks out, so the bytes are not handed to another resource until
-// no in-flight command list can still reference them. This matters more than it
-// did before pooling: a committed resource released early is merely undefined,
-// whereas a range released early is placed again almost immediately.
-//
-// A range handed out after another resource used it is activated with an
-// aliasing barrier, submitted on its own one-shot list. Doing it in the
-// allocator rather than folding it into a caller's command list means no call
-// site has to know whether the range it got was fresh; the submit costs nothing
-// in steady state, since a pool only recycles once a lease has dropped and its
-// retire frame has passed.
-//
-// The `Rc` behind the leases is main-thread state. `DxContext` is `Send` and
-// the parallel encoder hands workers a `&DxContext`, but a worker only ever
-// dereferences a pooled resource to bind it, which touches no refcount; every
-// allocation, clone and drop happens on the main thread.
+//! The device-memory allocator persistent D3D12 resources are placed through.
+//! Buffers and textures are suballocated out of a few large `ID3D12Heap`s with
+//! `CreatePlacedResource` instead of each owning a `CreateCommittedResource`
+//! allocation of its own.
+//!
+//! D3D12 caps nothing here the way Vulkan's `maxMemoryAllocationCount` does, so
+//! this is not a scalability cliff. What it buys is creation cost and
+//! fragmentation: a committed resource is a kernel-mode video-memory allocation
+//! and a separately residency-managed object, which a streaming world pays for
+//! on every texture swap, while a placed resource is a user-mode operation
+//! against memory its heap already owns.
+//!
+//! `block_alloc::BlockAllocator` decides which block and what offset; this file
+//! is what makes those decisions D3D12. The split is the one `transient_pool.rs`
+//! and the Metal / Vulkan `allocator.rs` already use: shared placement policy,
+//! backend-specific binding.
+//!
+//! Blocks are separated into pools by heap type, and below resource-heap tier 2
+//! also by heap class: tier 1 hardware cannot host buffers, RT/DS textures and
+//! plain textures in one heap, so each gets its own `ALLOW_ONLY_*` pool. Tier 2
+//! and above collapse the three into one `ALLOW_ALL_BUFFERS_AND_TEXTURES` pool.
+//!
+//! Only CPU-written, GPU-read-only resources are placed here. A GPU-written
+//! placed resource (render target, depth-stencil, UAV) must be re-initialized by
+//! a Clear / Discard / Copy every time it claims memory, and its compression
+//! metadata is what makes the aliasing rules bite; those are also a fixed
+//! handful rather than something that scales with world size. The render graph's
+//! transients already share memory through `transient_pool.rs`, which does that
+//! dance properly.
+//!
+//! Frees are deferred and leases are RAII. Dropping a `PooledBuffer` /
+//! `PooledTexture` returns its byte range to the pool tagged with a retire frame
+//! `FRAMES + 1` ticks out, so the bytes are not handed to another resource until
+//! no in-flight command list can still reference them. This matters more than it
+//! did before pooling: a committed resource released early is merely undefined,
+//! whereas a range released early is placed again almost immediately.
+//!
+//! A range handed out after another resource used it is activated with an
+//! aliasing barrier, submitted on its own one-shot list. Doing it in the
+//! allocator rather than folding it into a caller's command list means no call
+//! site has to know whether the range it got was fresh; the submit costs nothing
+//! in steady state, since a pool only recycles once a lease has dropped and its
+//! retire frame has passed.
+//!
+//! The `Rc` behind the leases is main-thread state. `DxContext` is `Send` and
+//! the parallel encoder hands workers a `&DxContext`, but a worker only ever
+//! dereferences a pooled resource to bind it, which touches no refcount; every
+//! allocation, clone and drop happens on the main thread.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
