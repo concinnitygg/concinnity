@@ -2,8 +2,7 @@
 //! its SkinnedVertexData / SkeletonJoint / CharacterCapsule, and their Defaults) lives
 //! above; SkinnedMesh is a resource (compiled by cook into the
 //! blob's resource stream, no `Component` impl), so this file keeps only the
-//! skeleton builder and the `SkinnedMeshGeometry` extension trait that needs
-//! `gfx::skeleton`.
+//! skeleton builder and the model matrix, both built through `gfx::skeleton`.
 
 use crate::ecs::MaterialHandle;
 use crate::ecs::PayloadLocator;
@@ -327,19 +326,10 @@ pub fn build_skeleton_from_joint_defs(defs: &[SkeletonJoint]) -> crate::gfx::ske
     skinning::Skeleton::new(joints)
 }
 
-/// Column-major world matrix from a SkinnedMesh's transform. Kept in core (not
-/// the schema half) because the matrix build goes through `gfx::skeleton`, which
-/// needs std transcendentals. Exposed as an extension trait so call sites keep
-/// method syntax (`sm.model_matrix()`), matching `geometry.rs`.
-pub trait SkinnedMeshGeometry {
-    /// Column-major world matrix built from the mesh's transform.
-    fn model_matrix(&self) -> [[f32; 4]; 4];
-}
-
-impl SkinnedMeshGeometry for SkinnedMesh {
-    // Same construction order (scale, YXZ rotation, translate) as
-    // `Prop::model_matrix`.
-    fn model_matrix(&self) -> [[f32; 4]; 4] {
+impl SkinnedMesh {
+    /// Column-major world matrix built from the mesh's transform, in the same
+    /// construction order (scale, YXZ rotation, translate) as `Prop::model_matrix`.
+    pub fn model_matrix(&self) -> [[f32; 4]; 4] {
         crate::gfx::skeleton::JointPose {
             translation: self.position,
             rotation_deg: self.rotation_deg,

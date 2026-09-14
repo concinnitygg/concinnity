@@ -5,7 +5,7 @@
 //! live-lighting seam re-resolves the ones an authoring edit can reach, so an
 //! edit applied to a running world shows what relaunching that world would.
 
-use concinnity_core::components::{PostProcessConfig, PostProcessResolve, ShadowUpdate};
+use concinnity_core::components::{PostProcessConfig, ShadowUpdate};
 use concinnity_core::gfx::render_types::PostProcessTunables;
 
 use crate::config::GraphicsSettings;

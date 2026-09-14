@@ -431,7 +431,9 @@ pub fn reparent(ctx: &mut PipelineContext, child: Entity, new_parent: Option<Ent
                     kids.0.push(child);
                 }
             }
-            None => ctx.insert(parent, Children(crate::memory::InlineVec::one(child))),
+            None => {
+                ctx.insert(parent, Children(crate::memory::InlineVec::one(child)));
+            }
         }
     }
 

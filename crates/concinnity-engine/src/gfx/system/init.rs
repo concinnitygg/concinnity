@@ -30,9 +30,8 @@ use concinnity_core::components::procedural_mesh;
 use concinnity_core::components::sdf_volume;
 use concinnity_core::components::{
     BlockType, Camera3D, Decal, DirectionalLight, GlassPanel, GraphicsConfig, HitRegion, Material,
-    Model, ParticleEmitter, PointLight, PostProcessConfig, PostProcessResolve, RectAreaLight,
-    SdfVolume, Shader, ShaderStage, SkinnedMeshGeometry, SpotLight, StreamingConfig, VolumetricFog,
-    VoxelWorld, WaterSurface, Window,
+    Model, ParticleEmitter, PointLight, PostProcessConfig, RectAreaLight, SdfVolume, Shader,
+    ShaderStage, SpotLight, StreamingConfig, VolumetricFog, VoxelWorld, WaterSurface, Window,
 };
 use concinnity_core::ecs::Entity;
 use concinnity_core::ecs::FontHandle;

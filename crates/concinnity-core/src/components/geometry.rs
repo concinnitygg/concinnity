@@ -1,8 +1,7 @@
 //! Model matrices and normals computed from asset data. These live here rather
 //! than with the schema types because those stay serde-only data:
 //! anything that computes over an authored struct belongs on this side of the
-//! line. Exposed as extension traits so call sites keep method syntax
-//! (`prop.model_matrix()`).
+//! line.
 
 use crate::components::{GlassPanel, InstancedProp, RectAreaLight, SpotLight};
 use crate::math::{cos, sqrt};
@@ -23,17 +22,11 @@ fn normalize_or(v: [f32; 3], fallback: [f32; 3]) -> [f32; 3] {
     }
 }
 
-/// Per-instance model matrices for an [InstancedProp].
-pub trait InstancedPropGeometry {
+impl InstancedProp {
     /// Column-major model matrix for the i-th instance, or `None` when the
-    /// index is past the instance list.
-    fn instance_model_matrix(&self, idx: usize) -> Option<[[f32; 4]; 4]>;
-}
-
-impl InstancedPropGeometry for InstancedProp {
-    /// Build a column-major model matrix for the i-th instance.
-    /// Order matches `Prop::model_matrix`: scale, then YXZ rotation, then translation.
-    fn instance_model_matrix(&self, idx: usize) -> Option<[[f32; 4]; 4]> {
+    /// index is past the instance list. Order matches `Prop::model_matrix`:
+    /// scale, then YXZ rotation, then translation.
+    pub fn instance_model_matrix(&self, idx: usize) -> Option<[[f32; 4]; 4]> {
         let xform = self.instances.get(idx)?;
         Some(crate::gfx::transform::trs_matrix(
             xform.position,
@@ -43,60 +36,37 @@ impl InstancedPropGeometry for InstancedProp {
     }
 }
 
-/// Cone direction and angular falloff cosines for a [SpotLight].
-pub trait SpotLightGeometry {
-    /// Unit-length cone axis.
-    fn unit_direction(&self) -> [f32; 3];
-    /// Cosine of the inner half-angle: the widest angle still at full
-    /// brightness.
-    fn cos_inner(&self) -> f32;
-    /// Cosine of the outer half-angle: the angle at which the cone is black.
-    fn cos_outer(&self) -> f32;
-}
-
-impl SpotLightGeometry for SpotLight {
+impl SpotLight {
     /// Unit-length cone axis, falling back to straight down when the authored
     /// `direction` is degenerate.
-    fn unit_direction(&self) -> [f32; 3] {
+    pub fn unit_direction(&self) -> [f32; 3] {
         normalize_or(self.direction, [0.0, -1.0, 0.0])
     }
 
     /// Cosine of the inner half-angle: the widest angle still at full brightness.
-    fn cos_inner(&self) -> f32 {
+    pub fn cos_inner(&self) -> f32 {
         cos(self.inner_angle.clamp(0.0, self.outer_angle).to_radians())
     }
 
     /// Cosine of the outer half-angle: the angle at which the cone reaches black.
-    fn cos_outer(&self) -> f32 {
+    pub fn cos_outer(&self) -> f32 {
         cos(self.outer_angle.clamp(0.0, SPOT_MAX_ANGLE_DEG).to_radians())
     }
 }
 
-/// Unit-length facing normal for a [GlassPanel].
-pub trait GlassPanelGeometry {
-    /// Unit-length facing direction.
-    fn unit_normal(&self) -> [f32; 3];
-}
-
-impl GlassPanelGeometry for GlassPanel {
+impl GlassPanel {
     /// Unit-length facing direction, falling back to `+Z` when the authored
     /// `normal` is degenerate. The build-time quad generator and the runtime
     /// shader both rely on a usable normal.
-    fn unit_normal(&self) -> [f32; 3] {
+    pub fn unit_normal(&self) -> [f32; 3] {
         normalize_or(self.normal, [0.0, 0.0, 1.0])
     }
 }
 
-/// Unit-length emission normal for a [RectAreaLight].
-pub trait RectAreaLightGeometry {
-    /// Unit-length emission direction.
-    fn unit_normal(&self) -> [f32; 3];
-}
-
-impl RectAreaLightGeometry for RectAreaLight {
+impl RectAreaLight {
     /// Unit-length emission direction, falling back to straight down when the
     /// authored `normal` is degenerate (the panel default emits downward).
-    fn unit_normal(&self) -> [f32; 3] {
+    pub fn unit_normal(&self) -> [f32; 3] {
         normalize_or(self.normal, [0.0, -1.0, 0.0])
     }
 }

@@ -41,12 +41,11 @@ impl From<postcard::Error> for CnError {
     }
 }
 
-// Reading one back reads a length-delimited frame; a failure means the record
-// and the component schema disagree (a stale blob survives the version check
-// instead of reaching here).
+// Reading one back reads a length-delimited frame; a record that does not
+// decode is corrupt world data.
 impl From<crate::blob::FrameError> for CnError {
     fn from(_: crate::blob::FrameError) -> Self {
-        CnError::InvalidArgument
+        CnError::InvalidData
     }
 }
 
@@ -69,11 +68,11 @@ mod tests {
     }
 
     #[test]
-    fn frame_errors_map_to_invalid_argument() {
+    fn frame_errors_map_to_invalid_data() {
         let bad = crate::blob::decode_exact::<String>(&[0xff]).unwrap_err();
-        assert_eq!(CnError::from(bad), CnError::InvalidArgument);
+        assert_eq!(CnError::from(bad), CnError::InvalidData);
 
         let trailing = crate::blob::decode_exact::<u8>(&[1, 2]).unwrap_err();
-        assert_eq!(CnError::from(trailing), CnError::InvalidArgument);
+        assert_eq!(CnError::from(trailing), CnError::InvalidData);
     }
 }

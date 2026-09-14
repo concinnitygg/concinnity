@@ -116,7 +116,9 @@ pub(super) fn inject(ctx: &mut PipelineContext, minter: &mut Minter) -> Result<(
 
     match ctx.query_mut::<LoadingOverlay>().next() {
         Some(existing) => *existing = overlay,
-        None => ctx.push(overlay),
+        None => {
+            ctx.push(overlay);
+        }
     }
     Ok(())
 }

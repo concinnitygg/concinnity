@@ -85,9 +85,10 @@ impl World {
     /// a [`components`](crate::components) type, or one of the application's
     /// own.
     ///
-    /// The entity must be alive and must not already hold this component type.
-    pub fn insert<C: ComponentSlot>(&mut self, entity: Entity, component: C) {
-        self.inner.insert(entity, component);
+    /// `false`, leaving the world unchanged, when the entity is dead or already
+    /// holds this component type.
+    pub fn insert<C: ComponentSlot>(&mut self, entity: Entity, component: C) -> bool {
+        self.inner.insert(entity, component)
     }
 
     /// Add a component on an entity of its own, returning that entity so more
@@ -134,7 +135,8 @@ impl World {
     /// in a phase runs before every system registered into it, so registering
     /// never reorders the engine's own tick. `name` is what the profile and the
     /// log address the system by; it cannot repeat an engine system's name or an
-    /// earlier registration's.
+    /// earlier registration's, and a repeat makes [`App::run`](crate::App::run)
+    /// return an error.
     ///
     /// ```
     /// # use concinnity::system::{Phase, PipelineContext, StepResult, System};

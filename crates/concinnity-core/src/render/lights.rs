@@ -5,9 +5,7 @@
 //! buffer the clustered forward pass iterates, the per-slice spot shadow
 //! projections, and the rect area-light extents.
 
-use crate::components::{
-    DirectionalLight, PointLight, RectAreaLight, SpotLight, SpotLightGeometry,
-};
+use crate::components::{DirectionalLight, PointLight, RectAreaLight, SpotLight};
 use crate::gfx::render_types::{
     AreaLightData, DirectionalLightData, GpuLight, LIGHT_KIND_AREA, LIGHT_KIND_POINT,
     LIGHT_KIND_SPOT, LightUniforms, MAX_DIRECTIONAL_LIGHTS, MAX_LOCAL_LIGHTS, MAX_POINT_LIGHTS,

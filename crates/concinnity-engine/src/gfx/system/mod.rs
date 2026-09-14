@@ -16,7 +16,7 @@
 //!   draw_geometry.rs   draw-object positions + auto-seed triangle gathering
 
 use concinnity_core::components::{
-    GamepadAction, GraphicsConfig, IndirectLighting, PostProcessConfig, PostProcessResolve,
+    GamepadAction, GraphicsConfig, IndirectLighting, PostProcessConfig,
 };
 use concinnity_core::ecs::{Entity, PipelineContext, StepResult, System};
 use concinnity_core::gfx::transform_propagation;

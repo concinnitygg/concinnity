@@ -38,13 +38,15 @@ impl SkyRotationSystem {
         for &pivot in &self.pivots {
             match ctx.get_mut::<Transform>(pivot) {
                 Some(transform) => transform.rotation_deg = rotation_deg,
-                None => ctx.insert(
-                    pivot,
-                    Transform {
-                        rotation_deg,
-                        ..Default::default()
-                    },
-                ),
+                None => {
+                    ctx.insert(
+                        pivot,
+                        Transform {
+                            rotation_deg,
+                            ..Default::default()
+                        },
+                    );
+                }
             }
         }
         ctx.insert_resource(sky);

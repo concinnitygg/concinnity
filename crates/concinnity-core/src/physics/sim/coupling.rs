@@ -254,15 +254,15 @@ mod tests {
         ))
     }
 
-    const FLOOR_CENTRE: Vec3 = vec3(0.0, -5.0, 0.0);
-    const BOX_CENTRE: Vec3 = vec3(0.0, HALF, 0.0);
+    const FLOOR_CENTER: Vec3 = vec3(0.0, -5.0, 0.0);
+    const BOX_CENTER: Vec3 = vec3(0.0, HALF, 0.0);
 
     /// The four bottom corners of `small_box`, against an immovable floor, as
     /// the offsets to each body's center the coupling is built from.
     fn corner_anchors() -> [(Vec3, Vec3); 4] {
         [(-HALF, -HALF), (HALF, -HALF), (HALF, HALF), (-HALF, HALF)].map(|(x, z)| {
             let point = vec3(x, 0.0, z);
-            (point - FLOOR_CENTRE, point - BOX_CENTRE)
+            (point - FLOOR_CENTER, point - BOX_CENTER)
         })
     }
 

@@ -68,7 +68,8 @@ impl App {
     ///
     /// The same registration [`World::add_system`](crate::World::add_system)
     /// makes, reachable on an app whose world came from a blob rather than from
-    /// a world assembled here.
+    /// a world assembled here. A name that repeats an engine system's or an
+    /// earlier registration's makes [`run`](App::run) return an error.
     ///
     /// ```no_run
     /// # use concinnity::system::{Phase, PipelineContext, StepResult, System};

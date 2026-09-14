@@ -4,7 +4,7 @@
 //!
 //! Each module here is one asset, both halves together: the authored data
 //! schema a world.jsonl declares and whatever runtime behavior it needs -- a
-//! runtime struct distinct from its authored args, an extension trait, a
+//! runtime struct distinct from its authored args, methods over its fields, a
 //! build-time `SourceBacked` binding, or a helper the generated `Component`
 //! impl can't express. Most components are pure data whose impl is generated
 //! from the registry (see `cn_impl_components!` in `ecs::registry`).
@@ -204,10 +204,7 @@ pub use font::Font;
 pub use frame_input::FrameInput;
 pub use gamepad_button::GamepadButton;
 pub use gamepad_map::{GamepadAction, GamepadMap};
-pub use geometry::{
-    GlassPanelGeometry, InstancedPropGeometry, RectAreaLightGeometry, SPOT_MAX_ANGLE_DEG,
-    SpotLightGeometry,
-};
+pub use geometry::SPOT_MAX_ANGLE_DEG;
 pub use glass_panel::GlassPanel;
 pub use graphics_config::GraphicsConfig;
 pub use graphics_config::ShadowUpdate;
@@ -241,7 +238,6 @@ pub use post_process_config::AaMode;
 pub use post_process_config::HDR_MULTISAMPLE_COUNT;
 pub use post_process_config::IndirectLighting;
 pub use post_process_config::PostProcessConfig;
-pub use post_process_config::PostProcessResolve;
 pub use post_process_config::ReflectionBlurResolution;
 pub use post_process_config::SsgiResolution;
 pub use post_process_config::UpscaleQuality;
@@ -277,7 +273,7 @@ pub use skinned_mesh::MorphDelta;
 pub use skinned_mesh::SkeletonJoint;
 pub use skinned_mesh::SkinnedMesh;
 pub use skinned_mesh::SkinnedVertexData;
-pub use skinned_mesh::{SkinnedMeshGeometry, build_skeleton_from_joint_defs};
+pub use skinned_mesh::build_skeleton_from_joint_defs;
 pub use sky_rotation::SkyRotation;
 pub use spawn_request::SpawnRequest;
 pub use spawner::Spawner;

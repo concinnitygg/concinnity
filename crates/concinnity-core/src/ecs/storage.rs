@@ -96,23 +96,19 @@ macro_rules! define_component_storage {
 
             /// Add component C to an existing entity. Unlike `push_typed` this does
             /// not mint an entity: it is how an entity comes to own more than one
-            /// component. The entity must be alive and must not already have C
-            /// (a second row for the same (entity, C) would desync the join).
-            pub fn insert_typed<C: $slot>(&mut self, entity: $crate::ecs::Entity, c: C) {
+            /// component. `false`, leaving the storage unchanged, when the entity
+            /// is dead or already has C.
+            pub fn insert_typed<C: $slot>(&mut self, entity: $crate::ecs::Entity, c: C) -> bool {
                 let id = $crate::ecs::ComponentId::new(C::DISCRIMINANT);
-                debug_assert!(
-                    self.entities.is_alive(entity),
-                    "insert_typed on a despawned entity",
-                );
-                debug_assert!(
-                    self.join.row(entity, id).is_none(),
-                    "insert_typed: entity already has this component",
-                );
+                if !self.entities.is_alive(entity) || self.join.row(entity, id).is_some() {
+                    return false;
+                }
                 let tick = self.change_tick.bump();
                 let col = C::column_mut(self);
                 col.push(entity, c, tick);
                 let row = (col.len() - 1) as u32;
                 self.join.set(entity, id, row);
+                true
             }
 
             /// Remove component C from an entity (leaving the entity alive and any
@@ -572,10 +568,10 @@ mod tests {
         s.insert_typed(b, Velocity(20));
 
         // Remove then re-insert the same component type on the same live entity.
-        // The re-insert must not trip insert_typed's "already has it" assert.
+        // The re-insert must not be refused as a duplicate.
         assert_eq!(s.remove_typed::<Velocity>(b), Some(Velocity(20)));
         assert!(s.is_alive(b));
-        s.insert_typed(b, Velocity(21));
+        assert!(s.insert_typed(b, Velocity(21)));
 
         let joined: std::collections::HashMap<_, _> = s
             .join2::<Position, Velocity>()
@@ -583,6 +579,31 @@ mod tests {
             .collect();
         assert_eq!(joined.get(&b), Some(&(Position(2), Velocity(21))));
         assert_eq!(joined.get(&a), None);
+    }
+
+    // A recycled index must not let a stale handle reset the new occupant's
+    // join rows.
+    #[test]
+    fn insert_on_a_stale_recycled_entity_is_refused() {
+        let mut s = TestStorage::default();
+        let stale = s.push_typed(Position(1));
+        s.despawn(stale);
+        let live = s.push_typed(Position(2));
+        assert_eq!(stale.index(), live.index());
+
+        assert!(!s.insert_typed(stale, Velocity(9)));
+        assert_eq!(s.get::<Position>(live), Some(&Position(2)));
+        assert_eq!(s.Velocity.len(), 0);
+    }
+
+    #[test]
+    fn a_duplicate_insert_is_refused() {
+        let mut s = TestStorage::default();
+        let e = s.push_typed(Position(1));
+        assert!(s.insert_typed(e, Velocity(1)));
+        assert!(!s.insert_typed(e, Velocity(2)));
+        assert_eq!(s.Velocity.len(), 1);
+        assert_eq!(s.get::<Velocity>(e), Some(&Velocity(1)));
     }
 
     #[test]

@@ -344,7 +344,7 @@ mod tests {
 
     mod instanced_prop {
         use super::*;
-        use concinnity_core::components::{InstanceTransform, InstancedPropGeometry};
+        use concinnity_core::components::InstanceTransform;
         use concinnity_host::thread::asset_id::AssetId;
 
         fn empty() -> InstancedProp {

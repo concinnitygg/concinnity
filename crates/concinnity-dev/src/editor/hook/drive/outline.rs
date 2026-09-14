@@ -7,8 +7,8 @@
 //! the renderer's line pass, which handles depth: occluded runs draw faint.
 
 use concinnity_core::components::{
-    Collider, PointLight, RectAreaLight, RectAreaLightGeometry, ReflectionProbe,
-    SPOT_MAX_ANGLE_DEG, SpotLight, SpotLightGeometry, Transform, TriggerVolume,
+    Collider, PointLight, RectAreaLight, ReflectionProbe, SPOT_MAX_ANGLE_DEG, SpotLight, Transform,
+    TriggerVolume,
 };
 use concinnity_core::ecs::Entity;
 use concinnity_core::ecs::World;

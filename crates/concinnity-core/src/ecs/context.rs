@@ -169,27 +169,25 @@ impl<'a> PipelineContext<'a> {
     }
 
     /// Push a runtime-produced component into the matching typed column,
-    /// minting a fresh Entity for it. Preferred over reaching into
-    /// `self.components` directly.
-    pub fn push<C: ComponentSlot>(&mut self, c: C) {
+    /// minting and returning a fresh Entity for it. Preferred over reaching
+    /// into `self.components` directly.
+    pub fn push<C: ComponentSlot>(&mut self, c: C) -> Entity {
         #[cfg(debug_assertions)]
         note_structural("push");
-        self.components.push_typed(c);
+        self.components.push_typed(c)
     }
 
     /// Add a component to an existing entity, so an entity can own more than one
-    /// component. The entity must be alive and must not already have C. Allowed
-    /// dead because the caller is in the client crate (the load-time Prop
-    /// decomposition); core itself has no systems.
-    pub fn insert<C: ComponentSlot>(&mut self, entity: Entity, c: C) {
+    /// component. `false`, leaving the world unchanged, when the entity is dead
+    /// or already holds C.
+    pub fn insert<C: ComponentSlot>(&mut self, entity: Entity, c: C) -> bool {
         #[cfg(debug_assertions)]
         note_structural("insert");
-        self.components.insert_typed(entity, c);
+        self.components.insert_typed(entity, c)
     }
 
     /// Remove a component from an entity, returning it if present. The entity
-    /// keeps its other components. Allowed dead for the same cross-crate reason
-    /// as `insert` (the client toggles the Held tag on pickup/drop).
+    /// keeps its other components.
     pub fn remove<C: ComponentSlot>(&mut self, entity: Entity) -> Option<C> {
         #[cfg(debug_assertions)]
         note_structural("remove");
@@ -198,9 +196,7 @@ impl<'a> PipelineContext<'a> {
 
     /// Remove an entity entirely: swap-remove its row from every component
     /// column and recycle its id (a stale handle to it then reads as dead). A
-    /// no-op on an already-dead or unknown entity. Allowed dead for the same
-    /// cross-crate reason as `insert` (the client despawns entities at runtime
-    /// from the GraphicsSystem).
+    /// no-op on an already-dead or unknown entity.
     pub fn despawn(&mut self, entity: Entity) {
         #[cfg(debug_assertions)]
         note_structural("despawn");
@@ -208,15 +204,11 @@ impl<'a> PipelineContext<'a> {
     }
 
     /// Whether an entity is still live (not despawned, matching generation).
-    /// Allowed dead for the same cross-crate reason as `insert` (the client
-    /// reaps a despawned entity's physics body in PhysicsSystem).
     pub fn is_alive(&self, entity: Entity) -> bool {
         self.components.is_alive(entity)
     }
 
-    /// Borrow one entity's component C read-only. Allowed dead for the same
-    /// cross-crate reason as `insert` (the client reads Transform / Held by
-    /// entity in the physics, camera, and audio systems).
+    /// Borrow one entity's component C read-only.
     pub fn get<C: ComponentSlot>(&self, entity: Entity) -> Option<&C> {
         #[cfg(debug_assertions)]
         note_read::<C>();
@@ -235,8 +227,7 @@ impl<'a> PipelineContext<'a> {
     }
 
     /// Read-only join over two component types: iterate the first type's rows
-    /// and yield both refs for every entity that also has the second. Allowed
-    /// dead for the same cross-crate reason as `insert`.
+    /// and yield both refs for every entity that also has the second.
     pub fn join2<A: ComponentSlot, B: ComponentSlot>(
         &self,
     ) -> impl Iterator<Item = (Entity, &A, &B)> {
@@ -249,8 +240,7 @@ impl<'a> PipelineContext<'a> {
     }
 
     /// Mutably borrow one entity's component C (a propagation pass writing a
-    /// single entity's value). Allowed dead for the same cross-crate reason as
-    /// `insert`.
+    /// single entity's value).
     pub fn get_mut<C: ComponentSlot>(&mut self, entity: Entity) -> Option<&mut C> {
         #[cfg(debug_assertions)]
         note_write::<C>();
@@ -478,7 +468,7 @@ mod tests {
         };
 
         ctx.push(Transform::default());
-        let e = ctx.components.push_typed(Transform::default());
+        let e = ctx.push(Transform::default());
         assert!(ctx.is_alive(e));
         assert_eq!(ctx.query::<Transform>().count(), 2);
         assert_eq!(ctx.query_with_entity::<Transform>().count(), 2);

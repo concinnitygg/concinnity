@@ -6,10 +6,10 @@
 //! world -- a baked record is already validated.
 
 use crate::components::{
-    CameraTrackArgs, Decal, DirectionalLight, GlassPanel, GlassPanelGeometry, InstancedProp,
-    MAX_WATER_WAVES, Material, ParticleEmitter, PointLight, Prop, RectAreaLight, ReflectionProbe,
-    RigidBody, SPOT_MAX_ANGLE_DEG, SdfVolume, SkyRotation, SpotLight, SpotLightGeometry,
-    VolumetricFog, VoxelChunk, WaterSurface, WaterWave,
+    CameraTrackArgs, Decal, DirectionalLight, GlassPanel, InstancedProp, MAX_WATER_WAVES, Material,
+    ParticleEmitter, PointLight, Prop, RectAreaLight, ReflectionProbe, RigidBody,
+    SPOT_MAX_ANGLE_DEG, SdfVolume, SkyRotation, SpotLight, VolumetricFog, VoxelChunk, WaterSurface,
+    WaterWave,
 };
 use crate::math::sqrt;
 use crate::math::vec3;

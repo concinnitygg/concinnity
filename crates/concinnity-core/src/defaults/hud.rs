@@ -81,7 +81,9 @@ where
 
     match ctx.query_mut::<H>().next() {
         Some(existing) => *existing = hud,
-        None => ctx.push(hud),
+        None => {
+            ctx.push(hud);
+        }
     }
     Ok(())
 }

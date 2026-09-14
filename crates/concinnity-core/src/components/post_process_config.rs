@@ -1,7 +1,6 @@
 //! The PostProcessConfig asset: the authored schema (the struct, its enums and
-//! their `Default`), the `Component` impl, and the `PostProcessResolve` extension
-//! trait that resolves the authored tunables into the renderer's clamped `gfx`
-//! settings.
+//! their `Default`), the `Component` impl, and the methods that resolve the
+//! authored tunables into the renderer's clamped `gfx` settings.
 
 use crate::components::vocabulary;
 use crate::ecs::Component;
@@ -616,60 +615,14 @@ mod tests {
 // stray value cannot push the scene to `inf` / `0`.
 const EXPOSURE_EV_LIMIT: f32 = 16.0;
 
-/// Resolves a `PostProcessConfig`'s authored tunables into the clamped,
-/// GPU-facing settings the renderer consumes. Kept in `gfx` (not the schema)
-/// because every return type is a `crate::gfx` settings struct.
-pub trait PostProcessResolve {
+/// Resolution of the authored tunables into the clamped, GPU-facing `gfx` settings.
+impl PostProcessConfig {
     /// Resolve the authored fields into the GPU-facing `PostProcessTunables`:
     /// clamps each tunable and converts `exposure_ev` (stops) into the linear
     /// multiplier the shaders expect. The composite's display-output flags are
     /// not authored, so they are absent here: the backend adds them to the full
     /// `PostProcessParams` once it has negotiated EDR support with the display.
-    fn resolve(&self) -> PostProcessTunables;
-
-    /// Clamp the authored `ambient_intensity` to a safe `[0, 16]` multiplier the
-    /// backend folds into `LightUniforms` to scale the indirect (ambient / IBL)
-    /// term.
-    fn ambient_intensity(&self) -> f32;
-
-    /// Per-axis divisor for the roughness-aware reflection blur target, resolved
-    /// from `reflection_blur_resolution`. Always at least 1.
-    fn reflection_blur_divisor(&self) -> u32;
-
-    /// Resolve the SSAO tunables into clamped `SsaoSettings`, or `None` when the
-    /// `ssao` toggle is off -- or on with an intensity that cannot darken
-    /// anything -- so the backend can skip the SSAO passes entirely.
-    fn ssao_settings(&self) -> Option<crate::gfx::ssao::SsaoSettings>;
-
-    /// Resolve the SSR tunables into clamped `SsrSettings`, or `None` when the
-    /// `ssr` toggle is off.
-    ///
-    /// Deliberately NOT gated on the intensity, unlike SSAO / SSGI: when a
-    /// resolve is active the forward pass hands its glossy dielectric specular
-    /// over to the resolve's composite (`ViewUniforms::reflections_enabled`), so
-    /// a zero-intensity resolve still carries that term and dropping the pass
-    /// changes the image. Measured at 1.53M of 3.28M pixels on a glossy floor.
-    fn ssr_settings(&self) -> Option<crate::gfx::ssr::SsrSettings>;
-
-    /// Resolve the ray-traced-reflection tunables into clamped
-    /// `RtReflectionSettings`, or `None` when `ray_traced_reflections` is off.
-    /// Reuses the SSR intensity / distance fields; the backend additionally gates
-    /// on GPU ray-tracing support. Not gated on the intensity, for the same
-    /// specular-handover reason as `ssr_settings`.
-    fn rt_reflection_settings(&self) -> Option<crate::gfx::rt_reflections::RtReflectionSettings>;
-
-    /// Resolve the SSGI tunables into clamped `SsgiSettings`, or `None` when
-    /// `indirect_lighting` is not `Ssgi`, or its intensity scales the gathered
-    /// bounce to zero, so the backend can skip the SSGI passes.
-    fn ssgi_settings(&self) -> Option<crate::gfx::ssgi::SsgiSettings>;
-
-    /// Resolve the auto-exposure tunables into clamped `AutoExposureSettings`, or
-    /// `None` when the toggle is off so the backend can skip the histogram passes.
-    fn auto_exposure_settings(&self) -> Option<crate::gfx::auto_exposure::AutoExposureSettings>;
-}
-
-impl PostProcessResolve for PostProcessConfig {
-    fn resolve(&self) -> PostProcessTunables {
+    pub fn resolve(&self) -> PostProcessTunables {
         let ev = self
             .exposure_ev
             .clamp(-EXPOSURE_EV_LIMIT, EXPOSURE_EV_LIMIT);
@@ -684,27 +637,50 @@ impl PostProcessResolve for PostProcessConfig {
         }
     }
 
-    fn ambient_intensity(&self) -> f32 {
+    /// Clamp the authored `ambient_intensity` to a safe `[0, 16]` multiplier the
+    /// backend folds into `LightUniforms` to scale the indirect (ambient / IBL)
+    /// term.
+    pub fn ambient_intensity(&self) -> f32 {
         self.ambient_intensity.clamp(0.0, 16.0)
     }
 
-    fn reflection_blur_divisor(&self) -> u32 {
+    /// Per-axis divisor for the roughness-aware reflection blur target, resolved
+    /// from `reflection_blur_resolution`. Always at least 1.
+    pub fn reflection_blur_divisor(&self) -> u32 {
         self.reflection_blur_resolution.scale_divisor()
     }
 
-    fn ssao_settings(&self) -> Option<crate::gfx::ssao::SsaoSettings> {
+    /// Resolve the SSAO tunables into clamped `SsaoSettings`, or `None` when the
+    /// `ssao` toggle is off -- or on with an intensity that cannot darken
+    /// anything -- so the backend can skip the SSAO passes entirely.
+    pub fn ssao_settings(&self) -> Option<crate::gfx::ssao::SsaoSettings> {
         self.ssao
             .then(|| crate::gfx::ssao::SsaoSettings::resolve(self.ssao_radius, self.ssao_intensity))
             .filter(|s| s.contributes())
     }
 
-    fn ssr_settings(&self) -> Option<crate::gfx::ssr::SsrSettings> {
+    /// Resolve the SSR tunables into clamped `SsrSettings`, or `None` when the
+    /// `ssr` toggle is off.
+    ///
+    /// Deliberately NOT gated on the intensity, unlike SSAO / SSGI: when a
+    /// resolve is active the forward pass hands its glossy dielectric specular
+    /// over to the resolve's composite (`ViewUniforms::reflections_enabled`), so
+    /// a zero-intensity resolve still carries that term and dropping the pass
+    /// changes the image. Measured at 1.53M of 3.28M pixels on a glossy floor.
+    pub fn ssr_settings(&self) -> Option<crate::gfx::ssr::SsrSettings> {
         self.ssr.then(|| {
             crate::gfx::ssr::SsrSettings::resolve(self.ssr_intensity, self.ssr_max_distance)
         })
     }
 
-    fn rt_reflection_settings(&self) -> Option<crate::gfx::rt_reflections::RtReflectionSettings> {
+    /// Resolve the ray-traced-reflection tunables into clamped
+    /// `RtReflectionSettings`, or `None` when `ray_traced_reflections` is off.
+    /// Reuses the SSR intensity / distance fields; the backend additionally gates
+    /// on GPU ray-tracing support. Not gated on the intensity, for the same
+    /// specular-handover reason as `ssr_settings`.
+    pub fn rt_reflection_settings(
+        &self,
+    ) -> Option<crate::gfx::rt_reflections::RtReflectionSettings> {
         self.ray_traced_reflections.then(|| {
             crate::gfx::rt_reflections::RtReflectionSettings::resolve(
                 self.ssr_intensity,
@@ -713,7 +689,10 @@ impl PostProcessResolve for PostProcessConfig {
         })
     }
 
-    fn ssgi_settings(&self) -> Option<crate::gfx::ssgi::SsgiSettings> {
+    /// Resolve the SSGI tunables into clamped `SsgiSettings`, or `None` when
+    /// `indirect_lighting` is not `Ssgi`, or its intensity scales the gathered
+    /// bounce to zero, so the backend can skip the SSGI passes.
+    pub fn ssgi_settings(&self) -> Option<crate::gfx::ssgi::SsgiSettings> {
         (self.indirect_lighting == IndirectLighting::Ssgi)
             .then(|| {
                 crate::gfx::ssgi::SsgiSettings::resolve(
@@ -727,7 +706,11 @@ impl PostProcessResolve for PostProcessConfig {
             .filter(|s| s.contributes())
     }
 
-    fn auto_exposure_settings(&self) -> Option<crate::gfx::auto_exposure::AutoExposureSettings> {
+    /// Resolve the auto-exposure tunables into clamped `AutoExposureSettings`, or
+    /// `None` when the toggle is off so the backend can skip the histogram passes.
+    pub fn auto_exposure_settings(
+        &self,
+    ) -> Option<crate::gfx::auto_exposure::AutoExposureSettings> {
         self.auto_exposure.then(|| {
             // `hdr_display = true` shifts AE's pivot from scene-white
             // (legacy SDR + ACES) to perceptual middle-gray, so the average

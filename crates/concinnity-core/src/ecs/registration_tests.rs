@@ -11,6 +11,7 @@ use alloc::vec::Vec;
 
 use crate::components::TextLabel;
 use crate::ecs::{Phase, PipelineContext, StepResult, System, SystemEntry, SystemTable, World};
+use crate::error::CnError;
 
 // A system that does nothing; the tests read placement off the built set's
 // names, not off anything it writes.
@@ -181,21 +182,19 @@ fn registered_systems_are_listed_in_run_order() {
 // A name a table entry already uses would inherit that entry's ordering edges
 // and shadow it in every name lookup, so the merge refuses it.
 #[test]
-#[should_panic(expected = "already registered as 'TableLate'")]
 fn a_name_a_table_entry_uses_is_refused() {
     let mut world = seeded();
     world.add_system(Phase::Late, "TableLate", Inert);
-    let _ = world.start(&TABLE);
+    assert_eq!(world.start(&TABLE), Err(CnError::InvalidArgument));
 }
 
 // Two registrations under one name are equally unaddressable.
 #[test]
-#[should_panic(expected = "already registered as 'Mine'")]
 fn a_repeated_registration_name_is_refused() {
     let mut world = seeded();
     world.add_system(Phase::Late, "Mine", Inert);
     world.add_system(Phase::Early, "Mine", Inert);
-    let _ = world.start(&TABLE);
+    assert_eq!(world.start(&TABLE), Err(CnError::InvalidArgument));
 }
 
 // Registrations are read once, by `start`: a world already running does not

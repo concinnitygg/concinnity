@@ -20,13 +20,15 @@ pub(crate) fn center_on_camera(ctx: &mut PipelineContext, props: &[Entity], cam_
         }
         match ctx.get_mut::<Transform>(entity) {
             Some(transform) => transform.position = cam_pos,
-            None => ctx.insert(
-                entity,
-                Transform {
-                    position: cam_pos,
-                    ..Default::default()
-                },
-            ),
+            None => {
+                ctx.insert(
+                    entity,
+                    Transform {
+                        position: cam_pos,
+                        ..Default::default()
+                    },
+                );
+            }
         }
     }
 }

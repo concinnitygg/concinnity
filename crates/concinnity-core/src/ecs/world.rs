@@ -280,10 +280,11 @@ impl World {
         self.components.get_mut::<C>(entity)
     }
 
-    /// Add a component to an existing entity. Mirror of
+    /// Add a component to an existing entity. `false`, leaving the world
+    /// unchanged, when the entity is dead or already holds C. Mirror of
     /// `PipelineContext::insert`.
-    pub fn insert<C: ComponentSlot>(&mut self, entity: Entity, c: C) {
-        self.components.insert_typed(entity, c);
+    pub fn insert<C: ComponentSlot>(&mut self, entity: Entity, c: C) -> bool {
+        self.components.insert_typed(entity, c)
     }
 
     /// Overwrite an existing component with a rebuilt one, keeping the entity
@@ -478,7 +479,7 @@ impl World {
     /// `name` is what the profile, the log and the schedule address the system
     /// by. It must not repeat a table entry's name or an earlier registration's,
     /// since both the ordering edges and the schedule's lookups key on it;
-    /// [`start`](World::start) panics on a repeat rather than resolving it.
+    /// [`start`](World::start) returns `CnError::InvalidArgument` on a repeat.
     ///
     /// Registrations are read once, by `start`. Adding one to a world that has
     /// already started does nothing.
@@ -525,12 +526,18 @@ impl World {
         // The host's completion pass, before the gates read the world: an
         // injected component brings its own system into the schedule. Guarded
         // by the same once-per-world flag as the build below, so a second
-        // `start` neither re-injects nor re-gates.
-        if !self.systems_built
-            && let Some(complete) = table.complete_world
-        {
-            let mut ctx = self.context();
-            complete(&mut ctx)?;
+        // `start` neither re-injects nor re-gates. A repeated system name
+        // refuses the start before anything runs.
+        if !self.systems_built {
+            let registered: Vec<&'static str> = self.registered.iter().map(|s| s.name).collect();
+            let table_names: Vec<&'static str> = table.entries.iter().map(|e| e.name).collect();
+            if user_system::colliding_name(&registered, &table_names).is_some() {
+                return Err(CnError::InvalidArgument);
+            }
+            if let Some(complete) = table.complete_world {
+                let mut ctx = self.context();
+                complete(&mut ctx)?;
+            }
         }
         self.build_systems(table);
         let (systems, mut ctx) = self.systems_and_context();
@@ -577,15 +584,6 @@ impl World {
         }
         self.systems_built = true;
         self.entries = table.entries;
-
-        let registered: Vec<&'static str> = self.registered.iter().map(|s| s.name).collect();
-        let table_names: Vec<&'static str> = table.entries.iter().map(|e| e.name).collect();
-        if let Some(name) = user_system::colliding_name(&registered, &table_names) {
-            panic!(
-                "a system is already registered as '{name}': every system's name has to be its \
-                 own, since the schedule's edges and lookups key on it",
-            );
-        }
 
         // Phase by phase: the table's entries in table order, then the systems
         // registered into that phase in registration order. A stable sort is

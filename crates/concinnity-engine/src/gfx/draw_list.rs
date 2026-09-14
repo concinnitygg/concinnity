@@ -2,9 +2,7 @@
 //! None of these functions hold or borrow a backend handle.
 
 use concinnity_core::components::InstancedProp;
-use concinnity_core::components::{
-    File, FileKind, InstancedPropGeometry, ProceduralMesh, Room, SubMeshRef, VoxelChunk,
-};
+use concinnity_core::components::{File, FileKind, ProceduralMesh, Room, SubMeshRef, VoxelChunk};
 use concinnity_core::ecs::{Entity, MaterialHandle, MeshHandle, PayloadLocator, PipelineContext};
 use concinnity_core::gfx::frustum;
 use concinnity_core::gfx::mesh_payload;
