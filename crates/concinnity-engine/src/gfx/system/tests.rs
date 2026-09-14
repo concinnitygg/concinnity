@@ -3556,6 +3556,15 @@ fn a_backend_that_fails_to_build_marks_graphics_failed() {
 // skinned-payload format. `n` vertices span x = 0..n-1, each fully weighted to
 // joint 0, so the bind-pose AABB is predictable.
 fn skinned_payload(n: u16, lods: &[(f32, Vec<u16>)]) -> Vec<u8> {
+    skinned_payload_with_morphs(n, lods, &mesh_payload::PayloadMorphs::default())
+}
+
+// `skinned_payload` carrying a morph-target block.
+fn skinned_payload_with_morphs(
+    n: u16,
+    lods: &[(f32, Vec<u16>)],
+    morphs: &mesh_payload::PayloadMorphs,
+) -> Vec<u8> {
     use concinnity_core::gfx::mesh_payload::{
         PayloadJoint, SkinnedVertex, serialize_skinned_with_lods,
     };
@@ -3581,16 +3590,21 @@ fn skinned_payload(n: u16, lods: &[(f32, Vec<u16>)]) -> Vec<u8> {
         &vertices,
         &[0, 1, 2],
         &[joint("root", -1), joint("child", 0)],
-        &mesh_payload::PayloadMorphs::default(),
+        morphs,
         lods,
     )
+}
+
+// Register a SkinnedMesh resource over `skinned_payload(n, &[])`.
+fn push_skinned_mesh(b: &mut WorldBuilder, name: AssetId, sm: SkinnedMesh, n: u16) {
+    push_skinned_payload(b, name, sm, &skinned_payload(n, &[]));
 }
 
 // Register a SkinnedMesh resource: the placement / material / spawn reserve ride
 // the baked `data_bytes`, the geometry + skeleton ride the compiled payload, and
 // the table index IS the mesh's `SkinnedMeshHandle`.
-fn push_skinned_mesh(b: &mut WorldBuilder, name: AssetId, sm: SkinnedMesh, n: u16) {
-    let locator = b.payload(&skinned_payload(n, &[]));
+fn push_skinned_payload(b: &mut WorldBuilder, name: AssetId, sm: SkinnedMesh, payload: &[u8]) {
+    let locator = b.payload(payload);
     let handle = b.skinned_records.len() as u32;
     let data = postcard::to_allocvec(&(name.0, sm)).unwrap();
     b.skinned_records
@@ -3600,6 +3614,49 @@ fn push_skinned_mesh(b: &mut WorldBuilder, name: AssetId, sm: SkinnedMesh, n: u1
             payload: Some(locator),
             data_bytes: data,
         });
+}
+
+// Morph targets upload right after the skinned geometry, and a failed morph
+// upload fails init the way a failed geometry upload does.
+#[test]
+fn morph_target_upload_failure_fails_init() {
+    use concinnity_core::components::SkinnedMesh;
+
+    const MORPHED: AssetId = AssetId(846);
+    let delta = mesh_payload::MorphDelta {
+        position: [0.0, 1.0, 0.0],
+        normal: [0.0; 3],
+    };
+    let morphs =
+        mesh_payload::PayloadMorphs::from_dense(vec!["raise".to_string()], 3, &[delta; 3]).unwrap();
+    let payload = skinned_payload_with_morphs(3, &[], &morphs);
+
+    for fail in [
+        None,
+        Some(error::RenderError::Other(
+            "morph buffer rejected".to_string(),
+        )),
+    ] {
+        let failing = fail.is_some();
+        let (state, hooks) = recording_hooks();
+        lock(&state).fail_morph_upload = fail;
+        let mut b = scene_builder();
+        push_skinned_payload(
+            &mut b,
+            MORPHED,
+            SkinnedMesh {
+                asset_id: MORPHED,
+                ..Default::default()
+            },
+            &payload,
+        );
+        let mut world = b.build();
+        let gs = init_graphics(&mut world, hooks);
+
+        assert_eq!(gs.failed, failing);
+        let s = lock(&state);
+        assert!(s.saw(&Call::UploadSkinnedMorphs), "{:?}", s.calls);
+    }
 }
 
 // A SkinnedMesh's geometry is decoded, merged into the shared skinned buffers,

@@ -45,9 +45,8 @@ pub struct DeviceCapabilities {
 }
 
 impl DeviceCapabilities {
-    /// Every capability present. The trait default, so a backend that does not
-    /// report capabilities never wrongly disables a toggle (it keeps the prior
-    /// behavior: the feature no-ops with a warning on an incapable device).
+    /// Every capability present: a device on which no settings row is grayed
+    /// out and every live draw edit is applied in place.
     pub const ALL: Self = Self {
         ray_tracing: true,
         selectable_upscaler: true,
@@ -121,10 +120,9 @@ pub struct GpuProfile {
 
 impl GpuProfile {
     /// Conservative fallback for a backend that does not report a profile:
-    /// unknown hardware picks the cautious baseline, never a high preset. The
-    /// opposite default from `DeviceCapabilities::ALL` -- a feature gate fails
-    /// open (assume capable, no-op with a warning if not), but quality
-    /// auto-config fails safe (assume modest, never overdrive a weak GPU).
+    /// unknown hardware picks the cautious baseline, never a high preset:
+    /// quality auto-config fails safe (assume modest, never overdrive a weak
+    /// GPU).
     pub const UNKNOWN: Self = Self {
         vendor: GpuVendor::Other,
         tier: GpuTier::Unknown,
@@ -209,18 +207,16 @@ pub fn classify_tier(input: &GpuClassInput) -> GpuTier {
 /// The backend's own report: device capabilities, GPU class, frame counters,
 /// and the CPU-side readbacks.
 ///
-/// All defaulted to the conservative answer (no capability, `Unknown` tier,
-/// zeroed counters, an unsupported readback), so a query never has to ask
-/// whether the backend implements it.
+/// Capabilities are required: an overclaimed flag sends a live edit down a
+/// path the backend does not honor. The rest default to the conservative
+/// answer (`Unknown` tier, zeroed counters, an unsupported readback), so a
+/// query never has to ask whether the backend implements it.
 pub trait BackendProbe {
     /// Device capability flags, queried from the GPU once the backend is built.
     /// Read by GraphicsSystem to gray out + disable settings rows the device
-    /// cannot honor. Default: all capable, so a backend that does not report
-    /// capabilities keeps every toggle live (the feature then no-ops with a
-    /// warning on an incapable device, as before).
-    fn capabilities(&self) -> DeviceCapabilities {
-        DeviceCapabilities::ALL
-    }
+    /// cannot honor, and by the editor's live draw seam to choose between an
+    /// in-place edit and a world rebuild.
+    fn capabilities(&self) -> DeviceCapabilities;
 
     /// Coarse GPU performance profile, queried once the backend is built. Read at
     /// init to pick default graphics quality on first launch. Default: `UNKNOWN`

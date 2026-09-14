@@ -59,6 +59,7 @@ impl SkinnedDraws for DxContext {
         fn reveal_skinned_instance(&mut self, instance_index: usize, model: [[f32; 4]; 4]);
         fn retire_skinned_draw_object(&mut self, skinned_index: usize);
         fn update_skinned_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]);
+        fn upload_skinned_morphs(&mut self, morphs: Vec<Option<std::sync::Arc<mesh_payload::PayloadMorphs>>>) -> RenderResult<()>;
     }
 
     fn upload_skinned(
@@ -72,18 +73,6 @@ impl SkinnedDraws for DxContext {
         // shader model 5.1, which D3D12 cannot pair with the engine's 6.0
         // vertex (see `compile_skinned_shaders`).
         Ok(self.upload_skinned(vertices, indices, draw_objects)?)
-    }
-
-    // Trait method returns unit; the inherent returns Result (buffer
-    // allocation can fail), so the forwarder logs instead of propagating.
-    fn upload_skinned_morphs(
-        &mut self,
-        morphs: Vec<Option<std::sync::Arc<mesh_payload::PayloadMorphs>>>,
-    ) {
-        debug_assert_main_thread("upload_skinned_morphs");
-        if let Err(e) = DxContext::upload_skinned_morphs(self, morphs) {
-            tracing::error!("DirectX: morph target upload failed: {}", e);
-        }
     }
 }
 
@@ -180,7 +169,7 @@ impl RenderTuning for DxContext {
         );
         fn set_ambient_intensity(&mut self, value: f32);
         fn update_directional_lights(&mut self, lights: &[components::DirectionalLight]);
-        fn apply_quality_settings(&mut self, settings: backend::QualitySettings);
+        fn apply_quality_settings(&mut self, settings: backend::QualitySettings) -> error::RenderResult<()>;
         fn set_shadow_update(&mut self, update: components::ShadowUpdate);
         fn set_shadow_distance(&mut self, distance: u32);
         fn set_shadow_cascades(&mut self, count: u32);

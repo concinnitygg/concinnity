@@ -14,7 +14,7 @@ use concinnity_core::components;
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::backend;
 use concinnity_core::render::backend::QualitySettings;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 
 use super::auto_exposure::AutoExposureGpu;
 use super::context::MtlContext;
@@ -131,8 +131,10 @@ impl MtlContext {
 
     // Rebuild the toggle-controlled effects in place to match `q`, applied
     // between frames (the GraphicsSystem drain runs before the next
-    // `draw_frame`). A build failure logs and leaves the prior state intact.
-    pub(crate) fn apply_quality_settings(&mut self, q: QualitySettings) {
+    // `draw_frame`). An effect build failure returns before anything is
+    // swapped; a later failure keeps the rebuilt state and returns the first
+    // error once the rest has been applied.
+    pub(crate) fn apply_quality_settings(&mut self, q: QualitySettings) -> RenderResult<()> {
         // RT reflections only when the GPU supports hardware ray tracing;
         // otherwise the toggle persists + value-syncs but renders nothing,
         // matching the init-time fallback. The refusal is reported the way the
@@ -166,13 +168,8 @@ impl MtlContext {
             auto_exposure_bias_ev: q.auto_exposure_bias_ev,
         };
 
-        let effects = match self.build_quality_effects(&settings, taa_effective, needs_velocity) {
-            Ok(e) => e,
-            Err(e) => {
-                tracing::error!("apply_quality_settings: effect rebuild failed: {e}");
-                return;
-            }
-        };
+        let effects = self.build_quality_effects(&settings, taa_effective, needs_velocity)?;
+        let mut first_err: Option<RenderError> = None;
 
         // Swap the screen-space feature state in. The old `Retained` targets drop
         // here; any in-flight command buffer still referencing them holds its own
@@ -191,7 +188,7 @@ impl MtlContext {
         // are still correct.
         match self.targets.transient_pool.bloom_top() {
             Ok(top) => self.targets.bloom.mips[0] = top,
-            Err(e) => tracing::error!("apply_quality_settings: {e}"),
+            Err(e) => first_err = Some(format!("bloom top mip: {e}").into()),
         }
         self.ssr = effects.ssr;
         self.gbuffer = effects.gbuffer;
@@ -235,7 +232,14 @@ impl MtlContext {
                     Ok(None) => tracing::warn!(
                         "ray-traced reflections toggled on but the scene has no static geometry; no BVH built"
                     ),
-                    Err(e) => tracing::error!("apply_quality_settings: RT accel build: {e}"),
+                    Err(e) => {
+                        let e = RenderError::from(format!("RT accel build: {e}"));
+                        if first_err.is_some() {
+                            tracing::error!("apply_quality_settings: {e}");
+                        } else {
+                            first_err = Some(e);
+                        }
+                    }
                 }
             }
         } else {
@@ -251,6 +255,7 @@ impl MtlContext {
             last_elapsed: self.auto_exposure.last_elapsed,
             ..effects.auto_exposure
         };
+        first_err.map_or(Ok(()), Err)
     }
 
     // Build the toggle-controlled effects (see [`QualityEffects`]) in the order

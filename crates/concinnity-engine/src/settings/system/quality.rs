@@ -4,6 +4,8 @@
 
 use concinnity_core::components::SettingCommand;
 use concinnity_core::ecs::PipelineContext;
+use concinnity_core::render::backend::QualitySettings;
+use concinnity_core::render::error::RenderError;
 use concinnity_core::render::ops::RenderOps;
 
 use super::SettingsState;
@@ -56,7 +58,7 @@ impl SettingsState {
         // re-derived AA mode before the push below.
         self.post_process.fxaa = self.post_config.aa_mode.fxaa_flag();
         let quality = gsys::derive_quality_settings(&self.post_config);
-        ops.record(move |backend| backend.apply_quality_settings(quality));
+        record_quality_apply(ops, quality);
         // Auto-exposure may have flipped off; re-push the static post-process
         // params so exposure reverts.
         let params = self.post_process;
@@ -187,7 +189,7 @@ impl SettingsState {
         }
         self.opt_out_of_preset(ctx, cfg);
         let quality = gsys::derive_quality_settings(&self.post_config);
-        ops.record(move |backend| backend.apply_quality_settings(quality));
+        record_quality_apply(ops, quality);
         // Auto-exposure overwrites the backend's live exposure each frame while
         // it runs, so its copy freezes at the last adapted value once toggled
         // off. Re-push the static params (the authored / slider EV) so exposure
@@ -227,7 +229,7 @@ impl SettingsState {
         }
         self.opt_out_of_preset(ctx, cfg);
         let quality = gsys::derive_quality_settings(&self.post_config);
-        ops.record(move |backend| backend.apply_quality_settings(quality));
+        record_quality_apply(ops, quality);
         // The AA mode also drives the composite FXAA flag, which rides
         // PostProcessParams rather than the rebuild above.
         if key == "aa_mode" {
@@ -250,4 +252,15 @@ impl SettingsState {
             self.quality_preset.name(),
         );
     }
+}
+
+// Record a live quality rebuild. A failure is logged, and running out of device
+// memory raises the replay's memory pressure for the streaming valve.
+pub(super) fn record_quality_apply(ops: &mut RenderOps, quality: QualitySettings) {
+    ops.record_with(move |backend, out| {
+        if let Err(e) = backend.apply_quality_settings(quality) {
+            tracing::error!("SettingsSystem: quality rebuild failed: {e}");
+            out.memory_pressure |= matches!(e, RenderError::OutOfDeviceMemory(_));
+        }
+    });
 }

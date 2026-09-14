@@ -59,6 +59,7 @@ impl SkinnedDraws for VkContext {
         fn reveal_skinned_instance(&mut self, instance_index: usize, model: [[f32; 4]; 4]);
         fn retire_skinned_draw_object(&mut self, skinned_index: usize);
         fn update_skinned_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]);
+        fn upload_skinned_morphs(&mut self, morphs: Vec<Option<std::sync::Arc<mesh_payload::PayloadMorphs>>>) -> error::RenderResult<()>;
     }
 
     fn upload_skinned(
@@ -69,18 +70,6 @@ impl SkinnedDraws for VkContext {
     ) -> error::RenderResult<()> {
         debug_assert_main_thread("upload_skinned");
         self.upload_skinned(vertices, indices, draw_objects)
-    }
-
-    // Trait method returns unit; the inherent returns Result (buffer
-    // allocation can fail), so the forwarder logs instead of propagating.
-    fn upload_skinned_morphs(
-        &mut self,
-        morphs: Vec<Option<std::sync::Arc<mesh_payload::PayloadMorphs>>>,
-    ) {
-        debug_assert_main_thread("upload_skinned_morphs");
-        if let Err(e) = VkContext::upload_skinned_morphs(self, morphs) {
-            tracing::error!("Vulkan: morph target upload failed: {}", e);
-        }
     }
 }
 
@@ -137,7 +126,7 @@ impl RenderTuning for VkContext {
         fn set_ambient_intensity(&mut self, value: f32);
         fn update_directional_lights(&mut self, lights: &[components::DirectionalLight]);
         fn set_reflection_probes(&mut self, probes: &[reflection_probe::ProbePlacement]);
-        fn apply_quality_settings(&mut self, settings: backend::QualitySettings);
+        fn apply_quality_settings(&mut self, settings: backend::QualitySettings) -> error::RenderResult<()>;
         fn set_shadow_update(&mut self, update: components::ShadowUpdate);
         fn set_shadow_distance(&mut self, distance: u32);
         fn set_shadow_cascades(&mut self, count: u32);

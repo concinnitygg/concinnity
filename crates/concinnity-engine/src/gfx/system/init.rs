@@ -2624,8 +2624,12 @@ impl GraphicsSystem {
                     tracing::error!("GraphicsSystem: skinned geometry upload failed: {}", e);
                     return None;
                 }
-                if skinned_morphs.iter().any(|m| m.is_some()) {
-                    backend.upload_skinned_morphs(std::mem::take(&mut skinned_morphs));
+                if skinned_morphs.iter().any(|m| m.is_some())
+                    && let Err(e) =
+                        backend.upload_skinned_morphs(std::mem::take(&mut skinned_morphs))
+                {
+                    tracing::error!("GraphicsSystem: morph target upload failed: {}", e);
+                    return None;
                 }
                 // The hidden copies reserved above seed the engine-side
                 // skinned instance pool (`RenderSlots`), published below.

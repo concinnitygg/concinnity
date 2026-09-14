@@ -763,7 +763,11 @@ fn reload_shader_stages_on_empty_map_is_a_no_op() {
 
     impl backend::SceneEffects for DummyBackend {}
 
-    impl backend::BackendProbe for DummyBackend {}
+    impl backend::BackendProbe for DummyBackend {
+        fn capabilities(&self) -> backend::DeviceCapabilities {
+            backend::DeviceCapabilities::ALL
+        }
+    }
 
     let map = ShaderStageSourceMap::new();
     let mut backend = DummyBackend;
@@ -1017,7 +1021,11 @@ impl backend::LiveEdit for RecordingBackend {
 
 impl backend::SceneEffects for RecordingBackend {}
 
-impl backend::BackendProbe for RecordingBackend {}
+impl backend::BackendProbe for RecordingBackend {
+    fn capabilities(&self) -> backend::DeviceCapabilities {
+        backend::DeviceCapabilities::ALL
+    }
+}
 
 // A valid 1x1 RGBA8 PNG, so the texture-decode path has a real file to chew on.
 fn write_tiny_png(path: &std::path::Path) {

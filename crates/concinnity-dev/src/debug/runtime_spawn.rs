@@ -1242,7 +1242,11 @@ mod tests {
 
     impl backend::SceneEffects for StubBackend {}
 
-    impl backend::BackendProbe for StubBackend {}
+    impl backend::BackendProbe for StubBackend {
+        fn capabilities(&self) -> backend::DeviceCapabilities {
+            backend::DeviceCapabilities::ALL
+        }
+    }
 
     // Drive one runtime-spawn command whose reply is `Result<(), String>` (the
     // ECS-side variants) through the backend dispatch and return its reply.

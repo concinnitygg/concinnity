@@ -887,8 +887,7 @@ mod tests {
                 "{key} should be available"
             );
         }
-        // The default reports all capabilities present (an unwired backend keeps
-        // every toggle live).
+        // The default reports every capability present.
         assert!(setting_available(
             "ray_traced_reflections",
             &DeviceCapabilities::default()

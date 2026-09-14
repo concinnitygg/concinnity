@@ -99,6 +99,7 @@ pub(crate) enum Call {
         vertices: usize,
         draws: usize,
     },
+    UploadSkinnedMorphs,
     UpdateSkinnedPose(usize),
     UpdateSkinnedModel(usize),
     RevealSkinnedInstance(usize),
@@ -175,6 +176,10 @@ pub(crate) struct MockState {
     // When set, reload_world returns this error instead of Ok (exercising the
     // hot-swap failure path where GraphicsSystem marks itself failed).
     pub(crate) fail_reload: Option<String>,
+    // When set, upload_skinned_morphs returns this error instead of Ok.
+    pub(crate) fail_morph_upload: Option<RenderError>,
+    // When set, apply_quality_settings returns this error instead of Ok.
+    pub(crate) fail_quality: Option<RenderError>,
     // Snapshot the next take_input() returns, then reset to default
     // (matching a real backend's drain-on-poll semantics).
     pub(crate) next_input: RenderInput,
@@ -199,6 +204,8 @@ impl Default for MockState {
             window_closed: false,
             fail_draw: None,
             fail_reload: None,
+            fail_morph_upload: None,
+            fail_quality: None,
             next_input: RenderInput::default(),
             logical_size: (1280.0, 720.0),
             top_inset: 0.0,
@@ -426,6 +433,15 @@ impl SkinnedDraws for MockBackend {
         Ok(())
     }
 
+    fn upload_skinned_morphs(
+        &mut self,
+        _morphs: Vec<Option<Arc<concinnity_core::gfx::mesh_payload::PayloadMorphs>>>,
+    ) -> RenderResult<()> {
+        let mut s = self.state.lock().unwrap();
+        s.calls.push(Call::UploadSkinnedMorphs);
+        s.fail_morph_upload.clone().map_or(Ok(()), Err)
+    }
+
     fn update_skinned_pose(&mut self, skinned_index: usize, _matrices: &[[[f32; 4]; 4]]) {
         self.record(Call::UpdateSkinnedPose(skinned_index));
     }
@@ -610,8 +626,10 @@ impl RenderTuning for MockBackend {
         self.record(Call::UpdatePostProcess);
     }
 
-    fn apply_quality_settings(&mut self, _settings: backend::QualitySettings) {
-        self.record(Call::ApplyQualitySettings);
+    fn apply_quality_settings(&mut self, _settings: backend::QualitySettings) -> RenderResult<()> {
+        let mut s = self.state.lock().unwrap();
+        s.calls.push(Call::ApplyQualitySettings);
+        s.fail_quality.clone().map_or(Ok(()), Err)
     }
 
     fn update_quality_params(&mut self, _settings: backend::QualitySettings) {

@@ -33,12 +33,14 @@ pub trait SkinnedDraws {
 
     /// Attach morph-target data to the skinned draw objects, called once after
     /// `upload_skinned`: `morphs[i]` belongs to draw object `i` (instance
-    /// copies share their template's data via the `Arc`). Default no-op for a
-    /// backend without a morph deformation path.
+    /// copies share their template's data via the `Arc`). Default: nothing to
+    /// attach, for a backend without a morph deformation path.
     fn upload_skinned_morphs(
         &mut self,
-        _morphs: Vec<Option<alloc::sync::Arc<crate::gfx::mesh_payload::PayloadMorphs>>>,
-    ) {
+        morphs: Vec<Option<alloc::sync::Arc<crate::gfx::mesh_payload::PayloadMorphs>>>,
+    ) -> RenderResult<()> {
+        let _ = morphs;
+        Ok(())
     }
 
     /// Push a skinned object's current morph-target weights, sampled by the

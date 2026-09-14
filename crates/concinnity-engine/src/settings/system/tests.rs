@@ -913,6 +913,43 @@ fn quality_cycle_knob_rebuilds_and_flips_to_custom() {
     assert!(f.persisted().graphics.ssgi_rays.is_some());
 }
 
+// A quality rebuild that runs out of device memory raises the replay's memory
+// pressure for the streaming valve; any other failure only logs.
+#[test]
+fn quality_rebuild_out_of_memory_raises_memory_pressure() {
+    use concinnity_core::render::backend::QualitySettings;
+    use concinnity_core::render::error::RenderError;
+
+    for (error, pressure) in [
+        (
+            RenderError::OutOfDeviceMemory("quality targets".to_string()),
+            true,
+        ),
+        (RenderError::Other("pipeline rejected".to_string()), false),
+    ] {
+        let (calls, mut backend) = recording_backend();
+        calls.lock().unwrap().fail_quality = Some(error);
+        let mut queue = ops::RenderOps::default();
+        super::quality::record_quality_apply(
+            &mut queue,
+            QualitySettings {
+                taa: false,
+                ssao: None,
+                ssr: None,
+                rt_reflections: None,
+                ssgi: None,
+                reflection_blur_scale: 1,
+                auto_exposure: None,
+                auto_exposure_bias_ev: 0.0,
+            },
+        );
+
+        let outcome = queue.replay(&mut backend);
+        assert_eq!(outcome.memory_pressure, pressure);
+        assert!(calls.lock().unwrap().saw(&Call::ApplyQualitySettings));
+    }
+}
+
 // The AA mode also drives the composite FXAA flag, which rides the post-process
 // params rather than the quality rebuild.
 #[test]

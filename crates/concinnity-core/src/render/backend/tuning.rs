@@ -11,6 +11,7 @@ use crate::gfx::rt_reflections::RtReflectionSettings;
 use crate::gfx::ssao::SsaoSettings;
 use crate::gfx::ssgi::SsgiSettings;
 use crate::gfx::ssr::SsrSettings;
+use crate::render::error::RenderResult;
 use crate::render::volumetric_fog::FogSettings;
 
 /// The resolved per-feature quality settings for [`RenderTuning::apply_quality_settings`].
@@ -103,10 +104,11 @@ pub trait RenderTuning {
     /// these gate render passes whose GPU resources (pipelines, render targets,
     /// ray-tracing acceleration structures) are built once at init, so applying a
     /// change rebuilds the affected resources in place rather than flipping a
-    /// uniform. Default no-op: a backend that only reads these at init ignores
-    /// runtime changes, so the choice takes effect at the next launch there.
-    fn apply_quality_settings(&mut self, settings: QualitySettings) {
+    /// uniform. Default: `Ok` with nothing rebuilt, for a backend that only reads
+    /// these at init, where the choice takes effect at the next launch.
+    fn apply_quality_settings(&mut self, settings: QualitySettings) -> RenderResult<()> {
         let _ = settings;
+        Ok(())
     }
 
     /// Set the shadow cascade re-render cadence live. The cascade scheduler reads

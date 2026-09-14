@@ -11,8 +11,11 @@
 //! tells a new backend author which subset is which.
 //!
 //! A fallible default returns [`RenderError::Unsupported`](crate::render::error::RenderError::Unsupported),
-//! never a silent `Ok`. An infallible setter defaults to a no-op; a caller that
-//! must know whether one lands gates on [`DeviceCapabilities`] first.
+//! never a silent `Ok`, unless doing nothing is the complete answer: a backend
+//! without a morph path has no morph data to attach, and one without a live
+//! quality rebuild applies the settings at the next launch. An infallible
+//! setter defaults to a no-op; a caller that must know whether one lands gates
+//! on [`DeviceCapabilities`] first.
 //!
 //! Implementations are thin forwarders to the inherent methods on `MtlContext`
 //! / `DxContext` / `VkContext`; concinnity-device generates the 1:1 ones from
@@ -227,7 +230,11 @@ pub(crate) mod test_stub {
         }
     }
 
-    impl BackendProbe for StubBackend {}
+    impl BackendProbe for StubBackend {
+        fn capabilities(&self) -> super::DeviceCapabilities {
+            super::DeviceCapabilities::ALL
+        }
+    }
     impl LiveEdit for StubBackend {}
     impl RenderTuning for StubBackend {}
     impl SceneEffects for StubBackend {}
@@ -271,9 +278,6 @@ mod tests {
     #[test]
     fn default_query_methods_report_conservative_values() {
         let backend = StubBackend;
-        // Capabilities fail open: a backend that does not report keeps every
-        // toggle live.
-        assert!(backend.capabilities().ray_tracing);
         // Quality auto-config fails safe: the unknown/conservative profile.
         assert_eq!(backend.gpu_profile().tier, GpuTier::Unknown);
         assert_eq!(backend.gpu_profile().vendor, GpuVendor::Other);
@@ -304,6 +308,8 @@ mod tests {
         backend.reveal_skinned_instance(0, IDENTITY);
         backend.retire_skinned_draw_object(0);
         backend.update_skinned_models(&[(0, IDENTITY)]);
+        // No morph deformation path: nothing to attach.
+        assert!(backend.upload_skinned_morphs(vec![]).is_ok());
 
         // Streaming + cursor + capture no-ops.
         backend.seed_mesh_streaming(0, 0, 0, 0);
@@ -326,7 +332,7 @@ mod tests {
         backend.update_post_process(PostProcessTunables::DEFAULT);
         backend.set_ambient_intensity(1.0);
         backend.set_keymap(&KeyMap::default());
-        backend.apply_quality_settings(stub_quality());
+        assert!(backend.apply_quality_settings(stub_quality()).is_ok());
         backend.update_quality_params(stub_quality());
         backend.set_shadow_update(crate::components::ShadowUpdate::EveryFrame);
         backend.set_shadow_distance(200);

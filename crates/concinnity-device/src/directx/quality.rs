@@ -57,14 +57,8 @@ pub(in crate::directx) struct QualitySlotHandles {
 impl DxContext {
     // Bring the toggle-controlled features to match `q`, applied between frames
     // (the GraphicsSystem reads the SettingCommand before the next draw_frame).
-    // A build failure logs and leaves the prior state intact.
-    pub(crate) fn apply_quality_settings(&mut self, q: QualitySettings) {
-        if let Err(e) = self.apply_quality_settings_inner(q) {
-            tracing::error!("apply_quality_settings: rebuild failed: {e}");
-        }
-    }
-
-    fn apply_quality_settings_inner(&mut self, q: QualitySettings) -> RenderResult<()> {
+    // A build failure returns early and leaves the prior state intact.
+    pub(crate) fn apply_quality_settings(&mut self, q: QualitySettings) -> RenderResult<()> {
         // Every build / teardown below frees or replaces GPU resources a prior
         // frame may still reference; drain the device first so the swap is safe.
         self.wait_idle();
