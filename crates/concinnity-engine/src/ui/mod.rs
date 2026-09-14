@@ -810,13 +810,8 @@ impl System for UiInputSystem {
             // inert (e.g. the clicked button whose screen is being hidden) does not
             // strand its hover color, then clear the hover flag and skip it.
             let disabled = !disabled_rows.is_empty()
-                && entry
-                    .region
-                    .action
-                    .strip_prefix("setting:")
-                    .is_some_and(|rest| {
-                        disabled_rows.contains(rest.split(':').next().unwrap_or(""))
-                    });
+                && crate::settings::action::key(&entry.region.action)
+                    .is_some_and(|key| disabled_rows.contains(key));
             // A follow-label region tracks its label's y and goes inert while
             // the label is empty (a hidden menu entry catches no clicks).
             let follow_inert = if let Some((label_id, offset)) = entry.follow {
@@ -1231,14 +1226,8 @@ impl UiInputSystem {
     // (mirrors the hit-test loop's gating).
     fn row_disabled(&self, entry: &RegionEntry) -> bool {
         !self.disabled_rows_cache.is_empty()
-            && entry
-                .region
-                .action
-                .strip_prefix("setting:")
-                .is_some_and(|rest| {
-                    self.disabled_rows_cache
-                        .contains(rest.split(':').next().unwrap_or(""))
-                })
+            && crate::settings::action::key(&entry.region.action)
+                .is_some_and(|key| self.disabled_rows_cache.contains(key))
     }
 
     // Advance the focus cursor for one directional pulse: Left/Right on a
@@ -1525,8 +1514,8 @@ impl UiInputSystem {
         // immutably while the regions are mutated (disjoint fields).
         let panels = &self.panels;
         for entry in self.regions.iter_mut() {
-            let is_content =
-                entry.region.action.starts_with("setting:") || entry.group_toggle.is_some();
+            let is_content = crate::settings::action::key(&entry.region.action).is_some()
+                || entry.group_toggle.is_some();
             if !is_content {
                 continue;
             }
@@ -1874,10 +1863,10 @@ fn fire_action(
     }
     // setting:<key>:next|prev -- cycle a graphics setting. GraphicsSystem
     // reads the SettingCommand to apply, persist, and refresh the value label.
-    if let Some(rest) = action.strip_prefix("setting:") {
-        match rest.rsplit_once(':') {
-            Some((key, "next")) | Some((key, "prev")) if !key.is_empty() => {
-                let op = if rest.ends_with(":prev") {
+    if action.starts_with("setting:") {
+        match crate::settings::action::parse(action) {
+            Some((key, verb @ ("next" | "prev"))) => {
+                let op = if verb == "prev" {
                     SettingOp::Prev
                 } else {
                     SettingOp::Next
@@ -1895,8 +1884,7 @@ fn fire_action(
             // not the click-to-fire path, so they never reach here from a
             // HitRegion click; recognize them so a stray binding does not log a
             // false "malformed" warning.
-            Some((key, "drag")) | Some((key, "rebind")) | Some((key, "open"))
-                if !key.is_empty() => {}
+            Some((_, "drag" | "rebind" | "open")) => {}
             _ => tracing::warn!("UiInputSystem: malformed setting action '{}'", action),
         }
         return None;

@@ -4,10 +4,12 @@
 //! their backend effects into the frame's op queue, owns the in-memory
 //! settings snapshot + the background disk writer, and publishes the per-frame
 //! HUD-preference state:
-//!   mod.rs    system + state + scene jumps + HUD-state publish
-//!   apply.rs  the SettingCommand drain (one arm per settings row)
-//!   rows.rs   row helpers shared with GraphicsSystem's init-time captures
-//!   writer.rs background disk writer for settings changes
+//!   mod.rs      system + state + scene jumps + HUD-state publish
+//!   apply.rs    the SettingCommand drain and its per-family row handlers
+//!   quality.rs  the quality preset, feature toggle, and quality knob rows
+//!   rebind.rs   the key and gamepad rebind rows
+//!   rows.rs     row helpers shared with GraphicsSystem's init-time captures
+//!   writer.rs   background disk writer for settings changes
 //!
 //! Scheduled after SpawnSystem and before GraphicsSystem, so a change's
 //! recorded op lands on the backend before this frame's draw (visible the same
@@ -37,6 +39,8 @@ use concinnity_core::render::snapshot;
 use concinnity_host::thread::asset_id::AssetId;
 
 mod apply;
+mod quality;
+mod rebind;
 pub(crate) mod rows;
 #[cfg(test)]
 mod tests;
@@ -45,7 +49,8 @@ pub(crate) mod writer;
 // The live settings state: every value the settings menu displays and cycles,
 // with the authored baselines a preset change re-clamps from, the row
 // bookkeeping captured at init, and the persistence machinery. Field meanings
-// match the settings-menu rows they back; see the drain arms in `apply.rs`.
+// match the settings-menu rows they back; see the row handlers in `apply.rs`
+// and its siblings.
 pub(crate) struct SettingsState {
     // Live gameplay movement key map (the source of truth for the Controls-tab
     // rebind rows), pushed to the backend on each rebind (with a swap).

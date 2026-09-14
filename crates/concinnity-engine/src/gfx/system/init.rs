@@ -481,9 +481,8 @@ impl GraphicsSystem {
         // the override + ceiling clamp have settled the final mode).
         let post_config = ctx.drain::<PostProcessConfig>().into_iter().next();
         // Persisted slider choices override the world's values, re-applied here
-        // each launch so they survive a restart. The transform / clamp is shared
-        // with the live drag-apply via `settings::slider_apply_value`, so the
-        // value re-applied at launch matches the value applied at drag time.
+        // each launch so they survive a restart, each through its `SLIDERS`
+        // entry's `apply`, the same transform the live drag uses.
         let mut post_process = resolve::post_process_params(post_config.as_ref(), &user_graphics);
         // Keep a copy as the live source of truth for the slider settings to
         // read at init and mutate at runtime (PostProcessParams is Copy, so the
@@ -3008,8 +3007,7 @@ fn sync_setting_value_labels(
     let rows: Vec<(String, AssetId)> = ctx
         .query::<HitRegion>()
         .filter_map(|r| {
-            let rest = r.action.strip_prefix("setting:")?;
-            let key = rest.split(':').next()?;
+            let key = crate::settings::action::key(&r.action)?;
             Some((key.to_string(), r.label?))
         })
         .collect();
@@ -3034,7 +3032,7 @@ fn sync_setting_value_labels(
 // row's "Auto (High)", or the live "Custom" flip when a quality row changes).
 fn set_setting_row_label(ctx: &mut PipelineContext, key: &str, text: &str) {
     let label_id = ctx.query::<HitRegion>().find_map(|r| {
-        let row_key = r.action.strip_prefix("setting:")?.split(':').next()?;
+        let row_key = crate::settings::action::key(&r.action)?;
         (row_key == key).then_some(r.label).flatten()
     });
     if let Some(id) = label_id {

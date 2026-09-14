@@ -1,7 +1,8 @@
 // The `setting:<key>:<verb>` action grammar the settings-menu HitRegions carry.
-// One parse shared by the UI input pass (which verb a click means), the focus
-// pass (which regions are value rows), and the settings-row capture that maps
-// each key to its value label.
+// One parse shared by the UI input pass (which verb a click means, which regions
+// are panel content, and which belong to a disabled row), the focus pass (which
+// regions are value rows), the settings-row capture that maps each key to its
+// value label, and the init-time capability gating and value-label sync.
 
 // The key and verb of a `setting:<key>:<verb>` action, or `None` for any other
 // action or an empty key.
@@ -9,6 +10,11 @@ pub(crate) fn parse(action: &str) -> Option<(&str, &str)> {
     let rest = action.strip_prefix("setting:")?;
     let (key, verb) = rest.rsplit_once(':')?;
     (!key.is_empty()).then_some((key, verb))
+}
+
+// The setting key of a `setting:<key>:<verb>` action with any verb, or `None`.
+pub(crate) fn key(action: &str) -> Option<&str> {
+    parse(action).map(|(key, _)| key)
 }
 
 // The setting key of an action carrying `verb`, or `None`.

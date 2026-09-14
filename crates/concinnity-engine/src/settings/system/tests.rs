@@ -446,15 +446,13 @@ fn exposure_slider_persists_ev_and_applies_the_multiplier() {
     f.apply(vec![drag("exposure", 1.0, true)]);
 
     let ev = f.persisted().graphics.exposure_ev.expect("persisted");
+    let exposure = settings::slider("exposure").expect("exposure is a slider");
     assert_eq!(
         f.state.post_process.exposure,
-        settings::slider_apply_value("exposure", ev),
+        (exposure.apply)(ev),
         "the live param is the EV mapped through the apply transform"
     );
-    assert_eq!(
-        f.label(VALUE_LABEL),
-        settings::format_slider_value("exposure", ev)
-    );
+    assert_eq!(f.label(VALUE_LABEL), (exposure.format)(ev));
 }
 
 // The slider's handle slides to the dragged fraction along its track.
@@ -536,6 +534,34 @@ fn unknown_slider_is_ignored() {
 
     assert!(f.calls.lock().unwrap().calls.is_empty());
     assert!(f.saved.lock().unwrap().is_empty());
+}
+
+// Every table-driven Off/On row flips its state field and persisted override on
+// Next, and back on Prev.
+#[test]
+fn bool_rows_flip_state_and_persisted_value_both_ways() {
+    for row in &super::apply::BOOL_ROWS {
+        let mut f = Fixture::new();
+        let before = *(row.state)(&mut f.state);
+        let cached = |f: &mut Fixture| {
+            let cfg = f.state.settings_cache.as_mut().expect("the batch cache");
+            *(row.persisted)(&mut cfg.graphics)
+        };
+
+        f.next(row.key);
+        assert_eq!(*(row.state)(&mut f.state), !before, "{} Next", row.key);
+        assert_eq!(cached(&mut f), Some(!before), "{} Next persists", row.key);
+
+        f.apply(vec![cycle(row.key, SettingOp::Prev)]);
+        assert_eq!(*(row.state)(&mut f.state), before, "{} Prev", row.key);
+        assert_eq!(cached(&mut f), Some(before), "{} Prev persists", row.key);
+        assert_eq!(
+            *(row.persisted)(&mut f.persisted().graphics),
+            Some(before),
+            "{} reaches the writer",
+            row.key
+        );
+    }
 }
 
 // A sub-quality slider rides the quality-params push (no pass rebuild) rather

@@ -11,7 +11,7 @@ use concinnity_core::gfx::render_types::PostProcessTunables;
 use crate::config::GraphicsSettings;
 use crate::gfx::quality_preset::{QualityCeiling, clamp_shadow_update};
 use crate::gfx::system::{clamp_quality_cycle, set_quality_toggle};
-use crate::settings::slider_apply_value;
+use crate::settings::{SLIDERS, SliderTarget};
 
 /// Shadow map resolution. Restart-required: the cascade array is sized once at
 /// backend init.
@@ -73,23 +73,12 @@ pub(crate) fn post_process_params(
     let mut params = config
         .map(|c| c.resolve())
         .unwrap_or(PostProcessTunables::DEFAULT);
-    if let Some(v) = user.exposure_ev {
-        params.exposure = slider_apply_value("exposure", v);
-    }
-    if let Some(v) = user.bloom_intensity {
-        params.bloom_intensity = slider_apply_value("bloom_intensity", v);
-    }
-    if let Some(v) = user.bloom_threshold {
-        params.bloom_threshold = slider_apply_value("bloom_threshold", v);
-    }
-    if let Some(v) = user.bloom_knee {
-        params.bloom_knee = slider_apply_value("bloom_knee", v);
-    }
-    if let Some(v) = user.vignette {
-        params.vignette = slider_apply_value("vignette", v);
-    }
-    if let Some(v) = user.lut_strength {
-        params.lut_strength = slider_apply_value("lut_strength", v);
+    for s in &SLIDERS {
+        if let SliderTarget::PostProcess { field, persisted } = &s.target
+            && let Some(v) = *(persisted.get)(user)
+        {
+            *(field.get_mut)(&mut params) = (s.apply)(v);
+        }
     }
     params
 }
@@ -101,39 +90,27 @@ pub(crate) fn ambient_intensity(
     user: &GraphicsSettings,
 ) -> f32 {
     let world = config.map(|c| c.ambient_intensity()).unwrap_or(1.0);
-    slider_apply_value("ambient_intensity", user.ambient_intensity.unwrap_or(world))
+    SLIDERS
+        .iter()
+        .find_map(|s| match &s.target {
+            SliderTarget::Ambient { persisted } => {
+                Some((s.apply)((persisted.get)(user).unwrap_or(world)))
+            }
+            _ => None,
+        })
+        .unwrap_or(world)
 }
 
 /// Overlay the per-feature sub-quality sliders (look tuning, applied live
 /// through `update_quality_params`) onto a config already carrying the world's
 /// values. Not preset-governed, so no ceiling clamp.
 pub(crate) fn overlay_quality_scalars(cfg: &mut PostProcessConfig, user: &GraphicsSettings) {
-    if let Some(v) = user.ssao_radius {
-        cfg.ssao_radius = slider_apply_value("ssao_radius", v);
-    }
-    if let Some(v) = user.ssao_intensity {
-        cfg.ssao_intensity = slider_apply_value("ssao_intensity", v);
-    }
-    if let Some(v) = user.ssr_intensity {
-        cfg.ssr_intensity = slider_apply_value("ssr_intensity", v);
-    }
-    if let Some(v) = user.ssr_max_distance {
-        cfg.ssr_max_distance = slider_apply_value("ssr_max_distance", v);
-    }
-    if let Some(v) = user.ssgi_intensity {
-        cfg.ssgi_intensity = slider_apply_value("ssgi_intensity", v);
-    }
-    if let Some(v) = user.ssgi_max_distance {
-        cfg.ssgi_max_distance = slider_apply_value("ssgi_max_distance", v);
-    }
-    if let Some(v) = user.auto_exposure_min_ev {
-        cfg.auto_exposure_min_ev = slider_apply_value("auto_exposure_min_ev", v);
-    }
-    if let Some(v) = user.auto_exposure_max_ev {
-        cfg.auto_exposure_max_ev = slider_apply_value("auto_exposure_max_ev", v);
-    }
-    if let Some(v) = user.auto_exposure_speed {
-        cfg.auto_exposure_speed = slider_apply_value("auto_exposure_speed", v);
+    for s in &SLIDERS {
+        if let SliderTarget::PostConfig { field, persisted } = &s.target
+            && let Some(v) = *(persisted.get)(user)
+        {
+            *(field.get_mut)(cfg) = (s.apply)(v);
+        }
     }
 }
 

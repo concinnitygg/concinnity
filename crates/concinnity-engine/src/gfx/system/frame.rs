@@ -582,17 +582,18 @@ impl GraphicsSystem {
         // not the render params), so the capture never re-reads it per row.
         let persisted = self.persisted_settings();
         for s in &sliders {
-            let Some(value) = self.slider_current_value(&s.key, &persisted) else {
+            let Some(slider) = settings::slider(&s.key) else {
                 continue;
             };
-            let frac = settings::slider_fraction(&s.key, value).unwrap_or(0.0);
-            let hx = s.track_x + frac.clamp(0.0, 1.0) * (s.track_w - s.handle_w).max(0.0);
-            set_sprite_x(ctx, s.handle_id, hx);
-            set_label_content(
-                ctx,
-                s.value_id,
-                &settings::format_slider_value(&s.key, value),
+            let value = slider.current_value(
+                &self.post_process,
+                &self.post_config,
+                self.ambient_intensity,
+                &persisted,
             );
+            let hx = s.track_x + slider.fraction(value) * (s.track_w - s.handle_w).max(0.0);
+            set_sprite_x(ctx, s.handle_id, hx);
+            set_label_content(ctx, s.value_id, &(slider.format)(value));
         }
         self.sliders = sliders;
     }
@@ -679,10 +680,7 @@ impl GraphicsSystem {
         let mut gated_value_labels: std::collections::HashSet<AssetId> =
             std::collections::HashSet::new();
         for r in ctx.query_mut::<HitRegion>() {
-            let Some(rest) = r.action.strip_prefix("setting:") else {
-                continue;
-            };
-            let Some(key) = rest.split(':').next() else {
+            let Some(key) = action::key(&r.action) else {
                 continue;
             };
             if settings::setting_available(key, &caps) {
@@ -733,52 +731,6 @@ impl GraphicsSystem {
             &self.resolution_row_labels,
             self.window_args.mode != WindowMode::Fullscreen,
         );
-    }
-
-    // The current user-facing value of a slider setting, derived from the live
-    // post-process params, or from `persisted` for the settings this system
-    // does not hold live. `None` for a key it does not own at all.
-    fn slider_current_value(&self, key: &str, persisted: &crate::config::Settings) -> Option<f32> {
-        let stored = match key {
-            "exposure" => self.post_process.exposure,
-            "bloom_intensity" => self.post_process.bloom_intensity,
-            "bloom_threshold" => self.post_process.bloom_threshold,
-            "bloom_knee" => self.post_process.bloom_knee,
-            "vignette" => self.post_process.vignette,
-            "lut_strength" => self.post_process.lut_strength,
-            "ambient_intensity" => self.ambient_intensity,
-            // Per-feature sub-quality sliders read from the stored PostProcessConfig.
-            "ssao_radius" => self.post_config.ssao_radius,
-            "ssao_intensity" => self.post_config.ssao_intensity,
-            "ssr_intensity" => self.post_config.ssr_intensity,
-            "ssr_max_distance" => self.post_config.ssr_max_distance,
-            "ssgi_intensity" => self.post_config.ssgi_intensity,
-            "ssgi_max_distance" => self.post_config.ssgi_max_distance,
-            "auto_exposure_min_ev" => self.post_config.auto_exposure_min_ev,
-            "auto_exposure_max_ev" => self.post_config.auto_exposure_max_ev,
-            "auto_exposure_speed" => self.post_config.auto_exposure_speed,
-            // The controls sliders live in the controls store, not the render
-            // params; read the persisted value or the engine default.
-            "mouse_sensitivity" => persisted
-                .controls
-                .mouse_sensitivity
-                .unwrap_or(settings::DEFAULT_MOUSE_SENSITIVITY),
-            "gamepad_look_sensitivity" => persisted
-                .controls
-                .gamepad_look_sensitivity
-                .unwrap_or(settings::DEFAULT_GAMEPAD_LOOK_SENSITIVITY),
-            "gamepad_deadzone" => persisted
-                .controls
-                .gamepad_deadzone
-                .unwrap_or(settings::DEFAULT_GAMEPAD_DEADZONE),
-            // FOV lives in the graphics store (degrees); read the persisted value
-            // or the authored default.
-            "fov" => persisted.graphics.fov.unwrap_or(settings::DEFAULT_FOV),
-            _ => return None,
-        };
-        // Invert `slider_apply_value` to the user-facing value (exposure: 2^ev ->
-        // EV; mouse sensitivity: radians/pixel -> 1..100).
-        Some(settings::slider_recover_value(key, stored))
     }
 }
 
