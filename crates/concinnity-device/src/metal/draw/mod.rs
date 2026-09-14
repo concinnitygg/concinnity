@@ -166,19 +166,14 @@ impl MtlContext {
         let mut gpu_wait = crate::gpu_wait::GpuWait::none();
         let frame_slot = gpu_wait.measure(|| self.frame_pacing.acquire());
 
-        // Asynchronous reflection-probe bake. One probe at a time, advanced across
-        // frames, captures real geometry into `probe.maps` (the sky `env_map` is
-        // left untouched) so glossy surfaces reflect their surroundings instead of a
-        // foreign HDR; unbaked probes fall back to the sky until installed. The
-        // render thread never blocks on it: the six faces are submitted without
-        // `waitUntilCompleted` (into a reserved ring slot the frame never overwrites)
-        // and the prefilter convolution runs on a worker thread. Runs AFTER
-        // `acquire()` so its reserved-slot retire-pool collection sees a fence-
-        // consistent frame id. Non-fatal: a failure keeps the current state.
-        // Skipped while the world is hidden: a probe bake feeds reflections no
-        // pass will sample this frame.
-        if !world_hidden && let Err(e) = self.bake_pending_probes(elapsed, near, far) {
-            tracing::warn!("reflection probe bake failed, keeping current environment: {e}");
+        // Asynchronous reflection-probe bake, prefiltering half: convolve one mip of
+        // a finished capture or install its cube, ahead of the argument buffers
+        // below so an installed cube is sampled this frame. The capture half runs
+        // once those buffers exist. Runs AFTER `acquire()` so the bake's retire-pool
+        // collection sees a fence-consistent frame id. Skipped while the world is
+        // hidden: a probe bake feeds reflections no pass will sample this frame.
+        if !world_hidden {
+            self.advance_probe_prefilter();
         }
 
         // tell MTKView to prepare its drawable for this frame, then take it.
@@ -432,6 +427,11 @@ impl MtlContext {
             } else {
                 None
             };
+            // Asynchronous reflection-probe bake, capture half: submit one cube
+            // face, or start or hand off a capture. Every face samples through
+            // this frame's texture arguments, so it never reads a texture that
+            // streaming has since replaced.
+            self.advance_probe_capture(elapsed, near, far, bindless_tex_args.as_ref());
             // Keep the RT acceleration structure current with this frame's
             // transforms before any pass reads `rt_accel`. The default `Auto` mode
             // rebuilds the TLAS only when a participating prop actually moved; a
@@ -972,7 +972,6 @@ impl MtlContext {
         // the per-pass resolve and the frame-slot release belong to the join's
         // last arrival, since the async queue may still be running.
         {
-            let render_fault_logged = std::sync::Arc::clone(&self.diagnostics.render_fault_logged);
             let device_error = std::sync::Arc::clone(&self.diagnostics.device_error);
             let part = std::sync::Arc::clone(&join);
             join.add_part();
@@ -981,17 +980,9 @@ impl MtlContext {
                     // SAFETY: Metal hands the completion handler a live command buffer, and the
                     // borrow does not escape the block.
                     let cb = unsafe { cb.as_ref() };
-                    // A faulted frame render buffer is the usual origin of a
-                    // `SubmissionsIgnored` cascade seen later on the RT build.
-                    // Log its own error once so the real first fault is visible.
+                    super::fault_log::report_fault(cb, "frame render");
                     use objc2_metal::MTLCommandBufferStatus;
                     if cb.status() == MTLCommandBufferStatus::Error {
-                        if !render_fault_logged.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                            tracing::error!(
-                                "frame render command buffer faulted: {:?}",
-                                cb.error()
-                            );
-                        }
                         // Classify and park the first failure for the next
                         // draw_frame to report across the backend boundary.
                         let classified = match cb.error() {

@@ -12,6 +12,7 @@ mod decal;
 mod descriptors;
 mod encode;
 mod error;
+mod fault_log;
 // pub(in crate::metal) so the render-graph executor, planar mirror, and probe
 // bake can name the shared main-pass param structs (MainPassCamera, DrawInputs,
 // GpuFrameBuffers, FaceTargets) defined in draw/main.rs.

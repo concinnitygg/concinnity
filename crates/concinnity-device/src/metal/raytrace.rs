@@ -601,35 +601,6 @@ pub(in crate::metal) fn use_blas_resident_fragment(
     }
 }
 
-// Attach a completion handler that logs the first GPU fault on an async RT
-// command buffer (`what` names the stage: skin compute or BLAS/TLAS build). The
-// per-frame skinned rebuild commits these without `waitUntilCompleted`, so a
-// fault can no longer be caught synchronously by `check_build_status`; this
-// surfaces it (once per process, so a wedged GPU does not spam) instead of
-// leaving only the downstream trace victim to report.
-fn attach_async_fault_logger(
-    cmd: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
-    what: &'static str,
-) {
-    static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    let handler = block2::RcBlock::new(
-        move |cb: NonNull<ProtocolObject<dyn objc2_metal::MTLCommandBuffer>>| {
-            // SAFETY: Metal hands the completion handler a live command buffer, and the borrow does
-            // not escape the block.
-            let cb = unsafe { cb.as_ref() };
-            if cb.status() == MTLCommandBufferStatus::Error
-                && !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed)
-            {
-                tracing::error!("RT {what} faulted (async): {:?}", cb.error());
-            }
-        },
-    );
-    // SAFETY: addCompletedHandler copies the block, so the RcBlock may drop here.
-    unsafe {
-        cmd.addCompletedHandler(block2::RcBlock::as_ptr(&handler));
-    }
-}
-
 // Identity matrix used as a one-joint fallback palette so a skinned object with
 // no pose yet still has a valid (undeformed) palette to dispatch against.
 const IDENTITY4: [[f32; 4]; 4] = [
@@ -1594,7 +1565,7 @@ impl RtAccelData {
                 );
                 enc.endEncoding();
             }
-            attach_async_fault_logger(&cmd, "RT topology build");
+            super::fault_log::attach_fault_logger(&cmd, "RT topology build");
             cmd.commit();
             // The async build keeps reading the scratch after this returns.
             retire_buffers.push(scratch);
@@ -1829,7 +1800,7 @@ impl RtAccelData {
                 },
             )?;
             cenc.endEncoding();
-            attach_async_fault_logger(&skin_cmd, "skinning compute");
+            super::fault_log::attach_fault_logger(&skin_cmd, "RT skinning compute");
             skin_cmd.commit();
         }
 
@@ -1908,7 +1879,7 @@ impl RtAccelData {
                 0,
             );
             enc.endEncoding();
-            attach_async_fault_logger(&cmd, "skinned BLAS + TLAS build");
+            super::fault_log::attach_fault_logger(&cmd, "RT skinned BLAS + TLAS build");
             cmd.commit();
         }
 

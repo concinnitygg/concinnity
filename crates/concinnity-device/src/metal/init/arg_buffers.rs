@@ -41,8 +41,8 @@ pub(super) fn build_arg_buffers(
 
     Ok(MtlArgumentBuffers {
         bindless_tex_encoder,
-        bindless_tex_gates: SlotGates::new(gpu.frames_in_flight.max(1) + 1),
-        bindless_tail_gates: SlotGates::new(gpu.frames_in_flight.max(1) + 1),
+        bindless_tex_gates: SlotGates::new(gpu.frames_in_flight.max(1)),
+        bindless_tail_gates: SlotGates::new(gpu.frames_in_flight.max(1)),
         bindless_residency: ResidencySet::new(),
         bindless_sampler_args,
         probe_cube_encoder,

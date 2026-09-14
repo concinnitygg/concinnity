@@ -25,9 +25,10 @@
 //! transition table, called once per pipeline slot per frame):
 //!   * Rendering    -- six cube faces submitted to the GPU WITHOUT
 //!     `waitUntilCompleted`; a completion handler flags GPU
-//!     completion. The faces draw from a RESERVED ring slot
-//!     (`bake_ring_slot`) the frame never overwrites, so the bake's
-//!     CPU-written bindless buffers stay valid across the async work.
+//!     completion. The faces draw their object and draw-args records
+//!     from a RESERVED ring slot (`bake_ring_slot`) the frame never
+//!     overwrites, so they stay valid across the async work, and sample
+//!     textures through the frame's own bindless arguments.
 //!   * Prefiltering -- the capture's draw resources are released, the probe cube is
 //!     allocated, and the convolution runs as compute dispatches: the
 //!     clamped mirror mip plus the capture's source pyramid in the
@@ -61,9 +62,8 @@ use concinnity_core::render::reflection_probe::{
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTLBuffer as _, MTLCommandBuffer as _, MTLCommandBufferStatus, MTLCommandQueue as _,
-    MTLDevice as _, MTLPixelFormat, MTLResourceOptions, MTLTexture, MTLTextureType,
-    MTLTextureUsage,
+    MTLBuffer as _, MTLCommandBuffer as _, MTLCommandQueue as _, MTLDevice as _, MTLPixelFormat,
+    MTLResourceOptions, MTLTexture, MTLTextureType, MTLTextureUsage,
 };
 use std::ptr::NonNull;
 use std::sync::Arc;
@@ -150,7 +150,6 @@ pub(in crate::metal) struct BakeGpu {
     capture: Retained<ProtocolObject<dyn MTLTexture>>,
     object_buffer: Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>,
     draw_args: Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>,
-    tex_args: Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>,
     joint_bufs: Vec<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
     morph_weight_bufs: Vec<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
     deformed: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
@@ -233,18 +232,13 @@ impl MtlContext {
         }
     }
 
-    // Advance the asynchronous reflection-probe bake by one step. Called every
-    // frame from `draw_frame_inner` after the frames-in-flight fence; cheap once the
-    // queue drains and nothing is in flight. Drives the pure `next_bake_action`
-    // transition table: start the next probe's capture, move a finished capture into
-    // the convolution, convolve one mip, or install a finished cube. Never blocks the
-    // render thread. Non-fatal: a failure keeps the current state.
-    pub(in crate::metal) fn bake_pending_probes(
-        &mut self,
-        elapsed: f32,
-        near: f32,
-        far: f32,
-    ) -> Result<(), String> {
+    // Advance the prefiltering half of the asynchronous reflection-probe bake by one
+    // step: convolve one mip, or install a finished cube. Called every frame from
+    // `draw_frame_inner` after the frames-in-flight fence and before the frame
+    // builds its argument buffers, so an installed cube is sampled that same frame.
+    // Cheap once the queue drains and nothing is in flight. Never blocks the render
+    // thread; a failure abandons the rest of the bake and keeps what baked.
+    pub(in crate::metal) fn advance_probe_prefilter(&mut self) {
         // Free any parked (interrupted) bake resources the fence now guarantees have
         // retired on the GPU.
         self.probe
@@ -266,7 +260,7 @@ impl MtlContext {
         {
             self.retire_in_flight_bakes();
             self.probe.bake_queue.abort();
-            return Ok(());
+            return;
         }
 
         // Two pipelined slots advance independently each frame, the pure
@@ -303,19 +297,31 @@ impl MtlContext {
             BakeAction::PrefilterMip => {
                 if let Err(e) = self.probe_prefilter_next_mip() {
                     self.fail_bake(e);
-                    return Ok(());
                 }
             }
             BakeAction::Install => {
                 if let Err(e) = self.probe_install() {
                     self.fail_bake(e);
-                    return Ok(());
                 }
             }
             _ => {}
         }
-        // The prefiltering slot is free this frame if it was empty or we just installed
-        // it (the install is the only transition that empties it).
+    }
+
+    // Advance the capture half of the bake by one step: submit the next cube face,
+    // hand a captured probe to the prefiltering slot, or start the next pending
+    // placement. Called once the frame has built `tex_args`, its bindless texture
+    // arguments, which every face samples through: they name the textures live this
+    // frame, and the fence keeps their ring slot intact until the face retires.
+    pub(in crate::metal) fn advance_probe_capture(
+        &mut self,
+        elapsed: f32,
+        near: f32,
+        far: f32,
+        tex_args: Option<&Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
+    ) {
+        // Free if it was never filled or `advance_probe_prefilter` just installed its
+        // cube (the install is the only transition that empties it).
         let prefiltering_free = self.probe.prefiltering.is_none();
 
         // Rendering slot: submit one cube face per frame; once the GPU signals all six
@@ -357,7 +363,10 @@ impl MtlContext {
             },
         ) {
             BakeAction::RenderFace => {
-                if let Err(e) = self.probe_render_next_face() {
+                let face = tex_args
+                    .ok_or_else(|| "probe: no bindless texture args".to_string())
+                    .and_then(|tex_args| self.probe_render_next_face(tex_args));
+                if let Err(e) = face {
                     self.fail_bake(e);
                 }
             }
@@ -373,7 +382,6 @@ impl MtlContext {
             }
             BakeAction::PrefilterMip | BakeAction::Install | BakeAction::Idle => {}
         }
-        Ok(())
     }
 
     // Abandon the rest of the bake after an unrecoverable error, keeping the cubes
@@ -428,10 +436,6 @@ impl MtlContext {
             .map_err(|e| e.to_string())?
             .ok_or("probe: no draw args to bake")?;
         let counts = self.draw_record_counts();
-        let tex_args = self
-            .build_bindless_texture_args(slot)
-            .map_err(|e| e.to_string())?
-            .ok_or("probe: no bindless texture args")?;
         let joint_bufs = self.build_joint_buffers(slot).map_err(|e| e.to_string())?;
         let morph_weight_bufs = self
             .build_morph_weight_buffers(slot)
@@ -482,7 +486,6 @@ impl MtlContext {
                 capture,
                 object_buffer,
                 draw_args,
-                tex_args,
                 joint_bufs,
                 morph_weight_bufs,
                 deformed,
@@ -498,11 +501,10 @@ impl MtlContext {
     // when this one is. The shared `cull.icb` is GPU-written, so Metal hazard-tracks
     // it: each face's cull (and the frame's own cull) waits for the prior read,
     // ordering the reuse correctly with no explicit barrier or `waitUntilCompleted`.
-    fn probe_render_next_face(&mut self) -> Result<(), String> {
-        // The face's main pass declares the bindless textures resident from the
-        // cached set. It runs ahead of the frame's own refresh, so refresh here
-        // rather than depend on a prior frame having done it.
-        self.refresh_bindless_residency();
+    fn probe_render_next_face(
+        &mut self,
+        tex_args: &Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>,
+    ) -> Result<(), String> {
         let Some(bake) = self.probe.rendering.as_ref() else {
             return Err("probe: render face with no capture in flight".into());
         };
@@ -562,6 +564,7 @@ impl MtlContext {
             eye,
             counts,
         )?;
+        super::fault_log::attach_fault_logger(&cull_cb, "reflection probe cull");
         cull_cb.commit();
 
         // Render command buffer: reads the ICB into this face.
@@ -586,26 +589,18 @@ impl MtlContext {
             },
             crate::metal::draw::main::GpuFrameBuffers {
                 object_buffer: Some(&gpu.object_buffer),
-                bindless_tex_args: Some(&gpu.tex_args),
+                bindless_tex_args: Some(tex_args),
                 deformed_skinned: gpu.deformed.as_ref(),
                 counts,
             },
             // Probe cube bake reuses the main cull ICB (no per-face mirror cull).
             None,
         )?;
+        super::fault_log::attach_fault_logger(&render_cb, "reflection probe face");
         if attach_done {
             let flag = Arc::clone(done);
             let handler = block2::RcBlock::new(
-                move |cb: NonNull<ProtocolObject<dyn objc2_metal::MTLCommandBuffer>>| {
-                    // SAFETY: the completion handler is invoked by Metal with a valid
-                    // command-buffer pointer.
-                    let cb = unsafe { cb.as_ref() };
-                    if cb.status() == MTLCommandBufferStatus::Error {
-                        tracing::error!(
-                            "reflection probe face bake faulted (async): {:?}",
-                            cb.error()
-                        );
-                    }
+                move |_: NonNull<ProtocolObject<dyn objc2_metal::MTLCommandBuffer>>| {
                     flag.store(true, Ordering::Release);
                 },
             );
@@ -653,6 +648,7 @@ impl MtlContext {
             .commandBuffer()
             .ok_or("probe: failed to get prefilter command buffer")?;
         self.encode_probe_pyramid(&cmd_buf, &prefilter_gpu, &PLAN)?;
+        super::fault_log::attach_fault_logger(&cmd_buf, "reflection probe pyramid");
         cmd_buf.commit();
 
         self.probe.prefiltering = Some(PrefilteringBake {
@@ -684,6 +680,7 @@ impl MtlContext {
             .commandBuffer()
             .ok_or("probe: failed to get convolution command buffer")?;
         self.encode_probe_ggx_mip(&cmd_buf, gpu, &PLAN, cursor)?;
+        super::fault_log::attach_fault_logger(&cmd_buf, "reflection probe convolution");
         cmd_buf.commit();
 
         if let Some(bake) = self.probe.prefiltering.as_mut() {

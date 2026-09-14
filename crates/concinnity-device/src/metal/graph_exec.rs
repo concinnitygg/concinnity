@@ -307,10 +307,6 @@ impl MtlContext {
             std::sync::Mutex::new((0..graph.passes.len()).map(|_| None).collect());
         let first_error: std::sync::Mutex<Option<RenderError>> = std::sync::Mutex::new(None);
 
-        // Cloned before the parallel borrow so the commit loop's per-pass
-        // fault-logging handlers can share the throttle without re-borrowing
-        // `self` while `ctx_ref` is live.
-        let pass_fault_count = std::sync::Arc::clone(&self.diagnostics.pass_fault_count);
         let plan_ref = plan.as_ref();
         let ctx_ref = ParallelCtxRef::new(self);
         jobs::pool().install(|| {
@@ -399,16 +395,12 @@ impl MtlContext {
             .map_err(|_| "graph executor: worker slot mutex poisoned".to_string())?;
         for (idx, slot) in slots.into_iter().enumerate() {
             if let Some(cb) = slot {
-                // Diagnostic: each pass commits its own command buffer, so a
-                // GPU fault confined to one pass (e.g. the RT reflection trace)
-                // surfaces only here: the outer composite buffer just sees a
-                // downstream victim. Attach a handler naming the faulting pass
-                // so the *original* fault in a cascade is identifiable. The same
-                // handler reports the buffer to the frame's completion join, so
-                // the frame-in-flight slot outlives every queue's work rather
-                // than just the presenting buffer's.
+                // Each pass commits its own command buffer, so its handler names
+                // the pass when the GPU faults it. The same handler reports the
+                // buffer to the frame's completion join, so the frame-in-flight
+                // slot outlives every queue's work rather than just the
+                // presenting buffer's.
                 let pass_id = graph.passes.get(idx).map(|p| p.id);
-                let throttle = std::sync::Arc::clone(&pass_fault_count);
                 let part = std::sync::Arc::clone(join);
                 join.add_part();
                 let handler = block2::RcBlock::new(
@@ -416,14 +408,12 @@ impl MtlContext {
                         // SAFETY: Metal hands the completion handler a live command buffer, and the
                         // borrow does not escape the block.
                         let cbh = unsafe { cbh.as_ref() };
-                        if cbh.status() == objc2_metal::MTLCommandBufferStatus::Error
-                            && throttle.fetch_add(1, Ordering::Relaxed) < 8
-                        {
-                            tracing::error!(
-                                "render-graph pass {:?} command buffer faulted: {:?}",
-                                pass_id,
-                                cbh.error()
-                            );
+                        match pass_id {
+                            Some(id) => super::fault_log::report_fault(
+                                cbh,
+                                format_args!("render-graph pass {id:?}"),
+                            ),
+                            None => super::fault_log::report_fault(cbh, "render-graph pass"),
                         }
                         part.arrive();
                     },

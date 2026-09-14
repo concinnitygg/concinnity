@@ -482,23 +482,10 @@ pub(super) struct Diagnostics {
     // GPU execution time of the last completed frame, in microseconds. Written
     // by each command buffer's completion handler.
     pub gpu_time_us: std::sync::Arc<std::sync::atomic::AtomicU32>,
-    // Set once the frame render command buffer is observed to have faulted on
-    // the GPU. A render fault is the usual *origin* of a `SubmissionsIgnored`
-    // cascade that then shows up downstream on the next acceleration-structure
-    // build; logging the render buffer's own error names the real culprit.
-    // Logged once (this flag throttles it) so a per-frame fault streak does not
-    // spam at frame rate.
-    pub render_fault_logged: std::sync::Arc<std::sync::atomic::AtomicBool>,
     // First classified GPU failure observed on a completed frame command buffer,
     // parked here by the completion handler until the next draw_frame reports it
     // across the backend boundary.
     pub device_error: std::sync::Arc<std::sync::Mutex<Option<error::RenderError>>>,
-    // Count of render-graph per-pass command-buffer faults logged so far. Each
-    // graph pass commits its own command buffer; this throttle logs the first
-    // handful (with the pass name + error) so the *original* fault in a
-    // `SubmissionsIgnored`/`InnocentVictim` cascade is identifiable, while later
-    // victims do not spam at frame rate.
-    pub pass_fault_count: std::sync::Arc<std::sync::atomic::AtomicU32>,
     // Per-pass GPU sample buffers, when the active device supports the
     // `MTLCommonCounterSetTimestamp` counter set. Each `draw_frame` rotates to
     // the next slot in the ring; the completion handler resolves that slot into
