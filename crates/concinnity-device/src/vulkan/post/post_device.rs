@@ -502,7 +502,7 @@ impl crate::vulkan::context::VkContext {
             },
             cache: &self.post.cache,
             arena: &self.post.arena,
-            sampler: self.composite.sampler.handle(),
+            sampler: self.post.sampler.handle(),
             cube_sampler: self.scene.cube_sampler.handle(),
             probes: Some(VkPostProbes {
                 layout: self.descriptors.global_set_layout.handle(),

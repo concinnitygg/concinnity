@@ -58,8 +58,7 @@ pub(super) struct VkShadow {
     pub(super) framebuffers: Vec<OwnedFramebuffer>,
     pub(super) pipeline: Option<OwnedPipeline>,
     pub(super) pipeline_layout: Option<OwnedPipelineLayout>,
-    pub(super) global_set_layout: Option<OwnedSetLayout>,
-    pub(super) global_sets: Vec<vk::DescriptorSet>,
+    pub(super) global_set_layout: OwnedSetLayout,
     pub(super) sampler: OwnedSampler,
     pub(super) skinned_pipeline: Option<OwnedPipeline>,
     pub(super) skinned_pipeline_layout: Option<OwnedPipelineLayout>,
@@ -98,8 +97,7 @@ pub(super) struct VkShadow {
 
 impl VkShadow {
     // Destroy every owned GPU object. Called from `VkContext::drop` after
-    // `wait_idle`. The per-frame `global_sets` are freed with the shared
-    // descriptor pool, so they are not destroyed here.
+    // `wait_idle`. The per-frame shadow global sets live in `VkDescriptors`.
     pub(super) fn destroy(&mut self, _device: &VkDevice) {
         self.map = GpuImage::null();
         self.ubos.clear();
@@ -310,13 +308,12 @@ impl VkGeometry {
     }
 }
 
-// The main geometry-path descriptor set layouts plus the shared pool the
-// per-frame sets are allocated from, grouped off the flat `VkContext` field
-// soup. Global set 0 (camera / lights / shadow / IBL / SSAO) and the
-// text-overlay set; the `*_sets` are allocated from `descriptor_pool` at init
-// and freed with it. Post and skinned descriptors live in their own pools, not
-// here.
-#[derive(Default)]
+// The global set layout plus the shared pool the per-frame sets are allocated
+// from, grouped off the flat `VkContext` field soup. Global set 0 (camera /
+// lights / shadow / IBL / SSAO) and the cascade shadow pass's set 0; the
+// `*_sets` are allocated from `descriptor_pool` at init and freed with it, as
+// are the text, composite and cull sets their own states hold. Post and skinned
+// descriptors live in their own pools, not here.
 pub(super) struct VkDescriptors {
     pub(super) global_set_layout: OwnedSetLayout,
     // Whether `global_set_layout` was created with
@@ -333,15 +330,16 @@ pub(super) struct VkDescriptors {
     // re-rendered global set, and probe-shader recompile reads it from here so
     // they stay sized to the layout the pipelines were built against.
     pub(super) probe_cube_count: u32,
-    pub(super) text_set_layout: OwnedSetLayout,
     pub(super) descriptor_pool: OwnedDescriptorPool,
     pub(super) global_sets: Vec<vk::DescriptorSet>,
-    pub(super) text_atlas_sets: Vec<vk::DescriptorSet>,
+    // The cascade shadow pass's set 0 per frame, over `VkShadow`'s layout and
+    // uniform ring.
+    pub(super) shadow_global_sets: Vec<vk::DescriptorSet>,
 }
 
 impl VkDescriptors {
     // Destroy the shared descriptor pool (which frees every set allocated from
-    // it: global_sets / text_atlas_sets) and the set layouts. Called from
+    // it: global_sets / shadow_global_sets) and the set layout. Called from
     // `VkContext::drop` after `wait_idle`.
     pub(super) fn destroy(&self, _device: &VkDevice) {}
 }
@@ -403,7 +401,6 @@ impl VkChunkStream {
 // `Some` / non-empty only when the world has anything to GPU-drive. Field names
 // are kept verbatim (heterogeneous prefixes, no single cluster prefix to drop).
 // The two-pass Hi-Z pyramid + its temporal state live here too.
-#[derive(Default)]
 pub(super) struct VkCull {
     // Bindless static main pass: bucket 0's pipeline, the world default Shader's
     // pair where the world declares one and the engine's otherwise. The bindless
@@ -797,18 +794,14 @@ pub(super) struct ParticleState {
 // swapchain, with the text overlay drawn here too, post-tonemap. The
 // framebuffers are one per swapchain image; `sets` is one per frame-in-flight
 // slot, binding the matching HDR resolve image (binding 0), bloom mip 0
-// (binding 1), and the 3D color LUT (binding 2). `sampler` is the linear-clamp
-// sampler the composite + bloom shaders read HDR images with, the color LUT
-// included.
-#[derive(Default)]
+// (binding 1), and the 3D color LUT (binding 2), read through the post sampler.
 pub(super) struct CompositeState {
     pub render_pass: OwnedRenderPass,
     pub framebuffers: Vec<OwnedFramebuffer>,
     pub pipeline: OwnedPipeline,
     pub pipeline_layout: OwnedPipelineLayout,
-    pub set_layout: OwnedSetLayout,
+    pub _set_layout: OwnedSetLayout,
     pub sets: Vec<vk::DescriptorSet>,
-    pub sampler: OwnedSampler,
 }
 
 // Bloom chain. The mips, framebuffers, and input descriptor sets are all
@@ -819,7 +812,6 @@ pub(super) struct CompositeState {
 // entry than `write_framebuffers` (the smallest mip is never upsampled into).
 // `input_sets` is `[frame][input]`: input 0 binds the HDR resolve image, input
 // `1 + m` binds bloom mip `m`.
-#[derive(Default)]
 pub(super) struct BloomState {
     pub write_pass: OwnedRenderPass,
     pub blend_pass: OwnedRenderPass,
@@ -836,17 +828,20 @@ pub(super) struct BloomState {
     pub input_sets: Vec<Vec<vk::DescriptorSet>>,
 }
 
-// HUD text pass: the glyph atlases, the pipeline (`None` until the first frame
-// that publishes text), its layout, the sampler held for lifetime, and the
+// HUD text pass: the glyph atlases with their set layout and one set per atlas,
+// the pipeline (`None` when the world has no atlas), its layout, the sampler
+// held for lifetime, and the
 // per-frame-slot persistent upload buffers for transient text geometry. Each
 // upload slot's cursor resets and its buffer grows inside the ring's `reserve`,
 // which the composite pass calls once the frame fence confirms the GPU is done
 // with that slot.
 pub(super) struct TextState {
     pub atlas_textures: Vec<GpuImage>,
+    pub _set_layout: OwnedSetLayout,
+    pub atlas_sets: Vec<vk::DescriptorSet>,
     pub pipeline: Option<OwnedPipeline>,
     pub pipeline_layout: OwnedPipelineLayout,
-    pub sampler: OwnedSampler,
+    pub _sampler: OwnedSampler,
     pub upload: super::upload_ring::UploadRing,
 }
 

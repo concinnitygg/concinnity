@@ -12,13 +12,12 @@ use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::lights;
 use concinnity_core::render::planar_reflection;
 
-use super::gpu_driven::RtResources;
-use super::{Features, GlobalBindings, InitGpu, PassStates};
+use super::ray_tracing::RtResources;
+use super::{Features, GlobalBindings, InitGpu};
 use crate::vulkan::context::{
-    AutoExposureState, DecalState, FogState, HDR_FORMAT, VkCull, VkDescriptors, VkGeometry,
-    VkSceneAssets, VkTargets,
+    AutoExposureState, BloomState, CompositeState, DecalState, FogState, HDR_FORMAT, VkCull,
+    VkDescriptors, VkGeometry, VkSceneAssets, VkTargets,
 };
-use crate::vulkan::owned::OwnedSampler;
 use crate::vulkan::planar::PlanarReflectionSet;
 use crate::vulkan::post::PostSupport;
 use crate::vulkan::post::bloom::rebind_bloom_input0;
@@ -31,7 +30,6 @@ use crate::vulkan::post::taa::TaaResources;
 use crate::vulkan::post::upscale::VkUpscaleBackend;
 use crate::vulkan::raymarch::RaymarchResources;
 use crate::vulkan::swapchain::{write_composite_channel_set, write_composite_set};
-use crate::vulkan::texture::{self, GpuImage};
 use crate::vulkan::transparent::TransparentResources;
 
 // Temporal upscaling (FSR / DLSS / XeSS). Built before the off-screen
@@ -104,7 +102,6 @@ pub(super) fn build_upscale(
 fn shared_post_device<'a>(
     gpu: &InitGpu<'a>,
     post_support: &'a PostSupport,
-    composite_sampler: &'a OwnedSampler,
     scene: &'a VkSceneAssets,
     descriptors: &'a VkDescriptors,
 ) -> VkPostDevice<'a> {
@@ -123,7 +120,7 @@ fn shared_post_device<'a>(
         },
         cache: &post_support.cache,
         arena: &post_support.arena,
-        sampler: composite_sampler.handle(),
+        sampler: post_support.sampler.handle(),
         cube_sampler: scene.cube_sampler.handle(),
         probes: Some(VkPostProbes {
             layout: descriptors.global_set_layout.handle(),
@@ -135,19 +132,12 @@ fn shared_post_device<'a>(
     }
 }
 
-// The 1x1 white image bound at set 0 binding 6 when SSAO is off, so the main
-// pass's `ambient *= ao` multiplier collapses to a pass-through.
-pub(super) fn build_ssao_white(gpu: &InitGpu<'_>) -> RenderResult<GpuImage> {
-    texture::create_fallback_white(&gpu.upload())
-}
-
 pub(super) struct ScreenSpaceInputs<'a> {
     pub(super) post: &'a PostSettings,
     pub(super) features: &'a Features,
     pub(super) targets: &'a VkTargets,
     pub(super) scene: &'a VkSceneAssets,
     pub(super) descriptors: &'a VkDescriptors,
-    pub(super) composite_sampler: &'a OwnedSampler,
 }
 
 pub(super) struct ScreenSpace {
@@ -175,7 +165,6 @@ pub(super) fn build_screen_space(
         targets,
         scene,
         descriptors,
-        composite_sampler,
     } = inputs;
     let render_extent = targets.render_extent;
     // SSAO (GTAO): pre-pass + kernel + blur. The transient image pool was built
@@ -202,8 +191,7 @@ pub(super) fn build_screen_space(
     // on; its settings stay `None` unless SSR itself is authored, and the
     // resolve runs only when it is and RT did not take its graph slot.
     let post_support = crate::vulkan::post::PostSupport::new(device, frames)?;
-    let init_post_device =
-        shared_post_device(gpu, &post_support, composite_sampler, scene, descriptors);
+    let init_post_device = shared_post_device(gpu, &post_support, scene, descriptors);
     let ssr = if post.ssr.is_some() || post.ssgi.is_some() || features.rt_wanted {
         Some(crate::vulkan::post::ssr::SsrResources::new(
             &init_post_device,
@@ -270,7 +258,8 @@ pub(super) struct SceneInputWiring<'a> {
     pub(super) targets: &'a VkTargets,
     pub(super) scene: &'a VkSceneAssets,
     pub(super) descriptors: &'a VkDescriptors,
-    pub(super) passes: &'a PassStates,
+    pub(super) composite: &'a CompositeState,
+    pub(super) bloom: &'a BloomState,
     pub(super) screen: &'a ScreenSpace,
     pub(super) upscale: Option<&'a dyn VkUpscaleBackend>,
 }
@@ -286,13 +275,13 @@ pub(super) fn build_taa_and_wire_scene_inputs(
         targets,
         scene,
         descriptors,
-        passes,
+        composite,
+        bloom,
         screen,
         upscale,
     } = inputs;
-    let (composite, bloom) = (&passes.composite, &passes.bloom);
-    let init_post_device =
-        shared_post_device(gpu, &screen.post, &composite.sampler, scene, descriptors);
+    let init_post_device = shared_post_device(gpu, &screen.post, scene, descriptors);
+    let post_sampler = screen.post.sampler.handle();
     // When TAA is on the history resolve produces a post-TAA scene image;
     // the bloom prefilter and composite pass must sample that instead of the
     // raw HDR resolve, so their binding-0 descriptor is re-pointed at the
@@ -307,16 +296,11 @@ pub(super) fn build_taa_and_wire_scene_inputs(
                 taa.output_view(i),
                 bloom.mips[i][0].view,
                 scene.color_lut.view,
-                composite.sampler.handle(),
+                post_sampler,
             );
         }
         for (i, frame_sets) in bloom.input_sets.iter().enumerate() {
-            rebind_bloom_input0(
-                device,
-                frame_sets[0],
-                taa.output_view(i),
-                composite.sampler.handle(),
-            );
+            rebind_bloom_input0(device, frame_sets[0], taa.output_view(i), post_sampler);
         }
         Some(taa)
     } else {
@@ -339,16 +323,11 @@ pub(super) fn build_taa_and_wire_scene_inputs(
                 up_output_view,
                 bloom.mips[i][0].view,
                 scene.color_lut.view,
-                composite.sampler.handle(),
+                post_sampler,
             );
         }
         for frame_sets in &bloom.input_sets {
-            rebind_bloom_input0(
-                device,
-                frame_sets[0],
-                up_output_view,
-                composite.sampler.handle(),
-            );
+            rebind_bloom_input0(device, frame_sets[0], up_output_view, post_sampler);
         }
     }
 
@@ -381,7 +360,7 @@ pub(super) fn build_taa_and_wire_scene_inputs(
                 .transient_pool
                 .view_for("ao_output", i)
                 .unwrap_or(scene.ssao_white.view),
-            composite.sampler.handle(),
+            post_sampler,
         );
     }
     Ok(taa)

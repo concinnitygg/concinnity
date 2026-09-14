@@ -187,7 +187,7 @@ impl VkContext {
                 sb_layout.handle(),
                 0,
                 &[
-                    self.shadow.global_sets[frame_idx],
+                    self.descriptors.shadow_global_sets[frame_idx],
                     self.cull.bindless_sets[frame_idx],
                 ],
                 &[],

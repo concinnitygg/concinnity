@@ -1,35 +1,43 @@
 //! VkContext construction. `build` resolves the backend inputs, then calls each
-//! stage in Vulkan object creation order. A stage returns the owned groups and
-//! subsystem states it builds; a state whose render passes, layouts, pipelines
-//! and descriptor sets come from different stages starts from inert
-//! placeholders, and each stage fills in its part:
+//! stage in dependency order. A stage builds one owned group or subsystem state
+//! whole and returns it, borrowing the finished states it depends on:
 //!
-//!   bootstrap.rs    window, instance, debug messenger, surface, device, swapchain.
-//!   commands.rs     command pools and buffers, timestamp reset, sync objects.
-//!   targets.rs      shadow maps, render passes, HDR attachments, bloom chain.
-//!   scene_data.rs   area lights, textures, samplers, geometry, uniforms, IBL.
-//!   descriptors.rs  set and pipeline layouts, the descriptor pool and sets.
-//!   pipelines.rs    shadow, text, composite, bloom and material pipelines.
-//!   gpu_driven.rs   bindless pass, RT reflections, compute cull, Hi-Z.
-//!   effects.rs      upscaler, screen-space passes, TAA, world effects.
+//!   bootstrap.rs     window, instance, debug messenger, surface, device, swapchain.
+//!   commands.rs      command pools and buffers, timestamp reset, sync objects.
+//!   scene_assets.rs  textures, scene and cube samplers, IBL cubes, color LUT.
+//!   targets.rs       main render pass, HDR attachments, transient image pool.
+//!   scene_data.rs    area lights, geometry, uniform rings, clustered lights.
+//!   shadow.rs        cascade and spot shadow states.
+//!   descriptors.rs   global set layout, the shared pool, global and shadow sets.
+//!   effects.rs       upscaler, screen-space passes, TAA wiring, world effects.
+//!   cull/            bindless pass, compute cull, Hi-Z, GPU-driven shadow, G-buffer.
+//!   ray_tracing.rs   RT acceleration structure, reflections, reflection composite.
+//!   bloom.rs         bloom passes, pipelines, mip chain and input sets.
+//!   composite.rs     composite pass, pipeline and input sets.
+//!   text.rs          text atlases, pipeline and atlas sets.
 
 use ash::vk;
 use concinnity_core::gfx::render_types::PostProcessParams;
-use concinnity_core::render::backend_init::{BackendInit, PostSettings, ShadowParams, WorldShader};
+use concinnity_core::render::backend_init::{BackendInit, PostSettings, WorldShader};
 use concinnity_core::render::error::RenderResult;
 
 use super::context::*;
 use super::light_cull::VkLightCull;
-use super::texture::{GpuImage, GpuUploadContext};
+use super::texture::GpuUploadContext;
 
+mod bloom;
 pub(in crate::vulkan) mod bootstrap;
 mod commands;
+mod composite;
+mod cull;
 mod descriptors;
 mod effects;
-mod gpu_driven;
-mod pipelines;
+mod ray_tracing;
+mod scene_assets;
 mod scene_data;
+mod shadow;
 mod targets;
+mod text;
 
 // The hardware and command pool every init stage creates resources through.
 struct InitGpu<'a> {
@@ -100,52 +108,6 @@ impl Features {
                 || post.ssr.is_some()
                 || post.ssgi.is_some()
                 || rt_wanted,
-        }
-    }
-}
-
-// The fixed-function pass states whose render passes, layouts, pipelines and
-// descriptor sets different stages create, filled in as each stage runs.
-struct PassStates {
-    shadow: VkShadow,
-    text: TextState,
-    composite: CompositeState,
-    bloom: BloomState,
-}
-
-impl PassStates {
-    fn new(shadows: &ShadowParams, frames: usize) -> Self {
-        Self {
-            shadow: VkShadow {
-                render_pass: Default::default(),
-                map: GpuImage::null(),
-                map_size: shadows.map_size,
-                framebuffers: Vec::new(),
-                pipeline: None,
-                pipeline_layout: None,
-                global_set_layout: None,
-                global_sets: Vec::new(),
-                sampler: Default::default(),
-                skinned_pipeline: None,
-                skinned_pipeline_layout: None,
-                ubos: Vec::new(),
-                uniforms: concinnity_core::render::csm::empty_shadow_uniforms(),
-                light_dir: [0.0; 3],
-                update: shadows.update,
-                distance: shadows.distance,
-                cascades: shadows.cascades,
-                scheduler: Default::default(),
-                render_mask: 0,
-            },
-            text: TextState {
-                atlas_textures: Vec::new(),
-                pipeline: None,
-                pipeline_layout: Default::default(),
-                sampler: Default::default(),
-                upload: super::upload_ring::UploadRing::new(frames),
-            },
-            composite: CompositeState::default(),
-            bloom: BloomState::default(),
         }
     }
 }
@@ -242,13 +204,8 @@ impl VkContext {
 
         let (upscale, render_extent) = effects::build_upscale(&gpu, swapchain.extent, &post)?;
         commands::reset_timestamp_queries(&gpu)?;
-        let mut passes = PassStates::new(&shadows, frames);
-        targets::build_shadow_map(&gpu, &mut passes.shadow)?;
         let area_light = scene_data::build_area_lights(&gpu, &area_lights)?;
-        let spot_shadow_map =
-            targets::build_spot_shadow_map(&gpu, shadows.map_size, &spot_shadows)?;
-        let mut scene =
-            scene_data::build_textures_and_samplers(&gpu, &media, anisotropy, &mut passes)?;
+        let scene = scene_assets::build_scene_assets(&gpu, &media, anisotropy)?;
         let targets = targets::build_render_targets(
             &gpu,
             targets::TargetInputs {
@@ -257,23 +214,39 @@ impl VkContext {
                 render_extent,
                 ssao_enabled: post.ssao.is_some(),
             },
-            &mut passes,
         )?;
         let (geometry, uniforms, light_cull) = scene_data::build_scene_resources(
             &gpu,
             scene_data::SceneInputs {
                 world: &world,
-                media: &media,
                 local_lights: &local_lights,
                 light_uniforms,
             },
-            &mut scene,
-            &mut passes.shadow,
         )?;
-        let mut descriptors = descriptors::build_layouts(&gpu, &mut passes)?;
-        let spot_shadow =
-            pipelines::build_main_pipelines(&gpu, &mut passes, spot_shadow_map, &spot_shadows)?;
-        scene.ssao_white = effects::build_ssao_white(&gpu)?;
+        let shadow = shadow::build_shadow(&gpu, &shadows, &uniforms.light_uniforms)?;
+        let spot_shadow = shadow::build_spot_shadow(&gpu, &shadow, &spot_shadows)?;
+        let globals = GlobalBindings {
+            uniforms: &uniforms,
+            light_cull: &light_cull,
+            shadow: &shadow,
+            spot_shadow: &spot_shadow,
+            area_light: &area_light,
+            scene: &scene,
+            targets: &targets,
+        };
+        let budget = descriptors::global_set_budget(&hw);
+        let plan = cull::plan_cull(&gpu, &world, media.textures, &budget);
+        let descriptors = descriptors::build_descriptors(
+            &gpu,
+            budget,
+            descriptors::SetPoolInputs {
+                instanced_clusters: &world.instanced_clusters,
+                text_atlas_count: media.text_atlases.len(),
+                plan: &plan,
+                has_gbuffer: features.gbuffer_enabled,
+            },
+            &globals,
+        )?;
         let screen = effects::build_screen_space(
             &gpu,
             effects::ScreenSpaceInputs {
@@ -282,54 +255,27 @@ impl VkContext {
                 targets: &targets,
                 scene: &scene,
                 descriptors: &descriptors,
-                composite_sampler: &passes.composite.sampler,
             },
         )?;
 
-        let plan = gpu_driven::plan_cull(&gpu, &world, media.textures, &descriptors);
-        descriptors::build_sets(
+        let (cull, probe_prefilter) = cull::build_cull(
             &gpu,
-            &mut descriptors,
-            descriptors::SetPoolInputs {
-                instanced_clusters: &world.instanced_clusters,
-                text_atlas_count: passes.text.atlas_textures.len(),
-                plan: &plan,
-                has_gbuffer: screen.gbuffer.is_some(),
-            },
-            &GlobalBindings {
-                uniforms: &uniforms,
-                light_cull: &light_cull,
-                shadow: &passes.shadow,
-                spot_shadow: &spot_shadow,
-                area_light: &area_light,
-                scene: &scene,
-                targets: &targets,
-            },
-        )?;
-        descriptors::build_shadow_global_sets(&gpu, &descriptors, &mut passes.shadow)?;
-        let mut cull = gpu_driven::build_bindless_pass(
-            &gpu,
-            gpu_driven::BindlessInputs {
+            cull::CullInputs {
+                world: &world,
                 world_shaders: &world_shaders,
                 plan: &plan,
                 occlusion_two_pass: post.occlusion_two_pass,
                 descriptors: &descriptors,
                 targets: &targets,
                 scene: &scene,
+                shadow: &shadow,
+                gbuffer: screen.gbuffer.as_ref(),
                 swapchain_format: swapchain.format,
             },
         )?;
-        pipelines::build_world_pipelines(
+        let rt = ray_tracing::build_rt_reflections(
             &gpu,
-            &mut cull,
-            &world_shaders,
-            &targets,
-            swapchain.format,
-            descriptors.probe_cube_count,
-        )?;
-        let rt = gpu_driven::build_rt_reflections(
-            &gpu,
-            gpu_driven::RtInputs {
+            ray_tracing::RtInputs {
                 world: &world,
                 geometry: &geometry,
                 scene: &scene,
@@ -341,34 +287,28 @@ impl VkContext {
                 rt_wanted: features.rt_wanted,
             },
         )?;
-        gpu_driven::build_cull_pass(
+        let bloom = bloom::build_bloom(
             &gpu,
-            &mut cull,
-            gpu_driven::CullInputs {
-                world: &world,
-                scene: &scene,
+            bloom::BloomInputs {
                 targets: &targets,
-                descriptors: &descriptors,
-                plan: &plan,
+                extent: swapchain.extent,
+                sampler: &screen.post.sampler,
+                reflection_composite: rt.composite.as_ref(),
             },
         )?;
-        gpu_driven::build_shadow_cull(&gpu, &mut cull, &passes.shadow, &descriptors, &plan)?;
-        let probe_prefilter = gpu_driven::build_gbuffer_pass(
+        let composite = composite::build_composite(
             &gpu,
-            &mut cull,
-            screen.gbuffer.as_ref(),
-            &descriptors,
-            &plan,
+            composite::CompositeInputs {
+                swapchain: &swapchain,
+                descriptors: &descriptors,
+                bloom: &bloom,
+                scene: &scene,
+                targets: &targets,
+                sampler: &screen.post.sampler,
+                reflection_composite: rt.composite.as_ref(),
+            },
         )?;
-        gpu_driven::build_two_pass_cull(&gpu, &mut cull, &plan, targets.msaa_samples)?;
-        descriptors::build_post_sets(
-            &gpu,
-            &mut descriptors,
-            &mut passes,
-            &targets,
-            &scene,
-            rt.composite.as_ref(),
-        )?;
+        let text = text::build_text(&gpu, &media, &composite, &descriptors)?;
         let taa = effects::build_taa_and_wire_scene_inputs(
             &gpu,
             effects::SceneInputWiring {
@@ -376,7 +316,8 @@ impl VkContext {
                 targets: &targets,
                 scene: &scene,
                 descriptors: &descriptors,
-                passes: &passes,
+                composite: &composite,
+                bloom: &bloom,
                 screen: &screen,
                 upscale: upscale.as_deref(),
             },
@@ -394,30 +335,22 @@ impl VkContext {
                 geometry: &geometry,
                 post: &post,
             },
-            &GlobalBindings {
-                uniforms: &uniforms,
-                light_cull: &light_cull,
-                shadow: &passes.shadow,
-                spot_shadow: &spot_shadow,
-                area_light: &area_light,
-                scene: &scene,
-                targets: &targets,
-            },
+            &globals,
         )?;
         let (commands, frame_sync) = commands::build_frame_commands(&gpu, &swapchain)?;
 
         let mut me = Self {
             swapchain,
             targets,
-            composite: passes.composite,
-            shadow: passes.shadow,
+            composite,
+            shadow,
             spot_shadow,
             area_light,
             scene,
             cull,
             light_cull,
-            text: passes.text,
-            bloom: passes.bloom,
+            text,
+            bloom,
             post_process: features.post_process,
             taa,
             post: screen.post,

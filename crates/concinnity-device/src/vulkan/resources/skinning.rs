@@ -42,10 +42,8 @@ impl VkContext {
         )?;
 
         let (skinned_shadow_pipeline, skinned_shadow_pipeline_layout) =
-            if let (Some(_), Some(shadow_global)) = (
-                self.shadow.pipeline.as_ref(),
-                self.shadow.global_set_layout.as_ref(),
-            ) {
+            if self.shadow.pipeline.is_some() {
+                let shadow_global = &self.shadow.global_set_layout;
                 let shadow_pc = vk::PushConstantRange::default()
                     .stage_flags(vk::ShaderStageFlags::VERTEX)
                     .offset(0)

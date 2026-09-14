@@ -162,7 +162,7 @@ impl fullscreen::CompositeEncoder for VkContext {
         call: &TextDrawCall,
         binds: &mut TextBindCache,
     ) -> Result<(), String> {
-        if call.vertices.is_empty() || self.descriptors.text_atlas_sets.is_empty() {
+        if call.vertices.is_empty() || self.text.atlas_sets.is_empty() {
             return Ok(());
         }
         let device = &self.hw.device;
@@ -186,9 +186,7 @@ impl fullscreen::CompositeEncoder for VkContext {
             None => (0, 0, extent.width, extent.height),
         };
 
-        let atlas_idx = call
-            .atlas_slot
-            .min(self.descriptors.text_atlas_sets.len() - 1);
+        let atlas_idx = call.atlas_slot.min(self.text.atlas_sets.len() - 1);
 
         // Append this label's vertex + index geometry into the frame slot's
         // persistent upload buffer (sized up front by `reserve` in
@@ -211,7 +209,7 @@ impl fullscreen::CompositeEncoder for VkContext {
                     vk::PipelineBindPoint::GRAPHICS,
                     self.text.pipeline_layout.handle(),
                     0,
-                    std::slice::from_ref(&self.descriptors.text_atlas_sets[atlas_idx]),
+                    std::slice::from_ref(&self.text.atlas_sets[atlas_idx]),
                     &[],
                 );
             }

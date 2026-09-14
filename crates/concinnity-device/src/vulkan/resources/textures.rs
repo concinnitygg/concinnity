@@ -223,7 +223,7 @@ impl VkContext {
             let info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(new_view)
-                .sampler(self.composite.sampler.handle());
+                .sampler(self.post.sampler.handle());
             let write = vk::WriteDescriptorSet::default()
                 .dst_set(set)
                 .dst_binding(2)

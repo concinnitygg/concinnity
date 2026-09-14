@@ -299,7 +299,7 @@ impl VkContext {
             &self.hw.device,
             self.bloom.descriptor_pool.handle(),
             self.bloom.set_layout.handle(),
-            self.composite.sampler.handle(),
+            self.post.sampler.handle(),
             &self.targets.hdr_resolve_images,
             &self.bloom.mips,
         )?;
@@ -427,7 +427,7 @@ impl VkContext {
                     &self.hw.device,
                     frame_sets[0],
                     rc.output.view,
-                    self.composite.sampler.handle(),
+                    self.post.sampler.handle(),
                 );
             }
             self.reflection_composite = Some(rc);
@@ -447,7 +447,7 @@ impl VkContext {
                     &self.hw.device,
                     frame_sets[0],
                     taa.output_view(i),
-                    self.composite.sampler.handle(),
+                    self.post.sampler.handle(),
                 );
             }
             self.taa = Some(taa);
@@ -463,7 +463,7 @@ impl VkContext {
                     &self.hw.device,
                     frame_sets[0],
                     up_output_view,
-                    self.composite.sampler.handle(),
+                    self.post.sampler.handle(),
                 );
             }
         }
@@ -770,7 +770,7 @@ impl VkContext {
                 scene_view,
                 self.bloom.mips[i][0].view,
                 self.scene.color_lut.view,
-                self.composite.sampler.handle(),
+                self.post.sampler.handle(),
             );
             // The view-mode channel sources are resolution-dependent too, so
             // they follow the rebuilt G-buffer / AO targets.
@@ -787,7 +787,7 @@ impl VkContext {
                     .transient_pool
                     .view_for("ao_output", i)
                     .unwrap_or(self.scene.ssao_white.view),
-                self.composite.sampler.handle(),
+                self.post.sampler.handle(),
             );
         }
 

@@ -46,6 +46,9 @@ pub(in crate::vulkan) struct PostSupport {
     pub(in crate::vulkan) cache: pass_cache::PostPassCache,
     /// Descriptor sets, one pool per frame in flight.
     pub(in crate::vulkan) arena: set_arena::PostSetArena,
+    /// The linear-clamp sampler the post passes, bloom and the composite read
+    /// HDR images and the color LUT with; clamp keeps edge taps from wrapping.
+    pub(in crate::vulkan) sampler: crate::vulkan::owned::OwnedSampler,
 }
 
 impl PostSupport {
@@ -57,6 +60,7 @@ impl PostSupport {
         Ok(Self {
             cache: pass_cache::PostPassCache::new(),
             arena: set_arena::PostSetArena::new(device, frames)?,
+            sampler: crate::vulkan::texture::create_sampler_linear_clamp(device)?,
         })
     }
 }
