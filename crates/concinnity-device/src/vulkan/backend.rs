@@ -30,7 +30,7 @@ use concinnity_core::render::display_mode;
 use concinnity_core::render::draw_slot;
 use concinnity_core::render::error;
 use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::input::RenderInput;
+use concinnity_core::render::input::InputSnapshot;
 use concinnity_core::render::keymap::KeyMap;
 use concinnity_core::render::particles;
 use concinnity_core::render::reflection_probe;
@@ -43,7 +43,7 @@ impl RenderBackend for VkContext {
     forward! { assert = debug_assert_main_thread;
         fn window_closed(&mut self) -> bool;
         fn capture_cursor(&mut self);
-        fn take_input(&mut self) -> RenderInput;
+        fn take_input(&mut self) -> InputSnapshot;
         fn wait_idle(&self);
         fn draw_frame(&mut self, params: FrameParams<'_>) -> error::RenderResult<()>;
         fn update_view(&mut self, matrix: [[f32; 4]; 4]);

@@ -107,7 +107,7 @@ fn thumb_height(list_h: f32, count: usize) -> f32 {
 // `first_for_thumb_top`.
 pub(crate) fn thumb_rect(layout: &DropdownLayout, first: usize, count: usize) -> Option<[f32; 4]> {
     let visible = visible_count(count);
-    if count <= visible || visible == 0 {
+    if count <= visible {
         return None;
     }
     let [lx, ly, lw, lh] = layout.list;
@@ -214,6 +214,8 @@ mod tests {
         assert_eq!(bottom[1] + bottom[3], l.list[1] + l.list[3]);
         // A fitting list has no thumb.
         assert!(thumb_rect(&layout([0.0, 100.0, 100.0, 40.0], 4), 0, 4).is_none());
+        // Nor does an empty one.
+        assert!(thumb_rect(&layout([0.0, 100.0, 100.0, 40.0], 0), 0, 0).is_none());
     }
 
     #[test]

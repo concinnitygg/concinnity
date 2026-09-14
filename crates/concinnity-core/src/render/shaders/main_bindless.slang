@@ -83,10 +83,10 @@ struct EngineSamplers
 };
 
 // register() numbers pin the Metal buffer slots directly (b and t share the
-// index space there). The three pads reserve buffers 1-3 -- the vertex stream
-// rides buffer(1) and the layout keeps the legacy pass's gaps -- so the
-// argument buffer lands at buffer(7) and the sampler block at buffer(10), the
-// first free slots when their declarations are reached.
+// index space there). The three pads reserve buffers 1-3 so the vertex stream
+// keeps buffer(1), the argument buffer lands at buffer(7) and the sampler
+// block at buffer(10): the slots the Metal host binds them at, and the first
+// free ones when their declarations are reached.
 ConstantBuffer<ViewUniforms> view_cb : register(b0);
 ConstantBuffer<float4> abi_pad1 : register(b1);
 ConstantBuffer<float4> abi_pad2 : register(b2);

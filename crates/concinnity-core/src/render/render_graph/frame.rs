@@ -73,8 +73,8 @@ pub struct FrameGraphInputs {
     /// bindless static path is configured AND there is geometry to cull
     /// AND the per-frame `object_buffer` / `draw_args` buffers built. The
     /// graph adds the Cull compute pass and the Main read-edge from
-    /// `draw_args` only when this is on; otherwise Main draws via the
-    /// legacy per-draw path with no graph dependency on the cull output.
+    /// `draw_args` only when this is on; otherwise Main draws no static
+    /// geometry and the graph has no dependency on the cull output.
     pub bindless_cull_enabled: bool,
     /// `true` when the auto-exposure compute pipelines are built (i.e.
     /// the world declared `PostProcessConfig.auto_exposure`). The graph

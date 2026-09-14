@@ -13,7 +13,7 @@ use concinnity_core::ecs::{Access, PipelineContext, ScreenStack, StepResult, Sys
 use concinnity_core::render::scene_flow::FadePhase;
 use concinnity_core::render::scene_residency::SceneLoadState;
 use concinnity_host::thread::asset_id::AssetId;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 // Seconds the backdrop takes to fade out over the freshly resident scene.
 const FADE_OUT_SECS: f32 = 0.35;
@@ -36,11 +36,18 @@ pub(crate) struct LoadingOverlaySystem {
     // The backdrop's authored tint alpha, captured on first show so the
     // fade-out animation can restore it for the next load.
     backdrop_alpha: Option<f32>,
+    // Time since an instant, read when the fade-out advances.
+    elapsed: fn(Instant) -> Duration,
 }
 
 impl LoadingOverlaySystem {
     // Build the overlay from a world's `LoadingOverlay` request component.
     pub(crate) fn new(config: LoadingOverlay) -> Self {
+        Self::with_elapsed(config, |started| started.elapsed())
+    }
+
+    // `new` with the fade-out's clock supplied by the caller.
+    pub(crate) fn with_elapsed(config: LoadingOverlay, elapsed: fn(Instant) -> Duration) -> Self {
         Self {
             screen: config.screen,
             backdrop: config.backdrop,
@@ -49,6 +56,7 @@ impl LoadingOverlaySystem {
             label: config.label,
             phase: Phase::Hidden,
             backdrop_alpha: None,
+            elapsed,
         }
     }
 
@@ -202,7 +210,7 @@ impl System for LoadingOverlaySystem {
                     self.phase = Phase::Shown;
                     return StepResult::Continue;
                 }
-                let faded = 1.0 - started.elapsed().as_secs_f32() / FADE_OUT_SECS;
+                let faded = fade_remaining((self.elapsed)(started));
                 if faded > 0.0 {
                     let base = self.backdrop_alpha.unwrap_or(1.0);
                     self.set_backdrop_alpha(ctx, base * faded);
@@ -225,6 +233,12 @@ impl System for LoadingOverlaySystem {
     }
 }
 
+// The backdrop's remaining opacity fraction `elapsed` into the fade-out; at or
+// below zero once the fade has finished.
+fn fade_remaining(elapsed: Duration) -> f32 {
+    1.0 - elapsed.as_secs_f32() / FADE_OUT_SECS
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -240,15 +254,26 @@ mod tests {
     const LABEL: AssetId = AssetId(5);
     const SCENE: AssetId = AssetId(9);
 
-    fn overlay_world() -> World {
-        let mut world = World::new();
-        world.add_component(LoadingOverlay {
+    fn overlay_config() -> LoadingOverlay {
+        LoadingOverlay {
             screen: Some(SCREEN),
             backdrop: Some(BACKDROP),
             track: Some(TRACK),
             fill: Some(FILL),
             label: Some(LABEL),
-        });
+        }
+    }
+
+    fn overlay_world() -> World {
+        let mut world = overlay_elements();
+        world.add_component(overlay_config());
+        world
+    }
+
+    // The overlay's screen, elements and scene flow, without the
+    // `LoadingOverlay` component that schedules the engine's own system.
+    fn overlay_elements() -> World {
+        let mut world = World::new();
         world.add_component(Screen {
             asset_id: SCREEN,
             ..Default::default()
@@ -359,8 +384,23 @@ mod tests {
     }
 
     #[test]
+    fn fade_remaining_runs_from_one_to_zero_over_the_fade() {
+        assert_eq!(fade_remaining(Duration::ZERO), 1.0);
+        let half = fade_remaining(Duration::from_secs_f32(FADE_OUT_SECS / 2.0));
+        assert!((half - 0.5).abs() < 1e-6);
+        assert!(fade_remaining(Duration::from_secs_f32(FADE_OUT_SECS)) <= 0.0);
+    }
+
+    #[test]
     fn resident_target_fades_the_overlay_out_and_hides_it() {
-        let mut world = overlay_world();
+        // PreRender keeps the overlay after StreamingSystem and ahead of
+        // UiInputSystem, as the table entry runs.
+        let mut world = overlay_elements();
+        world.add_system(
+            concinnity_core::ecs::Phase::PreRender,
+            "FixedClockLoadingOverlaySystem",
+            LoadingOverlaySystem::with_elapsed(overlay_config(), |_| Duration::from_secs(1)),
+        );
         set_status(&mut world, SceneLoadState::Loading, 0.5);
         world.start(SYSTEMS).unwrap();
         world.step();
@@ -374,8 +414,6 @@ mod tests {
         assert!(shown(&world), "backdrop still fading");
 
         // Past the fade the screen pops off the stack.
-        std::thread::sleep(std::time::Duration::from_secs_f32(FADE_OUT_SECS + 0.1));
-        world.step();
         world.step();
         assert!(!shown(&world));
 

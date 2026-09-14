@@ -20,7 +20,7 @@ use concinnity_core::ecs::{
     Access, CursorState, EventCursor, FlyCam, MenuActive, PipelineContext, ScreenStack, StepResult,
     System,
 };
-use concinnity_core::render::input::RenderInput;
+use concinnity_core::render::input::InputSnapshot;
 use std::time::Instant;
 
 use crate::ecs::InputMailbox;
@@ -58,7 +58,7 @@ impl InputSystem {
 // the gameplay gate. Pure, so the merge and gating are unit-tested without a
 // backend; the caller fills in the window metrics.
 fn compose_frame_input(
-    raw: &RenderInput,
+    raw: &InputSnapshot,
     pad: &PadSnapshot,
     map: GamepadMap,
     nav: Option<NavDirection>,
@@ -296,7 +296,7 @@ mod tests {
             press(GamepadButton::Start),
         ]);
         let input = compose_frame_input(
-            &RenderInput::default(),
+            &InputSnapshot::default(),
             &pad,
             GamepadMap::DEFAULT,
             None,
@@ -310,7 +310,7 @@ mod tests {
 
     #[test]
     fn keyboard_fields_pass_through_unchanged() {
-        let raw = RenderInput {
+        let raw = InputSnapshot {
             forward: true,
             sprint: true,
             mouse_dx: 3.0,
@@ -337,7 +337,7 @@ mod tests {
     // while a menu (or the in-engine editor) holds the screen.
     #[test]
     fn ui_modifiers_stay_live_behind_the_menu_gate() {
-        let raw = RenderInput {
+        let raw = InputSnapshot {
             ctrl: true,
             alt: true,
             cmd: true,
@@ -360,10 +360,10 @@ mod tests {
         let mut map = GamepadMap::DEFAULT;
         map.rebind(GamepadAction::Jump, GamepadButton::North);
         let pad = pad_snapshot(&[press(GamepadButton::North)]);
-        let input = compose_frame_input(&RenderInput::default(), &pad, map, None, true);
+        let input = compose_frame_input(&InputSnapshot::default(), &pad, map, None, true);
         assert!(input.jump, "jump follows the rebound button");
         let default_pad = pad_snapshot(&[press(GamepadButton::South)]);
-        let input = compose_frame_input(&RenderInput::default(), &default_pad, map, None, true);
+        let input = compose_frame_input(&InputSnapshot::default(), &default_pad, map, None, true);
         assert!(!input.jump, "the old button no longer jumps");
     }
 
@@ -384,7 +384,7 @@ mod tests {
                 value: 1.0,
             },
         ]);
-        let raw = RenderInput {
+        let raw = InputSnapshot {
             forward: true,
             sprint: true,
             mouse_dx: 5.0,
@@ -408,7 +408,7 @@ mod tests {
     fn mouse_clicks_pass_the_menu_gate() {
         // Both click pulses serve UI, so neither freezes behind a menu: the
         // backend already withholds them while the cursor is captured.
-        let raw = RenderInput {
+        let raw = InputSnapshot {
             left_click: true,
             right_click: true,
             ..Default::default()
@@ -434,7 +434,7 @@ mod tests {
             },
         ]);
         let input = compose_frame_input(
-            &RenderInput::default(),
+            &InputSnapshot::default(),
             &pad,
             GamepadMap::DEFAULT,
             None,
@@ -454,7 +454,7 @@ mod tests {
         let pad = pad_snapshot(&[press(GamepadButton::South), press(GamepadButton::East)]);
         let nav = Some(NavDirection::Down);
         let input = compose_frame_input(
-            &RenderInput::default(),
+            &InputSnapshot::default(),
             &pad,
             GamepadMap::DEFAULT,
             nav,
@@ -465,7 +465,7 @@ mod tests {
         assert!(input.back, "East edge surfaces behind the menu");
         // The same fields surface during play too; UI just ignores them.
         let input = compose_frame_input(
-            &RenderInput::default(),
+            &InputSnapshot::default(),
             &pad,
             GamepadMap::DEFAULT,
             nav,

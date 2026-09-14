@@ -250,8 +250,7 @@ impl OverlaySystem {
             &mut self.buffer,
             labels,
             &assets.fonts,
-            win_w,
-            win_h,
+            [win_w, win_h],
             &assets.clip_rects,
             hud_layers,
         );
@@ -277,8 +276,7 @@ impl OverlaySystem {
                 &mut self.buffer,
                 &self.widget_scratch.labels,
                 &assets.fonts,
-                win_w,
-                win_h,
+                [win_w, win_h],
                 &no_clips,
                 &empty_layers,
             );
@@ -327,8 +325,7 @@ impl OverlaySystem {
                 &mut self.buffer,
                 &self.widget_scratch.labels,
                 &assets.fonts,
-                win_w,
-                win_h,
+                [win_w, win_h],
                 &assets.clip_rects,
                 &empty_layers,
             );
@@ -357,7 +354,7 @@ impl OverlaySystem {
             cursor::build_cursor_calls_into(
                 &mut self.buffer,
                 sprites,
-                cursor.pos,
+                cursor.pos.into(),
                 cursor_shape,
                 default_atlas_slot,
                 [win_w, win_h],

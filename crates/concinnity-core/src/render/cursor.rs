@@ -86,7 +86,7 @@ const CURSOR_LAYER: i32 = i32::MAX;
 #[cfg(test)]
 pub(crate) fn build_cursor_calls(
     sprites: &[Sprite],
-    pointer: (f32, f32),
+    pointer: [f32; 2],
     shape: CursorShape,
     default_atlas_slot: Option<usize>,
     viewport: [f32; 2],
@@ -108,7 +108,7 @@ pub(crate) fn build_cursor_calls(
 pub fn build_cursor_calls_into(
     out: &mut crate::render::call_buffer::TextCallBuffer,
     sprites: &[Sprite],
-    pointer: (f32, f32),
+    pointer: [f32; 2],
     shape: CursorShape,
     default_atlas_slot: Option<usize>,
     viewport: [f32; 2],
@@ -148,7 +148,7 @@ pub fn build_cursor_calls_into(
         // Outline first so the fill, appended after, composites on top of it
         // (the overlay draws indexed triangles in order, with no depth test).
         for (dx, dy) in OUTLINE_OFFSETS {
-            let o = (pointer.0 + dx * outline_w, pointer.1 + dy * outline_w);
+            let o = [pointer[0] + dx * outline_w, pointer[1] + dy * outline_w];
             push_shape(&mut call, o, size, outline, alpha, &sil);
         }
         push_shape(&mut call, pointer, size, fill, alpha, &sil);
@@ -192,7 +192,7 @@ fn cursor_geometry(shape: CursorShape) -> Silhouette {
 // draw call.
 fn push_shape(
     call: &mut TextDrawCall,
-    origin: (f32, f32),
+    origin: [f32; 2],
     size: f32,
     color: [f32; 3],
     alpha: f32,
@@ -204,7 +204,7 @@ fn push_shape(
         let rx = nx * c - ny * s;
         let ry = nx * s + ny * c;
         call.vertices.push(TextVertex {
-            pos: [origin.0 + rx * size, origin.1 + ry * size],
+            pos: [origin[0] + rx * size, origin[1] + ry * size],
             // sentinel u < 0 -> solid-fill path; v carries alpha
             uv: [-1.0, alpha],
             color,
@@ -259,7 +259,7 @@ mod tests {
         assert!(
             build_cursor_calls(
                 core::slice::from_ref(&c),
-                (10.0, 10.0),
+                [10.0, 10.0],
                 CursorShape::Default,
                 None,
                 [0.0, 0.0]
@@ -273,7 +273,7 @@ mod tests {
         let c = cursor([1.0, 1.0, 1.0, 1.0], 22.0);
         let calls = build_cursor_calls(
             core::slice::from_ref(&c),
-            (100.0, 50.0),
+            [100.0, 50.0],
             CursorShape::Default,
             Some(0),
             [0.0, 0.0],
@@ -303,7 +303,7 @@ mod tests {
         assert!(
             build_cursor_calls(
                 core::slice::from_ref(&hidden),
-                (0.0, 0.0),
+                [0.0, 0.0],
                 CursorShape::Default,
                 Some(0),
                 [0.0, 0.0]
@@ -314,7 +314,7 @@ mod tests {
         assert!(
             build_cursor_calls(
                 core::slice::from_ref(&clear),
-                (0.0, 0.0),
+                [0.0, 0.0],
                 CursorShape::Default,
                 Some(0),
                 [0.0, 0.0]
@@ -335,7 +335,7 @@ mod tests {
         let c = cursor([1.0, 1.0, 1.0, 1.0], 0.0);
         let calls = build_cursor_calls(
             core::slice::from_ref(&c),
-            (0.0, 0.0),
+            [0.0, 0.0],
             CursorShape::Default,
             Some(0),
             [0.0, 0.0],
@@ -357,7 +357,7 @@ mod tests {
         let c = cursor([1.0, 1.0, 1.0, 1.0], 22.0);
         let calls = build_cursor_calls(
             core::slice::from_ref(&c),
-            (0.0, 0.0),
+            [0.0, 0.0],
             CursorShape::Default,
             Some(0),
             [2560.0, 1440.0],
@@ -375,7 +375,7 @@ mod tests {
         let c = cursor([1.0, 1.0, 1.0, 1.0], 20.0);
         let calls = build_cursor_calls(
             core::slice::from_ref(&c),
-            (100.0, 100.0),
+            [100.0, 100.0],
             CursorShape::ResizeEW,
             Some(0),
             [0.0, 0.0],
@@ -406,7 +406,7 @@ mod tests {
         let c = cursor([1.0, 1.0, 1.0, 1.0], 20.0);
         let calls = build_cursor_calls(
             core::slice::from_ref(&c),
-            (100.0, 100.0),
+            [100.0, 100.0],
             CursorShape::ResizeNS,
             Some(0),
             [0.0, 0.0],

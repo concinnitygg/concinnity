@@ -9,7 +9,7 @@
 
 use concinnity_core::components::{InputKey, WindowMode};
 use concinnity_core::render::display_mode::DisplayMode;
-use concinnity_core::render::input::RenderInput;
+use concinnity_core::render::input::InputSnapshot;
 use concinnity_core::render::keymap::KeyMap;
 use objc2::rc::Retained;
 use objc2_app_kit::{
@@ -478,8 +478,8 @@ impl AppKitWindow {
     // InputKey booleans reflect what is held right now; mouse deltas are cleared
     // after being read so they don't accumulate across frames.
     // `interact` and `jump` are true for exactly one frame per key press then cleared.
-    pub(crate) fn take_input(&mut self) -> RenderInput {
-        let snapshot = RenderInput {
+    pub(crate) fn take_input(&mut self) -> InputSnapshot {
+        let snapshot = InputSnapshot {
             forward: self.keys.forward,
             backward: self.keys.backward,
             left: self.keys.left,

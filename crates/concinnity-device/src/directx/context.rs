@@ -15,7 +15,7 @@ use concinnity_core::render::decal;
 use concinnity_core::render::display_mode;
 use concinnity_core::render::error;
 use concinnity_core::render::hdr_output;
-use concinnity_core::render::input::RenderInput;
+use concinnity_core::render::input::InputSnapshot;
 use concinnity_core::render::keymap::KeyMap;
 use concinnity_core::render::lights;
 use concinnity_core::render::particles;
@@ -2566,7 +2566,7 @@ impl DxContext {
         self.win_mut().key.set_keymap(keymap);
     }
 
-    pub(crate) fn take_input(&mut self) -> RenderInput {
+    pub(crate) fn take_input(&mut self) -> InputSnapshot {
         take_input_snapshot(self.win_mut())
     }
 

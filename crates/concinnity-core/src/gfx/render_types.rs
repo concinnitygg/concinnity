@@ -8,13 +8,13 @@ use alloc::vec::Vec;
 
 /// Capacity of the fixed directional-light array in `LightUniforms`.
 pub const MAX_DIRECTIONAL_LIGHTS: usize = 4;
-/// Capacity of the fixed point-light array in `LightUniforms`, which the
-/// raymarch / fog / probe paths read.
+/// Capacity of the fixed point-light array in `LightUniforms`, which world
+/// Shader hooks read.
 pub const MAX_POINT_LIGHTS: usize = 8;
 
 /// Capacity of the per-scene local-light storage buffer the forward pass reads.
-/// Distinct from MAX_POINT_LIGHTS, which still bounds the fixed LightUniforms
-/// point array consumed by the raymarch / fog / probe paths. Lights past this
+/// Distinct from MAX_POINT_LIGHTS, which bounds the fixed LightUniforms point
+/// array world Shader hooks read. Lights past this
 /// cap are dropped with a warning.
 pub const MAX_LOCAL_LIGHTS: usize = 1024;
 
@@ -288,8 +288,8 @@ pub struct LightUniforms {
     pub ambient_intensity: f32,
     /// Number of valid entries in the GpuLight storage buffer the forward pass
     /// reads. Occupies the second trailing pad word, so the 400-byte layout is
-    /// unchanged. The raymarch / fog / probe paths ignore it and read `num_point`
-    /// against the fixed `point` array instead.
+    /// unchanged. Shader hooks read `num_point` against the fixed `point` array
+    /// instead.
     pub num_local_lights: i32,
 }
 
@@ -1569,7 +1569,7 @@ impl InstancedCluster {
     /// distance to each instance's translation. Returns one entry per
     /// non-empty bucket, in mesh-LOD order (LOD0 first). With no alternates
     /// every instance lands in a single LOD0 bucket so the caller's loop
-    /// degenerates to the legacy one-`drawIndexedInstanced` path.
+    /// degenerates to a single `drawIndexedInstanced`.
     ///
     /// Per-instance distance uses the model-matrix translation rather than
     /// a transformed-AABB center: close enough for distance-keyed swaps

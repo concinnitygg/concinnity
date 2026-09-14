@@ -21,7 +21,7 @@ use concinnity_core::render::decal;
 use concinnity_core::render::display_mode;
 use concinnity_core::render::draw_slot;
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::input::RenderInput;
+use concinnity_core::render::input::InputSnapshot;
 use concinnity_core::render::keymap::KeyMap;
 use concinnity_core::render::particles;
 use concinnity_core::render::reflection_probe;
@@ -53,7 +53,7 @@ impl RenderBackend for MtlContext {
     forward! { assert = debug_assert_main_thread,
         via = self.window().appkit, via_mut = self.window_mut().appkit;
         fn capture_cursor(&mut self);
-        fn take_input(&mut self) -> RenderInput;
+        fn take_input(&mut self) -> InputSnapshot;
     }
 
     forward! { assert = debug_assert_main_thread;

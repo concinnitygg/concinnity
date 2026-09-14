@@ -9,7 +9,7 @@
 use ash::vk;
 use concinnity_core::components::WindowMode;
 use concinnity_core::render::display_mode::DisplayMode;
-use concinnity_core::render::input::RenderInput;
+use concinnity_core::render::input::InputSnapshot;
 use concinnity_core::render::keymap::KeyMap;
 
 use crate::win32::display_mode::{self, FullscreenDisplayMode};
@@ -58,7 +58,7 @@ impl Win32Window {
     }
 
     // Snapshot of the accumulated input since the last call.
-    pub(crate) fn take_input(&mut self) -> RenderInput {
+    pub(crate) fn take_input(&mut self) -> InputSnapshot {
         take_input_snapshot(&mut self.win_state)
     }
 

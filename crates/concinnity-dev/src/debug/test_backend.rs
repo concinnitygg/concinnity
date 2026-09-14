@@ -24,8 +24,8 @@ impl backend::RenderBackend for StubBackend {
         false
     }
     fn capture_cursor(&mut self) {}
-    fn take_input(&mut self) -> input::RenderInput {
-        input::RenderInput::default()
+    fn take_input(&mut self) -> input::InputSnapshot {
+        input::InputSnapshot::default()
     }
     fn wait_idle(&self) {}
     fn draw_frame(&mut self, _params: backend::FrameParams<'_>) -> RenderResult<()> {

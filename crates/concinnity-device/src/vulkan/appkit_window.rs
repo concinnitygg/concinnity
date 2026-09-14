@@ -14,7 +14,7 @@
 use ash::vk;
 use concinnity_core::components::WindowMode;
 use concinnity_core::render::display_mode::DisplayMode;
-use concinnity_core::render::input::RenderInput;
+use concinnity_core::render::input::InputSnapshot;
 use concinnity_core::render::keymap::KeyMap;
 use objc2::MainThreadOnly;
 use objc2::rc::Retained;
@@ -111,7 +111,7 @@ impl AppKitVkWindow {
         self.win.closed()
     }
 
-    pub(crate) fn take_input(&mut self) -> RenderInput {
+    pub(crate) fn take_input(&mut self) -> InputSnapshot {
         self.win.take_input()
     }
 

@@ -353,7 +353,7 @@ pub fn measure_label_box(label: &TextLabel, loaded_fonts: &FontSet) -> Option<La
 }
 
 /// Build one TextDrawCall per TextLabel, laying out character quads using the
-/// loaded font metrics. When `win_w` and `win_h` are both > 0.0, labels with
+/// loaded font metrics. When both `viewport` dimensions are > 0.0, labels with
 /// `centered = true` are repositioned to the center of the viewport. `clips`
 /// maps an element id to a reference-space clip band; a label found there has
 /// its call scissored to that band (mapped to the window), so a scrollable
@@ -361,13 +361,12 @@ pub fn measure_label_box(label: &TextLabel, loaded_fonts: &FontSet) -> Option<La
 pub fn build_text_calls(
     labels: &[TextLabel],
     loaded_fonts: &FontSet,
-    win_w: f32,
-    win_h: f32,
+    viewport: [f32; 2],
     clips: &ClipRects,
     layers: &OverlayLayers,
 ) -> Vec<TextDrawCall> {
     let mut out = crate::render::call_buffer::TextCallBuffer::default();
-    build_text_calls_into(&mut out, labels, loaded_fonts, win_w, win_h, clips, layers);
+    build_text_calls_into(&mut out, labels, loaded_fonts, viewport, clips, layers);
     out.take()
 }
 
@@ -378,18 +377,18 @@ pub fn build_text_calls_into(
     out: &mut crate::render::call_buffer::TextCallBuffer,
     labels: &[TextLabel],
     loaded_fonts: &FontSet,
-    win_w: f32,
-    win_h: f32,
+    viewport: [f32; 2],
     clips: &ClipRects,
     layers: &OverlayLayers,
 ) {
+    let [win_w, win_h] = viewport;
     // Screen-owned labels are overlay UI authored in the reference canvas; map
     // them to the live window so menus scale with the window. HUD labels
     // (view == None) keep literal window pixels.
-    let overlay = OverlayTransform::from_viewport([win_w, win_h]);
+    let overlay = OverlayTransform::from_viewport(viewport);
     // Alternate mappings a view-owned label may opt into via `fit`.
-    let bottom = OverlayTransform::bottom_anchored_from_viewport([win_w, win_h]);
-    let cover = OverlayTransform::cover_from_viewport([win_w, win_h]);
+    let bottom = OverlayTransform::bottom_anchored_from_viewport(viewport);
+    let cover = OverlayTransform::cover_from_viewport(viewport);
     for label in labels {
         if !label.visible {
             continue;
@@ -736,8 +735,7 @@ mod tests {
         let calls = build_text_calls(
             core::slice::from_ref(&label),
             &fonts,
-            200.0,
-            200.0,
+            [200.0, 200.0],
             &no_clips(),
             &no_layers(),
         );
@@ -752,7 +750,7 @@ mod tests {
     #[test]
     fn empty_labels_returns_empty_calls() {
         let fonts = FontSet::default();
-        assert!(build_text_calls(&[], &fonts, 0.0, 0.0, &no_clips(), &no_layers()).is_empty());
+        assert!(build_text_calls(&[], &fonts, [0.0, 0.0], &no_clips(), &no_layers()).is_empty());
     }
 
     // A world assembled in code has no compiled Font for its labels to name, so
@@ -770,8 +768,7 @@ mod tests {
         let calls = build_text_calls(
             core::slice::from_ref(&label),
             &fonts,
-            0.0,
-            0.0,
+            [0.0, 0.0],
             &no_clips(),
             &no_layers(),
         );
@@ -782,8 +779,7 @@ mod tests {
         let calls = build_text_calls(
             core::slice::from_ref(&label),
             &fonts,
-            0.0,
-            0.0,
+            [0.0, 0.0],
             &no_clips(),
             &no_layers(),
         );
@@ -827,8 +823,7 @@ mod tests {
             build_text_calls(
                 core::slice::from_ref(&label),
                 &fonts,
-                0.0,
-                0.0,
+                [0.0, 0.0],
                 &no_clips(),
                 &no_layers()
             )
@@ -845,8 +840,7 @@ mod tests {
         let calls = build_text_calls(
             core::slice::from_ref(&label),
             &fonts,
-            0.0,
-            0.0,
+            [0.0, 0.0],
             &no_clips(),
             &no_layers(),
         );
@@ -867,8 +861,7 @@ mod tests {
         let calls = build_text_calls(
             core::slice::from_ref(&label),
             &fonts,
-            0.0,
-            0.0,
+            [0.0, 0.0],
             &no_clips(),
             &no_layers(),
         );
@@ -910,8 +903,7 @@ mod tests {
         let calls = build_text_calls(
             core::slice::from_ref(&label),
             &fonts,
-            0.0,
-            0.0,
+            [0.0, 0.0],
             &no_clips(),
             &no_layers(),
         );
@@ -943,8 +935,7 @@ mod tests {
             build_text_calls(
                 core::slice::from_ref(&label),
                 &fonts,
-                0.0,
-                0.0,
+                [0.0, 0.0],
                 &no_clips(),
                 &no_layers()
             )
@@ -963,8 +954,7 @@ mod tests {
         let calls = build_text_calls(
             core::slice::from_ref(&label),
             &fonts,
-            0.0,
-            0.0,
+            [0.0, 0.0],
             &no_clips(),
             &no_layers(),
         );
@@ -995,8 +985,7 @@ mod tests {
         let calls = build_text_calls(
             core::slice::from_ref(&label),
             &fonts,
-            0.0,
-            0.0,
+            [0.0, 0.0],
             &no_clips(),
             &no_layers(),
         );
@@ -1017,8 +1006,7 @@ mod tests {
         let calls = build_text_calls(
             core::slice::from_ref(&label),
             &fonts,
-            0.0,
-            0.0,
+            [0.0, 0.0],
             &no_clips(),
             &no_layers(),
         );
@@ -1055,8 +1043,7 @@ mod tests {
         let calls = build_text_calls(
             core::slice::from_ref(&label),
             &fonts,
-            200.0,
-            100.0,
+            [200.0, 100.0],
             &no_clips(),
             &no_layers(),
         );
@@ -1086,16 +1073,14 @@ mod tests {
         let hud_calls = build_text_calls(
             core::slice::from_ref(&hud),
             &fonts,
-            vp.0,
-            vp.1,
+            [vp.0, vp.1],
             &no_clips(),
             &no_layers(),
         );
         let ovl_calls = build_text_calls(
             core::slice::from_ref(&overlay_label),
             &fonts,
-            vp.0,
-            vp.1,
+            [vp.0, vp.1],
             &no_clips(),
             &no_layers(),
         );
@@ -1162,8 +1147,7 @@ mod tests {
             build_text_calls(
                 core::slice::from_ref(&l),
                 &fonts,
-                0.0,
-                0.0,
+                [0.0, 0.0],
                 &no_clips(),
                 &no_layers(),
             )[0]
@@ -1191,8 +1175,7 @@ mod tests {
         let calls = build_text_calls(
             core::slice::from_ref(&label),
             &fonts,
-            1280.0,
-            720.0,
+            [1280.0, 720.0],
             &clips,
             &no_layers(),
         );
@@ -1203,8 +1186,7 @@ mod tests {
         let unclipped = build_text_calls(
             core::slice::from_ref(&other),
             &fonts,
-            1280.0,
-            720.0,
+            [1280.0, 720.0],
             &clips,
             &no_layers(),
         );
@@ -1241,8 +1223,7 @@ mod tests {
             build_text_calls(
                 core::slice::from_ref(&l),
                 &fonts,
-                vp.0,
-                vp.1,
+                [vp.0, vp.1],
                 &no_clips(),
                 &no_layers(),
             )[0]
@@ -1272,8 +1253,7 @@ mod tests {
         let calls = build_text_calls(
             core::slice::from_ref(&label),
             &fonts,
-            0.0,
-            0.0,
+            [0.0, 0.0],
             &no_clips(),
             &no_layers(),
         );

@@ -3153,8 +3153,7 @@ fn text_naming_no_font_falls_back_to_the_built_in_face() {
     let calls = text::build_text_calls(
         &labels,
         &overlay.fonts,
-        640.0,
-        360.0,
+        [640.0, 360.0],
         &overlay_maps::ClipRects::new(),
         &overlay_maps::OverlayLayers::new(),
     );

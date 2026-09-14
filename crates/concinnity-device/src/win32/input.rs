@@ -4,7 +4,7 @@
 // GraphicsSystem each tick.
 
 use concinnity_core::components::InputKey;
-use concinnity_core::render::input::RenderInput;
+use concinnity_core::render::input::InputSnapshot;
 use concinnity_core::render::keymap::KeyMap;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 
@@ -170,10 +170,10 @@ impl KeyState {
         }
     }
 
-    // Drain into a RenderInput snapshot, resetting one-shot flags. The mouse
+    // Drain into an InputSnapshot, resetting one-shot flags. The mouse
     // fields (deltas, position, click, held-button, scroll) are owned by
     // `WindowState` and passed in; the keyboard one-shots tracked here are reset.
-    pub(crate) fn take(&mut self, mouse: MouseSnapshot) -> RenderInput {
+    pub(crate) fn take(&mut self, mouse: MouseSnapshot) -> InputSnapshot {
         let MouseSnapshot {
             dx: mouse_dx,
             dy: mouse_dy,
@@ -184,7 +184,7 @@ impl KeyState {
             right_click,
             scroll_delta,
         } = mouse;
-        let s = RenderInput {
+        let s = InputSnapshot {
             forward: self.forward,
             backward: self.backward,
             left: self.left,
@@ -313,7 +313,7 @@ fn key_from_vk(vk: VIRTUAL_KEY) -> Option<InputKey> {
 mod tests {
     use super::*;
 
-    fn snapshot(ks: &mut KeyState) -> RenderInput {
+    fn snapshot(ks: &mut KeyState) -> InputSnapshot {
         ks.take(MouseSnapshot {
             dx: 0.0,
             dy: 0.0,

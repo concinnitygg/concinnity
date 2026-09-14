@@ -23,7 +23,7 @@ use concinnity_core::render::backend_init::{BackendInit, ShadowParams, Swapchain
 use concinnity_core::render::display_mode;
 use concinnity_core::render::draw_slot;
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::input::RenderInput;
+use concinnity_core::render::input::InputSnapshot;
 use concinnity_core::render::keymap;
 use concinnity_core::render::reflection_probe;
 use concinnity_core::render::scene_flow::SceneControl;
@@ -183,7 +183,7 @@ pub(crate) struct MockState {
     pub(crate) fail_quality: Option<RenderError>,
     // Snapshot the next take_input() returns, then reset to default
     // (matching a real backend's drain-on-poll semantics).
-    pub(crate) next_input: RenderInput,
+    pub(crate) next_input: InputSnapshot,
     // Reported logical viewport size.
     pub(crate) logical_size: (f32, f32),
     // Reported top content inset: the window chrome a real macOS window leaves
@@ -207,7 +207,7 @@ impl Default for MockState {
             fail_reload: None,
             fail_morph_upload: None,
             fail_quality: None,
-            next_input: RenderInput::default(),
+            next_input: InputSnapshot::default(),
             logical_size: (1280.0, 720.0),
             top_inset: 0.0,
             caps: DeviceCapabilities::ALL,
@@ -372,7 +372,7 @@ impl RenderBackend for MockBackend {
         self.record(Call::CaptureCursor);
     }
 
-    fn take_input(&mut self) -> RenderInput {
+    fn take_input(&mut self) -> InputSnapshot {
         let mut s = self.state.lock().unwrap();
         s.calls.push(Call::TakeInput);
         std::mem::take(&mut s.next_input)

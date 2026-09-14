@@ -2,7 +2,7 @@
 //! backend uses the shared native Win32 layer instead -- see win32_window.rs;
 //! this module is compiled only off-Windows.)
 //!
-//! Input design mirrors metal.rs: events accumulate into an RenderInput between
+//! Input design mirrors metal.rs: events accumulate into an InputSnapshot between
 //! poll() calls; GraphicsSystem drains the state each step via take_input()
 //! and deposits it as a FrameInput component for Camera3DSystem to consume.
 //!
@@ -14,7 +14,7 @@ use concinnity_core::components::{InputKey, WindowMode};
 use concinnity_core::render::display_mode;
 use concinnity_core::render::display_mode::DisplayMode;
 use concinnity_core::render::input;
-use concinnity_core::render::input::RenderInput;
+use concinnity_core::render::input::InputSnapshot;
 use concinnity_core::render::keymap::KeyMap;
 
 // Owns the GLFW library handle, the window, and the event receiver.
@@ -28,7 +28,7 @@ pub(crate) struct GlfwWindow {
     events: glfw::GlfwReceiver<(f64, glfw::WindowEvent)>,
     // last cursor position, used to compute deltas when not in raw mode
     last_cursor: Option<(f64, f64)>,
-    input: RenderInput,
+    input: InputSnapshot,
     cursor_captured: bool,
     // Whether the OS cursor is hidden for an in-engine UI cursor (e.g. a
     // MainMenu) while not captured. GLFW's cursor mode is a single enum, so the
@@ -100,7 +100,7 @@ fn resolve_cursor_mode(captured: bool, ui_cursor_hidden: bool) -> glfw::CursorMo
 // `pressed` is the held state (movement / sprint follow it) and, on a press,
 // fires the one-shot actions (jump / interact). Mirrors the Metal / DirectX
 // `apply_binding`.
-fn apply_binding(input: &mut RenderInput, km: KeyMap, key: InputKey, pressed: bool) {
+fn apply_binding(input: &mut InputSnapshot, km: KeyMap, key: InputKey, pressed: bool) {
     if km.forward == key {
         input.forward = pressed;
     }
@@ -280,7 +280,7 @@ impl GlfwWindow {
             window,
             events,
             last_cursor: None,
-            input: RenderInput::default(),
+            input: InputSnapshot::default(),
             cursor_captured: false,
             ui_cursor_hidden: false,
             menu_mode: false,
@@ -686,7 +686,7 @@ impl GlfwWindow {
     // the camera stutter for that gap. Only the momentary one-shot inputs
     // (interact/jump/left_click) and the per-call accumulated mouse delta
     // are cleared.
-    pub(crate) fn take_input(&mut self) -> RenderInput {
+    pub(crate) fn take_input(&mut self) -> InputSnapshot {
         let snapshot = self.input;
         self.input.interact = false;
         self.input.jump = false;

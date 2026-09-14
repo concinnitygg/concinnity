@@ -52,7 +52,7 @@ pub use window::WindowControl;
 
 use crate::gfx::render_types::{LineVertex, TextDrawCall};
 use crate::render::error::RenderResult;
-use crate::render::input::RenderInput;
+use crate::render::input::InputSnapshot;
 use crate::render::scene_flow::SceneControl;
 
 /// Per-frame inputs for [`RenderBackend::draw_frame`]. `world_hidden` is set when
@@ -115,7 +115,7 @@ pub trait RenderBackend:
     /// Confine the cursor to the window.
     fn capture_cursor(&mut self);
     /// Take the input sampled since the last call.
-    fn take_input(&mut self) -> RenderInput;
+    fn take_input(&mut self) -> InputSnapshot;
     /// Block until the GPU has drained every submitted frame.
     fn wait_idle(&self);
 
@@ -161,8 +161,8 @@ pub(crate) mod test_stub {
             false
         }
         fn capture_cursor(&mut self) {}
-        fn take_input(&mut self) -> RenderInput {
-            RenderInput::default()
+        fn take_input(&mut self) -> InputSnapshot {
+            InputSnapshot::default()
         }
         fn wait_idle(&self) {}
         fn draw_frame(&mut self, _params: FrameParams<'_>) -> RenderResult<()> {

@@ -82,8 +82,7 @@ fn run_loop(backend: &mut dyn RenderBackend, message: &str, fonts: &FontSet) {
         let text_calls = build_text_calls(
             &screen.labels,
             fonts,
-            win_w,
-            win_h,
+            [win_w, win_h],
             &overlay_maps::ClipRects::new(),
             &overlay_maps::OverlayLayers::new(),
         );

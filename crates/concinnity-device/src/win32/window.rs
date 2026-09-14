@@ -808,11 +808,11 @@ pub(crate) fn frame_tick(
     state.closed
 }
 
-// Drain the accumulated input into a `RenderInput` snapshot, shared by both
+// Drain the accumulated input into an `InputSnapshot`, shared by both
 // backends' `take_input`. The mouse delta, pending click, and scroll are
 // one-shot (reset here); the held-button flag persists until WM_LBUTTONUP and
 // the keyboard one-shots are reset inside `KeyState::take`.
-pub(crate) fn take_input_snapshot(state: &mut WindowState) -> input::RenderInput {
+pub(crate) fn take_input_snapshot(state: &mut WindowState) -> input::InputSnapshot {
     let dx = state.mouse_dx;
     let dy = state.mouse_dy;
     let mx = state.mouse_x;

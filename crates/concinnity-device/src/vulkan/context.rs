@@ -15,7 +15,7 @@ use concinnity_core::render::decal;
 use concinnity_core::render::display_mode;
 use concinnity_core::render::error;
 use concinnity_core::render::hdr_output;
-use concinnity_core::render::input::RenderInput;
+use concinnity_core::render::input::InputSnapshot;
 use concinnity_core::render::keymap::KeyMap;
 use concinnity_core::render::lights;
 use concinnity_core::render::particles;
@@ -2255,8 +2255,8 @@ impl VkContext {
             .map(std::sync::Arc::clone)
     }
 
-    pub(crate) fn take_input(&mut self) -> RenderInput {
-        // Both platform windows snapshot straight into the shared RenderInput.
+    pub(crate) fn take_input(&mut self) -> InputSnapshot {
+        // Both platform windows snapshot straight into the shared InputSnapshot.
         self.window_mut().take_input()
     }
 

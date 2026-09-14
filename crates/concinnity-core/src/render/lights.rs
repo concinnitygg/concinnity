@@ -1,9 +1,9 @@
 //! Converts drained DirectionalLight, PointLight, SpotLight, and RectAreaLight
 //! asset components into the GPU data the renderer consumes: the fixed
-//! LightUniforms uniform (directional lights, ambient, and the legacy point array
-//! the raymarch / fog / probe paths read), the GpuLight storage buffer the
-//! clustered forward pass iterates, the per-slice spot shadow projections, and
-//! the rect area-light extents.
+//! LightUniforms uniform (directional lights, ambient, and the fixed point array
+//! world Shader hooks read as `LIGHTS.pt` / `num_pt`), the GpuLight storage
+//! buffer the clustered forward pass iterates, the per-slice spot shadow
+//! projections, and the rect area-light extents.
 
 use crate::components::{
     DirectionalLight, PointLight, RectAreaLight, SpotLight, SpotLightGeometry,
@@ -254,8 +254,8 @@ pub fn build_light_uniforms(
     }
 
     let (directional, num_directional) = directional_light_data(&dir_lights);
-    // The `point` array is the legacy subset the raymarch / fog / probe paths
-    // read; the forward pass reads every light from the GpuLight buffer instead
+    // The `point` array is the subset world Shader hooks read as `LIGHTS.pt`;
+    // the forward pass reads every light from the GpuLight buffer instead
     // (see build_light_data), so exceeding MAX_POINT_LIGHTS is not an error.
     let mut point = [ZERO_PT; MAX_POINT_LIGHTS];
     let num_point = pt_lights.len().min(MAX_POINT_LIGHTS);
@@ -440,8 +440,8 @@ mod tests {
 
     #[test]
     fn excess_point_lights_clamped_to_max() {
-        // The legacy `point` array (raymarch / fog / probe) still caps at 8, but
-        // num_local_lights carries the full count for the forward pass.
+        // The `point` array Shader hooks read caps at 8, but num_local_lights
+        // carries the full count for the forward pass.
         let lights: Vec<PointLight> = (0..MAX_POINT_LIGHTS + 2)
             .map(|i| pt([i as f32, 0.0, 0.0], [1.0; 3], 1.0, 5.0))
             .collect();
@@ -632,7 +632,7 @@ mod tests {
     }
 
     #[test]
-    fn light_buffer_carries_more_than_the_legacy_cap() {
+    fn light_buffer_carries_more_than_the_point_array_cap() {
         let lights: Vec<PointLight> = (0..MAX_POINT_LIGHTS + 50)
             .map(|i| pt([i as f32, 0.0, 0.0], [1.0; 3], 1.0, 5.0))
             .collect();

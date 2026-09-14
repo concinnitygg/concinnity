@@ -129,9 +129,8 @@ pub(super) fn create_main_bindless_root_signature(
         RegisterSpace: 0,
         OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
     };
-    // [16] table: spot shadow depth array. The probe cube array above runs
-    // t7..t7+MAX_PROBES, so this clears it at t15/t16 rather than reusing the
-    // legacy shader's t10.
+    // [16] table: spot shadow depth array at t16, one register past the spot
+    // shadow records at t15 that follow the probe cube array (t7..t7+MAX_PROBES).
     let spot_shadow_srv_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
         NumDescriptors: 1,

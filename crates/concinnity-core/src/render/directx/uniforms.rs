@@ -1,15 +1,5 @@
-//! repr(C) uniform / root-constant structs only the DirectX frame encoders bind
-//! (cbuffer / root-constant layouts). Each is mirrored field-for-field in an
-//! `.hlsl` shader under `directx/shaders/`.
-//!
-//! Blocks whose shader counterpart is a single-source `.slang` declaration are
-//! declared once for every backend in `crate::render::uniforms`; what is left here is
-//! what only this backend binds. Their layouts are checked by `shader_layout` in
-//! concinnity-device, which reads the expected offsets out of slangc's
-//! reflection per target. The hand-written asserts below are for the families
-//! whose shaders are still per backend -- the cull kernel, the skinning and
-//! morph kernels, the raymarch SDF templates, the legacy per-draw main and
-//! velocity passes, and Metal's water.
+//! The DirectX GPU-cull `CullParams` cbuffer, whose layout the test below
+//! asserts by hand against the `DXIL_ABI` block in `cull.slang`.
 
 /// The GPU-cull `CullParams` cbuffer (b0, 208 bytes): six already-normalized
 /// frustum planes, the camera position sharing its row with the object count, the

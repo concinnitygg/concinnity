@@ -1,12 +1,10 @@
 //! Backend-agnostic input snapshot returned by RenderBackend::take_input.
-//! Each backend was previously carrying its own structurally-identical
-//! InputState; this single type replaces those duplicates.
 
 /// Accumulated input state since the last poll. Drained and reset every
 /// frame by GraphicsSystem and converted into a FrameInput component for
 /// Camera3DSystem to consume.
 #[derive(Default, Debug, Clone, Copy)]
-pub struct RenderInput {
+pub struct InputSnapshot {
     /// Forward movement key held.
     pub forward: bool,
     /// Backward movement key held.
@@ -84,7 +82,7 @@ pub struct RenderInput {
 #[derive(Default, Debug, Clone, Copy)]
 pub struct InputPacket {
     /// The raw sampled input state.
-    pub raw: RenderInput,
+    pub raw: InputSnapshot,
     /// Whether the cursor has left the window.
     pub cursor_outside_window: bool,
     /// Logical window size, for UI hit-testing and overlay layout.
@@ -159,7 +157,7 @@ mod tests {
     #[test]
     fn packet_merge_keeps_pulses_and_accumulates_deltas() {
         let mut pending = InputPacket {
-            raw: RenderInput {
+            raw: InputSnapshot {
                 jump: true,
                 left_click: true,
                 mouse_dx: 2.0,
@@ -174,7 +172,7 @@ mod tests {
             top_inset: 0.0,
         };
         pending.merge_from(InputPacket {
-            raw: RenderInput {
+            raw: InputSnapshot {
                 interact: true,
                 mouse_dx: 3.0,
                 scroll_delta: -0.5,
