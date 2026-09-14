@@ -94,8 +94,12 @@ impl MtlContext {
         // Sample the hit's albedo texture from the bindless pool when it is
         // available (the standard GPU-cull path); otherwise fall back to the
         // flat-tint pipeline so non-bindless worlds still get RT reflections.
-        let textured = bindless_tex_args.is_some() && self.rt.pipeline_textured.is_some();
-        let pipeline = match (textured, &self.rt.pipeline_textured, &self.rt.pipeline) {
+        let textured = bindless_tex_args.is_some() && self.rt.pipelines.resolve_textured.is_some();
+        let pipeline = match (
+            textured,
+            &self.rt.pipelines.resolve_textured,
+            &self.rt.pipelines.resolve,
+        ) {
             (true, Some(p), _) => p,
             (_, _, Some(p)) => p,
             _ => return Ok(0),

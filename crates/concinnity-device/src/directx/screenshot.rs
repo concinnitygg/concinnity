@@ -169,7 +169,7 @@ impl DxContext {
 // Bytes per texel for the swapchain color formats this backend can present.
 // The DX swapchain only ever resolves to `B8G8R8A8_UNORM` for SDR or
 // `R16G16B16A16_FLOAT` for the HDR (scRGB-linear / PQ-float) path; see
-// `init/window.rs`. Unknown formats default to 4, the common 32-bit-texel case.
+// `init/bootstrap.rs`. Unknown formats default to 4, the common 32-bit-texel case.
 // The capture path sizes its readback from `GetCopyableFootprints` (which also
 // folds in the 256-byte row alignment), so this helper only documents +
 // asserts the format-to-texel-size mapping under test.

@@ -1142,7 +1142,7 @@ impl MtlContext {
         // when the `Rebuild` diagnostic forces a from-scratch build every frame.
         let has_skinned = self.rt.skinned_geometry
             && !self.skinned.slots.draw_objects.is_empty()
-            && self.rt.skin_pipeline.is_some();
+            && self.rt.pipelines.skin.is_some();
         if has_skinned {
             if self.rt.accel.is_none() || self.rt.dynamic_mode == RtDynamicMode::Rebuild {
                 return self.rebuild_rt_accel(albedo_count);
@@ -1266,7 +1266,7 @@ impl MtlContext {
         let skinned = match (
             &self.skinned.vertex_buffer,
             &self.skinned.index_buffer,
-            &self.rt.skin_pipeline,
+            &self.rt.pipelines.skin,
         ) {
             (Some(svb), Some(sib), Some(pipe))
                 if !self.skinned.slots.draw_objects.is_empty() && self.rt.skinned_geometry =>
@@ -1325,7 +1325,7 @@ impl MtlContext {
         let (Some(svb), Some(sib), Some(pipe)) = (
             self.skinned.vertex_buffer.clone(),
             self.skinned.index_buffer.clone(),
-            self.rt.skin_pipeline.clone(),
+            self.rt.pipelines.skin.clone(),
         ) else {
             return Ok(());
         };
@@ -1449,7 +1449,7 @@ impl MtlContext {
             want_w != self.targets.bloom.width || want_h != self.targets.bloom.height;
         // Whether the unified G-buffer pre-pass runs, derived once so the pool
         // and the pre-pass's own depth target below cannot disagree about it.
-        // Same expression as `build_effects`'s `needs_gbuffer`.
+        // Same expression as `EffectSettings::gbuffer_needed`.
         let needs_gbuffer = self.ssr.settings.is_some()
             || self.ssgi.settings.is_some()
             || self.rt.settings.is_some()

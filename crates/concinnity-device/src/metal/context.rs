@@ -122,6 +122,19 @@ pub(super) struct DrawState {
     pub n_skinned: usize,
 }
 
+impl DrawState {
+    // The draw list with room for the instance records the cull folds in after
+    // it. The skinned count stays 0 until a SkinnedMesh uploads.
+    pub(super) fn new(objects: Vec<DrawObject>, instanced: &InstancedState) -> Self {
+        Self {
+            objects,
+            graph_cache: None,
+            n_instances: instanced.clusters.iter().map(|c| c.instances.len()).sum(),
+            n_skinned: 0,
+        }
+    }
+}
+
 // InstancedProp clusters and the per-instance records they draw through.
 pub(super) struct InstancedState {
     // One entry per cluster. Each issues one drawIndexedInstanced call with all
@@ -161,6 +174,19 @@ pub(super) struct ViewState {
     // Rows of the sky's inverse rotation, uploaded into every uniform block
     // whose pass samples the environment cubemaps.
     pub sky_rot: [[f32; 4]; 3],
+}
+
+impl ViewState {
+    pub(super) fn new(clear_color: [f32; 4]) -> Self {
+        Self {
+            clear_color,
+            scene_fade: 0.0,
+            mode: Default::default(),
+            far: 1.0,
+            matrix: concinnity_core::gfx::transform::IDENTITY,
+            sky_rot: concinnity_core::sky::SkyOrientation::IDENTITY_ROWS,
+        }
+    }
 }
 
 // Scene-captured reflection probes: each surface's specular reflection samples
@@ -409,6 +435,28 @@ pub(super) struct HotReloadState {
     pub watcher: Option<crate::metal::hot_reload::WatcherHandle>,
 }
 
+impl HotReloadState {
+    // The atomic flag is shared between the notify watcher thread and
+    // `draw_frame`, plus the `reload-shaders` debug tool call via
+    // `GraphicsSystem`. Watcher creation is best-effort: a missing source dir
+    // or a notify error logs a warning and disables only the watcher half --
+    // the debug command still works on the same flag.
+    pub(super) fn spawn(enabled: bool) -> Self {
+        let (reload_pending, watcher) = if enabled {
+            let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let watcher = super::hot_reload::spawn(std::sync::Arc::clone(&flag));
+            (Some(flag), watcher)
+        } else {
+            (None, None)
+        };
+        Self {
+            enabled,
+            reload_pending,
+            watcher,
+        }
+    }
+}
+
 // Byte-range sub-allocators over the shared `vertex_buffer` / `index_buffer`.
 // The mesh pair covers the streamed-mesh regions, seeded at init by evicting
 // every streamed mesh; from then on `upload_mesh` / `evict_mesh` allocate and
@@ -417,6 +465,7 @@ pub(super) struct HotReloadState {
 // `setup_chunk_streaming`, disjoint from both the build-time geometry and the
 // mesh allocators so a streamed `VoxelWorld` chunk never collides with static
 // geometry; empty until `setup_chunk_streaming` runs.
+#[derive(Default)]
 pub(super) struct GeometryAllocators {
     pub mesh_vtx: crate::suballoc::range_alloc::RangeAllocator,
     pub mesh_idx: crate::suballoc::range_alloc::RangeAllocator,
@@ -1466,7 +1515,7 @@ impl MtlContext {
     // footprints) stays bounded.
     pub(crate) fn add_decal(&mut self, record: decal::DecalRecord) -> Result<usize, String> {
         if self.decal.pipeline.is_none() {
-            let (ps, vbuf, ibuf, samp) = super::init::effects::build_decal_resources_for_runtime(
+            let (ps, vbuf, ibuf, samp) = super::init::world_fx::build_decal_resources_for_runtime(
                 &self.hw.device,
                 self.hot_reload.enabled,
             )?;

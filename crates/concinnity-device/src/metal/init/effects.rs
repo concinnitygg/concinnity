@@ -1,7 +1,7 @@
-//! Post-process pipeline + target construction extracted from MtlContext::new:
-//! bloom, TAA + velocity pre-pass, SSAO, SSR, projected decals, volumetric fog,
-//! and auto-exposure. Each block is gated on the relevant world setting so a
-//! world that disables an effect pays zero construction cost.
+//! Screen-space effect construction: the MetalFX upscaler, TAA, SSAO, SSR, the
+//! unified G-buffer pre-pass, SSGI, and auto-exposure. Each is gated on its
+//! world setting so a world that disables an effect pays zero construction cost,
+//! and the runtime quality rebuild calls the same builders.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::auto_exposure;
@@ -10,47 +10,36 @@ use concinnity_core::gfx::rt_reflections::RtReflectionSettings;
 use concinnity_core::gfx::ssao::SsaoSettings;
 use concinnity_core::gfx::ssgi::SsgiSettings;
 use concinnity_core::gfx::ssr::SsrSettings;
-use concinnity_core::render::decal::DecalRecord;
+use concinnity_core::render::backend_init::PostSettings;
 use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::particles::ParticleEmitterRecord;
 use concinnity_core::render::post::device::PostExtent;
 use concinnity_core::render::post::ssgi::SsgiPass;
 use concinnity_core::render::post::ssr::SsrPass;
-use concinnity_core::render::volumetric_fog::FogSettings;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_metal::{
-    MTLBuffer, MTLDevice, MTLRenderPipelineState, MTLResourceOptions, MTLSamplerAddressMode,
-    MTLSamplerDescriptor, MTLSamplerMinMagFilter, MTLSamplerState,
-};
+use objc2_metal::{MTLBuffer, MTLDevice, MTLResourceOptions};
 
+use super::InitGpu;
 use crate::metal::allocator::DeviceAllocator;
-use crate::metal::auto_exposure::{AutoExposurePipelines, build_auto_exposure_pipelines};
-use crate::metal::decal::build_decal_pipeline;
-use crate::metal::fog::build_fog_pipeline;
-use crate::metal::particle::{
-    ParticleEmitterGpuState, ParticlePipelines, build_emitter_gpu_state, build_particle_pipelines,
-};
+use crate::metal::auto_exposure::{AutoExposureGpu, build_auto_exposure_pipelines};
+use crate::metal::context::{CompositeState, MtlSceneAssets};
 use crate::metal::post::post_device::MtlPostDevice;
-use crate::metal::post::taa::MtlTaaPass;
 use crate::metal::post::{
-    BloomPipelines, BloomTargets, GBufferState, SsaoState, SsgiState, SsrState,
-    build_bloom_pipelines, build_gbuffer_bindless_pipeline, build_reflection_blur_pipeline,
-    build_reflection_composite_pipeline, build_rt_reflection_pipeline, build_ssao_pipeline,
-    build_taa_pass, create_bloom_targets, create_gbuffer_targets, create_ssao_targets,
-    create_ssr_targets,
+    GBufferState, MetalFXUpscaler, SsaoState, SsgiState, SsrState, TaaState, UpscaleState,
+    build_gbuffer_bindless_pipeline, build_reflection_blur_pipeline,
+    build_reflection_composite_pipeline, build_ssao_pipeline, build_taa_pass,
+    create_gbuffer_targets, create_ssao_targets, create_ssr_targets, temporal_scaler_supported,
 };
 use crate::metal::slang_builtins::{SSAO_BLUR, SSAO_KERNEL};
 use crate::metal::texture::create_fallback_texture;
-use crate::metal::transient_pool::{TransientTexturePool, transient_slots};
 
-// The toggle-controlled feature settings shared by [`build_effects`] and
-// [`build_quality_effects`] (the runtime quality rebuild forwards the same set).
-// Each is the world-resolved `Option` that gates whether that feature's
-// pipelines + targets are built at all. `reflection_blur_scale` and
-// `auto_exposure_bias_ev` ride along because they only make sense paired with
-// their feature (SSR/RT and auto-exposure respectively).
-pub(crate) struct EffectSettings<'a> {
+// The toggle-controlled feature settings the screen-space builders gate on:
+// the world's post settings at init, a quality push at runtime. Each is the
+// world-resolved `Option` that gates whether that feature's pipelines + targets
+// are built at all. `reflection_blur_scale` and `auto_exposure_bias_ev` ride
+// along because they only make sense paired with their feature (SSR/RT and
+// auto-exposure respectively).
+pub(in crate::metal) struct EffectSettings<'a> {
     pub ssao: &'a Option<SsaoSettings>,
     pub ssr: &'a Option<SsrSettings>,
     pub ssgi: &'a Option<SsgiSettings>,
@@ -63,276 +52,234 @@ pub(crate) struct EffectSettings<'a> {
     pub auto_exposure_bias_ev: f32,
 }
 
-// The non-settings build flags shared by [`build_effects`] and
-// [`build_quality_effects`].
-#[derive(Clone, Copy)]
-pub(crate) struct EffectFlags {
-    pub taa_enabled: bool,
-    // Whether the velocity pre-pass + targets should be built. True when TAA is
-    // on or temporal upscaling is on (the MetalFX scaler consumes motion vectors).
-    pub needs_velocity: bool,
-    pub hot_reload: bool,
-    // Depth of the frame-pacing ring: one slot per frame the CPU may queue
-    // ahead of the GPU. Sizes the auto-exposure readback ring and each
-    // emitter's spawn-counter buffer.
-    pub frames_in_flight: usize,
+impl<'a> EffectSettings<'a> {
+    pub(super) fn from_post(post: &'a PostSettings) -> Self {
+        Self {
+            ssao: &post.ssao,
+            ssr: &post.ssr,
+            ssgi: &post.ssgi,
+            rt_reflection: &post.rt_reflections,
+            auto_exposure: &post.auto_exposure,
+            reflection_blur_scale: post.reflection_blur_scale,
+            auto_exposure_bias_ev: post.auto_exposure_bias_ev,
+        }
+    }
+
+    // Whether SSR, SSGI or RT reflections run: all three need the reflection
+    // targets and the G-buffer the unified pre-pass produces.
+    fn reflections(&self) -> bool {
+        self.ssr.is_some() || self.ssgi.is_some() || self.rt_reflection.is_some()
+    }
+
+    // Whether the unified G-buffer pre-pass runs at all. It gates two things
+    // that must agree: the pool (which owns the pre-pass's three color
+    // channels) and the pre-pass's own targets + pipelines. If they disagreed,
+    // a consumer would read a label the pool never created. `needs_velocity` is
+    // true when TAA is on or temporal upscaling is on (the MetalFX scaler
+    // consumes motion vectors).
+    pub(in crate::metal) fn gbuffer_needed(&self, needs_velocity: bool) -> bool {
+        self.reflections() || self.ssao.is_some() || needs_velocity
+    }
 }
 
-// The resolution pair [`build_effects`] operates at. Render-resolution is where
-// the 3D scene + most post passes (HDR, TAA, velocity, SSAO, SSR) draw;
-// output-resolution is where bloom + composite operate so the upscaled / native
-// scene reads back cleanly into the drawable. They are equal when no upscaler is
-// active; render is smaller when MetalFX upscaling is on.
-#[derive(Clone, Copy)]
-pub(crate) struct EffectDimensions {
-    pub render_w: u32,
-    pub render_h: u32,
-    pub output_w: u32,
-    pub output_h: u32,
-}
-
-// The world-content effects [`build_effects`] builds outside the quality-toggle
-// subset: decals, volumetric fog, and particles. Each is skipped when the world
-// declares none, and a quality toggle never rebuilds them.
-pub(crate) struct WorldContentEffects<'a> {
-    pub fog_settings: &'a Option<FogSettings>,
-    pub decals: &'a [DecalRecord],
-    pub particles: &'a [ParticleEmitterRecord],
-}
-
-pub(crate) struct EffectsBundle {
-    // Bloom targets are always created (the composite pass binds the top mip
-    // unconditionally; a scene-less world sizes them 1x1). The pipelines are
-    // built only for worlds with a 3D scene: without one there is nothing to
-    // threshold, and the graph never inserts the Bloom pass.
-    pub bloom_targets: BloomTargets,
-    pub bloom_pipelines: Option<BloomPipelines>,
-
-    // TAA: built only when taa_enabled.
-    pub taa: Option<MtlTaaPass>,
-
-    // SSAO: pipelines + targets built only when ssao_settings is Some (the
-    // kernel reads the unified G-buffer pre-pass output, so there is no
-    // SSAO-owned pre-pass); the white fallback is always present.
-    pub ssao: SsaoState,
-
-    // Render-graph transient texture pool (`gfx::render_graph::alias`). Always
-    // owns `bloom_top`, plus `ao_output` when SSAO is on; the two share one
-    // aliased heap slot. `bloom_targets.mips[0]` is a handle into it.
-    pub transient_pool: TransientTexturePool,
-
-    // SSR resolve + output target: built when SSR / SSGI / RT is on (RT reuses
-    // `ssr.targets.output`). The resolve pipeline is built only when SSR is on.
-    pub ssr: SsrState,
-
-    // Unified G-buffer pre-pass: built when any consumer (SSR / SSGI / RT / SSAO
-    // / velocity) is on. The skinned variant is built later by `upload_skinned`.
-    pub gbuffer: GBufferState,
-
-    // SSGI: built only when ssgi_settings is Some.
-    pub ssgi: SsgiState,
-
-    // RT reflections: built only when rt_reflection_settings is Some (the GPU
-    // supports ray tracing). Reuses the SSR pre-pass G-buffer + `ssr_targets`.
-    // The flat variant is the non-bindless fallback; the textured variant
-    // samples the bindless albedo pool.
-    pub rt_pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    pub rt_pipeline_textured: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    pub rt_skin_pipeline:
-        Option<Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>>,
-
-    // Decals: built only when at least one decal is declared.
-    pub decal_pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    pub decal_cube_vertex_buffer: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
-    pub decal_cube_index_buffer: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
-    pub decal_sampler: Option<Retained<ProtocolObject<dyn MTLSamplerState>>>,
-
-    // Volumetric fog: built only when fog_settings is Some.
-    pub fog_pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    pub fog_froxel_pipeline:
-        Option<Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>>,
-    pub fog_froxel_volume: Option<Retained<ProtocolObject<dyn objc2_metal::MTLTexture>>>,
-
-    // Particles: built only when at least one emitter is declared. The
-    // per-emitter GPU state vec is parallel to the `particles` records and
-    // empty when none are declared.
-    pub particle_pipelines: Option<ParticlePipelines>,
-    pub particle_emitter_state: Vec<ParticleEmitterGpuState>,
-
-    // Auto-exposure: built only when auto_exposure_settings is Some.
-    pub auto_exposure_pipelines: Option<AutoExposurePipelines>,
-    pub auto_exposure_histogram: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
-    // One readback buffer per frame-in-flight; see [`AutoExposureGpu::outputs`].
-    pub auto_exposure_outputs: Vec<Retained<ProtocolObject<dyn MTLBuffer>>>,
-    pub auto_exposure_state: Option<AutoExposureState>,
-    pub auto_exposure_bias_ev: f32,
-}
-
-// The toggle-controlled subset of the effects stack: the features the Quality
-// settings group switches on and off at runtime (TAA, SSAO, SSR, SSGI, RT
-// reflection pipelines, auto-exposure) plus the resources they share (the
-// G-buffer pre-pass + the SSAO transient pool). Built by [`build_quality_effects`]
-// from the per-feature settings, so both `MtlContext::new` (init) and the
-// runtime rebuild ([`crate::metal::MtlContext::apply_quality_settings`]) produce
-// byte-identical resources from the same inputs. Bloom, decals, fog, and
-// particles are NOT here: bloom is always on (only its uniforms change, live),
-// and decals/fog/particles are world-content effects a quality toggle never
-// affects (and rebuilding particles would reset their live GPU pools).
-pub(crate) struct QualityEffectsBundle {
-    pub taa: Option<MtlTaaPass>,
-    pub ssao: SsaoState,
-    pub transient_pool: TransientTexturePool,
-    pub ssr: SsrState,
-    pub gbuffer: GBufferState,
-    pub ssgi: SsgiState,
-    pub rt_pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    pub rt_pipeline_textured: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    pub rt_skin_pipeline:
-        Option<Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>>,
-    pub auto_exposure_pipelines: Option<AutoExposurePipelines>,
-    pub auto_exposure_histogram: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
-    // One readback buffer per frame-in-flight; see [`AutoExposureGpu::outputs`].
-    pub auto_exposure_outputs: Vec<Retained<ProtocolObject<dyn MTLBuffer>>>,
-    pub auto_exposure_state: Option<AutoExposureState>,
-    pub auto_exposure_bias_ev: f32,
-}
-
-// Build the toggle-controlled effects subset (see [`QualityEffectsBundle`]). The
-// RT acceleration structure is the caller's responsibility (it needs the
-// resident geometry buffers); this builds only the RT resolve pipelines.
-pub(crate) fn build_quality_effects(
-    alloc: &DeviceAllocator,
-    // The shared post-pass device, which builds every effect drawn through the
-    // seam.
-    post_device: &MtlPostDevice,
-    dims: EffectDimensions,
-    settings: EffectSettings,
-    flags: EffectFlags,
-) -> RenderResult<QualityEffectsBundle> {
-    let device = alloc.device();
-    let EffectDimensions {
-        render_w,
-        render_h,
-        output_w,
-        output_h,
-    } = dims;
-    let EffectSettings {
-        ssao: ssao_settings,
-        ssr: ssr_settings,
-        ssgi: ssgi_settings,
-        rt_reflection: rt_reflection_settings,
-        auto_exposure: auto_exposure_settings,
-        reflection_blur_scale,
-        auto_exposure_bias_ev,
-    } = settings;
-    let EffectFlags {
-        taa_enabled,
-        needs_velocity,
-        hot_reload,
-        frames_in_flight,
-    } = flags;
-    // The shared temporal resolve: pipeline plus ping-pong history buffers.
-    // Built only when TAA is on; upscaling-on worlds skip the TAA pass entirely
-    // (the MetalFX scaler does temporal accumulation itself). Its targets are
-    // sized at render-resolution to match the scene texture they sample.
-    let taa = if taa_enabled {
-        Some(build_taa_pass(post_device, render_w, render_h)?)
+// MetalFX temporal upscaler. Built ahead of the scene targets because the
+// resolved input size (clamped to the device's supported scale range)
+// determines the render resolution every other 3D-scene target uses; bloom +
+// composite stay at the drawable (output) resolution. Failure or unsupported
+// hardware falls back silently to native-resolution rendering: the entire
+// `temporal_upscaling` feature is asset-driven so a world that doesn't author
+// it pays no construction cost either way. Metal always uses MetalFX, whatever
+// upscaler backend the world names.
+pub(super) fn build_upscale(
+    gpu: &InitGpu<'_>,
+    output: (u32, u32),
+    post: &PostSettings,
+) -> UpscaleState {
+    let device = &*gpu.hw.device;
+    let upscaler = if post.temporal_upscaling {
+        if temporal_scaler_supported(device) {
+            match MetalFXUpscaler::new(device, output.0, output.1, post.upscale_scale) {
+                Ok(u) => {
+                    tracing::info!(
+                        "MetalFX: temporal upscaling on: render {}x{} → present {}x{} ({}x scale)",
+                        u.input_width,
+                        u.input_height,
+                        u.output_width,
+                        u.output_height,
+                        (u.input_width as f32) / (u.output_width.max(1) as f32),
+                    );
+                    Some(u)
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "MetalFX: temporal scaler creation failed ({}); falling back to native resolution",
+                        e
+                    );
+                    None
+                }
+            }
+        } else {
+            tracing::warn!(
+                "MetalFX: temporal scaler not supported on this GPU; falling back to native resolution"
+            );
+            None
+        }
     } else {
         None
     };
+    // The stored scale is the *requested* one, not `input / output`: that ratio
+    // is rounded to whole pixels, so feeding it back into the next rebuild
+    // shrinks the input a little further every resize.
+    let scale = if upscaler.is_some() {
+        post.upscale_scale
+    } else {
+        1.0
+    };
+    UpscaleState {
+        scaler: upscaler,
+        scale,
+        jitter: Default::default(),
+        reset_pending: std::sync::atomic::AtomicBool::new(true),
+    }
+}
 
-    // SSAO (GTAO): the horizon-search kernel, the depth-aware blur, and their
-    // occlusion targets. The depth + normal the kernel reads come from the
-    // unified G-buffer pre-pass (below), so SSAO builds no pre-pass of its own.
-    let (ssao_targets, ssao_kernel_pipeline, ssao_blur_pipeline) = if ssao_settings.is_some() {
+// The shared post-pass device every effect drawn through the seam is built on.
+// Pipelines and targets only: nothing encodes before the context exists, so
+// the device needs no probe set.
+pub(super) fn post_device<'a>(
+    gpu: &InitGpu<'a>,
+    composite: &'a CompositeState,
+    scene: &'a MtlSceneAssets,
+) -> MtlPostDevice<'a> {
+    MtlPostDevice {
+        device: &gpu.hw.device,
+        sampler: &composite.sampler,
+        cube_sampler: &scene.cube_sampler,
+        probes: None,
+        timing: None,
+        hot_reload: gpu.hot_reload,
+    }
+}
+
+// The shared temporal resolve: pipeline plus ping-pong history buffers.
+// Built only when TAA is on; upscaling-on worlds skip the TAA pass entirely
+// (the MetalFX scaler does temporal accumulation itself). Its targets are
+// sized at render-resolution to match the scene texture they sample.
+pub(in crate::metal) fn build_taa(
+    post_device: &MtlPostDevice,
+    enabled: bool,
+    render: (u32, u32),
+) -> RenderResult<TaaState> {
+    let pass = if enabled {
+        Some(build_taa_pass(post_device, render.0, render.1)?)
+    } else {
+        None
+    };
+    Ok(TaaState {
+        enabled,
+        pass,
+        frame: 0,
+    })
+}
+
+// SSAO (GTAO): the horizon-search kernel, the depth-aware blur, and their
+// occlusion targets, built only when SSAO is on. The depth + normal the kernel
+// reads come from the unified G-buffer pre-pass, so SSAO builds no pre-pass of
+// its own; the white fallback is always present.
+pub(in crate::metal) fn build_ssao(
+    alloc: &DeviceAllocator,
+    settings: &EffectSettings,
+    render: (u32, u32),
+    hot_reload: bool,
+) -> RenderResult<SsaoState> {
+    let device = alloc.device();
+    let (ssao_targets, ssao_kernel_pipeline, ssao_blur_pipeline) = if settings.ssao.is_some() {
         (
-            Some(create_ssao_targets(device, render_w, render_h)?),
+            Some(create_ssao_targets(device, render.0, render.1)?),
             Some(build_ssao_pipeline(device, &SSAO_KERNEL, hot_reload)?),
             Some(build_ssao_pipeline(device, &SSAO_BLUR, hot_reload)?),
         )
     } else {
         (None, None, None)
     };
-    let ssao = SsaoState {
-        settings: *ssao_settings,
+    Ok(SsaoState {
+        settings: *settings.ssao,
         targets: ssao_targets,
         kernel_pipeline: ssao_kernel_pipeline,
         blur_pipeline: ssao_blur_pipeline,
         white: create_fallback_texture(alloc)?,
-    };
+    })
+}
 
-    // Whether the unified G-buffer pre-pass runs at all. Derived once, here,
-    // because it gates two things that must agree: the pool (which owns the
-    // pre-pass's three color channels) and the pre-pass's own targets +
-    // pipelines below. If they disagreed, a consumer would read a label the
-    // pool never created.
-    let needs_ssr_prepass =
-        ssr_settings.is_some() || ssgi_settings.is_some() || rt_reflection_settings.is_some();
-    let needs_gbuffer = needs_ssr_prepass || ssao_settings.is_some() || needs_velocity;
-
-    // Render-graph transient texture pool: `ao_output` (SSAO's blurred
-    // occlusion), `bloom_top` (bloom mip 0, half output resolution), and the
-    // G-buffer pre-pass's normal+depth / roughness / velocity channels. The
-    // planner packs whichever of them have disjoint lifetimes onto shared heap
-    // slots. Built before the bloom chain and the pre-pass, both of which read
-    // their targets back out of it by label.
-    let transient_pool = TransientTexturePool::build(
-        device,
-        &transient_slots(
-            ssao_settings.is_some(),
-            needs_gbuffer,
-            (render_w, render_h),
-            (output_w, output_h),
-        )?,
-    )?;
-
-    // SSR: the reflection targets, built when SSR *or* SSGI *or* RT reflections
-    // is on (all three need the G-buffer the unified pre-pass below produces; RT
-    // reuses `ssr_targets.reflection`). The shared resolve is built only when
-    // SSR itself is on.
-    let (ssr_targets, ssr_resolve, ssr_composite_pipeline, ssr_blur_pipeline) = if needs_ssr_prepass
-    {
-        let ssr_resolve = if ssr_settings.is_some() {
-            Some(SsrPass::new(post_device)?)
-        } else {
-            None
-        };
-        // The reflection composite (roughness blur + blend over the scene)
-        // runs for both SSR and RT reflections; both write the reflection
-        // target it reads. SSGI alone needs the G-buffer but no composite.
-        // The blur is its reduced-resolution first pass.
-        let (composite, blur) = if ssr_settings.is_some() || rt_reflection_settings.is_some() {
+// SSR: the reflection targets, built when SSR *or* SSGI *or* RT reflections
+// is on (all three need the G-buffer the unified pre-pass produces; RT
+// reuses `ssr_targets.reflection`). The shared resolve is built only when
+// SSR itself is on.
+pub(in crate::metal) fn build_ssr(
+    post_device: &MtlPostDevice,
+    settings: &EffectSettings,
+    render: (u32, u32),
+) -> RenderResult<SsrState> {
+    let (device, hot_reload) = (post_device.device, post_device.hot_reload);
+    let (ssr_targets, ssr_resolve, ssr_composite_pipeline, ssr_blur_pipeline) =
+        if settings.reflections() {
+            let ssr_resolve = if settings.ssr.is_some() {
+                Some(SsrPass::new(post_device)?)
+            } else {
+                None
+            };
+            // The reflection composite (roughness blur + blend over the scene)
+            // runs for both SSR and RT reflections; both write the reflection
+            // target it reads. SSGI alone needs the G-buffer but no composite.
+            // The blur is its reduced-resolution first pass.
+            let (composite, blur) = if settings.ssr.is_some() || settings.rt_reflection.is_some() {
+                (
+                    Some(build_reflection_composite_pipeline(device, hot_reload)?),
+                    Some(build_reflection_blur_pipeline(device, hot_reload)?),
+                )
+            } else {
+                (None, None)
+            };
             (
-                Some(build_reflection_composite_pipeline(device, hot_reload)?),
-                Some(build_reflection_blur_pipeline(device, hot_reload)?),
+                Some(create_ssr_targets(
+                    device,
+                    render.0,
+                    render.1,
+                    settings.reflection_blur_scale,
+                )?),
+                ssr_resolve,
+                composite,
+                blur,
             )
         } else {
-            (None, None)
+            (None, None, None, None)
         };
-        (
-            Some(create_ssr_targets(
-                device,
-                render_w,
-                render_h,
-                reflection_blur_scale,
-            )?),
-            ssr_resolve,
-            composite,
-            blur,
-        )
-    } else {
-        (None, None, None, None)
-    };
+    Ok(SsrState {
+        settings: *settings.ssr,
+        targets: ssr_targets,
+        resolve: ssr_resolve,
+        composite_pipeline: ssr_composite_pipeline,
+        blur_pipeline: ssr_blur_pipeline,
+        blur_scale: settings.reflection_blur_scale.max(1),
+    })
+}
 
-    // Unified G-buffer pre-pass (Metal): the shared targets and the one
-    // GPU-driven pipeline that fills them, built when any consumer (SSR / SSGI /
-    // RT / SSAO / velocity) is on. The pipeline is one engine-internal shader,
-    // independent of the world's fragment, so it builds the same in init and the
-    // runtime quality rebuild; the encode gates on the cull-produced object
-    // buffer, so a world with nothing in the cull records draws nothing here.
-    let (gbuffer_targets, gbuffer_bindless_pipeline, gbuffer_history_pipeline) = if needs_gbuffer {
+// Unified G-buffer pre-pass (Metal): the shared targets and the one
+// GPU-driven pipeline that fills them, built when any consumer (SSR / SSGI /
+// RT / SSAO / velocity) is on. The pipeline is one engine-internal shader,
+// independent of the world's fragment, so it builds the same in init and the
+// runtime quality rebuild; the encode gates on the cull-produced object
+// buffer, so a world with nothing in the cull records draws nothing here. The
+// skinned variant is built later by `upload_skinned`.
+pub(in crate::metal) fn build_gbuffer(
+    device: &ProtocolObject<dyn MTLDevice>,
+    enabled: bool,
+    render: (u32, u32),
+    hot_reload: bool,
+) -> RenderResult<GBufferState> {
+    let (targets, bindless_pipeline, history_pipeline) = if enabled {
         (
-            Some(create_gbuffer_targets(device, render_w, render_h)?),
+            Some(create_gbuffer_targets(device, render.0, render.1)?),
             Some(build_gbuffer_bindless_pipeline(device, hot_reload)?),
             Some(crate::metal::model_history::build_model_history_pipeline(
                 device, hot_reload,
@@ -341,342 +288,75 @@ pub(crate) fn build_quality_effects(
     } else {
         (None, None, None)
     };
+    Ok(GBufferState {
+        targets,
+        bindless_pipeline,
+        history_pipeline,
+    })
+}
 
-    // SSGI: the shared gather + composite. Built only when SSGI is on; the
-    // gather reads the G-buffer built above.
-    let ssgi_pass = match ssgi_settings {
+// SSGI: the shared gather + composite. Built only when SSGI is on; the
+// gather reads the G-buffer the pre-pass fills.
+pub(in crate::metal) fn build_ssgi(
+    post_device: &MtlPostDevice,
+    settings: &EffectSettings,
+    render: (u32, u32),
+) -> RenderResult<SsgiState> {
+    let pass = match settings.ssgi {
         Some(s) => Some(SsgiPass::new(
             post_device,
             s.gi_scale,
             PostExtent {
-                width: render_w,
-                height: render_h,
+                width: render.0,
+                height: render.1,
             },
         )?),
         None => None,
     };
-
-    let ssr = SsrState {
-        settings: *ssr_settings,
-        targets: ssr_targets,
-        resolve: ssr_resolve,
-        composite_pipeline: ssr_composite_pipeline,
-        blur_pipeline: ssr_blur_pipeline,
-        blur_scale: reflection_blur_scale.max(1),
-    };
-    let gbuffer = GBufferState {
-        targets: gbuffer_targets,
-        bindless_pipeline: gbuffer_bindless_pipeline,
-        history_pipeline: gbuffer_history_pipeline,
-    };
-    let ssgi = SsgiState {
-        settings: *ssgi_settings,
-        pass: ssgi_pass,
-    };
-
-    // RT reflections: the inline ray-trace resolve pipelines. Built only when RT
-    // reflections are on; the caller has already confirmed the GPU supports ray
-    // tracing. Writes into `ssr_targets.output`, reusing the SSR pre-pass
-    // G-buffer built above.
-    let (rt_pipeline, rt_pipeline_textured) = if rt_reflection_settings.is_some() {
-        (
-            Some(build_rt_reflection_pipeline(
-                device,
-                &crate::metal::slang_builtins::RT_REFLECTIONS_FRAG,
-                hot_reload,
-            )?),
-            Some(build_rt_reflection_pipeline(
-                device,
-                &crate::metal::slang_builtins::RT_REFLECTIONS_FRAG_TEXTURED,
-                hot_reload,
-            )?),
-        )
-    } else {
-        (None, None)
-    };
-    // Compute-skinning pipeline for ray tracing: deforms skinned vertices into a
-    // buffer the BVH can trace. Built alongside the reflection pipelines (same
-    // RT gate); unused when the world has no SkinnedMesh.
-    let rt_skin_pipeline = if rt_reflection_settings.is_some()
-        && crate::metal::raytrace::raytracing_supported(device)
-    {
-        Some(crate::metal::raytrace::build_rt_skin_pipeline(
-            device, hot_reload,
-        )?)
-    } else {
-        None
-    };
-
-    // Auto-exposure pipelines + persistent compute buffers. Every buffer is
-    // zero-initialized so the build kernel's first dispatch sees an empty
-    // histogram and the readback ring's first reads see a finite average.
-    let (
-        auto_exposure_pipelines,
-        auto_exposure_histogram,
-        auto_exposure_outputs,
-        auto_exposure_state,
-        auto_exposure_bias,
-    ) = if let Some(settings) = auto_exposure_settings.as_ref() {
-        let pipelines = build_auto_exposure_pipelines(device, hot_reload)?;
-        let hist = make_auto_exposure_histogram(device)?;
-        let outputs = (0..frames_in_flight.max(1))
-            .map(|_| make_auto_exposure_output(device))
-            .collect::<Result<Vec<_>, _>>()?;
-        let state = AutoExposureState::new(settings);
-        (
-            Some(pipelines),
-            Some(hist),
-            outputs,
-            Some(state),
-            auto_exposure_bias_ev,
-        )
-    } else {
-        (None, None, Vec::new(), None, 0.0)
-    };
-
-    Ok(QualityEffectsBundle {
-        taa,
-        ssao,
-        transient_pool,
-        ssr,
-        gbuffer,
-        ssgi,
-        rt_pipeline,
-        rt_pipeline_textured,
-        rt_skin_pipeline,
-        auto_exposure_pipelines,
-        auto_exposure_histogram,
-        auto_exposure_outputs,
-        auto_exposure_state,
-        auto_exposure_bias_ev: auto_exposure_bias,
+    Ok(SsgiState {
+        settings: *settings.ssgi,
+        pass,
     })
 }
 
-pub(crate) fn build_effects(
-    alloc: &DeviceAllocator,
-    post_device: &MtlPostDevice,
-    // False for a world with no 3D scene content: bloom pipelines are skipped
-    // (the settings-gated features below are already trimmed by the
-    // requirements derivation before they reach here).
-    scene: bool,
-    dims: EffectDimensions,
-    settings: EffectSettings,
-    flags: EffectFlags,
-    world_content: WorldContentEffects,
-) -> RenderResult<EffectsBundle> {
-    let device = alloc.device();
-    // Render dimensions ride `dims` into `build_quality_effects`; only the
-    // output pair is used directly here, by the bloom chain.
-    let EffectDimensions {
-        output_w, output_h, ..
-    } = dims;
-    let WorldContentEffects {
-        fog_settings,
-        decals,
-        particles,
-    } = world_content;
-    let frames_in_flight = flags.frames_in_flight;
-    // `flags` is Copy and moves intact into `build_quality_effects` below; this
-    // local drives the bloom + world-content pipeline builds that stay here.
-    let hot_reload = flags.hot_reload;
-
-    // The toggle-controlled subset (TAA, SSAO, SSR, SSGI, RT resolve pipelines,
-    // auto-exposure, + the shared G-buffer pre-pass and the transient pool).
-    // Shared with the runtime rebuild (`apply_quality_settings`) so init and a
-    // live toggle produce byte-identical resources. The RT acceleration
-    // structure is built below. Runs before the bloom chain, which takes its top
-    // mip from the pool this builds.
-    let QualityEffectsBundle {
-        taa,
-        ssao,
-        transient_pool,
-        ssr,
-        gbuffer,
-        ssgi,
-        rt_pipeline,
-        rt_pipeline_textured,
-        rt_skin_pipeline,
-        auto_exposure_pipelines,
-        auto_exposure_histogram,
-        auto_exposure_outputs,
-        auto_exposure_state,
-        auto_exposure_bias_ev: auto_exposure_bias,
-    } = build_quality_effects(alloc, post_device, dims, settings, flags)?;
-
-    // Bloom chain + pipelines. Bloom samples whatever scene_color the post
-    // stack hands it: that's at output (drawable) resolution when MetalFX
-    // upscaling is on, native resolution otherwise. Sized off `output_w/h`
-    // so bloom stays crisp at the panel's pixel grid. Built for any world
-    // with a 3D scene (only its uniforms vary at runtime), so it is not part
-    // of the toggle-controlled subset; the targets exist regardless because
-    // the composite pass binds the top mip unconditionally (1x1 scene-less).
-    // Mip 0 is the pool's `bloom_top`, which the pool always manages.
-    let bloom_targets =
-        create_bloom_targets(device, output_w, output_h, transient_pool.bloom_top()?)?;
-    let bloom_pipelines = if scene {
-        Some(build_bloom_pipelines(device, hot_reload)?)
-    } else {
-        None
-    };
-
-    // Projected-decal pass. Built only when the world declares at least one
-    // decal; with none, all four resources stay `None` and the pass is
-    // skipped by `draw_frame`. The unit cube spans `[-0.5, 0.5]^3` -- the
-    // same local space the decal `inv_model` maps a reconstructed world
-    // point into. 36 indices form 12 triangles wound CCW outward. The first
-    // runtime [`MtlContext::add_decal`] for a world that started with no
-    // decals will rebuild the same four resources on demand.
-    let (decal_pipeline, decal_cube_vertex_buffer, decal_cube_index_buffer, decal_sampler) =
-        if !decals.is_empty() {
-            let (ps, vbuf, ibuf, samp) = build_decal_resources_for_runtime(device, hot_reload)?;
-            (Some(ps), Some(vbuf), Some(ibuf), Some(samp))
-        } else {
-            (None, None, None, None)
-        };
-
-    // Volumetric-fog pipeline. Built only when the world declares a
-    // `VolumetricFog`; with none, the pipeline stays `None` and the fog
-    // pass is skipped by `draw_frame`.
-    let (fog_pipeline, fog_froxel_pipeline, fog_froxel_volume) = if fog_settings.is_some() {
-        let render_ps = build_fog_pipeline(device, hot_reload)?;
-        let compute_ps = super::super::fog::build_fog_froxel_pipeline(device, hot_reload)?;
-        let volume = super::super::fog::build_fog_froxel_volume(device)?;
-        (Some(render_ps), Some(compute_ps), Some(volume))
-    } else {
-        (None, None, None)
-    };
-
-    // Particle compute + render pipelines, plus one persistent GPU pool per
-    // emitter. Pools are zero-initialized so every slot starts dead; the
-    // compute kernel spawns into them on its first dispatch.
-    let (particle_pipelines, particle_emitter_state) = if !particles.is_empty() {
-        let pipelines = build_particle_pipelines(device, hot_reload)?;
-        let mut states = Vec::with_capacity(particles.len());
-        for rec in particles {
-            states.push(build_emitter_gpu_state(device, rec, frames_in_flight)?);
-        }
-        (Some(pipelines), states)
-    } else {
-        (None, Vec::new())
-    };
-
-    Ok(EffectsBundle {
-        bloom_targets,
-        bloom_pipelines,
-        taa,
-        ssao,
-        transient_pool,
-        ssr,
-        gbuffer,
-        ssgi,
-        rt_pipeline,
-        rt_pipeline_textured,
-        rt_skin_pipeline,
-        decal_pipeline,
-        decal_cube_vertex_buffer,
-        decal_cube_index_buffer,
-        decal_sampler,
-        fog_pipeline,
-        fog_froxel_pipeline,
-        fog_froxel_volume,
-        particle_pipelines,
-        particle_emitter_state,
-        auto_exposure_pipelines,
-        auto_exposure_histogram,
-        auto_exposure_outputs,
-        auto_exposure_state,
-        auto_exposure_bias_ev: auto_exposure_bias,
-    })
-}
-
-type DecalResources = (
-    Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
-    Retained<ProtocolObject<dyn MTLBuffer>>,
-    Retained<ProtocolObject<dyn MTLBuffer>>,
-    Retained<ProtocolObject<dyn MTLSamplerState>>,
-);
-
-// Build the projected-decal pipeline + the unit-cube vertex / index buffers
-// + the shared sampler. Called either at init when the world declared ≥1
-// decal, or lazily by [`crate::metal::MtlContext::add_decal`] on the first
-// runtime add for a world that started with none.
-pub(crate) fn build_decal_resources_for_runtime(
+// Auto-exposure pipelines + persistent compute buffers. Every buffer is
+// zero-initialized so the build kernel's first dispatch sees an empty
+// histogram and the readback ring's first reads see a finite average.
+// `frames_in_flight` sizes the readback ring, one slot per frame the CPU may
+// queue ahead of the GPU.
+pub(in crate::metal) fn build_auto_exposure(
     device: &ProtocolObject<dyn MTLDevice>,
+    settings: &EffectSettings,
+    frames_in_flight: usize,
     hot_reload: bool,
-) -> Result<DecalResources, String> {
-    let ps = build_decal_pipeline(device, hot_reload)?;
-    #[repr(C)]
-    #[derive(Copy, Clone)]
-    struct CubeVtx {
-        p: [f32; 3],
-    }
-    const CUBE_VERTS: [CubeVtx; 8] = [
-        CubeVtx {
-            p: [-0.5, -0.5, -0.5],
-        },
-        CubeVtx {
-            p: [0.5, -0.5, -0.5],
-        },
-        CubeVtx {
-            p: [0.5, 0.5, -0.5],
-        },
-        CubeVtx {
-            p: [-0.5, 0.5, -0.5],
-        },
-        CubeVtx {
-            p: [-0.5, -0.5, 0.5],
-        },
-        CubeVtx {
-            p: [0.5, -0.5, 0.5],
-        },
-        CubeVtx { p: [0.5, 0.5, 0.5] },
-        CubeVtx {
-            p: [-0.5, 0.5, 0.5],
-        },
-    ];
-    const CUBE_INDICES: [u16; 36] = [
-        // -Z face                    +Z face
-        0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, // -Y                         +Y
-        0, 1, 5, 0, 5, 4, 3, 6, 2, 3, 7, 6, // -X                         +X
-        0, 4, 7, 0, 7, 3, 1, 2, 6, 1, 6, 5,
-    ];
-    // SAFETY: the pointer and length describe the live `CUBE_VERTS` allocation, and Metal copies
-    // those bytes into the new buffer before the call returns.
-    let vbuf = unsafe {
-        let ptr = std::ptr::NonNull::new(CUBE_VERTS.as_ptr() as *mut _)
-            .ok_or("decal cube vertex slice is null")?;
-        device
-            .newBufferWithBytes_length_options(
-                ptr,
-                std::mem::size_of_val(&CUBE_VERTS),
-                MTLResourceOptions::StorageModeShared,
+) -> RenderResult<AutoExposureGpu> {
+    let (pipelines, histogram, outputs, state, bias_ev) =
+        if let Some(ae_settings) = settings.auto_exposure.as_ref() {
+            let pipelines = build_auto_exposure_pipelines(device, hot_reload)?;
+            let hist = make_auto_exposure_histogram(device)?;
+            let outputs = (0..frames_in_flight.max(1))
+                .map(|_| make_auto_exposure_output(device))
+                .collect::<Result<Vec<_>, _>>()?;
+            let state = AutoExposureState::new(ae_settings);
+            (
+                Some(pipelines),
+                Some(hist),
+                outputs,
+                Some(state),
+                settings.auto_exposure_bias_ev,
             )
-            .ok_or("failed to create decal cube vertex buffer")?
-    };
-    // SAFETY: the pointer and length describe the live `CUBE_INDICES` allocation, and Metal copies
-    // those bytes into the new buffer before the call returns.
-    let ibuf = unsafe {
-        let ptr = std::ptr::NonNull::new(CUBE_INDICES.as_ptr() as *mut _)
-            .ok_or("decal cube index slice is null")?;
-        device
-            .newBufferWithBytes_length_options(
-                ptr,
-                std::mem::size_of_val(&CUBE_INDICES),
-                MTLResourceOptions::StorageModeShared,
-            )
-            .ok_or("failed to create decal cube index buffer")?
-    };
-    let samp = {
-        let desc = MTLSamplerDescriptor::new();
-        desc.setMinFilter(MTLSamplerMinMagFilter::Linear);
-        desc.setMagFilter(MTLSamplerMinMagFilter::Linear);
-        desc.setSAddressMode(MTLSamplerAddressMode::ClampToEdge);
-        desc.setTAddressMode(MTLSamplerAddressMode::ClampToEdge);
-        device
-            .newSamplerStateWithDescriptor(&desc)
-            .ok_or("failed to create decal sampler state")?
-    };
-    Ok((ps, vbuf, ibuf, samp))
+        } else {
+            (None, None, Vec::new(), None, 0.0)
+        };
+    Ok(AutoExposureGpu {
+        settings: *settings.auto_exposure,
+        state,
+        bias_ev,
+        pipelines,
+        histogram,
+        outputs,
+        last_elapsed: 0.0,
+    })
 }
 
 // Shared storage so the average kernel's writes are visible to the CPU

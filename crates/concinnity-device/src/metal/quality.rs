@@ -4,7 +4,7 @@
 //! are built once at init from the world's PostProcessConfig, so applying a
 //! change at runtime means rebuilding those resources, not flipping a uniform.
 //!
-//! The rebuild reuses `init::effects::build_quality_effects` -- the exact path
+//! The rebuild reuses the init stages' effect builders -- the exact path
 //! `MtlContext::new` runs -- so a live toggle produces resources byte-identical
 //! to a launch with the same config. Only the toggle-controlled subset is rebuilt;
 //! bloom, decals, fog, particles, and the uploaded geometry are untouched (so no
@@ -14,14 +14,41 @@ use concinnity_core::components;
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::backend;
 use concinnity_core::render::backend::QualitySettings;
+use concinnity_core::render::error::RenderResult;
 
+use super::auto_exposure::AutoExposureGpu;
 use super::context::MtlContext;
 use super::init::effects::{
-    EffectDimensions, EffectFlags, EffectSettings, QualityEffectsBundle, build_quality_effects,
+    EffectSettings, build_auto_exposure, build_gbuffer, build_ssao, build_ssgi, build_ssr,
+    build_taa,
 };
+use super::init::ray_tracing::build_rt_pipelines;
+use super::init::targets::build_transient_pool;
+use super::post::post_device::MtlPostDevice;
+use super::post::{GBufferState, SsaoState, SsgiState, SsrState, TaaState};
 use super::raytrace::{
-    RtGpu, RtSceneGeometry, RtStaticGeometry, RtTextureCounts, build_rt_accel, raytracing_supported,
+    RtGpu, RtPipelines, RtSceneGeometry, RtStaticGeometry, RtTextureCounts, build_rt_accel,
+    raytracing_supported,
 };
+use super::transient_pool::TransientTexturePool;
+
+// The toggle-controlled subset of the effects stack: the features the Quality
+// settings group switches on and off at runtime (TAA, SSAO, SSR, SSGI, RT
+// reflection pipelines, auto-exposure) plus the resources they share (the
+// G-buffer pre-pass + the transient pool). Bloom, decals, fog, and particles are
+// NOT here: bloom is always on (only its uniforms change, live), and
+// decals/fog/particles are world-content effects a quality toggle never affects
+// (and rebuilding particles would reset their live GPU pools).
+struct QualityEffects {
+    taa: TaaState,
+    ssao: SsaoState,
+    transient_pool: TransientTexturePool,
+    ssr: SsrState,
+    gbuffer: GBufferState,
+    ssgi: SsgiState,
+    rt: RtPipelines,
+    auto_exposure: AutoExposureGpu,
+}
 
 impl MtlContext {
     // Turn display sync (vsync) on or off at runtime via the view's backing
@@ -129,66 +156,23 @@ impl MtlContext {
         let upscaling_active = self.upscale.scaler.is_some();
         let taa_effective = q.taa && !upscaling_active;
         let needs_velocity = taa_effective || upscaling_active;
-        // Output dimensions come from the live bloom chain, which was built at
-        // them; the rebuilt pool sizes `bloom_top` off the same pair, so the new
-        // top mip drops back into the chain unchanged below.
-        let dims = EffectDimensions {
-            render_w: self.targets.hdr.width,
-            render_h: self.targets.hdr.height,
-            output_w: self.targets.bloom.width,
-            output_h: self.targets.bloom.height,
+        let settings = EffectSettings {
+            ssao: &q.ssao,
+            ssr: &q.ssr,
+            ssgi: &q.ssgi,
+            rt_reflection: &rt_settings,
+            auto_exposure: &q.auto_exposure,
+            reflection_blur_scale: q.reflection_blur_scale,
+            auto_exposure_bias_ev: q.auto_exposure_bias_ev,
         };
 
-        let bundle = match build_quality_effects(
-            &self.hw.allocator,
-            &super::post::post_device::MtlPostDevice {
-                device: &self.hw.device,
-                sampler: &self.composite.sampler,
-                cube_sampler: &self.scene.cube_sampler,
-                probes: None,
-                timing: None,
-                hot_reload: self.hot_reload.enabled,
-            },
-            dims,
-            EffectSettings {
-                ssao: &q.ssao,
-                ssr: &q.ssr,
-                ssgi: &q.ssgi,
-                rt_reflection: &rt_settings,
-                auto_exposure: &q.auto_exposure,
-                reflection_blur_scale: q.reflection_blur_scale,
-                auto_exposure_bias_ev: q.auto_exposure_bias_ev,
-            },
-            EffectFlags {
-                taa_enabled: taa_effective,
-                needs_velocity,
-                hot_reload: self.hot_reload.enabled,
-                frames_in_flight: self.frames_in_flight,
-            },
-        ) {
-            Ok(b) => b,
+        let effects = match self.build_quality_effects(&settings, taa_effective, needs_velocity) {
+            Ok(e) => e,
             Err(e) => {
                 tracing::error!("apply_quality_settings: effect rebuild failed: {e}");
                 return;
             }
         };
-
-        let QualityEffectsBundle {
-            taa,
-            ssao,
-            transient_pool,
-            ssr,
-            gbuffer,
-            ssgi,
-            rt_pipeline,
-            rt_pipeline_textured,
-            rt_skin_pipeline,
-            auto_exposure_pipelines,
-            auto_exposure_histogram,
-            auto_exposure_outputs,
-            auto_exposure_state,
-            auto_exposure_bias_ev,
-        } = bundle;
 
         // Swap the screen-space feature state in. The old `Retained` targets drop
         // here; any in-flight command buffer still referencing them holds its own
@@ -197,10 +181,10 @@ impl MtlContext {
         // frame (no cached graph to invalidate).
         // A rebuilt pass starts with its ring at slot 0 and its history
         // invalid, so the first frame after a toggle passes through.
-        self.taa.enabled = taa_effective;
-        self.taa.pass = taa;
-        self.ssao = ssao;
-        self.targets.transient_pool = transient_pool;
+        self.taa.enabled = effects.taa.enabled;
+        self.taa.pass = effects.taa.pass;
+        self.ssao = effects.ssao;
+        self.targets.transient_pool = effects.transient_pool;
         // The rebuilt pool holds a fresh `bloom_top`, so the bloom chain's top
         // mip (a handle into the old pool) is stale. Re-point it rather than
         // rebuilding the chain: the extent is unchanged, so the mips below it
@@ -209,18 +193,16 @@ impl MtlContext {
             Ok(top) => self.targets.bloom.mips[0] = top,
             Err(e) => tracing::error!("apply_quality_settings: {e}"),
         }
-        self.ssr = ssr;
-        self.gbuffer = gbuffer;
-        self.ssgi = ssgi;
+        self.ssr = effects.ssr;
+        self.gbuffer = effects.gbuffer;
+        self.ssgi = effects.ssgi;
 
         // RT resolve pipelines come from the rebuild; the acceleration structure
         // is built here (it needs the resident geometry buffers) when RT turns
         // on, and dropped when it turns off. Skinned geometry is seeded into the
         // BVH by the next frame's per-frame update, matching the init path.
         self.rt.settings = rt_settings;
-        self.rt.pipeline = rt_pipeline;
-        self.rt.pipeline_textured = rt_pipeline_textured;
-        self.rt.skin_pipeline = rt_skin_pipeline;
+        self.rt.pipelines = effects.rt;
         if self.rt.settings.is_some() {
             if self.rt.accel.is_none() {
                 match build_rt_accel(
@@ -264,12 +246,58 @@ impl MtlContext {
 
         // Auto-exposure. When it turns off the static path uses
         // `self.post_process.exposure` (the authored / slider EV), already set,
-        // so only the GPU state is swapped here.
-        self.auto_exposure.settings = q.auto_exposure;
-        self.auto_exposure.state = auto_exposure_state;
-        self.auto_exposure.bias_ev = auto_exposure_bias_ev;
-        self.auto_exposure.pipelines = auto_exposure_pipelines;
-        self.auto_exposure.histogram = auto_exposure_histogram;
-        self.auto_exposure.outputs = auto_exposure_outputs;
+        // so only the GPU state is swapped here; the frame clock carries over.
+        self.auto_exposure = AutoExposureGpu {
+            last_elapsed: self.auto_exposure.last_elapsed,
+            ..effects.auto_exposure
+        };
+    }
+
+    // Build the toggle-controlled effects (see [`QualityEffects`]) in the order
+    // init builds them. Render dimensions come from the live HDR targets
+    // (render-resolution, already post-upscale). Output dimensions come from the
+    // live bloom chain, which was built at them; the rebuilt pool sizes
+    // `bloom_top` off the same pair, so the new top mip drops back into the chain
+    // unchanged. The RT acceleration structure is the caller's responsibility.
+    fn build_quality_effects(
+        &self,
+        settings: &EffectSettings,
+        taa_enabled: bool,
+        needs_velocity: bool,
+    ) -> RenderResult<QualityEffects> {
+        let device = &*self.hw.device;
+        let hot_reload = self.hot_reload.enabled;
+        let post_device = MtlPostDevice {
+            device,
+            sampler: &self.composite.sampler,
+            cube_sampler: &self.scene.cube_sampler,
+            probes: None,
+            timing: None,
+            hot_reload,
+        };
+        let render = (self.targets.hdr.width, self.targets.hdr.height);
+        let output = (self.targets.bloom.width, self.targets.bloom.height);
+        let gbuffer_enabled = settings.gbuffer_needed(needs_velocity);
+        Ok(QualityEffects {
+            taa: build_taa(&post_device, taa_enabled, render)?,
+            ssao: build_ssao(&self.hw.allocator, settings, render, hot_reload)?,
+            transient_pool: build_transient_pool(
+                device,
+                settings.ssao.is_some(),
+                gbuffer_enabled,
+                render,
+                output,
+            )?,
+            ssr: build_ssr(&post_device, settings, render)?,
+            gbuffer: build_gbuffer(device, gbuffer_enabled, render, hot_reload)?,
+            ssgi: build_ssgi(&post_device, settings, render)?,
+            rt: build_rt_pipelines(device, settings.rt_reflection, hot_reload)?,
+            auto_exposure: build_auto_exposure(
+                device,
+                settings,
+                self.frames_in_flight,
+                hot_reload,
+            )?,
+        })
     }
 }

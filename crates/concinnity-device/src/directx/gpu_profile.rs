@@ -20,7 +20,7 @@ pub(crate) fn probe_gpu_profile() -> GpuProfile {
 // "Graphics Tools" optional feature), pick the first non-software adapter that
 // supports D3D12, and classify it. No device is created: the D3D12 support check
 // passes a null device-out pointer, a pure capability query. Mirrors the
-// `pick_adapter` loop in `init/window.rs`.
+// adapter loop in `init/adapter.rs::select`.
 fn probe_adapter() -> Option<GpuProfile> {
     let factory: IDXGIFactory4 =
         // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the

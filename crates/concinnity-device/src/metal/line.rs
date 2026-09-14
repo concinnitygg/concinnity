@@ -54,6 +54,18 @@ pub(crate) struct LineState {
     pub frame: Option<(Retained<ProtocolObject<dyn MTLBuffer>>, usize)>,
 }
 
+impl LineState {
+    // No pipeline until the first frame that publishes lines.
+    pub(crate) fn new(frames_in_flight: usize) -> Self {
+        Self {
+            pipeline: None,
+            build_failed: false,
+            upload: TransientRing::new(frames_in_flight),
+            frame: None,
+        }
+    }
+}
+
 impl MtlContext {
     // Build the line pipeline if this frame has lines to draw and it is
     // not built yet. A failed build latches, so the error is reported once and

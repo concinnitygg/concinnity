@@ -89,6 +89,21 @@ pub(crate) struct SkinnedState {
     pub morphs: Vec<Option<MorphBinding>>,
 }
 
+impl SkinnedState {
+    pub(crate) fn new() -> Self {
+        Self {
+            shadow_pipeline_state: None,
+            vertex_buffer: None,
+            index_buffer: None,
+            slots: SkinnedSlots::new(),
+            skin_pipeline: None,
+            deformed: Vec::new(),
+            deformed_primed: std::sync::atomic::AtomicBool::new(false),
+            morphs: Vec::new(),
+        }
+    }
+}
+
 // GPU-resident morph data for one skinned mesh: the packed sparse buffer
 // (`PayloadMorphs::packed_words`: per-vertex offsets, then 28-byte
 // `MorphEntry`s) and its target count.

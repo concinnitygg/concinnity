@@ -135,7 +135,7 @@ impl MtlContext {
 
 // Bytes per texel for the swapchain color formats this backend can present.
 // The MTKView only ever presents `BGRA8Unorm` for SDR or `RGBA16Float` for the
-// HDR EDR path (see `metal/init/window.rs::swap_pixel_format`). Unknown formats
+// HDR EDR path (see `metal/init/bootstrap.rs::swap_pixel_format`). Unknown formats
 // default to 4, the common 32-bit-texel case.
 fn swapchain_bytes_per_pixel(format: MTLPixelFormat) -> u32 {
     match format {

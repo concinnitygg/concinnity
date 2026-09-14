@@ -1,8 +1,9 @@
-//! Core render-pipeline construction extracted from MtlContext::new:
+//! Main-pass and shadow pipeline builders shared by the init stages and the
+//! shader hot reload:
 //!   * The shared vertex descriptor (interleaved [pos, normal, tangent, color, uv]).
-//!   * The main static pipeline (with its GPU-driven cull pipeline and the
-//!     bindless texture argument encoder).
-//!   * The shared depth-stencil state used by main + shadow passes.
+//!   * The main static pipeline, the world shader bucket pipelines, and the
+//!     bindless argument encoders and sampler block.
+//!   * The cascade shadow pipelines and the shared depth-stencil states.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::components::ShaderPrograms;
@@ -17,19 +18,15 @@ use objc2_metal::{
 };
 
 use crate::metal::context::{BINDLESS_SAMPLER_ARG_BUFFER_INDEX, BINDLESS_TEXTURE_ARG_BUFFER_INDEX};
-use crate::metal::cull::{CullPipeline, build_cull_pipeline};
 use crate::metal::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
 use crate::metal::pipeline::{ns_str, world_library};
 
-pub(crate) struct MainPipelineBundle {
-    pub pipeline_state: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
-    // The GPU-driven cull's pipelines, phase 2 included: it is built whenever
-    // the bindless path is active (cheap: one extra compute pipeline) and only
-    // used when `occlusion_two_pass` is on at runtime.
-    pub cull: CullPipeline,
-    pub bindless_tex_arg_encoder: Option<Retained<ProtocolObject<dyn MTLArgumentEncoder>>>,
-    // Encoder for the engine sampler block at buffer(10).
-    pub bindless_sampler_arg_encoder: Option<Retained<ProtocolObject<dyn MTLArgumentEncoder>>>,
+// The argument encoders of the bindless main pass's engine blocks.
+pub(crate) struct BindlessArgEncoders {
+    // The `BindlessTextures` block at buffer(7).
+    pub texture: Retained<ProtocolObject<dyn MTLArgumentEncoder>>,
+    // The engine sampler block at buffer(10).
+    pub sampler: Retained<ProtocolObject<dyn MTLArgumentEncoder>>,
 }
 
 // Describes the per-vertex buffer layout so Metal can map [[stage_in]]:
@@ -77,18 +74,16 @@ pub(crate) fn make_vertex_descriptor() -> Retained<MTLVertexDescriptor> {
     )
 }
 
-// Build the main static pipeline together with everything the GPU-driven pass
-// implies: the pipeline opts into indirect command buffers, and a compute cull
-// pipeline, an ICB argument encoder and the BindlessTextures argument encoder
-// come with it. The pair is the engine's own, or the world Shader's compile of
-// the same source.
+// Build the main static pipeline of the GPU-driven pass, which opts into
+// indirect command buffers. The pair is the engine's own, or the world Shader's
+// compile of the same source.
 pub(crate) fn build_main_pipeline(
     device: &ProtocolObject<dyn MTLDevice>,
     vert_desc: &MTLVertexDescriptor,
     world: Option<&ShaderPrograms>,
     hot_reload: bool,
     sample_count: u32,
-) -> Result<MainPipelineBundle, String> {
+) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
     // Both pairs come from the single-source bindless program: the engine's
     // own, or the world's compile of the same file with its hooks spliced in.
     // The static pass is always GPU-driven now.
@@ -141,48 +136,35 @@ pub(crate) fn build_main_pipeline(
     pipeline_desc.setDepthAttachmentPixelFormat(MTLPixelFormat::Depth32Float);
     pipeline_desc.setSupportIndirectCommandBuffers(true);
 
-    let pipeline_state = device
+    device
         .newRenderPipelineStateWithDescriptor_error(&pipeline_desc)
-        .map_err(|e| format!("failed to create pipeline state: {:?}", e))?;
+        .map_err(|e| format!("failed to create pipeline state: {:?}", e))
+}
 
-    let cull = build_cull_pipeline(device, hot_reload)?;
-
-    // The argument encoders for the `BindlessTextures` buffer at buffer(7) and
-    // the sampler block at buffer(10) describe the engine's layouts, so they
-    // come from the engine's own fragment. A world's compile of the same file
-    // declares the same blocks, but a `shade` that samples nothing lets the
-    // compiler drop them, and an encoder cannot be derived from a parameter
-    // that is not there.
-    let encoder_frag_fn = match world {
-        None => main_frag_fn.clone(),
-        Some(_) => super::super::slang_builtins::entry_function(
-            device,
-            &super::super::slang_builtins::MAIN_BINDLESS_FRAG,
-            hot_reload,
-        )?,
-    };
+// The argument encoders for the `BindlessTextures` buffer at buffer(7) and the
+// sampler block at buffer(10). They describe the engine's layouts, so they come
+// from the engine's own fragment. A world's compile of the same file declares
+// the same blocks, but a `shade` that samples nothing lets the compiler drop
+// them, and an encoder cannot be derived from a parameter that is not there.
+pub(crate) fn build_bindless_arg_encoders(
+    device: &ProtocolObject<dyn MTLDevice>,
+    hot_reload: bool,
+) -> Result<BindlessArgEncoders, String> {
+    let encoder_frag_fn = super::super::slang_builtins::entry_function(
+        device,
+        &super::super::slang_builtins::MAIN_BINDLESS_FRAG,
+        hot_reload,
+    )?;
     // SAFETY: both indices are the static buffer indices the engine fragment
     // declares its argument buffers at (locked by the build script's ABI
     // assertion).
-    let (bindless_tex_arg_encoder, bindless_sampler_arg_encoder) = unsafe {
+    let (texture, sampler) = unsafe {
         (
-            Some(
-                encoder_frag_fn
-                    .newArgumentEncoderWithBufferIndex(BINDLESS_TEXTURE_ARG_BUFFER_INDEX),
-            ),
-            Some(
-                encoder_frag_fn
-                    .newArgumentEncoderWithBufferIndex(BINDLESS_SAMPLER_ARG_BUFFER_INDEX),
-            ),
+            encoder_frag_fn.newArgumentEncoderWithBufferIndex(BINDLESS_TEXTURE_ARG_BUFFER_INDEX),
+            encoder_frag_fn.newArgumentEncoderWithBufferIndex(BINDLESS_SAMPLER_ARG_BUFFER_INDEX),
         )
     };
-
-    Ok(MainPipelineBundle {
-        pipeline_state,
-        cull,
-        bindless_tex_arg_encoder,
-        bindless_sampler_arg_encoder,
-    })
+    Ok(BindlessArgEncoders { texture, sampler })
 }
 
 // Write the engine sampler block once: the pool sampler (trilinear +

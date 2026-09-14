@@ -22,14 +22,14 @@ use std::time::{Duration, Instant};
 
 use super::auto_exposure::build_auto_exposure_pipelines;
 use super::context::MtlContext;
-use super::cull::build_shadow_cull_pipeline;
+use super::cull::{build_cull_pipeline, build_shadow_cull_pipeline};
 use super::decal::build_decal_pipeline;
 use super::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
 use super::fog::build_fog_pipeline;
 use super::hiz::build_hiz_pipelines;
 use super::init::pipelines::{
-    MainPipelineBundle, build_main_pipeline, build_shadow_bindless_pipeline, build_shadow_pipeline,
-    make_vertex_descriptor,
+    build_bindless_arg_encoders, build_bindless_sampler_args, build_main_pipeline,
+    build_shadow_bindless_pipeline, build_shadow_pipeline, make_vertex_descriptor,
 };
 use super::pipeline::{build_post_pipeline, build_text_pipeline};
 use super::post::post_device::MtlPostDevice;
@@ -283,11 +283,10 @@ impl MtlContext {
             self.taa.pass.is_some(),
             concinnity_core::render::post::taa::build_pipeline(&post_device)
         );
-        // The main pass and the GPU cull come from one builder, because the
-        // cull's argument encoder is derived from the pipeline it feeds. A
-        // world Shader's pair wins here exactly as it does at init, so a save
-        // to an engine template does not swap a world's program for the
-        // engine's.
+        // The main pass rebuilds together with the GPU cull and the bindless
+        // argument encoders, whose layouts come from the same sources. A world
+        // Shader's pair wins here exactly as it does at init, so a save to an
+        // engine template does not swap a world's program for the engine's.
         let main = rebuild_if_live!(
             self.cull.main_pipeline.is_some(),
             build_main_pipeline(
@@ -298,14 +297,14 @@ impl MtlContext {
                 self.targets.hdr.sample_count,
             )
         );
+        let main_cull = rebuild_if_live!(main.is_some(), build_cull_pipeline(device, hr));
+        let main_encoders =
+            rebuild_if_live!(main.is_some(), build_bindless_arg_encoders(device, hr));
         // The engine sampler block rides the fresh fragment's encoder.
-        let main_sampler_args = match main
-            .as_ref()
-            .and_then(|m| m.bindless_sampler_arg_encoder.as_ref())
-        {
-            Some(enc) => Some(super::init::pipelines::build_bindless_sampler_args(
+        let main_sampler_args = match &main_encoders {
+            Some(enc) => Some(build_bindless_sampler_args(
                 device,
-                enc,
+                &enc.sampler,
                 &self.scene.sampler,
                 &self.shadow.sampler,
                 &self.scene.cube_sampler,
@@ -368,7 +367,7 @@ impl MtlContext {
             concinnity_core::render::post::ssgi::build_pipelines(&post_device)
         );
         let rt_reflections = rebuild_if_live!(
-            self.rt.pipeline.is_some(),
+            self.rt.pipelines.resolve.is_some(),
             build_rt_reflection_pipeline(
                 device,
                 &crate::metal::slang_builtins::RT_REFLECTIONS_FRAG,
@@ -376,7 +375,7 @@ impl MtlContext {
             )
         );
         let rt_reflections_textured = rebuild_if_live!(
-            self.rt.pipeline_textured.is_some(),
+            self.rt.pipelines.resolve_textured.is_some(),
             build_rt_reflection_pipeline(
                 device,
                 &crate::metal::slang_builtins::RT_REFLECTIONS_FRAG_TEXTURED,
@@ -435,14 +434,14 @@ impl MtlContext {
         if let (Some(p), Some(taa)) = (taa, self.taa.pass.as_mut()) {
             taa.swap_pipeline(p);
         }
-        if let Some(p) = main {
-            self.cull.main_pipeline = Some(p.pipeline_state);
-            self.arg_buffers.bindless_tex_encoder = p.bindless_tex_arg_encoder;
+        if let (Some(p), Some(cull), Some(encoders)) = (main, main_cull, main_encoders) {
+            self.cull.main_pipeline = Some(p);
+            self.arg_buffers.bindless_tex_encoder = Some(encoders.texture);
             self.arg_buffers.bindless_sampler_args = main_sampler_args;
-            self.cull.pipeline = Some(p.cull.decide);
-            self.cull.pipeline_phase2 = Some(p.cull.decide_phase2);
-            self.cull.encode_pipeline = Some(p.cull.encode);
-            self.cull.icb_arg_encoder = Some(p.cull.icb_arg_encoder);
+            self.cull.pipeline = Some(cull.decide);
+            self.cull.pipeline_phase2 = Some(cull.decide_phase2);
+            self.cull.encode_pipeline = Some(cull.encode);
+            self.cull.icb_arg_encoder = Some(cull.icb_arg_encoder);
             // Force the ICB rebuilds on the next frame so every argument buffer
             // is re-encoded with the arg encoder the new encode kernel produced.
             // The status buffers and the phase-2 ICB are rebuilt by the same
@@ -495,10 +494,10 @@ impl MtlContext {
             pass.swap_pipelines(p);
         }
         if let Some(p) = rt_reflections {
-            self.rt.pipeline = Some(p);
+            self.rt.pipelines.resolve = Some(p);
         }
         if let Some(p) = rt_reflections_textured {
-            self.rt.pipeline_textured = Some(p);
+            self.rt.pipelines.resolve_textured = Some(p);
         }
         if let Some(p) = shadow {
             self.shadow.pipeline_state = Some(p);
@@ -539,53 +538,40 @@ impl MtlContext {
         // for the fresh world-shader programs to replace.
         let vert_desc = make_vertex_descriptor();
         let new_main = if self.cull.main_pipeline.is_some() {
-            Some(build_main_pipeline(
-                &self.hw.device,
-                &vert_desc,
-                world,
-                self.hot_reload.enabled,
-                self.targets.hdr.sample_count,
-            )?)
-        } else {
-            None
-        };
-
-        // The engine sampler block rides the fresh fragment's encoder; built
-        // here (still before the swap) so a failure leaves the live state
-        // untouched.
-        let new_sampler_args = match new_main
-            .as_ref()
-            .and_then(|m| m.bindless_sampler_arg_encoder.as_ref())
-        {
-            Some(enc) => Some(super::init::pipelines::build_bindless_sampler_args(
-                &self.hw.device,
-                enc,
+            let hr = self.hot_reload.enabled;
+            let device = &self.hw.device;
+            let pipeline =
+                build_main_pipeline(device, &vert_desc, world, hr, self.targets.hdr.sample_count)?;
+            let cull = build_cull_pipeline(device, hr)?;
+            let encoders = build_bindless_arg_encoders(device, hr)?;
+            // The engine sampler block rides the fresh fragment's encoder; built
+            // here (still before the swap) so a failure leaves the live state
+            // untouched.
+            let sampler_args = build_bindless_sampler_args(
+                device,
+                &encoders.sampler,
                 &self.scene.sampler,
                 &self.shadow.sampler,
                 &self.scene.cube_sampler,
-            )?),
-            None => None,
+            )?;
+            Some((pipeline, cull, encoders.texture, sampler_args))
+        } else {
+            None
         };
 
         // All builds succeeded: swap into the live context. After this
         // point the next frame's draw calls bind the freshly compiled
         // pipelines.
-        if let Some(new_main) = new_main {
-            let MainPipelineBundle {
-                pipeline_state,
-                cull,
-                bindless_tex_arg_encoder,
-                bindless_sampler_arg_encoder: _,
-            } = new_main;
-            self.cull.main_pipeline = Some(pipeline_state);
+        if let Some((pipeline, cull, tex_encoder, sampler_args)) = new_main {
+            self.cull.main_pipeline = Some(pipeline);
             // Swap the cull state with the pipeline; `two_pass_occlusion` keeps
             // its init-time resolution.
             self.cull.pipeline = Some(cull.decide);
             self.cull.pipeline_phase2 = Some(cull.decide_phase2);
             self.cull.encode_pipeline = Some(cull.encode);
             self.cull.icb_arg_encoder = Some(cull.icb_arg_encoder);
-            self.arg_buffers.bindless_tex_encoder = bindless_tex_arg_encoder;
-            self.arg_buffers.bindless_sampler_args = new_sampler_args;
+            self.arg_buffers.bindless_tex_encoder = Some(tex_encoder);
+            self.arg_buffers.bindless_sampler_args = Some(sampler_args);
             // Force fresh ICBs on the next frame so every argument buffer is
             // re-encoded with the new encoder. Matches the `cull` swap in
             // `reload_shaders`; the status buffers and phase-2 ICB rebuild

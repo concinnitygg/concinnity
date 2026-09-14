@@ -1,9 +1,12 @@
-//! NSWindow + MTKView setup for MtlContext::new, plus the initial HDR target
+//! The hardware a context builds on: the NSWindow + MTKView, the device with its
+//! command queues and allocator, the EDR negotiation, and the initial HDR target
 //! sizing decision (geometry-less worlds clamp to 1x1; otherwise the drawable
 //! size wins, falling back to the requested width/height before the drawable
 //! exists).
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::render::backend_init::SwapchainConfig;
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::hdr_output;
 use concinnity_core::render::hdr_output::HdrOutputMode;
 use objc2::MainThreadOnly;
@@ -13,11 +16,15 @@ use objc2_app_kit::{NSApplication, NSAutoresizingMaskOptions, NSScreen, NSView, 
 use objc2_core_graphics::{
     CGColorSpace, kCGColorSpaceDisplayP3_PQ, kCGColorSpaceExtendedLinearDisplayP3,
 };
-use objc2_metal::{MTLDevice, MTLPixelFormat};
+use objc2_metal::{MTLCreateSystemDefaultDevice, MTLDevice, MTLPixelFormat};
 use objc2_metal_kit::MTKView;
 use objc2_quartz_core::CAMetalLayer;
 
-use crate::metal::context::{take_embedded_pump_events, take_embedded_view};
+use crate::metal::allocator::DeviceAllocator;
+use crate::metal::context::{
+    MtlHardware, WindowState, take_embedded_pump_events, take_embedded_view,
+};
+use crate::metal::graph_queues::GraphQueues;
 
 pub(crate) struct WindowSetup {
     pub window: Option<Retained<NSWindow>>,
@@ -57,6 +64,102 @@ pub(crate) struct WindowConfig<'a> {
 pub(crate) struct HdrRequest {
     pub display_requested: bool,
     pub pq_requested: bool,
+}
+
+// Acquire the hardware a context builds on, with the initial scene target size.
+// A live reload adopts the handed-over device, queues, allocator and window,
+// re-resolving the HDR mode on the inherited view; a fresh build creates them.
+pub(super) fn setup(
+    reuse: Option<MtlHardware>,
+    config: WindowConfig,
+    hdr: HdrRequest,
+    frames_in_flight: usize,
+    vsync: bool,
+) -> RenderResult<(MtlHardware, (u32, u32))> {
+    // all Metal and AppKit calls must happen on the main thread
+    let mtm = objc2::MainThreadMarker::new()
+        .ok_or("MtlContext::new must be called from the main thread")?;
+    let swapchain_config = SwapchainConfig {
+        frames_in_flight: frames_in_flight.max(1),
+        hdr_display: hdr.display_requested,
+        hdr_pq: hdr.pq_requested,
+    };
+    let title_bar = config.title_bar;
+
+    let (hw, initial_w, initial_h) = match reuse {
+        Some(mut hw) => {
+            let view = &hw
+                .window
+                .as_ref()
+                .ok_or("reload_world: handed-over hardware has no window")?
+                .view;
+            let (hdr_mode, initial_w, initial_h) = reconfigure_view(mtm, view, config, hdr);
+            hw.swap_pixel_format = swap_pixel_format(hdr_mode);
+            hw.hdr_mode = hdr_mode;
+            hw.swapchain_config = swapchain_config;
+            (hw, initial_w, initial_h)
+        }
+        None => {
+            let device = MTLCreateSystemDefaultDevice().ok_or("no default Metal device")?;
+            let command_queue = device
+                .newCommandQueue()
+                .ok_or("failed to create Metal command queue")?;
+            // The block pool the world's persistent buffers and textures are
+            // placed in, per context: a live reload hands its successor a
+            // fresh one, so the outgoing context's heaps go with it.
+            let allocator = DeviceAllocator::new(&device, frames_in_flight);
+            let WindowSetup {
+                window,
+                mtk_view,
+                pump_events,
+                initial_w,
+                initial_h,
+                fullscreen,
+                window_delegate,
+                hdr_mode,
+            } = setup_window_and_view(mtm, &device, config, hdr)?;
+            // Second queue + per-queue events for the render graph's
+            // two-queue schedule. Falls back to a single-queue submission
+            // when the device will not create them.
+            let graph_queues = GraphQueues::new(&device);
+            if graph_queues.is_none() {
+                tracing::warn!(
+                    "metal: no async-compute queue, submitting the render graph on one queue"
+                );
+            }
+            let window = WindowState {
+                appkit: crate::appkit::AppKitWindow::new(crate::appkit::AppKitWindowParts {
+                    window,
+                    // The shared layer drives the view through NSView alone;
+                    // the MTKView below stays for drawable acquisition.
+                    view: Retained::into_super(mtk_view.clone()),
+                    title_bar,
+                    pump_events,
+                    fullscreen,
+                    window_delegate,
+                }),
+                view: mtk_view,
+                was_visible: false,
+            };
+            let hw = MtlHardware {
+                device,
+                allocator,
+                command_queue,
+                graph_queues,
+                swap_pixel_format: swap_pixel_format(hdr_mode),
+                hdr_mode,
+                swapchain_config,
+                window: Some(window),
+            };
+            (hw, initial_w, initial_h)
+        }
+    };
+    if let Some(w) = &hw.window {
+        // Honor the requested vsync on the backing CAMetalLayer (default
+        // CAMetalLayer presentation is display-synced).
+        set_display_sync(&w.view, vsync);
+    }
+    Ok((hw, (initial_w, initial_h)))
 }
 
 pub(crate) fn setup_window_and_view(

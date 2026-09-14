@@ -109,17 +109,23 @@ pub(crate) struct RtState {
     // ones -- instead of either ignoring the change (the default `Auto` path
     // only watches transforms of the prior set) or rebuilding every BLAS.
     pub topology_dirty: bool,
+    pub pipelines: RtPipelines,
+}
+
+// The ray-traced reflection pipelines, `Some` only when RT reflections are on.
+// The quality rebuild swaps them as a unit.
+pub(crate) struct RtPipelines {
     // Resolve pipeline, flat-tint hit shading. Used for non-bindless worlds
     // (no albedo pool).
-    pub pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+    pub resolve: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     // Resolve pipeline, textured hit shading (samples the bindless albedo pool
-    // at buffer(7)). Preferred over `pipeline` when the bindless texture
+    // at buffer(7)). Preferred over `resolve` when the bindless texture
     // argument buffer is available this frame.
-    pub pipeline_textured: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+    pub resolve_textured: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     // Compute-skinning pipeline that deforms skinned vertices into a buffer the
     // BVH can trace. Consumed each frame by `rebuild_rt_accel` to pose skinned
     // geometry before the skinned BLAS build.
-    pub skin_pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
+    pub skin: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
 }
 
 // Identifies the geometry a draw-object BLAS traces, on the shared

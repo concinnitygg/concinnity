@@ -1,65 +1,136 @@
-//! MtlContext construction. The constructor is intentionally a flat top-to-
-//! bottom sequence so the order of dependencies stays obvious; helpers for
-//! self-contained sub-phases live in sibling modules:
+//! MtlContext construction. `build` resolves the backend inputs, then calls each
+//! stage in dependency order. A stage builds one owned group or subsystem state
+//! whole and returns it, borrowing the finished states it depends on:
 //!
-//!   window.rs    NSWindow + MTKView setup + initial HDR target sizing
-//!   pipelines.rs Vertex descriptor, main pipeline (+cull/bindless), instanced
-//!                pipeline, depth-stencil state
-//!   effects.rs   Bloom, TAA, velocity, SSAO, SSR, decal, volumetric fog,
-//!                auto-exposure (everything gated on per-world settings)
+//!   bootstrap.rs     window, MTKView, device, command queues, EDR negotiation.
+//!   effects.rs       upscaler, TAA, SSAO, SSR, G-buffer pre-pass, SSGI, auto-exposure.
+//!   scene_assets.rs  geometry, light tables, LTC, textures, samplers, IBL, color LUT.
+//!   targets.rs       depth states, HDR scene target, transient pool, bloom mips.
+//!   scene_data.rs    clustered light binning.
+//!   shadow.rs        cascade and spot shadow states.
+//!   cull/            bindless main pass, compute cull, Hi-Z, GPU-driven shadow,
+//!                    probe prefilter, instance records.
+//!   arg_buffers.rs   bindless texture and sampler blocks, probe cube encoder.
+//!   text.rs          text atlases and pipeline.
+//!   composite.rs     composite pipeline and sampler.
+//!   bloom.rs         bloom pipelines.
+//!   world_fx.rs      decals, fog, particles, water, glass, planar reflections, raymarch.
+//!   ray_tracing.rs   RT reflection pipelines, acceleration structure.
+//!   commands.rs      frame rings, pass timing diagnostics.
 //!
-//! What still lives inline here:
-//!   * Device + command queue creation
-//!   * Geometry, texture, sampler, IBL and LUT uploads (they share local state
-//!     with shadow + text + post-pipeline setup)
-//!   * Shadow pipeline + shadow map (depends on the shared vertex descriptor)
-//!   * Text + post-process pipelines + their samplers
-//!   * BVH partition + previous-model snapshot + hot-reload watcher
-//!   * The final `Self { ... }` literal
+//! `pipelines.rs` holds the main-pass and shadow pipeline builders the stages
+//! share with the shader hot reload.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::gfx::render_types::{ClusterParams, PostProcessParams};
+use concinnity_core::gfx::transform::IDENTITY;
+use concinnity_core::render::backend_init::{BackendInit, PostSettings};
+use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::model_history::ModelHistory;
+
+use self::effects::EffectSettings;
+use super::context::*;
+use super::frame_pacing::FrameInFlight;
+use super::line::LineState;
+use super::post::UpscaleState;
+use super::resources::skinning::SkinnedState;
+
+mod arg_buffers;
+mod bloom;
+mod bootstrap;
+mod commands;
+mod composite;
+mod cull;
 pub(super) mod effects;
 pub(crate) mod pipelines;
-mod window;
-// Runtime vsync toggle reaches the backing CAMetalLayer through this helper.
-use concinnity_core::bake;
-use concinnity_core::gfx::lod;
-use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::gfx::profile;
-use concinnity_core::gfx::render_types;
-use concinnity_core::gfx::render_types::NUM_SHADOW_CASCADES;
-use concinnity_core::gfx::transform::IDENTITY;
-use concinnity_core::render::backend_init;
-use concinnity_core::render::csm;
-use concinnity_core::render::decal;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::lights;
-use concinnity_core::render::ltc;
-use concinnity_core::render::planar_reflection;
-use concinnity_core::render::reflection_probe;
-use concinnity_core::render::skinned_slots;
-use objc2_metal::{
-    MTLCompareFunction, MTLCreateSystemDefaultDevice, MTLDevice as _, MTLResourceOptions,
-    MTLSamplerAddressMode, MTLSamplerDescriptor, MTLSamplerMinMagFilter,
-};
-pub(crate) use window::set_display_sync;
+pub(super) mod ray_tracing;
+mod scene_assets;
+mod scene_data;
+mod shadow;
+pub(super) mod targets;
+mod text;
+pub(super) mod world_fx;
 
-use super::allocator::DeviceAllocator;
-use super::context::*;
-use super::pipeline::{build_post_pipeline, build_text_pipeline};
-use super::texture::{
-    EnvironmentMapTextures, create_fallback_color_lut, create_fallback_cubemap,
-    create_fallback_texture, create_hdr_targets, create_lut_texture, create_shadow_map_array,
-    create_shadow_map_fallback, upload_color_lut, upload_environment_map, upload_texture,
-    upload_texture_image,
-};
+pub(crate) use bootstrap::set_display_sync;
+
+// The hardware every init stage creates resources through, whether the shader
+// compiles it makes resolve from disk for hot reload, and the frames-in-flight
+// depth the per-frame rings are sized to.
+struct InitGpu<'a> {
+    hw: &'a MtlHardware,
+    hot_reload: bool,
+    frames_in_flight: usize,
+}
+
+// The feature gates every stage agrees on, resolved once from the world's post
+// settings, the drawable and the upscaler.
+struct Features {
+    // True when the world has 3D scene content, which builds the GPU-driven main
+    // pass and the bloom pipelines.
+    scene: bool,
+    // The sample count every main-pass pipeline, HDR target, planar mirror and
+    // probe face is built at. One whenever a temporal technique runs, which
+    // drops the MSAA attachments and the resolve entirely.
+    hdr_samples: u32,
+    // Drawable resolution, where bloom and composite operate.
+    output: (u32, u32),
+    // Resolution the 3D scene and most post passes draw at: the upscaler's input
+    // when MetalFX runs, the drawable resolution otherwise.
+    render: (u32, u32),
+    taa_enabled: bool,
+    ssao_enabled: bool,
+    gbuffer_enabled: bool,
+    post_process: PostProcessParams,
+}
+
+impl Features {
+    fn resolve(
+        hw: &MtlHardware,
+        post: &PostSettings,
+        scene: bool,
+        output: (u32, u32),
+        upscale: &UpscaleState,
+    ) -> Self {
+        let hdr_samples = post.hdr_samples.max(1);
+        tracing::info!("metal HDR target: {hdr_samples}x MSAA");
+        // Render resolution comes from the scaler, which owns the clamp to the
+        // device's supported range.
+        let render = match &upscale.scaler {
+            Some(u) => (u.input_width, u.input_height),
+            None => output,
+        };
+        // With the MetalFX scaler doing temporal accumulation, the TAA pass
+        // is bypassed but the velocity pre-pass and projection jitter stay
+        // on (the scaler consumes both). `taa_enabled` is what the engine
+        // carries downstream; the asset `taa` flag is ignored when upscaling
+        // is on.
+        let upscaling_active = upscale.scaler.is_some();
+        let taa_enabled = post.taa_enabled && !upscaling_active;
+        let needs_velocity = taa_enabled || upscaling_active;
+        Self {
+            scene,
+            hdr_samples,
+            output,
+            render,
+            taa_enabled,
+            ssao_enabled: post.ssao.is_some(),
+            gbuffer_enabled: EffectSettings::from_post(post).gbuffer_needed(needs_velocity),
+            // Pair the authored tunables with the resolved mode's output flags.
+            // On the SDR path both flags stay 0.0 and the shader runs the full
+            // ACES + gamma + FXAA + LUT chain unchanged. On the HDR path
+            // `hdr_output` lights up; `pq_output` further picks PQ-encode vs
+            // scRGB-linear passthrough inside that branch.
+            post_process: hw.hdr_mode.post_process_params(post.post_process),
+        }
+    }
+}
 
 impl MtlContext {
     // Create a window and Metal render pipeline from the assembled backend
     // inputs (see `concinnity_core::render::backend_init::BackendInit` for per-field docs).
     // The shadow pass is engine-internal and enabled whenever
     // `shadows.map_size > 0`.
-    pub(crate) fn new(init: backend_init::BackendInit<'_>) -> RenderResult<Self> {
+    pub(crate) fn new(init: BackendInit<'_>) -> RenderResult<Self> {
         Self::build(init, None)
     }
 
@@ -69,13 +140,7 @@ impl MtlContext {
     // live `cn editor` reload, keeping its window so a save does not recreate
     // it. Everything after the hardware is identical: the same pipelines,
     // buffers, textures, and targets are built from `init` either way.
-    fn build(
-        init: backend_init::BackendInit<'_>,
-        reuse: Option<MtlHardware>,
-    ) -> RenderResult<Self> {
-        use concinnity_core::render::backend_init::{
-            BackendInit, MediaPayloads, PostSettings, SceneData, ShadowParams, WorldFx,
-        };
+    fn build(init: BackendInit<'_>, reuse: Option<MtlHardware>) -> RenderResult<Self> {
         let BackendInit {
             window,
             // The Metal validation layer is enabled by the CLI re-execing with
@@ -86,1392 +151,178 @@ impl MtlContext {
             clear_color,
             hot_reload,
             capture,
-            scene:
-                SceneData {
-                    vertices,
-                    indices,
-                    draw_objects,
-                    instanced_clusters,
-                    // Unused on Metal: the object / draw-args transient rings and
-                    // the cull ICB auto-grow to `cull_count()` each frame (the
-                    // skinned count is set later in `upload_skinned`, and resident
-                    // chunks fold into the per-frame rebuild), so no init-time
-                    // sizing is needed. DX/VK pre-size fixed buffers from these.
-                    n_skinned: _,
-                    n_chunk_max: _,
-                },
+            // `n_skinned` and `n_chunk_max` are unused on Metal: the object /
+            // draw-args transient rings and the cull ICB auto-grow to
+            // `cull_count()` each frame (the skinned count is set later in
+            // `upload_skinned`, and resident chunks fold into the per-frame
+            // rebuild), so no init-time sizing is needed. DX/VK pre-size fixed
+            // buffers from these.
+            scene: world,
             shaders: world_shaders,
-            media:
-                MediaPayloads {
-                    textures,
-                    text_atlases,
-                    env_map_bytes,
-                    color_lut_bytes,
-                },
+            media,
             light_uniforms,
             local_lights,
             spot_shadows,
             area_lights,
-            shadows:
-                ShadowParams {
-                    map_size: shadow_map_size,
-                    update: shadow_update,
-                    distance: shadow_distance,
-                    cascades: shadow_cascades,
-                },
+            shadows,
             anisotropy,
             planar_planes,
-            post:
-                PostSettings {
-                    post_process: post_tunables,
-                    taa_enabled,
-                    hdr_samples,
-                    ssao: ssao_settings,
-                    ssr: ssr_settings,
-                    ssgi: ssgi_settings,
-                    rt_reflections: rt_reflection_settings,
-                    rt_dynamic: rt_dynamic_mode,
-                    rt_skinned_geometry,
-                    reflection_blur_scale,
-                    auto_exposure: auto_exposure_settings,
-                    auto_exposure_bias_ev,
-                    hdr_display: hdr_display_requested,
-                    hdr_pq: hdr_pq_requested,
-                    temporal_upscaling: temporal_upscaling_requested,
-                    upscale_scale: upscale_scale_requested,
-                    // Metal always uses MetalFX for temporal upscaling.
-                    upscale_backend: _,
-                    occlusion_two_pass: occlusion_two_pass_requested,
-                },
-            fx:
-                WorldFx {
-                    decals,
-                    particles,
-                    fog: fog_settings,
-                    water_surfaces,
-                    glass_panels,
-                    sdf_volumes,
-                },
+            post,
+            fx,
             requirements,
         } = init;
-        let (title, width, height, title_bar) = (
-            window.title.as_str(),
-            window.width,
-            window.height,
-            window.title_bar,
-        );
-        // all Metal and AppKit calls must happen on the main thread
-        let mtm = objc2::MainThreadMarker::new()
-            .ok_or("MtlContext::new must be called from the main thread")?;
 
-        // Window + MTKView + initial drawable sizing. Scene-less (UI / text
-        // only) worlds clamp the HDR / bloom / effect targets to 1x1; keyed off
-        // the derived requirements rather than raw vertex presence so a
-        // vertex-less world that still renders 3D content (SDF volumes, water,
-        // glass) keeps full-size targets. The swapchain color-output mode
-        // resolved here picks the BGRA8Unorm vs RGBA16Float format the post +
-        // text pipelines target.
-        let geometry_less = !requirements.scene;
-        let window_config = window::WindowConfig {
-            title,
-            width,
-            height,
-            title_bar,
-            geometry_less,
-            capture_enabled: capture,
+        // Scene-less (UI / text only) worlds clamp the HDR / bloom / effect
+        // targets to 1x1; keyed off the derived requirements rather than raw
+        // vertex presence so a vertex-less world that still renders 3D content
+        // (SDF volumes, water, glass) keeps full-size targets.
+        let (hw, output) = bootstrap::setup(
+            reuse,
+            bootstrap::WindowConfig {
+                title: window.title.as_str(),
+                width: window.width,
+                height: window.height,
+                title_bar: window.title_bar,
+                geometry_less: !requirements.scene,
+                capture_enabled: capture,
+            },
+            bootstrap::HdrRequest {
+                display_requested: post.hdr_display,
+                pq_requested: post.hdr_pq,
+            },
+            frames_in_flight,
+            vsync,
+        )?;
+        let gpu = InitGpu {
+            hw: &hw,
+            hot_reload,
+            frames_in_flight,
         };
-        let hdr_request = window::HdrRequest {
-            display_requested: hdr_display_requested,
-            pq_requested: hdr_pq_requested,
-        };
-        let swapchain_config = backend_init::SwapchainConfig {
-            frames_in_flight: frames_in_flight.max(1),
-            hdr_display: hdr_display_requested,
-            hdr_pq: hdr_pq_requested,
-        };
-
-        // A live reload adopts the handed-over device, queues, allocator and
-        // window, re-resolving the HDR mode on the inherited view; a fresh build
-        // creates them.
-        let (hw, initial_w, initial_h) = match reuse {
-            Some(mut hw) => {
-                let view = &hw
-                    .window
-                    .as_ref()
-                    .ok_or("reload_world: handed-over hardware has no window")?
-                    .view;
-                let (hdr_mode, initial_w, initial_h) =
-                    window::reconfigure_view(mtm, view, window_config, hdr_request);
-                hw.swap_pixel_format = window::swap_pixel_format(hdr_mode);
-                hw.hdr_mode = hdr_mode;
-                hw.swapchain_config = swapchain_config;
-                (hw, initial_w, initial_h)
-            }
-            None => {
-                let device = MTLCreateSystemDefaultDevice().ok_or("no default Metal device")?;
-                let command_queue = device
-                    .newCommandQueue()
-                    .ok_or("failed to create Metal command queue")?;
-                // The block pool the world's persistent buffers and textures are
-                // placed in, per context: a live reload hands its successor a
-                // fresh one, so the outgoing context's heaps go with it.
-                let allocator = DeviceAllocator::new(&device, frames_in_flight);
-                let window::WindowSetup {
-                    window,
-                    mtk_view,
-                    pump_events,
-                    initial_w,
-                    initial_h,
-                    fullscreen,
-                    window_delegate,
-                    hdr_mode,
-                } = window::setup_window_and_view(mtm, &device, window_config, hdr_request)?;
-                // Second queue + per-queue events for the render graph's
-                // two-queue schedule. Falls back to a single-queue submission
-                // when the device will not create them.
-                let graph_queues = super::graph_queues::GraphQueues::new(&device);
-                if graph_queues.is_none() {
-                    tracing::warn!(
-                        "metal: no async-compute queue, submitting the render graph on one queue"
-                    );
-                }
-                let window = WindowState {
-                    appkit: crate::appkit::AppKitWindow::new(crate::appkit::AppKitWindowParts {
-                        window,
-                        // The shared layer drives the view through NSView alone;
-                        // the MTKView below stays for drawable acquisition.
-                        view: objc2::rc::Retained::into_super(mtk_view.clone()),
-                        title_bar,
-                        pump_events,
-                        fullscreen,
-                        window_delegate,
-                    }),
-                    view: mtk_view,
-                    was_visible: false,
-                };
-                let hw = MtlHardware {
-                    device,
-                    allocator,
-                    command_queue,
-                    graph_queues,
-                    swap_pixel_format: window::swap_pixel_format(hdr_mode),
-                    hdr_mode,
-                    swapchain_config,
-                    window: Some(window),
-                };
-                (hw, initial_w, initial_h)
-            }
-        };
-        if let Some(w) = &hw.window {
-            // Honor the requested vsync on the backing CAMetalLayer (default
-            // CAMetalLayer presentation is display-synced).
-            window::set_display_sync(&w.view, vsync);
-        }
-        let device = &*hw.device;
-        let command_queue = &*hw.command_queue;
-        let allocator = &hw.allocator;
-        let (swap_pixel_format, hdr_mode) = (hw.swap_pixel_format, hw.hdr_mode);
-
-        // The sample count every main-pass pipeline, HDR target, planar mirror
-        // and probe face below is built at. One whenever a temporal technique
-        // runs, which drops the MSAA attachments and the resolve entirely.
-        let hdr_samples = hdr_samples.max(1);
-        tracing::info!("metal HDR target: {hdr_samples}x MSAA");
-
-        // Main + cull + bindless argument encoder. A world with no
-        // 3D scene content skips the main PBR pipeline and the whole GPU-cull
-        // path: the Main pass then survives as a bare clear the composite pass
-        // samples (the same shape a world_hidden frame takes).
+        let upscale = effects::build_upscale(&gpu, output, &post);
+        let features = Features::resolve(&hw, &post, requirements.scene, output, &upscale);
         let vert_desc = pipelines::make_vertex_descriptor();
-        let bindless = requirements.scene;
-        let (pipeline_state, cull, bindless_tex_arg_encoder, bindless_sampler_arg_encoder) =
-            if bindless {
-                let pipelines::MainPipelineBundle {
-                    pipeline_state,
-                    cull,
-                    bindless_tex_arg_encoder,
-                    bindless_sampler_arg_encoder,
-                } = pipelines::build_main_pipeline(
-                    device,
-                    &vert_desc,
-                    world_shaders[0].programs,
-                    hot_reload,
-                    hdr_samples,
-                )?;
-                (
-                    Some(pipeline_state),
-                    Some(cull),
-                    bindless_tex_arg_encoder,
-                    bindless_sampler_arg_encoder,
-                )
-            } else {
-                (None, None, None, None)
-            };
-        // The probe cube argument encoder is world-independent: every pass that
-        // samples the set declares the same block, and the layout is fixed by
-        // MAX_PROBES rather than by world content.
-        let probe_cube_arg_encoder =
-            super::probe_cubes::probe_cube_arg_encoder(device, hot_reload)?;
-        let (cull_pipeline, cull_pipeline_phase2, cull_encode_pipeline, cull_icb_arg_encoder) =
-            match cull {
-                Some(c) => (
-                    Some(c.decide),
-                    Some(c.decide_phase2),
-                    Some(c.encode),
-                    Some(c.icb_arg_encoder),
-                ),
-                None => (None, None, None, None),
-            };
 
-        // Two-pass occlusion is only usable on the bindless cull path (the
-        // phase-2 pipeline exists exactly then). Gate the request here so the
-        // runtime flag is true only when the feature can actually run.
-        let two_pass_occlusion = occlusion_two_pass_requested && cull_pipeline_phase2.is_some();
-
-        // Material-referenced shaders (ShaderHandle 1..) each get a bindless
-        // pipeline; the cull kernel routes their draws into per-bucket ICBs.
-        let world_pipelines = if requirements.scene && world_shaders.len() > 1 {
-            let max = render_types::MAX_SHADER_BUCKETS;
-            if world_shaders.len() > max {
-                return Err(RenderError::Other(format!(
-                    "world declares {} Shaders but at most {max} are supported",
-                    world_shaders.len()
-                )));
-            }
-            if !bindless {
-                return Err(
-                    "material-referenced Shaders need the GPU-driven main pass, which a \
-                            world with no 3D scene content does not build"
-                        .into(),
-                );
-            }
-            pipelines::build_world_pipeline_table(
-                device,
-                &vert_desc,
-                &world_shaders[1..],
-                hot_reload,
-                hdr_samples,
-            )?
-        } else {
-            Vec::new()
-        };
-        let shader_bucket_count = 1 + world_pipelines.len();
-
-        let depth_state = pipelines::make_depth_state(device)?;
-        let depth_state_read_only = pipelines::make_depth_state_read_only(device)?;
-
-        // upload vertex and index data into GPU-accessible buffers. A
-        // geometry-less world (text-only) has empty slices; Metal rejects a
-        // zero-length buffer, so a minimal placeholder is allocated instead --
-        // the draw list is empty so the placeholder is never read.
-        let vertex_buffer = if vertices.is_empty() {
-            allocator.alloc_buffer(
-                std::mem::size_of::<Vertex>(),
-                MTLResourceOptions::StorageModeShared,
-            )
-        } else {
-            allocator.alloc_buffer_with_bytes(
-                bytes_of_slice(vertices),
-                MTLResourceOptions::StorageModeShared,
-            )
-        }
-        .map_err(|e| format!("vertex buffer: {e}"))?;
-
-        let index_buffer = if indices.is_empty() {
-            allocator.alloc_buffer(
-                std::mem::size_of::<u32>(),
-                MTLResourceOptions::StorageModeShared,
-            )
-        } else {
-            allocator.alloc_buffer_with_bytes(
-                bytes_of_slice(indices),
-                MTLResourceOptions::StorageModeShared,
-            )
-        }
-        .map_err(|e| format!("index buffer: {e}"))?;
-
-        // Per-scene local-light storage buffer bound to the forward pass at
-        // fragment buffer(8). Metal rejects a zero-length buffer, so a scene with
-        // no local lights gets a one-element placeholder; num_local_lights == 0
-        // keeps the shader from reading it.
-        let local_light_buffer = {
-            use concinnity_core::gfx::render_types::GpuLight;
-            if local_lights.is_empty() {
-                allocator.alloc_buffer(
-                    std::mem::size_of::<GpuLight>(),
-                    MTLResourceOptions::StorageModeShared,
-                )
-            } else {
-                allocator.alloc_buffer_with_bytes(
-                    bytes_of_slice(local_lights.as_slice()),
-                    MTLResourceOptions::StorageModeShared,
-                )
-            }
-            .map_err(|e| format!("local-light buffer: {e}"))?
-        };
-
-        // Spot shadow resources: one array slice per shadow-casting spot plus the
-        // per-slice projections. Local lights are static, so both are built once
-        // here and never rebuilt. A scene with no casting spot gets the 1x1
-        // fallback array (depth 1.0 = lit) and a placeholder buffer, since Metal
-        // rejects zero-length buffers and the fragment binding must stay valid.
-        let spot_shadow_count = spot_shadows.len() as u32;
-        let spot_shadow_map = if spot_shadows.is_empty() {
-            create_shadow_map_fallback(device)?
-        } else {
-            create_shadow_map_array(
-                device,
-                render_types::spot_shadow_slice_size(shadow_map_size),
-                spot_shadow_count,
-            )?
-        };
-        let spot_shadow_buffer = {
-            use concinnity_core::gfx::render_types::SpotShadowData;
-            if spot_shadows.is_empty() {
-                allocator.alloc_buffer(
-                    std::mem::size_of::<SpotShadowData>(),
-                    MTLResourceOptions::StorageModeShared,
-                )
-            } else {
-                allocator.alloc_buffer_with_bytes(
-                    bytes_of_slice(spot_shadows.as_slice()),
-                    MTLResourceOptions::StorageModeShared,
-                )
-            }
-            .map_err(|e| format!("spot-shadow buffer: {e}"))?
-        };
-
-        // Per-scene rect area-light table, indexed by `GpuLight.data_index`.
-        // Static like the lights themselves, so it uploads once. Metal rejects a
-        // zero-length buffer, so a world with no area light gets a one-element
-        // placeholder the shader never reads (every data_index stays -1).
-        let area_light_buffer = {
-            use concinnity_core::gfx::render_types::AreaLightData;
-            if area_lights.is_empty() {
-                allocator.alloc_buffer(
-                    std::mem::size_of::<AreaLightData>(),
-                    MTLResourceOptions::StorageModeShared,
-                )
-            } else {
-                allocator.alloc_buffer_with_bytes(
-                    bytes_of_slice(area_lights.as_slice()),
-                    MTLResourceOptions::StorageModeShared,
-                )
-            }
-            .map_err(|e| format!("area-light buffer: {e}"))?
-        };
-
-        // Area-light LTC tables. Scene-independent (they depend only on the
-        // build-time fit), so they are created unconditionally and the shader
-        // simply never samples them when no area light is declared.
-        let ltc_matrix_texture =
-            create_lut_texture(allocator, ltc::matrix_texels(), ltc::LTC_LUT_SIZE as u32, 4)?;
-        let ltc_magnitude_texture = create_lut_texture(
-            allocator,
-            ltc::magnitude_texels(),
-            ltc::LTC_LUT_SIZE as u32,
-            2,
-        )?;
-
-        // Clustered-lighting resources: the per-cluster light-index buffer
-        // (always allocated so the forward pass has a valid fragment buffer(12)
-        // binding) and the binning compute pipeline (built only when the world
-        // has local lights to bin).
-        let cluster_light_buffer = super::light_cull::build_cluster_light_buffer(device)?;
-        let light_cull_pipeline = if local_lights.is_empty() {
-            None
-        } else {
-            Some(super::light_cull::build_light_cull_pipeline(
-                device, hot_reload,
-            )?)
-        };
-
-        // upload textures; fall back to a 1x1 opaque white texture when none provided
-        let gpu_textures = if textures.is_empty() {
-            vec![create_fallback_texture(allocator)?]
-        } else {
-            textures
-                .iter()
-                .enumerate()
-                .map(|(i, image)| {
-                    upload_texture_image(allocator, image)
-                        .map_err(|e| format!("texture[{}]: {}", i, e))
-                })
-                .collect::<Result<Vec<_>, _>>()?
-        };
-
-        // Reserved fallbacks, in the order `FALLBACK_TEXTURE_COUNT` documents:
-        // the 1x1 tangent-space (0,0,1) texture a draw with no normal map
-        // samples, then the 1x1 white texture a draw with no albedo samples.
-        // Real normal maps and albedos are textures in `gpu_textures` (the
-        // shared pool) at their own handle; only these two live in
-        // `gpu_fallbacks`, past the last real texture.
-        let flat_normal = upload_texture(allocator, 1, 1, &[128u8, 128, 255, 255])
-            .map_err(|e| format!("flat normal fallback: {}", e))?;
-        let white = upload_texture(allocator, 1, 1, &[255u8, 255, 255, 255])
-            .map_err(|e| format!("white fallback: {}", e))?;
-        let gpu_fallbacks = vec![flat_normal, white];
-
-        // The bindless static pass binds every texture plus the flat-normal
-        // fallback into one capped pool. A world that exceeds the cap still
-        // renders, but objects whose pool index would overflow get clamped to
-        // the last slot.
-        if bindless && gpu_textures.len() + gpu_fallbacks.len() > BINDLESS_TEXTURE_COUNT {
-            tracing::warn!(
-                "Metal: texture pool ({} textures + 2 fallbacks) exceeds bindless \
-                 capacity {}; some objects will sample a clamped texture",
-                gpu_textures.len(),
-                BINDLESS_TEXTURE_COUNT,
-            );
-        }
-
-        // linear filter, repeat wrap -- matches the room shader expectations.
-        // Mipmap linear + anisotropy let minified scene textures trilinear-select
-        // down the mip chain now that uploads carry one, instead of aliasing from
-        // mip 0. The degree comes from GraphicsConfig.anisotropy (default 8),
-        // clamped to Metal's guaranteed 1..16 range.
-        let sampler = {
-            let desc = MTLSamplerDescriptor::new();
-            desc.setMinFilter(MTLSamplerMinMagFilter::Linear);
-            desc.setMagFilter(MTLSamplerMinMagFilter::Linear);
-            desc.setMipFilter(objc2_metal::MTLSamplerMipFilter::Linear);
-            desc.setSAddressMode(MTLSamplerAddressMode::Repeat);
-            desc.setTAddressMode(MTLSamplerAddressMode::Repeat);
-            desc.setMaxAnisotropy(anisotropy.clamp(1, 16) as usize);
-            // Written into the engine sampler block (an argument buffer) for
-            // the single-source main program, which requires this flag.
-            desc.setSupportArgumentBuffers(true);
-            device
-                .newSamplerStateWithDescriptor(&desc)
-                .ok_or("failed to create sampler state")?
-        };
-
-        // compare sampler for PCF: always created so texture(2) / sampler(1) are
-        // always bound; LessEqual returns 1.0 (lit) when reference <= stored depth.
-        let shadow_sampler = {
-            let desc = MTLSamplerDescriptor::new();
-            desc.setMinFilter(MTLSamplerMinMagFilter::Linear);
-            desc.setMagFilter(MTLSamplerMinMagFilter::Linear);
-            desc.setSAddressMode(MTLSamplerAddressMode::ClampToEdge);
-            desc.setTAddressMode(MTLSamplerAddressMode::ClampToEdge);
-            desc.setCompareFunction(MTLCompareFunction::LessEqual);
-            // Rides the engine sampler block alongside the pool sampler.
-            desc.setSupportArgumentBuffers(true);
-            device
-                .newSamplerStateWithDescriptor(&desc)
-                .ok_or("failed to create shadow sampler state")?
-        };
-
-        // Cube sampler: linear filter + clamp-to-edge + mipmap linear for prefilter
-        // roughness lookups. Bound at sampler(2) and shared by both IBL cubes.
-        let cube_sampler = {
-            let desc = MTLSamplerDescriptor::new();
-            desc.setMinFilter(MTLSamplerMinMagFilter::Linear);
-            desc.setMagFilter(MTLSamplerMinMagFilter::Linear);
-            desc.setMipFilter(objc2_metal::MTLSamplerMipFilter::Linear);
-            desc.setSAddressMode(MTLSamplerAddressMode::ClampToEdge);
-            desc.setTAddressMode(MTLSamplerAddressMode::ClampToEdge);
-            desc.setRAddressMode(MTLSamplerAddressMode::ClampToEdge);
-            // Rides the engine sampler block alongside the pool sampler.
-            desc.setSupportArgumentBuffers(true);
-            device
-                .newSamplerStateWithDescriptor(&desc)
-                .ok_or("failed to create cube sampler state")?
-        };
-
-        // The engine sampler block for the single-source main program, written
-        // once now that the three sampler states exist.
-        let bindless_sampler_args = match &bindless_sampler_arg_encoder {
-            Some(enc) => Some(pipelines::build_bindless_sampler_args(
-                device,
-                enc,
-                &sampler,
-                &shadow_sampler,
-                &cube_sampler,
-            )?),
-            None => None,
-        };
-
-        // IBL: either upload the supplied EnvironmentMap payload or build a
-        // 1x1 gray fallback cube pair so texture(3) / texture(4) are always
-        // bound. The fragment shader uses `prefilter_mip_count == 0` to
-        // detect the fallback and skip IBL math.
-        let env_map = if let Some(bytes) = env_map_bytes {
-            let view = bake::environment_map::deserialize(bytes)
-                .map_err(|e| format!("EnvironmentMap payload malformed: {}", e))?;
-            upload_environment_map(
-                allocator,
-                view.irradiance_face,
-                view.irradiance_bytes,
-                view.prefilter_face,
-                &view.prefilter_mip_bytes,
-            )?
-        } else {
-            EnvironmentMapTextures {
-                irradiance: create_fallback_cubemap(allocator, [0.05, 0.05, 0.05, 1.0])?,
-                prefilter: create_fallback_cubemap(allocator, [0.05, 0.05, 0.05, 1.0])?,
-                prefilter_mip_count: 0,
-            }
-        };
-
-        // Color-grading LUT: upload the declared ColorLut payload, or build a
-        // 2x2x2 identity LUT so the composite pass always binds a valid 3D
-        // texture. With the identity LUT the grade is a no-op at any strength.
-        let color_lut = if let Some(bytes) = color_lut_bytes {
-            let (size, data) = bake::color_lut::deserialize(bytes)
-                .map_err(|e| format!("ColorLut payload malformed: {}", e))?;
-            upload_color_lut(allocator, size, data)?
-        } else {
-            create_fallback_color_lut(allocator)?
-        };
-
-        // shadow pipeline + array map: created only when shadow_map_size > 0.
-        // The fallback 1x1 shadow map (all depth = 1.0 = max = lit) is always
-        // bound so fragment shaders can safely sample texture(2) as a depth array.
-        let (shadow_pipeline_state, shadow_map, shadow_uniforms_init, effective_shadow_size) =
-            if shadow_map_size > 0 {
-                let shadow_ps = pipelines::build_shadow_pipeline(device, &vert_desc, hot_reload)?;
-                // Depth32Float 2D array, NUM_SHADOW_CASCADES layers, GPU-private.
-                let shadow_tex =
-                    create_shadow_map_array(device, shadow_map_size, NUM_SHADOW_CASCADES as u32)?;
-                (
-                    Some(shadow_ps),
-                    shadow_tex,
-                    csm::empty_shadow_uniforms(),
-                    shadow_map_size,
-                )
-            } else {
-                // 1x1 fallback depth array (value 1.0 = fully lit).
-                let shadow_tex = create_shadow_map_fallback(device)?;
-                (None, shadow_tex, csm::empty_shadow_uniforms(), 1)
-            };
-
-        // GPU-driven cascaded-shadow resources: the frustum-only
-        // shadow decision kernel and the depth-only bindless shadow render
-        // pipeline. Built only for a scene world with shadows enabled; a
-        // UI-only or shadowless world leaves these `None` and renders no
-        // cascades. The shadow ICB +
-        // its argument buffer are allocated lazily by `ensure_shadow_icb_capacity`
-        // (sized to NUM_SHADOW_CASCADES * cull_count once geometry is known).
-        let (shadow_cull_pipeline, shadow_bindless_pipeline) =
-            if shadow_pipeline_state.is_some() && bindless {
-                let sc = super::cull::build_shadow_cull_pipeline(device, hot_reload)?;
-                let sb = pipelines::build_shadow_bindless_pipeline(device, &vert_desc, hot_reload)?;
-                (Some(sc), Some(sb))
-            } else {
-                (None, None)
-            };
-
-        // Cache the first directional light's direction; per-frame CSM updates
-        // use it. `update_directional_lights` re-caches it when the sun changes.
-        let shadow_light_dir = lights::sun_direction(&light_uniforms);
-
-        // Pair the authored tunables with the resolved mode's output flags. On
-        // the SDR path both flags stay 0.0 and the shader runs the full ACES +
-        // gamma + FXAA + LUT chain unchanged. On the HDR path `hdr_output`
-        // lights up; `pq_output` further picks PQ-encode vs scRGB-linear
-        // passthrough inside that branch.
-        let post_process = hdr_mode.post_process_params(post_tunables);
-
-        // text rendering resources
-        let (text_pipeline_state, gpu_text_atlases) = if text_atlases.is_empty() {
-            (None, Vec::new())
-        } else {
-            let text_ps = build_text_pipeline(device, swap_pixel_format, hot_reload)?;
-            let mut gpu_atlases = Vec::with_capacity(text_atlases.len());
-            for (i, (aw, ah, pixels)) in text_atlases.iter().enumerate() {
-                let tex = upload_texture(allocator, *aw, *ah, pixels)
-                    .map_err(|e| format!("text_atlas[{}]: {}", i, e))?;
-                gpu_atlases.push(tex);
-            }
-            (Some(text_ps), gpu_atlases)
-        };
-
-        let text_sampler = {
-            let desc = MTLSamplerDescriptor::new();
-            desc.setMinFilter(MTLSamplerMinMagFilter::Linear);
-            desc.setMagFilter(MTLSamplerMinMagFilter::Linear);
-            desc.setSAddressMode(MTLSamplerAddressMode::ClampToEdge);
-            desc.setTAddressMode(MTLSamplerAddressMode::ClampToEdge);
-            device
-                .newSamplerStateWithDescriptor(&desc)
-                .ok_or("failed to create text sampler state")?
-        };
-
-        // Post-process pipeline + sampler. The composite pass samples the
-        // resolved HDR target with a linear-clamp filter and writes either
-        // ACES-tonemapped + gamma + FXAA-filtered output (SDR drawable) or
-        // linear extended-range values (HDR drawable) into the swapchain.
-        let post_pipeline_state = build_post_pipeline(device, swap_pixel_format, hot_reload)?;
-        let post_sampler = {
-            let desc = MTLSamplerDescriptor::new();
-            desc.setMinFilter(MTLSamplerMinMagFilter::Linear);
-            desc.setMagFilter(MTLSamplerMinMagFilter::Linear);
-            desc.setSAddressMode(MTLSamplerAddressMode::ClampToEdge);
-            desc.setTAddressMode(MTLSamplerAddressMode::ClampToEdge);
-            // Clamp the R axis too -- the same sampler trilinearly filters the
-            // 3D color LUT in the composite pass.
-            desc.setRAddressMode(MTLSamplerAddressMode::ClampToEdge);
-            device
-                .newSamplerStateWithDescriptor(&desc)
-                .ok_or("failed to create post sampler state")?
-        };
-
-        // MetalFX temporal upscaler. Built ahead of the HDR + post targets
-        // because the resolved input size (clamped to the device's supported
-        // scale range) determines the render resolution every other 3D-scene
-        // target uses; bloom + composite stay at the drawable (output)
-        // resolution. Failure or unsupported hardware falls back silently to
-        // native-resolution rendering: the entire `temporal_upscaling`
-        // feature is asset-driven so a world that doesn't author it pays no
-        // construction cost either way.
-        let upscaler = if temporal_upscaling_requested {
-            if super::post::temporal_scaler_supported(device) {
-                match super::post::MetalFXUpscaler::new(
-                    device,
-                    initial_w,
-                    initial_h,
-                    upscale_scale_requested,
-                ) {
-                    Ok(u) => {
-                        tracing::info!(
-                            "MetalFX: temporal upscaling on: render {}x{} → present {}x{} ({}x scale)",
-                            u.input_width,
-                            u.input_height,
-                            u.output_width,
-                            u.output_height,
-                            (u.input_width as f32) / (u.output_width.max(1) as f32),
-                        );
-                        Some(u)
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            "MetalFX: temporal scaler creation failed ({}); falling back to native resolution",
-                            e
-                        );
-                        None
-                    }
-                }
-            } else {
-                tracing::warn!(
-                    "MetalFX: temporal scaler not supported on this GPU; falling back to native resolution"
-                );
-                None
-            }
-        } else {
-            None
-        };
-        // Render resolution comes from the scaler, which owns the clamp to the
-        // device's supported range. The stored scale is the *requested* one, not
-        // `input / output`: that ratio is rounded to whole pixels, so feeding it
-        // back into the next rebuild shrinks the input a little further every
-        // resize.
-        let (render_w, render_h, upscale_scale) = match &upscaler {
-            Some(u) => (u.input_width, u.input_height, upscale_scale_requested),
-            None => (initial_w, initial_h, 1.0),
-        };
-        // With the MetalFX scaler doing temporal accumulation, the TAA pass
-        // is bypassed but the velocity pre-pass and projection jitter stay
-        // on (the scaler consumes both). `effective_taa_enabled` is what
-        // the engine carries downstream; the asset `taa` flag is ignored
-        // when upscaling is on.
-        let upscaling_active = upscaler.is_some();
-        let effective_taa_enabled = taa_enabled && !upscaling_active;
-        let velocity_needed = effective_taa_enabled || upscaling_active;
-
-        let hdr_targets = create_hdr_targets(device, render_w, render_h, hdr_samples)?;
-
-        // Hi-Z depth pyramid for GPU-driven occlusion culling. Built exactly
-        // when the bindless cull pipeline is active and sized to the render
-        // (depth) resolution; `resize_targets_if_needed` rebuilds it on a
-        // window resize. The cull kernel projects each AABB through the
-        // previous frame's depth pyramid and culls fully-occluded objects.
-        let hiz = if cull_pipeline.is_some() {
-            Some(super::hiz::HiZResources::new(
-                device,
-                render_w,
-                render_h,
-                hot_reload,
-                hdr_samples,
-            )?)
-        } else {
-            None
-        };
-
-        // The reflection-probe convolution kernels, under the same gate: a probe
-        // capture renders through the bindless ICB, so a world without the cull
-        // pipeline never bakes one and never needs them.
-        let probe_prefilter = if cull_pipeline.is_some() {
-            Some(super::probe_prefilter::ProbePrefilterPipelines::new(
-                device, hot_reload,
-            )?)
-        } else {
-            None
-        };
-
-        // Post-process effect chain: bloom is built for any world with a 3D
-        // scene; TAA / velocity / SSAO / SSR / decal / fog / auto-exposure are
-        // gated on their own settings so a world that disables them pays zero
-        // construction cost.
-        let effects::EffectsBundle {
-            bloom_targets,
-            bloom_pipelines,
-            taa,
-            ssao,
-            transient_pool,
-            ssr,
-            gbuffer,
-            ssgi,
-            rt_pipeline,
-            rt_pipeline_textured,
-            rt_skin_pipeline,
-            decal_pipeline,
-            decal_cube_vertex_buffer,
-            decal_cube_index_buffer,
-            decal_sampler,
-            fog_pipeline,
-            fog_froxel_pipeline,
-            fog_froxel_volume,
-            particle_pipelines,
-            particle_emitter_state,
-            auto_exposure_pipelines,
-            auto_exposure_histogram,
-            auto_exposure_outputs,
-            auto_exposure_state,
-            auto_exposure_bias_ev: auto_exposure_bias,
-        } = effects::build_effects(
-            allocator,
-            // Pipelines and targets only: nothing encodes before the context
-            // exists, so the device needs no probe set.
-            &super::post::post_device::MtlPostDevice {
-                device,
-                sampler: &post_sampler,
-                cube_sampler: &cube_sampler,
-                probes: None,
-                timing: None,
-                hot_reload,
-            },
-            requirements.scene,
-            effects::EffectDimensions {
-                render_w,
-                render_h,
-                output_w: initial_w,
-                output_h: initial_h,
-            },
-            effects::EffectSettings {
-                ssao: &ssao_settings,
-                ssr: &ssr_settings,
-                ssgi: &ssgi_settings,
-                rt_reflection: &rt_reflection_settings,
-                auto_exposure: &auto_exposure_settings,
-                reflection_blur_scale,
-                auto_exposure_bias_ev,
-            },
-            effects::EffectFlags {
-                taa_enabled: effective_taa_enabled,
-                needs_velocity: velocity_needed,
-                hot_reload,
-                frames_in_flight,
-            },
-            effects::WorldContentEffects {
-                fog_settings: &fog_settings,
-                decals: &decals,
-                particles: &particles,
+        let scene = scene_assets::build_scene_assets(
+            &gpu,
+            scene_assets::SceneInputs {
+                world: &world,
+                media: &media,
+                local_lights: &local_lights,
+                area_lights: &area_lights,
+                anisotropy,
+                bindless: features.scene,
             },
         )?;
+        let targets = targets::build_targets(&gpu, &features)?;
+        let light_cull = scene_data::build_light_cull(&gpu, &local_lights)?;
+        let shadow = shadow::build_shadow(&gpu, &vert_desc, &shadows, &light_uniforms)?;
+        let spot_shadow = shadow::build_spot_shadow(&gpu, &spot_shadows, shadows.map_size)?;
+        let cull = cull::build_cull(
+            &gpu,
+            cull::CullInputs {
+                world_shaders: &world_shaders,
+                vert_desc: &vert_desc,
+                features: &features,
+                shadow_enabled: shadow.pipeline_state.is_some(),
+                occlusion_two_pass: post.occlusion_two_pass,
+            },
+        )?;
+        let probe = cull::build_probe(&gpu, &cull)?;
+        let arg_buffers = arg_buffers::build_arg_buffers(&gpu, &cull, &scene, &shadow)?;
+        let text = text::build_text(&gpu, &media.text_atlases)?;
+        let composite = composite::build_composite(&gpu)?;
+        let bloom_pipelines = bloom::build_bloom(&gpu, features.scene)?;
 
-        // The slot table the decal pass draws from: authored decals seed it in
-        // order, and a runtime add reuses whatever `remove_decal` freed. Metal
-        // reserves no per-decal descriptors, so the table is uncapped.
-        let mut decal_set = decal::DecalSet::new(usize::MAX, frames_in_flight);
-        for record in decals {
-            decal_set
-                .insert(record)
-                .map_err(|_| "decals: decal slot table is full".to_string())?;
-        }
+        let post_device = effects::post_device(&gpu, &composite, &scene);
+        let settings = EffectSettings::from_post(&post);
+        let taa = effects::build_taa(&post_device, features.taa_enabled, features.render)?;
+        let ssao = effects::build_ssao(&hw.allocator, &settings, features.render, hot_reload)?;
+        let ssr = effects::build_ssr(&post_device, &settings, features.render)?;
+        let gbuffer = effects::build_gbuffer(
+            &hw.device,
+            features.gbuffer_enabled,
+            features.render,
+            hot_reload,
+        )?;
+        let ssgi = effects::build_ssgi(&post_device, &settings, features.render)?;
+        let auto_exposure =
+            effects::build_auto_exposure(&hw.device, &settings, frames_in_flight, hot_reload)?;
 
-        // Transparent water surfaces. Built only when the world declared
-        // ≥1 `WaterSurface`; the transparent-pass executor stays a no-op
-        // otherwise. Per-surface tessellated grids upload once at init.
-        let (water_pipeline, water_pipeline_rt, water_pipeline_rt_textured, mut water_records) =
-            if water_surfaces.is_empty() {
-                (None, None, None, Vec::new())
-            } else {
-                let ps = super::water::build_water_pipeline(device, hot_reload)?;
-                // The ray-traced variants are built whenever the device can ray
-                // trace (regardless of whether RT is on at launch), so a live RT
-                // toggle can select them without a pipeline rebuild. The shader
-                // uses `metal_raytracing`, so it must not be compiled on a non-RT
-                // device. The textured variant additionally needs a bindless world
-                // at draw time; it is selected over the flat variant then.
-                let (ps_rt, ps_rt_tex) = if super::raytrace::raytracing_supported(device) {
-                    (
-                        Some(super::water::build_water_pipeline_rt(device, hot_reload)?),
-                        Some(super::water::build_water_pipeline_rt_textured(
-                            device, hot_reload,
-                        )?),
-                    )
-                } else {
-                    (None, None)
-                };
-                let mut records = Vec::with_capacity(water_surfaces.len());
-                for s in &water_surfaces {
-                    records.push(super::water::build_water_surface_record(device, s)?);
-                }
-                (Some(ps), ps_rt, ps_rt_tex, records)
-            };
+        let decal = world_fx::build_decals(&gpu, fx.decals)?;
+        let fog = world_fx::build_fog(&gpu, fx.fog)?;
+        let particle = world_fx::build_particles(&gpu, fx.particles)?;
+        let planar = world_fx::plan_planar(&fx.water_surfaces, &fx.glass_panels, planar_planes);
+        let n_water = fx.water_surfaces.len();
+        let water = world_fx::build_water(&gpu, &fx.water_surfaces, &planar.slots[..n_water])?;
+        let glass = world_fx::build_glass(
+            &gpu,
+            &fx.glass_panels,
+            &planar.slots[n_water..],
+            &world.draw_objects,
+        )?;
+        let planar_reflection = world_fx::build_planar_reflection(&gpu, &planar, &features)?;
+        let raymarch = world_fx::build_raymarch(&gpu, &fx.sdf_volumes)?;
 
-        // Translucent glass panels. Built only when the world declared ≥1
-        // `GlassPanel`; rides the same transparent pass as water. Per-panel
-        // world-space quads upload once at init.
-        let (glass_pipeline, glass_pipeline_rt, glass_pipeline_rt_textured, mut glass_records) =
-            if glass_panels.is_empty() {
-                (None, None, None, Vec::new())
-            } else {
-                let ps = super::glass::build_glass_pipeline(device, hot_reload)?;
-                // The ray-traced variants are built whenever the device can ray
-                // trace (regardless of whether RT is on at launch), so a live RT
-                // toggle can select them without a pipeline rebuild. The shader
-                // uses `metal_raytracing`, so it must not be compiled on a non-RT
-                // device. The textured variant additionally needs a bindless world
-                // at draw time; it is selected over the flat variant then.
-                let (ps_rt, ps_rt_tex) = if super::raytrace::raytracing_supported(device) {
-                    (
-                        Some(super::glass::build_glass_pipeline_rt(device, hot_reload)?),
-                        Some(super::glass::build_glass_pipeline_rt_textured(
-                            device, hot_reload,
-                        )?),
-                    )
-                } else {
-                    (None, None)
-                };
-                let mut records = Vec::with_capacity(glass_panels.len());
-                for g in &glass_panels {
-                    records.push(super::glass::build_glass_panel_record(device, g)?);
-                }
-                (Some(ps), ps_rt, ps_rt_tex, records)
-            };
-
-        // Transparent glass MESH pipelines (Layer 2): built whenever the device can
-        // ray trace, INDEPENDENT of any `GlassPanel` -- the transparent material
-        // lives on imported meshes, not panels, and a live RT toggle then has them
-        // ready. `glass_mesh_pipeline_rt.is_some()` gates the whole transparent-mesh
-        // reroute; `seethrough_mesh_indices` marks which `draw_objects` carry it.
-        let (glass_mesh_pipeline_rt, glass_mesh_pipeline_rt_textured) =
-            if super::raytrace::raytracing_supported(device) {
-                (
-                    Some(super::glass::build_glass_mesh_pipeline_rt(
-                        device, hot_reload,
-                    )?),
-                    Some(super::glass::build_glass_mesh_pipeline_rt_textured(
-                        device, hot_reload,
-                    )?),
-                )
-            } else {
-                (None, None)
-            };
-        // Layer 2 see-through glass is opt-in per `Material` (the `see_through`
-        // arg, which implies `transparent`): see-through only looks right when the
-        // space behind the glass is modeled. A material that is `transparent` but
-        // NOT `see_through` renders as Layer 1 (opaque, low roughness, scene
-        // reflections) = tinted reflective glass that hides the interior. This list
-        // drives the producer + the opaque-pass skip (`mesh_glass_active`) + the
-        // RT-BLAS exclude together.
-        let seethrough_mesh_indices: Vec<usize> = draw_objects
-            .iter()
-            .enumerate()
-            .filter(|(_, o)| o.material.transparent != 0 && o.material.see_through != 0)
-            .map(|(i, _)| i)
-            .collect();
-        // The Layer 2 path is enabled when at least one material opts into
-        // see-through AND the mesh pipeline built (RT-capable device). Mirrors
-        // `MtlContext::seethrough_meshes_enabled`; used here for the init-time BVH
-        // build, which must exclude the see-through meshes it will reroute.
-        let seethrough_enabled =
-            !seethrough_mesh_indices.is_empty() && glass_mesh_pipeline_rt.is_some();
-
-        // Planar reflection set: group every flat reflector (water surfaces +
-        // glass panes) into a bounded number of distinct planes, one mirror render
-        // each. Water planes are listed first so they take slots before glass when
-        // the budget is tight. Each reflector records the slot it samples; planes
-        // past the budget get no slot and keep the box-projected probe cube
-        // (warned here, not silently dropped). The set is built only when the
-        // world has >=1 reflector; the per-frame pass is additionally gated on RT
-        // being off.
-        let planar_reflection = {
-            let mut planes: Vec<[f32; 4]> = Vec::new();
-            for s in &water_surfaces {
-                // Horizontal plane at the surface base height, normal +y.
-                planes.push([0.0, 1.0, 0.0, -s.center[1]]);
-            }
-            for g in &glass_panels {
-                // The pane plane: normal (unit from `from_args`) through center,
-                // so `n . p + d = 0` on the pane.
-                let n = g.normal;
-                let d = -(n[0] * g.center[0] + n[1] * g.center[1] + n[2] * g.center[2]);
-                planes.push([n[0], n[1], n[2], d]);
-            }
-            // The budget is capped at the capacity ceiling the mirror targets + ICB
-            // slots are sized to, so a stale/over-large preset value can never
-            // over-allocate.
-            let planar_budget = planar_planes.min(super::planar::MAX_PLANAR_PLANES);
-            let assignment = planar_reflection::assign_planar_slots(&planes, planar_budget);
-            // Record each reflector's slot (water first, then glass, matching the
-            // push order above).
-            for (rec, slot) in water_records.iter_mut().zip(assignment.slots.iter()) {
-                rec.planar_slot = *slot;
-            }
-            let glass_offset = water_records.len();
-            for (rec, slot) in glass_records
-                .iter_mut()
-                .zip(assignment.slots[glass_offset..].iter())
-            {
-                rec.planar_slot = *slot;
-            }
-            let overflow = assignment.slots.iter().filter(|s| s.is_none()).count();
-            if overflow > 0 {
-                tracing::warn!(
-                    "planar reflection: {} reflector plane(s) exceed the budget of {} \
-                     and fall back to the box-projected probe cube",
-                    overflow,
-                    planar_budget
-                );
-            }
-            if assignment.representatives.is_empty() {
-                None
-            } else {
-                Some(super::planar::create_planar_set(
-                    device,
-                    render_w,
-                    render_h,
-                    hdr_samples,
-                    &assignment.representatives,
-                )?)
-            }
-        };
-
-        // Raymarched SDF volumes. Each volume builds its own pipelines from the
-        // field the build compiled into its payload; the proxy-cube buffers are
-        // allocated once and shared across all volumes. Empty input list means
-        // both stay None / empty and the raymarch executor short-circuits.
-        let (raymarch_records, raymarch_cube_vertex_buffer, raymarch_cube_index_buffer) =
-            if sdf_volumes.is_empty() {
-                (Vec::new(), None, None)
-            } else {
-                let mut records = Vec::with_capacity(sdf_volumes.len());
-                for (volume, payload, label) in &sdf_volumes {
-                    records.push(super::raymarch::build_raymarch_volume_record(
-                        device, volume, payload, hot_reload, label,
-                    )?);
-                }
-                let (vb, ib) = super::raymarch::build_raymarch_cube_buffers(device)?;
-                (records, Some(vb), Some(ib))
-            };
-
-        // Shader hot-reload wiring. The atomic flag is shared between the
-        // notify watcher thread and `draw_frame`, plus the `reload-shaders`
-        // debug tool call via `GraphicsSystem`.
-        // Watcher creation is best-effort: a missing source dir or a notify
-        // error logs a warning and disables only the watcher half -- the
-        // debug command still works on the same flag.
-        let (shader_reload_pending, shader_watcher) = if hot_reload {
-            let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let watcher = super::hot_reload::spawn(std::sync::Arc::clone(&flag));
-            (Some(flag), watcher)
-        } else {
-            (None, None)
-        };
-
-        // Built before `device` moves into Self. Returns `None` when the
-        // device does not expose the timestamp counter set; the per-pass
-        // GPU timer then stays at zero for every pass.
-        let pass_timing = super::pass_timing::PassTimingResources::new(device);
-        tracing::info!(
-            "pass-timing: per-pass GPU sample buffers {}",
-            if pass_timing.is_some() {
-                "ready"
-            } else {
-                "unavailable (no MTLCommonCounterSetTimestamp)"
-            }
-        );
-
-        // Build the scene acceleration structure for hardware ray-traced
-        // reflections. Only when the world enabled RT (the RT pipeline is built
-        // above) and the GPU supports ray tracing; `build_rt_accel` returns None
-        // when the scene has no resident geometry, in which case the RT pass
-        // stays a no-op (draw/mod gates `rt_reflections_enabled` on this being
-        // Some). Built here because it needs the shared geometry buffers + draw
-        // list, which exist by now; resolution-independent, so untouched on
-        // resize. A wholesale rebuild on geometry change is the current update path.
-        let rt_accel = if rt_reflection_settings.is_some()
-            && super::raytrace::raytracing_supported(device)
-        {
-            match super::raytrace::build_rt_accel(
-                super::raytrace::RtGpu {
-                    device,
-                    command_queue,
-                    frames_in_flight,
-                },
-                super::raytrace::RtStaticGeometry {
-                    vertex_buffer: &vertex_buffer,
-                    index_buffer: &index_buffer,
-                },
-                super::raytrace::RtSceneGeometry {
-                    draw_objects: &draw_objects,
-                    clusters: &instanced_clusters,
-                },
-                super::raytrace::RtTextureCounts {
-                    albedo_count: gpu_textures.len(),
-                },
-                // Skinned meshes upload after `new`, so the initial BVH is
-                // static + instanced; the first frame's update seeds the
-                // skinned geometry once `upload_skinned` has run.
-                None,
-                seethrough_enabled,
-            )? {
-                Some(a) => {
-                    tracing::info!(
-                        "ray-traced reflections: built BVH over {} static objects",
-                        a.blas.len()
-                    );
-                    Some(a)
-                }
-                None => {
-                    tracing::warn!(
-                        "ray-traced reflections requested but the scene has no static geometry to build a BVH from; reflections disabled"
-                    );
-                    None
-                }
-            }
-        } else {
-            if rt_reflection_settings.is_some() {
-                tracing::warn!(
-                    "ray-traced reflections requested but this GPU does not support hardware ray tracing; falling back (no RT reflections)"
-                );
-            }
-            None
-        };
-
-        if rt_accel.is_some() {
-            tracing::info!("ray-traced reflections: dynamic transform mode = {rt_dynamic_mode:?}");
-        }
-
-        // Fold every instanced-cluster instance into the GPU-driven bindless
-        // main pass: each becomes a `GpuObjectData` record appended after the
-        // static objects, drawn through the shared cull + indirect path
-        // (`build_object_buffer` / `build_draw_args_buffer` re-append these every
-        // frame; see `cull_count`). Built once here against the final bindless
-        // pool counts (`gpu_textures` / `gpu_fallbacks`, the same counts the
-        // static fill uses) via the Metal-local `metal_instance_records`, which
-        // addresses the flat pool with Metal's CPU-bias convention (NOT the
-        // shared core `instance_object_records`, which is the DX/VK raw-index
-        // convention): instances are placed at world load and never move, so the
-        // records are static. The draw args carry the cluster base index range;
-        // `build_draw_args_buffer` patches per-instance LOD over it each frame
-        // for the clusters that declare alternates.
-        let n_instances: usize = instanced_clusters.iter().map(|c| c.instances.len()).sum();
-        let (instance_records, instance_draw_args) = {
-            use concinnity_core::gfx::render_types::{GpuDrawArgs, draw_args_flags};
-            let records =
-                super::cull::metal_instance_records(&instanced_clusters, gpu_textures.len());
-            let mut args: Vec<GpuDrawArgs> = Vec::with_capacity(records.len());
-            for cluster in &instanced_clusters {
-                for _ in &cluster.instances {
-                    args.push(GpuDrawArgs {
-                        index_count: cluster.index_count as u32,
-                        index_offset: cluster.index_offset as u32,
-                        base_vertex: 0,
-                        flags: draw_args_flags(true, true, true),
-                    });
-                }
-            }
-            (records, args)
-        };
+        let diagnostics = commands::build_diagnostics(&gpu);
+        let rt = ray_tracing::build_ray_tracing(
+            &gpu,
+            ray_tracing::RtInputs {
+                world: &world,
+                scene: &scene,
+                glass: &glass,
+                post: &post,
+            },
+        )?;
+        let instanced = cull::build_instanced(world.instanced_clusters, scene.textures.len());
+        let rings = commands::build_rings(&gpu);
 
         let ctx = Self {
             last_present_texture: None,
-            cull: super::cull::CullState {
-                bindless,
-                main_pipeline: pipeline_state,
-                world_pipelines,
-                pipeline: cull_pipeline,
-                encode_pipeline: cull_encode_pipeline,
-                bucket_count: shader_bucket_count,
-                icbs: Vec::new(),
-                icb_arg_encoder: cull_icb_arg_encoder,
-                icb_arg_buffer: None,
-                icb_capacity: 0,
-                pipeline_phase2: cull_pipeline_phase2,
-                icbs_2: Vec::new(),
-                icb_2_arg_buffer: None,
-                status_buffer: None,
-                two_pass_occlusion,
-                hiz,
-                prev_view_proj: IDENTITY,
-                cur_view_proj: IDENTITY,
-                hiz_valid: false,
-                shadow_pipeline: shadow_cull_pipeline,
-                shadow_bindless_pipeline,
-                shadow_icb: None,
-                shadow_icb_arg_buffer: None,
-                shadow_status: None,
-                shadow_icb_capacity: 0,
-                mirror_slots: Vec::new(),
-                mirror_status: None,
-                mirror_icb_capacity: 0,
-            },
-            arg_buffers: MtlArgumentBuffers {
-                bindless_tex_encoder: bindless_tex_arg_encoder,
-                bindless_tex_gates: super::bindless_args::SlotGates::new(
-                    frames_in_flight.max(1) + 1,
-                ),
-                bindless_tail_gates: super::bindless_args::SlotGates::new(
-                    frames_in_flight.max(1) + 1,
-                ),
-                bindless_residency: super::bindless_args::ResidencySet::new(),
-                bindless_sampler_args,
-                probe_cube_encoder: probe_cube_arg_encoder,
-                texture_epoch: 0,
-            },
-            draw: super::context::DrawState {
-                objects: draw_objects,
-                graph_cache: None,
-                n_instances,
-                // Set by `upload_skinned` (when bindless + static geometry
-                // present); 0 keeps the skinned fold inactive until a
-                // SkinnedMesh uploads.
-                n_skinned: 0,
-            },
-            instanced: super::context::InstancedState {
-                any_lod: lod::any_cluster_has_lod(&instanced_clusters),
-                clusters: instanced_clusters,
-                records: instance_records,
-                draw_args: instance_draw_args,
-            },
-            view: super::context::ViewState {
-                clear_color,
-                scene_fade: 0.0,
-                mode: Default::default(),
-                far: 1.0,
-                matrix: IDENTITY,
-                sky_rot: concinnity_core::sky::SkyOrientation::IDENTITY_ROWS,
-            },
-            scene: MtlSceneAssets {
-                vertex_buffer,
-                index_buffer,
-                textures: gpu_textures,
-                fallback_textures: gpu_fallbacks,
-                local_light_buffer,
-                area_light_buffer,
-                ltc_matrix_texture,
-                ltc_magnitude_texture,
-                env_map,
-                color_lut,
-                sampler,
-                cube_sampler,
-            },
+            cull,
+            arg_buffers,
+            draw: DrawState::new(world.draw_objects, &instanced),
+            instanced,
+            view: ViewState::new(clear_color),
+            scene,
             light_uniforms,
-            shadow: super::context::ShadowState {
-                pipeline_state: shadow_pipeline_state,
-                map: shadow_map,
-                map_size: effective_shadow_size,
-                update: shadow_update,
-                distance: shadow_distance,
-                cascades: shadow_cascades,
-                scheduler: Default::default(),
-                render_mask: 0,
-                sampler: shadow_sampler,
-                uniforms: shadow_uniforms_init,
-                light_dir: shadow_light_dir,
-            },
-            spot_shadow: super::context::SpotShadowState {
-                map: spot_shadow_map,
-                buffer: spot_shadow_buffer,
-                count: spot_shadow_count,
-                scheduler: Default::default(),
-                render_mask: 0,
-            },
-            probe: super::context::ProbeState {
-                placements: Vec::new(),
-                maps: Vec::new(),
-                // Empty until `set_reflection_probes` supplies placements.
-                bake_queue: reflection_probe::ProbeBakeQueue::new(0),
-                set: concinnity_core::render::uniforms::ProbeSet::EMPTY,
-                rendering: None,
-                prefiltering: None,
-                prefilter: probe_prefilter,
-                retire_pool: super::transient::RetirePool::new(),
-                cube_args: None,
-                cube_arg_gates: super::bindless_args::SlotGates::new(frames_in_flight.max(1) + 1),
-                cube_residency: super::bindless_args::ResidencySet::new(),
-            },
-            text: super::context::TextState {
-                pipeline_state: text_pipeline_state,
-                atlas_textures: gpu_text_atlases,
-                sampler: text_sampler,
-                upload: super::text_upload::TextUploadRing::new(frames_in_flight),
-            },
-            targets: MtlTargets {
-                hdr: hdr_targets,
-                bloom: bloom_targets,
-                transient_pool,
-                depth_state,
-                depth_state_read_only,
-                geometry_less,
-            },
-            composite: CompositeState {
-                pipeline: post_pipeline_state,
-                sampler: post_sampler,
-            },
+            shadow,
+            spot_shadow,
+            probe,
+            text,
+            targets,
+            composite,
             bloom_pipelines,
-            post_process,
-            taa: super::post::TaaState {
-                enabled: effective_taa_enabled,
-                pass: taa,
-                frame: 0,
-            },
+            post_process: features.post_process,
+            taa,
             prev_view_proj: IDENTITY,
-            upscale: super::post::UpscaleState {
-                scaler: upscaler,
-                scale: upscale_scale,
-                jitter: Default::default(),
-                reset_pending: std::sync::atomic::AtomicBool::new(true),
-            },
+            upscale,
             ssao,
             ssr,
             gbuffer,
             ssgi,
-            rt: super::raytrace::RtState {
-                settings: rt_reflection_settings,
-                accel: rt_accel,
-                dynamic_mode: rt_dynamic_mode,
-                skinned_geometry: rt_skinned_geometry,
-                update_failed: false,
-                topology_dirty: false,
-                pipeline: rt_pipeline,
-                pipeline_textured: rt_pipeline_textured,
-                skin_pipeline: rt_skin_pipeline,
-            },
-            lines: super::line::LineState {
-                pipeline: None,
-                build_failed: false,
-                upload: super::transient::TransientRing::new(frames_in_flight),
-                frame: None,
-            },
-            decal: super::decal::DecalState {
-                set: decal_set,
-                pipeline: decal_pipeline,
-                cube_vertex_buffer: decal_cube_vertex_buffer,
-                cube_index_buffer: decal_cube_index_buffer,
-                sampler: decal_sampler,
-            },
-            fog: super::fog::FogState {
-                settings: fog_settings,
-                pipeline: fog_pipeline,
-                froxel_pipeline: fog_froxel_pipeline,
-                froxel_volume: fog_froxel_volume,
-            },
-            light_cull: super::light_cull::LightCullState {
-                pipeline: light_cull_pipeline,
-                cluster_buffer: cluster_light_buffer,
-            },
-            cluster_params: render_types::ClusterParams::ZERO,
-            particle: super::particle::ParticleState {
-                records: particles.into_iter().map(Some).collect(),
-                emitter_state: particle_emitter_state.into_iter().map(Some).collect(),
-                free_slots: Vec::new(),
-                pipelines: particle_pipelines,
-                last_elapsed: 0.0,
-                frame_index: 0,
-                counter_slot: 0,
-            },
-            auto_exposure: super::auto_exposure::AutoExposureGpu {
-                settings: auto_exposure_settings,
-                state: auto_exposure_state,
-                bias_ev: auto_exposure_bias,
-                pipelines: auto_exposure_pipelines,
-                histogram: auto_exposure_histogram,
-                outputs: auto_exposure_outputs,
-                last_elapsed: 0.0,
-            },
-            hot_reload: super::context::HotReloadState {
-                enabled: hot_reload,
-                reload_pending: shader_reload_pending,
-                watcher: shader_watcher,
-            },
+            rt,
+            lines: LineState::new(frames_in_flight),
+            decal,
+            fog,
+            light_cull,
+            cluster_params: ClusterParams::ZERO,
+            particle,
+            auto_exposure,
+            hot_reload: HotReloadState::spawn(hot_reload),
             world_shader: world_shaders[0].programs.cloned(),
             capture,
-            model_history: concinnity_core::render::model_history::ModelHistory::new(),
-            skinned: super::resources::skinning::SkinnedState {
-                shadow_pipeline_state: None,
-                vertex_buffer: None,
-                index_buffer: None,
-                slots: skinned_slots::SkinnedSlots::new(),
-                skin_pipeline: None,
-                deformed: Vec::new(),
-                deformed_primed: std::sync::atomic::AtomicBool::new(false),
-                morphs: Vec::new(),
-            },
-            geometry_alloc: super::context::GeometryAllocators {
-                mesh_vtx: crate::suballoc::range_alloc::RangeAllocator::new(),
-                mesh_idx: crate::suballoc::range_alloc::RangeAllocator::new(),
-                chunk_vtx: crate::suballoc::range_alloc::RangeAllocator::new(),
-                chunk_idx: crate::suballoc::range_alloc::RangeAllocator::new(),
-            },
-            diagnostics: super::context::Diagnostics {
-                frame_stats: profile::RenderStats::default(),
-                gpu_time_us: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
-                render_fault_logged: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-                device_error: std::sync::Arc::new(std::sync::Mutex::new(None)),
-                pass_fault_count: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
-                pass_timing,
-                pass_times_us: std::sync::Arc::new(std::array::from_fn(|_| {
-                    std::sync::atomic::AtomicU32::new(0)
-                })),
-                draw_calls_accum: std::sync::atomic::AtomicU32::new(0),
-            },
-            frame_pacing: super::frame_pacing::FrameInFlight::new(frames_in_flight),
+            model_history: ModelHistory::new(),
+            skinned: SkinnedState::new(),
+            geometry_alloc: GeometryAllocators::default(),
+            diagnostics,
+            frame_pacing: FrameInFlight::new(frames_in_flight),
             frames_in_flight: frames_in_flight.max(1),
             frame_ring_index: 0,
-            // The bindless buffers an async reflection-probe bake reads (object,
-            // draw-args, bindless-texture-args, and the skinned joint palettes) get
-            // one EXTRA ring slot. The frame only ever uses slots
-            // `frame_ring_index % frames_in_flight` -- i.e. `[0, frames_in_flight)`
-            // -- so slot `frames_in_flight` is reserved for the bake: a slot the
-            // frame never overwrites, keeping the bake's CPU-written buffers valid
-            // across its asynchronous (no `waitUntilCompleted`) GPU capture. See
-            // metal/probe.rs `bake_ring_slot`.
-            rings: super::context::FrameRings {
-                object: super::transient::TransientRing::new(frames_in_flight.max(1) + 1),
-                draw_args: super::transient::TransientRing::new(frames_in_flight.max(1) + 1),
-                model_history: super::transient::TransientRing::new(frames_in_flight),
-                bindless_tex: super::transient::TransientRing::new(frames_in_flight.max(1) + 1),
-                probe_cube: super::transient::TransientRing::new(frames_in_flight.max(1) + 1),
-                joint: super::transient::JointRing::new(frames_in_flight.max(1) + 1),
-                object_scratch: Vec::new(),
-                draw_args_scratch: Vec::new(),
-            },
-            water: super::context::WaterState {
-                pipeline: water_pipeline,
-                pipeline_rt: water_pipeline_rt,
-                pipeline_rt_textured: water_pipeline_rt_textured,
-                surfaces: water_records,
-            },
+            rings,
+            water,
             planar_reflection,
-            glass: super::context::GlassState {
-                pipeline: glass_pipeline,
-                pipeline_rt: glass_pipeline_rt,
-                pipeline_rt_textured: glass_pipeline_rt_textured,
-                mesh_pipeline_rt: glass_mesh_pipeline_rt,
-                mesh_pipeline_rt_textured: glass_mesh_pipeline_rt_textured,
-                seethrough_mesh_indices,
-                panels: glass_records,
-            },
-            raymarch: super::context::RaymarchState {
-                volumes: raymarch_records,
-                cube_vertex_buffer: raymarch_cube_vertex_buffer,
-                cube_index_buffer: raymarch_cube_index_buffer,
-            },
+            glass,
+            raymarch,
             hw,
         };
         let pooled = ctx.hw.allocator.stats();
@@ -1502,10 +353,7 @@ impl MtlContext {
     // the frames-in-flight and HDR request still match. On a build failure the
     // handed-over window closes with the dropped hardware, and the caller drops
     // this backend.
-    pub(super) fn apply_world_reload(
-        &mut self,
-        init: backend_init::BackendInit<'_>,
-    ) -> RenderResult<()> {
+    pub(super) fn apply_world_reload(&mut self, init: BackendInit<'_>) -> RenderResult<()> {
         debug_assert_main_thread("apply_world_reload");
         self.wait_idle();
         let reuse = self.hw.hand_over()?;
