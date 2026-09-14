@@ -719,8 +719,8 @@ impl VkContext {
             return;
         }
 
-        let device = &self.device;
-        let extent = self.render_extent;
+        let device = &self.hw.device;
+        let extent = self.targets.render_extent;
 
         // Upload this frame's view UBO.
         let inv_vp = mat4_inverse(vp);
@@ -823,7 +823,7 @@ impl VkContext {
     // Reuses tombstoned slots from a prior `remove_decal` before growing
     // the vec.
     pub(crate) fn add_decal(&mut self, record: DecalRecord) -> Result<usize, String> {
-        let last_tex = self.textures.len().saturating_sub(1);
+        let last_tex = self.scene.textures.len().saturating_sub(1);
         let tex_idx = record.texture_slot.min(last_tex);
 
         let id = self
@@ -841,9 +841,9 @@ impl VkContext {
             .as_ref()
             .ok_or_else(|| "add_decal: decal pipeline unavailable".to_string())?;
         write_albedo_set(
-            &self.device,
+            &self.hw.device,
             decals.albedo_sets[id],
-            self.textures[tex_idx].view,
+            self.scene.textures[tex_idx].view,
             decals.sampler,
         );
         let mut slots = decals.decal_texture_slots.get();
@@ -890,11 +890,16 @@ impl VkContext {
             None => return,
         };
         let slots = decals.decal_texture_slots.get();
-        let last_tex = self.textures.len().saturating_sub(1);
+        let last_tex = self.scene.textures.len().saturating_sub(1);
         for (id, &tex_slot) in slots.iter().enumerate() {
             if tex_slot == slot {
-                let view = self.textures[tex_slot.min(last_tex)].view;
-                write_albedo_set(&self.device, decals.albedo_sets[id], view, decals.sampler);
+                let view = self.scene.textures[tex_slot.min(last_tex)].view;
+                write_albedo_set(
+                    &self.hw.device,
+                    decals.albedo_sets[id],
+                    view,
+                    decals.sampler,
+                );
             }
         }
     }

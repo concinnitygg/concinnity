@@ -1,48 +1,76 @@
-//! The shared hardware a Vulkan context builds on: the platform window,
-//! instance, debug messenger, surface, device, swapchain and allocator a fresh
-//! launch acquires, and the bundle a live world reload inherits instead.
+//! The device layer a Vulkan context builds on: the platform window, instance,
+//! debug messenger, surface, device, swapchain and allocator a fresh launch
+//! acquires, or adopts from the outgoing context on a live world reload.
 
 use ash::vk;
 use concinnity_core::components;
+use concinnity_core::render::backend_init::{self, PostSettings};
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::hdr_output;
 use std::ffi::{CStr, CString, c_char};
 
+use crate::vulkan::context::{SwapchainState, VkHardware};
 use crate::vulkan::device::*;
 use crate::vulkan::swapchain::*;
 
-// The backend inputs a fresh hardware acquisition reads.
+// The backend inputs the hardware is acquired or adopted with.
 pub(super) struct HardwareRequest<'a> {
-    pub(super) title: &'a str,
-    pub(super) width: u32,
-    pub(super) height: u32,
-    pub(super) title_bar: bool,
+    pub(super) window: &'a components::Window,
     pub(super) validation: bool,
     pub(super) frames: usize,
     pub(super) vsync: bool,
-    pub(super) hdr_display: bool,
-    pub(super) hdr_pq: bool,
-    pub(super) temporal_upscaling: bool,
-    pub(super) upscale_backend: components::UpscalerBackend,
+    pub(super) post: &'a PostSettings,
 }
 
-// Acquire the shared hardware for a fresh launch. `upscale_sdk` stays alive
-// through device creation, since its instance-extension pointers and XeSS
-// feature chain are read there.
-pub(super) fn acquire_hardware(req: HardwareRequest<'_>) -> RenderResult<SharedHardware> {
+impl HardwareRequest<'_> {
+    // The swap-decision key for a future live reload of the context (see
+    // `hot_swap_config`). Normalized `frames` (>=1) matches how
+    // `BackendInit::swapchain_config` clamps it.
+    fn swapchain_config(&self) -> backend_init::SwapchainConfig {
+        backend_init::SwapchainConfig {
+            frames_in_flight: self.frames,
+            hdr_display: self.post.hdr_display,
+            hdr_pq: self.post.hdr_pq,
+        }
+    }
+}
+
+// Adopt the hardware an outgoing context handed over on a live editor reload.
+// The swapchain is inherited, but its image views are this context's own (the
+// outgoing context frees its views), and the vsync and swap settings are the
+// incoming world's.
+pub(super) fn inherit_hardware(
+    (mut hw, mut swapchain): (VkHardware, SwapchainState),
+    req: &HardwareRequest<'_>,
+) -> RenderResult<(VkHardware, SwapchainState)> {
+    swapchain.image_views =
+        create_swapchain_image_views(&hw.device, &swapchain.images, swapchain.format)?;
+    hw.vsync = req.vsync;
+    hw.swapchain_config = req.swapchain_config();
+    Ok((hw, swapchain))
+}
+
+// Acquire the hardware for a fresh launch. `upscale_sdk` stays alive through
+// device creation, since its instance-extension pointers and XeSS feature chain
+// are read there.
+pub(super) fn acquire_hardware(
+    req: &HardwareRequest<'_>,
+) -> RenderResult<(VkHardware, SwapchainState)> {
+    let (title, width, height, title_bar) = (
+        req.window.title.as_str(),
+        req.window.width,
+        req.window.height,
+        req.window.title_bar,
+    );
     let HardwareRequest {
-        title,
-        width,
-        height,
-        title_bar,
         validation,
         frames,
         vsync,
-        hdr_display,
-        hdr_pq,
-        temporal_upscaling,
-        upscale_backend,
-    } = req;
+        post,
+        ..
+    } = *req;
+    let hdr_display = post.hdr_display;
+    let (temporal_upscaling, upscale_backend) = (post.temporal_upscaling, post.upscale_backend);
     // Platform window: native Win32 on Windows, AppKit on macOS, GLFW on Linux.
     let mut window = crate::vulkan::PlatformWindow::new(
         title,
@@ -309,8 +337,91 @@ pub(super) fn acquire_hardware(req: HardwareRequest<'_>) -> RenderResult<SharedH
         Vec::new()
     };
 
-    let max_msaa_samples = get_max_usable_sample_count(&instance, physical_device);
+    let hdr_mode = resolve_hdr_mode(
+        &surface_loader,
+        physical_device,
+        surface,
+        swapchain_colorspace_ext_available,
+        post,
+    );
+    let swapchain_loader = ash::khr::swapchain::Device::new(&instance, &device);
+    let (swapchain, swapchain_images, swapchain_format, swapchain_extent) = create_swapchain_inner(
+        &SwapchainSurface {
+            instance: &instance,
+            device: &device,
+            pd: physical_device,
+            surface_loader: &surface_loader,
+            surface,
+            swapchain_loader: &swapchain_loader,
+        },
+        SwapchainQueueFamilies {
+            graphics_family,
+            present_family,
+        },
+        SwapchainConfig {
+            width,
+            height,
+            old_swapchain: vk::SwapchainKHR::null(),
+            hdr_mode,
+            vsync,
+        },
+    )?;
+    let swapchain_image_views =
+        create_swapchain_image_views(&device, &swapchain_images, swapchain_format)?;
 
+    // The device allocator every pooled buffer / image is placed
+    // through, built before any resource creation so init-time
+    // resources can pool. A reload inherits the outgoing
+    // context's instead (the other match arm), so the rebuilt
+    // world places into the blocks the old world releases.
+    let alloc =
+        crate::vulkan::allocator::DeviceAllocator::new(&instance, physical_device, &device, frames);
+
+    Ok((
+        VkHardware {
+            instance,
+            device,
+            physical_device,
+            surface,
+            surface_loader,
+            graphics_queue,
+            present_queue,
+            graphics_family,
+            alloc,
+            timestamp_query_pool,
+            timestamp_period_ns: timestamp_period,
+            device_local_heaps,
+            memory_budget_supported,
+            rt_capable,
+            update_after_bind,
+            hdr_mode,
+            vsync,
+            swapchain_config: req.swapchain_config(),
+            window: Some(window),
+            _entry: entry,
+        },
+        SwapchainState {
+            loader: swapchain_loader,
+            handle: swapchain,
+            images: swapchain_images,
+            image_views: swapchain_image_views,
+            format: swapchain_format,
+            extent: swapchain_extent,
+            last_present_index: None,
+        },
+    ))
+}
+
+// Resolve the swapchain output mode from the world's HDR request and the color
+// space pairs the surface advertises.
+fn resolve_hdr_mode(
+    surface_loader: &ash::khr::surface::Instance,
+    physical_device: vk::PhysicalDevice,
+    surface: vk::SurfaceKHR,
+    swapchain_colorspace_ext_available: bool,
+    post: &PostSettings,
+) -> hdr_output::HdrOutputMode {
+    let (hdr_display, hdr_pq) = (post.hdr_display, post.hdr_pq);
     // HDR-output resolve. The world's `hdr_display` toggle is the
     // gate; even on a capable display, no HDR unless the asset opts
     // in. The reverse (`hdr_display = true` on an SDR-only surface,
@@ -378,179 +489,7 @@ pub(super) fn acquire_hardware(req: HardwareRequest<'_>) -> RenderResult<SharedH
      EXTENDED_SRGB_LINEAR_EXT)"
         );
     }
-    let swapchain_loader = ash::khr::swapchain::Device::new(&instance, &device);
-    let (swapchain, swapchain_images, swapchain_format, swapchain_extent) = create_swapchain_inner(
-        &SwapchainSurface {
-            instance: &instance,
-            device: &device,
-            pd: physical_device,
-            surface_loader: &surface_loader,
-            surface,
-            swapchain_loader: &swapchain_loader,
-        },
-        SwapchainQueueFamilies {
-            graphics_family,
-            present_family,
-        },
-        SwapchainConfig {
-            width,
-            height,
-            old_swapchain: vk::SwapchainKHR::null(),
-            hdr_mode,
-            vsync,
-        },
-    )?;
-    let swapchain_image_views =
-        create_swapchain_image_views(&device, &swapchain_images, swapchain_format)?;
-
-    // The device allocator every pooled buffer / image is placed
-    // through, built before any resource creation so init-time
-    // resources can pool. A reload inherits the outgoing
-    // context's instead (the other match arm), so the rebuilt
-    // world places into the blocks the old world releases.
-    let alloc =
-        crate::vulkan::allocator::DeviceAllocator::new(&instance, physical_device, &device, frames);
-
-    Ok(SharedHardware {
-        window,
-        entry,
-        instance,
-        device,
-        physical_device,
-        surface,
-        surface_loader,
-        graphics_queue,
-        present_queue,
-        graphics_family,
-        swapchain_loader,
-        swapchain,
-        swapchain_images,
-        swapchain_format,
-        swapchain_extent,
-        swapchain_image_views,
-        max_msaa_samples,
-        hdr_mode,
-        memory_budget_supported,
-        rt_capable,
-        update_after_bind,
-        device_local_heaps,
-        timestamp_query_pool,
-        timestamp_period,
-        alloc,
-    })
-}
-
-// The shared hardware `VkContext::build` acquires (fresh launch) or inherits
-// (live editor reload) before it builds any per-world resource. Destructured
-// right after so the rest of `build` is identical on both paths.
-pub(super) struct SharedHardware {
-    pub(super) window: crate::vulkan::PlatformWindow,
-    pub(super) entry: ash::Entry,
-    pub(super) instance: ash::Instance,
-    pub(super) device: crate::vulkan::owned::VkDevice,
-    pub(super) physical_device: vk::PhysicalDevice,
-    pub(super) surface: vk::SurfaceKHR,
-    pub(super) surface_loader: ash::khr::surface::Instance,
-    pub(super) graphics_queue: vk::Queue,
-    pub(super) present_queue: vk::Queue,
-    pub(super) graphics_family: u32,
-    pub(super) swapchain_loader: ash::khr::swapchain::Device,
-    pub(super) swapchain: vk::SwapchainKHR,
-    pub(super) swapchain_images: Vec<vk::Image>,
-    pub(super) swapchain_format: vk::Format,
-    pub(super) swapchain_extent: vk::Extent2D,
-    pub(super) swapchain_image_views: Vec<vk::ImageView>,
-    // This device's ceiling for the HDR format, not the count the world runs
-    // at: `resolve_sample_count` clamps the world's request against it.
-    pub(super) max_msaa_samples: vk::SampleCountFlags,
-    pub(super) hdr_mode: hdr_output::HdrOutputMode,
-    pub(super) memory_budget_supported: bool,
-    pub(super) rt_capable: bool,
-    pub(super) update_after_bind: bool,
-    pub(super) device_local_heaps: Vec<u32>,
-    pub(super) timestamp_query_pool: Option<vk::QueryPool>,
-    pub(super) timestamp_period: f32,
-    // Fresh on a launch; the outgoing context's on a reload, so the rebuilt
-    // world places into the blocks the old world's leases released.
-    pub(super) alloc: crate::vulkan::allocator::DeviceAllocator,
-}
-
-// The shared hardware an outgoing context hands to its successor on a live
-// editor `reload_world` (see `VkContext::apply_world_reload`). The loaders and
-// `ash::{Entry,Instance,Device}` are cheap dispatch-table clones over the same
-// underlying objects; the raw `vk::*` handles are `Copy`; the window and the
-// (already-`Option`) debug + timestamp handles are moved out of the outgoing
-// context so its `Drop` leaves them alone; the device allocator is a shared
-// handle (clones share one pool). Vulkan handles are not refcounted, so the
-// outgoing `Drop` also skips destroying the shared instance / device /
-// surface / swapchain (gated on `reused_by_successor`).
-pub(super) struct VkReuse {
-    pub(super) window: crate::vulkan::PlatformWindow,
-    pub(super) entry: ash::Entry,
-    pub(super) instance: ash::Instance,
-    pub(super) device: crate::vulkan::owned::VkDevice,
-    pub(super) physical_device: vk::PhysicalDevice,
-    pub(super) surface: vk::SurfaceKHR,
-    pub(super) surface_loader: ash::khr::surface::Instance,
-    pub(super) graphics_queue: vk::Queue,
-    pub(super) present_queue: vk::Queue,
-    pub(super) graphics_family: u32,
-    pub(super) swapchain_loader: ash::khr::swapchain::Device,
-    pub(super) swapchain: vk::SwapchainKHR,
-    pub(super) swapchain_images: Vec<vk::Image>,
-    pub(super) swapchain_format: vk::Format,
-    pub(super) swapchain_extent: vk::Extent2D,
-    pub(super) hdr_mode: hdr_output::HdrOutputMode,
-    pub(super) memory_budget_supported: bool,
-    pub(super) rt_capable: bool,
-    pub(super) update_after_bind: bool,
-    pub(super) device_local_heaps: Vec<u32>,
-    pub(super) timestamp_query_pool: Option<vk::QueryPool>,
-    pub(super) timestamp_period: f32,
-    pub(super) alloc: crate::vulkan::allocator::DeviceAllocator,
-}
-
-impl VkReuse {
-    // Turn the inherited hardware into a `SharedHardware`, recreating the only
-    // per-context object among it: fresh swapchain image views over the reused
-    // swapchain's images (the outgoing context frees its own views in Drop).
-    pub(super) fn into_shared(self) -> Result<SharedHardware, String> {
-        let swapchain_image_views = create_swapchain_image_views(
-            &self.device,
-            &self.swapchain_images,
-            self.swapchain_format,
-        )?;
-        // Re-queried rather than carried: the outgoing context holds the count
-        // its world resolved to, and the incoming world's AA mode may differ.
-        let max_msaa_samples = get_max_usable_sample_count(&self.instance, self.physical_device);
-        Ok(SharedHardware {
-            window: self.window,
-            entry: self.entry,
-            instance: self.instance,
-            device: self.device,
-            physical_device: self.physical_device,
-            surface: self.surface,
-            surface_loader: self.surface_loader,
-            graphics_queue: self.graphics_queue,
-            present_queue: self.present_queue,
-            graphics_family: self.graphics_family,
-            swapchain_loader: self.swapchain_loader,
-            swapchain: self.swapchain,
-            swapchain_images: self.swapchain_images,
-            swapchain_format: self.swapchain_format,
-            swapchain_extent: self.swapchain_extent,
-            swapchain_image_views,
-            max_msaa_samples,
-            hdr_mode: self.hdr_mode,
-            memory_budget_supported: self.memory_budget_supported,
-            rt_capable: self.rt_capable,
-            update_after_bind: self.update_after_bind,
-            device_local_heaps: self.device_local_heaps,
-            timestamp_query_pool: self.timestamp_query_pool,
-            timestamp_period: self.timestamp_period,
-            alloc: self.alloc,
-        })
-    }
+    hdr_mode
 }
 
 // Validation layer debug callback: logs validation errors and warnings.

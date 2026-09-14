@@ -29,22 +29,22 @@ impl VkContext {
             return Ok(());
         }
         let size = data.len() as u64;
-        let staging = self.alloc.create_buffer(
+        let staging = self.hw.alloc.create_buffer(
             size,
             vk::BufferUsageFlags::TRANSFER_SRC,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         )?;
         staging.write_bytes(0, data);
         texture::one_shot_submit(
-            &self.device,
+            &self.hw.device,
             self.commands.command_pool,
-            self.graphics_queue,
+            self.hw.graphics_queue,
             |cmd| {
                 let copy = vk::BufferCopy::default().dst_offset(offset).size(size);
                 // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
                 // slice these commands name is live for the call.
                 unsafe {
-                    self.device.cmd_copy_buffer(
+                    self.hw.device.cmd_copy_buffer(
                         cmd,
                         staging.buffer(),
                         dest,
@@ -56,7 +56,7 @@ impl VkContext {
         // The one-shot idled the queue; drop the staging buffer and retire it
         // immediately so a per-region upload loop reuses one staging range.
         drop(staging);
-        self.alloc.reclaim_idle();
+        self.hw.alloc.reclaim_idle();
         Ok(())
     }
 
@@ -125,7 +125,7 @@ impl VkContext {
         obj.resident = true;
         // The mesh joins the RT-relevant draw set at a freshly allocated region;
         // the next RT update builds its BLAS over the new slice.
-        self.rt_topology_dirty = true;
+        self.rt.topology_dirty = true;
         Ok(())
     }
 
@@ -248,7 +248,7 @@ impl VkContext {
         // and flag the topology: the next RT update rebuilds this slot's BLAS
         // rather than reusing the stale one.
         slot.geometry_generation = slot.geometry_generation.wrapping_add(1);
-        self.rt_topology_dirty = true;
+        self.rt.topology_dirty = true;
         Ok(())
     }
 
@@ -273,7 +273,7 @@ impl VkContext {
         self.draw.objects[draw_idx].resident = false;
         // The mesh leaves the RT-relevant draw set; the next RT update drops its
         // BLAS (deferred-freed once in-flight traces retire).
-        self.rt_topology_dirty = true;
+        self.rt.topology_dirty = true;
         Ok(())
     }
 

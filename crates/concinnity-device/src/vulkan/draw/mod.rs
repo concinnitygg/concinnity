@@ -87,7 +87,7 @@ impl VkContext {
             GpuObjectData, albedo_pool_index, normal_pool_index, pack_object_record,
             pack_skinned_record,
         };
-        let texture_count = self.textures.len() as u32;
+        let texture_count = self.scene.textures.len() as u32;
         let stride = std::mem::size_of::<GpuObjectData>();
         for (i, obj) in self
             .draw
@@ -332,79 +332,14 @@ impl VkContext {
             text_calls,
             lines,
         } = view;
-        let device = self.device.clone();
+        let device = self.hw.device.clone();
         let device = &device;
         // The scene rasterizes at render resolution (== swapchain extent unless
         // upscaling). Cascade / projection aspect, the HDR graph dims, and the
         // sub-pixel jitter all derive from this, not the display extent.
-        let extent = self.render_extent;
+        let extent = self.targets.render_extent;
 
-        // Profiler-overlay timestamp pair. The pool slot for this frame is
-        // reset (the matching `get_query_pool_results` already ran at the top
-        // of `draw_frame`, after the fence wait that gated the previous trip's
-        // writes), then the start tick is recorded as the first cmd-buffer
-        // op. The matching end tick is written just before
-        // `end_command_buffer` returns control. Mirrors the DirectX
-        // EndQuery(TIMESTAMP) + ResolveQueryData pattern.
-        // Outer "start" command buffer: the leading timestamp (the frame's
-        // first GPU op), recorded into its own buffer so it can be submitted
-        // before the per-pass buffers. The query-pool reset must precede every
-        // pass, hence it lives here at the head of the batch.
-        let start_cmd = self.commands.start_command_buffers[frame_idx];
-        // SAFETY: `cmd` belongs to this frame slot, whose fence was already waited on, so it is not
-        // in flight; reset then begin puts it in the recording state, which is what the subsequent
-        // recording requires.
-        unsafe {
-            device
-                .reset_command_buffer(start_cmd, vk::CommandBufferResetFlags::empty())
-                .map_err(|e| format!("reset start cmd buf: {e}"))?;
-            device
-                .begin_command_buffer(
-                    start_cmd,
-                    &vk::CommandBufferBeginInfo::default()
-                        .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
-                )
-                .map_err(|e| format!("begin start cmd buf: {e}"))?;
-        }
-        if let Some(pool) = self.timestamp_query_pool {
-            // Reset this frame's whole timestamp block (whole-frame pair + every
-            // per-pass pair) here, before any per-pass buffer writes into it.
-            // `start_cmd` is submitted first, so the reset precedes every write in
-            // queue order. The whole-frame start goes in the block's first slot;
-            // each pass writes its own pair (see graph_exec); the whole-frame end
-            // is the block's second slot, written in the end buffer below.
-            let block_base = super::pass_timing::frame_block_base(frame_idx);
-            let (wf_start, _) = super::pass_timing::whole_frame_pair(frame_idx);
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
-            unsafe {
-                device.cmd_reset_query_pool(
-                    start_cmd,
-                    pool,
-                    block_base,
-                    super::pass_timing::SLOTS_PER_FRAME as u32,
-                );
-                device.cmd_write_timestamp(
-                    start_cmd,
-                    vk::PipelineStageFlags::TOP_OF_PIPE,
-                    pool,
-                    wf_start,
-                );
-            }
-        }
-        // Hardware ray-traced reflections: rebuild the TLAS for moved props (when
-        // the dynamic mode + dirty gate call for it) onto the start buffer, which
-        // is submitted before every per-pass trace, then re-point this frame's RT
-        // descriptor set at the live TLAS + geometry table. A no-op when RT is
-        // off. Recorded here (not on a per-pass worker) because it needs
-        // `&mut self`; the start buffer carries it within the frame's submit batch.
-        self.rt_dynamic_update(start_cmd, frame_idx);
-        // SAFETY: `cmd` is in the recording state, which is what `end_command_buffer` requires.
-        unsafe {
-            device
-                .end_command_buffer(start_cmd)
-                .map_err(|e| format!("end start cmd buf: {e}"))?;
-        }
+        let start_cmd = self.record_frame_start(frame_idx)?;
 
         // Recompute cascade VPs + splits from the current camera + light, and
         // push the result to the shadow UBO so both passes see the same data.
@@ -487,162 +422,16 @@ impl VkContext {
             self.uniforms.light_uniforms.num_local_lights,
         );
 
-        //  Per-frame seed inputs for the shared backend-agnostic frame
-        //  builder ([gfx/render_graph/frame.rs](../../gfx/render_graph/frame.rs)).
-        //  Decals landed 2026-05-24; Fog followed; AutoExposure landed
-        //  2026-05-25; Particles landed 2026-05-25. The flags track
-        //  whether each pipeline is built: the encoders skip cheaply
-        //  when there is nothing live to draw.
-        let seed_inputs = FrameGraphInputs {
-            shadow_enabled: self.shadow.pipeline.is_some(),
-            shadow_map_size: self.shadow.map_size,
-            hdr_width: extent.width,
-            hdr_height: extent.height,
-            hdr_sample_count: self.msaa_samples.as_raw(),
-            bindless_cull_enabled: self.cull.cull_pipeline.is_some() && self.cull_count() > 0,
-            auto_exposure_enabled: self.auto_exposure.resources.is_some(),
-            bloom_enabled: self.post_process.bloom_intensity > 0.0,
-            // Velocity (motion vectors) runs for TAA *or* temporal upscaling
-            // (FSR consumes them); TAA resources are forced built under
-            // upscaling, so `taa.is_some()` already implies it, but spell out
-            // the upscale case too.
-            velocity_enabled: self.taa.is_some() || self.upscale.is_some(),
-            // TAA resolve and Upscale are mutually exclusive (both do temporal
-            // accumulation and share the graph slot). Drop TAA when upscaling.
-            taa_enabled: self.taa.is_some() && self.upscale.is_none(),
-            // The SSR *resolve* (reflection compositing). `self.ssr` may exist
-            // for a SSGI-only build (it owns the shared pre-pass G-buffer), so
-            // gate the resolve node on whether it runs, not `ssr.is_some()`.
-            ssr_enabled: self.ssr_resolve_active(),
-            particles_enabled: self.particle.resources.is_some()
-                && self.particle.records.iter().any(|p| p.is_some()),
-            // Gated on the resources (built at init when the world declared a
-            // VolumetricFog) and on live settings that can affect the frame, so
-            // runtime `update_fog_settings(None)` -- or an authored zero density,
-            // which integrates to a transparent black over the whole volume --
-            // drops the FogFroxel + Fog passes from the graph entirely. Mirrors
-            // Metal's gate.
-            fog_enabled: self.fog.resources.is_some()
-                && self.fog.settings.is_some_and(|s| s.contributes()),
-            decals_enabled: self.decal.resources.is_some() && !self.decal.set.is_empty(),
-            // The SSR pre-pass G-buffer is shared with SSGI, so it runs whenever
-            // `self.ssr` exists (built for SSR resolve *or* SSGI).
-            ssr_prepass_enabled: self.ssr.is_some(),
-            ssao_enabled: self.ssao.is_some(),
-            // Gated on the resources (built at init when at least one `.glsl`
-            // SdfVolume survived the filter) AND a currently-visible volume, so
-            // an all-hidden world drops the pass from the graph.
-            raymarch_enabled: self.raymarch.as_ref().is_some_and(|r| r.any_visible()),
-            // Temporal upscaling (FSR via FidelityFX). `Some` only when the
-            // world opted in AND the FFX VK runtime + context built; the shared
-            // builder then runs `Upscale` in the `TaaResolve` slot, reading the
-            // post-SSR scene + velocity and writing the swapchain-res scene the
-            // bloom + composite stack samples.
-            upscale_enabled: self.upscale.is_some(),
-            // Transparent / translucent pass: on when the world declared a
-            // visible `GlassPanel` or `WaterSurface`. The shared builder then
-            // seeds the Transparent node and the executor draws every record
-            // back-to-front over the post-SSR scene.
-            transparent_enabled: self.transparent.as_ref().is_some_and(|t| t.any_visible())
-                || self.mesh_glass_visible(),
-            // Two-pass Hi-Z occlusion: inserts HizBuild -> Cull2 -> Main2 after
-            // Main when the world requested `occlusion_two_pass` and the bindless
-            // GPU-cull path + phase-2 resources are live. `two_pass_occlusion_active`
-            // is the single gate the executor's phase-2 arms + the phase-1
-            // render-pass selection share, so the graph shape matches what the
-            // executor dispatches. The graph builder further ANDs this with
-            // `bindless_cull_enabled`, which is already implied here.
-            two_pass_occlusion_enabled: self.two_pass_occlusion_active(),
-            // The terminal Hi-Z build. Present whenever the GPU-cull path built a
-            // pyramid: the frame ends by reducing its final depth into it for the
-            // next frame's phase-1 occlusion test.
-            hiz_build_enabled: self.cull.hiz.is_some(),
-            // Screen-space global illumination. Built only when the world
-            // selected `indirect_lighting: ssgi`; the graph then inserts the
-            // `Ssgi` node on the hdr_resolve RMW chain (which forces the SSR
-            // pre-pass on, since `self.ssr` is built for SSGI too). Also asks the
-            // settings whether they contribute: a zero intensity would otherwise
-            // pay a hemisphere ray-march to add exactly zero.
-            ssgi_enabled: self.ssgi.as_ref().is_some_and(|s| s.settings.contributes()),
-            // Hardware ray-traced reflections (`VK_KHR_ray_query`). On only when
-            // the world requested it, the GPU exposed the ray-query extensions,
-            // and the acceleration structure built; the shared builder then emits
-            // `RtReflections` in the `SsrResolve` slot (RT takes precedence; SSR
-            // is the non-RT-GPU fallback).
-            rt_reflections_enabled: self.rt_reflections_active(),
-            // Geometry pre-pass: one `GBufferPrepass` node rasterizes the
-            // normal+depth / roughness / velocity MRT every screen-space consumer
-            // (SSR / SSAO / SSGI / TAA / FSR) reads. On exactly when the buffer
-            // was built, which is when any of those consumers is live. Mirrors
-            // DirectX's `gbuffer_prepass_enabled: self.gbuffer.is_some()`.
-            gbuffer_prepass_enabled: self.gbuffer.is_some(),
-            // An opaque menu backdrop hides the scene: the shared builder masks
-            // every world pass off, collapsing to Main (a bare clear, fed the
-            // empty scene below) -> Composite (presents the overlay).
-            world_hidden,
-            // Clustered light binning, sharing the gate that sets `use_clusters`
-            // below: the pipeline is built only for a world with local lights,
-            // and the live count has to still be non-zero. Otherwise the forward
-            // pass brute-forces an empty light list.
-            clustered_lighting_enabled: clustered,
-            // Zero drops the SpotShadow node and its imported array from the
-            // graph entirely, which is the common case (no shadow-casting spot).
-            shadowed_spot_count: self.spot_shadow.count(),
-            spot_shadow_slice_size: self.spot_shadow.slice_size,
-            // Lines run only on the frames a system published them (the
-            // `cn editor` axes), and only once their resources are live: the
-            // build is lazy, so a shipped runtime never compiles them.
-            lines_enabled: !lines.is_empty() && self.lines.resources.is_some(),
-            // Set by the view-mode mask below (occlusion view only).
-            composite_reads_ao: false,
-        };
-        // The viewport's view mode + show flags mask the seeded inputs (the
-        // per-frame counterpart of the init-time trims); Lit with every flag
-        // set is the identity, so a shipped runtime is unaffected.
-        let seed_inputs = render_graph::apply_view(&seed_inputs, self.view.mode, self.view.show);
+        let seed_inputs =
+            self.frame_graph_inputs(extent, clustered, !lines.is_empty(), world_hidden);
 
         //  Camera projection + per-frame view state. Computed before the main
         //  render pass begins so the GPU-cull compute dispatch (which Vulkan
         //  forbids inside a render pass) can read this frame's frustum.
-        let aspect = if extent.height == 0 {
-            1.0
-        } else {
-            extent.width as f32 / extent.height as f32
-        };
-        let proj = perspective_rh(fov_y_radians, aspect, near, far);
+        let (aspect, proj, render_proj) = self.frame_projection(extent, fov_y_radians, near, far);
         // Un-jittered camera VP, fed to the velocity pre-pass so the stored
         // motion vector is free of the sub-pixel projection jitter.
         let cur_vp = mat4_mul(proj, self.view.matrix);
-        // When TAA is on, offset the projection by a sub-pixel Halton jitter so
-        // the accumulation has fresh sample positions each frame. The jitter is
-        // a pure NDC x/y shift (depth is unaffected): `proj[2][0/1]` are the
-        // z-coefficients of clip x/y, so subtracting the jitter there shifts
-        // post-divide NDC by exactly the jitter amount (clip.w == -view_z).
-        // Mirrors the jitter in metal/draw.rs.
-        let render_proj = if let Some(up) = self.upscale.as_ref() {
-            // The active backend prescribes the jitter sequence (render-pixel
-            // units): FSR queries its FFX-tuned offsets, DLSS / XeSS use the
-            // shared Halton-2/3. The same offset feeds the dispatch via
-            // `set_jitter`. Phase index = the TAA frame counter, which advances
-            // every frame here (TAA resources are forced built under upscaling).
-            let phase = self.taa.as_ref().map(|t| t.taa_frame).unwrap_or(0);
-            let [jx_px, jy_px] = up.jitter_offset(phase);
-            up.set_jitter([jx_px, jy_px]);
-            let mut p = proj;
-            p[2][0] -= jx_px * 2.0 / extent.width.max(1) as f32;
-            p[2][1] -= jy_px * 2.0 / extent.height.max(1) as f32;
-            p
-        } else if let Some(taa_frame) = self.taa.as_ref().map(|t| t.taa_frame) {
-            let idx = taa_frame % 8 + 1;
-            let jx = (jitter::radical_inverse(idx, 2) - 0.5) * 2.0 / extent.width.max(1) as f32;
-            let jy = (jitter::radical_inverse(idx, 3) - 0.5) * 2.0 / extent.height.max(1) as f32;
-            let mut p = proj;
-            p[2][0] -= jx;
-            p[2][1] -= jy;
-            p
-        } else {
-            proj
-        };
         let vp_mat = mat4_mul(render_proj, self.view.matrix);
 
         // Clustered light-binning params (main camera). The compute pass reads
@@ -688,7 +477,7 @@ impl VkContext {
                 0.0
             },
             cam_pos: [cam_pos[0], cam_pos[1], cam_pos[2]],
-            prefilter_mip_count: self.prefilter_mip_count as f32,
+            prefilter_mip_count: self.scene.prefilter_mip_count as f32,
             shade_mode: self.shade_mode(),
             _end_pad: 0.0,
             sky_rot: self.view.sky_rot,
@@ -841,7 +630,7 @@ impl VkContext {
 
         // End-of-frame timestamp for the profiler overlay. Pairs with the
         // TOP_OF_PIPE write near the top of the function (the block's first pair).
-        if let Some(pool) = self.timestamp_query_pool {
+        if let Some(pool) = self.hw.timestamp_query_pool {
             let (_, wf_end) = super::pass_timing::whole_frame_pair(frame_idx);
             // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
             // these commands name is live for the call.
@@ -864,6 +653,253 @@ impl VkContext {
         submit.push(start_cmd);
         submit.extend(pass_bufs);
         Ok(submit)
+    }
+
+    // Record the frame's leading "start" command buffer: the timestamp block
+    // reset and whole-frame start tick, then the TLAS refresh for moved props.
+    fn record_frame_start(&mut self, frame_idx: usize) -> RenderResult<vk::CommandBuffer> {
+        let device = self.hw.device.clone();
+        let device = &device;
+        // Profiler-overlay timestamp pair. The pool slot for this frame is
+        // reset (the matching `get_query_pool_results` already ran at the top
+        // of `draw_frame`, after the fence wait that gated the previous trip's
+        // writes), then the start tick is recorded as the first cmd-buffer
+        // op. The matching end tick is written just before
+        // `end_command_buffer` returns control. Mirrors the DirectX
+        // EndQuery(TIMESTAMP) + ResolveQueryData pattern.
+        // Outer "start" command buffer: the leading timestamp (the frame's
+        // first GPU op), recorded into its own buffer so it can be submitted
+        // before the per-pass buffers. The query-pool reset must precede every
+        // pass, hence it lives here at the head of the batch.
+        let start_cmd = self.commands.start_command_buffers[frame_idx];
+        // SAFETY: `cmd` belongs to this frame slot, whose fence was already waited on, so it is not
+        // in flight; reset then begin puts it in the recording state, which is what the subsequent
+        // recording requires.
+        unsafe {
+            device
+                .reset_command_buffer(start_cmd, vk::CommandBufferResetFlags::empty())
+                .map_err(|e| format!("reset start cmd buf: {e}"))?;
+            device
+                .begin_command_buffer(
+                    start_cmd,
+                    &vk::CommandBufferBeginInfo::default()
+                        .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+                )
+                .map_err(|e| format!("begin start cmd buf: {e}"))?;
+        }
+        if let Some(pool) = self.hw.timestamp_query_pool {
+            // Reset this frame's whole timestamp block (whole-frame pair + every
+            // per-pass pair) here, before any per-pass buffer writes into it.
+            // `start_cmd` is submitted first, so the reset precedes every write in
+            // queue order. The whole-frame start goes in the block's first slot;
+            // each pass writes its own pair (see graph_exec); the whole-frame end
+            // is the block's second slot, written in the end buffer below.
+            let block_base = super::pass_timing::frame_block_base(frame_idx);
+            let (wf_start, _) = super::pass_timing::whole_frame_pair(frame_idx);
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
+            unsafe {
+                device.cmd_reset_query_pool(
+                    start_cmd,
+                    pool,
+                    block_base,
+                    super::pass_timing::SLOTS_PER_FRAME as u32,
+                );
+                device.cmd_write_timestamp(
+                    start_cmd,
+                    vk::PipelineStageFlags::TOP_OF_PIPE,
+                    pool,
+                    wf_start,
+                );
+            }
+        }
+        // Hardware ray-traced reflections: rebuild the TLAS for moved props (when
+        // the dynamic mode + dirty gate call for it) onto the start buffer, which
+        // is submitted before every per-pass trace, then re-point this frame's RT
+        // descriptor set at the live TLAS + geometry table. A no-op when RT is
+        // off. Recorded here (not on a per-pass worker) because it needs
+        // `&mut self`; the start buffer carries it within the frame's submit batch.
+        self.rt_dynamic_update(start_cmd, frame_idx);
+        // SAFETY: `cmd` is in the recording state, which is what `end_command_buffer` requires.
+        unsafe {
+            device
+                .end_command_buffer(start_cmd)
+                .map_err(|e| format!("end start cmd buf: {e}"))?;
+        }
+        Ok(start_cmd)
+    }
+
+    // This frame's graph inputs: the passes the live resources and settings run,
+    // masked by the viewport's view mode and show flags.
+    fn frame_graph_inputs(
+        &self,
+        extent: vk::Extent2D,
+        clustered: bool,
+        lines_published: bool,
+        world_hidden: bool,
+    ) -> FrameGraphInputs {
+        //  Per-frame seed inputs for the shared backend-agnostic frame
+        //  builder ([gfx/render_graph/frame.rs](../../gfx/render_graph/frame.rs)).
+        //  Decals landed 2026-05-24; Fog followed; AutoExposure landed
+        //  2026-05-25; Particles landed 2026-05-25. The flags track
+        //  whether each pipeline is built: the encoders skip cheaply
+        //  when there is nothing live to draw.
+        let seed_inputs = FrameGraphInputs {
+            shadow_enabled: self.shadow.pipeline.is_some(),
+            shadow_map_size: self.shadow.map_size,
+            hdr_width: extent.width,
+            hdr_height: extent.height,
+            hdr_sample_count: self.targets.msaa_samples.as_raw(),
+            bindless_cull_enabled: self.cull.cull_pipeline.is_some() && self.cull_count() > 0,
+            auto_exposure_enabled: self.auto_exposure.resources.is_some(),
+            bloom_enabled: self.post_process.bloom_intensity > 0.0,
+            // Velocity (motion vectors) runs for TAA *or* temporal upscaling
+            // (FSR consumes them); TAA resources are forced built under
+            // upscaling, so `taa.is_some()` already implies it, but spell out
+            // the upscale case too.
+            velocity_enabled: self.taa.is_some() || self.upscale.is_some(),
+            // TAA resolve and Upscale are mutually exclusive (both do temporal
+            // accumulation and share the graph slot). Drop TAA when upscaling.
+            taa_enabled: self.taa.is_some() && self.upscale.is_none(),
+            // The SSR *resolve* (reflection compositing). `self.ssr` may exist
+            // for a SSGI-only build (it owns the shared pre-pass G-buffer), so
+            // gate the resolve node on whether it runs, not `ssr.is_some()`.
+            ssr_enabled: self.ssr_resolve_active(),
+            particles_enabled: self.particle.resources.is_some()
+                && self.particle.records.iter().any(|p| p.is_some()),
+            // Gated on the resources (built at init when the world declared a
+            // VolumetricFog) and on live settings that can affect the frame, so
+            // runtime `update_fog_settings(None)` -- or an authored zero density,
+            // which integrates to a transparent black over the whole volume --
+            // drops the FogFroxel + Fog passes from the graph entirely. Mirrors
+            // Metal's gate.
+            fog_enabled: self.fog.resources.is_some()
+                && self.fog.settings.is_some_and(|s| s.contributes()),
+            decals_enabled: self.decal.resources.is_some() && !self.decal.set.is_empty(),
+            // The SSR pre-pass G-buffer is shared with SSGI, so it runs whenever
+            // `self.ssr` exists (built for SSR resolve *or* SSGI).
+            ssr_prepass_enabled: self.ssr.is_some(),
+            ssao_enabled: self.ssao.is_some(),
+            // Gated on the resources (built at init when at least one `.glsl`
+            // SdfVolume survived the filter) AND a currently-visible volume, so
+            // an all-hidden world drops the pass from the graph.
+            raymarch_enabled: self.raymarch.as_ref().is_some_and(|r| r.any_visible()),
+            // Temporal upscaling (FSR via FidelityFX). `Some` only when the
+            // world opted in AND the FFX VK runtime + context built; the shared
+            // builder then runs `Upscale` in the `TaaResolve` slot, reading the
+            // post-SSR scene + velocity and writing the swapchain-res scene the
+            // bloom + composite stack samples.
+            upscale_enabled: self.upscale.is_some(),
+            // Transparent / translucent pass: on when the world declared a
+            // visible `GlassPanel` or `WaterSurface`. The shared builder then
+            // seeds the Transparent node and the executor draws every record
+            // back-to-front over the post-SSR scene.
+            transparent_enabled: self.transparent.as_ref().is_some_and(|t| t.any_visible())
+                || self.mesh_glass_visible(),
+            // Two-pass Hi-Z occlusion: inserts HizBuild -> Cull2 -> Main2 after
+            // Main when the world requested `occlusion_two_pass` and the bindless
+            // GPU-cull path + phase-2 resources are live. `two_pass_occlusion_active`
+            // is the single gate the executor's phase-2 arms + the phase-1
+            // render-pass selection share, so the graph shape matches what the
+            // executor dispatches. The graph builder further ANDs this with
+            // `bindless_cull_enabled`, which is already implied here.
+            two_pass_occlusion_enabled: self.two_pass_occlusion_active(),
+            // The terminal Hi-Z build. Present whenever the GPU-cull path built a
+            // pyramid: the frame ends by reducing its final depth into it for the
+            // next frame's phase-1 occlusion test.
+            hiz_build_enabled: self.cull.hiz.is_some(),
+            // Screen-space global illumination. Built only when the world
+            // selected `indirect_lighting: ssgi`; the graph then inserts the
+            // `Ssgi` node on the hdr_resolve RMW chain (which forces the SSR
+            // pre-pass on, since `self.ssr` is built for SSGI too). Also asks the
+            // settings whether they contribute: a zero intensity would otherwise
+            // pay a hemisphere ray-march to add exactly zero.
+            ssgi_enabled: self.ssgi.as_ref().is_some_and(|s| s.settings.contributes()),
+            // Hardware ray-traced reflections (`VK_KHR_ray_query`). On only when
+            // the world requested it, the GPU exposed the ray-query extensions,
+            // and the acceleration structure built; the shared builder then emits
+            // `RtReflections` in the `SsrResolve` slot (RT takes precedence; SSR
+            // is the non-RT-GPU fallback).
+            rt_reflections_enabled: self.rt_reflections_active(),
+            // Geometry pre-pass: one `GBufferPrepass` node rasterizes the
+            // normal+depth / roughness / velocity MRT every screen-space consumer
+            // (SSR / SSAO / SSGI / TAA / FSR) reads. On exactly when the buffer
+            // was built, which is when any of those consumers is live. Mirrors
+            // DirectX's `gbuffer_prepass_enabled: self.gbuffer.is_some()`.
+            gbuffer_prepass_enabled: self.gbuffer.is_some(),
+            // An opaque menu backdrop hides the scene: the shared builder masks
+            // every world pass off, collapsing to Main (a bare clear, fed the
+            // empty scene below) -> Composite (presents the overlay).
+            world_hidden,
+            // Clustered light binning, sharing the gate that sets `use_clusters`
+            // below: the pipeline is built only for a world with local lights,
+            // and the live count has to still be non-zero. Otherwise the forward
+            // pass brute-forces an empty light list.
+            clustered_lighting_enabled: clustered,
+            // Zero drops the SpotShadow node and its imported array from the
+            // graph entirely, which is the common case (no shadow-casting spot).
+            shadowed_spot_count: self.spot_shadow.count(),
+            spot_shadow_slice_size: self.spot_shadow.slice_size,
+            // Lines run only on the frames a system published them (the
+            // `cn editor` axes), and only once their resources are live: the
+            // build is lazy, so a shipped runtime never compiles them.
+            lines_enabled: lines_published && self.lines.resources.is_some(),
+            // Set by the view-mode mask below (occlusion view only).
+            composite_reads_ao: false,
+        };
+        // The viewport's view mode + show flags mask the seeded inputs (the
+        // per-frame counterpart of the init-time trims); Lit with every flag
+        // set is the identity, so a shipped runtime is unaffected.
+        render_graph::apply_view(&seed_inputs, self.view.mode, self.view.show)
+    }
+
+    // The camera projection at render resolution and the same projection offset
+    // by this frame's sub-pixel jitter when TAA or an upscaler accumulates.
+    // Returns (aspect, projection, jittered projection).
+    fn frame_projection(
+        &self,
+        extent: vk::Extent2D,
+        fov_y_radians: f32,
+        near: f32,
+        far: f32,
+    ) -> (f32, [[f32; 4]; 4], [[f32; 4]; 4]) {
+        let aspect = if extent.height == 0 {
+            1.0
+        } else {
+            extent.width as f32 / extent.height as f32
+        };
+        let proj = perspective_rh(fov_y_radians, aspect, near, far);
+        // When TAA is on, offset the projection by a sub-pixel Halton jitter so
+        // the accumulation has fresh sample positions each frame. The jitter is
+        // a pure NDC x/y shift (depth is unaffected): `proj[2][0/1]` are the
+        // z-coefficients of clip x/y, so subtracting the jitter there shifts
+        // post-divide NDC by exactly the jitter amount (clip.w == -view_z).
+        // Mirrors the jitter in metal/draw.rs.
+        let render_proj = if let Some(up) = self.upscale.as_ref() {
+            // The active backend prescribes the jitter sequence (render-pixel
+            // units): FSR queries its FFX-tuned offsets, DLSS / XeSS use the
+            // shared Halton-2/3. The same offset feeds the dispatch via
+            // `set_jitter`. Phase index = the TAA frame counter, which advances
+            // every frame here (TAA resources are forced built under upscaling).
+            let phase = self.taa.as_ref().map(|t| t.taa_frame).unwrap_or(0);
+            let [jx_px, jy_px] = up.jitter_offset(phase);
+            up.set_jitter([jx_px, jy_px]);
+            let mut p = proj;
+            p[2][0] -= jx_px * 2.0 / extent.width.max(1) as f32;
+            p[2][1] -= jy_px * 2.0 / extent.height.max(1) as f32;
+            p
+        } else if let Some(taa_frame) = self.taa.as_ref().map(|t| t.taa_frame) {
+            let idx = taa_frame % 8 + 1;
+            let jx = (jitter::radical_inverse(idx, 2) - 0.5) * 2.0 / extent.width.max(1) as f32;
+            let jy = (jitter::radical_inverse(idx, 3) - 0.5) * 2.0 / extent.height.max(1) as f32;
+            let mut p = proj;
+            p[2][0] -= jx;
+            p[2][1] -= jy;
+            p
+        } else {
+            proj
+        };
+        (aspect, proj, render_proj)
     }
 }
 

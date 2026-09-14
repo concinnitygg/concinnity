@@ -841,7 +841,7 @@ impl VkContext {
             return;
         }
         let (dt, frame_index, spawn_budgets) = (frame.0, frame.1, frame.2.as_slice());
-        let device = &self.device;
+        let device = &self.hw.device;
         let params_per_emitter = self.particle_params(dt, frame_index, spawn_budgets);
 
         // Counter resets first. Each emitter's counter buffer is
@@ -982,8 +982,8 @@ impl VkContext {
             return;
         }
         let (dt, frame_index, spawn_budgets) = (frame.0, frame.1, frame.2.as_slice());
-        let device = &self.device;
-        let extent = self.render_extent;
+        let device = &self.hw.device;
+        let extent = self.targets.render_extent;
 
         // Visibility-cull per emitter, for the draw alone: the simulation ticked
         // every live pool so off-screen emitters stay in a realistic mid-life
@@ -1132,18 +1132,22 @@ impl VkContext {
         record: ParticleEmitterRecord,
     ) -> RenderResult<usize> {
         if self.particle.resources.is_none() {
-            let hdr_resolve_views: Vec<vk::ImageView> =
-                self.hdr_resolve_images.iter().map(|img| img.view).collect();
+            let hdr_resolve_views: Vec<vk::ImageView> = self
+                .targets
+                .hdr_resolve_images
+                .iter()
+                .map(|img| img.view)
+                .collect();
             let resources = ParticleResources::new(
                 &GpuUploadContext {
-                    alloc: &self.alloc,
-                    device: &self.device,
+                    alloc: &self.hw.alloc,
+                    device: &self.hw.device,
                     command_pool: self.commands.command_pool,
-                    queue: self.graphics_queue,
+                    queue: self.hw.graphics_queue,
                 },
                 self.frames_in_flight,
                 &hdr_resolve_views,
-                self.render_extent,
+                self.targets.render_extent,
                 self.hot_reload.enabled,
             )?;
             self.particle.resources = Some(resources);
@@ -1158,10 +1162,10 @@ impl VkContext {
 
         let gpu_state = build_emitter_gpu_state(
             GpuUploadContext {
-                alloc: &self.alloc,
-                device: &self.device,
+                alloc: &self.hw.alloc,
+                device: &self.hw.device,
                 command_pool: self.commands.command_pool,
-                queue: self.graphics_queue,
+                queue: self.hw.graphics_queue,
             },
             self.particle
                 .resources
@@ -1171,7 +1175,7 @@ impl VkContext {
         )?;
 
         // Write the albedo binding from the live texture pool.
-        let last_tex = self.textures.len().saturating_sub(1);
+        let last_tex = self.scene.textures.len().saturating_sub(1);
         let tex_idx = record.texture_slot.min(last_tex);
         let sampler = self
             .particle
@@ -1181,9 +1185,9 @@ impl VkContext {
             .sampler
             .handle();
         write_render_albedo_binding(
-            &self.device,
+            &self.hw.device,
             gpu_state.render_set,
-            self.textures[tex_idx].view,
+            self.scene.textures[tex_idx].view,
             sampler,
         );
 
@@ -1278,7 +1282,7 @@ impl VkContext {
     }
 
     // Re-point every emitter's albedo binding (set 1, binding 1) that samples
-    // texture-pool `slot` at the just-swapped `self.textures[slot]` view. The
+    // texture-pool `slot` at the just-swapped `self.scene.textures[slot]` view. The
     // emitter albedo lives in the shared texture pool, so a streamed or
     // hot-reloaded albedo swap recreates the view and leaves a dangling
     // descriptor unless every emitter sampling that slot is re-pointed. Called
@@ -1288,7 +1292,7 @@ impl VkContext {
     // whenever the particle pass runs, so a swap of a slot they sample must
     // drain the device before rewriting.
     pub(in crate::vulkan) fn particle_samples_slot(&self, slot: usize) -> bool {
-        let last = self.textures.len().saturating_sub(1);
+        let last = self.scene.textures.len().saturating_sub(1);
         self.particle
             .emitter_state
             .iter()
@@ -1300,12 +1304,12 @@ impl VkContext {
         let Some(resources) = self.particle.resources.as_ref() else {
             return;
         };
-        let last = self.textures.len().saturating_sub(1);
-        let view = self.textures[slot].view;
+        let last = self.scene.textures.len().saturating_sub(1);
+        let view = self.scene.textures[slot].view;
         for state in self.particle.emitter_state.iter().flatten() {
             if state.texture_slot.min(last) == slot {
                 write_render_albedo_binding(
-                    &self.device,
+                    &self.hw.device,
                     state.render_set,
                     view,
                     resources.sampler.handle(),

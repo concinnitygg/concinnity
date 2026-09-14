@@ -7,18 +7,16 @@ use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::render_graph;
 
 use super::InitGpu;
+use crate::vulkan::context::{SwapchainState, VkCommands, VkFrameSync, VkHardware};
 use crate::vulkan::owned::VkDevice;
 
-pub(super) fn create_command_pool(
-    device: &VkDevice,
-    graphics_family: u32,
-) -> RenderResult<vk::CommandPool> {
+pub(super) fn create_command_pool(hw: &VkHardware) -> RenderResult<vk::CommandPool> {
     let info = vk::CommandPoolCreateInfo::default()
         .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
-        .queue_family_index(graphics_family);
+        .queue_family_index(hw.graphics_family);
     // SAFETY: the create-info and every slice it borrows are live for the call, and each
     // handle it names belongs to this device.
-    let command_pool = unsafe { device.create_command_pool(&info, None) }
+    let command_pool = unsafe { hw.device.create_command_pool(&info, None) }
         .map_err(|e| format!("command pool: {e}"))?;
     Ok(command_pool)
 }
@@ -29,22 +27,19 @@ pub(super) fn create_command_pool(
 // layer emits a "query not reset" error. After the reset, the slot
 // is in "unavailable" state, so `get_query_pool_results` returns
 // NOT_READY → 0 cleanly until `record_frame` writes the first pair.
-pub(super) fn reset_timestamp_queries(
-    gpu: &InitGpu<'_>,
-    timestamp_query_pool: Option<vk::QueryPool>,
-) -> RenderResult<()> {
+pub(super) fn reset_timestamp_queries(gpu: &InitGpu<'_>) -> RenderResult<()> {
     let InitGpu {
-        device,
+        hw,
         command_pool,
-        queue: graphics_queue,
         frames,
         ..
     } = *gpu;
-    if let Some(pool) = timestamp_query_pool {
+    let device = &hw.device;
+    if let Some(pool) = hw.timestamp_query_pool {
         crate::vulkan::texture::one_shot_submit(
             device,
             command_pool,
-            graphics_queue,
+            hw.graphics_queue,
             // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
             // slice these commands name is live for the call.
             |cmd| unsafe {
@@ -60,28 +55,17 @@ pub(super) fn reset_timestamp_queries(
     Ok(())
 }
 
-pub(super) struct FrameCommands {
-    pub(super) command_buffers: Vec<vk::CommandBuffer>,
-    pub(super) start_command_pools: Vec<vk::CommandPool>,
-    pub(super) start_command_buffers: Vec<vk::CommandBuffer>,
-    pub(super) pass_command_pools: Vec<vk::CommandPool>,
-    pub(super) pass_command_buffers: Vec<vk::CommandBuffer>,
-    pub(super) image_available: Vec<vk::Semaphore>,
-    pub(super) render_finished: Vec<vk::Semaphore>,
-    pub(super) in_flight: Vec<vk::Fence>,
-}
-
 pub(super) fn build_frame_commands(
     gpu: &InitGpu<'_>,
-    graphics_family: u32,
-    swapchain_images: &[vk::Image],
-) -> RenderResult<FrameCommands> {
+    swapchain: &SwapchainState,
+) -> RenderResult<(VkCommands, VkFrameSync)> {
     let InitGpu {
-        device,
+        hw,
         command_pool,
         frames,
         ..
     } = *gpu;
+    let (device, graphics_family) = (&hw.device, hw.graphics_family);
     let alloc_info = vk::CommandBufferAllocateInfo::default()
         .command_pool(command_pool)
         .level(vk::CommandBufferLevel::PRIMARY)
@@ -151,8 +135,8 @@ pub(super) fn build_frame_commands(
     let fence_info = vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
     let mut image_available = Vec::with_capacity(frames);
     let mut in_flight = Vec::with_capacity(frames);
-    let mut render_finished = Vec::with_capacity(swapchain_images.len());
-    for _ in 0..swapchain_images.len() {
+    let mut render_finished = Vec::with_capacity(swapchain.images.len());
+    for _ in 0..swapchain.images.len() {
         render_finished.push(
             // SAFETY: the create-info and every slice it borrows are live for the call, and
             // each handle it names belongs to this device.
@@ -173,14 +157,19 @@ pub(super) fn build_frame_commands(
             unsafe { device.create_fence(&fence_info, None) }.map_err(|e| format!("fence: {e}"))?,
         );
     }
-    Ok(FrameCommands {
-        command_buffers,
-        start_command_pools,
-        start_command_buffers,
-        pass_command_pools,
-        pass_command_buffers,
-        image_available,
-        render_finished,
-        in_flight,
-    })
+    Ok((
+        VkCommands {
+            command_pool,
+            command_buffers,
+            start_command_pools,
+            start_command_buffers,
+            pass_command_pools,
+            pass_command_buffers,
+        },
+        VkFrameSync {
+            image_available,
+            render_finished,
+            in_flight,
+        },
+    ))
 }

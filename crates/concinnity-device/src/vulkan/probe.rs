@@ -142,7 +142,7 @@ impl VkContext {
         {
             self.wait_idle();
         }
-        let device = self.device.clone();
+        let device = self.hw.device.clone();
         if let Some(rendering) = self.probe.rendering.take() {
             rendering.destroy(&device, self.commands.command_pool);
         }
@@ -178,8 +178,8 @@ impl VkContext {
             .map(|_| {
                 vk::DescriptorImageInfo::default()
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                    .image_view(self.env_map.prefilter.view)
-                    .sampler(self.cube_sampler.handle())
+                    .image_view(self.scene.env_map.prefilter.view)
+                    .sampler(self.scene.cube_sampler.handle())
             })
             .collect();
         for &set in &self.descriptors.global_sets {
@@ -191,7 +191,7 @@ impl VkContext {
                 .image_info(&sky);
             // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
             // every set and resource it names belongs to this device.
-            unsafe { self.device.update_descriptor_sets(&[write], &[]) };
+            unsafe { self.hw.device.update_descriptor_sets(&[write], &[]) };
         }
     }
 
@@ -220,7 +220,7 @@ impl VkContext {
         // environment, and the capture renders through the bindless GPU cull. These
         // never become true after init, so abandon the queue rather than re-checking
         // forever (the forward specular keeps sampling the sky).
-        if self.env_map.prefilter_mip_count <= 1
+        if self.scene.env_map.prefilter_mip_count <= 1
             || self.cull.cull_pipeline.is_none()
             || self.cull.bindless_pipeline.is_none()
             || self.probe.prefilter.is_none()
@@ -247,7 +247,7 @@ impl VkContext {
             .probe
             .prefiltering
             .as_ref()
-            .is_some_and(|p| p.dispatches_retired(&self.device));
+            .is_some_and(|p| p.dispatches_retired(&self.hw.device));
         match reflection_probe::next_bake_action(
             if prefiltering_occupied {
                 BakePhase::Prefiltering
@@ -292,7 +292,7 @@ impl VkContext {
         let done = self.probe.rendering.as_ref().is_some_and(|r| {
             r.cursor >= PROBE_FACE_COUNT
                 // SAFETY: the fence was created from this device; the query only reads.
-                && unsafe { self.device.get_fence_status(r.face_fences[r.last_fence()]) }
+                && unsafe { self.hw.device.get_fence_status(r.face_fences[r.last_fence()]) }
                     .unwrap_or(false)
         });
         // Transient ineligibility: geometry may still be streaming. A zero cull keeps
@@ -339,7 +339,7 @@ impl VkContext {
         if self.probe.rendering.is_some() || self.probe.prefiltering.is_some() {
             self.wait_idle();
         }
-        let device = self.device.clone();
+        let device = self.hw.device.clone();
         if let Some(rendering) = self.probe.rendering.take() {
             rendering.destroy(&device, self.commands.command_pool);
         }
@@ -394,7 +394,7 @@ impl VkContext {
         // reflections_enabled stays 0: no resolve runs over a probe face, so the bake
         // captures the full forward probe specular -- here the sky, since the bake
         // binds an EMPTY ProbeSet.
-        let prefilter_mip_count = self.env_map.prefilter_mip_count as f32;
+        let prefilter_mip_count = self.scene.env_map.prefilter_mip_count as f32;
         for face in 0..PROBE_FACE_COUNT {
             let vp = reflection_probe::face_view_projection(eye, face, PROBE_NEAR, PROBE_FAR);
             let view_mat = reflection_probe::face_view_matrix(eye, face);
@@ -422,7 +422,7 @@ impl VkContext {
             .prefilter
             .as_ref()
             .ok_or("probe: prefilter pipelines missing")?;
-        let prefilter = PrefilterGpu::new(&self.device, &self.alloc, pipelines, &PLAN)?;
+        let prefilter = PrefilterGpu::new(&self.hw.device, &self.hw.alloc, pipelines, &PLAN)?;
 
         self.probe.rendering = Some(RenderingBake {
             index,
@@ -444,14 +444,15 @@ impl VkContext {
         // Every slot the layout declares, padded with the last reserved fallback
         // across the unused tail exactly as init fills the frame's own sets.
         let mut pool_infos: Vec<vk::DescriptorImageInfo> = self
+            .scene
             .textures
             .iter()
-            .chain(self.fallback_textures.iter())
+            .chain(self.scene.fallback_textures.iter())
             .map(|img| {
                 vk::DescriptorImageInfo::default()
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                     .image_view(img.view)
-                    .sampler(self.linear_sampler.handle())
+                    .sampler(self.scene.linear_sampler.handle())
             })
             .collect();
         if let Some(&tail) = pool_infos.last() {
@@ -466,7 +467,8 @@ impl VkContext {
         // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every
         // set and resource it names belongs to this device.
         unsafe {
-            self.device
+            self.hw
+                .device
                 .update_descriptor_sets(std::slice::from_ref(&write), &[])
         };
     }
@@ -479,7 +481,7 @@ impl VkContext {
     // capture is done. One face per frame spreads the capture so no frame pays the
     // whole cost.
     fn probe_render_next_face(&mut self) -> RenderResult<()> {
-        let device = self.device.clone();
+        let device = self.hw.device.clone();
         let extent = vk::Extent2D {
             width: PROBE_FACE_SIZE,
             height: PROBE_FACE_SIZE,
@@ -710,7 +712,7 @@ impl VkContext {
                 .map_err(|e| format!("probe face end: {e}"))?;
             let submit = vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&cmd));
             device
-                .queue_submit(self.graphics_queue, std::slice::from_ref(&submit), fence)
+                .queue_submit(self.hw.graphics_queue, std::slice::from_ref(&submit), fence)
                 .map_err(|e| format!("probe face submit: {e}"))?;
         }
 
@@ -737,7 +739,7 @@ impl VkContext {
             .rendering
             .take()
             .ok_or("probe: convolve with no bake in flight")?;
-        let device = self.device.clone();
+        let device = self.hw.device.clone();
         let RenderingBake {
             index,
             placement,
@@ -811,7 +813,7 @@ impl VkContext {
         &self,
         bake: &mut PrefilteringBake,
     ) -> Result<(vk::CommandBuffer, vk::Fence), String> {
-        let device = &self.device;
+        let device = &self.hw.device;
         let info = vk::CommandBufferAllocateInfo::default()
             .command_pool(self.commands.command_pool)
             .level(vk::CommandBufferLevel::PRIMARY)
@@ -855,12 +857,14 @@ impl VkContext {
         // SAFETY: `cmd` is in the recording state and every handle these calls name belongs to this
         // device; the fence is unsignaled and not already in use.
         unsafe {
-            self.device
+            self.hw
+                .device
                 .end_command_buffer(cmd)
                 .map_err(|e| format!("probe convolve end: {e}"))?;
             let submit = vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&cmd));
-            self.device
-                .queue_submit(self.graphics_queue, std::slice::from_ref(&submit), fence)
+            self.hw
+                .device
+                .queue_submit(self.hw.graphics_queue, std::slice::from_ref(&submit), fence)
                 .map_err(|e| format!("probe convolve submit: {e}"))
         }
     }
@@ -883,7 +887,7 @@ impl VkContext {
             .take()
             .ok_or("probe: install with no bake in flight")?;
         self.wait_idle();
-        let device = self.device.clone();
+        let device = self.hw.device.clone();
         let PrefilteringBake {
             index,
             placement: p,
@@ -900,7 +904,7 @@ impl VkContext {
         let img_info = vk::DescriptorImageInfo::default()
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             .image_view(cube.view)
-            .sampler(self.cube_sampler.handle());
+            .sampler(self.scene.cube_sampler.handle());
         for &set in &self.descriptors.global_sets {
             let write = vk::WriteDescriptorSet::default()
                 .dst_set(set)
@@ -910,7 +914,7 @@ impl VkContext {
                 .image_info(std::slice::from_ref(&img_info));
             // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
             // every set and resource it names belongs to this device.
-            unsafe { self.device.update_descriptor_sets(&[write], &[]) };
+            unsafe { self.hw.device.update_descriptor_sets(&[write], &[]) };
         }
 
         // Installs run in queue order, so the cube array stays aligned with the
@@ -960,7 +964,7 @@ impl VkContext {
         ) else {
             return;
         };
-        let device = &self.device;
+        let device = &self.hw.device;
         let params = capture_cull_params(frustum, cam_pos, self.cull_count() as u32);
         // SAFETY: `CullParams` is `repr(C)` and matches the push-constant block
         // cull.slang declares (pinned by the layout test in `core::render`).
@@ -1031,7 +1035,7 @@ impl VkContext {
         ) else {
             return;
         };
-        let device = &self.device;
+        let device = &self.hw.device;
         let [r, g, b, a] = self.view.clear_color;
         let clear_color = vk::ClearValue {
             color: vk::ClearColorValue {
@@ -1044,13 +1048,14 @@ impl VkContext {
                 stencil: 0,
             },
         };
-        let clears: &[vk::ClearValue] = if self.msaa_samples != vk::SampleCountFlags::TYPE_1 {
+        let clears: &[vk::ClearValue] = if self.targets.msaa_samples != vk::SampleCountFlags::TYPE_1
+        {
             &[clear_color, clear_depth, vk::ClearValue::default()]
         } else {
             &[clear_color, clear_depth]
         };
         let rp_begin = vk::RenderPassBeginInfo::default()
-            .render_pass(self.main_render_pass.handle())
+            .render_pass(self.targets.main_render_pass.handle())
             .framebuffer(framebuffer)
             .render_area(vk::Rect2D::default().extent(extent))
             .clear_values(clears);
@@ -1254,9 +1259,9 @@ impl BakeResources {
         use concinnity_core::gfx::render_types::{
             GpuDrawArgs, GpuObjectData, LightUniforms, ShadowUniforms,
         };
-        let device = &ctx.device;
-        let alloc = &ctx.alloc;
-        let msaa = ctx.msaa_samples != vk::SampleCountFlags::TYPE_1;
+        let device = &ctx.hw.device;
+        let alloc = &ctx.hw.alloc;
+        let msaa = ctx.targets.msaa_samples != vk::SampleCountFlags::TYPE_1;
         let size = PROBE_FACE_SIZE;
 
         // Color + depth (+ single-sample resolve when MSAA), then a framebuffer
@@ -1272,7 +1277,7 @@ impl BakeResources {
                     | vk::ImageUsageFlags::TRANSFER_SRC
                     | vk::ImageUsageFlags::SAMPLED,
                 mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
-                samples: ctx.msaa_samples,
+                samples: ctx.targets.msaa_samples,
             },
         )?;
         let color_view = create_image_view(
@@ -1291,7 +1296,7 @@ impl BakeResources {
                 tiling: vk::ImageTiling::OPTIMAL,
                 usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
                 mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
-                samples: ctx.msaa_samples,
+                samples: ctx.targets.msaa_samples,
             },
         )?;
         let depth_view = create_image_view(
@@ -1339,7 +1344,7 @@ impl BakeResources {
             vec![color.view, depth.view]
         };
         let fb_info = vk::FramebufferCreateInfo::default()
-            .render_pass(ctx.main_render_pass.handle())
+            .render_pass(ctx.targets.main_render_pass.handle())
             .attachments(&fb_attachments)
             .width(size)
             .height(size)
@@ -1535,8 +1540,8 @@ impl BakeResources {
             .map(|_| {
                 vk::DescriptorImageInfo::default()
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                    .image_view(ctx.env_map.prefilter.view)
-                    .sampler(ctx.cube_sampler.handle())
+                    .image_view(ctx.scene.env_map.prefilter.view)
+                    .sampler(ctx.scene.cube_sampler.handle())
             })
             .collect();
         for (face, &set) in global_sets.iter().enumerate() {
@@ -1548,9 +1553,15 @@ impl BakeResources {
             );
             let probeset_info = buf_info(probeset.buffer(), std::mem::size_of::<ProbeSet>() as u64);
             let shadow_img = img_info(ctx.shadow.map.view, ctx.shadow.sampler.handle());
-            let irr_img = img_info(ctx.env_map.irradiance.view, ctx.cube_sampler.handle());
-            let pre_img = img_info(ctx.env_map.prefilter.view, ctx.cube_sampler.handle());
-            let ssao_img = img_info(ctx.ssao_white.view, ctx.linear_sampler.handle());
+            let irr_img = img_info(
+                ctx.scene.env_map.irradiance.view,
+                ctx.scene.cube_sampler.handle(),
+            );
+            let pre_img = img_info(
+                ctx.scene.env_map.prefilter.view,
+                ctx.scene.cube_sampler.handle(),
+            );
+            let ssao_img = img_info(ctx.scene.ssao_white.view, ctx.scene.linear_sampler.handle());
             let writes = [
                 ubo_write(set, 0, &view_info),
                 ubo_write(set, 1, &light_info),

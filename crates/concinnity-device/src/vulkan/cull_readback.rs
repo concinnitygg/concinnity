@@ -44,10 +44,10 @@ impl VkContext {
         // The GPU must be idle: the status buffer is then settled and no
         // in-flight cull dispatch is still writing the slot being copied.
         // SAFETY: a wait on this device's own queues; it takes no borrowed state.
-        unsafe { self.device.device_wait_idle() }
+        unsafe { self.hw.device.device_wait_idle() }
             .map_err(|e| format!("cull-status: wait idle: {e}"))?;
 
-        let readback = self.alloc.create_buffer(
+        let readback = self.hw.alloc.create_buffer(
             byte_size,
             vk::BufferUsageFlags::TRANSFER_DST,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
@@ -57,11 +57,11 @@ impl VkContext {
         // transition, and the idle wait above already retired the cull
         // dispatch that wrote this slot. Emitting one here would also hand a
         // second owner to a resource the graph's barrier registry resolves.
-        let device = self.device.clone();
+        let device = self.hw.device.clone();
         one_shot_submit(
             &device,
             self.commands.command_pool,
-            self.graphics_queue,
+            self.hw.graphics_queue,
             |cmd| {
                 let region = vk::BufferCopy::default().size(byte_size);
                 // SAFETY: `cmd` is a command buffer in the recording state, and every handle and

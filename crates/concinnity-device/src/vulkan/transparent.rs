@@ -1476,7 +1476,7 @@ impl TransparentResources {
     }
 
     // True when the see-through mesh pipelines are built, so the Layer 2 reroute
-    // can engage as soon as RT is live. Independent of `rt_accel`, because the
+    // can engage as soon as RT is live. Independent of `rt.accel`, because the
     // init-time BLAS build has to exclude the meshes it will reroute before the
     // acceleration structure it gates on exists.
     pub(in crate::vulkan) fn mesh_pipelines_ready(&self) -> bool {
@@ -1713,7 +1713,7 @@ const GLASS_MESH_FRESNEL_POWER: f32 = 1.0;
 
 impl VkContext {
     // Whether a material opted into Layer 2 see-through glass AND the device can
-    // drive it (the mesh pipelines built). Independent of `rt_accel`, so it
+    // drive it (the mesh pipelines built). Independent of `rt.accel`, so it
     // answers "would the see-through path run if RT is on" -- used at the RT-BLAS
     // build, which must exclude the meshes it will reroute before the
     // acceleration structure it gates on exists. Data-driven: see-through is
@@ -1769,7 +1769,7 @@ impl VkContext {
         let Some(ring) = producer.params_buffers.get(frame_idx) else {
             return Vec::new();
         };
-        let prefilter_mip_count = self.prefilter_mip_count as f32;
+        let prefilter_mip_count = self.scene.prefilter_mip_count as f32;
 
         let mut draws = Vec::with_capacity(count);
         for (slot, &idx) in producer.object_indices.iter().enumerate() {
@@ -1826,11 +1826,11 @@ impl VkContext {
             inv_vp: mat4_inverse(vp),
             camera_pos: [cam_pos[0], cam_pos[1], cam_pos[2], 0.0],
             viewport: [
-                self.render_extent.width as f32,
-                self.render_extent.height as f32,
+                self.targets.render_extent.width as f32,
+                self.targets.render_extent.height as f32,
             ],
             time,
-            prefilter_mip_count: self.prefilter_mip_count as f32,
+            prefilter_mip_count: self.scene.prefilter_mip_count as f32,
             sky_rot: self.view.sky_rot,
             sun_dir,
             sun_color,
@@ -1885,8 +1885,8 @@ impl VkContext {
             return Ok(());
         }
 
-        let device = &self.device;
-        let extent = self.render_extent;
+        let device = &self.hw.device;
+        let extent = self.targets.render_extent;
         let scene_image = *transparent
             .scene_images
             .get(frame_idx)
@@ -1926,7 +1926,7 @@ impl VkContext {
                 cam_pos: cam,
                 sun_dir: self.fog.sun_dir,
                 sun_color: self.fog.sun_color,
-                prefilter_mip_count: self.prefilter_mip_count as f32,
+                prefilter_mip_count: self.scene.prefilter_mip_count as f32,
                 sky_rot: self.view.sky_rot,
             });
             rt.params_buffers[frame_idx].write_val(0, &params);

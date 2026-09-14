@@ -494,16 +494,16 @@ impl crate::vulkan::context::VkContext {
     // The post-pass device over this context, recording into frame slot `frame`.
     pub(in crate::vulkan) fn post_device(&self, frame: usize) -> VkPostDevice<'_> {
         VkPostDevice {
-            device: &self.device,
-            alloc: &self.alloc,
+            device: &self.hw.device,
+            alloc: &self.hw.alloc,
             queue: PostQueue {
                 command_pool: self.commands.command_pool,
-                queue: self.graphics_queue,
+                queue: self.hw.graphics_queue,
             },
             cache: &self.post.cache,
             arena: &self.post.arena,
             sampler: self.composite.sampler.handle(),
-            cube_sampler: self.cube_sampler.handle(),
+            cube_sampler: self.scene.cube_sampler.handle(),
             probes: Some(VkPostProbes {
                 layout: self.descriptors.global_set_layout.handle(),
                 sets: &self.descriptors.global_sets,
@@ -517,8 +517,9 @@ impl crate::vulkan::context::VkContext {
     // This frame slot's HDR scene, as a post draw's target.
     pub(in crate::vulkan) fn hdr_scene_attachment(&self, frame: usize) -> VkAttachment {
         VkAttachment {
-            view: self.hdr_resolve_images[frame % self.hdr_resolve_images.len()].view,
-            extent: self.render_extent,
+            view: self.targets.hdr_resolve_images[frame % self.targets.hdr_resolve_images.len()]
+                .view,
+            extent: self.targets.render_extent,
             format: PixelFormat::Rgba16Float,
         }
     }

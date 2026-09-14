@@ -4,52 +4,42 @@
 //! resources.
 
 use ash::vk;
-use concinnity_core::components::{self, GlassPanel, SdfVolume, WaterSurface};
-use concinnity_core::gfx::auto_exposure::{self, AutoExposureSettings};
-use concinnity_core::gfx::ssao::SsaoSettings;
-use concinnity_core::gfx::ssgi::SsgiSettings;
-use concinnity_core::gfx::ssr::SsrSettings;
+use concinnity_core::gfx::auto_exposure;
+use concinnity_core::gfx::render_types::{LightUniforms, ShadowUniforms};
+use concinnity_core::render::backend_init::{PostSettings, WorldFx};
+use concinnity_core::render::decal;
 use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::lights;
 use concinnity_core::render::planar_reflection;
-use concinnity_core::render::volumetric_fog::FogSettings;
 
-use super::{GlobalBindings, InitGpu};
-use crate::vulkan::allocator::PooledBuffer;
-use crate::vulkan::auto_exposure::AutoExposureResources;
-use crate::vulkan::context::HDR_FORMAT;
-use crate::vulkan::decal::DecalResources;
-use crate::vulkan::fog::FogResources;
-use crate::vulkan::hiz::HiZResources;
-use crate::vulkan::owned::{OwnedRenderPass, OwnedSampler, OwnedSetLayout};
+use super::gpu_driven::RtResources;
+use super::{Features, GlobalBindings, InitGpu, PassStates};
+use crate::vulkan::context::{
+    AutoExposureState, DecalState, FogState, HDR_FORMAT, VkCull, VkDescriptors, VkGeometry,
+    VkSceneAssets, VkTargets,
+};
+use crate::vulkan::owned::OwnedSampler;
 use crate::vulkan::planar::PlanarReflectionSet;
 use crate::vulkan::post::PostSupport;
 use crate::vulkan::post::bloom::rebind_bloom_input0;
-use crate::vulkan::post::gbuffer::{GbufferPooled, GbufferResources};
+use crate::vulkan::post::gbuffer::GbufferResources;
 use crate::vulkan::post::post_device::{PostQueue, VkPostDevice, VkPostProbes};
-use crate::vulkan::post::reflection_composite::ReflectionCompositeResources;
 use crate::vulkan::post::ssao::SsaoResources;
 use crate::vulkan::post::ssgi::SsgiResources;
 use crate::vulkan::post::ssr::SsrResources;
 use crate::vulkan::post::taa::TaaResources;
 use crate::vulkan::post::upscale::VkUpscaleBackend;
 use crate::vulkan::raymarch::RaymarchResources;
-use crate::vulkan::raytrace::RtAccelData;
 use crate::vulkan::swapchain::{write_composite_channel_set, write_composite_set};
-use crate::vulkan::texture::{self, GpuImage, GpuUploadContext};
-use crate::vulkan::transient_pool::TransientImagePool;
+use crate::vulkan::texture::{self, GpuImage};
 use crate::vulkan::transparent::TransparentResources;
 
-pub(super) struct Upscale {
-    pub(super) upscale: Option<Box<dyn VkUpscaleBackend>>,
-    pub(super) render_extent: vk::Extent2D,
-}
-
-// Temporal upscaling (FSR / DLSS / XeSS). Built here, before the
-// off-screen attachments, because its render dims drive `render_extent`:
+// Temporal upscaling (FSR / DLSS / XeSS). Built before the off-screen
+// attachments, because its render dims drive the returned render extent:
 // when an upscaler builds, the whole scene pipeline renders at
 // `round(swapchain_extent * upscale_scale)` and the upscaler
 // reconstructs the swapchain resolution. When `temporal_upscaling` is
-// off (or no backend is available) `render_extent == swapchain_extent`
+// off (or no backend is available) the render extent is `swapchain_extent`
 // and the pipeline collapses to native-resolution rendering. Bloom /
 // composite / swapchain always stay at `swapchain_extent`.
 // `build_upscaler` resolves `upscale_backend` against availability with
@@ -58,33 +48,28 @@ pub(super) struct Upscale {
 pub(super) fn build_upscale(
     gpu: &InitGpu<'_>,
     swapchain_extent: vk::Extent2D,
-    temporal_upscaling: bool,
-    upscale_scale: f32,
-    upscale_backend: components::UpscalerBackend,
-) -> RenderResult<Upscale> {
+    post: &PostSettings,
+) -> RenderResult<(Option<Box<dyn VkUpscaleBackend>>, vk::Extent2D)> {
     let InitGpu {
-        instance,
-        device,
-        physical_device,
-        alloc,
-        command_pool,
-        queue: graphics_queue,
-        ..
+        hw, command_pool, ..
     } = *gpu;
-    let upscale = if temporal_upscaling {
+    let device = &hw.device;
+    let upscale = if post.temporal_upscaling {
         let (built, resolved) = crate::vulkan::post::build_upscaler(
             crate::vulkan::post::upscale::UpscalerGpu {
-                alloc,
-                instance,
+                alloc: &hw.alloc,
+                instance: &hw.instance,
                 device,
-                physical_device,
+                physical_device: hw.physical_device,
                 command_pool,
-                queue: graphics_queue,
+                queue: hw.graphics_queue,
             },
             swapchain_extent.width,
             swapchain_extent.height,
-            upscale_scale,
-            upscale_backend,
+            post.upscale_scale,
+            // Only FSR is available on Vulkan (DLSS / XeSS are DirectX-only); a
+            // DX-only request logs a note and uses FSR.
+            post.upscale_backend,
         )?;
         // Arm the messenger's benign-error budget for DLSS (see
         // `DLSS_FIRST_FRAME_LAYOUT_SUPPRESS`); a no-op for other backends.
@@ -110,83 +95,67 @@ pub(super) fn build_upscale(
         }
         None => swapchain_extent,
     };
-    Ok(Upscale {
-        upscale,
-        render_extent,
-    })
-}
-
-struct PostDeviceSources<'a> {
-    post_support: &'a PostSupport,
-    composite_sampler: &'a OwnedSampler,
-    cube_sampler: &'a OwnedSampler,
-    global_set_layout: &'a OwnedSetLayout,
-    probe_cube_count: u32,
+    Ok((upscale, render_extent))
 }
 
 // The device every shared post pass builds its pipelines and targets
 // through at init. Nothing encodes before the context exists, so it
 // carries the global set's layout but none of its per-frame sets.
-fn shared_post_device<'a>(gpu: &InitGpu<'a>, sources: PostDeviceSources<'a>) -> VkPostDevice<'a> {
+fn shared_post_device<'a>(
+    gpu: &InitGpu<'a>,
+    post_support: &'a PostSupport,
+    composite_sampler: &'a OwnedSampler,
+    scene: &'a VkSceneAssets,
+    descriptors: &'a VkDescriptors,
+) -> VkPostDevice<'a> {
     let InitGpu {
-        device,
-        alloc,
+        hw,
         command_pool,
-        queue: graphics_queue,
         hot_reload,
         ..
     } = *gpu;
-    let PostDeviceSources {
-        post_support,
-        composite_sampler,
-        cube_sampler,
-        global_set_layout,
-        probe_cube_count,
-    } = sources;
     VkPostDevice {
-        device,
-        alloc,
+        device: &hw.device,
+        alloc: &hw.alloc,
         queue: PostQueue {
             command_pool,
-            queue: graphics_queue,
+            queue: hw.graphics_queue,
         },
         cache: &post_support.cache,
         arena: &post_support.arena,
         sampler: composite_sampler.handle(),
-        cube_sampler: cube_sampler.handle(),
+        cube_sampler: scene.cube_sampler.handle(),
         probes: Some(VkPostProbes {
-            layout: global_set_layout.handle(),
+            layout: descriptors.global_set_layout.handle(),
             sets: &[],
-            cube_count: probe_cube_count,
+            cube_count: descriptors.probe_cube_count,
         }),
         frame: 0,
         hot_reload,
     }
 }
 
+// The 1x1 white image bound at set 0 binding 6 when SSAO is off, so the main
+// pass's `ambient *= ao` multiplier collapses to a pass-through.
+pub(super) fn build_ssao_white(gpu: &InitGpu<'_>) -> RenderResult<GpuImage> {
+    texture::create_fallback_white(&gpu.upload())
+}
+
 pub(super) struct ScreenSpaceInputs<'a> {
-    pub(super) transient_pool: &'a TransientImagePool,
-    pub(super) gbuffer_pooled: &'a GbufferPooled,
+    pub(super) post: &'a PostSettings,
+    pub(super) features: &'a Features,
+    pub(super) targets: &'a VkTargets,
+    pub(super) scene: &'a VkSceneAssets,
+    pub(super) descriptors: &'a VkDescriptors,
     pub(super) composite_sampler: &'a OwnedSampler,
-    pub(super) cube_sampler: &'a OwnedSampler,
-    pub(super) global_set_layout: &'a OwnedSetLayout,
-    pub(super) probe_cube_count: u32,
-    pub(super) render_extent: vk::Extent2D,
-    pub(super) ssao_settings: Option<SsaoSettings>,
-    pub(super) ssr_settings: Option<SsrSettings>,
-    pub(super) ssgi_settings: Option<SsgiSettings>,
-    pub(super) rt_wanted: bool,
-    pub(super) gbuffer_enabled: bool,
 }
 
 pub(super) struct ScreenSpace {
-    pub(super) ssao_white: GpuImage,
-    pub(super) ssao_opt: Option<SsaoResources>,
-    pub(super) ssr_authored: bool,
-    pub(super) post_support: PostSupport,
-    pub(super) ssr_opt: Option<SsrResources>,
-    pub(super) gbuffer_opt: Option<GbufferResources>,
-    pub(super) ssgi_opt: Option<SsgiResources>,
+    pub(super) ssao: Option<SsaoResources>,
+    pub(super) post: PostSupport,
+    pub(super) ssr: Option<SsrResources>,
+    pub(super) gbuffer: Option<GbufferResources>,
+    pub(super) ssgi: Option<SsgiResources>,
 }
 
 pub(super) fn build_screen_space(
@@ -194,41 +163,26 @@ pub(super) fn build_screen_space(
     inputs: ScreenSpaceInputs<'_>,
 ) -> RenderResult<ScreenSpace> {
     let InitGpu {
-        device,
-        alloc,
+        hw,
         command_pool,
-        queue: graphics_queue,
         frames,
         hot_reload,
-        ..
     } = *gpu;
+    let (device, alloc) = (&hw.device, &hw.alloc);
     let ScreenSpaceInputs {
-        transient_pool,
-        gbuffer_pooled,
+        post,
+        features,
+        targets,
+        scene,
+        descriptors,
         composite_sampler,
-        cube_sampler,
-        global_set_layout,
-        probe_cube_count,
-        render_extent,
-        ssao_settings,
-        ssr_settings,
-        ssgi_settings,
-        rt_wanted,
-        gbuffer_enabled,
     } = inputs;
-    // SSAO (GTAO): pre-pass + kernel + blur, plus a 1×1 white fallback
-    // that is always bound at set 0 binding 6 when SSAO is off so the
-    // main pass's `ambient *= ao` multiplier collapses to a pass-through.
-    let ssao_white = texture::create_fallback_white(&GpuUploadContext {
-        alloc,
-        device,
-        command_pool,
-        queue: graphics_queue,
-    })?;
-    // The transient image pool was built with the render targets (before the bloom chain); it
-    // already holds this frame's pooled `ao_output` views when SSAO is on.
-    let ssao_opt = if let Some(settings) = ssao_settings {
-        let ao_views = transient_pool.views_for_frames("ao_output", frames);
+    let render_extent = targets.render_extent;
+    // SSAO (GTAO): pre-pass + kernel + blur. The transient image pool was built
+    // with the render targets (before the bloom chain); it already holds this
+    // frame's pooled `ao_output` views when SSAO is on.
+    let ssao = if let Some(settings) = post.ssao {
+        let ao_views = targets.transient_pool.views_for_frames("ao_output", frames);
         Some(crate::vulkan::post::ssao::SsaoResources::new(
             &crate::vulkan::post::ssao::SsaoDeviceCtx { alloc, device },
             render_extent.width,
@@ -247,26 +201,13 @@ pub(super) fn build_screen_space(
     // with SSGI and RT, so `SsrResources` is built whenever any of them is
     // on; its settings stay `None` unless SSR itself is authored, and the
     // resolve runs only when it is and RT did not take its graph slot.
-    let ssr_authored = ssr_settings.is_some();
-    // RT reflections reuse the SSR depth + normal + roughness pre-pass
-    // G-buffer (like SSGI), so the pre-pass half is built whenever SSR, SSGI,
-    // *or* RT (and the device supports it) is on. `rt_wanted` is derived up
-    // with the transient pool's gates.
     let post_support = crate::vulkan::post::PostSupport::new(device, frames)?;
-    let init_post_device = shared_post_device(
-        gpu,
-        PostDeviceSources {
-            post_support: &post_support,
-            composite_sampler,
-            cube_sampler,
-            global_set_layout,
-            probe_cube_count,
-        },
-    );
-    let ssr_opt = if ssr_settings.is_some() || ssgi_settings.is_some() || rt_wanted {
+    let init_post_device =
+        shared_post_device(gpu, &post_support, composite_sampler, scene, descriptors);
+    let ssr = if post.ssr.is_some() || post.ssgi.is_some() || features.rt_wanted {
         Some(crate::vulkan::post::ssr::SsrResources::new(
             &init_post_device,
-            ssr_settings,
+            post.ssr,
             render_extent,
         )?)
     } else {
@@ -275,29 +216,29 @@ pub(super) fn build_screen_space(
 
     // Unified geometry G-buffer pre-pass. Built whenever any screen-space
     // consumer of the merged buffer is on: SSR resolve / SSGI / RT (all
-    // fold into `ssr_opt`), SSAO, or the velocity channel a TAA / upscale
-    // consumer needs (`taa_enabled`). One jittered traversal rasterizes the
-    // normal+depth / roughness / velocity MRT every reader then samples,
-    // replacing the separate SSR / SSAO / velocity pre-passes. The skinned
-    // variant is built lazily by `upload_skinned` once the joint-set layout
-    // exists (it doesn't at init). Mirrors the DirectX `self.gbuffer` build.
-    // The gate is `gbuffer_enabled`, the same value the transient pool was built
-    // from, so the pool cannot place the MRT channels for a pre-pass that is
-    // not built (harmless) or -- the dangerous direction -- leave them
-    // unplaced for one that is.
-    let gbuffer_opt = if gbuffer_enabled {
+    // fold into `ssr`), SSAO, or the velocity channel a TAA / upscale
+    // consumer needs. One jittered traversal rasterizes the normal+depth /
+    // roughness / velocity MRT every reader then samples, replacing the
+    // separate SSR / SSAO / velocity pre-passes. The skinned variant is built
+    // lazily by `upload_skinned` once the joint-set layout exists (it doesn't
+    // at init). Mirrors the DirectX `self.gbuffer` build. The gate is the
+    // same `gbuffer_enabled` the transient pool was built from, so the pool
+    // cannot place the MRT channels for a pre-pass that is not built
+    // (harmless) or -- the dangerous direction -- leave them unplaced for one
+    // that is.
+    let gbuffer = if features.gbuffer_enabled {
         Some(crate::vulkan::post::gbuffer::GbufferResources::new(
             crate::vulkan::post::gbuffer::GbufferDeviceCtx { alloc, device },
             crate::vulkan::post::gbuffer::GbufferQueueCtx {
                 command_pool,
-                queue: graphics_queue,
+                queue: hw.graphics_queue,
             },
             crate::vulkan::post::gbuffer::GbufferExtent {
                 width: render_extent.width,
                 height: render_extent.height,
                 frames,
             },
-            gbuffer_pooled,
+            &targets.transient_pool.gbuffer_pooled(frames),
         )?)
     } else {
         None
@@ -307,7 +248,7 @@ pub(super) fn build_screen_space(
     // depth-aware-blur GI pass. Built only when the world selected
     // `indirect_lighting: ssgi`; it samples the unified pre-pass G-buffer,
     // which SSGI forces on, and each frame's HDR resolve.
-    let ssgi_opt = match ssgi_settings {
+    let ssgi = match post.ssgi {
         Some(settings) => Some(crate::vulkan::post::ssgi::SsgiResources::new(
             &init_post_device,
             settings,
@@ -316,91 +257,65 @@ pub(super) fn build_screen_space(
         None => None,
     };
     Ok(ScreenSpace {
-        ssao_white,
-        ssao_opt,
-        ssr_authored,
-        post_support,
-        ssr_opt,
-        gbuffer_opt,
-        ssgi_opt,
+        ssao,
+        post: post_support,
+        ssr,
+        gbuffer,
+        ssgi,
     })
 }
 
 pub(super) struct SceneInputWiring<'a> {
-    pub(super) taa_enabled: bool,
-    pub(super) render_extent: vk::Extent2D,
-    pub(super) post_support: &'a PostSupport,
-    pub(super) composite_sampler: &'a OwnedSampler,
-    pub(super) cube_sampler: &'a OwnedSampler,
-    pub(super) global_set_layout: &'a OwnedSetLayout,
-    pub(super) probe_cube_count: u32,
-    pub(super) composite_sets: &'a [vk::DescriptorSet],
-    pub(super) bloom_input_sets: &'a [Vec<vk::DescriptorSet>],
-    pub(super) bloom_mips: &'a [Vec<GpuImage>],
-    pub(super) color_lut: &'a GpuImage,
+    pub(super) features: &'a Features,
+    pub(super) targets: &'a VkTargets,
+    pub(super) scene: &'a VkSceneAssets,
+    pub(super) descriptors: &'a VkDescriptors,
+    pub(super) passes: &'a PassStates,
+    pub(super) screen: &'a ScreenSpace,
     pub(super) upscale: Option<&'a dyn VkUpscaleBackend>,
-    pub(super) gbuffer_opt: Option<&'a GbufferResources>,
-    pub(super) ssao_opt: Option<&'a SsaoResources>,
-    pub(super) ssao_white: &'a GpuImage,
-    pub(super) transient_pool: &'a TransientImagePool,
 }
 
 pub(super) fn build_taa_and_wire_scene_inputs(
     gpu: &InitGpu<'_>,
     inputs: SceneInputWiring<'_>,
 ) -> RenderResult<Option<TaaResources>> {
-    let InitGpu { device, frames, .. } = *gpu;
+    let InitGpu { hw, frames, .. } = *gpu;
+    let device = &hw.device;
     let SceneInputWiring {
-        taa_enabled,
-        render_extent,
-        post_support,
-        composite_sampler,
-        cube_sampler,
-        global_set_layout,
-        probe_cube_count,
-        composite_sets,
-        bloom_input_sets,
-        bloom_mips,
-        color_lut,
+        features,
+        targets,
+        scene,
+        descriptors,
+        passes,
+        screen,
         upscale,
-        gbuffer_opt,
-        ssao_opt,
-        ssao_white,
-        transient_pool,
     } = inputs;
-    let init_post_device = shared_post_device(
-        gpu,
-        PostDeviceSources {
-            post_support,
-            composite_sampler,
-            cube_sampler,
-            global_set_layout,
-            probe_cube_count,
-        },
-    );
+    let (composite, bloom) = (&passes.composite, &passes.bloom);
+    let init_post_device =
+        shared_post_device(gpu, &screen.post, &composite.sampler, scene, descriptors);
     // When TAA is on the history resolve produces a post-TAA scene image;
     // the bloom prefilter and composite pass must sample that instead of the
     // raw HDR resolve, so their binding-0 descriptor is re-pointed at the
     // per-frame TAA output image. The resolve's own inputs need no wiring:
     // it allocates its set per frame from the shared post arena.
-    let taa = if taa_enabled {
-        let taa = TaaResources::new(&init_post_device, frames, render_extent)?;
-        for (i, &set) in composite_sets.iter().enumerate() {
+    let taa = if features.taa_enabled {
+        let taa = TaaResources::new(&init_post_device, frames, targets.render_extent)?;
+        for (i, &set) in composite.sets.iter().enumerate() {
             write_composite_set(
                 device,
                 set,
                 taa.output_view(i),
-                bloom_mips[i][0].view,
-                color_lut.view,
-                composite_sampler.handle(),
+                bloom.mips[i][0].view,
+                scene.color_lut.view,
+                composite.sampler.handle(),
             );
         }
-        for (i, frame_sets) in bloom_input_sets.iter().enumerate() {
+        for (i, frame_sets) in bloom.input_sets.iter().enumerate() {
             rebind_bloom_input0(
                 device,
                 frame_sets[0],
                 taa.output_view(i),
-                composite_sampler.handle(),
+                composite.sampler.handle(),
             );
         }
         Some(taa)
@@ -417,22 +332,22 @@ pub(super) fn build_taa_and_wire_scene_inputs(
     // graph and never runs.
     if let Some(up) = upscale {
         let up_output_view = up.output_image().view;
-        for (i, &set) in composite_sets.iter().enumerate() {
+        for (i, &set) in composite.sets.iter().enumerate() {
             write_composite_set(
                 device,
                 set,
                 up_output_view,
-                bloom_mips[i][0].view,
-                color_lut.view,
-                composite_sampler.handle(),
+                bloom.mips[i][0].view,
+                scene.color_lut.view,
+                composite.sampler.handle(),
             );
         }
-        for frame_sets in bloom_input_sets {
+        for frame_sets in &bloom.input_sets {
             rebind_bloom_input0(
                 device,
                 frame_sets[0],
                 up_output_view,
-                composite_sampler.handle(),
+                composite.sampler.handle(),
             );
         }
     }
@@ -441,9 +356,9 @@ pub(super) fn build_taa_and_wire_scene_inputs(
     // pre-pass's per-frame views now that the merged buffer exists. RT was
     // already wired to the unified views at its construction, and the shared
     // post passes read those views per frame, so they need no wiring.
-    if let Some(gb) = gbuffer_opt {
+    if let Some(gb) = &screen.gbuffer {
         let nd_views = gb.normal_depth_views();
-        if let Some(ssao) = ssao_opt {
+        if let Some(ssao) = &screen.ssao {
             ssao.wire_kernel_and_blur_sets_gbuffer(device, &nd_views);
         }
     }
@@ -452,65 +367,45 @@ pub(super) fn build_taa_and_wire_scene_inputs(
     // modes. Written after the re-wire above so they point at the merged
     // pre-pass's views; the 1x1 white fallback stands in when a world built
     // no G-buffer / no SSAO.
-    for (i, &set) in composite_sets.iter().enumerate() {
-        let (nd_view, rough_view) = match gbuffer_opt {
+    for (i, &set) in composite.sets.iter().enumerate() {
+        let (nd_view, rough_view) = match &screen.gbuffer {
             Some(gb) => (gb.normal_depth_views()[i], gb.roughness_views()[i]),
-            None => (ssao_white.view, ssao_white.view),
+            None => (scene.ssao_white.view, scene.ssao_white.view),
         };
         write_composite_channel_set(
             device,
             set,
             nd_view,
             rough_view,
-            transient_pool
+            targets
+                .transient_pool
                 .view_for("ao_output", i)
-                .unwrap_or(ssao_white.view),
-            composite_sampler.handle(),
+                .unwrap_or(scene.ssao_white.view),
+            composite.sampler.handle(),
         );
     }
     Ok(taa)
 }
 
 pub(super) struct WorldEffectInputs<'a> {
-    pub(super) render_extent: vk::Extent2D,
-    pub(super) msaa_samples: vk::SampleCountFlags,
-    pub(super) depth_images: &'a [GpuImage],
-    pub(super) hdr_resolve_images: &'a [GpuImage],
-    pub(super) main_render_pass: &'a OwnedRenderPass,
-    pub(super) shadow_render_pass: &'a OwnedRenderPass,
-    pub(super) global_set_layout: &'a OwnedSetLayout,
-    pub(super) global_update_after_bind: bool,
-    pub(super) probe_cube_count: u32,
-    pub(super) fog_settings: Option<&'a FogSettings>,
-    pub(super) sdf_volumes: &'a [(SdfVolume, Vec<u8>, String)],
-    pub(super) water_surfaces: &'a [WaterSurface],
-    pub(super) glass_panels: &'a [GlassPanel],
+    pub(super) targets: &'a VkTargets,
+    pub(super) descriptors: &'a VkDescriptors,
+    pub(super) fx: &'a WorldFx,
     pub(super) planar_planes: usize,
-    pub(super) cull_set_layout: Option<&'a OwnedSetLayout>,
-    pub(super) object_buffers: &'a [PooledBuffer],
-    pub(super) draw_args_buffers: &'a [PooledBuffer],
+    pub(super) cull: &'a VkCull,
     pub(super) n_cull: usize,
-    pub(super) hiz: Option<&'a HiZResources>,
-    pub(super) composite_opt: Option<&'a ReflectionCompositeResources>,
-    pub(super) rt_accel_opt: Option<&'a RtAccelData>,
-    pub(super) rt_capable: bool,
-    pub(super) has_seethrough_meshes: bool,
-    pub(super) seethrough_mesh_indices: &'a [usize],
-    pub(super) vertex_buffer: &'a PooledBuffer,
-    pub(super) index_buffer: &'a PooledBuffer,
-    pub(super) bindless_set_layout: Option<&'a OwnedSetLayout>,
-    pub(super) bindless_pool_size: usize,
-    pub(super) auto_exposure_settings: Option<&'a AutoExposureSettings>,
+    pub(super) rt: &'a RtResources,
+    pub(super) geometry: &'a VkGeometry,
+    pub(super) post: &'a PostSettings,
 }
 
 pub(super) struct WorldEffects {
-    pub(super) decals_state: Option<DecalResources>,
-    pub(super) fog_resources: Option<FogResources>,
+    pub(super) decal: DecalState,
+    pub(super) fog: FogState,
     pub(super) raymarch: Option<RaymarchResources>,
     pub(super) planar_reflection: Option<PlanarReflectionSet>,
     pub(super) transparent: Option<TransparentResources>,
-    pub(super) auto_exposure: Option<AutoExposureResources>,
-    pub(super) auto_exposure_state: Option<auto_exposure::AutoExposureState>,
+    pub(super) auto_exposure: AutoExposureState,
 }
 
 pub(super) fn build_world_effects(
@@ -519,74 +414,43 @@ pub(super) fn build_world_effects(
     bindings: &GlobalBindings<'_>,
 ) -> RenderResult<WorldEffects> {
     let InitGpu {
-        instance,
-        device,
-        physical_device,
-        alloc,
+        hw,
         command_pool,
-        queue: graphics_queue,
         frames,
         hot_reload,
     } = *gpu;
+    let (device, alloc, graphics_queue) = (&hw.device, &hw.alloc, hw.graphics_queue);
     let WorldEffectInputs {
-        render_extent,
-        msaa_samples,
-        depth_images,
-        hdr_resolve_images,
-        main_render_pass,
-        shadow_render_pass,
-        global_set_layout,
-        global_update_after_bind,
-        probe_cube_count,
-        fog_settings,
-        sdf_volumes,
-        water_surfaces,
-        glass_panels,
+        targets,
+        descriptors,
+        fx,
         planar_planes,
-        cull_set_layout,
-        object_buffers,
-        draw_args_buffers,
+        cull,
         n_cull,
-        hiz,
-        composite_opt,
-        rt_accel_opt,
-        rt_capable,
-        has_seethrough_meshes,
-        seethrough_mesh_indices,
-        vertex_buffer,
-        index_buffer,
-        bindless_set_layout,
-        bindless_pool_size,
-        auto_exposure_settings,
+        rt,
+        geometry,
+        post,
     } = inputs;
     let GlobalBindings {
-        light_ubo_buffers,
-        light_ubo_size,
-        shadow_ubos,
-        shadow_ubo_size,
-        local_light_buffer,
-        local_light_buffer_size,
+        uniforms,
         light_cull,
-        shadow_map,
-        shadow_sampler,
+        shadow,
         spot_shadow,
-        area_light_buffer,
-        ltc_matrix_image,
-        ltc_magnitude_image,
-        ltc_sampler,
-        env_map,
-        cube_sampler,
-        ssao_white,
-        linear_sampler,
+        area_light,
+        scene,
         ..
     } = *bindings;
+    let (render_extent, msaa_samples) = (targets.render_extent, targets.msaa_samples);
     // Pipeline + per-frame uniforms + per-decal albedo sets are always
     // built so runtime `add_decal` works from a world that started
     // with none. The encoder simply skips when every slot is `None`
     // or every live decal culls.
-    let depth_views: Vec<vk::ImageView> = depth_images.iter().map(|img| img.view).collect();
-    let hdr_resolve_views: Vec<vk::ImageView> =
-        hdr_resolve_images.iter().map(|img| img.view).collect();
+    let depth_views: Vec<vk::ImageView> = targets.depth_images.iter().map(|img| img.view).collect();
+    let hdr_resolve_views: Vec<vk::ImageView> = targets
+        .hdr_resolve_images
+        .iter()
+        .map(|img| img.view)
+        .collect();
     let decals_state = Some(crate::vulkan::decal::DecalResources::new(
         crate::vulkan::decal::DecalDeviceContext {
             alloc,
@@ -598,7 +462,7 @@ pub(super) fn build_world_effects(
             hdr_format: HDR_FORMAT,
             hdr_resolve_views: &hdr_resolve_views,
             depth_views: &depth_views,
-            sampler: linear_sampler.handle(),
+            sampler: scene.linear_sampler.handle(),
             extent: render_extent,
         },
         frames,
@@ -608,8 +472,8 @@ pub(super) fn build_world_effects(
 
     // Volumetric fog: pipeline + per-frame uniform ring. Built only
     // when the world declared a `VolumetricFog`; the encoder skips the
-    // pass when `fog_settings` is `None`.
-    let fog_resources = if fog_settings.is_some() {
+    // pass when the fog settings are `None`.
+    let fog_resources = if fx.fog.is_some() {
         Some(crate::vulkan::fog::FogResources::new(
             crate::vulkan::fog::FogDeviceContext {
                 alloc,
@@ -623,13 +487,13 @@ pub(super) fn build_world_effects(
                 hdr_format: HDR_FORMAT,
                 hdr_resolve_views: &hdr_resolve_views,
                 depth_views: &depth_views,
-                sampler: linear_sampler.handle(),
+                sampler: scene.linear_sampler.handle(),
                 extent: render_extent,
             },
             crate::vulkan::fog::FogShadowResources {
-                ubos: shadow_ubos,
-                map_view: shadow_map.view,
-                sampler: shadow_sampler.handle(),
+                ubos: &shadow.ubos,
+                map_view: shadow.map.view,
+                sampler: shadow.sampler.handle(),
             },
             hot_reload,
         )?)
@@ -655,17 +519,17 @@ pub(super) fn build_world_effects(
             height: render_extent.height,
         },
         crate::vulkan::raymarch::RaymarchSharedBindings {
-            shadow_map_view: shadow_map.view,
-            shadow_sampler: shadow_sampler.handle(),
-            irradiance_view: env_map.irradiance.view,
-            prefilter_view: env_map.prefilter.view,
-            cube_sampler: cube_sampler.handle(),
-            linear_sampler: linear_sampler.handle(),
-            light_ubos: light_ubo_buffers,
-            shadow_ubos,
-            shadow_render_pass: shadow_render_pass.handle(),
+            shadow_map_view: shadow.map.view,
+            shadow_sampler: shadow.sampler.handle(),
+            irradiance_view: scene.env_map.irradiance.view,
+            prefilter_view: scene.env_map.prefilter.view,
+            cube_sampler: scene.cube_sampler.handle(),
+            linear_sampler: scene.linear_sampler.handle(),
+            light_ubos: &uniforms.light_ubo_buffers,
+            shadow_ubos: &shadow.ubos,
+            shadow_render_pass: shadow.render_pass.handle(),
         },
-        sdf_volumes,
+        &fx.sdf_volumes,
         hot_reload,
     )?;
 
@@ -678,12 +542,13 @@ pub(super) fn build_world_effects(
     //
     // Water first, then glass, matching the Metal backend, so the two slot
     // ranges are the leading `water_surfaces.len()` entries and the rest.
-    let planar_reflectors: Vec<[f32; 4]> = water_surfaces
+    let planar_reflectors: Vec<[f32; 4]> = fx
+        .water_surfaces
         .iter()
         // A water surface's rest plane: horizontal at the surface base height.
         .map(|s| [0.0, 1.0, 0.0, -s.center[1]])
         .chain(
-            glass_panels
+            fx.glass_panels
                 .iter()
                 .map(|p| crate::vulkan::planar::pane_plane(p.normal, p.center)),
         )
@@ -699,13 +564,13 @@ pub(super) fn build_world_effects(
     // probe / sky reflection. Mirrors `metal::planar`'s bindless gate.
     let planar_reflection = if planar_assignment.representatives.is_empty() {
         None
-    } else if let Some(csl) = cull_set_layout {
+    } else if let Some(csl) = cull.cull_set_layout.as_ref() {
         let cull_sources = crate::vulkan::planar::PlanarCullSources {
-            frame_object_buffers: object_buffers,
-            frame_draw_args_buffers: draw_args_buffers,
+            frame_object_buffers: &cull.object_buffers,
+            frame_draw_args_buffers: &cull.draw_args_buffers,
             cull_set_layout: csl.handle(),
             cull_count: n_cull,
-            hiz: hiz.map(|h| {
+            hiz: cull.hiz.as_ref().map(|h| {
                 let (view, sampler) = h.read_set_sources();
                 (h.read_set_layout.handle(), view, sampler)
             }),
@@ -719,34 +584,34 @@ pub(super) fn build_world_effects(
                 height: render_extent.height,
             },
             &planar_assignment.representatives,
-            main_render_pass,
+            &targets.main_render_pass,
             crate::vulkan::planar::PlanarGlobalSet {
-                update_after_bind: global_update_after_bind,
-                layout: global_set_layout.handle(),
-                probe_cube_count,
+                update_after_bind: descriptors.global_update_after_bind,
+                layout: descriptors.global_set_layout.handle(),
+                probe_cube_count: descriptors.probe_cube_count,
             },
             crate::vulkan::planar::PlanarLightingBindings {
-                light_ubos: light_ubo_buffers,
-                light_size: light_ubo_size,
-                local_light_buffer: local_light_buffer.buffer(),
-                local_light_size: local_light_buffer_size,
+                light_ubos: &uniforms.light_ubo_buffers,
+                light_size: std::mem::size_of::<LightUniforms>() as u64,
+                local_light_buffer: uniforms.local_light_buffer.buffer(),
+                local_light_size: uniforms.local_light_size,
                 cluster_params_ubo: light_cull.unclustered_buffer.buffer(),
                 cluster_list_buffer: light_cull.cluster_buffer.buffer(),
                 spot_shadow_map_view: spot_shadow.map.view,
                 spot_shadow_data_buffer: spot_shadow.data_buffer.buffer(),
-                area_light_buffer: area_light_buffer.buffer(),
-                ltc_matrix_view: ltc_matrix_image.view,
-                ltc_magnitude_view: ltc_magnitude_image.view,
-                ltc_sampler: ltc_sampler.handle(),
-                shadow_ubos,
-                shadow_size: shadow_ubo_size,
-                shadow_map_view: shadow_map.view,
-                shadow_sampler: shadow_sampler.handle(),
-                irradiance_view: env_map.irradiance.view,
-                prefilter_view: env_map.prefilter.view,
-                cube_sampler: cube_sampler.handle(),
-                ssao_white_view: ssao_white.view,
-                linear_sampler: linear_sampler.handle(),
+                area_light_buffer: area_light.buffer.buffer(),
+                ltc_matrix_view: area_light.ltc_matrix.view,
+                ltc_magnitude_view: area_light.ltc_magnitude.view,
+                ltc_sampler: area_light.sampler.handle(),
+                shadow_ubos: &shadow.ubos,
+                shadow_size: std::mem::size_of::<ShadowUniforms>() as u64,
+                shadow_map_view: shadow.map.view,
+                shadow_sampler: shadow.sampler.handle(),
+                irradiance_view: scene.env_map.irradiance.view,
+                prefilter_view: scene.env_map.prefilter.view,
+                cube_sampler: scene.cube_sampler.handle(),
+                ssao_white_view: scene.ssao_white.view,
+                linear_sampler: scene.linear_sampler.handle(),
             },
             cull_sources,
         )?)
@@ -768,79 +633,84 @@ pub(super) fn build_world_effects(
     // active, else this slot's HDR resolve), so the scene target per frame slot
     // is resolved here; the main-depth views feed the fragments' manual
     // occlusion test.
-    let transparent =
-        if glass_panels.is_empty() && water_surfaces.is_empty() && !has_seethrough_meshes {
-            None
-        } else {
-            let (scene_views, scene_images): (Vec<vk::ImageView>, Vec<vk::Image>) = (0..frames)
-                .map(|i| {
-                    if let Some(c) = composite_opt {
-                        (c.output.view, c.output.image)
-                    } else {
-                        (hdr_resolve_images[i].view, hdr_resolve_images[i].image)
-                    }
-                })
-                .unzip();
-            let transparent_depth_views: Vec<vk::ImageView> =
-                depth_images.iter().map(|img| img.view).collect();
-            // The initial acceleration-structure handles for the RT path (`None`
-            // when RT is off at launch; the per-frame `rt_dynamic_update` fills the
-            // ring before the RT path is taken). The RT pipelines themselves are
-            // built whenever the device is RT-capable.
-            let rt_inputs = rt_accel_opt.map(|a| {
-                let (geom_buffer, geom_size) = a.geom_table();
-                crate::vulkan::transparent::TransparentRtInputs {
-                    tlas: a.tlas(),
-                    geom_buffer,
-                    geom_size,
-                    deformed_verts: a.deformed_verts(),
-                    skinned_indices: a.skinned_indices(),
+    let transparent = if fx.glass_panels.is_empty()
+        && fx.water_surfaces.is_empty()
+        && !rt.has_seethrough_meshes
+    {
+        None
+    } else {
+        let (scene_views, scene_images): (Vec<vk::ImageView>, Vec<vk::Image>) = (0..frames)
+            .map(|i| {
+                if let Some(c) = rt.composite.as_ref() {
+                    (c.output.view, c.output.image)
+                } else {
+                    (
+                        targets.hdr_resolve_images[i].view,
+                        targets.hdr_resolve_images[i].image,
+                    )
                 }
-            });
-            let (water_planar_slots, glass_planar_slots) =
-                planar_assignment.slots.split_at(water_surfaces.len());
-            Some(crate::vulkan::transparent::TransparentResources::new(
-                crate::vulkan::transparent::TransparentDeviceCtx {
-                    alloc,
-                    instance,
-                    device,
-                    physical_device,
-                    command_pool,
-                    queue: graphics_queue,
-                },
-                crate::vulkan::transparent::TransparentBuildConfig {
-                    frames,
-                    msaa_samples,
-                    width: render_extent.width,
-                    height: render_extent.height,
-                    global_set_layout: global_set_layout.handle(),
-                    probe_cube_count,
-                    hot_reload,
-                },
-                crate::vulkan::transparent::TransparentSceneTargets {
-                    scene_views: &scene_views,
-                    scene_images: &scene_images,
-                    depth_views: &transparent_depth_views,
-                    sampler: linear_sampler.handle(),
-                },
-                crate::vulkan::transparent::TransparentContent {
-                    glass_panels,
-                    glass_planar_slots,
-                    water_surfaces,
-                    water_planar_slots,
-                    planar_target_views: &planar_target_views,
-                    seethrough_mesh_indices,
-                },
-                crate::vulkan::transparent::TransparentRtSetup {
-                    rt_capable,
-                    vertex_buffer: vertex_buffer.buffer(),
-                    index_buffer: index_buffer.buffer(),
-                    rt_inputs,
-                    bindless_set_layout: bindless_set_layout.map(|l| l.handle()),
-                    bindless_pool_size,
-                },
-            )?)
-        };
+            })
+            .unzip();
+        let transparent_depth_views: Vec<vk::ImageView> =
+            targets.depth_images.iter().map(|img| img.view).collect();
+        // The initial acceleration-structure handles for the RT path (`None`
+        // when RT is off at launch; the per-frame `rt_dynamic_update` fills the
+        // ring before the RT path is taken). The RT pipelines themselves are
+        // built whenever the device is RT-capable.
+        let rt_inputs = rt.state.accel.as_ref().map(|a| {
+            let (geom_buffer, geom_size) = a.geom_table();
+            crate::vulkan::transparent::TransparentRtInputs {
+                tlas: a.tlas(),
+                geom_buffer,
+                geom_size,
+                deformed_verts: a.deformed_verts(),
+                skinned_indices: a.skinned_indices(),
+            }
+        });
+        let (water_planar_slots, glass_planar_slots) =
+            planar_assignment.slots.split_at(fx.water_surfaces.len());
+        Some(crate::vulkan::transparent::TransparentResources::new(
+            crate::vulkan::transparent::TransparentDeviceCtx {
+                alloc,
+                instance: &hw.instance,
+                device,
+                physical_device: hw.physical_device,
+                command_pool,
+                queue: graphics_queue,
+            },
+            crate::vulkan::transparent::TransparentBuildConfig {
+                frames,
+                msaa_samples,
+                width: render_extent.width,
+                height: render_extent.height,
+                global_set_layout: descriptors.global_set_layout.handle(),
+                probe_cube_count: descriptors.probe_cube_count,
+                hot_reload,
+            },
+            crate::vulkan::transparent::TransparentSceneTargets {
+                scene_views: &scene_views,
+                scene_images: &scene_images,
+                depth_views: &transparent_depth_views,
+                sampler: scene.linear_sampler.handle(),
+            },
+            crate::vulkan::transparent::TransparentContent {
+                glass_panels: &fx.glass_panels,
+                glass_planar_slots,
+                water_surfaces: &fx.water_surfaces,
+                water_planar_slots,
+                planar_target_views: &planar_target_views,
+                seethrough_mesh_indices: &rt.seethrough_mesh_indices,
+            },
+            crate::vulkan::transparent::TransparentRtSetup {
+                rt_capable: hw.rt_capable,
+                vertex_buffer: geometry.vertex_buffer.buffer(),
+                index_buffer: geometry.index_buffer.buffer(),
+                rt_inputs,
+                bindless_set_layout: cull.bindless_set_layout.as_ref().map(|l| l.handle()),
+                bindless_pool_size: cull.bindless_pool_size,
+            },
+        )?)
+    };
 
     // Auto-exposure (EV adaptation): histogram + average compute
     // pipelines, the device-local histogram + output buffers, and the
@@ -848,13 +718,13 @@ pub(super) fn build_world_effects(
     // `PostProcessConfig` opted in. With auto-exposure off every
     // field below is None and the static authored EV continues to
     // drive `post_process.exposure` unchanged.
-    let (auto_exposure, auto_exposure_state) = if let Some(settings) = auto_exposure_settings {
+    let (auto_exposure, auto_exposure_state) = if let Some(settings) = post.auto_exposure.as_ref() {
         let resources = crate::vulkan::auto_exposure::AutoExposureResources::new(
             alloc,
             device,
             frames,
             &hdr_resolve_views,
-            linear_sampler.handle(),
+            scene.linear_sampler.handle(),
             hot_reload,
         )?;
         let state = auto_exposure::AutoExposureState::new(settings);
@@ -863,12 +733,30 @@ pub(super) fn build_world_effects(
         (None, None)
     };
     Ok(WorldEffects {
-        decals_state,
-        fog_resources,
+        decal: DecalState {
+            resources: decals_state,
+            // Authored decals land in the table through `add_decal`, which
+            // also writes each one's albedo descriptor.
+            set: decal::DecalSet::new(crate::vulkan::decal::MAX_DECALS, frames),
+        },
+        // The fog sun mirrors the first directional light, cached because the
+        // light UBO is uploaded rather than pushed each frame.
+        // `update_directional_lights` re-derives both.
+        fog: FogState {
+            resources: fog_resources,
+            settings: fx.fog,
+            sun_dir: lights::sun_direction(&uniforms.light_uniforms),
+            sun_color: lights::sun_color(&uniforms.light_uniforms),
+        },
         raymarch,
         planar_reflection,
         transparent,
-        auto_exposure,
-        auto_exposure_state,
+        auto_exposure: AutoExposureState {
+            resources: auto_exposure,
+            settings: post.auto_exposure,
+            state: auto_exposure_state,
+            bias_ev: post.auto_exposure_bias_ev,
+            last_elapsed: 0.0,
+        },
     })
 }

@@ -159,7 +159,7 @@ impl AppKitWindow {
     // The window / delegate handles a live world reload transplants onto the
     // rebuilt context, so a save reuses the window instead of spawning a new
     // one. The caller supplies the view (it owns the concrete subclass).
-    #[cfg(backend_metal)] // Vulkan carries its window through `VkReuse`
+    #[cfg(backend_metal)] // Vulkan carries its window through `VkHardware::hand_over`
     pub(crate) fn handles_for_reuse(&self) -> WindowHandles {
         WindowHandles {
             window: self.window.clone(),
@@ -175,7 +175,7 @@ impl AppKitWindow {
     // mode-restore state. NSCursor's hide count and the CGAssociate coupling are
     // process-global and survive teardown, so the flags tracking them must come
     // across too or a reload leaks a hide and strands the OS cursor.
-    #[cfg(backend_metal)] // Vulkan carries its window through `VkReuse`
+    #[cfg(backend_metal)] // Vulkan carries its window through `VkHardware::hand_over`
     pub(crate) fn adopt_live_state(&mut self, prev: &mut AppKitWindow) {
         self.fullscreen_display =
             std::mem::replace(&mut prev.fullscreen_display, FullscreenDisplayMode::new());

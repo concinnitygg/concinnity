@@ -249,7 +249,8 @@ impl VkContext {
             // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
             // these commands name is live for the call.
             unsafe {
-                self.device
+                self.hw
+                    .device
                     .cmd_begin_render_pass(cmd, &begin, vk::SubpassContents::INLINE);
                 // Negative height flips NDC y, matching the cascade pass and the
                 // `-ndc.y` the forward sampler applies.
@@ -261,8 +262,8 @@ impl VkContext {
                     min_depth: 0.0,
                     max_depth: 1.0,
                 };
-                self.device.cmd_set_viewport(cmd, 0, &[viewport]);
-                self.device.cmd_set_scissor(
+                self.hw.device.cmd_set_viewport(cmd, 0, &[viewport]);
+                self.hw.device.cmd_set_scissor(
                     cmd,
                     0,
                     &[vk::Rect2D {
@@ -288,7 +289,7 @@ impl VkContext {
 
             // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
             // these commands name is live for the call.
-            unsafe { self.device.cmd_end_render_pass(cmd) };
+            unsafe { self.hw.device.cmd_end_render_pass(cmd) };
         }
     }
 
@@ -307,7 +308,7 @@ impl VkContext {
         // opaque rasterization while RT is live, and the GPU-driven cascade takes
         // the same decision through the cull kernel's ENABLED bit.
         let skip_seethrough = self.mesh_glass_active();
-        let device = &self.device;
+        let device = &self.hw.device;
         let SpotSliceBinding {
             pipeline: shadow_pipeline,
             layout: shadow_pl,

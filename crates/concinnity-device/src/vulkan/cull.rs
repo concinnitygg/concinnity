@@ -160,7 +160,7 @@ impl VkContext {
         ) else {
             return;
         };
-        let device = &self.device;
+        let device = &self.hw.device;
 
         // Pack the six already-normalized frustum planes for the kernel.
         let mut params = CullParams {
@@ -256,7 +256,7 @@ impl VkContext {
         if self.cull_count() == 0 {
             return;
         }
-        let device = &self.device;
+        let device = &self.hw.device;
         let object_count = self.cull_count() as u32;
 
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
@@ -347,7 +347,7 @@ impl VkContext {
         if self.cull.cull_sets2.is_empty() || self.cull_count() == 0 {
             return;
         }
-        let device = &self.device;
+        let device = &self.hw.device;
 
         // Frustum planes + camera position are unused by the phase-2 kernel
         // (candidates already passed those in phase 1) but the push-constant

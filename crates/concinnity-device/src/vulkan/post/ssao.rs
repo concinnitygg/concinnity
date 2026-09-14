@@ -616,7 +616,7 @@ impl VkContext {
         let Some(ssao) = &self.ssao else {
             return;
         };
-        let extent = self.render_extent;
+        let extent = self.targets.render_extent;
         let params = ssao.settings.params(fov_y_radians, aspect);
         let area = vk::Rect2D::default().extent(extent);
 

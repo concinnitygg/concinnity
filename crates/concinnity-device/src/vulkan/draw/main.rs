@@ -54,9 +54,9 @@ impl VkContext {
         frame_idx: usize,
         world_hidden: bool,
     ) {
-        let device = self.device.clone();
+        let device = self.hw.device.clone();
         let device = &device;
-        let extent = self.render_extent;
+        let extent = self.targets.render_extent;
 
         // Opaque menu backdrop, MSAA path: skip the main render pass entirely.
         // Beginning it would clear the MSAA color+depth and, on
@@ -72,11 +72,11 @@ impl VkContext {
         // DirectX paused path (which likewise skips the resolve). The
         // single-sample path below has no resolve to skip (hdr_resolve is the
         // color attachment), so it keeps its cheap clear-only render pass.
-        if world_hidden && self.msaa_samples != vk::SampleCountFlags::TYPE_1 {
+        if world_hidden && self.targets.msaa_samples != vk::SampleCountFlags::TYPE_1 {
             super::super::texture::transition_image_layout(
                 device,
                 cmd,
-                self.hdr_resolve_images[frame_idx].image,
+                self.targets.hdr_resolve_images[frame_idx].image,
                 vk::ImageLayout::UNDEFINED,
                 vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
                 vk::ImageAspectFlags::COLOR,
@@ -100,7 +100,8 @@ impl VkContext {
                 stencil: 0,
             },
         };
-        let clears: &[vk::ClearValue] = if self.msaa_samples != vk::SampleCountFlags::TYPE_1 {
+        let clears: &[vk::ClearValue] = if self.targets.msaa_samples != vk::SampleCountFlags::TYPE_1
+        {
             &[clear_color, clear_depth, vk::ClearValue::default()]
         } else {
             &[clear_color, clear_depth]
@@ -117,7 +118,7 @@ impl VkContext {
             self.cull
                 .main_render_pass_phase1
                 .as_ref()
-                .unwrap_or(&self.main_render_pass)
+                .unwrap_or(&self.targets.main_render_pass)
         } else if let Some(rp) = self
             .raymarch
             .as_ref()
@@ -125,11 +126,11 @@ impl VkContext {
         {
             rp
         } else {
-            &self.main_render_pass
+            &self.targets.main_render_pass
         };
         let rp_begin = vk::RenderPassBeginInfo::default()
             .render_pass(render_pass.handle())
-            .framebuffer(self.framebuffers[frame_idx].handle())
+            .framebuffer(self.targets.framebuffers[frame_idx].handle())
             .render_area(vk::Rect2D::default().extent(extent))
             .clear_values(clears);
 
@@ -359,9 +360,9 @@ impl VkContext {
         if self.draw.n_objects == 0 || self.cull.indirect_buffers2.is_empty() {
             return;
         }
-        let device = self.device.clone();
+        let device = self.hw.device.clone();
         let device = &device;
-        let extent = self.render_extent;
+        let extent = self.targets.render_extent;
 
         // The phase-2 render pass LOADs the phase-1 color + depth. Because it
         // shares the main render pass's subpass dependency (so the shared
@@ -402,7 +403,7 @@ impl VkContext {
         // values are required.
         let rp_begin = vk::RenderPassBeginInfo::default()
             .render_pass(render_pass.handle())
-            .framebuffer(self.framebuffers[frame_idx].handle())
+            .framebuffer(self.targets.framebuffers[frame_idx].handle())
             .render_area(vk::Rect2D::default().extent(extent));
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.

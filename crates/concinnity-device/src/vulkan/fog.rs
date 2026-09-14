@@ -927,14 +927,14 @@ impl VkContext {
             None => return,
         };
 
-        let device = &self.device;
+        let device = &self.hw.device;
 
         // Per-frame FogParams (drives the volume integration + the fragment's
         // viewport / reconstruction). Uploaded here so `encode_fog` only reads.
         let inv_vp = mat4_inverse(vp);
         let viewport_pix = [
-            self.render_extent.width as f32,
-            self.render_extent.height as f32,
+            self.targets.render_extent.width as f32,
+            self.targets.render_extent.height as f32,
         ];
         let params = fog_settings.params(
             inv_vp,
@@ -1016,8 +1016,8 @@ impl VkContext {
             None => return,
         };
 
-        let device = &self.device;
-        let extent = self.render_extent;
+        let device = &self.hw.device;
+        let extent = self.targets.render_extent;
 
         // Main depth is already in SHADER_READ_ONLY for the fragment's scene-depth
         // sample: the graph declares this pass's depth read and the executor emits

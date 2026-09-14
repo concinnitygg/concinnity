@@ -24,7 +24,7 @@ impl VkContext {
         let info = vk::DescriptorImageInfo::default()
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             .image_view(view)
-            .sampler(self.linear_sampler.handle());
+            .sampler(self.scene.linear_sampler.handle());
         let write = vk::WriteDescriptorSet::default()
             .dst_set(set)
             .dst_binding(1)
@@ -34,7 +34,8 @@ impl VkContext {
         // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every
         // set and resource it names belongs to this device.
         unsafe {
-            self.device
+            self.hw
+                .device
                 .update_descriptor_sets(std::slice::from_ref(&write), &[])
         };
     }
@@ -44,7 +45,7 @@ impl VkContext {
     // copies plus the decal / clone / particle sets. Only legal under a device
     // drain (the fallback streaming path and the `cn debug` hot-reload paths).
     fn rewrite_bound_texture_sets(&self, slot: usize) {
-        let view = self.textures[slot].view;
+        let view = self.scene.textures[slot].view;
         // The bindless pool addresses each texture at pool index == its handle,
         // shared by albedo and normal sampling, so one re-point covers both.
         for &set in &self.cull.bindless_sets {
@@ -97,19 +98,19 @@ impl VkContext {
         slot: usize,
         image: &bake::texture::TextureImage,
     ) -> error::RenderResult<()> {
-        if slot >= self.textures.len() {
+        if slot >= self.scene.textures.len() {
             return Err(format!(
                 "update_texture_slot: slot {} out of range (pool size {})",
                 slot,
-                self.textures.len()
+                self.scene.textures.len()
             )
             .into());
         }
         let ctx = GpuUploadContext {
-            alloc: &self.alloc,
-            device: &self.device,
+            alloc: &self.hw.alloc,
+            device: &self.hw.device,
             command_pool: self.commands.command_pool,
-            queue: self.graphics_queue,
+            queue: self.hw.graphics_queue,
         };
         if self.streamed_slot_needs_drain(slot) {
             self.wait_idle();
@@ -119,7 +120,7 @@ impl VkContext {
             // order left a brief window where descriptor sets referenced an
             // already-destroyed VkImageView, which validation layers and some
             // drivers flag even though vkUpdateDescriptorSets is write-only.
-            let old = std::mem::replace(&mut self.textures[slot], img);
+            let old = std::mem::replace(&mut self.scene.textures[slot], img);
             self.rewrite_texture_slot(slot);
             // The full rewrite covered every per-frame pool copy, so any
             // propagation queued for this slot is already satisfied.
@@ -128,7 +129,7 @@ impl VkContext {
             return Ok(());
         }
         let (img, in_flight) = upload_texture_image_deferred(&ctx, image)?;
-        let old = std::mem::replace(&mut self.textures[slot], img);
+        let old = std::mem::replace(&mut self.scene.textures[slot], img);
         self.stream.pool_rewrites.queue(slot);
         // `+ 1`: the swap lands between frames, after the previous frame's
         // submit, so the first frame fence that covers the upload submission
@@ -157,9 +158,9 @@ impl VkContext {
     pub(in crate::vulkan) fn apply_streamed_texture_rewrites(&mut self, frame: usize) {
         self.stream.frame += 1;
         if !self.stream.pool_rewrites.is_empty() {
-            let last = self.textures.len().saturating_sub(1);
+            let last = self.scene.textures.len().saturating_sub(1);
             for slot in self.stream.pool_rewrites.begin_frame() {
-                let view = self.textures[slot.min(last)].view;
+                let view = self.scene.textures[slot.min(last)].view;
                 if let Some(&set) = self.cull.bindless_sets.get(frame) {
                     self.write_pool_image(set, slot as u32, view);
                 }
@@ -167,7 +168,7 @@ impl VkContext {
         }
         if !self.stream.retires.is_empty() {
             let now = self.stream.frame;
-            let device = self.device.clone();
+            let device = self.hw.device.clone();
             let pool = self.commands.command_pool;
             let mut i = 0;
             while i < self.stream.retires.len() {
@@ -184,7 +185,7 @@ impl VkContext {
     // a device drain; the world-reload and drop paths call this before
     // tearing the pool down.
     pub(in crate::vulkan) fn drain_stream_retires(&mut self) {
-        let device = self.device.clone();
+        let device = self.hw.device.clone();
         let pool = self.commands.command_pool;
         for retire in self.stream.retires.drain(..) {
             retire.destroy(&device, pool);
@@ -206,10 +207,10 @@ impl VkContext {
         self.wait_idle();
         let new_lut = super::super::texture::upload_color_lut(
             &GpuUploadContext {
-                alloc: &self.alloc,
-                device: &self.device,
+                alloc: &self.hw.alloc,
+                device: &self.hw.device,
                 command_pool: self.commands.command_pool,
-                queue: self.graphics_queue,
+                queue: self.hw.graphics_queue,
             },
             size,
             data,
@@ -217,7 +218,7 @@ impl VkContext {
         // Rewrite composite descriptors before destroying the old image; see
         // the texture-pool rewires above for the rationale.
         let new_view = new_lut.view;
-        let old = std::mem::replace(&mut self.color_lut, new_lut);
+        let old = std::mem::replace(&mut self.scene.color_lut, new_lut);
         for &set in &self.composite.sets {
             let info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
@@ -231,7 +232,8 @@ impl VkContext {
             // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
             // every set and resource it names belongs to this device.
             unsafe {
-                self.device
+                self.hw
+                    .device
                     .update_descriptor_sets(std::slice::from_ref(&write), &[])
             };
         }
@@ -260,10 +262,10 @@ impl VkContext {
         self.wait_idle();
         let new_env = super::super::texture::upload_environment_map(
             &GpuUploadContext {
-                alloc: &self.alloc,
-                device: &self.device,
+                alloc: &self.hw.alloc,
+                device: &self.hw.device,
                 command_pool: self.commands.command_pool,
-                queue: self.graphics_queue,
+                queue: self.hw.graphics_queue,
             },
             view.irradiance_face,
             view.irradiance_bytes,
@@ -275,17 +277,17 @@ impl VkContext {
         let new_mip_count = new_env.prefilter_mip_count;
         // Rewrite global sets before destroying the previous cubes; see the
         // texture-pool rewires above for the rationale.
-        let old = std::mem::replace(&mut self.env_map, new_env);
-        self.prefilter_mip_count = new_mip_count;
+        let old = std::mem::replace(&mut self.scene.env_map, new_env);
+        self.scene.prefilter_mip_count = new_mip_count;
         for &set in &self.descriptors.global_sets {
             let irr_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(new_irradiance_view)
-                .sampler(self.cube_sampler.handle());
+                .sampler(self.scene.cube_sampler.handle());
             let pre_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(new_prefilter_view)
-                .sampler(self.cube_sampler.handle());
+                .sampler(self.scene.cube_sampler.handle());
             let writes = [
                 vk::WriteDescriptorSet::default()
                     .dst_set(set)
@@ -300,7 +302,7 @@ impl VkContext {
             ];
             // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
             // every set and resource it names belongs to this device.
-            unsafe { self.device.update_descriptor_sets(&writes, &[]) };
+            unsafe { self.hw.device.update_descriptor_sets(&writes, &[]) };
         }
         // The IBL cubes are also bound outside `global_sets`: the raymarch view
         // sets sample both cubes (bindings 4 + 5). They captured the old image
@@ -311,16 +313,20 @@ impl VkContext {
         // prefilter cube per frame, so it needs no re-point.
         if let Some(rm) = self.raymarch.as_ref() {
             rm.rewire_ibl_cubes(
-                &self.device,
+                &self.hw.device,
                 new_irradiance_view,
                 new_prefilter_view,
-                self.cube_sampler.handle(),
+                self.scene.cube_sampler.handle(),
             );
         }
         // The RT-reflection sets sample the prefilter cube at binding 8 (the miss
         // fallback + the metallic/roughness IBL hit shading); re-point them too.
         if let Some(rt) = self.rt_reflections.as_ref() {
-            rt.rewire_prefilter(&self.device, new_prefilter_view, self.cube_sampler.handle());
+            rt.rewire_prefilter(
+                &self.hw.device,
+                new_prefilter_view,
+                self.scene.cube_sampler.handle(),
+            );
         }
         drop(old);
         Ok(())
@@ -415,7 +421,7 @@ impl VkContext {
         // The cloned prop joins the RT-relevant draw set; the next RT update folds
         // it into the BVH (it reuses the source mesh's geometry slice, so only
         // this clone's BLAS is built).
-        self.rt_topology_dirty = true;
+        self.rt.topology_dirty = true;
         Ok(())
     }
 }

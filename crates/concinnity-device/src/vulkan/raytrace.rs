@@ -2845,20 +2845,20 @@ impl super::context::VkContext {
     pub(in crate::vulkan) fn rebuild_rt_accel(&mut self) -> RenderResult<()> {
         let fresh = match build_rt_accel(
             RtDeviceCtx {
-                alloc: &self.alloc,
-                instance: &self.instance,
-                device: &self.device,
-                pd: self.physical_device,
+                alloc: &self.hw.alloc,
+                instance: &self.hw.instance,
+                device: &self.hw.device,
+                pd: self.hw.physical_device,
             },
             self.commands.command_pool,
-            self.graphics_queue,
+            self.hw.graphics_queue,
             RtSceneGeometry {
                 vertex_buffer: self.geometry.vertex_buffer.buffer(),
                 index_buffer: self.geometry.index_buffer.buffer(),
                 draw_objects: &self.draw.objects,
                 clusters: &self.instanced.clusters,
-                albedo_count: self.textures.len(),
-                total_vertices: self.rt_static_vertex_count,
+                albedo_count: self.scene.textures.len(),
+                total_vertices: self.rt.static_vertex_count,
                 exclude_seethrough: self.seethrough_meshes_enabled(),
             },
             self.frames_in_flight,
@@ -2870,21 +2870,21 @@ impl super::context::VkContext {
                 None
             }
         };
-        if let Some(mut old) = self.rt_accel.take() {
-            old.destroy(&self.device);
+        if let Some(mut old) = self.rt.accel.take() {
+            old.destroy(&self.hw.device);
         }
-        self.rt_accel = fresh;
+        self.rt.accel = fresh;
         // An RT pass with no BVH traces nothing, so it goes with the BVH.
-        if self.rt_accel.is_none()
+        if self.rt.accel.is_none()
             && let Some(mut rt) = self.rt_reflections.take()
         {
-            rt.destroy(&self.device);
+            rt.destroy(&self.hw.device);
         }
 
         // The resolve + glass sets bind the shared vertex / index buffers
         // directly (the trace fetches attributes at hit points), so they must
         // follow the swap even when the BVH itself was dropped.
-        let device = self.device.clone();
+        let device = self.hw.device.clone();
         let (vertex_buffer, index_buffer) = (
             self.geometry.vertex_buffer.buffer(),
             self.geometry.index_buffer.buffer(),
@@ -2915,14 +2915,14 @@ impl super::context::VkContext {
     // from `upload_skinned` when the bindless cull path is active. Mirrors the
     // DirectX `upload_skinned` skin block.
     pub(in crate::vulkan) fn build_main_skin(&mut self, vertex_total: usize) -> RenderResult<()> {
-        let device = self.device.clone();
+        let device = self.hw.device.clone();
         let frames = self.frames_in_flight.max(1);
         let n = self.skinned.slots.draw_objects.len();
         if n == 0 {
             return Ok(());
         }
 
-        let mut skin = build_skin_pipeline(&self.alloc, &device, self.hot_reload.enabled)?;
+        let mut skin = build_skin_pipeline(&self.hw.alloc, &device, self.hot_reload.enabled)?;
         ensure_skin_sets(&device, &mut skin, frames, n)?;
         let deformed = self.build_deformed_ring(&skin.sets, vertex_total)?;
 
@@ -3008,7 +3008,7 @@ impl super::context::VkContext {
         let deformed_bytes = (vertex_total as u64 * VERTEX_STRIDE).max(VERTEX_STRIDE);
         let mut deformed: Vec<DeviceBuffer> = Vec::with_capacity(frames);
         for _ in 0..frames {
-            deformed.push(create_main_deformed_buffer(&self.alloc, deformed_bytes)?);
+            deformed.push(create_main_deformed_buffer(&self.hw.alloc, deformed_bytes)?);
         }
 
         let src_buffer = self.skinned.vertex_buffer.buffer();
@@ -3036,7 +3036,7 @@ impl super::context::VkContext {
                 ];
                 // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
                 // every set and resource it names belongs to this device.
-                unsafe { self.device.update_descriptor_sets(&writes, &[]) };
+                unsafe { self.hw.device.update_descriptor_sets(&writes, &[]) };
             }
         }
 
@@ -3060,7 +3060,7 @@ impl super::context::VkContext {
         if self.draw.n_skinned == 0 || self.skinned.deformed.len() <= frame_idx {
             return;
         }
-        let device = &self.device;
+        let device = &self.hw.device;
         let frame_sets = &skin.sets[frame_idx];
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.

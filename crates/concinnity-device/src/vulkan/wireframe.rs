@@ -48,8 +48,9 @@ impl VkContext {
         // it the mode falls back to solid fill rather than failing the frame.
         // SAFETY: a property query on a live handle; it only reads.
         let supported = unsafe {
-            self.instance
-                .get_physical_device_features(self.physical_device)
+            self.hw
+                .instance
+                .get_physical_device_features(self.hw.physical_device)
         };
         if supported.fill_mode_non_solid == 0 {
             tracing::warn!("wireframe view: device lacks fillModeNonSolid; using solid fill");
@@ -68,10 +69,10 @@ impl VkContext {
     }
 
     fn build_wireframe_pipelines(&mut self) -> Result<(), String> {
-        let device = self.device.clone();
-        let msaa = self.msaa_samples;
+        let device = self.hw.device.clone();
+        let msaa = self.targets.msaa_samples;
         let format = self.swapchain.format;
-        let render_pass = self.main_render_pass.handle();
+        let render_pass = self.targets.main_render_pass.handle();
         let mut built = VkWireframe {
             built: true,
             ..Default::default()

@@ -594,7 +594,7 @@ impl VkContext {
     pub(in crate::vulkan) fn post_scene_image(&self, frame: usize) -> &GpuImage {
         match self.reflection_composite.as_ref() {
             Some(rc) => &rc.output,
-            None => &self.hdr_resolve_images[frame % self.hdr_resolve_images.len()],
+            None => &self.targets.hdr_resolve_images[frame % self.targets.hdr_resolve_images.len()],
         }
     }
 
@@ -608,7 +608,7 @@ impl VkContext {
         let Some(mut rc) = self.reflection_composite.take() else {
             return false;
         };
-        rc.destroy(&self.device);
+        rc.destroy(&self.hw.device);
         true
     }
 
@@ -629,16 +629,16 @@ impl VkContext {
             .expect("a reflection path forces the unified G-buffer pre-pass");
         let rc = ReflectionCompositeResources::new(
             &GpuUploadContext {
-                alloc: &self.alloc,
-                device: &self.device,
+                alloc: &self.hw.alloc,
+                device: &self.hw.device,
                 command_pool: self.commands.command_pool,
-                queue: self.graphics_queue,
+                queue: self.hw.graphics_queue,
             },
-            self.render_extent.width,
-            self.render_extent.height,
+            self.targets.render_extent.width,
+            self.targets.render_extent.height,
             self.frames_in_flight,
             blur_scale,
-            &CompositeInputs::new(&self.hdr_resolve_images, gb),
+            &CompositeInputs::new(&self.targets.hdr_resolve_images, gb),
             self.hot_reload.enabled,
         )?;
         self.reflection_composite = Some(rc);
@@ -665,7 +665,7 @@ impl VkContext {
         let Some(view) = view else {
             return;
         };
-        let device = self.device.clone();
+        let device = self.hw.device.clone();
         if let Some(rc) = self.reflection_composite.as_mut() {
             rc.repoint_reflection(&device, frame_idx, view);
         }
@@ -693,7 +693,7 @@ impl VkContext {
             Some(reflection_view),
             "reflection composite set wired for a different resolve target"
         );
-        let device = &self.device;
+        let device = &self.hw.device;
         // Pass 1: roughness blur into the reduced-resolution blur target.
         self.begin_fullscreen_pass_sized(
             cmd,

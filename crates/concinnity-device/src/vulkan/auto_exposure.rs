@@ -476,7 +476,7 @@ impl VkContext {
         let Some(resources) = self.auto_exposure.resources.as_ref() else {
             return;
         };
-        let device = &self.device;
+        let device = &self.hw.device;
         let params = self.auto_exposure_params();
         // SAFETY: `AutoExposureParams` is `repr(C)`, 16 bytes, push range matched.
         let push_bytes = unsafe {
@@ -486,7 +486,7 @@ impl VkContext {
             )
         };
 
-        let extent = self.render_extent;
+        let extent = self.targets.render_extent;
         if extent.width == 0 || extent.height == 0 {
             return;
         }

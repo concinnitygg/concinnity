@@ -56,7 +56,7 @@ impl VkContext {
         // frame's animation time once (no-op without casters) so the from-light
         // SDF march lines up with the lit-side surface.
         self.upload_raymarch_shadow_view(frame_idx, elapsed);
-        let device = self.device.clone();
+        let device = self.hw.device.clone();
         let device = &device;
 
         let sm = self.shadow.map_size;

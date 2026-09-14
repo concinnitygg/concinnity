@@ -29,13 +29,13 @@ impl VkContext {
         let new_v = old_v + chunk_vtx_bytes as u64;
         let new_i = old_i + chunk_idx_bytes as u64;
 
-        let shared = super::shared_geometry_usage(self.rt_capable);
-        let new_vbuf = self.alloc.create_buffer(
+        let shared = super::shared_geometry_usage(self.hw.rt_capable);
+        let new_vbuf = self.hw.alloc.create_buffer(
             new_v,
             vk::BufferUsageFlags::VERTEX_BUFFER | shared,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
-        let new_ibuf = self.alloc.create_buffer(
+        let new_ibuf = self.hw.alloc.create_buffer(
             new_i,
             vk::BufferUsageFlags::INDEX_BUFFER | shared,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
@@ -44,22 +44,22 @@ impl VkContext {
         // Copy the build-time geometry into the start of the grown buffers so
         // every existing draw's offsets stay valid.
         texture::one_shot_submit(
-            &self.device,
+            &self.hw.device,
             self.commands.command_pool,
-            self.graphics_queue,
+            self.hw.graphics_queue,
             |cmd| {
                 let vcopy = vk::BufferCopy::default().size(old_v);
                 let icopy = vk::BufferCopy::default().size(old_i);
                 // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
                 // slice these commands name is live for the call.
                 unsafe {
-                    self.device.cmd_copy_buffer(
+                    self.hw.device.cmd_copy_buffer(
                         cmd,
                         self.geometry.vertex_buffer.buffer(),
                         new_vbuf.buffer(),
                         std::slice::from_ref(&vcopy),
                     );
-                    self.device.cmd_copy_buffer(
+                    self.hw.device.cmd_copy_buffer(
                         cmd,
                         self.geometry.index_buffer.buffer(),
                         new_ibuf.buffer(),
@@ -172,7 +172,7 @@ impl VkContext {
         self.model_history.borrow_mut().reoccupy_draw(draw_idx);
         // A new resident chunk changes the RT-relevant draw set; the next RT
         // update folds it into the BVH (building just this chunk's BLAS).
-        self.rt_topology_dirty = true;
+        self.rt.topology_dirty = true;
         Ok(())
     }
 
@@ -198,7 +198,7 @@ impl VkContext {
             .free(region.index_offset, region.index_bytes, retire_frame);
         // The removed chunk leaves the RT-relevant draw set; the next RT update
         // drops its BLAS (deferred-freed once in-flight traces retire).
-        self.rt_topology_dirty = true;
+        self.rt.topology_dirty = true;
         Ok(())
     }
 

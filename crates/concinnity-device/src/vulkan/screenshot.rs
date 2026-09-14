@@ -46,7 +46,7 @@ impl VkContext {
         // The GPU must be idle: the last-presented image is then stable and no
         // in-flight command buffer still references the resources we touch.
         // SAFETY: a wait on this device's own queues; it takes no borrowed state.
-        unsafe { self.device.device_wait_idle() }
+        unsafe { self.hw.device.device_wait_idle() }
             .map_err(|e| format!("screenshot: wait idle: {e}"))?;
 
         // Host-visible readback buffer, tightly packed at the swapchain
@@ -56,7 +56,7 @@ impl VkContext {
         // loses the device, so derive it from the actual format.
         let bytes_per_pixel = swapchain_bytes_per_pixel(self.swapchain.format) as u64;
         let byte_size = (width as u64) * (height as u64) * bytes_per_pixel;
-        let readback = self.alloc.create_buffer(
+        let readback = self.hw.alloc.create_buffer(
             byte_size,
             vk::BufferUsageFlags::TRANSFER_DST,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
@@ -65,11 +65,11 @@ impl VkContext {
         // Copy the presented image into the buffer, bracketing with
         // PRESENT_SRC <-> TRANSFER_SRC barriers so the image is left exactly as
         // present expects it for the next acquire.
-        let device = self.device.clone();
+        let device = self.hw.device.clone();
         let copied = one_shot_submit(
             &device,
             self.commands.command_pool,
-            self.graphics_queue,
+            self.hw.graphics_queue,
             |cmd| {
                 let to_src = image_barrier(
                     src_image,
@@ -142,7 +142,7 @@ impl VkContext {
             // The HDR float swapchain needs the encoding to decode for display:
             // scRGB-linear gets the sRGB OETF, PQ-encoded code values pass
             // through (not display-correct, but a valid PNG rather than a crash).
-            let encoding = match self.hdr_mode {
+            let encoding = match self.hw.hdr_mode {
                 HdrOutputMode::Hdr { encoding, .. } => Some(encoding),
                 HdrOutputMode::Sdr => None,
             };

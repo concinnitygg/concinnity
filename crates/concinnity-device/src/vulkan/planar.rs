@@ -887,7 +887,7 @@ impl VkContext {
         // mirror render shares the main camera's projection + jitter, keeping the
         // reflection aligned with the reflective fragment's screen-space sample.
         let proj = mat4_mul(vp_mat, mat4_inverse(self.view.matrix));
-        let prefilter_mip_count = self.prefilter_mip_count as f32;
+        let prefilter_mip_count = self.scene.prefilter_mip_count as f32;
         let extent = vk::Extent2D {
             width: set.width,
             height: set.height,
@@ -952,7 +952,7 @@ impl VkContext {
             // to outlive), and `from_ref` gives the one-element slice the count
             // implies.
             unsafe {
-                self.device.cmd_pipeline_barrier(
+                self.hw.device.cmd_pipeline_barrier(
                     cmd,
                     vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
                         | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
@@ -1003,7 +1003,7 @@ impl VkContext {
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
-            self.device.cmd_pipeline_barrier(
+            self.hw.device.cmd_pipeline_barrier(
                 cmd,
                 vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
                 vk::PipelineStageFlags::FRAGMENT_SHADER,

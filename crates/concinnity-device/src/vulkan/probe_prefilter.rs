@@ -279,7 +279,7 @@ impl super::context::VkContext {
             .prefilter
             .as_ref()
             .ok_or("probe: prefilter pipelines missing")?;
-        let device = &self.device;
+        let device = &self.hw.device;
 
         transition(
             device,
@@ -397,7 +397,7 @@ impl super::context::VkContext {
         mips: u32,
     ) {
         transition(
-            &self.device,
+            &self.hw.device,
             cmd,
             image,
             mips,
@@ -430,9 +430,10 @@ impl super::context::VkContext {
         // SAFETY: `cmd` is in the recording state, and every handle these commands name belongs to
         // this device; the push range matches the layout's, declared from the same type.
         unsafe {
-            self.device
+            self.hw
+                .device
                 .cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline);
-            self.device.cmd_bind_descriptor_sets(
+            self.hw.device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::COMPUTE,
                 layout,
@@ -440,14 +441,14 @@ impl super::context::VkContext {
                 std::slice::from_ref(&set),
                 &[],
             );
-            self.device.cmd_push_constants(
+            self.hw.device.cmd_push_constants(
                 cmd,
                 layout,
                 vk::ShaderStageFlags::COMPUTE,
                 0,
                 bytemuck::bytes_of(params),
             );
-            self.device.cmd_dispatch(cmd, groups, groups, 6);
+            self.hw.device.cmd_dispatch(cmd, groups, groups, 6);
         }
     }
 }

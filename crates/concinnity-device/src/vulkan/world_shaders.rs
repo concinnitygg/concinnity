@@ -34,11 +34,11 @@ impl VkContext {
             .as_ref()
             .ok_or_else(|| "shader buckets need the bindless main pass".to_string())?;
         let pipeline = build_bucket_pipeline(
-            &self.device,
+            &self.hw.device,
             BucketPipelineTargets {
-                render_pass: self.main_render_pass.handle(),
+                render_pass: self.targets.main_render_pass.handle(),
                 layout: layout.handle(),
-                msaa_samples: self.msaa_samples,
+                msaa_samples: self.targets.msaa_samples,
                 swapchain_format: self.swapchain.format,
                 hot_reload: self.hot_reload.enabled,
                 probe_count: self.descriptors.probe_cube_count as usize,
@@ -70,10 +70,10 @@ impl VkContext {
         // this out-of-frame path does not tick.
         // SAFETY: a wait on this device's own queues; it takes no borrowed state.
         unsafe {
-            let _ = self.device.device_wait_idle();
+            let _ = self.hw.device.device_wait_idle();
         }
         self.cull.world_pipelines[slot] = None;
-        self.device.reclaim_idle();
+        self.hw.device.reclaim_idle();
     }
 
     // Whether a bucket's draws can render this frame: bucket 0 is the world
@@ -115,7 +115,7 @@ impl VkContext {
             // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
             // these commands name is live for the call.
             unsafe {
-                self.device.cmd_bind_pipeline(
+                self.hw.device.cmd_bind_pipeline(
                     cmd,
                     vk::PipelineBindPoint::GRAPHICS,
                     pipeline.handle(),
@@ -167,7 +167,7 @@ impl VkContext {
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
-            self.device.cmd_draw_indexed_indirect(
+            self.hw.device.cmd_draw_indexed_indirect(
                 cmd,
                 indirect,
                 self.bucket_region_offset(bucket),

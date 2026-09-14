@@ -16,7 +16,7 @@ impl VkContext {
         render_pass: vk::RenderPass,
         framebuffer: vk::Framebuffer,
     ) {
-        self.begin_fullscreen_pass_sized(cmd, render_pass, framebuffer, self.render_extent);
+        self.begin_fullscreen_pass_sized(cmd, render_pass, framebuffer, self.targets.render_extent);
     }
 
     // As `begin_fullscreen_pass`, but with an explicit target extent for a pass
@@ -45,11 +45,14 @@ impl VkContext {
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
-            self.device
+            self.hw
+                .device
                 .cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
-            self.device
+            self.hw
+                .device
                 .cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp));
-            self.device
+            self.hw
+                .device
                 .cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
         }
     }
@@ -58,6 +61,6 @@ impl VkContext {
     pub(in crate::vulkan) fn end_fullscreen_pass(&self, cmd: vk::CommandBuffer) {
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
-        unsafe { self.device.cmd_end_render_pass(cmd) };
+        unsafe { self.hw.device.cmd_end_render_pass(cmd) };
     }
 }

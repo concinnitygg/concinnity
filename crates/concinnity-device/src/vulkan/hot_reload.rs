@@ -211,7 +211,7 @@ impl VkContext {
         if !self.hot_reload.enabled {
             return Ok(());
         }
-        let device = self.device.clone();
+        let device = self.hw.device.clone();
         let device = &device;
         let hr = true;
 
@@ -354,7 +354,7 @@ impl VkContext {
             super::decal::rebuild_decal_pipeline(
                 device,
                 self.decal.resources.as_ref().expect("decal state is live"),
-                self.msaa_samples != vk::SampleCountFlags::TYPE_1,
+                self.targets.msaa_samples != vk::SampleCountFlags::TYPE_1,
                 hr,
             )
         );
@@ -368,7 +368,7 @@ impl VkContext {
                     .resources
                     .as_ref()
                     .expect("line resources are live"),
-                self.msaa_samples != vk::SampleCountFlags::TYPE_1,
+                self.targets.msaa_samples != vk::SampleCountFlags::TYPE_1,
                 hr,
             )
         );
@@ -381,7 +381,7 @@ impl VkContext {
             let render = super::fog::rebuild_fog_pipeline(
                 device,
                 fog,
-                self.msaa_samples != vk::SampleCountFlags::TYPE_1,
+                self.targets.msaa_samples != vk::SampleCountFlags::TYPE_1,
                 hr,
             )?;
             super::fog::rebuild_fog_froxel_pipeline(device, fog, hr).map(|froxel| (render, froxel))
@@ -579,11 +579,11 @@ impl VkContext {
             .as_ref()
             .ok_or_else(|| "the GPU-driven main pass is not live".to_string())?;
         build_bucket_pipeline(
-            &self.device,
+            &self.hw.device,
             BucketPipelineTargets {
-                render_pass: self.main_render_pass.handle(),
+                render_pass: self.targets.main_render_pass.handle(),
                 layout: layout.handle(),
-                msaa_samples: self.msaa_samples,
+                msaa_samples: self.targets.msaa_samples,
                 swapchain_format: self.swapchain.format,
                 hot_reload: self.hot_reload.enabled,
                 probe_count: self.descriptors.probe_cube_count as usize,

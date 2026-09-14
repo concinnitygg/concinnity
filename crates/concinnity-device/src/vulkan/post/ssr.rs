@@ -101,11 +101,12 @@ impl VkContext {
             aspect,
             inv_view_rot,
             cam_pos,
-            self.prefilter_mip_count as f32,
+            self.scene.prefilter_mip_count as f32,
             self.view.sky_rot,
         );
         let device = self.post_device(frame_idx);
-        let scene = &self.hdr_resolve_images[frame_idx % self.hdr_resolve_images.len()];
+        let scene =
+            &self.targets.hdr_resolve_images[frame_idx % self.targets.hdr_resolve_images.len()];
         if let Err(e) = ssr.pass.encode(
             &device,
             &cmd,
@@ -114,7 +115,7 @@ impl VkContext {
                 scene: scene.view,
                 normal_depth: gbuffer.normal_depth_view(frame_idx),
                 roughness: gbuffer.roughness_view(frame_idx),
-                prefilter: self.env_map.prefilter.view,
+                prefilter: self.scene.env_map.prefilter.view,
             },
             &params,
         ) {

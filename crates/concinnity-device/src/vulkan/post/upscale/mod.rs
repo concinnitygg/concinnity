@@ -710,7 +710,7 @@ impl VkContext {
         // SHADER_READ_ONLY (their render-pass final layout), so those are
         // same-layout execution+memory barriers.
         image_barrier(
-            &self.device,
+            &self.hw.device,
             cmd,
             scene_image,
             vk::ImageAspectFlags::COLOR,
@@ -726,7 +726,7 @@ impl VkContext {
             },
         );
         image_barrier(
-            &self.device,
+            &self.hw.device,
             cmd,
             velocity.image,
             vk::ImageAspectFlags::COLOR,
@@ -742,7 +742,7 @@ impl VkContext {
             },
         );
         image_barrier(
-            &self.device,
+            &self.hw.device,
             cmd,
             depth.image,
             vk::ImageAspectFlags::DEPTH,
@@ -762,7 +762,7 @@ impl VkContext {
         // (skipped on the first frame, where it starts in GENERAL).
         if upscaler.output_layout() != vk::ImageLayout::GENERAL {
             image_barrier(
-                &self.device,
+                &self.hw.device,
                 cmd,
                 upscaler.output_image().image,
                 vk::ImageAspectFlags::COLOR,
@@ -825,7 +825,7 @@ impl VkContext {
         // sample it. (Inputs are left where the upscaler leaves them; the next
         // frame's render passes reset them.)
         image_barrier(
-            &self.device,
+            &self.hw.device,
             cmd,
             upscaler.output_image().image,
             vk::ImageAspectFlags::COLOR,

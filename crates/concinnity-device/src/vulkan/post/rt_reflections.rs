@@ -898,7 +898,7 @@ impl VkContext {
     // (so the graph emits `RtReflections` in the `SsrResolve` slot) and the
     // post-stack scene-image routing. Mirrors `DxContext::rt_reflections_active`.
     pub(in crate::vulkan) fn rt_reflections_active(&self) -> bool {
-        self.rt_reflections.is_some() && self.rt_accel.is_some()
+        self.rt_reflections.is_some() && self.rt.accel.is_some()
     }
 
     // True when the transparent pass should trace per-pixel RT reflections this
@@ -949,14 +949,14 @@ impl VkContext {
         // (Vulkan builds `rt_accel` + `rt_reflections` together, so an RT-enabled
         // scene that was empty at build time has both `None` and RT stays off until
         // a quality re-toggle rebuilds the pass; there is no seed-from-empty here.)
-        let topology_dirty = std::mem::take(&mut self.rt_topology_dirty);
-        if self.rt_accel.is_none() || self.rt_reflections.is_none() {
+        let topology_dirty = std::mem::take(&mut self.rt.topology_dirty);
+        if self.rt.accel.is_none() || self.rt_reflections.is_none() {
             return;
         }
-        let device = self.device.clone();
-        let instance = self.instance.clone();
-        let pd = self.physical_device;
-        let mode = self.rt_dynamic_mode;
+        let device = self.hw.device.clone();
+        let instance = self.hw.instance.clone();
+        let pd = self.hw.physical_device;
+        let mode = self.rt.dynamic_mode;
 
         // Assemble this frame's skinned-geometry inputs while `self` is still
         // fully borrowable: the shared skinned VB/IB handles. `None` when there is
@@ -965,7 +965,7 @@ impl VkContext {
         // they do not overlap the `rt_accel` mutable borrow below; the per-object
         // joint palettes are borrowed straight out of this frame's slot instead of
         // being collected into a per-frame list.
-        let skinned_inputs: Option<(vk::Buffer, vk::Buffer)> = if self.rt_skinned_geometry
+        let skinned_inputs: Option<(vk::Buffer, vk::Buffer)> = if self.rt.skinned_geometry
             && !self.skinned.slots.draw_objects.is_empty()
             && !self.skinned.vertex_buffer.is_null()
             && !self.skinned.index_buffer.is_null()
@@ -985,7 +985,7 @@ impl VkContext {
         // Take `rt_accel` out so its `&mut` borrow does not overlap the shared
         // `&self` reads (`skinned_draw_objects` / `draw_objects`) the inputs need;
         // put it back immediately after.
-        if let Some(mut accel) = self.rt_accel.take() {
+        if let Some(mut accel) = self.rt.accel.take() {
             let joint_buffers = self
                 .skinned
                 .joint_buffers
@@ -1000,7 +1000,7 @@ impl VkContext {
             });
             accel.dynamic_update(
                 super::super::raytrace::RtDeviceCtx {
-                    alloc: &self.alloc,
+                    alloc: &self.hw.alloc,
                     instance: &instance,
                     device: &device,
                     pd,
@@ -1017,10 +1017,11 @@ impl VkContext {
                     skinned,
                 },
             );
-            self.rt_accel = Some(accel);
+            self.rt.accel = Some(accel);
         }
         let accel = self
-            .rt_accel
+            .rt
+            .accel
             .as_ref()
             .expect("RT acceleration structures are live");
         let (geom_buffer, geom_size) = accel.geom_table();
@@ -1078,8 +1079,8 @@ impl VkContext {
             Some(r) => r,
             None => return,
         };
-        let device = &self.device;
-        let extent = self.render_extent;
+        let device = &self.hw.device;
+        let extent = self.targets.render_extent;
 
         // The view->world rotation is the transpose of the view matrix's
         // orthonormal 3x3; `params` fills in the camera-position translation
@@ -1098,7 +1099,7 @@ impl VkContext {
             cam_pos,
             sun_dir: self.fog.sun_dir,
             sun_color: self.fog.sun_color,
-            prefilter_mip_count: self.prefilter_mip_count as f32,
+            prefilter_mip_count: self.scene.prefilter_mip_count as f32,
             sky_rot: self.view.sky_rot,
         });
         rt.params_buffers[frame_idx].write_val(0, &params);

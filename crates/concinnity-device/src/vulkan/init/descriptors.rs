@@ -3,44 +3,37 @@
 //! composite and bloom input sets.
 
 use ash::vk;
-use concinnity_core::gfx::render_types::{self, InstancedCluster};
+use concinnity_core::gfx::render_types::{self, InstancedCluster, LightUniforms, ShadowUniforms};
 use concinnity_core::render::error::RenderResult;
 
-use super::{GlobalBindings, InitGpu};
-use crate::vulkan::owned::{
-    OwnedDescriptorPool, OwnedPipelineLayout, OwnedSampler, OwnedSetLayout,
-};
+use super::gpu_driven::CullPlan;
+use super::{GlobalBindings, InitGpu, PassStates};
+use crate::vulkan::context::{VkDescriptors, VkHardware, VkSceneAssets, VkShadow, VkTargets};
 use crate::vulkan::post::bloom::{MAX_BLOOM_MIPS, alloc_bloom_input_sets, rebind_bloom_input0};
 use crate::vulkan::post::reflection_composite::ReflectionCompositeResources;
 use crate::vulkan::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use crate::vulkan::swapchain::write_composite_set;
-use crate::vulkan::texture::GpuImage;
 
-pub(super) struct DescriptorLayouts {
-    pub(super) max_per_stage_samplers: u32,
-    pub(super) global_update_after_bind: bool,
-    pub(super) probe_cube_count: u32,
-    pub(super) global_set_layout: OwnedSetLayout,
-    pub(super) text_set_layout: OwnedSetLayout,
-    pub(super) shadow_global_set_layout: OwnedSetLayout,
-    pub(super) composite_set_layout: OwnedSetLayout,
-    pub(super) bloom_set_layout: OwnedSetLayout,
-    pub(super) shadow_pipeline_layout: OwnedPipelineLayout,
-    pub(super) text_pipeline_layout: OwnedPipelineLayout,
-    pub(super) composite_pipeline_layout: OwnedPipelineLayout,
-    pub(super) bloom_pipeline_layout: OwnedPipelineLayout,
+// The device's per-stage sampler budget, which both the global set's probe cube
+// array and the bindless texture pool are sized against.
+pub(super) fn max_per_stage_samplers(hw: &VkHardware) -> u32 {
+    // SAFETY: a property query on a live handle; it only reads.
+    unsafe {
+        hw.instance
+            .get_physical_device_properties(hw.physical_device)
+    }
+    .limits
+    .max_per_stage_descriptor_samplers
 }
 
+// Build the global and text set layouts, and the set and pipeline layouts of the
+// shadow, text, composite and bloom pass states.
 pub(super) fn build_layouts(
     gpu: &InitGpu<'_>,
-    update_after_bind: bool,
-) -> RenderResult<DescriptorLayouts> {
-    let InitGpu {
-        instance,
-        device,
-        physical_device,
-        ..
-    } = *gpu;
+    passes: &mut PassStates,
+) -> RenderResult<VkDescriptors> {
+    let hw = gpu.hw;
+    let device = &hw.device;
     // Global set 0 is bound by the geometry path, glass, and the SSR resolve
     // alike, so its sampler cost is paid by all three pipeline layouts.
     // `maxPerStageDescriptorSamplers` is 16 on MoltenVK (Metal's per-stage
@@ -51,21 +44,17 @@ pub(super) fn build_layouts(
     // `maxPerStageDescriptorUpdateAfterBindSamplers` (1024 on MoltenVK) and
     // drops out of the plain per-layout count entirely. Desktop stays on the
     // plain path untouched.
-    let max_per_stage_samplers =
-        // SAFETY: a property query on a live handle; it only reads.
-        unsafe { instance.get_physical_device_properties(physical_device) }
-            .limits
-            .max_per_stage_descriptor_samplers;
+    let max_per_stage_samplers = max_per_stage_samplers(hw);
     let global_constrained =
         crate::vulkan::descriptor_layout::sampler_budget_is_constrained(max_per_stage_samplers);
-    if global_constrained && !update_after_bind {
+    if global_constrained && !hw.update_after_bind {
         tracing::warn!(
             "global descriptor set: per-stage sampler budget ({max_per_stage_samplers}) is \
              too tight for the widest pass and update-after-bind is unavailable; the \
              reflection-probe cube array will be clamped"
         );
     }
-    let global_update_after_bind = global_constrained && update_after_bind;
+    let global_update_after_bind = global_constrained && hw.update_after_bind;
     // Reflection-probe cube-array length this device affords. Sizes the
     // binding below, the descriptor pool, every probe cube write, the GLSL
     // arrays, and the placement list, so they can never disagree.
@@ -79,19 +68,17 @@ pub(super) fn build_layouts(
             concinnity_core::render::uniforms::MAX_PROBES
         );
     }
-    // Global set (set 0): view UBO, light UBO, shadow UBO, shadow array
-    // sampler (binding 3), IBL irradiance cube (4), IBL prefilter cube (5),
-    // SSAO occlusion (binding 6, bound to the live `ssao.ao` image when
-    // SSAO is enabled, otherwise to the 1×1 `ssao_white` fallback so the
-    // main pass's `ambient *= ao` multiplier collapses to a pass-through).
     // Global set (set 0): the geometry path's view / light / shadow UBOs +
-    // shadow-map + IBL cubes + SSAO sampler + ProbeSet UBO (binding 7) + the
-    // reflection-probe cube array (binding 8). Binding table + lock-down test
-    // live in `descriptor_layout.rs`. Built inline (not via the count-1
+    // shadow-map + IBL cubes + SSAO sampler (binding 6, bound to the pooled
+    // `ao_output` when SSAO is enabled, otherwise to the 1x1 `ssao_white`
+    // fallback so the main pass's `ambient *= ao` multiplier collapses to a
+    // pass-through) + ProbeSet UBO (binding 7) + the reflection-probe cube
+    // array (binding 8). Binding table + lock-down test live in
+    // `descriptor_layout.rs`. Built inline (not via the count-1
     // `create_descriptor_set_layout` helper) because binding 8 is a
     // `probe_cube_count` cube array; the count-1 bindings come from the locked
     // `global_set()` table, then the array binding is appended (the same shape
-    // as the bindless texture pool's array binding below).
+    // as the bindless texture pool's array binding).
     let global_set_layout = {
         let mut bindings: Vec<vk::DescriptorSetLayoutBinding> =
             crate::vulkan::descriptor_layout::global_set()
@@ -286,89 +273,63 @@ pub(super) fn build_layouts(
                 .push_constant_ranges(std::slice::from_ref(&post_pc_range)),
         )
         .map_err(|e| format!("bloom pipeline layout: {e}"))?;
-    Ok(DescriptorLayouts {
-        max_per_stage_samplers,
+    passes.shadow.global_set_layout = Some(shadow_global_set_layout);
+    passes.shadow.pipeline_layout = Some(shadow_pipeline_layout);
+    passes.text.pipeline_layout = text_pipeline_layout;
+    passes.composite.set_layout = composite_set_layout;
+    passes.composite.pipeline_layout = composite_pipeline_layout;
+    passes.bloom.set_layout = bloom_set_layout;
+    passes.bloom.pipeline_layout = bloom_pipeline_layout;
+    Ok(VkDescriptors {
+        global_set_layout,
         global_update_after_bind,
         probe_cube_count,
-        global_set_layout,
         text_set_layout,
-        shadow_global_set_layout,
-        composite_set_layout,
-        bloom_set_layout,
-        shadow_pipeline_layout,
-        text_pipeline_layout,
-        composite_pipeline_layout,
-        bloom_pipeline_layout,
+        ..Default::default()
     })
 }
 
 pub(super) struct SetPoolInputs<'a> {
     pub(super) instanced_clusters: &'a [InstancedCluster],
-    pub(super) gpu_text_atlases: &'a [GpuImage],
-    pub(super) bindless_active: bool,
+    pub(super) text_atlas_count: usize,
+    pub(super) plan: &'a CullPlan,
     pub(super) has_gbuffer: bool,
-    pub(super) has_shadow_pipeline: bool,
-    pub(super) bindless_pool_size: usize,
-    pub(super) bindless_uab: bool,
-    pub(super) probe_cube_count: u32,
-    pub(super) global_update_after_bind: bool,
-    pub(super) global_set_layout: &'a OwnedSetLayout,
-    pub(super) shadow_global_set_layout: &'a OwnedSetLayout,
 }
 
-pub(super) struct DescriptorSets {
-    pub(super) descriptor_pool: OwnedDescriptorPool,
-    pub(super) gbuffer_active: bool,
-    pub(super) global_sets: Vec<vk::DescriptorSet>,
-    pub(super) shadow_global_sets: Vec<vk::DescriptorSet>,
-}
-
+// Create the shared descriptor pool, then allocate and write the per-frame
+// global sets.
 pub(super) fn build_sets(
     gpu: &InitGpu<'_>,
+    descriptors: &mut VkDescriptors,
     pool: SetPoolInputs<'_>,
     bindings: &GlobalBindings<'_>,
-) -> RenderResult<DescriptorSets> {
-    let InitGpu { device, frames, .. } = *gpu;
+) -> RenderResult<()> {
+    let InitGpu { hw, frames, .. } = *gpu;
+    let device = &hw.device;
     let SetPoolInputs {
         instanced_clusters,
-        gpu_text_atlases,
-        bindless_active,
+        text_atlas_count,
+        plan,
         has_gbuffer,
-        has_shadow_pipeline,
-        bindless_pool_size,
-        bindless_uab,
-        probe_cube_count,
-        global_update_after_bind,
-        global_set_layout,
-        shadow_global_set_layout,
     } = pool;
     let GlobalBindings {
-        view_ubo_buffers,
-        view_ubo_size,
-        probe_set_ubo_buffers,
-        probe_set_ubo_size,
-        light_ubo_buffers,
-        light_ubo_size,
-        shadow_ubos,
-        shadow_ubo_size,
-        local_light_buffer,
-        local_light_buffer_size,
+        uniforms,
         light_cull,
-        shadow_map,
-        shadow_sampler,
+        shadow,
         spot_shadow,
-        area_light_buffer,
-        ltc_matrix_image,
-        ltc_magnitude_image,
-        ltc_sampler,
-        env_map,
-        cube_sampler,
-        transient_pool,
-        ssao_white,
-        linear_sampler,
+        area_light,
+        scene,
+        targets,
     } = *bindings;
+    let CullPlan {
+        bindless_active,
+        bindless_pool_size,
+        bindless_uab,
+        ..
+    } = *plan;
+    let probe_cube_count = descriptors.probe_cube_count;
     let n_cluster = instanced_clusters.len() as u32;
-    let n_atlas = gpu_text_atlases.len().max(1) as u32;
+    let n_atlas = text_atlas_count.max(1) as u32;
     let n_frames = frames as u32;
     let bindless_sets_count = if bindless_active { n_frames } else { 0 };
     // GPU-driven G-buffer pre-pass: one set 0 per frame (1 UBO + 2 SSBOs: the
@@ -411,7 +372,7 @@ pub(super) fn build_sets(
     // indirect-command buffer). Allocated only when the bindless cull path is
     // active AND shadows are enabled. The depth-only shadow draw reuses the
     // shadow-global + bindless sets, so it adds no sets here.
-    let shadow_cull_set_count = if bindless_active && has_shadow_pipeline {
+    let shadow_cull_set_count = if bindless_active && shadow.pipeline.is_some() {
         n_frames * render_types::NUM_SHADOW_CASCADES as u32
     } else {
         0
@@ -463,88 +424,100 @@ pub(super) fn build_sets(
     let mut pool_info = vk::DescriptorPoolCreateInfo::default()
         .pool_sizes(&pool_sizes)
         .max_sets(total_sets);
-    if bindless_uab || global_update_after_bind {
+    if bindless_uab || descriptors.global_update_after_bind {
         pool_info = pool_info.flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND);
     }
-    let descriptor_pool = device
+    descriptors.descriptor_pool = device
         .create_descriptor_pool(&pool_info)
         .map_err(|e| format!("descriptor pool: {e}"))?;
 
     // Global sets (one per frame).
-    let global_layouts: Vec<_> = (0..frames).map(|_| global_set_layout.handle()).collect();
-    let global_sets = alloc_descriptor_sets(device, descriptor_pool.handle(), &global_layouts)?;
+    let global_layouts: Vec<_> = (0..frames)
+        .map(|_| descriptors.global_set_layout.handle())
+        .collect();
+    descriptors.global_sets = alloc_descriptor_sets(
+        device,
+        descriptors.descriptor_pool.handle(),
+        &global_layouts,
+    )?;
+    let view_ubo_size = std::mem::size_of::<crate::vulkan::draw::ViewUniforms>() as u64;
+    let light_ubo_size = std::mem::size_of::<LightUniforms>() as u64;
+    let shadow_ubo_size = std::mem::size_of::<ShadowUniforms>() as u64;
+    let probe_set_ubo_size =
+        std::mem::size_of::<concinnity_core::render::uniforms::ProbeSet>() as u64;
     // Update global sets.
-    for (i, &set) in global_sets.iter().enumerate() {
+    for (i, &set) in descriptors.global_sets.iter().enumerate() {
         let view_info = vk::DescriptorBufferInfo::default()
-            .buffer(view_ubo_buffers[i].buffer())
+            .buffer(uniforms.view_ubo_buffers[i].buffer())
             .offset(0)
             .range(view_ubo_size);
         let light_info = vk::DescriptorBufferInfo::default()
-            .buffer(light_ubo_buffers[i].buffer())
+            .buffer(uniforms.light_ubo_buffers[i].buffer())
             .offset(0)
             .range(light_ubo_size);
         let shadow_info = vk::DescriptorBufferInfo::default()
-            .buffer(shadow_ubos[i].buffer())
+            .buffer(shadow.ubos[i].buffer())
             .offset(0)
             .range(shadow_ubo_size);
         // Layout must match the post-cascade transition in draw.rs, which
         // flips the shadow array to SHADER_READ_ONLY_OPTIMAL.
         let shadow_img_info = vk::DescriptorImageInfo::default()
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(shadow_map.view)
-            .sampler(shadow_sampler.handle());
+            .image_view(shadow.map.view)
+            .sampler(shadow.sampler.handle());
         // Same resting layout as the cascade array: the SpotShadow producer
         // barrier opens it for the depth loop and Main returns it here.
         let spot_shadow_img_info = vk::DescriptorImageInfo::default()
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             .image_view(spot_shadow.map.view)
-            .sampler(shadow_sampler.handle());
+            .sampler(shadow.sampler.handle());
         let spot_shadow_data_info = vk::DescriptorBufferInfo::default()
             .buffer(spot_shadow.data_buffer.buffer())
             .offset(0)
             .range(vk::WHOLE_SIZE);
         let area_light_info = vk::DescriptorBufferInfo::default()
-            .buffer(area_light_buffer.buffer())
+            .buffer(area_light.buffer.buffer())
             .offset(0)
             .range(vk::WHOLE_SIZE);
         let ltc_matrix_info = vk::DescriptorImageInfo::default()
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(ltc_matrix_image.view)
-            .sampler(ltc_sampler.handle());
+            .image_view(area_light.ltc_matrix.view)
+            .sampler(area_light.sampler.handle());
         let ltc_magnitude_info = vk::DescriptorImageInfo::default()
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(ltc_magnitude_image.view)
-            .sampler(ltc_sampler.handle());
+            .image_view(area_light.ltc_magnitude.view)
+            .sampler(area_light.sampler.handle());
         let irr_img_info = vk::DescriptorImageInfo::default()
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(env_map.irradiance.view)
-            .sampler(cube_sampler.handle());
+            .image_view(scene.env_map.irradiance.view)
+            .sampler(scene.cube_sampler.handle());
         let pre_img_info = vk::DescriptorImageInfo::default()
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(env_map.prefilter.view)
-            .sampler(cube_sampler.handle());
+            .image_view(scene.env_map.prefilter.view)
+            .sampler(scene.cube_sampler.handle());
         // SSAO occlusion: this frame's blurred occlusion when SSAO is on
         // (per frame in flight, pooled), or the 1×1 white fallback when it
         // is off. Either way the descriptor is bound so the main pass's
         // `ambient *= ao` always samples a valid texture.
-        let ssao_view = transient_pool
+        let ssao_view = targets
+            .transient_pool
             .view_for("ao_output", i)
-            .unwrap_or(ssao_white.view);
+            .unwrap_or(scene.ssao_white.view);
         let ssao_img_info = vk::DescriptorImageInfo::default()
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             .image_view(ssao_view)
-            .sampler(linear_sampler.handle());
+            .sampler(scene.linear_sampler.handle());
         // ProbeSet UBO (binding 7): this frame's reflection-probe set.
         let probe_set_info = vk::DescriptorBufferInfo::default()
-            .buffer(probe_set_ubo_buffers[i].buffer())
+            .buffer(uniforms.probe_set_ubo_buffers[i].buffer())
             .offset(0)
             .range(probe_set_ubo_size);
         // Local-light SSBO (binding 9): the single static buffer, bound into
         // every frame's global set.
         let local_light_info = vk::DescriptorBufferInfo::default()
-            .buffer(local_light_buffer.buffer())
+            .buffer(uniforms.local_light_buffer.buffer())
             .offset(0)
-            .range(local_light_buffer_size);
+            .range(uniforms.local_light_size);
         // Clustered lighting: this frame's live ClusterParams (binding 10)
         // and the shared per-cluster light lists (binding 11).
         let cluster_params_info = vk::DescriptorBufferInfo::default()
@@ -565,8 +538,8 @@ pub(super) fn build_sets(
             .map(|_| {
                 vk::DescriptorImageInfo::default()
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                    .image_view(env_map.prefilter.view)
-                    .sampler(cube_sampler.handle())
+                    .image_view(scene.env_map.prefilter.view)
+                    .sampler(scene.cube_sampler.handle())
             })
             .collect();
         let writes = [
@@ -668,16 +641,32 @@ pub(super) fn build_sets(
         // every set and resource it names belongs to this device.
         unsafe { device.update_descriptor_sets(&writes, &[]) };
     }
+    Ok(())
+}
 
-    // Shadow global sets (one per frame).
-    let shadow_global_layouts: Vec<_> = (0..frames)
-        .map(|_| shadow_global_set_layout.handle())
-        .collect();
-    let shadow_global_sets =
-        alloc_descriptor_sets(device, descriptor_pool.handle(), &shadow_global_layouts)?;
-    for (i, &set) in shadow_global_sets.iter().enumerate() {
+// Allocate and write the per-frame shadow global sets from the shared pool.
+pub(super) fn build_shadow_global_sets(
+    gpu: &InitGpu<'_>,
+    descriptors: &VkDescriptors,
+    shadow: &mut VkShadow,
+) -> RenderResult<()> {
+    let InitGpu { hw, frames, .. } = *gpu;
+    let device = &hw.device;
+    let layout = shadow
+        .global_set_layout
+        .as_ref()
+        .expect("the layout stage builds the shadow global set layout")
+        .handle();
+    let shadow_global_layouts: Vec<_> = (0..frames).map(|_| layout).collect();
+    shadow.global_sets = alloc_descriptor_sets(
+        device,
+        descriptors.descriptor_pool.handle(),
+        &shadow_global_layouts,
+    )?;
+    let shadow_ubo_size = std::mem::size_of::<ShadowUniforms>() as u64;
+    for (i, &set) in shadow.global_sets.iter().enumerate() {
         let su_info = vk::DescriptorBufferInfo::default()
-            .buffer(shadow_ubos[i].buffer())
+            .buffer(shadow.ubos[i].buffer())
             .offset(0)
             .range(shadow_ubo_size);
         let write = vk::WriteDescriptorSet::default()
@@ -689,68 +678,47 @@ pub(super) fn build_sets(
         // every set and resource it names belongs to this device.
         unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
     }
-    Ok(DescriptorSets {
-        descriptor_pool,
-        gbuffer_active,
-        global_sets,
-        shadow_global_sets,
-    })
+    Ok(())
 }
 
-pub(super) struct PostSetInputs<'a> {
-    pub(super) gpu_text_atlases: &'a [GpuImage],
-    pub(super) text_set_layout: &'a OwnedSetLayout,
-    pub(super) text_sampler: &'a OwnedSampler,
-    pub(super) descriptor_pool: &'a OwnedDescriptorPool,
-    pub(super) composite_set_layout: &'a OwnedSetLayout,
-    pub(super) composite_sampler: &'a OwnedSampler,
-    pub(super) composite_opt: Option<&'a ReflectionCompositeResources>,
-    pub(super) hdr_resolve_images: &'a [GpuImage],
-    pub(super) bloom_mips: &'a [Vec<GpuImage>],
-    pub(super) bloom_set_layout: &'a OwnedSetLayout,
-    pub(super) color_lut: &'a GpuImage,
-}
-
-pub(super) struct PostSets {
-    pub(super) text_atlas_sets: Vec<vk::DescriptorSet>,
-    pub(super) composite_sets: Vec<vk::DescriptorSet>,
-    pub(super) bloom_descriptor_pool: OwnedDescriptorPool,
-    pub(super) bloom_input_sets: Vec<Vec<vk::DescriptorSet>>,
-}
-
+// Allocate and write the text atlas sets, the composite sets, and the bloom
+// pool with its input sets.
 pub(super) fn build_post_sets(
     gpu: &InitGpu<'_>,
-    inputs: PostSetInputs<'_>,
-) -> RenderResult<PostSets> {
-    let InitGpu { device, frames, .. } = *gpu;
+    descriptors: &mut VkDescriptors,
+    passes: &mut PassStates,
+    targets: &VkTargets,
+    scene: &VkSceneAssets,
+    reflection_composite: Option<&ReflectionCompositeResources>,
+) -> RenderResult<()> {
+    let InitGpu { hw, frames, .. } = *gpu;
+    let device = &hw.device;
     let n_frames = frames as u32;
-    let PostSetInputs {
-        gpu_text_atlases,
-        text_set_layout,
-        text_sampler,
-        descriptor_pool,
-        composite_set_layout,
-        composite_sampler,
-        composite_opt,
-        hdr_resolve_images,
-        bloom_mips,
-        bloom_set_layout,
-        color_lut,
-    } = inputs;
+    let PassStates {
+        text,
+        composite,
+        bloom,
+        ..
+    } = passes;
     // Text atlas sets.
-    let text_atlas_layouts: Vec<_> = gpu_text_atlases
+    let text_atlas_layouts: Vec<_> = text
+        .atlas_textures
         .iter()
-        .map(|_| text_set_layout.handle())
+        .map(|_| descriptors.text_set_layout.handle())
         .collect();
-    let text_atlas_sets = if text_atlas_layouts.is_empty() {
+    descriptors.text_atlas_sets = if text_atlas_layouts.is_empty() {
         vec![]
     } else {
-        let sets = alloc_descriptor_sets(device, descriptor_pool.handle(), &text_atlas_layouts)?;
-        for (&set, atlas) in sets.iter().zip(gpu_text_atlases.iter()) {
+        let sets = alloc_descriptor_sets(
+            device,
+            descriptors.descriptor_pool.handle(),
+            &text_atlas_layouts,
+        )?;
+        for (&set, atlas) in sets.iter().zip(text.atlas_textures.iter()) {
             let img_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(atlas.view)
-                .sampler(text_sampler.handle());
+                .sampler(text.sampler.handle());
             let write = vk::WriteDescriptorSet::default()
                 .dst_set(set)
                 .dst_binding(0)
@@ -768,25 +736,27 @@ pub(super) fn build_post_sets(
     // resolve), binding 1 = that slot's bloom mip 0, binding 2 = the
     // shared 3D color LUT. The TAA wiring later overrides binding 0 to
     // the TAA output when TAA is on.
-    let composite_layouts: Vec<_> = (0..frames).map(|_| composite_set_layout.handle()).collect();
-    let composite_sets =
-        alloc_descriptor_sets(device, descriptor_pool.handle(), &composite_layouts)?;
-    for (i, &set) in composite_sets.iter().enumerate() {
+    let composite_layouts: Vec<_> = (0..frames).map(|_| composite.set_layout.handle()).collect();
+    composite.sets = alloc_descriptor_sets(
+        device,
+        descriptors.descriptor_pool.handle(),
+        &composite_layouts,
+    )?;
+    for (i, &set) in composite.sets.iter().enumerate() {
         // Scene image: the reflection composite output (the SSR / RT reflection
         // blended over the scene) when a reflection path is active, else the raw
         // HDR resolve (a SSGI-only build composited its bounce into the latter
         // upstream). The TAA / upscale wiring overrides this later.
-        let scene_view = composite_opt
-            .as_ref()
+        let scene_view = reflection_composite
             .map(|c| c.output.view)
-            .unwrap_or(hdr_resolve_images[i].view);
+            .unwrap_or(targets.hdr_resolve_images[i].view);
         write_composite_set(
             device,
             set,
             scene_view,
-            bloom_mips[i][0].view,
-            color_lut.view,
-            composite_sampler.handle(),
+            bloom.mips[i][0].view,
+            scene.color_lut.view,
+            composite.sampler.handle(),
         );
     }
 
@@ -797,35 +767,30 @@ pub(super) fn build_post_sets(
     let bloom_pool_size = vk::DescriptorPoolSize::default()
         .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
         .descriptor_count(bloom_pool_capacity);
-    let bloom_descriptor_pool = device
+    bloom.descriptor_pool = device
         .create_descriptor_pool(
             &vk::DescriptorPoolCreateInfo::default()
                 .pool_sizes(std::slice::from_ref(&bloom_pool_size))
                 .max_sets(bloom_pool_capacity),
         )
         .map_err(|e| format!("bloom descriptor pool: {e}"))?;
-    let bloom_input_sets = alloc_bloom_input_sets(
+    bloom.input_sets = alloc_bloom_input_sets(
         device,
-        bloom_descriptor_pool.handle(),
-        bloom_set_layout.handle(),
-        composite_sampler.handle(),
-        hdr_resolve_images,
-        bloom_mips,
+        bloom.descriptor_pool.handle(),
+        bloom.set_layout.handle(),
+        composite.sampler.handle(),
+        &targets.hdr_resolve_images,
+        &bloom.mips,
     )?;
     // The reflection composite replaces the bloom prefilter's scene input
     // (input 0) with its output, the same scene image the composite pass
     // samples when a reflection path is active and TAA is off (a SSGI-only
     // build leaves the prefilter on the raw HDR resolve). One shared image, so
     // every frame's prefilter input 0 points at it.
-    if let Some(view) = composite_opt.map(|c| c.output.view) {
-        for frame_sets in &bloom_input_sets {
-            rebind_bloom_input0(device, frame_sets[0], view, composite_sampler.handle());
+    if let Some(view) = reflection_composite.map(|c| c.output.view) {
+        for frame_sets in &bloom.input_sets {
+            rebind_bloom_input0(device, frame_sets[0], view, composite.sampler.handle());
         }
     }
-    Ok(PostSets {
-        text_atlas_sets,
-        composite_sets,
-        bloom_descriptor_pool,
-        bloom_input_sets,
-    })
+    Ok(())
 }

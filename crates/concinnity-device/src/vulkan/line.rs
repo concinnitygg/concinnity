@@ -556,24 +556,32 @@ impl VkContext {
             return;
         }
         if self.lines.resources.is_none() {
-            let depth_views: Vec<vk::ImageView> =
-                self.depth_images.iter().map(|img| img.view).collect();
-            let hdr_resolve_views: Vec<vk::ImageView> =
-                self.hdr_resolve_images.iter().map(|img| img.view).collect();
+            let depth_views: Vec<vk::ImageView> = self
+                .targets
+                .depth_images
+                .iter()
+                .map(|img| img.view)
+                .collect();
+            let hdr_resolve_views: Vec<vk::ImageView> = self
+                .targets
+                .hdr_resolve_images
+                .iter()
+                .map(|img| img.view)
+                .collect();
             let built = LineResources::new(
                 LineDeviceContext {
-                    alloc: &self.alloc,
-                    device: &self.device,
+                    alloc: &self.hw.alloc,
+                    device: &self.hw.device,
                 },
                 LinePassTargets {
                     hdr_format: super::context::HDR_FORMAT,
                     hdr_resolve_views: &hdr_resolve_views,
                     depth_views: &depth_views,
-                    sampler: self.linear_sampler.handle(),
-                    extent: self.render_extent,
+                    sampler: self.scene.linear_sampler.handle(),
+                    extent: self.targets.render_extent,
                 },
                 self.frames_in_flight,
-                self.msaa_samples != vk::SampleCountFlags::TYPE_1,
+                self.targets.msaa_samples != vk::SampleCountFlags::TYPE_1,
                 self.hot_reload.enabled,
             );
             match built {
@@ -607,7 +615,7 @@ impl VkContext {
             return Ok(());
         }
         let capacity = grow_capacity(slot.capacity, needed);
-        *slot = new_vertex_slot(&self.alloc, capacity)?;
+        *slot = new_vertex_slot(&self.hw.alloc, capacity)?;
         Ok(())
     }
 
@@ -636,8 +644,8 @@ impl VkContext {
             return;
         }
 
-        let device = &self.device;
-        let extent = self.render_extent;
+        let device = &self.hw.device;
+        let extent = self.targets.render_extent;
 
         let view_uni = LineView {
             vp,

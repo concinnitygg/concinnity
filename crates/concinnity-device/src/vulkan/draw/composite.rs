@@ -38,7 +38,7 @@ impl fullscreen::CompositeEncoder for VkContext {
     type Args = VkCompositeArgs;
 
     fn begin_composite(&self, cmd: &Self::Rec, args: &Self::Args) {
-        let device = &self.device;
+        let device = &self.hw.device;
         let extent = self.swapchain.extent;
         let composite_begin = vk::RenderPassBeginInfo::default()
             .render_pass(self.composite.render_pass.handle())
@@ -65,7 +65,7 @@ impl fullscreen::CompositeEncoder for VkContext {
     }
 
     fn composite_draw(&self, cmd: &Self::Rec, args: &Self::Args) {
-        let device = &self.device;
+        let device = &self.hw.device;
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
@@ -133,12 +133,12 @@ impl fullscreen::CompositeEncoder for VkContext {
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
-            self.device.cmd_bind_pipeline(
+            self.hw.device.cmd_bind_pipeline(
                 *cmd,
                 vk::PipelineBindPoint::GRAPHICS,
                 text_pipeline.handle(),
             );
-            self.device.cmd_push_constants(
+            self.hw.device.cmd_push_constants(
                 *cmd,
                 self.text.pipeline_layout.handle(),
                 vk::ShaderStageFlags::VERTEX,
@@ -165,7 +165,7 @@ impl fullscreen::CompositeEncoder for VkContext {
         if call.vertices.is_empty() || self.descriptors.text_atlas_sets.is_empty() {
             return Ok(());
         }
-        let device = &self.device;
+        let device = &self.hw.device;
         let extent = self.swapchain.extent;
         // The text vertices are in overlay units (mapped to NDC by the shader's
         // divide by win_width/height); the scissor is in attachment pixels, so a
@@ -234,7 +234,7 @@ impl fullscreen::CompositeEncoder for VkContext {
     fn end_composite(&self, cmd: &Self::Rec, _args: &Self::Args) {
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
-        unsafe { self.device.cmd_end_render_pass(*cmd) };
+        unsafe { self.hw.device.cmd_end_render_pass(*cmd) };
     }
 }
 
@@ -257,7 +257,7 @@ impl VkContext {
         let text_bytes = fullscreen::text_upload_bytes(text_calls, UPLOAD_ALIGN);
         self.text
             .upload
-            .reserve(&self.alloc, frame_idx, text_bytes)?;
+            .reserve(&self.hw.alloc, frame_idx, text_bytes)?;
 
         let args = VkCompositeArgs {
             image_index: image_index as usize,

@@ -33,7 +33,7 @@ impl VkContext {
         let skinned_shadow_vs = compile_skinned_shadow_shader(self.hot_reload.enabled)?;
 
         let joint_set_layout = create_descriptor_set_layout(
-            &self.device,
+            &self.hw.device,
             &[(
                 0,
                 vk::DescriptorType::STORAGE_BUFFER,
@@ -52,6 +52,7 @@ impl VkContext {
                     .size(80);
                 let shadow_set_layouts = [shadow_global.handle(), joint_set_layout.handle()];
                 let layout = self
+                    .hw
                     .device
                     .create_pipeline_layout(
                         &vk::PipelineLayoutCreateInfo::default()
@@ -60,7 +61,7 @@ impl VkContext {
                     )
                     .map_err(|e| format!("skinned shadow pipeline layout: {e}"))?;
                 let pipeline = create_skinned_shadow_pipeline(
-                    &self.device,
+                    &self.hw.device,
                     self.shadow.render_pass.handle(),
                     layout.handle(),
                     &skinned_shadow_vs,
@@ -82,14 +83,14 @@ impl VkContext {
         // the device is RT-capable (not only when RT is on at launch) so a later
         // live toggle finds the skinned IB already usable, mirroring how the
         // static VB/IB gate their RT flags at init. Inert when RT is never built.
-        let skinned_ib_rt = if self.rt_capable {
+        let skinned_ib_rt = if self.hw.rt_capable {
             vk::BufferUsageFlags::STORAGE_BUFFER
                 | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
                 | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
         } else {
             vk::BufferUsageFlags::empty()
         };
-        let skinned_vbuf = self.alloc.create_buffer(
+        let skinned_vbuf = self.hw.alloc.create_buffer(
             vtx_bytes.len() as u64,
             vk::BufferUsageFlags::VERTEX_BUFFER
                 | vk::BufferUsageFlags::TRANSFER_DST
@@ -98,7 +99,7 @@ impl VkContext {
         )?;
         // Never zero-length: the ray-traced hit path binds this as a storage
         // buffer of index words and its descriptor takes the whole size.
-        let skinned_ibuf = self.alloc.create_buffer(
+        let skinned_ibuf = self.hw.alloc.create_buffer(
             rt_geom::skinned_index_buffer_bytes(indices.len()) as u64,
             vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | skinned_ib_rt,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
@@ -110,6 +111,7 @@ impl VkContext {
             .ty(vk::DescriptorType::STORAGE_BUFFER)
             .descriptor_count((n * frames) as u32)];
         let pool = self
+            .hw
             .device
             .create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
@@ -128,7 +130,7 @@ impl VkContext {
         for _ in 0..frames {
             let mut bufs: Vec<super::super::allocator::PooledBuffer> = Vec::with_capacity(n);
             for _ in 0..n {
-                let buf = self.alloc.create_buffer(
+                let buf = self.hw.alloc.create_buffer(
                     joint_buf_bytes,
                     vk::BufferUsageFlags::STORAGE_BUFFER,
                     vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
@@ -137,7 +139,7 @@ impl VkContext {
                 bufs.push(buf);
             }
             let layouts: Vec<_> = (0..n).map(|_| joint_set_layout.handle()).collect();
-            let sets = alloc_descriptor_sets(&self.device, pool.handle(), &layouts)?;
+            let sets = alloc_descriptor_sets(&self.hw.device, pool.handle(), &layouts)?;
             for (i, &set) in sets.iter().enumerate() {
                 let info = vk::DescriptorBufferInfo::default()
                     .buffer(bufs[i].buffer())
@@ -151,7 +153,8 @@ impl VkContext {
                 // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
                 // every set and resource it names belongs to this device.
                 unsafe {
-                    self.device
+                    self.hw
+                        .device
                         .update_descriptor_sets(std::slice::from_ref(&write), &[])
                 };
             }
@@ -337,7 +340,7 @@ impl VkContext {
         use std::collections::HashMap;
 
         let n = self.skinned.slots.draw_objects.len();
-        let device = self.device.clone();
+        let device = self.hw.device.clone();
         let frames = self.frames_in_flight.max(1);
 
         let mut delta_unique: Vec<super::super::allocator::PooledBuffer> = Vec::new();
@@ -354,7 +357,7 @@ impl VkContext {
                 None => {
                     let words = data.packed_words();
                     let bytes: &[u8] = bytemuck::cast_slice(&words);
-                    let pooled = self.alloc.create_buffer(
+                    let pooled = self.hw.alloc.create_buffer(
                         bytes.len().max(4) as u64,
                         vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
                         vk::MemoryPropertyFlags::DEVICE_LOCAL,
@@ -381,7 +384,7 @@ impl VkContext {
                 let mut bufs = Vec::with_capacity(n);
                 for &count in &target_counts {
                     let size = (count.max(1) as u64) * std::mem::size_of::<f32>() as u64;
-                    let buf = self.alloc.create_buffer(
+                    let buf = self.hw.alloc.create_buffer(
                         size,
                         vk::BufferUsageFlags::STORAGE_BUFFER,
                         vk::MemoryPropertyFlags::HOST_VISIBLE

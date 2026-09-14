@@ -365,7 +365,7 @@ impl fullscreen::BloomEncoder for VkContext {
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
-            self.device.cmd_push_constants(
+            self.hw.device.cmd_push_constants(
                 *cmd,
                 self.bloom.pipeline_layout.handle(),
                 vk::ShaderStageFlags::FRAGMENT,
@@ -451,7 +451,7 @@ impl VkContext {
         pipeline: &OwnedPipeline,
         input_set: vk::DescriptorSet,
     ) {
-        let device = &self.device;
+        let device = &self.hw.device;
         let rp_begin = vk::RenderPassBeginInfo::default()
             .render_pass(render_pass)
             .framebuffer(framebuffer)

@@ -907,8 +907,8 @@ impl VkContext {
             jittered_vp,
             cur_vp,
         } = view;
-        let device = &self.device;
-        let extent = self.render_extent;
+        let device = &self.hw.device;
+        let extent = self.targets.render_extent;
 
         // Upload this frame's view UBO. When velocity is inactive the previous
         // VP equals the current one, so instanced + sky motion is zero.
@@ -1018,7 +1018,7 @@ impl VkContext {
             true => 0..frames,
             false => frame_idx..frame_idx + 1,
         };
-        let device = &self.device;
+        let device = &self.hw.device;
         let groups = records.div_ceil(MODEL_HISTORY_THREADGROUP) as u32;
         for slot in slots {
             let Some(&set) = history.sets.get(frame_idx * frames + slot) else {
@@ -1094,7 +1094,7 @@ impl VkContext {
         // SAFETY: the caller guarantees `cmd` is recording, and the barrier and the buffer it
         // names are live for the call and belong to this device.
         unsafe {
-            self.device.cmd_pipeline_barrier(
+            self.hw.device.cmd_pipeline_barrier(
                 cmd,
                 src_stage,
                 dst_stage,
@@ -1122,7 +1122,7 @@ impl VkContext {
         frame_idx: usize,
         velocity_active: bool,
     ) {
-        let device = &self.device;
+        let device = &self.hw.device;
         let (Some(pipeline), Some(layout)) = (
             self.cull.gbuffer_bindless_pipeline.as_ref(),
             self.cull.gbuffer_bindless_pipeline_layout.as_ref(),

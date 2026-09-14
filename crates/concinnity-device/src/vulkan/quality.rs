@@ -51,8 +51,8 @@ impl VkContext {
         // device (or XeSS) did not enable the ray-query extensions at creation,
         // so it cannot build the acceleration structure at runtime -- the toggle
         // no-ops with a warning and RT stays whatever it launched as.
-        let desired_rt = q.rt_reflections.is_some() && self.rt_capable;
-        if q.rt_reflections.is_some() && !self.rt_capable {
+        let desired_rt = q.rt_reflections.is_some() && self.hw.rt_capable;
+        if q.rt_reflections.is_some() && !self.hw.rt_capable {
             tracing::warn!(
                 "ray-traced reflections requested but the device is not RT-capable \
                  (no ray-query extensions / XeSS active); keeping SSR"
@@ -76,8 +76,12 @@ impl VkContext {
         let ssr_needed = desired_ssr || desired_ssgi || desired_rt;
         let gbuffer_needed = ssr_needed || desired_ssao || desired_taa;
 
-        let hdr_views: Vec<vk::ImageView> =
-            self.hdr_resolve_images.iter().map(|i| i.view).collect();
+        let hdr_views: Vec<vk::ImageView> = self
+            .targets
+            .hdr_resolve_images
+            .iter()
+            .map(|i| i.view)
+            .collect();
 
         // Unified G-buffer pre-pass (shared dependency): build it before any
         // consumer that samples it. Kept alive once built (a later toggle-off of
@@ -88,36 +92,39 @@ impl VkContext {
             // them before the pre-pass framebuffers can reference them. Rebuild
             // with the G-buffer gate on first; the `rebuild_swapchain` later in
             // this call rebuilds the pool once more and re-points every reader.
-            self.transient_pool.rebuild(
+            self.targets.transient_pool.rebuild(
                 &super::transient_pool::TransientPoolGpu {
-                    instance: &self.instance,
-                    device: &self.device,
-                    physical_device: self.physical_device,
+                    instance: &self.hw.instance,
+                    device: &self.hw.device,
+                    physical_device: self.hw.physical_device,
                     command_pool: self.commands.command_pool,
-                    queue: self.graphics_queue,
+                    queue: self.hw.graphics_queue,
                 },
                 self.frames_in_flight,
                 &super::transient_pool::transient_slots(
                     self.ssao.is_some(),
                     self.post_process.bloom_intensity > 0.0,
                     true,
-                    self.render_extent,
+                    self.targets.render_extent,
                     self.swapchain.extent,
                 )?,
             )?;
-            let pooled = self.transient_pool.gbuffer_pooled(self.frames_in_flight);
+            let pooled = self
+                .targets
+                .transient_pool
+                .gbuffer_pooled(self.frames_in_flight);
             let gb = super::post::gbuffer::GbufferResources::new(
                 super::post::gbuffer::GbufferDeviceCtx {
-                    alloc: &self.alloc,
-                    device: &self.device,
+                    alloc: &self.hw.alloc,
+                    device: &self.hw.device,
                 },
                 super::post::gbuffer::GbufferQueueCtx {
                     command_pool: self.commands.command_pool,
-                    queue: self.graphics_queue,
+                    queue: self.hw.graphics_queue,
                 },
                 super::post::gbuffer::GbufferExtent {
-                    width: self.render_extent.width,
-                    height: self.render_extent.height,
+                    width: self.targets.render_extent.width,
+                    height: self.targets.render_extent.height,
                     frames: self.frames_in_flight,
                 },
                 &pooled,
@@ -130,7 +137,7 @@ impl VkContext {
             let taa = super::post::taa::TaaResources::new(
                 &self.post_device(0),
                 self.frames_in_flight,
-                self.render_extent,
+                self.targets.render_extent,
             )?;
             self.taa = Some(taa);
         } else if !desired_taa && self.taa.is_some() {
@@ -147,7 +154,7 @@ impl VkContext {
             let ssr = super::post::ssr::SsrResources::new(
                 &self.post_device(0),
                 q.ssr,
-                self.render_extent,
+                self.targets.render_extent,
             )?;
             self.ssr = Some(ssr);
         } else if !ssr_needed && self.ssr.is_some() {
@@ -165,7 +172,7 @@ impl VkContext {
             let ssgi = super::post::ssgi::SsgiResources::new(
                 &self.post_device(0),
                 settings,
-                self.render_extent,
+                self.targets.render_extent,
             )?;
             self.ssgi = Some(ssgi);
         } else if !desired_ssgi && self.ssgi.is_some() {
@@ -182,11 +189,11 @@ impl VkContext {
                 .as_ref()
                 .expect("desired_ae implies auto-exposure settings");
             let resources = crate::vulkan::auto_exposure::AutoExposureResources::new(
-                &self.alloc,
-                &self.device,
+                &self.hw.alloc,
+                &self.hw.device,
                 self.frames_in_flight,
                 &hdr_views,
-                self.linear_sampler.handle(),
+                self.scene.linear_sampler.handle(),
                 self.hot_reload.enabled,
             )?;
             self.auto_exposure.resources = Some(resources);
@@ -199,7 +206,7 @@ impl VkContext {
                 .resources
                 .take()
                 .expect("auto-exposure present");
-            ae.destroy(&self.device);
+            ae.destroy(&self.hw.device);
             self.auto_exposure.settings = None;
             self.auto_exposure.state = None;
         }
@@ -210,34 +217,35 @@ impl VkContext {
         // resources. `rebuild_swapchain` below rebuilds the pool again from the
         // now-Some `self.ssao`, then re-points binding 6 at the rebuilt views.
         if desired_ssao && self.ssao.is_none() {
-            self.transient_pool.rebuild(
+            self.targets.transient_pool.rebuild(
                 &super::transient_pool::TransientPoolGpu {
-                    instance: &self.instance,
-                    device: &self.device,
-                    physical_device: self.physical_device,
+                    instance: &self.hw.instance,
+                    device: &self.hw.device,
+                    physical_device: self.hw.physical_device,
                     command_pool: self.commands.command_pool,
-                    queue: self.graphics_queue,
+                    queue: self.hw.graphics_queue,
                 },
                 self.frames_in_flight,
                 &super::transient_pool::transient_slots(
                     true,
                     self.post_process.bloom_intensity > 0.0,
                     self.gbuffer.is_some(),
-                    self.render_extent,
+                    self.targets.render_extent,
                     self.swapchain.extent,
                 )?,
             )?;
             let settings = q.ssao.expect("desired_ssao implies ssao settings");
             let ao_views = self
+                .targets
                 .transient_pool
                 .views_for_frames("ao_output", self.frames_in_flight);
             let ssao = super::post::ssao::SsaoResources::new(
                 &super::post::ssao::SsaoDeviceCtx {
-                    alloc: &self.alloc,
-                    device: &self.device,
+                    alloc: &self.hw.alloc,
+                    device: &self.hw.device,
                 },
-                self.render_extent.width,
-                self.render_extent.height,
+                self.targets.render_extent.width,
+                self.targets.render_extent.height,
                 self.frames_in_flight,
                 settings,
                 &ao_views,
@@ -246,7 +254,7 @@ impl VkContext {
             self.ssao = Some(ssao);
         } else if !desired_ssao && self.ssao.is_some() {
             let mut ssao = self.ssao.take().expect("ssao present");
-            ssao.destroy(&self.device);
+            ssao.destroy(&self.hw.device);
         }
 
         // Ray-traced reflections. Turning on builds the scene acceleration
@@ -260,10 +268,10 @@ impl VkContext {
             self.build_rt_runtime(q.rt_reflections.expect("desired_rt implies settings"))?;
         } else if !desired_rt && self.rt_reflections.is_some() {
             if let Some(mut rt) = self.rt_reflections.take() {
-                rt.destroy(&self.device);
+                rt.destroy(&self.hw.device);
             }
-            if let Some(mut accel) = self.rt_accel.take() {
-                accel.destroy(&self.device);
+            if let Some(mut accel) = self.rt.accel.take() {
+                accel.destroy(&self.hw.device);
             }
         }
 
@@ -291,7 +299,7 @@ impl VkContext {
 
     // Build the RT acceleration structure + reflection pass at runtime (a live
     // toggle-on). Mirrors the init RT block: an empty scene, an AS-build error,
-    // or a shader-compile failure leaves both `rt_accel` / `rt_reflections`
+    // or a shader-compile failure leaves both `rt.accel` / `rt_reflections`
     // `None` and the renderer falls back to the SSR resolve when authored (a soft
     // failure, returns `Ok`). The
     // caller has ensured the unified G-buffer pre-pass exists and drained the
@@ -302,20 +310,20 @@ impl VkContext {
     ) -> Result<(), String> {
         let accel = match crate::vulkan::raytrace::build_rt_accel(
             crate::vulkan::raytrace::RtDeviceCtx {
-                alloc: &self.alloc,
-                instance: &self.instance,
-                device: &self.device,
-                pd: self.physical_device,
+                alloc: &self.hw.alloc,
+                instance: &self.hw.instance,
+                device: &self.hw.device,
+                pd: self.hw.physical_device,
             },
             self.commands.command_pool,
-            self.graphics_queue,
+            self.hw.graphics_queue,
             crate::vulkan::raytrace::RtSceneGeometry {
                 vertex_buffer: self.geometry.vertex_buffer.buffer(),
                 index_buffer: self.geometry.index_buffer.buffer(),
                 draw_objects: &self.draw.objects,
                 clusters: &self.instanced.clusters,
-                albedo_count: self.textures.len(),
-                total_vertices: self.rt_static_vertex_count,
+                albedo_count: self.scene.textures.len(),
+                total_vertices: self.rt.static_vertex_count,
                 exclude_seethrough: self.seethrough_meshes_enabled(),
             },
             self.frames_in_flight,
@@ -334,8 +342,12 @@ impl VkContext {
             }
         };
 
-        let hdr_views: Vec<vk::ImageView> =
-            self.hdr_resolve_images.iter().map(|i| i.view).collect();
+        let hdr_views: Vec<vk::ImageView> = self
+            .targets
+            .hdr_resolve_images
+            .iter()
+            .map(|i| i.view)
+            .collect();
         let gb = self
             .gbuffer
             .as_ref()
@@ -349,10 +361,10 @@ impl VkContext {
         let bindless_pool_size = self.cull.bindless_pool_size;
         let rt = match super::post::rt_reflections::RtReflectionsResources::new(
             super::post::rt_reflections::RtBuild {
-                alloc: &self.alloc,
-                device: &self.device,
-                width: self.render_extent.width,
-                height: self.render_extent.height,
+                alloc: &self.hw.alloc,
+                device: &self.hw.device,
+                width: self.targets.render_extent.width,
+                height: self.targets.render_extent.height,
                 frames: self.frames_in_flight,
             },
             settings,
@@ -362,8 +374,8 @@ impl VkContext {
                 hdr_resolve_views: &hdr_views,
                 gbuffer_views: &nd_views,
                 roughness_views: &rough_views,
-                prefilter_view: self.env_map.prefilter.view,
-                cube_sampler: self.cube_sampler.handle(),
+                prefilter_view: self.scene.env_map.prefilter.view,
+                cube_sampler: self.scene.cube_sampler.handle(),
             },
             super::post::rt_reflections::RtAccelHandles {
                 tlas: accel.tlas(),
@@ -384,11 +396,11 @@ impl VkContext {
             Err(e) => {
                 tracing::warn!("RT reflections pass build failed (keeping SSR): {e}");
                 let mut accel = accel;
-                accel.destroy(&self.device);
+                accel.destroy(&self.hw.device);
                 return Ok(());
             }
         };
-        self.rt_accel = Some(accel);
+        self.rt.accel = Some(accel);
         self.rt_reflections = Some(rt);
         Ok(())
     }
@@ -401,13 +413,14 @@ impl VkContext {
     fn rewire_ssao_white_fallback(&self) {
         for (i, &set) in self.descriptors.global_sets.iter().enumerate() {
             let ao_view = self
+                .targets
                 .transient_pool
                 .view_for("ao_output", i)
-                .unwrap_or(self.ssao_white.view);
+                .unwrap_or(self.scene.ssao_white.view);
             let info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(ao_view)
-                .sampler(self.linear_sampler.handle());
+                .sampler(self.scene.linear_sampler.handle());
             let write = vk::WriteDescriptorSet::default()
                 .dst_set(set)
                 .dst_binding(6)
@@ -416,7 +429,8 @@ impl VkContext {
             // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
             // every set and resource it names belongs to this device.
             unsafe {
-                self.device
+                self.hw
+                    .device
                     .update_descriptor_sets(std::slice::from_ref(&write), &[])
             };
         }

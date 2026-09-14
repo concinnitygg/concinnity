@@ -216,13 +216,13 @@ impl VkContext {
         let new_vertex_count = new_vertices.len();
         let new_v_bytes = std::mem::size_of_val(new_vertices.as_slice()) as u64;
         let new_i_bytes = std::mem::size_of_val(new_indices.as_slice()) as u64;
-        let shared = super::shared_geometry_usage(self.rt_capable);
-        let new_vbuf = self.alloc.create_buffer(
+        let shared = super::shared_geometry_usage(self.hw.rt_capable);
+        let new_vbuf = self.hw.alloc.create_buffer(
             new_v_bytes,
             vk::BufferUsageFlags::VERTEX_BUFFER | shared,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
-        let new_ibuf = self.alloc.create_buffer(
+        let new_ibuf = self.hw.alloc.create_buffer(
             new_i_bytes,
             vk::BufferUsageFlags::INDEX_BUFFER | shared,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
@@ -259,8 +259,8 @@ impl VkContext {
         // fresh layout and re-point the passes that read the buffers directly.
         // The static vertex count (which bounds each BLAS's vertex range) moved
         // with the rebuild, so it is refreshed first.
-        self.rt_static_vertex_count = new_vertex_count;
-        if self.rt_accel.is_some() {
+        self.rt.static_vertex_count = new_vertex_count;
+        if self.rt.accel.is_some() {
             self.rebuild_rt_accel()?;
         }
         Ok(())
@@ -424,14 +424,14 @@ impl VkContext {
         // so a live RT toggle keeps working across reloads).
         let new_v_bytes = std::mem::size_of_val(new_vertices.as_slice()) as u64;
         let new_i_bytes = std::mem::size_of_val(new_indices.as_slice()) as u64;
-        let skinned_ib_rt = if self.rt_capable {
+        let skinned_ib_rt = if self.hw.rt_capable {
             vk::BufferUsageFlags::STORAGE_BUFFER
                 | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
                 | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
         } else {
             vk::BufferUsageFlags::empty()
         };
-        let new_vbuf = self.alloc.create_buffer(
+        let new_vbuf = self.hw.alloc.create_buffer(
             new_v_bytes,
             vk::BufferUsageFlags::VERTEX_BUFFER
                 | vk::BufferUsageFlags::TRANSFER_DST
@@ -439,7 +439,7 @@ impl VkContext {
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
         // Whole u32 words for the index buffer; see `upload_skinned`.
-        let new_ibuf = self.alloc.create_buffer(
+        let new_ibuf = self.hw.alloc.create_buffer(
             rt_geom::skinned_index_buffer_bytes(new_indices.len()) as u64,
             vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | skinned_ib_rt,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
@@ -490,15 +490,15 @@ fn readback_typed<T: Copy>(ctx: &VkContext, src: vk::Buffer, bytes: u64) -> Rend
         .into());
     }
     let count = (bytes / stride) as usize;
-    let staging = ctx.alloc.create_buffer(
+    let staging = ctx.hw.alloc.create_buffer(
         bytes,
         vk::BufferUsageFlags::TRANSFER_DST,
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
     )?;
     one_shot_submit(
-        &ctx.device,
+        &ctx.hw.device,
         ctx.commands.command_pool,
-        ctx.graphics_queue,
+        ctx.hw.graphics_queue,
         |cmd| {
             let copy = vk::BufferCopy::default()
                 .src_offset(0)
@@ -507,8 +507,12 @@ fn readback_typed<T: Copy>(ctx: &VkContext, src: vk::Buffer, bytes: u64) -> Rend
             // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
             // these commands name is live for the call.
             unsafe {
-                ctx.device
-                    .cmd_copy_buffer(cmd, src, staging.buffer(), std::slice::from_ref(&copy))
+                ctx.hw.device.cmd_copy_buffer(
+                    cmd,
+                    src,
+                    staging.buffer(),
+                    std::slice::from_ref(&copy),
+                )
             };
         },
     )?;

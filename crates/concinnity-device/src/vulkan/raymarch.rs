@@ -1326,11 +1326,11 @@ impl VkContext {
             inv_vp: mat4_inverse(vp),
             cam_pos: [cam_pos[0], cam_pos[1], cam_pos[2], 0.0],
             viewport: [
-                self.render_extent.width as f32,
-                self.render_extent.height as f32,
+                self.targets.render_extent.width as f32,
+                self.targets.render_extent.height as f32,
             ],
             time,
-            prefilter_mip_count: self.prefilter_mip_count as f32,
+            prefilter_mip_count: self.scene.prefilter_mip_count as f32,
             sky_rot: self.view.sky_rot,
         }
     }
@@ -1382,7 +1382,7 @@ impl VkContext {
         if !rm.any_shadow_casters() || rm.shadow_view_sets.is_empty() {
             return;
         }
-        let device = &self.device;
+        let device = &self.hw.device;
         let push = RaymarchShadowCascade {
             cascade_idx: cascade_idx as u32,
             _pad: [0; 3],
@@ -1455,9 +1455,10 @@ impl VkContext {
         if !rm.any_visible() {
             return Ok(());
         }
-        let device = &self.device;
-        let extent = self.render_extent;
+        let device = &self.hw.device;
+        let extent = self.targets.render_extent;
         let hdr_resolve = self
+            .targets
             .hdr_resolve_images
             .get(frame_idx)
             .ok_or("raymarch: hdr_resolve index OOB")?
@@ -1568,7 +1569,7 @@ impl VkContext {
         // volume, then resolve (MSAA) / store (single-sample) into hdr_resolve.
         let rp_begin = vk::RenderPassBeginInfo::default()
             .render_pass(rm.render_pass.handle())
-            .framebuffer(self.framebuffers[frame_idx].handle())
+            .framebuffer(self.targets.framebuffers[frame_idx].handle())
             .render_area(vk::Rect2D::default().extent(extent));
         // Negative-height viewport: matches the main pass so the proxy rasterizes
         // into identical pixels and the reprojected hit depth shares its space.

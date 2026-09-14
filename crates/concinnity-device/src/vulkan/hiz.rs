@@ -575,7 +575,7 @@ impl crate::vulkan::context::VkContext {
         if hiz.mip_count == 0 || hiz.mip_views.is_empty() {
             return;
         }
-        let device = &self.device;
+        let device = &self.hw.device;
         let plan = Plan::new(
             hiz.width,
             hiz.height,

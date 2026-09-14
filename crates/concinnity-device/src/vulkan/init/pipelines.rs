@@ -6,97 +6,65 @@ use concinnity_core::gfx::render_types::{self, SpotShadowData};
 use concinnity_core::render::backend_init::WorldShader;
 use concinnity_core::render::error::RenderResult;
 
-use super::InitGpu;
-use crate::vulkan::context::VkSpotShadow;
-use crate::vulkan::owned::{
-    OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass, OwnedSetLayout,
-};
+use super::{InitGpu, PassStates};
+use crate::vulkan::context::{VkCull, VkSpotShadow, VkTargets};
 use crate::vulkan::pipeline::*;
 use crate::vulkan::post::bloom::{compile_bloom_shaders, create_bloom_pipeline};
 use crate::vulkan::swapchain::create_shadow_framebuffers;
 use crate::vulkan::texture::GpuImage;
 
-pub(super) struct MainPipelineInputs<'a> {
-    pub(super) effective_shadow_size: u32,
-    pub(super) shadow_render_pass: &'a OwnedRenderPass,
-    pub(super) shadow_pipeline_layout: &'a OwnedPipelineLayout,
-    pub(super) shadow_global_set_layout: &'a OwnedSetLayout,
-    pub(super) shadow_map: &'a GpuImage,
-    pub(super) spot_shadow_map: GpuImage,
-    pub(super) spot_shadow_slice_size: u32,
-    pub(super) spot_shadows: &'a [SpotShadowData],
-    pub(super) gpu_text_atlases: &'a [GpuImage],
-    pub(super) text_pipeline_layout: &'a OwnedPipelineLayout,
-    pub(super) composite_render_pass: &'a OwnedRenderPass,
-    pub(super) composite_pipeline_layout: &'a OwnedPipelineLayout,
-    pub(super) bloom_write_pass: &'a OwnedRenderPass,
-    pub(super) bloom_blend_pass: &'a OwnedRenderPass,
-    pub(super) bloom_pipeline_layout: &'a OwnedPipelineLayout,
-}
-
-pub(super) struct MainPipelines {
-    pub(super) shadow_pipeline_opt: Option<OwnedPipeline>,
-    pub(super) shadow_framebuffers_vec: Vec<OwnedFramebuffer>,
-    pub(super) spot_shadow: VkSpotShadow,
-    pub(super) text_pipeline_opt: Option<OwnedPipeline>,
-    pub(super) composite_pipeline: OwnedPipeline,
-    pub(super) bloom_pipeline_prefilter: OwnedPipeline,
-    pub(super) bloom_pipeline_downsample: OwnedPipeline,
-    pub(super) bloom_pipeline_upsample: OwnedPipeline,
-}
-
+// Build the shadow, text, composite and bloom pipelines into the pass states,
+// and the spot shadow state that reuses the cascade pass.
 pub(super) fn build_main_pipelines(
     gpu: &InitGpu<'_>,
-    inputs: MainPipelineInputs<'_>,
-) -> RenderResult<MainPipelines> {
-    let InitGpu {
-        instance,
-        device,
-        physical_device,
-        alloc,
-        hot_reload,
-        ..
-    } = *gpu;
-    let MainPipelineInputs {
-        effective_shadow_size,
-        shadow_render_pass,
-        shadow_pipeline_layout,
-        shadow_global_set_layout,
-        shadow_map,
-        spot_shadow_map,
-        spot_shadow_slice_size,
-        spot_shadows,
-        gpu_text_atlases,
-        text_pipeline_layout,
-        composite_render_pass,
-        composite_pipeline_layout,
-        bloom_write_pass,
-        bloom_blend_pass,
-        bloom_pipeline_layout,
-    } = inputs;
-    let (shadow_pipeline_opt, shadow_framebuffers_vec) = if effective_shadow_size > 0
+    passes: &mut PassStates,
+    spot_shadow_map: GpuImage,
+    spot_shadows: &[SpotShadowData],
+) -> RenderResult<VkSpotShadow> {
+    let InitGpu { hw, hot_reload, .. } = *gpu;
+    let device = &hw.device;
+    let PassStates {
+        shadow,
+        text,
+        composite,
+        bloom,
+    } = passes;
+    let shadow_set_layout = shadow
+        .global_set_layout
+        .as_ref()
+        .expect("the layout stage builds the shadow global set layout")
+        .handle();
+    let (shadow_pipeline, shadow_framebuffers) = if shadow.map_size > 0
         && let Ok(Some(shadow_spv)) = resolve_shadow_shader(hot_reload)
     {
         let pl = create_shadow_pipeline(
             device,
-            shadow_render_pass.handle(),
-            shadow_pipeline_layout.handle(),
+            shadow.render_pass.handle(),
+            shadow
+                .pipeline_layout
+                .as_ref()
+                .expect("the layout stage builds the shadow pipeline layout")
+                .handle(),
             &shadow_spv,
         )?;
         let fbs = create_shadow_framebuffers(
             device,
-            shadow_render_pass.handle(),
-            shadow_map,
-            effective_shadow_size,
+            shadow.render_pass.handle(),
+            &shadow.map,
+            shadow.map_size,
         )?;
         (Some(pl), fbs)
     } else {
         // No shadow pipeline: no transition needed. create_shadow_map_array
         // already rests the (1x1 fallback) shadow_map in SHADER_READ_ONLY,
         // the layout the main-pass descriptor expects, and with no shadow
-        // loop nothing ever moves it out of that layout.
+        // loop nothing ever moves it out of that layout. The pipeline layout
+        // is not kept either.
+        shadow.pipeline_layout = None;
         (None, Vec::new())
     };
+    shadow.pipeline = shadow_pipeline;
+    shadow.framebuffers = shadow_framebuffers;
 
     // Spot shadows reuse the cascade pass's depth-only render pass, pipeline
     // and one-UBO set layout; only the framebuffers, the per-slice
@@ -105,26 +73,26 @@ pub(super) fn build_main_pipelines(
     // so the main pass's bindings 12/13 are always valid.
     let spot_shadow = crate::vulkan::draw::spot_shadow::build_spot_shadow(
         crate::vulkan::draw::spot_shadow::SpotShadowBuild {
-            alloc,
-            instance,
+            alloc: &hw.alloc,
+            instance: &hw.instance,
             device,
-            physical_device,
+            physical_device: hw.physical_device,
             map: spot_shadow_map,
-            render_pass: shadow_render_pass.handle(),
-            set_layout: shadow_global_set_layout.handle(),
-            slice_size: spot_shadow_slice_size,
+            render_pass: shadow.render_pass.handle(),
+            set_layout: shadow_set_layout,
+            slice_size: render_types::spot_shadow_slice_size(shadow.map_size),
             spot_shadows,
         },
     )?;
 
     // Text renders in the composite pass (post-tonemap, single-sample), so
     // its pipeline targets the composite render pass.
-    let text_pipeline_opt = if !gpu_text_atlases.is_empty() {
+    text.pipeline = if !text.atlas_textures.is_empty() {
         let (tv, tf) = compile_text_shaders(hot_reload)?;
         let tp = create_text_pipeline(
             device,
-            composite_render_pass.handle(),
-            text_pipeline_layout.handle(),
+            composite.render_pass.handle(),
+            text.pipeline_layout.handle(),
             &tv,
             &tf,
             vk::SampleCountFlags::TYPE_1,
@@ -134,73 +102,46 @@ pub(super) fn build_main_pipelines(
         None
     };
 
-    let composite_pipeline = {
+    composite.pipeline = {
         let (cv, cf) = compile_composite_shaders(hot_reload)?;
         create_composite_pipeline(
             device,
-            composite_render_pass.handle(),
-            composite_pipeline_layout.handle(),
+            composite.render_pass.handle(),
+            composite.pipeline_layout.handle(),
             &cv,
             &cf,
         )?
     };
 
     // Bloom pipelines: prefilter, downsample and upsample.
-    let (bloom_pipeline_prefilter, bloom_pipeline_downsample, bloom_pipeline_upsample) = {
-        let bs = compile_bloom_shaders(hot_reload)?;
-        let prefilter = create_bloom_pipeline(
-            device,
-            bloom_write_pass.handle(),
-            bloom_pipeline_layout.handle(),
-            &bs.vert,
-            &bs.prefilter,
-            false,
-        )?;
-        let downsample = create_bloom_pipeline(
-            device,
-            bloom_write_pass.handle(),
-            bloom_pipeline_layout.handle(),
-            &bs.vert,
-            &bs.downsample,
-            false,
-        )?;
-        // The upsample pipeline targets the LOAD blend pass and blends
-        // additively onto the mip already there.
-        let upsample = create_bloom_pipeline(
-            device,
-            bloom_blend_pass.handle(),
-            bloom_pipeline_layout.handle(),
-            &bs.vert,
-            &bs.upsample,
-            true,
-        )?;
-        (prefilter, downsample, upsample)
-    };
-    Ok(MainPipelines {
-        shadow_pipeline_opt,
-        shadow_framebuffers_vec,
-        spot_shadow,
-        text_pipeline_opt,
-        composite_pipeline,
-        bloom_pipeline_prefilter,
-        bloom_pipeline_downsample,
-        bloom_pipeline_upsample,
-    })
-}
-
-pub(super) struct WorldPipelineInputs<'a> {
-    pub(super) world_shaders: &'a [WorldShader<'a>],
-    pub(super) bindless_pipeline_layout: Option<&'a OwnedPipelineLayout>,
-    pub(super) bindless_main_spv: &'a (Vec<u8>, Vec<u8>),
-    pub(super) main_render_pass: &'a OwnedRenderPass,
-    pub(super) msaa_samples: vk::SampleCountFlags,
-    pub(super) swapchain_format: vk::Format,
-    pub(super) probe_cube_count: u32,
-}
-
-pub(super) struct WorldPipelines {
-    pub(super) world_pipelines: Vec<Option<OwnedPipeline>>,
-    pub(super) shader_bucket_count: usize,
+    let bs = compile_bloom_shaders(hot_reload)?;
+    bloom.pipeline_prefilter = create_bloom_pipeline(
+        device,
+        bloom.write_pass.handle(),
+        bloom.pipeline_layout.handle(),
+        &bs.vert,
+        &bs.prefilter,
+        false,
+    )?;
+    bloom.pipeline_downsample = create_bloom_pipeline(
+        device,
+        bloom.write_pass.handle(),
+        bloom.pipeline_layout.handle(),
+        &bs.vert,
+        &bs.downsample,
+        false,
+    )?;
+    // The upsample pipeline targets the LOAD blend pass and blends
+    // additively onto the mip already there.
+    bloom.pipeline_upsample = create_bloom_pipeline(
+        device,
+        bloom.blend_pass.handle(),
+        bloom.pipeline_layout.handle(),
+        &bs.vert,
+        &bs.upsample,
+        true,
+    )?;
+    Ok(spot_shadow)
 }
 
 // Material-referenced shaders (ShaderHandle 1..) each get their own
@@ -208,22 +149,18 @@ pub(super) struct WorldPipelines {
 // of the GPU-culled command buffer.
 pub(super) fn build_world_pipelines(
     gpu: &InitGpu<'_>,
-    inputs: WorldPipelineInputs<'_>,
-) -> RenderResult<WorldPipelines> {
-    let InitGpu {
-        device, hot_reload, ..
-    } = *gpu;
-    let WorldPipelineInputs {
-        world_shaders,
-        bindless_pipeline_layout,
-        bindless_main_spv,
-        main_render_pass,
-        msaa_samples,
-        swapchain_format,
-        probe_cube_count,
-    } = inputs;
+    cull: &mut VkCull,
+    world_shaders: &[WorldShader<'_>],
+    targets: &VkTargets,
+    swapchain_format: vk::Format,
+    probe_cube_count: u32,
+) -> RenderResult<()> {
+    let InitGpu { hw, hot_reload, .. } = *gpu;
     let bucket_shaders = world_shaders.get(1..).unwrap_or(&[]);
-    let world_pipelines = match (bindless_pipeline_layout, bucket_shaders.is_empty()) {
+    cull.world_pipelines = match (
+        cull.bindless_pipeline_layout.as_ref(),
+        bucket_shaders.is_empty(),
+    ) {
         (Some(layout), false) => {
             let max = render_types::MAX_SHADER_BUCKETS;
             if bucket_shaders.len() + 1 > max {
@@ -234,24 +171,20 @@ pub(super) fn build_world_pipelines(
                 .into());
             }
             build_world_pipeline_table(
-                device,
+                &hw.device,
                 BucketPipelineTargets {
-                    render_pass: main_render_pass.handle(),
+                    render_pass: targets.main_render_pass.handle(),
                     layout: layout.handle(),
-                    msaa_samples,
+                    msaa_samples: targets.msaa_samples,
                     swapchain_format,
                     hot_reload,
                     probe_count: probe_cube_count as usize,
                 },
                 bucket_shaders,
-                bindless_main_spv,
+                &cull.bindless_main_spv,
             )?
         }
         _ => Vec::new(),
     };
-    let shader_bucket_count = 1 + world_pipelines.len();
-    Ok(WorldPipelines {
-        world_pipelines,
-        shader_bucket_count,
-    })
+    Ok(())
 }

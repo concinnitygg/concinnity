@@ -183,7 +183,7 @@ impl LiveEdit for VkContext {
     // the new world's `swapchain_config` matches; otherwise the swap does a full
     // rebuild (recreating the window). Mirrors `DxContext`.
     fn hot_swap_config(&self) -> Option<backend_init::SwapchainConfig> {
-        Some(self.swapchain_config)
+        Some(self.hw.swapchain_config)
     }
 
     // Rebuild a new world's GPU content on this already-constructed backend,

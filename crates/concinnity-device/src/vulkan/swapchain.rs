@@ -25,7 +25,7 @@ use crate::vulkan::owned::{OwnedFramebuffer, VkDevice};
 
 impl VkContext {
     pub(super) fn destroy_swapchain_resources(&mut self) {
-        let device = &self.device;
+        let device = &self.hw.device;
         for iv in &self.swapchain.image_views {
             // SAFETY: the handle was created from this device and is destroyed exactly once; the
             // caller has already waited for the device to go idle, so no submission still
@@ -47,7 +47,7 @@ impl VkContext {
                     .destroy_swapchain(self.swapchain.handle, None)
             };
         }
-        self.framebuffers.clear();
+        self.targets.framebuffers.clear();
         // The shared post passes' cached framebuffers name views dropped here
         // (the HDR scene the SSGI composite writes) or rebuilt along with them.
         self.post.cache.forget_views();
@@ -58,9 +58,9 @@ impl VkContext {
         // pooled mip 0 releases nothing) retires them through the allocator.
         self.bloom.mips.clear();
         self.bloom.mip_extents.clear();
-        self.color_images.clear();
-        self.depth_images.clear();
-        self.hdr_resolve_images.clear();
+        self.targets.color_images.clear();
+        self.targets.depth_images.clear();
+        self.targets.hdr_resolve_images.clear();
         self.swapchain.image_views.clear();
     }
 
@@ -70,8 +70,9 @@ impl VkContext {
     pub(super) fn surface_extent(&self) -> Result<vk::Extent2D, String> {
         // SAFETY: a property query on a live handle; it only reads.
         let caps = unsafe {
-            self.surface_loader
-                .get_physical_device_surface_capabilities(self.physical_device, self.surface)
+            self.hw
+                .surface_loader
+                .get_physical_device_surface_capabilities(self.hw.physical_device, self.hw.surface)
         }
         .map_err(|e| format!("surface caps: {e}"))?;
         let (width, height) = self.window().framebuffer_size();
@@ -111,32 +112,32 @@ impl VkContext {
         // re-query present family
         let present_family = {
             let (_, pf) = query_queue_families(
-                &self.instance,
-                self.physical_device,
-                &self.surface_loader,
-                self.surface,
+                &self.hw.instance,
+                self.hw.physical_device,
+                &self.hw.surface_loader,
+                self.hw.surface,
             )?;
             pf
         };
         let (sc, imgs, fmt, ext) = create_swapchain_inner(
             &SwapchainSurface {
-                instance: &self.instance,
-                device: &self.device,
-                pd: self.physical_device,
-                surface_loader: &self.surface_loader,
-                surface: self.surface,
+                instance: &self.hw.instance,
+                device: &self.hw.device,
+                pd: self.hw.physical_device,
+                surface_loader: &self.hw.surface_loader,
+                surface: self.hw.surface,
                 swapchain_loader: &self.swapchain.loader,
             },
             SwapchainQueueFamilies {
-                graphics_family: self.graphics_family,
+                graphics_family: self.hw.graphics_family,
                 present_family,
             },
             SwapchainConfig {
                 width: width as u32,
                 height: height as u32,
                 old_swapchain: vk::SwapchainKHR::null(),
-                hdr_mode: self.hdr_mode,
-                vsync: self.vsync,
+                hdr_mode: self.hw.hdr_mode,
+                vsync: self.hw.vsync,
             },
         )?;
         self.swapchain.handle = sc;
@@ -151,7 +152,7 @@ impl VkContext {
         // to it while bloom / composite / swapchain stay at `ext`.
         if let Some(scale) = self.upscale.as_ref().map(|u| u.scale()) {
             if let Some(mut old) = self.upscale.take() {
-                old.destroy(&self.device);
+                old.destroy(&self.hw.device);
             }
             // Rebuild the backend the world requested (not a hardcoded FSR). The
             // DLSS / XeSS device extensions are fixed at device creation, and
@@ -159,12 +160,12 @@ impl VkContext {
             // to the same first choice, so the rebuilt backend matches the device.
             let (built, resolved) = super::post::build_upscaler(
                 UpscalerGpu {
-                    alloc: &self.alloc,
-                    instance: &self.instance,
-                    device: &self.device,
-                    physical_device: self.physical_device,
+                    alloc: &self.hw.alloc,
+                    instance: &self.hw.instance,
+                    device: &self.hw.device,
+                    physical_device: self.hw.physical_device,
                     command_pool: self.commands.command_pool,
-                    queue: self.graphics_queue,
+                    queue: self.hw.graphics_queue,
                 },
                 ext.width,
                 ext.height,
@@ -174,7 +175,7 @@ impl VkContext {
             // The rebuilt feature re-emits the benign DLSS first-frame layout
             // errors; re-arm the messenger budget so they stay suppressed.
             if resolved == super::post::ResolvedBackend::Dlss
-                && let Some(f) = self.device.debug_filter()
+                && let Some(f) = self.hw.device.debug_filter()
             {
                 f.store(
                     super::init::bootstrap::DLSS_FIRST_FRAME_LAYOUT_SUPPRESS,
@@ -193,20 +194,20 @@ impl VkContext {
             }
             None => ext,
         };
-        self.render_extent = render_ext;
+        self.targets.render_extent = render_ext;
 
         // Rebuild the transient image pool before the off-screen attachments /
         // bloom chain / SSAO targets that bind its images. `ao_output` is
         // render-res, `bloom_top` is half the output (swapchain) extent; both are
         // per frame in flight. `bloom_top_pairs` feeds the bloom chain's mip 0
         // below (empty when bloom is off, so mip 0 is committed instead).
-        self.transient_pool.rebuild(
+        self.targets.transient_pool.rebuild(
             &super::transient_pool::TransientPoolGpu {
-                instance: &self.instance,
-                device: &self.device,
-                physical_device: self.physical_device,
+                instance: &self.hw.instance,
+                device: &self.hw.device,
+                physical_device: self.hw.physical_device,
                 command_pool: self.commands.command_pool,
-                queue: self.graphics_queue,
+                queue: self.hw.graphics_queue,
             },
             self.frames_in_flight,
             &super::transient_pool::transient_slots(
@@ -218,38 +219,39 @@ impl VkContext {
             )?,
         )?;
         let bloom_top_pairs = self
+            .targets
             .transient_pool
             .pairs_for_frames("bloom_top", self.frames_in_flight);
 
         self.swapchain.image_views =
-            create_swapchain_image_views(&self.device, &self.swapchain.images, fmt)?;
+            create_swapchain_image_views(&self.hw.device, &self.swapchain.images, fmt)?;
 
         let (color_images, depth_images, hdr_resolve_images) = create_attachments(
             &AttachmentDeviceCtx {
-                alloc: &self.alloc,
-                device: &self.device,
+                alloc: &self.hw.alloc,
+                device: &self.hw.device,
                 command_pool: self.commands.command_pool,
-                queue: self.graphics_queue,
+                queue: self.hw.graphics_queue,
             },
             render_ext.width,
             render_ext.height,
-            self.msaa_samples,
+            self.targets.msaa_samples,
             self.frames_in_flight,
         )?;
-        self.color_images = color_images;
-        self.depth_images = depth_images;
-        self.hdr_resolve_images = hdr_resolve_images;
-        self.framebuffers = create_main_framebuffers(
-            &self.device,
-            self.main_render_pass.handle(),
-            &self.color_images,
-            &self.depth_images,
-            &self.hdr_resolve_images,
+        self.targets.color_images = color_images;
+        self.targets.depth_images = depth_images;
+        self.targets.hdr_resolve_images = hdr_resolve_images;
+        self.targets.framebuffers = create_main_framebuffers(
+            &self.hw.device,
+            self.targets.main_render_pass.handle(),
+            &self.targets.color_images,
+            &self.targets.depth_images,
+            &self.targets.hdr_resolve_images,
             render_ext,
-            self.msaa_samples,
+            self.targets.msaa_samples,
         )?;
         self.composite.framebuffers = create_composite_framebuffers(
-            &self.device,
+            &self.hw.device,
             self.composite.render_pass.handle(),
             &self.swapchain.image_views,
             ext,
@@ -258,10 +260,10 @@ impl VkContext {
         // Rebuild the bloom chain at the new resolution.
         let (bloom_mips, bloom_mip_extents) = create_bloom_chain(
             &BloomDeviceContext {
-                alloc: &self.alloc,
-                device: &self.device,
+                alloc: &self.hw.alloc,
+                device: &self.hw.device,
                 command_pool: self.commands.command_pool,
-                queue: self.graphics_queue,
+                queue: self.hw.graphics_queue,
             },
             ext,
             self.frames_in_flight,
@@ -270,7 +272,7 @@ impl VkContext {
         self.bloom.mips = bloom_mips;
         self.bloom.mip_extents = bloom_mip_extents;
         let (bloom_write_framebuffers, bloom_blend_framebuffers) = create_bloom_framebuffers(
-            &self.device,
+            &self.hw.device,
             self.bloom.write_pass.handle(),
             self.bloom.blend_pass.handle(),
             &self.bloom.mips,
@@ -285,7 +287,8 @@ impl VkContext {
         // SAFETY: `descriptor_pool` was created from this device and every set allocated from it is
         // dropped here; the caller has already idled the device, so none is still in use.
         unsafe {
-            self.device
+            self.hw
+                .device
                 .reset_descriptor_pool(
                     self.bloom.descriptor_pool.handle(),
                     vk::DescriptorPoolResetFlags::empty(),
@@ -293,14 +296,22 @@ impl VkContext {
                 .map_err(|e| format!("reset bloom pool: {e}"))?;
         }
         self.bloom.input_sets = alloc_bloom_input_sets(
-            &self.device,
+            &self.hw.device,
             self.bloom.descriptor_pool.handle(),
             self.bloom.set_layout.handle(),
             self.composite.sampler.handle(),
-            &self.hdr_resolve_images,
+            &self.targets.hdr_resolve_images,
             &self.bloom.mips,
         )?;
 
+        self.rebuild_screen_space_targets(render_ext)?;
+        self.rebuild_scene_pass_targets(render_ext)?;
+        self.rebuild_ssao_and_composite_inputs(render_ext)
+    }
+
+    // Rebuild the unified G-buffer and every screen-space reader of it at the new
+    // render resolution, and re-point the bloom prefilter at the scene image.
+    fn rebuild_screen_space_targets(&mut self, render_ext: vk::Extent2D) -> RenderResult<()> {
         // Rebuild the unified G-buffer pre-pass targets at the new resolution
         // *first*: every reader (SSR resolve, SSAO, SSGI, RT, TAA velocity, FSR)
         // re-points its descriptors at the rebuilt per-frame normal+depth /
@@ -310,15 +321,18 @@ impl VkContext {
             // The three color channels are pool-owned and were reallocated by
             // the pool rebuild above, so the framebuffers built here reference
             // the new images.
-            let pooled = self.transient_pool.gbuffer_pooled(self.frames_in_flight);
+            let pooled = self
+                .targets
+                .transient_pool
+                .gbuffer_pooled(self.frames_in_flight);
             gb.rebuild(
                 GbufferDeviceCtx {
-                    alloc: &self.alloc,
-                    device: &self.device,
+                    alloc: &self.hw.alloc,
+                    device: &self.hw.device,
                 },
                 GbufferQueueCtx {
                     command_pool: self.commands.command_pool,
-                    queue: self.graphics_queue,
+                    queue: self.hw.graphics_queue,
                 },
                 GbufferExtent {
                     width: render_ext.width,
@@ -352,8 +366,12 @@ impl VkContext {
         // survives; the per-frame TLAS + geometry-table descriptors are re-pointed
         // by `rt_dynamic_update` as usual.
         if let Some(mut rt) = self.rt_reflections.take() {
-            let hdr_views: Vec<vk::ImageView> =
-                self.hdr_resolve_images.iter().map(|img| img.view).collect();
+            let hdr_views: Vec<vk::ImageView> = self
+                .targets
+                .hdr_resolve_images
+                .iter()
+                .map(|img| img.view)
+                .collect();
             // RT samples the unified G-buffer's per-frame normal+depth + roughness
             // views. The merged pre-pass was rebuilt above, so they are current.
             let gb = self
@@ -363,8 +381,8 @@ impl VkContext {
             let nd_views = gb.normal_depth_views();
             let rough_views = gb.roughness_views();
             rt.rebuild(
-                &self.alloc,
-                &self.device,
+                &self.hw.alloc,
+                &self.hw.device,
                 render_ext.width,
                 render_ext.height,
                 RtStaticInputs {
@@ -373,8 +391,8 @@ impl VkContext {
                     hdr_resolve_views: &hdr_views,
                     gbuffer_views: &nd_views,
                     roughness_views: &rough_views,
-                    prefilter_view: self.env_map.prefilter.view,
-                    cube_sampler: self.cube_sampler.handle(),
+                    prefilter_view: self.scene.env_map.prefilter.view,
+                    cube_sampler: self.scene.cube_sampler.handle(),
                 },
             )?;
             // The bloom prefilter samples the reflection composite output (re-pointed
@@ -395,18 +413,18 @@ impl VkContext {
                 .expect("a reflection path forces the unified G-buffer pre-pass");
             rc.rebuild(
                 &super::texture::GpuUploadContext {
-                    alloc: &self.alloc,
-                    device: &self.device,
+                    alloc: &self.hw.alloc,
+                    device: &self.hw.device,
                     command_pool: self.commands.command_pool,
-                    queue: self.graphics_queue,
+                    queue: self.hw.graphics_queue,
                 },
                 render_ext.width,
                 render_ext.height,
-                &CompositeInputs::new(&self.hdr_resolve_images, gb),
+                &CompositeInputs::new(&self.targets.hdr_resolve_images, gb),
             )?;
             for frame_sets in &self.bloom.input_sets {
                 rebind_bloom_input0(
-                    &self.device,
+                    &self.hw.device,
                     frame_sets[0],
                     rc.output.view,
                     self.composite.sampler.handle(),
@@ -426,7 +444,7 @@ impl VkContext {
             taa.rebuild(&self.post_device(0), render_ext)?;
             for (i, frame_sets) in self.bloom.input_sets.iter().enumerate() {
                 rebind_bloom_input0(
-                    &self.device,
+                    &self.hw.device,
                     frame_sets[0],
                     taa.output_view(i),
                     self.composite.sampler.handle(),
@@ -442,25 +460,38 @@ impl VkContext {
             let up_output_view = up.output_image().view;
             for frame_sets in &self.bloom.input_sets {
                 rebind_bloom_input0(
-                    &self.device,
+                    &self.hw.device,
                     frame_sets[0],
                     up_output_view,
                     self.composite.sampler.handle(),
                 );
             }
         }
+        Ok(())
+    }
 
+    // Rebuild the render-resolution targets of the passes that draw into the
+    // scene against the rebuilt attachments.
+    fn rebuild_scene_pass_targets(&mut self, render_ext: vk::Extent2D) -> RenderResult<()> {
         // Rebuild the decal framebuffers at the new resolution + re-point
         // the per-frame depth descriptor at the rebuilt depth view. The
         // pipeline, layouts, buffers, sampler, and per-decal albedo sets
         // all survive: only the targets the framebuffers + depth binding
         // reference moved.
         if let Some(mut decals) = self.decal.resources.take() {
-            let hdr_views: Vec<vk::ImageView> =
-                self.hdr_resolve_images.iter().map(|img| img.view).collect();
-            let depth_views: Vec<vk::ImageView> =
-                self.depth_images.iter().map(|img| img.view).collect();
-            decals.rebuild(&self.device, &hdr_views, &depth_views, render_ext)?;
+            let hdr_views: Vec<vk::ImageView> = self
+                .targets
+                .hdr_resolve_images
+                .iter()
+                .map(|img| img.view)
+                .collect();
+            let depth_views: Vec<vk::ImageView> = self
+                .targets
+                .depth_images
+                .iter()
+                .map(|img| img.view)
+                .collect();
+            decals.rebuild(&self.hw.device, &hdr_views, &depth_views, render_ext)?;
             self.decal.resources = Some(decals);
         }
 
@@ -468,11 +499,19 @@ impl VkContext {
         // descriptor. Mirrors the decal rebuild; only present once a frame
         // published lines and the lazy build ran.
         if let Some(mut lines) = self.lines.resources.take() {
-            let hdr_views: Vec<vk::ImageView> =
-                self.hdr_resolve_images.iter().map(|img| img.view).collect();
-            let depth_views: Vec<vk::ImageView> =
-                self.depth_images.iter().map(|img| img.view).collect();
-            lines.rebuild(&self.device, &hdr_views, &depth_views, render_ext)?;
+            let hdr_views: Vec<vk::ImageView> = self
+                .targets
+                .hdr_resolve_images
+                .iter()
+                .map(|img| img.view)
+                .collect();
+            let depth_views: Vec<vk::ImageView> = self
+                .targets
+                .depth_images
+                .iter()
+                .map(|img| img.view)
+                .collect();
+            lines.rebuild(&self.hw.device, &hdr_views, &depth_views, render_ext)?;
             self.lines.resources = Some(lines);
         }
 
@@ -480,11 +519,19 @@ impl VkContext {
         // descriptor at the rebuilt depth view. Mirrors the decal rebuild;
         // the pipeline, layouts, UBOs, and sampler all survive.
         if let Some(mut fog) = self.fog.resources.take() {
-            let hdr_views: Vec<vk::ImageView> =
-                self.hdr_resolve_images.iter().map(|img| img.view).collect();
-            let depth_views: Vec<vk::ImageView> =
-                self.depth_images.iter().map(|img| img.view).collect();
-            fog.rebuild(&self.device, &hdr_views, &depth_views, render_ext)?;
+            let hdr_views: Vec<vk::ImageView> = self
+                .targets
+                .hdr_resolve_images
+                .iter()
+                .map(|img| img.view)
+                .collect();
+            let depth_views: Vec<vk::ImageView> = self
+                .targets
+                .depth_images
+                .iter()
+                .map(|img| img.view)
+                .collect();
+            fog.rebuild(&self.hw.device, &hdr_views, &depth_views, render_ext)?;
             self.fog.resources = Some(fog);
         }
 
@@ -495,10 +542,10 @@ impl VkContext {
         if let Some(mut rm) = self.raymarch.take() {
             rm.rebuild(
                 RaymarchDeviceContext {
-                    alloc: &self.alloc,
-                    device: &self.device,
+                    alloc: &self.hw.alloc,
+                    device: &self.hw.device,
                     command_pool: self.commands.command_pool,
-                    queue: self.graphics_queue,
+                    queue: self.hw.graphics_queue,
                 },
                 render_ext.width,
                 render_ext.height,
@@ -518,8 +565,8 @@ impl VkContext {
         // new target views.
         if let Some(mut planar) = self.planar_reflection.take() {
             planar.rebuild(
-                &self.alloc,
-                &self.device,
+                &self.hw.alloc,
+                &self.hw.device,
                 render_ext.width,
                 render_ext.height,
             )?;
@@ -538,16 +585,20 @@ impl VkContext {
                     (scene.view, scene.image)
                 })
                 .unzip();
-            let depth_views: Vec<vk::ImageView> =
-                self.depth_images.iter().map(|img| img.view).collect();
+            let depth_views: Vec<vk::ImageView> = self
+                .targets
+                .depth_images
+                .iter()
+                .map(|img| img.view)
+                .collect();
             transparent.rebuild(
                 TransparentDeviceCtx {
-                    alloc: &self.alloc,
-                    instance: &self.instance,
-                    device: &self.device,
-                    physical_device: self.physical_device,
+                    alloc: &self.hw.alloc,
+                    instance: &self.hw.instance,
+                    device: &self.hw.device,
+                    physical_device: self.hw.physical_device,
                     command_pool: self.commands.command_pool,
-                    queue: self.graphics_queue,
+                    queue: self.hw.graphics_queue,
                 },
                 render_ext.width,
                 render_ext.height,
@@ -567,14 +618,18 @@ impl VkContext {
         // Invalidate the pyramid so the next frame's cull falls back to frustum
         // + distance until a pyramid at the new resolution has been built.
         if let Some(mut hiz) = self.cull.hiz.take() {
-            let depth_views: Vec<vk::ImageView> =
-                self.depth_images.iter().map(|img| img.view).collect();
+            let depth_views: Vec<vk::ImageView> = self
+                .targets
+                .depth_images
+                .iter()
+                .map(|img| img.view)
+                .collect();
             hiz.resize_to(
                 HiZDeviceCtx {
-                    alloc: &self.alloc,
-                    device: &self.device,
+                    alloc: &self.hw.alloc,
+                    device: &self.hw.device,
                     command_pool: self.commands.command_pool,
-                    queue: self.graphics_queue,
+                    queue: self.hw.graphics_queue,
                 },
                 HiZTarget {
                     width: render_ext.width,
@@ -594,14 +649,14 @@ impl VkContext {
         if let (Some(planar), Some(hiz)) = (self.planar_reflection.as_ref(), self.cull.hiz.as_ref())
         {
             let (view, sampler) = hiz.read_set_sources();
-            planar.rewrite_hiz_view(&self.device, view, sampler);
+            planar.rewrite_hiz_view(&self.hw.device, view, sampler);
         }
 
         // An in-flight probe bake's Hi-Z set captured the same destroyed view
         // at bake start; re-point it too or its next face binds a freed view.
         if let (Some(bake), Some(hiz)) = (self.probe.rendering.as_ref(), self.cull.hiz.as_ref()) {
             let (view, sampler) = hiz.read_set_sources();
-            bake.rewrite_hiz_view(&self.device, view, sampler);
+            bake.rewrite_hiz_view(&self.hw.device, view, sampler);
         }
 
         // Rebuild the particle framebuffers at the new resolution. The
@@ -609,9 +664,13 @@ impl VkContext {
         // descriptor sets all survive: only the framebuffers reference
         // the moved hdr_resolve targets.
         if let Some(mut p) = self.particle.resources.take() {
-            let hdr_views: Vec<vk::ImageView> =
-                self.hdr_resolve_images.iter().map(|img| img.view).collect();
-            p.rebuild(&self.device, &hdr_views, render_ext)?;
+            let hdr_views: Vec<vk::ImageView> = self
+                .targets
+                .hdr_resolve_images
+                .iter()
+                .map(|img| img.view)
+                .collect();
+            p.rebuild(&self.hw.device, &hdr_views, render_ext)?;
             self.particle.resources = Some(p);
         }
 
@@ -619,12 +678,25 @@ impl VkContext {
         // views. The histogram / output / readback buffers are
         // resolution-independent and survive the rebuild untouched.
         if let Some(mut ae) = self.auto_exposure.resources.take() {
-            let hdr_views: Vec<vk::ImageView> =
-                self.hdr_resolve_images.iter().map(|img| img.view).collect();
-            ae.rebuild(&self.device, &hdr_views, self.linear_sampler.handle());
+            let hdr_views: Vec<vk::ImageView> = self
+                .targets
+                .hdr_resolve_images
+                .iter()
+                .map(|img| img.view)
+                .collect();
+            ae.rebuild(
+                &self.hw.device,
+                &hdr_views,
+                self.scene.linear_sampler.handle(),
+            );
             self.auto_exposure.resources = Some(ae);
         }
+        Ok(())
+    }
 
+    // Rebuild SSAO, re-point the composite sets at the rebuilt scene inputs, and
+    // match the render-finished semaphores to the new swapchain image count.
+    fn rebuild_ssao_and_composite_inputs(&mut self, render_ext: vk::Extent2D) -> RenderResult<()> {
         // Rebuild the SSAO targets + re-point the SSAO descriptor at set 0
         // binding 6 of every global set against the per-frame pooled `ao_output`
         // views (the transient pool was already rebuilt above). SSAO's stale
@@ -640,11 +712,14 @@ impl VkContext {
                 Some(gb) => gb.normal_depth_views(),
                 None => Vec::new(),
             };
-            let ao_views = self.transient_pool.views_for_frames("ao_output", frames);
+            let ao_views = self
+                .targets
+                .transient_pool
+                .views_for_frames("ao_output", frames);
             ssao.rebuild(
                 &SsaoDeviceCtx {
-                    alloc: &self.alloc,
-                    device: &self.device,
+                    alloc: &self.hw.alloc,
+                    device: &self.hw.device,
                 },
                 render_ext.width,
                 render_ext.height,
@@ -653,13 +728,14 @@ impl VkContext {
             )?;
             for (i, &set) in self.descriptors.global_sets.iter().enumerate() {
                 let ao_view = self
+                    .targets
                     .transient_pool
                     .view_for("ao_output", i)
-                    .unwrap_or(self.ssao_white.view);
+                    .unwrap_or(self.scene.ssao_white.view);
                 let info = vk::DescriptorImageInfo::default()
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                     .image_view(ao_view)
-                    .sampler(self.linear_sampler.handle());
+                    .sampler(self.scene.linear_sampler.handle());
                 let write = vk::WriteDescriptorSet::default()
                     .dst_set(set)
                     .dst_binding(6)
@@ -668,7 +744,8 @@ impl VkContext {
                 // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
                 // every set and resource it names belongs to this device.
                 unsafe {
-                    self.device
+                    self.hw
+                        .device
                         .update_descriptor_sets(std::slice::from_ref(&write), &[])
                 };
             }
@@ -688,27 +765,28 @@ impl VkContext {
                 self.post_scene_image(i).view
             };
             write_composite_set(
-                &self.device,
+                &self.hw.device,
                 set,
                 scene_view,
                 self.bloom.mips[i][0].view,
-                self.color_lut.view,
+                self.scene.color_lut.view,
                 self.composite.sampler.handle(),
             );
             // The view-mode channel sources are resolution-dependent too, so
             // they follow the rebuilt G-buffer / AO targets.
             let (nd_view, rough_view) = match self.gbuffer.as_ref() {
                 Some(gb) => (gb.normal_depth_views()[i], gb.roughness_views()[i]),
-                None => (self.ssao_white.view, self.ssao_white.view),
+                None => (self.scene.ssao_white.view, self.scene.ssao_white.view),
             };
             write_composite_channel_set(
-                &self.device,
+                &self.hw.device,
                 set,
                 nd_view,
                 rough_view,
-                self.transient_pool
+                self.targets
+                    .transient_pool
                     .view_for("ao_output", i)
-                    .unwrap_or(self.ssao_white.view),
+                    .unwrap_or(self.scene.ssao_white.view),
                 self.composite.sampler.handle(),
             );
         }
@@ -721,13 +799,13 @@ impl VkContext {
                 // SAFETY: the handle was created from this device and is destroyed exactly once;
                 // the caller has already waited for the device to go idle, so no submission still
                 // references it.
-                unsafe { self.device.destroy_semaphore(s, None) };
+                unsafe { self.hw.device.destroy_semaphore(s, None) };
             }
             let sem_info = vk::SemaphoreCreateInfo::default();
             self.frame_sync.render_finished = (0..self.swapchain.images.len())
                 // SAFETY: the create-info and every slice it borrows are live for the call, and
                 // each handle it names belongs to this device.
-                .map(|_| unsafe { self.device.create_semaphore(&sem_info, None) })
+                .map(|_| unsafe { self.hw.device.create_semaphore(&sem_info, None) })
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| format!("semaphore: {e}"))?;
         }

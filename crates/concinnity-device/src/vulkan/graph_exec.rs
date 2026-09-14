@@ -570,7 +570,7 @@ impl VkContext {
         // must never create or retire an owned object, so it is handed the
         // dispatch table alone. The owning handle is `Arc` and would be sound to
         // send, but nothing here needs the device's lifetime.
-        let device = ash::Device::clone(&self.device);
+        let device = ash::Device::clone(&self.hw.device);
 
         // One output slot per graph pass index; each worker stores its finished
         // command buffer at its own index. Disjoint indices, but a `Mutex`
@@ -593,7 +593,7 @@ impl VkContext {
         #[cfg(debug_assertions)]
         render_graph::assert_slot_aliasing_sound(
             graph,
-            self.transient_pool.slot_labels(),
+            self.targets.transient_pool.slot_labels(),
             "vulkan",
         );
         // The graph now carries a two-queue schedule (a `PassQueue` per pass plus
@@ -675,7 +675,7 @@ impl VkContext {
                         // writes are valid. A pass absent from a later frame's graph
                         // leaves its slots unwritten; the readback's
                         // `WITH_AVAILABILITY` reports those as 0.
-                        if let Some(pool) = ctx.timestamp_query_pool {
+                        if let Some(pool) = ctx.hw.timestamp_query_pool {
                             let (ts_start, _) = super::pass_timing::pass_pair(frame_idx, pass_id);
                             rec.write_timestamp(
                                 vk::PipelineStageFlags::TOP_OF_PIPE,
@@ -695,7 +695,7 @@ impl VkContext {
                             return;
                         }
                         emit_pass_epilogue(device_ref, buf, registry_ref, pass);
-                        if let Some(pool) = ctx.timestamp_query_pool {
+                        if let Some(pool) = ctx.hw.timestamp_query_pool {
                             let (_, ts_end) = super::pass_timing::pass_pair(frame_idx, pass_id);
                             rec.write_timestamp(
                                 vk::PipelineStageFlags::BOTTOM_OF_PIPE,
@@ -724,12 +724,12 @@ impl VkContext {
         // with its own per-pass timestamp pair (in the end buffer, which also
         // carries the whole-frame end timestamp written later in `record_frame`).
         if let Some(idx) = composite_idx {
-            if let Some(pool) = self.timestamp_query_pool {
+            if let Some(pool) = self.hw.timestamp_query_pool {
                 let (ts_start, _) = super::pass_timing::pass_pair(frame_idx, PassId::Composite);
                 // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
                 // slice these commands name is live for the call.
                 unsafe {
-                    self.device.cmd_write_timestamp(
+                    self.hw.device.cmd_write_timestamp(
                         params.cmd,
                         vk::PipelineStageFlags::TOP_OF_PIPE,
                         pool,
@@ -738,7 +738,7 @@ impl VkContext {
                 }
             }
             emit_pass_prologue(
-                &self.device,
+                &self.hw.device,
                 params.cmd,
                 registry,
                 &alias_barriers[idx],
@@ -748,15 +748,15 @@ impl VkContext {
             // `record_frame`, so this scope adopts it rather than beginning it.
             // SAFETY: `params.cmd` is the buffer `draw_frame` reset and began above this call, and
             // it belongs to this device.
-            let rec = unsafe { Recorder::assume_recording(&self.device, params.cmd) };
+            let rec = unsafe { Recorder::assume_recording(&self.hw.device, params.cmd) };
             self.encode_pass_into(PassId::Composite, &rec, params, particle_frame.as_ref())?;
-            emit_pass_epilogue(&self.device, params.cmd, registry, &graph.passes[idx]);
-            if let Some(pool) = self.timestamp_query_pool {
+            emit_pass_epilogue(&self.hw.device, params.cmd, registry, &graph.passes[idx]);
+            if let Some(pool) = self.hw.timestamp_query_pool {
                 let (_, ts_end) = super::pass_timing::pass_pair(frame_idx, PassId::Composite);
                 // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
                 // slice these commands name is live for the call.
                 unsafe {
-                    self.device.cmd_write_timestamp(
+                    self.hw.device.cmd_write_timestamp(
                         params.cmd,
                         vk::PipelineStageFlags::BOTTOM_OF_PIPE,
                         pool,
@@ -769,7 +769,7 @@ impl VkContext {
         // Return every driven resource the frame left off its resting layout.
         // Recorded last into the outer "end" buffer, which is submitted after
         // every pass buffer.
-        emit_graph_restores(&self.device, params.cmd, registry, graph);
+        emit_graph_restores(&self.hw.device, params.cmd, registry, graph);
 
         // Collect the per-pass buffers in ascending graph index = toposort
         // order (the `None` Composite slot is skipped). Never sort: the submit
@@ -838,10 +838,15 @@ impl VkContext {
         }
         table.resize_with(graph.passes.len(), Vec::new);
         for res in &graph.resources {
-            if self.transient_pool.alias_predecessor(res.label).is_none() {
+            if self
+                .targets
+                .transient_pool
+                .alias_predecessor(res.label)
+                .is_none()
+            {
                 continue;
             }
-            if let Some(image) = self.transient_pool.image_for(res.label, frame_idx) {
+            if let Some(image) = self.targets.transient_pool.image_for(res.label, frame_idx) {
                 let first = res.lifetime.first;
                 if first < table.len() {
                     table[first].push(image);
@@ -926,6 +931,7 @@ impl VkContext {
             // A pooled transient: fully rewritten each frame, so its first use
             // discards whatever the pool's previous tenant left.
             "ao_output" => self
+                .targets
                 .transient_pool
                 .image_for("ao_output", frame_idx)
                 .map(|i| image(i, 1, 1, VkResting::Discarded)),
@@ -957,6 +963,7 @@ impl VkContext {
             // pass clears it and its render pass declares an UNDEFINED initial
             // layout, so nothing survives the frame boundary.
             "hdr_depth" => self
+                .targets
                 .depth_images
                 .get(frame_idx)
                 .map(|d| image(d.image, 1, 1, VkResting::Discarded)),
