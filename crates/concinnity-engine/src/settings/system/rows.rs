@@ -1,11 +1,18 @@
-// Settings-row plumbing shared by the per-frame SettingCommand drain and
-// GraphicsSystem's init-time row captures: label / sprite writers, the
-// action-string parsers, and the gray-out helpers for disabled rows.
+// Settings-row plumbing shared by the per-frame SettingCommand drain and the
+// init-time row captures: label / sprite writers, the gray-out helpers for
+// disabled rows, and the captures GraphicsSystem's init runs on the
+// SettingsState it resolves.
 
-use concinnity_core::components::{HitRegion, ScrollPanel, Sprite, TextLabel};
+use concinnity_core::components::{
+    GamepadAction, HitRegion, ScrollPanel, Sprite, TextLabel, WindowMode,
+};
 use concinnity_core::ecs::PipelineContext;
+use concinnity_core::render::{display_mode, keymap};
 use concinnity_host::thread::asset_id::AssetId;
 
+use super::SettingsState;
+use crate::gfx::system::{PadRebindViz, RebindViz, SliderViz};
+use crate::settings;
 use crate::settings::action;
 
 // Muted gray applied to the labels of a capability-disabled settings row, so it
@@ -113,6 +120,138 @@ pub(crate) fn set_cached_row_label(
 // slide a slider's handle along its track.
 pub(crate) fn set_sprite_x(ctx: &mut PipelineContext, id: AssetId, x: f32) {
     crate::ecs::by_asset_id::update::<Sprite>(ctx, Some(id), |s| s.x = x);
+}
+
+impl SettingsState {
+    // Capture each slider row's runtime bookkeeping from its drag HitRegion +
+    // handle Sprite, then sync the handle position and value label to the live
+    // value. Runs once at init, before UiInputSystem drains the HitRegions and
+    // hides the screen elements. `persisted` serves every controls slider, which
+    // reads the store rather than the render params.
+    pub(crate) fn init_sliders(
+        &mut self,
+        ctx: &mut PipelineContext,
+        persisted: &crate::config::Settings,
+    ) {
+        let sprite_w: std::collections::HashMap<AssetId, f32> = ctx
+            .query::<Sprite>()
+            .map(|s| (s.asset_id, s.width))
+            .collect();
+        let mut sliders: Vec<SliderViz> = Vec::new();
+        for r in ctx.query::<HitRegion>() {
+            let Some(key) = action::key_with_verb(&r.action, "drag") else {
+                continue;
+            };
+            let (Some(handle_id), Some(value_id)) = (r.drag_handle, r.label) else {
+                continue;
+            };
+            let handle_w = sprite_w.get(&handle_id).copied().unwrap_or(0.0);
+            sliders.push(SliderViz {
+                key: key.to_string(),
+                track_x: r.x,
+                track_w: r.width,
+                handle_w,
+                handle_id,
+                value_id,
+            });
+        }
+        for s in &sliders {
+            let Some(slider) = settings::slider(&s.key) else {
+                continue;
+            };
+            let value = slider.current_value(
+                &self.post_process,
+                &self.post_config,
+                self.ambient_intensity,
+                persisted,
+            );
+            let hx = s.track_x + slider.fraction(value) * (s.track_w - s.handle_w).max(0.0);
+            set_sprite_x(ctx, s.handle_id, hx);
+            set_label_content(ctx, s.value_id, &(slider.format)(value));
+        }
+        self.sliders = sliders;
+    }
+
+    // Capture each key-rebind row's bookkeeping from its `setting:key_*:rebind`
+    // HitRegion, then sync each value label to the live bound key. Runs once at
+    // init (after the keymap is seeded), before UiInputSystem drains the
+    // HitRegions.
+    pub(crate) fn init_rebind_rows(&mut self, ctx: &mut PipelineContext) {
+        let mut rows: Vec<RebindViz> = Vec::new();
+        let mut pad_rows: Vec<PadRebindViz> = Vec::new();
+        for r in ctx.query::<HitRegion>() {
+            let (Some(key), Some(value_id)) = (action::key_with_verb(&r.action, "rebind"), r.label)
+            else {
+                continue;
+            };
+            // A `key_*` setting is a keyboard rebind row; a `pad_*` setting is
+            // a gamepad rebind row.
+            if let Some(action) = keymap::Bindable::from_setting_key(key) {
+                rows.push(RebindViz { action, value_id });
+            } else if let Some(action) = GamepadAction::from_setting_key(key) {
+                pad_rows.push(PadRebindViz { action, value_id });
+            }
+        }
+        for row in &rows {
+            let name = self.keymap.get(row.action).display_name();
+            set_label_content(ctx, row.value_id, name);
+        }
+        for row in &pad_rows {
+            let name = self.gamepad_map.get(row.action).display_name();
+            set_label_content(ctx, row.value_id, name);
+        }
+        self.rebind_rows = rows;
+        self.pad_rebind_rows = pad_rows;
+    }
+
+    // Capture each cycle row's setting key -> value-label id, so a runtime change
+    // can relabel a row other than the one clicked (the master preset relabels
+    // its dependents; a quality-toggle change relabels the master row). Runs at
+    // init, before UiInputSystem drains the HitRegions.
+    pub(crate) fn init_cycle_value_labels(&mut self, ctx: &mut PipelineContext) {
+        let mut labels = std::collections::HashMap::new();
+        for r in ctx.query::<HitRegion>() {
+            if let (Some(key), Some(value_id)) = (action::cycle_key(&r.action), r.label) {
+                labels.insert(key.to_string(), value_id);
+            }
+        }
+        self.cycle_value_labels = labels;
+    }
+
+    // Capture the show_fps / show_vram row labels (with their authored colors)
+    // so the master "Display performance stats" toggle can gray them out at
+    // runtime and restore them, and apply the initial gray from the resolved
+    // toggle. Runs once at init while the HitRegions / ScrollPanels are present.
+    pub(crate) fn capture_perf_sub_rows(&mut self, ctx: &mut PipelineContext) {
+        self.perf_sub_row_labels = capture_row_labels(ctx, &["show_fps", "show_vram"]);
+        set_rows_grayed(ctx, &self.perf_sub_row_labels, !self.perf_stats);
+    }
+
+    // Capture the Resolution row's labels and apply the initial gray from the
+    // resolved window mode: the row only applies in fullscreen (windowed sizes
+    // come from the window itself, borderless covers the display), so it is
+    // grayed + inert in the other modes. Same init window as the perf rows.
+    pub(crate) fn capture_resolution_row(&mut self, ctx: &mut PipelineContext) {
+        self.resolution_row_labels = capture_row_labels(ctx, &["resolution"]);
+        set_rows_grayed(
+            ctx,
+            &self.resolution_row_labels,
+            self.window_args.mode != WindowMode::Fullscreen,
+        );
+    }
+
+    // The mode the Resolution row displays and cycles from: the user's choice,
+    // else the display's own mode, else the authored window size (a backend
+    // that cannot read the display; snaps to the nearest listed mode).
+    pub(crate) fn effective_resolution(&self) -> display_mode::DisplayMode {
+        self.resolution
+            .or(self.current_mode)
+            .unwrap_or(display_mode::DisplayMode {
+                width: self.window_args.width,
+                height: self.window_args.height,
+                refresh_hz: 0,
+            })
+    }
 }
 
 #[cfg(test)]
@@ -336,5 +475,87 @@ mod tests {
         let mut ctx = world.ctx();
 
         assert!(capture_row_labels(&mut ctx, &["resolution"]).is_empty());
+    }
+
+    // A perf sub-row captured while the stats master is off starts grayed, and
+    // one captured while it is on keeps its authored color.
+    #[test]
+    fn capture_perf_sub_rows_applies_the_initial_gray() {
+        let authored = [0.8, 0.8, 0.8];
+        for (perf_stats, expected) in [(false, DISABLED_ROW_COLOR), (true, authored)] {
+            let mut world = TestWorld::new();
+            world.push(label(1, authored));
+            world.push(region("setting:show_fps:next", Some(1)));
+            let mut state = SettingsState::for_tests();
+            state.perf_stats = perf_stats;
+            let mut ctx = world.ctx();
+
+            state.capture_perf_sub_rows(&mut ctx);
+            assert_eq!(state.perf_sub_row_labels, [(AssetId(1), authored)]);
+            assert_eq!(ctx.query::<TextLabel>().next().unwrap().color, expected);
+        }
+    }
+
+    // The Resolution row starts grayed in every mode but fullscreen.
+    #[test]
+    fn capture_resolution_row_grays_outside_fullscreen() {
+        let authored = [0.8, 0.8, 0.8];
+        for (mode, expected) in [
+            (WindowMode::Windowed, DISABLED_ROW_COLOR),
+            (WindowMode::Borderless, DISABLED_ROW_COLOR),
+            (WindowMode::Fullscreen, authored),
+        ] {
+            let mut world = TestWorld::new();
+            world.push(label(1, authored));
+            world.push(region("setting:resolution:next", Some(1)));
+            let mut state = SettingsState::for_tests();
+            state.window_args.mode = mode;
+            let mut ctx = world.ctx();
+
+            state.capture_resolution_row(&mut ctx);
+            assert_eq!(state.resolution_row_labels, [(AssetId(1), authored)]);
+            assert_eq!(
+                ctx.query::<TextLabel>().next().unwrap().color,
+                expected,
+                "{mode:?}"
+            );
+        }
+    }
+
+    // Each cycle row's value label is captured under its key; drag and rebind
+    // rows are not cycle rows.
+    #[test]
+    fn init_cycle_value_labels_maps_each_cycle_key_to_its_label() {
+        let mut world = TestWorld::new();
+        world.push(region("setting:vsync:next", Some(1)));
+        world.push(region("setting:vsync:prev", Some(1)));
+        world.push(region("setting:exposure:drag", Some(2)));
+        let mut state = SettingsState::for_tests();
+        let mut ctx = world.ctx();
+
+        state.init_cycle_value_labels(&mut ctx);
+        assert_eq!(state.cycle_value_labels.len(), 1);
+        assert_eq!(state.cycle_value_labels.get("vsync"), Some(&AssetId(1)));
+    }
+
+    // The Resolution row reads the user's choice first, then the display's own
+    // mode, then the authored window size.
+    #[test]
+    fn effective_resolution_falls_back_from_choice_to_display_to_window() {
+        let mode = |width, height, refresh_hz| display_mode::DisplayMode {
+            width,
+            height,
+            refresh_hz,
+        };
+        let mut state = SettingsState::for_tests();
+        state.window_args.width = 640;
+        state.window_args.height = 360;
+        assert_eq!(state.effective_resolution(), mode(640, 360, 0));
+
+        state.current_mode = Some(mode(2560, 1440, 144));
+        assert_eq!(state.effective_resolution(), mode(2560, 1440, 144));
+
+        state.resolution = Some(mode(1920, 1080, 60));
+        assert_eq!(state.effective_resolution(), mode(1920, 1080, 60));
     }
 }

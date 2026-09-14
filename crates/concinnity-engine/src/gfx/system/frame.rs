@@ -4,8 +4,8 @@
 // rebase run in StreamingSystem, scheduled just before this system.
 
 use concinnity_core::components::{
-    Camera3D, CharacterRig, DirectionalLight, FrameInput, GamepadAction, GlobalTransform,
-    HitRegion, RenderHandle, ScrollPanel, SkeletonPose, Sprite, TextLabel, Transform, WindowMode,
+    Camera3D, CharacterRig, DirectionalLight, FrameInput, GlobalTransform, HitRegion, RenderHandle,
+    ScrollPanel, SkeletonPose, TextLabel, Transform,
 };
 use concinnity_core::ecs::{
     FlyCam, HiddenAssets, MenuOverride, PickEntry, PickIndex, PipelineContext, StepResult,
@@ -15,7 +15,6 @@ use concinnity_core::gfx::frustum;
 use concinnity_core::gfx::profile;
 use concinnity_core::gfx::transform_propagation;
 use concinnity_core::render::input;
-use concinnity_core::render::keymap;
 use concinnity_core::render::overlay_maps;
 use concinnity_core::render::scene_flow;
 use concinnity_core::render::snapshot::{FrameScalars, RenderSnapshot, SceneOpRecorder};
@@ -25,12 +24,7 @@ use super::sky_follow;
 use super::*;
 use crate::settings;
 use crate::settings::action;
-// The settings-row helpers this system's init-time captures share with the
-// SettingCommand drain (which now lives in `settings::system`).
-use crate::settings::system::rows::{
-    DISABLED_ROW_COLOR, capture_row_labels, expand_dim_set, set_label_content, set_rows_grayed,
-    set_sprite_x,
-};
+use crate::settings::system::rows::{DISABLED_ROW_COLOR, expand_dim_set};
 
 // The model matrix pushed for an editor-hidden object's draw slots: zero
 // linear part and translation, so every vertex collapses to a degenerate
@@ -550,102 +544,6 @@ impl GraphicsSystem {
         ctx.insert_resource(crate::gfx::overlay::OverlayRecycle(spent));
     }
 
-    // Capture each slider row's runtime bookkeeping from its drag HitRegion +
-    // handle Sprite, then sync the handle position and value label to the live
-    // value. Runs once at init, before UiInputSystem drains the HitRegions and
-    // hides the screen elements. The HitRegions / Sprites are still present here.
-    pub(super) fn init_sliders(&mut self, ctx: &mut PipelineContext) {
-        let sprite_w: std::collections::HashMap<AssetId, f32> = ctx
-            .query::<Sprite>()
-            .map(|s| (s.asset_id, s.width))
-            .collect();
-        let mut sliders: Vec<SliderViz> = Vec::new();
-        for r in ctx.query::<HitRegion>() {
-            let Some(key) = action::key_with_verb(&r.action, "drag") else {
-                continue;
-            };
-            let (Some(handle_id), Some(value_id)) = (r.drag_handle, r.label) else {
-                continue;
-            };
-            let handle_w = sprite_w.get(&handle_id).copied().unwrap_or(0.0);
-            sliders.push(SliderViz {
-                key: key.to_string(),
-                track_x: r.x,
-                track_w: r.width,
-                handle_w,
-                handle_id,
-                value_id,
-            });
-        }
-        // Sync each slider's handle + value label to its live value. One
-        // persisted snapshot serves every controls slider (they read the store,
-        // not the render params), so the capture never re-reads it per row.
-        let persisted = self.persisted_settings();
-        for s in &sliders {
-            let Some(slider) = settings::slider(&s.key) else {
-                continue;
-            };
-            let value = slider.current_value(
-                &self.post_process,
-                &self.post_config,
-                self.ambient_intensity,
-                &persisted,
-            );
-            let hx = s.track_x + slider.fraction(value) * (s.track_w - s.handle_w).max(0.0);
-            set_sprite_x(ctx, s.handle_id, hx);
-            set_label_content(ctx, s.value_id, &(slider.format)(value));
-        }
-        self.sliders = sliders;
-    }
-
-    // Capture each key-rebind row's bookkeeping from its `setting:key_*:rebind`
-    // HitRegion, then sync each value label to the live bound key. Runs once at
-    // init (after the keymap is seeded), before UiInputSystem drains the
-    // HitRegions; they are still present here.
-    pub(super) fn init_rebind_rows(&mut self, ctx: &mut PipelineContext) {
-        let mut rows: Vec<RebindViz> = Vec::new();
-        let mut pad_rows: Vec<super::PadRebindViz> = Vec::new();
-        for r in ctx.query::<HitRegion>() {
-            let (Some(key), Some(value_id)) = (action::key_with_verb(&r.action, "rebind"), r.label)
-            else {
-                continue;
-            };
-            // A `key_*` setting is a keyboard rebind row; a `pad_*` setting is
-            // a gamepad rebind row.
-            if let Some(action) = keymap::Bindable::from_setting_key(key) {
-                rows.push(RebindViz { action, value_id });
-            } else if let Some(action) = GamepadAction::from_setting_key(key) {
-                pad_rows.push(super::PadRebindViz { action, value_id });
-            }
-        }
-        // Sync each value label to the live binding (persisted or default).
-        for row in &rows {
-            let name = self.keymap.get(row.action).display_name();
-            set_label_content(ctx, row.value_id, name);
-        }
-        for row in &pad_rows {
-            let name = self.gamepad_map.get(row.action).display_name();
-            set_label_content(ctx, row.value_id, name);
-        }
-        self.rebind_rows = rows;
-        self.pad_rebind_rows = pad_rows;
-    }
-
-    // Capture each cycle row's setting key -> value-label id, so a runtime change
-    // can relabel a row other than the one clicked (the master preset relabels
-    // its dependents; a quality-toggle change relabels the master row). Runs at
-    // init, before UiInputSystem drains the HitRegions (GraphicsSystem.init runs
-    // first), since they cannot be re-queried once drained.
-    pub(super) fn init_cycle_value_labels(&mut self, ctx: &mut PipelineContext) {
-        let mut labels = std::collections::HashMap::new();
-        for r in ctx.query::<HitRegion>() {
-            if let (Some(key), Some(value_id)) = (action::cycle_key(&r.action), r.label) {
-                labels.insert(key.to_string(), value_id);
-            }
-        }
-        self.cycle_value_labels = labels;
-    }
-
     // Capture each ScrollPanel's per-element clip band (reference space) so the
     // draw path scissors scroll-content elements to their panel and off-band
     // rows do not bleed over the chrome. Runs at init, before UiInputSystem
@@ -707,30 +605,6 @@ impl GraphicsSystem {
                 l.color = DISABLED_ROW_COLOR;
             }
         }
-    }
-
-    // Capture the show_fps / show_vram row labels (with their authored colors)
-    // so the master "Display performance stats" toggle can gray them out at
-    // runtime and restore them, and apply the initial gray from the resolved
-    // toggle. Runs once at init while the HitRegions / ScrollPanels are present
-    // (before UiInputSystem drains them), the same window
-    // `apply_capability_gating` and the other init-time row captures use.
-    pub(super) fn capture_perf_sub_rows(&mut self, ctx: &mut PipelineContext) {
-        self.perf_sub_row_labels = capture_row_labels(ctx, &["show_fps", "show_vram"]);
-        set_rows_grayed(ctx, &self.perf_sub_row_labels, !self.perf_stats);
-    }
-
-    // Capture the Resolution row's labels and apply the initial gray from the
-    // resolved window mode: the row only applies in fullscreen (windowed sizes
-    // come from the window itself, borderless covers the display), so it is
-    // grayed + inert in the other modes. Same init window as the perf rows.
-    pub(super) fn capture_resolution_row(&mut self, ctx: &mut PipelineContext) {
-        self.resolution_row_labels = capture_row_labels(ctx, &["resolution"]);
-        set_rows_grayed(
-            ctx,
-            &self.resolution_row_labels,
-            self.window_args.mode != WindowMode::Fullscreen,
-        );
     }
 }
 

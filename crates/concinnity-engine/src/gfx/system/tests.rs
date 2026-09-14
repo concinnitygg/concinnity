@@ -703,8 +703,9 @@ fn persisted_settings_override_authored_config() {
     let gs = init_graphics(&mut world, hooks);
 
     assert!(!gs.failed);
-    assert_eq!(gs.fps_cap, 30, "persisted cap overrides the world's 0");
-    assert_eq!(gs.quality_preset, QualityPreset::Custom);
+    let live = settings_state(&world);
+    assert_eq!(live.fps_cap, 30, "persisted cap overrides the world's 0");
+    assert_eq!(live.quality_preset, QualityPreset::Custom);
     let s = lock(&state);
     let init = s.init.as_ref().unwrap();
     assert!(init.vsync, "persisted vsync overrides the authored false");
@@ -718,7 +719,7 @@ fn low_preset_ceiling_clamps_quality_knobs() {
     settings.graphics.quality_preset = Some(QualityPreset::Low);
     let (state, hooks) = recording_hooks_with(settings, GpuProfile::UNKNOWN);
     let mut world = scene_builder().build();
-    let gs = init_graphics(&mut world, hooks);
+    init_graphics(&mut world, hooks);
 
     // The authored GraphicsConfig defaults (4096 / 80 / 4 / 16) are clamped
     // under the Low ceiling; the authored baselines are kept for a later
@@ -729,10 +730,11 @@ fn low_preset_ceiling_clamps_quality_knobs() {
     assert_eq!(init.shadows.distance, 40);
     assert_eq!(init.shadows.cascades, 2);
     assert_eq!(init.anisotropy, 4);
-    assert_eq!(gs.authored_shadow_map_size, 4096);
-    assert_eq!(gs.authored_shadow_distance, 80);
-    assert_eq!(gs.authored_shadow_cascades, 4);
-    assert_eq!(gs.authored_anisotropy, 16);
+    let live = settings_state(&world);
+    assert_eq!(live.authored_shadow_map_size, 4096);
+    assert_eq!(live.authored_shadow_distance, 80);
+    assert_eq!(live.authored_shadow_cascades, 4);
+    assert_eq!(live.authored_anisotropy, 16);
 }
 
 #[test]
@@ -749,9 +751,9 @@ fn auto_preset_resolves_ceiling_from_gpu_tier() {
     };
     let (state, hooks) = recording_hooks_with(crate::config::Settings::default(), profile);
     let mut world = scene_builder().build();
-    let gs = init_graphics(&mut world, hooks);
+    init_graphics(&mut world, hooks);
 
-    assert_eq!(gs.quality_preset, QualityPreset::Auto);
+    assert_eq!(settings_state(&world).quality_preset, QualityPreset::Auto);
     let s = lock(&state);
     assert_eq!(s.init.as_ref().unwrap().shadows.map_size, 1024);
 }
@@ -2254,8 +2256,8 @@ fn the_quality_preset_flag_reaches_the_ray_tracing_ceiling() {
     crate::app::dev_flags::set_quality_preset(None);
     let (clamped, hooks) = recording_hooks_with(settings.clone(), profile_at(GpuTier::MidDiscrete));
     let mut world = post_config_scene(authored.clone()).build();
-    let gs = init_graphics_under_flags(&mut world, hooks);
-    assert_eq!(gs.quality_preset, QualityPreset::Auto);
+    init_graphics_under_flags(&mut world, hooks);
+    assert_eq!(settings_state(&world).quality_preset, QualityPreset::Auto);
     assert!(
         !lock(&clamped).init.as_ref().unwrap().rt_reflections_on,
         "the Auto -> High ceiling clamps RT off, silently"
@@ -2264,9 +2266,9 @@ fn the_quality_preset_flag_reaches_the_ray_tracing_ceiling() {
     crate::app::dev_flags::set_quality_preset(Some(QualityPreset::Ultra));
     let (forced, hooks) = recording_hooks_with(settings, profile_at(GpuTier::MidDiscrete));
     let mut world = post_config_scene(authored).build();
-    let gs = init_graphics_under_flags(&mut world, hooks);
+    init_graphics_under_flags(&mut world, hooks);
     assert_eq!(
-        gs.quality_preset,
+        settings_state(&world).quality_preset,
         QualityPreset::Ultra,
         "the flag outranks the persisted Auto"
     );
@@ -2347,10 +2349,10 @@ fn a_high_ceiling_never_enables_what_the_world_turned_off() {
         ..Default::default()
     })
     .build();
-    let gs = init_graphics(&mut world, hooks);
+    init_graphics(&mut world, hooks);
 
-    assert_eq!(gs.quality_preset, QualityPreset::Ultra);
     let live = settings_state(&world);
+    assert_eq!(live.quality_preset, QualityPreset::Ultra);
     assert!(!live.post_config.ssao, "a feature turned off stays off");
     assert!(!live.post_config.ssr);
     assert!(!live.post_config.ray_traced_reflections);
@@ -2407,8 +2409,8 @@ fn auto_preset_shadow_ceiling_tracks_the_detected_tier() {
         let (state, hooks) =
             recording_hooks_with(crate::config::Settings::default(), profile_at(tier));
         let mut world = scene_builder().build();
-        let gs = init_graphics(&mut world, hooks);
-        assert_eq!(gs.quality_preset, QualityPreset::Auto);
+        init_graphics(&mut world, hooks);
+        assert_eq!(settings_state(&world).quality_preset, QualityPreset::Auto);
         lock(&state).init.as_ref().unwrap().shadows.map_size
     })
     .collect();
@@ -3287,6 +3289,22 @@ fn a_malformed_font_payload_fails_init() {
     let (state, hooks) = recording_hooks();
     let mut b = scene_builder();
     b.push_resource(ResourceKind::Font, b"not-a-font");
+    let mut world = b.build();
+    let gs = init_graphics(&mut world, hooks);
+
+    assert!(gs.failed);
+    assert!(!backend_parked(&world));
+    assert!(lock(&state).init.is_none(), "backend never constructed");
+}
+
+// A texture payload that does not deserialize fails the world build, like a
+// malformed Font: the pool is a build product, so bad bytes mean a broken build.
+#[test]
+fn a_malformed_texture_payload_fails_init() {
+    let (state, hooks) = recording_hooks();
+    let mut b = scene_builder();
+    let bad = b.payload(b"not-a-texture");
+    b.texture_records[0].payload = Some(bad);
     let mut world = b.build();
     let gs = init_graphics(&mut world, hooks);
 

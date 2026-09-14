@@ -278,15 +278,7 @@ impl SettingsState {
         if self.display_modes.is_empty() {
             return false;
         }
-        let effective =
-            self.resolution
-                .or(self.current_mode)
-                .unwrap_or(display_mode::DisplayMode {
-                    width: self.window_args.width,
-                    height: self.window_args.height,
-                    refresh_hz: 0,
-                });
-        let cur = display_mode::index_of(&self.display_modes, effective);
+        let cur = display_mode::index_of(&self.display_modes, self.effective_resolution());
         let next = settings::cycle(cur, self.display_modes.len(), cmd.op);
         let mode = self.display_modes[next];
         self.resolution = Some(mode);

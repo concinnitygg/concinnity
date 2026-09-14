@@ -35,7 +35,6 @@ use concinnity_core::components::{
     VoxelWorld, WaterSurface, Window,
 };
 use concinnity_core::ecs::Entity;
-use concinnity_core::ecs::EventCursor;
 use concinnity_core::ecs::FontHandle;
 use concinnity_core::ecs::FrameRateCap;
 use concinnity_core::ecs::MaterialHandle;
@@ -72,10 +71,10 @@ use super::draw_geometry::{draw_object_position, gather_auto_seed_triangles};
 use super::*;
 use crate::gfx::draw_list;
 use crate::gfx::material_entry::MaterialEntry;
+use crate::settings::system::{SettingsSlot, SettingsState};
 
-// The resolved render settings the rest of init consumes after
-// `init_render_settings` has written the remaining values onto the
-// GraphicsSystem: the packed post-processing config handed to the backend ctor,
+// The resolved render config `init_render_settings` returns beside the live
+// settings state: the packed post-processing config handed to the backend ctor,
 // the quality ceiling (planar-reflection budget), and the drained StreamingConfig.
 struct ResolvedRenderConfig {
     post: backend_init::PostSettings,
@@ -299,25 +298,33 @@ fn mesh_stream_data(
 
 impl GraphicsSystem {
     // Resolve every render setting (window, quality preset + ceiling, post-process
-    // tunables, shadows, streaming caps, keymap) onto the GraphicsSystem, sync the
-    // settings-menu value labels, and return the config the rest of init needs.
-    fn init_render_settings(&mut self, ctx: &mut PipelineContext) -> ResolvedRenderConfig {
+    // tunables, shadows, streaming caps, keymap) into a fresh settings state, sync
+    // the settings-menu value labels, and return it with the config the rest of
+    // init needs.
+    fn init_render_settings(
+        &mut self,
+        ctx: &mut PipelineContext,
+    ) -> (ResolvedRenderConfig, SettingsState) {
+        let mut settings = SettingsState::new();
         // Persisted settings-menu choices override the world's authored defaults
         // below (each field is None when the user never changed that setting).
         let user_graphics = self.persisted_settings().graphics;
-        self.persisted_graphics = user_graphics.clone();
+        settings.persisted_graphics = user_graphics.clone();
 
         // Detect the GPU before the backend is built so the auto-config quality
         // ceiling can influence the render targets / effect pipelines sized at
-        // backend init. Held on self for later (e.g. the menu's preset label).
-        self.gpu_profile = self.detect_gpu_profile();
+        // backend init. Held on the settings state for the menu's preset label.
+        settings.gpu_profile = self.detect_gpu_profile();
         // Published so readouts outside the graphics system (the editor's Health
         // panel) can size live VRAM against the device's budget without reaching
         // for the backend itself.
-        ctx.insert_resource(self.gpu_profile);
+        ctx.insert_resource(settings.gpu_profile);
         crate::crash::note(
             "gpu",
-            &format!("{:?} {:?}", self.gpu_profile.vendor, self.gpu_profile.tier),
+            &format!(
+                "{:?} {:?}",
+                settings.gpu_profile.vendor, settings.gpu_profile.tier
+            ),
         );
         // Resolve the master quality preset. The launch's `--quality-preset` flag
         // wins first and is never persisted, so a test / CI / GPU probe can force
@@ -337,17 +344,17 @@ impl GraphicsSystem {
                 });
         // Hold the resolved preset as the live value the settings-menu master
         // row cycles (and that an individual quality-row change flips to Custom).
-        self.quality_preset = active_preset;
+        settings.quality_preset = active_preset;
         let quality_ceiling =
-            crate::gfx::quality_preset::resolve_ceiling(active_preset, &self.gpu_profile);
+            crate::gfx::quality_preset::resolve_ceiling(active_preset, &settings.gpu_profile);
         tracing::info!(
             "auto-config: GPU tier {:?}, quality preset {:?}",
-            self.gpu_profile.tier,
+            settings.gpu_profile.tier,
             active_preset,
         );
 
         if let Some(w) = ctx.drain::<Window>().into_iter().next() {
-            self.window_args = w;
+            settings.window_args = w;
         }
         // Capture the DebugHud chip ids (cursor, camera, sys, passes stack
         // order) so the frame step can anchor them to the top-right of the
@@ -386,12 +393,12 @@ impl GraphicsSystem {
             })
             .unwrap_or_default();
         if let Some(m) = user_graphics.window_mode {
-            self.window_args.mode = m;
+            settings.window_args.mode = m;
         }
         // The chosen fullscreen display mode. Fullscreen-only: it never feeds
         // the windowed size, which stays the world's authored `Window` value.
         if let Some([w, h, hz]) = user_graphics.resolution {
-            self.resolution = Some(display_mode::DisplayMode {
+            settings.resolution = Some(display_mode::DisplayMode {
                 width: w,
                 height: h,
                 refresh_hz: hz,
@@ -400,40 +407,40 @@ impl GraphicsSystem {
 
         if let Some(c) = ctx.drain::<GraphicsConfig>().into_iter().next() {
             let args = c;
-            self.frames_in_flight = args.frames_in_flight as usize;
-            self.vsync = args.vsync;
-            self.fps_cap = args.fps_cap;
+            settings.frames_in_flight = args.frames_in_flight as usize;
+            settings.vsync = args.vsync;
+            settings.fps_cap = args.fps_cap;
             self.clear_color = args.clear_color;
             self.max_frames = args.max_frames;
-            self.shadow_map_size = args.shadow_map_size;
-            self.shadow_update = args.shadow_update;
-            self.shadow_distance = args.shadow_distance;
-            self.shadow_cascades = args.shadow_cascades;
-            self.anisotropy = args.anisotropy;
+            settings.shadow_map_size = args.shadow_map_size;
+            settings.shadow_update = args.shadow_update;
+            settings.shadow_distance = args.shadow_distance;
+            settings.shadow_cascades = args.shadow_cascades;
+            settings.anisotropy = args.anisotropy;
         }
         // A persisted vsync choice overrides the world's value. Applied outside
         // the GraphicsConfig block (unconditional), matching window_mode /
         // resolution, so it wins over both the authored value and the default.
         if let Some(v) = user_graphics.vsync {
-            self.vsync = v;
+            settings.vsync = v;
         }
         // A persisted frame-rate cap overrides the world's value (0 = unlimited),
         // applied live by the render-step pacer. Independent of the quality preset,
         // like vsync, so no ceiling clamp.
         if let Some(v) = user_graphics.fps_cap {
-            self.fps_cap = v;
+            settings.fps_cap = v;
         }
         // Stats-HUD display toggles (None = shown, the default, so an existing
         // settings file keeps the FPS / VRAM chips visible). Independent of the
         // quality preset, like vsync / fps_cap.
         if let Some(v) = user_graphics.perf_stats {
-            self.perf_stats = v;
+            settings.perf_stats = v;
         }
         if let Some(v) = user_graphics.show_fps {
-            self.show_fps = v;
+            settings.show_fps = v;
         }
         if let Some(v) = user_graphics.show_vram {
-            self.show_vram = v;
+            settings.show_vram = v;
         }
 
         // Shadow quality knobs (GraphicsConfig-sourced). Snapshot the world's
@@ -441,37 +448,38 @@ impl GraphicsSystem {
         // then apply any persisted override and otherwise clamp under the preset
         // ceiling (an explicit override wins, like the quality toggles below). The
         // resolution is restart-required -- the shadow map array is sized from
-        // `self.shadow_map_size` at backend init below -- while the cadence is read
+        // `settings.shadow_map_size` at backend init below -- while the cadence is read
         // by the cascade scheduler each frame.
         use crate::gfx::render_config as resolve;
-        self.authored_shadow_map_size = self.shadow_map_size;
-        self.authored_shadow_update = self.shadow_update;
-        self.shadow_map_size =
-            resolve::shadow_map_size(self.shadow_map_size, &user_graphics, &quality_ceiling);
-        self.shadow_update =
-            resolve::shadow_update(self.shadow_update, &user_graphics, &quality_ceiling);
+        settings.authored_shadow_map_size = settings.shadow_map_size;
+        settings.authored_shadow_update = settings.shadow_update;
+        settings.shadow_map_size =
+            resolve::shadow_map_size(settings.shadow_map_size, &user_graphics, &quality_ceiling);
+        settings.shadow_update =
+            resolve::shadow_update(settings.shadow_update, &user_graphics, &quality_ceiling);
         // Shadow distance (GraphicsConfig-sourced, live -- the per-frame cascade
         // split reads it). Same baseline / override / ceiling-clamp shape as the
         // shadow knobs above.
-        self.authored_shadow_distance = self.shadow_distance;
-        self.shadow_distance =
-            resolve::shadow_distance(self.shadow_distance, &user_graphics, &quality_ceiling);
+        settings.authored_shadow_distance = settings.shadow_distance;
+        settings.shadow_distance =
+            resolve::shadow_distance(settings.shadow_distance, &user_graphics, &quality_ceiling);
         // Shadow cascade count (GraphicsConfig-sourced, live -- the per-frame split
         // + schedule read it). Same baseline / override / ceiling-clamp shape.
-        self.authored_shadow_cascades = self.shadow_cascades;
-        self.shadow_cascades =
-            resolve::shadow_cascades(self.shadow_cascades, &user_graphics, &quality_ceiling);
+        settings.authored_shadow_cascades = settings.shadow_cascades;
+        settings.shadow_cascades =
+            resolve::shadow_cascades(settings.shadow_cascades, &user_graphics, &quality_ceiling);
         // Anisotropy (GraphicsConfig-sourced, restart-required -- the scene sampler
-        // is built from `self.anisotropy` at backend init below). Same baseline /
+        // is built from `settings.anisotropy` at backend init below). Same baseline /
         // override / ceiling-clamp shape as the shadow knobs above.
-        self.authored_anisotropy = self.anisotropy;
-        self.anisotropy = resolve::anisotropy(self.anisotropy, &user_graphics, &quality_ceiling);
+        settings.authored_anisotropy = settings.anisotropy;
+        settings.anisotropy =
+            resolve::anisotropy(settings.anisotropy, &user_graphics, &quality_ceiling);
         // Frames-in-flight (ring-buffer depth): a persisted override clamped to the
         // 1..3 the backends support, applied unconditionally like vsync. Restart-
         // required (the ring buffers are sized at backend init below), independent
         // of the quality preset.
         if let Some(v) = user_graphics.frames_in_flight {
-            self.frames_in_flight = (v as usize).clamp(1, 3);
+            settings.frames_in_flight = (v as usize).clamp(1, 3);
         }
 
         // Resolve post-process tunables. The first declared PostProcessConfig
@@ -487,7 +495,7 @@ impl GraphicsSystem {
         // Keep a copy as the live source of truth for the slider settings to
         // read at init and mutate at runtime (PostProcessParams is Copy, so the
         // value is still passed into the backend below).
-        self.post_process = post_process;
+        settings.post_process = post_process;
         // Ambient (IBL) scale: the world's `PostProcessConfig.ambient_intensity`
         // overridden by any persisted choice. It rides `LightUniforms`, not
         // `PostProcessParams`, so it is held here and pushed to the backend once
@@ -500,7 +508,8 @@ impl GraphicsSystem {
             .as_ref()
             .map(|c| c.ambient_intensity())
             .unwrap_or(1.0);
-        self.ambient_intensity = resolve::ambient_intensity(post_config.as_ref(), &user_graphics);
+        settings.ambient_intensity =
+            resolve::ambient_intensity(post_config.as_ref(), &user_graphics);
         // Quality-feature toggles: the world's config overlaid with the user's
         // persisted choices, stored as the source of truth for the Quality-group
         // rows. A runtime toggle flips a field here, re-derives the per-feature
@@ -508,19 +517,19 @@ impl GraphicsSystem {
         // declares no config falls back to the schema defaults, which author the
         // top-tier look, so the overrides + ceiling below apply either way: the
         // preset is what settles a default world's quality.
-        self.post_config = post_config.clone().unwrap_or_default();
+        settings.post_config = post_config.clone().unwrap_or_default();
         // The pristine world baseline, before the user overrides + preset ceiling
         // below. A live preset change re-clamps the quality toggles from this, so
         // raising a preset restores the world's features (a ceiling never enables
         // anything the world did not author, so re-clamping the baseline is exact).
-        self.authored_post_config = self.post_config.clone();
-        resolve::overlay_quality_overrides(&mut self.post_config, &user_graphics);
+        settings.authored_post_config = settings.post_config.clone();
+        resolve::overlay_quality_overrides(&mut settings.post_config, &user_graphics);
         // The active quality preset as a performance ceiling over the toggles
         // above: where the ceiling disallows a feature, force it off -- but only
         // for a toggle the user did not explicitly override, and never turning a
         // feature on. A no-op under Custom (the ceiling permits everything).
         resolve::clamp_quality_under_ceiling(
-            &mut self.post_config,
+            &mut settings.post_config,
             &user_graphics,
             &quality_ceiling,
         );
@@ -531,46 +540,46 @@ impl GraphicsSystem {
         // RT takes precedence over SSR where both are on (the graph builder picks
         // `RtReflections`), reusing the same SSR pre-pass G-buffer + resolve
         // target.
-        let taa_enabled = self.post_config.aa_mode.taa_enabled();
+        let taa_enabled = settings.post_config.aa_mode.taa_enabled();
         // The composite FXAA flag follows the final (overridden + ceiling-clamped)
         // AA mode. resolve() seeded `post_process.fxaa` from the authored mode
         // before the override/clamp above, so refresh both the local copy passed
-        // to the backend ctor and the live `self.post_process` here.
-        post_process.fxaa = self.post_config.aa_mode.fxaa_flag();
-        self.post_process.fxaa = post_process.fxaa;
-        let ssao_settings = self.post_config.ssao_settings();
-        let ssr_settings = self.post_config.ssr_settings();
-        let rt_reflection_settings = self.post_config.rt_reflection_settings();
-        let reflection_blur_scale = self.post_config.reflection_blur_divisor();
-        let ssgi_settings = self.post_config.ssgi_settings();
+        // to the backend ctor and the live `settings.post_process` here.
+        post_process.fxaa = settings.post_config.aa_mode.fxaa_flag();
+        settings.post_process.fxaa = post_process.fxaa;
+        let ssao_settings = settings.post_config.ssao_settings();
+        let ssr_settings = settings.post_config.ssr_settings();
+        let rt_reflection_settings = settings.post_config.rt_reflection_settings();
+        let reflection_blur_scale = settings.post_config.reflection_blur_divisor();
+        let ssgi_settings = settings.post_config.ssgi_settings();
         // The authored `exposure_ev` becomes an additive bias on the adapted EV
         // when auto-exposure is on; otherwise the static path bakes it into
         // `post_process.exposure` (resolve()) and the bias here is unused.
-        let auto_exposure_settings = self.post_config.auto_exposure_settings();
-        let auto_exposure_bias_ev = self.post_config.exposure_ev;
+        let auto_exposure_settings = settings.post_config.auto_exposure_settings();
+        let auto_exposure_bias_ev = settings.post_config.exposure_ev;
         // Display-output / upscaling preferences: the world's value overridden by
         // any persisted settings-menu choice. Restart-required (the swapchain
         // format + render targets are sized once at init), so they are read here,
-        // passed to the backend ctor below, and held on self for the settings rows
+        // passed to the backend ctor below, and held on the settings state for the rows
         // to display + cycle. Independent of the quality preset (a user choice,
         // not a tier), so they never clamp under the ceiling or flip it to Custom.
         // HDR display output is additionally gated on the platform advertising an
         // HDR-capable surface (else it warns and falls back to the SDR composite).
-        self.hdr_display = user_graphics
+        settings.hdr_display = user_graphics
             .hdr_display
             .unwrap_or_else(|| post_config.as_ref().map(|c| c.hdr_display).unwrap_or(false));
-        self.hdr_pq = user_graphics
+        settings.hdr_pq = user_graphics
             .hdr_pq
             .unwrap_or_else(|| post_config.as_ref().map(|c| c.hdr_pq).unwrap_or(false));
-        self.temporal_upscaling = user_graphics.temporal_upscaling.unwrap_or_else(|| {
+        settings.temporal_upscaling = user_graphics.temporal_upscaling.unwrap_or_else(|| {
             post_config
                 .as_ref()
                 .map(|c| c.temporal_upscaling)
                 .unwrap_or(false)
         });
-        let hdr_display = self.hdr_display;
-        let hdr_pq = self.hdr_pq;
-        let temporal_upscaling = self.temporal_upscaling;
+        let hdr_display = settings.hdr_display;
+        let hdr_pq = settings.hdr_pq;
+        let temporal_upscaling = settings.temporal_upscaling;
         // Two-pass Hi-Z occlusion + texture-streaming quality: also restart-class
         // and independent of the preset, resolved here (before the value-label sync
         // below) from the world's config overridden by any persisted choice.
@@ -579,13 +588,13 @@ impl GraphicsSystem {
         // budget come from the StreamingConfig, drained here so the override lands
         // before the streamer is built later; the pool only bites where the world
         // declares streaming.
-        self.occlusion_two_pass = user_graphics.occlusion_two_pass.unwrap_or_else(|| {
+        settings.occlusion_two_pass = user_graphics.occlusion_two_pass.unwrap_or_else(|| {
             post_config
                 .as_ref()
                 .map(|c| c.occlusion_two_pass)
                 .unwrap_or(false)
         });
-        let occlusion_two_pass = self.occlusion_two_pass;
+        let occlusion_two_pass = settings.occlusion_two_pass;
         let mut streaming_config = ctx.drain::<StreamingConfig>().into_iter().next();
         if let Some(sc) = streaming_config.as_mut() {
             if let Some(v) = user_graphics.texture_cap {
@@ -595,17 +604,17 @@ impl GraphicsSystem {
                 sc.texture_budget = v;
             }
         }
-        self.texture_cap = streaming_config
+        settings.texture_cap = streaming_config
             .as_ref()
             .map(|c| c.texture_cap)
             .unwrap_or(96);
-        self.texture_budget = streaming_config
+        settings.texture_budget = streaming_config
             .as_ref()
             .map(|c| c.texture_budget)
             .unwrap_or(4);
         // Render-scale (upscaling quality): the world's choice overridden by any
         // persisted settings-menu choice. Restart-required -- the upscaler and
-        // render targets are sized from this once, here. `self.render_scale` is
+        // render targets are sized from this once, here. `settings.render_scale` is
         // kept for the settings row to display and cycle.
         let world_quality = post_config
             .as_ref()
@@ -614,7 +623,7 @@ impl GraphicsSystem {
         // A persisted render-scale choice wins; otherwise the world's choice,
         // clamped under the preset ceiling (the more aggressive of the two, so a
         // weak-tier ceiling forces more upscaling but never less).
-        self.render_scale = match user_graphics.render_scale {
+        settings.render_scale = match user_graphics.render_scale {
             Some(v) => v,
             None => crate::gfx::quality_preset::more_aggressive_upscale(
                 world_quality,
@@ -622,7 +631,7 @@ impl GraphicsSystem {
             ),
         };
         let upscale_scale = if post_config.is_some() {
-            self.render_scale.scale()
+            settings.render_scale.scale()
         } else {
             1.0
         };
@@ -631,7 +640,7 @@ impl GraphicsSystem {
         // built once at init); independent of the quality preset, so no ceiling
         // clamp. Resolved here (ahead of the value-label sync) so the settings row
         // shows the live value. DirectX / Vulkan honor it; Metal uses MetalFX.
-        self.upscale_backend = user_graphics.upscale_backend.unwrap_or_else(|| {
+        settings.upscale_backend = user_graphics.upscale_backend.unwrap_or_else(|| {
             post_config
                 .as_ref()
                 .map(|c| c.upscale_backend)
@@ -642,27 +651,6 @@ impl GraphicsSystem {
         // render, so a persisted/authored choice shows instead of the build's
         // placeholder. HitRegions are still present here: GraphicsSystem.init
         // runs before UiInputSystem.init, which drains them.
-        let (vsync, mode, scale) = (self.vsync, self.window_args.mode, self.render_scale);
-        let fps_cap_val = self.fps_cap;
-        // Stats-HUD display toggles for the value-label sync (copies, so the
-        // closure below does not borrow self while ctx is borrowed mutably).
-        let (perf_stats_val, show_fps_val, show_vram_val) =
-            (self.perf_stats, self.show_fps, self.show_vram);
-        // Display-group toggle states for the value-label sync (copies, so the
-        // closure below does not borrow self while ctx is borrowed mutably).
-        let (display_upscaling, display_hdr, display_pq) =
-            (self.temporal_upscaling, self.hdr_display, self.hdr_pq);
-        // Upscaler-backend selection for the value-label sync (a copy, same
-        // reason as the display tuple above).
-        let upscale_backend_sel = self.upscale_backend;
-        // Shadow knob states for the value-label sync (copies, same reason).
-        let (shadow_size, shadow_update_val) = (self.shadow_map_size, self.shadow_update);
-        let shadow_distance_val = self.shadow_distance;
-        let shadow_cascades_val = self.shadow_cascades;
-        let anisotropy_val = self.anisotropy;
-        // System / streaming restart-row states for the value-label sync (copies).
-        // `occlusion_two_pass` is already a local above.
-        let (frames_in_flight_n, texture_cap_n) = (self.frames_in_flight as u32, self.texture_cap);
         // Audio / controls value labels read from the persisted settings store
         // (with the baseline default when unset); their owning systems apply the
         // value at their own init.
@@ -675,87 +663,97 @@ impl GraphicsSystem {
         // Movement key map: a persisted rebind set overrides the engine default.
         // Pushed to the backend after it is built (below) and used to sync the
         // Controls-tab rebind row labels (`init_rebind_rows`).
-        self.keymap = user_settings.controls.keymap.unwrap_or_default();
+        settings.keymap = user_settings.controls.keymap.unwrap_or_default();
         // Gamepad button map: same override rule; InputSystem loads its own
         // copy at its init, so this one only drives the rebind row labels and
-        // the SettingsState handoff.
-        self.gamepad_map = user_settings.controls.gamepad_map.unwrap_or_default();
-        // Snapshot of the resolved quality toggles for the value-label arm below
-        // (a copy, matching the other snapshot locals, so the closure does not
-        // borrow self while ctx is borrowed mutably).
-        let quality_cfg = self.post_config.clone();
+        // the SettingsSystem drain.
+        settings.gamepad_map = user_settings.controls.gamepad_map.unwrap_or_default();
         sync_setting_value_labels(ctx, |key| match key {
-            "vsync" => Some(vsync as usize),
-            "fps_cap" => Some(crate::settings::fps_cap_index(fps_cap_val)),
-            "window_mode" => Some(crate::settings::window_mode_index(mode)),
+            "vsync" => Some(settings.vsync as usize),
+            "fps_cap" => Some(crate::settings::fps_cap_index(settings.fps_cap)),
+            "window_mode" => Some(crate::settings::window_mode_index(
+                settings.window_args.mode,
+            )),
             // "resolution" is a dynamic dropdown; its label is set from the
             // enumerated mode list after the backend is built.
-            "render_scale" => Some(crate::settings::render_scale_index(scale)),
-            "upscale_backend" => Some(crate::settings::upscale_backend_index(upscale_backend_sel)),
+            "render_scale" => Some(crate::settings::render_scale_index(settings.render_scale)),
+            "upscale_backend" => Some(crate::settings::upscale_backend_index(
+                settings.upscale_backend,
+            )),
             "master_volume" => Some(crate::settings::volume_index(master_volume)),
             "music_volume" => Some(crate::settings::volume_index(music_volume)),
             "sfx_volume" => Some(crate::settings::volume_index(sfx_volume)),
             "voice_volume" => Some(crate::settings::volume_index(voice_volume)),
-            // Display-output / upscaling toggles (Off/On), held on self.
-            "temporal_upscaling" => Some(display_upscaling as usize),
-            "hdr_display" => Some(display_hdr as usize),
-            "hdr_pq" => Some(display_pq as usize),
-            // Stats-HUD display toggles (Off/On), held on self.
-            "perf_stats" => Some(perf_stats_val as usize),
-            "show_fps" => Some(show_fps_val as usize),
-            "show_vram" => Some(show_vram_val as usize),
+            // Display-output / upscaling toggles (Off/On).
+            "temporal_upscaling" => Some(settings.temporal_upscaling as usize),
+            "hdr_display" => Some(settings.hdr_display as usize),
+            "hdr_pq" => Some(settings.hdr_pq as usize),
+            // Stats-HUD display toggles (Off/On).
+            "perf_stats" => Some(settings.perf_stats as usize),
+            "show_fps" => Some(settings.show_fps as usize),
+            "show_vram" => Some(settings.show_vram as usize),
             // Shadow quality knobs (resolution restart-required, cadence live).
-            "shadow_map_size" => Some(crate::settings::shadow_resolution_index(shadow_size)),
-            "shadow_update" => Some(crate::settings::shadow_update_index(shadow_update_val)),
-            "shadow_distance" => Some(crate::settings::shadow_distance_index(shadow_distance_val)),
-            "shadow_cascades" => Some(crate::settings::shadow_cascades_index(shadow_cascades_val)),
-            "anisotropy" => Some(crate::settings::anisotropy_index(anisotropy_val)),
+            "shadow_map_size" => Some(crate::settings::shadow_resolution_index(
+                settings.shadow_map_size,
+            )),
+            "shadow_update" => Some(crate::settings::shadow_update_index(settings.shadow_update)),
+            "shadow_distance" => Some(crate::settings::shadow_distance_index(
+                settings.shadow_distance,
+            )),
+            "shadow_cascades" => Some(crate::settings::shadow_cascades_index(
+                settings.shadow_cascades,
+            )),
+            "anisotropy" => Some(crate::settings::anisotropy_index(settings.anisotropy)),
             // System / streaming restart rows.
-            "frames_in_flight" => Some(crate::settings::frames_in_flight_index(frames_in_flight_n)),
-            "occlusion_two_pass" => Some(occlusion_two_pass as usize),
-            "texture_quality" => Some(crate::settings::texture_quality_index(texture_cap_n)),
+            "frames_in_flight" => Some(crate::settings::frames_in_flight_index(
+                settings.frames_in_flight as u32,
+            )),
+            "occlusion_two_pass" => Some(settings.occlusion_two_pass as usize),
+            "texture_quality" => Some(crate::settings::texture_quality_index(settings.texture_cap)),
             // mouse_sensitivity is a slider now, synced by `init_sliders`.
             // Quality toggles: index 0 = Off, 1 = On, matching OFF_ON_OPTIONS.
             key if crate::settings::is_quality_toggle(key) => {
-                super::quality_toggle_on(&quality_cfg, key).map(|on| on as usize)
+                super::quality_toggle_on(&settings.post_config, key).map(|on| on as usize)
             }
             // SSGI gather sub-quality dropdowns.
-            key if super::is_quality_cycle(key) => super::quality_cycle_index(&quality_cfg, key),
+            key if super::is_quality_cycle(key) => {
+                super::quality_cycle_index(&settings.post_config, key)
+            }
             _ => None,
         });
         // The master "Graphics Quality" row carries the resolved tier under Auto
         // (e.g. "Auto (High)"), which the static option table cannot express, so
         // it is set directly after the generic sync above writes the bare name.
         let preset_label =
-            crate::gfx::quality_preset::preset_label(active_preset, &self.gpu_profile);
+            crate::gfx::quality_preset::preset_label(active_preset, &settings.gpu_profile);
         set_setting_row_label(ctx, "graphics_quality", &preset_label);
         // Capture the slider rows and sync each handle + value label to its live
         // value (e.g. the persisted/authored exposure). Like the cycle-row sync
         // above, this runs before UiInputSystem drains the HitRegions.
-        self.init_sliders(ctx);
+        settings.init_sliders(ctx, &user_settings);
         // Capture the rebind rows and sync each value label to the live bound
         // key (persisted or default). Like the slider sync, before UiInputSystem
         // drains the HitRegions.
-        self.init_rebind_rows(ctx);
+        settings.init_rebind_rows(ctx);
         // Capture each cycle row's value-label id, so a preset change can relabel
         // its dependent rows (and a quality-row change the master row) at runtime,
         // when the HitRegions are gone. Also before UiInputSystem drains them.
-        self.init_cycle_value_labels(ctx);
+        settings.init_cycle_value_labels(ctx);
         // Capture the show_fps / show_vram row labels and apply the initial
         // gray-out from the resolved "Display performance stats" master toggle.
         // Before UiInputSystem drains the HitRegions / ScrollPanels.
-        self.capture_perf_sub_rows(ctx);
+        settings.capture_perf_sub_rows(ctx);
         // Capture the Resolution row's labels and apply the initial gray-out
         // from the resolved window mode (the row only applies in fullscreen).
-        self.capture_resolution_row(ctx);
+        settings.capture_resolution_row(ctx);
         // Capture each ScrollPanel's per-element clip bands for the draw path,
         // before UiInputSystem drains the panels (init order: graphics first).
         self.init_clip_rects(ctx);
         // Upscaler backend selector, resolved above (persisted choice over the
-        // world's `PostProcessConfig.upscale_backend`) and held on self for the
-        // settings row. Honored by the DirectX and Vulkan backends (FSR3 / DLSS /
-        // XeSS); Metal always uses MetalFX, so it ignores the selector.
-        let upscale_backend = self.upscale_backend;
+        // world's `PostProcessConfig.upscale_backend`). Honored by the DirectX and
+        // Vulkan backends (FSR3 / DLSS / XeSS); Metal always uses MetalFX, so it
+        // ignores the selector.
+        let upscale_backend = settings.upscale_backend;
 
         // Off-screen HDR sample count, resolved from the ceiling-clamped AA
         // mode and the resolved upscaling preference. Restart-class like
@@ -763,7 +761,7 @@ impl GraphicsSystem {
         // render targets and the planar / probe faces all bake the count, so a
         // live AA toggle keeps the count this launch resolved and the next
         // launch picks up the change.
-        let hdr_samples = hdr_sample_count(self.post_config.aa_mode, temporal_upscaling);
+        let hdr_samples = hdr_sample_count(settings.post_config.aa_mode, temporal_upscaling);
 
         let post = backend_init::PostSettings {
             post_process,
@@ -785,12 +783,15 @@ impl GraphicsSystem {
             upscale_backend,
             occlusion_two_pass,
         };
-        ResolvedRenderConfig {
-            post,
-            quality_ceiling,
-            streaming_config,
-            world_ambient_intensity: world_ambient,
-        }
+        (
+            ResolvedRenderConfig {
+                post,
+                quality_ceiling,
+                streaming_config,
+                world_ambient_intensity: world_ambient,
+            },
+            settings,
+        )
     }
 
     // Decode every SkinnedMesh resource-table entry's geometry payload (before
@@ -798,9 +799,9 @@ impl GraphicsSystem {
     // name -> handle index + skin-selector list for the animation systems.
     // Returns the decoded geometry and the blob indices its payloads occupy (for
     // the release step), or None if any entry's baked data or payload is missing
-    // or malformed (self.failed already set).
+    // or malformed, which fails init.
     fn decode_skinned_geometry(
-        &mut self,
+        &self,
         ctx: &mut PipelineContext,
     ) -> Option<(Vec<SkinnedGeometry>, Vec<u32>)> {
         // Load the SkinnedMesh resource table and decode each entry's geometry
@@ -829,7 +830,6 @@ impl GraphicsSystem {
                         handle.index(),
                         e
                     );
-                    self.failed = true;
                     return None;
                 }
             };
@@ -842,7 +842,6 @@ impl GraphicsSystem {
                         "GraphicsSystem: SkinnedMesh handle {} has no compiled payload",
                         handle.index()
                     );
-                    self.failed = true;
                     return None;
                 }
             };
@@ -855,7 +854,6 @@ impl GraphicsSystem {
                         handle.index(),
                         e
                     );
-                    self.failed = true;
                     return None;
                 }
             };
@@ -875,7 +873,6 @@ impl GraphicsSystem {
                 }
                 Err(e) => {
                     tracing::error!("GraphicsSystem: malformed SkinnedMesh payload: {}", e);
-                    self.failed = true;
                     return None;
                 }
             }
@@ -903,9 +900,9 @@ impl GraphicsSystem {
     // bind-pose skeletons from the decoded SkinnedMesh geometry. Runs after the
     // material map so SkinnedMesh material references resolve. Each mesh also
     // pre-reserves `max_instances` hidden bind-pose copies for runtime spawns.
-    // Returns None (self.failed set) if a mesh references an unknown material.
+    // Returns None, failing init, if a mesh references an unknown material.
     fn assemble_skinned_meshes(
-        &mut self,
+        &self,
         skinned_geometry: &[SkinnedGeometry],
         material_map: &std::collections::HashMap<MaterialHandle, MaterialEntry>,
         capture_sources: bool,
@@ -950,7 +947,6 @@ impl GraphicsSystem {
                             name_id,
                             mat_id.index()
                         );
-                        self.failed = true;
                         return None;
                     }
                 };
@@ -1094,9 +1090,9 @@ impl GraphicsSystem {
     // (`capture_sources`) also records the file-backed source paths + the
     // name -> slot map for the hot-reload watcher and the runtime spawn-by-name
     // path; the shipped runtime resolves every texture by handle and needs
-    // neither. Returns None (self.failed set) if a texture lacks a payload.
+    // neither. Returns None, failing init, if a texture lacks a payload.
     fn decode_texture_table(
-        &mut self,
+        &self,
         ctx: &mut PipelineContext,
         capture_sources: bool,
     ) -> Option<TextureTableDecode> {
@@ -1135,7 +1131,6 @@ impl GraphicsSystem {
                     tracing::error!(
                         "GraphicsSystem: Texture has no compiled payload -- did the build succeed?"
                     );
-                    self.failed = true;
                     return None;
                 }
             }
@@ -1151,10 +1146,10 @@ impl GraphicsSystem {
 
     // Decode the MaterialTable (dense by `MaterialHandle`) into the per-object GPU
     // uniforms + resolved texture slots the draw list indexes. Materials have no
-    // payload; all data lives in the baked `data_bytes`. Returns None
-    // (self.failed set) on any decode or resolution failure.
+    // payload; all data lives in the baked `data_bytes`. Returns None,
+    // failing init, on any decode or resolution failure.
     fn build_material_map(
-        &mut self,
+        &self,
         ctx: &mut PipelineContext,
         texture_count: usize,
     ) -> Option<std::collections::HashMap<MaterialHandle, MaterialEntry>> {
@@ -1170,7 +1165,6 @@ impl GraphicsSystem {
                         material_handle,
                         e
                     );
-                    self.failed = true;
                     return None;
                 }
             };
@@ -1185,7 +1179,6 @@ impl GraphicsSystem {
                         field,
                         texture_count
                     );
-                    self.failed = true;
                     return None;
                 }
             }
@@ -1201,7 +1194,7 @@ impl GraphicsSystem {
     // world default pipeline. Under `cn debug` also records the default
     // shader's resolved on-disk stage source paths so the asset hot-reload
     // watcher can recompile + rebuild its pipelines on a shader save. Returns
-    // None (self.failed set) if any payload is missing or unreadable.
+    // None, failing init, if any payload is missing or unreadable.
     //
     // A world that declares no Shader is the common case: it gets a single
     // bucket carrying no bytes, which every backend reads as "use the engine's
@@ -1245,7 +1238,6 @@ impl GraphicsSystem {
                 Some(l) => l.clone(),
                 None => {
                     tracing::error!("GraphicsSystem: Shader has no compiled payload");
-                    self.failed = true;
                     return None;
                 }
             };
@@ -1285,13 +1277,11 @@ impl GraphicsSystem {
                     Ok(p) => p,
                     Err(e) => {
                         tracing::error!("GraphicsSystem: shader payload decode: {:?}", e);
-                        self.failed = true;
                         return None;
                     }
                 },
                 Err(e) => {
                     tracing::error!("GraphicsSystem: failed to read shader payload: {:?}", e);
-                    self.failed = true;
                     return None;
                 }
             };
@@ -1345,26 +1335,25 @@ impl GraphicsSystem {
     // preset fallback), apply a persisted display-mode choice to the backend, and
     // seed the frame-rate-cap resource + the Resolution row's dynamic value label.
     // Runs after the backend is built.
-    fn finalize_display_modes(&mut self, ctx: &mut PipelineContext) {
-        let chosen = self.resolution;
+    fn finalize_display_modes(&mut self, ctx: &mut PipelineContext, settings: &mut SettingsState) {
         if let Some(backend) = self.backend.as_deref_mut() {
             let raw = backend.display_modes();
-            self.display_modes = if raw.is_empty() {
+            settings.display_modes = if raw.is_empty() {
                 display_mode::fallback_modes()
             } else {
                 display_mode::normalize(raw)
             };
-            self.current_mode = backend.current_display_mode();
-            if let Some(mode) = chosen {
+            settings.current_mode = backend.current_display_mode();
+            if let Some(mode) = settings.resolution {
                 backend.set_display_mode(mode);
             }
         }
-        ctx.insert_resource(crate::ecs::DisplayModes(self.display_modes.clone()));
+        ctx.insert_resource(crate::ecs::DisplayModes(settings.display_modes.clone()));
         // The resolved frame-rate cap (world value or persisted override) for
         // the App-level pacer; the settings row's live change republishes it.
-        ctx.insert_resource(FrameRateCap(self.fps_cap));
-        let idx = display_mode::index_of(&self.display_modes, self.effective_resolution());
-        if let Some(m) = self.display_modes.get(idx) {
+        ctx.insert_resource(FrameRateCap(settings.fps_cap));
+        let idx = display_mode::index_of(&settings.display_modes, settings.effective_resolution());
+        if let Some(m) = settings.display_modes.get(idx) {
             set_setting_row_label(ctx, "resolution", &m.label());
         }
     }
@@ -1372,7 +1361,7 @@ impl GraphicsSystem {
     // Decide cursor handling and push the post-build backend config: menu mode,
     // ambient scale, key map, the startup cursor grab (plain first-person worlds
     // only), and the device capability flags that gate the settings rows.
-    fn finalize_backend_config(&mut self, ctx: &mut PipelineContext) {
+    fn finalize_backend_config(&mut self, ctx: &mut PipelineContext, settings: &SettingsState) {
         // A plain first-person world (Camera3D, no UI) captures the cursor at
         // startup. A Camera3D world that also has UI (a MainMenu's HitRegion /
         // KeyBinding) is "menu mode": capture is driven per-frame in `run_step`.
@@ -1406,11 +1395,11 @@ impl GraphicsSystem {
             // override). The backend already seeds the world value at its own
             // init, so this is the path that applies a persisted Ambient-slider
             // choice; idempotent when there is no override.
-            backend.set_ambient_intensity(self.ambient_intensity);
+            backend.set_ambient_intensity(settings.ambient_intensity);
             // Push the movement key map (the persisted rebinds, or the default).
             // The backend decodes physical keys through it; idempotent with its
             // own default seed when there is no override.
-            backend.set_keymap(&self.keymap);
+            backend.set_keymap(&settings.keymap);
             if has_camera && !has_ui && !menu_driven {
                 backend.capture_cursor();
             }
@@ -1428,75 +1417,14 @@ impl GraphicsSystem {
         self.apply_capability_gating(ctx);
     }
 
-    // Hand the resolved settings snapshot to SettingsSystem, which owns the live
-    // SettingCommand / SceneCommand drain against the backend from here. This
-    // system resolves the values (world config + persisted overrides + device
-    // capabilities) at init and never re-reads its copies afterward.
-    fn publish_settings_state(&mut self, ctx: &mut PipelineContext) {
-        ctx.insert_resource(crate::settings::system::SettingsSlot(Some(
-            crate::settings::system::SettingsState {
-                keymap: self.keymap,
-                rebind_rows: std::mem::take(&mut self.rebind_rows),
-                gamepad_map: self.gamepad_map,
-                pad_rebind_rows: std::mem::take(&mut self.pad_rebind_rows),
-                sliders: std::mem::take(&mut self.sliders),
-                cycle_value_labels: std::mem::take(&mut self.cycle_value_labels),
-                post_process: self.post_process,
-                post_config: self.post_config.clone(),
-                authored_post_config: self.authored_post_config.clone(),
-                ambient_intensity: self.ambient_intensity,
-                quality_preset: self.quality_preset,
-                gpu_profile: self.gpu_profile,
-                render_scale: self.render_scale,
-                upscale_backend: self.upscale_backend,
-                temporal_upscaling: self.temporal_upscaling,
-                hdr_display: self.hdr_display,
-                hdr_pq: self.hdr_pq,
-                shadow_map_size: self.shadow_map_size,
-                shadow_update: self.shadow_update,
-                shadow_distance: self.shadow_distance,
-                shadow_cascades: self.shadow_cascades,
-                anisotropy: self.anisotropy,
-                authored_shadow_map_size: self.authored_shadow_map_size,
-                authored_shadow_update: self.authored_shadow_update,
-                authored_shadow_distance: self.authored_shadow_distance,
-                authored_shadow_cascades: self.authored_shadow_cascades,
-                authored_anisotropy: self.authored_anisotropy,
-                vsync: self.vsync,
-                fps_cap: self.fps_cap,
-                perf_stats: self.perf_stats,
-                show_fps: self.show_fps,
-                show_vram: self.show_vram,
-                perf_sub_row_labels: std::mem::take(&mut self.perf_sub_row_labels),
-                window_args: self.window_args.clone(),
-                display_modes: std::mem::take(&mut self.display_modes),
-                resolution: self.resolution,
-                current_mode: self.current_mode,
-                resolution_row_labels: std::mem::take(&mut self.resolution_row_labels),
-                frames_in_flight: self.frames_in_flight,
-                occlusion_two_pass: self.occlusion_two_pass,
-                texture_cap: self.texture_cap,
-                texture_budget: self.texture_budget,
-                persisted_graphics: self.persisted_graphics.clone(),
-                fog_built: self.fog_built,
-                settings_cache: None,
-                settings_writer: None,
-                scene_cmd_cursor: EventCursor::default(),
-                setting_cmd_cursor: EventCursor::default(),
-                published_hud_prefs: None,
-                published_disabled_inputs: None,
-            },
-        )));
-    }
-
     // Read the sole EnvironmentMap (handle 0) from its resource table and capture
     // its IBL payload; extra declarations are logged and ignored. Under `cn debug`
     // (`capture_sources`) also captures the resolved HDR source path + convolution
     // sizing for the hot-reload watcher (procedural generators have no file to
-    // watch). Returns (payload bytes, source), or None (self.failed set) if the
+    // watch). Returns (payload bytes, source), or None, failing init, if the
     // payload is unreadable.
     fn decode_environment_map(
-        &mut self,
+        &self,
         ctx: &mut PipelineContext,
         capture_sources: bool,
     ) -> Option<(
@@ -1529,7 +1457,6 @@ impl GraphicsSystem {
                             "GraphicsSystem: failed to read EnvironmentMap payload: {:?}",
                             e
                         );
-                        self.failed = true;
                         return None;
                     }
                 },
@@ -1558,9 +1485,9 @@ impl GraphicsSystem {
     // Read the sole ColorLut (handle 0) from its resource table and capture its
     // color-grading payload; extras are logged and ignored. Under `cn debug`
     // captures the resolved source path for the hot-reload watcher. Returns
-    // (payload bytes, source), or None (self.failed set) if unreadable.
+    // (payload bytes, source), or None, failing init, if unreadable.
     fn decode_color_lut(
-        &mut self,
+        &self,
         ctx: &mut PipelineContext,
         capture_sources: bool,
     ) -> Option<(
@@ -1583,7 +1510,6 @@ impl GraphicsSystem {
                 Ok(b) => color_lut_bytes = Some(b.to_vec()),
                 Err(e) => {
                     tracing::error!("GraphicsSystem: failed to read ColorLut payload: {:?}", e);
-                    self.failed = true;
                     return None;
                 }
             }
@@ -1609,7 +1535,7 @@ impl GraphicsSystem {
     // each distinct Sprite / Story-stage texture (resolved through
     // `texture_locators`) into `self.sprite_texture_slots`. An unresolved sprite
     // texture demotes to its tint (warned, not fatal). Returns the RGBA atlases +
-    // the font payloads' blob indices, or None (self.failed set) on a Font decode
+    // the font payloads' blob indices, or None, failing init, on a Font decode
     // or read failure.
     fn decode_text_atlases(
         &mut self,
@@ -1631,7 +1557,6 @@ impl GraphicsSystem {
                             slot,
                             e
                         );
-                        self.failed = true;
                         return None;
                     }
                 },
@@ -1640,7 +1565,6 @@ impl GraphicsSystem {
                         "GraphicsSystem: Font handle {} has no compiled payload -- did the build succeed?",
                         slot
                     );
-                    self.failed = true;
                     return None;
                 }
             };
@@ -1665,7 +1589,6 @@ impl GraphicsSystem {
                 }
                 Err(e) => {
                     tracing::error!("GraphicsSystem: malformed Font payload: {}", e);
-                    self.failed = true;
                     return None;
                 }
             }
@@ -1776,13 +1699,23 @@ impl GraphicsSystem {
         })
     }
 
+    // Run init, marking the system failed when any step of it fails.
     pub(super) fn run_init(&mut self, ctx: &mut PipelineContext) {
-        let ResolvedRenderConfig {
-            post,
-            quality_ceiling,
-            streaming_config,
-            world_ambient_intensity,
-        } = self.init_render_settings(ctx);
+        if self.try_init(ctx).is_none() {
+            self.failed = true;
+        }
+    }
+
+    fn try_init(&mut self, ctx: &mut PipelineContext) -> Option<()> {
+        let (
+            ResolvedRenderConfig {
+                post,
+                quality_ceiling,
+                streaming_config,
+                world_ambient_intensity,
+            },
+            mut settings,
+        ) = self.init_render_settings(ctx);
         // Infinite-world chunk streaming. The first declared VoxelWorld wins;
         // with none declared, no chunks stream. BlockTypes are drained here so
         // the runtime can resolve the VoxelWorld palette to chunk-mesh data.
@@ -1829,18 +1762,9 @@ impl GraphicsSystem {
             always_resident: always_resident_meshes,
             component_handles: component_mesh_handles,
             deferred_seeds: deferred_mesh_seeds,
-        } = match draw_list::load_mesh_geometry(ctx, &deferred_mesh_sources, blob_disk_backed) {
-            Some(m) => m,
-            None => {
-                self.failed = true;
-                return;
-            }
-        };
+        } = draw_list::load_mesh_geometry(ctx, &deferred_mesh_sources, blob_disk_backed)?;
 
-        let (skinned_geometry, skinned_blob_indices) = match self.decode_skinned_geometry(ctx) {
-            Some(decoded) => decoded,
-            None => return,
-        };
+        let (skinned_geometry, skinned_blob_indices) = self.decode_skinned_geometry(ctx)?;
 
         // drain Model components into a name-keyed map for Prop lookup
         let models = ctx.drain::<Model>();
@@ -1849,22 +1773,13 @@ impl GraphicsSystem {
 
         // decode Room payloads before shaders/textures are read; all payloads
         // live in the same blob and must be consumed before it is released
-        let (room_geometry, room_blob_indices) = match draw_list::load_room_geometry(ctx) {
-            Some(r) => r,
-            None => {
-                self.failed = true;
-                return;
-            }
-        };
+        let (room_geometry, room_blob_indices) = draw_list::load_room_geometry(ctx)?;
 
         let DecodedShaders {
             locators: shader_locators,
             source_map: shader_stage_source_map,
             shaders: decoded_shaders,
-        } = match self.decode_shaders(ctx, streaming_config.is_some()) {
-            Some(decoded) => decoded,
-            None => return,
-        };
+        } = self.decode_shaders(ctx, streaming_config.is_some())?;
         // The world default program (ShaderHandle 0): skinned upload and the
         // DX / Vulkan single-pipeline paths consume these directly.
 
@@ -1877,14 +1792,8 @@ impl GraphicsSystem {
             source_map: asset_source_map,
             name_to_slot: texture_name_to_slot,
             count: texture_count,
-        } = match self.decode_texture_table(ctx, capture_sources) {
-            Some(decoded) => decoded,
-            None => return,
-        };
-        let material_map = match self.build_material_map(ctx, texture_count) {
-            Some(map) => map,
-            None => return,
-        };
+        } = self.decode_texture_table(ctx, capture_sources)?;
+        let material_map = self.build_material_map(ctx, texture_count)?;
 
         // Build skinned draw objects, the shared skinned vertex/index buffers,
         // and bind-pose skeletons from the decoded SkinnedMesh geometry. Runs
@@ -1897,10 +1806,7 @@ impl GraphicsSystem {
             pool_reservations: skinned_pool_reservations,
             morphs: mut skinned_morphs,
             source_map: skinned_mesh_source_map,
-        } = match self.assemble_skinned_meshes(&skinned_geometry, &material_map, capture_sources) {
-            Some(assembly) => assembly,
-            None => return,
-        };
+        } = self.assemble_skinned_meshes(&skinned_geometry, &material_map, capture_sources)?;
 
         let mut texture_data: Vec<texture::TextureImage> = Vec::new();
         // Raw compiled texture payloads, kept past blob release so the
@@ -1928,8 +1834,7 @@ impl GraphicsSystem {
                                 "GraphicsSystem: failed to read texture payload: {:?}",
                                 e
                             );
-                            self.failed = true;
-                            return;
+                            return None;
                         }
                     }
                 }
@@ -1939,16 +1844,14 @@ impl GraphicsSystem {
                 Ok(b) => b.to_vec(),
                 Err(e) => {
                     tracing::error!("GraphicsSystem: failed to read texture payload: {:?}", e);
-                    self.failed = true;
-                    return;
+                    return None;
                 }
             };
             match texture::deserialize(&tex_bytes) {
                 Ok(t) => texture_data.push(t),
                 Err(e) => {
                     tracing::error!("GraphicsSystem: malformed texture payload: {}", e);
-                    self.failed = true;
-                    return;
+                    return None;
                 }
             }
             if !blob_disk_backed {
@@ -1965,22 +1868,12 @@ impl GraphicsSystem {
         // Read the sole EnvironmentMap + ColorLut payloads, then build the shared
         // text/sprite atlas pool.
         let (env_map_bytes, environment_map_source) =
-            match self.decode_environment_map(ctx, capture_sources) {
-                Some(decoded) => decoded,
-                None => return,
-            };
-        let (color_lut_bytes, color_lut_source) = match self.decode_color_lut(ctx, capture_sources)
-        {
-            Some(decoded) => decoded,
-            None => return,
-        };
+            self.decode_environment_map(ctx, capture_sources)?;
+        let (color_lut_bytes, color_lut_source) = self.decode_color_lut(ctx, capture_sources)?;
         let TextAtlases {
             atlases: text_atlas_data,
             font_blob_indices,
-        } = match self.decode_text_atlases(ctx, &texture_locators) {
-            Some(decoded) => decoded,
-            None => return,
-        };
+        } = self.decode_text_atlases(ctx, &texture_locators)?;
 
         // Indirect-ambient multiplier from PostProcessConfig, folded into the
         // shared LightUniforms so every backend's main pass scales its IBL /
@@ -2095,7 +1988,7 @@ impl GraphicsSystem {
             prop_draw_indices,
             mesh_handle_to_draws,
             prop_local_bounds,
-        } = match draw_list::build_draw_list(draw_list::DrawListInputs {
+        } = draw_list::build_draw_list(draw_list::DrawListInputs {
             items: &items,
             instanced_props: &instanced_props,
             world_mats: &world_mats,
@@ -2105,13 +1998,7 @@ impl GraphicsSystem {
             texture_count,
             material_map: &material_map,
             always_resident_meshes: &always_resident_meshes,
-        }) {
-            Some(d) => d,
-            None => {
-                self.failed = true;
-                return;
-            }
-        };
+        })?;
 
         // Give each prop entity a RenderHandle (its GPU draw slots) and a
         // GlobalTransform (its init world matrix), so the per-frame push reads
@@ -2415,7 +2302,7 @@ impl GraphicsSystem {
                 .and_then(|f| volumetric_fog::resolve_asset(&f))
         };
         let fog_enabled = fog_settings.is_some();
-        self.fog_built = fog_enabled;
+        settings.fog_built = fog_enabled;
         // Seed the hot-reload dedupe state. Subsequent reload_volumetric_fog
         // calls compare resolved JSONL settings against this and only push
         // (and log) on a real change.
@@ -2502,10 +2389,10 @@ impl GraphicsSystem {
             BackendInit, MediaPayloads, SceneData, ShadowParams, WorldFx, WorldShader,
         };
         let mut backend_init = BackendInit {
-            window: &self.window_args,
+            window: &settings.window_args,
             validation,
-            frames_in_flight: self.frames_in_flight,
-            vsync: self.vsync,
+            frames_in_flight: settings.frames_in_flight,
+            vsync: settings.vsync,
             clear_color: self.clear_color,
             hot_reload,
             capture,
@@ -2541,12 +2428,12 @@ impl GraphicsSystem {
             spot_shadows: light_data.spot_shadows,
             area_lights: light_data.area_lights,
             shadows: ShadowParams {
-                map_size: self.shadow_map_size,
-                update: self.shadow_update,
-                distance: self.shadow_distance,
-                cascades: self.shadow_cascades,
+                map_size: settings.shadow_map_size,
+                update: settings.shadow_update,
+                distance: settings.shadow_distance,
+                cascades: settings.shadow_cascades,
             },
-            anisotropy: self.anisotropy,
+            anisotropy: settings.anisotropy,
             planar_planes: planar_reflection_planes,
             post,
             fx: WorldFx {
@@ -2586,8 +2473,7 @@ impl GraphicsSystem {
             None => None,
         };
         // Tests inject a mock backend factory through `test_hooks`; production
-        // always routes to the compile-time-selected real backend. Inline (not
-        // a method) because `backend_init` still borrows `self.window_args`.
+        // always routes to the compile-time-selected real backend.
         let built = match reuse_backend {
             Some(mut backend) => match backend.reload_world(backend_init) {
                 Ok(()) => {
@@ -2619,11 +2505,7 @@ impl GraphicsSystem {
             }
         };
         self.backend = built;
-
-        if self.backend.is_none() {
-            self.failed = true;
-            return;
-        }
+        self.backend.as_ref()?;
 
         // Apply a persisted or authored non-windowed window mode at startup. The
         // window is always created as a standard titled window, so a Borderless
@@ -2631,15 +2513,15 @@ impl GraphicsSystem {
         // launches) has to be applied here; otherwise the app would always start
         // windowed regardless of the saved mode. No-op for Windowed and in
         // embedded mode (the backend owns no window there).
-        if self.window_args.mode != WindowMode::Windowed
+        if settings.window_args.mode != WindowMode::Windowed
             && let Some(backend) = self.backend.as_deref_mut()
         {
-            backend.set_window_mode(self.window_args.mode);
+            backend.set_window_mode(settings.window_args.mode);
         }
 
         // Publish the Resolution row's mode list + frame-rate cap now the backend
         // can enumerate the display's modes.
-        self.finalize_display_modes(ctx);
+        self.finalize_display_modes(ctx, &mut settings);
 
         // Reflection probes: hand the backend the declared `ReflectionProbe`
         // placements (Metal bakes a cube per probe; an empty list auto-seeds from
@@ -2740,8 +2622,7 @@ impl GraphicsSystem {
                     std::mem::take(&mut skinned_draw_objects),
                 ) {
                     tracing::error!("GraphicsSystem: skinned geometry upload failed: {}", e);
-                    self.failed = true;
-                    return;
+                    return None;
                 }
                 if skinned_morphs.iter().any(|m| m.is_some()) {
                     backend.upload_skinned_morphs(std::mem::take(&mut skinned_morphs));
@@ -2890,7 +2771,7 @@ impl GraphicsSystem {
         );
         self.setup_voxel_world_streaming(voxel_world, &block_types, &material_map);
 
-        self.finalize_backend_config(ctx);
+        self.finalize_backend_config(ctx, &settings);
 
         self.setup_scene_flow(ctx);
 
@@ -2912,8 +2793,6 @@ impl GraphicsSystem {
             clip_rects: std::mem::take(&mut self.clip_rects),
             initial_viewport: self.viewport,
         });
-
-        self.publish_settings_state(ctx);
 
         // Hand the streaming pools built above to StreamingSystem: it drives
         // them each frame (against the parked backend) and publishes the
@@ -2938,7 +2817,7 @@ impl GraphicsSystem {
             shader_warmup: self.shader_warmup.take(),
             scene_residency,
             frame_count: 0,
-            frames_in_flight: self.frames_in_flight,
+            frames_in_flight: settings.frames_in_flight,
             texture_baseline_budget,
             mesh_baseline_budget,
             chunk_baseline_budget,
@@ -2981,10 +2860,10 @@ impl GraphicsSystem {
         });
         tracing::info!(
             "GraphicsSystem: ready ({}x{} \"{}\", {} frames in flight, {} draw objects, {} instanced clusters ({} instances total), {} decals, {} particle emitter(s), fog={})",
-            self.window_args.width,
-            self.window_args.height,
-            self.window_args.title,
-            self.frames_in_flight,
+            settings.window_args.width,
+            settings.window_args.height,
+            settings.window_args.title,
+            settings.frames_in_flight,
             draw_object_count,
             cluster_count,
             total_instances,
@@ -2992,6 +2871,8 @@ impl GraphicsSystem {
             particle_count,
             if fog_enabled { "on" } else { "off" },
         );
+        ctx.insert_resource(SettingsSlot(Some(settings)));
+        Some(())
     }
 }
 

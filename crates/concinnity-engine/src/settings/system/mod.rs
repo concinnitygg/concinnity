@@ -21,6 +21,7 @@
 //! `PipelineContext` are never borrowed together.
 
 use concinnity_core::components::GamepadMap;
+use concinnity_core::components::GraphicsConfig;
 use concinnity_core::components::PostProcessConfig;
 use concinnity_core::components::SceneCommand;
 use concinnity_core::components::ShadowUpdate;
@@ -201,12 +202,12 @@ impl System for SettingsSystem {
 }
 
 impl SettingsState {
-    // A neutral live state for tests: no persisted overrides, no preset ceiling
-    // (`Custom`), the engine defaults everywhere else. Tests set the few fields
-    // they exercise.
-    #[cfg(test)]
-    pub(crate) fn for_tests() -> Self {
-        use concinnity_core::components::PostProcessConfig;
+    // The state before init resolves anything: the `GraphicsConfig` schema
+    // defaults, every stats readout shown, the `Auto` preset, and no rows
+    // captured. Init overwrites some fields only when the world or the persisted
+    // store supplies a value, so these seeds are what an unconfigured world runs.
+    pub(crate) fn new() -> Self {
+        let gfx = GraphicsConfig::default();
         Self {
             keymap: keymap::KeyMap::default(),
             rebind_rows: Vec::new(),
@@ -218,13 +219,56 @@ impl SettingsState {
             post_config: PostProcessConfig::default(),
             authored_post_config: PostProcessConfig::default(),
             ambient_intensity: 1.0,
-            quality_preset: crate::gfx::quality_preset::QualityPreset::Custom,
+            quality_preset: crate::gfx::quality_preset::QualityPreset::Auto,
             gpu_profile: backend::GpuProfile::UNKNOWN,
-            render_scale: Default::default(),
-            upscale_backend: Default::default(),
+            render_scale: UpscaleQuality::default(),
+            upscale_backend: UpscalerBackend::default(),
             temporal_upscaling: false,
             hdr_display: false,
             hdr_pq: false,
+            shadow_map_size: gfx.shadow_map_size,
+            shadow_update: gfx.shadow_update,
+            shadow_distance: gfx.shadow_distance,
+            shadow_cascades: gfx.shadow_cascades,
+            anisotropy: gfx.anisotropy,
+            authored_shadow_map_size: gfx.shadow_map_size,
+            authored_shadow_update: gfx.shadow_update,
+            authored_shadow_distance: gfx.shadow_distance,
+            authored_shadow_cascades: gfx.shadow_cascades,
+            authored_anisotropy: gfx.anisotropy,
+            vsync: gfx.vsync,
+            fps_cap: gfx.fps_cap,
+            perf_stats: true,
+            show_fps: true,
+            show_vram: true,
+            perf_sub_row_labels: Vec::new(),
+            window_args: Window::default(),
+            display_modes: Vec::new(),
+            resolution: None,
+            current_mode: None,
+            resolution_row_labels: Vec::new(),
+            frames_in_flight: gfx.frames_in_flight as usize,
+            occlusion_two_pass: PostProcessConfig::default().occlusion_two_pass,
+            texture_cap: 96,
+            texture_budget: 4,
+            persisted_graphics: crate::config::GraphicsSettings::default(),
+            fog_built: false,
+            settings_cache: None,
+            settings_writer: None,
+            scene_cmd_cursor: EventCursor::default(),
+            setting_cmd_cursor: EventCursor::default(),
+            published_hud_prefs: None,
+            published_disabled_inputs: None,
+        }
+    }
+
+    // A neutral live state for tests: no persisted overrides, no preset ceiling
+    // (`Custom`), the engine defaults everywhere else. Tests set the few fields
+    // they exercise.
+    #[cfg(test)]
+    pub(crate) fn for_tests() -> Self {
+        Self {
+            quality_preset: crate::gfx::quality_preset::QualityPreset::Custom,
             shadow_map_size: 2048,
             shadow_update: Default::default(),
             shadow_distance: 200,
@@ -237,27 +281,12 @@ impl SettingsState {
             authored_anisotropy: 8,
             vsync: true,
             fps_cap: 0,
-            perf_stats: true,
-            show_fps: true,
-            show_vram: true,
-            perf_sub_row_labels: Vec::new(),
-            window_args: Window::default(),
-            display_modes: Vec::new(),
-            resolution: None,
-            current_mode: None,
-            resolution_row_labels: Vec::new(),
             frames_in_flight: 2,
             occlusion_two_pass: false,
             texture_cap: 0,
             texture_budget: 0,
-            persisted_graphics: Default::default(),
             fog_built: true,
-            settings_cache: None,
-            settings_writer: None,
-            scene_cmd_cursor: Default::default(),
-            setting_cmd_cursor: Default::default(),
-            published_hud_prefs: None,
-            published_disabled_inputs: None,
+            ..Self::new()
         }
     }
 

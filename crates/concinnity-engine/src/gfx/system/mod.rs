@@ -16,15 +16,13 @@
 //!   draw_geometry.rs   draw-object positions + auto-seed triangle gathering
 
 use concinnity_core::components::{
-    GamepadAction, GamepadMap, GraphicsConfig, IndirectLighting, PostProcessConfig,
-    PostProcessResolve, ShadowUpdate, UpscaleQuality, UpscalerBackend, Window,
+    GamepadAction, GraphicsConfig, IndirectLighting, PostProcessConfig, PostProcessResolve,
 };
 use concinnity_core::ecs::{Entity, PipelineContext, StepResult, System};
-use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::transform_propagation;
 use concinnity_core::render::backend::RenderBackend;
 use concinnity_core::render::{
-    backend, display_mode, keymap, overlay_maps, scene_flow, snapshot, text, volumetric_fog,
+    backend, keymap, overlay_maps, scene_flow, snapshot, text, volumetric_fog,
 };
 use concinnity_host::store::paths::StateTree;
 use concinnity_host::thread::asset_id::AssetId;
@@ -74,64 +72,8 @@ pub struct GraphicsSystem {
     // Where this world reads its source assets and writes its settings, or
     // `None` for a world with no state tree.
     state: Option<StateTree>,
-    window_args: Window,
     clear_color: [f32; 4],
-    frames_in_flight: usize,
-    vsync: bool,
-    // Frame-rate cap in FPS (GraphicsConfig.fps_cap; 0 = unlimited). Applied by
-    // the App-level frame pacer, which reads it through the `FrameRateCap`
-    // resource this system publishes (at init and on the settings row's live
-    // change). Held here so the settings row can cycle from the current value.
-    // Independent of the quality preset (a user/hardware preference, like vsync).
-    fps_cap: u32,
-    // The display modes the Resolution row offers, shaped at init from the
-    // backend's enumeration (or the static fallback when it cannot enumerate)
-    // and published once as the `DisplayModes` resource for the dropdown list.
-    display_modes: Vec<display_mode::DisplayMode>,
-    // The user's chosen fullscreen display mode, persisted as `resolution`.
-    // `None` = never chosen: the display keeps its own mode and the row shows
-    // `current_mode`. Fullscreen-only: windowed sizes come from the window
-    // (authored / dragged) and borderless covers the display, so the row is
-    // grayed + inert outside Fullscreen and never resizes the window.
-    resolution: Option<display_mode::DisplayMode>,
-    // The mode the display was running at init (the row's display value until
-    // the user chooses one). `None` when the backend cannot read it.
-    current_mode: Option<display_mode::DisplayMode>,
-    // The Resolution row's labels with their authored colors, captured at init
-    // so window-mode changes can gray the row out and restore it (mirrors
-    // `perf_sub_row_labels`).
-    resolution_row_labels: Vec<(AssetId, [f32; 3])>,
-    // Stats-HUD display state (GraphicsSettings perf_stats / show_fps / show_vram;
-    // default shown). `perf_stats` is the master "Display performance stats"
-    // toggle; the per-readout flags gate the FPS / VRAM chips under it. Published
-    // each frame as the `HudPrefs` resource for StatHudSystem, and persisted +
-    // applied live by the settings-menu rows. When the master is off the two
-    // sub-rows are grayed (their captured labels in `perf_sub_row_labels`) and
-    // made inert (the `DisabledSettingRows` resource read by UiInputSystem).
-    perf_stats: bool,
-    show_fps: bool,
-    show_vram: bool,
-    // The TextLabel ids of the show_fps / show_vram rows with their authored
-    // colors, captured at init so the master toggle can gray them and restore
-    // them (the menu's HitRegions are drained after init, so the row -> label map
-    // is captured once rather than re-queried).
-    perf_sub_row_labels: Vec<(AssetId, [f32; 3])>,
     max_frames: Option<u64>,
-    shadow_map_size: u32,
-    shadow_update: ShadowUpdate,
-    // Shadow distance in world units (GraphicsConfig.shadow_distance). Applied
-    // live via set_shadow_distance (the per-frame cascade-split math reads it);
-    // preset-governed (a manual change flips the master preset to Custom).
-    shadow_distance: u32,
-    // Active shadow cascade count, 1..=4 (GraphicsConfig.shadow_cascades). Applied
-    // live via set_shadow_cascades (the per-frame split + schedule read it);
-    // preset-governed (a manual change flips the master preset to Custom).
-    shadow_cascades: u32,
-    // Scene-sampler max anisotropy. Restart-required (the sampler is built once at
-    // backend init from this), so this is display/persist state; the value reaches
-    // the backend through the ctor. Preset-governed (a manual change flips the
-    // master preset to Custom).
-    anisotropy: u32,
     failed: bool,
     start_time: Option<Instant>,
     frame_count: u64,
@@ -141,16 +83,6 @@ pub struct GraphicsSystem {
     // cursor capture is driven each frame by whether a menu screen is active
     // (release while open, capture otherwise) rather than fixed at startup.
     menu_mode: bool,
-    // Current render-scale (upscaling) quality, seeded at init from the world's
-    // PostProcessConfig overridden by any persisted choice. The settings row
-    // cycles + persists it; it is restart-required, so this is display/persist
-    // state only (the upscaler is sized once at init).
-    render_scale: UpscaleQuality,
-    // Current upscaler backend (Auto / FSR3 / DLSS / XeSS), seeded at init from
-    // the world's PostProcessConfig overridden by any persisted choice. Like
-    // render_scale this is restart-required display/persist state (the upscaler
-    // is selected + built once at init); DirectX / Vulkan only.
-    upscale_backend: UpscalerBackend,
     // The render backend while init constructs and wires it. Boxed
     // `dyn RenderBackend` so the setup logic in init.rs / streaming.rs /
     // scene.rs runs as one cfg-free path across Metal, DirectX, and Vulkan.
@@ -213,126 +145,23 @@ pub struct GraphicsSystem {
     // resolve an authored Texture name to its live pool slot. `Some` only under
     // `cn debug`; read-only after init.
     world_reload: Option<WorldReloadState>,
-    // The persisted settings-menu graphics overrides as they stood at init
-    // (each field `None` when the user never changed that row). Held so the
-    // live-lighting seam can re-derive a knob exactly as init did: an authoring
-    // edit to a row the user has overridden moves the authored baseline only,
-    // matching what a relaunch of the edited world would show.
-    persisted_graphics: crate::config::GraphicsSettings,
-    // Whether the world declared enabled fog at init, so the backend built the
-    // fog pass. A backend that never built it cannot be handed fog live.
-    fog_built: bool,
     // Last `VolumetricFog` settings pushed to the backend, used by the
     // world.jsonl reload pass to dedupe: if the resolved value matches what's
     // already live, the reload skips the trait call and the log entry. Tracks
     // both `None` (no fog / disabled) and `Some(settings)`. Initialized by
     // `run_init` to whatever was passed into the backend constructor.
     last_fog_settings: Option<volumetric_fog::FogSettings>,
-    // Live post-process parameters (bloom / exposure / vignette / LUT blend),
-    // the source of truth for slider settings. Seeded at init from the world's
-    // resolved PostProcessConfig (with any persisted overrides applied); a
-    // slider drag mutates a field here and pushes the whole struct to the
-    // backend via `update_post_process`.
-    post_process: render_types::PostProcessTunables,
-    // Live ambient (IBL) light scale, the source of truth for the Ambient
-    // slider. Lives in the backend's `LightUniforms` (not `PostProcessParams`),
-    // so it is held + pushed separately via `set_ambient_intensity`. Seeded at
-    // init from the world's `PostProcessConfig.ambient_intensity` (with any
-    // persisted override applied) and pushed to the backend once after it is
-    // built.
-    ambient_intensity: f32,
-    // The world's resolved PostProcessConfig with the user's persisted
-    // quality-toggle overrides applied (defaulted when the world declares none).
-    // The source of truth for the Quality-group toggles: a toggle flips the
-    // matching field here, re-derives the per-feature settings, and pushes them
-    // to the backend's live rebuild. The non-toggle fields (exposure, bloom,
-    // ambient) keep their authored values here; the sliders own those via
-    // `post_process` / `ambient_intensity` instead.
-    post_config: PostProcessConfig,
-    // Slider rows in the world, captured at init from their drag HitRegions +
-    // handle Sprites. Drives the handle position + value-label update when a
-    // slider changes, and the one-time sync of both to the live value at init.
-    sliders: Vec<SliderViz>,
-    // Cycle rows' setting key -> value-label id, captured at init from their
-    // `setting:<key>:next` HitRegions (drained by UiInputSystem afterwards). Lets
-    // a runtime change relabel a row other than the one clicked: the master
-    // "Graphics Quality" preset relabels the quality toggles + render scale it
-    // re-derives, and an individual quality-row change relabels the master row.
-    cycle_value_labels: std::collections::HashMap<String, AssetId>,
     // Per-element clip bands (reference space) captured at init from the world's
     // ScrollPanels: each scroll-content element id maps to its panel's content
     // band, so the draw path scissors it and off-band rows do not bleed over the
     // panel chrome. Empty when no ScrollPanel was declared; handed to
     // OverlaySystem (inside `OverlayAssets`) at the end of init.
     clip_rects: overlay_maps::ClipRects,
-    // Live gameplay movement key map (the source of truth for the Controls-tab
-    // rebind rows). Seeded at init from the persisted `ControlsSettings.keymap`
-    // or the engine default, pushed to the backend once after it is built, and
-    // updated (with a swap) + re-pushed + persisted on each rebind.
-    keymap: keymap::KeyMap,
-    // Rebind rows in the world, captured at init from their `setting:key_*:rebind`
-    // HitRegions. Maps each rebindable action to its value `TextLabel`, so a
-    // rebind (and the swap it may trigger) can refresh both affected row labels.
-    rebind_rows: Vec<RebindViz>,
-    // Live gamepad action -> button map. Seeded at init from the persisted
-    // `ControlsSettings.gamepad_map` or the engine default; InputSystem applies
-    // it (the gamepad is polled engine-side, so no backend push).
-    gamepad_map: GamepadMap,
-    // Gamepad rebind rows in the world, captured at init from their
-    // `setting:pad_*:rebind` HitRegions, like `rebind_rows`.
-    pad_rebind_rows: Vec<PadRebindViz>,
     // Device capability flags, queried from the backend once it is built. Drives
     // the capability gating at init: a settings row whose feature the device
     // cannot provide (e.g. ray-traced reflections without hardware ray tracing)
     // is grayed out and made inert. Held in memory only, never persisted.
     caps: backend::DeviceCapabilities,
-    // Coarse GPU performance profile, probed before the backend is built so the
-    // auto-config quality ceiling can influence the render targets / effect
-    // pipelines sized at backend init. Held in memory only, never persisted.
-    gpu_profile: backend::GpuProfile,
-    // The live master "Graphics Quality" preset the settings-menu row cycles.
-    // Seeded at init from the persisted choice (or `Auto` on first launch);
-    // changing a preset re-derives the quality toggles + render scale under its
-    // ceiling, and changing any individual quality row flips this to `Custom`.
-    quality_preset: crate::gfx::quality_preset::QualityPreset,
-    // The world's authored PostProcessConfig before the user overrides + preset
-    // ceiling are applied (defaulted when the world declares none). The pristine
-    // baseline a live preset change re-clamps from, so up-shifting a preset
-    // restores the world's features and down-shifting clamps them off.
-    authored_post_config: PostProcessConfig,
-    // Display-output / upscaling preferences (the Display settings rows). Resolved
-    // at init from the world's `PostProcessConfig` overridden by any persisted
-    // choice, passed to the backend ctor, and held here so the rows display +
-    // cycle them. Restart-required (swapchain format / render targets are sized
-    // once at init), so a runtime change only persists + relabels; independent of
-    // the quality preset.
-    temporal_upscaling: bool,
-    hdr_display: bool,
-    hdr_pq: bool,
-    // The world's authored shadow knobs before the user overrides + preset ceiling
-    // (defaulted when the world declares no GraphicsConfig). The pristine baseline
-    // a live preset change re-clamps from, like `authored_post_config`. The live
-    // values are `shadow_map_size` / `shadow_update` above.
-    authored_shadow_map_size: u32,
-    authored_shadow_update: ShadowUpdate,
-    // The world's authored shadow distance, the baseline a live preset change
-    // re-clamps from. The live value is `shadow_distance` above.
-    authored_shadow_distance: u32,
-    // The world's authored shadow cascade count, the baseline a live preset
-    // change re-clamps from. The live value is `shadow_cascades` above.
-    authored_shadow_cascades: u32,
-    // The world's authored anisotropy degree before the user override + preset
-    // ceiling, the baseline a live preset change re-clamps from (like
-    // `authored_shadow_map_size`). The live value is `anisotropy` above.
-    authored_anisotropy: u32,
-    // System / streaming restart preferences (the Advanced "Frame Buffering",
-    // "Occlusion Culling", and "Texture Quality" rows). Resolved at init from the
-    // world's config overridden by any persisted choice, passed to the backend
-    // ctor / streamer, and held here so the rows display + cycle them. Restart-
-    // required, independent of the quality preset. `frames_in_flight` lives above.
-    occlusion_two_pass: bool,
-    texture_cap: u32,
-    texture_budget: u32,
     // Reused scratch + change-tracking for the per-frame transform propagation
     // (`transform_propagation::propagate_transforms_cached`): buffers are refilled in place
     // and the pass is skipped on frames where no Transform / Parent changed.
@@ -370,7 +199,7 @@ pub(crate) struct RebindViz {
 }
 
 // One gamepad-rebind row's runtime bookkeeping, mirroring `RebindViz`: built at
-// init (`init_pad_rebind_rows`) from the row's `setting:pad_*:rebind` HitRegion
+// init (`init_rebind_rows`) from the row's `setting:pad_*:rebind` HitRegion
 // and handed to SettingsState for the button-rebind drain.
 pub(crate) struct PadRebindViz {
     pub(crate) action: GamepadAction,
@@ -444,32 +273,13 @@ impl GraphicsSystem {
         let gfx = GraphicsConfig::default();
         Self {
             state: tree.cloned(),
-            window_args: Default::default(),
             clear_color: gfx.clear_color,
-            frames_in_flight: gfx.frames_in_flight as usize,
-            vsync: gfx.vsync,
-            fps_cap: gfx.fps_cap,
-            display_modes: Vec::new(),
-            resolution: None,
-            current_mode: None,
-            resolution_row_labels: Vec::new(),
-            perf_stats: true,
-            show_fps: true,
-            show_vram: true,
-            perf_sub_row_labels: Vec::new(),
             max_frames: gfx.max_frames,
-            shadow_map_size: gfx.shadow_map_size,
-            shadow_update: gfx.shadow_update,
-            shadow_distance: gfx.shadow_distance,
-            shadow_cascades: gfx.shadow_cascades,
-            anisotropy: gfx.anisotropy,
             failed: false,
             start_time: None,
             frame_count: 0,
             frame_policy: frame_policy::FramePolicy::default(),
             menu_mode: false,
-            render_scale: UpscaleQuality::default(),
-            upscale_backend: UpscalerBackend::default(),
             backend: None,
             scene_flow: None,
             scene_visibility: Default::default(),
@@ -487,42 +297,10 @@ impl GraphicsSystem {
             deferred_shader_scenes: Vec::new(),
             pending_hot_reload_sources: None,
             world_reload: None,
-            persisted_graphics: crate::config::GraphicsSettings::default(),
-            fog_built: false,
             last_fog_settings: None,
-            post_process: render_types::PostProcessTunables::DEFAULT,
-            // Matches PostProcessConfig's ambient_intensity default; overwritten
-            // at init from the world / persisted store.
-            ambient_intensity: 1.0,
-            // Default until init resolves the world's config + persisted toggles.
-            post_config: PostProcessConfig::default(),
-            sliders: Vec::new(),
-            cycle_value_labels: std::collections::HashMap::new(),
             clip_rects: overlay_maps::ClipRects::new(),
-            keymap: keymap::KeyMap::default(),
-            rebind_rows: Vec::new(),
-            gamepad_map: GamepadMap::default(),
-            pad_rebind_rows: Vec::new(),
             // All-capable until the backend reports otherwise at init.
             caps: backend::DeviceCapabilities::ALL,
-            // Conservative until probed at init.
-            gpu_profile: backend::GpuProfile::UNKNOWN,
-            // Seeded at init from the persisted preset (Auto on first launch).
-            quality_preset: crate::gfx::quality_preset::QualityPreset::Auto,
-            // Defaulted until init captures the world's authored config.
-            authored_post_config: PostProcessConfig::default(),
-            // Resolved at init from the world's config + persisted overrides.
-            temporal_upscaling: false,
-            hdr_display: false,
-            hdr_pq: false,
-            authored_shadow_map_size: gfx.shadow_map_size,
-            authored_shadow_update: gfx.shadow_update,
-            authored_shadow_distance: gfx.shadow_distance,
-            authored_shadow_cascades: gfx.shadow_cascades,
-            authored_anisotropy: gfx.anisotropy,
-            occlusion_two_pass: PostProcessConfig::default().occlusion_two_pass,
-            texture_cap: 96,
-            texture_budget: 4,
             transform_cache: transform_propagation::TransformCache::default(),
             pushed_sky_angle: None,
             model_push: model_push::ModelPushCache::default(),
@@ -575,19 +353,6 @@ impl GraphicsSystem {
         if let Err(e) = s.save(self.state.as_ref()) {
             tracing::warn!("first-launch quality preset save failed: {e}");
         }
-    }
-
-    // The mode the Resolution row displays and cycles from: the user's choice,
-    // else the display's own mode, else the authored window size (a backend
-    // that cannot read the display; snaps to the nearest listed mode).
-    fn effective_resolution(&self) -> display_mode::DisplayMode {
-        self.resolution
-            .or(self.current_mode)
-            .unwrap_or(display_mode::DisplayMode {
-                width: self.window_args.width,
-                height: self.window_args.height,
-                refresh_hz: 0,
-            })
     }
 }
 
