@@ -236,6 +236,30 @@ pub(super) struct SkinnedState {
     pub deformed_primed: std::sync::atomic::AtomicBool,
 }
 
+impl SkinnedState {
+    pub(super) fn new() -> Self {
+        Self {
+            shadow_pso: None,
+            shadow_root_sig: None,
+            vertex_buffer: None,
+            index_buffer: None,
+            vertex_buffer_view: D3D12_VERTEX_BUFFER_VIEW::default(),
+            index_buffer_view: D3D12_INDEX_BUFFER_VIEW::default(),
+            slots: skinned_slots::SkinnedSlots::new(),
+            joint_buffers: Vec::new(),
+            joint_ptrs: Vec::new(),
+            skin_pipeline: None,
+            deformed_primed: std::sync::atomic::AtomicBool::new(false),
+            deformed_buffers: Vec::new(),
+            deformed_vbvs: Vec::new(),
+            morph_delta_buffers: Vec::new(),
+            morph_target_counts: Vec::new(),
+            morph_weight_buffers: Vec::new(),
+            morph_weight_ptrs: Vec::new(),
+        }
+    }
+}
+
 // GPU-driven cull + main pass. A compute kernel frustum/distance-tests every
 // record and writes one `ExecuteIndirect` command per object; the main pass
 // issues each bucket's region with one `ExecuteIndirect`. All `Some`/non-empty
@@ -255,6 +279,10 @@ pub(super) struct CullState {
     // at init to the record capacity the buffers were sized for. Bucket `b`'s
     // region starts at command `b * bucket_stride`.
     pub bucket_stride: usize,
+    // The engine's compiled bindless main-pass stages, retained so a shader
+    // bucket warmed mid-session can build its pipeline without recompiling the
+    // HLSL. See [`super::init::pipelines::BindlessMainShaders`].
+    pub bindless_main_shaders: super::init::pipelines::BindlessMainShaders,
     // Per-frame `StructuredBuffer<GpuObjectData>` upload buffers, one per
     // frame-in-flight, persistently mapped. Rebuilt each frame.
     pub object_buffer_resources: Vec<PooledBuffer>,
@@ -356,6 +384,26 @@ pub(super) struct HotReloadState {
     pub watcher: Option<crate::directx::hot_reload::WatcherHandle>,
 }
 
+impl HotReloadState {
+    // Watcher creation is best-effort: a missing source dir or a notify error
+    // logs a warning and disables only the watcher half -- the debug command
+    // still works on the same flag.
+    pub(super) fn spawn(enabled: bool) -> Self {
+        let (reload_pending, watcher) = if enabled {
+            let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let watcher = crate::directx::hot_reload::spawn(std::sync::Arc::clone(&flag));
+            (Some(flag), watcher)
+        } else {
+            (None, None)
+        };
+        Self {
+            enabled,
+            reload_pending,
+            watcher,
+        }
+    }
+}
+
 // Byte-range sub-allocators for the streamed-mesh regions of the shared
 // vertex/index buffers. Empty until mesh streaming is active; seeded at init by
 // one of two paths: the shrinkable-seed path hands them the single compacted
@@ -363,6 +411,7 @@ pub(super) struct HotReloadState {
 // streamed draw's build-time region via `evict_mesh`. From then on `upload_mesh`
 // / `evict_mesh` allocate and free byte ranges so a streamed mesh lands wherever
 // there is room.
+#[derive(Default)]
 pub(super) struct MeshStreamState {
     pub vtx_alloc: crate::suballoc::range_alloc::RangeAllocator,
     pub idx_alloc: crate::suballoc::range_alloc::RangeAllocator,
@@ -374,6 +423,7 @@ pub(super) struct MeshStreamState {
 // allocators. `draw.objects` slots vacated by removed chunks are recycled
 // through the shared `DrawSlotAllocator` (`draw_slots`), so the draw list does
 // not grow without bound as the camera roams an infinite world.
+#[derive(Default)]
 pub(super) struct ChunkStreamState {
     pub vtx_alloc: crate::suballoc::range_alloc::RangeAllocator,
     pub idx_alloc: crate::suballoc::range_alloc::RangeAllocator,
@@ -507,6 +557,10 @@ pub(super) struct ShadowState {
     // refresh every frame; per-cascade light VPs only when the mask includes
     // that cascade. Uploaded to the per-frame shadow UBO each frame.
     pub uniforms: ShadowUniforms,
+    // Depth-only cascade pipeline, `None` when shadows are disabled; the shadow
+    // passes key off `pso.is_some()`.
+    pub root_sig: Option<ID3D12RootSignature>,
+    pub pso: Option<ID3D12PipelineState>,
 }
 
 // Spot shadow map resources: one depth array slice per shadow-casting spot
@@ -618,6 +672,15 @@ pub(super) struct DxUniforms {
     pub light_uniforms: render_types::LightUniforms,
     pub shadow_ubo_resources: Vec<PooledBuffer>,
     pub shadow_ubo_ptrs: Vec<*mut u8>,
+    // Per-frame CBVs holding `probe.set` (the parallax boxes + live count) bound
+    // at root param [11] by the main pass. A `FRAMES` ring so a frame writes its
+    // own slot without racing a prior frame's in-flight GPU read.
+    pub probe_set_cbvs: Vec<PooledBuffer>,
+    pub probe_set_cbv_ptrs: Vec<*mut u8>,
+    // A static count-0 ProbeSet CBV the asynchronous capture binds at [11], so a
+    // probe face render samples the sky (no probe feedback) and never reads the
+    // live ring while `record_frame` rewrites it.
+    pub probe_set_empty_cbv: PooledBuffer,
 }
 
 impl DxUniforms {
@@ -729,37 +792,40 @@ pub(super) struct DxInstanced {
     pub bucket_layouts: std::sync::RwLock<Vec<Vec<InstanceBucketLayout>>>,
 }
 
-// Shader-visible descriptor heaps + samplers + the scene texture pools, grouped
-// off the flat `DxContext`. DirectX's binding model couples these: the SRV heap
-// holds the flat texture pool the `textures` / `_fallback_textures` pools feed,
-// and the sampler heap holds the static samplers. No direct Vulkan
-// single-struct equivalent (VK keeps its textures + samplers flat), so this is
-// DX progress toward Metal's struct-of-structs.
+impl DxInstanced {
+    pub(super) fn new(clusters: Vec<InstancedCluster>) -> Self {
+        Self {
+            any_lod: concinnity_core::gfx::lod::any_cluster_has_lod(&clusters),
+            // One outer Vec entry per cluster; populated each frame by
+            // `build_instance_upload` from `lod_buckets(cam_pos)`. The
+            // inner Vec is the bucket order (LOD0 -> LODN) for that
+            // cluster. Empty rows for clusters that never have visible
+            // instances stay empty.
+            bucket_layouts: std::sync::RwLock::new(vec![Vec::new(); clusters.len()]),
+            clusters,
+        }
+    }
+}
+
+// The shader-visible descriptor heaps and the static sampler handles, grouped
+// off the flat `DxContext`. The SRV heap's slot map is `layout`, which every
+// pass addresses its descriptors through.
 pub(super) struct DxDescriptors {
     // CBV/SRV/UAV descriptor heap (shader-visible). The slot map is
     // `init/heap_layout.rs`.
     pub srv_heap: ID3D12DescriptorHeap,
     pub srv_descriptor_size: usize,
-    // Base slot of the flat deduplicated bindless pool: `[albedo SRVs..] ++
-    // [normal SRVs..]`, repeated once per frame in flight (`flat_pool_len`
-    // slots per copy). The bindless main pass and the RT hit shader address
-    // the current frame's copy by a flat index; the streaming-residency
-    // rewrite re-points the one SRV per swapped pool slot in each copy as its
-    // frame fence-waits.
-    pub flat_pool_base_slot: usize,
+    // The resolved slot of every block in `srv_heap`. The flat deduplicated
+    // bindless pool at `layout.flat_pool_base_slot` (`[albedo SRVs..] ++
+    // [normal SRVs..]`) repeats once per frame in flight, `flat_pool_len` slots
+    // per copy: the bindless main pass and the RT hit shader address the current
+    // frame's copy by a flat index, and the streaming-residency rewrite
+    // re-points the one SRV per swapped pool slot in each copy as its frame
+    // fence-waits. The reflection-probe cube block and the per-bake convolution
+    // descriptors live here too. See [`super::probe`] and
+    // [`super::probe_prefilter`].
+    pub layout: super::init::heap_layout::SrvHeapLayout,
     pub flat_pool_len: usize,
-    // Base slot of the contiguous MAX_PROBES reflection-probe cube SRV block (the
-    // bindless main shader's `probe_cubes` table). Filled with the sky prefilter
-    // cube at init; a baked probe overwrites its slot. See [`super::probe`].
-    pub probe_cube_base_slot: usize,
-    // The reflection-probe convolution's descriptor block, rewritten per bake:
-    // the capture pyramid's all-mips SRV, one UAV per mip of each cube, and the
-    // contiguous (capture mip 0, probe mip 0) pair the mirror copy binds as one
-    // table. See [`super::probe_prefilter`].
-    pub probe_capture_srv_slot: usize,
-    pub probe_capture_uav_base_slot: usize,
-    pub probe_cube_uav_base_slot: usize,
-    pub probe_mip0_pair_slot: usize,
     // Sampler heap (shader-visible). Slots:
     //   [0] shadow comparison (s0)   [1] linear repeat (s1)
     //   [2] cube linear-clamp + mip linear (s2)   [3] text linear-clamp
@@ -767,24 +833,6 @@ pub(super) struct DxDescriptors {
     pub shadow_sampler_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
     pub linear_sampler_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
     pub text_sampler_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-    // Shared texture pool (kept alive). Every texture -- albedo, normal map,
-    // emissive/ORM, terrain secondary -- lives here once at its handle, matching
-    // Metal/Vulkan, so `DrawObject::texture_slot` and a real `normal_map_slot`
-    // index directly into it. `_fallback_textures` holds only the reserved
-    // pair past the last real texture -- flat-normal for a normal-less draw,
-    // then white for an albedo-less one; real normal maps and albedos are
-    // entries in `textures`. Held so the flat pool's fallback SRVs stay
-    // resident; nothing reads the resources back.
-    pub textures: Vec<PooledTexture>,
-    pub _fallback_textures: Vec<PooledTexture>,
-    // Held only to keep the text-atlas textures resident; the SRV handles
-    // below are what the text pass actually binds.
-    #[expect(
-        dead_code,
-        reason = "held to keep the text atlases resident; the pass binds the SRV handles"
-    )]
-    pub text_atlas_textures: Vec<GpuResource>,
-    pub text_atlas_srv_gpus: Vec<D3D12_GPU_DESCRIPTOR_HANDLE>,
 }
 
 // The scene draw list plus the record counts that partition the GPU-driven
@@ -828,6 +876,29 @@ pub(super) struct DrawState {
     pub n_skinned: usize,
 }
 
+impl DrawState {
+    pub(super) fn new(objects: Vec<DrawObject>, n_instances: usize, n_chunk_max: usize) -> Self {
+        let n_objects = objects.len();
+        Self {
+            n_objects,
+            objects,
+            graph_cache: RefCell::new(None),
+            n_instances,
+            // Runtime record reserve (fixed at init): the worst-case
+            // resident streamed-chunk window plus the runtime-clone cap. The
+            // cull buffers reserve `[n_objects + n_instances, +n_runtime)`;
+            // resident chunks and spawned clones are folded in per frame and
+            // the unused tail is disabled.
+            n_runtime: n_chunk_max + clone_reserve(n_objects),
+            // Set in `upload_skinned` once skinned geometry is resident; the
+            // cull buffers reserve the tail at init via the threaded
+            // `n_skinned` capacity, but `cull_count()` reads this runtime
+            // count.
+            n_skinned: 0,
+        }
+    }
+}
+
 // The frame's view state, snapped from `FrameParams` at the top of `draw_frame`.
 pub(super) struct ViewState {
     pub clear_color: [f32; 4],
@@ -851,6 +922,20 @@ pub(super) struct ViewState {
     // Rows of the sky's inverse rotation, uploaded into every uniform block
     // whose pass samples the environment cubemaps.
     pub sky_rot: [[f32; 4]; 3],
+}
+
+impl ViewState {
+    pub(super) fn new(clear_color: [f32; 4]) -> Self {
+        Self {
+            clear_color,
+            scene_fade: 0.0,
+            mode: Default::default(),
+            show: Default::default(),
+            far: 1.0,
+            matrix: concinnity_core::gfx::transform::IDENTITY,
+            sky_rot: concinnity_core::sky::SkyOrientation::IDENTITY_ROWS,
+        }
+    }
 }
 
 // Scene-captured reflection probes and the staggered bake that fills them.
@@ -881,15 +966,22 @@ pub(super) struct ProbeState {
     // is placement `i`). Distinct from `env_map`; sampled only by the specular
     // reflection term.
     pub maps: Vec<super::probe::ProbeCube>,
-    // Per-frame CBVs holding `set` (the parallax boxes + live count) bound at
-    // root param [11] by the main pass. A `FRAMES` ring so a frame writes its own
-    // slot without racing a prior frame's in-flight GPU read.
-    pub set_cbvs: Vec<PooledBuffer>,
-    pub set_cbv_ptrs: Vec<*mut u8>,
-    // A static count-0 ProbeSet CBV the asynchronous capture binds at [11], so a
-    // probe face render samples the sky (no probe feedback) and never reads the
-    // live ring while `record_frame` rewrites it.
-    pub set_empty_cbv: PooledBuffer,
+}
+
+impl ProbeState {
+    // Empty until `set_reflection_probes` supplies placements (declared or
+    // auto-seeded).
+    pub(super) fn new(prefilter: Option<super::probe_prefilter::ProbePrefilterPipelines>) -> Self {
+        Self {
+            placements: Vec::new(),
+            bake_queue: reflection_probe::ProbeBakeQueue::new(0),
+            set: concinnity_core::render::uniforms::ProbeSet::EMPTY,
+            rendering: None,
+            prefiltering: None,
+            prefilter,
+            maps: Vec::new(),
+        }
+    }
 }
 
 // Stall-free texture streaming. A streamed slot swap replaces the pool resource
@@ -904,6 +996,16 @@ pub(super) struct StreamState {
     pub pool_rewrites: slot_rewrites::SlotRewriteQueue,
     pub frame: u64,
     pub retires: Vec<super::texture::StreamedUploadRetire>,
+}
+
+impl StreamState {
+    pub(super) fn new() -> Self {
+        Self {
+            pool_rewrites: slot_rewrites::SlotRewriteQueue::new(FRAMES),
+            frame: 0,
+            retires: Vec::new(),
+        }
+    }
 }
 
 // The swapchain, its back buffers + RTV heap, and the presentation pacing.
@@ -947,16 +1049,12 @@ pub(super) struct Extents {
     pub output_height: u32,
 }
 
-// The main depth buffer and its DSV heap. `resource` and `heap` are held only to
-// keep the depth buffer and heap resident; `dsv` indexes into them and the
-// resources themselves are never read back.
+// The main depth buffer and the DSV heap that also holds the cascade, spot and
+// G-buffer depth views. `dsv` indexes into the heap; the depth resource itself
+// is never read back.
 pub(super) struct DepthState {
     pub dsv: D3D12_CPU_DESCRIPTOR_HANDLE,
     pub resource: ID3D12Resource,
-    #[expect(
-        dead_code,
-        reason = "held to keep the DSV heap resident; the pass binds through dsv"
-    )]
     pub heap: ID3D12DescriptorHeap,
 }
 
@@ -969,6 +1067,14 @@ pub(super) struct TextState {
     pub root_sig: ID3D12RootSignature,
     pub pso: Option<ID3D12PipelineState>,
     pub upload: super::upload_ring::UploadRing,
+    // Held only to keep the text-atlas textures resident; the SRV handles
+    // below are what the text pass actually binds.
+    #[expect(
+        dead_code,
+        reason = "held to keep the text atlases resident; the pass binds the SRV handles"
+    )]
+    pub atlas_textures: Vec<GpuResource>,
+    pub atlas_srv_gpus: Vec<D3D12_GPU_DESCRIPTOR_HANDLE>,
 }
 
 // Composite (post-process) pass: fullscreen-triangle tonemap of the HDR scene
@@ -979,6 +1085,7 @@ pub(super) struct CompositeState {
 }
 
 // Per-frame counters and the D3D12 validation sink.
+#[derive(Default)]
 pub(super) struct Diagnostics {
     // Render statistics for the most recent frame: draw-call and object counts
     // (filled by `draw_frame`) plus VRAM bytes pulled from the adapter. Lives in
@@ -1027,6 +1134,16 @@ pub(super) struct DxSceneAssets {
     pub color_lut: GpuResource,
     pub area_light: AreaLightState,
     pub geometry: DxGeometry,
+    // Shared texture pool (kept alive). Every texture -- albedo, normal map,
+    // emissive/ORM, terrain secondary -- lives here once at its handle, matching
+    // Metal/Vulkan, so `DrawObject::texture_slot` and a real `normal_map_slot`
+    // index directly into it. `_fallback_textures` holds only the reserved
+    // pair past the last real texture -- flat-normal for a normal-less draw,
+    // then white for an albedo-less one; real normal maps and albedos are
+    // entries in `textures`. Held so the flat pool's fallback SRVs stay
+    // resident; nothing reads the resources back.
+    pub textures: Vec<PooledTexture>,
+    pub _fallback_textures: Vec<PooledTexture>,
 }
 
 // The hardware ray-tracing scene: the acceleration structures and the policy
@@ -1184,8 +1301,6 @@ pub(crate) struct DxContext {
     // has local lights), the per-cluster light-index buffer, and the per-frame
     // `ClusterParams` constant buffers. See [`LightCullState`].
     pub(super) light_cull: super::light_cull::LightCullState,
-    pub(super) shadow_root_sig: Option<ID3D12RootSignature>,
-    pub(super) shadow_pso: Option<ID3D12PipelineState>,
     pub(super) text: TextState,
     pub(super) composite: CompositeState,
 
@@ -1314,11 +1429,6 @@ pub(crate) struct DxContext {
     // Lazily-built wireframe twin of the main-pass pipeline; empty until the
     // first Wireframe frame. See [`super::wireframe`].
     pub(super) wireframe: super::wireframe::DxWireframe,
-
-    // The engine's compiled bindless main-pass stages, retained so a shader
-    // bucket warmed mid-session can build its pipeline without recompiling the
-    // HLSL. See [`super::init::pipelines::BindlessMainShaders`].
-    pub(super) bindless_main_shaders: super::init::pipelines::BindlessMainShaders,
 
     // Auto-exposure (EV adaptation) state. See [`AutoExposureState`].
     pub(super) auto_exposure: AutoExposureState,

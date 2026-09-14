@@ -558,7 +558,7 @@ impl DxContext {
         self.bloom.pso_upsample = bloom_upsample;
         if let Some((p, engine_pair)) = bindless_main_pso {
             self.cull.main_bindless_pso = Some(p);
-            self.bindless_main_shaders = engine_pair;
+            self.cull.bindless_main_shaders = engine_pair;
         }
         // The wireframe twins were built from the pre-reload shaders; drop them
         // so the next wireframe frame rebuilds against these.
@@ -647,7 +647,8 @@ impl DxContext {
         &mut self,
         programs: &concinnity_core::components::ShaderPrograms,
     ) -> Result<(), String> {
-        let new_main = self.build_world_main_pso(Some(programs), &self.bindless_main_shaders)?;
+        let new_main =
+            self.build_world_main_pso(Some(programs), &self.cull.bindless_main_shaders)?;
         // Drain the GPU before the swap releases the displaced PSO: a command
         // list does not keep one alive, and the debug reload drive does not
         // wait for us.

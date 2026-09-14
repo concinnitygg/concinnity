@@ -30,7 +30,7 @@ impl DxContext {
     // its handle), shared by albedo + normal sampling and by the RT hit shader,
     // so one re-point per copy refreshes every consumer at once.
     fn rewrite_bound_texture_srvs(&self, slot: usize) {
-        let resource = &self.descriptors.textures[slot];
+        let resource = &self.scene.textures[slot];
         for f in 0..FRAMES {
             write_texture_srv(
                 &self.hw.device,
@@ -42,7 +42,7 @@ impl DxContext {
 
     // Heap slot of pool index `slot` in frame `frame`'s flat-pool copy.
     fn flat_pool_slot(&self, frame: usize, slot: usize) -> usize {
-        self.descriptors.flat_pool_base_slot + frame * self.descriptors.flat_pool_len + slot
+        self.descriptors.layout.flat_pool_base_slot + frame * self.descriptors.flat_pool_len + slot
     }
 
     // Re-point every SRV that samples texture-pool `slot`. Only legal under a
@@ -82,17 +82,17 @@ impl DxContext {
         slot: usize,
         image: &bake::texture::TextureImage,
     ) -> Result<(), String> {
-        if slot >= self.descriptors.textures.len() {
+        if slot >= self.scene.textures.len() {
             return Err(format!(
                 "update_texture_slot: slot {} out of range (pool size {})",
                 slot,
-                self.descriptors.textures.len()
+                self.scene.textures.len()
             ));
         }
         if self.streamed_slot_needs_drain() {
             self.wait_idle();
             let texture = upload_texture_image(&self.hw.alloc, image)?;
-            self.descriptors.textures[slot] = texture;
+            self.scene.textures[slot] = texture;
             self.rewrite_texture_slot(slot);
             // The full rewrite covered every flat-pool copy, so any propagation
             // queued for this slot is already satisfied.
@@ -100,7 +100,7 @@ impl DxContext {
             return Ok(());
         }
         let (texture, in_flight) = upload_texture_image_deferred(&self.hw.alloc, image)?;
-        let old = std::mem::replace(&mut self.descriptors.textures[slot], texture);
+        let old = std::mem::replace(&mut self.scene.textures[slot], texture);
         self.stream.pool_rewrites.queue(slot);
         // `+ 1`: the swap lands between frames, after the previous frame's
         // submit, so the first frame fence that covers the upload submission
@@ -126,9 +126,9 @@ impl DxContext {
     pub(in crate::directx) fn apply_streamed_texture_rewrites(&mut self, frame: usize) {
         self.stream.frame += 1;
         if !self.stream.pool_rewrites.is_empty() {
-            let last = self.descriptors.textures.len().saturating_sub(1);
+            let last = self.scene.textures.len().saturating_sub(1);
             for slot in self.stream.pool_rewrites.begin_frame() {
-                let resource = &self.descriptors.textures[slot.min(last)];
+                let resource = &self.scene.textures[slot.min(last)];
                 write_texture_srv(
                     &self.hw.device,
                     resource,

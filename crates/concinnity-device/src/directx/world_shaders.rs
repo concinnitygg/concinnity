@@ -41,7 +41,7 @@ impl DxContext {
             BucketPipelineTargets {
                 root_sig: &root_sig,
                 msaa_samples: self.targets.hdr.msaa_samples,
-                engine_default: &self.bindless_main_shaders,
+                engine_default: &self.cull.bindless_main_shaders,
                 hot_reload: self.hot_reload.enabled,
             },
             bucket as usize,

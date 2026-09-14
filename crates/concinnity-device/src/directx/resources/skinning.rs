@@ -159,7 +159,7 @@ impl DxContext {
 
         // Skinned shadow pipeline: built only when the static shadow pass is
         // active, so a skinned mesh casts a correctly deformed shadow.
-        let (skinned_shadow_root_sig, skinned_shadow_pso) = if self.shadow_pso.is_some() {
+        let (skinned_shadow_root_sig, skinned_shadow_pso) = if self.shadow.pso.is_some() {
             let sr = dump_on_err(
                 self.hw.info_queue.as_ref(),
                 create_skinned_shadow_root_signature(&self.hw.device),

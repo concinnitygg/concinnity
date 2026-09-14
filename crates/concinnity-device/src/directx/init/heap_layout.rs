@@ -43,6 +43,11 @@
 //!   [spot_shadow_srv_slot]         spot shadow depth array SRV (Texture2DArray)
 //!   [ltc_srv_base_slot..+2]        area-light LTC tables (matrix, magnitude)
 //!   srv_slots                      total descriptor count (heap size)
+//!
+//! The RTV heap follows the same cascade in `RtvHeapLayout`, and the DSV heap's
+//! fixed slots are the `DSV_*` constants.
+
+use concinnity_core::gfx::render_types::{MAX_SHADOWED_SPOTS, NUM_SHADOW_CASCADES};
 
 use super::HIZ_MAX_MIPS;
 use crate::directx::context::FRAMES;
@@ -248,6 +253,83 @@ impl SrvHeapLayout {
     }
 }
 
+// The live-toggleable Quality features (TAA, SSAO, SSR, SSGI, and the unified
+// G-buffer pre-pass they share) reserve their RTV / DSV / SRV slots
+// UNCONDITIONALLY, independent of the world's init-time gates. The slots are
+// fixed positions the passes bind by absolute index, so a live toggle
+// (`apply_quality_settings`) can build a feature that launched off and write
+// into its pre-reserved slot without shifting any other feature's slots. A
+// reserved-but-unbuilt feature leaves its slots unwritten; that is safe because
+// no always-running pass binds them (each feature's own pass runs only when the
+// feature is on, and the main pass's SSAO occlusion binding falls back to the
+// 1x1 white slot).
+//
+// SSAO: ao_raw + ao. View normal + depth come from the G-buffer pre-pass, so no
+// DSV.
+pub(super) const SSAO_TARGETS: usize = 2;
+// Unified G-buffer pre-pass: normal+depth, roughness, velocity, plus one DSV
+// (`DSV_GBUFFER_DEPTH_SLOT`) for its private depth.
+pub(super) const GBUFFER_TARGETS: usize = 3;
+// RT-reflection output: the trace writes the RTV, the post stack samples the SRV.
+pub(super) const RT_OUTPUT_TARGETS: usize = 1;
+// Reflection composite: composited output + reduced-res blur.
+pub(super) const REFL_COMPOSITE_TARGETS: usize = 2;
+
+// DSV heap slots: the main depth, one per shadow cascade (a slice each into the
+// shadow map array), one per shadowed spot slice, then the unified G-buffer
+// pre-pass's private depth buffer.
+pub(super) const DSV_MAIN_DEPTH_SLOT: usize = 0;
+pub(super) const DSV_SHADOW_BASE_SLOT: usize = DSV_MAIN_DEPTH_SLOT + 1;
+pub(super) const DSV_SPOT_SHADOW_BASE_SLOT: usize = DSV_SHADOW_BASE_SLOT + NUM_SHADOW_CASCADES;
+pub(super) const DSV_GBUFFER_DEPTH_SLOT: usize = DSV_SPOT_SHADOW_BASE_SLOT + MAX_SHADOWED_SPOTS;
+pub(super) const DSV_SLOTS: usize = DSV_GBUFFER_DEPTH_SLOT + 1;
+
+// Resolved slot indices into the RTV heap, after the back-buffer views at
+// `[0, FRAMES)`. `rtv_slots` is the total descriptor count the heap is created
+// with.
+pub(super) struct RtvHeapLayout {
+    // HDR scene target.
+    pub hdr_slot: usize,
+    pub bloom_base_slot: usize,
+    // The shared fullscreen post passes' target RTVs: a fixed
+    // `POST_TARGET_SLOTS` block sub-allocated at runtime by
+    // `post/descriptors.rs`. A post target is color only, so it reserves no DSV.
+    pub post_base_slot: usize,
+    pub ssao_base_slot: usize,
+    // `hdr_resolve`, which the projected-decal pass renders into. Reserved only
+    // under MSAA; the MSAA-off path writes through the HDR scene RTV.
+    pub decal_resolve_slot: usize,
+    pub gbuffer_base_slot: usize,
+    pub rt_output_slot: usize,
+    pub refl_composite_base_slot: usize,
+    pub rtv_slots: usize,
+}
+
+impl RtvHeapLayout {
+    pub(super) fn compute(bloom_count: usize, msaa_samples: u32) -> Self {
+        let hdr_slot = FRAMES;
+        let bloom_base_slot = hdr_slot + 1;
+        let post_base_slot = bloom_base_slot + bloom_count;
+        let ssao_base_slot = post_base_slot + POST_TARGET_SLOTS;
+        let decal_resolve_slot = ssao_base_slot + SSAO_TARGETS;
+        let gbuffer_base_slot = decal_resolve_slot + usize::from(msaa_samples > 1);
+        let rt_output_slot = gbuffer_base_slot + GBUFFER_TARGETS;
+        let refl_composite_base_slot = rt_output_slot + RT_OUTPUT_TARGETS;
+        let rtv_slots = refl_composite_base_slot + REFL_COMPOSITE_TARGETS;
+        Self {
+            hdr_slot,
+            bloom_base_slot,
+            post_base_slot,
+            ssao_base_slot,
+            decal_resolve_slot,
+            gbuffer_base_slot,
+            rt_output_slot,
+            refl_composite_base_slot,
+            rtv_slots,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -376,5 +458,65 @@ mod tests {
         });
         assert_eq!(l.atlas_base_slot, GLOBAL_SRV_COUNT);
         assert!(l.hdr_srv_slot >= GLOBAL_SRV_COUNT);
+    }
+
+    // The RTV blocks must follow the back buffers gap-free, with the decal
+    // resolve slot present only under MSAA. Sizes are restated independently of
+    // `compute` so an offset slip there fails the assert.
+    fn assert_rtv_gap_free(bloom_count: usize, msaa_samples: u32) {
+        let l = RtvHeapLayout::compute(bloom_count, msaa_samples);
+        let decal_resolve = if msaa_samples > 1 { 1 } else { 0 };
+        let blocks: [(usize, usize); 8] = [
+            (l.hdr_slot, 1),
+            (l.bloom_base_slot, bloom_count),
+            (l.post_base_slot, POST_TARGET_SLOTS),
+            (l.ssao_base_slot, 2),
+            (l.decal_resolve_slot, decal_resolve),
+            (l.gbuffer_base_slot, 3),
+            (l.rt_output_slot, 1),
+            (l.refl_composite_base_slot, 2),
+        ];
+        let mut expected_base = FRAMES;
+        for (i, (base, count)) in blocks.iter().enumerate() {
+            assert_eq!(
+                *base, expected_base,
+                "RTV block {i} base {base} should sit at running total {expected_base}",
+            );
+            expected_base += count;
+        }
+        assert_eq!(l.rtv_slots, expected_base);
+    }
+
+    #[test]
+    fn rtv_layout_gap_free_without_msaa() {
+        assert_rtv_gap_free(6, 1);
+    }
+
+    #[test]
+    fn rtv_layout_gap_free_with_msaa() {
+        assert_rtv_gap_free(5, 4);
+    }
+
+    #[test]
+    fn rtv_layout_without_bloom_starts_post_after_hdr() {
+        let l = RtvHeapLayout::compute(0, 1);
+        assert_eq!(l.post_base_slot, FRAMES + 1);
+        assert_eq!(l.decal_resolve_slot, l.gbuffer_base_slot);
+    }
+
+    // Main depth first, then a view per cascade and per shadowed spot slice,
+    // then the G-buffer depth, with the heap sized to cover the last one.
+    #[test]
+    fn dsv_layout_covers_every_depth_view() {
+        assert_eq!(DSV_MAIN_DEPTH_SLOT, 0);
+        assert_eq!(
+            DSV_SPOT_SHADOW_BASE_SLOT - DSV_SHADOW_BASE_SLOT,
+            NUM_SHADOW_CASCADES
+        );
+        assert_eq!(
+            DSV_GBUFFER_DEPTH_SLOT - DSV_SPOT_SHADOW_BASE_SLOT,
+            MAX_SHADOWED_SPOTS
+        );
+        assert_eq!(DSV_SLOTS, 2 + NUM_SHADOW_CASCADES + MAX_SHADOWED_SPOTS);
     }
 }

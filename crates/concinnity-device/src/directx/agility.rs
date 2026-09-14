@@ -19,7 +19,7 @@
 //
 // The handshake has no fallback: if the directory is absent, D3D12 device
 // creation fails outright rather than reverting to the OS runtime, and the
-// renderer reports "no suitable D3D12 adapter found" (see `init::window`, which
+// renderer reports "no suitable D3D12 adapter found" (see `init::bootstrap`, which
 // says so). A binary carrying these exports is therefore only portable together
 // with the directory beside it.
 //

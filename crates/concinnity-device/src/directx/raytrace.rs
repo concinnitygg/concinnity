@@ -2253,7 +2253,7 @@ impl super::context::DxContext {
             draw_objects: &self.draw.objects,
             clusters: &self.instanced.clusters,
             total_vertices: self.rt.static_vertex_count,
-            albedo_count: self.descriptors.textures.len() as u32,
+            albedo_count: self.scene.textures.len() as u32,
             exclude_seethrough: self.seethrough_meshes_enabled(),
         }) {
             Ok(Some(accel)) => accel,

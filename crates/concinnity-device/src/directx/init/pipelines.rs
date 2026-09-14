@@ -1,47 +1,27 @@
-//! Core render-pipeline construction extracted from DxContext::new:
-//!   * Shader compilation (`compile_all_shaders`, `compile_main_bindless_shaders`),
-//!     from the program declarations in `directx/slang_builtins.rs`.
+//! Main-pass pipeline construction shared by init and the runtime rebuilds:
+//!   * Shader compilation for the bindless main pass and the GPU-driven shadow
+//!     pass, from the program declarations in `directx/slang_builtins.rs`.
 //!   * Root-signature + PSO builders for the GPU-driven main pass, its shader
 //!     buckets, and the depth-only shadow pass.
-//!   * High-level `build_main_pipelines`/`build_shadow_pipeline`/etc.
-//!     orchestration helpers consumed by init/mod.rs.
 //!
-//! Mirrors src/metal/init/pipelines.rs (the same set of pipelines built at
-//! init time). Text + composite pipelines live in `directx/pipeline.rs`;
+//! Text + composite pipelines live in `directx/pipeline.rs`;
 //! bloom/TAA/SSAO live in `directx/post/`; the GPU-cull compute pipeline lives
 //! in `directx/cull.rs`; the skinned shadow pipeline (built lazily once a
 //! `SkinnedMesh` is uploaded) lives in `directx/resources.rs`.
 
-use concinnity_core::gfx::render_types;
 use concinnity_core::render::backend_init;
 use concinnity_core::render::shadow_bias;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
-use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
 use crate::directx::com;
-use crate::directx::context::{FRAMES, align256, dump_on_err};
-use crate::directx::cull::{
-    INDIRECT_COMMAND_STRIDE, compile_cull_shader, compile_cull_shader_phase2,
-    compile_cull_shader_shadow, create_cull_command_signature, create_cull_pso,
-    create_cull_root_signature,
-};
-use crate::directx::pipeline::{
-    compile_composite_shaders, compile_text_shaders, create_composite_pso,
-    create_composite_root_signature, create_text_pso, create_text_root_signature,
-    main_input_layout, serialize_and_create_root_sig,
-};
+use crate::directx::context::dump_on_err;
+use crate::directx::pipeline::{main_input_layout, serialize_and_create_root_sig};
 use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
-use crate::directx::texture::{HDR_FORMAT, create_buffer, create_uav_buffer};
+use crate::directx::texture::HDR_FORMAT;
 
 // Shader compilation
-
-pub(super) struct CompiledShaders {
-    pub shadow_vs: Option<Vec<u8>>,
-    pub text_vs: Vec<u8>,
-    pub text_ps: Vec<u8>,
-}
 
 // The world Shader's program for `entry`, as a DXIL container: the cook's
 // artifact when the engine template still matches, else a compile here. The
@@ -57,20 +37,6 @@ pub(in crate::directx) fn world_entry(
         hot_reload,
     };
     crate::shader::surface_source::artifact(world, entry, &req).map(|c| c.into_owned())
-}
-
-// Compile the engine-internal stages the init path needs outside the
-// GPU-driven main pass.
-pub(super) fn compile_all_shaders(hot_reload: bool) -> Result<CompiledShaders, String> {
-    // Whether the shadow pass runs is gated by `effective_shadow_size` at the
-    // call site.
-    let shadow_vs = Some(slang_builtins::SHADOW_VERT.compile(hot_reload)?);
-    let (text_vs, text_ps) = compile_text_shaders(hot_reload)?;
-    Ok(CompiledShaders {
-        shadow_vs,
-        text_vs,
-        text_ps,
-    })
 }
 
 // Compile the engine's bindless static-pass pair. A bucket whose Shader is the
@@ -101,7 +67,7 @@ pub(in crate::directx) fn compile_shadow_bindless_vs(hot_reload: bool) -> Result
 // rides a root constant); slot [5] is the unbounded bindless `Texture2D` pool
 // (`t0, space1`); slot [8] is a root SRV at `t3` carrying the per-frame
 // `StructuredBuffer<GpuObjectData>`.
-fn create_main_bindless_root_signature(
+pub(super) fn create_main_bindless_root_signature(
     device: &ID3D12Device,
 ) -> Result<ID3D12RootSignature, String> {
     let shadow_srv_ranges = [
@@ -742,7 +708,7 @@ pub(in crate::directx) struct BucketPipelineTargets<'a> {
 // shaders. Index `b` holds bucket `b + 1`'s pipeline; `None` marks a bucket the
 // streaming pump installs later (its Shader is owned by a scene that has not
 // pinned, so `decode_shaders` handed over an all-empty payload).
-fn build_world_pipeline_table(
+pub(super) fn build_world_pipeline_table(
     device: &ID3D12Device,
     info_queue: Option<&ID3D12InfoQueue>,
     targets: BucketPipelineTargets<'_>,
@@ -762,473 +728,6 @@ fn build_world_pipeline_table(
         )?));
     }
     Ok(table)
-}
-
-// Init-time orchestration
-
-pub(super) struct MainPipelines {
-    // The GPU-driven main pass's root signature and bucket 0's PSO: the world
-    // default Shader's pair where the world declares one, the engine's pair
-    // otherwise.
-    pub main_bindless_root_sig: Option<ID3D12RootSignature>,
-    pub main_bindless_pso: Option<ID3D12PipelineState>,
-    // Material-referenced world shader pipelines, indexed by `shader_bucket - 1`.
-    // Empty unless the world declares more than one Shader.
-    pub world_pipelines: Vec<Option<ID3D12PipelineState>>,
-    // Commands reserved per bucket region in the indirect buffers.
-    pub bucket_stride: usize,
-    // The engine's compiled bindless main-pass stages, retained for the buckets a
-    // scene warms mid-session and for the Wireframe twin.
-    pub bindless_main_shaders: BindlessMainShaders,
-    pub object_buffer_resources: Vec<PooledBuffer>,
-    pub object_buffer_ptrs: Vec<*mut u8>,
-    pub cull_root_sig: Option<ID3D12RootSignature>,
-    pub cull_pso: Option<ID3D12PipelineState>,
-    // Phase-2 cull PSO for two-pass occlusion (`main_phase2` entry, same root
-    // signature as `cull_pso`). `Some` only when the world requested
-    // `occlusion_two_pass` AND the bindless cull path is active.
-    pub cull_pso_phase2: Option<ID3D12PipelineState>,
-    pub cull_command_signature: Option<ID3D12CommandSignature>,
-    pub draw_args_buffer_resources: Vec<PooledBuffer>,
-    pub draw_args_buffer_ptrs: Vec<*mut u8>,
-    pub indirect_cmd_buffers: Vec<ID3D12Resource>,
-    // Per-frame per-object cull-status buffers (one u32 each). Phase-1 cull
-    // writes drawn / hi-z-candidate / culled; phase-2 cull reads it. Always
-    // allocated when the bindless cull path is active (mirrors Metal, where the
-    // status buffer is always present and ignored under single-pass).
-    pub cull_status_buffers: Vec<ID3D12Resource>,
-    // Per-frame second indirect-command buffers the phase-2 cull writes and
-    // `Main2` consumes. `Some`/non-empty only under two-pass occlusion.
-    pub indirect_cmd_buffers_2: Vec<ID3D12Resource>,
-    // GPU-driven shadow pass. Depth-only bindless pipeline + the
-    // shared cull command signature rebuilt against its root sig + per-frame
-    // indirect buffers (one region per cascade) + a scratch cull-status buffer.
-    // All `Some`/non-empty only when the bindless cull path is active AND shadows
-    // are enabled.
-    pub shadow_bindless_root_sig: Option<ID3D12RootSignature>,
-    pub shadow_bindless_pso: Option<ID3D12PipelineState>,
-    pub shadow_bindless_cmd_sig: Option<ID3D12CommandSignature>,
-    // Frustum-only shadow cull PSO (`main_shadow` entry, shares the cull root sig).
-    pub cull_pso_shadow: Option<ID3D12PipelineState>,
-    pub shadow_indirect_buffers: Vec<ID3D12Resource>,
-    pub shadow_cull_status_buffers: Vec<ID3D12Resource>,
-    // GPU-driven G-buffer pre-pass. A 3-MRT bindless pipeline + the
-    // shared cull command signature rebuilt against its root sig + per-frame
-    // previous-frame model upload buffers. All `Some`/non-empty only when the
-    // bindless cull path is active AND the G-buffer is enabled.
-    pub gbuffer_bindless_root_sig: Option<ID3D12RootSignature>,
-    pub gbuffer_bindless_pso: Option<ID3D12PipelineState>,
-    pub gbuffer_bindless_cmd_sig: Option<ID3D12CommandSignature>,
-    pub prev_model_buffer_resources: Vec<ID3D12Resource>,
-    pub model_history_root_sig: Option<ID3D12RootSignature>,
-    pub model_history_pso: Option<ID3D12PipelineState>,
-}
-
-// The world's Shaders, one per bucket (`BackendInit::shaders`): entry 0 is the
-// world default that drives bucket 0 (`programs: None` for the engine's own),
-// entries 1.. are the material-referenced buckets. Each gets its own
-// GPU-driven main-pass pipeline; an entry flagged `deferred` is a bucket whose
-// Shader belongs to a scene that has not pinned, and is installed later by
-// `install_world_shader`.
-#[derive(Clone, Copy)]
-pub(super) struct MainPipelineShaders<'a> {
-    pub world_shaders: &'a [backend_init::WorldShader<'a>],
-}
-
-// Record counts + MSAA that size the GPU-driven bindless pass's cull / object /
-// draw-args / indirect buffers.
-#[derive(Clone, Copy)]
-pub(super) struct MainPipelineConfig {
-    // Static build-time object count.
-    pub n_objects: usize,
-    // Total instanced-cluster instances folded in after the static objects.
-    pub n_instances: usize,
-    // Skinned draw objects folded in after the instances.
-    pub n_skinned: usize,
-    // Worst-case resident chunk count for a streaming VoxelWorld (0 otherwise),
-    // reserved between the instances and the skinned tail.
-    pub n_chunk_max: usize,
-    // MSAA sample count for the HDR render target.
-    pub msaa_samples: u32,
-}
-
-// Which optional GPU-driven pipeline variants to build.
-#[derive(Clone, Copy)]
-pub(super) struct MainPipelineFeatures {
-    // Build the phase-2 cull PSO + second indirect buffers for two-pass Hi-Z occlusion.
-    pub occlusion_two_pass: bool,
-    // Build the GPU-driven shadow pass (depth-only pipeline + per-cascade indirect buffers).
-    pub shadow_enabled: bool,
-    // Build the GPU-driven G-buffer pre-pass (pipeline + previous-frame model buffers).
-    pub gbuffer_enabled: bool,
-    pub hot_reload: bool,
-}
-
-// Build the GPU-driven main pass (root signature, bucket PSOs, GPU-cull compute
-// pipeline). Allocates the per-frame `StructuredBuffer<GpuObjectData>` /
-// `StructuredBuffer<GpuDrawArgs>` upload buffers and the per-frame
-// indirect-command UAV buffers that the cull kernel writes into, all only when
-// the world has anything to drive (`n_cull > 0`).
-pub(super) fn build_main_pipelines(
-    alloc: &DeviceAllocator,
-    info_queue: Option<&ID3D12InfoQueue>,
-    pipeline_shaders: MainPipelineShaders<'_>,
-    config: MainPipelineConfig,
-    features: MainPipelineFeatures,
-) -> Result<MainPipelines, String> {
-    let device = alloc.device();
-    let MainPipelineShaders { world_shaders } = pipeline_shaders;
-    let world_default = world_shaders
-        .first()
-        .copied()
-        .ok_or_else(|| "BackendInit carried no shaders".to_string())?;
-    let bucket_shaders = world_shaders.get(1..).unwrap_or(&[]);
-    let MainPipelineConfig {
-        n_objects,
-        n_instances,
-        n_skinned,
-        n_chunk_max,
-        msaa_samples,
-    } = config;
-    let MainPipelineFeatures {
-        occlusion_two_pass,
-        shadow_enabled,
-        gbuffer_enabled,
-        hot_reload,
-    } = features;
-    // Merged record count: static build-time objects, the instanced-cluster
-    // instances, the runtime reserve, then the skinned objects. The per-frame
-    // static fills write only the first `n_objects`; the instance records are
-    // written once at init; runtime and skinned records are written each frame
-    // into their reserved regions. `n_chunk_max` sizes the streamed-chunk window
-    // and `clone_reserve` the spawned-clone one; both live in the single
-    // runtime reserve between the instances and the skinned tail (see
-    // `DrawState::n_runtime`).
-    let n_cull =
-        n_objects + n_instances + n_chunk_max + render_types::clone_reserve(n_objects) + n_skinned;
-    // The GPU-driven main pass. The engine's pair is compiled regardless of the
-    // world default: it is the program for every bucket that declares no Shader
-    // and the source of the Wireframe twin. Bucket 0 takes the world default's
-    // pair where the world declares one.
-    let (bvs, bps) = compile_main_bindless_shaders(hot_reload)?;
-    let bindless_main_shaders = BindlessMainShaders { vs: bvs, ps: bps };
-    let brs = dump_on_err(info_queue, create_main_bindless_root_signature(device))?;
-    let targets = BucketPipelineTargets {
-        root_sig: &brs,
-        msaa_samples,
-        engine_default: &bindless_main_shaders,
-        hot_reload,
-    };
-    let main_pso = build_bucket_pipeline(device, info_queue, targets, 0, world_default)?;
-
-    // Material-referenced shaders (ShaderHandle 1..) each get their own
-    // main-pass pipeline, so their draws route into their own region of the
-    // GPU-culled command buffer.
-    let world_pipelines = if bucket_shaders.is_empty() {
-        Vec::new()
-    } else {
-        let max = render_types::MAX_SHADER_BUCKETS;
-        if bucket_shaders.len() + 1 > max {
-            return Err(format!(
-                "world declares {} Shaders but at most {max} can be routed",
-                bucket_shaders.len() + 1
-            ));
-        }
-        build_world_pipeline_table(device, info_queue, targets, bucket_shaders)?
-    };
-    let main_bindless_root_sig = Some(brs);
-    let main_bindless_pso = Some(main_pso);
-    let bucket_count = 1 + world_pipelines.len();
-
-    // Per-frame StructuredBuffer<GpuObjectData> upload buffers. Allocated only
-    // when the bindless pass is active and the world has build-time static
-    // geometry; rebuilt each frame in `build_object_buffer`.
-    let mut object_buffer_resources: Vec<PooledBuffer> = Vec::new();
-    let mut object_buffer_ptrs: Vec<*mut u8> = Vec::new();
-    if main_bindless_pso.is_some() && n_cull > 0 {
-        let object_buffer_size =
-            align256((n_cull * std::mem::size_of::<render_types::GpuObjectData>()) as u64);
-        // `FRAMES + 1`: the extra slot (index `FRAMES`) is reserved for the
-        // asynchronous reflection-probe capture, which builds its CPU-written
-        // bindless buffers into a slot the frame never touches (it uses
-        // `[0, FRAMES)`). See `directx/probe.rs::bake_ring_slot`.
-        for _ in 0..FRAMES + 1 {
-            let buf = create_buffer(
-                alloc,
-                object_buffer_size,
-                D3D12_HEAP_TYPE_UPLOAD,
-                D3D12_RESOURCE_STATE_GENERIC_READ,
-            )?;
-            let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
-            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
-            // local that receives the mapping.
-            unsafe { buf.Map(0, None, Some(&mut ptr)) }
-                .map_err(|e| format!("map object buffer: {e}"))?;
-            object_buffer_ptrs.push(ptr as *mut u8);
-            object_buffer_resources.push(buf);
-        }
-    }
-
-    // Compute cull: cull compute pipeline + per-frame draw-args /
-    // indirect-command buffers. Built under the same condition as the object
-    // buffer.
-    let mut cull_root_sig: Option<ID3D12RootSignature> = None;
-    let mut cull_pso: Option<ID3D12PipelineState> = None;
-    let mut cull_pso_phase2: Option<ID3D12PipelineState> = None;
-    let mut cull_command_signature: Option<ID3D12CommandSignature> = None;
-    let mut draw_args_buffer_resources: Vec<PooledBuffer> = Vec::new();
-    let mut draw_args_buffer_ptrs: Vec<*mut u8> = Vec::new();
-    let mut indirect_cmd_buffers: Vec<ID3D12Resource> = Vec::new();
-    let mut cull_status_buffers: Vec<ID3D12Resource> = Vec::new();
-    let mut indirect_cmd_buffers_2: Vec<ID3D12Resource> = Vec::new();
-    let mut shadow_bindless_root_sig: Option<ID3D12RootSignature> = None;
-    let mut shadow_bindless_pso: Option<ID3D12PipelineState> = None;
-    let mut shadow_bindless_cmd_sig: Option<ID3D12CommandSignature> = None;
-    let mut cull_pso_shadow: Option<ID3D12PipelineState> = None;
-    let mut shadow_indirect_buffers: Vec<ID3D12Resource> = Vec::new();
-    let mut shadow_cull_status_buffers: Vec<ID3D12Resource> = Vec::new();
-    let mut gbuffer_bindless_root_sig: Option<ID3D12RootSignature> = None;
-    let mut gbuffer_bindless_pso: Option<ID3D12PipelineState> = None;
-    let mut gbuffer_bindless_cmd_sig: Option<ID3D12CommandSignature> = None;
-    let mut prev_model_buffer_resources: Vec<ID3D12Resource> = Vec::new();
-    let mut model_history_root_sig: Option<ID3D12RootSignature> = None;
-    let mut model_history_pso: Option<ID3D12PipelineState> = None;
-    if let (Some(bindless_root), true) = (
-        main_bindless_root_sig.as_ref(),
-        main_bindless_pso.is_some() && n_cull > 0,
-    ) {
-        let cs = compile_cull_shader(hot_reload)?;
-        let crs = dump_on_err(info_queue, create_cull_root_signature(device))?;
-        let cps = dump_on_err(info_queue, create_cull_pso(device, &crs, &cs))?;
-        let csig = dump_on_err(
-            info_queue,
-            create_cull_command_signature(device, bindless_root),
-        )?;
-        // Phase-2 cull PSO for two-pass occlusion (same root sig, `main_phase2`
-        // entry). Built only when the world opted in.
-        if occlusion_two_pass {
-            let cs2 = compile_cull_shader_phase2(hot_reload)?;
-            cull_pso_phase2 = Some(dump_on_err(
-                info_queue,
-                create_cull_pso(device, &crs, &cs2),
-            )?);
-        }
-
-        let draw_args_size =
-            align256((n_cull * std::mem::size_of::<render_types::GpuDrawArgs>()) as u64);
-        // Default-heap indirect-command buffers (UAV target for the cull
-        // kernel; ExecuteIndirect source for the bindless static pass). One
-        // `n_cull`-command region per shader bucket: the cull kernel writes every
-        // record's slot in each region and the main pass issues one
-        // `ExecuteIndirect` per region under that bucket's pipeline.
-        let indirect_size =
-            align256((bucket_count * n_cull) as u64 * INDIRECT_COMMAND_STRIDE as u64);
-        // Per-object cull-status buffer (one u32 each). Always allocated when
-        // the cull path is active (matches Metal); resting state `UAV` so it
-        // binds as a root UAV with no transition.
-        let status_size = align256((n_cull as u64) * std::mem::size_of::<u32>() as u64);
-        // `FRAMES + 1`: the extra slot (index `FRAMES`) is the reserved
-        // reflection-probe capture slot (see the object-buffer loop above). The
-        // bake culls each cube face into `indirect_cmd_buffers[FRAMES]` reading
-        // `draw_args_buffer_resources[FRAMES]`, a slot the frame never overwrites.
-        for _ in 0..FRAMES + 1 {
-            let da = create_buffer(
-                alloc,
-                draw_args_size,
-                D3D12_HEAP_TYPE_UPLOAD,
-                D3D12_RESOURCE_STATE_GENERIC_READ,
-            )?;
-            let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
-            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
-            // local that receives the mapping.
-            unsafe { da.Map(0, None, Some(&mut ptr)) }
-                .map_err(|e| format!("map draw args buffer: {e}"))?;
-            draw_args_buffer_ptrs.push(ptr as *mut u8);
-            draw_args_buffer_resources.push(da);
-
-            // Created in COMMON (D3D12 always makes committed buffers in COMMON
-            // regardless of the requested state); the cull pass transitions them
-            // to UNORDERED_ACCESS / INDIRECT_ARGUMENT as it writes + executes them.
-            indirect_cmd_buffers.push(create_uav_buffer(
-                device,
-                indirect_size,
-                D3D12_RESOURCE_STATE_COMMON,
-            )?);
-            cull_status_buffers.push(create_uav_buffer(
-                device,
-                status_size,
-                D3D12_RESOURCE_STATE_COMMON,
-            )?);
-            // Second indirect buffer for the phase-2 (disocclusion) draws.
-            // Only allocated under two-pass occlusion.
-            if occlusion_two_pass {
-                indirect_cmd_buffers_2.push(create_uav_buffer(
-                    device,
-                    indirect_size,
-                    D3D12_RESOURCE_STATE_COMMON,
-                )?);
-            }
-        }
-        // GPU-driven shadow pass: a depth-only bindless pipeline + the shared
-        // cull command signature rebuilt against its root sig (object id still
-        // at root param 0) + per-frame indirect buffers carrying one cull region
-        // per cascade (`NUM_SHADOW_CASCADES * n_cull` commands) + a scratch
-        // cull-status buffer the shadow cull dispatches write but never read.
-        if shadow_enabled {
-            let svs = compile_shadow_bindless_vs(hot_reload)?;
-            let sbrs = dump_on_err(info_queue, create_shadow_bindless_root_signature(device))?;
-            // Reuse the depth-only shadow PSO builder (no pixel shader, 0 RTVs,
-            // D32 DSV, slope-scaled depth bias, main vertex layout).
-            let sbpso = dump_on_err(info_queue, create_shadow_pso(device, &sbrs, &svs))?;
-            let sbsig = dump_on_err(info_queue, create_cull_command_signature(device, &sbrs))?;
-            // Frustum-only shadow cull kernel (`main_shadow`), shares the cull root sig.
-            let scs = compile_cull_shader_shadow(hot_reload)?;
-            cull_pso_shadow = Some(dump_on_err(
-                info_queue,
-                create_cull_pso(device, &crs, &scs),
-            )?);
-            let cascades = render_types::NUM_SHADOW_CASCADES as u64;
-            let shadow_indirect_size =
-                align256(cascades * (n_cull as u64) * INDIRECT_COMMAND_STRIDE as u64);
-            for _ in 0..FRAMES {
-                shadow_indirect_buffers.push(create_uav_buffer(
-                    device,
-                    shadow_indirect_size,
-                    D3D12_RESOURCE_STATE_COMMON,
-                )?);
-                shadow_cull_status_buffers.push(create_uav_buffer(
-                    device,
-                    status_size,
-                    D3D12_RESOURCE_STATE_COMMON,
-                )?);
-            }
-            shadow_bindless_root_sig = Some(sbrs);
-            shadow_bindless_pso = Some(sbpso);
-            shadow_bindless_cmd_sig = Some(sbsig);
-        }
-
-        // GPU-driven G-buffer pre-pass: a 3-MRT bindless pipeline whose VS reads
-        // model + roughness from `GpuObjectData[object_id]` + the previous frame's
-        // model from the model-history ring, drawn by reusing the main pass's
-        // per-frame indirect command buffer (NO new cull -- the camera-frustum
-        // cull already ran). Plus that ring (one column-major `float4x4` per cull
-        // record per frame) and the snapshot kernel that fills it: device-local,
-        // resting as a shader resource between the dispatch that writes a slot
-        // and the pre-pass that reads it a frame later.
-        if gbuffer_enabled {
-            let (grs, gpso, gsig) = crate::directx::post::gbuffer::build_gbuffer_bindless(
-                device, info_queue, hot_reload,
-            )?;
-            let (mhrs, mhpso) =
-                crate::directx::post::gbuffer::build_model_history(device, info_queue, hot_reload)?;
-            let prev_model_size = align256((n_cull * std::mem::size_of::<[[f32; 4]; 4]>()) as u64);
-            for _ in 0..FRAMES {
-                prev_model_buffer_resources.push(create_uav_buffer(
-                    device,
-                    prev_model_size,
-                    D3D12_RESOURCE_STATE_COMMON,
-                )?);
-            }
-            gbuffer_bindless_root_sig = Some(grs);
-            gbuffer_bindless_pso = Some(gpso);
-            gbuffer_bindless_cmd_sig = Some(gsig);
-            model_history_root_sig = Some(mhrs);
-            model_history_pso = Some(mhpso);
-        }
-
-        cull_root_sig = Some(crs);
-        cull_pso = Some(cps);
-        cull_command_signature = Some(csig);
-    }
-
-    Ok(MainPipelines {
-        main_bindless_root_sig,
-        main_bindless_pso,
-        world_pipelines,
-        bucket_stride: n_cull,
-        bindless_main_shaders,
-        object_buffer_resources,
-        object_buffer_ptrs,
-        cull_root_sig,
-        cull_pso,
-        cull_pso_phase2,
-        cull_command_signature,
-        draw_args_buffer_resources,
-        draw_args_buffer_ptrs,
-        indirect_cmd_buffers,
-        cull_status_buffers,
-        indirect_cmd_buffers_2,
-        shadow_bindless_root_sig,
-        shadow_bindless_pso,
-        shadow_bindless_cmd_sig,
-        cull_pso_shadow,
-        shadow_indirect_buffers,
-        shadow_cull_status_buffers,
-        gbuffer_bindless_root_sig,
-        gbuffer_bindless_pso,
-        gbuffer_bindless_cmd_sig,
-        prev_model_buffer_resources,
-        model_history_root_sig,
-        model_history_pso,
-    })
-}
-
-pub(super) fn build_shadow_pipeline(
-    device: &ID3D12Device,
-    info_queue: Option<&ID3D12InfoQueue>,
-    shadow_vs: Option<&[u8]>,
-) -> Result<(Option<ID3D12RootSignature>, Option<ID3D12PipelineState>), String> {
-    if let Some(svs) = shadow_vs {
-        let sr = dump_on_err(info_queue, create_shadow_root_signature(device))?;
-        let sp = dump_on_err(info_queue, create_shadow_pso(device, &sr, svs))?;
-        Ok((Some(sr), Some(sp)))
-    } else {
-        Ok((None, None))
-    }
-}
-
-pub(super) fn build_text_pipeline(
-    device: &ID3D12Device,
-    info_queue: Option<&ID3D12InfoQueue>,
-    text_vs: &[u8],
-    text_ps: &[u8],
-    swap_format: DXGI_FORMAT,
-    has_atlases: bool,
-) -> Result<(ID3D12RootSignature, Option<ID3D12PipelineState>), String> {
-    let text_root_sig = dump_on_err(info_queue, create_text_root_signature(device))?;
-    // Text renders in the composite pass into the single-sample swapchain
-    // backbuffer (post-tonemap), so its PSO targets the swapchain format at
-    // sample count 1.
-    let text_pso = if has_atlases {
-        Some(dump_on_err(
-            info_queue,
-            create_text_pso(device, &text_root_sig, text_vs, text_ps, swap_format, 1),
-        )?)
-    } else {
-        None
-    };
-    Ok((text_root_sig, text_pso))
-}
-
-pub(super) fn build_composite_pipeline(
-    device: &ID3D12Device,
-    info_queue: Option<&ID3D12InfoQueue>,
-    swap_format: DXGI_FORMAT,
-    hot_reload: bool,
-) -> Result<(ID3D12RootSignature, ID3D12PipelineState), String> {
-    let composite_root_sig = dump_on_err(info_queue, create_composite_root_signature(device))?;
-    let (composite_vs, composite_ps) = compile_composite_shaders(hot_reload)?;
-    let composite_pso = dump_on_err(
-        info_queue,
-        create_composite_pso(
-            device,
-            &composite_root_sig,
-            &composite_vs,
-            &composite_ps,
-            swap_format,
-        ),
-    )?;
-    Ok((composite_root_sig, composite_pso))
 }
 
 #[cfg(test)]

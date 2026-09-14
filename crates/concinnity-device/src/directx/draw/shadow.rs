@@ -64,7 +64,7 @@ impl DxContext {
     ) {
         // The depth-only pipeline is the spot pass's; its absence still means
         // shadows are not configured, so there is nothing to render here either.
-        if self.shadow_pso.is_none() {
+        if self.shadow.pso.is_none() {
             return;
         }
         if self.shadow.dsvs.is_empty() {

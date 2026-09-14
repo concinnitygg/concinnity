@@ -1,65 +1,50 @@
-//! DxContext construction. The constructor is intentionally a flat top-to-
-//! bottom sequence so the order of dependencies stays obvious; helpers for
-//! self-contained sub-phases live in sibling modules:
+//! DxContext construction. `build` resolves the backend inputs, then calls each
+//! stage in dependency order. A stage builds one owned group or subsystem state
+//! whole and returns it, borrowing the finished states it depends on:
 //!
-//!   window.rs    Win32 window + raw input + DXGI factory + adapter +
-//!                D3D12 device + info-queue + command queue + swapchain
-//!                + MSAA support query.
-//!   pipelines.rs Shader compile + main / shadow / instanced / text /
-//!                composite PSOs + bindless main pass + GPU-cull compute
-//!                pipeline and its per-frame UAV / upload buffers.
-//!   effects.rs   Bloom mip targets + pipelines, TAA velocity + history,
-//!                SSAO pre-pass + kernel + blur, SSAO white fallback.
-//!                Each gated on per-world settings.
+//!   bootstrap.rs     window, DXGI factory, adapter, device, queue, swapchain.
+//!   heaps.rs         RTV heap with the back-buffer views, DSV and sampler heaps.
+//!   descriptors.rs   shader-visible SRV heap, sampler handles, post-pass block.
+//!   effects.rs       upscaler, screen-space passes, world effects.
+//!   scene_assets.rs  area lights, IBL cubes, textures, color LUT, geometry.
+//!   targets.rs       main depth, HDR scene target, transient pool.
+//!   scene_data.rs    constant-buffer rings, clustered light binning.
+//!   shadow.rs        cascade and spot shadow states.
+//!   cull/            bindless pass, compute cull, Hi-Z, GPU-driven shadow, G-buffer.
+//!   text.rs          text atlases and pipeline.
+//!   composite.rs     composite pipeline.
+//!   ray_tracing.rs   reflection composite, RT reflections, acceleration structure.
+//!   bloom.rs         bloom mip chain and pipelines.
+//!   commands.rs      command lists, frame sync, timestamp queries.
 //!
-//! What still lives inline here:
-//!   * Descriptor heap creation (RTV / DSV / CBV+SRV+UAV / sampler) with
-//!     the cross-cutting slot layout.
-//!   * Sampler creation.
-//!   * Texture pool uploads, flat bindless pool SRV writes,
-//!     text atlas uploads, shadow map array, IBL cubes, color LUT,
-//!     main-depth + HDR scene targets.
-//!   * Geometry + per-frame view / light / shadow constant buffers.
-//!   * Per-frame command infrastructure (allocator/list/fence), per-cluster
-//!     instance upload buffers, and the final `Self { ... }` literal.
+//! `heap_layout.rs` holds every heap's slot layout, `pipelines.rs` the main-pass
+//! root signature and PSO builders, and `adapter.rs` the adapter selection.
 
-use concinnity_core::bake;
-use concinnity_core::gfx::auto_exposure;
-use concinnity_core::gfx::lod;
-use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::gfx::profile;
-use concinnity_core::gfx::render_types;
-use concinnity_core::gfx::render_types::*;
-use concinnity_core::gfx::transform::IDENTITY;
-use concinnity_core::render::backend_init;
-use concinnity_core::render::csm;
-use concinnity_core::render::decal;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::lights;
-use concinnity_core::render::ltc;
-use concinnity_core::render::particles;
-use concinnity_core::render::planar_reflection;
-use concinnity_core::render::reflection_probe;
-use concinnity_core::render::render_graph;
-use concinnity_core::render::skinned_slots;
-use concinnity_core::render::slot_rewrites;
-use std::cell::RefCell;
-use windows::Win32::Graphics::Direct3D12::*;
-use windows::Win32::System::Threading::CreateEventW;
+use concinnity_core::gfx::render_types::{FALLBACK_TEXTURE_COUNT, PostProcessParams};
+use concinnity_core::render::backend_init::{self, BackendInit, PostSettings, WorldShader};
+use concinnity_core::render::error::RenderResult;
 
-use super::com;
+use self::heap_layout::{RtvHeapLayout, SrvHeapParams};
 use super::context::*;
-use super::draw::*;
 use super::post::bloom::bloom_mip_count;
-use super::post::descriptors::{POST_TARGET_SLOTS, PostDescriptors};
-use super::texture::*;
-use crate::directx::allocator::{PooledBuffer, PooledTexture};
 
 mod adapter;
+mod bloom;
+mod bootstrap;
+mod commands;
+mod composite;
+mod cull;
+mod descriptors;
 mod effects;
-mod heap_layout;
+pub(in crate::directx) mod heap_layout;
+mod heaps;
 pub(in crate::directx) mod pipelines;
-mod window;
+mod ray_tracing;
+mod scene_assets;
+mod scene_data;
+mod shadow;
+mod targets;
+mod text;
 
 // Maximum Hi-Z mip count we reserve descriptor slots for. 15 mips covers
 // every render target up to 16384 pixels in the larger dimension; an
@@ -67,10 +52,82 @@ mod window;
 // so the heap layout stays anchored even when the window resizes.
 pub(in crate::directx) const HIZ_MAX_MIPS: usize = 15;
 
+// The hardware every init stage creates resources through, and whether the
+// shader compiles it makes resolve from disk for hot reload.
+struct InitGpu<'a> {
+    hw: &'a DxHardware,
+    hot_reload: bool,
+}
+
+// The feature gates every stage agrees on, resolved once from the world's post
+// settings and the device.
+struct Features {
+    taa_enabled: bool,
+    msaa_samples: u32,
+    post_process: PostProcessParams,
+    ssao_enabled: bool,
+    gbuffer_enabled: bool,
+}
+
+impl Features {
+    fn resolve(hw: &DxHardware, post: &PostSettings) -> Self {
+        // FSR3 needs the velocity buffer + the TAA-velocity pre-pass
+        // PSOs, both of which live inside `TaaResources`. When upscale
+        // is on we force the TAA resources to be built even if the
+        // world's `PostProcessConfig.aa_mode` is off; the TAA *resolve*
+        // pass is still skipped (see `record_frame::seed_inputs`),
+        // because FSR owns the temporal accumulation.
+        let taa_enabled = post.taa_enabled || post.temporal_upscaling;
+        // The adapter ceiling clamped to what the world asks for. A temporal
+        // technique resolves it to one sample, which drops the resolve step and
+        // makes `hdr.color` the scene spine; every PSO bakes the result into its
+        // `SampleDesc`.
+        let msaa_samples = bootstrap::resolve_sample_count(
+            bootstrap::query_msaa_samples(&hw.device),
+            post.hdr_samples,
+        );
+        // Pair the authored tunables with the resolved mode's output flags. On
+        // the SDR path both stay 0.0 and the shader runs the full ACES + gamma
+        // + FXAA + LUT chain unchanged. Inside the HDR branch, `pq_output`
+        // picks scRGB-linear passthrough (0.0) vs SMPTE ST 2084 in-shader
+        // encode (1.0). Mirrors the Metal hop in `metal/init/mod.rs`. `setup`
+        // may have already downgraded the encoding when
+        // `CheckColorSpaceSupport(HDR10 PQ)` came back negative, so composing
+        // after `setup` returns is what makes `hw.hdr_mode` the source of truth.
+        let post_process = hw.hdr_mode.post_process_params(post.post_process);
+        // Hardware ray-tracing capability. RT reflection resources + the
+        // acceleration structure are built only when the world authored
+        // `ray_traced_reflections` AND the GPU reports the DXR 1.1 tier inline
+        // `RayQuery` needs; otherwise the renderer falls back to SSR.
+        let rt_enabled = post.rt_reflections.is_some() && hw.rt_capable;
+        if post.rt_reflections.is_some() && !hw.rt_capable {
+            tracing::warn!(
+                "ray_traced_reflections requested but the GPU does not report DXR \
+                 tier 1.1; falling back to screen-space reflections"
+            );
+        }
+        let ssao_enabled = post.ssao.is_some();
+        Self {
+            taa_enabled,
+            msaa_samples,
+            post_process,
+            ssao_enabled,
+            // The unified G-buffer pre-pass exists when any screen-space
+            // consumer needs it: SSR / SSGI / RT, SSAO, or TAA / FSR velocity.
+            // `taa_enabled` already folds in temporal upscaling.
+            gbuffer_enabled: taa_enabled
+                || ssao_enabled
+                || post.ssr.is_some()
+                || post.ssgi.is_some()
+                || rt_enabled,
+        }
+    }
+}
+
 impl DxContext {
     // Construct a fresh context (new device + window + swapchain) from the
     // assembled backend inputs (see `concinnity_core::render::backend_init::BackendInit`).
-    pub(crate) fn new(init: backend_init::BackendInit<'_>) -> RenderResult<Self> {
+    pub(crate) fn new(init: BackendInit<'_>) -> RenderResult<Self> {
         Self::build(init, None)
     }
 
@@ -78,16 +135,12 @@ impl DxContext {
     // normal `new` path); `reuse == Some` rebuilds only the world's content on
     // the retained device + window + swapchain for a live `cn editor` world
     // reload (see `reload_world`). Everything after the device/window
-    // acquisition is identical -- the same pipelines, buffers, textures, and
-    // targets are built from `init` either way; the DirectX-specific behavior
-    // of each input is documented inline below.
+    // acquisition is identical: the same pipelines, buffers, textures, and
+    // targets are built from `init` either way.
     fn build(
-        init: backend_init::BackendInit<'_>,
-        reuse: Option<(DxHardware, window::DxgiSwapchain)>,
+        init: BackendInit<'_>,
+        reuse: Option<(DxHardware, bootstrap::DxgiSwapchain)>,
     ) -> RenderResult<Self> {
-        use concinnity_core::render::backend_init::{
-            BackendInit, MediaPayloads, PostSettings, SceneData, ShadowParams, WorldFx, WorldShader,
-        };
         let BackendInit {
             window,
             validation,
@@ -100,122 +153,54 @@ impl DxContext {
             // DirectX retains the presented back-buffer index unconditionally,
             // so capture needs no arming here.
             capture: _,
-            scene:
-                SceneData {
-                    vertices,
-                    indices,
-                    draw_objects,
-                    instanced_clusters,
-                    // Skinned draw-object count, threaded purely to size the
-                    // shared cull / object / draw-args / indirect buffers for the
-                    // merged total at init (`n_objects + n_instances +
-                    // n_skinned`); the skinned geometry itself is uploaded later
-                    // by `upload_skinned`, which sets the live `self.draw.n_skinned`.
-                    n_skinned,
-                    // Sizes the runtime record region in the shared cull buffers
-                    // at init, alongside the runtime-clone cap; resident chunks
-                    // and spawned clones fold into the indirect path each frame.
-                    // Sets the live `self.draw.n_runtime`.
-                    n_chunk_max,
-                },
+            scene: world,
             shaders: world_shaders,
-            media:
-                MediaPayloads {
-                    textures,
-                    text_atlases,
-                    env_map_bytes,
-                    color_lut_bytes,
-                },
+            media,
             light_uniforms,
             local_lights,
             spot_shadows,
             area_lights,
-            shadows:
-                ShadowParams {
-                    map_size: shadow_map_size,
-                    update: shadow_update,
-                    distance: shadow_distance,
-                    cascades: shadow_cascades,
-                },
-            // Clamped to the D3D12 1..16 range where the sampler is built below.
+            shadows,
+            // Clamped to the D3D12 1..16 range where the sampler is built.
             anisotropy,
             planar_planes,
-            post:
-                PostSettings {
-                    post_process: post_tunables,
-                    taa_enabled,
-                    hdr_samples,
-                    ssao: ssao_settings,
-                    ssr: ssr_settings,
-                    ssgi: ssgi_settings,
-                    rt_reflections: rt_reflection_settings,
-                    rt_dynamic: rt_dynamic_mode,
-                    rt_skinned_geometry,
-                    reflection_blur_scale,
-                    auto_exposure: auto_exposure_settings,
-                    auto_exposure_bias_ev,
-                    hdr_display,
-                    hdr_pq,
-                    temporal_upscaling,
-                    upscale_scale,
-                    upscale_backend,
-                    occlusion_two_pass,
-                },
-            fx:
-                WorldFx {
-                    decals,
-                    particles,
-                    fog: fog_settings,
-                    water_surfaces,
-                    glass_panels,
-                    sdf_volumes,
-                },
+            post,
+            fx,
             requirements: _,
         } = init;
         // Entry 0 is the world default program; entries 1.. are the
-        // material-referenced shader buckets (see `world_shaders.rs`).
+        // material-referenced shader buckets (see `world_shaders.rs`). The world
+        // default program is never deferred (bucket 0 always decodes at init);
+        // only the material-referenced buckets can be.
         let &WorldShader {
             programs: world_programs,
-            // The world default program is never deferred (bucket 0 always
-            // decodes at init); only the material-referenced buckets can be.
             deferred: _,
         } = world_shaders
             .first()
             .ok_or_else(|| "BackendInit carried no shaders".to_string())?;
-        let (title, width, height) = (window.title.as_str(), window.width, window.height);
+        let output = (window.width, window.height);
         // Record this (main) thread so the `RenderBackend` mutation entry
         // points can `debug_assert_main_thread` against it; the Send invariant
         // rests on the context being touched from this thread alone.
         super::context::record_main_thread();
 
-        // FSR3 needs the velocity buffer + the TAA-velocity pre-pass
-        // PSOs, both of which live inside `TaaResources`. When upscale
-        // is on we force the TAA resources to be built even if the
-        // world's `PostProcessConfig.aa_mode` is off; the TAA *resolve*
-        // pass is still skipped (see `record_frame::seed_inputs`),
-        // because FSR owns the temporal accumulation.
-        let taa_enabled = taa_enabled || temporal_upscaling;
         // The swapchain config the caller's reload gate compares against.
         let swapchain_config = backend_init::SwapchainConfig {
             frames_in_flight: frames_in_flight.max(1),
-            hdr_display,
-            hdr_pq,
+            hdr_display: post.hdr_display,
+            hdr_pq: post.hdr_pq,
         };
-        // Win32 window + DXGI factory + device + info-queue + command queue +
-        // allocator + swapchain. See init/window.rs. The HDR-display
-        // negotiation also happens in there: a capable adapter + a `true`
-        // toggle yields a `RGBA16Float` scRGB swapchain; otherwise
-        // `hw.hdr_mode` is `Sdr` and the swapchain stays at BGRA8Unorm.
+        // A live editor reload hands over the hardware and swapchain (HDR was
+        // already negotiated on the unchanged swapchain, so `setup` is skipped).
+        // Otherwise `setup` negotiates HDR: a capable adapter + a `true` toggle
+        // yields a `RGBA16Float` scRGB swapchain, else `hw.hdr_mode` is `Sdr`.
         let (hw, swapchain) = match reuse {
-            // Live editor reload: the hardware and swapchain are handed over
-            // (HDR was already negotiated on the unchanged swapchain, so `setup`
-            // is skipped). Only the world content below is rebuilt.
             Some(reuse) => reuse,
-            None => window::setup(
-                window::WindowConfig {
-                    title,
-                    width,
-                    height,
+            None => bootstrap::setup(
+                bootstrap::WindowConfig {
+                    title: window.title.as_str(),
+                    width: output.0,
+                    height: output.1,
                     title_bar: window.title_bar,
                 },
                 validation,
@@ -223,1854 +208,165 @@ impl DxContext {
                 swapchain_config,
             )?,
         };
-        // The adapter ceiling clamped to what the world asks for. A temporal
-        // technique resolves it to one sample, which drops the resolve step and
-        // makes `hdr.color` the scene spine; every PSO below bakes the result
-        // into its `SampleDesc`.
-        let msaa_samples =
-            window::resolve_sample_count(window::query_msaa_samples(&hw.device), hdr_samples);
-
+        let features = Features::resolve(&hw, &post);
         // Persisted pipeline library: seeded from disk when a blob for this
         // adapter exists, consulted by every PSO creation below. No-op on the
         // reload path, where it is already installed.
         super::pso_library::install(&hw.device, hw.adapter.as_ref());
-        // Presentation pacing derived from the vsync request + tearing support.
-        // vsync on -> sync interval 1 (lock to refresh). vsync off + tearing ->
-        // sync interval 0 with the tearing present flag (true uncapped). vsync
-        // off without tearing -> sync interval 0, no flag (flip-model refresh
-        // pacing, the best available fallback).
-        let present_sync_interval: u32 = if vsync { 1 } else { 0 };
-        // Pair the authored tunables with the resolved mode's output flags. On
-        // the SDR path both stay 0.0 and the shader runs the full ACES + gamma
-        // + FXAA + LUT chain unchanged. Inside the HDR branch, `pq_output`
-        // picks scRGB-linear passthrough (0.0) vs SMPTE ST 2084 in-shader
-        // encode (1.0). Mirrors the Metal hop in `metal/init/mod.rs`. `setup`
-        // may have already downgraded the encoding when
-        // `CheckColorSpaceSupport(HDR10 PQ)` came back negative, so composing
-        // after `setup` returns is what makes `hw.hdr_mode` the source of truth.
-        let post_process = hw.hdr_mode.post_process_params(post_tunables);
-
-        // Hardware ray-tracing capability. RT reflection resources + the
-        // acceleration structure are built only when the world authored
-        // `ray_traced_reflections` AND the GPU reports the DXR 1.1 tier inline
-        // `RayQuery` needs; otherwise the renderer falls back to SSR.
-        let rt_enabled = rt_reflection_settings.is_some() && hw.rt_capable;
-        if rt_reflection_settings.is_some() && !hw.rt_capable {
-            tracing::warn!(
-                "ray_traced_reflections requested but the GPU does not report DXR \
-                 tier 1.1; falling back to screen-space reflections"
-            );
-        }
-
-        // RTV heap
-        // Slots: [0..FRAMES) = back-buffer RTVs, [FRAMES] = HDR scene RTV,
-        // [FRAMES+1 .. FRAMES+1+bloom_count] = bloom mip RTVs, then (TAA only)
-        // the velocity RTV + two ping-pong history RTVs.
-        let bloom_count = bloom_mip_count(width, height) as usize;
-        // The five live-toggleable Quality features (TAA, SSAO, SSR, SSGI, and
-        // the unified G-buffer pre-pass they share) reserve their RTV / DSV / SRV
-        // slots UNCONDITIONALLY, independent of the world's init-time gates. The
-        // slots are fixed positions the passes bind by absolute index, so a live
-        // toggle (`apply_quality_settings`) can build a feature that launched off
-        // and write into its pre-reserved slot without shifting any other
-        // feature's slots. A reserved-but-unbuilt feature leaves its slots
-        // unwritten; that is safe because no always-running pass binds them (each
-        // feature's own pass runs only when the feature is on, and the main pass's
-        // SSAO occlusion binding falls back to the 1x1 white slot below). The
-        // `*_enabled` / `*_present` gates below still drive whether the resources
-        // are BUILT at init, just not whether the slots exist.
-        //
-        // The shared fullscreen post passes: one RTV after the bloom mip RTVs
-        // and one SRV after the color LUT SRV per target they may hold, always
-        // reserved and sub-allocated at runtime by `post/descriptors.rs`. They
-        // reserve no DSV: a post target is color only.
-        let post_rtv_extra = POST_TARGET_SLOTS;
-        // SSAO: 2 RTVs (ao_raw + ao) + 2 SRVs (ao_raw + ao); view normal + depth
-        // come from the G-buffer pre-pass, so no DSV. A 1x1 white fallback always
-        // sits one slot further so the main pass binds a constant 1.0 occlusion
-        // when SSAO is off (this is the one feature SRV an always-running pass
-        // binds, hence the always-present fallback).
-        let ssao_enabled = ssao_settings.is_some();
-        let ssao_rtv_extra = 2;
-        let ssao_srv_extra = 2;
-        // SSR / SSGI / RT all reuse the G-buffer pre-pass; `ssr_prepass_present`
-        // gates whether `SsrResources` is built at init. The SSR reflection
-        // target and the SSGI gather target take their descriptors from the
-        // shared post block.
-        let ssr_prepass_present = ssr_settings.is_some() || ssgi_settings.is_some() || rt_enabled;
-        // RT-reflection output: 1 RTV (the trace writes it) at the RTV-heap tail
-        // + 1 SRV (the post stack samples it) at the SRV-heap tail. Reserved
-        // UNCONDITIONALLY like the other live-toggleable features, so a live
-        // `apply_quality_settings` RT enable (on a DXR-capable GPU) builds the
-        // output into its fixed slot without shifting any other feature's slots.
-        // `rt_enabled` still gates whether RT is BUILT at init, just not the slot.
-        let rt_rtv_extra = 1;
-        let rt_srv_extra = 1;
-        // Reflection composite: 2 RTVs (composited output + reduced-res blur) at the
-        // RTV-heap tail + 2 SRVs at the SRV-heap tail. Reserved UNCONDITIONALLY (like
-        // SSR / RT) so a live `apply_quality_settings` reflection enable can build it
-        // into its fixed slots; the resources themselves build at init only when SSR
-        // resolve or RT is authored.
-        let refl_composite_rtv_extra = 2;
-        let refl_composite_srv_extra = 2;
-        // Unified G-buffer pre-pass: 3 RTVs (normal+depth, roughness, velocity),
-        // 1 DSV (private depth), 3 SRVs. Slots always reserved; `gbuffer_enabled`
-        // still gates whether the pre-pass resources are built at init (any
-        // screen-space consumer: SSR / SSGI, SSAO, or TAA / FSR velocity).
-        // `taa_enabled` already folds in temporal upscaling, covering velocity.
-        let gbuffer_enabled = taa_enabled || ssao_enabled || ssr_prepass_present;
-        let gbuffer_rtv_extra = 3;
-        let gbuffer_dsv_extra = 1;
-        let gbuffer_srv_extra = 3;
-        // Projected decals: always-on infrastructure so runtime `add_decal`
-        // works from a world that started empty. One extra RTV for
-        // `hdr_resolve` (only when MSAA is on; the MSAA-off path writes
-        // through the existing `hdr_color` RTV), one SRV for the main depth,
-        // and `MAX_DECALS` per-decal albedo SRV slots.
-        let decal_rtv_extra = if msaa_samples > 1 { 1 } else { 0 };
-        let decal_srv_extra = crate::directx::decal::MAX_DECALS + 1;
-        let _ = &decals; // referenced below where the pipeline is built.
-        // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
-        // new COM object lands in a binding that owns it.
-        let rtv_heap: ID3D12DescriptorHeap = unsafe {
-            hw.device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC {
-                Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
-                NumDescriptors: FRAMES as u32
-                    + 1
-                    + bloom_count as u32
-                    + post_rtv_extra as u32
-                    + ssao_rtv_extra as u32
-                    + decal_rtv_extra as u32
-                    + gbuffer_rtv_extra as u32
-                    + rt_rtv_extra as u32
-                    + refl_composite_rtv_extra,
-                ..Default::default()
-            })
-        }
-        .map_err(|e| format!("RTV heap: {e}"))?;
-        let rtv_descriptor_size =
-            // SAFETY: a property query on a live descriptor heap; it only reads.
-            unsafe { hw.device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV) }
-                as usize;
-
-        // Back-buffer RTVs
-        let mut back_buffers = Vec::with_capacity(FRAMES);
-        // SAFETY: a property query on a live descriptor heap; it only reads.
-        let rtv_base = unsafe { rtv_heap.GetCPUDescriptorHandleForHeapStart() };
-        for i in 0..FRAMES {
-            // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters
-            // it fills are live locals that outlive the call.
-            let buf: ID3D12Resource = unsafe { swapchain.handle.GetBuffer(i as u32) }
-                .map_err(|e| format!("GetBuffer[{i}]: {e}"))?;
-            let rtv_handle = D3D12_CPU_DESCRIPTOR_HANDLE {
-                ptr: rtv_base.ptr + i * rtv_descriptor_size,
-            };
-            // SAFETY: the view descriptor and the resource it names are live for the call, and the
-            // destination handle addresses a slot this context reserved for the view in a heap it
-            // owns.
-            unsafe {
-                hw.device.CreateRenderTargetView(&buf, None, rtv_handle);
-            }
-            back_buffers.push(buf);
-        }
-
-        // DSV heap
-        // Slots: [0] = main depth, [1..1+NUM_SHADOW_CASCADES] = per-cascade
-        // shadow DSVs (one slice each into the shadow map array),
-        // [..+MAX_SHADOWED_SPOTS] = per-spot shadow slice DSVs, then the
-        // unified G-buffer pre-pass's private depth buffer.
-        // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
-        // new COM object lands in a binding that owns it.
-        let dsv_heap: ID3D12DescriptorHeap = unsafe {
-            hw.device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC {
-                Type: D3D12_DESCRIPTOR_HEAP_TYPE_DSV,
-                NumDescriptors: 1
-                    + NUM_SHADOW_CASCADES as u32
-                    + MAX_SHADOWED_SPOTS as u32
-                    + gbuffer_dsv_extra,
-                ..Default::default()
-            })
-        }
-        .map_err(|e| format!("DSV heap: {e}"))?;
-        let dsv_descriptor_size =
-            // SAFETY: a property query on a live descriptor heap; it only reads.
-            unsafe { hw.device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV) }
-                as usize;
-        // SAFETY: a property query on a live descriptor heap; it only reads.
-        let dsv_base = unsafe { dsv_heap.GetCPUDescriptorHandleForHeapStart() };
-        let main_dsv_cpu = D3D12_CPU_DESCRIPTOR_HANDLE { ptr: dsv_base.ptr };
-        let shadow_dsv_base_cpu = D3D12_CPU_DESCRIPTOR_HANDLE {
-            ptr: dsv_base.ptr + dsv_descriptor_size,
-        };
-        let spot_shadow_dsv_base_cpu = D3D12_CPU_DESCRIPTOR_HANDLE {
-            ptr: dsv_base.ptr + (1 + NUM_SHADOW_CASCADES) * dsv_descriptor_size,
+        let gpu = InitGpu {
+            hw: &hw,
+            hot_reload,
         };
 
-        // CBV/SRV/UAV heap slot layout. The full per-block map + the
-        // positional cascade live in `heap_layout.rs`, which a unit test
-        // anchors so a stray offset edit fails a test instead of silently
-        // misbinding a descriptor at shader time.
-        let n_objects = draw_objects.len();
-        let n_clusters = instanced_clusters.len();
-        let n_atlases = text_atlases.len();
-        // Flat bindless pool sizes, derived from the resource pools built below.
-        // Albedo and normal maps share ONE handle-indexed pool: the real
-        // textures (a 1x1 white fallback stands in when there are none)
-        // followed by the reserved fallback pair, flat-normal then white, for
-        // draws with no normal map and no albedo.
-        let flat_albedo_count = textures.len().max(1);
-        let flat_fallback_count = FALLBACK_TEXTURE_COUNT;
-        let _ = decal_srv_extra; // folded into the heap_layout decal block.
-
-        // Planar reflections: group each transparent reflector's plane into a
-        // bounded set of distinct planes (near-coplanar reflectors share one mirror
-        // render; reflectors past the budget fall back to the probe cube). The
-        // distinct count sizes the reserved planar-resolve SRV block; `slots[i]` is
-        // reflector `i`'s resolve slot (or `None`). Computed here (pre-heap) so the
-        // block is sized before the heap is created; the set itself is built after
-        // the render dims are known.
-        //
-        // Water first, then glass, matching the Metal backend, so the two slot
-        // ranges are `[..water_surfaces.len()]` and the rest.
-        let planar_panes: Vec<[f32; 4]> = water_surfaces
-            .iter()
-            // A water surface's rest plane: horizontal at the surface base height.
-            .map(|s| [0.0, 1.0, 0.0, -s.center[1]])
-            .chain(
-                glass_panels
-                    .iter()
-                    .map(|p| crate::directx::planar::pane_plane(p.normal, p.center)),
-            )
-            .collect();
-        // Cap at the capacity ceiling the reserved planar resolve SRVs are sized to,
-        // so a stale/over-large preset value can never over-allocate.
-        let planar_budget = planar_planes.min(crate::directx::planar::MAX_PLANAR_PLANES);
-        let planar_assignment =
-            planar_reflection::assign_planar_slots(&planar_panes, planar_budget);
-        let planar_resolve_srv_extra = planar_assignment.representatives.len();
-
-        let heap_layout::SrvHeapLayout {
-            atlas_base_slot,
-            hdr_srv_slot,
-            bloom_srv_base_slot,
-            lut_srv_slot,
-            post_srv_base_slot,
-            ssao_srv_base_slot,
-            ssao_white_srv_slot,
-            decal_depth_srv_slot,
-            decal_srv_base_slot,
-            particle_srv_base_slot,
-            fog_froxel_uav_slot,
-            fog_froxel_srv_slot,
-            upscale_uav_slot,
-            upscale_srv_slot,
-            raymarch_srv_base_slot,
-            hiz_srv_slot,
-            hiz_uav_base_slot,
-            probe_capture_srv_slot,
-            probe_capture_uav_base_slot,
-            probe_cube_uav_base_slot,
-            probe_mip0_pair_slot,
-            transparent_scene_copy_srv_slot,
-            gbuffer_srv_base_slot,
-            rt_output_srv_slot,
-            refl_composite_srv_base_slot,
-            planar_resolve_srv_base_slot,
-            flat_pool_base_slot,
-            probe_cube_base_slot,
-            spot_shadow_srv_slot,
-            ltc_srv_base_slot,
-            srv_slots,
-        } = heap_layout::SrvHeapLayout::compute(&heap_layout::SrvHeapParams {
-            n_atlases,
-            bloom_count,
-            ssao_srv_extra,
-            gbuffer_srv_extra,
-            rt_output_srv_extra: rt_srv_extra,
-            refl_composite_srv_extra,
-            planar_resolve_srv_extra,
-            albedo_count: flat_albedo_count,
-            normal_count: flat_fallback_count,
-        });
-        // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
-        // new COM object lands in a binding that owns it.
-        let srv_heap: ID3D12DescriptorHeap = unsafe {
-            hw.device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC {
-                Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
-                // `srv_slots` is the running total of every block in the
-                // heap_layout cascade, so it sizes the heap to exactly cover
-                // the highest slot any descriptor write addresses.
-                NumDescriptors: srv_slots as u32,
-                Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE,
-                ..Default::default()
-            })
-        }
-        .map_err(|e| format!("SRV heap: {e}"))?;
-        // SAFETY: a property query on a live descriptor heap; it only reads.
-        let srv_descriptor_size = unsafe {
-            hw.device
-                .GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)
-        } as usize;
-        // SAFETY: a property query on a live descriptor heap; it only reads.
-        let srv_cpu_base = unsafe { srv_heap.GetCPUDescriptorHandleForHeapStart() };
-        // SAFETY: a property query on a live descriptor heap; it only reads.
-        let srv_gpu_base = unsafe { srv_heap.GetGPUDescriptorHandleForHeapStart() };
-
-        let slot_cpu = |i: usize| D3D12_CPU_DESCRIPTOR_HANDLE {
-            ptr: srv_cpu_base.ptr + i * srv_descriptor_size,
-        };
-        let slot_gpu = |i: usize| D3D12_GPU_DESCRIPTOR_HANDLE {
-            ptr: srv_gpu_base.ptr + (i * srv_descriptor_size) as u64,
-        };
-
-        // Temporal upscaler (FSR3 via the FidelityFX SDK). Built here,
-        // ahead of the HDR / depth / post-effect targets, because its
-        // resolved render dimensions decide the size of every scene target.
-        // When the world's `PostProcessConfig.temporal_upscaling` is on AND
-        // the FFX DLL loads + the context creates successfully, this returns
-        // `Some` and the scene renders at `output * upscale_scale`; FSR
-        // reconstructs the drawable resolution into the upscaler's output
-        // texture, which bloom + composite sample. Falls back silently (logs
-        // a warning, leaves render == output) when the SDK isn't on `PATH`
-        // or the GPU rejects the context build, so a missing SDK degrades
-        // to native-resolution TAA rather than a low-res bilinear stretch.
-        let upscaler = if temporal_upscaling {
-            crate::directx::post::upscale::build_upscaler(
-                &hw.device,
-                &hw.command_queue,
-                width,
-                height,
-                upscale_scale,
-                crate::directx::post::upscale::UpscalerDescriptors {
-                    uav_cpu: slot_cpu(upscale_uav_slot),
-                    srv_cpu: slot_cpu(upscale_srv_slot),
-                    srv_gpu: slot_gpu(upscale_srv_slot),
-                },
-                upscale_backend,
-            )?
-            .0
-        } else {
-            None
-        };
-        // Off-screen scene render resolution. The active backend reports the
-        // resolved render dims (clamped to the backend's supported ratio
-        // range); a missing / failed upscaler leaves the scene at full output.
-        let (render_w, render_h) = match &upscaler {
-            Some(u) => u.render_dims(),
-            None => (width, height),
-        };
-        if upscaler.is_some() {
-            tracing::info!(
-                "DirectX: temporal upscaling active: scene render {}x{}, drawable {}x{}",
-                render_w,
-                render_h,
-                width,
-                height
-            );
-        }
-
-        // Sampler heap
-        // Slots: [0]=shadow comparison, [1]=linear repeat, [2]=cube linear-clamp+mip,
-        //        [3]=linear clamp (text). linear+cube are placed contiguously so the
-        //        main pass binds them via a single 2-descriptor table range.
-        // Slots [4..7] are the raymarch pass's contiguous descriptor table:
-        // shadow comparison, cube linear-clamp, and a linear-clamp scene
-        // sampler. These duplicate samplers at slots 0 / 2 so the raymarch
-        // root sig can bind a single 3-slot range; the cost is three extra
-        // descriptors (a few bytes). Reserved unconditionally so the heap
-        // layout stays anchored.
-        let raymarch_sampler_base_slot = 4usize;
-        // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
-        // new COM object lands in a binding that owns it.
-        let sampler_heap: ID3D12DescriptorHeap = unsafe {
-            hw.device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC {
-                Type: D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER,
-                NumDescriptors: 7,
-                Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE,
-                ..Default::default()
-            })
-        }
-        .map_err(|e| format!("sampler heap: {e}"))?;
-        let sampler_descriptor_size =
-            // SAFETY: a property query on a live descriptor heap; it only reads.
-            unsafe { hw.device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER) }
-                as usize;
-        // SAFETY: a property query on a live descriptor heap; it only reads.
-        let samp_cpu_base = unsafe { sampler_heap.GetCPUDescriptorHandleForHeapStart() };
-        // SAFETY: a property query on a live descriptor heap; it only reads.
-        let samp_gpu_base = unsafe { sampler_heap.GetGPUDescriptorHandleForHeapStart() };
-
-        create_samplers(
-            &hw.device,
-            samp_cpu_base,
-            sampler_descriptor_size,
+        let planar = effects::plan_planar(&fx, planar_planes);
+        let bloom_count = bloom_mip_count(output.0, output.1) as usize;
+        let rtv = RtvHeapLayout::compute(bloom_count, features.msaa_samples);
+        let swapchain = heaps::build_swapchain(&gpu, swapchain, &rtv, vsync)?;
+        let descriptors = descriptors::build_descriptors(
+            &gpu,
+            &SrvHeapParams {
+                n_atlases: media.text_atlases.len(),
+                bloom_count,
+                ssao_srv_extra: heap_layout::SSAO_TARGETS,
+                gbuffer_srv_extra: heap_layout::GBUFFER_TARGETS,
+                rt_output_srv_extra: heap_layout::RT_OUTPUT_TARGETS,
+                refl_composite_srv_extra: heap_layout::REFL_COMPOSITE_TARGETS,
+                planar_resolve_srv_extra: planar.representatives.len(),
+                // Albedo and normal maps share ONE handle-indexed pool: the real
+                // textures (a 1x1 white fallback stands in when there are none)
+                // followed by the reserved fallback pair.
+                albedo_count: media.textures.len().max(1),
+                normal_count: FALLBACK_TEXTURE_COUNT,
+            },
             anisotropy,
-        );
-
-        let shadow_sampler_gpu = D3D12_GPU_DESCRIPTOR_HANDLE {
-            ptr: samp_gpu_base.ptr,
-        };
-        let linear_sampler_gpu = D3D12_GPU_DESCRIPTOR_HANDLE {
-            ptr: samp_gpu_base.ptr + sampler_descriptor_size as u64,
-        };
-        let text_sampler_gpu = D3D12_GPU_DESCRIPTOR_HANDLE {
-            ptr: samp_gpu_base.ptr + (3 * sampler_descriptor_size) as u64,
-        };
-
-        // Shadow map array
-        // Real path: NUM_SHADOW_CASCADES-slice Texture2DArray with per-slice DSVs.
-        // Fallback: 1×1 single-slice R32_FLOAT array with value 0.0 (LESS_EQUAL
-        // always passes → fully lit), declared as Texture2DArray so the shader's
-        // binding type stays identical between disabled and enabled cases.
-        // CSM is gated on `shadow_map_size` (from GraphicsConfig; 0 disables
-        // shadows). The shadow vertex shader is engine-internal
-        // (`slang_builtins::SHADOW_VERT`). Mirrors the Metal internal-shadow
-        // path.
-        let effective_shadow_size = shadow_map_size;
-        let (shadow_resource_opt, shadow_dsvs, shadow_srv_gpu) = if effective_shadow_size > 0 {
-            let (sm, dsvs) = create_shadow_map_array(
-                &hw.device,
-                effective_shadow_size,
-                NUM_SHADOW_CASCADES as u32,
-                shadow_dsv_base_cpu,
-                dsv_descriptor_size,
-                slot_cpu(0),
-                slot_gpu(0),
-            )?;
-            (Some(sm), dsvs, slot_gpu(0))
-        } else {
-            let fb = create_fallback_shadow_array(&hw.alloc, slot_cpu(0), slot_gpu(0))?;
-            (Some(fb), Vec::new(), slot_gpu(0))
-        };
-
-        // Spot shadow map array: one slice per shadow-casting spot light, at a
-        // quarter the cascade resolution (a spot slice covers a single cone, not
-        // a view-frustum slab). Local lights are static, so the slice count and
-        // every light-space matrix are fixed here; only the depth refreshes.
-        // A world with no shadowed spot still binds a 1x1 fallback so the main
-        // pass's SRV is never unwritten.
-        let spot_shadow_slice_size = render_types::spot_shadow_slice_size(effective_shadow_size);
-        let (spot_shadow_resource, spot_shadow_dsvs) = if spot_shadows.is_empty() {
-            let fb = create_fallback_shadow_array(
-                &hw.alloc,
-                slot_cpu(spot_shadow_srv_slot),
-                slot_gpu(spot_shadow_srv_slot),
-            )?;
-            (Some(fb), Vec::new())
-        } else {
-            let (sm, dsvs) = create_shadow_map_array(
-                &hw.device,
-                spot_shadow_slice_size,
-                spot_shadows.len() as u32,
-                spot_shadow_dsv_base_cpu,
-                dsv_descriptor_size,
-                slot_cpu(spot_shadow_srv_slot),
-                slot_gpu(spot_shadow_srv_slot),
-            )?;
-            (Some(sm), dsvs)
-        };
-        // The per-slice projections, uploaded once. A scene with no shadowed
-        // spot gets a one-element identity buffer: the shader never indexes it
-        // (every `shadow_index` is -1) but the root SRV must still be valid.
-        let spot_shadow_data = if spot_shadows.is_empty() {
-            vec![render_types::SpotShadowData::ZERO]
-        } else {
-            spot_shadows.clone()
-        };
-        let spot_shadow_buffer = {
-            use concinnity_core::gfx::render_types::SpotShadowData;
-            let size = align256((spot_shadow_data.len() * size_of::<SpotShadowData>()) as u64);
-            let buf = create_buffer(
-                &hw.alloc,
-                size,
-                D3D12_HEAP_TYPE_UPLOAD,
-                D3D12_RESOURCE_STATE_GENERIC_READ,
-            )?;
-            upload_static_records(&buf, &spot_shadow_data, "spot-shadow")?;
-            buf
-        };
-        // One `ShadowUniforms` per slice, each carrying that spot's matrix in
-        // `light_vps[0]`, so the shared shadow vertex shader renders a spot
-        // slice by pushing cascade_idx = 0. Written once: the projections never
-        // change, so unlike the cascade UBO this needs no per-frame ring.
-        let spot_shadow_ubo_stride = align256(size_of::<ShadowUniforms>() as u64);
-        let spot_shadow_ubo = {
-            let slots = spot_shadows.len().max(1) as u64;
-            let buf = create_buffer(
-                &hw.alloc,
-                spot_shadow_ubo_stride * slots,
-                D3D12_HEAP_TYPE_UPLOAD,
-                D3D12_RESOURCE_STATE_GENERIC_READ,
-            )?;
-            let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
-            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
-            // local that receives the mapping.
-            unsafe { buf.Map(0, None, Some(&mut ptr)) }
-                .map_err(|e| format!("map spot-shadow UBO: {e}"))?;
-            for (i, sd) in spot_shadows.iter().enumerate() {
-                let mut u = csm::empty_shadow_uniforms();
-                u.light_vps[0] = sd.light_vp;
-                u.active_cascades = 1;
-                // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload,
-                // and the source is a separate allocation, so the ranges cannot overlap.
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        &u as *const ShadowUniforms as *const u8,
-                        (ptr as *mut u8).add(i * spot_shadow_ubo_stride as usize),
-                        size_of::<ShadowUniforms>(),
-                    );
-                }
-            }
-            // SAFETY: the resource is live and this code mapped it, and nothing keeps the mapping
-            // past this call.
-            unsafe { buf.Unmap(0, None) };
-            buf
-        };
-
-        // Per-scene rectangular area lights: the edge vectors that do not fit in
-        // `GpuLight`, indexed by its `data_index`. A world with no area light
-        // still gets a one-element buffer, since the shader never reads it
-        // (`data_index` stays -1) but the root SRV must be valid.
-        let area_light_data = if area_lights.is_empty() {
-            vec![render_types::AreaLightData::ZERO]
-        } else {
-            area_lights.clone()
-        };
-        let area_light_buffer = {
-            use concinnity_core::gfx::render_types::AreaLightData;
-            let size = align256((area_light_data.len() * size_of::<AreaLightData>()) as u64);
-            let buf = create_buffer(
-                &hw.alloc,
-                size,
-                D3D12_HEAP_TYPE_UPLOAD,
-                D3D12_RESOURCE_STATE_GENERIC_READ,
-            )?;
-            upload_static_records(&buf, &area_light_data, "area-light")?;
-            buf
-        };
-
-        // Area-light LTC tables. Scene-independent (they depend only on the
-        // build-time fit), so they are created unconditionally and the shader
-        // simply never samples them when no area light is declared.
-        let ltc_size = ltc::LTC_LUT_SIZE as u32;
-        let ltc_matrix_texture = upload_float_lut(
-            &hw.alloc,
-            ltc_size,
-            4,
-            ltc::matrix_texels(),
-            slot_cpu(ltc_srv_base_slot),
-            slot_gpu(ltc_srv_base_slot),
         )?;
-        let ltc_magnitude_texture = upload_float_lut(
-            &hw.alloc,
-            ltc_size,
-            2,
-            ltc::magnitude_texels(),
-            slot_cpu(ltc_srv_base_slot + 1),
-            slot_gpu(ltc_srv_base_slot + 1),
+        let upscale = effects::build_upscale(&gpu, &descriptors, output, &post)?;
+        let scene =
+            scene_assets::build_scene_assets(&gpu, &descriptors, &media, &area_lights, &world)?;
+        let targets = targets::build_targets(
+            &gpu,
+            targets::TargetInputs {
+                descriptors: &descriptors,
+                swapchain: &swapchain,
+                rtv: &rtv,
+                upscale: &upscale,
+                features: &features,
+                output,
+                clear_color,
+            },
+        )?;
+        let uniforms = scene_data::build_uniforms(&gpu, light_uniforms, &local_lights)?;
+        let light_cull = scene_data::build_light_cull(&gpu, &local_lights)?;
+        let shadow = shadow::build_shadow(
+            &gpu,
+            &descriptors,
+            &targets,
+            &shadows,
+            &uniforms.light_uniforms,
+        )?;
+        let spot_shadow = shadow::build_spot_shadow(
+            &gpu,
+            &descriptors,
+            &targets,
+            &spot_shadows,
+            shadows.map_size,
         )?;
 
-        // IBL cubemaps (irradiance + prefilter)
-        // When env_map_bytes is Some, deserialize the EnvironmentMap payload and
-        // upload both cubes. Otherwise bind a 1×1 gray fallback for each; the
-        // shader keys off prefilter_mip_count == 0 to skip IBL math.
-        let env_map = if let Some(bytes) = env_map_bytes {
-            let view = bake::environment_map::deserialize(bytes)
-                .map_err(|e| format!("EnvironmentMap payload malformed: {e}"))?;
-            upload_environment_map(
-                &hw.alloc,
-                crate::directx::texture::EnvironmentMapPayload {
-                    irradiance_face: view.irradiance_face,
-                    irradiance_bytes: view.irradiance_bytes,
-                    prefilter_face: view.prefilter_face,
-                    mip_bytes: &view.prefilter_mip_bytes,
-                },
-                crate::directx::texture::EnvironmentMapDescriptors {
-                    irr_srv_cpu: slot_cpu(1),
-                    irr_srv_gpu: slot_gpu(1),
-                    pre_srv_cpu: slot_cpu(2),
-                    pre_srv_gpu: slot_gpu(2),
-                },
-            )?
-        } else {
-            let irradiance = create_fallback_cubemap(
-                &hw.alloc,
-                [0.05, 0.05, 0.05, 1.0],
-                slot_cpu(1),
-                slot_gpu(1),
-            )?;
-            let prefilter = create_fallback_cubemap(
-                &hw.alloc,
-                [0.05, 0.05, 0.05, 1.0],
-                slot_cpu(2),
-                slot_gpu(2),
-            )?;
-            EnvironmentMapTextures {
-                irradiance,
-                prefilter,
-                prefilter_mip_count: 0,
-            }
-        };
-
-        // Reflection-probe cube array: point every slot at the sky prefilter cube so
-        // the bindless main shader's `probe_cubes` table is valid before any probe
-        // bakes (unbaked slots stay the sky; a baked probe overwrites its slot in
-        // `probe_install`). The forward shader only samples a slot when
-        // `ProbeSet.count` covers it, but the descriptor table must still be valid.
-        let probe_sky_mips = env_map.prefilter_mip_count.max(1);
-        for k in 0..concinnity_core::render::uniforms::MAX_PROBES {
-            crate::directx::texture::write_cube_srv_mips(
-                &hw.device,
-                &env_map.prefilter.resource,
-                probe_sky_mips,
-                slot_cpu(probe_cube_base_slot + k),
-            );
-        }
-
-        // ProbeSet constant buffers: a `FRAMES` ring the main pass binds at root
-        // param [11] (written per frame from `probe_set`), plus a static count-0 CBV
-        // the asynchronous capture binds so a probe face samples the sky, not other
-        // probes (and never reads the live ring while `record_frame` rewrites it).
-        let probe_set_size =
-            align256(std::mem::size_of::<concinnity_core::render::uniforms::ProbeSet>() as u64);
-        let mut probe_set_cbvs: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
-        let mut probe_set_cbv_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
-        for _ in 0..FRAMES {
-            let buf = create_buffer(
-                &hw.alloc,
-                probe_set_size,
-                D3D12_HEAP_TYPE_UPLOAD,
-                D3D12_RESOURCE_STATE_GENERIC_READ,
-            )?;
-            let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
-            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
-            // local that receives the mapping.
-            unsafe { buf.Map(0, None, Some(&mut ptr)) }
-                .map_err(|e| format!("map probe set cbv: {e}"))?;
-            // Initialize to the empty set (count 0) until the first frame writes it.
-            let empty = concinnity_core::render::uniforms::ProbeSet::EMPTY;
-            // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and
-            // the source is a separate allocation, so the ranges cannot overlap.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    &empty as *const concinnity_core::render::uniforms::ProbeSet as *const u8,
-                    ptr as *mut u8,
-                    std::mem::size_of::<concinnity_core::render::uniforms::ProbeSet>(),
-                );
-            }
-            probe_set_cbv_ptrs.push(ptr as *mut u8);
-            probe_set_cbvs.push(buf);
-        }
-        let probe_set_empty_cbv = {
-            let buf = create_buffer(
-                &hw.alloc,
-                probe_set_size,
-                D3D12_HEAP_TYPE_UPLOAD,
-                D3D12_RESOURCE_STATE_GENERIC_READ,
-            )?;
-            let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
-            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
-            // local that receives the mapping.
-            unsafe { buf.Map(0, None, Some(&mut ptr)) }
-                .map_err(|e| format!("map probe empty cbv: {e}"))?;
-            let empty = concinnity_core::render::uniforms::ProbeSet::EMPTY;
-            // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and
-            // the source is a separate allocation, so the ranges cannot overlap.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    &empty as *const concinnity_core::render::uniforms::ProbeSet as *const u8,
-                    ptr as *mut u8,
-                    std::mem::size_of::<concinnity_core::render::uniforms::ProbeSet>(),
-                );
-                buf.Unmap(0, None);
-            }
-            buf
-        };
-
-        // Cache the first directional light's direction for per-frame CSM updates.
-        let shadow_light_dir = lights::sun_direction(&light_uniforms);
-
-        // Cache the first directional light's color * intensity for the
-        // volumetric-fog encoder, since `LightUniforms` is uploaded rather than
-        // pushed each frame. `update_directional_lights` re-derives both.
-        let fog_sun_dir = shadow_light_dir;
-        let fog_sun_color = lights::sun_color(&light_uniforms);
-
-        // Albedo texture pool
-        // One ID3D12Resource per input texture; SRVs are written below at
-        // per-object pair slots so a single texture can be referenced by many
-        // objects. When no textures were declared, a single 1x1 white fallback
-        // stands in so every object's albedo slot resolves to opaque white.
-        let gpu_textures: Vec<PooledTexture> = if textures.is_empty() {
-            vec![create_fallback_white_resource(&hw.alloc)?]
-        } else {
-            textures
-                .iter()
-                .enumerate()
-                .map(|(i, image)| {
-                    upload_texture_image(&hw.alloc, image).map_err(|e| format!("texture[{i}]: {e}"))
-                })
-                .collect::<Result<Vec<_>, _>>()?
-        };
-
-        // Reserved fallbacks, in the order `FALLBACK_TEXTURE_COUNT` documents:
-        // the flat-normal resource a draw with no normal map samples, then the
-        // white resource a draw with no albedo samples. Real normal maps and
-        // albedos are textures in `gpu_textures` (the shared pool), addressed by
-        // their own handle; only these two live in `fallback_textures`.
-        let gpu_fallbacks: Vec<PooledTexture> = vec![
-            create_fallback_flat_normal_resource(&hw.alloc)?,
-            create_fallback_white_resource(&hw.alloc)?,
-        ];
-
-        // Flat deduplicated bindless pool: one SRV per distinct texture, then the
-        // fallback pair at `flat_albedo_count`. The bindless main pass and
-        // the RT hit shader bind this region's base and index it by a flat slot
-        // (`albedo = texture_slot` or the white slot when the draw has none,
-        // `normal = normal's own handle` or the flat-normal slot), mirroring
-        // Vulkan/Metal. A shared texture resolves to ONE descriptor here.
-        debug_assert_eq!(gpu_textures.len(), flat_albedo_count);
-        debug_assert_eq!(gpu_fallbacks.len(), flat_fallback_count);
-        let flat_pool_len = flat_albedo_count + flat_fallback_count;
-        for f in 0..FRAMES {
-            let copy_base = flat_pool_base_slot + f * flat_pool_len;
-            for (k, tex) in gpu_textures.iter().enumerate() {
-                write_texture_srv(&hw.device, tex, slot_cpu(copy_base + k));
-            }
-            for (k, tex) in gpu_fallbacks.iter().enumerate() {
-                write_texture_srv(&hw.device, tex, slot_cpu(copy_base + flat_albedo_count + k));
-            }
-        }
-
-        // Text atlas textures
-        let mut gpu_text_atlases: Vec<GpuResource> = Vec::new();
-        let mut text_atlas_srv_gpus: Vec<D3D12_GPU_DESCRIPTOR_HANDLE> = Vec::new();
-        for (i, (w, h, px)) in text_atlases.iter().enumerate() {
-            let s = atlas_base_slot + i;
-            let res = upload_texture(&hw.alloc, *w, *h, px, slot_cpu(s), slot_gpu(s))
-                .map_err(|e| format!("text_atlas[{i}]: {e}"))?;
-            text_atlas_srv_gpus.push(slot_gpu(s));
-            gpu_text_atlases.push(res);
-        }
-
-        // Main depth buffer. Allowed as SRV so the projected-decal pass can
-        // sample it to reconstruct world positions; runtime `add_decal`
-        // needs this even when no decals were declared at init.
-        let depth_resource = create_main_depth_texture(
-            &hw.device,
-            render_w,
-            render_h,
-            main_dsv_cpu,
-            msaa_samples,
-            true,
+        let plan = cull::plan_cull(&world);
+        let cull = cull::build_cull(
+            &gpu,
+            cull::CullInputs {
+                world: &world,
+                world_shaders: &world_shaders,
+                plan: &plan,
+                descriptors: &descriptors,
+                targets: &targets,
+                albedo_count: scene.textures.len(),
+                shadow_enabled: shadow.map_size > 0,
+                gbuffer_enabled: features.gbuffer_enabled,
+                occlusion_two_pass: post.occlusion_two_pass,
+            },
         )?;
+        let probe_prefilter = cull::build_probe_prefilter(&gpu, &cull)?;
+        let text = text::build_text(&gpu, &descriptors, &media, swapchain.format)?;
+        let composite = composite::build_composite(&gpu, swapchain.format)?;
 
-        // Off-screen HDR scene target
-        // The main + instanced passes render linear-light HDR into this; the
-        // composite pass tonemaps it onto the swapchain. RTV heap slot [FRAMES]
-        // (after the back-buffer RTVs) holds its render-target view.
-        let hdr_color_rtv = D3D12_CPU_DESCRIPTOR_HANDLE {
-            ptr: rtv_base.ptr + FRAMES * rtv_descriptor_size,
-        };
-        let hdr_color = create_hdr_color_target(
-            &hw.device,
-            render_w,
-            render_h,
-            msaa_samples,
-            hdr_color_rtv,
+        let post_descriptors = descriptors::build_post_descriptors(&descriptors, &swapchain, &rtv);
+        let quality_slots =
+            effects::build_quality_slots(&gpu, &descriptors, &swapchain, &targets, &rtv);
+        let reflection_composite =
+            ray_tracing::build_reflection_composite(&gpu, &quality_slots, &targets, &post)?;
+        let bloom = bloom::build_bloom(
+            &gpu,
+            bloom::BloomInputs {
+                descriptors: &descriptors,
+                swapchain: &swapchain,
+                rtv: &rtv,
+                targets: &targets,
+                output,
+            },
+        )?;
+        let post_device = effects::post_device(&gpu, &descriptors, &post_descriptors);
+        let taa = effects::build_taa(&post_device, &features, &targets)?;
+        let ssao = effects::build_ssao(&gpu, &descriptors, &targets, &quality_slots, post.ssao)?;
+        let ssr = effects::build_ssr(&post_device, &targets, &post)?;
+        let ssgi = effects::build_ssgi(&post_device, &targets, &post)?;
+        let rt_reflections =
+            ray_tracing::build_rt_reflections(&gpu, &quality_slots, &targets, &post);
+        let gbuffer =
+            effects::build_gbuffer(&gpu, &targets, &quality_slots, features.gbuffer_enabled)?;
+
+        let decal = effects::build_decals(&gpu, &descriptors, &targets, &scene, fx.decals)?;
+        let fog = effects::build_fog(
+            &gpu,
+            &descriptors,
+            &targets,
+            &shadow,
+            fx.fog,
+            &uniforms.light_uniforms,
+        )?;
+        let particle = effects::build_particles(&gpu, &descriptors, &scene, fx.particles)?;
+        let commands = commands::build_commands(&gpu)?;
+        let frame_sync = commands::build_frame_sync(&gpu)?;
+        let timestamps = commands::build_timestamps(&gpu);
+        let auto_exposure = effects::build_auto_exposure(&gpu, &post)?;
+        let raymarch = effects::build_raymarch(
+            &gpu,
+            &descriptors,
+            &targets,
+            &shadow,
+            &scene,
+            &fx.sdf_volumes,
+        )?;
+        let planar_reflection = effects::build_planar_reflection(
+            &gpu,
+            &descriptors,
+            &targets,
+            &planar,
+            plan.n_cull,
             clear_color,
         )?;
-        // The resolved sample count decides which of two shapes the frame has:
-        // with MSAA the main pass resolves `hdr_color` into a separate
-        // single-sample spine (and the render graph carries both as resources),
-        // without it `hdr_color` is the spine and there is no resolve step at
-        // all. Log it so a verification run can say which shape it exercised.
-        tracing::info!("d3d12 HDR target: {msaa_samples}x MSAA");
-        let hdr_resolve = if msaa_samples > 1 {
-            Some(create_hdr_resolve_target(&hw.device, render_w, render_h)?)
-        } else {
-            None
-        };
-        // RTV for `hdr_resolve`: the projected-decal pass renders into the
-        // resolved scene target, so it needs a render-target view. Sits in
-        // the RTV heap right after the SSAO RTVs. Only created when MSAA is
-        // on (MSAA off uses the existing `hdr_color_rtv`).
-        let hdr_resolve_rtv = if let Some(resolve) = &hdr_resolve {
-            let rtv_handle = D3D12_CPU_DESCRIPTOR_HANDLE {
-                ptr: rtv_base.ptr
-                    + (FRAMES + 1 + bloom_count + post_rtv_extra + ssao_rtv_extra)
-                        * rtv_descriptor_size,
-            };
-            // SAFETY: the view descriptor and the resource it names are live for the call, and the
-            // destination handle addresses a slot this context reserved for the view in a heap it
-            // owns.
-            unsafe {
-                let rtv_desc = D3D12_RENDER_TARGET_VIEW_DESC {
-                    Format: crate::directx::texture::HDR_FORMAT,
-                    ViewDimension: D3D12_RTV_DIMENSION_TEXTURE2D,
-                    ..Default::default()
-                };
-                hw.device
-                    .CreateRenderTargetView(resolve, Some(&rtv_desc), rtv_handle);
-            }
-            Some(rtv_handle)
-        } else {
-            None
-        };
-        // The composite pass samples the resolved target (MSAA on) or the
-        // directly-rendered HDR target (MSAA off).
-        write_hdr_srv(
-            &hw.device,
-            hdr_resolve.as_ref().unwrap_or(&hdr_color),
-            slot_cpu(hdr_srv_slot),
+        let transparent = effects::build_transparent(
+            &gpu,
+            effects::TransparentInputs {
+                descriptors: &descriptors,
+                targets: &targets,
+                planar: &planar,
+                glass_panels: &fx.glass_panels,
+                water_surfaces: &fx.water_surfaces,
+                draw_objects: &world.draw_objects,
+            },
+        )?;
+        let rt = ray_tracing::build_ray_tracing(
+            &gpu,
+            ray_tracing::RtInputs {
+                world: &world,
+                scene: &scene,
+                reflections: rt_reflections.as_ref(),
+                transparent: transparent.as_ref(),
+                post: &post,
+            },
         );
-        let hdr_srv_gpu = slot_gpu(hdr_srv_slot);
-
-        // Main-depth SRV, shared by every depth-sampling decoration pass (decal,
-        // glass, lines) at their own t0. The DSV-only flag was dropped above so
-        // this is valid.
-        crate::directx::decal::write_main_depth_srv(
-            &hw.device,
-            &depth_resource,
-            slot_cpu(decal_depth_srv_slot),
-            msaa_samples,
-        );
-        let decal_depth_srv_gpu = slot_gpu(decal_depth_srv_slot);
-
-        // Color-grading LUT
-        // Upload the declared `ColorLut` payload, or build a 2×2×2 identity LUT
-        // so the composite pass always binds a valid Texture3D. With the
-        // identity LUT the grade is a no-op at any `lut_strength`.
-        let color_lut = if let Some(bytes) = color_lut_bytes {
-            let (size, data) = bake::color_lut::deserialize(bytes)
-                .map_err(|e| format!("ColorLut payload malformed: {e}"))?;
-            upload_color_lut(
-                &hw.alloc,
-                size,
-                data,
-                slot_cpu(lut_srv_slot),
-                slot_gpu(lut_srv_slot),
-            )?
-        } else {
-            create_fallback_color_lut(&hw.alloc, slot_cpu(lut_srv_slot), slot_gpu(lut_srv_slot))?
-        };
-
-        // Geometry buffers
-        let vert_bytes_raw = bytemuck::cast_slice(vertices);
-        let idx_bytes_raw = bytemuck::cast_slice(indices);
-        let vertex_buffer = upload_buffer(
-            &hw.alloc,
-            vert_bytes_raw,
-            D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
-        )?;
-        let index_buffer =
-            upload_buffer(&hw.alloc, idx_bytes_raw, D3D12_RESOURCE_STATE_INDEX_BUFFER)?;
-
-        let vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
-            BufferLocation: com::gpu_va(&vertex_buffer),
-            SizeInBytes: vert_bytes_raw.len().max(4) as u32,
-            StrideInBytes: std::mem::size_of::<Vertex>() as u32,
-        };
-        let index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
-            BufferLocation: com::gpu_va(&index_buffer),
-            SizeInBytes: idx_bytes_raw.len().max(4) as u32,
-            // Static IB is u32: the `indices: &[u32]` signature is honored
-            // end-to-end. A previous half-completed migration left this as
-            // R16_UINT while the byte count was already widened: the GPU then
-            // read each u32 index as a pair of u16s, indexing into garbage
-            // vertices and shearing every static prop's geometry.
-            Format: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R32_UINT,
-        };
-
-        // Constant buffers
-        let view_ubo_size = align256(std::mem::size_of::<ViewUniforms>() as u64);
-        let light_ubo_size = align256(std::mem::size_of::<LightUniforms>() as u64);
-        let shadow_ubo_size = align256(std::mem::size_of::<ShadowUniforms>() as u64);
-
-        let mut view_ubo_resources = Vec::with_capacity(FRAMES);
-        let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
-        for _ in 0..FRAMES {
-            let buf = create_buffer(
-                &hw.alloc,
-                view_ubo_size,
-                D3D12_HEAP_TYPE_UPLOAD,
-                D3D12_RESOURCE_STATE_GENERIC_READ,
-            )?;
-            let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
-            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
-            // local that receives the mapping.
-            unsafe { buf.Map(0, None, Some(&mut ptr)) }
-                .map_err(|e| format!("map view ubo: {e}"))?;
-            view_ubo_ptrs.push(ptr as *mut u8);
-            view_ubo_resources.push(buf);
-        }
-
-        // Per-frame-in-flight light CBV ring, persistently mapped. One slot per
-        // frame so a live directional-light or ambient change is a CPU write
-        // rather than a queue drain: a turning sky rewrites the set every frame,
-        // and a single shared buffer would stall on every one of them.
-        let mut light_ubo_resources = Vec::with_capacity(FRAMES);
-        let mut light_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
-        for _ in 0..FRAMES {
-            let buf = create_buffer(
-                &hw.alloc,
-                light_ubo_size,
-                D3D12_HEAP_TYPE_UPLOAD,
-                D3D12_RESOURCE_STATE_GENERIC_READ,
-            )?;
-            let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
-            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
-            // local that receives the mapping.
-            unsafe { buf.Map(0, None, Some(&mut ptr)) }
-                .map_err(|e| format!("map light ubo: {e}"))?;
-            light_ubo_ptrs.push(ptr as *mut u8);
-            light_ubo_resources.push(buf);
-        }
-
-        // Triple-buffer the shadow UBO since cascade VPs are recomputed each
-        // frame from the camera. Persistently mapped.
-        let mut shadow_ubo_resources = Vec::with_capacity(FRAMES);
-        let mut shadow_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
-        for _ in 0..FRAMES {
-            let buf = create_buffer(
-                &hw.alloc,
-                shadow_ubo_size,
-                D3D12_HEAP_TYPE_UPLOAD,
-                D3D12_RESOURCE_STATE_GENERIC_READ,
-            )?;
-            let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
-            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
-            // local that receives the mapping.
-            unsafe { buf.Map(0, None, Some(&mut ptr)) }
-                .map_err(|e| format!("map shadow ubo: {e}"))?;
-            shadow_ubo_ptrs.push(ptr as *mut u8);
-            shadow_ubo_resources.push(buf);
-        }
-
-        let shadow_uniforms = csm::empty_shadow_uniforms();
-        // Seed every frame's shadow UBO with the empty uniforms; per-frame
-        // compute_shadow_uniforms in record_frame overwrites them.
-        for ptr in &shadow_ubo_ptrs {
-            // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and
-            // the source is a separate allocation, so the ranges cannot overlap.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    &shadow_uniforms as *const ShadowUniforms as *const u8,
-                    *ptr,
-                    std::mem::size_of::<ShadowUniforms>(),
-                );
-            }
-        }
-        for ptr in &light_ubo_ptrs {
-            upload_light_uniforms(*ptr, &light_uniforms);
-        }
-
-        // Per-scene local-light storage buffer: a single UPLOAD resource filled
-        // once from `local_lights` and never rewritten per frame. An empty scene
-        // still allocates a one-element placeholder; the shader's
-        // `num_local_lights == 0` guard keeps it from being read.
-        let local_light_buffer = {
-            use concinnity_core::gfx::render_types::GpuLight;
-            let size =
-                align256((local_lights.len().max(1) * std::mem::size_of::<GpuLight>()) as u64);
-            let buf = create_buffer(
-                &hw.alloc,
-                size,
-                D3D12_HEAP_TYPE_UPLOAD,
-                D3D12_RESOURCE_STATE_GENERIC_READ,
-            )?;
-            if !local_lights.is_empty() {
-                upload_static_records(&buf, &local_lights, "local-light")?;
-            }
-            buf
-        };
-
-        // Clustered light binning. The per-cluster list + `ClusterParams` buffers
-        // are always allocated (the forward shaders reference them
-        // unconditionally, guarded by `use_clusters`); the compute pipeline is
-        // built only when the world has local lights to bin, which is also what
-        // gates the `LightCull` graph node.
-        let light_cull = {
-            use super::light_cull as lc;
-            let cluster_buffer = lc::build_cluster_light_buffer(&hw.device)?;
-            let (params_resources, params_ptrs) =
-                lc::build_cluster_params_buffers(&hw.alloc, FRAMES)?;
-            let (root_sig, pso) = if local_lights.is_empty() {
-                (None, None)
-            } else {
-                let cs = lc::compile_light_cull_shader(hot_reload)?;
-                let rs = dump_on_err(
-                    hw.info_queue.as_ref(),
-                    lc::create_light_cull_root_signature(&hw.device),
-                )?;
-                let pso = dump_on_err(
-                    hw.info_queue.as_ref(),
-                    lc::create_light_cull_pso(&hw.device, &rs, &cs),
-                )?;
-                (Some(rs), Some(pso))
-            };
-            lc::LightCullState {
-                root_sig,
-                pso,
-                cluster_buffer,
-                params_resources,
-                params_ptrs,
-            }
-        };
-
-        // Shaders + root sigs + PSOs (GPU-driven main + GPU-cull compute /
-        // shadow / text / composite). See init/pipelines.rs.
-        // Total instances across all clusters, folded into the GPU-driven bindless
-        // pass as `GpuObjectData` records after the `n_objects` static objects.
-        let n_instances: usize = instanced_clusters.iter().map(|c| c.instances.len()).sum();
-        let shaders = pipelines::compile_all_shaders(hot_reload)?;
-
-        let main_pipelines = pipelines::build_main_pipelines(
-            &hw.alloc,
-            hw.info_queue.as_ref(),
-            pipelines::MainPipelineShaders {
-                world_shaders: &world_shaders,
-            },
-            pipelines::MainPipelineConfig {
-                n_objects,
-                n_instances,
-                n_skinned,
-                n_chunk_max,
-                msaa_samples,
-            },
-            pipelines::MainPipelineFeatures {
-                occlusion_two_pass,
-                shadow_enabled: effective_shadow_size > 0,
-                gbuffer_enabled,
-                hot_reload,
-            },
-        )?;
-        let pipelines::MainPipelines {
-            main_bindless_root_sig,
-            main_bindless_pso,
-            world_pipelines,
-            bucket_stride,
-            bindless_main_shaders,
-            object_buffer_resources,
-            object_buffer_ptrs,
-            cull_root_sig,
-            cull_pso,
-            cull_pso_phase2,
-            cull_command_signature,
-            draw_args_buffer_resources,
-            draw_args_buffer_ptrs,
-            indirect_cmd_buffers,
-            cull_status_buffers,
-            indirect_cmd_buffers_2,
-            shadow_bindless_root_sig,
-            shadow_bindless_pso,
-            shadow_bindless_cmd_sig,
-            cull_pso_shadow,
-            shadow_indirect_buffers,
-            shadow_cull_status_buffers,
-            gbuffer_bindless_root_sig,
-            gbuffer_bindless_pso,
-            gbuffer_bindless_cmd_sig,
-            prev_model_buffer_resources,
-            model_history_root_sig,
-            model_history_pso,
-        } = main_pipelines;
-
-        // GPU-driven instanced merge: write each instance's `GpuObjectData` record
-        // (+ `GpuDrawArgs`) once into every frame buffer, after the `n_objects`
-        // static records. Instances are placed at world load and never move, so
-        // these records are static -- the per-frame static fill (`build_object_buffer`
-        // / `build_draw_args_buffer`) writes only `[0, n_objects)`, leaving the
-        // instance tail intact. Only runs when the bindless cull buffers exist (the
-        // bindless pass is active with build-time geometry) and the world declares
-        // instanced props.
-        if n_instances > 0 && !object_buffer_ptrs.is_empty() {
-            use concinnity_core::gfx::render_types::{
-                GpuDrawArgs, GpuObjectData, draw_args_flags, instance_object_records,
-            };
-            let records = instance_object_records(&instanced_clusters, flat_albedo_count as u32);
-            // Cluster base index range (cluster indices are absolute, so
-            // base_vertex = 0), which `build_draw_args_buffer` patches per frame
-            // for the clusters that declare alternates. Every instance is
-            // visible + resident + cullable, so its finite per-instance world AABB
-            // is frustum/distance/Hi-Z tested independently by the cull kernel.
-            let mut draw_args: Vec<GpuDrawArgs> = Vec::with_capacity(records.len());
-            for cluster in &instanced_clusters {
-                for _ in &cluster.instances {
-                    draw_args.push(GpuDrawArgs {
-                        index_count: cluster.index_count as u32,
-                        index_offset: cluster.index_offset as u32,
-                        base_vertex: 0,
-                        flags: draw_args_flags(true, true, true),
-                    });
-                }
-            }
-            let obj_stride = std::mem::size_of::<GpuObjectData>();
-            let da_stride = std::mem::size_of::<GpuDrawArgs>();
-            for (obj_ptr, da_ptr) in object_buffer_ptrs.iter().zip(draw_args_buffer_ptrs.iter()) {
-                // SAFETY: the buffers were sized for `n_objects + n_instances`
-                // records, so writing `records.len()` past the `n_objects` offset
-                // stays in bounds.
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        records.as_ptr() as *const u8,
-                        obj_ptr.add(n_objects * obj_stride),
-                        records.len() * obj_stride,
-                    );
-                    std::ptr::copy_nonoverlapping(
-                        draw_args.as_ptr() as *const u8,
-                        da_ptr.add(n_objects * da_stride),
-                        draw_args.len() * da_stride,
-                    );
-                }
-            }
-        }
-
-        // The bindless texture pool's base, one table handle per frame-in-flight
-        // copy; pool index `texture_slot` lands on the albedo SRV and
-        // `albedo_count + normal_slot` on the normal SRV. The bindless main pass
-        // and the RT hit shader bind the recording frame's copy.
-        let bindless_pool_gpu: Vec<D3D12_GPU_DESCRIPTOR_HANDLE> = (0..FRAMES)
-            .map(|f| slot_gpu(flat_pool_base_slot + f * flat_pool_len))
-            .collect();
-
-        // Only build the shadow PSO when shadows are enabled; the shadow pass
-        // keys off `shadow_pso.is_some()`, so passing `None` when
-        // `effective_shadow_size == 0` keeps a shadow-disabled world from
-        // rendering into nonexistent cascade DSVs.
-        let shadow_vs_for_pso = if effective_shadow_size > 0 {
-            shaders.shadow_vs.as_deref()
-        } else {
-            None
-        };
-        let (shadow_root_sig, shadow_pso) = pipelines::build_shadow_pipeline(
-            &hw.device,
-            hw.info_queue.as_ref(),
-            shadow_vs_for_pso,
-        )?;
-
-        let (text_root_sig, text_pso) = pipelines::build_text_pipeline(
-            &hw.device,
-            hw.info_queue.as_ref(),
-            &shaders.text_vs,
-            &shaders.text_ps,
-            swapchain.format,
-            !text_atlases.is_empty(),
-        )?;
-
-        let (composite_root_sig, composite_pso) = pipelines::build_composite_pipeline(
-            &hw.device,
-            hw.info_queue.as_ref(),
-            swapchain.format,
-            hot_reload,
-        )?;
-
-        // Bloom mips + bloom PSOs + TAA + SSAO. See init/effects.rs.
-        let bloom_rtv_for = |i: usize| D3D12_CPU_DESCRIPTOR_HANDLE {
-            ptr: rtv_base.ptr + (FRAMES + 1 + i) * rtv_descriptor_size,
-        };
-        let bloom_srv_cpu_for = |i: usize| slot_cpu(bloom_srv_base_slot + i);
-        let bloom_srv_gpu_for = |i: usize| slot_gpu(bloom_srv_base_slot + i);
-
-        // The shared post passes' descriptor block: SRVs after the color LUT,
-        // RTVs after the bloom mips.
-        let post_descriptors = PostDescriptors::new(
-            slot_cpu(post_srv_base_slot),
-            slot_gpu(post_srv_base_slot),
-            srv_descriptor_size,
-            D3D12_CPU_DESCRIPTOR_HANDLE {
-                ptr: rtv_base.ptr + (FRAMES + 1 + bloom_count) * rtv_descriptor_size,
-            },
-            rtv_descriptor_size,
-        );
-
-        let ssao_rtv_for = |i: usize| D3D12_CPU_DESCRIPTOR_HANDLE {
-            ptr: rtv_base.ptr
-                + (FRAMES + 1 + bloom_count + post_rtv_extra + i) * rtv_descriptor_size,
-        };
-        let ssao_slots = effects::SsaoSlots {
-            ao_raw_rtv: ssao_rtv_for(0),
-            ao_raw_srv: (slot_cpu(ssao_srv_base_slot), slot_gpu(ssao_srv_base_slot)),
-            ao_rtv: ssao_rtv_for(1),
-            ao_srv: (
-                slot_cpu(ssao_srv_base_slot + 1),
-                slot_gpu(ssao_srv_base_slot + 1),
-            ),
-            white_srv: (slot_cpu(ssao_white_srv_slot), slot_gpu(ssao_white_srv_slot)),
-        };
-
-        // RT-reflection output target: RTV right after the gbuffer RTVs (the
-        // last RTV block), SRV at the SRV-heap tail.
-        let rt_output_rtv = D3D12_CPU_DESCRIPTOR_HANDLE {
-            ptr: rtv_base.ptr
-                + (FRAMES
-                    + 1
-                    + bloom_count
-                    + post_rtv_extra
-                    + ssao_rtv_extra
-                    + decal_rtv_extra
-                    + gbuffer_rtv_extra)
-                    * rtv_descriptor_size,
-        };
-        let rt_slots = effects::RtReflectionsSlots {
-            output_rtv: rt_output_rtv,
-            output_srv: (slot_cpu(rt_output_srv_slot), slot_gpu(rt_output_srv_slot)),
-        };
-
-        // Reflection composite: 2 RTVs at the very tail (after the RT RTV) + 2 SRVs
-        // at the SRV-heap tail. `output` is the scene-with-reflections the post stack
-        // consumes; `blur` is the reduced-res roughness blur. Built when SSR resolve
-        // or RT is authored (both feed the same composite); the slots stay reserved
-        // either way for a live reflection enable.
-        let refl_composite_rtv_base = FRAMES
-            + 1
-            + bloom_count
-            + post_rtv_extra
-            + ssao_rtv_extra
-            + decal_rtv_extra
-            + gbuffer_rtv_extra
-            + rt_rtv_extra;
-        let refl_composite_rtv = |i: usize| D3D12_CPU_DESCRIPTOR_HANDLE {
-            ptr: rtv_base.ptr + (refl_composite_rtv_base + i) * rtv_descriptor_size,
-        };
-        let refl_composite_slots =
-            crate::directx::post::reflection_composite::ReflectionCompositeSlots {
-                output_rtv: refl_composite_rtv(0),
-                output_srv: (
-                    slot_cpu(refl_composite_srv_base_slot),
-                    slot_gpu(refl_composite_srv_base_slot),
-                ),
-                blur_rtv: refl_composite_rtv(1),
-                blur_srv: (
-                    slot_cpu(refl_composite_srv_base_slot + 1),
-                    slot_gpu(refl_composite_srv_base_slot + 1),
-                ),
-            };
-        let reflection_composite = if ssr_settings.is_some() || rt_reflection_settings.is_some() {
-            Some(
-                crate::directx::post::reflection_composite::ReflectionCompositeResources::new(
-                    &hw.device,
-                    render_w,
-                    render_h,
-                    reflection_blur_scale,
-                    refl_composite_slots,
-                    hw.info_queue.as_ref(),
-                    hot_reload,
-                )?,
-            )
-        } else {
-            None
-        };
-
-        // Unified G-buffer pre-pass descriptor slots (always reserved). Minted
-        // here so both the conditional init build below and the runtime
-        // `apply_quality_settings` rebuild use the same fixed slots.
-        let gb_rtv_base =
-            FRAMES + 1 + bloom_count + post_rtv_extra + ssao_rtv_extra + decal_rtv_extra;
-        let gb_rtv = |i: usize| D3D12_CPU_DESCRIPTOR_HANDLE {
-            ptr: rtv_base.ptr + (gb_rtv_base + i) * rtv_descriptor_size,
-        };
-        let gbuffer_slots = crate::directx::post::gbuffer::GbufferSlots {
-            normal_depth_rtv: gb_rtv(0),
-            normal_depth_srv: (
-                slot_cpu(gbuffer_srv_base_slot),
-                slot_gpu(gbuffer_srv_base_slot),
-            ),
-            roughness_rtv: gb_rtv(1),
-            roughness_srv: (
-                slot_cpu(gbuffer_srv_base_slot + 1),
-                slot_gpu(gbuffer_srv_base_slot + 1),
-            ),
-            velocity_rtv: gb_rtv(2),
-            velocity_srv: (
-                slot_cpu(gbuffer_srv_base_slot + 2),
-                slot_gpu(gbuffer_srv_base_slot + 2),
-            ),
-            depth_dsv: D3D12_CPU_DESCRIPTOR_HANDLE {
-                ptr: dsv_base.ptr
-                    + (1 + NUM_SHADOW_CASCADES + MAX_SHADOWED_SPOTS) * dsv_descriptor_size,
-            },
-        };
-
-        // Stash the live-toggleable effects' fixed slots so the runtime
-        // `apply_quality_settings` can build a launched-off feature into its slot
-        // without re-deriving the heap layout. Copied from the per-effect slot
-        // structs before they move into `build_effects` below.
-        let quality_slots = super::quality::QualitySlotHandles {
-            ssao_ao_raw_rtv: ssao_slots.ao_raw_rtv,
-            ssao_ao_raw_srv: ssao_slots.ao_raw_srv,
-            ssao_ao_rtv: ssao_slots.ao_rtv,
-            ssao_ao_srv: ssao_slots.ao_srv,
-            rt_output_rtv: rt_slots.output_rtv,
-            rt_output_srv: rt_slots.output_srv,
-            refl_composite: refl_composite_slots,
-            gbuffer: gbuffer_slots,
-        };
-
-        let effects_bundle = effects::build_effects(
-            &hw.alloc,
-            hw.info_queue.as_ref(),
-            &crate::directx::post::post_device::DxPostDevice {
-                device: &hw.device,
-                descriptors: &post_descriptors,
-                srv_heap: &srv_heap,
-                info_queue: hw.info_queue.as_ref(),
-                // Pipelines and targets only: nothing encodes before the
-                // context exists, so the device needs no probe set.
-                probes: None,
-                hot_reload,
-            },
-            effects::EffectDimensions {
-                width,
-                height,
-                render_width: render_w,
-                render_height: render_h,
-            },
-            effects::EffectSettings {
-                ssao_settings,
-                ssr_settings,
-                ssgi_settings,
-                rt_reflection_settings,
-                rt_supported: hw.rt_capable,
-            },
-            effects::EffectFlags {
-                taa_enabled,
-                gbuffer_enabled,
-                hot_reload,
-            },
-            effects::EffectDescriptorSlots {
-                bloom: effects::BloomSlots {
-                    rtv_for: &bloom_rtv_for,
-                    srv_cpu_for: &bloom_srv_cpu_for,
-                    srv_gpu_for: &bloom_srv_gpu_for,
-                },
-                ssao: ssao_slots,
-                rt: rt_slots,
-            },
-        )?;
-        let effects::EffectsBundle {
-            transient_pool,
-            bloom_mips,
-            bloom_mip_rtvs,
-            bloom_mip_srv_gpus,
-            bloom_mip_extents,
-            bloom_root_sig,
-            bloom_pso_prefilter,
-            bloom_pso_downsample,
-            bloom_pso_upsample,
-            taa,
-            ssao,
-            ssao_white,
-            ssao_white_srv_gpu,
-            ssr,
-            ssgi,
-            rt_reflections,
-        } = effects_bundle;
-
-        // Unified G-buffer pre-pass resources. Built whenever any screen-space
-        // consumer drives it (see `gbuffer_enabled`). Its three MRT RTVs sit at
-        // the tail of the RTV heap (after the decal RTV), its private depth DSV
-        // right after the shadow DSVs, and its three SRVs in the reserved
-        // `gbuffer_srv_base_slot` block. The skinned PSO builds lazily in
-        // `upload_skinned` once the joint-bound vertex layout exists.
-        let gbuffer = if gbuffer_enabled {
-            // The three color targets are pooled, so the pool (built in
-            // `build_effects`, before this) is what owns them.
-            let pooled = transient_pool
-                .gbuffer_pooled()
-                .ok_or("transient pool missing the gbuffer color targets")?;
-            Some(crate::directx::post::gbuffer::GbufferResources::new(
-                crate::directx::post::gbuffer::GbufferDeviceCtx { alloc: &hw.alloc },
-                crate::directx::post::gbuffer::GbufferExtent {
-                    width: render_w,
-                    height: render_h,
-                },
-                gbuffer_slots,
-                &pooled,
-            )?)
-        } else {
-            None
-        };
-
-        // Projected decals: pipeline + unit-cube buffers + per-frame
-        // uniform rings. Always built so runtime `add_decal` works from a
-        // world that started with none; pre-authored decals get their albedo
-        // SRV written below.
-        let decals_state = Some(crate::directx::decal::DecalResources::new(
-            &hw.alloc,
-            msaa_samples,
-            decal_srv_base_slot,
-            decal_depth_srv_gpu,
-            hw.info_queue.as_ref(),
-            hot_reload,
-        )?);
-        // Pre-authored decals: write each one's albedo SRV into its reserved
-        // heap slot. Runtime adds via `DxContext::add_decal` follow the same
-        // pattern.
-        if decals.len() > crate::directx::decal::MAX_DECALS {
-            return Err(RenderError::Other(format!(
-                "decals: {} authored decals exceed MAX_DECALS ({})",
-                decals.len(),
-                crate::directx::decal::MAX_DECALS
-            )));
-        }
-        let last_tex = gpu_textures.len().saturating_sub(1);
-        for (i, rec) in decals.iter().enumerate() {
-            let tex_idx = rec.texture_slot.min(last_tex);
-            write_texture_srv(
-                &hw.device,
-                &gpu_textures[tex_idx],
-                slot_cpu(decal_srv_base_slot + i),
-            );
-        }
-        // The slot table the decal pass draws from. Each authored decal takes
-        // the slot whose albedo SRV was just written above, in the same order.
-        let mut decal_set = decal::DecalSet::new(crate::directx::decal::MAX_DECALS, FRAMES);
-        for record in decals {
-            decal_set
-                .insert(record)
-                .map_err(|_| "decals: authored decals exceed MAX_DECALS".to_string())?;
-        }
-
-        // Volumetric fog: pipeline + per-frame uniform ring. Built only when
-        // the world declared a `VolumetricFog`; the encoder simply skips the
-        // pass when `fog_settings` is `None`. The fog pass shares the main-
-        // depth SRV that the decal-init path already wrote into the heap.
-        let fog_resources = if fog_settings.is_some() {
-            Some(crate::directx::fog::FogResources::new(
-                &hw.alloc,
-                crate::directx::fog::FogVolumeDescriptors {
-                    uav_cpu: slot_cpu(fog_froxel_uav_slot),
-                    uav_gpu: slot_gpu(fog_froxel_uav_slot),
-                    srv_cpu: slot_cpu(fog_froxel_srv_slot),
-                    srv_gpu: slot_gpu(fog_froxel_srv_slot),
-                },
-                crate::directx::fog::FogShaderResourceHandles {
-                    depth_srv_gpu: decal_depth_srv_gpu,
-                    shadow_srv_gpu,
-                },
-                crate::directx::fog::FogDeviceParams {
-                    msaa_samples,
-                    hot_reload,
-                },
-                hw.info_queue.as_ref(),
-            )?)
-        } else {
-            None
-        };
-
-        // (The FSR3 temporal upscaler is built earlier; its resolved render
-        // dimensions decide the scene-target sizes used above.)
-
-        // Particles: compute + render pipelines + per-frame uniform rings,
-        // plus one persistent GPU pool per emitter. Built only when the world
-        // declared ≥1 emitter; the encoder skips the passes when
-        // `particle_resources` is `None`, and runtime `add_emitter` builds the
-        // pipelines lazily the same way. The emitter cap matches the SRV-heap
-        // reservation made above.
-        if particles.len() > crate::directx::particle::MAX_EMITTERS {
-            return Err(RenderError::Other(format!(
-                "particles: {} authored emitters exceed MAX_EMITTERS ({})",
-                particles.len(),
-                crate::directx::particle::MAX_EMITTERS
-            )));
-        }
-        let (particle_resources, particle_records, particle_emitter_states) =
-            if !particles.is_empty() {
-                let resources = crate::directx::particle::ParticleResources::new(
-                    &hw.alloc,
-                    particle_srv_base_slot,
-                    hw.info_queue.as_ref(),
-                    hot_reload,
-                )?;
-                let mut states: Vec<Option<crate::directx::particle::ParticleEmitterGpuState>> =
-                    Vec::with_capacity(particles.len());
-                let last_tex = gpu_textures.len().saturating_sub(1);
-                for (i, rec) in particles.iter().enumerate() {
-                    let state = crate::directx::particle::build_emitter_gpu_state(&hw.alloc, rec)?;
-                    states.push(Some(state));
-                    // Write the per-emitter albedo SRV into its reserved heap slot.
-                    let tex_idx = rec.texture_slot.min(last_tex);
-                    write_texture_srv(
-                        &hw.device,
-                        &gpu_textures[tex_idx],
-                        slot_cpu(particle_srv_base_slot + i),
-                    );
-                }
-                let recs: Vec<Option<particles::ParticleEmitterRecord>> =
-                    particles.into_iter().map(Some).collect();
-                (Some(resources), recs, states)
-            } else {
-                (None, Vec::new(), Vec::new())
-            };
-
-        // Per-frame command infrastructure
-        let mut command_allocators = Vec::with_capacity(FRAMES);
-        let mut command_lists: Vec<ID3D12GraphicsCommandList> = Vec::with_capacity(FRAMES);
-        for _ in 0..FRAMES {
-            let alloc: ID3D12CommandAllocator =
-                // SAFETY: the create descriptor and every pointer it borrows are live for the call,
-                // and the new COM object lands in a binding that owns it.
-                unsafe { hw.device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT) }
-                    .map_err(|e| format!("command allocator: {e}"))?;
-            // SAFETY: the create descriptor and every pointer it borrows are live for the call, and
-            // the new COM object lands in a binding that owns it.
-            let list: ID3D12GraphicsCommandList = unsafe {
-                hw.device
-                    .CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &alloc, None)
-            }
-            .map_err(|e| format!("command list: {e}"))?;
-            // Close immediately; we re-open each frame.
-            // SAFETY: the command list is live and in the recording state, which is what `Close`
-            // requires.
-            unsafe { list.Close() }.map_err(|e| format!("close cmd list: {e}"))?;
-            command_allocators.push(alloc);
-            command_lists.push(list);
-        }
-
-        // Per-pass command allocator + cmd list pool for the parallel-
-        // encoding path. Sized FRAMES * PASS_COUNT so each pass owns its
-        // own allocator + cmd list per in-flight slot; workers reset
-        // their own allocator + cmd list before recording, so multiple
-        // workers can encode in parallel without contending. Allocators
-        // are very lightweight (a few KB of CPU-side bookkeeping each);
-        // a 21-pass × 3-frame pool is ~63 entries.
-        let pass_pool_size = FRAMES * render_graph::PASS_COUNT;
-        let mut pass_allocators: Vec<ID3D12CommandAllocator> = Vec::with_capacity(pass_pool_size);
-        let mut pass_cmd_lists: Vec<ID3D12GraphicsCommandList> = Vec::with_capacity(pass_pool_size);
-        for _ in 0..pass_pool_size {
-            let alloc: ID3D12CommandAllocator =
-                // SAFETY: the create descriptor and every pointer it borrows are live for the call,
-                // and the new COM object lands in a binding that owns it.
-                unsafe { hw.device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT) }
-                    .map_err(|e| format!("per-pass command allocator: {e}"))?;
-            // SAFETY: the create descriptor and every pointer it borrows are live for the call, and
-            // the new COM object lands in a binding that owns it.
-            let list: ID3D12GraphicsCommandList = unsafe {
-                hw.device
-                    .CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &alloc, None)
-            }
-            .map_err(|e| format!("per-pass command list: {e}"))?;
-            // Close immediately; we re-open per-pass each frame as needed.
-            // SAFETY: the command list is live and in the recording state, which is what `Close`
-            // requires.
-            unsafe { list.Close() }.map_err(|e| format!("close per-pass cmd list: {e}"))?;
-            pass_allocators.push(alloc);
-            pass_cmd_lists.push(list);
-        }
-
-        // End-of-frame outer cmd list pair (composite + final timestamp +
-        // resolve). Submitted last so its `ResolveQueryData` reads every
-        // per-pass `EndQuery` write.
-        let mut end_command_allocators: Vec<ID3D12CommandAllocator> = Vec::with_capacity(FRAMES);
-        let mut end_command_lists: Vec<ID3D12GraphicsCommandList> = Vec::with_capacity(FRAMES);
-        for _ in 0..FRAMES {
-            let alloc: ID3D12CommandAllocator =
-                // SAFETY: the create descriptor and every pointer it borrows are live for the call,
-                // and the new COM object lands in a binding that owns it.
-                unsafe { hw.device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT) }
-                    .map_err(|e| format!("end command allocator: {e}"))?;
-            // SAFETY: the create descriptor and every pointer it borrows are live for the call, and
-            // the new COM object lands in a binding that owns it.
-            let list: ID3D12GraphicsCommandList = unsafe {
-                hw.device
-                    .CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &alloc, None)
-            }
-            .map_err(|e| format!("end command list: {e}"))?;
-            // SAFETY: the command list is live and in the recording state, which is what `Close`
-            // requires.
-            unsafe { list.Close() }.map_err(|e| format!("close end cmd list: {e}"))?;
-            end_command_allocators.push(alloc);
-            end_command_lists.push(list);
-        }
-
-        // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
-        // new COM object lands in a binding that owns it.
-        let fence: ID3D12Fence = unsafe { hw.device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }
-            .map_err(|e| format!("create fence: {e}"))?;
-        // SAFETY: an auto-reset, initially unsignaled event with no name and no security
-        // attributes; the call borrows nothing.
-        let fence_event = unsafe { CreateEventW(None, false, false, None) }
-            .map_err(|e| format!("create fence event: {e}"))?;
-        let fence_values = vec![0u64; FRAMES];
-
-        // Timestamp infrastructure for the per-frame GPU time chip. Falls back
-        // to `None`s with frequency 0 when the queue does not support
-        // timestamps (every WDDM 2.0+ direct queue does, but the fallback keeps
-        // the rest of the overlay working on adapters that don't).
-        let (timestamp_query_heap, timestamp_readback, timestamp_readback_ptr, timestamp_frequency) =
-            crate::directx::context::build_timestamp_resources(&hw.alloc);
-
-        // Shader hot-reload wiring. The atomic flag is shared between the
-        // notify watcher thread and `draw_frame`, plus the `reload-shaders`
-        // debug tool call via `GraphicsSystem`. Watcher
-        // creation is best-effort: a missing source dir or a notify error
-        // logs a warning and disables only the watcher half -- the debug
-        // command still works on the same flag.
-        let (shader_reload_pending, shader_watcher) = if hot_reload {
-            let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let watcher = crate::directx::hot_reload::spawn(std::sync::Arc::clone(&flag));
-            (Some(flag), watcher)
-        } else {
-            (None, None)
-        };
-
-        // Auto-exposure: build the histogram + average compute pipelines plus
-        // the GPU buffers (histogram UAV, output UAV, per-frame readback)
-        // only when the world's PostProcessConfig opted in. With auto-exposure
-        // off every path below is None and the static authored EV continues
-        // to drive `post_process.exposure` unchanged.
-        let (auto_exposure, auto_exposure_state) = if let Some(settings) =
-            auto_exposure_settings.as_ref()
-        {
-            let resources = dump_on_err(
-                hw.info_queue.as_ref(),
-                crate::directx::auto_exposure::AutoExposureResources::new(&hw.alloc, hot_reload),
-            )?;
-            let state = auto_exposure::AutoExposureState::new(settings);
-            (Some(resources), Some(state))
-        } else {
-            (None, None)
-        };
-
-        // Raymarched SDF volumes. Builds per-volume PSOs from `.hlsl`
-        // payloads and writes the raymarch SRV + sampler tables into
-        // their reserved blocks. `.metal` payloads are filtered out
-        // inside `try_new` with a logged warning; if every volume is
-        // Metal-first (the current showcase shape), this returns `None`
-        // and the render graph never adds `PassId::Raymarch`. The
-        // shadow + IBL handles passed here mirror the matching slot-0/1/2
-        // bindings the main pass uses, so raymarched surfaces sample the
-        // same CSM cascades + IBL cubes as rasterized geometry.
-        let raymarch = crate::directx::raymarch::RaymarchResources::try_new(
-            crate::directx::raymarch::RaymarchDeviceContext {
-                alloc: &hw.alloc,
-                info_queue: hw.info_queue.as_ref(),
-            },
-            crate::directx::raymarch::RaymarchTargetConfig {
-                width: render_w,
-                height: render_h,
-                msaa_samples,
-            },
-            crate::directx::raymarch::RaymarchSharedBindings {
-                shadow_resource: shadow_resource_opt.as_ref().map(|r| &r.resource),
-                shadow_layers: NUM_SHADOW_CASCADES as u32,
-                irradiance_resource: &env_map.irradiance.resource,
-                prefilter_resource: &env_map.prefilter.resource,
-            },
-            crate::directx::raymarch::RaymarchDescriptorHandles {
-                srv_base_cpu: slot_cpu(raymarch_srv_base_slot),
-                srv_base_gpu: slot_gpu(raymarch_srv_base_slot),
-                srv_descriptor_size,
-                sampler_base_cpu: D3D12_CPU_DESCRIPTOR_HANDLE {
-                    ptr: samp_cpu_base.ptr + raymarch_sampler_base_slot * sampler_descriptor_size,
-                },
-                sampler_base_gpu: D3D12_GPU_DESCRIPTOR_HANDLE {
-                    ptr: samp_gpu_base.ptr
-                        + (raymarch_sampler_base_slot * sampler_descriptor_size) as u64,
-                },
-                sampler_descriptor_size,
-            },
-            &sdf_volumes,
-            hot_reload,
-        )?;
-
-        // Hi-Z pyramid. Built under the same condition as the cull pipeline
-        // (bindless main pass active + build-time static geometry). The
-        // resource owns its descriptors at the reserved Hi-Z heap slots;
-        // when the gating condition fails the slots stay empty and the
-        // cull kernel's `hiz_enabled` flag stays zero so it never samples
-        // them. The init kernel reads the main-depth SRV that the decal +
-        // fog passes already wrote; `decal_depth_srv_gpu` carries the
-        // matching GPU handle.
-        // The reflection-probe convolution kernels, under the same gate the bake
-        // itself needs: a probe capture renders through the bindless GPU cull, so a
-        // world without the cull PSO never bakes one and never needs them.
-        //
-        // The convolution kernels also read their source mip through a UAV, which
-        // D3D12 allows for this format only under `TypedUAVLoadAdditionalFormats`.
-        // Without it there is no probe bake and the cube array keeps sampling the sky.
-        let typed_uav_load = crate::directx::probe_prefilter::typed_uav_load_supported(&hw.device);
-        if cull_pso.is_some() && !typed_uav_load {
-            tracing::warn!(
-                "reflection probes: device lacks TypedUAVLoadAdditionalFormats, skipping probe baking"
-            );
-        }
-        let probe_prefilter = match cull_pso.is_some() && typed_uav_load {
-            true => Some(
-                crate::directx::probe_prefilter::ProbePrefilterPipelines::new(
-                    &hw.device, hot_reload,
-                )?,
-            ),
-            false => None,
-        };
-
-        let hiz = if cull_pso.is_some() {
-            let mut mip_uav_cpus: Vec<D3D12_CPU_DESCRIPTOR_HANDLE> =
-                Vec::with_capacity(HIZ_MAX_MIPS);
-            let mut mip_uav_gpus: Vec<D3D12_GPU_DESCRIPTOR_HANDLE> =
-                Vec::with_capacity(HIZ_MAX_MIPS);
-            for i in 0..HIZ_MAX_MIPS {
-                mip_uav_cpus.push(slot_cpu(hiz_uav_base_slot + i));
-                mip_uav_gpus.push(slot_gpu(hiz_uav_base_slot + i));
-            }
-            Some(crate::directx::hiz::HiZResources::new(
-                crate::directx::hiz::HiZDeviceCtx {
-                    device: &hw.device,
-                    info_queue: hw.info_queue.as_ref(),
-                    hot_reload,
-                },
-                crate::directx::hiz::HiZTarget {
-                    width: render_w,
-                    height: render_h,
-                    srv_cpu: slot_cpu(hiz_srv_slot),
-                    srv_gpu: slot_gpu(hiz_srv_slot),
-                    depth_srv_gpu: decal_depth_srv_gpu,
-                    mip_uav_cpus,
-                    mip_uav_gpus,
-                },
-            )?)
-        } else {
-            None
-        };
-
-        // Planar reflections: one mirror-render resolve per distinct reflector
-        // plane (the `assign_planar_slots` representatives), each SRV in a reserved
-        // heap slot the transparent pass binds per record. `None` when no reflector
-        // was assigned a planar slot (no transparent content, or every plane
-        // degenerate / over budget).
-        let planar_reflection = if planar_assignment.representatives.is_empty() {
-            None
-        } else {
-            // Build-time draw-record count (matches `DxContext::cull_count`): sizes
-            // each plane's region of the mirror-cull indirect buffer.
-            let planar_n_cull =
-                n_objects + n_instances + n_chunk_max + clone_reserve(n_objects) + n_skinned;
-            let resolve_srv_cpu: Vec<_> = (0..planar_assignment.representatives.len())
-                .map(|i| slot_cpu(planar_resolve_srv_base_slot + i))
-                .collect();
-            let resolve_srv_gpu: Vec<_> = (0..planar_assignment.representatives.len())
-                .map(|i| slot_gpu(planar_resolve_srv_base_slot + i))
-                .collect();
-            Some(crate::directx::planar::PlanarReflectionSet::new(
-                &hw.alloc,
-                crate::directx::planar::PlanarConfig {
-                    sample_count: msaa_samples,
-                    width: render_w,
-                    height: render_h,
-                    n_cull: planar_n_cull,
-                },
-                &planar_assignment.representatives,
-                crate::directx::planar::PlanarTargets {
-                    resolve_srv_cpu: &resolve_srv_cpu,
-                    resolve_srv_gpu: &resolve_srv_gpu,
-                    clear_color,
-                },
-            )?)
-        };
-
-        // Layer 2 see-through glass is opt-in per `Material` (the `see_through`
-        // arg, which implies `transparent`): see-through only looks right when the
-        // space behind the glass is modeled. A material that is `transparent` but
-        // NOT `see_through` renders as Layer 1 (opaque, low roughness, scene
-        // reflections) = tinted reflective glass that hides the interior. This list
-        // drives the transparent-pass producer, the opaque-pass skip and the
-        // RT-BLAS exclude together.
-        let seethrough_mesh_indices: Vec<usize> = draw_objects
-            .iter()
-            .enumerate()
-            .filter(|(_, o)| o.material.transparent != 0 && o.material.see_through != 0)
-            .map(|(i, _)| i)
-            .collect();
-
-        // The shared transparent pass and its producers: water surfaces,
-        // translucent glass panes, and see-through glass meshes. `Some` only when
-        // the world declared at least one of the three; the mesh case additionally
-        // needs a DXR-capable GPU, since its producer is ray-traced only and a
-        // pane-less, water-less world would otherwise build the whole pass for a
-        // producer that cannot exist. Shares the main-depth SRV with the decal
-        // pass; the scene-copy snapshot uses its own reserved heap slot.
-        // `planar_assignment.slots` gives each reflector its planar resolve slot
-        // (or `None` -> probe-cube fallback), numbered water first to match the
-        // plane list above.
-        let has_seethrough_meshes = !seethrough_mesh_indices.is_empty() && hw.rt_capable;
-        let transparent =
-            if glass_panels.is_empty() && water_surfaces.is_empty() && !has_seethrough_meshes {
-                None
-            } else {
-                let (water_planar_slots, glass_planar_slots) =
-                    planar_assignment.slots.split_at(water_surfaces.len());
-                Some(crate::directx::transparent::TransparentResources::new(
-                    crate::directx::transparent::TransparentDeviceCtx { alloc: &hw.alloc },
-                    crate::directx::transparent::TransparentBuildConfig {
-                        msaa_samples,
-                        width: render_w,
-                        height: render_h,
-                        hot_reload,
-                    },
-                    crate::directx::transparent::TransparentSceneTargets {
-                        scene_copy_srv_cpu: slot_cpu(transparent_scene_copy_srv_slot),
-                        scene_copy_srv_gpu: slot_gpu(transparent_scene_copy_srv_slot),
-                        depth_srv_gpu: decal_depth_srv_gpu,
-                    },
-                    crate::directx::transparent::TransparentContent {
-                        glass_panels: &glass_panels,
-                        glass_planar_slots,
-                        water_surfaces: &water_surfaces,
-                        water_planar_slots,
-                        seethrough_mesh_indices: &seethrough_mesh_indices,
-                    },
-                    hw.info_queue.as_ref(),
-                )?)
-            };
-
-        // Hardware-RT acceleration structure. Built once over the shared static
-        // vertex/index buffers + the draw-object / cluster lists, only when the
-        // RT reflection resources came up (DXR-capable GPU + DXC compile OK).
-        // `Ok(None)` means an empty scene; an `Err` is non-fatal (logged, falls
-        // back to SSR). `rt_reflections_active` gates the RT pass on both this
-        // and the resources being `Some`. The init build is static-only; skinned
-        // meshes are seeded into the BVH on the first dynamic frame
-        // (`rebuild_skinned`), so the compute-skinning pipeline is built here and
-        // attached. A skin-pipeline build failure is non-fatal: the
-        // RT pass still runs for static geometry, just without skinned hits.
-        let rt_accel = if rt_reflections.is_some() {
-            match super::raytrace::build_rt_accel(super::raytrace::RtInitGeometry {
-                alloc: &hw.alloc,
-                vertex_buffer: &vertex_buffer,
-                index_buffer: &index_buffer,
-                draw_objects: &draw_objects,
-                clusters: &instanced_clusters,
-                total_vertices: vertices.len(),
-                albedo_count: flat_albedo_count as u32,
-                // Exclude the meshes the transparent pass will reroute. Decided
-                // here rather than through `seethrough_meshes_enabled` because
-                // the context does not exist yet; the two agree because both read
-                // "a material opted in AND the mesh pipelines built".
-                exclude_seethrough: transparent
-                    .as_ref()
-                    .is_some_and(|t| t.mesh_pipelines_ready()),
-            }) {
-                Ok(Some(mut accel)) => {
-                    match super::raytrace::build_rt_skin_pipeline(&hw.device, hot_reload) {
-                        Ok(skin) => accel.set_skin_pipeline(skin),
-                        Err(e) => tracing::warn!(
-                            "RT skin pipeline build failed (skinned meshes absent from reflections): {e}"
-                        ),
-                    }
-                    Some(accel)
-                }
-                Ok(None) => None,
-                Err(e) => {
-                    tracing::warn!(
-                        "RT acceleration-structure build failed, falling back to SSR: {e}"
-                    );
-                    None
-                }
-            }
-        } else {
-            None
-        };
 
         crate::shader::cache::report_init();
         // Serialize the pipeline library now that every init-built PSO has
@@ -2091,340 +387,54 @@ impl DxContext {
 
         Ok(Self {
             post: post_descriptors,
-            swapchain: super::context::SwapchainState {
-                handle: swapchain.handle,
-                back_buffers,
-                rtv_heap,
-                rtv_descriptor_size,
-                format: swapchain.format,
-                present_sync_interval,
-                allow_tearing: swapchain.allow_tearing,
-                last_present_index: None,
-            },
-            targets: DxTargets {
-                hdr: super::context::HdrState {
-                    color: hdr_color,
-                    color_rtv: hdr_color_rtv,
-                    resolve: hdr_resolve,
-                    resolve_rtv: hdr_resolve_rtv,
-                    srv_gpu: hdr_srv_gpu,
-                    msaa_samples,
-                },
-                depth: super::context::DepthState {
-                    dsv: main_dsv_cpu,
-                    resource: depth_resource,
-                    heap: dsv_heap,
-                },
-                main_depth_srv_gpu: decal_depth_srv_gpu,
-                extent: super::context::Extents {
-                    render_width: render_w,
-                    render_height: render_h,
-                    output_width: width,
-                    output_height: height,
-                },
-                transient_pool,
-            },
-            upscale: super::context::UpscaleState {
-                backend: upscaler,
-                requested: upscale_backend,
-                jitter: std::cell::Cell::new([0.0, 0.0]),
-                prev_elapsed: std::cell::Cell::new(0.0),
-            },
-            shadow: super::context::ShadowState {
-                resource: shadow_resource_opt,
-                dsvs: shadow_dsvs,
-                map_size: effective_shadow_size,
-                srv_gpu: shadow_srv_gpu,
-                light_dir: shadow_light_dir,
-                update: shadow_update,
-                distance: shadow_distance,
-                cascades: shadow_cascades,
-                scheduler: Default::default(),
-                render_mask: 0,
-                uniforms: csm::empty_shadow_uniforms(),
-            },
-            spot_shadow: super::context::SpotShadowState {
-                resource: spot_shadow_resource,
-                dsvs: spot_shadow_dsvs,
-                srv_gpu: slot_gpu(spot_shadow_srv_slot),
-                buffer: spot_shadow_buffer,
-                ubo: spot_shadow_ubo,
-                ubo_stride: spot_shadow_ubo_stride,
-                slice_size: spot_shadow_slice_size,
-                scheduler: Default::default(),
-                render_mask: 0,
-            },
-            scene: DxSceneAssets {
-                env_map,
-                color_lut,
-                area_light: super::context::AreaLightState {
-                    buffer: area_light_buffer,
-                    ltc_matrix: ltc_matrix_texture,
-                    ltc_magnitude: ltc_magnitude_texture,
-                    ltc_table_gpu: slot_gpu(ltc_srv_base_slot),
-                },
-                geometry: DxGeometry {
-                    vertex_buffer,
-                    index_buffer,
-                    vertex_buffer_view,
-                    index_buffer_view,
-                },
-            },
-            descriptors: DxDescriptors {
-                srv_heap,
-                srv_descriptor_size,
-                flat_pool_base_slot,
-                flat_pool_len,
-                probe_cube_base_slot,
-                probe_capture_srv_slot,
-                probe_capture_uav_base_slot,
-                probe_cube_uav_base_slot,
-                probe_mip0_pair_slot,
-                sampler_heap,
-                shadow_sampler_gpu,
-                linear_sampler_gpu,
-                text_sampler_gpu,
-                textures: gpu_textures,
-                _fallback_textures: gpu_fallbacks,
-                text_atlas_textures: gpu_text_atlases,
-                text_atlas_srv_gpus,
-            },
-            mesh_stream: super::context::MeshStreamState {
-                vtx_alloc: crate::suballoc::range_alloc::RangeAllocator::new(),
-                idx_alloc: crate::suballoc::range_alloc::RangeAllocator::new(),
-            },
-            chunk_stream: super::context::ChunkStreamState {
-                vtx_alloc: crate::suballoc::range_alloc::RangeAllocator::new(),
-                idx_alloc: crate::suballoc::range_alloc::RangeAllocator::new(),
-            },
-            skinned: SkinnedState {
-                shadow_pso: None,
-                shadow_root_sig: None,
-                vertex_buffer: None,
-                index_buffer: None,
-                vertex_buffer_view: D3D12_VERTEX_BUFFER_VIEW::default(),
-                index_buffer_view: D3D12_INDEX_BUFFER_VIEW::default(),
-                slots: skinned_slots::SkinnedSlots::new(),
-                joint_buffers: Vec::new(),
-                joint_ptrs: Vec::new(),
-                skin_pipeline: None,
-                deformed_primed: std::sync::atomic::AtomicBool::new(false),
-                deformed_buffers: Vec::new(),
-                deformed_vbvs: Vec::new(),
-                morph_delta_buffers: Vec::new(),
-                morph_target_counts: Vec::new(),
-                morph_weight_buffers: Vec::new(),
-                morph_weight_ptrs: Vec::new(),
-            },
-            uniforms: DxUniforms {
-                view_ubo_resources,
-                view_ubo_ptrs,
-                light_ubo_resources,
-                light_ubo_ptrs,
-                local_light_buffer,
-                light_uniforms,
-                light_dirty: std::cell::Cell::new(
-                    concinnity_core::render::frame_dirty::FrameDirty::new(FRAMES),
-                ),
-                shadow_ubo_resources,
-                shadow_ubo_ptrs,
-            },
+            swapchain,
+            targets,
+            upscale,
+            shadow,
+            spot_shadow,
+            scene,
+            descriptors,
+            mesh_stream: Default::default(),
+            chunk_stream: Default::default(),
+            skinned: SkinnedState::new(),
+            uniforms,
             light_cull,
-            cull: CullState {
-                main_bindless_root_sig,
-                main_bindless_pso,
-                world_pipelines,
-                bucket_stride,
-                object_buffer_resources,
-                object_buffer_ptrs,
-                bindless_pool_gpu,
-                cull_root_sig,
-                cull_pso,
-                cull_pso_phase2,
-                cull_command_signature,
-                draw_args_buffer_resources,
-                draw_args_buffer_ptrs,
-                indirect_cmd_buffers,
-                cull_status_buffers,
-                indirect_cmd_buffers_2,
-                shadow_bindless_root_sig,
-                shadow_bindless_pso,
-                shadow_bindless_cmd_sig,
-                cull_pso_shadow,
-                shadow_indirect_buffers,
-                shadow_cull_status_buffers,
-                gbuffer_bindless_root_sig,
-                gbuffer_bindless_pso,
-                gbuffer_bindless_cmd_sig,
-                prev_model_buffers: prev_model_buffer_resources,
-                model_history_root_sig,
-                model_history_pso,
-                model_history_prime: std::sync::atomic::AtomicBool::new(false),
-                occlusion_two_pass,
-                hiz,
-                prev_view_proj: std::cell::Cell::new(IDENTITY),
-                hiz_valid: std::cell::Cell::new(false),
-            },
-            shadow_root_sig,
-            shadow_pso,
-            text: super::context::TextState {
-                root_sig: text_root_sig,
-                pso: text_pso,
-                upload: super::upload_ring::UploadRing::new(FRAMES),
-            },
-            composite: super::context::CompositeState {
-                root_sig: composite_root_sig,
-                pso: composite_pso,
-            },
-            bloom: BloomState {
-                mips: bloom_mips,
-                mip_rtvs: bloom_mip_rtvs,
-                mip_srv_gpus: bloom_mip_srv_gpus,
-                mip_extents: bloom_mip_extents,
-                root_sig: bloom_root_sig,
-                pso_prefilter: bloom_pso_prefilter,
-                pso_downsample: bloom_pso_downsample,
-                pso_upsample: bloom_pso_upsample,
-            },
-            post_process,
+            cull,
+            text,
+            composite,
+            bloom,
+            post_process: features.post_process,
             gbuffer,
             model_history: Default::default(),
             taa,
-            ssao: super::context::SsaoState {
-                resources: ssao,
-                white: ssao_white,
-                white_srv_gpu: ssao_white_srv_gpu,
-            },
+            ssao,
             ssr,
             ssgi,
             reflection_composite,
             rt_reflections,
-            rt: DxRayTracing {
-                accel: rt_accel,
-                dynamic_mode: rt_dynamic_mode,
-                skinned_geometry: rt_skinned_geometry,
-                topology_dirty: false,
-                static_vertex_count: vertices.len(),
-            },
-            decal: super::context::DecalState {
-                state: decals_state,
-                set: decal_set,
-            },
+            rt,
+            decal,
             lines: super::line::LineState::empty(),
             raymarch,
             transparent,
             planar_reflection,
-            fog: super::context::FogState {
-                resources: fog_resources,
-                settings: fog_settings,
-                sun_dir: fog_sun_dir,
-                sun_color: fog_sun_color,
-            },
-            particle: super::context::ParticleState {
-                resources: particle_resources,
-                records: particle_records,
-                emitter_state: particle_emitter_states,
-                free_slots: Vec::new(),
-                srv_base_slot: particle_srv_base_slot,
-                last_elapsed: std::cell::Cell::new(0.0),
-                frame_index: std::cell::Cell::new(0),
-            },
-            commands: DxCommands {
-                command_allocators,
-                command_lists,
-                pass_allocators,
-                pass_cmd_lists,
-                end_command_allocators,
-                end_command_lists,
-            },
-            frame_sync: DxFrameSync {
-                fence,
-                fence_values,
-                next_fence_value: std::cell::Cell::new(1),
-                fence_event,
-            },
+            fog,
+            particle,
+            commands,
+            frame_sync,
             current_frame: 0,
-            stream: super::context::StreamState {
-                pool_rewrites: slot_rewrites::SlotRewriteQueue::new(FRAMES),
-                frame: 0,
-                retires: Vec::new(),
-            },
-            draw: super::context::DrawState {
-                n_objects,
-                objects: draw_objects,
-                graph_cache: RefCell::new(None),
-                n_instances,
-                // Runtime record reserve (fixed at init): the worst-case
-                // resident streamed-chunk window plus the runtime-clone cap. The
-                // cull buffers reserve `[n_objects + n_instances, +n_runtime)`;
-                // resident chunks and spawned clones are folded in per frame and
-                // the unused tail is disabled.
-                n_runtime: n_chunk_max + clone_reserve(n_objects),
-                // Set in `upload_skinned` once skinned geometry is resident; the
-                // cull buffers reserve the tail at init via the threaded
-                // `n_skinned` capacity, but `cull_count()` reads this runtime
-                // count.
-                n_skinned: 0,
-            },
-            instanced: DxInstanced {
-                any_lod: lod::any_cluster_has_lod(&instanced_clusters),
-                clusters: instanced_clusters,
-                // One outer Vec entry per cluster; populated each frame by
-                // `build_instance_upload` from `lod_buckets(cam_pos)`. The
-                // inner Vec is the bucket order (LOD0 → LODN) for that
-                // cluster. Empty rows for clusters that never have visible
-                // instances stay empty.
-                bucket_layouts: std::sync::RwLock::new(vec![Vec::new(); n_clusters]),
-            },
-            view: super::context::ViewState {
-                clear_color,
-                scene_fade: 0.0,
-                mode: Default::default(),
-                show: Default::default(),
-                far: 1.0,
-                matrix: IDENTITY,
-                sky_rot: concinnity_core::sky::SkyOrientation::IDENTITY_ROWS,
-            },
+            stream: StreamState::new(),
+            draw: DrawState::new(world.draw_objects, plan.n_instances, world.n_chunk_max),
+            instanced: DxInstanced::new(world.instanced_clusters),
+            view: ViewState::new(clear_color),
             wireframe: Default::default(),
-            diagnostics: super::context::Diagnostics {
-                frame_stats: std::cell::Cell::new(profile::RenderStats::default()),
-                draw_calls_accum: std::sync::atomic::AtomicU32::new(0),
-            },
-            bindless_main_shaders,
-            timestamps: TimestampState {
-                query_heap: timestamp_query_heap,
-                readback: timestamp_readback,
-                readback_ptr: timestamp_readback_ptr,
-                frequency: timestamp_frequency,
-            },
-            auto_exposure: super::context::AutoExposureState {
-                resources: auto_exposure,
-                settings: auto_exposure_settings,
-                state: auto_exposure_state,
-                bias_ev: auto_exposure_bias_ev,
-                last_elapsed: 0.0,
-            },
-            hot_reload: super::context::HotReloadState {
-                enabled: hot_reload,
-                reload_pending: shader_reload_pending,
-                watcher: shader_watcher,
-            },
+            diagnostics: Default::default(),
+            timestamps,
+            auto_exposure,
+            hot_reload: HotReloadState::spawn(hot_reload),
             world_shader: world_programs.cloned(),
             quality_slots,
-            // Reflection probes: empty until `set_reflection_probes` supplies
-            // placements (declared or auto-seeded). See [`super::context`].
-            probe: super::context::ProbeState {
-                placements: Vec::new(),
-                bake_queue: reflection_probe::ProbeBakeQueue::new(0),
-                set: concinnity_core::render::uniforms::ProbeSet::EMPTY,
-                rendering: None,
-                prefiltering: None,
-                prefilter: probe_prefilter,
-                maps: Vec::new(),
-                set_cbvs: probe_set_cbvs,
-                set_cbv_ptrs: probe_set_cbv_ptrs,
-                set_empty_cbv: probe_set_empty_cbv,
-            },
+            probe: ProbeState::new(probe_prefilter),
             hw,
         })
     }
@@ -2444,10 +454,10 @@ impl DxContext {
     // is left `None`; the caller drops this backend and marks the session failed.
     pub(in crate::directx) fn apply_world_reload(
         &mut self,
-        init: backend_init::BackendInit<'_>,
+        init: BackendInit<'_>,
     ) -> RenderResult<()> {
         self.wait_idle();
-        let swapchain = window::DxgiSwapchain {
+        let swapchain = bootstrap::DxgiSwapchain {
             handle: self.swapchain.handle.clone(),
             format: self.swapchain.format,
             allow_tearing: self.swapchain.allow_tearing,
@@ -2456,107 +466,4 @@ impl DxContext {
         *self = DxContext::build(init, Some(reuse))?;
         Ok(())
     }
-}
-
-fn create_samplers(
-    device: &ID3D12Device,
-    base_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-    stride: usize,
-    // Scene-sampler max anisotropy from GraphicsConfig.anisotropy, clamped to the
-    // D3D12 1..16 range below.
-    anisotropy: u32,
-) {
-    // [0] Shadow comparison sampler (LESS_EQUAL).
-    let shadow_samp = D3D12_SAMPLER_DESC {
-        Filter: D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT,
-        AddressU: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        AddressV: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        AddressW: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        ComparisonFunc: D3D12_COMPARISON_FUNC_LESS_EQUAL,
-        MinLOD: 0.0,
-        MaxLOD: f32::MAX,
-        ..Default::default()
-    };
-    // SAFETY: the view descriptor and the resource it names are live for the call, and the
-    // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe {
-        device.CreateSampler(
-            &shadow_samp,
-            D3D12_CPU_DESCRIPTOR_HANDLE { ptr: base_cpu.ptr },
-        )
-    };
-
-    // [1] Anisotropic repeat (albedo + normal map). Anisotropic filtering plus
-    // the unclamped MaxLOD lets minified scene textures trilinear-select down
-    // their mip chain instead of aliasing from mip 0. The degree comes from
-    // GraphicsConfig.anisotropy (default 8), clamped to the D3D12 feature-level-11
-    // guaranteed 1..16 range.
-    let linear_samp = D3D12_SAMPLER_DESC {
-        Filter: D3D12_FILTER_ANISOTROPIC,
-        AddressU: D3D12_TEXTURE_ADDRESS_MODE_WRAP,
-        AddressV: D3D12_TEXTURE_ADDRESS_MODE_WRAP,
-        AddressW: D3D12_TEXTURE_ADDRESS_MODE_WRAP,
-        MaxAnisotropy: anisotropy.clamp(1, 16),
-        MinLOD: 0.0,
-        MaxLOD: f32::MAX,
-        ..Default::default()
-    };
-    // SAFETY: the view descriptor and the resource it names are live for the call, and the
-    // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe {
-        device.CreateSampler(
-            &linear_samp,
-            D3D12_CPU_DESCRIPTOR_HANDLE {
-                ptr: base_cpu.ptr + stride,
-            },
-        )
-    };
-
-    // [2] Cube linear-clamp + mip linear (IBL irradiance / prefilter).
-    let cube_samp = D3D12_SAMPLER_DESC {
-        Filter: D3D12_FILTER_MIN_MAG_MIP_LINEAR,
-        AddressU: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        AddressV: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        AddressW: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        MinLOD: 0.0,
-        MaxLOD: f32::MAX,
-        ..Default::default()
-    };
-    // SAFETY: the view descriptor and the resource it names are live for the call, and the
-    // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe {
-        device.CreateSampler(
-            &cube_samp,
-            D3D12_CPU_DESCRIPTOR_HANDLE {
-                ptr: base_cpu.ptr + stride * 2,
-            },
-        )
-    };
-
-    // [3] Linear clamp, mip 0 only (text atlas). The text atlas is a tightly
-    // packed glyph SDF: its coarse mips bleed adjacent glyphs together, so
-    // trilinear minification samples that garbage and the text reads choppy.
-    // Clamp MaxLOD to 0 so only the full-resolution (supersampled) mip 0 is
-    // sampled; the SDF stays crisp under bilinear minification on its own.
-    // Mirrors the Vulkan text sampler (`create_sampler_linear_clamp`, whose
-    // max_lod defaults to 0).
-    let clamp_samp = D3D12_SAMPLER_DESC {
-        Filter: D3D12_FILTER_MIN_MAG_MIP_LINEAR,
-        AddressU: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        AddressV: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        AddressW: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        MinLOD: 0.0,
-        MaxLOD: 0.0,
-        ..Default::default()
-    };
-    // SAFETY: the view descriptor and the resource it names are live for the call, and the
-    // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe {
-        device.CreateSampler(
-            &clamp_samp,
-            D3D12_CPU_DESCRIPTOR_HANDLE {
-                ptr: base_cpu.ptr + stride * 3,
-            },
-        )
-    };
 }

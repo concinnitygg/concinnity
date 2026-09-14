@@ -25,7 +25,7 @@ impl DxContext {
         cam_pos: [f32; 3],
     ) {
         let (Some(shadow_pso), Some(shadow_root_sig)) =
-            (self.shadow_pso.as_ref(), self.shadow_root_sig.as_ref())
+            (self.shadow.pso.as_ref(), self.shadow.root_sig.as_ref())
         else {
             return;
         };

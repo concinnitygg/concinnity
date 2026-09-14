@@ -1312,7 +1312,7 @@ impl DxContext {
         // and the per-frame ProbeSet CBV (b4). count == 0 keeps the sky fallback.
         let prefilter_srv = self.prefilter_cube_srv_gpu();
         let probe_cube_srv = self.probe_cube_table_gpu();
-        let probe_set_gva = com::gpu_va(&self.probe.set_cbvs[frame_idx]);
+        let probe_set_gva = com::gpu_va(&self.uniforms.probe_set_cbvs[frame_idx]);
 
         // The one per-record binding whose root parameter moves between the two
         // signatures (the RT one appends it past the trace's inputs).

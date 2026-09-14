@@ -618,7 +618,7 @@ impl DxContext {
             .ok_or_else(|| "add_decal: decal pipeline unavailable".to_string())?;
         let base_slot = state.decal_srv_base_slot;
 
-        let last_tex = self.descriptors.textures.len().saturating_sub(1);
+        let last_tex = self.scene.textures.len().saturating_sub(1);
         let tex_idx = record.texture_slot.min(last_tex);
 
         // Write the SRV for the chosen texture into this decal's heap slot.
@@ -638,11 +638,7 @@ impl DxContext {
             }
             .ptr + (base_slot + id) * self.descriptors.srv_descriptor_size,
         };
-        write_texture_srv(
-            &self.hw.device,
-            &self.descriptors.textures[tex_idx],
-            srv_cpu,
-        );
+        write_texture_srv(&self.hw.device, &self.scene.textures[tex_idx], srv_cpu);
         Ok(id)
     }
 

@@ -163,19 +163,29 @@ impl PrefilterGpu {
                 device,
                 &capture,
                 mip,
-                cpu_slot(ctx, d.probe_capture_uav_base_slot + mip as usize),
+                cpu_slot(ctx, d.layout.probe_capture_uav_base_slot + mip as usize),
             );
             write_cube_mip_uav(
                 device,
                 &probe,
                 mip,
-                cpu_slot(ctx, d.probe_cube_uav_base_slot + mip as usize),
+                cpu_slot(ctx, d.layout.probe_cube_uav_base_slot + mip as usize),
             );
         }
         // The mirror-mip copy binds capture mip 0 and probe mip 0 as one contiguous
         // pair, which neither per-cube block can supply, so it gets its own.
-        write_cube_mip_uav(device, &capture, 0, cpu_slot(ctx, d.probe_mip0_pair_slot));
-        write_cube_mip_uav(device, &probe, 0, cpu_slot(ctx, d.probe_mip0_pair_slot + 1));
+        write_cube_mip_uav(
+            device,
+            &capture,
+            0,
+            cpu_slot(ctx, d.layout.probe_mip0_pair_slot),
+        );
+        write_cube_mip_uav(
+            device,
+            &probe,
+            0,
+            cpu_slot(ctx, d.layout.probe_mip0_pair_slot + 1),
+        );
 
         Ok(PrefilterGpu {
             capture,
@@ -209,7 +219,7 @@ impl PrefilterGpu {
 impl DxContext {
     /// CPU handle of the capture cube's all-mips SRV slot.
     pub(in crate::directx) fn probe_capture_srv_cpu(&self) -> D3D12_CPU_DESCRIPTOR_HANDLE {
-        cpu_slot(self, self.descriptors.probe_capture_srv_slot)
+        cpu_slot(self, self.descriptors.layout.probe_capture_srv_slot)
     }
 
     /// Record the cheap half of the convolution: the capture moves from the
@@ -246,7 +256,7 @@ impl DxContext {
         self.dispatch_prefilter(
             cmd,
             &pipelines.mip0,
-            gpu_slot(self, d.probe_mip0_pair_slot),
+            gpu_slot(self, d.layout.probe_mip0_pair_slot),
             None,
             &plan.mip0_params(),
             plan.face_size(),
@@ -257,7 +267,10 @@ impl DxContext {
             self.dispatch_prefilter(
                 cmd,
                 &pipelines.downsample,
-                gpu_slot(self, d.probe_capture_uav_base_slot + (mip - 1) as usize),
+                gpu_slot(
+                    self,
+                    d.layout.probe_capture_uav_base_slot + (mip - 1) as usize,
+                ),
                 None,
                 &plan.downsample_params(mip),
                 plan.mip_face_size(mip),
@@ -294,8 +307,8 @@ impl DxContext {
         self.dispatch_prefilter(
             cmd,
             &pipelines.ggx,
-            gpu_slot(self, d.probe_cube_uav_base_slot + dst_mip as usize),
-            Some(gpu_slot(self, d.probe_capture_srv_slot)),
+            gpu_slot(self, d.layout.probe_cube_uav_base_slot + dst_mip as usize),
+            Some(gpu_slot(self, d.layout.probe_capture_srv_slot)),
             &plan.ggx_params(dst_mip),
             plan.mip_face_size(dst_mip),
         );

@@ -233,8 +233,8 @@ impl DxContext {
         };
         D3D12_GPU_DESCRIPTOR_HANDLE {
             ptr: base.ptr
-                + (self.descriptors.probe_cube_base_slot * self.descriptors.srv_descriptor_size)
-                    as u64,
+                + (self.descriptors.layout.probe_cube_base_slot
+                    * self.descriptors.srv_descriptor_size) as u64,
         }
     }
 
@@ -249,7 +249,7 @@ impl DxContext {
         };
         D3D12_CPU_DESCRIPTOR_HANDLE {
             ptr: base.ptr
-                + (self.descriptors.probe_cube_base_slot + i)
+                + (self.descriptors.layout.probe_cube_base_slot + i)
                     * self.descriptors.srv_descriptor_size,
         }
     }
@@ -1086,7 +1086,10 @@ impl DxContext {
             // ProbeSet (count 0), so a probe face samples only the sky, not other
             // probes, and never reads the live ProbeSet ring while it is rewritten.
             cmd.SetGraphicsRootDescriptorTable(10, self.probe_cube_table_gpu());
-            cmd.SetGraphicsRootConstantBufferView(11, com::gpu_va(&self.probe.set_empty_cbv));
+            cmd.SetGraphicsRootConstantBufferView(
+                11,
+                com::gpu_va(&self.uniforms.probe_set_empty_cbv),
+            );
             // Static + instance prefix `[0, skinned_record_base())`. Skinned tail
             // omitted (not captured into the probe in V1).
             cmd.ExecuteIndirect(

@@ -532,7 +532,10 @@ impl DxContext {
             // per-frame ProbeSet CBV at b4. count == 0 keeps the sky path,
             // so a probe-less world is byte-identical to before.
             cmd.SetGraphicsRootDescriptorTable(12, self.probe_cube_table_gpu());
-            cmd.SetGraphicsRootConstantBufferView(13, com::gpu_va(&self.probe.set_cbvs[frame_idx]));
+            cmd.SetGraphicsRootConstantBufferView(
+                13,
+                com::gpu_va(&self.uniforms.probe_set_cbvs[frame_idx]),
+            );
             cmd.IASetPrimitiveTopology(
                 windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             );

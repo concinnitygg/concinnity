@@ -140,7 +140,7 @@ impl fullscreen::CompositeEncoder for DxContext {
         let Some(text_pso) = &self.text.pso else {
             return false;
         };
-        if self.descriptors.text_atlas_srv_gpus.is_empty() {
+        if self.text.atlas_srv_gpus.is_empty() {
             return false;
         }
         // Root constants for the text pass (16 bytes = 4 DWORDs).
@@ -175,7 +175,7 @@ impl fullscreen::CompositeEncoder for DxContext {
         call: &TextDrawCall,
         binds: &mut TextBindCache,
     ) -> Result<(), String> {
-        if call.vertices.is_empty() || self.descriptors.text_atlas_srv_gpus.is_empty() {
+        if call.vertices.is_empty() || self.text.atlas_srv_gpus.is_empty() {
             return Ok(());
         }
 
@@ -194,9 +194,7 @@ impl fullscreen::CompositeEncoder for DxContext {
             None => (0, 0, args.width, args.height),
         };
 
-        let atlas_idx = call
-            .atlas_slot
-            .min(self.descriptors.text_atlas_srv_gpus.len() - 1);
+        let atlas_idx = call.atlas_slot.min(self.text.atlas_srv_gpus.len() - 1);
 
         // Append this label's vertex + index geometry into the frame slot's
         // persistent upload buffer (sized up front by `reserve` in
@@ -231,10 +229,7 @@ impl fullscreen::CompositeEncoder for DxContext {
                 }]);
             }
             if binds.atlas_changed(atlas_idx) {
-                cmd.SetGraphicsRootDescriptorTable(
-                    1,
-                    self.descriptors.text_atlas_srv_gpus[atlas_idx],
-                );
+                cmd.SetGraphicsRootDescriptorTable(1, self.text.atlas_srv_gpus[atlas_idx]);
             }
             cmd.IASetVertexBuffers(0, Some(&[vbv]));
             cmd.IASetIndexBuffer(Some(&ibv));

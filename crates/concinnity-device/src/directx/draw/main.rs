@@ -62,7 +62,7 @@ impl DxContext {
         // texture_slot, normal = the normal map's own handle (or the flat-normal
         // fallback slot for a normal-less draw). The bindless main pass + RT hit
         // shader bind the pool base, so a shared texture resolves to one descriptor.
-        let texture_count = self.descriptors.textures.len() as u32;
+        let texture_count = self.scene.textures.len() as u32;
         for (i, obj) in self
             .draw
             .objects
@@ -338,7 +338,7 @@ impl DxContext {
                 cmd.SetGraphicsRootDescriptorTable(10, self.probe_cube_table_gpu());
                 cmd.SetGraphicsRootConstantBufferView(
                     11,
-                    com::gpu_va(&self.probe.set_cbvs[frame_idx]),
+                    com::gpu_va(&self.uniforms.probe_set_cbvs[frame_idx]),
                 );
                 // ExecuteIndirect #1: the static + instance prefix
                 // `[0, skinned_record_base())` against the static VB/IB (bound
@@ -436,7 +436,7 @@ impl DxContext {
                 cmd.SetGraphicsRootDescriptorTable(10, self.probe_cube_table_gpu());
                 cmd.SetGraphicsRootConstantBufferView(
                     11,
-                    com::gpu_va(&self.probe.set_cbvs[frame_idx]),
+                    com::gpu_va(&self.uniforms.probe_set_cbvs[frame_idx]),
                 );
                 // ExecuteIndirect #2: skinned tail
                 // `[skinned_record_base(), cull_count())`, byte-offset into the
@@ -619,7 +619,7 @@ impl DxContext {
                 cmd.SetGraphicsRootDescriptorTable(10, self.probe_cube_table_gpu());
                 cmd.SetGraphicsRootConstantBufferView(
                     11,
-                    com::gpu_va(&self.probe.set_cbvs[frame_idx]),
+                    com::gpu_va(&self.uniforms.probe_set_cbvs[frame_idx]),
                 );
                 // ExecuteIndirect #1: static + instance prefix against the static
                 // VB/IB (bound above), once per shader bucket.

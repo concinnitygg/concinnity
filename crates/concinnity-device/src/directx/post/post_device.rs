@@ -382,7 +382,7 @@ impl crate::directx::context::DxContext {
             info_queue: self.hw.info_queue.as_ref(),
             probes: Some(DxPostProbes {
                 cube_table: self.probe_cube_table_gpu(),
-                set_cbv: com::gpu_va(&self.probe.set_cbvs[frame]),
+                set_cbv: com::gpu_va(&self.uniforms.probe_set_cbvs[frame]),
             }),
             hot_reload: self.hot_reload.enabled,
         }

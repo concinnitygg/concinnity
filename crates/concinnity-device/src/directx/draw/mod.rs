@@ -158,7 +158,7 @@ impl DxContext {
         unsafe {
             std::ptr::copy_nonoverlapping(
                 &self.probe.set as *const concinnity_core::render::uniforms::ProbeSet as *const u8,
-                self.probe.set_cbv_ptrs[frame_idx],
+                self.uniforms.probe_set_cbv_ptrs[frame_idx],
                 std::mem::size_of::<concinnity_core::render::uniforms::ProbeSet>(),
             );
         }

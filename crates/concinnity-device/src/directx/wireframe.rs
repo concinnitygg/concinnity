@@ -61,8 +61,8 @@ impl DxContext {
         // The engine's pair is retained on the context past init (the
         // world-shader bucket rebuild reads it), so this is a straight PSO create.
         if let Some(root_sig) = self.cull.main_bindless_root_sig.as_ref() {
-            let vs = &self.bindless_main_shaders.vs;
-            let ps = &self.bindless_main_shaders.ps;
+            let vs = &self.cull.bindless_main_shaders.vs;
+            let ps = &self.cull.bindless_main_shaders.ps;
             built.bindless = Some(dump_on_err(
                 iq.as_ref(),
                 create_main_pso_wireframe(&device, root_sig, vs, ps, HDR_FORMAT, msaa),
