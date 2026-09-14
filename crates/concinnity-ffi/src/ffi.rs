@@ -11,9 +11,11 @@
 
 use std::ffi::{CStr, c_void};
 use std::os::raw::{c_char, c_int};
+use std::ptr::NonNull;
 use std::sync::{Mutex, OnceLock};
 
 use concinnity_core::ecs::StepResult;
+use concinnity_core::render::backend_init::EmbeddedSurface;
 use concinnity_engine::App;
 use concinnity_host::store::paths::StateTree;
 
@@ -89,10 +91,10 @@ pub unsafe extern "C" fn cn_world_open(
     let Some(root) = (unsafe { ptr_to_string(root) }) else {
         return 0;
     };
-    if view.is_null() {
+    let Some(view) = NonNull::new(view) else {
         tracing::error!("cn_world_open: view is null");
         return 0;
-    }
+    };
     let Some(state) = STATE.get() else {
         tracing::error!("cn_world_open: call cn_init first");
         return 0;
@@ -105,13 +107,11 @@ pub unsafe extern "C" fn cn_world_open(
     // detached before the incoming one attaches.
     state.world = None;
 
-    attach_view(view, pump_events != 0);
-    let opened = open_world(&root);
-    // The hooks are consumed by world start; clearing them keeps a later world
-    // from inheriting a stale pointer.
-    attach_view(std::ptr::null_mut(), false);
-
-    match opened {
+    let surface = EmbeddedSurface {
+        view,
+        pump_events: pump_events != 0,
+    };
+    match open_world(&root, surface) {
         Ok(world) => {
             state.world = Some(world);
             1
@@ -149,9 +149,9 @@ pub extern "C" fn cn_world_close() {
     }
 }
 
-// Build and start a world rooted at `root`. Split out so the failure path has
-// one shape and the caller above owns the view hooks around it.
-fn open_world(root: &str) -> Result<App, String> {
+// Build and start a world rooted at `root` that renders into `surface`. Split
+// out so the failure path has one shape.
+fn open_world(root: &str, surface: EmbeddedSurface) -> Result<App, String> {
     let root = std::path::Path::new(root);
     if !root.is_dir() {
         return Err(format!("{} is not a directory", root.display()));
@@ -160,23 +160,11 @@ fn open_world(root: &str) -> Result<App, String> {
     world
         .load_blob()
         .map_err(|e| format!("loading the world under {} failed: {e:?}", root.display()))?;
+    world.world_mut().insert_resource(surface);
     world
         .start()
         .map_err(|e| format!("starting the world failed: {e:?}"))?;
     Ok(world)
-}
-
-// Hand the backend the view the next world attaches to. A build with no
-// backend compiled renders nothing, so it has no hooks to set.
-#[cfg(backend_metal)]
-fn attach_view(view: *mut c_void, pump_events: bool) {
-    concinnity_device::metal::set_preview_view(view);
-    concinnity_device::metal::set_embedded_pump_events(pump_events);
-}
-
-#[cfg(not(backend_metal))]
-fn attach_view(view: *mut c_void, pump_events: bool) {
-    let _ = (view, pump_events);
 }
 
 // A C string as an owned `String`, or `None` when it is null or not UTF-8.

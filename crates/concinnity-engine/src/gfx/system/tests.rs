@@ -2334,6 +2334,27 @@ fn a_capture_launch_request_reaches_the_backend() {
     assert!(lock(&state).init.as_ref().unwrap().capture);
 }
 
+// A host-owned view inserted before start reaches the backend; without one the
+// backend opens its own window.
+#[test]
+fn an_embedded_surface_resource_reaches_the_backend() {
+    let (state, hooks) = recording_hooks();
+    let mut world = scene_builder().build();
+    init_graphics(&mut world, hooks);
+    assert!(!lock(&state).init.as_ref().unwrap().embedded_surface);
+
+    let (state, hooks) = recording_hooks();
+    let mut world = scene_builder().build();
+    world
+        .resources
+        .insert(concinnity_core::render::backend_init::EmbeddedSurface {
+            view: std::ptr::NonNull::dangling(),
+            pump_events: false,
+        });
+    init_graphics(&mut world, hooks);
+    assert!(lock(&state).init.as_ref().unwrap().embedded_surface);
+}
+
 // A ceiling only ever reduces: a world that turned the expensive effects off is
 // not "upgraded" by a high tier, and the resolved preset is held for the master
 // menu row.

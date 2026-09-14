@@ -151,6 +151,7 @@ impl MtlContext {
             clear_color,
             hot_reload,
             capture,
+            embedded_surface,
             // `n_skinned` and `n_chunk_max` are unused on Metal: the object /
             // draw-args transient rings and the cull ICB auto-grow to
             // `cull_count()` each frame (the skinned count is set later in
@@ -185,6 +186,7 @@ impl MtlContext {
                 title_bar: window.title_bar,
                 geometry_less: !requirements.scene,
                 capture_enabled: capture,
+                embedded: embedded_surface,
             },
             bootstrap::HdrRequest {
                 display_requested: post.hdr_display,

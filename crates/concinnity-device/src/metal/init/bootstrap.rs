@@ -5,7 +5,7 @@
 //! exists).
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::render::backend_init::SwapchainConfig;
+use concinnity_core::render::backend_init::{EmbeddedSurface, SwapchainConfig};
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::hdr_output;
 use concinnity_core::render::hdr_output::HdrOutputMode;
@@ -21,9 +21,7 @@ use objc2_metal_kit::MTKView;
 use objc2_quartz_core::CAMetalLayer;
 
 use crate::metal::allocator::DeviceAllocator;
-use crate::metal::context::{
-    MtlHardware, WindowState, take_embedded_pump_events, take_embedded_view,
-};
+use crate::metal::context::{MtlHardware, WindowState};
 use crate::metal::graph_queues::GraphQueues;
 
 pub(crate) struct WindowSetup {
@@ -47,8 +45,8 @@ pub(crate) struct WindowSetup {
 
 // The window's own configuration: its title, requested size, whether the title
 // bar is drawn, whether the world is geometry-less (clamps the initial HDR
-// targets to 1x1), and whether frame capture is enabled (drives
-// `framebufferOnly` on the MTKView).
+// targets to 1x1), whether frame capture is enabled (drives `framebufferOnly`
+// on the MTKView), and the host view to embed into instead of a window.
 pub(crate) struct WindowConfig<'a> {
     pub title: &'a str,
     pub width: u32,
@@ -56,6 +54,7 @@ pub(crate) struct WindowConfig<'a> {
     pub title_bar: bool,
     pub geometry_less: bool,
     pub capture_enabled: bool,
+    pub embedded: Option<EmbeddedSurface>,
 }
 
 // The world's HDR-output request, resolved against the active display's EDR
@@ -191,11 +190,33 @@ pub(crate) fn setup_window_and_view(
         );
     }
 
-    let embedded_ptr = take_embedded_view();
-    // Windowed mode always pumps events (CLI behavior). Embedded mode is
-    // quiet by default; the play-in-view path opts in via set_embedded_pump_events.
-    let pump_events = embedded_ptr.is_null() || take_embedded_pump_events();
-    let (window, mtk_view, fullscreen, window_delegate) = if embedded_ptr.is_null() {
+    // A window of our own always pumps events; an embedded view pumps only when
+    // the host asks, since the host usually dispatches input itself.
+    let embedded = config.embedded;
+    let pump_events = embedded.is_none_or(|s| s.pump_events);
+    let (window, mtk_view, fullscreen, window_delegate) = if let Some(surface) = embedded {
+        // Embedded mode: attach an MTKView as a subview of the host's NSView.
+        // SAFETY: `EmbeddedSurface` requires the host to keep its view alive for
+        // the world's lifetime, which covers this borrow, and `surface.view` is
+        // non-null by construction. This runs on the main thread (`mtm`).
+        let parent: &NSView = unsafe { surface.view.cast::<NSView>().as_ref() };
+        let bounds = parent.bounds();
+        let mtk_view = MTKView::initWithFrame_device(MTKView::alloc(mtm), bounds, Some(device));
+        configure_mtk_view(&mtk_view, hdr_mode, config.capture_enabled);
+        mtk_view.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewWidthSizable
+                | NSAutoresizingMaskOptions::ViewHeightSizable,
+        );
+        parent.addSubview(&mtk_view);
+        // No NSWindow we own in embedded mode, so no fullscreen delegate; the
+        // flag stays false (set_window_mode is a no-op without self.window).
+        (
+            None,
+            mtk_view,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            None,
+        )
+    } else {
         // Windowed mode: create a new NSWindow containing the MTKView.
         let window = crate::appkit::chrome::create_window(
             mtm,
@@ -217,29 +238,6 @@ pub(crate) fn setup_window_and_view(
         NSApplication::sharedApplication(mtm).activate();
         window.makeKeyAndOrderFront(None);
         (Some(window), mtk_view, fullscreen, Some(delegate))
-    } else {
-        // Embedded mode: attach an MTKView as a subview of the provided NSView.
-        // The host caller owns the parent NSView and keeps it alive for the
-        // preview lifetime; we borrow a raw reference here only during init.
-        // SAFETY: the host caller owns the parent NSView and keeps it alive for the whole preview
-        // lifetime, which covers this borrow; `embedded_ptr` is non-null on this branch.
-        let parent: &NSView = unsafe { &*(embedded_ptr as *const NSView) };
-        let bounds = parent.bounds();
-        let mtk_view = MTKView::initWithFrame_device(MTKView::alloc(mtm), bounds, Some(device));
-        configure_mtk_view(&mtk_view, hdr_mode, config.capture_enabled);
-        mtk_view.setAutoresizingMask(
-            NSAutoresizingMaskOptions::ViewWidthSizable
-                | NSAutoresizingMaskOptions::ViewHeightSizable,
-        );
-        parent.addSubview(&mtk_view);
-        // No NSWindow we own in embedded mode, so no fullscreen delegate; the
-        // flag stays false (set_window_mode is a no-op without self.window).
-        (
-            None,
-            mtk_view,
-            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            None,
-        )
     };
 
     let drawable = mtk_view.drawableSize();
@@ -462,6 +460,7 @@ mod tests {
             title_bar: true,
             geometry_less,
             capture_enabled: false,
+            embedded: None,
         }
     }
 

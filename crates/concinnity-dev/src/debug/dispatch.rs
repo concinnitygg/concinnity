@@ -749,7 +749,7 @@ mod tests {
     // blocks so the forwarding arm's reply lands without the engine timeout.
     #[test]
     fn camera_stop_forwards_and_reports_stopped() {
-        use crate::debug::runtime_spawn::{self, RuntimeCommand};
+        use crate::debug::runtime_spawn::{self, RuntimeCommand, WorldCommand};
         let _guard = crate::test_support::lock();
         let worker = std::thread::spawn(|| {
             let shared = Arc::new(Mutex::new(DebugState::default()));
@@ -759,7 +759,7 @@ mod tests {
         loop {
             for cmd in runtime_spawn::drain() {
                 match cmd {
-                    RuntimeCommand::CameraStop { reply } => {
+                    RuntimeCommand::World(WorldCommand::CameraStop { reply }) => {
                         let _ = reply.send(Ok(()));
                     }
                     other => runtime_spawn::enqueue(other),

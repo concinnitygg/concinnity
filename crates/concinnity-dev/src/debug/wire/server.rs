@@ -83,11 +83,10 @@ impl DebugServer {
     // per-frame camera-move advance. The asset / shader / world.jsonl reload
     // passes live on `self.reload`, driven separately by `tick`.
     fn drive_runtime_commands(&mut self, world: &mut World) {
-        // ECS-side commands (camera-set / camera-move / camera-stop, plus
-        // quality-set) mutate the ECS or this server's motion slot, not the
-        // backend, so they cannot be applied inside the systems borrow
-        // below. Collect them here and apply them once that borrow ends.
-        let mut deferred_ecs_cmds: Vec<runtime_spawn::RuntimeCommand> = Vec::new();
+        // World commands mutate the ECS or this server's motion slot, so they
+        // cannot be applied inside the systems borrow below. Collect them here
+        // and apply them once that borrow ends.
+        let mut deferred: Vec<runtime_spawn::WorldCommand> = Vec::new();
         // The backend lives in the world's parked slot (disjoint from the
         // system list), so both are borrowed at once for the apply passes.
         let (systems, mut backend) = concinnity_engine::ecs::systems_and_render_backend(world);
@@ -95,30 +94,18 @@ impl DebugServer {
             if let Some(gs) = system.downcast_mut::<GraphicsSystem>() {
                 if let Some(backend) = backend.take() {
                     let apply = gs.hot_reload_apply_parts(backend);
-                    // Runtime decal / emitter spawn: independent of the
-                    // hot-reload state, available in any `cn debug` world.
-                    // CameraSet is deferred; everything else hits the
-                    // backend now.
+                    // Backend commands are independent of the hot-reload
+                    // state, available in any `cn debug` world.
                     for cmd in runtime_spawn::drain() {
-                        if matches!(
-                            cmd,
-                            runtime_spawn::RuntimeCommand::CameraSet { .. }
-                                | runtime_spawn::RuntimeCommand::CameraMove { .. }
-                                | runtime_spawn::RuntimeCommand::CameraStop { .. }
-                                | runtime_spawn::RuntimeCommand::QualitySet { .. }
-                                | runtime_spawn::RuntimeCommand::Rebind { .. }
-                                | runtime_spawn::RuntimeCommand::Despawn { .. }
-                                | runtime_spawn::RuntimeCommand::Reparent { .. }
-                                | runtime_spawn::RuntimeCommand::Spawn { .. }
-                                | runtime_spawn::RuntimeCommand::Story { .. }
-                        ) {
-                            deferred_ecs_cmds.push(cmd);
-                        } else {
-                            runtime_spawn::dispatch_runtime_spawn(
-                                cmd,
-                                apply.world_reload.as_ref(),
-                                apply.backend,
-                            );
+                        match cmd {
+                            runtime_spawn::RuntimeCommand::Backend(cmd) => {
+                                runtime_spawn::dispatch_runtime_spawn(
+                                    cmd,
+                                    apply.world_reload.as_ref(),
+                                    apply.backend,
+                                );
+                            }
+                            runtime_spawn::RuntimeCommand::World(cmd) => deferred.push(cmd),
                         }
                     }
                 }
@@ -127,54 +114,11 @@ impl DebugServer {
             }
         }
 
-        // Apply deferred ECS commands now the `systems_mut` borrow is
-        // released. tick() runs before the world step, so the Camera3DSystem
-        // step this frame sees the new pose; the velocity reset inside keeps
-        // free-fly from drifting it. camera-move / camera-stop install or clear
-        // the motion slot; the actual per-frame advance happens just below so a
-        // freshly installed motion also steps this same frame. quality-set
-        // sends a `SettingCommand` the GraphicsSystem reads on its next step.
-        for cmd in deferred_ecs_cmds {
-            match cmd {
-                runtime_spawn::RuntimeCommand::CameraSet { .. } => {
-                    runtime_spawn::dispatch_camera_set(cmd, world);
-                }
-                runtime_spawn::RuntimeCommand::QualitySet { .. } => {
-                    runtime_spawn::dispatch_quality_set(cmd, world);
-                }
-                runtime_spawn::RuntimeCommand::Rebind { .. } => {
-                    runtime_spawn::dispatch_rebind(cmd, world);
-                }
-                runtime_spawn::RuntimeCommand::Despawn { .. } => {
-                    runtime_spawn::dispatch_despawn(cmd, world);
-                }
-                runtime_spawn::RuntimeCommand::Reparent { .. } => {
-                    runtime_spawn::dispatch_reparent(cmd, world);
-                }
-                runtime_spawn::RuntimeCommand::Spawn { .. } => {
-                    runtime_spawn::dispatch_spawn(cmd, world);
-                }
-                runtime_spawn::RuntimeCommand::Story { .. } => {
-                    runtime_spawn::dispatch_story(cmd, world);
-                }
-                runtime_spawn::RuntimeCommand::CameraMove { args, reply } => {
-                    // Accept the motion only when a camera exists, so the client
-                    // gets a clean error in a camera-less world. The reply fires
-                    // on acceptance, not completion.
-                    if world.query::<Camera3D>().next().is_some() {
-                        self.camera_motion = Some(runtime_spawn::CameraMotion::from_args(&args));
-                        let _ = reply.send(Ok(()));
-                    } else {
-                        let _ = reply.send(Err("camera-move: no Camera3D in world".to_string()));
-                    }
-                }
-                runtime_spawn::RuntimeCommand::CameraStop { reply } => {
-                    self.camera_motion = None;
-                    let _ = reply.send(Ok(()));
-                }
-                // Only ECS-side variants are routed into `deferred_ecs_cmds`.
-                _ => {}
-            }
+        // tick() runs before the world step, so the Camera3DSystem step this
+        // frame sees a new pose, and a freshly installed camera-move also steps
+        // this same frame just below.
+        for cmd in deferred {
+            runtime_spawn::dispatch_world_command(cmd, world, &mut self.camera_motion);
         }
 
         // Advance an in-progress camera-move one step. Runs every frame (before

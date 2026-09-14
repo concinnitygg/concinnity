@@ -152,6 +152,7 @@ impl VkContext {
             // Vulkan retains the presented swapchain index unconditionally, so
             // capture needs no arming here.
             capture: _,
+            embedded_surface: _,
             scene: world,
             shaders: world_shaders,
             media,

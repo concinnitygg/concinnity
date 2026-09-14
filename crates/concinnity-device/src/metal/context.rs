@@ -66,37 +66,6 @@ pub(super) const BINDLESS_TEXTURE_ARG_BUFFER_INDEX: usize = 7;
 // buffer. World-authored fragments declare inline samplers and ignore it.
 pub(super) const BINDLESS_SAMPLER_ARG_BUFFER_INDEX: usize = 10;
 
-// Stores the NSView* pointer set by cn_preview_start before world.start() is called.
-// MtlContext::new() atomically takes it: non-null → embedded mode, null → windowed mode.
-static EMBEDDED_VIEW_PTR: std::sync::atomic::AtomicPtr<std::ffi::c_void> =
-    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
-
-// Whether the next MtlContext should pump NSEvents in draw_frame even when in
-// embedded mode. Preview leaves this false (the host owns input dispatch); the
-// blocking-in-view play path sets it true so the world receives keyboard/mouse.
-static EMBEDDED_PUMP_EVENTS: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-/// Called by cn_preview_start to register the NSView that MtlContext should embed into.
-pub fn set_preview_view(ptr: *mut std::ffi::c_void) {
-    EMBEDDED_VIEW_PTR.store(ptr, std::sync::atomic::Ordering::SeqCst);
-}
-
-/// Called by cn_run_world_blocking_in_view to opt the next embedded MtlContext
-/// into pumping NSEvents (so the world receives input). The flag is consumed
-/// in MtlContext::new and reset to false, so subsequent previews stay quiet.
-pub fn set_embedded_pump_events(v: bool) {
-    EMBEDDED_PUMP_EVENTS.store(v, std::sync::atomic::Ordering::SeqCst);
-}
-
-pub(super) fn take_embedded_view() -> *mut std::ffi::c_void {
-    EMBEDDED_VIEW_PTR.swap(std::ptr::null_mut(), std::sync::atomic::Ordering::SeqCst)
-}
-
-pub(super) fn take_embedded_pump_events() -> bool {
-    EMBEDDED_PUMP_EVENTS.swap(false, std::sync::atomic::Ordering::SeqCst)
-}
-
 // The scene draw list and the record counts that extend the GPU-driven cull
 // past the static objects.
 pub(super) struct DrawState {

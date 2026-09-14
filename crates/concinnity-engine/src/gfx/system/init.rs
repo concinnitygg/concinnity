@@ -2323,6 +2323,9 @@ impl GraphicsSystem {
             || ctx
                 .resource::<crate::app::run::LaunchRequest>()
                 .is_some_and(|r| r.capture);
+        let embedded_surface = ctx
+            .resource::<concinnity_core::render::backend_init::EmbeddedSurface>()
+            .copied();
         // Worst-case resident chunk count for the streaming VoxelWorld (0 for a
         // non-voxel world). Threaded into the backend so its GPU-cull buffers
         // reserve a chunk record region at init; resident chunks fold into the
@@ -2396,6 +2399,7 @@ impl GraphicsSystem {
             clear_color: self.clear_color,
             hot_reload,
             capture,
+            embedded_surface,
             scene: SceneData {
                 vertices: &all_vertices,
                 indices: &all_indices,

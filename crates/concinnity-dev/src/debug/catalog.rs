@@ -390,7 +390,7 @@ const COMMANDS: &[Command] = &[
         name: "screenshot",
         description: "Capture the last presented frame to a PNG file.",
         access: Access::Mutating,
-        params: &[required("path", Kind::Text, "Destination PNG path.")],
+        params: &[required("path", Kind::Text, "Destination PNG path (.png).")],
     },
     Command {
         name: "cull-status",

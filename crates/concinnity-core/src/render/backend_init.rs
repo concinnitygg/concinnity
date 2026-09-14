@@ -172,6 +172,24 @@ pub struct WorldFx {
     pub sdf_volumes: Vec<(SdfVolume, Vec<u8>, String)>,
 }
 
+/// A native view the host application owns (an `NSView` on macOS, a `UIView`
+/// on iOS) that the backend renders into instead of opening a window. Inserted
+/// as a world resource before start; GraphicsSystem init carries it into
+/// [`BackendInit::embedded_surface`].
+#[derive(Clone, Copy, Debug)]
+pub struct EmbeddedSurface {
+    /// The host's view pointer, which must outlive the world.
+    pub view: core::ptr::NonNull<core::ffi::c_void>,
+    /// Drain the platform event queue during a step, for a host that runs no
+    /// event loop of its own.
+    pub pump_events: bool,
+}
+
+// SAFETY: the host keeps the view alive for the world's lifetime, and the
+// engine only dereferences it on the main thread during backend construction.
+// Moving the pointer between threads as a world resource never touches the view.
+unsafe impl Send for EmbeddedSurface {}
+
 /// Everything a backend constructor needs, assembled once by GraphicsSystem
 /// init after the world's assets have been drained and settings resolved.
 pub struct BackendInit<'a> {
@@ -192,6 +210,9 @@ pub struct BackendInit<'a> {
     /// otherwise pays nothing for it (Metal leaves the drawable
     /// framebuffer-only and retains nothing).
     pub capture: bool,
+    /// A host-owned view to render into instead of opening a window, or `None`
+    /// for a window of the backend's own.
+    pub embedded_surface: Option<EmbeddedSurface>,
     /// The world's static geometry and draw lists.
     pub scene: SceneData<'a>,
     /// One entry per world Shader, indexed by the dense ShaderHandle value a
@@ -301,6 +322,7 @@ impl<'a> BackendInit<'a> {
             clear_color: [0.0, 0.0, 0.0, 1.0],
             hot_reload: false,
             capture: false,
+            embedded_surface: None,
             scene: SceneData {
                 vertices: &[],
                 indices: &[],
@@ -498,6 +520,13 @@ mod tests {
         assert!(!init.post.taa_enabled);
         assert!(init.post.ssao.is_none());
         assert_eq!(init.planar_planes, 0);
+    }
+
+    #[test]
+    fn minimal_opens_its_own_window() {
+        let window = Window::default();
+        let init = BackendInit::minimal(&window, Vec::new());
+        assert!(init.embedded_surface.is_none());
     }
 
     #[test]

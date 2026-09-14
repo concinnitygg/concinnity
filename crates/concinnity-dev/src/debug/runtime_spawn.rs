@@ -3,8 +3,10 @@
 //!
 //!   queue     a process-wide command queue the debug tool calls push onto
 //!             (`enqueue`) and the per-frame debug drive drains (`drain`).
-//!   dispatch  `dispatch_runtime_spawn`, run by `DebugServer::drive_runtime_commands`
-//!             against the live backend + the init-captured texture-name table.
+//!   dispatch  `dispatch_runtime_spawn` applies a `BackendCommand` against the live
+//!             backend + the init-captured texture-name table, and
+//!             `dispatch_world_command` applies a `WorldCommand` against the ECS,
+//!             both run by `DebugServer::drive_runtime_commands`.
 //!
 //! The debug endpoint pushes commands off the engine thread; the drive applies them
 //! at frame start on the main thread. Each command carries a reply channel so
@@ -12,6 +14,7 @@
 //! synchronously: the wait is bounded by one frame (~16 ms at 60 Hz). `cn run`
 //! has no debug hook and never reaches any of this.
 
+use concinnity_core::components::Camera3D;
 use concinnity_core::components::DespawnRequest;
 use concinnity_core::components::InputKey;
 use concinnity_core::components::ReparentRequest;
@@ -229,11 +232,10 @@ pub(crate) fn advance_pose(
     (new_pos, new_yaw, new_pitch)
 }
 
-// One runtime spawn / despawn command pushed onto [`enqueue`] by the debug
-// endpoint and drained by the per-frame debug drive. Each variant carries a
-// `std::sync::mpsc::SyncSender` reply channel so the tool call can block
-// (with timeout) on the result and hand a JSON reply back to its client.
-pub(crate) enum RuntimeCommand {
+// A runtime command applied against the live backend. Each variant carries a
+// `std::sync::mpsc::SyncSender` reply channel so the tool call can block (with
+// timeout) on the result and hand a JSON reply back to its client.
+pub(crate) enum BackendCommand {
     DecalAdd {
         args: DecalSpawnArgs,
         reply: std::sync::mpsc::SyncSender<Result<usize, String>>,
@@ -250,85 +252,59 @@ pub(crate) enum RuntimeCommand {
         id: usize,
         reply: std::sync::mpsc::SyncSender<Result<(), String>>,
     },
-    // Capture the last presented frame to a PNG at `path`; the reply carries the
-    // saved path. Routed to `RenderBackend::screenshot` on the render thread.
+    // Capture the last presented frame to a PNG at `path`; replies the saved path.
     Screenshot {
         path: String,
         reply: std::sync::mpsc::SyncSender<Result<String, String>>,
     },
-    // Read the GPU-driven cull's per-object status buffer back to the host; the
-    // reply carries one `CullStatus` value per live cull record. Routed to
-    // `RenderBackend::read_cull_status` on the render thread.
+    // Read back one `CullStatus` value per live GPU cull record.
     CullStatus {
         reply: std::sync::mpsc::SyncSender<Result<Vec<u32>, String>>,
     },
-    // Teleport the active `Camera3D` to a new pose. Applied against the ECS by
-    // `apply_camera_set`, not the backend, so the per-frame drive routes it to
-    // `dispatch_camera_set` (which holds the `World`) rather than
-    // `dispatch_runtime_spawn`.
+}
+
+// A runtime command applied against the ECS, or the debug server's camera-motion
+// slot, once the per-frame drive has released the systems borrow. Replies like
+// [`BackendCommand`].
+pub(crate) enum WorldCommand {
+    // Teleport the active `Camera3D` to a new pose.
     CameraSet {
         args: CameraSetArgs,
         reply: std::sync::mpsc::SyncSender<Result<(), String>>,
     },
-    // Install a sustained camera-move motion on the active `Camera3D`. Like
-    // `CameraSet` it mutates the ECS, so the per-frame drive partitions it out
-    // and installs it on the `DebugServer` rather than touching the backend.
-    // The reply fires as soon as the motion is accepted (a Camera3D exists),
-    // not when it finishes, so a long move never outlasts the reply timeout.
+    // Install a sustained camera motion; replies on acceptance, not completion.
     CameraMove {
         args: CameraMoveArgs,
         reply: std::sync::mpsc::SyncSender<Result<(), String>>,
     },
-    // Clear any in-progress camera-move motion. Also ECS-side (it clears the
-    // `DebugServer`'s motion slot), so the per-frame drive routes it like
-    // `CameraSet` / `CameraMove`.
+    // Clear any in-progress camera motion.
     CameraStop {
         reply: std::sync::mpsc::SyncSender<Result<(), String>>,
     },
-    // Toggle a Quality-group graphics setting (taa / ssao / ssr / ssgi /
-    // auto_exposure) live by pushing the same `SettingCommand` the settings
-    // menu emits. Like `CameraSet` it mutates the ECS (not the backend
-    // directly), so the per-frame drive partitions it out and applies it once
-    // the `systems_mut` borrow ends, via `dispatch_quality_set`.
+    // Step a Quality-group graphics setting through the settings menu's command.
     QualitySet {
         setting: String,
         op: SettingOp,
         reply: std::sync::mpsc::SyncSender<Result<(), String>>,
     },
-    // Bind a movement action (`key_forward` / ... ) to a key, live, by pushing
-    // the same `Rebind` `SettingCommand` the settings menu emits. Like
-    // `QualitySet` it mutates the ECS, so the per-frame drive routes it to
-    // `dispatch_rebind` once the `systems_mut` borrow ends.
+    // Bind a movement action (`key_forward`, ...) to a key.
     Rebind {
         setting: String,
         key: InputKey,
         reply: std::sync::mpsc::SyncSender<Result<(), String>>,
     },
-    // Despawn an authored placement (and its descendants) by name. ECS-side: it
-    // sends a `DespawnRequest` event the GraphicsSystem drains on its next step
-    // (resolving the name to its entity, hiding the draw slots, removing the
-    // entity), so the per-frame drive routes it to `dispatch_despawn` once the
-    // `systems_mut` borrow ends, like `CameraSet` / `QualitySet`.
+    // Despawn an authored placement and its descendants by name.
     Despawn {
         name: String,
         reply: std::sync::mpsc::SyncSender<Result<(), String>>,
     },
-    // Re-parent an authored placement by name (parent `None` detaches it to a
-    // root). ECS-side like `Despawn`: it sends a `ReparentRequest` event the
-    // GraphicsSystem drains on its next step, so the per-frame drive routes it to
-    // `dispatch_reparent` once the `systems_mut` borrow ends.
+    // Re-parent an authored placement by name; a `None` parent detaches it.
     Reparent {
         child: String,
         parent: Option<String>,
         reply: std::sync::mpsc::SyncSender<Result<(), String>>,
     },
-    // Spawn a runtime copy of an authored placement `template` at a new
-    // transform, registered under `name`, optionally with a `lifetime` after
-    // which it auto-despawns. ECS-side like `Despawn`: it sends a `SpawnRequest`
-    // event the GraphicsSystem drains on its next step (cloning the template's
-    // draw slots into recycled slots and building the new entity), so the
-    // per-frame drive routes it to `dispatch_spawn` once the `systems_mut`
-    // borrow ends.
+    // Spawn a copy of `template` under `name`, auto-despawning after `lifetime`.
     Spawn {
         template: String,
         name: String,
@@ -338,13 +314,29 @@ pub(crate) enum RuntimeCommand {
         lifetime: Option<f32>,
         reply: std::sync::mpsc::SyncSender<Result<(), String>>,
     },
-    // Drive the story system: the same `StoryCommand` event a stage click or
-    // key press fires, so a headless harness can start, advance, and choose
-    // through a story and screenshot each page. ECS-side like `Despawn`.
+    // Fire the `StoryCommand` a stage click or key press would.
     Story {
         command: StoryCommand,
         reply: std::sync::mpsc::SyncSender<Result<(), String>>,
     },
+}
+
+// One queued runtime command, split by what the per-frame drive applies it to.
+pub(crate) enum RuntimeCommand {
+    Backend(BackendCommand),
+    World(WorldCommand),
+}
+
+impl From<BackendCommand> for RuntimeCommand {
+    fn from(cmd: BackendCommand) -> Self {
+        Self::Backend(cmd)
+    }
+}
+
+impl From<WorldCommand> for RuntimeCommand {
+    fn from(cmd: WorldCommand) -> Self {
+        Self::World(cmd)
+    }
 }
 
 static QUEUE: Mutex<Vec<RuntimeCommand>> = Mutex::new(Vec::new());
@@ -353,12 +345,12 @@ static QUEUE: Mutex<Vec<RuntimeCommand>> = Mutex::new(Vec::new());
 // caller blocks on its own reply receiver to get the result. A poisoned
 // mutex is recovered and used regardless (an unrelated panic in another
 // thread must not silently drop spawn commands).
-pub(crate) fn enqueue(cmd: RuntimeCommand) {
+pub(crate) fn enqueue(cmd: impl Into<RuntimeCommand>) {
     let mut q = match QUEUE.lock() {
         Ok(g) => g,
         Err(poisoned) => poisoned.into_inner(),
     };
-    q.push(cmd);
+    q.push(cmd.into());
 }
 
 // Take every queued command. Called by the `cn debug` drive
@@ -380,12 +372,12 @@ pub(crate) fn drain() -> Vec<RuntimeCommand> {
 // may have already given up waiting (e.g. its client disconnected), and
 // that is not a renderer error.
 pub(crate) fn dispatch_runtime_spawn(
-    cmd: RuntimeCommand,
+    cmd: BackendCommand,
     world_reload: Option<&WorldReloadState>,
     backend: &mut dyn backend::RenderBackend,
 ) {
     match cmd {
-        RuntimeCommand::DecalAdd { args, reply } => {
+        BackendCommand::DecalAdd { args, reply } => {
             let result = resolve_texture_slot(args.texture.as_deref(), world_reload)
                 .and_then(|slot| {
                     let model =
@@ -402,10 +394,10 @@ pub(crate) fn dispatch_runtime_spawn(
                 .and_then(|rec| backend.add_decal(rec).map_err(|e| e.to_string()));
             let _ = reply.send(result);
         }
-        RuntimeCommand::DecalRemove { id, reply } => {
+        BackendCommand::DecalRemove { id, reply } => {
             let _ = reply.send(backend.remove_decal(id).map_err(|e| e.to_string()));
         }
-        RuntimeCommand::EmitterAdd { args, reply } => {
+        BackendCommand::EmitterAdd { args, reply } => {
             let result = resolve_texture_slot(args.texture.as_deref(), world_reload)
                 .map(|slot| {
                     // Mirror the clamp / normalize rules used by
@@ -452,219 +444,133 @@ pub(crate) fn dispatch_runtime_spawn(
                 .and_then(|rec| backend.add_emitter(rec).map_err(|e| e.to_string()));
             let _ = reply.send(result);
         }
-        RuntimeCommand::EmitterRemove { id, reply } => {
+        BackendCommand::EmitterRemove { id, reply } => {
             let _ = reply.send(backend.remove_emitter(id).map_err(|e| e.to_string()));
         }
-        RuntimeCommand::Screenshot { path, reply } => {
+        BackendCommand::Screenshot { path, reply } => {
             let _ = reply.send(backend.screenshot(&path).map_err(|e| e.to_string()));
         }
-        RuntimeCommand::CullStatus { reply } => {
+        BackendCommand::CullStatus { reply } => {
             let _ = reply.send(backend.read_cull_status().map_err(|e| e.to_string()));
-        }
-        RuntimeCommand::CameraSet { reply, .. } => {
-            // CameraSet mutates the ECS, not the backend; the per-frame drive
-            // partitions it out and routes it to `dispatch_camera_set`. Reaching
-            // here means a future caller misrouted it.
-            let _ = reply.send(Err("camera-set: misrouted to backend dispatch".to_string()));
-        }
-        RuntimeCommand::CameraMove { reply, .. } => {
-            // ECS-side like CameraSet; the per-frame drive installs it on the
-            // DebugServer. Reaching the backend dispatch means a misroute.
-            let _ = reply.send(Err("camera-move: misrouted to backend dispatch".to_string()));
-        }
-        RuntimeCommand::CameraStop { reply } => {
-            let _ = reply.send(Err("camera-stop: misrouted to backend dispatch".to_string()));
-        }
-        RuntimeCommand::QualitySet { reply, .. } => {
-            // ECS-side like CameraSet; the per-frame drive routes it to
-            // `dispatch_quality_set`. Reaching the backend dispatch is a misroute.
-            let _ = reply.send(Err("quality-set: misrouted to backend dispatch".to_string()));
-        }
-        RuntimeCommand::Rebind { reply, .. } => {
-            // ECS-side like QualitySet; routed to `dispatch_rebind`.
-            let _ = reply.send(Err("rebind: misrouted to backend dispatch".to_string()));
-        }
-        RuntimeCommand::Despawn { reply, .. } => {
-            // ECS-side like CameraSet; routed to `dispatch_despawn`.
-            let _ = reply.send(Err("despawn: misrouted to backend dispatch".to_string()));
-        }
-        RuntimeCommand::Reparent { reply, .. } => {
-            // ECS-side like CameraSet; routed to `dispatch_reparent`.
-            let _ = reply.send(Err("reparent: misrouted to backend dispatch".to_string()));
-        }
-        RuntimeCommand::Spawn { reply, .. } => {
-            // ECS-side like CameraSet; routed to `dispatch_spawn`.
-            let _ = reply.send(Err("spawn: misrouted to backend dispatch".to_string()));
-        }
-        RuntimeCommand::Story { reply, .. } => {
-            // ECS-side like CameraSet; routed to `dispatch_story`.
-            let _ = reply.send(Err("story: misrouted to backend dispatch".to_string()));
         }
     }
 }
 
-// Apply a drained `CameraSet` command against the live ECS and reply. Routed
-// here (instead of `dispatch_runtime_spawn`) by the per-frame debug drive
-// because it needs the `World`, not the backend. Non-`CameraSet` variants are
-// ignored: the caller only routes `CameraSet` here.
-pub(crate) fn dispatch_camera_set(cmd: RuntimeCommand, world: &mut World) {
-    let RuntimeCommand::CameraSet { args, reply } = cmd else {
-        return;
-    };
-    let _ = reply.send(apply_camera_set(&args, world));
+// Apply a drained world command and reply. The setting, despawn, reparent,
+// spawn and story commands send the same events the settings menu and gameplay
+// systems emit, so the next world step applies them through the real paths; the
+// reply fires once the event is queued, and an unknown name is a clean error.
+// camera-move and camera-stop install or clear `motion`, which the debug drive
+// advances once per frame.
+pub(crate) fn dispatch_world_command(
+    cmd: WorldCommand,
+    world: &mut World,
+    motion: &mut Option<CameraMotion>,
+) {
+    match cmd {
+        WorldCommand::CameraSet { args, reply } => {
+            let _ = reply.send(apply_camera_set(&args, world));
+        }
+        WorldCommand::CameraMove { args, reply } => {
+            let result = if world.query::<Camera3D>().next().is_some() {
+                *motion = Some(CameraMotion::from_args(&args));
+                Ok(())
+            } else {
+                Err("camera-move: no Camera3D in world".to_string())
+            };
+            let _ = reply.send(result);
+        }
+        WorldCommand::CameraStop { reply } => {
+            *motion = None;
+            let _ = reply.send(Ok(()));
+        }
+        WorldCommand::QualitySet { setting, op, reply } => {
+            send_setting(world, setting, op);
+            let _ = reply.send(Ok(()));
+        }
+        WorldCommand::Rebind {
+            setting,
+            key,
+            reply,
+        } => {
+            send_setting(world, setting, SettingOp::Rebind(key));
+            let _ = reply.send(Ok(()));
+        }
+        WorldCommand::Despawn { name, reply } => {
+            let result = asset_id::lookup(&name)
+                .ok_or_else(|| format!("despawn: name '{name}' not found"))
+                .map(|id| {
+                    world
+                        .events_mut::<DespawnRequest>()
+                        .send(DespawnRequest { target: id.into() });
+                });
+            let _ = reply.send(result);
+        }
+        WorldCommand::Reparent {
+            child,
+            parent,
+            reply,
+        } => {
+            let _ = reply.send(reparent_by_name(world, &child, parent.as_deref()));
+        }
+        WorldCommand::Spawn {
+            template,
+            name,
+            position,
+            rotation_deg,
+            scale,
+            lifetime,
+            reply,
+        } => {
+            let result = asset_id::lookup(&template)
+                .ok_or_else(|| format!("spawn: template '{template}' not found"))
+                .map(|template_id| {
+                    // A zero scale (the array default when the request omits it)
+                    // would make the instance invisible; treat it as unit scale.
+                    let scale = if scale == [0.0; 3] { [1.0; 3] } else { scale };
+                    world.events_mut::<SpawnRequest>().send(SpawnRequest {
+                        template: template_id,
+                        name: Some(asset_id::intern(&name)),
+                        transform: Transform {
+                            position,
+                            rotation_deg,
+                            scale,
+                        },
+                        lifetime_secs: lifetime,
+                    });
+                });
+            let _ = reply.send(result);
+        }
+        WorldCommand::Story { command, reply } => {
+            world.events_mut::<StoryCommand>().send(command);
+            let _ = reply.send(Ok(()));
+        }
+    }
 }
 
-// Apply a drained `QualitySet` command by sending a `SettingCommand` into the
-// ECS, exactly as `UiInputSystem` does for a settings-menu toggle. The
-// `GraphicsSystem` reads it on its next step and applies the change live
-// (`apply_quality_settings`), so this exercises the real toggle path rather
-// than a duplicate. Routed here (like `CameraSet`) because it mutates the ECS,
-// not the backend. `cn debug` only.
-pub(crate) fn dispatch_quality_set(cmd: RuntimeCommand, world: &mut World) {
-    let RuntimeCommand::QualitySet { setting, op, reply } = cmd else {
-        return;
-    };
+// Send the `SettingCommand` the settings menu emits. `GraphicsSystem` applies it
+// live on its next step and refreshes the value label itself.
+fn send_setting(world: &mut World, setting: String, op: SettingOp) {
     world.events_mut::<SettingCommand>().send(SettingCommand {
         setting,
         op,
         value_label: None,
         persist: true,
     });
-    let _ = reply.send(Ok(()));
 }
 
-// Apply a drained `Rebind` command by sending a `Rebind` `SettingCommand` into
-// the ECS, exactly as `UiInputSystem` does after a capture. `GraphicsSystem`
-// reads it on its next step and applies the rebind live (swap + `set_keymap` +
-// persist + label refresh via its registry, which is why `value_label` is left
-// `None` here). Routed here (like `QualitySet`) because it mutates the ECS.
-pub(crate) fn dispatch_rebind(cmd: RuntimeCommand, world: &mut World) {
-    let RuntimeCommand::Rebind {
-        setting,
-        key,
-        reply,
-    } = cmd
-    else {
-        return;
-    };
-    world.events_mut::<SettingCommand>().send(SettingCommand {
-        setting,
-        op: SettingOp::Rebind(key),
-        value_label: None,
-        persist: true,
-    });
-    let _ = reply.send(Ok(()));
-}
-
-// Apply a drained `Despawn` command by resolving the placement name to its
-// AssetId and sending a `DespawnRequest` event into the ECS. GraphicsSystem
-// reads it on its next step, resolves the name to its entity, hides the entity's
-// draw slots, and despawns it and its descendants. Routed here (like
-// `CameraSet` / `QualitySet`) because it mutates the ECS, not the backend. The
-// reply fires once the event is queued; an unknown name is a clean error. The
-// the despawn is applied by the GraphicsSystem on its next step.
-pub(crate) fn dispatch_despawn(cmd: RuntimeCommand, world: &mut World) {
-    let RuntimeCommand::Despawn { name, reply } = cmd else {
-        return;
-    };
-    let Some(id) = asset_id::lookup(&name) else {
-        let _ = reply.send(Err(format!("despawn: name '{name}' not found")));
-        return;
-    };
-    world
-        .events_mut::<DespawnRequest>()
-        .send(DespawnRequest { target: id.into() });
-    let _ = reply.send(Ok(()));
-}
-
-// Apply a drained `Reparent` command by resolving the child + parent names to
-// AssetIds and sending a `ReparentRequest` event into the ECS. GraphicsSystem
-// reads it on its next step, resolves the names to entities, and re-points the
-// child's Parent edge. Routed here (like `Despawn`) because it mutates the ECS,
-// not the backend. The reply fires once the event is queued; an unknown name is
-// a clean error.
-pub(crate) fn dispatch_reparent(cmd: RuntimeCommand, world: &mut World) {
-    let RuntimeCommand::Reparent {
-        child,
-        parent,
-        reply,
-    } = cmd
-    else {
-        return;
-    };
-    let resolve = asset_id::lookup;
-    let Some(child_id) = resolve(&child) else {
-        let _ = reply.send(Err(format!("reparent: child '{child}' not found")));
-        return;
-    };
-    let parent_id = match &parent {
-        Some(p) => match resolve(p) {
-            Some(id) => Some(id),
-            None => {
-                let _ = reply.send(Err(format!("reparent: parent '{p}' not found")));
-                return;
-            }
-        },
-        None => None,
-    };
+// Resolve the child and optional parent names and queue a `ReparentRequest`.
+fn reparent_by_name(world: &mut World, child: &str, parent: Option<&str>) -> Result<(), String> {
+    let child_id =
+        asset_id::lookup(child).ok_or_else(|| format!("reparent: child '{child}' not found"))?;
+    let parent_id = parent
+        .map(|p| asset_id::lookup(p).ok_or_else(|| format!("reparent: parent '{p}' not found")))
+        .transpose()?;
     world.events_mut::<ReparentRequest>().send(ReparentRequest {
         child: child_id.into(),
         parent: parent_id.map(Into::into),
     });
-    let _ = reply.send(Ok(()));
-}
-
-// Apply a drained `Spawn` command by resolving the template name to its
-// AssetId, interning the new instance name, and sending a `SpawnRequest` event
-// into the ECS. GraphicsSystem reads it on its next step, clones the template's
-// draw slots into recycled slots, and builds the new entity. Routed here (like
-// `Despawn`) because it mutates the ECS, not the backend. The reply fires once
-// the event is queued; an unknown template is a clean error.
-pub(crate) fn dispatch_spawn(cmd: RuntimeCommand, world: &mut World) {
-    let RuntimeCommand::Spawn {
-        template,
-        name,
-        position,
-        rotation_deg,
-        scale,
-        lifetime,
-        reply,
-    } = cmd
-    else {
-        return;
-    };
-    let Some(template_id) = asset_id::lookup(&template) else {
-        let _ = reply.send(Err(format!("spawn: template '{template}' not found")));
-        return;
-    };
-    // A zero scale (the array default when the request omits it) would make the
-    // instance invisible; treat it as unit scale.
-    let scale = if scale == [0.0; 3] { [1.0; 3] } else { scale };
-    let name_id = asset_id::intern(&name);
-    world.events_mut::<SpawnRequest>().send(SpawnRequest {
-        template: template_id,
-        name: Some(name_id),
-        transform: Transform {
-            position,
-            rotation_deg,
-            scale,
-        },
-        lifetime_secs: lifetime,
-    });
-    let _ = reply.send(Ok(()));
-}
-
-// Apply a drained `Story` command by sending a `StoryCommand` event into the
-// ECS, exactly as `UiInputSystem` does for a `story:*` action. The story
-// system reads it on its next step and moves through its graph. Routed here
-// (like `Despawn`) because it mutates the ECS, not the backend. The reply
-// fires once the event is queued; a world without a story simply ignores it.
-pub(crate) fn dispatch_story(cmd: RuntimeCommand, world: &mut World) {
-    let RuntimeCommand::Story { command, reply } = cmd else {
-        return;
-    };
-    world.events_mut::<StoryCommand>().send(command);
-    let _ = reply.send(Ok(()));
+    Ok(())
 }
 
 // Write a new pose onto the active `Camera3D` and zero the controller velocity.
@@ -675,7 +581,6 @@ pub(crate) fn dispatch_story(cmd: RuntimeCommand, world: &mut World) {
 // the same frame, and with velocity zeroed (and no input in an unfocused
 // window) it leaves it untouched.
 pub(crate) fn apply_camera_set(args: &CameraSetArgs, world: &mut World) -> Result<(), String> {
-    use concinnity_core::components::Camera3D;
     let Some(camera) = world.query_mut::<Camera3D>().next() else {
         return Err("camera-set: no Camera3D in world".to_string());
     };
@@ -701,7 +606,6 @@ pub(crate) fn apply_camera_set(args: &CameraSetArgs, world: &mut World) -> Resul
 // fighting the externally driven pose). Returns `false` when the world has no
 // `Camera3D`, so the caller drops the motion instead of spinning forever.
 pub(crate) fn apply_camera_move_step(motion: &CameraMotion, world: &mut World) -> bool {
-    use concinnity_core::components::Camera3D;
     let Some(camera) = world.query_mut::<Camera3D>().next() else {
         return false;
     };
@@ -749,15 +653,10 @@ fn resolve_texture_slot(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::debug::test_backend::StubBackend;
     use crate::test_support;
     use concinnity_core::components::Camera3D;
     use concinnity_core::ecs::EventCursor;
-    use concinnity_core::gfx::mesh_payload;
-    use concinnity_core::gfx::render_types;
-    use concinnity_core::render::draw_slot;
-    use concinnity_core::render::error;
-    use concinnity_core::render::input;
-    use concinnity_core::render::scene_flow;
 
     #[test]
     fn enqueue_drain_round_trip() {
@@ -767,11 +666,11 @@ mod tests {
         // Drain any leftovers from a panicked earlier test in this process.
         let _ = drain();
         let (tx, _rx) = std::sync::mpsc::sync_channel(1);
-        enqueue(RuntimeCommand::DecalRemove { id: 7, reply: tx });
+        enqueue(BackendCommand::DecalRemove { id: 7, reply: tx });
         let cmds = drain();
         assert_eq!(cmds.len(), 1);
         match cmds.into_iter().next().unwrap() {
-            RuntimeCommand::DecalRemove { id, .. } => assert_eq!(id, 7),
+            RuntimeCommand::Backend(BackendCommand::DecalRemove { id, .. }) => assert_eq!(id, 7),
             _ => panic!("wrong variant"),
         }
         // Second drain is empty.
@@ -783,14 +682,16 @@ mod tests {
         let _guard = test_support::lock();
         let _ = drain();
         let (tx, _rx) = std::sync::mpsc::sync_channel(1);
-        enqueue(RuntimeCommand::Despawn {
+        enqueue(WorldCommand::Despawn {
             name: "crate_a".to_string(),
             reply: tx,
         });
         let cmds = drain();
         assert_eq!(cmds.len(), 1);
         match cmds.into_iter().next().unwrap() {
-            RuntimeCommand::Despawn { name, .. } => assert_eq!(name, "crate_a"),
+            RuntimeCommand::World(WorldCommand::Despawn { name, .. }) => {
+                assert_eq!(name, "crate_a")
+            }
             _ => panic!("wrong variant"),
         }
         assert!(drain().is_empty());
@@ -801,7 +702,7 @@ mod tests {
         let _guard = test_support::lock();
         let _ = drain();
         let (tx, _rx) = std::sync::mpsc::sync_channel(1);
-        enqueue(RuntimeCommand::Reparent {
+        enqueue(WorldCommand::Reparent {
             child: "box_a".to_string(),
             parent: Some("frame".to_string()),
             reply: tx,
@@ -809,7 +710,7 @@ mod tests {
         let cmds = drain();
         assert_eq!(cmds.len(), 1);
         match cmds.into_iter().next().unwrap() {
-            RuntimeCommand::Reparent { child, parent, .. } => {
+            RuntimeCommand::World(WorldCommand::Reparent { child, parent, .. }) => {
                 assert_eq!(child, "box_a");
                 assert_eq!(parent.as_deref(), Some("frame"));
             }
@@ -848,7 +749,7 @@ mod tests {
         let _guard = test_support::lock();
         let _ = drain();
         let (tx, _rx) = std::sync::mpsc::sync_channel(1);
-        enqueue(RuntimeCommand::CameraSet {
+        enqueue(WorldCommand::CameraSet {
             args: CameraSetArgs {
                 position: [1.0, 2.0, 3.0],
                 yaw: 0.5,
@@ -860,7 +761,7 @@ mod tests {
         let cmds = drain();
         assert_eq!(cmds.len(), 1);
         match cmds.into_iter().next().unwrap() {
-            RuntimeCommand::CameraSet { args, .. } => {
+            RuntimeCommand::World(WorldCommand::CameraSet { args, .. }) => {
                 assert_eq!(args.position, [1.0, 2.0, 3.0]);
                 assert_eq!(args.fov_y_degrees, Some(60.0));
             }
@@ -1057,7 +958,7 @@ mod tests {
         let _guard = test_support::lock();
         let _ = drain();
         let (tx, _rx) = std::sync::mpsc::sync_channel(1);
-        enqueue(RuntimeCommand::CameraMove {
+        enqueue(WorldCommand::CameraMove {
             args: CameraMoveArgs {
                 forward: 1.5,
                 frames: 30,
@@ -1066,12 +967,12 @@ mod tests {
             reply: tx,
         });
         let (stx, _srx) = std::sync::mpsc::sync_channel(1);
-        enqueue(RuntimeCommand::CameraStop { reply: stx });
+        enqueue(WorldCommand::CameraStop { reply: stx });
         let cmds = drain();
         assert_eq!(cmds.len(), 2);
         let mut it = cmds.into_iter();
         match it.next().unwrap() {
-            RuntimeCommand::CameraMove { args, .. } => {
+            RuntimeCommand::World(WorldCommand::CameraMove { args, .. }) => {
                 assert_eq!(args.forward, 1.5);
                 assert_eq!(args.frames, 30);
             }
@@ -1079,7 +980,7 @@ mod tests {
         }
         assert!(matches!(
             it.next().unwrap(),
-            RuntimeCommand::CameraStop { .. }
+            RuntimeCommand::World(WorldCommand::CameraStop { .. })
         ));
         assert!(drain().is_empty());
     }
@@ -1140,207 +1041,6 @@ mod tests {
         assert!(!apply_camera_move_step(&motion, &mut world));
     }
 
-    // A do-nothing RenderBackend for driving `dispatch_runtime_spawn` without a
-    // GPU. It implements the mandatory families only, so the runtime decal /
-    // emitter / screenshot hooks fall through to the empty `SceneEffects` and
-    // `BackendProbe` impls below and report the trait defaults' `Err` --
-    // exactly the failure arms the dispatch reply surfaces to an MCP client.
-    struct StubBackend;
-
-    impl scene_flow::SceneControl for StubBackend {
-        fn update_visibility(&mut self, _draw_idx: usize, _visible: bool) {}
-        fn set_fade(&mut self, _fade: f32) {}
-    }
-
-    impl backend::RenderBackend for StubBackend {
-        fn window_closed(&mut self) -> bool {
-            false
-        }
-        fn capture_cursor(&mut self) {}
-        fn take_input(&mut self) -> input::RenderInput {
-            input::RenderInput::default()
-        }
-        fn wait_idle(&self) {}
-        fn draw_frame(&mut self, _params: backend::FrameParams<'_>) -> error::RenderResult<()> {
-            Ok(())
-        }
-        fn update_view(&mut self, _matrix: [[f32; 4]; 4]) {}
-        fn update_models(&mut self, _updates: &[(u32, [[f32; 4]; 4])]) {}
-        fn retire_draw_object(&mut self, _draw_idx: usize) {}
-    }
-
-    impl backend::SkinnedDraws for StubBackend {
-        fn upload_skinned(
-            &mut self,
-            _vertices: &[mesh_payload::SkinnedVertex],
-            _indices: &[u32],
-            _draw_objects: Vec<render_types::SkinnedDrawObject>,
-        ) -> error::RenderResult<()> {
-            Ok(())
-        }
-        fn update_skinned_pose(&mut self, _skinned_index: usize, _matrices: &[[[f32; 4]; 4]]) {}
-    }
-
-    impl backend::DrawStreaming for StubBackend {
-        fn evict_texture_slot(&mut self, _slot: usize) -> error::RenderResult<()> {
-            Ok(())
-        }
-        fn update_texture_slot(
-            &mut self,
-            _slot: usize,
-            _image: &concinnity_core::bake::texture::TextureImage,
-        ) -> error::RenderResult<()> {
-            Ok(())
-        }
-        fn evict_mesh(&mut self, _draw_idx: usize, _retire_frame: u64) -> error::RenderResult<()> {
-            Ok(())
-        }
-        fn upload_mesh(
-            &mut self,
-            _draw_idx: usize,
-            _verts: &[mesh_payload::Vertex],
-            _idxs: &[u16],
-            _frame: u64,
-        ) -> error::RenderResult<()> {
-            Ok(())
-        }
-        fn setup_chunk_streaming(
-            &mut self,
-            _chunk_vtx_bytes: usize,
-            _chunk_idx_bytes: usize,
-        ) -> error::RenderResult<()> {
-            Ok(())
-        }
-        fn add_chunk_mesh(
-            &mut self,
-            _: backend::ChunkMesh<'_>,
-            _: draw_slot::SlotAlloc,
-        ) -> error::RenderResult<()> {
-            Ok(())
-        }
-        fn remove_chunk_mesh(
-            &mut self,
-            _draw_idx: usize,
-            _retire_frame: u64,
-        ) -> error::RenderResult<()> {
-            Ok(())
-        }
-        fn set_chunk_model(
-            &mut self,
-            _draw_idx: usize,
-            _model: [[f32; 4]; 4],
-        ) -> error::RenderResult<()> {
-            Ok(())
-        }
-    }
-
-    impl backend::WindowControl for StubBackend {}
-
-    impl backend::RenderTuning for StubBackend {}
-
-    impl backend::LiveEdit for StubBackend {}
-
-    impl backend::SceneEffects for StubBackend {}
-
-    impl backend::BackendProbe for StubBackend {
-        fn capabilities(&self) -> backend::DeviceCapabilities {
-            backend::DeviceCapabilities::ALL
-        }
-    }
-
-    // Drive one runtime-spawn command whose reply is `Result<(), String>` (the
-    // ECS-side variants) through the backend dispatch and return its reply.
-    fn dispatch_spawn_unit(
-        build: impl FnOnce(std::sync::mpsc::SyncSender<Result<(), String>>) -> RuntimeCommand,
-    ) -> Result<(), String> {
-        let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        let mut backend = StubBackend;
-        dispatch_runtime_spawn(build(tx), None, &mut backend);
-        rx.recv().expect("dispatch replied")
-    }
-
-    // Every ECS-side command that reaches the backend dispatch is a misroute:
-    // the per-frame drive should have partitioned it to its ECS dispatcher. Each
-    // arm replies with a clear error that names itself.
-    #[test]
-    fn backend_dispatch_reports_misroute_for_ecs_commands() {
-        let cases: [(&str, Result<(), String>); 9] = [
-            (
-                "camera-set",
-                dispatch_spawn_unit(|reply| RuntimeCommand::CameraSet {
-                    args: CameraSetArgs::default(),
-                    reply,
-                }),
-            ),
-            (
-                "camera-move",
-                dispatch_spawn_unit(|reply| RuntimeCommand::CameraMove {
-                    args: CameraMoveArgs::default(),
-                    reply,
-                }),
-            ),
-            (
-                "camera-stop",
-                dispatch_spawn_unit(|reply| RuntimeCommand::CameraStop { reply }),
-            ),
-            (
-                "quality-set",
-                dispatch_spawn_unit(|reply| RuntimeCommand::QualitySet {
-                    setting: "ssao".to_string(),
-                    op: SettingOp::Next,
-                    reply,
-                }),
-            ),
-            (
-                "rebind",
-                dispatch_spawn_unit(|reply| RuntimeCommand::Rebind {
-                    setting: "key_forward".to_string(),
-                    key: InputKey::Space,
-                    reply,
-                }),
-            ),
-            (
-                "despawn",
-                dispatch_spawn_unit(|reply| RuntimeCommand::Despawn {
-                    name: "x".to_string(),
-                    reply,
-                }),
-            ),
-            (
-                "reparent",
-                dispatch_spawn_unit(|reply| RuntimeCommand::Reparent {
-                    child: "x".to_string(),
-                    parent: None,
-                    reply,
-                }),
-            ),
-            (
-                "spawn",
-                dispatch_spawn_unit(|reply| RuntimeCommand::Spawn {
-                    template: "x".to_string(),
-                    name: "y".to_string(),
-                    position: [0.0; 3],
-                    rotation_deg: [0.0; 3],
-                    scale: [1.0; 3],
-                    lifetime: None,
-                    reply,
-                }),
-            ),
-            (
-                "story",
-                dispatch_spawn_unit(|reply| RuntimeCommand::Story {
-                    command: StoryCommand::Advance,
-                    reply,
-                }),
-            ),
-        ];
-        for (label, result) in cases {
-            let err = result.expect_err("misroute should be an error");
-            assert!(err.contains(label), "expected '{label}' in: {err}");
-            assert!(err.contains("misrouted to backend dispatch"), "got: {err}");
-        }
-    }
-
     // DecalAdd with no texture resolves to the white slot and, with a
     // non-degenerate size, builds the DecalRecord before handing it to the
     // backend, whose default `add_decal` reports the feature is unimplemented.
@@ -1349,7 +1049,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let mut backend = StubBackend;
         dispatch_runtime_spawn(
-            RuntimeCommand::DecalAdd {
+            BackendCommand::DecalAdd {
                 args: DecalSpawnArgs::default(),
                 reply: tx,
             },
@@ -1367,7 +1067,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let mut backend = StubBackend;
         dispatch_runtime_spawn(
-            RuntimeCommand::DecalAdd {
+            BackendCommand::DecalAdd {
                 args: DecalSpawnArgs {
                     size: [0.0, 0.0, 0.0],
                     ..DecalSpawnArgs::default()
@@ -1386,7 +1086,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let mut backend = StubBackend;
         dispatch_runtime_spawn(
-            RuntimeCommand::DecalRemove { id: 3, reply: tx },
+            BackendCommand::DecalRemove { id: 3, reply: tx },
             None,
             &mut backend,
         );
@@ -1420,7 +1120,7 @@ mod tests {
             let (tx, rx) = std::sync::mpsc::sync_channel(1);
             let mut backend = StubBackend;
             dispatch_runtime_spawn(
-                RuntimeCommand::EmitterAdd { args, reply: tx },
+                BackendCommand::EmitterAdd { args, reply: tx },
                 None,
                 &mut backend,
             );
@@ -1434,7 +1134,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let mut backend = StubBackend;
         dispatch_runtime_spawn(
-            RuntimeCommand::EmitterRemove { id: 5, reply: tx },
+            BackendCommand::EmitterRemove { id: 5, reply: tx },
             None,
             &mut backend,
         );
@@ -1447,7 +1147,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let mut backend = StubBackend;
         dispatch_runtime_spawn(
-            RuntimeCommand::Screenshot {
+            BackendCommand::Screenshot {
                 path: "shot.png".to_string(),
                 reply: tx,
             },
@@ -1462,7 +1162,7 @@ mod tests {
     fn backend_dispatch_cull_status_surfaces_backend_err() {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let mut backend = StubBackend;
-        dispatch_runtime_spawn(RuntimeCommand::CullStatus { reply: tx }, None, &mut backend);
+        dispatch_runtime_spawn(BackendCommand::CullStatus { reply: tx }, None, &mut backend);
         let err = rx.recv().unwrap().unwrap_err();
         assert!(
             err.contains("read_cull_status: not supported"),
@@ -1509,46 +1209,6 @@ mod tests {
         );
     }
 
-    // Each ECS dispatcher is only ever handed its own variant; a mismatched
-    // command hits the `let else { return }` guard and drops the reply channel
-    // without answering (so the receiver observes a disconnect). This never
-    // reaches the name table, so no interner setup is needed.
-    #[test]
-    fn ecs_dispatchers_ignore_mismatched_variants() {
-        fn dropped(rx: std::sync::mpsc::Receiver<Result<(), String>>) -> bool {
-            rx.recv().is_err()
-        }
-        let mut world = World::new();
-
-        let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        dispatch_camera_set(RuntimeCommand::CameraStop { reply: tx }, &mut world);
-        assert!(dropped(rx));
-
-        let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        dispatch_quality_set(RuntimeCommand::CameraStop { reply: tx }, &mut world);
-        assert!(dropped(rx));
-
-        let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        dispatch_rebind(RuntimeCommand::CameraStop { reply: tx }, &mut world);
-        assert!(dropped(rx));
-
-        let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        dispatch_despawn(RuntimeCommand::CameraStop { reply: tx }, &mut world);
-        assert!(dropped(rx));
-
-        let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        dispatch_reparent(RuntimeCommand::CameraStop { reply: tx }, &mut world);
-        assert!(dropped(rx));
-
-        let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        dispatch_spawn(RuntimeCommand::CameraStop { reply: tx }, &mut world);
-        assert!(dropped(rx));
-
-        let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        dispatch_story(RuntimeCommand::CameraStop { reply: tx }, &mut world);
-        assert!(dropped(rx));
-    }
-
     fn controlled_camera() -> Camera3D {
         use concinnity_core::components::{Camera3D, CameraController};
         Camera3D {
@@ -1568,7 +1228,7 @@ mod tests {
 
     // The CameraSet wrapper applies the pose against the live ECS and replies Ok.
     #[test]
-    fn dispatch_camera_set_applies_pose_and_replies_ok() {
+    fn world_command_camera_set_applies_pose_and_replies_ok() {
         use concinnity_core::components::Camera3D;
         use concinnity_core::ecs::World;
 
@@ -1577,8 +1237,8 @@ mod tests {
         world.start(concinnity_engine::ecs::SYSTEMS).unwrap();
 
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        dispatch_camera_set(
-            RuntimeCommand::CameraSet {
+        dispatch_world_command(
+            WorldCommand::CameraSet {
                 args: CameraSetArgs {
                     position: [1.0, 2.0, 3.0],
                     yaw: 0.5,
@@ -1588,6 +1248,7 @@ mod tests {
                 reply: tx,
             },
             &mut world,
+            &mut None,
         );
         assert!(rx.recv().unwrap().is_ok());
         let cam = world.query::<Camera3D>().next().expect("camera present");
@@ -1596,16 +1257,17 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_quality_set_sends_setting_command() {
+    fn world_command_quality_set_sends_setting_command() {
         let mut world = World::new();
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        dispatch_quality_set(
-            RuntimeCommand::QualitySet {
+        dispatch_world_command(
+            WorldCommand::QualitySet {
                 setting: "ssao".to_string(),
                 op: SettingOp::Next,
                 reply: tx,
             },
             &mut world,
+            &mut None,
         );
         assert!(rx.recv().unwrap().is_ok());
 
@@ -1622,16 +1284,17 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_rebind_sends_rebind_setting_command() {
+    fn world_command_rebind_sends_rebind_setting_command() {
         let mut world = World::new();
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        dispatch_rebind(
-            RuntimeCommand::Rebind {
+        dispatch_world_command(
+            WorldCommand::Rebind {
                 setting: "key_forward".to_string(),
                 key: InputKey::Space,
                 reply: tx,
             },
             &mut world,
+            &mut None,
         );
         assert!(rx.recv().unwrap().is_ok());
 
@@ -1646,15 +1309,16 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_story_forwards_the_command() {
+    fn world_command_story_forwards_the_command() {
         let mut world = World::new();
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        dispatch_story(
-            RuntimeCommand::Story {
+        dispatch_world_command(
+            WorldCommand::Story {
                 command: StoryCommand::Choose(2),
                 reply: tx,
             },
             &mut world,
+            &mut None,
         );
         assert!(rx.recv().unwrap().is_ok());
 
@@ -1668,19 +1332,20 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_despawn_resolves_name_and_reports_unknown() {
+    fn world_command_despawn_resolves_name_and_reports_unknown() {
         let _guard = test_support::lock();
         asset_id::reset_interner();
         asset_id::intern_all(&["crate_a", "crate_b"]);
         let mut world = World::new();
 
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        dispatch_despawn(
-            RuntimeCommand::Despawn {
+        dispatch_world_command(
+            WorldCommand::Despawn {
                 name: "crate_b".to_string(),
                 reply: tx,
             },
             &mut world,
+            &mut None,
         );
         assert!(rx.recv().unwrap().is_ok());
         let events = world
@@ -1693,19 +1358,20 @@ mod tests {
 
         // An unknown name is a clean error.
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        dispatch_despawn(
-            RuntimeCommand::Despawn {
+        dispatch_world_command(
+            WorldCommand::Despawn {
                 name: "ghost".to_string(),
                 reply: tx,
             },
             &mut world,
+            &mut None,
         );
         let err = rx.recv().unwrap().unwrap_err();
         assert!(err.contains("'ghost' not found"), "got: {err}");
     }
 
     #[test]
-    fn dispatch_reparent_resolves_names_and_reports_errors() {
+    fn world_command_reparent_resolves_names_and_reports_errors() {
         let _guard = test_support::lock();
         asset_id::reset_interner();
         asset_id::intern_all(&["box_a", "frame"]);
@@ -1714,13 +1380,14 @@ mod tests {
 
         // Both names known -> queued with both ids.
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        dispatch_reparent(
-            RuntimeCommand::Reparent {
+        dispatch_world_command(
+            WorldCommand::Reparent {
                 child: "box_a".to_string(),
                 parent: Some("frame".to_string()),
                 reply: tx,
             },
             &mut world,
+            &mut None,
         );
         assert!(rx.recv().unwrap().is_ok());
         {
@@ -1738,13 +1405,14 @@ mod tests {
 
         // A None parent detaches the child to a root.
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        dispatch_reparent(
-            RuntimeCommand::Reparent {
+        dispatch_world_command(
+            WorldCommand::Reparent {
                 child: "box_a".to_string(),
                 parent: None,
                 reply: tx,
             },
             &mut world,
+            &mut None,
         );
         assert!(rx.recv().unwrap().is_ok());
         {
@@ -1756,33 +1424,35 @@ mod tests {
 
         // Unknown child.
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        dispatch_reparent(
-            RuntimeCommand::Reparent {
+        dispatch_world_command(
+            WorldCommand::Reparent {
                 child: "ghost".to_string(),
                 parent: Some("frame".to_string()),
                 reply: tx,
             },
             &mut world,
+            &mut None,
         );
         let err = rx.recv().unwrap().unwrap_err();
         assert!(err.contains("child 'ghost' not found"), "got: {err}");
 
         // Known child, unknown parent.
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        dispatch_reparent(
-            RuntimeCommand::Reparent {
+        dispatch_world_command(
+            WorldCommand::Reparent {
                 child: "box_a".to_string(),
                 parent: Some("void".to_string()),
                 reply: tx,
             },
             &mut world,
+            &mut None,
         );
         let err = rx.recv().unwrap().unwrap_err();
         assert!(err.contains("parent 'void' not found"), "got: {err}");
     }
 
     #[test]
-    fn dispatch_spawn_resolves_template_interns_name_and_defaults_scale() {
+    fn world_command_spawn_resolves_template_interns_name_and_defaults_scale() {
         let _guard = test_support::lock();
         asset_id::reset_interner();
         asset_id::intern_all(&["template_a"]);
@@ -1790,8 +1460,8 @@ mod tests {
         let mut cursor = EventCursor::default();
 
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        dispatch_spawn(
-            RuntimeCommand::Spawn {
+        dispatch_world_command(
+            WorldCommand::Spawn {
                 template: "template_a".to_string(),
                 name: "instance_1".to_string(),
                 position: [1.0, 2.0, 3.0],
@@ -1801,6 +1471,7 @@ mod tests {
                 reply: tx,
             },
             &mut world,
+            &mut None,
         );
         assert!(rx.recv().unwrap().is_ok());
         {
@@ -1820,8 +1491,8 @@ mod tests {
         // A zero scale (the array default when omitted) is treated as unit scale
         // so the spawned copy is visible.
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        dispatch_spawn(
-            RuntimeCommand::Spawn {
+        dispatch_world_command(
+            WorldCommand::Spawn {
                 template: "template_a".to_string(),
                 name: "instance_2".to_string(),
                 position: [0.0; 3],
@@ -1831,6 +1502,7 @@ mod tests {
                 reply: tx,
             },
             &mut world,
+            &mut None,
         );
         assert!(rx.recv().unwrap().is_ok());
         {
@@ -1842,8 +1514,8 @@ mod tests {
 
         // An unknown template is a clean error.
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        dispatch_spawn(
-            RuntimeCommand::Spawn {
+        dispatch_world_command(
+            WorldCommand::Spawn {
                 template: "missing".to_string(),
                 name: "instance_3".to_string(),
                 position: [0.0; 3],
@@ -1853,8 +1525,67 @@ mod tests {
                 reply: tx,
             },
             &mut world,
+            &mut None,
         );
         let err = rx.recv().unwrap().unwrap_err();
         assert!(err.contains("template 'missing' not found"), "got: {err}");
+    }
+
+    // camera-move in a camera-less world is a clean error and installs nothing.
+    #[test]
+    fn world_command_camera_move_without_a_camera_errs_and_installs_no_motion() {
+        let mut world = World::new();
+        let mut motion = None;
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        dispatch_world_command(
+            WorldCommand::CameraMove {
+                args: CameraMoveArgs {
+                    forward: 1.0,
+                    ..CameraMoveArgs::default()
+                },
+                reply: tx,
+            },
+            &mut world,
+            &mut motion,
+        );
+        let err = rx.recv().unwrap().unwrap_err();
+        assert!(err.contains("no Camera3D"), "got: {err}");
+        assert!(motion.is_none());
+    }
+
+    #[test]
+    fn world_command_camera_move_installs_the_motion_when_a_camera_exists() {
+        let mut world = World::new();
+        world.add_component(controlled_camera());
+        let mut motion = None;
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        dispatch_world_command(
+            WorldCommand::CameraMove {
+                args: CameraMoveArgs {
+                    forward: 1.0,
+                    frames: 4,
+                    ..CameraMoveArgs::default()
+                },
+                reply: tx,
+            },
+            &mut world,
+            &mut motion,
+        );
+        assert!(rx.recv().unwrap().is_ok());
+        assert_eq!(motion.map(|m| m.frames_left), Some(Some(4)));
+    }
+
+    #[test]
+    fn world_command_camera_stop_clears_the_motion_and_replies_ok() {
+        let mut world = World::new();
+        let mut motion = Some(CameraMotion::from_args(&CameraMoveArgs::default()));
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        dispatch_world_command(
+            WorldCommand::CameraStop { reply: tx },
+            &mut world,
+            &mut motion,
+        );
+        assert!(rx.recv().unwrap().is_ok());
+        assert!(motion.is_none());
     }
 }

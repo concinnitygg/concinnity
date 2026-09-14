@@ -86,7 +86,7 @@ pub(super) fn handle_decal_add(text: &str) -> String {
         "decal-add",
         SPAWN_REPLY_TIMEOUT,
         |reply| {
-            super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::DecalAdd {
+            super::runtime_spawn::enqueue(super::runtime_spawn::BackendCommand::DecalAdd {
                 args,
                 reply,
             });
@@ -109,7 +109,7 @@ pub(super) fn handle_decal_remove(text: &str) -> String {
         "decal-remove",
         SPAWN_REPLY_TIMEOUT,
         |reply| {
-            super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::DecalRemove {
+            super::runtime_spawn::enqueue(super::runtime_spawn::BackendCommand::DecalRemove {
                 id: req.id,
                 reply,
             });
@@ -190,7 +190,7 @@ pub(super) fn handle_emitter_add(text: &str) -> String {
         "emitter-add",
         SPAWN_REPLY_TIMEOUT,
         |reply| {
-            super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::EmitterAdd {
+            super::runtime_spawn::enqueue(super::runtime_spawn::BackendCommand::EmitterAdd {
                 args,
                 reply,
             });
@@ -208,7 +208,7 @@ pub(super) fn handle_emitter_remove(text: &str) -> String {
         "emitter-remove",
         SPAWN_REPLY_TIMEOUT,
         |reply| {
-            super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::EmitterRemove {
+            super::runtime_spawn::enqueue(super::runtime_spawn::BackendCommand::EmitterRemove {
                 id: req.id,
                 reply,
             });
@@ -375,11 +375,17 @@ pub(super) fn handle_screenshot(text: &str) -> String {
     if req.path.trim().is_empty() {
         return error_reply("screenshot: missing 'path'");
     }
+    if !std::path::Path::new(req.path.trim())
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("png"))
+    {
+        return error_reply("screenshot: 'path' must end in .png");
+    }
     run_with_reply(
         "screenshot",
         SCREENSHOT_REPLY_TIMEOUT,
         |reply| {
-            super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::Screenshot {
+            super::runtime_spawn::enqueue(super::runtime_spawn::BackendCommand::Screenshot {
                 path: req.path,
                 reply,
             });
@@ -399,7 +405,7 @@ pub(super) fn handle_cull_status() -> String {
         "cull-status",
         SCREENSHOT_REPLY_TIMEOUT,
         |reply| {
-            super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::CullStatus {
+            super::runtime_spawn::enqueue(super::runtime_spawn::BackendCommand::CullStatus {
                 reply,
             });
         },
@@ -471,7 +477,7 @@ pub(super) fn handle_camera_set(text: &str) -> String {
         "camera-set",
         SPAWN_REPLY_TIMEOUT,
         |reply| {
-            super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::CameraSet {
+            super::runtime_spawn::enqueue(super::runtime_spawn::WorldCommand::CameraSet {
                 args,
                 reply,
             });
@@ -528,7 +534,7 @@ pub(super) fn handle_quality_set(text: &str) -> String {
         "quality-set",
         SPAWN_REPLY_TIMEOUT,
         |reply| {
-            super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::QualitySet {
+            super::runtime_spawn::enqueue(super::runtime_spawn::WorldCommand::QualitySet {
                 setting: req.setting,
                 op,
                 reply,
@@ -578,7 +584,7 @@ pub(super) fn handle_rebind(text: &str) -> String {
         "rebind",
         SPAWN_REPLY_TIMEOUT,
         |reply| {
-            super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::Rebind {
+            super::runtime_spawn::enqueue(super::runtime_spawn::WorldCommand::Rebind {
                 setting: req.setting,
                 key,
                 reply,
@@ -615,7 +621,7 @@ pub(super) fn handle_despawn(text: &str) -> String {
         "despawn",
         SPAWN_REPLY_TIMEOUT,
         |reply| {
-            super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::Despawn {
+            super::runtime_spawn::enqueue(super::runtime_spawn::WorldCommand::Despawn {
                 name: req.target,
                 reply,
             });
@@ -665,7 +671,7 @@ pub(super) fn handle_story(text: &str) -> String {
         "story",
         SPAWN_REPLY_TIMEOUT,
         |reply| {
-            super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::Story {
+            super::runtime_spawn::enqueue(super::runtime_spawn::WorldCommand::Story {
                 command,
                 reply,
             });
@@ -703,7 +709,7 @@ pub(super) fn handle_reparent(text: &str) -> String {
         "reparent",
         SPAWN_REPLY_TIMEOUT,
         |reply| {
-            super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::Reparent {
+            super::runtime_spawn::enqueue(super::runtime_spawn::WorldCommand::Reparent {
                 child: req.target,
                 // An empty / whitespace parent name detaches the target to a root.
                 parent: req.parent.filter(|p| !p.trim().is_empty()),
@@ -753,7 +759,7 @@ pub(super) fn handle_spawn(text: &str) -> String {
         "spawn",
         SPAWN_REPLY_TIMEOUT,
         |reply| {
-            super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::Spawn {
+            super::runtime_spawn::enqueue(super::runtime_spawn::WorldCommand::Spawn {
                 template: req.template,
                 name: req.name,
                 position: req.position,
@@ -817,7 +823,7 @@ pub(super) fn handle_camera_move(text: &str) -> String {
         "camera-move",
         SPAWN_REPLY_TIMEOUT,
         |reply| {
-            super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::CameraMove {
+            super::runtime_spawn::enqueue(super::runtime_spawn::WorldCommand::CameraMove {
                 args,
                 reply,
             });
@@ -831,9 +837,7 @@ pub(super) fn handle_camera_stop() -> String {
         "camera-stop",
         SPAWN_REPLY_TIMEOUT,
         |reply| {
-            super::runtime_spawn::enqueue(super::runtime_spawn::RuntimeCommand::CameraStop {
-                reply,
-            });
+            super::runtime_spawn::enqueue(super::runtime_spawn::WorldCommand::CameraStop { reply });
         },
         |()| serde_json::json!({ "ok": true, "stopped": true }).to_string(),
     )
@@ -1167,6 +1171,12 @@ mod tests {
     }
 
     #[test]
+    fn screenshot_requires_a_png_path() {
+        assert_err_reply(&handle_screenshot(r#"{"path":"/tmp/out.rs"}"#), ".png");
+        assert_err_reply(&handle_screenshot(r#"{"path":"/tmp/out"}"#), ".png");
+    }
+
+    #[test]
     fn camera_set_handler_rejects_malformed_json() {
         assert_err_reply(&handle_camera_set(r#"{"position":"nope"}"#), "camera-set");
     }
@@ -1265,7 +1275,7 @@ mod tests {
     // process-global; any unrelated command drained alongside is re-enqueued
     // untouched.
 
-    use crate::debug::runtime_spawn::{self, RuntimeCommand};
+    use crate::debug::runtime_spawn::{self, BackendCommand, RuntimeCommand, WorldCommand};
     use crate::test_support;
 
     // A heavily loaded test host can stall either thread past the handler's
@@ -1325,7 +1335,7 @@ mod tests {
                 )
             },
             |cmd| match cmd {
-                RuntimeCommand::DecalAdd { args, reply } => {
+                RuntimeCommand::Backend(BackendCommand::DecalAdd { args, reply }) => {
                     assert_eq!(args.texture.as_deref(), Some("grid"));
                     assert_eq!(args.position, [1.0, 2.0, 3.0]);
                     assert_eq!(args.size, [2.0, 2.0, 2.0]);
@@ -1346,7 +1356,7 @@ mod tests {
         let reply = drive_runtime_handler(
             || handle_decal_add("{}"),
             |cmd| match cmd {
-                RuntimeCommand::DecalAdd { reply, .. } => {
+                RuntimeCommand::Backend(BackendCommand::DecalAdd { reply, .. }) => {
                     let _ = reply.send(Err("no free decal slot".to_string()));
                     None
                 }
@@ -1360,21 +1370,51 @@ mod tests {
     // handler under test takes its `Ok(Err(e))` reply branch.
     fn reply_engine_error(cmd: RuntimeCommand) -> Option<RuntimeCommand> {
         match cmd {
-            RuntimeCommand::DecalAdd { reply, .. } => drop(reply.send(Err("boom".into()))),
-            RuntimeCommand::DecalRemove { reply, .. } => drop(reply.send(Err("boom".into()))),
-            RuntimeCommand::EmitterAdd { reply, .. } => drop(reply.send(Err("boom".into()))),
-            RuntimeCommand::EmitterRemove { reply, .. } => drop(reply.send(Err("boom".into()))),
-            RuntimeCommand::Screenshot { reply, .. } => drop(reply.send(Err("boom".into()))),
-            RuntimeCommand::CullStatus { reply } => drop(reply.send(Err("boom".into()))),
-            RuntimeCommand::CameraSet { reply, .. } => drop(reply.send(Err("boom".into()))),
-            RuntimeCommand::CameraMove { reply, .. } => drop(reply.send(Err("boom".into()))),
-            RuntimeCommand::CameraStop { reply } => drop(reply.send(Err("boom".into()))),
-            RuntimeCommand::QualitySet { reply, .. } => drop(reply.send(Err("boom".into()))),
-            RuntimeCommand::Rebind { reply, .. } => drop(reply.send(Err("boom".into()))),
-            RuntimeCommand::Despawn { reply, .. } => drop(reply.send(Err("boom".into()))),
-            RuntimeCommand::Reparent { reply, .. } => drop(reply.send(Err("boom".into()))),
-            RuntimeCommand::Spawn { reply, .. } => drop(reply.send(Err("boom".into()))),
-            RuntimeCommand::Story { reply, .. } => drop(reply.send(Err("boom".into()))),
+            RuntimeCommand::Backend(BackendCommand::DecalAdd { reply, .. }) => {
+                drop(reply.send(Err("boom".into())))
+            }
+            RuntimeCommand::Backend(BackendCommand::DecalRemove { reply, .. }) => {
+                drop(reply.send(Err("boom".into())))
+            }
+            RuntimeCommand::Backend(BackendCommand::EmitterAdd { reply, .. }) => {
+                drop(reply.send(Err("boom".into())))
+            }
+            RuntimeCommand::Backend(BackendCommand::EmitterRemove { reply, .. }) => {
+                drop(reply.send(Err("boom".into())))
+            }
+            RuntimeCommand::Backend(BackendCommand::Screenshot { reply, .. }) => {
+                drop(reply.send(Err("boom".into())))
+            }
+            RuntimeCommand::Backend(BackendCommand::CullStatus { reply }) => {
+                drop(reply.send(Err("boom".into())))
+            }
+            RuntimeCommand::World(WorldCommand::CameraSet { reply, .. }) => {
+                drop(reply.send(Err("boom".into())))
+            }
+            RuntimeCommand::World(WorldCommand::CameraMove { reply, .. }) => {
+                drop(reply.send(Err("boom".into())))
+            }
+            RuntimeCommand::World(WorldCommand::CameraStop { reply }) => {
+                drop(reply.send(Err("boom".into())))
+            }
+            RuntimeCommand::World(WorldCommand::QualitySet { reply, .. }) => {
+                drop(reply.send(Err("boom".into())))
+            }
+            RuntimeCommand::World(WorldCommand::Rebind { reply, .. }) => {
+                drop(reply.send(Err("boom".into())))
+            }
+            RuntimeCommand::World(WorldCommand::Despawn { reply, .. }) => {
+                drop(reply.send(Err("boom".into())))
+            }
+            RuntimeCommand::World(WorldCommand::Reparent { reply, .. }) => {
+                drop(reply.send(Err("boom".into())))
+            }
+            RuntimeCommand::World(WorldCommand::Spawn { reply, .. }) => {
+                drop(reply.send(Err("boom".into())))
+            }
+            RuntimeCommand::World(WorldCommand::Story { reply, .. }) => {
+                drop(reply.send(Err("boom".into())))
+            }
         }
         None
     }
@@ -1502,7 +1542,7 @@ mod tests {
         let reply = drive_runtime_handler(
             || handle_decal_remove(r#"{"id":3}"#),
             |cmd| match cmd {
-                RuntimeCommand::DecalRemove { id, reply } => {
+                RuntimeCommand::Backend(BackendCommand::DecalRemove { id, reply }) => {
                     assert_eq!(id, 3);
                     let _ = reply.send(Ok(()));
                     None
@@ -1519,7 +1559,7 @@ mod tests {
         let reply = drive_runtime_handler(
             || handle_emitter_add("{}"),
             |cmd| match cmd {
-                RuntimeCommand::EmitterAdd { args, reply } => {
+                RuntimeCommand::Backend(BackendCommand::EmitterAdd { args, reply }) => {
                     // A bare command carries the emitter defaults through.
                     assert_eq!(args.direction, [0.0, 1.0, 0.0]);
                     assert_eq!(args.max_particles, 256);
@@ -1538,7 +1578,7 @@ mod tests {
         let reply = drive_runtime_handler(
             || handle_emitter_remove(r#"{"id":5}"#),
             |cmd| match cmd {
-                RuntimeCommand::EmitterRemove { id, reply } => {
+                RuntimeCommand::Backend(BackendCommand::EmitterRemove { id, reply }) => {
                     assert_eq!(id, 5);
                     let _ = reply.send(Ok(()));
                     None
@@ -1555,7 +1595,7 @@ mod tests {
         let reply = drive_runtime_handler(
             || handle_screenshot(r#"{"path":"shot.png"}"#),
             |cmd| match cmd {
-                RuntimeCommand::Screenshot { path, reply } => {
+                RuntimeCommand::Backend(BackendCommand::Screenshot { path, reply }) => {
                     assert_eq!(path, "shot.png");
                     let _ = reply.send(Ok("shot.png".to_string()));
                     None
@@ -1576,7 +1616,7 @@ mod tests {
                 )
             },
             |cmd| match cmd {
-                RuntimeCommand::CameraSet { args, reply } => {
+                RuntimeCommand::World(WorldCommand::CameraSet { args, reply }) => {
                     assert_eq!(args.position, [1.0, 2.0, 3.0]);
                     assert_eq!(args.yaw, 0.5);
                     assert_eq!(args.pitch, -0.25);
@@ -1596,7 +1636,7 @@ mod tests {
         let reply = drive_runtime_handler(
             || handle_camera_move(r#"{"forward":1.5,"frames":3}"#),
             |cmd| match cmd {
-                RuntimeCommand::CameraMove { args, reply } => {
+                RuntimeCommand::World(WorldCommand::CameraMove { args, reply }) => {
                     assert_eq!(args.forward, 1.5);
                     assert_eq!(args.frames, 3);
                     let _ = reply.send(Ok(()));
@@ -1615,7 +1655,7 @@ mod tests {
         let reply = drive_runtime_handler(
             || handle_camera_move("{}"),
             |cmd| match cmd {
-                RuntimeCommand::CameraMove { reply, .. } => {
+                RuntimeCommand::World(WorldCommand::CameraMove { reply, .. }) => {
                     let _ = reply.send(Ok(()));
                     None
                 }
@@ -1629,7 +1669,7 @@ mod tests {
     fn camera_stop_reports_stopped() {
         let _guard = test_support::lock();
         let reply = drive_runtime_handler(handle_camera_stop, |cmd| match cmd {
-            RuntimeCommand::CameraStop { reply } => {
+            RuntimeCommand::World(WorldCommand::CameraStop { reply }) => {
                 let _ = reply.send(Ok(()));
                 None
             }
@@ -1644,7 +1684,7 @@ mod tests {
         let reply = drive_runtime_handler(
             || handle_quality_set(r#"{"setting":"taa","op":"prev"}"#),
             |cmd| match cmd {
-                RuntimeCommand::QualitySet { setting, op, reply } => {
+                RuntimeCommand::World(WorldCommand::QualitySet { setting, op, reply }) => {
                     assert_eq!(setting, "taa");
                     assert_eq!(op, SettingOp::Prev);
                     let _ = reply.send(Ok(()));
@@ -1659,7 +1699,7 @@ mod tests {
         let reply = drive_runtime_handler(
             || handle_quality_set(r#"{"setting":"ssao"}"#),
             |cmd| match cmd {
-                RuntimeCommand::QualitySet { op, reply, .. } => {
+                RuntimeCommand::World(WorldCommand::QualitySet { op, reply, .. }) => {
                     assert_eq!(op, SettingOp::Next);
                     let _ = reply.send(Ok(()));
                     None
@@ -1676,11 +1716,11 @@ mod tests {
         let reply = drive_runtime_handler(
             || handle_rebind(r#"{"setting":"key_forward","key":"Space"}"#),
             |cmd| match cmd {
-                RuntimeCommand::Rebind {
+                RuntimeCommand::World(WorldCommand::Rebind {
                     setting,
                     key,
                     reply,
-                } => {
+                }) => {
                     assert_eq!(setting, "key_forward");
                     assert_eq!(key, InputKey::Space);
                     let _ = reply.send(Ok(()));
@@ -1698,7 +1738,7 @@ mod tests {
         let reply = drive_runtime_handler(
             || handle_despawn(r#"{"target":"crate_a"}"#),
             |cmd| match cmd {
-                RuntimeCommand::Despawn { name, reply } => {
+                RuntimeCommand::World(WorldCommand::Despawn { name, reply }) => {
                     assert_eq!(name, "crate_a");
                     let _ = reply.send(Ok(()));
                     None
@@ -1731,7 +1771,7 @@ mod tests {
             let reply = drive_runtime_handler(
                 move || handle_story(&text),
                 |cmd| match cmd {
-                    RuntimeCommand::Story { command, reply } => {
+                    RuntimeCommand::World(WorldCommand::Story { command, reply }) => {
                         assert_eq!(command, expected, "action '{action}'");
                         let _ = reply.send(Ok(()));
                         None
@@ -1755,7 +1795,7 @@ mod tests {
             let reply = drive_runtime_handler(
                 move || handle_story(&text),
                 |cmd| match cmd {
-                    RuntimeCommand::Story { command, reply } => {
+                    RuntimeCommand::World(WorldCommand::Story { command, reply }) => {
                         assert_eq!(command, expected);
                         let _ = reply.send(Ok(()));
                         None
@@ -1773,11 +1813,11 @@ mod tests {
         let reply = drive_runtime_handler(
             || handle_reparent(r#"{"target":"box_a","parent":"  "}"#),
             |cmd| match cmd {
-                RuntimeCommand::Reparent {
+                RuntimeCommand::World(WorldCommand::Reparent {
                     child,
                     parent,
                     reply,
-                } => {
+                }) => {
                     assert_eq!(child, "box_a");
                     assert!(parent.is_none(), "whitespace parent must detach");
                     let _ = reply.send(Ok(()));
@@ -1795,7 +1835,7 @@ mod tests {
         let reply = drive_runtime_handler(
             || handle_reparent(r#"{"target":"box_a","parent":"frame"}"#),
             |cmd| match cmd {
-                RuntimeCommand::Reparent { parent, reply, .. } => {
+                RuntimeCommand::World(WorldCommand::Reparent { parent, reply, .. }) => {
                     assert_eq!(parent.as_deref(), Some("frame"));
                     let _ = reply.send(Ok(()));
                     None
@@ -1816,7 +1856,7 @@ mod tests {
                 )
             },
             |cmd| match cmd {
-                RuntimeCommand::Spawn {
+                RuntimeCommand::World(WorldCommand::Spawn {
                     template,
                     name,
                     position,
@@ -1824,7 +1864,7 @@ mod tests {
                     scale,
                     lifetime,
                     reply,
-                } => {
+                }) => {
                     assert_eq!(template, "crate_a");
                     assert_eq!(name, "crate_b");
                     assert_eq!(position, [1.0, 0.0, -1.0]);

@@ -153,6 +153,7 @@ impl DxContext {
             // DirectX retains the presented back-buffer index unconditionally,
             // so capture needs no arming here.
             capture: _,
+            embedded_surface: _,
             scene: world,
             shaders: world_shaders,
             media,

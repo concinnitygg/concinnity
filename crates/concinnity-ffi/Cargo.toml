@@ -25,16 +25,15 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]
 default = ["native"]
-native = ["concinnity-engine/native", "dep:concinnity-device", "concinnity-device/native"]
-metal = ["concinnity-engine/metal", "dep:concinnity-device", "concinnity-device/metal"]
-directx = ["concinnity-engine/directx", "dep:concinnity-device", "concinnity-device/directx"]
-vulkan = ["concinnity-engine/vulkan", "dep:concinnity-device", "concinnity-device/vulkan"]
+native = ["concinnity-engine/native"]
+metal = ["concinnity-engine/metal"]
+directx = ["concinnity-engine/directx"]
+vulkan = ["concinnity-engine/vulkan"]
 
 [dependencies]
 concinnity-core = { workspace = true }
 concinnity-engine = { workspace = true }
 concinnity-host = { workspace = true }
-concinnity-device = { workspace = true, optional = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
