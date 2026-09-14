@@ -257,8 +257,6 @@ pub(crate) fn load_mesh_geometry(
     deferred: &DeferredMeshSources,
     blob_disk_backed: bool,
 ) -> Option<MeshGeometry> {
-    let mut deferred_payloads: std::collections::HashMap<usize, DeferredMeshSeed> =
-        std::collections::HashMap::new();
     let mesh_table = ctx.resource::<MeshTable>().cloned().unwrap_or_default();
     // Dev-only source catalog (present under `cn debug`) so the hot-reload
     // watcher can map a mesh handle back to the file that backs it. Mesh is a
@@ -326,184 +324,53 @@ pub(crate) fn load_mesh_geometry(
         );
     }
 
-    let mut geometry: Vec<LoadedMesh> = Vec::new();
-    // Asset id -> handle for the geometry producers that are still components,
-    // so init can cross-reference their id-keyed metadata (e.g. the
-    // ProceduralMesh args snapshot) with the handle-keyed draw map.
-    let mut component_mesh_handles: std::collections::HashMap<AssetId, usize> =
-        std::collections::HashMap::new();
+    let mut sink = MeshSink::new(deferred, blob_disk_backed);
 
-    // Mesh block first: decode each resource-table entry at its handle position.
+    // Mesh block first: each resource-table entry lands at its own handle.
     for (handle, entry) in mesh_table.0.iter().enumerate() {
-        let locator = match &entry.payload {
-            Some(l) => l,
-            None => {
-                tracing::error!(
-                    "GraphicsSystem: Mesh handle {} has no compiled payload -- did the build succeed?",
-                    handle
-                );
-                return None;
-            }
-        };
-        if let Some(bounds) = deferred.resource_bounds(handle) {
-            let bytes = if blob_disk_backed {
-                None
-            } else {
-                match ctx.read_payload(locator) {
-                    Ok(b) => Some(b.to_vec()),
-                    Err(e) => {
-                        tracing::error!("GraphicsSystem: failed to read Mesh payload: {:?}", e);
-                        return None;
-                    }
-                }
-            };
-            deferred_payloads.insert(
-                handle,
-                DeferredMeshSeed {
-                    locator: locator.clone(),
-                    bytes,
-                },
+        let Some(locator) = &entry.payload else {
+            tracing::error!(
+                "GraphicsSystem: Mesh handle {} has no compiled payload -- did the build succeed?",
+                handle
             );
-            geometry.push(LoadedMesh {
-                vertices: Vec::new(),
-                indices: Vec::new(),
-                lod_alternates: Vec::new(),
-                bounds: Some(bounds),
-                counts: deferred.counts.get(&(handle as u32)).copied(),
-            });
-            continue;
-        }
-        let bytes = match ctx.read_payload(locator) {
-            Ok(b) => b.to_vec(),
-            Err(e) => {
-                tracing::error!("GraphicsSystem: failed to read Mesh payload: {:?}", e);
-                return None;
-            }
+            return None;
         };
-        // `deserialize_with_lods` parses the optional LOD trailer when the
-        // build emitted one and falls back to an empty alternates vec for
-        // legacy single-LOD payloads.
-        match mesh_payload::deserialize_with_lods(&bytes) {
-            Ok((verts, idxs, alternates)) => geometry.push(LoadedMesh {
-                vertices: verts,
-                indices: idxs,
-                lod_alternates: alternates,
-                bounds: None,
-                counts: None,
-            }),
-            Err(e) => {
-                tracing::error!("GraphicsSystem: malformed Mesh payload: {}", e);
-                return None;
-            }
-        }
+        sink.push(ctx, locator, deferred.resource_bounds(handle), "Mesh")?;
     }
 
-    macro_rules! load_meshes {
-        ($label:expr_2021, $items:expr_2021) => {
-            for (i, mesh) in $items.iter().enumerate() {
-                let locator = match &mesh.locator {
-                    Some(l) => l,
-                    None => {
-                        tracing::error!(
-                            "GraphicsSystem: {}[{}] {} has no compiled payload",
-                            $label,
-                            i,
-                            mesh.asset_id
-                        );
-                        return None;
-                    }
-                };
-                if let Some(bounds) = deferred.def_bounds(mesh.asset_id, geometry.len()) {
-                    let bytes = if blob_disk_backed {
-                        None
-                    } else {
-                        match ctx.read_payload(locator) {
-                            Ok(b) => Some(b.to_vec()),
-                            Err(e) => {
-                                tracing::error!(
-                                    "GraphicsSystem: failed to read {} payload: {:?}",
-                                    $label,
-                                    e
-                                );
-                                return None;
-                            }
-                        }
-                    };
-                    deferred_payloads.insert(
-                        geometry.len(),
-                        DeferredMeshSeed {
-                            locator: locator.clone(),
-                            bytes,
-                        },
-                    );
-                    component_mesh_handles.insert(mesh.asset_id, geometry.len());
-                    let counts = deferred.counts.get(&(geometry.len() as u32)).copied();
-                    geometry.push(LoadedMesh {
-                        vertices: Vec::new(),
-                        indices: Vec::new(),
-                        lod_alternates: Vec::new(),
-                        bounds: Some(bounds),
-                        counts,
-                    });
-                    continue;
-                }
-                let bytes = match ctx.read_payload(locator) {
-                    Ok(b) => b.to_vec(),
-                    Err(e) => {
-                        tracing::error!(
-                            "GraphicsSystem: failed to read {} payload: {:?}",
-                            $label,
-                            e
-                        );
-                        return None;
-                    }
-                };
-                match mesh_payload::deserialize_with_lods(&bytes) {
-                    Ok((verts, idxs, alternates)) => {
-                        // This source's handle is its push position: the blocks
-                        // are loaded in cook's block order and each iterates in
-                        // declaration order.
-                        component_mesh_handles.insert(mesh.asset_id, geometry.len());
-                        geometry.push(LoadedMesh {
-                            vertices: verts,
-                            indices: idxs,
-                            lod_alternates: alternates,
-                            bounds: None,
-                            counts: None,
-                        });
-                    }
-                    Err(e) => {
-                        tracing::error!("GraphicsSystem: malformed {} payload: {}", $label, e);
-                        return None;
-                    }
-                }
-            }
-        };
-    }
-    load_meshes!("ProceduralMesh", proc_meshes);
-    load_meshes!("VoxelChunk", voxel_chunks);
-    load_meshes!("File", file_meshes);
+    sink.push_components(
+        ctx,
+        "ProceduralMesh",
+        proc_meshes.iter().map(|m| (m.asset_id, m.locator.as_ref())),
+    )?;
+    sink.push_components(
+        ctx,
+        "VoxelChunk",
+        voxel_chunks
+            .iter()
+            .map(|c| (c.asset_id, c.locator.as_ref())),
+    )?;
+    sink.push_components(
+        ctx,
+        "File",
+        file_meshes.iter().map(|f| (f.asset_id, f.locator.as_ref())),
+    )?;
 
     // The world's own block: geometry baked at start, whose payload bytes are
     // already in memory rather than behind a locator, in install order.
     for (id, bytes) in baked_payloads.iter() {
-        match mesh_payload::deserialize_with_lods(bytes) {
-            Ok((verts, idxs, alternates)) => {
-                component_mesh_handles.insert(id, geometry.len());
-                geometry.push(LoadedMesh {
-                    vertices: verts,
-                    indices: idxs,
-                    lod_alternates: alternates,
-                    bounds: None,
-                    counts: None,
-                });
-            }
-            Err(e) => {
-                tracing::error!("GraphicsSystem: malformed baked mesh payload {}: {}", id, e);
-                return None;
-            }
-        }
+        let handle = sink.geometry.len();
+        sink.geometry
+            .push(decode_loaded(bytes, &format!("baked mesh {id}"))?);
+        sink.component_handles.insert(id, handle);
     }
+
+    let MeshSink {
+        geometry,
+        deferred_payloads,
+        component_handles,
+        ..
+    } = sink;
 
     // Skybox-generated meshes enclose the camera, so any prop using one must
     // opt out of frustum culling AND streaming residency (per the
@@ -512,16 +379,131 @@ pub(crate) fn load_mesh_geometry(
         .iter()
         .chain(&baked_meshes)
         .filter(|pm| pm.generator == "skybox")
-        .filter_map(|pm| component_mesh_handles.get(&pm.asset_id).copied())
+        .filter_map(|pm| component_handles.get(&pm.asset_id).copied())
         .collect();
 
     Some(MeshGeometry {
         meshes: geometry,
         sources: mesh_sources,
         always_resident: always_resident_meshes,
-        component_handles: component_mesh_handles,
+        component_handles,
         deferred_seeds: deferred_payloads,
     })
+}
+
+// Decode one compiled mesh payload, logging a malformed one under `label`.
+fn decode_loaded(bytes: &[u8], label: &str) -> Option<LoadedMesh> {
+    match mesh_payload::deserialize_with_lods(bytes) {
+        Ok((vertices, indices, lod_alternates)) => Some(LoadedMesh {
+            vertices,
+            indices,
+            lod_alternates,
+            bounds: None,
+            counts: None,
+        }),
+        Err(e) => {
+            tracing::error!("GraphicsSystem: malformed {label} payload: {e}");
+            None
+        }
+    }
+}
+
+// Read the payload behind `locator`, logging a failed read under `label`.
+fn read_payload(
+    ctx: &mut PipelineContext,
+    locator: &PayloadLocator,
+    label: &str,
+) -> Option<Vec<u8>> {
+    match ctx.read_payload(locator) {
+        Ok(bytes) => Some(bytes.to_vec()),
+        Err(e) => {
+            tracing::error!("GraphicsSystem: failed to read {label} payload: {e:?}");
+            None
+        }
+    }
+}
+
+// The dense geometry table `load_mesh_geometry` fills in handle order, plus the
+// payload seeds of the meshes it deferred and the handles of the mesh sources
+// that are still components.
+struct MeshSink<'a> {
+    geometry: Vec<LoadedMesh>,
+    deferred_payloads: std::collections::HashMap<usize, DeferredMeshSeed>,
+    component_handles: std::collections::HashMap<AssetId, usize>,
+    deferred: &'a DeferredMeshSources,
+    blob_disk_backed: bool,
+}
+
+impl<'a> MeshSink<'a> {
+    fn new(deferred: &'a DeferredMeshSources, blob_disk_backed: bool) -> Self {
+        Self {
+            geometry: Vec::new(),
+            deferred_payloads: std::collections::HashMap::new(),
+            component_handles: std::collections::HashMap::new(),
+            deferred,
+            blob_disk_backed,
+        }
+    }
+
+    // Push the mesh behind `locator` at the next handle and return that handle.
+    // Baked `bounds` defer its decode to the streamer, keeping the payload bytes
+    // only when the blob is not disk-backed; without them it decodes now.
+    fn push(
+        &mut self,
+        ctx: &mut PipelineContext,
+        locator: &PayloadLocator,
+        bounds: Option<([f32; 3], [f32; 3])>,
+        label: &str,
+    ) -> Option<usize> {
+        let handle = self.geometry.len();
+        let mesh = match bounds {
+            None => decode_loaded(&read_payload(ctx, locator, label)?, label)?,
+            Some(bounds) => {
+                let bytes = if self.blob_disk_backed {
+                    None
+                } else {
+                    Some(read_payload(ctx, locator, label)?)
+                };
+                self.deferred_payloads.insert(
+                    handle,
+                    DeferredMeshSeed {
+                        locator: locator.clone(),
+                        bytes,
+                    },
+                );
+                LoadedMesh {
+                    vertices: Vec::new(),
+                    indices: Vec::new(),
+                    lod_alternates: Vec::new(),
+                    bounds: Some(bounds),
+                    counts: self.deferred.counts.get(&(handle as u32)).copied(),
+                }
+            }
+        };
+        self.geometry.push(mesh);
+        Some(handle)
+    }
+
+    // Push one component-backed mesh block, recording each asset id against its
+    // handle: its push position, since blocks load in cook's block order and each
+    // iterates in declaration order.
+    fn push_components<'m>(
+        &mut self,
+        ctx: &mut PipelineContext,
+        label: &str,
+        items: impl Iterator<Item = (AssetId, Option<&'m PayloadLocator>)>,
+    ) -> Option<()> {
+        for (i, (id, locator)) in items.enumerate() {
+            let Some(locator) = locator else {
+                tracing::error!("GraphicsSystem: {label}[{i}] {id} has no compiled payload");
+                return None;
+            };
+            let bounds = self.deferred.def_bounds(id, self.geometry.len());
+            let handle = self.push(ctx, locator, bounds, label)?;
+            self.component_handles.insert(id, handle);
+        }
+        Some(())
+    }
 }
 
 // Decode all Room mesh payloads and collect blob indices for the release step.
@@ -2009,6 +1991,49 @@ mod tests {
         } = load_mesh_geometry(&mut ctx, &DeferredMeshSources::default(), false).expect("ok");
         assert!(geometry.is_empty() && sources.is_empty() && resident.is_empty());
         assert!(component_handles.is_empty());
+    }
+
+    // A valid payload decodes with no baked bounds or counts attached.
+    #[test]
+    fn decode_loaded_decodes_a_valid_payload() {
+        let mesh = decode_loaded(&tri_payload(), "Mesh").expect("decoded");
+        assert_eq!(mesh.vertices.len(), 3);
+        assert_eq!(mesh.indices, vec![0, 1, 2]);
+        assert!(mesh.bounds.is_none() && mesh.counts.is_none());
+    }
+
+    // Bytes too short to hold their declared vertices do not decode.
+    #[test]
+    fn decode_loaded_rejects_a_truncated_payload() {
+        assert!(decode_loaded(&1u32.to_le_bytes(), "Mesh").is_none());
+    }
+
+    // A deferred push against a disk-backed blob keeps only the locator, since
+    // the streamer re-reads the file, and pushes an empty mesh carrying the
+    // baked bounds and counts.
+    #[test]
+    fn a_disk_backed_deferred_push_keeps_no_payload_bytes() {
+        let mut b = BlobWorld::new();
+        let loc = b.payload(&tri_payload());
+        let mut world = b.seal();
+        let mut ctx = world.ctx();
+        let mut deferred = DeferredMeshSources::default();
+        deferred.counts.insert(0, (3, 3));
+        let bounds = ([-1.0; 3], [1.0; 3]);
+
+        let mut sink = MeshSink::new(&deferred, true);
+        assert_eq!(sink.push(&mut ctx, &loc, Some(bounds), "Mesh"), Some(0));
+
+        let seed = sink.deferred_payloads.get(&0).expect("seed captured");
+        assert!(seed.bytes.is_none(), "a disk-backed seed re-reads the blob");
+        assert_eq!(
+            (seed.locator.offset, seed.locator.len),
+            (loc.offset, loc.len)
+        );
+        let mesh = &sink.geometry[0];
+        assert!(mesh.vertices.is_empty(), "decode deferred");
+        assert_eq!(mesh.bounds, Some(bounds));
+        assert_eq!(mesh.counts, Some((3, 3)));
     }
 
     fn test_room(locator: Option<PayloadLocator>) -> Room {

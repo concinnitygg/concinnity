@@ -2309,6 +2309,29 @@ fn the_ray_tracing_flags_reach_the_backend() {
     }
 }
 
+// A world launched without a screenshot request keeps the presented frame
+// unreadable, so production pays nothing for capture.
+#[test]
+fn capture_stays_off_without_a_launch_request() {
+    let (state, hooks) = recording_hooks();
+    let mut world = scene_builder().build();
+    init_graphics(&mut world, hooks);
+    assert!(!lock(&state).init.as_ref().unwrap().capture);
+}
+
+// The launch's screenshot request reaches the backend through the world's
+// `LaunchRequest`, with no process-wide flag involved.
+#[test]
+fn a_capture_launch_request_reaches_the_backend() {
+    let (state, hooks) = recording_hooks();
+    let mut world = scene_builder().build();
+    world
+        .resources
+        .insert(crate::app::run::LaunchRequest { capture: true });
+    init_graphics(&mut world, hooks);
+    assert!(lock(&state).init.as_ref().unwrap().capture);
+}
+
 // A ceiling only ever reduces: a world that turned the expensive effects off is
 // not "upgraded" by a high tier, and the resolved preset is held for the master
 // menu row.

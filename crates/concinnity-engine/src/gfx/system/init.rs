@@ -68,7 +68,7 @@ use concinnity_host::thread::asset_id;
 use concinnity_host::thread::asset_id::AssetId;
 use std::time::Instant;
 
-use super::helpers::*;
+use super::draw_geometry::{draw_object_position, gather_auto_seed_triangles};
 use super::*;
 use crate::gfx::draw_list;
 use crate::gfx::material_entry::MaterialEntry;
@@ -1324,10 +1324,8 @@ impl GraphicsSystem {
                 let Some(raw) = world_default.stage(stage) else {
                     continue;
                 };
-                let resolved = super::hot_reload_sources::resolve_runtime_source_path(
-                    raw,
-                    assets_dir.as_deref(),
-                );
+                let resolved =
+                    concinnity_host::store::source::resolve_source_path(raw, assets_dir.as_deref());
                 shader_stage_source_map.entries.push(
                     super::hot_reload_sources::ShaderStageSourceEntry {
                         stage,
@@ -2434,8 +2432,11 @@ impl GraphicsSystem {
         // and shader sources stay strictly include_str!-baked.
         let hot_reload = crate::app::dev_flags::enabled();
         // Frame capture: always available under the dev loop, and armed for a
-        // production run that asked for an exit screenshot.
-        let capture = hot_reload || crate::app::dev_flags::capture();
+        // launch that asked for an exit screenshot.
+        let capture = hot_reload
+            || ctx
+                .resource::<crate::app::run::LaunchRequest>()
+                .is_some_and(|r| r.capture);
         // Worst-case resident chunk count for the streaming VoxelWorld (0 for a
         // non-voxel world). Threaded into the backend so its GPU-cull buffers
         // reserve a chunk record region at init; resident chunks fold into the

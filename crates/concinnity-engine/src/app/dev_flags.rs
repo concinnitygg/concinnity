@@ -59,10 +59,6 @@ pub use crate::gfx::quality_preset::QualityPreset;
 use crate::gfx::quality_preset::{preset_at, preset_index};
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
-// "keep the presented frame blit-readable for an exit screenshot." Set by
-// `cn run --screenshot` before world build; read by `GraphicsSystem::init`.
-// The dev loop's ENABLED implies capture without this flag.
-static CAPTURE: AtomicBool = AtomicBool::new(false);
 
 // Tri-state validation request: 0 = unset (use the build-profile default),
 // 1 = explicitly off, 2 = explicitly on.
@@ -100,18 +96,6 @@ pub fn set_enabled(v: bool) {
 // shader hot-reload. False for `cn run` and any embedded preview.
 pub(crate) fn enabled() -> bool {
     ENABLED.load(Ordering::SeqCst)
-}
-
-// Arm frame capture for a production run that wants an exit screenshot.
-// Called by `start_runtime` before world build when a screenshot path was
-// requested.
-pub(crate) fn set_capture(v: bool) {
-    CAPTURE.store(v, Ordering::SeqCst);
-}
-
-// True when a production run armed frame capture (`cn run --screenshot`).
-pub(crate) fn capture() -> bool {
-    CAPTURE.load(Ordering::SeqCst)
 }
 
 /// Record the CLI `--validation` request. `None` leaves the build-profile

@@ -83,6 +83,13 @@ pub struct RunOptions {
     pub max_frames: Option<u64>,
 }
 
+/// What the launch asked graphics init to arm, published as a world resource.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct LaunchRequest {
+    /// Keep the presented frame blit-readable for an exit screenshot.
+    pub(crate) capture: bool,
+}
+
 /// Production entry point (`cn run`). Reads the compiled binary blobs from
 /// `tree`'s `data/`, written by a prior `cn build`. No debug server, no
 /// command channel: a shipped run is neither remotely inspectable nor
@@ -205,10 +212,9 @@ pub(crate) fn start_runtime(mut app: App, options: RunOptions) -> Result<(), CnE
             config.max_frames = Some(max);
         }
     }
-    if options.screenshot.is_some() {
-        // Before `start()`, so graphics init arms the blit-readable path.
-        crate::app::dev_flags::set_capture(true);
-    }
+    app.world_mut().insert_resource(LaunchRequest {
+        capture: options.screenshot.is_some(),
+    });
     app.world_mut().insert_resource(options.schedule);
 
     #[cfg(target_os = "macos")]

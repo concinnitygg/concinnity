@@ -164,17 +164,6 @@ impl ProceduralMeshSourceMap {
     }
 }
 
-// Resolve a Shader stage's declared source to the on-disk path the watcher
-// subscribes to and the runtime recompile reads, searching `assets_dir` the way
-// the build pipeline searches the root it was given. Fills a
-// [`ShaderStageSourceEntry`]'s `resolved_path`.
-pub(crate) fn resolve_runtime_source_path(
-    raw: &str,
-    assets_dir: Option<&std::path::Path>,
-) -> String {
-    concinnity_host::store::source::resolve_source_path(raw, assets_dir)
-}
-
 /// One of the world default Shader's files, as a reload entry: which hook it
 /// defines plus the resolved on-disk path the build pipeline read, so the
 /// hot-reload helper can recompile the Shader through the cook's own compile
@@ -379,18 +368,6 @@ pub struct HotReloadSources {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn resolve_keeps_paths_with_a_directory_component() {
-        // A path that already contains a directory is returned verbatim; the
-        // bare-filename branch searches the root it was given. The resolution
-        // itself is covered in `concinnity_host::store`, and the build-side
-        // variant in concinnity-cook.
-        assert_eq!(
-            resolve_runtime_source_path("shaders/x.slang", None),
-            "shaders/x.slang"
-        );
-    }
 
     fn mesh_entry(source: &str) -> MeshSourceEntry {
         MeshSourceEntry {

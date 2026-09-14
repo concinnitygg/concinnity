@@ -147,9 +147,16 @@ pub fn anchor(anchor: CacheAnchor) {
     *anchored().lock().unwrap() = Some(anchor);
 }
 
-/// Drop the anchor, leaving the process with no cache to warm from.
+/// Drop the anchor, leaving the process with no cache to warm from. The segment
+/// read under it is written back to its own file first, so a later [`flush`]
+/// has nothing left to write.
 pub fn clear_anchor() {
     *anchored().lock().unwrap() = None;
+    if let Some(mut previous) = lock().take() {
+        previous
+            .segment
+            .write_to(&previous.path, CACHE_BUDGET_BYTES);
+    }
 }
 
 // The file this run writes, when one is anchored.
@@ -261,6 +268,24 @@ mod tests {
         let tiered = CacheAnchor::new("/run/segment").with_bundled("/opt/shipped");
         assert_eq!(tiered.writable, Path::new("/run/segment"));
         assert_eq!(tiered.bundled.as_deref(), Some(Path::new("/opt/shipped")));
+    }
+
+    // Dropping the anchor writes back what was read under it, and leaves
+    // nothing for a later flush or store to reach.
+    #[test]
+    fn clearing_the_anchor_writes_the_segment_back_and_detaches_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("0");
+        anchor(CacheAnchor::new(path.clone()));
+        assert!(store(CacheEntryKind::Shader, "k", b"v"));
+
+        clear_anchor();
+        assert_eq!(
+            Segment::read_from(&path).get(CacheEntryKind::Shader, "k"),
+            Some(&b"v"[..])
+        );
+        assert!(!flush(), "nothing is left to write");
+        assert!(!store(CacheEntryKind::Shader, "k", b"v"));
     }
 
     // The tree is what a host builds an anchor from, and the portable layout

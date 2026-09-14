@@ -15,7 +15,7 @@ use concinnity_core::gfx::render_types;
 use concinnity_core::render::scene_residency;
 use concinnity_host::thread::asset_id::AssetId;
 
-use super::helpers::*;
+use super::stream_sources::{block_type_to_chunk, build_texture_payload_source};
 use super::*;
 use crate::gfx::material_entry::MaterialEntry;
 

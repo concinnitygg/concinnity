@@ -12,7 +12,8 @@
 //!   streaming.rs texture / normal-map / mesh / voxel-world streaming setup
 //!                (the per-frame drive lives in gfx::streaming::system)
 //!   scene.rs     scene-flow wiring + scene visibility
-//!   helpers.rs   shared free functions
+//!   stream_sources.rs  streamed texture payload sources + voxel palette entries
+//!   draw_geometry.rs   draw-object positions + auto-seed triangle gathering
 
 use concinnity_core::components::{
     GamepadAction, GamepadMap, GraphicsConfig, IndirectLighting, PostProcessConfig,
@@ -762,15 +763,16 @@ pub(crate) fn derive_quality_settings(cfg: &PostProcessConfig) -> backend::Quali
 }
 
 pub(crate) mod character_shape;
+mod draw_geometry;
 mod frame;
 pub(crate) mod frame_policy;
-mod helpers;
 pub mod hot_reload_sources;
 mod init;
 mod lines;
 mod model_push;
 pub(crate) mod scene;
 mod sky_follow;
+mod stream_sources;
 mod streaming;
 pub(crate) mod submit;
 #[cfg(test)]

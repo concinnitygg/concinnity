@@ -236,9 +236,11 @@ impl App {
     // Hand the state tree to the world, and to the process-wide caches that
     // outlive any one call. Runs after `install_home`, so what the systems read
     // is the tree the world asked for, and before `world.start(SYSTEMS)`, which
-    // is where the systems that capture a directory are built.
+    // is where the systems that capture a directory are built. An app with no
+    // tree drops the anchor a previous app left, so it touches no cache either.
     fn publish_state_tree(&mut self) {
         let Some(tree) = self.state.clone() else {
+            concinnity_host::store::cache::clear_anchor();
             return;
         };
         concinnity_host::store::cache::anchor(
@@ -503,6 +505,8 @@ mod tests {
     // leaving the content (and the blobs the app reads) where it was.
     #[test]
     fn an_app_config_home_moves_only_the_writable_root() {
+        // Starting an app with a tree anchors the process-wide runtime cache.
+        let _guard = concinnity_testing::exclusive();
         let root = if cfg!(windows) {
             r"C:\apps\MyGame"
         } else {
@@ -535,14 +539,27 @@ mod tests {
     }
 
     // An app with no tree touches no disk, and publishes nothing for the
-    // systems to read: a world runs, everything it would persist does nothing.
+    // systems to read: a world runs, everything it would persist does nothing,
+    // including the runtime cache a previous app anchored.
     #[test]
     fn an_app_without_a_tree_publishes_none() {
+        use concinnity_host::store::cache::{self, CacheAnchor, CacheEntryKind};
+
+        let _guard = concinnity_testing::exclusive();
+        let tmp = concinnity_testing::TempTree::new();
+        cache::anchor(CacheAnchor::new(tmp.join("cache")));
+        assert!(cache::store(CacheEntryKind::Shader, "k", b"v"));
+
         let mut app = App::new();
         assert_eq!(app.primary_blob(), None);
         assert_eq!(app.load_blob(), Err(CnError::NoStateRoot));
         app.start().unwrap();
         assert!(app.world().resource::<StateTree>().is_none());
+        assert!(
+            !cache::store(CacheEntryKind::Shader, "k", b"v"),
+            "the previous anchor no longer takes entries"
+        );
+        assert!(!cache::flush(), "nothing is left to write");
     }
 
     // A blob named directly anchors the state tree beside the world it holds,
