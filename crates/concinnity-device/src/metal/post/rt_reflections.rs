@@ -121,10 +121,10 @@ impl MtlContext {
         );
         enc.set_pipeline(pipeline);
         // Textures + samplers mirror the SSR resolve.
-        enc.set_fragment_texture(self.hdr_targets.hdr_resolve.as_ref(), 0);
+        enc.set_fragment_texture(self.targets.hdr.hdr_resolve.as_ref(), 0);
         enc.set_fragment_texture(gb_normal_depth, 1);
         enc.set_fragment_texture(gb_roughness, 2);
-        enc.set_fragment_texture(self.env_map.prefilter.as_ref(), 3);
+        enc.set_fragment_texture(self.scene.env_map.prefilter.as_ref(), 3);
         // Local reflection-probe cubes, through their argument buffer: a missed
         // reflection ray reflects the box-projected scene capture instead of
         // the foreign sky HDR (the source the forward IBL specular term uses).
@@ -134,14 +134,14 @@ impl MtlContext {
         // at sampler(3) and the probe block's own sampler at sampler(4) take
         // the cube sampler. The textured variant reads the bindless pool
         // through the repeat-address pool sampler after those.
-        set_fragment_sampler_range(&enc, &self.post_sampler, 0, 3);
-        set_fragment_sampler_range(&enc, self.cube_sampler.as_ref(), 3, 2);
-        set_fragment_sampler_range(&enc, self.sampler.as_ref(), RT_POOL_SAMPLER_INDEX, 1);
+        set_fragment_sampler_range(&enc, &self.composite.sampler, 0, 3);
+        set_fragment_sampler_range(&enc, self.scene.cube_sampler.as_ref(), 3, 2);
+        set_fragment_sampler_range(&enc, self.scene.sampler.as_ref(), RT_POOL_SAMPLER_INDEX, 1);
         // buffer(0) params; buffers 1..3 the shared geometry the kernel
         // fetches the hit triangle from; the TLAS at buffer(4).
         enc.set_fragment_value(rt_params, 0);
-        enc.set_fragment_buffer(self.vertex_buffer.as_ref(), 0, 1);
-        enc.set_fragment_buffer(self.index_buffer.as_ref(), 0, 2);
+        enc.set_fragment_buffer(self.scene.vertex_buffer.as_ref(), 0, 1);
+        enc.set_fragment_buffer(self.scene.index_buffer.as_ref(), 0, 2);
         enc.set_fragment_buffer(accel.geom_table.as_ref(), 0, 3);
         enc.set_fragment_acceleration_structure(accel.tlas.as_ref(), 4);
         // Deformed (posed) skinned vertices + the skinned index buffer

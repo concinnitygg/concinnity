@@ -78,12 +78,12 @@ impl MtlContext {
         // the vertex region the allocator chose: v_off is always a multiple of
         // size_of::<Vertex>() (every seed region and allocation is), so the
         // base is an exact vertex index.
-        write_buffer_region(&self.vertex_buffer, v_off, bytes_of_slice(vertices))?;
+        write_buffer_region(&self.scene.vertex_buffer, v_off, bytes_of_slice(vertices))?;
         // Static IB is u32 (per-scene total can exceed u16); per-mesh indices
         // are u16 (each mesh fits in u16, enforced by the build-time splitter).
         let base = (v_off / std::mem::size_of::<Vertex>()) as u32;
         let rebased: Vec<u32> = indices.iter().map(|&i| u32::from(i) + base).collect();
-        write_buffer_region(&self.index_buffer, i_off, bytes_of_slice(&rebased))?;
+        write_buffer_region(&self.scene.index_buffer, i_off, bytes_of_slice(&rebased))?;
 
         let obj = &mut self.draw.objects[draw_idx];
         obj.vertex_offset = v_off;
@@ -139,8 +139,8 @@ impl MtlContext {
         let v_len = obj.vertex_count * std::mem::size_of::<Vertex>();
         let i_off = obj.index_offset * std::mem::size_of::<u32>();
         let i_len = obj.index_count * std::mem::size_of::<u32>();
-        zero_buffer_region(&self.vertex_buffer, v_off, v_len)?;
-        zero_buffer_region(&self.index_buffer, i_off, i_len)?;
+        zero_buffer_region(&self.scene.vertex_buffer, v_off, v_len)?;
+        zero_buffer_region(&self.scene.index_buffer, i_off, i_len)?;
         self.geometry_alloc
             .mesh_vtx
             .free(v_off as u64, v_len as u64, retire_frame);
@@ -253,15 +253,19 @@ impl MtlContext {
             .map(|s| s.index_offset * std::mem::size_of::<u32>())
             .collect();
         let rebased: Vec<u32> = indices.iter().map(|&i| u32::from(i) + base).collect();
-        write_buffer_region(&self.vertex_buffer, v_off, bytes_of_slice(vertices))?;
-        write_buffer_region(&self.index_buffer, i_off_bytes, bytes_of_slice(&rebased))?;
+        write_buffer_region(&self.scene.vertex_buffer, v_off, bytes_of_slice(vertices))?;
+        write_buffer_region(
+            &self.scene.index_buffer,
+            i_off_bytes,
+            bytes_of_slice(&rebased),
+        )?;
         // LOD alternate slots were laid out at init-time alongside LOD0 in
         // the same shared index buffer. Rebase each alternate onto the same
         // `base` as LOD0 since LOD decimation shares the LOD0 vertex region.
         for ((_, alt_idx), &alt_off_bytes) in lod_alternates.iter().zip(lod_byte_offsets.iter()) {
             let alt_rebased: Vec<u32> = alt_idx.iter().map(|&i| u32::from(i) + base).collect();
             write_buffer_region(
-                &self.index_buffer,
+                &self.scene.index_buffer,
                 alt_off_bytes,
                 bytes_of_slice(&alt_rebased),
             )?;

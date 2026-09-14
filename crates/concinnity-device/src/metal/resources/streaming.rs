@@ -24,10 +24,11 @@ impl MtlContext {
         chunk_vtx_bytes: usize,
         chunk_idx_bytes: usize,
     ) -> Result<(), String> {
-        let old_v_len = self.vertex_buffer.length();
-        let old_i_len = self.index_buffer.length();
+        let old_v_len = self.scene.vertex_buffer.length();
+        let old_i_len = self.scene.index_buffer.length();
 
         let new_vbuf = self
+            .hw
             .allocator
             .alloc_buffer(
                 old_v_len + chunk_vtx_bytes,
@@ -35,6 +36,7 @@ impl MtlContext {
             )
             .map_err(|e| format!("setup_chunk_streaming: chunk vertex buffer: {e}"))?;
         let new_ibuf = self
+            .hw
             .allocator
             .alloc_buffer(
                 old_i_len + chunk_idx_bytes,
@@ -44,10 +46,10 @@ impl MtlContext {
 
         // Copy the build-time geometry into the start of the grown buffers so
         // every existing draw's offsets stay valid.
-        copy_buffer_prefix(&self.vertex_buffer, &new_vbuf, old_v_len);
-        copy_buffer_prefix(&self.index_buffer, &new_ibuf, old_i_len);
-        self.vertex_buffer = new_vbuf;
-        self.index_buffer = new_ibuf;
+        copy_buffer_prefix(&self.scene.vertex_buffer, &new_vbuf, old_v_len);
+        copy_buffer_prefix(&self.scene.index_buffer, &new_ibuf, old_i_len);
+        self.scene.vertex_buffer = new_vbuf;
+        self.scene.index_buffer = new_ibuf;
 
         // Seed the chunk allocators with the appended headroom. retire_frame 0:
         // nothing has been drawn, so the space is reusable immediately.
@@ -107,9 +109,13 @@ impl MtlContext {
         // headroom start and every alloc are), so the base is an exact index.
         // The shared index_buffer is u32-typed, so widen the per-mesh u16
         // indices before writing.
-        write_buffer_region(&self.vertex_buffer, v_off, bytes_of_slice(vertices))?;
+        write_buffer_region(&self.scene.vertex_buffer, v_off, bytes_of_slice(vertices))?;
         let indices_u32: Vec<u32> = indices.iter().map(|&i| u32::from(i)).collect();
-        write_buffer_region(&self.index_buffer, i_off, bytes_of_slice(&indices_u32))?;
+        write_buffer_region(
+            &self.scene.index_buffer,
+            i_off,
+            bytes_of_slice(&indices_u32),
+        )?;
         let base_vertex = (v_off / std::mem::size_of::<Vertex>()) as i32;
 
         let obj = DrawObject {
@@ -159,12 +165,12 @@ impl MtlContext {
     ) -> Result<(), String> {
         let region = draw_slot::retire_chunk_slot(&mut self.draw.objects, draw_idx)?;
         zero_buffer_region(
-            &self.vertex_buffer,
+            &self.scene.vertex_buffer,
             region.vertex_offset as usize,
             region.vertex_bytes as usize,
         )?;
         zero_buffer_region(
-            &self.index_buffer,
+            &self.scene.index_buffer,
             region.index_offset as usize,
             region.index_bytes as usize,
         )?;

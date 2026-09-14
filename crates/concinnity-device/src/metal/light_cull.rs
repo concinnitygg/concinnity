@@ -56,7 +56,7 @@ impl MtlContext {
         enc.set_pipeline(pipeline);
 
         enc.set_value(cluster_params, 0);
-        enc.set_buffer(&self.local_light_buffer, 0, 1);
+        enc.set_buffer(&self.scene.local_light_buffer, 0, 1);
         enc.set_buffer(&self.light_cull.cluster_buffer, 0, 2);
 
         // One thread per cluster; the kernel builds one cluster's list.

@@ -7,6 +7,7 @@ use concinnity_core::gfx::render_types::{
     ClusterParams, DrawObject, InstancedCluster, LightUniforms, NUM_SHADOW_CASCADES, ShadowUniforms,
 };
 use concinnity_core::render::backend;
+use concinnity_core::render::backend_init;
 use concinnity_core::render::decal;
 use concinnity_core::render::draw_slot;
 use concinnity_core::render::error;
@@ -434,14 +435,23 @@ pub(super) struct WindowState {
     // Metal-only: the drawable and its render-pass descriptor come from here,
     // which is why the shared window layer keeps only the NSView upcast.
     pub view: Retained<MTKView>,
-    // Whether this context is responsible for tearing the window / view down on
-    // drop (closing the NSWindow, or removing the embedded subview). True for a
-    // normally constructed context; set false on the outgoing context of a live
-    // `cn editor` reload, which transplants the window to its successor -- the
-    // successor owns it now, so the outgoing drop must NOT close the shared
-    // window (that would order it out from under the reused context).
-    pub owns: bool,
     pub was_visible: bool,
+}
+
+impl Drop for WindowState {
+    fn drop(&mut self) {
+        // Always release the cursor on teardown so the OS mouse association and
+        // cursor visibility are restored even if the caller didn't do it.
+        self.appkit.release_cursor();
+        if let Some(window) = self.appkit.window() {
+            // Close the window so it doesn't linger after the run loop exits.
+            window.close();
+        } else {
+            // In embedded mode (no NSWindow), the MTKView was added as a subview.
+            // Explicitly remove it so it doesn't outlive the preview session.
+            self.view.removeFromSuperview();
+        }
+    }
 }
 
 // Per-frame counters, GPU timings, and the fault reporting that crosses the
@@ -487,52 +497,206 @@ pub(super) struct Diagnostics {
     pub draw_calls_accum: std::sync::atomic::AtomicU32,
 }
 
-// HDR output negotiation for the swapchain.
-pub(super) struct HdrState {
-    // Maximum extended-range color-component multiplier reported by the active
-    // panel when the renderer is on the HDR path. `Some(2.0)` on HDR400,
-    // `Some(8.0+)` on HDR1000-class panels; `None` on SDR (whether the world
-    // disabled HDR or the platform fell back). Surfaced via `RenderStats.max_edr`
-    // so the `StatHud` overlay can render an `EDR` chip showing the headroom.
-    pub max_edr: Option<f32>,
-    // Resolved HDR encoding of the swapchain (scRGB-linear vs PQ), or `None` on
-    // the SDR path. Read only by the headless `screenshot` path to decode the
-    // captured `RGBA16Float` EDR drawable. Mirrors DX `hdr.encoding`.
-    pub encoding: Option<hdr_output::HdrEncoding>,
-    // The world's HDR-output *request* this context was built with (before EDR
-    // negotiation could fall it back to SDR). Reported by `hot_swap_config` so a
-    // live `cn editor` world reload can tell whether the new world would produce
-    // the same swapchain: comparing the request (not the negotiated result) keeps
-    // a display without EDR headroom from spuriously forcing a rebuild every
-    // save. Paired with `frames_in_flight` as the swapchain identity.
-    pub display_requested: bool,
-    pub pq_requested: bool,
+// The device layer every per-world resource is built on: device, queues,
+// allocator and window, plus the display settings negotiated with them. The
+// window is declared last so everything that presents to it releases first.
+pub(super) struct MtlHardware {
+    pub device: Retained<ProtocolObject<dyn objc2_metal::MTLDevice>>,
+    // Block pool every persistent CPU-written, GPU-read-only buffer and texture
+    // is placed in, so the world's resource count costs a handful of heaps
+    // rather than one device allocation each. See `metal/allocator.rs`.
+    pub allocator: DeviceAllocator,
+    pub command_queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
+    // The async-compute queue plus the per-queue `MTLEvent`s the render-graph
+    // executor submits the schedule's two queues over. `None` when the device
+    // would not create them, which drops the executor back to recording every
+    // pass onto `command_queue` in compiled order.
+    pub graph_queues: Option<super::graph_queues::GraphQueues>,
+    // Pixel format the MTKView's CAMetalLayer is currently presenting at:
+    // `BGRA8Unorm` for SDR, `RGBA16Float` for HDR EDR. The post + text
+    // pipelines bake this format into their color attachment descriptors,
+    // so it has to be stable between `MtlContext::new` and any subsequent
+    // hot-reload rebuild. The per-frame `PostProcessParams.hdr_output` flag
+    // carries the EDR signal into the shader.
+    pub swap_pixel_format: MTLPixelFormat,
+    // The resolved swapchain color-output mode. EDR negotiation can fall the
+    // world's HDR request back to SDR, so this can disagree with
+    // `swapchain_config`.
+    pub hdr_mode: hdr_output::HdrOutputMode,
+    // The swapchain config (ring depth + HDR request) this context was built
+    // with, reported by `hot_swap_config` so a live editor reload reuses this
+    // hardware only when the new world's config still matches. Holding the
+    // request rather than the negotiated mode keeps a display without EDR
+    // headroom from forcing a rebuild every save.
+    pub swapchain_config: backend_init::SwapchainConfig,
+    // `Option` so a live `cn editor` world reload can MOVE the window (and its
+    // live cursor / keymap / fullscreen state) into the rebuilt context; a
+    // normal context always holds `Some`. Access via `window`/`window_mut`.
+    pub window: Option<WindowState>,
+}
+
+impl MtlHardware {
+    // The hardware an outgoing context hands its successor on a live editor
+    // `reload_world`: clones of the device and command queue, with the window
+    // and the graph queues moved out. The successor places into a fresh
+    // allocator; the outgoing world releases into its own.
+    pub(super) fn hand_over(&mut self) -> Result<Self, String> {
+        Ok(Self {
+            window: Some(
+                self.window
+                    .take()
+                    .ok_or("apply_world_reload: window already taken")?,
+            ),
+            graph_queues: self.graph_queues.take(),
+            allocator: DeviceAllocator::new(&self.device, self.swapchain_config.frames_in_flight),
+            device: self.device.clone(),
+            command_queue: self.command_queue.clone(),
+            swap_pixel_format: self.swap_pixel_format,
+            hdr_mode: self.hdr_mode,
+            swapchain_config: self.swapchain_config,
+        })
+    }
+
+    // Maximum extended-range multiplier on the HDR path, `None` on SDR.
+    pub(super) fn max_edr(&self) -> Option<f32> {
+        match self.hdr_mode {
+            hdr_output::HdrOutputMode::Hdr { max_edr, .. } => Some(max_edr),
+            hdr_output::HdrOutputMode::Sdr => None,
+        }
+    }
+
+    // HDR encoding (scRGB-linear vs PQ) on the HDR path, `None` on SDR.
+    pub(super) fn hdr_encoding(&self) -> Option<hdr_output::HdrEncoding> {
+        match self.hdr_mode {
+            hdr_output::HdrOutputMode::Hdr { encoding, .. } => Some(encoding),
+            hdr_output::HdrOutputMode::Sdr => None,
+        }
+    }
+}
+
+// Render-resolution scene targets, rebuilt on resize, plus the depth tests the
+// scene passes run against them.
+pub(super) struct MtlTargets {
+    // Off-screen HDR render targets (MSAA RGBA16Float + resolve + MSAA
+    // Depth32Float). Re-created lazily in `draw_frame` whenever the
+    // drawable size changes. The main + instanced pipelines render into
+    // these, and the post-process pass samples `hdr_resolve` to write
+    // the tonemapped + FXAA-filtered output into the drawable.
+    pub hdr: HdrTargets,
+    // Bloom mip chain (prefilter/downsample/upsample targets). Re-created
+    // alongside `hdr` whenever the drawable size changes.
+    pub bloom: BloomTargets,
+    // Pool backing the render graph's transient textures
+    // (`gfx::render_graph::alias`). Owns `bloom_top` (which `bloom` borrows as
+    // mip 0) and, when SSAO is on, `ao_output`; their disjoint lifetimes put
+    // them on one aliased `MTLHeap` slot. Rebuilt on resize. See
+    // [`TransientTexturePool`].
+    pub transient_pool: TransientTexturePool,
+    pub depth_state: Retained<ProtocolObject<dyn MTLDepthStencilState>>,
+    // Read-only depth state: `LessEqual` test, no write. Used by translucent
+    // draws that must be occluded by nearer opaque geometry but must not
+    // update the depth buffer (volumetric raymarch volumes). Metal forbids
+    // `setDepthStencilState(nil)` under the validation layer, so translucent
+    // passes bind this instead of clearing the state.
+    pub depth_state_read_only: Retained<ProtocolObject<dyn MTLDepthStencilState>>,
+    // True when the world has no 3D geometry (e.g. a text-only world). The
+    // off-screen HDR / bloom / effect targets are then allocated at 1x1 since
+    // nothing is rendered into them; the composite pass still runs at the full
+    // drawable size, so text stays crisp.
+    pub geometry_less: bool,
+}
+
+// The world's scene assets: the shared geometry buffers, the texture pool, the
+// light tables, the IBL cubes and color-grading LUT, and the samplers they are
+// read through. None of it depends on the drawable.
+pub(super) struct MtlSceneAssets {
+    // Single shared vertex buffer containing geometry for all draw objects.
+    pub vertex_buffer: PooledBuffer,
+    // Single shared index buffer containing indices for all draw objects.
+    pub index_buffer: PooledBuffer,
+    // Shared texture pool (slot == handle): every texture (albedo, normal map,
+    // emissive/ORM, terrain secondary) lives here once, matching DX/VK. A 1x1
+    // opaque-white fallback is always present at slot 0 so shaders that sample
+    // texture(0) produce correct output even when no Texture asset was declared.
+    pub textures: Vec<PooledTexture>,
+    // Holds only the 1x1 flat-normal fallback (RGBA 128,128,255,255) a
+    // normal-less draw samples; its pool slot is one past the last real texture.
+    // Real normal maps are entries in `textures`.
+    pub fallback_textures: Vec<PooledTexture>,
+    // Per-scene local lights (point + spot + area) for the clustered forward
+    // pass, bound at fragment buffer(8). Always holds at least one element (a
+    // neutral placeholder when the scene declares no local lights) so the
+    // binding is valid; `light_uniforms.num_local_lights` bounds iteration.
+    pub local_light_buffer: PooledBuffer,
+    // Per-scene rect area-light extents, indexed by `GpuLight.data_index`.
+    // Uploaded once; a one-element placeholder when the world declares none.
+    pub area_light_buffer: PooledBuffer,
+    // The two linearly-transformed-cosine lookup tables the area-light shading
+    // path samples: the inverse transforms (RGBA32Float) and the matching
+    // (albedo, Fresnel) pairs (RG32Float). Generated at build time, so these are
+    // scene-independent and created once.
+    pub ltc_matrix_texture: PooledTexture,
+    pub ltc_magnitude_texture: PooledTexture,
+    // IBL cubemaps + mip count. Always Some: the runtime synthesizes a 1x1
+    // gray fallback for both cubes when no EnvironmentMap was supplied, so
+    // the fragment shader's texture(3) / texture(4) bindings are always
+    // valid. `prefilter_mip_count == 0` is the "IBL disabled" signal the
+    // shader uses to fall back to the legacy ambient/skybox path.
+    pub env_map: EnvironmentMapTextures,
+    // 3D color-grading LUT sampled in the composite pass. Holds the declared
+    // `ColorLut` payload, or a 2x2x2 identity LUT when the world declares
+    // none, so the composite pass binds a valid 3D texture either way.
+    pub color_lut: PooledTexture,
+    // Linear-filter, repeat-wrap sampler the texture pool is read through.
+    pub sampler: Retained<ProtocolObject<dyn MTLSamplerState>>,
+    // Linear-clamp sampler bound at sampler(2) for cubemap sampling.
+    pub cube_sampler: Retained<ProtocolObject<dyn MTLSamplerState>>,
+}
+
+// The argument encoders the bindless main pass and the probe-sampling passes
+// write through, plus what decides when a ring slot is re-encoded: the slot
+// gates, the residency set and the texture epoch. See `metal/bindless_args.rs`.
+pub(super) struct MtlArgumentBuffers {
+    // Encoder that packs the bindless pass's textures into a per-frame
+    // argument buffer (the `BindlessTextures` block). `Some` only when
+    // `cull.bindless`.
+    pub bindless_tex_encoder: Option<Retained<ProtocolObject<dyn MTLArgumentEncoder>>>,
+    // Per-ring-slot change gates for that argument buffer: the block's contents
+    // and its unused tail, gated apart because a stream-in moves the former
+    // every time and the latter almost never. See `build_bindless_texture_args`.
+    pub bindless_tex_gates: super::bindless_args::SlotGates,
+    pub bindless_tail_gates: super::bindless_args::SlotGates,
+    // Every texture the `BindlessTextures` block names, declared resident in
+    // one batched call per encoder. Refreshed once per frame by
+    // `refresh_bindless_residency`.
+    pub bindless_residency: super::bindless_args::ResidencySet,
+    // The engine sampler block bound at fragment buffer(10) for the
+    // single-source main program: three static samplers written once at init
+    // (samplers never stream, so no per-frame ring is needed). `None` when a
+    // world-authored fragment owns the main pass.
+    pub bindless_sampler_args: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
+    // Argument encoder for the `ProbeCubes` block the five probe-sampling
+    // fragments declare; see `probe_cubes::probe_cube_arg_encoder`.
+    pub probe_cube_encoder: Retained<ProtocolObject<dyn MTLArgumentEncoder>>,
+    // Bumped by every announced change to the textures those argument buffers
+    // name (a pool slot streamed in or evicted, an env-map or probe swap), so a
+    // handle that happens to reuse a freed one's address still moves the
+    // signature the gates compare.
+    pub texture_epoch: u64,
+}
+
+// The composite pass: ACES tonemap + gamma 2.2 + FXAA (SDR drawable) or linear
+// extended-range output (HDR drawable) from the resolved HDR target.
+pub(super) struct CompositeState {
+    pub pipeline: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
+    // Linear-clamp sampler bound at sampler(0) when sampling the HDR resolve
+    // target. Also reused by the bloom passes and the post-process chain.
+    pub sampler: Retained<ProtocolObject<dyn MTLSamplerState>>,
 }
 
 // Metal rendering context. Owns all GPU resources and the window.
 // Only ever accessed from the main thread.
 pub(crate) struct MtlContext {
-    pub(super) device: Retained<ProtocolObject<dyn objc2_metal::MTLDevice>>,
-    // Block pool every persistent CPU-written, GPU-read-only buffer and texture
-    // is placed in, so the world's resource count costs a handful of heaps
-    // rather than one device allocation each. See `metal/allocator.rs`.
-    pub(super) allocator: DeviceAllocator,
-    pub(super) command_queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
-    // The async-compute queue plus the per-queue `MTLEvent`s the render-graph
-    // executor submits the schedule's two queues over. `None` when the device
-    // would not create them, which drops the executor back to recording every
-    // pass onto `command_queue` in compiled order.
-    pub(super) graph_queues: Option<super::graph_queues::GraphQueues>,
-    // Pixel format the MTKView's CAMetalLayer is currently presenting at:
-    // `BGRA8Unorm` for SDR, `RGBA16Float` for HDR EDR. The post + text
-    // pipelines bake this format into their color attachment descriptors,
-    // so it has to be stable between `MtlContext::new` and any subsequent
-    // hot-reload rebuild. `swap_pixel_format == RGBA16Float` is the runtime
-    // equivalent of `HdrOutputMode::is_hdr()`, and the per-frame
-    // `PostProcessParams.hdr_output` flag carries the EDR signal into the
-    // shader.
-    pub(super) swap_pixel_format: MTLPixelFormat,
-    pub(super) hdr: HdrState,
     // Color texture of the most recently presented drawable, retained so the
     // `cn debug` `screenshot` command can blit it back to a host buffer and
     // PNG-encode it (see metal/screenshot.rs). Set each frame only under
@@ -542,157 +706,47 @@ pub(crate) struct MtlContext {
     // switched off under the same gate so the drawable is blit-readable.
     // Mirrors the DX/VK `last_present_index`.
     pub(super) last_present_texture: Option<Retained<ProtocolObject<dyn MTLTexture>>>,
-    // Main-pass PBR pipeline. None for a world with no 3D scene content
-    // (render requirements derived `scene == false`): the Main pass then
-    // encodes as a bare clear and every geometry sub-path early-outs.
-    pub(super) pipeline_state: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    // Pipelines for the material-referenced world shaders, indexed by
-    // `shader_bucket - 1` (bucket 0 is `pipeline_state`). Each executes its
-    // bucket's ICB in the main pass; empty for single-shader worlds. `None`
-    // while the bucket's Shader is not resident -- init defers a shader owned
-    // by a scene other than the start scene, and `install_world_shader` builds
-    // it when that scene pins. Draws carrying a `None` bucket are skipped.
-    pub(super) world_pipelines: super::init::pipelines::WorldPipelineTable,
-    // True when the GPU-driven main pass exists: a world with 3D scene
-    // content. The static draw loop then reads each object from the per-frame
-    // `GpuObjectData` buffer and the bindless texture pool. False for a world
-    // with no scene content, whose Main pass is a bare clear.
-    pub(super) bindless: bool,
-    // GPU-driven cull feature state: the phase-1/phase-2 cull pipelines,
-    // their indirect command buffers + argument encoders/buffers, the
-    // per-object status buffer, the two-pass-occlusion toggle, and the Hi-Z
-    // pyramid + view-projection snapshots the occlusion test reprojects
-    // through. All `Some`/active only when the world has 3D scene content.
-    // See [`CullState`].
+    // GPU-driven main pass + cull feature state: the main and world-shader
+    // pipelines, the phase-1/phase-2 cull pipelines, their indirect command
+    // buffers + argument encoders/buffers, the per-object status buffer, the
+    // two-pass-occlusion toggle, and the Hi-Z pyramid + view-projection
+    // snapshots the occlusion test reprojects through. All `Some`/active only
+    // when the world has 3D scene content. See [`CullState`].
     pub(super) cull: CullState,
-    // Encoder that packs the bindless pass's textures into a per-frame
-    // argument buffer (the `BindlessTextures` block). `Some` only
-    // when `bindless`. (A main-pass resource, not part of `cull`.)
-    pub(super) bindless_tex_arg_encoder: Option<Retained<ProtocolObject<dyn MTLArgumentEncoder>>>,
-    // Per-ring-slot change gates for that argument buffer: the block's contents
-    // and its unused tail, gated apart because a stream-in moves the former
-    // every time and the latter almost never. See `build_bindless_texture_args`.
-    pub(super) bindless_tex_gates: super::bindless_args::SlotGates,
-    pub(super) bindless_tail_gates: super::bindless_args::SlotGates,
-    // Every texture the `BindlessTextures` block names, declared resident in
-    // one batched call per encoder. Refreshed once per frame by
-    // `refresh_bindless_residency`.
-    pub(super) bindless_residency: super::bindless_args::ResidencySet,
-    // Bumped by every announced change to the textures those argument buffers
-    // name (a pool slot streamed in or evicted, an env-map or probe swap), so a
-    // handle that happens to reuse a freed one's address still moves the
-    // signature the gates compare.
-    pub(super) texture_epoch: u64,
-    // Argument encoder for the `ProbeCubes` block the five probe-sampling
-    // fragments declare; see `probe_cubes::probe_cube_arg_encoder`.
-    pub(super) probe_cube_arg_encoder: Retained<ProtocolObject<dyn MTLArgumentEncoder>>,
-    // The engine sampler block bound at fragment buffer(10) for the
-    // single-source main program: three static samplers written once at init
-    // (samplers never stream, so no per-frame ring is needed). `None` when a
-    // world-authored fragment owns the main pass.
-    pub(super) bindless_sampler_args: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
-    pub(super) depth_state: Retained<ProtocolObject<dyn MTLDepthStencilState>>,
-    // Read-only depth state: `LessEqual` test, no write. Used by translucent
-    // draws that must be occluded by nearer opaque geometry but must not
-    // update the depth buffer (volumetric raymarch volumes). Metal forbids
-    // `setDepthStencilState(nil)` under the validation layer, so translucent
-    // passes bind this instead of clearing the state.
-    pub(super) depth_state_read_only: Retained<ProtocolObject<dyn MTLDepthStencilState>>,
-    // Single shared vertex buffer containing geometry for all draw objects.
-    pub(super) vertex_buffer: PooledBuffer,
-    // Single shared index buffer containing indices for all draw objects.
-    pub(super) index_buffer: PooledBuffer,
+    // Argument encoders and their re-encode gates. See [`MtlArgumentBuffers`].
+    pub(super) arg_buffers: MtlArgumentBuffers,
     // Draw list + cull inputs + folded record counts. See [`DrawState`].
     pub(super) draw: DrawState,
     // InstancedProp clusters. See [`InstancedState`].
     pub(super) instanced: InstancedState,
     // Per-frame view state. See [`ViewState`].
     pub(super) view: ViewState,
-    // True when the world has no 3D geometry (e.g. a text-only world). The
-    // off-screen HDR / bloom / effect targets are then allocated at 1x1 since
-    // nothing is rendered into them; the composite pass still runs at the full
-    // drawable size, so text stays crisp.
-    pub(super) geometry_less: bool,
-    // Shared texture pool (slot == handle): every texture (albedo, normal map,
-    // emissive/ORM, terrain secondary) lives here once, matching DX/VK. A 1x1
-    // opaque-white fallback is always present at slot 0 so shaders that sample
-    // texture(0) produce correct output even when no Texture asset was declared.
-    pub(super) textures: Vec<PooledTexture>,
-    // Holds only the 1x1 flat-normal fallback (RGBA 128,128,255,255) a
-    // normal-less draw samples; its pool slot is one past the last real texture.
-    // Real normal maps are entries in `textures`.
-    pub(super) fallback_textures: Vec<PooledTexture>,
+    // Scene assets. See [`MtlSceneAssets`].
+    pub(super) scene: MtlSceneAssets,
     // All scene lights packed and pushed to the fragment shader at buffer(4).
     pub(super) light_uniforms: LightUniforms,
-    // Per-scene local lights (point + spot + area) for the clustered forward
-    // pass, bound at fragment buffer(8). Always holds at least one element (a
-    // neutral placeholder when the scene declares no local lights) so the
-    // binding is valid; `light_uniforms.num_local_lights` bounds iteration.
-    pub(super) local_light_buffer: PooledBuffer,
-    pub(super) sampler: Retained<ProtocolObject<dyn MTLSamplerState>>,
     // Cascaded shadow map + its schedule. See [`ShadowState`].
     pub(super) shadow: ShadowState,
     // Spot-light shadow slices + their schedule. See [`SpotShadowState`].
     pub(super) spot_shadow: SpotShadowState,
-    // Per-scene rect area-light extents, indexed by `GpuLight.data_index`.
-    // Uploaded once; a one-element placeholder when the world declares none.
-    pub(super) area_light_buffer: PooledBuffer,
-    // The two linearly-transformed-cosine lookup tables the area-light shading
-    // path samples: the inverse transforms (RGBA32Float) and the matching
-    // (albedo, Fresnel) pairs (RG32Float). Generated at build time, so these are
-    // scene-independent and created once.
-    pub(super) ltc_matrix_texture: PooledTexture,
-    pub(super) ltc_magnitude_texture: PooledTexture,
-    // IBL cubemaps + mip count. Always Some: the runtime synthesizes a 1x1
-    // gray fallback for both cubes when no EnvironmentMap was supplied, so
-    // the fragment shader's texture(3) / texture(4) bindings are always
-    // valid. `prefilter_mip_count == 0` is the "IBL disabled" signal the
-    // shader uses to fall back to the legacy ambient/skybox path.
-    pub(super) env_map: EnvironmentMapTextures,
     // Local reflection probes: the scene captured into one cube per placement
-    // (metal/probe.rs). Distinct from `env_map` (which stays the sky -- it drives
-    // the skybox + diffuse irradiance) so the bake never corrupts the visible
-    // sky. Each surface's specular reflection samples the nearest probe whose box
-    // contains it; the skybox + diffuse keep the sky.
-    //
-    // Scene-captured reflection probes. See [`ProbeState`].
+    // (metal/probe.rs). Distinct from `scene.env_map` (which stays the sky -- it
+    // drives the skybox + diffuse irradiance) so the bake never corrupts the
+    // visible sky. See [`ProbeState`].
     pub(super) probe: ProbeState,
-    // Linear-clamp sampler bound at sampler(2) for cubemap sampling.
-    pub(super) cube_sampler: Retained<ProtocolObject<dyn MTLSamplerState>>,
     pub(super) text: TextState,
-    // Off-screen HDR render targets (MSAA RGBA16Float + resolve + MSAA
-    // Depth32Float). Re-created lazily in `draw_frame` whenever the
-    // drawable size changes. The main + instanced pipelines render into
-    // these, and the post-process pass samples `hdr_resolve` to write
-    // the tonemapped + FXAA-filtered output into the drawable.
-    pub(super) hdr_targets: HdrTargets,
-    // Pipeline that performs ACES tonemap + gamma 2.2 + FXAA from the
-    // resolved HDR target into the drawable.
-    pub(super) post_pipeline_state: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
-    // Linear-clamp sampler bound at sampler(0) when sampling the HDR
-    // resolve target during the post pass. Also reused by the bloom passes.
-    pub(super) post_sampler: Retained<ProtocolObject<dyn MTLSamplerState>>,
-    // Bloom mip chain (prefilter/downsample/upsample targets). Re-created
-    // alongside `hdr_targets` whenever the drawable size changes.
-    pub(super) bloom_targets: BloomTargets,
+    // Render-resolution scene targets. See [`MtlTargets`].
+    pub(super) targets: MtlTargets,
+    // Composite pass. See [`CompositeState`].
+    pub(super) composite: CompositeState,
     // Prefilter / downsample / upsample pipelines for the bloom chain. None
     // for a world with no 3D scene content: the graph never inserts the Bloom
     // pass, and the composite's unconditional top-mip bind stays 1x1 black.
     pub(super) bloom_pipelines: Option<BloomPipelines>,
-    // Pool backing the render graph's transient textures
-    // (`gfx::render_graph::alias`). Owns `bloom_top` (which `bloom_targets`
-    // borrows as mip 0) and, when SSAO is on, `ao_output`; their disjoint
-    // lifetimes put them on one aliased `MTLHeap` slot. Rebuilt on resize. See
-    // [`TransientTexturePool`].
-    pub(super) transient_pool: TransientTexturePool,
     // Post-process tunables (bloom intensity / threshold / knee). Pushed to
     // the bloom prefilter and composite fragment shaders. `bloom_intensity`
     // of 0 skips the bloom passes entirely.
     pub(super) post_process: render_types::PostProcessParams,
-    // 3D color-grading LUT sampled in the composite pass. Holds the declared
-    // `ColorLut` payload, or a 2x2x2 identity LUT when the world declares
-    // none, so the composite pass binds a valid 3D texture either way.
-    pub(super) color_lut: PooledTexture,
     // Temporal-anti-aliasing feature state: the toggle, resolve pipeline,
     // ping-pong history buffers, and per-frame bookkeeping. See [`TaaState`].
     pub(super) taa: TaaState,
@@ -724,7 +778,6 @@ pub(crate) struct MtlContext {
     // Screen-space-GI feature state: resolved tunables, the `gi` gather
     // target, and the gather + composite pipelines. See [`SsgiState`].
     pub(super) ssgi: SsgiState,
-    // Resolved + clamped ray-traced-reflection tunables. `Some` only when the
     // Hardware-ray-traced-reflection feature state: resolved tunables, the
     // scene acceleration structure, the dynamic-update mode + failure flag, and
     // the resolve / textured-resolve / skinning pipelines. See [`RtState`].
@@ -776,7 +829,6 @@ pub(crate) struct MtlContext {
     // the current + previous joint-palette matrices. See [`SkinnedState`].
     pub(super) skinned: SkinnedState,
     pub(super) geometry_alloc: GeometryAllocators,
-    pub(super) window: WindowState,
     pub(super) diagnostics: Diagnostics,
     // Frames-in-flight pacing. `draw_frame` acquires a slot before encoding
     // and the frame command buffer's completion handler releases it once the
@@ -797,10 +849,13 @@ pub(crate) struct MtlContext {
     // surfaces + glass panes, grouped by `assign_planar_slots`). `Some` only when
     // the world declared >=1 such reflector; the scene is re-rendered mirrored
     // across each plane into these each frame (RT off) and the reflective shader
-    // samples the resolve of its slot. Rebuilt on resize alongside `hdr_targets`.
+    // samples the resolve of its slot. Rebuilt on resize alongside `targets.hdr`.
     pub(super) planar_reflection: Option<super::planar::PlanarReflectionSet>,
     pub(super) glass: GlassState,
     pub(super) raymarch: RaymarchState,
+    // Device, queues, allocator and window. Declared last so every resource
+    // above releases before the device layer and the window it presents to.
+    pub(super) hw: MtlHardware,
 }
 
 // SAFETY: MtlContext is only ever accessed from the main thread (as documented
@@ -868,6 +923,25 @@ pub(super) fn ns_range(r: std::ops::Range<usize>) -> objc2_foundation::NSRange {
 }
 
 impl MtlContext {
+    // The live window. `None` only on the outgoing context of a `reload_world`
+    // (its window was moved into the successor), which is dropped without any
+    // further window access.
+    #[inline]
+    pub(super) fn window(&self) -> &WindowState {
+        self.hw
+            .window
+            .as_ref()
+            .expect("MtlContext window taken by reload_world")
+    }
+
+    #[inline]
+    pub(super) fn window_mut(&mut self) -> &mut WindowState {
+        self.hw
+            .window
+            .as_mut()
+            .expect("MtlContext window taken by reload_world")
+    }
+
     // The record set the live draw list covers. Every frame-driven pass takes
     // this; only the reflection-probe bake substitutes its own snapshot.
     pub(super) fn draw_record_counts(&self) -> DrawRecordCounts {
@@ -894,7 +968,7 @@ impl MtlContext {
     pub(super) fn probe_cube_or_sky(&self, i: usize) -> &ProtocolObject<dyn MTLTexture> {
         match self.probe.maps.get(i) {
             Some(p) => &p.prefilter,
-            None => self.env_map.prefilter.as_ref(),
+            None => self.scene.env_map.prefilter.as_ref(),
         }
     }
 
@@ -918,7 +992,7 @@ impl MtlContext {
     ) -> &ProtocolObject<dyn objc2_metal::MTLBuffer> {
         match self.skinned.index_buffer.as_ref() {
             Some(b) => b.as_ref(),
-            None => self.index_buffer.as_ref(),
+            None => self.scene.index_buffer.as_ref(),
         }
     }
 
@@ -956,6 +1030,7 @@ impl MtlContext {
         if self.cull.icb_arg_buffer.is_none() {
             let len = arg_encoder.encodedLength().max(16);
             let buf = self
+                .hw
                 .device
                 .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
                 .ok_or_else(|| super::error::allocation_failed("ICB argument buffer"))?;
@@ -981,6 +1056,7 @@ impl MtlContext {
         // (GPU-written by phase-1 cull, GPU-read by phase-2 cull). Always
         // allocated so the phase-1 kernel's buffer(5) binding always resolves.
         let status = self
+            .hw
             .device
             .newBufferWithLength_options(
                 new_cap * std::mem::size_of::<u32>(),
@@ -998,6 +1074,7 @@ impl MtlContext {
             if self.cull.icb_2_arg_buffer.is_none() {
                 let len = arg_encoder.encodedLength().max(16);
                 let buf = self
+                    .hw
                     .device
                     .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
                     .ok_or_else(|| {
@@ -1050,6 +1127,7 @@ impl MtlContext {
         if self.cull.shadow_icb_arg_buffer.is_none() {
             let len = arg_encoder.encodedLength().max(16);
             let buf = self
+                .hw
                 .device
                 .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
                 .ok_or_else(|| super::error::allocation_failed("shadow ICB argument buffer"))?;
@@ -1070,6 +1148,7 @@ impl MtlContext {
         // One status word per command slot: each cascade's decision dispatch
         // writes its region, the encode dispatch reads them all back.
         let status = self
+            .hw
             .device
             .newBufferWithLength_options(
                 new_cap * std::mem::size_of::<u32>(),
@@ -1118,6 +1197,7 @@ impl MtlContext {
             let icb = self.build_cull_icb(new_cap)?;
             let len = arg_encoder.encodedLength().max(16);
             let arg_buffer = self
+                .hw
                 .device
                 .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
                 .ok_or_else(|| super::error::allocation_failed("mirror ICB argument buffer"))?;
@@ -1135,6 +1215,7 @@ impl MtlContext {
         // status the same as phase 1, but nothing reads it (no phase-2 over the
         // mirror), so one buffer serves every slot. One u32 per command slot.
         let status = self
+            .hw
             .device
             .newBufferWithLength_options(
                 new_cap * std::mem::size_of::<u32>(),
@@ -1165,7 +1246,8 @@ impl MtlContext {
         desc.setMaxFragmentBufferBindCount(0);
         // SAFETY: `cap` is a valid command count; private storage as documented.
         unsafe {
-            self.device
+            self.hw
+                .device
                 .newIndirectCommandBufferWithDescriptor_maxCommandCount_options(
                     &desc,
                     cap,
@@ -1179,7 +1261,7 @@ impl MtlContext {
     // from the live MTLDevice (cheap; the same check the RT pass gates on).
     pub(crate) fn capabilities(&self) -> backend::DeviceCapabilities {
         backend::DeviceCapabilities {
-            ray_tracing: super::raytrace::raytracing_supported(&self.device),
+            ray_tracing: super::raytrace::raytracing_supported(&self.hw.device),
             // Upscaling always goes through MetalFX; there is no selector.
             selectable_upscaler: false,
             // The per-frame RT topology refresh re-admits recycled build-time
@@ -1194,7 +1276,7 @@ impl MtlContext {
     // Coarse GPU performance profile for default-quality selection, read live
     // from the MTLDevice (cheap; the same kind of device query as capabilities).
     pub(crate) fn gpu_profile(&self) -> backend::GpuProfile {
-        super::gpu_profile::device_profile(&self.device)
+        super::gpu_profile::device_profile(&self.hw.device)
     }
 
     // Render statistics for the most recent `draw_frame`, for the profiler
@@ -1224,7 +1306,7 @@ impl MtlContext {
         // Surface the active panel's EDR headroom. `None` on SDR: both the
         // world-opt-out case and the request-on-an-SDR-display fallback case
         // map to the same blank chip.
-        stats.max_edr = self.hdr.max_edr;
+        stats.max_edr = self.hw.max_edr();
         stats
     }
 
@@ -1385,7 +1467,7 @@ impl MtlContext {
     pub(crate) fn add_decal(&mut self, record: decal::DecalRecord) -> Result<usize, String> {
         if self.decal.pipeline.is_none() {
             let (ps, vbuf, ibuf, samp) = super::init::effects::build_decal_resources_for_runtime(
-                &self.device,
+                &self.hw.device,
                 self.hot_reload.enabled,
             )?;
             self.decal.pipeline = Some(ps);
@@ -1422,12 +1504,17 @@ impl MtlContext {
         record: particles::ParticleEmitterRecord,
     ) -> Result<usize, String> {
         if self.particle.pipelines.is_none() {
-            let pipelines =
-                super::particle::build_particle_pipelines(&self.device, self.hot_reload.enabled)?;
+            let pipelines = super::particle::build_particle_pipelines(
+                &self.hw.device,
+                self.hot_reload.enabled,
+            )?;
             self.particle.pipelines = Some(pipelines);
         }
-        let gpu_state =
-            super::particle::build_emitter_gpu_state(&self.device, &record, self.frames_in_flight)?;
+        let gpu_state = super::particle::build_emitter_gpu_state(
+            &self.hw.device,
+            &record,
+            self.frames_in_flight,
+        )?;
         let idx = if let Some(slot) = self.particle.free_slots.pop() {
             self.particle.records[slot] = Some(record);
             self.particle.emitter_state[slot] = Some(gpu_state);
@@ -1465,19 +1552,24 @@ impl MtlContext {
 
     // Returns true if the window has been closed by the user.
     pub(crate) fn window_closed(&self) -> bool {
-        if self.window.appkit.closed() {
+        if self.window().appkit.closed() {
             return true;
         }
         // Detect close via the red-X button: NSWindow.close() hides the window
         // without posting an ApplicationDefined event, so window_closed never
         // becomes true through the event pump alone. Guard with was_visible so
         // we don't misfire before the first frame appears.
-        self.window.was_visible && self.window.appkit.window().is_some_and(|w| !w.isVisible())
+        self.window().was_visible
+            && self
+                .window()
+                .appkit
+                .window()
+                .is_some_and(|w| !w.isVisible())
     }
 
     // Block until the GPU has finished all in-flight work.
     pub(crate) fn wait_idle(&self) {
-        if let Some(cmd_buf) = self.command_queue.commandBuffer() {
+        if let Some(cmd_buf) = self.hw.command_queue.commandBuffer() {
             cmd_buf.commit();
             cmd_buf.waitUntilCompleted();
         }
@@ -1511,27 +1603,9 @@ impl Drop for MtlContext {
         // counts and produce EXC_BAD_ACCESS in objc_release.
         self.wait_idle();
         // Write whatever metallibs were compiled lazily since init's own
-        // checkpoint. Ahead of the reload guard below: the artifacts belong to
-        // the process, not to the window this context may have handed on.
+        // checkpoint. The window, when this context still holds one, closes as
+        // `hw` drops after every GPU resource.
         crate::shader::runtime_cache::checkpoint();
-        // A context whose window was transplanted to a successor (a live editor
-        // reload) must tear nothing down: the successor owns the window, view,
-        // and cursor state now, so closing the window here would order the reused
-        // window out from under it.
-        if !self.window.owns {
-            return;
-        }
-        // Always release the cursor on teardown so the OS mouse association and
-        // cursor visibility are restored even if the caller didn't do it.
-        self.window.appkit.release_cursor();
-        if let Some(window) = self.window.appkit.window() {
-            // Close the game window so it doesn't linger after the run loop exits.
-            window.close();
-        } else {
-            // In embedded mode (no NSWindow), the MTKView was added as a subview.
-            // Explicitly remove it so it doesn't outlive the preview session.
-            self.window.view.removeFromSuperview();
-        }
     }
 }
 

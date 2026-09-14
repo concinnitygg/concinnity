@@ -13,7 +13,7 @@
 //! transparency.
 //!
 //! Refraction read-back: at the head of the pass a blit snapshots the current
-//! `scene_pre_taa` into `hdr_targets.transparent_scene_copy`, which the draws
+//! `scene_pre_taa` into `targets.hdr.transparent_scene_copy`, which the draws
 //! sample. This makes refraction work whether or not SSR produced a distinct
 //! `scene_pre_taa` (with SSR off it aliases `hdr_resolve`, so sampling the
 //! destination directly would be reading the attachment being written).
@@ -132,7 +132,7 @@ impl MtlContext {
         unsafe {
             blit.copyFromTexture_toTexture(
                 scene_pre_taa.as_ref(),
-                self.hdr_targets.transparent_scene_copy.as_ref(),
+                self.targets.hdr.transparent_scene_copy.as_ref(),
             );
         }
         blit.popDebugGroup();
@@ -176,22 +176,27 @@ impl MtlContext {
         // fragment buffer(7). Frame-constant, so bound once before the draw
         // loop; a probe count of 0 keeps the sky-only fallback. The per-draw
         // bindings below never touch these slots, so the state persists.
-        enc.set_fragment_texture(self.env_map.prefilter.as_ref(), 2);
+        enc.set_fragment_texture(self.scene.env_map.prefilter.as_ref(), 2);
         self.bind_probe_cubes(&enc);
         // The cube sampler covers the prefilter cube's own sampler at 1 and the
         // probe block's at 2; the planar resolve takes the post sampler after
         // them, and the bindless pool the RT variants read takes the
         // repeat-address sampler after that.
-        super::post::fullscreen::set_fragment_sampler_range(&enc, self.cube_sampler.as_ref(), 1, 2);
         super::post::fullscreen::set_fragment_sampler_range(
             &enc,
-            &self.post_sampler,
+            self.scene.cube_sampler.as_ref(),
+            1,
+            2,
+        );
+        super::post::fullscreen::set_fragment_sampler_range(
+            &enc,
+            &self.composite.sampler,
             GLASS_PLANAR_SAMPLER_INDEX,
             1,
         );
         super::post::fullscreen::set_fragment_sampler_range(
             &enc,
-            self.sampler.as_ref(),
+            self.scene.sampler.as_ref(),
             GLASS_POOL_SAMPLER_INDEX,
             1,
         );
@@ -230,8 +235,8 @@ impl MtlContext {
             rt_params,
         ) {
             enc.set_fragment_value(rt_params, 0);
-            enc.set_fragment_buffer(self.vertex_buffer.as_ref(), 0, 1);
-            enc.set_fragment_buffer(self.index_buffer.as_ref(), 0, 2);
+            enc.set_fragment_buffer(self.scene.vertex_buffer.as_ref(), 0, 1);
+            enc.set_fragment_buffer(self.scene.index_buffer.as_ref(), 0, 2);
             enc.set_fragment_buffer(accel.geom_table.as_ref(), 0, 3);
             enc.set_fragment_acceleration_structure(accel.tlas.as_ref(), 4);
             enc.set_fragment_buffer(accel.deformed_verts.as_ref(), 0, 8);

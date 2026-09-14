@@ -290,7 +290,8 @@ impl MtlContext {
     // SSAO is on, else the SSAO state's 1x1 white fallback so `shade_surface`
     // reads a constant 1.0 (fully unoccluded).
     pub(in crate::metal) fn ao_output_texture(&self) -> &ProtocolObject<dyn MTLTexture> {
-        self.transient_pool
+        self.targets
+            .transient_pool
             .texture_for("ao_output")
             .unwrap_or_else(|| self.ssao.white.as_ref())
     }
@@ -307,15 +308,17 @@ impl MtlContext {
     // was created under, so a consumer that finds `None` should skip rather
     // than substitute a fallback.
     pub(in crate::metal) fn gbuffer_normal_depth(&self) -> Option<&ProtocolObject<dyn MTLTexture>> {
-        self.transient_pool.texture_for("gbuffer_normal_depth")
+        self.targets
+            .transient_pool
+            .texture_for("gbuffer_normal_depth")
     }
 
     pub(in crate::metal) fn gbuffer_roughness(&self) -> Option<&ProtocolObject<dyn MTLTexture>> {
-        self.transient_pool.texture_for("gbuffer_roughness")
+        self.targets.transient_pool.texture_for("gbuffer_roughness")
     }
 
     pub(in crate::metal) fn gbuffer_velocity(&self) -> Option<&ProtocolObject<dyn MTLTexture>> {
-        self.transient_pool.texture_for("gbuffer_velocity")
+        self.targets.transient_pool.texture_for("gbuffer_velocity")
     }
 }
 

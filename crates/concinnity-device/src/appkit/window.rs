@@ -73,15 +73,7 @@ pub(crate) struct AppKitWindow {
     // mode. Retained here because NSWindow holds its delegate as a zeroing weak
     // reference, so dropping this would detach the delegate; the field is never
     // read directly (the delegate communicates through `fullscreen`).
-    #[cfg_attr(
-        not(backend_metal),
-        expect(
-            dead_code,
-            reason = "retained only to keep NSWindow's weak delegate reference alive; \
-                      the Vulkan path builds no delegate"
-        )
-    )]
-    window_delegate: Option<Retained<super::window_delegate::WindowDelegate>>,
+    _window_delegate: Option<Retained<super::window_delegate::WindowDelegate>>,
     // Holds the display to the user's chosen mode while the window is in
     // native fullscreen; restores the desktop mode on exit / drop. Reconciled
     // once per frame by the backend's draw path.
@@ -100,17 +92,6 @@ pub(crate) struct AppKitWindowParts {
     pub window: Option<Retained<NSWindow>>,
     pub view: Retained<NSView>,
     pub title_bar: bool,
-    pub pump_events: bool,
-    pub fullscreen: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    pub(crate) window_delegate: Option<Retained<super::window_delegate::WindowDelegate>>,
-}
-
-// The window-side handles a live world reload transplants onto the rebuilt
-// context, so a save reuses the window instead of spawning a new one. The view
-// is not carried: the backend owns the concrete subclass and supplies its own.
-#[cfg(backend_metal)]
-pub(crate) struct WindowHandles {
-    pub window: Option<Retained<NSWindow>>,
     pub pump_events: bool,
     pub fullscreen: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub(crate) window_delegate: Option<Retained<super::window_delegate::WindowDelegate>>,
@@ -137,7 +118,7 @@ impl AppKitWindow {
             ui_cursor_hidden: false,
             menu_mode: false,
             fullscreen,
-            window_delegate,
+            _window_delegate: window_delegate,
             fullscreen_display: FullscreenDisplayMode::new(),
             keys: KeyState::default(),
             keymap: KeyMap::default(),
@@ -154,34 +135,6 @@ impl AppKitWindow {
     // The engine-created NSWindow, or None in embedded mode.
     pub(crate) fn window(&self) -> Option<&NSWindow> {
         self.window.as_deref()
-    }
-
-    // The window / delegate handles a live world reload transplants onto the
-    // rebuilt context, so a save reuses the window instead of spawning a new
-    // one. The caller supplies the view (it owns the concrete subclass).
-    #[cfg(backend_metal)] // Vulkan carries its window through `VkHardware::hand_over`
-    pub(crate) fn handles_for_reuse(&self) -> WindowHandles {
-        WindowHandles {
-            window: self.window.clone(),
-            pump_events: self.pump_events,
-            fullscreen: std::sync::Arc::clone(&self.fullscreen),
-            window_delegate: self.window_delegate.clone(),
-        }
-    }
-
-    // Carry over the live state a fresh build resets but a world reload must
-    // keep. The keymap is re-pushed by GraphicsSystem immediately, but the
-    // fullscreen display-mode hold is not, so a fullscreen editor would lose its
-    // mode-restore state. NSCursor's hide count and the CGAssociate coupling are
-    // process-global and survive teardown, so the flags tracking them must come
-    // across too or a reload leaks a hide and strands the OS cursor.
-    #[cfg(backend_metal)] // Vulkan carries its window through `VkHardware::hand_over`
-    pub(crate) fn adopt_live_state(&mut self, prev: &mut AppKitWindow) {
-        self.fullscreen_display =
-            std::mem::replace(&mut prev.fullscreen_display, FullscreenDisplayMode::new());
-        self.keymap = prev.keymap;
-        self.ui_cursor_hidden = prev.ui_cursor_hidden;
-        self.cursor_captured = prev.cursor_captured;
     }
 
     // Whether the frame loop should pump NSEvents and honor cursor capture.

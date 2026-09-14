@@ -252,7 +252,11 @@ impl MtlContext {
         join: &std::sync::Arc<FrameJoin>,
     ) -> RenderResult<GraphSubmission> {
         #[cfg(debug_assertions)]
-        render_graph::assert_slot_aliasing_sound(graph, self.transient_pool.slot_labels(), "metal");
+        render_graph::assert_slot_aliasing_sound(
+            graph,
+            self.targets.transient_pool.slot_labels(),
+            "metal",
+        );
         // Both submission paths need the compiled order to be a topological
         // order for each queue at once, with every wait naming a producer
         // recorded earlier: the two-queue path because it commits each queue's
@@ -288,7 +292,7 @@ impl MtlContext {
         // This frame's event values. `None` when the second queue could not be
         // created: the fallback records every pass onto the graphics queue in
         // compiled order and encodes no events at all.
-        let plan = self.graph_queues.as_ref().map(|queues| {
+        let plan = self.hw.graph_queues.as_ref().map(|queues| {
             let (events, previous) = queues.begin_frame(graph.passes.len());
             graph_events::plan_frame(graph, events, previous)
         });
@@ -328,9 +332,9 @@ impl MtlContext {
                     scope.spawn(move |_| {
                         objc2::rc::autoreleasepool(|_| {
                             let ctx = ctx_ref.as_ctx();
-                            let queue = match ctx.graph_queues.as_ref() {
-                                Some(queues) => queues.queue(pass_queue, &ctx.command_queue),
-                                None => &ctx.command_queue,
+                            let queue = match ctx.hw.graph_queues.as_ref() {
+                                Some(queues) => queues.queue(pass_queue, &ctx.hw.command_queue),
+                                None => &ctx.hw.command_queue,
                             };
                             let cmd_buf = match queue.commandBuffer() {
                                 Some(cb) => cb,
@@ -348,7 +352,7 @@ impl MtlContext {
                             // Waits before the pass's own encoders, signals
                             // after them: Metal accepts an event command only
                             // while the command buffer has no open encoder.
-                            let sync = ctx.graph_queues.as_ref().zip(plan_ref);
+                            let sync = ctx.hw.graph_queues.as_ref().zip(plan_ref);
                             if let Some((queues, plan)) = sync {
                                 encode_waits(&cmd_buf, queues, plan.pass(idx));
                             }
@@ -438,7 +442,7 @@ impl MtlContext {
         let mut submission = GraphSubmission {
             pending_terminal: None,
         };
-        if let (Some(queues), Some(plan)) = (self.graph_queues.as_mut(), plan.as_ref()) {
+        if let (Some(queues), Some(plan)) = (self.hw.graph_queues.as_mut(), plan.as_ref()) {
             queues.end_submission(plan, deferred_terminal);
             submission.pending_terminal = deferred_terminal.and_then(|q| plan.terminal(q));
         }
@@ -449,7 +453,7 @@ impl MtlContext {
         // this returns; every other graphics-queue cmd buf has already
         // committed, so the queue order places it strictly after them.
         if let Some(idx) = composite_idx {
-            let sync = self.graph_queues.as_ref().zip(plan.as_ref());
+            let sync = self.hw.graph_queues.as_ref().zip(plan.as_ref());
             if let Some((queues, plan)) = sync {
                 encode_waits(params.cmd_buf, queues, plan.pass(idx));
             }
@@ -477,7 +481,7 @@ impl MtlContext {
     // and committing never leaves the next frame waiting on a value the GPU is
     // not going to reach.
     pub(in crate::metal) fn record_graph_terminal(&mut self, value: u64) {
-        if let Some(queues) = self.graph_queues.as_mut() {
+        if let Some(queues) = self.hw.graph_queues.as_mut() {
             queues.record_terminal(PassQueue::Graphics, value);
         }
     }
@@ -494,11 +498,11 @@ impl MtlContext {
             inv_vp: params.inv_vp,
             cam_pos: [params.cam_pos[0], params.cam_pos[1], params.cam_pos[2], 0.0],
             viewport: [
-                self.hdr_targets.width as f32,
-                self.hdr_targets.height as f32,
+                self.targets.hdr.width as f32,
+                self.targets.hdr.height as f32,
             ],
             time: params.elapsed,
-            prefilter_mip_count: self.env_map.prefilter_mip_count as f32,
+            prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
             sky_rot: self.view.sky_rot,
         }
     }
@@ -800,11 +804,11 @@ impl MtlContext {
                     inv_vp,
                     camera_pos: [params.cam_pos[0], params.cam_pos[1], params.cam_pos[2], 0.0],
                     viewport: [
-                        self.hdr_targets.width as f32,
-                        self.hdr_targets.height as f32,
+                        self.targets.hdr.width as f32,
+                        self.targets.hdr.height as f32,
                     ],
                     time: params.elapsed,
-                    prefilter_mip_count: self.env_map.prefilter_mip_count as f32,
+                    prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
                     sky_rot: self.view.sky_rot,
                     sun_dir,
                     sun_color,

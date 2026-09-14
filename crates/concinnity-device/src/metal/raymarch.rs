@@ -500,7 +500,7 @@ fn v(pos: [f32; 3]) -> Vertex {
 
 impl MtlContext {
     // Encode the raymarched SDF volume pass. Caller has ended the main
-    // pass (so `hdr_targets.depth_resolve` carries scene depth) and the
+    // pass (so `targets.hdr.depth_resolve` carries scene depth) and the
     // post-Main hdr_resolve writes from Decals / Fog / ParticlesDraw
     // have not yet fired. Each visible `SdfVolume` issues one indexed
     // draw of the proxy cube; the user's `map` + `shade` run per
@@ -537,7 +537,7 @@ impl MtlContext {
             .cube_index_buffer
             .as_ref()
             .ok_or("raymarch cube index buffer missing")?;
-        let depth_sampler = self.post_sampler.as_ref();
+        let depth_sampler = self.composite.sampler.as_ref();
 
         let lights_gpu: RaymarchLightsGpu = self.light_uniforms;
         let shadow_uniforms = self.shadow.uniforms;
@@ -569,18 +569,18 @@ impl MtlContext {
                 .blitCommandEncoder()
                 .ok_or("failed to get raymarch scene-copy blit encoder")?;
             blit.pushDebugGroup(&NSString::from_str("raymarch_scene_copy"));
-            // SAFETY: each pair is `hdr_targets`-owned and created with the same format and
+            // SAFETY: each pair is `targets.hdr`-owned and created with the same format and
             // dimensions, which is what a whole-texture blit copy requires.
             unsafe {
                 if refractive {
                     blit.copyFromTexture_toTexture(
-                        self.hdr_targets.hdr_resolve.as_ref(),
-                        self.hdr_targets.hdr_resolve_copy.as_ref(),
+                        self.targets.hdr.hdr_resolve.as_ref(),
+                        self.targets.hdr.hdr_resolve_copy.as_ref(),
                     );
                 }
                 blit.copyFromTexture_toTexture(
-                    self.hdr_targets.depth_resolve.as_ref(),
-                    self.hdr_targets.depth_copy.as_ref(),
+                    self.targets.hdr.depth_resolve.as_ref(),
+                    self.targets.hdr.depth_copy.as_ref(),
                 );
             }
             blit.popDebugGroup();
@@ -592,7 +592,7 @@ impl MtlContext {
         // this pass declares, and every texture set is owned by `self`.
         unsafe {
             let ca = pass_desc.colorAttachments().objectAtIndexedSubscript(0);
-            ca.setTexture(Some(self.hdr_targets.hdr_resolve.as_ref()));
+            ca.setTexture(Some(self.targets.hdr.hdr_resolve.as_ref()));
             ca.setLoadAction(MTLLoadAction::Load);
             ca.setStoreAction(MTLStoreAction::Store);
             // Bind the single-sample depth resolve as the
@@ -604,7 +604,7 @@ impl MtlContext {
             // rasterized and raymarched per pixel) alive for
             // water / decal / fog to consume.
             let da = pass_desc.depthAttachment();
-            da.setTexture(Some(self.hdr_targets.depth_resolve.as_ref()));
+            da.setTexture(Some(self.targets.hdr.depth_resolve.as_ref()));
             da.setLoadAction(MTLLoadAction::Load);
             da.setStoreAction(MTLStoreAction::Store);
         }
@@ -630,7 +630,7 @@ impl MtlContext {
         // gates: even if the rasterized proxy fragment passes the
         // depth test, the actual raymarch hit depth has to be < the
         // existing value to commit.
-        enc.set_depth_stencil(self.depth_state.as_ref());
+        enc.set_depth_stencil(self.targets.depth_state.as_ref());
 
         // Per-frame view at buffer(0); same value for vertex + fragment.
         enc.set_vertex_value(view, 0);
@@ -652,13 +652,13 @@ impl MtlContext {
         // `main_depth.Load` in the template fragment for the shader-side
         // cone-march early-out. A separate texture from the writable
         // `depth_resolve` attachment, so no aliasing.
-        enc.set_fragment_texture(self.hdr_targets.depth_copy.as_ref(), 0);
+        enc.set_fragment_texture(self.targets.hdr.depth_copy.as_ref(), 0);
         // CSM shadow map array + IBL cubes.
         // Always bound (1×1 fallback when the world has no shadow
         // stage / no EnvironmentMap), matching the Main pass.
         enc.set_fragment_texture(self.shadow.map.as_ref(), 1);
-        enc.set_fragment_texture(self.env_map.irradiance.as_ref(), 2);
-        enc.set_fragment_texture(self.env_map.prefilter.as_ref(), 3);
+        enc.set_fragment_texture(self.scene.env_map.irradiance.as_ref(), 2);
+        enc.set_fragment_texture(self.scene.env_map.prefilter.as_ref(), 3);
         // Pre-raymarch scene snapshot for refraction
         // sampling. The blit at the top of this function populated
         // `hdr_resolve_copy` from `hdr_resolve` when some volume
@@ -666,13 +666,13 @@ impl MtlContext {
         // bound (even when no shader uses it, and even when the blit
         // was skipped) so the per-volume PSO doesn't need a
         // "refraction enabled" variant.
-        enc.set_fragment_texture(self.hdr_targets.hdr_resolve_copy.as_ref(), 4);
+        enc.set_fragment_texture(self.targets.hdr.hdr_resolve_copy.as_ref(), 4);
         // Samplers in the order the single source declares them. The depth
         // read needs none (`read` takes integer pixels), so there is no
         // sampler(0) standing in for one, which is what the hand-written MSL
         // used to leave bound and unused.
         enc.set_fragment_sampler(self.shadow.sampler.as_ref(), 0);
-        enc.set_fragment_sampler(self.cube_sampler.as_ref(), 1);
+        enc.set_fragment_sampler(self.scene.cube_sampler.as_ref(), 1);
         // The linear-clamp post sampler for the scene-copy tap: the same
         // filter the water and bloom passes use.
         enc.set_fragment_sampler(depth_sampler, 2);
@@ -695,9 +695,9 @@ impl MtlContext {
             // the write-on state so they composite into the depth buffer
             // downstream passes sample.
             if vol.volumetric {
-                enc.set_depth_stencil(self.depth_state_read_only.as_ref());
+                enc.set_depth_stencil(self.targets.depth_state_read_only.as_ref());
             } else {
-                enc.set_depth_stencil(self.depth_state.as_ref());
+                enc.set_depth_stencil(self.targets.depth_state.as_ref());
             }
             enc.set_vertex_value(&vol.uniforms, 1);
             enc.set_fragment_value(&vol.uniforms, 1);
@@ -795,7 +795,7 @@ impl MtlContext {
             // light-space projection. Same depth state (compare = less, write
             // on) as the rasterized casters so the two layers composite.
             enc.setCullMode(MTLCullMode::Front);
-            enc.set_depth_stencil(self.depth_state.as_ref());
+            enc.set_depth_stencil(self.targets.depth_state.as_ref());
 
             let cascade = RaymarchShadowCascade {
                 cascade_idx: cascade_idx as u32,

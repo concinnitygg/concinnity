@@ -67,7 +67,7 @@ pub(in crate::metal) struct PlanarReflectionTargets {
 // resolve of the slot it was assigned at init (see `assign_planar_slots`). The
 // plane geometry is recomputed (oriented toward the camera) per frame, but the
 // count + each reflector's slot are fixed at init. Rebuilt on resize alongside
-// `hdr_targets` (the planes carry over).
+// `targets.hdr` (the planes carry over).
 pub(in crate::metal) struct PlanarReflectionSet {
     pub(in crate::metal) targets: Vec<PlanarReflectionTargets>,
     pub(in crate::metal) planes: Vec<[f32; 4]>,

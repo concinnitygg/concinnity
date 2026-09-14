@@ -271,7 +271,7 @@ impl super::context::MtlContext {
         enc.set_pipeline(&pipelines.ggx);
         enc.set_value(&params, 0);
         enc.set_texture(gpu.capture.as_ref(), 0);
-        enc.set_sampler(&self.cube_sampler, 0);
+        enc.set_sampler(&self.scene.cube_sampler, 0);
         enc.set_texture(gpu.probe_mip_views[dst_mip as usize].as_ref(), 1);
         dispatch_cube(&enc, plan.mip_face_size(dst_mip));
         Ok(())

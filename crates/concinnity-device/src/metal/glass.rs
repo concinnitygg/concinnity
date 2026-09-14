@@ -321,8 +321,8 @@ impl MtlContext {
             // globally by `encode_transparent`.
             let mut params = panel.params;
             let mut fragment_textures = vec![
-                (0, self.hdr_targets.transparent_scene_copy.clone()),
-                (1, self.hdr_targets.depth_resolve.clone()),
+                (0, self.targets.hdr.transparent_scene_copy.clone()),
+                (1, self.targets.hdr.depth_resolve.clone()),
             ];
             // Select the sharp planar reflection when the planar pass ran this
             // frame and this pane was assigned a slot; bind that slot's resolve at
@@ -351,7 +351,7 @@ impl MtlContext {
                 base_vertex: 0,
                 params: bytes_of(&params),
                 fragment_textures,
-                fragment_samplers: vec![(0, self.post_sampler.clone())],
+                fragment_samplers: vec![(0, self.composite.sampler.clone())],
                 sort_distance,
             });
         }
@@ -420,7 +420,7 @@ impl MtlContext {
                 None => return,
             },
         };
-        let prefilter_mip_count = self.env_map.prefilter_mip_count as f32;
+        let prefilter_mip_count = self.scene.env_map.prefilter_mip_count as f32;
         let cam = view.camera_pos;
         for &idx in &self.glass.seethrough_mesh_indices {
             let Some(obj) = self.draw.objects.get(idx) else {
@@ -450,18 +450,18 @@ impl MtlContext {
             };
             out.push(TransparentDraw {
                 pipeline: pipeline.clone(),
-                vertex_buffer: self.vertex_buffer.retained(),
-                index_buffer: self.index_buffer.retained(),
+                vertex_buffer: self.scene.vertex_buffer.retained(),
+                index_buffer: self.scene.index_buffer.retained(),
                 index_count: index_count as u32,
                 index_type: objc2_metal::MTLIndexType::UInt32,
                 index_offset_bytes: index_offset * std::mem::size_of::<u32>(),
                 base_vertex: obj.base_vertex,
                 params: bytes_of(&params),
                 fragment_textures: vec![
-                    (0, self.hdr_targets.transparent_scene_copy.clone()),
-                    (1, self.hdr_targets.depth_resolve.clone()),
+                    (0, self.targets.hdr.transparent_scene_copy.clone()),
+                    (1, self.targets.hdr.depth_resolve.clone()),
                 ],
-                fragment_samplers: vec![(0, self.post_sampler.clone())],
+                fragment_samplers: vec![(0, self.composite.sampler.clone())],
                 sort_distance: d,
             });
         }

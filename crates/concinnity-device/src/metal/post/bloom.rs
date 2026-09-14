@@ -151,7 +151,7 @@ impl fullscreen::BloomEncoder for BloomChain<'_> {
     type Args = ();
 
     fn bloom_mip_count(&self) -> usize {
-        self.ctx.bloom_targets.mips.len()
+        self.ctx.targets.bloom.mips.len()
     }
 
     // Nothing to do: a Metal render encoder keeps no state across the sub-passes,
@@ -174,7 +174,7 @@ impl fullscreen::BloomEncoder for BloomChain<'_> {
         self.ctx.fullscreen_pass(
             cmd,
             FullscreenPass {
-                target: self.ctx.bloom_targets.mips[0].as_ref(),
+                target: self.ctx.targets.bloom.mips[0].as_ref(),
                 load: MTLLoadAction::DontCare,
                 timer,
                 pipeline: &self.pipelines.prefilter,
@@ -182,7 +182,7 @@ impl fullscreen::BloomEncoder for BloomChain<'_> {
             },
             |enc| {
                 enc.set_fragment_texture(self.scene_color, 0);
-                enc.set_fragment_sampler(&self.ctx.post_sampler, 0);
+                enc.set_fragment_sampler(&self.ctx.composite.sampler, 0);
                 enc.set_fragment_value(&self.ctx.post_process, 0);
             },
         )
@@ -190,7 +190,7 @@ impl fullscreen::BloomEncoder for BloomChain<'_> {
 
     // Downsample: mips[dst - 1] -> mips[dst].
     fn bloom_downsample(&self, cmd: &Self::Rec, _args: &(), dst: usize) -> Result<(), String> {
-        let mips = &self.ctx.bloom_targets.mips;
+        let mips = &self.ctx.targets.bloom.mips;
         self.ctx.fullscreen_pass(
             cmd,
             FullscreenPass {
@@ -202,7 +202,7 @@ impl fullscreen::BloomEncoder for BloomChain<'_> {
             },
             |enc| {
                 enc.set_fragment_texture(mips[dst - 1].as_ref(), 0);
-                enc.set_fragment_sampler(&self.ctx.post_sampler, 0);
+                enc.set_fragment_sampler(&self.ctx.composite.sampler, 0);
             },
         )
     }
@@ -211,7 +211,7 @@ impl fullscreen::BloomEncoder for BloomChain<'_> {
     // downsampled content already there. The chain walks back down to mips[0],
     // so that iteration is the span's last encoder and records its end sample.
     fn bloom_upsample(&self, cmd: &Self::Rec, _args: &(), dst: usize) -> Result<(), String> {
-        let mips = &self.ctx.bloom_targets.mips;
+        let mips = &self.ctx.targets.bloom.mips;
         let timer = if dst == 0 {
             PassTimer::Last(crate::metal::pass_timing::PassId::Bloom)
         } else {
@@ -228,7 +228,7 @@ impl fullscreen::BloomEncoder for BloomChain<'_> {
             },
             |enc| {
                 enc.set_fragment_texture(mips[dst + 1].as_ref(), 0);
-                enc.set_fragment_sampler(&self.ctx.post_sampler, 0);
+                enc.set_fragment_sampler(&self.ctx.composite.sampler, 0);
             },
         )
     }

@@ -1,5 +1,5 @@
 //! Per-frame encoder for the projected (deferred) decal pass. Runs after the
-//! main HDR pass has resolved into `hdr_targets.hdr_resolve` and before SSR /
+//! main HDR pass has resolved into `targets.hdr.hdr_resolve` and before SSR /
 //! TAA pick the resolved scene up: so a decal is reflected by SSR and tracked
 //! by TAA's history just like the rest of the scene.
 //!
@@ -44,8 +44,8 @@ pub(crate) struct DecalState {
 
 impl MtlContext {
     // Encode the projected-decal pass. Caller has ended the main pass, so
-    // `hdr_targets.depth` (MSAA) holds the scene depth and
-    // `hdr_targets.hdr_resolve` holds the resolved scene color. The pass
+    // `targets.hdr.depth` (MSAA) holds the scene depth and
+    // `targets.hdr.hdr_resolve` holds the resolved scene color. The pass
     // alpha-blends one textured stamp per decal into `hdr_resolve`.
     //
     // `vp` is the same view-projection the main pass rasterized with:
@@ -86,8 +86,8 @@ impl MtlContext {
         let sampler = self.decal.sampler.as_ref().ok_or("decal sampler missing")?;
 
         let viewport = [
-            self.hdr_targets.width as f32,
-            self.hdr_targets.height as f32,
+            self.targets.hdr.width as f32,
+            self.targets.hdr.height as f32,
         ];
         let view = DecalView {
             vp,
@@ -101,7 +101,7 @@ impl MtlContext {
         // declares.
         unsafe {
             let ca = pass_desc.colorAttachments().objectAtIndexedSubscript(0);
-            ca.setTexture(Some(self.hdr_targets.hdr_resolve.as_ref()));
+            ca.setTexture(Some(self.targets.hdr.hdr_resolve.as_ref()));
             ca.setLoadAction(MTLLoadAction::Load);
             ca.setStoreAction(MTLStoreAction::Store);
         }
@@ -130,10 +130,10 @@ impl MtlContext {
         // Main depth, plus any raymarched surface depth) instead
         // of the MSAA original. Lets decals project correctly onto
         // raymarched surfaces.
-        enc.set_fragment_texture(self.hdr_targets.depth_resolve.as_ref(), 0);
+        enc.set_fragment_texture(self.targets.hdr.depth_resolve.as_ref(), 0);
         enc.set_fragment_sampler(sampler, 0);
 
-        let last_tex = self.textures.len().saturating_sub(1);
+        let last_tex = self.scene.textures.len().saturating_sub(1);
         let mut draw_calls: u32 = 0;
         // The params block rides the command buffer inline, so every draw
         // re-supplies it; the set's copy is prebuilt, not rebuilt here.
@@ -141,7 +141,7 @@ impl MtlContext {
             let slot = decal.record.texture_slot.min(last_tex);
             enc.set_vertex_value(decal.params, 1);
             enc.set_fragment_value(decal.params, 1);
-            enc.set_fragment_texture(self.textures[slot].as_ref(), 1);
+            enc.set_fragment_texture(self.scene.textures[slot].as_ref(), 1);
             // SAFETY: the draw's index range is this decal cube's own slice of the bound index
             // buffer.
             unsafe {

@@ -370,7 +370,7 @@ impl MtlContext {
             return 0;
         }
         enc.set_pipeline(pipeline);
-        enc.set_depth_stencil(&self.depth_state);
+        enc.set_depth_stencil(&self.targets.depth_state);
         // GBufferView (vbuf 0), current vertex stream (vbuf 1), previous
         // vertex stream (vbuf 2), object records (vbuf 9), model history
         // (vbuf 10), draw args (vbuf 11). The ICB commands inherit these
@@ -382,8 +382,8 @@ impl MtlContext {
         enc.set_vertex_buffer(object_buffer, 0, 9);
         enc.set_vertex_buffer(prev_models, 0, 10);
         enc.set_vertex_buffer(draw_args, 0, 11);
-        enc.set_vertex_buffer(&self.vertex_buffer, 0, 1);
-        enc.set_vertex_buffer(&self.vertex_buffer, 0, 2);
+        enc.set_vertex_buffer(&self.scene.vertex_buffer, 0, 1);
+        enc.set_vertex_buffer(&self.scene.vertex_buffer, 0, 2);
 
         let counts = self.draw_record_counts();
         let mut draw_calls = 0u32;
@@ -391,7 +391,7 @@ impl MtlContext {
         // Static + instance + chunk prefix: static u32 IB resident.
         if let Some(prefix) = counts.prefix(0) {
             enc.useResource_usage_stages(
-                ProtocolObject::from_ref(&*self.index_buffer),
+                ProtocolObject::from_ref(&*self.scene.index_buffer),
                 MTLResourceUsage::Read,
                 MTLRenderStages::Vertex,
             );

@@ -177,7 +177,7 @@ impl MtlContext {
             "shadow cascade indirect",
         ));
         enc.set_pipeline(pipeline);
-        enc.set_depth_stencil(&self.depth_state);
+        enc.set_depth_stencil(&self.targets.depth_state);
         enc.setDepthBias_slopeScale_clamp(
             shadow_bias::RASTER_CONSTANT,
             shadow_bias::RASTER_SLOPE,
@@ -190,7 +190,7 @@ impl MtlContext {
         enc.set_vertex_value(&self.shadow.uniforms, 0);
         enc.set_vertex_value(push, 7);
         enc.set_vertex_buffer(object_buffer, 0, 9);
-        enc.set_vertex_buffer(&self.vertex_buffer, 0, 1);
+        enc.set_vertex_buffer(&self.scene.vertex_buffer, 0, 1);
 
         // This cascade's command slots live at `[c*stride, c*stride + stride)`
         // in the shared shadow ICB (stride = the live record count, the same
@@ -202,7 +202,7 @@ impl MtlContext {
         // Static + instance prefix.
         if let Some(prefix) = counts.prefix(cascade_off) {
             enc.useResource_usage_stages(
-                ProtocolObject::from_ref(&*self.index_buffer),
+                ProtocolObject::from_ref(&*self.scene.index_buffer),
                 MTLResourceUsage::Read,
                 MTLRenderStages::Vertex,
             );

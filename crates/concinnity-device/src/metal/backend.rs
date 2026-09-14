@@ -45,12 +45,13 @@ use crate::forward::forward;
 // the in-order parallel fan-out's whole point and is allowed off the main
 // thread.
 //
-// `via = self.window.appkit` forwards the entry points whose implementation
+// `via` / `via_mut` forward the entry points whose implementation
 // lives on the shared AppKit window layer rather than on `MtlContext` itself.
 // Metal and Vulkan share that layer, so those arms carry no backend-specific
 // behavior; only the main-thread assertion differs from a direct call.
 impl RenderBackend for MtlContext {
-    forward! { assert = debug_assert_main_thread, via = self.window.appkit;
+    forward! { assert = debug_assert_main_thread,
+        via = self.window().appkit, via_mut = self.window_mut().appkit;
         fn capture_cursor(&mut self);
         fn take_input(&mut self) -> RenderInput;
     }
@@ -186,7 +187,8 @@ impl DrawStreaming for MtlContext {
 }
 
 impl WindowControl for MtlContext {
-    forward! { assert = debug_assert_main_thread, via = self.window.appkit;
+    forward! { assert = debug_assert_main_thread,
+        via = self.window().appkit, via_mut = self.window_mut().appkit;
         fn set_ui_cursor_hidden(&mut self, hidden: bool);
         fn cursor_outside_window(&self) -> bool;
         fn set_menu_mode(&mut self, on: bool);
@@ -272,11 +274,7 @@ impl LiveEdit for MtlContext {
     // reload reuses this backend (via `reload_world`) only when the new world's
     // `swapchain_config` matches; otherwise the swap does a full rebuild.
     fn hot_swap_config(&self) -> Option<backend_init::SwapchainConfig> {
-        Some(backend_init::SwapchainConfig {
-            frames_in_flight: self.frames_in_flight,
-            hdr_display: self.hdr.display_requested,
-            hdr_pq: self.hdr.pq_requested,
-        })
+        Some(self.hw.swapchain_config)
     }
 
     // Inherent method is named `apply_world_reload` so this forwarder does not

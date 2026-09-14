@@ -70,8 +70,8 @@ impl MtlContext {
     }
 
     // Encode the volumetric-fog pass. Caller has already ended the main HDR
-    // pass (and the decal pass, if any), so `hdr_targets.depth` (MSAA) holds
-    // the scene depth and `hdr_targets.hdr_resolve` holds the resolved
+    // pass (and the decal pass, if any), so `targets.hdr.depth` (MSAA) holds
+    // the scene depth and `targets.hdr.hdr_resolve` holds the resolved
     // scene + decals color. The pass alpha-blends a single lit ray-march
     // over `hdr_resolve`.
     // pub(in crate::metal) so the render-graph executor in
@@ -96,7 +96,7 @@ impl MtlContext {
         // declares.
         unsafe {
             let ca = pass_desc.colorAttachments().objectAtIndexedSubscript(0);
-            ca.setTexture(Some(self.hdr_targets.hdr_resolve.as_ref()));
+            ca.setTexture(Some(self.targets.hdr.hdr_resolve.as_ref()));
             ca.setLoadAction(MTLLoadAction::Load);
             ca.setStoreAction(MTLStoreAction::Store);
         }
@@ -119,11 +119,11 @@ impl MtlContext {
         // attenuates raymarched surfaces by their true distance. It is
         // fetched by pixel coordinate and never sampled, so it takes no
         // sampler slot; the volume is trilinearly filtered and takes
-        // sampler(0). `post_sampler` is the linear clamp-to-edge state the
+        // sampler(0). `composite.sampler` is the linear clamp-to-edge state the
         // shader used to declare inline as a constexpr sampler.
-        enc.set_fragment_texture(self.hdr_targets.depth_resolve.as_ref(), 0);
+        enc.set_fragment_texture(self.targets.hdr.depth_resolve.as_ref(), 0);
         enc.set_fragment_texture(volume.as_ref(), 1);
-        set_fragment_sampler_range(&enc, &self.post_sampler, 0, 1);
+        set_fragment_sampler_range(&enc, &self.composite.sampler, 0, 1);
         // Fullscreen triangle: 3 vertices, no vertex buffer.
         // SAFETY: the vertex shader generates all three vertices, so the draw reads no bound
         // vertex buffer.

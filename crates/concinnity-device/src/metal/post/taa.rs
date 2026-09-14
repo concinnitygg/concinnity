@@ -57,9 +57,9 @@ impl MtlContext {
     // frame's reflection-probe set, and the GPU-timing resources.
     pub(in crate::metal) fn post_device(&self) -> MtlPostDevice<'_> {
         MtlPostDevice {
-            device: &self.device,
-            sampler: &self.post_sampler,
-            cube_sampler: &self.cube_sampler,
+            device: &self.hw.device,
+            sampler: &self.composite.sampler,
+            cube_sampler: &self.scene.cube_sampler,
             probes: Some(MtlPostProbes {
                 set: &self.probe.set,
                 cube_args: self.probe.cube_args.as_deref(),

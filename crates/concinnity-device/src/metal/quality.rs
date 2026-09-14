@@ -30,7 +30,7 @@ impl MtlContext {
     // specific: Vulkan reaches the same end by rebuilding the swapchain with a
     // different present mode, so this does not live on the shared window layer.
     pub(crate) fn set_vsync(&mut self, on: bool) {
-        super::init::set_display_sync(&self.window.view, on);
+        super::init::set_display_sync(&self.window().view, on);
     }
 
     // Replace the live post-process tunables. They are pushed to the bloom
@@ -111,7 +111,7 @@ impl MtlContext {
         // matching the init-time fallback. The refusal is reported the way the
         // other two backends report theirs, so a request driven from the debug
         // port or a persisted settings file does not read as a success.
-        let rt_capable = raytracing_supported(&self.device);
+        let rt_capable = raytracing_supported(&self.hw.device);
         if q.rt_reflections.is_some() && !rt_capable {
             tracing::warn!(
                 "ray-traced reflections requested but the device does not support \
@@ -133,18 +133,18 @@ impl MtlContext {
         // them; the rebuilt pool sizes `bloom_top` off the same pair, so the new
         // top mip drops back into the chain unchanged below.
         let dims = EffectDimensions {
-            render_w: self.hdr_targets.width,
-            render_h: self.hdr_targets.height,
-            output_w: self.bloom_targets.width,
-            output_h: self.bloom_targets.height,
+            render_w: self.targets.hdr.width,
+            render_h: self.targets.hdr.height,
+            output_w: self.targets.bloom.width,
+            output_h: self.targets.bloom.height,
         };
 
         let bundle = match build_quality_effects(
-            &self.allocator,
+            &self.hw.allocator,
             &super::post::post_device::MtlPostDevice {
-                device: &self.device,
-                sampler: &self.post_sampler,
-                cube_sampler: &self.cube_sampler,
+                device: &self.hw.device,
+                sampler: &self.composite.sampler,
+                cube_sampler: &self.scene.cube_sampler,
                 probes: None,
                 timing: None,
                 hot_reload: self.hot_reload.enabled,
@@ -200,13 +200,13 @@ impl MtlContext {
         self.taa.enabled = taa_effective;
         self.taa.pass = taa;
         self.ssao = ssao;
-        self.transient_pool = transient_pool;
+        self.targets.transient_pool = transient_pool;
         // The rebuilt pool holds a fresh `bloom_top`, so the bloom chain's top
         // mip (a handle into the old pool) is stale. Re-point it rather than
         // rebuilding the chain: the extent is unchanged, so the mips below it
         // are still correct.
-        match self.transient_pool.bloom_top() {
-            Ok(top) => self.bloom_targets.mips[0] = top,
+        match self.targets.transient_pool.bloom_top() {
+            Ok(top) => self.targets.bloom.mips[0] = top,
             Err(e) => tracing::error!("apply_quality_settings: {e}"),
         }
         self.ssr = ssr;
@@ -225,20 +225,20 @@ impl MtlContext {
             if self.rt.accel.is_none() {
                 match build_rt_accel(
                     RtGpu {
-                        device: &self.device,
-                        command_queue: &self.command_queue,
+                        device: &self.hw.device,
+                        command_queue: &self.hw.command_queue,
                         frames_in_flight: self.frames_in_flight,
                     },
                     RtStaticGeometry {
-                        vertex_buffer: &self.vertex_buffer,
-                        index_buffer: &self.index_buffer,
+                        vertex_buffer: &self.scene.vertex_buffer,
+                        index_buffer: &self.scene.index_buffer,
                     },
                     RtSceneGeometry {
                         draw_objects: &self.draw.objects,
                         clusters: &self.instanced.clusters,
                     },
                     RtTextureCounts {
-                        albedo_count: self.textures.len(),
+                        albedo_count: self.scene.textures.len(),
                     },
                     None,
                     self.seethrough_meshes_enabled(),

@@ -197,7 +197,7 @@ impl MtlContext {
         self.probe.placements = placements;
         self.probe.maps.clear();
         self.probe.set = concinnity_core::render::uniforms::ProbeSet::EMPTY;
-        self.texture_epoch += 1;
+        self.arg_buffers.texture_epoch += 1;
         self.probe.bake_queue = reflection_probe::ProbeBakeQueue::new(self.probe.placements.len());
         // Park both slots' GPU resources instead of dropping them: their command
         // buffers may still be reading the reserved-slot buffers, the capture cube or
@@ -259,9 +259,9 @@ impl MtlContext {
         // eligible later, so abandon the queue rather than re-checking it forever.
         // Any in-flight work is parked behind the fence rather than leaked (its
         // command buffers may still be reading those resources).
-        if !self.bindless
-            || self.geometry_less
-            || self.env_map.prefilter_mip_count <= 1
+        if !self.cull.bindless
+            || self.targets.geometry_less
+            || self.scene.env_map.prefilter_mip_count <= 1
             || self.probe.prefilter.is_none()
         {
             self.retire_in_flight_bakes();
@@ -445,7 +445,8 @@ impl MtlContext {
             if self.draw.n_skinned > 0 {
                 match self.skinned.deformed.first().map(|b| b.length()) {
                     Some(len) if len > 0 => Some(
-                        self.device
+                        self.hw
+                            .device
                             .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
                             .ok_or("probe: failed to allocate deformed buffer")?,
                     ),
@@ -459,12 +460,12 @@ impl MtlContext {
         // and the capture cube each face resolves its own slice of. The sample
         // count is the main pipelines' -- a face binds them -- so a
         // single-sample world skips the color attachment entirely.
-        let samples = self.hdr_targets.sample_count;
+        let samples = self.targets.hdr.sample_count;
         let msaa_color = (samples > 1)
-            .then(|| make_face_color(&self.device, PLAN.face_size(), samples))
+            .then(|| make_face_color(&self.hw.device, PLAN.face_size(), samples))
             .transpose()?;
-        let depth = make_face_depth(&self.device, PLAN.face_size(), samples)?;
-        let capture = create_capture_cube(&self.device, &PLAN)?;
+        let depth = make_face_depth(&self.hw.device, PLAN.face_size(), samples)?;
+        let capture = create_capture_cube(&self.hw.device, &PLAN)?;
 
         self.probe.rendering = Some(RenderingBake {
             index,
@@ -533,6 +534,7 @@ impl MtlContext {
 
         // Cull command buffer: fills the shared ICB for this face's frustum.
         let cull_cb = self
+            .hw
             .command_queue
             .commandBuffer()
             .ok_or("probe: failed to get cull command buffer")?;
@@ -564,6 +566,7 @@ impl MtlContext {
 
         // Render command buffer: reads the ICB into this face.
         let render_cb = self
+            .hw
             .command_queue
             .commandBuffer()
             .ok_or("probe: failed to get render command buffer")?;
@@ -643,8 +646,9 @@ impl MtlContext {
         // all of it (the last face's completion handler flagged `done`, observed
         // Acquire before this call).
 
-        let prefilter_gpu = PrefilterGpu::new(&self.allocator, capture, &PLAN)?;
+        let prefilter_gpu = PrefilterGpu::new(&self.hw.allocator, capture, &PLAN)?;
         let cmd_buf = self
+            .hw
             .command_queue
             .commandBuffer()
             .ok_or("probe: failed to get prefilter command buffer")?;
@@ -675,6 +679,7 @@ impl MtlContext {
             (bake.cursor, &bake.gpu)
         };
         let cmd_buf = self
+            .hw
             .command_queue
             .commandBuffer()
             .ok_or("probe: failed to get convolution command buffer")?;
@@ -713,7 +718,7 @@ impl MtlContext {
             probe_pos: [p.position[0], p.position[1], p.position[2], 0.0],
         };
         self.probe.set.count = self.probe.maps.len() as u32;
-        self.texture_epoch += 1;
+        self.arg_buffers.texture_epoch += 1;
         tracing::info!(
             "reflection probes: baked {}/{}",
             index + 1,

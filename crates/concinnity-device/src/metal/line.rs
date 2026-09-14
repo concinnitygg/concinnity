@@ -1,6 +1,6 @@
 //! Per-frame encoder for the world-space line pass. Runs at the tail of
 //! the hdr_resolve decoration chain, after the main pass resolved color into
-//! `hdr_targets.hdr_resolve` and depth into `hdr_targets.depth_resolve`, so the
+//! `targets.hdr.hdr_resolve` and depth into `targets.hdr.depth_resolve`, so the
 //! lines layer over the lit scene and SSR / TAA treat them like any other scene
 //! content.
 //!
@@ -62,7 +62,7 @@ impl MtlContext {
         if !has_lines || self.lines.pipeline.is_some() || self.lines.build_failed {
             return;
         }
-        match build_line_pipeline(&self.device, self.hot_reload.enabled) {
+        match build_line_pipeline(&self.hw.device, self.hot_reload.enabled) {
             Ok(ps) => self.lines.pipeline = Some(ps),
             Err(e) => {
                 self.lines.build_failed = true;
@@ -87,7 +87,7 @@ impl MtlContext {
         let buf = self
             .lines
             .upload
-            .write(&self.device, slot, bytes_of_slice(vertices))?;
+            .write(&self.hw.device, slot, bytes_of_slice(vertices))?;
         self.lines.frame = Some((buf, vertices.len()));
         Ok(())
     }
@@ -119,7 +119,7 @@ impl MtlContext {
         // declares.
         unsafe {
             let ca = pass_desc.colorAttachments().objectAtIndexedSubscript(0);
-            ca.setTexture(Some(self.hdr_targets.hdr_resolve.as_ref()));
+            ca.setTexture(Some(self.targets.hdr.hdr_resolve.as_ref()));
             ca.setLoadAction(MTLLoadAction::Load);
             ca.setStoreAction(MTLStoreAction::Store);
         }
@@ -137,7 +137,7 @@ impl MtlContext {
         enc.set_fragment_value(&view, 0);
         enc.set_vertex_buffer(vbuf, 0, VERTEX_BUFFER_INDEX);
         // Resolved scene depth at texture(0) for the manual depth test.
-        enc.set_fragment_texture(self.hdr_targets.depth_resolve.as_ref(), 0);
+        enc.set_fragment_texture(self.targets.hdr.depth_resolve.as_ref(), 0);
         // SAFETY: the draw covers exactly the vertices uploaded into `vbuf`.
         unsafe {
             enc.drawPrimitives_vertexStart_vertexCount(

@@ -253,14 +253,14 @@ impl MtlContext {
         if !self.hot_reload.enabled {
             return Ok(());
         }
-        let device = &self.device;
+        let device = &self.hw.device;
         let hr = true;
 
         // Build every replacement into a temporary first. A `?` early-return
         // here means we never overwrite a live pipeline with a failed build:
         // any compile error leaves the running session rendering with the
         // previous shader source.
-        let post = build_post_pipeline(device, self.swap_pixel_format, hr)?;
+        let post = build_post_pipeline(device, self.hw.swap_pixel_format, hr)?;
         let bloom = rebuild_if_live!(
             self.bloom_pipelines.is_some(),
             build_bloom_pipelines(device, hr)
@@ -268,13 +268,13 @@ impl MtlContext {
 
         let text = rebuild_if_live!(
             self.text.pipeline_state.is_some(),
-            build_text_pipeline(device, self.swap_pixel_format, hr)
+            build_text_pipeline(device, self.hw.swap_pixel_format, hr)
         );
         // Pipelines only: nothing here encodes, so the device needs no probe set.
         let post_device = MtlPostDevice {
             device,
-            sampler: &self.post_sampler,
-            cube_sampler: &self.cube_sampler,
+            sampler: &self.composite.sampler,
+            cube_sampler: &self.scene.cube_sampler,
             probes: None,
             timing: None,
             hot_reload: hr,
@@ -289,13 +289,13 @@ impl MtlContext {
         // to an engine template does not swap a world's program for the
         // engine's.
         let main = rebuild_if_live!(
-            self.pipeline_state.is_some(),
+            self.cull.main_pipeline.is_some(),
             build_main_pipeline(
                 device,
                 &make_vertex_descriptor(),
                 self.world_shader.as_ref(),
                 hr,
-                self.hdr_targets.sample_count,
+                self.targets.hdr.sample_count,
             )
         );
         // The engine sampler block rides the fresh fragment's encoder.
@@ -306,9 +306,9 @@ impl MtlContext {
             Some(enc) => Some(super::init::pipelines::build_bindless_sampler_args(
                 device,
                 enc,
-                &self.sampler,
+                &self.scene.sampler,
                 &self.shadow.sampler,
-                &self.cube_sampler,
+                &self.scene.cube_sampler,
             )?),
             None => None,
         };
@@ -316,7 +316,7 @@ impl MtlContext {
         // shader); rebuild them whenever a Hi-Z resource exists so a saved
         // edit to `hiz_build.slang` is picked up. The texture + mip views are
         // kept: only the pipelines swap.
-        let hiz_samples = self.hdr_targets.sample_count;
+        let hiz_samples = self.targets.hdr.sample_count;
         let hiz = rebuild_if_live!(
             self.cull.hiz.is_some(),
             build_hiz_pipelines(device, hr, hiz_samples)
@@ -425,7 +425,7 @@ impl MtlContext {
         // All builds succeeded: swap into the live context. After this
         // point the next frame's draw calls bind the freshly compiled
         // pipelines.
-        self.post_pipeline_state = post;
+        self.composite.pipeline = post;
         if let Some(b) = bloom {
             self.bloom_pipelines = Some(b);
         }
@@ -436,9 +436,9 @@ impl MtlContext {
             taa.swap_pipeline(p);
         }
         if let Some(p) = main {
-            self.pipeline_state = Some(p.pipeline_state);
-            self.bindless_tex_arg_encoder = p.bindless_tex_arg_encoder;
-            self.bindless_sampler_args = main_sampler_args;
+            self.cull.main_pipeline = Some(p.pipeline_state);
+            self.arg_buffers.bindless_tex_encoder = p.bindless_tex_arg_encoder;
+            self.arg_buffers.bindless_sampler_args = main_sampler_args;
             self.cull.pipeline = Some(p.cull.decide);
             self.cull.pipeline_phase2 = Some(p.cull.decide_phase2);
             self.cull.encode_pipeline = Some(p.cull.encode);
@@ -484,7 +484,7 @@ impl MtlContext {
         if let (Some(p), Some(resolve)) = (ssr_resolve, self.ssr.resolve.as_mut()) {
             resolve.swap_pipeline(p);
         }
-        self.probe_cube_arg_encoder = probe_cube_arg_encoder;
+        self.arg_buffers.probe_cube_encoder = probe_cube_arg_encoder;
         if let Some(p) = reflection_composite {
             self.ssr.composite_pipeline = Some(p);
         }
@@ -538,13 +538,13 @@ impl MtlContext {
         // A scene-less world never built a main pipeline; there is nothing
         // for the fresh world-shader programs to replace.
         let vert_desc = make_vertex_descriptor();
-        let new_main = if self.pipeline_state.is_some() {
+        let new_main = if self.cull.main_pipeline.is_some() {
             Some(build_main_pipeline(
-                &self.device,
+                &self.hw.device,
                 &vert_desc,
                 world,
                 self.hot_reload.enabled,
-                self.hdr_targets.sample_count,
+                self.targets.hdr.sample_count,
             )?)
         } else {
             None
@@ -558,11 +558,11 @@ impl MtlContext {
             .and_then(|m| m.bindless_sampler_arg_encoder.as_ref())
         {
             Some(enc) => Some(super::init::pipelines::build_bindless_sampler_args(
-                &self.device,
+                &self.hw.device,
                 enc,
-                &self.sampler,
+                &self.scene.sampler,
                 &self.shadow.sampler,
-                &self.cube_sampler,
+                &self.scene.cube_sampler,
             )?),
             None => None,
         };
@@ -577,15 +577,15 @@ impl MtlContext {
                 bindless_tex_arg_encoder,
                 bindless_sampler_arg_encoder: _,
             } = new_main;
-            self.pipeline_state = Some(pipeline_state);
+            self.cull.main_pipeline = Some(pipeline_state);
             // Swap the cull state with the pipeline; `two_pass_occlusion` keeps
             // its init-time resolution.
             self.cull.pipeline = Some(cull.decide);
             self.cull.pipeline_phase2 = Some(cull.decide_phase2);
             self.cull.encode_pipeline = Some(cull.encode);
             self.cull.icb_arg_encoder = Some(cull.icb_arg_encoder);
-            self.bindless_tex_arg_encoder = bindless_tex_arg_encoder;
-            self.bindless_sampler_args = new_sampler_args;
+            self.arg_buffers.bindless_tex_encoder = bindless_tex_arg_encoder;
+            self.arg_buffers.bindless_sampler_args = new_sampler_args;
             // Force fresh ICBs on the next frame so every argument buffer is
             // re-encoded with the new encoder. Matches the `cull` swap in
             // `reload_shaders`; the status buffers and phase-2 ICB rebuild

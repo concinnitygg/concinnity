@@ -45,20 +45,20 @@ impl MtlContext {
         // Read views over the current shared buffers. `StorageModeShared`
         // means `contents()` is a CPU-addressable pointer aliasing the GPU
         // data; safe after `wait_idle`.
-        let old_v_len = self.vertex_buffer.length() / std::mem::size_of::<Vertex>();
+        let old_v_len = self.scene.vertex_buffer.length() / std::mem::size_of::<Vertex>();
         // SAFETY: the buffer is `StorageModeShared`, so `contents()` is a live CPU mapping of its
         // bytes, and the length was derived from that buffer's own byte length divided by the
         // element size. The preceding `wait_idle` means the GPU is not writing it.
         let old_v_slice: &[Vertex] = unsafe {
-            let ptr = self.vertex_buffer.contents().as_ptr() as *const Vertex;
+            let ptr = self.scene.vertex_buffer.contents().as_ptr() as *const Vertex;
             std::slice::from_raw_parts(ptr, old_v_len)
         };
-        let old_i_len = self.index_buffer.length() / std::mem::size_of::<u32>();
+        let old_i_len = self.scene.index_buffer.length() / std::mem::size_of::<u32>();
         // SAFETY: the buffer is `StorageModeShared`, so `contents()` is a live CPU mapping of its
         // bytes, and the length was derived from that buffer's own byte length divided by the
         // element size. The preceding `wait_idle` means the GPU is not writing it.
         let old_i_slice: &[u32] = unsafe {
-            let ptr = self.index_buffer.contents().as_ptr() as *const u32;
+            let ptr = self.scene.index_buffer.contents().as_ptr() as *const u32;
             std::slice::from_raw_parts(ptr, old_i_len)
         };
 
@@ -210,6 +210,7 @@ impl MtlContext {
         // replaced below; its ranges return to the pool on drop, withheld until
         // the frames the `wait_idle` above drained can no longer reference them.
         let new_vertex_buffer = self
+            .hw
             .allocator
             .alloc_buffer_with_bytes(
                 bytes_of_slice(new_vertices.as_slice()),
@@ -217,6 +218,7 @@ impl MtlContext {
             )
             .map_err(|e| format!("rebuild_static_geometry: vertex buffer: {e}"))?;
         let new_index_buffer = self
+            .hw
             .allocator
             .alloc_buffer_with_bytes(
                 bytes_of_slice(new_indices.as_slice()),
@@ -237,8 +239,8 @@ impl MtlContext {
             obj.lod_alternates = lods;
         }
 
-        self.vertex_buffer = new_vertex_buffer;
-        self.index_buffer = new_index_buffer;
+        self.scene.vertex_buffer = new_vertex_buffer;
+        self.scene.index_buffer = new_index_buffer;
 
         // The RT acceleration structure (if any) was built against the OLD
         // vertex/index buffers + draw-object offsets. After this swap its static
@@ -253,7 +255,7 @@ impl MtlContext {
         // failure leaves the prior BVH in place (`rebuild_rt_accel` only swaps on
         // success) and must NOT fail the geometry reload, which already succeeded.
         if self.rt.accel.is_some() {
-            let albedo_count = self.textures.len();
+            let albedo_count = self.scene.textures.len();
             if let Err(e) = self.rebuild_rt_accel(albedo_count) {
                 tracing::warn!(
                     "rebuild_static_geometry: RT BVH rebuild failed, reflections may be stale: {e}"

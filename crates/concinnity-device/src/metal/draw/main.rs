@@ -137,10 +137,10 @@ impl MtlContext {
             let ca = main_pass_desc
                 .colorAttachments()
                 .objectAtIndexedSubscript(0);
-            ca.setTexture(Some(self.hdr_targets.color_attachment()));
+            ca.setTexture(Some(self.targets.hdr.color_attachment()));
             ca.setLoadAction(MTLLoadAction::Clear);
-            if self.hdr_targets.multisampled() {
-                ca.setResolveTexture(Some(self.hdr_targets.hdr_resolve.as_ref()));
+            if self.targets.hdr.multisampled() {
+                ca.setResolveTexture(Some(self.targets.hdr.hdr_resolve.as_ref()));
                 ca.setStoreAction(if store_msaa_color {
                     MTLStoreAction::StoreAndMultisampleResolve
                 } else {
@@ -159,7 +159,7 @@ impl MtlContext {
             });
 
             let da = main_pass_desc.depthAttachment();
-            da.setTexture(Some(self.hdr_targets.depth_attachment()));
+            da.setTexture(Some(self.targets.hdr.depth_attachment()));
             da.setLoadAction(MTLLoadAction::Clear);
             da.setClearDepth(1.0);
             // `depth_resolve` is the canonical post-rasterize scene depth the
@@ -169,8 +169,8 @@ impl MtlContext {
             // is enough -- those passes only ever read sample 0) and keeps the
             // MSAA attachment alive for the Hi-Z build; without MSAA it is the
             // attachment, and the store is the whole of it.
-            if self.hdr_targets.multisampled() {
-                da.setResolveTexture(Some(self.hdr_targets.depth_resolve.as_ref()));
+            if self.targets.hdr.multisampled() {
+                da.setResolveTexture(Some(self.targets.hdr.depth_resolve.as_ref()));
                 da.setDepthResolveFilter(objc2_metal::MTLMultisampleDepthResolveFilter::Sample0);
                 da.setStoreAction(MTLStoreAction::StoreAndMultisampleResolve);
             } else {
@@ -201,7 +201,7 @@ impl MtlContext {
             elapsed,
             reflections_enabled: self.reflection_resolve_active(),
             cam_pos,
-            prefilter_mip_count: self.env_map.prefilter_mip_count as f32,
+            prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
             shade_mode: self.shade_mode(),
             _end_pad: 0.0,
             sky_rot: self.view.sky_rot,
@@ -210,7 +210,7 @@ impl MtlContext {
         // While the world is hidden behind an opaque menu, the pass stops at the
         // descriptor's Clear load action. A scene-less world (no main pipeline)
         // takes the same bare-clear shape every frame.
-        if world_hidden || self.pipeline_state.is_none() {
+        if world_hidden || self.cull.main_pipeline.is_none() {
             return Ok(0);
         }
 
@@ -308,7 +308,7 @@ impl MtlContext {
             // it (0.0) so captured glossy surfaces are not flattened.
             reflections_enabled: 0.0,
             cam_pos,
-            prefilter_mip_count: self.env_map.prefilter_mip_count as f32,
+            prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
             // A probe capture is always lit, whatever the viewport shows.
             shade_mode: 0.0,
             _end_pad: 0.0,
@@ -371,17 +371,17 @@ impl MtlContext {
             let ca = main_pass_desc
                 .colorAttachments()
                 .objectAtIndexedSubscript(0);
-            ca.setTexture(Some(self.hdr_targets.color_attachment()));
+            ca.setTexture(Some(self.targets.hdr.color_attachment()));
             ca.setLoadAction(MTLLoadAction::Load);
 
             let da = main_pass_desc.depthAttachment();
-            da.setTexture(Some(self.hdr_targets.depth_attachment()));
+            da.setTexture(Some(self.targets.hdr.depth_attachment()));
             da.setLoadAction(MTLLoadAction::Load);
 
-            if self.hdr_targets.multisampled() {
-                ca.setResolveTexture(Some(self.hdr_targets.hdr_resolve.as_ref()));
+            if self.targets.hdr.multisampled() {
+                ca.setResolveTexture(Some(self.targets.hdr.hdr_resolve.as_ref()));
                 ca.setStoreAction(MTLStoreAction::StoreAndMultisampleResolve);
-                da.setResolveTexture(Some(self.hdr_targets.depth_resolve.as_ref()));
+                da.setResolveTexture(Some(self.targets.hdr.depth_resolve.as_ref()));
                 da.setDepthResolveFilter(objc2_metal::MTLMultisampleDepthResolveFilter::Sample0);
                 da.setStoreAction(MTLStoreAction::StoreAndMultisampleResolve);
             } else {
@@ -409,7 +409,7 @@ impl MtlContext {
             elapsed,
             reflections_enabled: self.reflection_resolve_active(),
             cam_pos,
-            prefilter_mip_count: self.env_map.prefilter_mip_count as f32,
+            prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
             shade_mode: self.shade_mode(),
             _end_pad: 0.0,
             sky_rot: self.view.sky_rot,
@@ -467,7 +467,7 @@ impl MtlContext {
         // The engine sampler block (single-source main program only;
         // world-authored fragments use inline samplers and ignore the
         // slot).
-        if let Some(sampler_args) = &self.bindless_sampler_args {
+        if let Some(sampler_args) = &self.arg_buffers.bindless_sampler_args {
             enc.set_fragment_buffer(
                 sampler_args,
                 0,
@@ -487,7 +487,7 @@ impl MtlContext {
         // buffer is already bound at binding 1.
         if let Some(prefix) = counts.prefix(0) {
             enc.useResource_usage_stages(
-                ProtocolObject::from_ref(&*self.index_buffer),
+                ProtocolObject::from_ref(&*self.scene.index_buffer),
                 MTLResourceUsage::Read,
                 MTLRenderStages::Vertex,
             );
@@ -512,7 +512,7 @@ impl MtlContext {
             // Restore the default pipeline for the skinned tail below (and for
             // the caller's subsequent sub-paths, which re-bind anyway).
             if icbs.len() > 1
-                && let Some(ps) = &self.pipeline_state
+                && let Some(ps) = &self.cull.main_pipeline
             {
                 enc.set_pipeline(ps);
             }
@@ -581,21 +581,21 @@ impl MtlContext {
         enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
         view_uniforms: &ViewUniforms,
     ) -> bool {
-        let Some(pipeline_state) = &self.pipeline_state else {
+        let Some(pipeline_state) = &self.cull.main_pipeline else {
             return false;
         };
         enc.set_pipeline(pipeline_state);
-        enc.set_depth_stencil(&self.depth_state);
+        enc.set_depth_stencil(&self.targets.depth_state);
 
         enc.set_vertex_value(view_uniforms, 0);
         enc.set_fragment_value(view_uniforms, 0);
-        enc.set_vertex_buffer(&self.vertex_buffer, 0, 1);
+        enc.set_vertex_buffer(&self.scene.vertex_buffer, 0, 1);
         enc.set_fragment_value(&self.light_uniforms, 4);
         // Local-light storage buffer at fragment buffer(8). Encoder-bound
         // buffers are inherited by the ICB-executed bindless draws (the same
         // way the object buffer at binding 9 is), so this single bind covers
         // the main pass and the planar / probe re-renders.
-        enc.set_fragment_buffer(&self.local_light_buffer, 0, 8);
+        enc.set_fragment_buffer(&self.scene.local_light_buffer, 0, 8);
         // Per-slice spot shadow projections at fragment buffer(13), inherited
         // by the ICB draws like the local lights above. The matching depth
         // array is not bound here: every texture the pass samples travels in
@@ -605,7 +605,7 @@ impl MtlContext {
         // Rect area-light extents at fragment buffer(14), indexed by
         // GpuLight.data_index. Inherited by the ICB draws like the buffers
         // above, so this one bind covers every main-pass variant.
-        enc.set_fragment_buffer(&self.area_light_buffer, 0, 14);
+        enc.set_fragment_buffer(&self.scene.area_light_buffer, 0, 14);
         enc.set_fragment_value(&self.shadow.uniforms, 5);
         // Reflection-probe set (count + per-probe parallax boxes) at fragment
         // buffer(6). `EMPTY` until a bake; the shader weights every box

@@ -21,7 +21,7 @@
 //! backends compile; the pipeline state matches the glass panes exactly, because
 //! the same transparent encoder feeds both.
 //!
-//! Refraction samples `hdr_targets.transparent_scene_copy` (the snapshot the
+//! Refraction samples `targets.hdr.transparent_scene_copy` (the snapshot the
 //! transparent encoder blits from the current scene-pre-taa before drawing) so
 //! water renders correctly whether or not SSR produced a distinct scene texture
 //! (with SSR off, scene-pre-taa aliases `hdr_resolve`, and sampling it directly
@@ -222,8 +222,8 @@ impl MtlContext {
                 // (texture 1). The IBL prefilter cube (texture 2), the probe cube
                 // argument buffer, cube sampler (sampler 1) and probe set are
                 // bound globally by `encode_transparent` (shared with glass).
-                (0, self.hdr_targets.transparent_scene_copy.clone()),
-                (1, self.hdr_targets.depth_resolve.clone()),
+                (0, self.targets.hdr.transparent_scene_copy.clone()),
+                (1, self.targets.hdr.depth_resolve.clone()),
             ];
             // Select the sharp planar reflection when the planar pass ran this
             // frame and this surface was assigned a slot; bind that slot's resolve
@@ -252,7 +252,7 @@ impl MtlContext {
                 base_vertex: 0,
                 params: bytes_of(&params),
                 fragment_textures,
-                fragment_samplers: vec![(0, self.post_sampler.clone())],
+                fragment_samplers: vec![(0, self.composite.sampler.clone())],
                 sort_distance,
             });
         }

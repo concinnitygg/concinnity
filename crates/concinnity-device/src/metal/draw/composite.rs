@@ -57,14 +57,14 @@ impl fullscreen::CompositeEncoder for CompositePass<'_> {
     fn begin_composite(&self, _enc: &Self::Rec, _args: &()) {}
 
     fn composite_draw(&self, enc: &Self::Rec, _args: &()) {
-        enc.set_pipeline(&self.ctx.post_pipeline_state);
+        enc.set_pipeline(&self.ctx.composite.pipeline);
         enc.set_fragment_texture(self.scene_color, 0);
         // Bloom mip 0 at texture(1). Always bound so the binding resolves;
         // the shader skips the sample when bloom_intensity == 0.
-        enc.set_fragment_texture(self.ctx.bloom_targets.mips[0].as_ref(), 1);
+        enc.set_fragment_texture(self.ctx.targets.bloom.mips[0].as_ref(), 1);
         // 3D color-grading LUT at texture(2). Always bound -- an identity
         // LUT stands in when the world declares no ColorLut.
-        enc.set_fragment_texture(self.ctx.color_lut.as_ref(), 2);
+        enc.set_fragment_texture(self.ctx.scene.color_lut.as_ref(), 2);
         // The channel sources at texture(3..5), bound only while a channel
         // view will sample them. The SSAO white 1x1 stands in when a
         // G-buffer was never built.
@@ -83,7 +83,7 @@ impl fullscreen::CompositeEncoder for CompositePass<'_> {
         }
         crate::metal::post::fullscreen::set_fragment_sampler_range(
             enc,
-            &self.ctx.post_sampler,
+            &self.ctx.composite.sampler,
             0,
             6,
         );
@@ -211,7 +211,7 @@ impl MtlContext {
         text_calls: &[TextDrawCall],
     ) -> Result<u32, String> {
         let composite_pass_desc = self
-            .window
+            .window()
             .view
             .currentRenderPassDescriptor()
             .ok_or("no current render pass descriptor")?;
@@ -235,7 +235,7 @@ impl MtlContext {
         // divide by win_width/height); the scissor is in framebuffer pixels.
         // Recover the drawable's pixel size from the composite color attachment
         // so a per-call clip rect scales from points to pixels.
-        let size = self.window.view.bounds().size;
+        let size = self.window().view.bounds().size;
         let logical = (size.width as f32, size.height as f32);
         // SAFETY: attachment 0 is the only color attachment this pass declares, and the
         // accessors only read it.

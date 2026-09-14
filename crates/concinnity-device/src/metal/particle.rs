@@ -283,7 +283,7 @@ impl MtlContext {
             return Ok(0);
         }
         let frame_index = frame.frame_index;
-        let last_tex = self.textures.len().saturating_sub(1);
+        let last_tex = self.scene.textures.len().saturating_sub(1);
 
         // Visibility-cull per emitter, for the draw alone: the simulation above
         // ticked every pool. Tombstoned (None) slots are always invisible.
@@ -325,7 +325,7 @@ impl MtlContext {
         // declares.
         unsafe {
             let ca = pass_desc.colorAttachments().objectAtIndexedSubscript(0);
-            ca.setTexture(Some(self.hdr_targets.hdr_resolve.as_ref()));
+            ca.setTexture(Some(self.targets.hdr.hdr_resolve.as_ref()));
             ca.setLoadAction(MTLLoadAction::Load);
             ca.setStoreAction(MTLStoreAction::Store);
         }
@@ -366,7 +366,7 @@ impl MtlContext {
             let slot = rec.texture_slot.min(last_tex);
             enc.set_vertex_buffer(gpu.pool.as_ref(), 0, 0);
             enc.set_vertex_value(&params, 2);
-            enc.set_fragment_texture(self.textures[slot].as_ref(), 0);
+            enc.set_fragment_texture(self.scene.textures[slot].as_ref(), 0);
             // SAFETY: the four strip vertices are generated from `[[vertex_id]]` in the shader.
             unsafe {
                 enc.drawPrimitives_vertexStart_vertexCount_instanceCount(

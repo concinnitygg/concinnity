@@ -55,7 +55,7 @@ impl MtlContext {
         // from that. `ShaderRead` is the default usage and is enough for a blit
         // destination.
         let desc = TextureDesc {
-            format: self.swap_pixel_format,
+            format: self.hw.swap_pixel_format,
             width,
             height,
             storage: MTLStorageMode::Shared,
@@ -63,6 +63,7 @@ impl MtlContext {
         }
         .build();
         let staging = self
+            .hw
             .device
             .newTextureWithDescriptor(&desc)
             .ok_or("screenshot: failed to create staging texture")?;
@@ -72,6 +73,7 @@ impl MtlContext {
         // composite pass (which wrote the drawable) complete first; the
         // `waitUntilCompleted` then guarantees the copy is done before the read.
         let cmd_buf = self
+            .hw
             .command_queue
             .commandBuffer()
             .ok_or("screenshot: failed to get command buffer")?;
@@ -98,7 +100,7 @@ impl MtlContext {
         cmd_buf.waitUntilCompleted();
 
         // Read the staging texture back tightly (no row padding) and decode.
-        let bytes_per_pixel = swapchain_bytes_per_pixel(self.swap_pixel_format) as usize;
+        let bytes_per_pixel = swapchain_bytes_per_pixel(self.hw.swap_pixel_format) as usize;
         let bytes_per_row = width * bytes_per_pixel;
         let mut raw = vec![0u8; bytes_per_row * height];
         let region = MTLRegion {
@@ -124,7 +126,7 @@ impl MtlContext {
 
         let rgba = image_decode::decode_to_rgba8(
             &raw,
-            classify(self.swap_pixel_format, self.hdr.encoding),
+            classify(self.hw.swap_pixel_format, self.hw.hdr_encoding()),
         );
         encode_png(path, width as u32, height as u32, &rgba)?;
         Ok(path.to_string())

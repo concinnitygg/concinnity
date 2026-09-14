@@ -33,17 +33,14 @@ use concinnity_core::render::backend_init;
 use concinnity_core::render::csm;
 use concinnity_core::render::decal;
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::hdr_output;
 use concinnity_core::render::lights;
 use concinnity_core::render::ltc;
 use concinnity_core::render::planar_reflection;
 use concinnity_core::render::reflection_probe;
 use concinnity_core::render::skinned_slots;
-use objc2::rc::Retained;
-use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTLCommandQueue, MTLCompareFunction, MTLCreateSystemDefaultDevice, MTLDevice as _,
-    MTLResourceOptions, MTLSamplerAddressMode, MTLSamplerDescriptor, MTLSamplerMinMagFilter,
+    MTLCompareFunction, MTLCreateSystemDefaultDevice, MTLDevice as _, MTLResourceOptions,
+    MTLSamplerAddressMode, MTLSamplerDescriptor, MTLSamplerMinMagFilter,
 };
 pub(crate) use window::set_display_sync;
 
@@ -57,17 +54,6 @@ use super::texture::{
     upload_texture_image,
 };
 
-// The reusable hardware handles a live world reload (`cn editor` SAVE) hands
-// back so `MtlContext::build` rebuilds a world's GPU content on the *existing*
-// device + command queue + window instead of creating new ones. Cloned (the
-// Metal / AppKit handles are reference counted), so the underlying objects stay
-// alive while the old context is dropped. See `MtlContext::apply_world_reload`.
-pub(super) struct ReuseHandles {
-    pub device: Retained<ProtocolObject<dyn objc2_metal::MTLDevice>>,
-    pub command_queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
-    pub existing: window::ExistingWindow,
-}
-
 impl MtlContext {
     // Create a window and Metal render pipeline from the assembled backend
     // inputs (see `concinnity_core::render::backend_init::BackendInit` for per-field docs).
@@ -79,13 +65,13 @@ impl MtlContext {
 
     // The shared constructor. `reuse == None` creates a fresh device + command
     // queue + window (the normal `new` path); `reuse == Some` rebuilds the
-    // world's content on the retained hardware for a live `cn editor` reload,
-    // reusing the same window so a save does not recreate it. Everything between
-    // the two is identical: the same pipelines, buffers, textures, and targets
-    // are built from `init` either way.
+    // world's content on the hardware an outgoing context handed over for a
+    // live `cn editor` reload, keeping its window so a save does not recreate
+    // it. Everything after the hardware is identical: the same pipelines,
+    // buffers, textures, and targets are built from `init` either way.
     fn build(
         init: backend_init::BackendInit<'_>,
-        reuse: Option<ReuseHandles>,
+        reuse: Option<MtlHardware>,
     ) -> RenderResult<Self> {
         use concinnity_core::render::backend_init::{
             BackendInit, MediaPayloads, PostSettings, SceneData, ShadowParams, WorldFx,
@@ -178,25 +164,113 @@ impl MtlContext {
         let mtm = objc2::MainThreadMarker::new()
             .ok_or("MtlContext::new must be called from the main thread")?;
 
-        // A live reload reuses the existing device + command queue + window; a
-        // fresh build creates them. `existing_window` (when reusing) is forwarded
-        // to `setup_window_and_view` so it skips NSWindow / MTKView creation.
-        let (device, command_queue, existing_window) = match reuse {
-            Some(r) => (r.device, r.command_queue, Some(r.existing)),
+        // Window + MTKView + initial drawable sizing. Scene-less (UI / text
+        // only) worlds clamp the HDR / bloom / effect targets to 1x1; keyed off
+        // the derived requirements rather than raw vertex presence so a
+        // vertex-less world that still renders 3D content (SDF volumes, water,
+        // glass) keeps full-size targets. The swapchain color-output mode
+        // resolved here picks the BGRA8Unorm vs RGBA16Float format the post +
+        // text pipelines target.
+        let geometry_less = !requirements.scene;
+        let window_config = window::WindowConfig {
+            title,
+            width,
+            height,
+            title_bar,
+            geometry_less,
+            capture_enabled: capture,
+        };
+        let hdr_request = window::HdrRequest {
+            display_requested: hdr_display_requested,
+            pq_requested: hdr_pq_requested,
+        };
+        let swapchain_config = backend_init::SwapchainConfig {
+            frames_in_flight: frames_in_flight.max(1),
+            hdr_display: hdr_display_requested,
+            hdr_pq: hdr_pq_requested,
+        };
+
+        // A live reload adopts the handed-over device, queues, allocator and
+        // window, re-resolving the HDR mode on the inherited view; a fresh build
+        // creates them.
+        let (hw, initial_w, initial_h) = match reuse {
+            Some(mut hw) => {
+                let view = &hw
+                    .window
+                    .as_ref()
+                    .ok_or("reload_world: handed-over hardware has no window")?
+                    .view;
+                let (hdr_mode, initial_w, initial_h) =
+                    window::reconfigure_view(mtm, view, window_config, hdr_request);
+                hw.swap_pixel_format = window::swap_pixel_format(hdr_mode);
+                hw.hdr_mode = hdr_mode;
+                hw.swapchain_config = swapchain_config;
+                (hw, initial_w, initial_h)
+            }
             None => {
                 let device = MTLCreateSystemDefaultDevice().ok_or("no default Metal device")?;
                 let command_queue = device
                     .newCommandQueue()
                     .ok_or("failed to create Metal command queue")?;
-                (device, command_queue, None)
+                // The block pool the world's persistent buffers and textures are
+                // placed in, per context: a live reload hands its successor a
+                // fresh one, so the outgoing context's heaps go with it.
+                let allocator = DeviceAllocator::new(&device, frames_in_flight);
+                let window::WindowSetup {
+                    window,
+                    mtk_view,
+                    pump_events,
+                    initial_w,
+                    initial_h,
+                    fullscreen,
+                    window_delegate,
+                    hdr_mode,
+                } = window::setup_window_and_view(mtm, &device, window_config, hdr_request)?;
+                // Second queue + per-queue events for the render graph's
+                // two-queue schedule. Falls back to a single-queue submission
+                // when the device will not create them.
+                let graph_queues = super::graph_queues::GraphQueues::new(&device);
+                if graph_queues.is_none() {
+                    tracing::warn!(
+                        "metal: no async-compute queue, submitting the render graph on one queue"
+                    );
+                }
+                let window = WindowState {
+                    appkit: crate::appkit::AppKitWindow::new(crate::appkit::AppKitWindowParts {
+                        window,
+                        // The shared layer drives the view through NSView alone;
+                        // the MTKView below stays for drawable acquisition.
+                        view: objc2::rc::Retained::into_super(mtk_view.clone()),
+                        title_bar,
+                        pump_events,
+                        fullscreen,
+                        window_delegate,
+                    }),
+                    view: mtk_view,
+                    was_visible: false,
+                };
+                let hw = MtlHardware {
+                    device,
+                    allocator,
+                    command_queue,
+                    graph_queues,
+                    swap_pixel_format: window::swap_pixel_format(hdr_mode),
+                    hdr_mode,
+                    swapchain_config,
+                    window: Some(window),
+                };
+                (hw, initial_w, initial_h)
             }
         };
-
-        // The block pool the world's persistent buffers and textures are placed
-        // in. Built before anything uploads through it, and per context: a live
-        // reload keeps the device but rebuilds the world's resources, so the
-        // outgoing context's heaps go with it.
-        let allocator = DeviceAllocator::new(&device, frames_in_flight);
+        if let Some(w) = &hw.window {
+            // Honor the requested vsync on the backing CAMetalLayer (default
+            // CAMetalLayer presentation is display-synced).
+            window::set_display_sync(&w.view, vsync);
+        }
+        let device = &*hw.device;
+        let command_queue = &*hw.command_queue;
+        let allocator = &hw.allocator;
+        let (swap_pixel_format, hdr_mode) = (hw.swap_pixel_format, hw.hdr_mode);
 
         // The sample count every main-pass pipeline, HDR target, planar mirror
         // and probe face below is built at. One whenever a temporal technique
@@ -218,7 +292,7 @@ impl MtlContext {
                     bindless_tex_arg_encoder,
                     bindless_sampler_arg_encoder,
                 } = pipelines::build_main_pipeline(
-                    &device,
+                    device,
                     &vert_desc,
                     world_shaders[0].programs,
                     hot_reload,
@@ -237,7 +311,7 @@ impl MtlContext {
         // samples the set declares the same block, and the layout is fixed by
         // MAX_PROBES rather than by world content.
         let probe_cube_arg_encoder =
-            super::probe_cubes::probe_cube_arg_encoder(&device, hot_reload)?;
+            super::probe_cubes::probe_cube_arg_encoder(device, hot_reload)?;
         let (cull_pipeline, cull_pipeline_phase2, cull_encode_pipeline, cull_icb_arg_encoder) =
             match cull {
                 Some(c) => (
@@ -272,7 +346,7 @@ impl MtlContext {
                 );
             }
             pipelines::build_world_pipeline_table(
-                &device,
+                device,
                 &vert_desc,
                 &world_shaders[1..],
                 hot_reload,
@@ -283,8 +357,8 @@ impl MtlContext {
         };
         let shader_bucket_count = 1 + world_pipelines.len();
 
-        let depth_state = pipelines::make_depth_state(&device)?;
-        let depth_state_read_only = pipelines::make_depth_state_read_only(&device)?;
+        let depth_state = pipelines::make_depth_state(device)?;
+        let depth_state_read_only = pipelines::make_depth_state_read_only(device)?;
 
         // upload vertex and index data into GPU-accessible buffers. A
         // geometry-less world (text-only) has empty slices; Metal rejects a
@@ -343,10 +417,10 @@ impl MtlContext {
         // rejects zero-length buffers and the fragment binding must stay valid.
         let spot_shadow_count = spot_shadows.len() as u32;
         let spot_shadow_map = if spot_shadows.is_empty() {
-            create_shadow_map_fallback(&device)?
+            create_shadow_map_fallback(device)?
         } else {
             create_shadow_map_array(
-                &device,
+                device,
                 render_types::spot_shadow_slice_size(shadow_map_size),
                 spot_shadow_count,
             )?
@@ -390,14 +464,10 @@ impl MtlContext {
         // Area-light LTC tables. Scene-independent (they depend only on the
         // build-time fit), so they are created unconditionally and the shader
         // simply never samples them when no area light is declared.
-        let ltc_matrix_texture = create_lut_texture(
-            &allocator,
-            ltc::matrix_texels(),
-            ltc::LTC_LUT_SIZE as u32,
-            4,
-        )?;
+        let ltc_matrix_texture =
+            create_lut_texture(allocator, ltc::matrix_texels(), ltc::LTC_LUT_SIZE as u32, 4)?;
         let ltc_magnitude_texture = create_lut_texture(
-            &allocator,
+            allocator,
             ltc::magnitude_texels(),
             ltc::LTC_LUT_SIZE as u32,
             2,
@@ -407,24 +477,24 @@ impl MtlContext {
         // (always allocated so the forward pass has a valid fragment buffer(12)
         // binding) and the binning compute pipeline (built only when the world
         // has local lights to bin).
-        let cluster_light_buffer = super::light_cull::build_cluster_light_buffer(&device)?;
+        let cluster_light_buffer = super::light_cull::build_cluster_light_buffer(device)?;
         let light_cull_pipeline = if local_lights.is_empty() {
             None
         } else {
             Some(super::light_cull::build_light_cull_pipeline(
-                &device, hot_reload,
+                device, hot_reload,
             )?)
         };
 
         // upload textures; fall back to a 1x1 opaque white texture when none provided
         let gpu_textures = if textures.is_empty() {
-            vec![create_fallback_texture(&allocator)?]
+            vec![create_fallback_texture(allocator)?]
         } else {
             textures
                 .iter()
                 .enumerate()
                 .map(|(i, image)| {
-                    upload_texture_image(&allocator, image)
+                    upload_texture_image(allocator, image)
                         .map_err(|e| format!("texture[{}]: {}", i, e))
                 })
                 .collect::<Result<Vec<_>, _>>()?
@@ -436,9 +506,9 @@ impl MtlContext {
         // Real normal maps and albedos are textures in `gpu_textures` (the
         // shared pool) at their own handle; only these two live in
         // `gpu_fallbacks`, past the last real texture.
-        let flat_normal = upload_texture(&allocator, 1, 1, &[128u8, 128, 255, 255])
+        let flat_normal = upload_texture(allocator, 1, 1, &[128u8, 128, 255, 255])
             .map_err(|e| format!("flat normal fallback: {}", e))?;
-        let white = upload_texture(&allocator, 1, 1, &[255u8, 255, 255, 255])
+        let white = upload_texture(allocator, 1, 1, &[255u8, 255, 255, 255])
             .map_err(|e| format!("white fallback: {}", e))?;
         let gpu_fallbacks = vec![flat_normal, white];
 
@@ -513,7 +583,7 @@ impl MtlContext {
         // once now that the three sampler states exist.
         let bindless_sampler_args = match &bindless_sampler_arg_encoder {
             Some(enc) => Some(pipelines::build_bindless_sampler_args(
-                &device,
+                device,
                 enc,
                 &sampler,
                 &shadow_sampler,
@@ -530,7 +600,7 @@ impl MtlContext {
             let view = bake::environment_map::deserialize(bytes)
                 .map_err(|e| format!("EnvironmentMap payload malformed: {}", e))?;
             upload_environment_map(
-                &allocator,
+                allocator,
                 view.irradiance_face,
                 view.irradiance_bytes,
                 view.prefilter_face,
@@ -538,8 +608,8 @@ impl MtlContext {
             )?
         } else {
             EnvironmentMapTextures {
-                irradiance: create_fallback_cubemap(&allocator, [0.05, 0.05, 0.05, 1.0])?,
-                prefilter: create_fallback_cubemap(&allocator, [0.05, 0.05, 0.05, 1.0])?,
+                irradiance: create_fallback_cubemap(allocator, [0.05, 0.05, 0.05, 1.0])?,
+                prefilter: create_fallback_cubemap(allocator, [0.05, 0.05, 0.05, 1.0])?,
                 prefilter_mip_count: 0,
             }
         };
@@ -550,9 +620,9 @@ impl MtlContext {
         let color_lut = if let Some(bytes) = color_lut_bytes {
             let (size, data) = bake::color_lut::deserialize(bytes)
                 .map_err(|e| format!("ColorLut payload malformed: {}", e))?;
-            upload_color_lut(&allocator, size, data)?
+            upload_color_lut(allocator, size, data)?
         } else {
-            create_fallback_color_lut(&allocator)?
+            create_fallback_color_lut(allocator)?
         };
 
         // shadow pipeline + array map: created only when shadow_map_size > 0.
@@ -560,10 +630,10 @@ impl MtlContext {
         // bound so fragment shaders can safely sample texture(2) as a depth array.
         let (shadow_pipeline_state, shadow_map, shadow_uniforms_init, effective_shadow_size) =
             if shadow_map_size > 0 {
-                let shadow_ps = pipelines::build_shadow_pipeline(&device, &vert_desc, hot_reload)?;
+                let shadow_ps = pipelines::build_shadow_pipeline(device, &vert_desc, hot_reload)?;
                 // Depth32Float 2D array, NUM_SHADOW_CASCADES layers, GPU-private.
                 let shadow_tex =
-                    create_shadow_map_array(&device, shadow_map_size, NUM_SHADOW_CASCADES as u32)?;
+                    create_shadow_map_array(device, shadow_map_size, NUM_SHADOW_CASCADES as u32)?;
                 (
                     Some(shadow_ps),
                     shadow_tex,
@@ -572,7 +642,7 @@ impl MtlContext {
                 )
             } else {
                 // 1x1 fallback depth array (value 1.0 = fully lit).
-                let shadow_tex = create_shadow_map_fallback(&device)?;
+                let shadow_tex = create_shadow_map_fallback(device)?;
                 (None, shadow_tex, csm::empty_shadow_uniforms(), 1)
             };
 
@@ -583,69 +653,19 @@ impl MtlContext {
         // cascades. The shadow ICB +
         // its argument buffer are allocated lazily by `ensure_shadow_icb_capacity`
         // (sized to NUM_SHADOW_CASCADES * cull_count once geometry is known).
-        let (shadow_cull_pipeline, shadow_bindless_pipeline) = if shadow_pipeline_state.is_some()
-            && bindless
-        {
-            let sc = super::cull::build_shadow_cull_pipeline(&device, hot_reload)?;
-            let sb = pipelines::build_shadow_bindless_pipeline(&device, &vert_desc, hot_reload)?;
-            (Some(sc), Some(sb))
-        } else {
-            (None, None)
-        };
+        let (shadow_cull_pipeline, shadow_bindless_pipeline) =
+            if shadow_pipeline_state.is_some() && bindless {
+                let sc = super::cull::build_shadow_cull_pipeline(device, hot_reload)?;
+                let sb = pipelines::build_shadow_bindless_pipeline(device, &vert_desc, hot_reload)?;
+                (Some(sc), Some(sb))
+            } else {
+                (None, None)
+            };
 
         // Cache the first directional light's direction; per-frame CSM updates
         // use it. `update_directional_lights` re-caches it when the sun changes.
         let shadow_light_dir = lights::sun_direction(&light_uniforms);
 
-        // Window + MTKView + initial drawable sizing. A geometry-less world
-        // is clamped to 1x1 HDR/bloom/effect targets so the composite pass
-        // alone runs at the full drawable size (it samples the 1x1 uniformly).
-        // Window setup also resolves the swapchain color-output mode
-        // (`HdrOutputMode::Sdr` vs `Hdr`); the post + text pipelines that
-        // target the drawable need to know that mode to pick BGRA8Unorm vs
-        // RGBA16Float, so this hop happens before pipeline construction.
-        // Scene-less (UI / text only) worlds clamp the HDR / bloom / effect
-        // targets to 1x1; keyed off the derived requirements rather than raw
-        // vertex presence so a vertex-less world that still renders 3D content
-        // (SDF volumes, water, glass) keeps full-size targets.
-        let geometry_less = !requirements.scene;
-        let window::WindowSetup {
-            window,
-            mtk_view,
-            pump_events,
-            initial_w,
-            initial_h,
-            fullscreen,
-            window_delegate,
-            hdr_mode,
-        } = window::setup_window_and_view(
-            mtm,
-            &device,
-            window::WindowConfig {
-                title,
-                width,
-                height,
-                title_bar,
-                geometry_less,
-                capture_enabled: capture,
-            },
-            window::HdrRequest {
-                display_requested: hdr_display_requested,
-                pq_requested: hdr_pq_requested,
-            },
-            existing_window,
-        )?;
-        // Honor the requested vsync on the backing CAMetalLayer (default
-        // CAMetalLayer presentation is display-synced).
-        window::set_display_sync(&mtk_view, vsync);
-        let swap_pixel_format = window::swap_pixel_format(hdr_mode);
-        // Resolved EDR encoding, kept for the headless `screenshot` decode (it
-        // must know scRGB-linear vs PQ to turn the captured `RGBA16Float`
-        // drawable into a display-correct PNG). `None` on the SDR path.
-        let hdr_encoding = match hdr_mode {
-            hdr_output::HdrOutputMode::Hdr { encoding, .. } => Some(encoding),
-            hdr_output::HdrOutputMode::Sdr => None,
-        };
         // Pair the authored tunables with the resolved mode's output flags. On
         // the SDR path both flags stay 0.0 and the shader runs the full ACES +
         // gamma + FXAA + LUT chain unchanged. On the HDR path `hdr_output`
@@ -657,10 +677,10 @@ impl MtlContext {
         let (text_pipeline_state, gpu_text_atlases) = if text_atlases.is_empty() {
             (None, Vec::new())
         } else {
-            let text_ps = build_text_pipeline(&device, swap_pixel_format, hot_reload)?;
+            let text_ps = build_text_pipeline(device, swap_pixel_format, hot_reload)?;
             let mut gpu_atlases = Vec::with_capacity(text_atlases.len());
             for (i, (aw, ah, pixels)) in text_atlases.iter().enumerate() {
-                let tex = upload_texture(&allocator, *aw, *ah, pixels)
+                let tex = upload_texture(allocator, *aw, *ah, pixels)
                     .map_err(|e| format!("text_atlas[{}]: {}", i, e))?;
                 gpu_atlases.push(tex);
             }
@@ -682,7 +702,7 @@ impl MtlContext {
         // resolved HDR target with a linear-clamp filter and writes either
         // ACES-tonemapped + gamma + FXAA-filtered output (SDR drawable) or
         // linear extended-range values (HDR drawable) into the swapchain.
-        let post_pipeline_state = build_post_pipeline(&device, swap_pixel_format, hot_reload)?;
+        let post_pipeline_state = build_post_pipeline(device, swap_pixel_format, hot_reload)?;
         let post_sampler = {
             let desc = MTLSamplerDescriptor::new();
             desc.setMinFilter(MTLSamplerMinMagFilter::Linear);
@@ -706,9 +726,9 @@ impl MtlContext {
         // feature is asset-driven so a world that doesn't author it pays no
         // construction cost either way.
         let upscaler = if temporal_upscaling_requested {
-            if super::post::temporal_scaler_supported(&device) {
+            if super::post::temporal_scaler_supported(device) {
                 match super::post::MetalFXUpscaler::new(
-                    &device,
+                    device,
                     initial_w,
                     initial_h,
                     upscale_scale_requested,
@@ -759,7 +779,7 @@ impl MtlContext {
         let effective_taa_enabled = taa_enabled && !upscaling_active;
         let velocity_needed = effective_taa_enabled || upscaling_active;
 
-        let hdr_targets = create_hdr_targets(&device, render_w, render_h, hdr_samples)?;
+        let hdr_targets = create_hdr_targets(device, render_w, render_h, hdr_samples)?;
 
         // Hi-Z depth pyramid for GPU-driven occlusion culling. Built exactly
         // when the bindless cull pipeline is active and sized to the render
@@ -768,7 +788,7 @@ impl MtlContext {
         // previous frame's depth pyramid and culls fully-occluded objects.
         let hiz = if cull_pipeline.is_some() {
             Some(super::hiz::HiZResources::new(
-                &device,
+                device,
                 render_w,
                 render_h,
                 hot_reload,
@@ -783,7 +803,7 @@ impl MtlContext {
         // pipeline never bakes one and never needs them.
         let probe_prefilter = if cull_pipeline.is_some() {
             Some(super::probe_prefilter::ProbePrefilterPipelines::new(
-                &device, hot_reload,
+                device, hot_reload,
             )?)
         } else {
             None
@@ -820,11 +840,11 @@ impl MtlContext {
             auto_exposure_state,
             auto_exposure_bias_ev: auto_exposure_bias,
         } = effects::build_effects(
-            &allocator,
+            allocator,
             // Pipelines and targets only: nothing encodes before the context
             // exists, so the device needs no probe set.
             &super::post::post_device::MtlPostDevice {
-                device: &device,
+                device,
                 sampler: &post_sampler,
                 cube_sampler: &cube_sampler,
                 probes: None,
@@ -877,18 +897,18 @@ impl MtlContext {
             if water_surfaces.is_empty() {
                 (None, None, None, Vec::new())
             } else {
-                let ps = super::water::build_water_pipeline(&device, hot_reload)?;
+                let ps = super::water::build_water_pipeline(device, hot_reload)?;
                 // The ray-traced variants are built whenever the device can ray
                 // trace (regardless of whether RT is on at launch), so a live RT
                 // toggle can select them without a pipeline rebuild. The shader
                 // uses `metal_raytracing`, so it must not be compiled on a non-RT
                 // device. The textured variant additionally needs a bindless world
                 // at draw time; it is selected over the flat variant then.
-                let (ps_rt, ps_rt_tex) = if super::raytrace::raytracing_supported(&device) {
+                let (ps_rt, ps_rt_tex) = if super::raytrace::raytracing_supported(device) {
                     (
-                        Some(super::water::build_water_pipeline_rt(&device, hot_reload)?),
+                        Some(super::water::build_water_pipeline_rt(device, hot_reload)?),
                         Some(super::water::build_water_pipeline_rt_textured(
-                            &device, hot_reload,
+                            device, hot_reload,
                         )?),
                     )
                 } else {
@@ -896,7 +916,7 @@ impl MtlContext {
                 };
                 let mut records = Vec::with_capacity(water_surfaces.len());
                 for s in &water_surfaces {
-                    records.push(super::water::build_water_surface_record(&device, s)?);
+                    records.push(super::water::build_water_surface_record(device, s)?);
                 }
                 (Some(ps), ps_rt, ps_rt_tex, records)
             };
@@ -908,18 +928,18 @@ impl MtlContext {
             if glass_panels.is_empty() {
                 (None, None, None, Vec::new())
             } else {
-                let ps = super::glass::build_glass_pipeline(&device, hot_reload)?;
+                let ps = super::glass::build_glass_pipeline(device, hot_reload)?;
                 // The ray-traced variants are built whenever the device can ray
                 // trace (regardless of whether RT is on at launch), so a live RT
                 // toggle can select them without a pipeline rebuild. The shader
                 // uses `metal_raytracing`, so it must not be compiled on a non-RT
                 // device. The textured variant additionally needs a bindless world
                 // at draw time; it is selected over the flat variant then.
-                let (ps_rt, ps_rt_tex) = if super::raytrace::raytracing_supported(&device) {
+                let (ps_rt, ps_rt_tex) = if super::raytrace::raytracing_supported(device) {
                     (
-                        Some(super::glass::build_glass_pipeline_rt(&device, hot_reload)?),
+                        Some(super::glass::build_glass_pipeline_rt(device, hot_reload)?),
                         Some(super::glass::build_glass_pipeline_rt_textured(
-                            &device, hot_reload,
+                            device, hot_reload,
                         )?),
                     )
                 } else {
@@ -927,7 +947,7 @@ impl MtlContext {
                 };
                 let mut records = Vec::with_capacity(glass_panels.len());
                 for g in &glass_panels {
-                    records.push(super::glass::build_glass_panel_record(&device, g)?);
+                    records.push(super::glass::build_glass_panel_record(device, g)?);
                 }
                 (Some(ps), ps_rt, ps_rt_tex, records)
             };
@@ -938,13 +958,13 @@ impl MtlContext {
         // ready. `glass_mesh_pipeline_rt.is_some()` gates the whole transparent-mesh
         // reroute; `seethrough_mesh_indices` marks which `draw_objects` carry it.
         let (glass_mesh_pipeline_rt, glass_mesh_pipeline_rt_textured) =
-            if super::raytrace::raytracing_supported(&device) {
+            if super::raytrace::raytracing_supported(device) {
                 (
                     Some(super::glass::build_glass_mesh_pipeline_rt(
-                        &device, hot_reload,
+                        device, hot_reload,
                     )?),
                     Some(super::glass::build_glass_mesh_pipeline_rt_textured(
-                        &device, hot_reload,
+                        device, hot_reload,
                     )?),
                 )
             } else {
@@ -1021,7 +1041,7 @@ impl MtlContext {
                 None
             } else {
                 Some(super::planar::create_planar_set(
-                    &device,
+                    device,
                     render_w,
                     render_h,
                     hdr_samples,
@@ -1041,10 +1061,10 @@ impl MtlContext {
                 let mut records = Vec::with_capacity(sdf_volumes.len());
                 for (volume, payload, label) in &sdf_volumes {
                     records.push(super::raymarch::build_raymarch_volume_record(
-                        &device, volume, payload, hot_reload, label,
+                        device, volume, payload, hot_reload, label,
                     )?);
                 }
-                let (vb, ib) = super::raymarch::build_raymarch_cube_buffers(&device)?;
+                let (vb, ib) = super::raymarch::build_raymarch_cube_buffers(device)?;
                 (records, Some(vb), Some(ib))
             };
 
@@ -1065,7 +1085,7 @@ impl MtlContext {
         // Built before `device` moves into Self. Returns `None` when the
         // device does not expose the timestamp counter set; the per-pass
         // GPU timer then stays at zero for every pass.
-        let pass_timing = super::pass_timing::PassTimingResources::new(&device);
+        let pass_timing = super::pass_timing::PassTimingResources::new(device);
         tracing::info!(
             "pass-timing: per-pass GPU sample buffers {}",
             if pass_timing.is_some() {
@@ -1074,14 +1094,6 @@ impl MtlContext {
                 "unavailable (no MTLCommonCounterSetTimestamp)"
             }
         );
-
-        // Capture the resolved EDR multiplier (or None on SDR) so the HUD +
-        // debug endpoint can report it. The shader flag in `post_process.hdr_output`
-        // tracks "is HDR on" as a bool; this captures the multiplier itself.
-        let max_edr = match hdr_mode {
-            hdr_output::HdrOutputMode::Hdr { max_edr, .. } => Some(max_edr),
-            hdr_output::HdrOutputMode::Sdr => None,
-        };
 
         // Build the scene acceleration structure for hardware ray-traced
         // reflections. Only when the world enabled RT (the RT pipeline is built
@@ -1092,12 +1104,12 @@ impl MtlContext {
         // list, which exist by now; resolution-independent, so untouched on
         // resize. A wholesale rebuild on geometry change is the current update path.
         let rt_accel = if rt_reflection_settings.is_some()
-            && super::raytrace::raytracing_supported(&device)
+            && super::raytrace::raytracing_supported(device)
         {
             match super::raytrace::build_rt_accel(
                 super::raytrace::RtGpu {
-                    device: &device,
-                    command_queue: &command_queue,
+                    device,
+                    command_queue,
                     frames_in_flight,
                 },
                 super::raytrace::RtStaticGeometry {
@@ -1176,32 +1188,12 @@ impl MtlContext {
             (records, args)
         };
 
-        // Second queue + per-queue events for the render graph's two-queue
-        // schedule. Falls back to a single-queue submission when the device
-        // will not create them.
-        let graph_queues = super::graph_queues::GraphQueues::new(&device);
-        if graph_queues.is_none() {
-            tracing::warn!(
-                "metal: no async-compute queue, submitting the render graph on one queue"
-            );
-        }
-
         let ctx = Self {
-            device,
-            command_queue,
-            graph_queues,
-            swap_pixel_format,
-            hdr: super::context::HdrState {
-                max_edr,
-                encoding: hdr_encoding,
-                display_requested: hdr_display_requested,
-                pq_requested: hdr_pq_requested,
-            },
             last_present_texture: None,
-            pipeline_state,
-            world_pipelines,
-            bindless,
             cull: super::cull::CullState {
+                bindless,
+                main_pipeline: pipeline_state,
+                world_pipelines,
                 pipeline: cull_pipeline,
                 encode_pipeline: cull_encode_pipeline,
                 bucket_count: shader_bucket_count,
@@ -1228,17 +1220,19 @@ impl MtlContext {
                 mirror_status: None,
                 mirror_icb_capacity: 0,
             },
-            bindless_tex_arg_encoder,
-            bindless_tex_gates: super::bindless_args::SlotGates::new(frames_in_flight.max(1) + 1),
-            bindless_tail_gates: super::bindless_args::SlotGates::new(frames_in_flight.max(1) + 1),
-            bindless_residency: super::bindless_args::ResidencySet::new(),
-            texture_epoch: 0,
-            probe_cube_arg_encoder,
-            bindless_sampler_args,
-            depth_state,
-            depth_state_read_only,
-            vertex_buffer,
-            index_buffer,
+            arg_buffers: MtlArgumentBuffers {
+                bindless_tex_encoder: bindless_tex_arg_encoder,
+                bindless_tex_gates: super::bindless_args::SlotGates::new(
+                    frames_in_flight.max(1) + 1,
+                ),
+                bindless_tail_gates: super::bindless_args::SlotGates::new(
+                    frames_in_flight.max(1) + 1,
+                ),
+                bindless_residency: super::bindless_args::ResidencySet::new(),
+                bindless_sampler_args,
+                probe_cube_encoder: probe_cube_arg_encoder,
+                texture_epoch: 0,
+            },
             draw: super::context::DrawState {
                 objects: draw_objects,
                 graph_cache: None,
@@ -1262,13 +1256,21 @@ impl MtlContext {
                 matrix: IDENTITY,
                 sky_rot: concinnity_core::sky::SkyOrientation::IDENTITY_ROWS,
             },
-            geometry_less,
-            allocator,
-            textures: gpu_textures,
-            fallback_textures: gpu_fallbacks,
+            scene: MtlSceneAssets {
+                vertex_buffer,
+                index_buffer,
+                textures: gpu_textures,
+                fallback_textures: gpu_fallbacks,
+                local_light_buffer,
+                area_light_buffer,
+                ltc_matrix_texture,
+                ltc_magnitude_texture,
+                env_map,
+                color_lut,
+                sampler,
+                cube_sampler,
+            },
             light_uniforms,
-            local_light_buffer,
-            sampler,
             shadow: super::context::ShadowState {
                 pipeline_state: shadow_pipeline_state,
                 map: shadow_map,
@@ -1289,10 +1291,6 @@ impl MtlContext {
                 scheduler: Default::default(),
                 render_mask: 0,
             },
-            area_light_buffer,
-            ltc_matrix_texture,
-            ltc_magnitude_texture,
-            env_map,
             probe: super::context::ProbeState {
                 placements: Vec::new(),
                 maps: Vec::new(),
@@ -1307,21 +1305,26 @@ impl MtlContext {
                 cube_arg_gates: super::bindless_args::SlotGates::new(frames_in_flight.max(1) + 1),
                 cube_residency: super::bindless_args::ResidencySet::new(),
             },
-            cube_sampler,
             text: super::context::TextState {
                 pipeline_state: text_pipeline_state,
                 atlas_textures: gpu_text_atlases,
                 sampler: text_sampler,
                 upload: super::text_upload::TextUploadRing::new(frames_in_flight),
             },
-            hdr_targets,
-            post_pipeline_state,
-            post_sampler,
-            bloom_targets,
+            targets: MtlTargets {
+                hdr: hdr_targets,
+                bloom: bloom_targets,
+                transient_pool,
+                depth_state,
+                depth_state_read_only,
+                geometry_less,
+            },
+            composite: CompositeState {
+                pipeline: post_pipeline_state,
+                sampler: post_sampler,
+            },
             bloom_pipelines,
-            transient_pool,
             post_process,
-            color_lut,
             taa: super::post::TaaState {
                 enabled: effective_taa_enabled,
                 pass: taa,
@@ -1415,24 +1418,6 @@ impl MtlContext {
                 chunk_vtx: crate::suballoc::range_alloc::RangeAllocator::new(),
                 chunk_idx: crate::suballoc::range_alloc::RangeAllocator::new(),
             },
-            window: super::context::WindowState {
-                appkit: crate::appkit::AppKitWindow::new(crate::appkit::AppKitWindowParts {
-                    window,
-                    // The shared layer drives the view through NSView alone; the
-                    // MTKView below stays for drawable acquisition.
-                    view: objc2::rc::Retained::into_super(mtk_view.clone()),
-                    title_bar,
-                    pump_events,
-                    fullscreen,
-                    window_delegate,
-                }),
-                view: mtk_view,
-                // A freshly built context owns its window; a live reload flips
-                // the outgoing context's flag off before handing this one the
-                // window.
-                owns: true,
-                was_visible: false,
-            },
             diagnostics: super::context::Diagnostics {
                 frame_stats: profile::RenderStats::default(),
                 gpu_time_us: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
@@ -1487,8 +1472,9 @@ impl MtlContext {
                 cube_vertex_buffer: raymarch_cube_vertex_buffer,
                 cube_index_buffer: raymarch_cube_index_buffer,
             },
+            hw,
         };
-        let pooled = ctx.allocator.stats();
+        let pooled = ctx.hw.allocator.stats();
         tracing::info!(
             "device allocator: {} heap(s), {} KiB reserved for {} KiB of resources",
             pooled.block_count,
@@ -1509,42 +1495,21 @@ impl MtlContext {
     // world and calls this so the edit applies with no window recreation.
     //
     // The GPU is idled so no in-flight command buffer still references the old
-    // content, then a fresh context is `build`t on cloned hardware handles (the
-    // Metal / AppKit objects are reference counted, so cloning keeps the same
-    // window / device alive) and moved into `*self`. Assigning `*self` drops the
-    // old content resources; the window survives because the new context holds a
-    // clone of it. Only ever called when the swapchain config is unchanged (the
-    // caller's `hot_swap_config` gate), so the layer's pixel format /
-    // frames-in-flight are guaranteed to still match.
+    // content, then a fresh context is `build`t on the hardware this one hands
+    // over (`MtlHardware::hand_over`) and moved into `*self`, whose drop frees
+    // the old content with no window left to close. Only ever called when the
+    // swapchain config is unchanged (the caller's `hot_swap_config` gate), so
+    // the frames-in-flight and HDR request still match. On a build failure the
+    // handed-over window closes with the dropped hardware, and the caller drops
+    // this backend.
     pub(super) fn apply_world_reload(
         &mut self,
         init: backend_init::BackendInit<'_>,
     ) -> RenderResult<()> {
         debug_assert_main_thread("apply_world_reload");
         self.wait_idle();
-        let h = self.window.appkit.handles_for_reuse();
-        let reuse = ReuseHandles {
-            device: self.device.clone(),
-            command_queue: self.command_queue.clone(),
-            existing: window::ExistingWindow {
-                window: h.window,
-                mtk_view: self.window.view.clone(),
-                pump_events: h.pump_events,
-                fullscreen: h.fullscreen,
-                window_delegate: h.window_delegate,
-            },
-        };
-        let mut rebuilt = MtlContext::build(init, Some(reuse))?;
-        // Carry over the live window state the fresh build resets but a reload
-        // must keep (see `AppKitWindow::adopt_live_state`).
-        rebuilt
-            .window
-            .appkit
-            .adopt_live_state(&mut self.window.appkit);
-        // Hand the window over: the outgoing context (dropped by the assignment
-        // below) must not close the shared window -- `rebuilt` owns it now.
-        self.window.owns = false;
-        *self = rebuilt;
+        let reuse = self.hw.hand_over()?;
+        *self = MtlContext::build(init, Some(reuse))?;
         Ok(())
     }
 }

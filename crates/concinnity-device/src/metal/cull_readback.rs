@@ -48,11 +48,13 @@ impl MtlContext {
         }
 
         let staging = self
+            .hw
             .device
             .newBufferWithLength_options(byte_size, MTLResourceOptions::StorageModeShared)
             .ok_or("cull-status: failed to create staging buffer")?;
 
         let cmd_buf = self
+            .hw
             .command_queue
             .commandBuffer()
             .ok_or("cull-status: failed to get command buffer")?;

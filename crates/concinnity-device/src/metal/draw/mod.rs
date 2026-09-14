@@ -116,8 +116,9 @@ impl MtlContext {
         // instance pool.
         // Current GPU memory footprint. On Apple Silicon's unified memory this
         // is the Metal device's allocation within system RAM.
-        self.diagnostics.frame_stats.vram_bytes = self.device.currentAllocatedSize() as u64;
-        self.diagnostics.frame_stats.transient_pool_bytes = self.transient_pool.heap_bytes();
+        self.diagnostics.frame_stats.vram_bytes = self.hw.device.currentAllocatedSize() as u64;
+        self.diagnostics.frame_stats.transient_pool_bytes =
+            self.targets.transient_pool.heap_bytes();
 
         // Rotate the per-frame sample-buffer slot if per-pass GPU timing is
         // available. Every `diagnostics.pass_timing.attach_*` call this frame writes
@@ -135,8 +136,8 @@ impl MtlContext {
         // delivery (pumping there would dequeue mouse clicks meant for the
         // tab bar before they reach their targets); the windowed CLI path
         // and the blocking-in-view play path opt in.
-        if self.window.appkit.pump_events() {
-            self.window.appkit.pump_ns_events(mtm);
+        if self.window().appkit.pump_events() {
+            self.window_mut().appkit.pump_ns_events(mtm);
             if self.window_closed() {
                 return Ok(());
             }
@@ -147,7 +148,7 @@ impl MtlContext {
         // Runs off the delegate-tracked flag so OS-driven fullscreen exits
         // (green traffic-light button, Mission Control) restore too. Cheap
         // when nothing changed.
-        self.window.appkit.reconcile_display_mode();
+        self.window_mut().appkit.reconcile_display_mode();
 
         // Frames-in-flight gate: block until the GPU has retired an older frame
         // so the CPU never queues more than `frames_in_flight` frames ahead,
@@ -185,8 +186,8 @@ impl MtlContext {
         // still with the compositor, which is the display-paced half of the
         // frame's GPU wait.
         let drawable = gpu_wait.measure(|| {
-            self.window.view.draw();
-            self.window.view.currentDrawable()
+            self.window().view.draw();
+            self.window().view.currentDrawable()
         });
         self.diagnostics.frame_stats.gpu_wait_us = gpu_wait.micros();
         let drawable = match drawable {
@@ -194,7 +195,7 @@ impl MtlContext {
             // drawable not yet available -- skip this frame silently
             None => return Ok(()),
         };
-        self.window.was_visible = true;
+        self.window_mut().was_visible = true;
 
         // This frame's transient-buffer ring slot. The fence guarantees the
         // frame that last used `frame_ring_index - frames_in_flight` has retired
@@ -208,9 +209,10 @@ impl MtlContext {
         // Hand back the pooled ranges whose retire frame has passed and release
         // any heap left holding nothing. Ticked here, past the fence, so a range
         // is only reused once every frame that could reference it has retired.
-        self.allocator.begin_frame();
+        self.hw.allocator.begin_frame();
 
         let cmd_buf = self
+            .hw
             .command_queue
             .commandBuffer()
             .ok_or("failed to get command buffer")?;
@@ -248,7 +250,7 @@ impl MtlContext {
         // The aspect/near/far are taken from the same params used by the main
         // perspective below so cascades match the visible camera frustum.
         let cascade_aspect = {
-            let s = self.window.view.drawableSize();
+            let s = self.window().view.drawableSize();
             if s.height == 0.0 {
                 1.0
             } else {
@@ -289,10 +291,10 @@ impl MtlContext {
         // Main pass prep: resize off-screen targets.
         // Resize the HDR targets if the drawable size changed (window resize
         // or initial layout). The drawable was just refreshed by window.view.draw().
-        let draw_size = self.window.view.drawableSize();
+        let draw_size = self.window().view.drawableSize();
         // Geometry-less worlds keep their off-screen targets pinned at 1x1
         // (see MtlContext::new); the composite pass still uses the full drawable.
-        let (want_w, want_h) = if self.geometry_less {
+        let (want_w, want_h) = if self.targets.geometry_less {
             (1, 1)
         } else {
             (
@@ -306,8 +308,8 @@ impl MtlContext {
         // Equals `want_w/h` (the drawable size) when no upscaler is active;
         // otherwise it's smaller, so the upscaler reconstructs back up to
         // drawable size.
-        let render_w = self.hdr_targets.width;
-        let render_h = self.hdr_targets.height;
+        let render_w = self.targets.hdr.width;
+        let render_h = self.targets.hdr.height;
 
         // View-projection + GPU-driven cull.
         // The projection / jitter / VP are resolved here, ahead of the main
@@ -390,7 +392,7 @@ impl MtlContext {
             // all per-frame Metal buffers the bindless Main pass + Cull
             // compute pass consume. They must outlive the command buffer,
             // hence the bindings kept here through to `cmd_buf.commit()`.
-            let object_buffer = if self.bindless {
+            let object_buffer = if self.cull.bindless {
                 self.build_object_buffer(ring_slot)?
             } else {
                 None
@@ -463,7 +465,7 @@ impl MtlContext {
                 [v[0][2], v[1][2], v[2][2], 0.0],
                 [0.0, 0.0, 0.0, 1.0],
             ];
-            let prefilter_mip_count = self.env_map.prefilter_mip_count as f32;
+            let prefilter_mip_count = self.scene.env_map.prefilter_mip_count as f32;
             settings.params(
                 fov_y_radians,
                 aspect,
@@ -493,7 +495,7 @@ impl MtlContext {
                         [v[0][2], v[1][2], v[2][2], 0.0],
                         [0.0, 0.0, 0.0, 1.0],
                     ];
-                    let prefilter_mip_count = self.env_map.prefilter_mip_count as f32;
+                    let prefilter_mip_count = self.scene.env_map.prefilter_mip_count as f32;
                     let sun = &self.light_uniforms.directional[0];
                     let sun_color = [
                         sun.color[0] * sun.intensity,
@@ -628,7 +630,7 @@ impl MtlContext {
                 .output
                 .clone()
         } else {
-            self.hdr_targets.hdr_resolve.clone()
+            self.targets.hdr.hdr_resolve.clone()
         };
         let scene_color = if let Some(u) = &self.upscale.scaler {
             u.output.clone()
@@ -669,9 +671,9 @@ impl MtlContext {
         let graph_inputs = FrameGraphInputs {
             shadow_enabled: self.shadow.pipeline_state.is_some(),
             shadow_map_size: self.shadow.map_size,
-            hdr_width: self.hdr_targets.width,
-            hdr_height: self.hdr_targets.height,
-            hdr_sample_count: self.hdr_targets.sample_count,
+            hdr_width: self.targets.hdr.width,
+            hdr_height: self.targets.hdr.height,
+            hdr_sample_count: self.targets.hdr.sample_count,
             bindless_cull_enabled: object_buffer.is_some() && cull_draw_args.is_some(),
             auto_exposure_enabled: self.auto_exposure.pipelines.is_some(),
             // Gated on the pipelines existing: a scene-less world builds none
@@ -805,19 +807,23 @@ impl MtlContext {
             let mut targets = Vec::new();
             if prime {
                 for slot in 0..self.frames_in_flight {
-                    targets.push(self.rings.model_history.slot(&self.device, slot, bytes)?);
+                    targets.push(
+                        self.rings
+                            .model_history
+                            .slot(&self.hw.device, slot, bytes)?,
+                    );
                 }
             } else {
                 targets.push(
                     self.rings
                         .model_history
-                        .slot(&self.device, ring_slot, bytes)?,
+                        .slot(&self.hw.device, ring_slot, bytes)?,
                 );
             }
             let read = self
                 .rings
                 .model_history
-                .slot(&self.device, read_slot, bytes)?;
+                .slot(&self.hw.device, read_slot, bytes)?;
             (Some(read), targets)
         } else {
             (None, Vec::new())
@@ -829,7 +835,7 @@ impl MtlContext {
         // read of the frame that last used it.
         self.text
             .upload
-            .upload(&self.device, ring_slot, text_calls)?;
+            .upload(&self.hw.device, ring_slot, text_calls)?;
 
         let params = GraphFrameParams {
             cmd_buf: &cmd_buf,
@@ -1111,7 +1117,7 @@ impl MtlContext {
             self.rt.topology_dirty = false;
             return Ok(());
         }
-        let albedo_count = self.textures.len();
+        let albedo_count = self.scene.textures.len();
 
         // Free resources parked by prior skinned rebuilds that the frames-in-
         // flight fence now guarantees no in-flight frame can still read.
@@ -1214,10 +1220,10 @@ impl MtlContext {
         build_tlas: bool,
         frame_id: u64,
     ) -> Result<(), String> {
-        let device = self.device.clone();
-        let queue = self.command_queue.clone();
-        let vbuf = self.vertex_buffer.retained();
-        let ibuf = self.index_buffer.retained();
+        let device = self.hw.device.clone();
+        let queue = self.hw.command_queue.clone();
+        let vbuf = self.scene.vertex_buffer.retained();
+        let ibuf = self.scene.index_buffer.retained();
         let exclude_seethrough = self.seethrough_meshes_enabled();
         let draw_objects = std::mem::take(&mut self.draw.objects);
         let res = self
@@ -1277,13 +1283,13 @@ impl MtlContext {
         };
         let built = super::raytrace::build_rt_accel(
             super::raytrace::RtGpu {
-                device: &self.device,
-                command_queue: &self.command_queue,
+                device: &self.hw.device,
+                command_queue: &self.hw.command_queue,
                 frames_in_flight: self.frames_in_flight,
             },
             super::raytrace::RtStaticGeometry {
-                vertex_buffer: &self.vertex_buffer,
-                index_buffer: &self.index_buffer,
+                vertex_buffer: &self.scene.vertex_buffer,
+                index_buffer: &self.scene.index_buffer,
             },
             super::raytrace::RtSceneGeometry {
                 draw_objects: &self.draw.objects,
@@ -1313,8 +1319,8 @@ impl MtlContext {
         joint_buffers: &[Retained<ProtocolObject<dyn MTLBuffer>>],
     ) -> Result<(), String> {
         use super::raytrace::SkinnedRtInputs;
-        let device = self.device.clone();
-        let queue = self.command_queue.clone();
+        let device = self.hw.device.clone();
+        let queue = self.hw.command_queue.clone();
         let frames_in_flight = self.frames_in_flight;
         let (Some(svb), Some(sib), Some(pipe)) = (
             self.skinned.vertex_buffer.clone(),
@@ -1358,8 +1364,8 @@ impl MtlContext {
     // cheap handles and lift the draw list out (an O(1) `Vec` swap) to keep the
     // borrows from aliasing, then put the draw list back.
     fn rebuild_rt_tlas(&mut self, albedo_count: usize) -> Result<(), String> {
-        let device = self.device.clone();
-        let queue = self.command_queue.clone();
+        let device = self.hw.device.clone();
+        let queue = self.hw.command_queue.clone();
         let draw_objects = std::mem::take(&mut self.draw.objects);
         let res = self
             .rt
@@ -1391,7 +1397,7 @@ impl MtlContext {
             && (want_w != u.output_width || want_h != u.output_height)
         {
             self.upscale.scaler = Some(super::post::MetalFXUpscaler::new(
-                &self.device,
+                &self.hw.device,
                 want_w,
                 want_h,
                 self.upscale.scale,
@@ -1414,13 +1420,13 @@ impl MtlContext {
         };
 
         let render_changed =
-            render_w != self.hdr_targets.width || render_h != self.hdr_targets.height;
+            render_w != self.targets.hdr.width || render_h != self.targets.hdr.height;
         if render_changed {
-            self.hdr_targets = super::texture::create_hdr_targets(
-                &self.device,
+            self.targets.hdr = super::texture::create_hdr_targets(
+                &self.hw.device,
                 render_w,
                 render_h,
-                self.hdr_targets.sample_count,
+                self.targets.hdr.sample_count,
             )?;
         }
         // The planar reflection targets are render-resolution (they re-render the
@@ -1429,10 +1435,10 @@ impl MtlContext {
         if render_changed && let Some(set) = self.planar_reflection.as_ref() {
             let planes = set.planes.clone();
             self.planar_reflection = Some(super::planar::create_planar_set(
-                &self.device,
+                &self.hw.device,
                 render_w,
                 render_h,
-                self.hdr_targets.sample_count,
+                self.targets.hdr.sample_count,
                 &planes,
             )?);
         }
@@ -1440,7 +1446,7 @@ impl MtlContext {
         // upscaler runs, otherwise at native (= render) resolution. Sized
         // off `want_w/h` either way.
         let bloom_changed =
-            want_w != self.bloom_targets.width || want_h != self.bloom_targets.height;
+            want_w != self.targets.bloom.width || want_h != self.targets.bloom.height;
         // Whether the unified G-buffer pre-pass runs, derived once so the pool
         // and the pre-pass's own depth target below cannot disagree about it.
         // Same expression as `build_effects`'s `needs_gbuffer`.
@@ -1458,8 +1464,8 @@ impl MtlContext {
         // and every G-buffer consumer fetches its channel by label at encode
         // time, which is what makes a rebuild's slot repack harmless here.
         if render_changed || bloom_changed {
-            self.transient_pool.rebuild(
-                &self.device,
+            self.targets.transient_pool.rebuild(
+                &self.hw.device,
                 &super::transient_pool::transient_slots(
                     self.ssao.settings.is_some(),
                     needs_gbuffer,
@@ -1467,11 +1473,11 @@ impl MtlContext {
                     (want_w, want_h),
                 )?,
             )?;
-            self.bloom_targets = super::post::create_bloom_targets(
-                &self.device,
+            self.targets.bloom = super::post::create_bloom_targets(
+                &self.hw.device,
                 want_w,
                 want_h,
-                self.transient_pool.bloom_top()?,
+                self.targets.transient_pool.bloom_top()?,
             )?;
         }
         // The TAA history + velocity buffers are render-resolution. Stale
@@ -1495,7 +1501,7 @@ impl MtlContext {
         // `ao_output`, rebuilt above.
         if render_changed && self.ssao.settings.is_some() {
             self.ssao.targets = Some(super::post::create_ssao_targets(
-                &self.device,
+                &self.hw.device,
                 render_w,
                 render_h,
             )?);
@@ -1510,7 +1516,7 @@ impl MtlContext {
                 || self.rt.settings.is_some())
         {
             self.ssr.targets = Some(super::post::create_ssr_targets(
-                &self.device,
+                &self.hw.device,
                 render_w,
                 render_h,
                 self.ssr.blur_scale,
@@ -1522,7 +1528,7 @@ impl MtlContext {
         // always present or absent together.
         if render_changed && needs_gbuffer {
             self.gbuffer.targets = Some(super::post::create_gbuffer_targets(
-                &self.device,
+                &self.hw.device,
                 render_w,
                 render_h,
             )?);
@@ -1545,7 +1551,7 @@ impl MtlContext {
         // pyramid (the projection coordinates were generated at the old
         // resolution); the next frame's build refills it.
         if render_changed && let Some(hiz) = self.cull.hiz.as_mut() {
-            hiz.resize_to(&self.device, render_w, render_h)?;
+            hiz.resize_to(&self.hw.device, render_w, render_h)?;
             self.cull.hiz_valid = false;
         }
         Ok(())

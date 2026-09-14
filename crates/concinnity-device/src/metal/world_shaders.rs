@@ -25,14 +25,14 @@ impl MtlContext {
         let slot = self.world_pipeline_slot(bucket)?;
         let vert_desc = make_vertex_descriptor();
         let pso = build_bucket_pipeline(
-            &self.device,
+            &self.hw.device,
             &vert_desc,
             bucket as usize,
             programs,
             self.hot_reload.enabled,
-            self.hdr_targets.sample_count,
+            self.targets.hdr.sample_count,
         )?;
-        self.world_pipelines[slot] = Some(pso);
+        self.cull.world_pipelines[slot] = Some(pso);
         Ok(())
     }
 
@@ -43,7 +43,7 @@ impl MtlContext {
     // alive, so their evict drains the device first.
     pub(super) fn evict_world_shader(&mut self, bucket: u32) {
         if let Ok(slot) = self.world_pipeline_slot(bucket) {
-            self.world_pipelines[slot] = None;
+            self.cull.world_pipelines[slot] = None;
         }
     }
 
@@ -52,7 +52,7 @@ impl MtlContext {
     pub(super) fn world_shader_resident(&self, bucket: usize) -> bool {
         bucket == 0
             || matches!(
-                self.world_pipelines.get(bucket.wrapping_sub(1)),
+                self.cull.world_pipelines.get(bucket.wrapping_sub(1)),
                 Some(Some(_))
             )
     }
@@ -61,17 +61,20 @@ impl MtlContext {
         &self,
         bucket: usize,
     ) -> Option<&Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-        self.world_pipelines.get(bucket.checked_sub(1)?)?.as_ref()
+        self.cull
+            .world_pipelines
+            .get(bucket.checked_sub(1)?)?
+            .as_ref()
     }
 
     fn world_pipeline_slot(&self, bucket: u32) -> Result<usize, String> {
         let slot = (bucket as usize)
             .checked_sub(1)
             .ok_or_else(|| "shader bucket 0 is the world default program".to_string())?;
-        if slot >= self.world_pipelines.len() {
+        if slot >= self.cull.world_pipelines.len() {
             return Err(format!(
                 "shader bucket {bucket} is past the world's {} shader pipeline(s)",
-                self.world_pipelines.len()
+                self.cull.world_pipelines.len()
             ));
         }
         Ok(slot)

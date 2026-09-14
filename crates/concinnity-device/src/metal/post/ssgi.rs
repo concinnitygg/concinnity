@@ -40,7 +40,7 @@ impl MtlContext {
         else {
             return Ok(0);
         };
-        let scene = self.hdr_targets.hdr_resolve.as_ref();
+        let scene = self.targets.hdr.hdr_resolve.as_ref();
         pass.encode(
             &self.post_device(),
             cmd_buf,

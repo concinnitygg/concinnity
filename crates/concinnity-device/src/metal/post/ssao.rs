@@ -138,6 +138,7 @@ impl MtlContext {
         // `bloom_top`. The pool always holds it when SSAO is on (both gate on
         // the same setting).
         let ao_output = self
+            .targets
             .transient_pool
             .texture_for("ao_output")
             .ok_or("ao_output missing from transient pool")?;
@@ -154,7 +155,7 @@ impl MtlContext {
             },
             |enc| {
                 enc.set_fragment_texture(gbuffer, 0);
-                set_fragment_sampler_range(enc, &self.post_sampler, 0, 1);
+                set_fragment_sampler_range(enc, &self.composite.sampler, 0, 1);
                 enc.set_fragment_value(ssao_params, 0);
             },
         )?;
@@ -172,7 +173,7 @@ impl MtlContext {
             |enc| {
                 enc.set_fragment_texture(targets.ao_raw.as_ref(), 0);
                 enc.set_fragment_texture(gbuffer, 1);
-                set_fragment_sampler_range(enc, &self.post_sampler, 0, 2);
+                set_fragment_sampler_range(enc, &self.composite.sampler, 0, 2);
             },
         )?;
 

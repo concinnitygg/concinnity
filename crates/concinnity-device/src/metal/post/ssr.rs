@@ -173,13 +173,13 @@ impl MtlContext {
             cmd_buf,
             SsrInputs {
                 target: targets.reflection.as_ref(),
-                scene: self.hdr_targets.hdr_resolve.as_ref(),
+                scene: self.targets.hdr.hdr_resolve.as_ref(),
                 normal_depth,
                 roughness,
                 // Always valid: a gray fallback when no EnvironmentMap is bound,
                 // which `SsrParams.prefilter_mip_count == 0` tells the shader to
                 // ignore.
-                prefilter: self.env_map.prefilter.as_ref(),
+                prefilter: self.scene.env_map.prefilter.as_ref(),
             },
             ssr_params,
         )?;
@@ -220,7 +220,7 @@ impl MtlContext {
             |enc| {
                 enc.set_fragment_texture(targets.reflection.as_ref(), 0);
                 enc.set_fragment_texture(gb_roughness, 1);
-                set_fragment_sampler_range(enc, &self.post_sampler, 0, 2);
+                set_fragment_sampler_range(enc, &self.composite.sampler, 0, 2);
             },
         )?;
         // Pass 2: lerp the sharp full-res reflection against the upsampled blur by
@@ -236,11 +236,11 @@ impl MtlContext {
             },
             |enc| {
                 enc.set_fragment_texture(targets.reflection.as_ref(), 0);
-                enc.set_fragment_texture(self.hdr_targets.hdr_resolve.as_ref(), 1);
+                enc.set_fragment_texture(self.targets.hdr.hdr_resolve.as_ref(), 1);
                 enc.set_fragment_texture(gb_normal_depth, 2);
                 enc.set_fragment_texture(gb_roughness, 3);
                 enc.set_fragment_texture(targets.blur.as_ref(), 4);
-                set_fragment_sampler_range(enc, &self.post_sampler, 0, 5);
+                set_fragment_sampler_range(enc, &self.composite.sampler, 0, 5);
             },
         )?;
         Ok(())

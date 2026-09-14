@@ -252,7 +252,7 @@ impl MtlContext {
         // pass also writes, so the pyramid then covers raymarched surfaces too.
         // A nearer occluder only lowers the MAX, which makes the cull more
         // permissive, never wrong.
-        let depth: &ProtocolObject<dyn MTLTexture> = self.hdr_targets.depth_attachment();
+        let depth: &ProtocolObject<dyn MTLTexture> = self.targets.hdr.depth_attachment();
 
         let Some(enc) = cmd_buf.computeCommandEncoder() else {
             tracing::error!("hiz: failed to get compute encoder");
@@ -266,7 +266,7 @@ impl MtlContext {
             dst_width: hiz.width,
             dst_height: hiz.height,
             src_mip: 0,
-            sample_count: self.hdr_targets.sample_count,
+            sample_count: self.targets.hdr.sample_count,
         };
         enc.set_pipeline(&hiz.init_pipeline);
         enc.set_value(&init_params, 0);

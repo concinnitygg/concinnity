@@ -148,7 +148,7 @@ impl MtlContext {
 
         let params = self.auto_exposure_params();
         let hdr_tex: &ProtocolObject<dyn objc2_metal::MTLTexture> =
-            self.hdr_targets.hdr_resolve.as_ref();
+            self.targets.hdr.hdr_resolve.as_ref();
         let tex_w = hdr_tex.width();
         let tex_h = hdr_tex.height();
         if tex_w == 0 || tex_h == 0 {

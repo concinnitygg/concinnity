@@ -148,7 +148,7 @@ impl MtlContext {
         bind: &SpotSliceBinding,
     ) {
         enc.set_pipeline(bind.pipeline);
-        enc.set_depth_stencil(&self.depth_state);
+        enc.set_depth_stencil(&self.targets.depth_state);
         enc.setDepthBias_slopeScale_clamp(
             shadow_bias::RASTER_CONSTANT,
             shadow_bias::RASTER_SLOPE,
@@ -162,7 +162,7 @@ impl MtlContext {
             },
             7,
         );
-        enc.set_vertex_buffer(&self.vertex_buffer, 0, 1);
+        enc.set_vertex_buffer(&self.scene.vertex_buffer, 0, 1);
     }
 
     // Encode the static-geometry caster draws.
@@ -196,7 +196,7 @@ impl MtlContext {
                     MTLPrimitiveType::Triangle,
                     index_count,
                     MTLIndexType::UInt32,
-                    &self.index_buffer,
+                    &self.scene.index_buffer,
                     index_byte_offset,
                     1,
                     obj.base_vertex as isize,
@@ -244,7 +244,7 @@ impl MtlContext {
                             MTLPrimitiveType::Triangle,
                             index_count,
                             MTLIndexType::UInt32,
-                            &self.index_buffer,
+                            &self.scene.index_buffer,
                             index_byte_offset,
                         );
                     }

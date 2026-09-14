@@ -53,7 +53,7 @@ impl MtlContext {
     // nothing else does.
     fn probe_cube_signature(&self) -> u64 {
         let mut sig = super::bindless_args::Signature::new();
-        sig.push_u64(self.texture_epoch);
+        sig.push_u64(self.arg_buffers.texture_epoch);
         for i in 0..MAX_PROBES {
             sig.push_texture(self.probe_cube_or_sky(i));
         }
@@ -70,12 +70,12 @@ impl MtlContext {
     ) -> RenderResult<Retained<ProtocolObject<dyn MTLBuffer>>> {
         let sig = self.probe_cube_signature();
         // Cloned so no borrow of `self` outlives the mutable ring borrow below.
-        let enc = self.probe_cube_arg_encoder.clone();
+        let enc = self.arg_buffers.probe_cube_encoder.clone();
         let len = enc.encodedLength().max(16);
         let (buf, allocated) = self
             .rings
             .probe_cube
-            .slot_fresh(&self.device, ring_slot, len)?;
+            .slot_fresh(&self.hw.device, ring_slot, len)?;
         if allocated {
             self.probe.cube_arg_gates.invalidate(ring_slot);
         }

@@ -15,54 +15,60 @@
 //! and skip it.
 //!
 //! Metal's window entry points live on the shared AppKit layer rather than on
-//! the context, which is what `via` is for: `via = self.window.appkit` forwards
-//! the block to that receiver instead of to `self`.
+//! the context, which is what `via` is for: `via = self.window().appkit,
+//! via_mut = self.window_mut().appkit` forwards the `&self` arms of the block to
+//! the first receiver and the `&mut self` arms to the second.
 
 // Recurses token-by-token over the signature list, threading the assert and the
-// receiver prefix through each step.
+// shared and mutable receiver prefixes through each step.
 macro_rules! forward {
     (assert = $assert:path; $($sigs:tt)*) => {
-        $crate::forward::forward!(@each $assert, [], $($sigs)*);
+        $crate::forward::forward!(@each $assert, [] [], $($sigs)*);
     };
-    (assert = $assert:path, via = self $(. $field:ident)+; $($sigs:tt)*) => {
-        $crate::forward::forward!(@each $assert, [$(. $field)+], $($sigs)*);
+    (assert = $assert:path,
+     via = self . $get:ident () $(. $field:ident)*,
+     via_mut = self . $get_mut:ident () $(. $field_mut:ident)*;
+     $($sigs:tt)*) => {
+        $crate::forward::forward!(
+            @each $assert, [.$get() $(. $field)*] [.$get_mut() $(. $field_mut)*], $($sigs)*
+        );
     };
-    (@each $assert:path, [$($recv:tt)*],) => {};
-    (@each $assert:path, [$($recv:tt)*],
+    (@each $assert:path, [$($recv:tt)*] [$($recv_mut:tt)*],) => {};
+    (@each $assert:path, [$($recv:tt)*] [$($recv_mut:tt)*],
      fn $name:ident(&self $(, $arg:ident: $ty:ty)* $(,)?) -> $ret:ty; $($rest:tt)*) => {
         fn $name(&self $(, $arg: $ty)*) -> $ret { self $($recv)* .$name($($arg),*) }
-        $crate::forward::forward!(@each $assert, [$($recv)*], $($rest)*);
+        $crate::forward::forward!(@each $assert, [$($recv)*] [$($recv_mut)*], $($rest)*);
     };
-    (@each $assert:path, [$($recv:tt)*],
+    (@each $assert:path, [$($recv:tt)*] [$($recv_mut:tt)*],
      fn $name:ident(&self $(, $arg:ident: $ty:ty)* $(,)?); $($rest:tt)*) => {
         fn $name(&self $(, $arg: $ty)*) { self $($recv)* .$name($($arg),*) }
-        $crate::forward::forward!(@each $assert, [$($recv)*], $($rest)*);
+        $crate::forward::forward!(@each $assert, [$($recv)*] [$($recv_mut)*], $($rest)*);
     };
     // A `RenderResult` return lifts the inherent method's error through `?`, so
     // an inherent method still reporting `String` lands as `RenderError::Other`.
-    (@each $assert:path, [$($recv:tt)*],
+    (@each $assert:path, [$($recv:tt)*] [$($recv_mut:tt)*],
      fn $name:ident(&mut self $(, $arg:ident: $ty:ty)* $(,)?) -> RenderResult<$ok:ty>; $($rest:tt)*) => {
         fn $name(&mut self $(, $arg: $ty)*) -> concinnity_core::render::error::RenderResult<$ok> {
             $assert(stringify!($name));
-            Ok(self $($recv)* .$name($($arg),*)?)
+            Ok(self $($recv_mut)* .$name($($arg),*)?)
         }
-        $crate::forward::forward!(@each $assert, [$($recv)*], $($rest)*);
+        $crate::forward::forward!(@each $assert, [$($recv)*] [$($recv_mut)*], $($rest)*);
     };
-    (@each $assert:path, [$($recv:tt)*],
+    (@each $assert:path, [$($recv:tt)*] [$($recv_mut:tt)*],
      fn $name:ident(&mut self $(, $arg:ident: $ty:ty)* $(,)?) -> $ret:ty; $($rest:tt)*) => {
         fn $name(&mut self $(, $arg: $ty)*) -> $ret {
             $assert(stringify!($name));
-            self $($recv)* .$name($($arg),*)
+            self $($recv_mut)* .$name($($arg),*)
         }
-        $crate::forward::forward!(@each $assert, [$($recv)*], $($rest)*);
+        $crate::forward::forward!(@each $assert, [$($recv)*] [$($recv_mut)*], $($rest)*);
     };
-    (@each $assert:path, [$($recv:tt)*],
+    (@each $assert:path, [$($recv:tt)*] [$($recv_mut:tt)*],
      fn $name:ident(&mut self $(, $arg:ident: $ty:ty)* $(,)?); $($rest:tt)*) => {
         fn $name(&mut self $(, $arg: $ty)*) {
             $assert(stringify!($name));
-            self $($recv)* .$name($($arg),*)
+            self $($recv_mut)* .$name($($arg),*)
         }
-        $crate::forward::forward!(@each $assert, [$($recv)*], $($rest)*);
+        $crate::forward::forward!(@each $assert, [$($recv)*] [$($recv_mut)*], $($rest)*);
     };
 }
 

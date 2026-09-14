@@ -59,81 +59,12 @@ pub(crate) struct HdrRequest {
     pub pq_requested: bool,
 }
 
-// The already-created window + view handed back for a live world reload
-// (`cn editor` SAVE). When present, `setup_window_and_view` reuses these instead
-// of creating a fresh NSWindow / MTKView, so a save does not spawn a new window.
-// The swapchain-level config is guaranteed unchanged by the caller's
-// `hot_swap_config` gate, so the layer stays configured as-is; only the
-// drawable-derived target sizes are recomputed.
-pub(crate) struct ExistingWindow {
-    pub window: Option<Retained<NSWindow>>,
-    pub mtk_view: Retained<MTKView>,
-    pub pump_events: bool,
-    pub fullscreen: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    pub window_delegate: Option<Retained<crate::appkit::window_delegate::WindowDelegate>>,
-}
-
 pub(crate) fn setup_window_and_view(
     mtm: objc2::MainThreadMarker,
     device: &ProtocolObject<dyn MTLDevice>,
     config: WindowConfig,
     hdr: HdrRequest,
-    reuse: Option<ExistingWindow>,
 ) -> Result<WindowSetup, String> {
-    let WindowConfig {
-        title,
-        width,
-        height,
-        title_bar,
-        geometry_less,
-        capture_enabled,
-    } = config;
-    let HdrRequest {
-        display_requested: hdr_display_requested,
-        pq_requested: hdr_pq_requested,
-    } = hdr;
-
-    // Live reload: reuse the existing window/view without creating a new NSWindow
-    // (no activation, no delegate re-attach -- so a save does not raise a new
-    // window or steal focus). The reload is only chosen when the swapchain REQUEST
-    // is unchanged, but the display's actual EDR headroom can still have changed
-    // since the original build (a monitor plugged/unplugged, HDR toggled), which
-    // flips the resolved `hdr_mode` and therefore the drawable pixel format. So
-    // re-run `configure_mtk_view` to keep the CAMetalLayer's format in sync with
-    // the pipelines `build` rebuilds from this `hdr_mode`; without it the reused
-    // layer would keep its old format and the next draw would bind a
-    // format-mismatched pipeline. Then recompute the drawable-derived target sizes.
-    if let Some(ex) = reuse {
-        let max_edr = measure_max_edr(mtm);
-        let hdr_mode = HdrOutputMode::resolve(hdr_display_requested, hdr_pq_requested, max_edr);
-        configure_mtk_view(&ex.mtk_view, hdr_mode, capture_enabled);
-        let drawable = ex.mtk_view.drawableSize();
-        let initial_w = if geometry_less {
-            1
-        } else if drawable.width > 0.0 {
-            drawable.width as u32
-        } else {
-            width.max(1)
-        };
-        let initial_h = if geometry_less {
-            1
-        } else if drawable.height > 0.0 {
-            drawable.height as u32
-        } else {
-            height.max(1)
-        };
-        return Ok(WindowSetup {
-            window: ex.window,
-            mtk_view: ex.mtk_view,
-            pump_events: ex.pump_events,
-            initial_w,
-            initial_h,
-            fullscreen: ex.fullscreen,
-            window_delegate: ex.window_delegate,
-            hdr_mode,
-        });
-    }
-
     // Resolve the swapchain color-output mode. EDR support is per-display,
     // so the answer depends on which screen the window will land on. In
     // windowed mode we use `NSWindow::screen()` after attaching; in embedded
@@ -142,8 +73,8 @@ pub(crate) fn setup_window_and_view(
     // outer gate: a world that did not opt in stays SDR even on a capable
     // panel.
     let max_edr = measure_max_edr(mtm);
-    let hdr_mode = HdrOutputMode::resolve(hdr_display_requested, hdr_pq_requested, max_edr);
-    if hdr_display_requested && !hdr_mode.is_hdr() {
+    let hdr_mode = HdrOutputMode::resolve(hdr.display_requested, hdr.pq_requested, max_edr);
+    if hdr.display_requested && !hdr_mode.is_hdr() {
         tracing::warn!(
             "HDR display requested but the active display reports max EDR \
              multiplier {:.3}: falling back to SDR (BGRA8Unorm) output",
@@ -163,11 +94,17 @@ pub(crate) fn setup_window_and_view(
     let pump_events = embedded_ptr.is_null() || take_embedded_pump_events();
     let (window, mtk_view, fullscreen, window_delegate) = if embedded_ptr.is_null() {
         // Windowed mode: create a new NSWindow containing the MTKView.
-        let window = crate::appkit::chrome::create_window(mtm, title, width, height, title_bar)?;
+        let window = crate::appkit::chrome::create_window(
+            mtm,
+            config.title,
+            config.width,
+            config.height,
+            config.title_bar,
+        )?;
         let content_rect = window.contentRectForFrameRect(window.frame());
         let mtk_view =
             MTKView::initWithFrame_device(MTKView::alloc(mtm), content_rect, Some(device));
-        configure_mtk_view(&mtk_view, hdr_mode, capture_enabled);
+        configure_mtk_view(&mtk_view, hdr_mode, config.capture_enabled);
         window.setContentView(Some(&mtk_view));
         // Track native-fullscreen state authoritatively (the style-mask bit
         // lags the animated transition) so the settings menu's Window Mode row
@@ -186,7 +123,7 @@ pub(crate) fn setup_window_and_view(
         let parent: &NSView = unsafe { &*(embedded_ptr as *const NSView) };
         let bounds = parent.bounds();
         let mtk_view = MTKView::initWithFrame_device(MTKView::alloc(mtm), bounds, Some(device));
-        configure_mtk_view(&mtk_view, hdr_mode, capture_enabled);
+        configure_mtk_view(&mtk_view, hdr_mode, config.capture_enabled);
         mtk_view.setAutoresizingMask(
             NSAutoresizingMaskOptions::ViewWidthSizable
                 | NSAutoresizingMaskOptions::ViewHeightSizable,
@@ -202,29 +139,8 @@ pub(crate) fn setup_window_and_view(
         )
     };
 
-    // Initial HDR target sizing. The drawable may not exist yet (especially
-    // in embedded mode before the parent view finishes layout), so we use
-    // the requested width/height as a starting size and let draw_frame
-    // resize the targets if the actual drawable size differs.
-    let initial_drawable_size = mtk_view.drawableSize();
-    // A geometry-less world (e.g. text-only) renders no 3D content into the
-    // off-screen HDR / bloom / effect targets, so they are allocated at 1x1
-    // rather than full resolution -- this avoids paying for a full MSAA HDR
-    // color + depth + bloom chain (tens of MB) for a trivial 2D world.
-    let initial_w = if geometry_less {
-        1
-    } else if initial_drawable_size.width > 0.0 {
-        initial_drawable_size.width as u32
-    } else {
-        width.max(1)
-    };
-    let initial_h = if geometry_less {
-        1
-    } else if initial_drawable_size.height > 0.0 {
-        initial_drawable_size.height as u32
-    } else {
-        height.max(1)
-    };
+    let drawable = mtk_view.drawableSize();
+    let (initial_w, initial_h) = initial_target_size((drawable.width, drawable.height), &config);
 
     Ok(WindowSetup {
         window,
@@ -236,6 +152,52 @@ pub(crate) fn setup_window_and_view(
         window_delegate,
         hdr_mode,
     })
+}
+
+// Re-resolve the swapchain color-output mode on the view a live world reload
+// (`cn editor` SAVE) inherits, returning it with the initial target size. The
+// reload is only chosen when the swapchain REQUEST is unchanged, but the
+// display's actual EDR headroom can still have changed since the original build
+// (a monitor plugged/unplugged, HDR toggled), which flips the resolved mode and
+// therefore the drawable pixel format. Re-running `configure_mtk_view` keeps the
+// CAMetalLayer's format in sync with the pipelines `build` rebuilds from it; no
+// window is created, activated or re-delegated, so a save does not steal focus.
+pub(crate) fn reconfigure_view(
+    mtm: objc2::MainThreadMarker,
+    mtk_view: &MTKView,
+    config: WindowConfig,
+    hdr: HdrRequest,
+) -> (HdrOutputMode, u32, u32) {
+    let max_edr = measure_max_edr(mtm);
+    let hdr_mode = HdrOutputMode::resolve(hdr.display_requested, hdr.pq_requested, max_edr);
+    configure_mtk_view(mtk_view, hdr_mode, config.capture_enabled);
+    let drawable = mtk_view.drawableSize();
+    let (initial_w, initial_h) = initial_target_size((drawable.width, drawable.height), &config);
+    (hdr_mode, initial_w, initial_h)
+}
+
+// Initial HDR target sizing from the view's drawable size. The drawable may not
+// exist yet (especially in embedded mode before the parent view finishes
+// layout), so the requested width/height stands in and draw_frame resizes the
+// targets once the actual drawable size differs. A geometry-less world (e.g.
+// text-only) renders no 3D content into the off-screen HDR / bloom / effect
+// targets, so they are allocated at 1x1 rather than paying for a full MSAA HDR
+// color + depth + bloom chain (tens of MB) for a trivial 2D world.
+fn initial_target_size(drawable: (f64, f64), config: &WindowConfig) -> (u32, u32) {
+    if config.geometry_less {
+        return (1, 1);
+    }
+    let pick = |live: f64, requested: u32| {
+        if live > 0.0 {
+            live as u32
+        } else {
+            requested.max(1)
+        }
+    };
+    (
+        pick(drawable.0, config.width),
+        pick(drawable.1, config.height),
+    )
 }
 
 // Largest extended-range color-component multiplier the system thinks any
@@ -383,4 +345,52 @@ fn configure_hdr_layer(mtk_view: &MTKView, encoding: hdr_output::HdrEncoding) {
     // above, but make it explicit so a future refactor that drops the MTKView
     // hop does not silently bring the layer back to BGRA8Unorm.
     metal_layer.setPixelFormat(MTLPixelFormat::RGBA16Float);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(width: u32, height: u32, geometry_less: bool) -> WindowConfig<'static> {
+        WindowConfig {
+            title: "",
+            width,
+            height,
+            title_bar: true,
+            geometry_less,
+            capture_enabled: false,
+        }
+    }
+
+    #[test]
+    fn live_drawable_sets_the_target_size() {
+        assert_eq!(
+            initial_target_size((2048.0, 1536.0), &config(1024, 768, false)),
+            (2048, 1536)
+        );
+    }
+
+    #[test]
+    fn missing_drawable_falls_back_to_the_requested_size() {
+        assert_eq!(
+            initial_target_size((0.0, 0.0), &config(1024, 768, false)),
+            (1024, 768)
+        );
+    }
+
+    #[test]
+    fn requested_size_is_at_least_one_pixel() {
+        assert_eq!(
+            initial_target_size((0.0, 0.0), &config(0, 0, false)),
+            (1, 1)
+        );
+    }
+
+    #[test]
+    fn geometry_less_world_clamps_to_one_pixel() {
+        assert_eq!(
+            initial_target_size((2048.0, 1536.0), &config(1024, 768, true)),
+            (1, 1)
+        );
+    }
 }

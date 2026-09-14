@@ -355,7 +355,8 @@ impl MtlContext {
             let v_bytes = std::mem::size_of_val(new_vertices.as_slice());
             let ptr = std::ptr::NonNull::new(new_vertices.as_ptr() as *mut _)
                 .ok_or("rebuild_skinned_geometry: vertex slice pointer is null")?;
-            self.device
+            self.hw
+                .device
                 .newBufferWithBytes_length_options(
                     ptr,
                     v_bytes,
@@ -364,7 +365,7 @@ impl MtlContext {
                 .ok_or("rebuild_skinned_geometry: failed to create new vertex buffer")?
         };
         let new_index_buffer =
-            upload_skinned_index_buffer(&self.device, &new_indices, "rebuild_skinned_geometry")?;
+            upload_skinned_index_buffer(&self.hw.device, &new_indices, "rebuild_skinned_geometry")?;
 
         // Apply the new per-slot layout.
         for (skinned_index, v_base, v_count, i_off, i_count) in new_per_slot {
@@ -484,7 +485,7 @@ impl MtlContext {
         // active, so a skinned mesh casts a correctly deformed shadow.
         let skinned_shadow_ps = if self.shadow.pipeline_state.is_some() {
             Some(build_skinned_shadow_pipeline(
-                &self.device,
+                &self.hw.device,
                 &vdesc,
                 self.hot_reload.enabled,
             )?)
@@ -497,7 +498,8 @@ impl MtlContext {
         let skinned_vertex_buffer = unsafe {
             let ptr = std::ptr::NonNull::new(vertices.as_ptr() as *mut _)
                 .ok_or("skinned vertex slice is empty")?;
-            self.device
+            self.hw
+                .device
                 .newBufferWithBytes_length_options(
                     ptr,
                     std::mem::size_of_val(vertices),
@@ -506,7 +508,7 @@ impl MtlContext {
                 .ok_or("failed to create skinned vertex buffer")?
         };
         let skinned_index_buffer =
-            upload_skinned_index_buffer(&self.device, indices, "upload_skinned")?;
+            upload_skinned_index_buffer(&self.hw.device, indices, "upload_skinned")?;
 
         // Seed each object's joint matrices to identity (bind pose) so the
         // mesh renders undeformed until the first `update_skinned_pose`.
@@ -520,9 +522,9 @@ impl MtlContext {
         // A build failure is a startup error rather than a degraded render,
         // as on every host. The skin pipeline is built independently of RT;
         // RT keeps its own skin pipeline + deformed buffer.
-        if self.bindless {
+        if self.cull.bindless {
             let skin_pipeline = crate::metal::raytrace::build_rt_skin_pipeline(
-                &self.device,
+                &self.hw.device,
                 self.hot_reload.enabled,
             )?;
             // One deformed buffer per frame-in-flight (the skin write and the
@@ -536,6 +538,7 @@ impl MtlContext {
             let mut deformed = Vec::with_capacity(self.frames_in_flight);
             for _ in 0..self.frames_in_flight {
                 let buf = self
+                    .hw
                     .device
                     .newBufferWithLength_options(
                         deformed_bytes,
@@ -595,7 +598,8 @@ impl MtlContext {
                             let buffer = unsafe {
                                 let ptr = std::ptr::NonNull::new(bytes.as_ptr() as *mut _)
                                     .ok_or("morph entry slice is empty")?;
-                                self.device
+                                self.hw
+                                    .device
                                     .newBufferWithBytes_length_options(
                                         ptr,
                                         bytes.len(),
