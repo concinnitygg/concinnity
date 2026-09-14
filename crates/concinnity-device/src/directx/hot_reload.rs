@@ -203,8 +203,8 @@ impl DxContext {
         if !self.hot_reload.enabled {
             return Ok(());
         }
-        let device = &self.device;
-        let info_queue = self.diagnostics.info_queue.as_ref();
+        let device = &self.hw.device;
+        let info_queue = self.hw.info_queue.as_ref();
         let hr = true;
 
         // Build every replacement into a temporary first. A `?` early-return
@@ -403,7 +403,7 @@ impl DxContext {
                     .as_ref()
                     .expect("decal state is live")
                     .root_sig,
-                self.hdr.msaa_samples,
+                self.targets.hdr.msaa_samples,
                 hr,
                 info_queue,
             )
@@ -418,7 +418,7 @@ impl DxContext {
                     .resources
                     .as_ref()
                     .expect("line resources are live"),
-                self.hdr.msaa_samples,
+                self.targets.hdr.msaa_samples,
                 hr,
                 info_queue,
             )
@@ -434,7 +434,7 @@ impl DxContext {
                     .as_ref()
                     .expect("transparent resources are live")
                     .root_sig(),
-                self.hdr.msaa_samples,
+                self.targets.hdr.msaa_samples,
                 hr,
                 info_queue,
             )
@@ -447,7 +447,7 @@ impl DxContext {
                     .as_ref()
                     .expect("transparent resources are live")
                     .root_sig(),
-                self.hdr.msaa_samples,
+                self.targets.hdr.msaa_samples,
                 hr,
                 info_queue,
             )
@@ -467,7 +467,7 @@ impl DxContext {
                     .as_ref()
                     .expect("fog resources are live")
                     .root_sig,
-                self.hdr.msaa_samples,
+                self.targets.hdr.msaa_samples,
                 hr,
                 info_queue,
             )
@@ -673,11 +673,11 @@ impl DxContext {
             .as_ref()
             .ok_or_else(|| "the GPU-driven main pass is not live".to_string())?;
         build_bucket_pipeline(
-            &self.device,
-            self.diagnostics.info_queue.as_ref(),
+            &self.hw.device,
+            self.hw.info_queue.as_ref(),
             BucketPipelineTargets {
                 root_sig,
-                msaa_samples: self.hdr.msaa_samples,
+                msaa_samples: self.targets.hdr.msaa_samples,
                 engine_default,
                 hot_reload: self.hot_reload.enabled,
             },

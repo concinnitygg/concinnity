@@ -33,7 +33,7 @@ impl DxContext {
         let resource = &self.descriptors.textures[slot];
         for f in 0..FRAMES {
             write_texture_srv(
-                &self.device,
+                &self.hw.device,
                 resource,
                 self.srv_slot_cpu(self.flat_pool_slot(f, slot)),
             );
@@ -91,7 +91,7 @@ impl DxContext {
         }
         if self.streamed_slot_needs_drain() {
             self.wait_idle();
-            let texture = upload_texture_image(&self.alloc, image)?;
+            let texture = upload_texture_image(&self.hw.alloc, image)?;
             self.descriptors.textures[slot] = texture;
             self.rewrite_texture_slot(slot);
             // The full rewrite covered every flat-pool copy, so any propagation
@@ -99,7 +99,7 @@ impl DxContext {
             self.stream.pool_rewrites.remove(slot);
             return Ok(());
         }
-        let (texture, in_flight) = upload_texture_image_deferred(&self.alloc, image)?;
+        let (texture, in_flight) = upload_texture_image_deferred(&self.hw.alloc, image)?;
         let old = std::mem::replace(&mut self.descriptors.textures[slot], texture);
         self.stream.pool_rewrites.queue(slot);
         // `+ 1`: the swap lands between frames, after the previous frame's
@@ -130,7 +130,7 @@ impl DxContext {
             for slot in self.stream.pool_rewrites.begin_frame() {
                 let resource = &self.descriptors.textures[slot.min(last)];
                 write_texture_srv(
-                    &self.device,
+                    &self.hw.device,
                     resource,
                     self.srv_slot_cpu(self.flat_pool_slot(frame, slot)),
                 );
@@ -161,10 +161,10 @@ impl DxContext {
     // `MtlContext::update_color_lut`.
     pub(crate) fn update_color_lut(&mut self, size: u32, data: &[u8]) -> Result<(), String> {
         self.wait_idle();
-        let srv_cpu = self.color_lut.srv_cpu;
-        let srv_gpu = self.color_lut.srv_gpu;
-        let new_lut = upload_color_lut(&self.alloc, size, data, srv_cpu, srv_gpu)?;
-        self.color_lut = new_lut;
+        let srv_cpu = self.scene.color_lut.srv_cpu;
+        let srv_gpu = self.scene.color_lut.srv_gpu;
+        let new_lut = upload_color_lut(&self.hw.alloc, size, data, srv_cpu, srv_gpu)?;
+        self.scene.color_lut = new_lut;
         Ok(())
     }
 
@@ -175,7 +175,7 @@ impl DxContext {
     // descriptor-table rebind. The new payload may declare different mip /
     // face sizes than the original; `EnvironmentMapTextures` is replaced
     // wholesale and the next frame's `ViewUniforms` picks up the new
-    // `prefilter_mip_count` from `self.env_map`. `wait_idle` first guarantees
+    // `prefilter_mip_count` from `self.scene.env_map`. `wait_idle` first guarantees
     // no in-flight command list still references the old cubes (or the
     // now-stale SRVs) before they are overwritten and dropped. Mirrors
     // `MtlContext::update_environment_map`.
@@ -183,12 +183,12 @@ impl DxContext {
         let view = bake::environment_map::deserialize(payload)
             .map_err(|e| format!("envmap hot-reload payload malformed: {e}"))?;
         self.wait_idle();
-        let irr_srv_cpu = self.env_map.irradiance.srv_cpu;
-        let irr_srv_gpu = self.env_map.irradiance.srv_gpu;
-        let pre_srv_cpu = self.env_map.prefilter.srv_cpu;
-        let pre_srv_gpu = self.env_map.prefilter.srv_gpu;
+        let irr_srv_cpu = self.scene.env_map.irradiance.srv_cpu;
+        let irr_srv_gpu = self.scene.env_map.irradiance.srv_gpu;
+        let pre_srv_cpu = self.scene.env_map.prefilter.srv_cpu;
+        let pre_srv_gpu = self.scene.env_map.prefilter.srv_gpu;
         let new_env = upload_environment_map(
-            &self.alloc,
+            &self.hw.alloc,
             EnvironmentMapPayload {
                 irradiance_face: view.irradiance_face,
                 irradiance_bytes: view.irradiance_bytes,
@@ -202,7 +202,7 @@ impl DxContext {
                 pre_srv_gpu,
             },
         )?;
-        self.env_map = new_env;
+        self.scene.env_map = new_env;
         Ok(())
     }
 
@@ -285,7 +285,7 @@ impl DxContext {
         // The cloned prop joins the RT-relevant draw set; the next RT update folds
         // it into the BVH (it reuses the source mesh's geometry slice, so only
         // this clone's BLAS is built).
-        self.rt_topology_dirty = true;
+        self.rt.topology_dirty = true;
         Ok(())
     }
 }

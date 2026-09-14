@@ -29,21 +29,21 @@ impl DxContext {
         chunk_idx_bytes: usize,
     ) -> Result<(), String> {
         self.wait_idle();
-        let old_v_len = self.geometry.vertex_buffer_view.SizeInBytes as u64;
-        let old_i_len = self.geometry.index_buffer_view.SizeInBytes as u64;
+        let old_v_len = self.scene.geometry.vertex_buffer_view.SizeInBytes as u64;
+        let old_i_len = self.scene.geometry.index_buffer_view.SizeInBytes as u64;
         let new_v_len = old_v_len + chunk_vtx_bytes as u64;
         let new_i_len = old_i_len + chunk_idx_bytes as u64;
 
         // Buffers are created in COMMON; the CopyBufferRegion below implicitly
         // promotes the destination COMMON -> COPY_DEST.
         let new_vbuf = create_buffer(
-            &self.alloc,
+            &self.hw.alloc,
             new_v_len,
             D3D12_HEAP_TYPE_DEFAULT,
             D3D12_RESOURCE_STATE_COMMON,
         )?;
         let new_ibuf = create_buffer(
-            &self.alloc,
+            &self.hw.alloc,
             new_i_len,
             D3D12_HEAP_TYPE_DEFAULT,
             D3D12_RESOURCE_STATE_COMMON,
@@ -53,20 +53,32 @@ impl DxContext {
         // every existing draw's offsets stay valid.
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
-        one_shot_submit(&self.device, &self.command_queue, |cmd| unsafe {
+        one_shot_submit(&self.hw.device, &self.hw.command_queue, |cmd| unsafe {
             let v_src = transition_barrier(
-                &self.geometry.vertex_buffer,
+                &self.scene.geometry.vertex_buffer,
                 D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
                 D3D12_RESOURCE_STATE_COPY_SOURCE,
             );
             let i_src = transition_barrier(
-                &self.geometry.index_buffer,
+                &self.scene.geometry.index_buffer,
                 D3D12_RESOURCE_STATE_INDEX_BUFFER,
                 D3D12_RESOURCE_STATE_COPY_SOURCE,
             );
             cmd.ResourceBarrier(&[v_src, i_src]);
-            cmd.CopyBufferRegion(&*new_vbuf, 0, &*self.geometry.vertex_buffer, 0, old_v_len);
-            cmd.CopyBufferRegion(&*new_ibuf, 0, &*self.geometry.index_buffer, 0, old_i_len);
+            cmd.CopyBufferRegion(
+                &*new_vbuf,
+                0,
+                &*self.scene.geometry.vertex_buffer,
+                0,
+                old_v_len,
+            );
+            cmd.CopyBufferRegion(
+                &*new_ibuf,
+                0,
+                &*self.scene.geometry.index_buffer,
+                0,
+                old_i_len,
+            );
             let v_dst = transition_barrier(
                 &new_vbuf,
                 D3D12_RESOURCE_STATE_COPY_DEST,
@@ -80,19 +92,19 @@ impl DxContext {
             cmd.ResourceBarrier(&[v_dst, i_dst]);
         })?;
 
-        self.geometry.vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
+        self.scene.geometry.vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&new_vbuf),
             SizeInBytes: new_v_len as u32,
             StrideInBytes: std::mem::size_of::<Vertex>() as u32,
         };
-        self.geometry.index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
+        self.scene.geometry.index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&new_ibuf),
             SizeInBytes: new_i_len as u32,
             // Static IB is u32 (matches the `Format` chosen in init/mod.rs).
             Format: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R32_UINT,
         };
-        self.geometry.vertex_buffer = new_vbuf;
-        self.geometry.index_buffer = new_ibuf;
+        self.scene.geometry.vertex_buffer = new_vbuf;
+        self.scene.geometry.index_buffer = new_ibuf;
 
         // Seed the chunk allocators with the appended headroom. retire_frame 0:
         // nothing has been drawn, so the space is reusable immediately.
@@ -153,7 +165,7 @@ impl DxContext {
         // the draw fixes them up with `base_vertex`.
         let vert_bytes = bytemuck::cast_slice(vertices);
         self.write_geometry_region(
-            &self.geometry.vertex_buffer,
+            &self.scene.geometry.vertex_buffer,
             D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
             v_off as u64,
             vert_bytes,
@@ -163,7 +175,7 @@ impl DxContext {
         let widened: Vec<u32> = indices.iter().map(|&i| u32::from(i)).collect();
         let idx_bytes = bytemuck::cast_slice(&widened);
         self.write_geometry_region(
-            &self.geometry.index_buffer,
+            &self.scene.geometry.index_buffer,
             D3D12_RESOURCE_STATE_INDEX_BUFFER,
             i_off as u64,
             idx_bytes,
@@ -218,7 +230,7 @@ impl DxContext {
         self.model_history.borrow_mut().reoccupy_draw(draw_idx);
         // A new resident chunk changes the RT-relevant draw set; the next RT
         // update folds it into the BVH (building just this chunk's BLAS).
-        self.rt_topology_dirty = true;
+        self.rt.topology_dirty = true;
         Ok(())
     }
 
@@ -244,7 +256,7 @@ impl DxContext {
             .free(region.index_offset, region.index_bytes, retire_frame);
         // The removed chunk leaves the RT-relevant draw set; the next RT update
         // drops its BLAS (deferred-freed once in-flight traces retire).
-        self.rt_topology_dirty = true;
+        self.rt.topology_dirty = true;
         Ok(())
     }
 

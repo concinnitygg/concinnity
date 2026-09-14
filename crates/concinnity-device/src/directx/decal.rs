@@ -479,8 +479,8 @@ impl DxContext {
         // Upload this frame's view UBO.
         let inv_vp = mat4_inverse(vp);
         let viewport = [
-            self.extent.render_width as f32,
-            self.extent.render_height as f32,
+            self.targets.extent.render_width as f32,
+            self.targets.extent.render_height as f32,
         ];
         let view_uni = DecalView {
             vp,
@@ -510,8 +510,8 @@ impl DxContext {
         // and the next consumer's barrier takes it back out.
         let scene_rtv = self.hdr_scene_rtv();
 
-        let w = self.extent.render_width;
-        let h = self.extent.render_height;
+        let w = self.targets.extent.render_width;
+        let h = self.targets.extent.render_height;
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {
@@ -638,7 +638,11 @@ impl DxContext {
             }
             .ptr + (base_slot + id) * self.descriptors.srv_descriptor_size,
         };
-        write_texture_srv(&self.device, &self.descriptors.textures[tex_idx], srv_cpu);
+        write_texture_srv(
+            &self.hw.device,
+            &self.descriptors.textures[tex_idx],
+            srv_cpu,
+        );
         Ok(id)
     }
 

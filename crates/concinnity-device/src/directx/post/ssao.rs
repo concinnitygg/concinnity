@@ -189,7 +189,7 @@ pub(in crate::directx) struct SsaoResources {
     pub(in crate::directx) ao_raw_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
     pub(in crate::directx) ao_raw_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
     // The blurred `ao_output` the main pass samples is the graph's transient and
-    // is owned by `DxContext::transient_pool` (a placed resource); SSAO holds
+    // is owned by `DxTargets::transient_pool` (a placed resource); SSAO holds
     // only its RTV (blur writes it) + SRV (main samples it), written from the
     // pooled resource at build / resize time.
     pub(in crate::directx) ao_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
@@ -231,7 +231,7 @@ impl SsaoResources {
         height: u32,
         settings: ssao::SsaoSettings,
         handles: SsaoDescriptorHandles,
-        // The pooled `ao_output` resource (placed in `DxContext::transient_pool`);
+        // The pooled `ao_output` resource (placed in `DxTargets::transient_pool`);
         // SSAO writes its RTV + SRV but does not own it.
         ao_resource: &ID3D12Resource,
         hot_reload: bool,
@@ -418,8 +418,8 @@ impl DxContext {
             None => return,
         };
         let params = ssao.settings.params(fov_y_radians, aspect);
-        let w = self.extent.render_width;
-        let h = self.extent.render_height;
+        let w = self.targets.extent.render_width;
+        let h = self.targets.extent.render_height;
 
         // The kernel + blur are fullscreen passes; restore the viewport /
         // scissor / primitive topology the (now removed) geometry pre-pass used

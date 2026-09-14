@@ -50,9 +50,9 @@ impl DxContext {
     }
 
     fn build_wireframe_pipelines(&mut self) -> Result<(), String> {
-        let device = self.device.clone();
-        let iq = self.diagnostics.info_queue.clone();
-        let msaa = self.hdr.msaa_samples;
+        let device = self.hw.device.clone();
+        let iq = self.hw.info_queue.clone();
+        let msaa = self.targets.hdr.msaa_samples;
         let mut built = DxWireframe {
             built: true,
             ..Default::default()

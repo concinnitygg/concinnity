@@ -444,11 +444,11 @@ impl crate::directx::context::DxContext {
         let Some(hiz) = self.cull.hiz.as_ref() else {
             return;
         };
-        let sample_count = self.hdr.msaa_samples.max(1);
+        let sample_count = self.targets.hdr.msaa_samples.max(1);
         let plan = Plan::new(hiz.width, hiz.height, hiz.mip_count, sample_count);
 
         // Phase 1: main depth into mips 0..6. The UAV table starts at mip 0.
-        let pso = match self.hdr.msaa_samples > 1 {
+        let pso = match self.targets.hdr.msaa_samples > 1 {
             true => &hiz.spd_msaa_pso,
             false => &hiz.spd_single_pso,
         };

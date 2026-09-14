@@ -1205,7 +1205,7 @@ pub(super) struct VkHardware {
     // pair is advertised) runs the swapchain in that color space and the
     // composite PQ-encodes (SMPTE ST 2084) in-shader. On SDR the swapchain runs
     // in `BGRA8_UNORM` + sRGB-nonlinear and the ACES + gamma + FXAA + LUT path
-    // runs unchanged. Mirrors `DxContext::hdr_mode`. Stored so the swapchain
+    // runs unchanged. Mirrors `DxHardware::hdr_mode`. Stored so the swapchain
     // rebuild path preserves the format + color space on resize.
     pub(super) hdr_mode: hdr_output::HdrOutputMode,
     // Lock presentation to the display refresh. Captured so `rebuild_swapchain`
@@ -1215,7 +1215,7 @@ pub(super) struct VkHardware {
     // built with, reported by `hot_swap_config` so a live editor reload
     // (`reload_world`) reuses this backend in place only when the new world's
     // `swapchain_config` still matches; a mismatch routes to a full rebuild.
-    // Mirrors `DxContext::swapchain_config`.
+    // Mirrors `DxHardware::swapchain_config`.
     pub(super) swapchain_config: backend_init::SwapchainConfig,
     // Window + input (native Win32 on Windows, AppKit on macOS, GLFW on Linux).
     // `Option` so a `reload_world` can MOVE the live window (with its cursor /

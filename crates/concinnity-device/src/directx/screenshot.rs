@@ -40,8 +40,8 @@ impl DxContext {
             .get(back_idx)
             .ok_or("screenshot: stale back-buffer index")?
             .clone();
-        let width = self.extent.output_width;
-        let height = self.extent.output_height;
+        let width = self.targets.extent.output_width;
+        let height = self.targets.extent.output_height;
         if width == 0 || height == 0 {
             return Err("screenshot: zero-sized swapchain".into());
         }
@@ -74,7 +74,7 @@ impl DxContext {
         // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters it
         // fills are live locals that outlive the call.
         unsafe {
-            self.device.GetCopyableFootprints(
+            self.hw.device.GetCopyableFootprints(
                 &tex_desc,
                 0,
                 1,
@@ -89,7 +89,7 @@ impl DxContext {
         // Host-readable buffer sized for the padded footprint. READBACK heap
         // resources start in COPY_DEST and never need a barrier.
         let readback = create_buffer(
-            &self.alloc,
+            &self.hw.alloc,
             total_size,
             D3D12_HEAP_TYPE_READBACK,
             D3D12_RESOURCE_STATE_COPY_DEST,
@@ -116,7 +116,7 @@ impl DxContext {
         };
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
-        one_shot_submit(&self.device, &self.command_queue, |cmd| unsafe {
+        one_shot_submit(&self.hw.device, &self.hw.command_queue, |cmd| unsafe {
             let to_src = transition_barrier(
                 &back_buffer,
                 D3D12_RESOURCE_STATE_PRESENT,
@@ -159,7 +159,7 @@ impl DxContext {
 
         let rgba = image_decode::decode_to_rgba8(
             &packed,
-            classify(self.swapchain.format, self.hdr_encoding),
+            classify(self.swapchain.format, self.hw.hdr_encoding()),
         );
         encode_png(path, width, height, &rgba)?;
         Ok(path.to_string())

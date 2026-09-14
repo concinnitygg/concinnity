@@ -44,7 +44,7 @@ impl DxContext {
         // temporal upscaling on, `extent.render_width`/`extent.render_height` are a
         // fraction of the window size and would never equal it, firing a
         // pointless rebuild every frame.
-        if new_w == self.extent.output_width && new_h == self.extent.output_height {
+        if new_w == self.targets.extent.output_width && new_h == self.targets.extent.output_height {
             return Ok(());
         }
         self.handle_resize(new_w, new_h)
@@ -69,7 +69,11 @@ impl DxContext {
             // SAFETY: the view descriptor and the resource it names are live for the call, and the
             // destination handle addresses a slot this context reserved for the view in a heap it
             // owns.
-            unsafe { self.device.CreateRenderTargetView(&buf, None, rtv_handle) };
+            unsafe {
+                self.hw
+                    .device
+                    .CreateRenderTargetView(&buf, None, rtv_handle)
+            };
             self.swapchain.back_buffers.push(buf);
         }
         Ok(())
@@ -100,8 +104,8 @@ impl DxContext {
             // max_render / max_upscale sizes are baked at creation).
             self.upscale.backend = None;
             let rebuilt = crate::directx::post::upscale::build_upscaler(
-                &self.device,
-                &self.command_queue,
+                &self.hw.device,
+                &self.hw.command_queue,
                 new_w,
                 new_h,
                 scale,
@@ -184,20 +188,20 @@ impl DxContext {
         //    (`decal_depth_srv_gpu` on `DecalResources` / `FogResources`) are
         //    rewritten into their existing heap slots, so the consumers don't
         //    need a re-bind.
-        self.hdr.color = create_hdr_color_target(
-            &self.device,
+        self.targets.hdr.color = create_hdr_color_target(
+            &self.hw.device,
             render_w,
             render_h,
-            self.hdr.msaa_samples,
-            self.hdr.color_rtv,
+            self.targets.hdr.msaa_samples,
+            self.targets.hdr.color_rtv,
             self.view.clear_color,
         )?;
-        if self.hdr.msaa_samples > 1 {
-            let resolve = create_hdr_resolve_target(&self.device, render_w, render_h)?;
+        if self.targets.hdr.msaa_samples > 1 {
+            let resolve = create_hdr_resolve_target(&self.hw.device, render_w, render_h)?;
             // Rewrite the resolve target's RTV at the slot the decal pass
             // already binds. The CPU handle was captured at init when MSAA
             // turned the slot on; it stays valid across resize.
-            if let Some(rtv) = self.hdr.resolve_rtv {
+            if let Some(rtv) = self.targets.hdr.resolve_rtv {
                 let rtv_desc = D3D12_RENDER_TARGET_VIEW_DESC {
                     Format: HDR_FORMAT,
                     ViewDimension: D3D12_RTV_DIMENSION_TEXTURE2D,
@@ -207,20 +211,21 @@ impl DxContext {
                 // the destination handle addresses a slot this context reserved for the view in a
                 // heap it owns.
                 unsafe {
-                    self.device
+                    self.hw
+                        .device
                         .CreateRenderTargetView(&resolve, Some(&rtv_desc), rtv)
                 };
             }
-            self.hdr.resolve = Some(resolve);
+            self.targets.hdr.resolve = Some(resolve);
         }
         // Recreate main depth (shader-readable so the decal/fog/auto-exposure
         // paths can sample it). The DSV is rewritten at the same slot.
-        self.depth.resource = create_main_depth_texture(
-            &self.device,
+        self.targets.depth.resource = create_main_depth_texture(
+            &self.hw.device,
             render_w,
             render_h,
-            self.depth.dsv,
-            self.hdr.msaa_samples,
+            self.targets.depth.dsv,
+            self.targets.hdr.msaa_samples,
             true,
         )?;
 
@@ -247,9 +252,13 @@ impl DxContext {
         //    handles stored on the various Resources structs already match
         //    these heap slots; we just rewrite the descriptors in place.
         write_hdr_srv(
-            &self.device,
-            self.hdr.resolve.as_ref().unwrap_or(&self.hdr.color),
-            srv_cpu_of(self.hdr.srv_gpu),
+            &self.hw.device,
+            self.targets
+                .hdr
+                .resolve
+                .as_ref()
+                .unwrap_or(&self.targets.hdr.color),
+            srv_cpu_of(self.targets.hdr.srv_gpu),
         );
 
         // The main-depth SRV is shared by the decal pass and the fog pass.
@@ -257,10 +266,10 @@ impl DxContext {
         // and both consumers pick it up.
         if let Some(decals) = self.decal.state.as_ref() {
             crate::directx::decal::write_main_depth_srv(
-                &self.device,
-                &self.depth.resource,
+                &self.hw.device,
+                &self.targets.depth.resource,
                 srv_cpu_of(decals.depth_srv_gpu),
-                self.hdr.msaa_samples,
+                self.targets.hdr.msaa_samples,
             );
         }
 
@@ -271,9 +280,9 @@ impl DxContext {
         // so dropping the old placed resources + heaps is sound.
         let ssao_enabled = self.ssao.resources.is_some();
         let gbuffer_enabled = self.gbuffer.is_some();
-        self.transient_pool.rebuild(
-            &self.device,
-            &self.command_queue,
+        self.targets.transient_pool.rebuild(
+            &self.hw.device,
+            &self.hw.command_queue,
             &super::transient_pool::transient_slots(
                 ssao_enabled,
                 gbuffer_enabled,
@@ -290,19 +299,20 @@ impl DxContext {
         let bloom_count = self.bloom.mips.len();
         if bloom_count > 0 {
             let bloom_top = self
+                .targets
                 .transient_pool
                 .resource_for("bloom_top")
                 .ok_or("transient pool missing bloom_top on resize")?
                 .clone();
             let new_mips =
-                create_bloom_mips_at(&self.device, new_w, new_h, bloom_count, bloom_top)?;
+                create_bloom_mips_at(&self.hw.device, new_w, new_h, bloom_count, bloom_top)?;
             self.bloom.mips = new_mips.0;
             self.bloom.mip_extents = new_mips.1;
             // Rewrite each mip's RTV + SRV into the existing slots.
             for i in 0..bloom_count {
-                write_color_rtv(&self.device, &self.bloom.mips[i], self.bloom.mip_rtvs[i]);
+                write_color_rtv(&self.hw.device, &self.bloom.mips[i], self.bloom.mip_rtvs[i]);
                 write_hdr_srv(
-                    &self.device,
+                    &self.hw.device,
                     &self.bloom.mips[i],
                     srv_cpu_of(self.bloom.mip_srv_gpus[i]),
                 );
@@ -323,11 +333,15 @@ impl DxContext {
         // 6) SSAO: pre-pass G-buffer + private depth + raw/blurred AO. The
         // blurred `ao_output` is pooled and was rebuilt above; SSAO rewrites its
         // RTV + SRV from the new pooled resource.
-        if let Some(ao_resource) = self.transient_pool.resource_for("ao_output").cloned()
+        if let Some(ao_resource) = self
+            .targets
+            .transient_pool
+            .resource_for("ao_output")
+            .cloned()
             && let Some(ssao) = self.ssao.resources.as_mut()
         {
             ssao.resize_to(
-                &self.device,
+                &self.hw.device,
                 render_w,
                 render_h,
                 srv_cpu_base,
@@ -346,11 +360,11 @@ impl DxContext {
         // 7-gbuffer) Unified G-buffer pre-pass: the three color targets are
         // pooled and were relocated by the rebuild above, so this re-points
         // their views; the private depth is feature-owned and recreated.
-        if let Some(pooled) = self.transient_pool.gbuffer_pooled()
+        if let Some(pooled) = self.targets.transient_pool.gbuffer_pooled()
             && let Some(gbuffer) = self.gbuffer.as_mut()
         {
             gbuffer.resize_to(
-                &self.device,
+                &self.hw.device,
                 render_w,
                 render_h,
                 srv_cpu_base,
@@ -370,7 +384,13 @@ impl DxContext {
         //     slots; the acceleration structure is resolution-independent and is
         //     left untouched.
         if let Some(rt) = self.rt_reflections.as_mut() {
-            rt.resize_to(&self.device, render_w, render_h, srv_cpu_base, srv_gpu_base)?;
+            rt.resize_to(
+                &self.hw.device,
+                render_w,
+                render_h,
+                srv_cpu_base,
+                srv_gpu_base,
+            )?;
         }
 
         // 7-refl) Reflection composite: the full-res composited output + the
@@ -378,7 +398,13 @@ impl DxContext {
         //     so the live scene binding (which points at the output SRV slot) stays
         //     valid after the in-place descriptor rewrite.
         if let Some(rc) = self.reflection_composite.as_mut() {
-            rc.resize_to(&self.device, render_w, render_h, srv_cpu_base, srv_gpu_base)?;
+            rc.resize_to(
+                &self.hw.device,
+                render_w,
+                render_h,
+                srv_cpu_base,
+                srv_gpu_base,
+            )?;
         }
 
         // 7a) Raymarch: recreate the `hdr_resolve_copy` scene snapshot at
@@ -386,7 +412,7 @@ impl DxContext {
         //     descriptor slot itself doesn't move, so the live raymarch
         //     root-table binding stays valid without a re-bind.
         if let Some(rm) = self.raymarch.as_mut() {
-            rm.resize_to(&self.device, render_w, render_h)?;
+            rm.resize_to(&self.hw.device, render_w, render_h)?;
         }
 
         // 7b) Hi-Z (depth-mip pyramid). Resource sized to the depth buffer; the
@@ -398,7 +424,7 @@ impl DxContext {
         //     (NDC coords from the old resolution would mis-sample the new
         //     mip dimensions otherwise).
         if let Some(hiz) = self.cull.hiz.as_mut() {
-            hiz.resize_to(&self.device, render_w, render_h)?;
+            hiz.resize_to(&self.hw.device, render_w, render_h)?;
         }
         self.cull.hiz_valid.set(false);
 
@@ -406,24 +432,24 @@ impl DxContext {
         //     and rewrite its SRV in place. The depth SRV the pass also binds is
         //     the main-depth slot, rewritten by the decal path.
         if let Some(transparent) = self.transparent.as_mut() {
-            transparent.resize_to(&self.device, render_w, render_h)?;
+            transparent.resize_to(&self.hw.device, render_w, render_h)?;
         }
 
         // 7d) Planar reflections: recreate the shared mirror color + depth + the
         //     per-plane resolves at the new render dims and rewrite their RTV / DSV /
         //     SRVs in place, so each reflector's resolve binding stays valid.
         if let Some(planar) = self.planar_reflection.as_mut() {
-            planar.resize_to(&self.device, render_w, render_h)?;
+            planar.resize_to(&self.hw.device, render_w, render_h)?;
         }
 
         // 8) Commit the new dimensions. `render_*` drives the scene-pass
         //    viewports + the sub-pixel jitter; `output_*` drives the
         //    composite viewport and is what the next resize poll compares
         //    against. They differ only while temporal upscaling is active.
-        self.extent.render_width = render_w;
-        self.extent.render_height = render_h;
-        self.extent.output_width = new_w;
-        self.extent.output_height = new_h;
+        self.targets.extent.render_width = render_w;
+        self.targets.extent.render_height = render_h;
+        self.targets.extent.output_width = new_w;
+        self.targets.extent.output_height = new_h;
 
         // 9) Reset the swapchain back-buffer index. After `ResizeBuffers` the
         //    swapchain's notion of "current back buffer" is the next one to be

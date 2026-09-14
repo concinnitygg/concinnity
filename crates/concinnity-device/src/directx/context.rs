@@ -992,51 +992,159 @@ pub(super) struct Diagnostics {
     // `Cell<RenderStats>` is single-threaded and would race when workers encode
     // in parallel.
     pub draw_calls_accum: std::sync::atomic::AtomicU32,
-    // D3D12 validation message sink (`Some` only when validation=true).
-    pub info_queue: Option<ID3D12InfoQueue>,
 }
 
-pub(crate) struct DxContext {
-    // Win32 window. `Option` so a live `cn editor` world reload can MOVE the
-    // window (and its live cursor / menu / keymap state) into the rebuilt
-    // context; a normal context always holds `Some`. Access via `win`/`win_mut`.
-    pub(super) win_state: Option<Box<WindowState>>,
-    // The user's chosen fullscreen display mode, held on the monitor while the
-    // window is in (borderless) fullscreen and restored on exit / drop.
-    // Reconciled once per frame in `window_closed`.
-    pub(super) fullscreen_display: crate::win32::display_mode::FullscreenDisplayMode,
+// The render-resolution scene targets: the HDR color target, the main depth
+// buffer and its sampling SRV, the two pipeline resolutions, and the render
+// graph's transient pool. The resize path rebuilds all of it.
+pub(super) struct DxTargets {
+    pub hdr: HdrState,
+    pub depth: DepthState,
+    // GPU handle of the main-depth SRV. Written at init (and rewritten on
+    // resize) into a single reserved heap slot every depth-sampling decoration
+    // pass binds; the lazily-built line pass needs it past init.
+    pub main_depth_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub extent: Extents,
+    // Backing store for the render graph's transient render targets (the
+    // resources the aliasing planner manages). Owns each managed transient as a
+    // placed resource on an `ID3D12Heap`; features read them back by label and
+    // the executor's barrier registry resolves them the same way.
+    pub transient_pool: super::transient_pool::TransientResourcePool,
+}
 
-    // D3D12 core
-    pub(super) device: ID3D12Device,
-    pub(super) command_queue: ID3D12CommandQueue,
+// The world's scene assets: the IBL cubes and color-grading LUT, the area-light
+// tables, and the shared static-mesh geometry. None of it depends on the
+// swapchain.
+pub(super) struct DxSceneAssets {
+    // IBL resources. The fragment shader always samples these; when no
+    // EnvironmentMap was supplied, both are 1x1 gray fallback cubes and
+    // ViewUniforms::prefilter_mip_count is 0 (the shader takes the legacy
+    // ambient/skybox path).
+    pub env_map: EnvironmentMapTextures,
+    // 3D color-grading LUT sampled in the composite pass. Holds the declared
+    // `ColorLut` payload baked into a Texture3D, or a 2x2x2 identity LUT when
+    // the world declares none. Resolution-independent, so it is never rebuilt.
+    pub color_lut: GpuResource,
+    pub area_light: AreaLightState,
+    pub geometry: DxGeometry,
+}
+
+// The hardware ray-tracing scene: the acceleration structures and the policy
+// that keeps them current as the draw set changes.
+pub(super) struct DxRayTracing {
+    // BLAS/TLAS + geometry table. `Some` only when RT reflections are on, the
+    // GPU reports the DXR tier, and the build succeeded.
+    pub accel: Option<super::raytrace::RtAccelData>,
+    // How the acceleration structure is kept current as props move (the
+    // launch's `--rt-dynamic` request; `Auto` by default).
+    pub dynamic_mode: super::raytrace::RtDynamicMode,
+    // Whether skinned meshes join the BVH (the launch's `--rt-skinned-geometry`
+    // request; in by default). Clear it and the BVH covers static + instanced
+    // geometry only, isolating the skinned trace path.
+    pub skinned_geometry: bool,
+    // Set when a runtime change altered the RT-relevant draw set (a cloned prop,
+    // a streamed chunk added/removed) since the last update. Consumed once per
+    // frame by `rt_dynamic_update`, which folds the change into the BLAS head
+    // (`RtAccelData::refresh_topology`) -- reusing every unchanged BLAS and
+    // building only the new ones -- rather than ignoring it (the `Auto` dirty
+    // check only watches transforms of the prior set) or rebuilding every BLAS.
+    pub topology_dirty: bool,
+    // Total static vertices uploaded at init (the shared VB element count); the
+    // acceleration-structure build needs it to size the hit-shader vertex SSBO.
+    // Static-geometry rebuilds are not reflected (a pre-existing RT topology
+    // limitation).
+    pub static_vertex_count: usize,
+}
+
+// The device layer every per-world resource is built on: device, queue,
+// allocator, adapter and window, plus the capabilities and display settings
+// negotiated with them. The window is declared last so every COM object that
+// presents to it releases first.
+pub(super) struct DxHardware {
+    pub device: ID3D12Device,
+    pub command_queue: ID3D12CommandQueue,
     // Placement pool every persistent buffer and CPU-uploaded texture is
     // suballocated from, rather than one committed resource each. See
     // `directx/allocator.rs`.
-    pub(super) alloc: DeviceAllocator,
-
+    pub alloc: DeviceAllocator,
+    // IDXGIAdapter3 for `QueryVideoMemoryInfo`, the VRAM chip's source. `None`
+    // when the adapter does not expose the v3 interface; the chip then reads
+    // `0 MB`.
+    pub adapter: Option<IDXGIAdapter3>,
+    // D3D12 validation message sink (`Some` only when validation=true).
+    pub info_queue: Option<ID3D12InfoQueue>,
+    // Whether the GPU reports the DXR 1.1 tier. Gates the live RT-reflections
+    // toggle: an enable on a non-DXR GPU no-ops with a warning, mirroring the
+    // init fallback to SSR.
+    pub rt_capable: bool,
+    // The resolved HDR-output mode. (The DXGI format is in `swapchain.format`.)
+    pub hdr_mode: hdr_output::HdrOutputMode,
     // The swapchain config (ring depth + HDR request) this context was built
     // with, reported by `hot_swap_config` so a live editor reload reuses this
-    // backend (rebuilding only world content on the retained device + window +
-    // swapchain) instead of a full rebuild -- but only when the new world's
-    // `swapchain_config` still matches. See `reload_world`.
-    pub(super) swapchain_config: backend_init::SwapchainConfig,
-    // The resolved HDR-output mode, retained so a reload can reconstruct the
-    // `DeviceAndWindow` reuse bundle without re-negotiating HDR on the
-    // (unchanged) swapchain. (The DXGI format is already in `swapchain.format`.)
-    pub(super) hdr_mode: hdr_output::HdrOutputMode,
+    // hardware only when the new world's config still matches.
+    pub swapchain_config: backend_init::SwapchainConfig,
+    // The user's chosen fullscreen display mode, held on the monitor while the
+    // window is in (borderless) fullscreen and restored on exit / drop.
+    // Reconciled once per frame in `window_closed`.
+    pub fullscreen_display: crate::win32::display_mode::FullscreenDisplayMode,
+    // Win32 window. `Option` so a live `cn editor` world reload can MOVE the
+    // window (and its live cursor / menu / keymap state) into the rebuilt
+    // context; a normal context always holds `Some`. Access via `win`/`win_mut`.
+    pub win_state: Option<Box<WindowState>>,
+}
 
+impl DxHardware {
+    // The hardware an outgoing context hands its successor on a live editor
+    // `reload_world`: COM clones of the device, queue, adapter and info queue,
+    // with the window and fullscreen restore state moved out. The successor
+    // places into a fresh allocator; the outgoing world releases into its own.
+    pub(super) fn hand_over(&mut self) -> Result<Self, String> {
+        Ok(Self {
+            win_state: Some(
+                self.win_state
+                    .take()
+                    .ok_or("apply_world_reload: window already taken")?,
+            ),
+            fullscreen_display: std::mem::replace(
+                &mut self.fullscreen_display,
+                crate::win32::display_mode::FullscreenDisplayMode::new(),
+            ),
+            alloc: DeviceAllocator::new(&self.device, &self.command_queue, FRAMES),
+            device: self.device.clone(),
+            command_queue: self.command_queue.clone(),
+            adapter: self.adapter.clone(),
+            info_queue: self.info_queue.clone(),
+            rt_capable: self.rt_capable,
+            hdr_mode: self.hdr_mode,
+            swapchain_config: self.swapchain_config,
+        })
+    }
+
+    // Maximum extended-range multiplier on the HDR path, `None` on SDR.
+    pub(super) fn max_edr(&self) -> Option<f32> {
+        match self.hdr_mode {
+            hdr_output::HdrOutputMode::Hdr { max_edr, .. } => Some(max_edr),
+            hdr_output::HdrOutputMode::Sdr => None,
+        }
+    }
+
+    // HDR encoding (scRGB-linear vs PQ) on the HDR path, `None` on SDR.
+    pub(super) fn hdr_encoding(&self) -> Option<hdr_output::HdrEncoding> {
+        match self.hdr_mode {
+            hdr_output::HdrOutputMode::Hdr { encoding, .. } => Some(encoding),
+            hdr_output::HdrOutputMode::Sdr => None,
+        }
+    }
+}
+
+pub(crate) struct DxContext {
     pub(super) swapchain: SwapchainState,
 
-    // Off-screen HDR scene target. See [`HdrState`].
-    pub(super) hdr: HdrState,
-
-    pub(super) extent: Extents,
+    // Render-resolution scene targets. See [`DxTargets`].
+    pub(super) targets: DxTargets,
 
     // Temporal upscaling (AMD FidelityFX FSR3). See [`UpscaleState`].
     pub(super) upscale: UpscaleState,
-
-    // Main depth buffer + its DSV heap. See [`DepthState`].
-    pub(super) depth: DepthState,
 
     // Shadow map resources. See [`ShadowState`].
     pub(super) shadow: ShadowState,
@@ -1044,29 +1152,14 @@ pub(crate) struct DxContext {
     // Spot shadow map resources. See [`SpotShadowState`].
     pub(super) spot_shadow: SpotShadowState,
 
-    // Rectangular area-light resources. See [`AreaLightState`].
-    pub(super) area_light: AreaLightState,
-
-    // IBL resources. The fragment shader always samples these; when no
-    // EnvironmentMap was supplied, both are 1×1 gray fallback cubes and
-    // ViewUniforms::prefilter_mip_count is 0 (the shader takes the legacy
-    // ambient/skybox path).
-    pub(super) env_map: EnvironmentMapTextures,
-
-    // 3D color-grading LUT sampled in the composite pass. Holds the declared
-    // `ColorLut` payload baked into a Texture3D, or a 2×2×2 identity LUT when
-    // the world declares none (the grade is then a no-op at any `lut_strength`).
-    // Resolution-independent, so it is never rebuilt.
-    pub(super) color_lut: GpuResource,
+    // Scene assets. See [`DxSceneAssets`].
+    pub(super) scene: DxSceneAssets,
 
     // Shader-visible descriptor heaps + samplers + scene texture pools. See
     // `DxDescriptors`.
     pub(super) descriptors: DxDescriptors,
     // Draw list + cull inputs + folded record counts. See [`DrawState`].
     pub(super) draw: DrawState,
-
-    // Shared static-mesh geometry buffers + views. See `DxGeometry`.
-    pub(super) geometry: DxGeometry,
 
     // Streamed-mesh byte-range sub-allocators. See [`MeshStreamState`].
     pub(super) mesh_stream: MeshStreamState,
@@ -1129,13 +1222,6 @@ pub(crate) struct DxContext {
     // SSAO (GTAO). See [`SsaoState`].
     pub(super) ssao: SsaoState,
 
-    // Backing store for the render graph's transient render targets (the
-    // resources the aliasing planner manages). Owns each managed transient as a
-    // placed resource on an `ID3D12Heap`; features read them back by label and
-    // the executor's barrier registry resolves them the same way. Rebuilt on
-    // swapchain resize. Today it manages `ao_output`.
-    pub(super) transient_pool: super::transient_pool::TransientResourcePool,
-
     // SSR. `Some` when `PostProcessConfig.ssr` is set, or when SSGI is on
     // (SSGI reuses the depth + normal pre-pass G-buffer). The resolve half
     // (`ssr.resolve`) is `Some` only when SSR itself is authored on; with it
@@ -1161,7 +1247,7 @@ pub(crate) struct DxContext {
         Option<super::post::reflection_composite::ReflectionCompositeResources>,
 
     // Hardware ray-traced reflections (DXR). `rt_reflections` (output target +
-    // RtParams UBO + root sig + flat/textured PSOs) and `rt_accel` (BLAS/TLAS +
+    // RtParams UBO + root sig + flat/textured PSOs) and `rt.accel` (BLAS/TLAS +
     // geometry table) are both `Some` only when the world enables
     // `ray_traced_reflections`, the GPU supports the DXR tier, and the DXC
     // compile + acceleration-structure build succeeded; otherwise the graph
@@ -1170,21 +1256,8 @@ pub(crate) struct DxContext {
     // post stack consumes via `scene_srv_for_post`. `FrameGraphInputs::
     // rt_reflections_enabled` is gated on both being `Some`.
     pub(super) rt_reflections: Option<super::post::rt_reflections::RtReflectionsResources>,
-    pub(super) rt_accel: Option<super::raytrace::RtAccelData>,
-    // How the acceleration structure is kept current as props move (the
-    // launch's `--rt-dynamic` request; `Auto` by default).
-    pub(super) rt_dynamic_mode: super::raytrace::RtDynamicMode,
-    // Whether skinned meshes join the BVH (the launch's `--rt-skinned-geometry`
-    // request; in by default). Clear it and the BVH covers static + instanced
-    // geometry only, isolating the skinned trace path.
-    pub(super) rt_skinned_geometry: bool,
-    // Set when a runtime change altered the RT-relevant draw set (a cloned prop,
-    // a streamed chunk added/removed) since the last update. Consumed once per
-    // frame by `rt_dynamic_update`, which folds the change into the BLAS head
-    // (`RtAccelData::refresh_topology`) -- reusing every unchanged BLAS and
-    // building only the new ones -- rather than ignoring it (the `Auto` dirty
-    // check only watches transforms of the prior set) or rebuilding every BLAS.
-    pub(super) rt_topology_dirty: bool,
+    // The ray-tracing scene. See [`DxRayTracing`].
+    pub(super) rt: DxRayTracing,
 
     // Projected decals. See [`DecalState`].
     pub(super) decal: DecalState,
@@ -1192,11 +1265,6 @@ pub(crate) struct DxContext {
     // World-space line pass state: the resources, built on the first frame
     // that publishes lines. See [`super::line::LineState`].
     pub(super) lines: super::line::LineState,
-
-    // GPU handle of the main-depth SRV. Written at init (and rewritten on
-    // resize) into a single reserved heap slot every depth-sampling decoration
-    // pass binds; the lazily-built line pass needs it past init.
-    pub(super) main_depth_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
 
     // Raymarched SDF volumes. `Some` when at least one `SdfVolume` whose
     // `fragment_shader` resolves to `.hlsl` survived the init filter, i.e.
@@ -1252,32 +1320,12 @@ pub(crate) struct DxContext {
     // HLSL. See [`super::init::pipelines::BindlessMainShaders`].
     pub(super) bindless_main_shaders: super::init::pipelines::BindlessMainShaders,
 
-    // IDXGIAdapter3 captured at init for `QueryVideoMemoryInfo`, the VRAM
-    // chip's source. `None` when the adapter does not expose the v3
-    // interface; the chip then reads `0 MB` and the rest of the overlay
-    // still works. See `init/window.rs`.
-    pub(super) adapter: Option<IDXGIAdapter3>,
-
     // Auto-exposure (EV adaptation) state. See [`AutoExposureState`].
     pub(super) auto_exposure: AutoExposureState,
-
-    // Reported maximum extended-range color-component multiplier captured
-    // from the resolved [`HdrOutputMode`] at init. `Some` only when the
-    // renderer is on the HDR path (the swapchain was created in
-    // `RGBA16Float` + scRGB-linear color space). Surfaced through
-    // `RenderStats.max_edr` so the `StatHud` overlay can render an `EDR
-    // ×X.X` chip. Mirrors `MtlContext.max_edr`.
-    pub(super) max_edr: Option<f32>,
 
     // Per-pass GPU timestamp queries. Read at the top of `draw_frame` after
     // the matching fence wait so the CPU sees a fully committed block.
     pub(super) timestamps: TimestampState,
-
-    // Resolved HDR encoding (scRGB-linear vs PQ) captured from the init-time
-    // `HdrOutputMode`. `None` on the SDR path. Only the headless `screenshot`
-    // path reads it, to decode the float swapchain for display. Mirrors the
-    // `encoding` the Vulkan screenshot path pulls from `VkContext::hdr_mode`.
-    pub(super) hdr_encoding: Option<hdr_output::HdrEncoding>,
 
     // Shader hot-reload state. See [`HotReloadState`].
     pub(super) hot_reload: HotReloadState,
@@ -1293,19 +1341,12 @@ pub(crate) struct DxContext {
     // layout.
     pub(super) quality_slots: super::quality::QualitySlotHandles,
 
-    // Whether the GPU reports the DXR 1.1 tier (queried once at init). Gates the
-    // live RT-reflections toggle: an enable on a non-DXR GPU no-ops with a
-    // warning, mirroring the init fallback to SSR.
-    pub(super) rt_capable: bool,
-    // Total static vertices uploaded at init (the shared VB element count); the
-    // acceleration-structure build needs it to size the hit-shader vertex SSBO.
-    // There is no separate count field, so it is captured here for a live RT
-    // build. Static-geometry rebuilds are not reflected (a pre-existing RT
-    // topology limitation).
-    pub(super) rt_static_vertex_count: usize,
-
     // Scene-captured reflection probes. See [`ProbeState`].
     pub(super) probe: ProbeState,
+
+    // Device, queue, allocator and window. Declared last so every resource
+    // above releases before the device and the window go.
+    pub(super) hw: DxHardware,
 }
 
 // uniforms.view_ubo_ptrs are host-mapped and only touched on the render thread.
@@ -1442,12 +1483,12 @@ impl DxContext {
         // Tick the placement pool: the same fence wait retired every list that
         // could still reference a range freed `FRAMES + 1` ticks ago, so those
         // bytes become placeable again here.
-        self.alloc.begin_frame();
+        self.hw.alloc.begin_frame();
 
         // Periodic footprint readout, for measuring the pool under streaming
         // churn at scale. Inert unless debug logging is enabled.
         if self.stream.frame.is_multiple_of(1024) && tracing::enabled!(tracing::Level::DEBUG) {
-            tracing::debug!("device allocator: {}", self.alloc.stats());
+            tracing::debug!("device allocator: {}", self.hw.alloc.stats());
         }
 
         // Advance the staggered reflection-probe bake. Called after the frame-slot
@@ -1498,6 +1539,7 @@ impl DxContext {
         // "VRAM N MB" chip reports. Zero when the adapter does not expose the
         // v3 interface (pre-WDDM 2.0).
         let vram_bytes = self
+            .hw
             .adapter
             .as_ref()
             .and_then(|a| {
@@ -1612,7 +1654,7 @@ impl DxContext {
             // The fence wait alone so far; `Present` below adds to it.
             gpu_wait_us: gpu_wait.micros(),
             vram_bytes,
-            transient_pool_bytes: self.transient_pool.allocated_bytes(),
+            transient_pool_bytes: self.targets.transient_pool.allocated_bytes(),
             pass_times_us,
             // EMA-adapted exposure value, surfaced to the StatHud `EV ±X.XX`
             // chip. `None` when the world stayed on the authored static
@@ -1621,7 +1663,7 @@ impl DxContext {
             auto_exposure_ev: self.auto_exposure.state.as_ref().map(|s| s.current_ev),
             // Captured from the resolved `HdrOutputMode` at init. `None` on
             // the SDR path (chip blanks). Mirrors `MtlContext::render_stats`.
-            max_edr: self.max_edr,
+            max_edr: self.hw.max_edr(),
         });
 
         // Flush any D3D12 validation messages from the previous frame.
@@ -1739,8 +1781,8 @@ impl DxContext {
         // and encode_shadow_pass re-rasterizes only the masked slices. Mirrors
         // Metal; no-op (mask stays 0, uniforms stay empty) when shadows are off.
         if !self.shadow.dsvs.is_empty() {
-            let aspect =
-                self.extent.render_width.max(1) as f32 / self.extent.render_height.max(1) as f32;
+            let aspect = self.targets.extent.render_width.max(1) as f32
+                / self.targets.extent.render_height.max(1) as f32;
             let fresh = csm::compute_shadow_uniforms(csm::ShadowUniformInputs {
                 view: self.view.matrix,
                 cam_pos,
@@ -1798,10 +1840,10 @@ impl DxContext {
                 lines,
             },
             crate::directx::draw::RecordFrameResolution {
-                width: self.extent.render_width.max(1),
-                height: self.extent.render_height.max(1),
-                output_width: self.extent.output_width.max(1),
-                output_height: self.extent.output_height.max(1),
+                width: self.targets.extent.render_width.max(1),
+                height: self.targets.extent.render_height.max(1),
+                output_width: self.targets.extent.output_width.max(1),
+                output_height: self.targets.extent.output_height.max(1),
             },
             world_hidden,
         )?;
@@ -1873,7 +1915,7 @@ impl DxContext {
         submission.push(Some(end_handle));
         // SAFETY: every command list in the submission is live and closed, and the slice outlives
         // the call.
-        unsafe { self.command_queue.ExecuteCommandLists(&submission) };
+        unsafe { self.hw.command_queue.ExecuteCommandLists(&submission) };
 
         // Present. Sync interval 1 locks to the display refresh (vsync); 0 runs
         // uncapped. The tearing present flag is required (and only valid) at
@@ -1908,7 +1950,7 @@ impl DxContext {
         if let Err(e) = present_result.ok() {
             self.flush_validation();
             // SAFETY: a property query on a live COM object; it only reads.
-            let reason = unsafe { self.device.GetDeviceRemovedReason() };
+            let reason = unsafe { self.hw.device.GetDeviceRemovedReason() };
             return Err(super::error::classify_present_failure(
                 e.code(),
                 reason
@@ -1929,8 +1971,12 @@ impl DxContext {
         self.frame_sync.next_fence_value.set(next_val + 1);
         self.frame_sync.fence_values[frame] = next_val;
         // SAFETY: the fence and the event were created from this device and are live for the call.
-        unsafe { self.command_queue.Signal(&self.frame_sync.fence, next_val) }
-            .map_err(|e| super::error::map_hresult(e.code(), "Signal"))?;
+        unsafe {
+            self.hw
+                .command_queue
+                .Signal(&self.frame_sync.fence, next_val)
+        }
+        .map_err(|e| super::error::map_hresult(e.code(), "Signal"))?;
 
         self.current_frame = (self.current_frame + 1) % FRAMES;
         Ok(())
@@ -1938,7 +1984,7 @@ impl DxContext {
 
     // Drain any queued D3D12 validation messages and emit them via tracing.
     fn flush_validation(&self) {
-        if let Some(ref iq) = self.diagnostics.info_queue {
+        if let Some(ref iq) = self.hw.info_queue {
             drain_info_queue(iq);
         }
     }
@@ -2025,7 +2071,7 @@ impl DxContext {
     // `FrameGraphInputs::rt_reflections_enabled` in `record_frame::seed_inputs`
     // and the `scene_srv_for_post` precedence.
     pub(super) fn rt_reflections_active(&self) -> bool {
-        self.rt_reflections.is_some() && self.rt_accel.is_some()
+        self.rt_reflections.is_some() && self.rt.accel.is_some()
     }
 
     // True when a reflection resolve (SSR resolve or RT reflections) runs this
@@ -2045,15 +2091,19 @@ impl DxContext {
     // that additionally needs it in some other state (the MSAA resolve, a
     // refraction snapshot) transitions from there and back within its own body.
     pub(in crate::directx) fn hdr_scene_target(&self) -> &ID3D12Resource {
-        self.hdr.resolve.as_ref().unwrap_or(&self.hdr.color)
+        self.targets
+            .hdr
+            .resolve
+            .as_ref()
+            .unwrap_or(&self.targets.hdr.color)
     }
 
     // Render-target view of the spine `hdr_scene_target` returns. Every
     // decoration pass on the hdr_resolve chain binds this as its sole RTV.
     pub(in crate::directx) fn hdr_scene_rtv(&self) -> D3D12_CPU_DESCRIPTOR_HANDLE {
-        match self.hdr.resolve_rtv {
+        match self.targets.hdr.resolve_rtv {
             Some(rtv) => rtv,
-            None => self.hdr.color_rtv,
+            None => self.targets.hdr.color_rtv,
         }
     }
 
@@ -2109,7 +2159,7 @@ impl DxContext {
     }
 
     // Whether a material opted into Layer 2 see-through glass AND the device can
-    // drive it (the mesh pipelines built). Independent of `rt_accel`, so it
+    // drive it (the mesh pipelines built). Independent of `rt.accel`, so it
     // answers "would the see-through path run if RT is on" -- used at the RT-BLAS
     // build, which must exclude the meshes it will reroute before the
     // acceleration structure it gates on exists. Data-driven: see-through is
@@ -2167,14 +2217,16 @@ impl DxContext {
     // successor and calls no window method afterward), so the unwrap never fires.
     #[inline]
     pub(super) fn win(&self) -> &WindowState {
-        self.win_state
+        self.hw
+            .win_state
             .as_ref()
             .expect("DxContext window state present")
     }
 
     #[inline]
     pub(super) fn win_mut(&mut self) -> &mut WindowState {
-        self.win_state
+        self.hw
+            .win_state
             .as_mut()
             .expect("DxContext window state present")
     }
@@ -2185,10 +2237,11 @@ impl DxContext {
         // Partial field borrow (not `win_mut`) so `fullscreen_display` can be
         // borrowed disjointly in the same call.
         frame_tick(
-            self.win_state
+            self.hw
+                .win_state
                 .as_mut()
                 .expect("DxContext window state present"),
-            &mut self.fullscreen_display,
+            &mut self.hw.fullscreen_display,
         )
     }
 
@@ -2197,7 +2250,7 @@ impl DxContext {
         let val = self.frame_sync.next_fence_value.get();
         self.frame_sync.next_fence_value.set(val + 1);
         // SAFETY: the fence and the event were created from this device and are live for the call.
-        if unsafe { self.command_queue.Signal(&self.frame_sync.fence, val) }.is_ok()
+        if unsafe { self.hw.command_queue.Signal(&self.frame_sync.fence, val) }.is_ok()
             // SAFETY: the fence and the event were created from this device and are live for the
             // call.
             && unsafe { self.frame_sync.fence.GetCompletedValue() } < val
@@ -2304,7 +2357,7 @@ impl DxContext {
     // restores the desktop mode on leaving fullscreen), so a choice made in
     // any window mode takes effect when fullscreen is (or becomes) active.
     pub(crate) fn set_display_mode(&mut self, mode: display_mode::DisplayMode) {
-        self.fullscreen_display.set_desired(mode);
+        self.hw.fullscreen_display.set_desired(mode);
     }
 
     // Replace the live post-process tunables, pushed to the bloom + composite
@@ -2414,16 +2467,16 @@ impl DxContext {
     // pixels, so the overlay forward / inverse transforms stay consistent.
     pub(crate) fn logical_size(&self) -> (f32, f32) {
         (
-            self.extent.output_width as f32,
-            self.extent.output_height as f32,
+            self.targets.extent.output_width as f32,
+            self.targets.extent.output_height as f32,
         )
     }
 
     // Device capability flags for the settings menu. RT reflects the DXR-tier
-    // query made at init (`rt_capable`).
+    // query made at init (`hw.rt_capable`).
     pub(crate) fn capabilities(&self) -> backend::DeviceCapabilities {
         backend::DeviceCapabilities {
-            ray_tracing: self.rt_capable,
+            ray_tracing: self.hw.rt_capable,
             selectable_upscaler: true,
             // The cull BVH + RT tables key fixed build-time slot indices and
             // cannot refit; only the runtime-append region recycles (tracked
@@ -2442,7 +2495,7 @@ impl DxContext {
         use concinnity_core::render::backend::{
             GpuClassInput, GpuProfile, GpuVendor, classify_tier,
         };
-        let Some(adapter) = self.adapter.as_ref() else {
+        let Some(adapter) = self.hw.adapter.as_ref() else {
             return GpuProfile::UNKNOWN;
         };
         // SAFETY: a property query on a live COM object; it only reads.
@@ -2492,7 +2545,7 @@ impl Drop for DxContext {
         // Persist and release the pipeline library. `win_state` is `None` only
         // on the outgoing context of a `reload_world`, whose successor keeps
         // the device and the installed library.
-        if self.win_state.is_some() {
+        if self.hw.win_state.is_some() {
             super::pso_library::shutdown();
             // Also writes whatever shader artifacts were compiled lazily since
             // init's own checkpoint.
@@ -2501,7 +2554,7 @@ impl Drop for DxContext {
         // Restore cursor clip + visibility so the OS isn't left in a bad state
         // if the caller didn't release explicitly. `None` on the outgoing context
         // of a `reload_world` (the window moved to its successor), so guard it.
-        if let Some(ws) = self.win_state.as_mut() {
+        if let Some(ws) = self.hw.win_state.as_mut() {
             do_release_cursor(ws);
         }
         // Unmap persistent CBV mappings (view + shadow).

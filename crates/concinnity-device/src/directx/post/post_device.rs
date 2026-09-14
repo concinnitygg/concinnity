@@ -376,10 +376,10 @@ impl crate::directx::context::DxContext {
     // reflection-probe set.
     pub(in crate::directx) fn post_device(&self, frame: usize) -> DxPostDevice<'_> {
         DxPostDevice {
-            device: &self.device,
+            device: &self.hw.device,
             descriptors: &self.post,
             srv_heap: &self.descriptors.srv_heap,
-            info_queue: self.diagnostics.info_queue.as_ref(),
+            info_queue: self.hw.info_queue.as_ref(),
             probes: Some(DxPostProbes {
                 cube_table: self.probe_cube_table_gpu(),
                 set_cbv: com::gpu_va(&self.probe.set_cbvs[frame]),
@@ -395,8 +395,8 @@ impl crate::directx::context::DxContext {
             resource: self.hdr_scene_target(),
             rtv: self.hdr_scene_rtv(),
             extent: FullscreenExtent {
-                width: self.extent.render_width,
-                height: self.extent.render_height,
+                width: self.targets.extent.render_width,
+                height: self.targets.extent.render_height,
             },
         }
     }

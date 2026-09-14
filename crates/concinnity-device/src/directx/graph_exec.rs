@@ -633,7 +633,7 @@ impl DxContext {
         #[cfg(debug_assertions)]
         render_graph::assert_slot_aliasing_sound(
             graph,
-            self.transient_pool.slot_labels(),
+            self.targets.transient_pool.slot_labels(),
             "directx",
         );
         // The graph now carries a two-queue schedule (a `PassQueue` per pass plus
@@ -895,10 +895,15 @@ impl DxContext {
     ) -> DxAliasBarriers<'a> {
         let mut table = Vec::new();
         for (idx, res) in graph.resources.iter().enumerate() {
-            if self.transient_pool.alias_predecessor(res.label).is_none() {
+            if self
+                .targets
+                .transient_pool
+                .alias_predecessor(res.label)
+                .is_none()
+            {
                 continue;
             }
-            if let Some(r) = self.transient_pool.resource_for(res.label)
+            if let Some(r) = self.targets.transient_pool.resource_for(res.label)
                 && res.lifetime.first < graph.passes.len()
             {
                 table.push(DxAliasBarrier {
@@ -985,6 +990,7 @@ impl DxContext {
             // back, so they rest sampled. One buffer, not per-frame.
             "cluster_light_list" => Some((&self.light_cull.cluster_buffer, SAMPLED)),
             "ao_output" => self
+                .targets
                 .transient_pool
                 .resource_for("ao_output")
                 .map(|r| (r, SAMPLED)),
@@ -993,6 +999,7 @@ impl DxContext {
             // the finer octaves in between never leave the node. Pooled, so it
             // resolves through the transient pool exactly like `ao_output`.
             "bloom_top" => self
+                .targets
                 .transient_pool
                 .resource_for("bloom_top")
                 .map(|r| (r, SAMPLED)),
@@ -1027,7 +1034,10 @@ impl DxContext {
             // restore returns it there for the next main pass. This is the case
             // that keeps resting per-resource rather than per-class -- shadow_map
             // is the same class and rests sampled.
-            "hdr_depth" => Some((&self.depth.resource, D3D12_RESOURCE_STATE_DEPTH_WRITE)),
+            "hdr_depth" => Some((
+                &self.targets.depth.resource,
+                D3D12_RESOURCE_STATE_DEPTH_WRITE,
+            )),
             // The multisample color attachment, which exists only when the
             // world is multisampled -- and so does the graph resource. It rests
             // in RENDER_TARGET and no pass ever samples it, so every derived
@@ -1036,19 +1046,20 @@ impl DxContext {
             // RENDER_TARGET <-> RESOLVE_SOURCE pair intra-pass rather than a
             // frame-path transition the graph left behind.
             "hdr_color" => self
+                .targets
                 .hdr
                 .resolve
                 .is_some()
-                .then_some((&self.hdr.color, D3D12_RESOURCE_STATE_RENDER_TARGET)),
+                .then_some((&self.targets.hdr.color, D3D12_RESOURCE_STATE_RENDER_TARGET)),
             // The single-sample scene spine every decoration blends into. Which
             // object backs it, and where it rests, both follow MSAA: with MSAA
             // on it is the resolve target and rests sampled; with MSAA off there
             // is no resolve step and `hdr.color` *is* the spine, left in
             // RENDER_TARGET for the next frame's main pass. Its class is the
             // same either way.
-            "hdr_resolve" => Some(match &self.hdr.resolve {
+            "hdr_resolve" => Some(match &self.targets.hdr.resolve {
                 Some(resolve) => (resolve, SAMPLED),
-                None => (&self.hdr.color, D3D12_RESOURCE_STATE_RENDER_TARGET),
+                None => (&self.targets.hdr.color, D3D12_RESOURCE_STATE_RENDER_TARGET),
             }),
             // The scene-with-reflections the post stack consumes. Declared by
             // the graph exactly when a reflection resolve runs, which is the
@@ -1102,7 +1113,7 @@ impl DxContext {
             cam_pos: [params.cam_pos[0], params.cam_pos[1], params.cam_pos[2], 0.0],
             viewport: [params.width as f32, params.height as f32],
             time: params.elapsed,
-            prefilter_mip_count: self.env_map.prefilter_mip_count as f32,
+            prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
             sky_rot: self.view.sky_rot,
         }
     }
@@ -1123,7 +1134,7 @@ impl DxContext {
             camera_pos: [params.cam_pos[0], params.cam_pos[1], params.cam_pos[2], 0.0],
             viewport: [params.width as f32, params.height as f32],
             time: params.elapsed,
-            prefilter_mip_count: self.env_map.prefilter_mip_count as f32,
+            prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
             sky_rot: self.view.sky_rot,
             sun_dir,
             sun_color,

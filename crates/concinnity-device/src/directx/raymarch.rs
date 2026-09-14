@@ -1234,7 +1234,7 @@ impl DxContext {
         // color AND the raymarched-surface depth (which flowed into
         // `depth.resource` via SV_DepthLessEqual). The MSAA-off path
         // skips the resolve and renders into hdr_color directly.
-        let msaa = self.hdr.resolve.is_some();
+        let msaa = self.targets.hdr.resolve.is_some();
 
         // Pre-pass: snapshot the scene spine into `hdr_resolve_copy` for
         // refractive user shaders. A fragment cannot read the attachment it is
@@ -1281,12 +1281,17 @@ impl DxContext {
         // on. Depth stays in DEPTH_WRITE; the DSV is writable + the LESS_EQUAL
         // test composites against existing rasterized depth.
 
-        let w = self.extent.render_width;
-        let h = self.extent.render_height;
+        let w = self.targets.extent.render_width;
+        let h = self.targets.extent.render_height;
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {
-            cmd.OMSetRenderTargets(1, Some(&self.hdr.color_rtv), false, Some(&self.depth.dsv));
+            cmd.OMSetRenderTargets(
+                1,
+                Some(&self.targets.hdr.color_rtv),
+                false,
+                Some(&self.targets.depth.dsv),
+            );
             let vp = D3D12_VIEWPORT {
                 TopLeftX: 0.0,
                 TopLeftY: 0.0,
@@ -1345,7 +1350,7 @@ impl DxContext {
         // draws above already wrote it, so there is nothing to resolve.
         if msaa {
             let hdr_color_to_resolve_src = transition_barrier(
-                &self.hdr.color,
+                &self.targets.hdr.color,
                 D3D12_RESOURCE_STATE_RENDER_TARGET,
                 D3D12_RESOURCE_STATE_RESOLVE_SOURCE,
             );
@@ -1358,7 +1363,13 @@ impl DxContext {
             // and slice these commands name is live for the call.
             unsafe {
                 cmd.ResourceBarrier(&[hdr_color_to_resolve_src, resolve_to_dst]);
-                cmd.ResolveSubresource(self.hdr_scene_target(), 0, &self.hdr.color, 0, HDR_FORMAT);
+                cmd.ResolveSubresource(
+                    self.hdr_scene_target(),
+                    0,
+                    &self.targets.hdr.color,
+                    0,
+                    HDR_FORMAT,
+                );
             }
             let resolve_back = transition_barrier(
                 self.hdr_scene_target(),
@@ -1366,7 +1377,7 @@ impl DxContext {
                 D3D12_RESOURCE_STATE_RENDER_TARGET,
             );
             let hdr_color_back_to_rt = transition_barrier(
-                &self.hdr.color,
+                &self.targets.hdr.color,
                 D3D12_RESOURCE_STATE_RESOLVE_SOURCE,
                 D3D12_RESOURCE_STATE_RENDER_TARGET,
             );

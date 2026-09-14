@@ -30,7 +30,7 @@ impl DxContext {
             return Ok(());
         }
         let upload = create_buffer(
-            &self.alloc,
+            &self.hw.alloc,
             data.len() as u64,
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -48,7 +48,7 @@ impl DxContext {
         }
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
-        one_shot_submit(&self.device, &self.command_queue, |cmd| unsafe {
+        one_shot_submit(&self.hw.device, &self.hw.command_queue, |cmd| unsafe {
             let to_dst = transition_barrier(dest, usage_state, D3D12_RESOURCE_STATE_COPY_DEST);
             cmd.ResourceBarrier(&[to_dst]);
             cmd.CopyBufferRegion(dest, offset, &*upload, 0, data.len() as u64);
@@ -130,7 +130,7 @@ impl DxContext {
         // base is an exact vertex index.
         let vert_bytes = bytemuck::cast_slice(vertices);
         self.write_geometry_region(
-            &self.geometry.vertex_buffer,
+            &self.scene.geometry.vertex_buffer,
             D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
             v_off as u64,
             vert_bytes,
@@ -140,7 +140,7 @@ impl DxContext {
         let rebased: Vec<u32> = indices.iter().map(|&i| u32::from(i) + base).collect();
         let idx_bytes = bytemuck::cast_slice(&rebased);
         self.write_geometry_region(
-            &self.geometry.index_buffer,
+            &self.scene.geometry.index_buffer,
             D3D12_RESOURCE_STATE_INDEX_BUFFER,
             i_off as u64,
             idx_bytes,
@@ -152,7 +152,7 @@ impl DxContext {
         obj.resident = true;
         // The mesh joins the RT-relevant draw set at a freshly allocated region;
         // the next RT update builds its BLAS over the new slice.
-        self.rt_topology_dirty = true;
+        self.rt.topology_dirty = true;
         Ok(())
     }
 
@@ -245,7 +245,7 @@ impl DxContext {
 
         let vert_bytes = bytemuck::cast_slice(vertices);
         self.write_geometry_region(
-            &self.geometry.vertex_buffer,
+            &self.scene.geometry.vertex_buffer,
             D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
             v_off,
             vert_bytes,
@@ -253,7 +253,7 @@ impl DxContext {
         let rebased: Vec<u32> = indices.iter().map(|&i| u32::from(i) + base).collect();
         let idx_bytes = bytemuck::cast_slice(&rebased);
         self.write_geometry_region(
-            &self.geometry.index_buffer,
+            &self.scene.geometry.index_buffer,
             D3D12_RESOURCE_STATE_INDEX_BUFFER,
             i_off_bytes,
             idx_bytes,
@@ -266,7 +266,7 @@ impl DxContext {
             let alt_rebased: Vec<u32> = alt_idx.iter().map(|&i| u32::from(i) + base).collect();
             let alt_bytes = bytemuck::cast_slice(&alt_rebased);
             self.write_geometry_region(
-                &self.geometry.index_buffer,
+                &self.scene.geometry.index_buffer,
                 D3D12_RESOURCE_STATE_INDEX_BUFFER,
                 alt_off_bytes,
                 alt_bytes,
@@ -286,7 +286,7 @@ impl DxContext {
         // and flag the topology: the next RT update rebuilds this slot's BLAS
         // rather than reusing the stale one.
         slot.geometry_generation = slot.geometry_generation.wrapping_add(1);
-        self.rt_topology_dirty = true;
+        self.rt.topology_dirty = true;
         Ok(())
     }
 
@@ -315,7 +315,7 @@ impl DxContext {
         self.draw.objects[draw_idx].resident = false;
         // The mesh leaves the RT-relevant draw set; the next RT update drops its
         // BLAS (deferred-freed once in-flight traces retire).
-        self.rt_topology_dirty = true;
+        self.rt.topology_dirty = true;
         Ok(())
     }
 

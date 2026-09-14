@@ -312,11 +312,11 @@ impl DxContext {
         if !has_lines || self.lines.resources.is_some() || self.lines.build_failed {
             return;
         }
-        let info_queue = self.diagnostics.info_queue.clone();
+        let info_queue = self.hw.info_queue.clone();
         match LineResources::new(
-            &self.alloc,
-            self.hdr.msaa_samples,
-            self.main_depth_srv_gpu,
+            &self.hw.alloc,
+            self.targets.hdr.msaa_samples,
+            self.targets.main_depth_srv_gpu,
             info_queue.as_ref(),
             self.hot_reload.enabled,
         ) {
@@ -368,7 +368,7 @@ impl DxContext {
         // that read it last trip.
         let vertex_bytes: &[u8] = bytemuck::cast_slice(vertices);
         lines.vertices.reserve(
-            &self.alloc,
+            &self.hw.alloc,
             frame_idx,
             align_up(vertex_bytes.len() as u64, UPLOAD_ALIGN),
         )?;
@@ -388,8 +388,8 @@ impl DxContext {
         // and the next consumer's barrier takes it back out.
         let scene_rtv = self.hdr_scene_rtv();
 
-        let w = self.extent.render_width;
-        let h = self.extent.render_height;
+        let w = self.targets.extent.render_width;
+        let h = self.targets.extent.render_height;
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {

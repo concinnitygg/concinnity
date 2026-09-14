@@ -219,7 +219,7 @@ impl DxContext {
             shadow_map_size: self.shadow.map_size,
             hdr_width: width,
             hdr_height: height,
-            hdr_sample_count: self.hdr.msaa_samples,
+            hdr_sample_count: self.targets.hdr.msaa_samples,
             bindless_cull_enabled,
             bloom_enabled: self.post_process.bloom_intensity > 0.0,
             velocity_enabled: taa_on || upscale_on,
@@ -288,7 +288,7 @@ impl DxContext {
             // Hardware ray-traced reflections (DXR inline `RayQuery`). On when
             // the world authored `ray_traced_reflections`, the GPU supports the
             // DXR tier, and the DXC compile + acceleration-structure build
-            // succeeded (`rt_reflections` + `rt_accel` both live). The shared
+            // succeeded (`rt_reflections` + `rt.accel` both live). The shared
             // builder then seeds `RtReflections` in the SsrResolve slot and omits
             // `SsrResolve`; otherwise it falls back to SSR.
             rt_reflections_enabled: self.rt_reflections_active(),
@@ -416,7 +416,7 @@ impl DxContext {
             elapsed,
             reflections_enabled,
             cam_pos: [cam_pos[0], cam_pos[1], cam_pos[2]],
-            prefilter_mip_count: self.env_map.prefilter_mip_count as f32,
+            prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
             shade_mode: self.shade_mode(),
             _end_pad: 0.0,
             sky_rot: self.view.sky_rot,

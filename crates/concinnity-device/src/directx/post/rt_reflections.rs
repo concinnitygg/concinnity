@@ -412,7 +412,7 @@ impl DxContext {
         aspect: f32,
         cam_pos: [f32; 3],
     ) {
-        let (rt, accel, gbuffer) = match (&self.rt_reflections, &self.rt_accel, &self.gbuffer) {
+        let (rt, accel, gbuffer) = match (&self.rt_reflections, &self.rt.accel, &self.gbuffer) {
             (Some(r), Some(a), Some(g)) => (r, a, g),
             _ => return,
         };
@@ -438,7 +438,7 @@ impl DxContext {
             cam_pos,
             sun_dir: self.fog.sun_dir,
             sun_color: self.fog.sun_color,
-            prefilter_mip_count: self.env_map.prefilter_mip_count as f32,
+            prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
             sky_rot: self.view.sky_rot,
         });
         // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
@@ -472,8 +472,8 @@ impl DxContext {
         // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&[out_to_rt]) };
 
-        let w = self.extent.render_width;
-        let h = self.extent.render_height;
+        let w = self.targets.extent.render_width;
+        let h = self.targets.extent.render_height;
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {
@@ -502,11 +502,17 @@ impl DxContext {
             // Root SRVs: TLAS / vertex / index / geometry table (by GPU virtual
             // address; inline ray tracing reads the TLAS through a root SRV).
             cmd.SetGraphicsRootShaderResourceView(1, accel.tlas_gva());
-            cmd.SetGraphicsRootShaderResourceView(2, com::gpu_va(&self.geometry.vertex_buffer));
-            cmd.SetGraphicsRootShaderResourceView(3, com::gpu_va(&self.geometry.index_buffer));
+            cmd.SetGraphicsRootShaderResourceView(
+                2,
+                com::gpu_va(&self.scene.geometry.vertex_buffer),
+            );
+            cmd.SetGraphicsRootShaderResourceView(
+                3,
+                com::gpu_va(&self.scene.geometry.index_buffer),
+            );
             cmd.SetGraphicsRootShaderResourceView(4, accel.geom_table_gva());
             // Texture tables.
-            cmd.SetGraphicsRootDescriptorTable(5, self.hdr.srv_gpu);
+            cmd.SetGraphicsRootDescriptorTable(5, self.targets.hdr.srv_gpu);
             cmd.SetGraphicsRootDescriptorTable(6, gbuffer.normal_depth_srv_gpu);
             cmd.SetGraphicsRootDescriptorTable(7, gbuffer.roughness_srv_gpu);
             cmd.SetGraphicsRootDescriptorTable(8, self.prefilter_cube_srv_gpu());

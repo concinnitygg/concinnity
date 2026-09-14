@@ -878,8 +878,8 @@ impl DxContext {
         if any_visible {
             let scene_rtv = self.hdr_scene_rtv();
 
-            let w = self.extent.render_width;
-            let h = self.extent.render_height;
+            let w = self.targets.extent.render_width;
+            let h = self.targets.extent.render_height;
             // SAFETY: the command list is in the recording state, and every resource, descriptor
             // and slice these commands name is live for the call.
             unsafe {
@@ -948,9 +948,9 @@ impl DxContext {
     pub(crate) fn add_emitter(&mut self, record: ParticleEmitterRecord) -> Result<usize, String> {
         if self.particle.resources.is_none() {
             let resources = ParticleResources::new(
-                &self.alloc,
+                &self.hw.alloc,
                 self.particle.srv_base_slot,
-                self.diagnostics.info_queue.as_ref(),
+                self.hw.info_queue.as_ref(),
                 self.hot_reload.enabled,
             )?;
             self.particle.resources = Some(resources);
@@ -962,7 +962,7 @@ impl DxContext {
             .map(|r| r.emitter_srv_base_slot)
             .ok_or_else(|| "add_emitter: particle pipeline unavailable".to_string())?;
 
-        let gpu_state = build_emitter_gpu_state(&self.alloc, &record)?;
+        let gpu_state = build_emitter_gpu_state(&self.hw.alloc, &record)?;
         let last_tex = self.descriptors.textures.len().saturating_sub(1);
         let tex_idx = record.texture_slot.min(last_tex);
 
@@ -991,7 +991,11 @@ impl DxContext {
             }
             .ptr + (base_slot + id) * self.descriptors.srv_descriptor_size,
         };
-        write_texture_srv(&self.device, &self.descriptors.textures[tex_idx], srv_cpu);
+        write_texture_srv(
+            &self.hw.device,
+            &self.descriptors.textures[tex_idx],
+            srv_cpu,
+        );
         Ok(id)
     }
 

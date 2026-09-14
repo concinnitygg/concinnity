@@ -141,21 +141,21 @@ impl PrefilterGpu {
             ));
         }
         let capture = create_cube(
-            &ctx.device,
+            &ctx.hw.device,
             plan.face_size(),
             mips,
             D3D12_RESOURCE_STATE_COPY_DEST,
             "probe capture cube",
         )?;
         let probe = create_cube(
-            &ctx.device,
+            &ctx.hw.device,
             plan.face_size(),
             mips,
             D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
             "probe cube",
         )?;
 
-        let device = &ctx.device;
+        let device = &ctx.hw.device;
         let d = &ctx.descriptors;
         write_cube_srv(device, &capture, mips, ctx.probe_capture_srv_cpu());
         for mip in 0..mips {

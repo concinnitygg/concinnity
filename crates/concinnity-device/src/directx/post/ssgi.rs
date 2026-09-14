@@ -93,7 +93,7 @@ impl DxContext {
         let gathered = ssgi.pass.encode_gather(
             &device,
             cmd,
-            self.hdr.srv_gpu,
+            self.targets.hdr.srv_gpu,
             gbuffer.normal_depth_srv_gpu,
             &params,
         );

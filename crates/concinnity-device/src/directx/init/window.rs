@@ -1,8 +1,9 @@
 //! Bootstrap for DxContext: Win32 window registration, DXGI factory, adapter
-//! selection, D3D12 device + (optional) debug info-queue, command queue, MSAA
-//! support query, and swapchain creation. Returns a `DeviceAndWindow` bundle
-//! that init/mod.rs unpacks into the constructor's local state.
+//! selection, D3D12 device + (optional) debug info-queue, command queue,
+//! allocator, and swapchain creation. Returns the context's `DxHardware` group
+//! and the swapchain it presents through.
 
+use concinnity_core::render::backend_init::SwapchainConfig;
 use concinnity_core::render::hdr_output;
 use concinnity_core::render::hdr_output::HdrOutputMode;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -10,41 +11,22 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::*;
 use windows::core::Interface;
 
-use crate::directx::context::FRAMES;
+use crate::directx::allocator::DeviceAllocator;
+use crate::directx::context::{DxHardware, FRAMES};
 use crate::directx::texture::HDR_FORMAT;
-use crate::win32::window::{WindowState, create_window};
+use crate::win32::display_mode::FullscreenDisplayMode;
+use crate::win32::window::create_window;
 
-pub(super) struct DeviceAndWindow {
-    pub win_state: Box<WindowState>,
-    pub device: ID3D12Device,
-    pub info_queue: Option<ID3D12InfoQueue>,
-    pub command_queue: ID3D12CommandQueue,
-    pub swapchain: IDXGISwapChain3,
-    pub swapchain_format: DXGI_FORMAT,
+// The DXGI swapchain as created on the window, before its back buffers are
+// wrapped in the frame's RTV heap. A live reload hands the retained one to the
+// rebuilt context.
+pub(super) struct DxgiSwapchain {
+    pub handle: IDXGISwapChain3,
+    pub format: DXGI_FORMAT,
     // Whether the swapchain was created with DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING
     // (vsync off + tearing supported). Drives the present sync interval / flags
     // and must be mirrored in every `ResizeBuffers` call.
     pub allow_tearing: bool,
-    // This adapter's ceiling for the HDR format, not the count the world runs
-    // at: `resolve_sample_count` clamps the world's request against it.
-    pub max_msaa_samples: u32,
-    // Adapter cast to `IDXGIAdapter3` so the profiler overlay can call
-    // `QueryVideoMemoryInfo` for the VRAM chip. `None` on adapters that don't
-    // expose the v3 interface (very old WDDM 1.x drivers); the HUD then reads
-    // `VRAM 0 MB` and the rest of the overlay still works.
-    pub adapter: Option<IDXGIAdapter3>,
-    // Resolved swapchain color-output mode. When `Hdr`, the swapchain was
-    // created in `RGBA16Float` and `SetColorSpace1` was called with the
-    // matching color space: scRGB linear
-    // (`DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709`) for
-    // `HdrEncoding::ExtendedLinear`, HDR10 PQ
-    // (`DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020`) for `HdrEncoding::Pq`.
-    // The composite shader's `hdr_output` branch emits the matching
-    // envelope; its `pq_output` flag picks scRGB-linear passthrough vs the
-    // SMPTE ST 2084 in-shader encode. PQ-not-supported worlds fall back to
-    // extended-linear and the encoding is rewritten on the returned mode so
-    // the caller's `post_process.pq_output` setup stays consistent.
-    pub hdr_mode: HdrOutputMode,
 }
 
 // The window's own configuration: its title, requested size, and whether the
@@ -60,9 +42,8 @@ pub(super) fn setup(
     config: WindowConfig,
     validation: bool,
     vsync: bool,
-    hdr_display_requested: bool,
-    hdr_pq_requested: bool,
-) -> Result<DeviceAndWindow, String> {
+    swapchain_config: SwapchainConfig,
+) -> Result<(DxHardware, DxgiSwapchain), String> {
     let WindowConfig {
         title,
         width,
@@ -168,9 +149,6 @@ pub(super) fn setup(
     let command_queue: ID3D12CommandQueue = unsafe { device.CreateCommandQueue(&queue_desc) }
         .map_err(|e| format!("CreateCommandQueue: {e}"))?;
 
-    // MSAA ceiling (queried against HDR_FORMAT; the swapchain is always 1x).
-    let max_msaa_samples = query_msaa_samples(&device);
-
     // HDR-output detection. Walk the adapter's outputs, find the highest
     // max-EDR multiplier reported by any HDR-capable output, and feed it
     // through the asset-side `hdr_display` toggle. EDR support is per-output
@@ -184,7 +162,9 @@ pub(super) fn setup(
     // `mut` so a later PQ-not-supported fallback can downgrade the encoding
     // before the returned `hdr_mode` reaches the caller; see the
     // SetColorSpace1 block below.
-    let mut hdr_mode = HdrOutputMode::resolve(hdr_display_requested, hdr_pq_requested, max_edr);
+    let hdr_display_requested = swapchain_config.hdr_display;
+    let mut hdr_mode =
+        HdrOutputMode::resolve(hdr_display_requested, swapchain_config.hdr_pq, max_edr);
     if hdr_display_requested && !hdr_mode.is_hdr() {
         tracing::warn!(
             "HDR display requested but the active adapter's outputs report max EDR \
@@ -343,18 +323,26 @@ pub(super) fn setup(
     // state.
     unsafe { factory.MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER) }.ok();
 
-    Ok(DeviceAndWindow {
-        win_state,
+    let hw = DxHardware {
+        // Built before the first resource so nothing has to fall back to a
+        // committed allocation.
+        alloc: DeviceAllocator::new(&device, &command_queue, FRAMES),
+        rt_capable: crate::directx::raytrace::raytracing_supported(&device),
         device,
-        info_queue,
         command_queue,
-        swapchain,
-        swapchain_format,
-        allow_tearing,
-        max_msaa_samples,
         adapter: adapter3,
+        info_queue,
         hdr_mode,
-    })
+        swapchain_config,
+        fullscreen_display: FullscreenDisplayMode::new(),
+        win_state: Some(win_state),
+    };
+    let swapchain = DxgiSwapchain {
+        handle: swapchain,
+        format: swapchain_format,
+        allow_tearing,
+    };
+    Ok((hw, swapchain))
 }
 
 // Swapchain pixel format on the HDR path. RGBA16Float gives the compositor

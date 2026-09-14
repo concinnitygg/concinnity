@@ -203,7 +203,7 @@ impl LiveEdit for DxContext {
     // reload reuses this backend (via `reload_world`) only when the new world's
     // `swapchain_config` matches; otherwise the swap does a full rebuild.
     fn hot_swap_config(&self) -> Option<backend_init::SwapchainConfig> {
-        Some(self.swapchain_config)
+        Some(self.hw.swapchain_config)
     }
 
     // Rebuild the world's content on the retained device + window + swapchain.

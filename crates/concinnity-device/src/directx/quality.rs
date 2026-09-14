@@ -18,7 +18,7 @@
 //! fence-waited BLAS + TLAS over current geometry) plus the DXR reflection pass,
 //! so a live enable hitches once proportional to triangle count; and RT is only
 //! live-toggleable on a GPU that reports the DXR 1.1 tier (queried once at init
-//! into `rt_capable`), else the toggle no-ops with a warning and RT stays whatever
+//! into `hw.rt_capable`), else the toggle no-ops with a warning and RT stays whatever
 //! it launched as. The RT output reserves its fixed heap slot unconditionally like
 //! the other five features, so an enable builds into it without shifting any other
 //! slot; the dynamic `scene_srv_for_post` picks the RT output over SSR each frame,
@@ -70,15 +70,15 @@ impl DxContext {
         self.wait_idle();
 
         let hot_reload = self.hot_reload.enabled;
-        let render_w = self.extent.render_width;
-        let render_h = self.extent.render_height;
+        let render_w = self.targets.extent.render_width;
+        let render_h = self.targets.extent.render_height;
         let slots = self.quality_slots;
 
         // RT is gated on the GPU reporting the DXR 1.1 tier: a non-DXR GPU cannot
         // build the acceleration structure, so the toggle no-ops with a warning
         // and RT stays whatever it launched as (persisted for the next launch).
-        let desired_rt = q.rt_reflections.is_some() && self.rt_capable;
-        if q.rt_reflections.is_some() && !self.rt_capable {
+        let desired_rt = q.rt_reflections.is_some() && self.hw.rt_capable;
+        if q.rt_reflections.is_some() && !self.hw.rt_capable {
             tracing::warn!(
                 "ray-traced reflections requested but the GPU does not report DXR \
                  tier 1.1; keeping SSR"
@@ -115,11 +115,14 @@ impl DxContext {
             // re-points.
             self.rebuild_transient_pool_and_consumers(self.ssao.resources.is_some(), true)?;
             let pooled = self
+                .targets
                 .transient_pool
                 .gbuffer_pooled()
                 .ok_or("transient pool missing the gbuffer color targets after enable")?;
             let gbuffer = super::post::gbuffer::GbufferResources::new(
-                super::post::gbuffer::GbufferDeviceCtx { alloc: &self.alloc },
+                super::post::gbuffer::GbufferDeviceCtx {
+                    alloc: &self.hw.alloc,
+                },
                 super::post::gbuffer::GbufferExtent {
                     width: render_w,
                     height: render_h,
@@ -180,7 +183,7 @@ impl DxContext {
             self.build_rt_runtime(q.rt_reflections.expect("desired_rt implies settings"))?;
         } else if !desired_rt && self.rt_reflections.is_some() {
             self.rt_reflections = None;
-            self.rt_accel = None;
+            self.rt.accel = None;
         }
 
         // Reflection composite: the on-screen target the SSR/RT resolve writes its
@@ -195,12 +198,12 @@ impl DxContext {
         let refl_composite_needed = desired_ssr || desired_rt;
         if refl_composite_needed && self.reflection_composite.is_none() {
             let rc = super::post::reflection_composite::ReflectionCompositeResources::new(
-                &self.device,
+                &self.hw.device,
                 render_w,
                 render_h,
                 q.reflection_blur_scale,
                 slots.refl_composite,
-                self.diagnostics.info_queue.as_ref(),
+                self.hw.info_queue.as_ref(),
                 hot_reload,
             )?;
             self.reflection_composite = Some(rc);
@@ -214,7 +217,7 @@ impl DxContext {
         // after this call), so only the GPU + adaptation state is swapped here.
         if desired_ae && self.auto_exposure.resources.is_none() {
             let resources =
-                super::auto_exposure::AutoExposureResources::new(&self.alloc, hot_reload)?;
+                super::auto_exposure::AutoExposureResources::new(&self.hw.alloc, hot_reload)?;
             self.auto_exposure.resources = Some(resources);
             self.auto_exposure.state = q
                 .auto_exposure
@@ -240,6 +243,7 @@ impl DxContext {
         if desired_ssao && !ssao_was {
             self.rebuild_transient_pool_and_consumers(true, gbuffer_enabled)?;
             let ao_resource = self
+                .targets
                 .transient_pool
                 .resource_for("ao_output")
                 .ok_or("transient pool missing ao_output after SSAO enable")?
@@ -247,8 +251,8 @@ impl DxContext {
             let settings = q.ssao.expect("desired_ssao implies ssao settings");
             let ssao = super::post::ssao::SsaoResources::new(
                 super::post::ssao::SsaoDeviceCtx {
-                    device: &self.device,
-                    info_queue: self.diagnostics.info_queue.as_ref(),
+                    device: &self.hw.device,
+                    info_queue: self.hw.info_queue.as_ref(),
                 },
                 render_w,
                 render_h,
@@ -274,7 +278,7 @@ impl DxContext {
 
     // Build the RT acceleration structure + reflection pass at runtime (a live
     // toggle-on). Mirrors the init RT block: an empty scene, an AS-build error,
-    // or a shader-compile failure leaves both `rt_accel` / `rt_reflections`
+    // or a shader-compile failure leaves both `rt.accel` / `rt_reflections`
     // `None` and the renderer stays on SSR (a soft failure, returns `Ok`). The
     // caller has ensured the unified G-buffer pre-pass exists and drained the
     // device (`wait_idle`). The skinned BLAS is seeded on the first dynamic
@@ -286,12 +290,12 @@ impl DxContext {
     ) -> Result<(), String> {
         let hot_reload = self.hot_reload.enabled;
         let mut accel = match super::raytrace::build_rt_accel(super::raytrace::RtInitGeometry {
-            alloc: &self.alloc,
-            vertex_buffer: &self.geometry.vertex_buffer,
-            index_buffer: &self.geometry.index_buffer,
+            alloc: &self.hw.alloc,
+            vertex_buffer: &self.scene.geometry.vertex_buffer,
+            index_buffer: &self.scene.geometry.index_buffer,
             draw_objects: &self.draw.objects,
             clusters: &self.instanced.clusters,
-            total_vertices: self.rt_static_vertex_count,
+            total_vertices: self.rt.static_vertex_count,
             albedo_count: self.descriptors.textures.len() as u32,
             exclude_seethrough: self.seethrough_meshes_enabled(),
         }) {
@@ -307,7 +311,7 @@ impl DxContext {
                 return Ok(());
             }
         };
-        match super::raytrace::build_rt_skin_pipeline(&self.device, hot_reload) {
+        match super::raytrace::build_rt_skin_pipeline(&self.hw.device, hot_reload) {
             Ok(skin) => accel.set_skin_pipeline(skin),
             Err(e) => tracing::warn!(
                 "RT skin pipeline build failed (skinned meshes absent from reflections): {e}"
@@ -316,9 +320,9 @@ impl DxContext {
         let slots = self.quality_slots;
         let rt = match super::post::rt_reflections::RtReflectionsResources::new(
             super::post::rt_reflections::RtBuildContext {
-                alloc: &self.alloc,
-                width: self.extent.render_width,
-                height: self.extent.render_height,
+                alloc: &self.hw.alloc,
+                width: self.targets.extent.render_width,
+                height: self.targets.extent.render_height,
             },
             settings,
             super::post::rt_reflections::RtOutputDescriptors {
@@ -326,7 +330,7 @@ impl DxContext {
                 output_srv: slots.rt_output_srv,
             },
             super::post::rt_reflections::RtBuildInit {
-                info_queue: self.diagnostics.info_queue.as_ref(),
+                info_queue: self.hw.info_queue.as_ref(),
                 hot_reload,
             },
         ) {
@@ -336,7 +340,7 @@ impl DxContext {
                 return Ok(());
             }
         };
-        self.rt_accel = Some(accel);
+        self.rt.accel = Some(accel);
         self.rt_reflections = Some(rt);
         Ok(())
     }
@@ -355,17 +359,23 @@ impl DxContext {
         ssao_enabled: bool,
         gbuffer_enabled: bool,
     ) -> Result<(), String> {
-        self.transient_pool.rebuild(
-            &self.device,
-            &self.command_queue,
+        self.targets.transient_pool.rebuild(
+            &self.hw.device,
+            &self.hw.command_queue,
             &super::transient_pool::transient_slots(
                 ssao_enabled,
                 gbuffer_enabled,
-                (self.extent.render_width, self.extent.render_height),
-                (self.extent.output_width, self.extent.output_height),
+                (
+                    self.targets.extent.render_width,
+                    self.targets.extent.render_height,
+                ),
+                (
+                    self.targets.extent.output_width,
+                    self.targets.extent.output_height,
+                ),
             )?,
         )?;
-        if let Some(pooled) = self.transient_pool.gbuffer_pooled() {
+        if let Some(pooled) = self.targets.transient_pool.gbuffer_pooled() {
             // SAFETY: a property query on a live descriptor heap; it only reads.
             let srv_cpu_base = unsafe {
                 self.descriptors
@@ -378,7 +388,7 @@ impl DxContext {
                     .srv_heap
                     .GetGPUDescriptorHandleForHeapStart()
             };
-            let device = self.device.clone();
+            let device = self.hw.device.clone();
             if let Some(gbuffer) = self.gbuffer.as_mut() {
                 gbuffer.repoint_pooled(&device, srv_cpu_base, srv_gpu_base, &pooled);
             }
@@ -386,14 +396,15 @@ impl DxContext {
         let bloom_count = self.bloom.mips.len();
         if bloom_count > 0 {
             let bloom_top = self
+                .targets
                 .transient_pool
                 .resource_for("bloom_top")
                 .ok_or("transient pool missing bloom_top after rebuild")?
                 .clone();
             let (mips, extents) = create_bloom_mips_at(
-                &self.device,
-                self.extent.output_width,
-                self.extent.output_height,
+                &self.hw.device,
+                self.targets.extent.output_width,
+                self.targets.extent.output_height,
                 bloom_count,
                 bloom_top,
             )?;
@@ -418,9 +429,9 @@ impl DxContext {
                 ptr: srv_cpu_base.ptr + (gpu.ptr - srv_gpu_base.ptr) as usize,
             };
             for i in 0..bloom_count {
-                write_color_rtv(&self.device, &self.bloom.mips[i], self.bloom.mip_rtvs[i]);
+                write_color_rtv(&self.hw.device, &self.bloom.mips[i], self.bloom.mip_rtvs[i]);
                 write_hdr_srv(
-                    &self.device,
+                    &self.hw.device,
                     &self.bloom.mips[i],
                     srv_cpu_of(self.bloom.mip_srv_gpus[i]),
                 );

@@ -34,9 +34,12 @@ impl DxContext {
             cmd.SetGraphicsRootDescriptorTable(params.spot_table, self.spot_shadow.srv_gpu);
             cmd.SetGraphicsRootShaderResourceView(
                 params.area_buffer,
-                com::gpu_va(&self.area_light.buffer),
+                com::gpu_va(&self.scene.area_light.buffer),
             );
-            cmd.SetGraphicsRootDescriptorTable(params.ltc_table, self.area_light.ltc_table_gpu);
+            cmd.SetGraphicsRootDescriptorTable(
+                params.ltc_table,
+                self.scene.area_light.ltc_table_gpu,
+            );
         }
     }
 
@@ -190,13 +193,18 @@ impl DxContext {
             local_lights_gva,
             shadow_ubo_gva,
         } = gpu;
-        let depth_dsv = self.depth.dsv;
+        let depth_dsv = self.targets.depth.dsv;
 
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {
-            cmd.OMSetRenderTargets(1, Some(&self.hdr.color_rtv), false, Some(&depth_dsv));
-            cmd.ClearRenderTargetView(self.hdr.color_rtv, &self.view.clear_color, None);
+            cmd.OMSetRenderTargets(
+                1,
+                Some(&self.targets.hdr.color_rtv),
+                false,
+                Some(&depth_dsv),
+            );
+            cmd.ClearRenderTargetView(self.targets.hdr.color_rtv, &self.view.clear_color, None);
             cmd.ClearDepthStencilView(depth_dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0, 0, None);
 
             let vp = D3D12_VIEWPORT {
@@ -234,8 +242,8 @@ impl DxContext {
             cmd.IASetPrimitiveTopology(
                 windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             );
-            cmd.IASetVertexBuffers(0, Some(&[self.geometry.vertex_buffer_view]));
-            cmd.IASetIndexBuffer(Some(&self.geometry.index_buffer_view));
+            cmd.IASetVertexBuffers(0, Some(&[self.scene.geometry.vertex_buffer_view]));
+            cmd.IASetIndexBuffer(Some(&self.scene.geometry.index_buffer_view));
             cmd.SetDescriptorHeaps(&[
                 Some(self.descriptors.srv_heap.clone()),
                 Some(self.descriptors.sampler_heap.clone()),
@@ -468,11 +476,11 @@ impl DxContext {
     // resolve step's own, finer than the one-state-per-resource the graph
     // models, and each returns its target to RENDER_TARGET before the pass ends.
     pub(in crate::directx) fn finish_hdr_target(&self, cmd: &ID3D12GraphicsCommandList) {
-        let Some(hdr_resolve) = &self.hdr.resolve else {
+        let Some(hdr_resolve) = &self.targets.hdr.resolve else {
             return;
         };
         let color_to_src = transition_barrier(
-            &self.hdr.color,
+            &self.targets.hdr.color,
             D3D12_RESOURCE_STATE_RENDER_TARGET,
             D3D12_RESOURCE_STATE_RESOLVE_SOURCE,
         );
@@ -486,14 +494,14 @@ impl DxContext {
         unsafe { cmd.ResourceBarrier(&[color_to_src, resolve_to_dst]) };
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
-        unsafe { cmd.ResolveSubresource(hdr_resolve, 0, &self.hdr.color, 0, HDR_FORMAT) };
+        unsafe { cmd.ResolveSubresource(hdr_resolve, 0, &self.targets.hdr.color, 0, HDR_FORMAT) };
         let resolve_to_rt = transition_barrier(
             self.hdr_scene_target(),
             D3D12_RESOURCE_STATE_RESOLVE_DEST,
             D3D12_RESOURCE_STATE_RENDER_TARGET,
         );
         let color_to_rt = transition_barrier(
-            &self.hdr.color,
+            &self.targets.hdr.color,
             D3D12_RESOURCE_STATE_RESOLVE_SOURCE,
             D3D12_RESOURCE_STATE_RENDER_TARGET,
         );
@@ -530,14 +538,19 @@ impl DxContext {
             local_lights_gva,
             shadow_ubo_gva,
         } = gpu;
-        let depth_dsv = self.depth.dsv;
+        let depth_dsv = self.targets.depth.dsv;
 
         // Load (do not clear) the phase-1 color + depth: Main2 composites the
         // disoccluded geometry on top.
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {
-            cmd.OMSetRenderTargets(1, Some(&self.hdr.color_rtv), false, Some(&depth_dsv));
+            cmd.OMSetRenderTargets(
+                1,
+                Some(&self.targets.hdr.color_rtv),
+                false,
+                Some(&depth_dsv),
+            );
 
             let vp = D3D12_VIEWPORT {
                 TopLeftX: 0.0,
@@ -559,8 +572,8 @@ impl DxContext {
             cmd.IASetPrimitiveTopology(
                 windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             );
-            cmd.IASetVertexBuffers(0, Some(&[self.geometry.vertex_buffer_view]));
-            cmd.IASetIndexBuffer(Some(&self.geometry.index_buffer_view));
+            cmd.IASetVertexBuffers(0, Some(&[self.scene.geometry.vertex_buffer_view]));
+            cmd.IASetIndexBuffer(Some(&self.scene.geometry.index_buffer_view));
             cmd.SetDescriptorHeaps(&[
                 Some(self.descriptors.srv_heap.clone()),
                 Some(self.descriptors.sampler_heap.clone()),

@@ -161,12 +161,12 @@ impl DxContext {
         // active, so a skinned mesh casts a correctly deformed shadow.
         let (skinned_shadow_root_sig, skinned_shadow_pso) = if self.shadow_pso.is_some() {
             let sr = dump_on_err(
-                self.diagnostics.info_queue.as_ref(),
-                create_skinned_shadow_root_signature(&self.device),
+                self.hw.info_queue.as_ref(),
+                create_skinned_shadow_root_signature(&self.hw.device),
             )?;
             let sp = dump_on_err(
-                self.diagnostics.info_queue.as_ref(),
-                create_skinned_shadow_pso(&self.device, &sr, &skinned_shadow_vs),
+                self.hw.info_queue.as_ref(),
+                create_skinned_shadow_pso(&self.hw.device, &sr, &skinned_shadow_vs),
             )?;
             (Some(sr), Some(sp))
         } else {
@@ -183,11 +183,11 @@ impl DxContext {
         // IB). GENERIC_READ is a superset of both, so no per-frame transition on
         // these shared resources is needed.
         let skinned_vertex_buffer =
-            upload_buffer(&self.alloc, vtx_bytes, D3D12_RESOURCE_STATE_GENERIC_READ)?;
+            upload_buffer(&self.hw.alloc, vtx_bytes, D3D12_RESOURCE_STATE_GENERIC_READ)?;
         // Never zero-length: the ray-traced hit path binds this buffer as a raw
         // word array and no backend accepts a zero-length binding.
         let skinned_index_buffer = upload_buffer_padded(
-            &self.alloc,
+            &self.hw.alloc,
             idx_bytes,
             rt_geom::skinned_index_buffer_bytes(indices.len()) as u64,
             D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -224,7 +224,7 @@ impl DxContext {
             let mut frame_ptrs: Vec<*mut u8> = Vec::with_capacity(draw_objects.len());
             for _ in 0..draw_objects.len() {
                 let buf = create_buffer(
-                    &self.alloc,
+                    &self.hw.alloc,
                     joint_buf_bytes,
                     D3D12_HEAP_TYPE_UPLOAD,
                     D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -291,8 +291,11 @@ impl DxContext {
             let mut deformed_buffers: Vec<ID3D12Resource> = Vec::with_capacity(FRAMES);
             let mut deformed_vbvs: Vec<D3D12_VERTEX_BUFFER_VIEW> = Vec::with_capacity(FRAMES);
             for _ in 0..FRAMES {
-                let buf =
-                    create_uav_buffer(&self.device, deformed_bytes, D3D12_RESOURCE_STATE_COMMON)?;
+                let buf = create_uav_buffer(
+                    &self.hw.device,
+                    deformed_bytes,
+                    D3D12_RESOURCE_STATE_COMMON,
+                )?;
                 let vbv = D3D12_VERTEX_BUFFER_VIEW {
                     BufferLocation: com::gpu_va(&buf),
                     SizeInBytes: deformed_bytes as u32,
@@ -305,7 +308,7 @@ impl DxContext {
             // pass's VERTEX -> UAV -> VERTEX transition cycle is valid from frame 0.
             // SAFETY: the command list is in the recording state, and every resource, descriptor
             // and slice these commands name is live for the call.
-            one_shot_submit(&self.device, &self.command_queue, |cmd| unsafe {
+            one_shot_submit(&self.hw.device, &self.hw.command_queue, |cmd| unsafe {
                 let barriers: Vec<D3D12_RESOURCE_BARRIER> = deformed_buffers
                     .iter()
                     .map(|b| {
@@ -319,7 +322,7 @@ impl DxContext {
                 cmd.ResourceBarrier(&barriers);
             })?;
             let skin = super::super::raytrace::build_rt_skin_pipeline(
-                &self.device,
+                &self.hw.device,
                 self.hot_reload.enabled,
             )
             .map_err(|e| format!("skinned: main-pass skin fold build failed: {e}"))?;
@@ -516,7 +519,7 @@ impl DxContext {
                             let words = data.packed_words();
                             let bytes: &[u8] = bytemuck::cast_slice(&words);
                             let buf = upload_buffer(
-                                &self.alloc,
+                                &self.hw.alloc,
                                 bytes,
                                 D3D12_RESOURCE_STATE_GENERIC_READ,
                             )?;
@@ -549,7 +552,7 @@ impl DxContext {
                 for count in &target_counts {
                     let bytes = ((*count).max(1) as u64) * std::mem::size_of::<f32>() as u64;
                     let buf = create_buffer(
-                        &self.alloc,
+                        &self.hw.alloc,
                         bytes,
                         D3D12_HEAP_TYPE_UPLOAD,
                         D3D12_RESOURCE_STATE_GENERIC_READ,

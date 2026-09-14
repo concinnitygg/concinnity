@@ -364,7 +364,11 @@ impl DxContext {
     // the main HDR resolve and any post pass that mutates the scene (decals,
     // fog, SSR, TAA, bloom, composite), so it samples the pre-post scene.
     fn auto_exposure_source(&self) -> &ID3D12Resource {
-        self.hdr.resolve.as_ref().unwrap_or(&self.hdr.color)
+        self.targets
+            .hdr
+            .resolve
+            .as_ref()
+            .unwrap_or(&self.targets.hdr.color)
     }
 
     // Encode the auto-exposure histogram passes against the resolved HDR
@@ -413,11 +417,11 @@ impl DxContext {
                 &params as *const AutoExposureParams as *const std::ffi::c_void,
                 0,
             );
-            cmd.SetComputeRootDescriptorTable(1, self.hdr.srv_gpu);
+            cmd.SetComputeRootDescriptorTable(1, self.targets.hdr.srv_gpu);
             cmd.SetComputeRootUnorderedAccessView(2, histogram_gva);
 
-            let groups_x = self.extent.render_width.div_ceil(16);
-            let groups_y = self.extent.render_height.div_ceil(16);
+            let groups_x = self.targets.extent.render_width.div_ceil(16);
+            let groups_y = self.targets.extent.render_height.div_ceil(16);
             cmd.Dispatch(groups_x, groups_y, 1);
         }
 

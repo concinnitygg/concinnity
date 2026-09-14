@@ -36,11 +36,11 @@ impl DxContext {
             .clone()
             .ok_or_else(|| "shader buckets need the bindless main pass".to_string())?;
         let pso = build_bucket_pipeline(
-            &self.device,
-            self.diagnostics.info_queue.as_ref(),
+            &self.hw.device,
+            self.hw.info_queue.as_ref(),
             BucketPipelineTargets {
                 root_sig: &root_sig,
-                msaa_samples: self.hdr.msaa_samples,
+                msaa_samples: self.targets.hdr.msaa_samples,
                 engine_default: &self.bindless_main_shaders,
                 hot_reload: self.hot_reload.enabled,
             },

@@ -636,8 +636,8 @@ impl DxContext {
         }
         let view_gva = com::gpu_va(&gb.view_ubo_resources[frame_idx]);
 
-        let w = self.extent.render_width;
-        let h = self.extent.render_height;
+        let w = self.targets.extent.render_width;
+        let h = self.targets.extent.render_height;
 
         // The three color targets are one graph resource (`gbuffer`), so the
         // executor has already put them in RENDER_TARGET for this pass's write
@@ -795,11 +795,11 @@ impl DxContext {
             cmd.IASetVertexBuffers(
                 0,
                 Some(&[
-                    self.geometry.vertex_buffer_view,
-                    self.geometry.vertex_buffer_view,
+                    self.scene.geometry.vertex_buffer_view,
+                    self.scene.geometry.vertex_buffer_view,
                 ]),
             );
-            cmd.IASetIndexBuffer(Some(&self.geometry.index_buffer_view));
+            cmd.IASetIndexBuffer(Some(&self.scene.geometry.index_buffer_view));
             // [1] GbView, [2] GpuObjectData, [3] model history, [4] draw args.
             cmd.SetGraphicsRootConstantBufferView(1, view_gva);
             cmd.SetGraphicsRootShaderResourceView(2, object_gva);

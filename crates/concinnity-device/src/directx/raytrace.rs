@@ -2141,25 +2141,25 @@ impl super::context::DxContext {
     // the serial DIRECT queue). A no-op when RT reflections are off. Assembles
     // this frame's skinned-geometry inputs (the skinned VB/IB GVAs + per-object
     // joint-buffer GVAs for `frame_idx`) so the skin dispatch binds the right
-    // per-frame pose. Disjoint field borrows: `rt_accel` (mut) vs the rest
+    // per-frame pose. Disjoint field borrows: `rt.accel` (mut) vs the rest
     // (shared); the joint GVAs are collected up-front so `skinned_joint_gva`'s
-    // `&self` borrow does not overlap the `rt_accel` mutable borrow.
+    // `&self` borrow does not overlap the `rt.accel` mutable borrow.
     //
-    // Consumes `rt_topology_dirty` (set when a cloned prop / streamed chunk
+    // Consumes `rt.topology_dirty` (set when a cloned prop / streamed chunk
     // altered the draw set): the accel's `dynamic_update` folds the change into
     // the BLAS head. When RT is on but the scene had no resident geometry at build
-    // time (`rt_accel` is `None`), a topology change that introduces the first
+    // time (`rt.accel` is `None`), a topology change that introduces the first
     // participating geometry seeds the BVH from scratch here.
     pub(super) fn rt_dynamic_update(&mut self, cmd: &ID3D12GraphicsCommandList, frame_idx: usize) {
-        let topology_dirty = std::mem::take(&mut self.rt_topology_dirty);
+        let topology_dirty = std::mem::take(&mut self.rt.topology_dirty);
 
         // Seed-from-empty: RT enabled + a topology change added the first
         // participating geometry to a scene that had none at build time. The
         // one-shot build is fence-waited internally (a rare, one-time stall); the
         // DXR trace reads the TLAS + table by GPU virtual address each frame, so
         // the fresh accel is picked up with no descriptor rewire.
-        if self.rt_accel.is_none() {
-            if topology_dirty && self.rt_reflections.is_some() && self.rt_dynamic_mode.is_dynamic()
+        if self.rt.accel.is_none() {
+            if topology_dirty && self.rt_reflections.is_some() && self.rt.dynamic_mode.is_dynamic()
             {
                 self.seed_rt_accel();
             }
@@ -2177,7 +2177,7 @@ impl super::context::DxContext {
             self.skinned.index_buffer.as_ref(),
         ) {
             (Some(vb), Some(ib))
-                if self.rt_skinned_geometry && !self.skinned.slots.draw_objects.is_empty() =>
+                if self.rt.skinned_geometry && !self.skinned.slots.draw_objects.is_empty() =>
             {
                 let vertex_gva = com::gpu_va(vb);
                 let index_gva = com::gpu_va(ib);
@@ -2192,10 +2192,10 @@ impl super::context::DxContext {
             .map(|b| b.as_slice())
             .unwrap_or(&[]);
 
-        // Read before `rt_accel` is borrowed mutably below.
+        // Read before `rt.accel` is borrowed mutably below.
         let exclude_seethrough = self.seethrough_meshes_enabled();
 
-        let Some(accel) = self.rt_accel.as_mut() else {
+        let Some(accel) = self.rt.accel.as_mut() else {
             return;
         };
         let skinned = skinned_inputs.map(|(v, i)| SkinnedRtInputs {
@@ -2205,11 +2205,11 @@ impl super::context::DxContext {
             joint_buffers,
         });
         accel.dynamic_update(
-            &self.alloc,
+            &self.hw.alloc,
             cmd,
             &self.draw.objects,
             RtDynamicInputs {
-                mode: self.rt_dynamic_mode,
+                mode: self.rt.dynamic_mode,
                 skinned,
                 frame_idx,
                 topology_dirty,
@@ -2221,11 +2221,11 @@ impl super::context::DxContext {
     // Build the scene acceleration structure from scratch (mirrors the init /
     // `build_rt_runtime` accel block) when a runtime topology change introduces
     // the first participating geometry into an RT-enabled scene that had none.
-    // A build failure / still-empty scene is non-fatal: `rt_accel` stays `None`
+    // A build failure / still-empty scene is non-fatal: `rt.accel` stays `None`
     // and the next topology change retries.
     fn seed_rt_accel(&mut self) {
         if let Some(accel) = self.build_scene_accel() {
-            self.rt_accel = Some(accel);
+            self.rt.accel = Some(accel);
         }
     }
 
@@ -2238,7 +2238,7 @@ impl super::context::DxContext {
     // new, possibly smaller, buffers at old offsets); RT falls back to SSR until
     // the next topology change re-seeds it.
     pub(super) fn rebuild_rt_accel(&mut self) {
-        self.rt_accel = self.build_scene_accel();
+        self.rt.accel = self.build_scene_accel();
     }
 
     // Build a scene acceleration structure from scratch over the current draw set
@@ -2247,12 +2247,12 @@ impl super::context::DxContext {
     fn build_scene_accel(&self) -> Option<RtAccelData> {
         let hot_reload = self.hot_reload.enabled;
         let mut accel = match build_rt_accel(RtInitGeometry {
-            alloc: &self.alloc,
-            vertex_buffer: &self.geometry.vertex_buffer,
-            index_buffer: &self.geometry.index_buffer,
+            alloc: &self.hw.alloc,
+            vertex_buffer: &self.scene.geometry.vertex_buffer,
+            index_buffer: &self.scene.geometry.index_buffer,
             draw_objects: &self.draw.objects,
             clusters: &self.instanced.clusters,
-            total_vertices: self.rt_static_vertex_count,
+            total_vertices: self.rt.static_vertex_count,
             albedo_count: self.descriptors.textures.len() as u32,
             exclude_seethrough: self.seethrough_meshes_enabled(),
         }) {
@@ -2263,7 +2263,7 @@ impl super::context::DxContext {
                 return None;
             }
         };
-        match build_rt_skin_pipeline(&self.device, hot_reload) {
+        match build_rt_skin_pipeline(&self.hw.device, hot_reload) {
             Ok(skin) => accel.set_skin_pipeline(skin),
             Err(e) => {
                 tracing::warn!("RT skin pipeline build failed (skinned meshes absent): {e}")

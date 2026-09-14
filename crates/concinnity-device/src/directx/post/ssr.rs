@@ -142,7 +142,7 @@ impl DxContext {
         {
             return rc.output_srv_gpu;
         }
-        self.hdr.srv_gpu
+        self.targets.hdr.srv_gpu
     }
 
     // GPU descriptor handle of the IBL prefilter cubemap SRV. Fixed at heap
@@ -191,7 +191,7 @@ impl DxContext {
             aspect,
             inv_view_rot,
             cam_pos,
-            self.env_map.prefilter_mip_count as f32,
+            self.scene.env_map.prefilter_mip_count as f32,
             self.view.sky_rot,
         );
         let device = self.post_device(frame_idx);
@@ -200,7 +200,7 @@ impl DxContext {
             cmd,
             SsrInputs {
                 target: device.target_attachment(&resolve.output),
-                scene: self.hdr.srv_gpu,
+                scene: self.targets.hdr.srv_gpu,
                 normal_depth: gbuffer.normal_depth_srv_gpu,
                 roughness: gbuffer.roughness_srv_gpu,
                 prefilter: self.prefilter_cube_srv_gpu(),

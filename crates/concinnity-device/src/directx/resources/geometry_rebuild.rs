@@ -60,30 +60,30 @@ impl DxContext {
         // matching staging buffer, then transitions back; `wait_idle` above
         // gates the source side; the one-shot's internal fence wait gates
         // the destination.
-        let old_v_bytes = self.geometry.vertex_buffer_view.SizeInBytes as u64;
-        let old_i_bytes = self.geometry.index_buffer_view.SizeInBytes as u64;
+        let old_v_bytes = self.scene.geometry.vertex_buffer_view.SizeInBytes as u64;
+        let old_i_bytes = self.scene.geometry.index_buffer_view.SizeInBytes as u64;
         let v_readback = create_buffer(
-            &self.alloc,
+            &self.hw.alloc,
             old_v_bytes,
             D3D12_HEAP_TYPE_READBACK,
             D3D12_RESOURCE_STATE_COPY_DEST,
         )?;
         let i_readback = create_buffer(
-            &self.alloc,
+            &self.hw.alloc,
             old_i_bytes,
             D3D12_HEAP_TYPE_READBACK,
             D3D12_RESOURCE_STATE_COPY_DEST,
         )?;
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
-        one_shot_submit(&self.device, &self.command_queue, |cmd| unsafe {
+        one_shot_submit(&self.hw.device, &self.hw.command_queue, |cmd| unsafe {
             let v_src = transition_barrier(
-                &self.geometry.vertex_buffer,
+                &self.scene.geometry.vertex_buffer,
                 D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
                 D3D12_RESOURCE_STATE_COPY_SOURCE,
             );
             let i_src = transition_barrier(
-                &self.geometry.index_buffer,
+                &self.scene.geometry.index_buffer,
                 D3D12_RESOURCE_STATE_INDEX_BUFFER,
                 D3D12_RESOURCE_STATE_COPY_SOURCE,
             );
@@ -91,24 +91,24 @@ impl DxContext {
             cmd.CopyBufferRegion(
                 &*v_readback,
                 0,
-                &*self.geometry.vertex_buffer,
+                &*self.scene.geometry.vertex_buffer,
                 0,
                 old_v_bytes,
             );
             cmd.CopyBufferRegion(
                 &*i_readback,
                 0,
-                &*self.geometry.index_buffer,
+                &*self.scene.geometry.index_buffer,
                 0,
                 old_i_bytes,
             );
             let v_back = transition_barrier(
-                &self.geometry.vertex_buffer,
+                &self.scene.geometry.vertex_buffer,
                 D3D12_RESOURCE_STATE_COPY_SOURCE,
                 D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
             );
             let i_back = transition_barrier(
-                &self.geometry.index_buffer,
+                &self.scene.geometry.index_buffer,
                 D3D12_RESOURCE_STATE_COPY_SOURCE,
                 D3D12_RESOURCE_STATE_INDEX_BUFFER,
             );
@@ -275,25 +275,25 @@ impl DxContext {
         let new_v_bytes = std::mem::size_of_val(new_vertices.as_slice()) as u64;
         let new_i_bytes = std::mem::size_of_val(new_indices.as_slice()) as u64;
         let new_vbuf = create_buffer(
-            &self.alloc,
+            &self.hw.alloc,
             new_v_bytes,
             D3D12_HEAP_TYPE_DEFAULT,
             D3D12_RESOURCE_STATE_COMMON,
         )?;
         let new_ibuf = create_buffer(
-            &self.alloc,
+            &self.hw.alloc,
             new_i_bytes,
             D3D12_HEAP_TYPE_DEFAULT,
             D3D12_RESOURCE_STATE_COMMON,
         )?;
         let v_upload = create_buffer(
-            &self.alloc,
+            &self.hw.alloc,
             new_v_bytes,
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_RESOURCE_STATE_GENERIC_READ,
         )?;
         let i_upload = create_buffer(
-            &self.alloc,
+            &self.hw.alloc,
             new_i_bytes,
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -302,7 +302,7 @@ impl DxContext {
         write_upload_buffer(&i_upload, bytemuck::cast_slice(&new_indices))?;
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
-        one_shot_submit(&self.device, &self.command_queue, |cmd| unsafe {
+        one_shot_submit(&self.hw.device, &self.hw.command_queue, |cmd| unsafe {
             cmd.CopyBufferRegion(&*new_vbuf, 0, &*v_upload, 0, new_v_bytes);
             cmd.CopyBufferRegion(&*new_ibuf, 0, &*i_upload, 0, new_i_bytes);
             let v_dst = transition_barrier(
@@ -334,18 +334,18 @@ impl DxContext {
             obj.base_vertex = base_v;
             obj.lod_alternates = lods;
         }
-        self.geometry.vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
+        self.scene.geometry.vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&new_vbuf),
             SizeInBytes: new_v_bytes as u32,
             StrideInBytes: std::mem::size_of::<Vertex>() as u32,
         };
-        self.geometry.index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
+        self.scene.geometry.index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&new_ibuf),
             SizeInBytes: new_i_bytes as u32,
             Format: DXGI_FORMAT_R32_UINT,
         };
-        self.geometry.vertex_buffer = new_vbuf;
-        self.geometry.index_buffer = new_ibuf;
+        self.scene.geometry.vertex_buffer = new_vbuf;
+        self.scene.geometry.index_buffer = new_ibuf;
 
         // The RT acceleration structure was built against the buffers just
         // dropped and the per-draw offsets just rewritten, so its BLAS hold the
@@ -354,8 +354,8 @@ impl DxContext {
         // (which bounds each BLAS's vertex range) moved with the rebuild, so it
         // is refreshed first. `wait_idle` above plus the one-shot fence waits
         // leave the GPU quiet, so the synchronous rebuild is safe here.
-        self.rt_static_vertex_count = new_vertex_count;
-        if self.rt_accel.is_some() {
+        self.rt.static_vertex_count = new_vertex_count;
+        if self.rt.accel.is_some() {
             self.rebuild_rt_accel();
         }
         Ok(())
@@ -404,20 +404,20 @@ impl DxContext {
         let old_v_bytes = self.skinned.vertex_buffer_view.SizeInBytes as u64;
         let old_i_bytes = self.skinned.index_buffer_view.SizeInBytes as u64;
         let v_readback = create_buffer(
-            &self.alloc,
+            &self.hw.alloc,
             old_v_bytes,
             D3D12_HEAP_TYPE_READBACK,
             D3D12_RESOURCE_STATE_COPY_DEST,
         )?;
         let i_readback = create_buffer(
-            &self.alloc,
+            &self.hw.alloc,
             old_i_bytes,
             D3D12_HEAP_TYPE_READBACK,
             D3D12_RESOURCE_STATE_COPY_DEST,
         )?;
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
-        one_shot_submit(&self.device, &self.command_queue, |cmd| unsafe {
+        one_shot_submit(&self.hw.device, &self.hw.command_queue, |cmd| unsafe {
             let v_src = transition_barrier(
                 &v_buf,
                 D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
@@ -566,25 +566,25 @@ impl DxContext {
         // Whole u32 words for the index buffer; see `upload_skinned`.
         let ibuf_bytes = rt_geom::skinned_index_buffer_bytes(new_indices.len()) as u64;
         let new_vbuf = create_buffer(
-            &self.alloc,
+            &self.hw.alloc,
             new_v_bytes,
             D3D12_HEAP_TYPE_DEFAULT,
             D3D12_RESOURCE_STATE_COMMON,
         )?;
         let new_ibuf = create_buffer(
-            &self.alloc,
+            &self.hw.alloc,
             ibuf_bytes,
             D3D12_HEAP_TYPE_DEFAULT,
             D3D12_RESOURCE_STATE_COMMON,
         )?;
         let v_upload = create_buffer(
-            &self.alloc,
+            &self.hw.alloc,
             new_v_bytes,
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_RESOURCE_STATE_GENERIC_READ,
         )?;
         let i_upload = create_buffer(
-            &self.alloc,
+            &self.hw.alloc,
             ibuf_bytes,
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -593,7 +593,7 @@ impl DxContext {
         write_upload_buffer(&i_upload, bytemuck::cast_slice(&new_indices))?;
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
-        one_shot_submit(&self.device, &self.command_queue, |cmd| unsafe {
+        one_shot_submit(&self.hw.device, &self.hw.command_queue, |cmd| unsafe {
             cmd.CopyBufferRegion(&*new_vbuf, 0, &*v_upload, 0, new_v_bytes);
             cmd.CopyBufferRegion(&*new_ibuf, 0, &*i_upload, 0, new_i_bytes);
             let v_dst = transition_barrier(

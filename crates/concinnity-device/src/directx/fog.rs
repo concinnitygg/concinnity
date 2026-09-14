@@ -685,8 +685,8 @@ impl DxContext {
         // both passes see the same params this frame.
         let inv_vp = mat4_inverse(vp);
         let viewport = [
-            self.extent.render_width as f32,
-            self.extent.render_height as f32,
+            self.targets.extent.render_width as f32,
+            self.targets.extent.render_height as f32,
         ];
         let params = fog_settings.params(
             inv_vp,
@@ -778,8 +778,8 @@ impl DxContext {
         // read-modify-write, so the executor has already put it in RENDER_TARGET.
         let scene_rtv = self.hdr_scene_rtv();
 
-        let w = self.extent.render_width;
-        let h = self.extent.render_height;
+        let w = self.targets.extent.render_width;
+        let h = self.targets.extent.render_height;
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {

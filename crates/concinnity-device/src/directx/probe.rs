@@ -285,7 +285,7 @@ impl DxContext {
         // Permanent ineligibility: a probe only improves on a real environment, and
         // the capture renders through the bindless cull. Abandon the queue rather than
         // re-checking forever.
-        if self.env_map.prefilter_mip_count <= 1
+        if self.scene.env_map.prefilter_mip_count <= 1
             || !self.probe_capture_supported()
             || self.probe.prefilter.is_none()
         {
@@ -448,9 +448,9 @@ impl DxContext {
             concinnity_core::render::model_history::HistoryMode::Untracked,
         );
 
-        let alloc = &self.alloc;
-        let device = &self.device;
-        let sample_count = self.hdr.msaa_samples.max(1);
+        let alloc = &self.hw.alloc;
+        let device = &self.hw.device;
+        let sample_count = self.targets.hdr.msaa_samples.max(1);
         let size = PROBE_FACE_SIZE;
 
         // One MSAA (or single-sample) color + depth pair, reused across the six faces.
@@ -499,7 +499,7 @@ impl DxContext {
         // Per-face ViewUniforms CBVs, the only per-face binding.
         // The capture renders with the real env IBL (so the scene carries ambient
         // lighting), exactly like the main pass minus the SSR/RT resolve.
-        let prefilter_mip_count = self.env_map.prefilter_mip_count as f32;
+        let prefilter_mip_count = self.scene.env_map.prefilter_mip_count as f32;
         let mut view_cbvs = Vec::with_capacity(PROBE_FACE_COUNT);
         let mut view_gvas = Vec::with_capacity(PROBE_FACE_COUNT);
         for face in 0..PROBE_FACE_COUNT {
@@ -610,14 +610,16 @@ impl DxContext {
         // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
         // new COM object lands in a binding that owns it.
         let alloc: ID3D12CommandAllocator = unsafe {
-            self.device
+            self.hw
+                .device
                 .CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT)
         }
         .map_err(|e| format!("probe: face allocator: {e}"))?;
         // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
         // new COM object lands in a binding that owns it.
         let cmd: ID3D12GraphicsCommandList = unsafe {
-            self.device
+            self.hw
+                .device
                 .CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &alloc, None)
         }
         .map_err(|e| format!("probe: face cmd list: {e}"))?;
@@ -670,14 +672,18 @@ impl DxContext {
             windows::core::Interface::cast(&cmd).map_err(|e| format!("probe: face cast: {e}"))?;
         // SAFETY: every command list in the submission is live and closed, and the slice outlives
         // the call.
-        unsafe { self.command_queue.ExecuteCommandLists(&[Some(list)]) };
+        unsafe { self.hw.command_queue.ExecuteCommandLists(&[Some(list)]) };
 
         // Signal a unique fence value on the shared fence; the convolution waits for it.
         let fence_val = self.frame_sync.next_fence_value.get();
         self.frame_sync.next_fence_value.set(fence_val + 1);
         // SAFETY: the fence and the event were created from this device and are live for the call.
-        unsafe { self.command_queue.Signal(&self.frame_sync.fence, fence_val) }
-            .map_err(|e| format!("probe: face signal: {e}"))?;
+        unsafe {
+            self.hw
+                .command_queue
+                .Signal(&self.frame_sync.fence, fence_val)
+        }
+        .map_err(|e| format!("probe: face signal: {e}"))?;
 
         if let Some(bake) = self.probe.rendering.as_mut() {
             bake.last_fence_value = fence_val;
@@ -874,13 +880,15 @@ impl DxContext {
         // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
         // new COM object lands in a binding that owns it.
         let alloc: ID3D12CommandAllocator = unsafe {
-            self.device
+            self.hw
+                .device
                 .CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT)
         }
         .map_err(|e| format!("probe: convolve allocator: {e}"))?;
         // SAFETY: as above.
         let cmd: ID3D12GraphicsCommandList = unsafe {
-            self.device
+            self.hw
+                .device
                 .CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &alloc, None)
         }
         .map_err(|e| format!("probe: convolve cmd list: {e}"))?;
@@ -899,13 +907,17 @@ impl DxContext {
             .map_err(|e| format!("probe: convolve cast: {e}"))?;
         // SAFETY: every command list in the submission is live and closed, and the slice outlives
         // the call.
-        unsafe { self.command_queue.ExecuteCommandLists(&[Some(list)]) };
+        unsafe { self.hw.command_queue.ExecuteCommandLists(&[Some(list)]) };
 
         let fence_val = self.frame_sync.next_fence_value.get();
         self.frame_sync.next_fence_value.set(fence_val + 1);
         // SAFETY: the fence was created from this device and is live for the call.
-        unsafe { self.command_queue.Signal(&self.frame_sync.fence, fence_val) }
-            .map_err(|e| format!("probe: convolve signal: {e}"))?;
+        unsafe {
+            self.hw
+                .command_queue
+                .Signal(&self.frame_sync.fence, fence_val)
+        }
+        .map_err(|e| format!("probe: convolve signal: {e}"))?;
         bake.last_fence_value = fence_val;
         Ok(())
     }
@@ -942,7 +954,7 @@ impl DxContext {
         // formatted cubes, so either one an in-flight frame reads shades; only the
         // frame the swap lands in is undefined about which it gets.
         super::texture::write_cube_srv_mips_format(
-            &self.device,
+            &self.hw.device,
             &prefilter,
             mips,
             super::probe_prefilter::PROBE_CUBE_FORMAT,
@@ -1036,8 +1048,8 @@ impl DxContext {
             cmd.RSSetScissorRects(&[scissor]);
 
             cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            cmd.IASetVertexBuffers(0, Some(&[self.geometry.vertex_buffer_view]));
-            cmd.IASetIndexBuffer(Some(&self.geometry.index_buffer_view));
+            cmd.IASetVertexBuffers(0, Some(&[self.scene.geometry.vertex_buffer_view]));
+            cmd.IASetIndexBuffer(Some(&self.scene.geometry.index_buffer_view));
             cmd.SetDescriptorHeaps(&[
                 Some(self.descriptors.srv_heap.clone()),
                 Some(self.descriptors.sampler_heap.clone()),

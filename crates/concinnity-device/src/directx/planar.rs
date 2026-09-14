@@ -458,8 +458,11 @@ impl DxContext {
         // the mirror render shares the main camera's projection + jitter, keeping
         // the reflection aligned with the reflective fragment's screen-space sample.
         let proj = mat4_mul(params.vp_mat, mat4_inverse(self.view.matrix));
-        let prefilter_mip_count = self.env_map.prefilter_mip_count as f32;
-        let (w, h) = (self.extent.render_width, self.extent.render_height);
+        let prefilter_mip_count = self.scene.env_map.prefilter_mip_count as f32;
+        let (w, h) = (
+            self.targets.extent.render_width,
+            self.targets.extent.render_height,
+        );
 
         // Per plane: compute the reflected matrices, write the reflected view CBV,
         // and collect the reflected frustum + eye for the mirror cull. Inline,

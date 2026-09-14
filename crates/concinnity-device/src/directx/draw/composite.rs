@@ -113,7 +113,7 @@ impl fullscreen::CompositeEncoder for DxContext {
                 0,
             );
             // Root param [3]: 3D color-grading LUT SRV (t2).
-            cmd.SetGraphicsRootDescriptorTable(3, self.color_lut.srv_gpu);
+            cmd.SetGraphicsRootDescriptorTable(3, self.scene.color_lut.srv_gpu);
             // Root params [4..6]: the G-buffer channel sources the debug view
             // modes visualize (t3 normal+depth, t4 roughness, t5 SSAO). The
             // fragment references all three statically, so they are bound on
@@ -283,7 +283,7 @@ impl DxContext {
         let text_bytes = fullscreen::text_upload_bytes(text_calls, UPLOAD_ALIGN);
         self.text
             .upload
-            .reserve(&self.alloc, frame_idx, text_bytes)?;
+            .reserve(&self.hw.alloc, frame_idx, text_bytes)?;
 
         let args = DxCompositeArgs {
             back_buffer: back_buffer.clone(),

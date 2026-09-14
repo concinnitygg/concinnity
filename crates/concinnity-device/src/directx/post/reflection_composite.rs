@@ -374,8 +374,8 @@ impl DxContext {
             cmd,
             rc.output_rtv,
             FullscreenExtent {
-                width: self.extent.render_width,
-                height: self.extent.render_height,
+                width: self.targets.extent.render_width,
+                height: self.targets.extent.render_height,
             },
         );
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
@@ -386,7 +386,7 @@ impl DxContext {
             // t0 reflection, t1 scene, t2 G-buffer normal+depth, t3 roughness,
             // t4 blur -- the order `reflection.slang`'s composite declares them.
             cmd.SetGraphicsRootDescriptorTable(0, reflection_srv);
-            cmd.SetGraphicsRootDescriptorTable(1, self.hdr.srv_gpu);
+            cmd.SetGraphicsRootDescriptorTable(1, self.targets.hdr.srv_gpu);
             cmd.SetGraphicsRootDescriptorTable(2, gbuffer.normal_depth_srv_gpu);
             cmd.SetGraphicsRootDescriptorTable(3, gbuffer.roughness_srv_gpu);
             cmd.SetGraphicsRootDescriptorTable(4, rc.blur_srv_gpu);

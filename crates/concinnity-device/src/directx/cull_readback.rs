@@ -45,7 +45,7 @@ impl DxContext {
 
         // READBACK-heap resources start in COPY_DEST and never need a barrier.
         let readback = create_buffer(
-            &self.alloc,
+            &self.hw.alloc,
             byte_size,
             D3D12_HEAP_TYPE_READBACK,
             D3D12_RESOURCE_STATE_COPY_DEST,
@@ -59,7 +59,7 @@ impl DxContext {
         // resource is no longer in.
         // SAFETY: the command list is in the recording state, and every resource these commands
         // name is live for the call.
-        one_shot_submit(&self.device, &self.command_queue, |cmd| unsafe {
+        one_shot_submit(&self.hw.device, &self.hw.command_queue, |cmd| unsafe {
             cmd.CopyBufferRegion(&*readback, 0, &src, 0, byte_size);
         })?;
 

@@ -1032,7 +1032,7 @@ impl TransparentResources {
     }
 
     // True when the see-through mesh pipelines are built, so the Layer 2 reroute
-    // can engage as soon as RT is live. Independent of `rt_accel`, because the
+    // can engage as soon as RT is live. Independent of `rt.accel`, because the
     // init-time BLAS build has to exclude the meshes it will reroute before the
     // acceleration structure it gates on exists.
     pub(in crate::directx) fn mesh_pipelines_ready(&self) -> bool {
@@ -1091,7 +1091,7 @@ impl DxContext {
         let block = align256(std::mem::size_of::<GlassMeshParams>() as u64);
         let ring_base = com::gpu_va(&producer.params_ring[frame_idx]);
         let ring_ptr = producer.params_ptrs[frame_idx];
-        let prefilter_mip_count = self.env_map.prefilter_mip_count as f32;
+        let prefilter_mip_count = self.scene.env_map.prefilter_mip_count as f32;
 
         let mut draws = Vec::with_capacity(producer.object_indices.len());
         for (slot, &idx) in producer.object_indices.iter().enumerate() {
@@ -1218,7 +1218,7 @@ impl DxContext {
                 cam_pos: cam,
                 sun_dir: self.fog.sun_dir,
                 sun_color: self.fog.sun_color,
-                prefilter_mip_count: self.env_map.prefilter_mip_count as f32,
+                prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
                 sky_rot: self.view.sky_rot,
             });
             // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer
@@ -1281,8 +1281,8 @@ impl DxContext {
         // manual occlusion Load: the graph declares this pass's depth read and the
         // executor emits the transition ahead of this command list.
 
-        let w = self.extent.render_width;
-        let h = self.extent.render_height;
+        let w = self.targets.extent.render_width;
+        let h = self.targets.extent.render_height;
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {
@@ -1347,14 +1347,20 @@ impl DxContext {
             // (mirrors `encode_rt_reflections`); no per-record planar, since the RT
             // root sig has no planar slot -- planar is the RT-off sharp path.
             let rt_params_gva = rt_params_gva.expect("rt_live uploaded RtParams");
-            let accel = self.rt_accel.as_ref().expect("rt_reflections_active");
+            let accel = self.rt.accel.as_ref().expect("rt_reflections_active");
             // SAFETY: the command list is in the recording state, and every resource, descriptor
             // and slice these commands name is live for the call.
             unsafe {
                 cmd.SetGraphicsRootConstantBufferView(7, rt_params_gva);
                 cmd.SetGraphicsRootShaderResourceView(8, accel.tlas_gva());
-                cmd.SetGraphicsRootShaderResourceView(9, com::gpu_va(&self.geometry.vertex_buffer));
-                cmd.SetGraphicsRootShaderResourceView(10, com::gpu_va(&self.geometry.index_buffer));
+                cmd.SetGraphicsRootShaderResourceView(
+                    9,
+                    com::gpu_va(&self.scene.geometry.vertex_buffer),
+                );
+                cmd.SetGraphicsRootShaderResourceView(
+                    10,
+                    com::gpu_va(&self.scene.geometry.index_buffer),
+                );
                 cmd.SetGraphicsRootShaderResourceView(11, accel.geom_table_gva());
                 cmd.SetGraphicsRootShaderResourceView(12, accel.deformed_verts_gva());
                 cmd.SetGraphicsRootShaderResourceView(13, accel.skinned_index_gva());
@@ -1409,8 +1415,8 @@ impl DxContext {
                 // SAFETY: the command list is in the recording state, and every resource,
                 // descriptor and slice these commands name is live for the call.
                 unsafe {
-                    cmd.IASetVertexBuffers(0, Some(&[self.geometry.vertex_buffer_view]));
-                    cmd.IASetIndexBuffer(Some(&self.geometry.index_buffer_view));
+                    cmd.IASetVertexBuffers(0, Some(&[self.scene.geometry.vertex_buffer_view]));
+                    cmd.IASetIndexBuffer(Some(&self.scene.geometry.index_buffer_view));
                     cmd.SetGraphicsRootConstantBufferView(1, d.params_gva);
                     cmd.DrawIndexedInstanced(d.index_count, 1, d.index_offset, d.base_vertex, 0);
                 }

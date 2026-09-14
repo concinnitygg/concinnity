@@ -194,8 +194,8 @@ impl DxContext {
         unsafe {
             cmd.SetPipelineState(sb_pso);
             cmd.SetGraphicsRootSignature(sb_root);
-            cmd.IASetVertexBuffers(0, Some(&[self.geometry.vertex_buffer_view]));
-            cmd.IASetIndexBuffer(Some(&self.geometry.index_buffer_view));
+            cmd.IASetVertexBuffers(0, Some(&[self.scene.geometry.vertex_buffer_view]));
+            cmd.IASetIndexBuffer(Some(&self.scene.geometry.index_buffer_view));
             // [1] shadow UBO (light_vps), [3] this frame's GpuObjectData.
             cmd.SetGraphicsRootConstantBufferView(1, shadow_ubo_gva);
             cmd.SetGraphicsRootShaderResourceView(3, object_gva);
@@ -289,8 +289,8 @@ impl DxContext {
         unsafe {
             cmd.SetPipelineState(bind.pso);
             cmd.SetGraphicsRootSignature(bind.root_sig);
-            cmd.IASetVertexBuffers(0, Some(&[self.geometry.vertex_buffer_view]));
-            cmd.IASetIndexBuffer(Some(&self.geometry.index_buffer_view));
+            cmd.IASetVertexBuffers(0, Some(&[self.scene.geometry.vertex_buffer_view]));
+            cmd.IASetIndexBuffer(Some(&self.scene.geometry.index_buffer_view));
             cmd.SetGraphicsRootConstantBufferView(1, bind.ubo_gva);
 
             // See-through glass (Layer 2) casts no shadow: it is rerouted out of
