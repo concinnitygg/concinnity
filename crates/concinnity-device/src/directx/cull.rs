@@ -17,11 +17,13 @@
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::lod;
 use concinnity_core::gfx::render_types;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::model_history::HistoryMode;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::com;
 use crate::directx::context::DxContext;
+use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::slang_builtins::{self, SlangCompile as _};
 use crate::directx::texture::transition_barrier;
@@ -46,21 +48,27 @@ pub(in crate::directx) use crate::directx::uniforms::CullParams;
 // Pipeline + command signature builders
 
 // Compile the phase-1 GPU-cull compute kernel (`main`) to DXBC.
-pub(in crate::directx) fn compile_cull_shader(hot_reload: bool) -> Result<Vec<u8>, String> {
-    slang_builtins::CULL.compile(hot_reload)
+pub(in crate::directx) fn compile_cull_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
+    slang_builtins::CULL
+        .compile(hot_reload)
+        .map_err(RenderError::ShaderCompile)
 }
 
 // Compile the phase-2 GPU-cull compute kernel (`main_phase2`) for two-pass
 // occlusion. Same source / root signature as phase 1, different entry point.
-pub(in crate::directx) fn compile_cull_shader_phase2(hot_reload: bool) -> Result<Vec<u8>, String> {
-    slang_builtins::CULL_PHASE2.compile(hot_reload)
+pub(in crate::directx) fn compile_cull_shader_phase2(hot_reload: bool) -> RenderResult<Vec<u8>> {
+    slang_builtins::CULL_PHASE2
+        .compile(hot_reload)
+        .map_err(RenderError::ShaderCompile)
 }
 
 // Compile the GPU-driven shadow cull kernel (`main_shadow`): light-frustum only
 // (no Hi-Z, no distance cull, no status write). Same source / root signature as
 // phase 1, different entry point.
-pub(in crate::directx) fn compile_cull_shader_shadow(hot_reload: bool) -> Result<Vec<u8>, String> {
-    slang_builtins::CULL_SHADOW.compile(hot_reload)
+pub(in crate::directx) fn compile_cull_shader_shadow(hot_reload: bool) -> RenderResult<Vec<u8>> {
+    slang_builtins::CULL_SHADOW
+        .compile(hot_reload)
+        .map_err(RenderError::ShaderCompile)
 }
 
 // Root signature for the GPU-cull compute kernel: a `CullParams` root-constant
@@ -74,7 +82,7 @@ pub(in crate::directx) fn compile_cull_shader_shadow(hot_reload: bool) -> Result
 // phase 2 reads `cull_status` and writes the phase-2 `commands`.
 pub(in crate::directx) fn create_cull_root_signature(
     device: &ID3D12Device,
-) -> Result<ID3D12RootSignature, String> {
+) -> RenderResult<ID3D12RootSignature> {
     let hiz_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
         NumDescriptors: 1,
@@ -158,7 +166,7 @@ pub(in crate::directx) fn create_cull_root_signature(
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
         ..Default::default()
     };
-    serialize_desc_and_create(device, &desc, "cull root sig")
+    Ok(serialize_desc_and_create(device, &desc, "cull root sig")?)
 }
 
 // Compute pipeline state for the GPU-cull kernel.
@@ -166,7 +174,7 @@ pub(in crate::directx) fn create_cull_pso(
     device: &ID3D12Device,
     root_sig: &ID3D12RootSignature,
     cs: &[u8],
-) -> Result<ID3D12PipelineState, String> {
+) -> RenderResult<ID3D12PipelineState> {
     let desc = D3D12_COMPUTE_PIPELINE_STATE_DESC {
         pRootSignature: com::borrowed(root_sig),
         CS: D3D12_SHADER_BYTECODE {
@@ -178,7 +186,7 @@ pub(in crate::directx) fn create_cull_pso(
     // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
     // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_compute(device, &desc) }
-        .map_err(|e| format!("create cull PSO: {e}"))
+        .map_err(|e| map_pso_hresult(e.code(), "create cull PSO"))
 }
 
 // Command signature for the GPU-driven main pass `ExecuteIndirect`: each
@@ -189,7 +197,7 @@ pub(in crate::directx) fn create_cull_pso(
 pub(in crate::directx) fn create_cull_command_signature(
     device: &ID3D12Device,
     bindless_root_sig: &ID3D12RootSignature,
-) -> Result<ID3D12CommandSignature, String> {
+) -> RenderResult<ID3D12CommandSignature> {
     let arg_descs = [
         D3D12_INDIRECT_ARGUMENT_DESC {
             Type: D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT,
@@ -216,8 +224,10 @@ pub(in crate::directx) fn create_cull_command_signature(
     // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
     // COM object lands in a binding that owns it.
     unsafe { device.CreateCommandSignature(&desc, bindless_root_sig, &mut sig) }
-        .map_err(|e| format!("create cull command signature: {e}"))?;
-    sig.ok_or_else(|| "create cull command signature: returned None".to_string())
+        .map_err(|e| map_hresult(e.code(), "create cull command signature"))?;
+    sig.ok_or_else(|| {
+        RenderError::Other("create cull command signature: returned None".to_string())
+    })
 }
 
 // Per-frame buffer fill + encoder

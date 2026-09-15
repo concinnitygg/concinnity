@@ -38,6 +38,7 @@
 
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::reflection_probe::{
     self, BakeAction, BakePhase, BakeSignals, PrefilterPlan,
 };
@@ -48,10 +49,10 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
 use super::context::{DxContext, FRAMES};
+use super::error::map_hresult;
 use super::probe_prefilter::PrefilterGpu;
 use super::texture::{
-    HDR_FORMAT, create_buffer, create_hdr_color_target, create_hdr_resolve_target,
-    transition_barrier,
+    HDR_FORMAT, create_hdr_color_target, create_hdr_resolve_target, transition_barrier,
 };
 
 // What a runtime capture bakes: face size, mip count, GGX sample count and firefly
@@ -274,7 +275,7 @@ impl DxContext {
         elapsed: f32,
         near: f32,
         far: f32,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let _ = elapsed;
         if !self.probe.bake_queue.pending()
             && self.probe.rendering.is_none()
@@ -414,7 +415,7 @@ impl DxContext {
     // Abandon the rest of the bake after an unrecoverable error, keeping the cubes
     // already installed. The queue cursor advanced when the current probe started, so
     // aborting (cursor -> end) keeps `probe.maps` aligned with the placement list.
-    fn fail_bake(&mut self, e: String) {
+    fn fail_bake(&mut self, e: RenderError) {
         tracing::warn!(
             "reflection probe bake failed, keeping {} baked: {e}",
             self.probe.maps.len()
@@ -430,7 +431,7 @@ impl DxContext {
     // buffers (object + draw-args, frustum-independent) ONCE, and allocate the capture
     // targets + per-face view CBVs + both cubes. No face is submitted here; the
     // faces follow one per frame via `probe_render_next_face`.
-    fn probe_start_next(&mut self, near: f32, far: f32) -> Result<(), String> {
+    fn probe_start_next(&mut self, near: f32, far: f32) -> RenderResult<()> {
         let Some(index) = self.probe.bake_queue.take_next() else {
             return Ok(());
         };
@@ -519,8 +520,7 @@ impl DxContext {
                 _end_pad: 0.0,
                 sky_rot: self.view.sky_rot,
             };
-            let cbv = create_buffer(
-                alloc,
+            let cbv = alloc.alloc_buffer(
                 256,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -529,7 +529,7 @@ impl DxContext {
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
             unsafe { cbv.Map(0, None, Some(&mut ptr)) }
-                .map_err(|e| format!("probe: map view cbv: {e}"))?;
+                .map_err(|e| map_hresult(e.code(), "probe: map view cbv"))?;
             // SAFETY: the buffer is 256 bytes; ViewUniforms is 208.
             unsafe {
                 std::ptr::copy_nonoverlapping(
@@ -582,14 +582,12 @@ impl DxContext {
     // static + instance geometry into the face target, (resolves +) copies it into its
     // slice of the capture cube, then signals a fence value. The last face's value is
     // what the convolution waits for.
-    fn probe_render_next_face(&mut self) -> Result<(), String> {
+    fn probe_render_next_face(&mut self) -> RenderResult<()> {
         let slot = self.bake_ring_slot();
         let (face, eye, near, far, sample_count, view_gva, light_gva, shadow_gva) = {
-            let bake = self
-                .probe
-                .rendering
-                .as_ref()
-                .ok_or("probe: render face with no capture in flight")?;
+            let bake = self.probe.rendering.as_ref().ok_or_else(|| {
+                RenderError::Other("probe: render face with no capture in flight".to_string())
+            })?;
             (
                 bake.cursor,
                 bake.eye,
@@ -614,7 +612,7 @@ impl DxContext {
                 .device
                 .CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT)
         }
-        .map_err(|e| format!("probe: face allocator: {e}"))?;
+        .map_err(|e| map_hresult(e.code(), "probe: face allocator"))?;
         // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
         // new COM object lands in a binding that owns it.
         let cmd: ID3D12GraphicsCommandList = unsafe {
@@ -622,7 +620,7 @@ impl DxContext {
                 .device
                 .CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &alloc, None)
         }
-        .map_err(|e| format!("probe: face cmd list: {e}"))?;
+        .map_err(|e| map_hresult(e.code(), "probe: face cmd list"))?;
         // Register the recording on the bake before anything can fail: once it is
         // submitted, only `abandon_in_flight_bakes` idling the device makes it safe to
         // drop, and that reaches it only through the bake.
@@ -667,9 +665,9 @@ impl DxContext {
 
         // SAFETY: the command list is live and in the recording state, which is what `Close`
         // requires.
-        unsafe { cmd.Close() }.map_err(|e| format!("probe: face close: {e}"))?;
-        let list: ID3D12CommandList =
-            windows::core::Interface::cast(&cmd).map_err(|e| format!("probe: face cast: {e}"))?;
+        unsafe { cmd.Close() }.map_err(|e| map_hresult(e.code(), "probe: face close"))?;
+        let list: ID3D12CommandList = windows::core::Interface::cast(&cmd)
+            .map_err(|e| map_hresult(e.code(), "probe: face cast"))?;
         // SAFETY: every command list in the submission is live and closed, and the slice outlives
         // the call.
         unsafe { self.hw.command_queue.ExecuteCommandLists(&[Some(list)]) };
@@ -683,7 +681,7 @@ impl DxContext {
                 .command_queue
                 .Signal(&self.frame_sync.fence, fence_val)
         }
-        .map_err(|e| format!("probe: face signal: {e}"))?;
+        .map_err(|e| map_hresult(e.code(), "probe: face signal"))?;
 
         if let Some(bake) = self.probe.rendering.as_mut() {
             bake.last_fence_value = fence_val;
@@ -702,7 +700,7 @@ impl DxContext {
         cmd: &ID3D12GraphicsCommandList,
         face: usize,
         sample_count: u32,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let bake = self
             .probe
             .rendering
@@ -797,12 +795,10 @@ impl DxContext {
     // ownership of the two cubes, and submit the cheap half of the convolution -- the
     // firefly-clamped mirror mip plus the capture's source pyramid. The bake moves to
     // the Prefiltering slot with the mip cursor at 1.
-    fn probe_begin_prefilter(&mut self) -> Result<(), String> {
-        let bake = self
-            .probe
-            .rendering
-            .take()
-            .ok_or("probe: convolve with no bake in flight")?;
+    fn probe_begin_prefilter(&mut self) -> RenderResult<()> {
+        let bake = self.probe.rendering.take().ok_or_else(|| {
+            RenderError::Other("probe: convolve with no bake in flight".to_string())
+        })?;
         let RenderingBake {
             index,
             placement,
@@ -836,12 +832,10 @@ impl DxContext {
     // writes a mip nothing else touches, so consecutive mips need no barrier; the
     // queue's FIFO order puts every one of them after the pyramid build that produced
     // their source.
-    fn probe_prefilter_next_mip(&mut self) -> Result<(), String> {
-        let mut bake = self
-            .probe
-            .prefiltering
-            .take()
-            .ok_or("probe: convolve mip with no bake in flight")?;
+    fn probe_prefilter_next_mip(&mut self) -> RenderResult<()> {
+        let mut bake = self.probe.prefiltering.take().ok_or_else(|| {
+            RenderError::Other("probe: convolve mip with no bake in flight".to_string())
+        })?;
         let cursor = bake.cursor;
         // The last mip's list also carries the cube into PIXEL_SHADER_RESOURCE. The
         // install has no list of its own to submit that transition on: it would have
@@ -875,8 +869,8 @@ impl DxContext {
     fn record_prefilter_step(
         &self,
         bake: &mut PrefilteringBake,
-        encode: impl FnOnce(&Self, &ID3D12GraphicsCommandList, &PrefilteringBake) -> Result<(), String>,
-    ) -> Result<(), String> {
+        encode: impl FnOnce(&Self, &ID3D12GraphicsCommandList, &PrefilteringBake) -> RenderResult<()>,
+    ) -> RenderResult<()> {
         // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
         // new COM object lands in a binding that owns it.
         let alloc: ID3D12CommandAllocator = unsafe {
@@ -884,14 +878,14 @@ impl DxContext {
                 .device
                 .CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT)
         }
-        .map_err(|e| format!("probe: convolve allocator: {e}"))?;
+        .map_err(|e| map_hresult(e.code(), "probe: convolve allocator"))?;
         // SAFETY: as above.
         let cmd: ID3D12GraphicsCommandList = unsafe {
             self.hw
                 .device
                 .CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &alloc, None)
         }
-        .map_err(|e| format!("probe: convolve cmd list: {e}"))?;
+        .map_err(|e| map_hresult(e.code(), "probe: convolve cmd list"))?;
         bake.cmd_allocs.push(alloc);
         bake.cmd_lists.push(cmd.clone());
 
@@ -902,9 +896,9 @@ impl DxContext {
         encode(self, &cmd, bake)?;
         // SAFETY: the command list is live and in the recording state, which is what `Close`
         // requires.
-        unsafe { cmd.Close() }.map_err(|e| format!("probe: convolve close: {e}"))?;
+        unsafe { cmd.Close() }.map_err(|e| map_hresult(e.code(), "probe: convolve close"))?;
         let list: ID3D12CommandList = windows::core::Interface::cast(&cmd)
-            .map_err(|e| format!("probe: convolve cast: {e}"))?;
+            .map_err(|e| map_hresult(e.code(), "probe: convolve cast"))?;
         // SAFETY: every command list in the submission is live and closed, and the slice outlives
         // the call.
         unsafe { self.hw.command_queue.ExecuteCommandLists(&[Some(list)]) };
@@ -917,7 +911,7 @@ impl DxContext {
                 .command_queue
                 .Signal(&self.frame_sync.fence, fence_val)
         }
-        .map_err(|e| format!("probe: convolve signal: {e}"))?;
+        .map_err(|e| map_hresult(e.code(), "probe: convolve signal"))?;
         bake.last_fence_value = fence_val;
         Ok(())
     }
@@ -930,12 +924,10 @@ impl DxContext {
     // Purely CPU work. Nothing is uploaded -- the cube was written in place -- and
     // the dispatch recordings free here, which the fence gate on this transition
     // proved the GPU had finished with.
-    fn probe_install(&mut self) -> Result<(), String> {
-        let bake = self
-            .probe
-            .prefiltering
-            .take()
-            .ok_or("probe: install with no bake in flight")?;
+    fn probe_install(&mut self) -> RenderResult<()> {
+        let bake = self.probe.prefiltering.take().ok_or_else(|| {
+            RenderError::Other("probe: install with no bake in flight".to_string())
+        })?;
         let mips = bake.gpu.mips();
         let PrefilteringBake {
             index,
@@ -1116,10 +1108,9 @@ impl DxContext {
 // and return it with its GPU virtual address. Used for the bake's per-capture light
 // + shadow snapshots, so the six faces share one lighting set decoupled from the
 // frame's per-frame CBV writes.
-fn make_snapshot_cbv(alloc: &DeviceAllocator, bytes: &[u8]) -> Result<(PooledBuffer, u64), String> {
+fn make_snapshot_cbv(alloc: &DeviceAllocator, bytes: &[u8]) -> RenderResult<(PooledBuffer, u64)> {
     let size = (((bytes.len() as u64) + 255) & !255).max(256);
-    let cbv = create_buffer(
-        alloc,
+    let cbv = alloc.alloc_buffer(
         size,
         D3D12_HEAP_TYPE_UPLOAD,
         D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -1128,7 +1119,7 @@ fn make_snapshot_cbv(alloc: &DeviceAllocator, bytes: &[u8]) -> Result<(PooledBuf
     // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
     // receives the mapping.
     unsafe { cbv.Map(0, None, Some(&mut ptr)) }
-        .map_err(|e| format!("probe: map snapshot cbv: {e}"))?;
+        .map_err(|e| map_hresult(e.code(), "probe: map snapshot cbv"))?;
     // SAFETY: the buffer is at least `bytes.len()` bytes (256-aligned).
     unsafe {
         std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr as *mut u8, bytes.len());
@@ -1138,7 +1129,7 @@ fn make_snapshot_cbv(alloc: &DeviceAllocator, bytes: &[u8]) -> Result<(PooledBuf
 }
 
 // A one-entry non-shader-visible RTV heap for a probe face color target.
-fn create_rtv_heap(device: &ID3D12Device) -> Result<ID3D12DescriptorHeap, String> {
+fn create_rtv_heap(device: &ID3D12Device) -> RenderResult<ID3D12DescriptorHeap> {
     let desc = D3D12_DESCRIPTOR_HEAP_DESC {
         Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
         NumDescriptors: 1,
@@ -1147,11 +1138,12 @@ fn create_rtv_heap(device: &ID3D12Device) -> Result<ID3D12DescriptorHeap, String
     };
     // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
     // COM object lands in a binding that owns it.
-    unsafe { device.CreateDescriptorHeap(&desc) }.map_err(|e| format!("probe: rtv heap: {e}"))
+    unsafe { device.CreateDescriptorHeap(&desc) }
+        .map_err(|e| map_hresult(e.code(), "probe: rtv heap"))
 }
 
 // A one-entry non-shader-visible DSV heap for a probe face depth target.
-fn create_dsv_heap(device: &ID3D12Device) -> Result<ID3D12DescriptorHeap, String> {
+fn create_dsv_heap(device: &ID3D12Device) -> RenderResult<ID3D12DescriptorHeap> {
     let desc = D3D12_DESCRIPTOR_HEAP_DESC {
         Type: D3D12_DESCRIPTOR_HEAP_TYPE_DSV,
         NumDescriptors: 1,
@@ -1160,7 +1152,8 @@ fn create_dsv_heap(device: &ID3D12Device) -> Result<ID3D12DescriptorHeap, String
     };
     // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
     // COM object lands in a binding that owns it.
-    unsafe { device.CreateDescriptorHeap(&desc) }.map_err(|e| format!("probe: dsv heap: {e}"))
+    unsafe { device.CreateDescriptorHeap(&desc) }
+        .map_err(|e| map_hresult(e.code(), "probe: dsv heap"))
 }
 
 // Create a probe face depth target (D32_FLOAT, matching the main pass's DSV format
@@ -1171,7 +1164,7 @@ fn create_bake_depth(
     size: u32,
     sample_count: u32,
     dsv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-) -> Result<ID3D12Resource, String> {
+) -> RenderResult<ID3D12Resource> {
     let heap_props = D3D12_HEAP_PROPERTIES {
         Type: D3D12_HEAP_TYPE_DEFAULT,
         ..Default::default()
@@ -1212,8 +1205,9 @@ fn create_bake_depth(
             &mut tex_opt,
         )
     }
-    .map_err(|e| format!("probe: create face depth: {e}"))?;
-    let texture = tex_opt.ok_or_else(|| "probe: create face depth returned None".to_string())?;
+    .map_err(|e| map_hresult(e.code(), "probe: create face depth"))?;
+    let texture = tex_opt
+        .ok_or_else(|| RenderError::Other("probe: create face depth returned None".to_string()))?;
     let dsv_desc = D3D12_DEPTH_STENCIL_VIEW_DESC {
         Format: DXGI_FORMAT_D32_FLOAT,
         ViewDimension: if sample_count > 1 {

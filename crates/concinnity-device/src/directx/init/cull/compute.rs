@@ -14,6 +14,7 @@ use crate::directx::cull::{
     INDIRECT_COMMAND_STRIDE, compile_cull_shader, create_cull_command_signature, create_cull_pso,
     create_cull_root_signature,
 };
+use crate::directx::error::map_hresult;
 use crate::directx::hiz::{HiZDeviceCtx, HiZResources, HiZTarget};
 use crate::directx::init::{HIZ_MAX_MIPS, InitGpu};
 use crate::directx::texture::{create_buffer, create_uav_buffer};
@@ -111,7 +112,7 @@ pub(super) fn build_compute_cull(
         // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
         // local that receives the mapping.
         unsafe { da.Map(0, None, Some(&mut ptr)) }
-            .map_err(|e| format!("map draw args buffer: {e}"))?;
+            .map_err(|e| map_hresult(e.code(), "map draw args buffer"))?;
         draw_args_ptrs.push(ptr as *mut u8);
         draw_args_buffers.push(da);
 

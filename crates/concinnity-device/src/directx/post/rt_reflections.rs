@@ -16,6 +16,7 @@
 
 use concinnity_core::gfx::render_types::RtParams;
 use concinnity_core::gfx::rt_reflections::{RtParamsInputs, RtReflectionSettings};
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::post::device::PostBlend;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -23,12 +24,12 @@ use windows::Win32::Graphics::Direct3D12::*;
 use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
 use crate::directx::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
+use crate::directx::error::map_hresult;
 use crate::directx::pipeline::{create_blended_composite_pso, serialize_desc_and_create};
 use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::{
-    HDR_FORMAT, create_buffer, create_rt_target, transition_barrier, write_format_rtv,
-    write_format_srv,
+    HDR_FORMAT, create_rt_target, transition_barrier, write_format_rtv, write_format_srv,
 };
 
 // Size of the RT-reflection fragment-shader uniform block. 144 bytes; see
@@ -49,11 +50,17 @@ struct RtShaders {
 // shader existed for, the DirectX/Metal UV flip. Returns an `Err` (which the
 // caller turns into an SSR fallback) when slangc is unavailable or the shader
 // fails to compile.
-fn compile_rt_shaders(hot_reload: bool) -> Result<RtShaders, String> {
+fn compile_rt_shaders(hot_reload: bool) -> RenderResult<RtShaders> {
     Ok(RtShaders {
-        vs: slang_builtins::FULLSCREEN_VERT.compile(hot_reload)?,
-        flat_ps: slang_builtins::RT_REFLECTIONS_FRAG.compile(hot_reload)?,
-        textured_ps: slang_builtins::RT_REFLECTIONS_FRAG_TEXTURED.compile(hot_reload)?,
+        vs: slang_builtins::FULLSCREEN_VERT
+            .compile(hot_reload)
+            .map_err(RenderError::ShaderCompile)?,
+        flat_ps: slang_builtins::RT_REFLECTIONS_FRAG
+            .compile(hot_reload)
+            .map_err(RenderError::ShaderCompile)?,
+        textured_ps: slang_builtins::RT_REFLECTIONS_FRAG_TEXTURED
+            .compile(hot_reload)
+            .map_err(RenderError::ShaderCompile)?,
     })
 }
 
@@ -66,7 +73,7 @@ fn compile_rt_shaders(hot_reload: bool) -> Result<RtShaders, String> {
 // t7, and the unbounded bindless pool at (t0, space1); and two more root SRVs t8/t9
 // (deformed skinned verts / skinned indices, for skinned hits). Three static
 // samplers: linear-clamp s0, cube linear-clamp s1, linear-repeat s2.
-fn create_rt_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignature, String> {
+fn create_rt_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     let table_range = |reg: u32| D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
         NumDescriptors: 1,
@@ -179,7 +186,11 @@ fn create_rt_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignature
         pStaticSamplers: samplers.as_ptr(),
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
     };
-    serialize_desc_and_create(device, &desc, "rt reflections root sig")
+    Ok(serialize_desc_and_create(
+        device,
+        &desc,
+        "rt reflections root sig",
+    )?)
 }
 
 // Resources
@@ -240,7 +251,7 @@ impl RtReflectionsResources {
         settings: RtReflectionSettings,
         descriptors: RtOutputDescriptors,
         init: RtBuildInit,
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         let RtBuildContext {
             alloc,
             width,
@@ -263,8 +274,7 @@ impl RtReflectionsResources {
         let mut params_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
         let mut params_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
         for _ in 0..FRAMES {
-            let buf = create_buffer(
-                alloc,
+            let buf = alloc.alloc_buffer(
                 params_size,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -273,7 +283,7 @@ impl RtReflectionsResources {
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
             unsafe { buf.Map(0, None, Some(&mut ptr)) }
-                .map_err(|e| format!("map rt params ubo: {e}"))?;
+                .map_err(|e| map_hresult(e.code(), "map rt params ubo"))?;
             params_ubo_ptrs.push(ptr as *mut u8);
             params_ubo_resources.push(buf);
         }
@@ -328,7 +338,7 @@ impl RtReflectionsResources {
         height: u32,
         srv_cpu_base: D3D12_CPU_DESCRIPTOR_HANDLE,
         srv_gpu_base: D3D12_GPU_DESCRIPTOR_HANDLE,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let srv_cpu = D3D12_CPU_DESCRIPTOR_HANDLE {
             ptr: srv_cpu_base.ptr + (self.output_srv_gpu.ptr - srv_gpu_base.ptr) as usize,
         };
@@ -354,7 +364,7 @@ pub(in crate::directx) fn rebuild_rt_reflections_pipelines(
     rt: &RtReflectionsResources,
     hot_reload: bool,
     info_queue: Option<&ID3D12InfoQueue>,
-) -> Result<RebuiltRtPipelines, String> {
+) -> RenderResult<RebuiltRtPipelines> {
     let shaders = compile_rt_shaders(hot_reload)?;
     let flat_pso = dump_on_err(
         info_queue,

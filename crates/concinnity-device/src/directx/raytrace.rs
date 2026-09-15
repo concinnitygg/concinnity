@@ -37,6 +37,7 @@
 use concinnity_core::gfx::render_types::{
     DrawObject, InstancedCluster, RtGeomEntry, SkinnedDrawObject,
 };
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::rt_geom::{
     cluster_geom_entry, geom_entry, models_dirty, skinned_geom_entry,
 };
@@ -52,7 +53,8 @@ pub(super) use concinnity_core::render::rt_geom::RtDynamicMode;
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
 use super::context::FRAMES;
-use super::texture::{create_buffer, create_uav_buffer, transition_barrier};
+use super::error::{map_hresult, map_pso_hresult};
+use super::texture::{create_uav_buffer, transition_barrier};
 use crate::directx::slang_builtins::SlangCompile;
 
 // Byte stride of a `Vertex` in the shared vertex buffer (pos + normal + tangent
@@ -189,12 +191,12 @@ fn skinned_triangle_geometry(
 
 // Create an acceleration-structure backing buffer (default heap,
 // `ALLOW_UNORDERED_ACCESS`, initial state `RAYTRACING_ACCELERATION_STRUCTURE`).
-fn create_as_buffer(device: &ID3D12Device, size: u64) -> Result<ID3D12Resource, String> {
-    create_uav_buffer(
+fn create_as_buffer(device: &ID3D12Device, size: u64) -> RenderResult<ID3D12Resource> {
+    Ok(create_uav_buffer(
         device,
         size.max(256),
         D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE,
-    )
+    )?)
 }
 
 // Create a build scratch buffer (default heap, `ALLOW_UNORDERED_ACCESS`). D3D12
@@ -203,8 +205,12 @@ fn create_as_buffer(device: &ID3D12Device, size: u64) -> Result<ID3D12Resource, 
 // warning; the buffer implicitly promotes to `UNORDERED_ACCESS` on the AS
 // build's first UAV access (and decays back to `COMMON` after each
 // `ExecuteCommandLists`, re-promoting on the next reused-scratch rebuild).
-fn create_scratch(device: &ID3D12Device, size: u64) -> Result<ID3D12Resource, String> {
-    create_uav_buffer(device, size.max(256), D3D12_RESOURCE_STATE_COMMON)
+fn create_scratch(device: &ID3D12Device, size: u64) -> RenderResult<ID3D12Resource> {
+    Ok(create_uav_buffer(
+        device,
+        size.max(256),
+        D3D12_RESOURCE_STATE_COMMON,
+    )?)
 }
 
 // Byte size of a scratch slot covering a build requiring `needed` bytes. D3D12
@@ -241,7 +247,7 @@ struct ScratchRing {
 
 impl ScratchRing {
     // Allocate `frames` slots, each covering a build requiring `needed` bytes.
-    fn new(device: &ID3D12Device, frames: usize, needed: u64) -> Result<Self, String> {
+    fn new(device: &ID3D12Device, frames: usize, needed: u64) -> RenderResult<Self> {
         let capacity = scratch_capacity(needed);
         let mut slots = Vec::with_capacity(frames.max(1));
         for _ in 0..frames.max(1) {
@@ -267,7 +273,7 @@ impl ScratchRing {
         device: &ID3D12Device,
         frame_idx: usize,
         needed: u64,
-    ) -> Result<u64, String> {
+    ) -> RenderResult<u64> {
         let capacity = scratch_capacity(needed);
         let slot = &mut self.slots[frame_idx];
         if ring_slot_needs_grow(true, slot.capacity, capacity) {
@@ -288,10 +294,9 @@ fn upload_slice<T: Copy>(
     alloc: &DeviceAllocator,
     data: &[T],
     label: &str,
-) -> Result<PooledBuffer, String> {
+) -> RenderResult<PooledBuffer> {
     let bytes = std::mem::size_of_val(data).max(16) as u64;
-    let buf = create_buffer(
-        alloc,
+    let buf = alloc.alloc_buffer(
         bytes,
         D3D12_HEAP_TYPE_UPLOAD,
         D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -299,7 +304,8 @@ fn upload_slice<T: Copy>(
     let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
     // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
     // receives the mapping.
-    unsafe { buf.Map(0, None, Some(&mut ptr)) }.map_err(|e| format!("map {label}: {e}"))?;
+    unsafe { buf.Map(0, None, Some(&mut ptr)) }
+        .map_err(|e| map_hresult(e.code(), &format!("map {label}")))?;
     // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the source
     // is a separate allocation, so the ranges cannot overlap.
     unsafe {
@@ -418,7 +424,7 @@ const SKIN_PARAMS_DWORDS: u32 = 4;
 // b0, the skinned vertex buffer as a root SRV (t0), the joint palette as a root
 // SRV (t1), the deformed output as a root UAV (u0), the morph deltas as a root
 // SRV (t2), and the morph weights as a root SRV (t3).
-fn create_skin_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignature, String> {
+fn create_skin_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     let params = [
         // [0] b0 SkinParams root constants
         D3D12_ROOT_PARAMETER {
@@ -494,7 +500,11 @@ fn create_skin_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignatu
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
         ..Default::default()
     };
-    super::pipeline::serialize_desc_and_create(device, &desc, "rt skin root sig")
+    Ok(super::pipeline::serialize_desc_and_create(
+        device,
+        &desc,
+        "rt skin root sig",
+    )?)
 }
 
 // Build the `rt_skin` compute pipeline (root signature + PSO). slangc emits it
@@ -502,8 +512,10 @@ fn create_skin_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignatu
 // when the kernel fails to compile; the caller then leaves the skin pipeline
 // `None` and skinned geometry is absent from the BVH (the RT pass still runs for
 // static geometry).
-fn build_skin_pipeline(device: &ID3D12Device, hot_reload: bool) -> Result<SkinPipeline, String> {
-    let cs = super::slang_builtins::RT_SKIN.compile(hot_reload)?;
+fn build_skin_pipeline(device: &ID3D12Device, hot_reload: bool) -> RenderResult<SkinPipeline> {
+    let cs = super::slang_builtins::RT_SKIN
+        .compile(hot_reload)
+        .map_err(RenderError::ShaderCompile)?;
     let root_sig = create_skin_root_signature(device)?;
     let desc = D3D12_COMPUTE_PIPELINE_STATE_DESC {
         pRootSignature: com::borrowed(&root_sig),
@@ -516,7 +528,7 @@ fn build_skin_pipeline(device: &ID3D12Device, hot_reload: bool) -> Result<SkinPi
     // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
     // and input-element array whose raw pointers it borrows.
     let pso = unsafe { crate::directx::pso_library::create_compute(device, &desc) }
-        .map_err(|e| format!("create rt skin PSO: {e}"))?;
+        .map_err(|e| map_pso_hresult(e.code(), "create rt skin PSO"))?;
     Ok(SkinPipeline { root_sig, pso })
 }
 
@@ -679,18 +691,18 @@ fn write_upload_ring<T: Copy>(
     alloc: &DeviceAllocator,
     data: &[T],
     label: &str,
-) -> Result<(), String> {
+) -> RenderResult<()> {
     let len_bytes = std::mem::size_of_val(data);
     let needed = (len_bytes as u64).max(4);
     if ring_slot_needs_grow(slot.is_some(), *cap, needed) {
         *slot = Some(
-            create_buffer(
-                alloc,
-                needed,
-                D3D12_HEAP_TYPE_UPLOAD,
-                D3D12_RESOURCE_STATE_GENERIC_READ,
-            )
-            .map_err(|e| format!("{label}: {e}"))?,
+            alloc
+                .alloc_buffer(
+                    needed,
+                    D3D12_HEAP_TYPE_UPLOAD,
+                    D3D12_RESOURCE_STATE_GENERIC_READ,
+                )
+                .map_err(|e| e.context(label))?,
         );
         *cap = needed;
     }
@@ -702,7 +714,7 @@ fn write_upload_ring<T: Copy>(
     // is a separate allocation, so the ranges cannot overlap.
     unsafe {
         buf.Map(0, None, Some(&mut ptr))
-            .map_err(|e| format!("{label} map: {e}"))?;
+            .map_err(|e| map_hresult(e.code(), &format!("{label} map")))?;
         std::ptr::copy_nonoverlapping(data.as_ptr() as *const u8, ptr as *mut u8, len_bytes);
         buf.Unmap(0, None);
     }
@@ -857,7 +869,7 @@ impl RtAccelData {
 pub(super) fn build_rt_skin_pipeline(
     device: &ID3D12Device,
     hot_reload: bool,
-) -> Result<SkinPipeline, String> {
+) -> RenderResult<SkinPipeline> {
     build_skin_pipeline(device, hot_reload)
 }
 
@@ -920,7 +932,7 @@ pub(super) struct RtDynamicInputs<'a> {
 // each geometry's `VertexCount`); `albedo_count` is the shared pool's
 // real-texture count, used to resolve each geometry's albedo / normal pool
 // indices (the flat-normal fallback sits at `albedo_count`) for the RT hit shader.
-pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> Result<Option<RtAccelData>, String> {
+pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> RenderResult<Option<RtAccelData>> {
     let RtInitGeometry {
         alloc,
         vertex_buffer,
@@ -935,7 +947,7 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> Result<Option<RtAccelD
     let queue = alloc.queue();
     let device5: ID3D12Device5 = device
         .cast()
-        .map_err(|e| format!("ID3D12Device5 cast (DXR unsupported?): {e}"))?;
+        .map_err(|e| map_hresult(e.code(), "ID3D12Device5 cast (DXR unsupported?)"))?;
 
     // Participating static objects + clusters (real triangles, resident, and not
     // rerouted to the see-through transparent path).
@@ -1074,12 +1086,8 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> Result<Option<RtAccelD
     // warning); COMMON implicitly promotes to a shader-read state on the trace's
     // first t8/t9 access, so the dummies need no transition.
     let deformed_verts = create_uav_buffer(device, VERTEX_STRIDE, D3D12_RESOURCE_STATE_COMMON)?;
-    let skinned_indices = create_buffer(
-        alloc,
-        4,
-        D3D12_HEAP_TYPE_DEFAULT,
-        D3D12_RESOURCE_STATE_COMMON,
-    )?;
+    let skinned_indices =
+        alloc.alloc_buffer(4, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COMMON)?;
     let static_blas_count = blas.len();
 
     // Seed ring slot 0 with the init structures so the static-transform rebuild
@@ -1136,7 +1144,7 @@ fn record_builds<F>(
     alloc: &DeviceAllocator,
     queue: &ID3D12CommandQueue,
     record: F,
-) -> Result<(), String>
+) -> RenderResult<()>
 where
     F: FnOnce(&ID3D12GraphicsCommandList4),
 {
@@ -1145,21 +1153,23 @@ where
         // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
         // new COM object lands in a binding that owns it.
         unsafe { device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT) }
-            .map_err(|e| format!("RT build allocator: {e}"))?;
+            .map_err(|e| map_hresult(e.code(), "RT build allocator"))?;
     let cmd: ID3D12GraphicsCommandList =
         // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
         // new COM object lands in a binding that owns it.
         unsafe { device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &alloc, None) }
-            .map_err(|e| format!("RT build cmd list: {e}"))?;
+            .map_err(|e| map_hresult(e.code(), "RT build cmd list"))?;
     let cmd4: ID3D12GraphicsCommandList4 = cmd
         .cast()
-        .map_err(|e| format!("ID3D12GraphicsCommandList4 cast: {e}"))?;
+        .map_err(|e| map_hresult(e.code(), "ID3D12GraphicsCommandList4 cast"))?;
 
     record(&cmd4);
 
     // SAFETY: the command list is live and in the recording state, which is what `Close` requires.
-    unsafe { cmd.Close() }.map_err(|e| format!("RT build close: {e}"))?;
-    let list: ID3D12CommandList = cmd.cast().map_err(|e| format!("RT build cast: {e}"))?;
+    unsafe { cmd.Close() }.map_err(|e| map_hresult(e.code(), "RT build close"))?;
+    let list: ID3D12CommandList = cmd
+        .cast()
+        .map_err(|e| map_hresult(e.code(), "RT build cast"))?;
     // SAFETY: every command list in the submission is live and closed, and the slice outlives the
     // call.
     unsafe { queue.ExecuteCommandLists(&[Some(list)]) };
@@ -1167,19 +1177,19 @@ where
     // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
     // COM object lands in a binding that owns it.
     let fence: ID3D12Fence = unsafe { device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }
-        .map_err(|e| format!("RT build fence: {e}"))?;
+        .map_err(|e| map_hresult(e.code(), "RT build fence"))?;
     let event =
         // SAFETY: an auto-reset, initially unsignaled event with no name and no security
         // attributes; the call borrows nothing.
         unsafe { windows::Win32::System::Threading::CreateEventW(None, false, false, None) }
-            .map_err(|e| format!("RT build event: {e}"))?;
+            .map_err(|e| map_hresult(e.code(), "RT build event"))?;
     // SAFETY: the fence and the event were created from this device and are live for the call.
-    unsafe { queue.Signal(&fence, 1) }.map_err(|e| format!("RT build signal: {e}"))?;
+    unsafe { queue.Signal(&fence, 1) }.map_err(|e| map_hresult(e.code(), "RT build signal"))?;
     // SAFETY: the fence and the event were created from this device and are live for the call.
     if unsafe { fence.GetCompletedValue() } < 1 {
         // SAFETY: the fence and the event were created from this device and are live for the call.
         unsafe { fence.SetEventOnCompletion(1, event) }
-            .map_err(|e| format!("RT build set event: {e}"))?;
+            .map_err(|e| map_hresult(e.code(), "RT build set event"))?;
         // SAFETY: `event` is the handle created above and is still open.
         unsafe { windows::Win32::System::Threading::WaitForSingleObject(event, u32::MAX) };
     }
@@ -1358,14 +1368,17 @@ impl RtAccelData {
         draw_objects: &[DrawObject],
         exclude_seethrough: bool,
         now: u64,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let device = alloc.device();
         let device5: ID3D12Device5 = device
             .cast()
-            .map_err(|e| format!("ID3D12Device5 cast (topology refresh): {e}"))?;
-        let cmd4: ID3D12GraphicsCommandList4 = cmd
-            .cast()
-            .map_err(|e| format!("ID3D12GraphicsCommandList4 cast (topology refresh): {e}"))?;
+            .map_err(|e| map_hresult(e.code(), "ID3D12Device5 cast (topology refresh)"))?;
+        let cmd4: ID3D12GraphicsCommandList4 = cmd.cast().map_err(|e| {
+            map_hresult(
+                e.code(),
+                "ID3D12GraphicsCommandList4 cast (topology refresh)",
+            )
+        })?;
 
         // Current participating draw set (same predicate as `build_rt_accel`).
         let new_indices: Vec<usize> = draw_objects
@@ -1581,11 +1594,11 @@ impl RtAccelData {
         draw_objects: &[DrawObject],
         frame_idx: usize,
         scratch: &mut RtUpdateScratch,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let device = alloc.device();
         let device5: ID3D12Device5 = device
             .cast()
-            .map_err(|e| format!("ID3D12Device5 cast (rebuild): {e}"))?;
+            .map_err(|e| map_hresult(e.code(), "ID3D12Device5 cast (rebuild)"))?;
         let RtUpdateScratch {
             models,
             instances: instance_descs,
@@ -1656,7 +1669,7 @@ impl RtAccelData {
 
         let cmd4: ID3D12GraphicsCommandList4 = cmd
             .cast()
-            .map_err(|e| format!("ID3D12GraphicsCommandList4 cast (rebuild): {e}"))?;
+            .map_err(|e| map_hresult(e.code(), "ID3D12GraphicsCommandList4 cast (rebuild)"))?;
         let desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
             DestAccelerationStructureData: com::gpu_va(&tlas),
             Inputs: tlas_inputs(instance_descs.len() as u32, com::gpu_va(&instance_buffer)),
@@ -1735,7 +1748,7 @@ impl RtAccelData {
         skinned: &SkinnedRtInputs,
         frame_idx: usize,
         scratch: &mut RtUpdateScratch,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let RtUpdateScratch {
             skinned: skinned_objects,
             models,
@@ -1747,10 +1760,13 @@ impl RtAccelData {
         let device = alloc.device();
         let device5: ID3D12Device5 = device
             .cast()
-            .map_err(|e| format!("ID3D12Device5 cast (skinned rebuild): {e}"))?;
-        let cmd4: ID3D12GraphicsCommandList4 = cmd
-            .cast()
-            .map_err(|e| format!("ID3D12GraphicsCommandList4 cast (skinned rebuild): {e}"))?;
+            .map_err(|e| map_hresult(e.code(), "ID3D12Device5 cast (skinned rebuild)"))?;
+        let cmd4: ID3D12GraphicsCommandList4 = cmd.cast().map_err(|e| {
+            map_hresult(
+                e.code(),
+                "ID3D12GraphicsCommandList4 cast (skinned rebuild)",
+            )
+        })?;
 
         // Take this frame slot's buffers out to sidestep the `&mut self` borrow
         // while reading other fields (`skin`, `object_indices`, the static `blas`
@@ -1809,10 +1825,9 @@ impl RtAccelData {
 
         // Stage 1: skin dispatch per skinned object, writing the deformed buffer.
         {
-            let skin = self
-                .skin
-                .as_ref()
-                .ok_or("rebuild_skinned called without a skin pipeline")?;
+            let skin = self.skin.as_ref().ok_or_else(|| {
+                RenderError::Other("rebuild_skinned called without a skin pipeline".to_string())
+            })?;
             // SAFETY: the command list is in the recording state, and every resource, descriptor
             // and slice these commands name is live for the call.
             unsafe {

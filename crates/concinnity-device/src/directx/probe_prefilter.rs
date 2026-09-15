@@ -22,6 +22,7 @@
 //! sample it. The probe cube sits in UNORDERED_ACCESS for every dispatch that
 //! writes it and moves to PIXEL_SHADER_RESOURCE at install.
 
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::reflection_probe::PrefilterPlan;
 use concinnity_core::render::uniforms::ProbePrefilterParams;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -29,6 +30,7 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::com;
 use super::context::DxContext;
+use super::error::{map_hresult, map_pso_hresult};
 use super::pipeline::serialize_desc_and_create;
 use super::slang_builtins::SlangCompile;
 
@@ -81,26 +83,32 @@ pub(in crate::directx) fn typed_uav_load_supported(device: &ID3D12Device) -> boo
 }
 
 impl ProbePrefilterPipelines {
-    pub(in crate::directx) fn new(device: &ID3D12Device, hot_reload: bool) -> Result<Self, String> {
+    pub(in crate::directx) fn new(device: &ID3D12Device, hot_reload: bool) -> RenderResult<Self> {
         use super::slang_builtins;
         let mip_root = create_mip_root_signature(device)?;
         let ggx_root = create_ggx_root_signature(device)?;
         let mip0 = create_pso(
             device,
             &mip_root,
-            &slang_builtins::PROBE_MIP0.compile(hot_reload)?,
+            &slang_builtins::PROBE_MIP0
+                .compile(hot_reload)
+                .map_err(RenderError::ShaderCompile)?,
             "probe_mip0",
         )?;
         let downsample = create_pso(
             device,
             &mip_root,
-            &slang_builtins::PROBE_DOWNSAMPLE.compile(hot_reload)?,
+            &slang_builtins::PROBE_DOWNSAMPLE
+                .compile(hot_reload)
+                .map_err(RenderError::ShaderCompile)?,
             "probe_downsample",
         )?;
         let ggx = create_pso(
             device,
             &ggx_root,
-            &slang_builtins::PROBE_GGX.compile(hot_reload)?,
+            &slang_builtins::PROBE_GGX
+                .compile(hot_reload)
+                .map_err(RenderError::ShaderCompile)?,
             "probe_ggx",
         )?;
         Ok(Self {
@@ -133,12 +141,12 @@ impl PrefilterGpu {
     pub(in crate::directx) fn new(
         ctx: &DxContext,
         plan: &PrefilterPlan,
-    ) -> Result<PrefilterGpu, String> {
+    ) -> RenderResult<PrefilterGpu> {
         let mips = plan.mips();
         if mips as usize > PROBE_MAX_MIPS {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "probe: {mips} mips exceeds the {PROBE_MAX_MIPS} descriptors reserved for one bake"
-            ));
+            )));
         }
         let capture = create_cube(
             &ctx.hw.device,
@@ -236,12 +244,11 @@ impl DxContext {
         cmd: &ID3D12GraphicsCommandList,
         gpu: &PrefilterGpu,
         plan: &PrefilterPlan,
-    ) -> Result<(), String> {
-        let pipelines = self
-            .probe
-            .prefilter
-            .as_ref()
-            .ok_or("probe: prefilter pipelines missing")?;
+    ) -> RenderResult<()> {
+        let pipelines =
+            self.probe.prefilter.as_ref().ok_or_else(|| {
+                RenderError::Other("probe: prefilter pipelines missing".to_string())
+            })?;
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {
@@ -295,12 +302,11 @@ impl DxContext {
         cmd: &ID3D12GraphicsCommandList,
         plan: &PrefilterPlan,
         dst_mip: u32,
-    ) -> Result<(), String> {
-        let pipelines = self
-            .probe
-            .prefilter
-            .as_ref()
-            .ok_or("probe: prefilter pipelines missing")?;
+    ) -> RenderResult<()> {
+        let pipelines =
+            self.probe.prefilter.as_ref().ok_or_else(|| {
+                RenderError::Other("probe: prefilter pipelines missing".to_string())
+            })?;
         // SAFETY: the command list is in the recording state and the root signature is live.
         unsafe { cmd.SetComputeRootSignature(&pipelines.ggx_root) };
         let d = &self.descriptors;
@@ -356,7 +362,7 @@ impl DxContext {
 // plus one two-descriptor UAV table (u0 the source mip, u1 the destination). The
 // per-mip UAVs are contiguous in the heap, which is what lets one range cover the
 // pair.
-fn create_mip_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignature, String> {
+fn create_mip_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     let uav_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_UAV,
         NumDescriptors: 2,
@@ -371,14 +377,18 @@ fn create_mip_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignatur
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
         ..Default::default()
     };
-    serialize_desc_and_create(device, &desc, "probe prefilter mip root sig")
+    Ok(serialize_desc_and_create(
+        device,
+        &desc,
+        "probe prefilter mip root sig",
+    )?)
 }
 
 // Root signature for the GGX kernel: root constants at b0, the sampled capture
 // pyramid at t0, the destination mip at u0, and the linear-clamp mipmapped
 // sampler at s0 as a static sampler (a shader sampler needs no heap of its own
 // when it never varies).
-fn create_ggx_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignature, String> {
+fn create_ggx_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     let srv_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
         NumDescriptors: 1,
@@ -421,7 +431,11 @@ fn create_ggx_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignatur
         pStaticSamplers: &sampler,
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
     };
-    serialize_desc_and_create(device, &desc, "probe prefilter ggx root sig")
+    Ok(serialize_desc_and_create(
+        device,
+        &desc,
+        "probe prefilter ggx root sig",
+    )?)
 }
 
 fn root_constants() -> D3D12_ROOT_PARAMETER {
@@ -456,7 +470,7 @@ fn create_pso(
     root_sig: &ID3D12RootSignature,
     cs: &[u8],
     label: &str,
-) -> Result<ID3D12PipelineState, String> {
+) -> RenderResult<ID3D12PipelineState> {
     let desc = D3D12_COMPUTE_PIPELINE_STATE_DESC {
         pRootSignature: com::borrowed(root_sig),
         CS: D3D12_SHADER_BYTECODE {
@@ -468,7 +482,7 @@ fn create_pso(
     // SAFETY: `desc` outlives this synchronous call, and so do the root signature and shader
     // bytecode whose raw pointers it borrows.
     unsafe { super::pso_library::create_compute(device, &desc) }
-        .map_err(|e| format!("create {label} PSO: {e}"))
+        .map_err(|e| map_pso_hresult(e.code(), &format!("create {label} PSO")))
 }
 
 // A cube resource: six array slices, `mips` levels, UAV + SRV capable. Committed
@@ -481,7 +495,7 @@ fn create_cube(
     mips: u32,
     state: D3D12_RESOURCE_STATES,
     label: &str,
-) -> Result<ID3D12Resource, String> {
+) -> RenderResult<ID3D12Resource> {
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
         Width: face_size as u64,
@@ -513,8 +527,8 @@ fn create_cube(
             &mut cube,
         )
     }
-    .map_err(|e| format!("create {label}: {e}"))?;
-    cube.ok_or_else(|| format!("create {label} returned None"))
+    .map_err(|e| map_hresult(e.code(), &format!("create {label}")))?;
+    cube.ok_or_else(|| RenderError::Other(format!("create {label} returned None")))
 }
 
 // All-mips TEXTURECUBE SRV, the shape a sampler reads.

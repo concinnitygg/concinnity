@@ -44,7 +44,7 @@ use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::render_types::LightUniforms;
 use concinnity_core::platform::Platform;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::slang_programs::raymarch::{self, Family};
 use concinnity_slang::SlangTarget;
 use std::ffi::c_void;
@@ -61,11 +61,10 @@ pub(in crate::directx) use concinnity_core::render::uniforms::{
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledTexture};
 use crate::directx::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
-use crate::directx::error::map_hresult;
+use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::{main_input_layout, serialize_desc_and_create};
 use crate::directx::texture::{
-    HDR_FORMAT, create_buffer, create_fallback_white_resource, create_hdr_resolve_target,
-    transition_barrier,
+    HDR_FORMAT, create_fallback_white_resource, create_hdr_resolve_target, transition_barrier,
 };
 
 fn volume_uniforms_from(v: &SdfVolume) -> RaymarchVolumeUniforms {
@@ -186,9 +185,9 @@ fn family_dxil(
     family: Family,
     hot_reload: bool,
     label: &str,
-) -> Result<(Vec<u8>, Vec<u8>), String> {
+) -> RenderResult<(Vec<u8>, Vec<u8>)> {
     let mut stages = raymarch::ALL.iter().filter(|p| p.family == family);
-    let dxil = |entry: &str, profile: &'static str| -> Result<Vec<u8>, String> {
+    let dxil = |entry: &str, profile: &'static str| -> RenderResult<Vec<u8>> {
         crate::shader::raymarch_source::artifact(
             programs,
             &crate::shader::raymarch_source::Request {
@@ -201,6 +200,7 @@ fn family_dxil(
             },
         )
         .map(|bytes| bytes.into_owned())
+        .map_err(RenderError::ShaderCompile)
     };
     let vs = dxil(
         stages
@@ -227,7 +227,7 @@ fn family_dxil(
 //   [3] CBV b3 (RaymarchShadowUniforms)  : root descriptor
 //   [4] Descriptor table SRV  t0..t3     : shadow / IBL / scene fallback
 //   [5] Descriptor table Sampler s0..s2  : shadow_samp / cube_samp / scene_samp
-fn create_raymarch_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignature, String> {
+fn create_raymarch_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     let srv_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
         NumDescriptors: 4,
@@ -284,7 +284,11 @@ fn create_raymarch_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSig
         Flags: D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
         ..Default::default()
     };
-    serialize_desc_and_create(device, &desc, "raymarch root sig")
+    Ok(serialize_desc_and_create(
+        device,
+        &desc,
+        "raymarch root sig",
+    )?)
 }
 
 // Build the per-volume PSO. Front-face culled so back faces of the
@@ -299,7 +303,7 @@ fn create_raymarch_pso(
     vs: &[u8],
     ps: &[u8],
     msaa_samples: u32,
-) -> Result<ID3D12PipelineState, String> {
+) -> RenderResult<ID3D12PipelineState> {
     let input_layout = main_input_layout();
     let mut rasterizer = D3D12_RASTERIZER_DESC {
         FillMode: D3D12_FILL_MODE_SOLID,
@@ -382,7 +386,7 @@ fn create_raymarch_pso(
     // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
     // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_graphics(device, &desc) }
-        .map_err(|e| format!("create raymarch PSO: {e}"))
+        .map_err(|e| map_pso_hresult(e.code(), "create raymarch PSO"))
 }
 
 // Returns the wrapped HLSL for a single volume + the asset label used
@@ -395,7 +399,7 @@ fn compile_volume_pso(
     asset_label: &str,
     msaa_samples: u32,
     hot_reload: bool,
-) -> Result<ID3D12PipelineState, String> {
+) -> RenderResult<ID3D12PipelineState> {
     let (vs, ps) = family_dxil(programs, Family::Surface, hot_reload, asset_label)?;
     create_raymarch_pso(device, root_sig, &vs, &ps, msaa_samples)
 }
@@ -411,7 +415,7 @@ fn create_raymarch_volumetric_pso(
     vs: &[u8],
     ps: &[u8],
     msaa_samples: u32,
-) -> Result<ID3D12PipelineState, String> {
+) -> RenderResult<ID3D12PipelineState> {
     let input_layout = main_input_layout();
     let rasterizer = D3D12_RASTERIZER_DESC {
         FillMode: D3D12_FILL_MODE_SOLID,
@@ -488,7 +492,7 @@ fn create_raymarch_volumetric_pso(
     // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
     // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_graphics(device, &desc) }
-        .map_err(|e| format!("create raymarch volumetric PSO: {e}"))
+        .map_err(|e| map_pso_hresult(e.code(), "create raymarch volumetric PSO"))
 }
 
 // Volumetric counterpart of `compile_volume_pso`. Wraps the user
@@ -501,7 +505,7 @@ fn compile_volume_volumetric_pso(
     asset_label: &str,
     msaa_samples: u32,
     hot_reload: bool,
-) -> Result<ID3D12PipelineState, String> {
+) -> RenderResult<ID3D12PipelineState> {
     let (vs, ps) = family_dxil(programs, Family::Volumetric, hot_reload, asset_label)?;
     create_raymarch_volumetric_pso(device, root_sig, &vs, &ps, msaa_samples)
 }
@@ -517,7 +521,7 @@ fn compile_volume_volumetric_pso(
 //   [4] Root constants b4 (cascade_idx)  : 1 DWORD
 fn create_raymarch_shadow_root_signature(
     device: &ID3D12Device,
-) -> Result<ID3D12RootSignature, String> {
+) -> RenderResult<ID3D12RootSignature> {
     let cbv = |reg: u32, vis: D3D12_SHADER_VISIBILITY| D3D12_ROOT_PARAMETER {
         ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
         Anonymous: D3D12_ROOT_PARAMETER_0 {
@@ -554,7 +558,11 @@ fn create_raymarch_shadow_root_signature(
         Flags: D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
         ..Default::default()
     };
-    serialize_desc_and_create(device, &desc, "raymarch shadow root sig")
+    Ok(serialize_desc_and_create(
+        device,
+        &desc,
+        "raymarch shadow root sig",
+    )?)
 }
 
 // Build the depth-only shadow PSO for one volume. No RTV, no MSAA
@@ -568,7 +576,7 @@ fn create_raymarch_shadow_pso(
     root_sig: &ID3D12RootSignature,
     vs: &[u8],
     ps: &[u8],
-) -> Result<ID3D12PipelineState, String> {
+) -> RenderResult<ID3D12PipelineState> {
     let input_layout = main_input_layout();
     let rasterizer = D3D12_RASTERIZER_DESC {
         FillMode: D3D12_FILL_MODE_SOLID,
@@ -623,7 +631,7 @@ fn create_raymarch_shadow_pso(
     // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
     // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_graphics(device, &desc) }
-        .map_err(|e| format!("create raymarch shadow PSO: {e}"))
+        .map_err(|e| map_pso_hresult(e.code(), "create raymarch shadow PSO"))
 }
 
 // Compile and link the per-volume shadow PSO. Mirrors `compile_volume_pso`
@@ -634,7 +642,7 @@ fn compile_volume_shadow_pso(
     programs: &SdfPrograms,
     asset_label: &str,
     hot_reload: bool,
-) -> Result<ID3D12PipelineState, String> {
+) -> RenderResult<ID3D12PipelineState> {
     let (vs, ps) = family_dxil(programs, Family::Shadow, hot_reload, asset_label)?;
     create_raymarch_shadow_pso(device, root_sig, &vs, &ps)
 }
@@ -646,15 +654,12 @@ fn compile_volume_shadow_pso(
 // half-widths.
 fn build_cube_buffers(
     alloc: &DeviceAllocator,
-) -> Result<
-    (
-        PooledBuffer,
-        PooledBuffer,
-        D3D12_VERTEX_BUFFER_VIEW,
-        D3D12_INDEX_BUFFER_VIEW,
-    ),
-    String,
-> {
+) -> RenderResult<(
+    PooledBuffer,
+    PooledBuffer,
+    D3D12_VERTEX_BUFFER_VIEW,
+    D3D12_INDEX_BUFFER_VIEW,
+)> {
     #[rustfmt::skip]
     let corners: [Vertex; 8] = [
         v([-1.0, -1.0, -1.0]),
@@ -685,14 +690,12 @@ fn build_cube_buffers(
     let vb_bytes = std::mem::size_of_val(&corners) as u64;
     let ib_bytes = std::mem::size_of_val(&indices) as u64;
 
-    let vb = create_buffer(
-        alloc,
+    let vb = alloc.alloc_buffer(
         vb_bytes,
         D3D12_HEAP_TYPE_UPLOAD,
         D3D12_RESOURCE_STATE_GENERIC_READ,
     )?;
-    let ib = create_buffer(
-        alloc,
+    let ib = alloc.alloc_buffer(
         ib_bytes,
         D3D12_HEAP_TYPE_UPLOAD,
         D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -702,7 +705,7 @@ fn build_cube_buffers(
     unsafe {
         let mut p = std::ptr::null_mut::<c_void>();
         vb.Map(0, None, Some(&mut p))
-            .map_err(|e| format!("raymarch cube vb map: {e}"))?;
+            .map_err(|e| map_hresult(e.code(), "raymarch cube vb map"))?;
         std::ptr::copy_nonoverlapping(
             corners.as_ptr() as *const u8,
             p as *mut u8,
@@ -712,7 +715,7 @@ fn build_cube_buffers(
 
         let mut p = std::ptr::null_mut::<c_void>();
         ib.Map(0, None, Some(&mut p))
-            .map_err(|e| format!("raymarch cube ib map: {e}"))?;
+            .map_err(|e| map_hresult(e.code(), "raymarch cube ib map"))?;
         std::ptr::copy_nonoverlapping(
             indices.as_ptr() as *const u8,
             p as *mut u8,
@@ -1143,7 +1146,7 @@ impl RaymarchResources {
         device: &ID3D12Device,
         width: u32,
         height: u32,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         self.hdr_resolve_copy = create_hdr_resolve_target(device, width.max(1), height.max(1))?;
         write_scene_color_srv(device, &self.hdr_resolve_copy, self.scene_color_srv_cpu);
         Ok(())
@@ -1188,7 +1191,7 @@ impl DxContext {
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
         view: &RaymarchView,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let Some(rm) = self.raymarch.as_ref() else {
             return Ok(());
         };
@@ -1201,7 +1204,7 @@ impl DxContext {
             .view_ptrs
             .get(frame_idx)
             .copied()
-            .ok_or("raymarch: view_ptrs index OOB")?;
+            .ok_or_else(|| RenderError::Other("raymarch: view_ptrs index OOB".to_string()))?;
         // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the
         // source is a separate allocation, so the ranges cannot overlap.
         unsafe {
@@ -1425,7 +1428,7 @@ impl DxContext {
         frame_idx: usize,
         shadow_ubo_gva: u64,
         view: &RaymarchView,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let Some(rm) = self.raymarch.as_ref() else {
             return Ok(());
         };
@@ -1438,11 +1441,9 @@ impl DxContext {
 
         // Share the cbuffer ring with the main raymarch pass. See the
         // docstring above for why the double-write is safe.
-        let view_ptr = rm
-            .view_ptrs
-            .get(frame_idx)
-            .copied()
-            .ok_or("raymarch shadow: view_ptrs index OOB")?;
+        let view_ptr = rm.view_ptrs.get(frame_idx).copied().ok_or_else(|| {
+            RenderError::Other("raymarch shadow: view_ptrs index OOB".to_string())
+        })?;
         // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the
         // source is a separate allocation, so the ranges cannot overlap.
         unsafe {

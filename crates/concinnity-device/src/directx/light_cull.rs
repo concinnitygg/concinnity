@@ -5,15 +5,17 @@
 //! lights instead of iterating every light. Mirrors src/metal/light_cull.rs.
 
 use concinnity_core::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIGHT_LIST_STRIDE, ClusterParams};
+use concinnity_core::render::error::{RenderError, RenderResult};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
 use crate::directx::context::DxContext;
+use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
-use crate::directx::texture::{create_buffer, create_uav_buffer};
+use crate::directx::texture::create_uav_buffer;
 
 // Byte stride between the two `ClusterParams` slots in a frame's constant
 // buffer. Root CBVs must be 256-byte aligned, so each slot is padded up.
@@ -53,15 +55,17 @@ impl LightCullState {
 }
 
 // Compile the clustered light-binning compute kernel to DXIL.
-pub(in crate::directx) fn compile_light_cull_shader(hot_reload: bool) -> Result<Vec<u8>, String> {
-    slang_builtins::LIGHT_CULL.compile(hot_reload)
+pub(in crate::directx) fn compile_light_cull_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
+    slang_builtins::LIGHT_CULL
+        .compile(hot_reload)
+        .map_err(RenderError::ShaderCompile)
 }
 
 // Root signature for the light-cull kernel: the `ClusterParams` CBV, the
 // per-scene `GpuLight` SRV, and the per-cluster list UAV.
 pub(in crate::directx) fn create_light_cull_root_signature(
     device: &ID3D12Device,
-) -> Result<ID3D12RootSignature, String> {
+) -> RenderResult<ID3D12RootSignature> {
     let params = [
         // [0] Root CBV b0: ClusterParams
         D3D12_ROOT_PARAMETER {
@@ -103,7 +107,11 @@ pub(in crate::directx) fn create_light_cull_root_signature(
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
         ..Default::default()
     };
-    serialize_desc_and_create(device, &desc, "light cull root sig")
+    Ok(serialize_desc_and_create(
+        device,
+        &desc,
+        "light cull root sig",
+    )?)
 }
 
 // Compute pipeline state for the light-cull kernel.
@@ -111,7 +119,7 @@ pub(in crate::directx) fn create_light_cull_pso(
     device: &ID3D12Device,
     root_sig: &ID3D12RootSignature,
     cs: &[u8],
-) -> Result<ID3D12PipelineState, String> {
+) -> RenderResult<ID3D12PipelineState> {
     let desc = D3D12_COMPUTE_PIPELINE_STATE_DESC {
         pRootSignature: com::borrowed(root_sig),
         CS: D3D12_SHADER_BYTECODE {
@@ -123,7 +131,7 @@ pub(in crate::directx) fn create_light_cull_pso(
     // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
     // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_compute(device, &desc) }
-        .map_err(|e| format!("create light cull PSO: {e}"))
+        .map_err(|e| map_pso_hresult(e.code(), "create light cull PSO"))
 }
 
 // Allocate the per-cluster light-index buffer. Created in `COMMON` (D3D12
@@ -133,10 +141,10 @@ pub(in crate::directx) fn create_light_cull_pso(
 // cycles its indirect buffers.
 pub(in crate::directx) fn build_cluster_light_buffer(
     device: &ID3D12Device,
-) -> Result<ID3D12Resource, String> {
+) -> RenderResult<ID3D12Resource> {
     let len =
         (CLUSTER_COUNT * CLUSTER_LIGHT_LIST_STRIDE) as u64 * std::mem::size_of::<u32>() as u64;
-    create_uav_buffer(device, len, D3D12_RESOURCE_STATE_COMMON)
+    Ok(create_uav_buffer(device, len, D3D12_RESOURCE_STATE_COMMON)?)
 }
 
 // Allocate + persistently map the per-frame `ClusterParams` constant buffers
@@ -146,13 +154,12 @@ pub(in crate::directx) fn build_cluster_light_buffer(
 pub(in crate::directx) fn build_cluster_params_buffers(
     alloc: &DeviceAllocator,
     frames: usize,
-) -> Result<(Vec<PooledBuffer>, Vec<*mut u8>), String> {
+) -> RenderResult<(Vec<PooledBuffer>, Vec<*mut u8>)> {
     let size = CLUSTER_PARAMS_SLOT_STRIDE * 2;
     let mut resources = Vec::with_capacity(frames);
     let mut ptrs = Vec::with_capacity(frames);
     for _ in 0..frames {
-        let res = create_buffer(
-            alloc,
+        let res = alloc.alloc_buffer(
             size,
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -161,7 +168,7 @@ pub(in crate::directx) fn build_cluster_params_buffers(
         // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local
         // that receives the mapping.
         unsafe { res.Map(0, None, Some(&mut ptr)) }
-            .map_err(|e| format!("map cluster params buffer: {e}"))?;
+            .map_err(|e| map_hresult(e.code(), "map cluster params buffer"))?;
         let ptr = ptr as *mut u8;
         // Slot 1: the `use_clusters = 0` copy. Static for the context's life.
         let unclustered = ClusterParams::ZERO;
@@ -228,7 +235,7 @@ impl DxContext {
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let (pso, root_sig) = match (&self.light_cull.pso, &self.light_cull.root_sig) {
             (Some(p), Some(r)) => (p, r),
             _ => return Ok(()),

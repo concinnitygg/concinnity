@@ -24,6 +24,7 @@
 //! main depth attachment (decals, fog, and SSAO/SSR pre-passes already share
 //! that target).
 
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::hiz_spd::{self, Plan};
 use concinnity_core::render::uniforms::HizSpdParams;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -31,6 +32,7 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::directx::com;
 use crate::directx::context::dump_on_err;
+use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
@@ -84,10 +86,16 @@ pub(super) struct HiZResources {
 // Compiled Hi-Z kernels: spd_single, spd_msaa, spd_tail bytecode.
 type HizShaders = (Vec<u8>, Vec<u8>, Vec<u8>);
 
-pub(in crate::directx) fn compile_hiz_shaders(hot_reload: bool) -> Result<HizShaders, String> {
-    let single = slang_builtins::HIZ_SPD_SINGLE.compile(hot_reload)?;
-    let msaa = slang_builtins::HIZ_SPD_MSAA.compile(hot_reload)?;
-    let tail = slang_builtins::HIZ_SPD_TAIL.compile(hot_reload)?;
+pub(in crate::directx) fn compile_hiz_shaders(hot_reload: bool) -> RenderResult<HizShaders> {
+    let single = slang_builtins::HIZ_SPD_SINGLE
+        .compile(hot_reload)
+        .map_err(RenderError::ShaderCompile)?;
+    let msaa = slang_builtins::HIZ_SPD_MSAA
+        .compile(hot_reload)
+        .map_err(RenderError::ShaderCompile)?;
+    let tail = slang_builtins::HIZ_SPD_TAIL
+        .compile(hot_reload)
+        .map_err(RenderError::ShaderCompile)?;
     Ok((single, msaa, tail))
 }
 
@@ -131,13 +139,13 @@ fn hiz_root_params(
 
 pub(in crate::directx) fn create_hiz_root_signature(
     device: &ID3D12Device,
-) -> Result<ID3D12RootSignature, String> {
+) -> RenderResult<ID3D12RootSignature> {
     create_hiz_signature(device, true, "hiz spd root sig")
 }
 
 pub(in crate::directx) fn create_hiz_tail_root_signature(
     device: &ID3D12Device,
-) -> Result<ID3D12RootSignature, String> {
+) -> RenderResult<ID3D12RootSignature> {
     create_hiz_signature(device, false, "hiz spd tail root sig")
 }
 
@@ -145,7 +153,7 @@ fn create_hiz_signature(
     device: &ID3D12Device,
     with_srv: bool,
     label: &str,
-) -> Result<ID3D12RootSignature, String> {
+) -> RenderResult<ID3D12RootSignature> {
     let srv_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
         NumDescriptors: 1,
@@ -167,7 +175,7 @@ fn create_hiz_signature(
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
         ..Default::default()
     };
-    serialize_desc_and_create(device, &desc, label)
+    Ok(serialize_desc_and_create(device, &desc, label)?)
 }
 
 fn create_hiz_pso(
@@ -175,7 +183,7 @@ fn create_hiz_pso(
     root_sig: &ID3D12RootSignature,
     cs: &[u8],
     label: &str,
-) -> Result<ID3D12PipelineState, String> {
+) -> RenderResult<ID3D12PipelineState> {
     let desc = D3D12_COMPUTE_PIPELINE_STATE_DESC {
         pRootSignature: com::borrowed(root_sig),
         CS: D3D12_SHADER_BYTECODE {
@@ -187,7 +195,7 @@ fn create_hiz_pso(
     // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
     // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_compute(device, &desc) }
-        .map_err(|e| format!("create {label} PSO: {e}"))
+        .map_err(|e| map_pso_hresult(e.code(), &format!("create {label} PSO")))
 }
 
 // Mip count for a Hi-Z of size (w, h): `floor(log2(max(w, h))) + 1`. Power-
@@ -230,7 +238,7 @@ fn create_hiz_texture(
     width: u32,
     height: u32,
     mip_count: u32,
-) -> Result<ID3D12Resource, String> {
+) -> RenderResult<ID3D12Resource> {
     let heap_props = D3D12_HEAP_PROPERTIES {
         Type: D3D12_HEAP_TYPE_DEFAULT,
         ..Default::default()
@@ -262,8 +270,8 @@ fn create_hiz_texture(
             &mut tex,
         )
     }
-    .map_err(|e| format!("create hiz texture: {e}"))?;
-    tex.ok_or_else(|| "create hiz texture returned None".to_string())
+    .map_err(|e| map_hresult(e.code(), "create hiz texture"))?;
+    tex.ok_or_else(|| RenderError::Other("create hiz texture returned None".to_string()))
 }
 
 // Write the all-mips SRV that the cull kernel and the downsample kernel
@@ -341,7 +349,7 @@ impl HiZResources {
     // the bindless static pass + cull pipeline are active. Each of the
     // supplied descriptor handles points at a pre-reserved slot in the
     // SRV heap; the resource owns the descriptors but not the heap.
-    pub(super) fn new(ctx: HiZDeviceCtx, target: HiZTarget) -> Result<Self, String> {
+    pub(super) fn new(ctx: HiZDeviceCtx, target: HiZTarget) -> RenderResult<Self> {
         let HiZDeviceCtx {
             device,
             info_queue,
@@ -358,7 +366,7 @@ impl HiZResources {
         } = target;
         let mip_count = hiz_plan_mip_count(width, height, mip_uav_cpus.len());
         if mip_count == 0 {
-            return Err("hiz: zero mip count".into());
+            return Err(RenderError::Other("hiz: zero mip count".to_string()));
         }
         let (spd_single_cs, spd_msaa_cs, spd_tail_cs) = compile_hiz_shaders(hot_reload)?;
         let root_sig = dump_on_err(info_queue, create_hiz_root_signature(device))?;
@@ -406,7 +414,7 @@ impl HiZResources {
         device: &ID3D12Device,
         width: u32,
         height: u32,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let new_mip_count = hiz_plan_mip_count(width, height, self.mip_uav_cpus.len());
         let texture = create_hiz_texture(device, width, height, new_mip_count)?;
         write_hiz_srv(device, &texture, new_mip_count, self.srv_cpu);

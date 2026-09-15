@@ -25,6 +25,7 @@
 //! (the bindless face render omits the skinned tail), exactly like the probe capture.
 
 use concinnity_core::gfx::frustum::{Frustum, Plane};
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::planar_reflection;
 use concinnity_core::transform::mat4_inverse;
 use concinnity_core::transform::mat4_mul;
@@ -36,10 +37,11 @@ use super::com;
 use super::context::{DxContext, FRAMES, align256};
 use super::cull::INDIRECT_COMMAND_STRIDE;
 use super::draw::ViewUniforms;
+use super::error::map_hresult;
 use super::graph_exec::GraphFrameParams;
 use super::texture::{
-    HDR_FORMAT, create_buffer, create_hdr_color_target, create_hdr_sampled_target,
-    create_uav_buffer, transition_barrier, write_format_rtv, write_hdr_srv,
+    HDR_FORMAT, create_hdr_color_target, create_hdr_sampled_target, create_uav_buffer,
+    transition_barrier, write_format_rtv, write_hdr_srv,
 };
 
 // The engine capacity ceiling for distinct reflection planes: the count the
@@ -177,13 +179,13 @@ impl PlanarReflectionSet {
         config: PlanarConfig,
         planes: &[[f32; 4]],
         targets: PlanarTargets,
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         if planes.len() > MAX_PLANAR_PLANES {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "planar reflection: {} planes exceeds the {MAX_PLANAR_PLANES}-plane ceiling the \
                  reserved resolve descriptors are sized to",
                 planes.len()
-            ));
+            )));
         }
         let device = alloc.device();
         let PlanarConfig {
@@ -236,8 +238,7 @@ impl PlanarReflectionSet {
         let mut view_ptrs = Vec::with_capacity(planes.len() * FRAMES);
         let mut view_gvas = Vec::with_capacity(planes.len() * FRAMES);
         for _ in 0..planes.len() * FRAMES {
-            let cbv = create_buffer(
-                alloc,
+            let cbv = alloc.alloc_buffer(
                 256,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -246,7 +247,7 @@ impl PlanarReflectionSet {
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
             unsafe { cbv.Map(0, None, Some(&mut ptr)) }
-                .map_err(|e| format!("planar: map view cbv: {e}"))?;
+                .map_err(|e| map_hresult(e.code(), "planar: map view cbv"))?;
             view_gvas.push(com::gpu_va(&cbv));
             view_ptrs.push(ptr as *mut u8);
             view_cbvs.push(cbv);
@@ -305,7 +306,7 @@ impl PlanarReflectionSet {
         device: &ID3D12Device,
         width: u32,
         height: u32,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let (w, h) = (width.max(1), height.max(1));
         self._depth = create_planar_depth(device, w, h, self.sample_count, self.depth_dsv)?;
         for i in 0..self.resolves.len() {
@@ -449,7 +450,7 @@ impl DxContext {
         &self,
         cmd: &ID3D12GraphicsCommandList,
         params: &GraphFrameParams<'_>,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let Some(set) = self.planar_reflection.as_ref() else {
             return Ok(());
         };
@@ -568,7 +569,7 @@ impl DxContext {
 fn create_rtv_heap(
     device: &ID3D12Device,
     plane_count: usize,
-) -> Result<ID3D12DescriptorHeap, String> {
+) -> RenderResult<ID3D12DescriptorHeap> {
     let desc = D3D12_DESCRIPTOR_HEAP_DESC {
         Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
         NumDescriptors: plane_count.max(1) as u32,
@@ -577,7 +578,8 @@ fn create_rtv_heap(
     };
     // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
     // COM object lands in a binding that owns it.
-    unsafe { device.CreateDescriptorHeap(&desc) }.map_err(|e| format!("planar: rtv heap: {e}"))
+    unsafe { device.CreateDescriptorHeap(&desc) }
+        .map_err(|e| map_hresult(e.code(), "planar: rtv heap"))
 }
 
 // Render dimensions, sample count and RTV heap slots for building the planar
@@ -608,7 +610,7 @@ fn rtv_slot_index(multisampled: bool, slot: usize) -> usize {
 fn create_planar_color(
     device: &ID3D12Device,
     build: PlanarColorBuild<'_>,
-) -> Result<PlanarColor, String> {
+) -> RenderResult<PlanarColor> {
     let PlanarColorBuild {
         width,
         height,
@@ -638,7 +640,7 @@ fn create_planar_color(
 }
 
 // A one-entry non-shader-visible DSV heap for the shared planar depth target.
-fn create_dsv_heap(device: &ID3D12Device) -> Result<ID3D12DescriptorHeap, String> {
+fn create_dsv_heap(device: &ID3D12Device) -> RenderResult<ID3D12DescriptorHeap> {
     let desc = D3D12_DESCRIPTOR_HEAP_DESC {
         Type: D3D12_DESCRIPTOR_HEAP_TYPE_DSV,
         NumDescriptors: 1,
@@ -647,7 +649,8 @@ fn create_dsv_heap(device: &ID3D12Device) -> Result<ID3D12DescriptorHeap, String
     };
     // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
     // COM object lands in a binding that owns it.
-    unsafe { device.CreateDescriptorHeap(&desc) }.map_err(|e| format!("planar: dsv heap: {e}"))
+    unsafe { device.CreateDescriptorHeap(&desc) }
+        .map_err(|e| map_hresult(e.code(), "planar: dsv heap"))
 }
 
 // Create the shared planar depth target (D32_FLOAT, matching the main pass's DSV
@@ -660,7 +663,7 @@ fn create_planar_depth(
     height: u32,
     sample_count: u32,
     dsv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-) -> Result<ID3D12Resource, String> {
+) -> RenderResult<ID3D12Resource> {
     let heap_props = D3D12_HEAP_PROPERTIES {
         Type: D3D12_HEAP_TYPE_DEFAULT,
         ..Default::default()
@@ -701,8 +704,9 @@ fn create_planar_depth(
             &mut tex_opt,
         )
     }
-    .map_err(|e| format!("planar: create depth: {e}"))?;
-    let texture = tex_opt.ok_or_else(|| "planar: create depth returned None".to_string())?;
+    .map_err(|e| map_hresult(e.code(), "planar: create depth"))?;
+    let texture = tex_opt
+        .ok_or_else(|| RenderError::Other("planar: create depth returned None".to_string()))?;
     let dsv_desc = D3D12_DEPTH_STENCIL_VIEW_DESC {
         Format: DXGI_FORMAT_D32_FLOAT,
         ViewDimension: if sample_count > 1 {

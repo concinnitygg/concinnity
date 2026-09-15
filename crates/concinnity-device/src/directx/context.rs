@@ -2737,10 +2737,10 @@ pub(super) fn drain_info_queue(iq: &ID3D12InfoQueue) {
 
 // Wrap an init-path Result so that any D3D12 validation messages queued
 // during the failing op are dumped to tracing before the error bubbles up.
-pub(super) fn dump_on_err<T>(
+pub(super) fn dump_on_err<T, E>(
     info_queue: Option<&ID3D12InfoQueue>,
-    r: Result<T, String>,
-) -> Result<T, String> {
+    r: Result<T, E>,
+) -> Result<T, E> {
     if r.is_err()
         && let Some(iq) = info_queue
     {

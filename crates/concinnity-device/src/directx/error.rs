@@ -31,6 +31,15 @@ pub(super) fn map_hresult(hr: HRESULT, context: &str) -> RenderError {
     }
 }
 
+// Classify a failed pipeline-state creation: device loss and memory keep their
+// class, and anything else is the pipeline rejecting its shaders.
+pub(super) fn map_pso_hresult(hr: HRESULT, context: &str) -> RenderError {
+    match map_hresult(hr, context) {
+        RenderError::Other(detail) => RenderError::ShaderCompile(detail),
+        classified => classified,
+    }
+}
+
 // Classify a failed Present. `removed_reason` is the device's
 // `GetDeviceRemovedReason` verdict, which names the actual loss cause when
 // Present reports the generic DXGI_ERROR_DEVICE_REMOVED.
@@ -74,6 +83,22 @@ mod tests {
         assert!(matches!(
             map_hresult(E_OUTOFMEMORY, "call"),
             RenderError::OutOfDeviceMemory(_)
+        ));
+    }
+
+    #[test]
+    fn pso_failures_are_shader_compile_unless_the_device_or_memory_failed() {
+        assert!(matches!(
+            map_pso_hresult(HRESULT(-1), "create pso"),
+            RenderError::ShaderCompile(_)
+        ));
+        assert!(matches!(
+            map_pso_hresult(E_OUTOFMEMORY, "create pso"),
+            RenderError::OutOfDeviceMemory(_)
+        ));
+        assert!(matches!(
+            map_pso_hresult(DXGI_ERROR_DEVICE_HUNG, "create pso"),
+            RenderError::DeviceLost { .. }
         ));
     }
 

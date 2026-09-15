@@ -14,6 +14,7 @@
 //! each render their reflection target, then call `encode_reflection_composite` with
 //! that target's SRV. Mirrors src/metal/post/ssr.rs (the composite half).
 
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::post::device::PostBlend;
 use windows::Win32::Graphics::Direct3D12::*;
 
@@ -45,11 +46,17 @@ struct ReflCompShaders {
 // entry points. `REFLECTION_ROUGHNESS_CUT` is a `static const` in
 // `reflection.slang`, locked to the canonical Rust value by unit test, so the
 // blur ramp matches the SSR / RT resolve gates.
-fn compile_refl_composite_shaders(hot_reload: bool) -> Result<ReflCompShaders, String> {
+fn compile_refl_composite_shaders(hot_reload: bool) -> RenderResult<ReflCompShaders> {
     Ok(ReflCompShaders {
-        vs: slang_builtins::FULLSCREEN_VERT.compile(hot_reload)?,
-        blur_ps: slang_builtins::REFLECTION_BLUR.compile(hot_reload)?,
-        composite_ps: slang_builtins::REFLECTION_COMPOSITE.compile(hot_reload)?,
+        vs: slang_builtins::FULLSCREEN_VERT
+            .compile(hot_reload)
+            .map_err(RenderError::ShaderCompile)?,
+        blur_ps: slang_builtins::REFLECTION_BLUR
+            .compile(hot_reload)
+            .map_err(RenderError::ShaderCompile)?,
+        composite_ps: slang_builtins::REFLECTION_COMPOSITE
+            .compile(hot_reload)
+            .map_err(RenderError::ShaderCompile)?,
     })
 }
 
@@ -63,7 +70,7 @@ fn srv_table_root_sig(
     device: &ID3D12Device,
     count: u32,
     name: &str,
-) -> Result<ID3D12RootSignature, String> {
+) -> RenderResult<ID3D12RootSignature> {
     let ranges: Vec<D3D12_DESCRIPTOR_RANGE> = (0..count)
         .map(|i| D3D12_DESCRIPTOR_RANGE {
             RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
@@ -111,7 +118,7 @@ fn srv_table_root_sig(
         pStaticSamplers: samplers.as_ptr(),
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
     };
-    serialize_desc_and_create(device, &desc, name)
+    Ok(serialize_desc_and_create(device, &desc, name)?)
 }
 
 // Resources
@@ -165,7 +172,7 @@ impl ReflectionCompositeResources {
         slots: ReflectionCompositeSlots,
         info_queue: Option<&ID3D12InfoQueue>,
         hot_reload: bool,
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         let blur_scale = blur_scale.max(1);
         let output = create_rt_target(device, width, height, SSR_OUTPUT_FORMAT)?;
         write_format_rtv(device, &output, slots.output_rtv, SSR_OUTPUT_FORMAT);
@@ -244,7 +251,7 @@ impl ReflectionCompositeResources {
         height: u32,
         srv_cpu_base: D3D12_CPU_DESCRIPTOR_HANDLE,
         srv_gpu_base: D3D12_GPU_DESCRIPTOR_HANDLE,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let srv_cpu = |gpu: D3D12_GPU_DESCRIPTOR_HANDLE| D3D12_CPU_DESCRIPTOR_HANDLE {
             ptr: srv_cpu_base.ptr + (gpu.ptr - srv_gpu_base.ptr) as usize,
         };
@@ -286,7 +293,7 @@ pub(in crate::directx) fn rebuild_reflection_composite_pipelines(
     rc: &ReflectionCompositeResources,
     hot_reload: bool,
     info_queue: Option<&ID3D12InfoQueue>,
-) -> Result<RebuiltReflectionComposite, String> {
+) -> RenderResult<RebuiltReflectionComposite> {
     let shaders = compile_refl_composite_shaders(hot_reload)?;
     let blur_pso = dump_on_err(
         info_queue,

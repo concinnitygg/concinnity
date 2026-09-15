@@ -6,6 +6,7 @@
 use concinnity_core::gfx::mesh_payload;
 use concinnity_core::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use concinnity_core::gfx::render_types::*;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::rt_geom;
 use concinnity_core::render::shadow_bias;
 use concinnity_core::transform::IDENTITY;
@@ -15,6 +16,7 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use super::super::allocator::PooledBuffer;
 use super::super::com;
 use super::super::context::*;
+use super::super::error::map_hresult;
 use super::super::pipeline::{serialize_and_create_root_sig, skinned_input_layout};
 use super::super::slang_builtins;
 use super::super::texture::*;
@@ -142,16 +144,16 @@ impl DxContext {
         vertices: &[SkinnedVertex],
         indices: &[u32],
         draw_objects: Vec<SkinnedDrawObject>,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         if draw_objects.is_empty() || vertices.is_empty() || indices.is_empty() {
             return Ok(());
         }
         if draw_objects.len() > MAX_SKINNED_OBJECTS {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "skinned: {} skinned meshes exceeds MAX_SKINNED_OBJECTS ({})",
                 draw_objects.len(),
                 MAX_SKINNED_OBJECTS
-            ));
+            )));
         }
         self.wait_idle();
 
@@ -223,19 +225,21 @@ impl DxContext {
             let mut frame_bufs: Vec<PooledBuffer> = Vec::with_capacity(draw_objects.len());
             let mut frame_ptrs: Vec<*mut u8> = Vec::with_capacity(draw_objects.len());
             for _ in 0..draw_objects.len() {
-                let buf = create_buffer(
-                    &self.hw.alloc,
-                    joint_buf_bytes,
-                    D3D12_HEAP_TYPE_UPLOAD,
-                    D3D12_RESOURCE_STATE_GENERIC_READ,
-                )
-                .map_err(|e| format!("skinned joint buf: {e}"))?;
+                let buf = self
+                    .hw
+                    .alloc
+                    .alloc_buffer(
+                        joint_buf_bytes,
+                        D3D12_HEAP_TYPE_UPLOAD,
+                        D3D12_RESOURCE_STATE_GENERIC_READ,
+                    )
+                    .map_err(|e| e.context("skinned joint buf"))?;
                 let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
                 // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload,
                 // and the source is a separate allocation, so the ranges cannot overlap.
                 unsafe {
                     buf.Map(0, None, Some(&mut ptr))
-                        .map_err(|e| format!("map skinned joint buf: {e}"))?;
+                        .map_err(|e| map_hresult(e.code(), "map skinned joint buf"))?;
                     std::ptr::copy_nonoverlapping(
                         identity_seed.as_ptr() as *const u8,
                         ptr as *mut u8,
@@ -325,7 +329,7 @@ impl DxContext {
                 &self.hw.device,
                 self.hot_reload.enabled,
             )
-            .map_err(|e| format!("skinned: main-pass skin fold build failed: {e}"))?;
+            .map_err(|e| e.context("skinned: main-pass skin fold build failed"))?;
             self.skinned.skin_pipeline = Some(skin);
             self.skinned.deformed_buffers = deformed_buffers;
             self.skinned.deformed_vbvs = deformed_vbvs;

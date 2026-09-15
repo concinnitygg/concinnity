@@ -72,7 +72,7 @@ impl SkinnedDraws for DxContext {
         // Every skinned stage is the engine's own here: the world's fragment is
         // shader model 5.1, which D3D12 cannot pair with the engine's 6.0
         // vertex (see `compile_skinned_shaders`).
-        Ok(self.upload_skinned(vertices, indices, draw_objects)?)
+        self.upload_skinned(vertices, indices, draw_objects)
     }
 }
 
