@@ -4,10 +4,6 @@
 [advisories]
 # RustSec advisory database (https://github.com/rustsec/advisory-db).
 ignore = [
-    # paste is unmaintained and archived. Pulled in only transitively
-    # (glfw -> image -> ravif -> rav1e); there is no direct dependency and no
-    # fix until those upstreams drop it.
-    "RUSTSEC-2024-0436",
     # ttf-parser is unmaintained. Pulled in only transitively (fontdue ->
     # ttf-parser, fontdue being the cook-time glyph rasterizer); the advisory
     # lists no safe upgrade. The maintained alternative (skrifa) would require
@@ -31,13 +27,11 @@ allow = [
     "Unicode-3.0",
     "Unlicense",
     "CC0-1.0",
-    "CDLA-Permissive-2.0",
-    "NCSA",
     # MPL-2.0 is weak, file-level copyleft: only modifications to the MPL
     # source files themselves must be published. Linking these crates
     # unmodified into a proprietary binary carries no obligation on our own
     # code. Carried by the symphonia audio decoders (via kira), cbindgen
-    # (build-dependency only), option-ext, and triple_buffer.
+    # (build-dependency only), and triple_buffer.
     "MPL-2.0",
 ]
 # r-efi is `MIT OR Apache-2.0 OR LGPL-2.1-or-later`; allowing MIT and
