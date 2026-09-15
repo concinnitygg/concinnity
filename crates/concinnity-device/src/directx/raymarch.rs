@@ -284,11 +284,7 @@ fn create_raymarch_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12R
         Flags: D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
         ..Default::default()
     };
-    Ok(serialize_desc_and_create(
-        device,
-        &desc,
-        "raymarch root sig",
-    )?)
+    serialize_desc_and_create(device, &desc, "raymarch root sig")
 }
 
 // Build the per-volume PSO. Front-face culled so back faces of the
@@ -558,11 +554,7 @@ fn create_raymarch_shadow_root_signature(
         Flags: D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
         ..Default::default()
     };
-    Ok(serialize_desc_and_create(
-        device,
-        &desc,
-        "raymarch shadow root sig",
-    )?)
+    serialize_desc_and_create(device, &desc, "raymarch shadow root sig")
 }
 
 // Build the depth-only shadow PSO for one volume. No RTV, no MSAA

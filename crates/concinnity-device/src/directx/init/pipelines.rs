@@ -10,12 +10,14 @@
 //! `SkinnedMesh` is uploaded) lives in `directx/resources.rs`.
 
 use concinnity_core::render::backend_init;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::shadow_bias;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::directx::com;
 use crate::directx::context::dump_on_err;
+use crate::directx::error::map_pso_hresult;
 use crate::directx::pipeline::{main_input_layout, serialize_and_create_root_sig};
 use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
@@ -30,13 +32,15 @@ pub(in crate::directx) fn world_entry(
     world: &concinnity_core::components::ShaderPrograms,
     entry: &str,
     hot_reload: bool,
-) -> Result<Vec<u8>, String> {
+) -> RenderResult<Vec<u8>> {
     let req = crate::shader::surface_source::Request {
         platform: concinnity_core::platform::Platform::Hlsl,
         probe_count: concinnity_core::render::uniforms::MAX_PROBES,
         hot_reload,
     };
-    crate::shader::surface_source::artifact(world, entry, &req).map(|c| c.into_owned())
+    crate::shader::surface_source::artifact(world, entry, &req)
+        .map(|c| c.into_owned())
+        .map_err(RenderError::ShaderCompile)
 }
 
 // Compile the engine's bindless static-pass pair. A bucket whose Shader is the
@@ -45,7 +49,7 @@ pub(in crate::directx) fn world_entry(
 // the Wireframe twin.
 pub(in crate::directx) fn compile_main_bindless_shaders(
     hot_reload: bool,
-) -> Result<(Vec<u8>, Vec<u8>), String> {
+) -> RenderResult<(Vec<u8>, Vec<u8>)> {
     let vs = slang_builtins::MAIN_BINDLESS_VERT.compile(hot_reload)?;
     let ps = slang_builtins::MAIN_BINDLESS_FRAG.compile(hot_reload)?;
     Ok((vs, ps))
@@ -54,7 +58,7 @@ pub(in crate::directx) fn compile_main_bindless_shaders(
 // Compile the GPU-driven shadow pass's depth-only bindless vertex shader. Built
 // alongside the bindless main pass (same built-in-shader gate); a depth-only
 // PSO with no pixel shader consumes it.
-pub(in crate::directx) fn compile_shadow_bindless_vs(hot_reload: bool) -> Result<Vec<u8>, String> {
+pub(in crate::directx) fn compile_shadow_bindless_vs(hot_reload: bool) -> RenderResult<Vec<u8>> {
     slang_builtins::SHADOW_BINDLESS_VERT.compile(hot_reload)
 }
 
@@ -69,7 +73,7 @@ pub(in crate::directx) fn compile_shadow_bindless_vs(hot_reload: bool) -> Result
 // `StructuredBuffer<GpuObjectData>`.
 pub(super) fn create_main_bindless_root_signature(
     device: &ID3D12Device,
-) -> Result<ID3D12RootSignature, String> {
+) -> RenderResult<ID3D12RootSignature> {
     let shadow_srv_ranges = [
         D3D12_DESCRIPTOR_RANGE {
             RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
@@ -368,7 +372,7 @@ pub(super) fn create_main_bindless_root_signature(
 
 pub(in crate::directx) fn create_shadow_root_signature(
     device: &ID3D12Device,
-) -> Result<ID3D12RootSignature, String> {
+) -> RenderResult<ID3D12RootSignature> {
     let params = [
         // [0] Root constants: model mat4 (16) + cascade_idx + 3 pad = 20 DWORDs at b0
         D3D12_ROOT_PARAMETER {
@@ -408,7 +412,7 @@ pub(in crate::directx) fn create_shadow_root_signature(
 // from. All vertex-stage only (depth-only pass, no pixel shader).
 pub(in crate::directx) fn create_shadow_bindless_root_signature(
     device: &ID3D12Device,
-) -> Result<ID3D12RootSignature, String> {
+) -> RenderResult<ID3D12RootSignature> {
     let params = [
         // [0] Root constant b0: object id (set per command by the command sig).
         D3D12_ROOT_PARAMETER {
@@ -472,7 +476,7 @@ pub(in crate::directx) fn create_main_pso(
     ps: &[u8],
     rtv_format: DXGI_FORMAT,
     sample_count: u32,
-) -> Result<ID3D12PipelineState, String> {
+) -> RenderResult<ID3D12PipelineState> {
     create_main_pso_filled(
         device,
         root_sig,
@@ -494,7 +498,7 @@ pub(in crate::directx) fn create_main_pso_wireframe(
     ps: &[u8],
     rtv_format: DXGI_FORMAT,
     sample_count: u32,
-) -> Result<ID3D12PipelineState, String> {
+) -> RenderResult<ID3D12PipelineState> {
     create_main_pso_filled(
         device,
         root_sig,
@@ -514,7 +518,7 @@ fn create_main_pso_filled(
     rtv_format: DXGI_FORMAT,
     sample_count: u32,
     fill_mode: D3D12_FILL_MODE,
-) -> Result<ID3D12PipelineState, String> {
+) -> RenderResult<ID3D12PipelineState> {
     let layout = main_input_layout();
     let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
         pRootSignature: com::borrowed(root_sig),
@@ -580,14 +584,14 @@ fn create_main_pso_filled(
     // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
     // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
-        .map_err(|e| format!("create main PSO: {e}"))
+        .map_err(|e| map_pso_hresult(e.code(), "create main PSO"))
 }
 
 pub(in crate::directx) fn create_shadow_pso(
     device: &ID3D12Device,
     root_sig: &ID3D12RootSignature,
     vs: &[u8],
-) -> Result<ID3D12PipelineState, String> {
+) -> RenderResult<ID3D12PipelineState> {
     let layout = main_input_layout();
     let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
         pRootSignature: com::borrowed(root_sig),
@@ -635,7 +639,7 @@ pub(in crate::directx) fn create_shadow_pso(
     // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
     // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
-        .map_err(|e| format!("create shadow PSO: {e}"))
+        .map_err(|e| map_pso_hresult(e.code(), "create shadow PSO"))
 }
 
 // Material-referenced world shader pipelines
@@ -662,7 +666,7 @@ pub(in crate::directx) fn build_bucket_pipeline(
     targets: BucketPipelineTargets<'_>,
     bucket: usize,
     shader: backend_init::WorldShader<'_>,
-) -> Result<ID3D12PipelineState, String> {
+) -> RenderResult<ID3D12PipelineState> {
     let (vs, ps) = match shader.programs {
         Some(programs) => (
             world_entry(programs, "vertex_main_bindless", targets.hot_reload)?,
@@ -674,9 +678,9 @@ pub(in crate::directx) fn build_bucket_pipeline(
         ),
     };
     if vs.is_empty() || ps.is_empty() {
-        return Err(format!(
+        return Err(RenderError::ShaderCompile(format!(
             "shader bucket {bucket} carries no vertex/fragment bytecode"
-        ));
+        )));
     }
     dump_on_err(
         info_queue,
@@ -689,7 +693,7 @@ pub(in crate::directx) fn build_bucket_pipeline(
             targets.msaa_samples,
         ),
     )
-    .map_err(|e| format!("shader bucket {bucket}: {e}"))
+    .map_err(|e| e.context(format!("shader bucket {bucket}")))
 }
 
 // What every bucket pipeline shares: the bindless root signature it binds
@@ -712,7 +716,7 @@ pub(super) fn build_world_pipeline_table(
     info_queue: Option<&ID3D12InfoQueue>,
     targets: BucketPipelineTargets<'_>,
     bucket_shaders: &[backend_init::WorldShader<'_>],
-) -> Result<Vec<Option<ID3D12PipelineState>>, String> {
+) -> RenderResult<Vec<Option<ID3D12PipelineState>>> {
     let mut table = Vec::with_capacity(bucket_shaders.len());
     for (i, shader) in bucket_shaders.iter().enumerate() {
         let bucket = i + 1;

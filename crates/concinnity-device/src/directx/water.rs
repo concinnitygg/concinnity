@@ -89,12 +89,8 @@ pub(in crate::directx) fn compile_water_shaders(
     } else {
         &slang_builtins::WATER_FRAG
     };
-    let vs = slang_builtins::WATER_VERT
-        .compile(hot_reload)
-        .map_err(RenderError::ShaderCompile)?;
-    let ps = frag
-        .compile(hot_reload)
-        .map_err(RenderError::ShaderCompile)?;
+    let vs = slang_builtins::WATER_VERT.compile(hot_reload)?;
+    let ps = frag.compile(hot_reload)?;
     Ok((vs, ps))
 }
 
@@ -141,15 +137,9 @@ fn compile_water_rt_shaders(msaa_samples: u32, hot_reload: bool) -> RenderResult
         &slang_builtins::WATER_RT_FRAG_TEXTURED
     };
     Ok(WaterRtShaders {
-        vs: slang_builtins::WATER_VERT
-            .compile(hot_reload)
-            .map_err(RenderError::ShaderCompile)?,
-        flat_ps: flat
-            .compile(hot_reload)
-            .map_err(RenderError::ShaderCompile)?,
-        textured_ps: textured
-            .compile(hot_reload)
-            .map_err(RenderError::ShaderCompile)?,
+        vs: slang_builtins::WATER_VERT.compile(hot_reload)?,
+        flat_ps: flat.compile(hot_reload)?,
+        textured_ps: textured.compile(hot_reload)?,
     })
 }
 

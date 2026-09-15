@@ -20,6 +20,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::*;
 
 use crate::directx::context::{DxContext, FRAMES};
+use crate::directx::error::map_hresult;
 use crate::directx::post::bloom::{create_bloom_mips_at, write_color_rtv};
 use crate::directx::texture::{
     HDR_FORMAT, create_hdr_color_target, create_hdr_resolve_target, create_main_depth_texture,
@@ -54,7 +55,7 @@ impl DxContext {
     // pre-reserved RTV heap slots. Used by the resize path on both success (the
     // freshly-sized buffers) and failure (the unchanged old buffers), so a
     // failed `ResizeBuffers` never leaves `swapchain.back_buffers` empty.
-    fn populate_back_buffers(&mut self) -> Result<(), String> {
+    fn populate_back_buffers(&mut self) -> RenderResult<()> {
         self.swapchain.back_buffers.clear();
         // SAFETY: a property query on a live descriptor heap; it only reads.
         let rtv_base = unsafe { self.swapchain.rtv_heap.GetCPUDescriptorHandleForHeapStart() };
@@ -62,7 +63,7 @@ impl DxContext {
             // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters
             // it fills are live locals that outlive the call.
             let buf: ID3D12Resource = unsafe { self.swapchain.handle.GetBuffer(i as u32) }
-                .map_err(|e| format!("GetBuffer[{i}]: {e}"))?;
+                .map_err(|e| map_hresult(e.code(), &format!("GetBuffer[{i}]")))?;
             let rtv_handle = D3D12_CPU_DESCRIPTOR_HANDLE {
                 ptr: rtv_base.ptr + i * self.swapchain.rtv_descriptor_size,
             };

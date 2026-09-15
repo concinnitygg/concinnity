@@ -15,7 +15,7 @@ use concinnity_core::gfx::render_types::{
     CLUSTER_GRID_X, CLUSTER_GRID_Y, CLUSTER_GRID_Z, ClusterParams, LightUniforms, LineVertex,
     ShadowUniforms, TextDrawCall,
 };
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::lights;
 use concinnity_core::render::render_graph;
 use concinnity_core::render::render_graph::{FrameGraphInputs, build_frame_graph};
@@ -26,6 +26,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use super::com;
 use super::context::DxContext;
 use super::graph_exec::GraphFrameParams;
+use crate::directx::error::map_hresult;
 
 mod composite;
 mod main;
@@ -474,9 +475,8 @@ impl DxContext {
         let cached_graph = self.draw.graph_cache.borrow_mut().take();
         let frame_graph = match cached_graph {
             Some((cached_inputs, cached)) if cached_inputs == seed_inputs => cached,
-            _ => {
-                build_frame_graph(&seed_inputs).map_err(|e| format!("frame-graph compile: {e}"))?
-            }
+            _ => build_frame_graph(&seed_inputs)
+                .map_err(|e| RenderError::Other(format!("frame-graph compile: {e}")))?,
         };
         let frame_params = GraphFrameParams {
             cmd: end_cmd,
@@ -595,13 +595,13 @@ pub(super) fn upload_static_records<T: Copy>(
     buffer: &ID3D12Resource,
     records: &[T],
     label: &str,
-) -> Result<(), String> {
+) -> RenderResult<()> {
     let bytes = std::mem::size_of_val(records);
     let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
     // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
     // receives the mapping.
     unsafe { buffer.Map(0, None, Some(&mut ptr)) }
-        .map_err(|e| format!("map {label} buffer: {e}"))?;
+        .map_err(|e| map_hresult(e.code(), &format!("map {label} buffer")))?;
     // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the source
     // is a separate allocation, so the ranges cannot overlap.
     unsafe {

@@ -4,6 +4,7 @@
 //! and the swapchain it presents through.
 
 use concinnity_core::render::backend_init::SwapchainConfig;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::hdr_output;
 use concinnity_core::render::hdr_output::HdrOutputMode;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -13,6 +14,7 @@ use windows::core::Interface;
 
 use crate::directx::allocator::DeviceAllocator;
 use crate::directx::context::{DxHardware, FRAMES};
+use crate::directx::error::map_hresult;
 use crate::directx::texture::HDR_FORMAT;
 use crate::win32::display_mode::FullscreenDisplayMode;
 use crate::win32::window::create_window;
@@ -43,7 +45,7 @@ pub(super) fn setup(
     validation: bool,
     vsync: bool,
     swapchain_config: SwapchainConfig,
-) -> Result<(DxHardware, DxgiSwapchain), String> {
+) -> RenderResult<(DxHardware, DxgiSwapchain)> {
     let WindowConfig {
         title,
         width,
@@ -78,7 +80,8 @@ pub(super) fn setup(
 
     // Win32 window (create_window also registers raw mouse input and installs
     // the GWLP_USERDATA state pointer for the wnd_proc).
-    let (hwnd, win_state) = create_window(title, width, height, title_bar)?;
+    let (hwnd, win_state) =
+        create_window(title, width, height, title_bar).map_err(RenderError::Other)?;
 
     // DXGI factory
     // DXGI_CREATE_FACTORY_DEBUG requires the Windows "Graphics Tools" optional
@@ -90,12 +93,12 @@ pub(super) fn setup(
             // SAFETY: the create descriptor and every pointer it borrows are live for the call, and
             // the new COM object lands in a binding that owns it.
             .or_else(|_| unsafe { CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0)) })
-            .map_err(|e| format!("CreateDXGIFactory2: {e}"))?
+            .map_err(|e| map_hresult(e.code(), "CreateDXGIFactory2"))?
     } else {
         // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
         // new COM object lands in a binding that owns it.
         unsafe { CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0)) }
-            .map_err(|e| format!("CreateDXGIFactory2: {e}"))?
+            .map_err(|e| map_hresult(e.code(), "CreateDXGIFactory2"))?
     };
 
     let super::adapter::Selection { adapter, device } = super::adapter::select(&factory)?;
@@ -147,7 +150,7 @@ pub(super) fn setup(
     // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
     // COM object lands in a binding that owns it.
     let command_queue: ID3D12CommandQueue = unsafe { device.CreateCommandQueue(&queue_desc) }
-        .map_err(|e| format!("CreateCommandQueue: {e}"))?;
+        .map_err(|e| map_hresult(e.code(), "CreateCommandQueue"))?;
 
     // HDR-output detection. Walk the adapter's outputs, find the highest
     // max-EDR multiplier reported by any HDR-capable output, and feed it
@@ -236,10 +239,10 @@ pub(super) fn setup(
         // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
         // new COM object lands in a binding that owns it.
         unsafe { factory.CreateSwapChainForHwnd(&command_queue, hwnd, &sc_desc, None, None) }
-            .map_err(|e| format!("CreateSwapChain: {e}"))?;
+            .map_err(|e| map_hresult(e.code(), "CreateSwapChain"))?;
     let swapchain: IDXGISwapChain3 = sc_base
         .cast()
-        .map_err(|e| format!("SwapChain3 cast: {e}"))?;
+        .map_err(|e| map_hresult(e.code(), "SwapChain3 cast"))?;
 
     // On the HDR path, tell DXGI which color space the swapchain pixels
     // carry. Two flavors, picked by `hdr_mode.encoding`:

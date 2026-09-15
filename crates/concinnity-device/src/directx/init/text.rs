@@ -62,7 +62,7 @@ fn build_text_pipeline(
     text_ps: &[u8],
     swap_format: DXGI_FORMAT,
     has_atlases: bool,
-) -> Result<(ID3D12RootSignature, Option<ID3D12PipelineState>), String> {
+) -> RenderResult<(ID3D12RootSignature, Option<ID3D12PipelineState>)> {
     let text_root_sig = dump_on_err(info_queue, create_text_root_signature(device))?;
     // Text renders in the composite pass into the single-sample swapchain
     // backbuffer (post-tonemap), so its PSO targets the swapchain format at

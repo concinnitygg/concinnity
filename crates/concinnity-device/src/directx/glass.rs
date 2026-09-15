@@ -18,7 +18,7 @@
 use concinnity_core::components::GlassPanel;
 use concinnity_core::geometry::glass_quad::build_glass_quad;
 use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::error::RenderResult;
 use windows::Win32::Graphics::Direct3D12::*;
 // `GlassParams` (the per-panel cbuffer) is a GPU-free layout struct that lives
 // in `core::render`; re-export it so `crate::directx::glass::GlassParams` is
@@ -61,12 +61,8 @@ pub(in crate::directx) fn compile_glass_shaders(
     } else {
         &slang_builtins::GLASS_FRAG
     };
-    let vs = slang_builtins::GLASS_VERT
-        .compile(hot_reload)
-        .map_err(RenderError::ShaderCompile)?;
-    let ps = frag
-        .compile(hot_reload)
-        .map_err(RenderError::ShaderCompile)?;
+    let vs = slang_builtins::GLASS_VERT.compile(hot_reload)?;
+    let ps = frag.compile(hot_reload)?;
     Ok((vs, ps))
 }
 
@@ -112,15 +108,9 @@ fn compile_glass_rt_shaders(msaa_samples: u32, hot_reload: bool) -> RenderResult
         &slang_builtins::GLASS_RT_FRAG_TEXTURED
     };
     Ok(GlassRtShaders {
-        vs: slang_builtins::GLASS_VERT
-            .compile(hot_reload)
-            .map_err(RenderError::ShaderCompile)?,
-        flat_ps: flat
-            .compile(hot_reload)
-            .map_err(RenderError::ShaderCompile)?,
-        textured_ps: textured
-            .compile(hot_reload)
-            .map_err(RenderError::ShaderCompile)?,
+        vs: slang_builtins::GLASS_VERT.compile(hot_reload)?,
+        flat_ps: flat.compile(hot_reload)?,
+        textured_ps: textured.compile(hot_reload)?,
     })
 }
 
@@ -272,15 +262,9 @@ fn compile_glass_mesh_shaders(msaa_samples: u32, hot_reload: bool) -> RenderResu
         &slang_builtins::GLASS_MESH_RT_FRAG_TEXTURED
     };
     Ok(GlassRtShaders {
-        vs: slang_builtins::GLASS_MESH_VERT
-            .compile(hot_reload)
-            .map_err(RenderError::ShaderCompile)?,
-        flat_ps: flat
-            .compile(hot_reload)
-            .map_err(RenderError::ShaderCompile)?,
-        textured_ps: textured
-            .compile(hot_reload)
-            .map_err(RenderError::ShaderCompile)?,
+        vs: slang_builtins::GLASS_MESH_VERT.compile(hot_reload)?,
+        flat_ps: flat.compile(hot_reload)?,
+        textured_ps: textured.compile(hot_reload)?,
     })
 }
 

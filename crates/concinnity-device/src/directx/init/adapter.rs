@@ -7,9 +7,12 @@
 //! adapter is the last candidate, so a machine whose GPU is below the
 //! renderer's floor gets a picture instead of an exit.
 
+use concinnity_core::render::error::{RenderError, RenderResult};
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::*;
+
+use crate::directx::error::map_hresult;
 
 /// The adapter the renderer will run on, together with the device made on it.
 /// The device is kept rather than remade because creating it is what proved
@@ -31,7 +34,7 @@ pub(super) struct Selection {
 /// Every rejection is carried rather than counted, since the reason a
 /// particular machine cannot run the renderer is the whole content of both the
 /// warning and, when even the software adapter fails, the error.
-pub(super) fn select(factory: &IDXGIFactory4) -> Result<Selection, String> {
+pub(super) fn select(factory: &IDXGIFactory4) -> RenderResult<Selection> {
     let mut rejections: Vec<String> = Vec::new();
 
     let mut i = 0u32;
@@ -48,7 +51,7 @@ pub(super) fn select(factory: &IDXGIFactory4) -> Result<Selection, String> {
         }
         match consider(&adapter) {
             Ok(selection) => return Ok(selection),
-            Err(reason) => rejections.push(reason),
+            Err(reason) => rejections.push(reason.to_string()),
         }
     }
 
@@ -64,29 +67,39 @@ pub(super) fn select(factory: &IDXGIFactory4) -> Result<Selection, String> {
                 );
                 return Ok(selection);
             }
-            Err(reason) => rejections.push(reason),
+            Err(reason) => rejections.push(reason.to_string()),
         },
         Err(e) => rejections.push(format!("the software adapter is unavailable: {e}")),
     }
 
-    Err(no_usable_adapter_message(&rejections))
+    Err(RenderError::Other(no_usable_adapter_message(&rejections)))
 }
 
 // Make a device on one adapter and gate it on the binding tier. An adapter that
 // cannot make a device and one whose device cannot bind the texture pool are
 // the same answer here: not this one.
-fn consider(adapter: &IDXGIAdapter1) -> Result<Selection, String> {
+fn consider(adapter: &IDXGIAdapter1) -> RenderResult<Selection> {
     let mut device_opt: Option<ID3D12Device> = None;
     // SAFETY: the adapter is live for the call, and the new COM object lands in a binding that
     // owns it.
-    unsafe { D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_11_0, &mut device_opt) }
-        .map_err(|e| format!("{}: D3D12CreateDevice: {e}", adapter_name(adapter)))?;
-    let device = device_opt
-        .ok_or_else(|| format!("{}: D3D12CreateDevice returned None", adapter_name(adapter)))?;
+    unsafe { D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_11_0, &mut device_opt) }.map_err(
+        |e| {
+            map_hresult(
+                e.code(),
+                &format!("{}: D3D12CreateDevice", adapter_name(adapter)),
+            )
+        },
+    )?;
+    let device = device_opt.ok_or_else(|| {
+        RenderError::Other(format!(
+            "{}: D3D12CreateDevice returned None",
+            adapter_name(adapter)
+        ))
+    })?;
     if let Some(refusal) =
         binding_tier_refusal(resource_binding_tier(&device), &adapter_name(adapter))
     {
-        return Err(refusal);
+        return Err(RenderError::Other(refusal));
     }
     Ok(Selection {
         adapter: adapter.clone(),

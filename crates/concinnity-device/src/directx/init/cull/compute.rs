@@ -17,7 +17,7 @@ use crate::directx::cull::{
 use crate::directx::error::map_hresult;
 use crate::directx::hiz::{HiZDeviceCtx, HiZResources, HiZTarget};
 use crate::directx::init::{HIZ_MAX_MIPS, InitGpu};
-use crate::directx::texture::{create_buffer, create_uav_buffer};
+use crate::directx::texture::create_uav_buffer;
 
 pub(super) struct ComputeCull {
     pub(super) root_sig: Option<ID3D12RootSignature>,
@@ -102,8 +102,7 @@ pub(super) fn build_compute_cull(
     // bake culls each cube face into `indirect_cmd_buffers[FRAMES]` reading
     // `draw_args_buffer_resources[FRAMES]`, a slot the frame never overwrites.
     for _ in 0..FRAMES + 1 {
-        let da = create_buffer(
-            &gpu.hw.alloc,
+        let da = gpu.hw.alloc.alloc_buffer(
             draw_args_size,
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_RESOURCE_STATE_GENERIC_READ,

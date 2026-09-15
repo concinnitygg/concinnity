@@ -14,6 +14,7 @@ use concinnity_core::render::csm;
 use concinnity_core::render::decal;
 use concinnity_core::render::display_mode;
 use concinnity_core::render::error;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::hdr_output;
 use concinnity_core::render::input::InputSnapshot;
 use concinnity_core::render::keymap::KeyMap;
@@ -47,6 +48,7 @@ use super::post::ssao::*;
 use super::post::ssr::*;
 use super::post::taa::*;
 use super::texture::*;
+use crate::directx::error::map_hresult;
 use crate::win32::window::*;
 
 // Constants
@@ -119,8 +121,7 @@ pub(super) fn build_timestamp_resources(
         tracing::warn!("timestamp query heap create failed: {e}");
         return (None, None, std::ptr::null(), 0);
     }
-    let readback = match super::texture::create_buffer(
-        alloc,
+    let readback = match alloc.alloc_buffer(
         super::pass_timing::FRAME_BLOCK_BYTES * FRAMES as u64,
         D3D12_HEAP_TYPE_READBACK,
         D3D12_RESOURCE_STATE_COPY_DEST,
@@ -1215,13 +1216,11 @@ impl DxHardware {
     // `reload_world`: COM clones of the device, queue, adapter and info queue,
     // with the window and fullscreen restore state moved out. The successor
     // places into a fresh allocator; the outgoing world releases into its own.
-    pub(super) fn hand_over(&mut self) -> Result<Self, String> {
+    pub(super) fn hand_over(&mut self) -> RenderResult<Self> {
         Ok(Self {
-            win_state: Some(
-                self.win_state
-                    .take()
-                    .ok_or("apply_world_reload: window already taken")?,
-            ),
+            win_state: Some(self.win_state.take().ok_or_else(|| {
+                RenderError::Other("apply_world_reload: window already taken".into())
+            })?),
             fullscreen_display: std::mem::replace(
                 &mut self.fullscreen_display,
                 crate::win32::display_mode::FullscreenDisplayMode::new(),
@@ -2014,14 +2013,17 @@ impl DxContext {
             Vec::with_capacity(2 + pass_cmd_lists.len());
         let start_handle: ID3D12CommandList = start_cmd
             .cast()
-            .map_err(|e| format!("start cmd cast: {e}"))?;
+            .map_err(|e| map_hresult(e.code(), "start cmd cast"))?;
         submission.push(Some(start_handle));
         for cl in &pass_cmd_lists {
-            let h: ID3D12CommandList = cl.cast().map_err(|e| format!("per-pass cmd cast: {e}"))?;
+            let h: ID3D12CommandList = cl
+                .cast()
+                .map_err(|e| map_hresult(e.code(), "per-pass cmd cast"))?;
             submission.push(Some(h));
         }
-        let end_handle: ID3D12CommandList =
-            end_cmd.cast().map_err(|e| format!("end cmd cast: {e}"))?;
+        let end_handle: ID3D12CommandList = end_cmd
+            .cast()
+            .map_err(|e| map_hresult(e.code(), "end cmd cast"))?;
         submission.push(Some(end_handle));
         // SAFETY: every command list in the submission is live and closed, and the slice outlives
         // the call.

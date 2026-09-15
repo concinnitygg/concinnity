@@ -112,7 +112,7 @@ pub(in crate::directx) struct DxPostDevice<'a> {
 
 // The DXIL a post program's two stages compile to: the one shared fullscreen
 // triangle vertex plus the program's own fragment.
-fn compile(program: PostProgram, hot_reload: bool) -> Result<(Vec<u8>, Vec<u8>), String> {
+fn compile(program: PostProgram, hot_reload: bool) -> RenderResult<(Vec<u8>, Vec<u8>)> {
     let frag = match program {
         PostProgram::TaaResolve => &slang_builtins::TAA_FRAG,
         PostProgram::SsrResolve => &slang_builtins::SSR_RESOLVE,
@@ -157,7 +157,7 @@ fn table_parameter(range: &D3D12_DESCRIPTOR_RANGE) -> D3D12_ROOT_PARAMETER {
 fn create_root_signature(
     device: &ID3D12Device,
     bindings: PostProgramBindings,
-) -> Result<ID3D12RootSignature, String> {
+) -> RenderResult<ID3D12RootSignature> {
     let textures = bindings.textures as u32;
     let ranges: Vec<D3D12_DESCRIPTOR_RANGE> = (0..textures).map(|reg| srv_range(reg, 1)).collect();
     // The cube array takes the next texture register after the declared sources.

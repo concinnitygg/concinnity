@@ -14,7 +14,7 @@
 //! each render their reflection target, then call `encode_reflection_composite` with
 //! that target's SRV. Mirrors src/metal/post/ssr.rs (the composite half).
 
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::device::PostBlend;
 use windows::Win32::Graphics::Direct3D12::*;
 
@@ -48,15 +48,9 @@ struct ReflCompShaders {
 // blur ramp matches the SSR / RT resolve gates.
 fn compile_refl_composite_shaders(hot_reload: bool) -> RenderResult<ReflCompShaders> {
     Ok(ReflCompShaders {
-        vs: slang_builtins::FULLSCREEN_VERT
-            .compile(hot_reload)
-            .map_err(RenderError::ShaderCompile)?,
-        blur_ps: slang_builtins::REFLECTION_BLUR
-            .compile(hot_reload)
-            .map_err(RenderError::ShaderCompile)?,
-        composite_ps: slang_builtins::REFLECTION_COMPOSITE
-            .compile(hot_reload)
-            .map_err(RenderError::ShaderCompile)?,
+        vs: slang_builtins::FULLSCREEN_VERT.compile(hot_reload)?,
+        blur_ps: slang_builtins::REFLECTION_BLUR.compile(hot_reload)?,
+        composite_ps: slang_builtins::REFLECTION_COMPOSITE.compile(hot_reload)?,
     })
 }
 
@@ -118,7 +112,7 @@ fn srv_table_root_sig(
         pStaticSamplers: samplers.as_ptr(),
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
     };
-    Ok(serialize_desc_and_create(device, &desc, name)?)
+    serialize_desc_and_create(device, &desc, name)
 }
 
 // Resources

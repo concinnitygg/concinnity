@@ -10,6 +10,7 @@
 //! pass takes what it needs from here instead of adding a `<effect>_srv_extra`
 //! to the heap cascade.
 
+use concinnity_core::render::error::{RenderError, RenderResult};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use windows::Win32::Graphics::Direct3D12::*;
@@ -74,14 +75,14 @@ impl PostDescriptors {
     }
 
     // The lowest free slot's descriptors.
-    pub(in crate::directx) fn allocate(&self) -> Result<PostTargetDescriptors, String> {
+    pub(in crate::directx) fn allocate(&self) -> RenderResult<PostTargetDescriptors> {
         let mut current = self.used.load(Ordering::Relaxed);
         let i = loop {
             let i = (!current).trailing_zeros() as usize;
             if i >= POST_TARGET_SLOTS {
-                return Err(format!(
+                return Err(RenderError::Other(format!(
                     "the shared post passes asked for more than {POST_TARGET_SLOTS} targets"
-                ));
+                )));
             }
             match self.used.compare_exchange_weak(
                 current,

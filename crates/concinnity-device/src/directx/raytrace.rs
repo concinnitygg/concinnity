@@ -192,11 +192,11 @@ fn skinned_triangle_geometry(
 // Create an acceleration-structure backing buffer (default heap,
 // `ALLOW_UNORDERED_ACCESS`, initial state `RAYTRACING_ACCELERATION_STRUCTURE`).
 fn create_as_buffer(device: &ID3D12Device, size: u64) -> RenderResult<ID3D12Resource> {
-    Ok(create_uav_buffer(
+    create_uav_buffer(
         device,
         size.max(256),
         D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE,
-    )?)
+    )
 }
 
 // Create a build scratch buffer (default heap, `ALLOW_UNORDERED_ACCESS`). D3D12
@@ -206,11 +206,7 @@ fn create_as_buffer(device: &ID3D12Device, size: u64) -> RenderResult<ID3D12Reso
 // build's first UAV access (and decays back to `COMMON` after each
 // `ExecuteCommandLists`, re-promoting on the next reused-scratch rebuild).
 fn create_scratch(device: &ID3D12Device, size: u64) -> RenderResult<ID3D12Resource> {
-    Ok(create_uav_buffer(
-        device,
-        size.max(256),
-        D3D12_RESOURCE_STATE_COMMON,
-    )?)
+    create_uav_buffer(device, size.max(256), D3D12_RESOURCE_STATE_COMMON)
 }
 
 // Byte size of a scratch slot covering a build requiring `needed` bytes. D3D12
@@ -500,11 +496,7 @@ fn create_skin_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootS
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
         ..Default::default()
     };
-    Ok(super::pipeline::serialize_desc_and_create(
-        device,
-        &desc,
-        "rt skin root sig",
-    )?)
+    super::pipeline::serialize_desc_and_create(device, &desc, "rt skin root sig")
 }
 
 // Build the `rt_skin` compute pipeline (root signature + PSO). slangc emits it
@@ -513,9 +505,7 @@ fn create_skin_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootS
 // `None` and skinned geometry is absent from the BVH (the RT pass still runs for
 // static geometry).
 fn build_skin_pipeline(device: &ID3D12Device, hot_reload: bool) -> RenderResult<SkinPipeline> {
-    let cs = super::slang_builtins::RT_SKIN
-        .compile(hot_reload)
-        .map_err(RenderError::ShaderCompile)?;
+    let cs = super::slang_builtins::RT_SKIN.compile(hot_reload)?;
     let root_sig = create_skin_root_signature(device)?;
     let desc = D3D12_COMPUTE_PIPELINE_STATE_DESC {
         pRootSignature: com::borrowed(&root_sig),

@@ -90,25 +90,19 @@ impl ProbePrefilterPipelines {
         let mip0 = create_pso(
             device,
             &mip_root,
-            &slang_builtins::PROBE_MIP0
-                .compile(hot_reload)
-                .map_err(RenderError::ShaderCompile)?,
+            &slang_builtins::PROBE_MIP0.compile(hot_reload)?,
             "probe_mip0",
         )?;
         let downsample = create_pso(
             device,
             &mip_root,
-            &slang_builtins::PROBE_DOWNSAMPLE
-                .compile(hot_reload)
-                .map_err(RenderError::ShaderCompile)?,
+            &slang_builtins::PROBE_DOWNSAMPLE.compile(hot_reload)?,
             "probe_downsample",
         )?;
         let ggx = create_pso(
             device,
             &ggx_root,
-            &slang_builtins::PROBE_GGX
-                .compile(hot_reload)
-                .map_err(RenderError::ShaderCompile)?,
+            &slang_builtins::PROBE_GGX.compile(hot_reload)?,
             "probe_ggx",
         )?;
         Ok(Self {
@@ -377,11 +371,7 @@ fn create_mip_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSi
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
         ..Default::default()
     };
-    Ok(serialize_desc_and_create(
-        device,
-        &desc,
-        "probe prefilter mip root sig",
-    )?)
+    serialize_desc_and_create(device, &desc, "probe prefilter mip root sig")
 }
 
 // Root signature for the GGX kernel: root constants at b0, the sampled capture
@@ -431,11 +421,7 @@ fn create_ggx_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSi
         pStaticSamplers: &sampler,
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
     };
-    Ok(serialize_desc_and_create(
-        device,
-        &desc,
-        "probe prefilter ggx root sig",
-    )?)
+    serialize_desc_and_create(device, &desc, "probe prefilter ggx root sig")
 }
 
 fn root_constants() -> D3D12_ROOT_PARAMETER {

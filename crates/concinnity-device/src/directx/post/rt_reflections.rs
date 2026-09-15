@@ -16,7 +16,7 @@
 
 use concinnity_core::gfx::render_types::RtParams;
 use concinnity_core::gfx::rt_reflections::{RtParamsInputs, RtReflectionSettings};
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::device::PostBlend;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -52,15 +52,9 @@ struct RtShaders {
 // fails to compile.
 fn compile_rt_shaders(hot_reload: bool) -> RenderResult<RtShaders> {
     Ok(RtShaders {
-        vs: slang_builtins::FULLSCREEN_VERT
-            .compile(hot_reload)
-            .map_err(RenderError::ShaderCompile)?,
-        flat_ps: slang_builtins::RT_REFLECTIONS_FRAG
-            .compile(hot_reload)
-            .map_err(RenderError::ShaderCompile)?,
-        textured_ps: slang_builtins::RT_REFLECTIONS_FRAG_TEXTURED
-            .compile(hot_reload)
-            .map_err(RenderError::ShaderCompile)?,
+        vs: slang_builtins::FULLSCREEN_VERT.compile(hot_reload)?,
+        flat_ps: slang_builtins::RT_REFLECTIONS_FRAG.compile(hot_reload)?,
+        textured_ps: slang_builtins::RT_REFLECTIONS_FRAG_TEXTURED.compile(hot_reload)?,
     })
 }
 
@@ -186,11 +180,7 @@ fn create_rt_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSig
         pStaticSamplers: samplers.as_ptr(),
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
     };
-    Ok(serialize_desc_and_create(
-        device,
-        &desc,
-        "rt reflections root sig",
-    )?)
+    serialize_desc_and_create(device, &desc, "rt reflections root sig")
 }
 
 // Resources

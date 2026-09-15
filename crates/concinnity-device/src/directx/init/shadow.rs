@@ -17,10 +17,9 @@ use crate::directx::context::{
     DxDescriptors, DxTargets, ShadowState, SpotShadowState, align256, dump_on_err,
 };
 use crate::directx::draw::upload_static_records;
+use crate::directx::error::map_hresult;
 use crate::directx::slang_builtins::{self, SlangCompile};
-use crate::directx::texture::{
-    create_buffer, create_fallback_shadow_array, create_shadow_map_array,
-};
+use crate::directx::texture::{create_fallback_shadow_array, create_shadow_map_array};
 
 pub(super) fn build_shadow(
     gpu: &InitGpu<'_>,
@@ -100,7 +99,7 @@ fn build_shadow_pipeline(
     device: &ID3D12Device,
     info_queue: Option<&ID3D12InfoQueue>,
     shadow_vs: Option<&[u8]>,
-) -> Result<(Option<ID3D12RootSignature>, Option<ID3D12PipelineState>), String> {
+) -> RenderResult<(Option<ID3D12RootSignature>, Option<ID3D12PipelineState>)> {
     if let Some(svs) = shadow_vs {
         let sr = dump_on_err(info_queue, create_shadow_root_signature(device))?;
         let sp = dump_on_err(info_queue, create_shadow_pso(device, &sr, svs))?;
@@ -160,8 +159,7 @@ pub(super) fn build_spot_shadow(
     };
     let spot_shadow_buffer = {
         let size = align256((spot_shadow_data.len() * size_of::<SpotShadowData>()) as u64);
-        let buf = create_buffer(
-            &hw.alloc,
+        let buf = hw.alloc.alloc_buffer(
             size,
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -176,8 +174,7 @@ pub(super) fn build_spot_shadow(
     let spot_shadow_ubo_stride = align256(size_of::<ShadowUniforms>() as u64);
     let spot_shadow_ubo = {
         let slots = spot_shadows.len().max(1) as u64;
-        let buf = create_buffer(
-            &hw.alloc,
+        let buf = hw.alloc.alloc_buffer(
             spot_shadow_ubo_stride * slots,
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -186,7 +183,7 @@ pub(super) fn build_spot_shadow(
         // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
         // local that receives the mapping.
         unsafe { buf.Map(0, None, Some(&mut ptr)) }
-            .map_err(|e| format!("map spot-shadow UBO: {e}"))?;
+            .map_err(|e| map_hresult(e.code(), "map spot-shadow UBO"))?;
         for (i, sd) in spot_shadows.iter().enumerate() {
             let mut u = csm::empty_shadow_uniforms();
             u.light_vps[0] = sd.light_vp;

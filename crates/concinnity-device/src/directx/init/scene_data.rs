@@ -11,8 +11,8 @@ use super::InitGpu;
 use crate::directx::allocator::PooledBuffer;
 use crate::directx::context::{DxUniforms, FRAMES, align256, dump_on_err};
 use crate::directx::draw::{upload_light_uniforms, upload_static_records};
+use crate::directx::error::map_hresult;
 use crate::directx::light_cull::{self as lc, LightCullState};
-use crate::directx::texture::create_buffer;
 
 pub(super) fn build_uniforms(
     gpu: &InitGpu<'_>,
@@ -28,8 +28,7 @@ pub(super) fn build_uniforms(
     let mut probe_set_cbvs: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
     let mut probe_set_cbv_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
     for _ in 0..FRAMES {
-        let buf = create_buffer(
-            &hw.alloc,
+        let buf = hw.alloc.alloc_buffer(
             probe_set_size,
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -38,7 +37,7 @@ pub(super) fn build_uniforms(
         // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
         // local that receives the mapping.
         unsafe { buf.Map(0, None, Some(&mut ptr)) }
-            .map_err(|e| format!("map probe set cbv: {e}"))?;
+            .map_err(|e| map_hresult(e.code(), "map probe set cbv"))?;
         // Initialize to the empty set (count 0) until the first frame writes it.
         let empty = ProbeSet::EMPTY;
         // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and
@@ -54,8 +53,7 @@ pub(super) fn build_uniforms(
         probe_set_cbvs.push(buf);
     }
     let probe_set_empty_cbv = {
-        let buf = create_buffer(
-            &hw.alloc,
+        let buf = hw.alloc.alloc_buffer(
             probe_set_size,
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -64,7 +62,7 @@ pub(super) fn build_uniforms(
         // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
         // local that receives the mapping.
         unsafe { buf.Map(0, None, Some(&mut ptr)) }
-            .map_err(|e| format!("map probe empty cbv: {e}"))?;
+            .map_err(|e| map_hresult(e.code(), "map probe empty cbv"))?;
         let empty = ProbeSet::EMPTY;
         // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and
         // the source is a separate allocation, so the ranges cannot overlap.
@@ -87,8 +85,7 @@ pub(super) fn build_uniforms(
     let mut view_ubo_resources = Vec::with_capacity(FRAMES);
     let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
     for _ in 0..FRAMES {
-        let buf = create_buffer(
-            &hw.alloc,
+        let buf = hw.alloc.alloc_buffer(
             view_ubo_size,
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -96,7 +93,8 @@ pub(super) fn build_uniforms(
         let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
         // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
         // local that receives the mapping.
-        unsafe { buf.Map(0, None, Some(&mut ptr)) }.map_err(|e| format!("map view ubo: {e}"))?;
+        unsafe { buf.Map(0, None, Some(&mut ptr)) }
+            .map_err(|e| map_hresult(e.code(), "map view ubo"))?;
         view_ubo_ptrs.push(ptr as *mut u8);
         view_ubo_resources.push(buf);
     }
@@ -108,8 +106,7 @@ pub(super) fn build_uniforms(
     let mut light_ubo_resources = Vec::with_capacity(FRAMES);
     let mut light_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
     for _ in 0..FRAMES {
-        let buf = create_buffer(
-            &hw.alloc,
+        let buf = hw.alloc.alloc_buffer(
             light_ubo_size,
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -117,7 +114,8 @@ pub(super) fn build_uniforms(
         let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
         // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
         // local that receives the mapping.
-        unsafe { buf.Map(0, None, Some(&mut ptr)) }.map_err(|e| format!("map light ubo: {e}"))?;
+        unsafe { buf.Map(0, None, Some(&mut ptr)) }
+            .map_err(|e| map_hresult(e.code(), "map light ubo"))?;
         light_ubo_ptrs.push(ptr as *mut u8);
         light_ubo_resources.push(buf);
     }
@@ -127,8 +125,7 @@ pub(super) fn build_uniforms(
     let mut shadow_ubo_resources = Vec::with_capacity(FRAMES);
     let mut shadow_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
     for _ in 0..FRAMES {
-        let buf = create_buffer(
-            &hw.alloc,
+        let buf = hw.alloc.alloc_buffer(
             shadow_ubo_size,
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -136,7 +133,8 @@ pub(super) fn build_uniforms(
         let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
         // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
         // local that receives the mapping.
-        unsafe { buf.Map(0, None, Some(&mut ptr)) }.map_err(|e| format!("map shadow ubo: {e}"))?;
+        unsafe { buf.Map(0, None, Some(&mut ptr)) }
+            .map_err(|e| map_hresult(e.code(), "map shadow ubo"))?;
         shadow_ubo_ptrs.push(ptr as *mut u8);
         shadow_ubo_resources.push(buf);
     }
@@ -165,8 +163,7 @@ pub(super) fn build_uniforms(
     // `num_local_lights == 0` guard keeps it from being read.
     let local_light_buffer = {
         let size = align256((local_lights.len().max(1) * std::mem::size_of::<GpuLight>()) as u64);
-        let buf = create_buffer(
-            &hw.alloc,
+        let buf = hw.alloc.alloc_buffer(
             size,
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_RESOURCE_STATE_GENERIC_READ,

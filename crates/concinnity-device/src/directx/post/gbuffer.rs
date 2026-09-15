@@ -13,7 +13,7 @@
 //! un-jittered current / previous VPs in-shader so projection jitter never
 //! contaminates motion. Mirrors src/metal/post/gbuffer.rs.
 
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::transform::IDENTITY;
 use std::cell::RefCell;
 use windows::Win32::Foundation::RECT;
@@ -255,11 +255,7 @@ fn create_gbuffer_bindless_root_signature(
             ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,
         },
     ];
-    Ok(serialize_and_create_root_sig(
-        device,
-        &params,
-        "gbuffer bindless root sig",
-    )?)
+    serialize_and_create_root_sig(device, &params, "gbuffer bindless root sig")
 }
 
 // Threads per group, matching `[numthreads(64, 1, 1)]` in model_history.slang.
@@ -318,11 +314,7 @@ fn create_model_history_root_signature(device: &ID3D12Device) -> RenderResult<ID
             ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
         },
     ];
-    Ok(serialize_and_create_root_sig(
-        device,
-        &params,
-        "model history root sig",
-    )?)
+    serialize_and_create_root_sig(device, &params, "model history root sig")
 }
 
 // Build the model-history snapshot kernel: the compute PSO and its root
@@ -332,9 +324,7 @@ pub(in crate::directx) fn build_model_history(
     info_queue: Option<&ID3D12InfoQueue>,
     hot_reload: bool,
 ) -> RenderResult<(ID3D12RootSignature, ID3D12PipelineState)> {
-    let cs = slang_builtins::MODEL_HISTORY
-        .compile(hot_reload)
-        .map_err(RenderError::ShaderCompile)?;
+    let cs = slang_builtins::MODEL_HISTORY.compile(hot_reload)?;
     let root_sig = dump_on_err(info_queue, create_model_history_root_signature(device))?;
     let pso = dump_on_err(
         info_queue,
@@ -362,12 +352,8 @@ pub(in crate::directx) fn build_gbuffer_bindless(
     info_queue: Option<&ID3D12InfoQueue>,
     hot_reload: bool,
 ) -> RenderResult<GbufferBindlessPipeline> {
-    let vs = slang_builtins::GBUFFER_BINDLESS_VERT
-        .compile(hot_reload)
-        .map_err(RenderError::ShaderCompile)?;
-    let ps = slang_builtins::GBUFFER_BINDLESS_FRAG
-        .compile(hot_reload)
-        .map_err(RenderError::ShaderCompile)?;
+    let vs = slang_builtins::GBUFFER_BINDLESS_VERT.compile(hot_reload)?;
+    let ps = slang_builtins::GBUFFER_BINDLESS_FRAG.compile(hot_reload)?;
     let root_sig = dump_on_err(info_queue, create_gbuffer_bindless_root_signature(device))?;
     let layout = gbuffer_bindless_input_layout();
     let pso = dump_on_err(

@@ -467,11 +467,7 @@ fn create_transparent_root_signature(device: &ID3D12Device) -> RenderResult<ID3D
         pStaticSamplers: samplers.as_ptr(),
         Flags: D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
     };
-    Ok(serialize_desc_and_create(
-        device,
-        &desc,
-        "transparent root sig",
-    )?)
+    serialize_desc_and_create(device, &desc, "transparent root sig")
 }
 
 // PSO for a transparent producer. Writes the single-sample post-SSR scene target
@@ -676,11 +672,7 @@ fn create_transparent_rt_root_signature(
         pStaticSamplers: samplers.as_ptr(),
         Flags: D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
     };
-    Ok(serialize_desc_and_create(
-        device,
-        &desc,
-        "transparent rt root sig",
-    )?)
+    serialize_desc_and_create(device, &desc, "transparent rt root sig")
 }
 
 // The per-frame RtParams upload ring, built alongside the RT root signature.

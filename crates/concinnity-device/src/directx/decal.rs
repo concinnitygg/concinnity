@@ -39,12 +39,8 @@ pub(in crate::directx) fn compile_decal_shaders(
     } else {
         &slang_builtins::DECAL_FRAG
     };
-    let vs = slang_builtins::DECAL_VERT
-        .compile(hot_reload)
-        .map_err(RenderError::ShaderCompile)?;
-    let ps = frag
-        .compile(hot_reload)
-        .map_err(RenderError::ShaderCompile)?;
+    let vs = slang_builtins::DECAL_VERT.compile(hot_reload)?;
+    let ps = frag.compile(hot_reload)?;
     Ok((vs, ps))
 }
 
@@ -175,7 +171,7 @@ fn create_decal_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12Root
         pStaticSamplers: &samp,
         Flags: D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
     };
-    Ok(serialize_desc_and_create(device, &desc, "decal root sig")?)
+    serialize_desc_and_create(device, &desc, "decal root sig")
 }
 
 fn decal_input_layout() -> [D3D12_INPUT_ELEMENT_DESC; 1] {

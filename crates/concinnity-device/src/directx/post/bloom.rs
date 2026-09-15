@@ -35,18 +35,10 @@ pub(in crate::directx) struct BloomShaders {
 // Compile the bloom prefilter / downsample / upsample shaders.
 pub(in crate::directx) fn compile_bloom_shaders(hot_reload: bool) -> RenderResult<BloomShaders> {
     Ok(BloomShaders {
-        vs: slang_builtins::FULLSCREEN_VERT
-            .compile(hot_reload)
-            .map_err(RenderError::ShaderCompile)?,
-        prefilter_ps: slang_builtins::BLOOM_PREFILTER
-            .compile(hot_reload)
-            .map_err(RenderError::ShaderCompile)?,
-        downsample_ps: slang_builtins::BLOOM_DOWNSAMPLE
-            .compile(hot_reload)
-            .map_err(RenderError::ShaderCompile)?,
-        upsample_ps: slang_builtins::BLOOM_UPSAMPLE
-            .compile(hot_reload)
-            .map_err(RenderError::ShaderCompile)?,
+        vs: slang_builtins::FULLSCREEN_VERT.compile(hot_reload)?,
+        prefilter_ps: slang_builtins::BLOOM_PREFILTER.compile(hot_reload)?,
+        downsample_ps: slang_builtins::BLOOM_DOWNSAMPLE.compile(hot_reload)?,
+        upsample_ps: slang_builtins::BLOOM_UPSAMPLE.compile(hot_reload)?,
     })
 }
 
@@ -112,7 +104,7 @@ pub(in crate::directx) fn create_bloom_root_signature(
         pStaticSamplers: &static_sampler,
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
     };
-    Ok(serialize_desc_and_create(device, &desc, "bloom root sig")?)
+    serialize_desc_and_create(device, &desc, "bloom root sig")
 }
 
 // PSO for a bloom-chain pass: a vertex-buffer-less fullscreen triangle that

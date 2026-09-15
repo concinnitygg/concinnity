@@ -27,7 +27,7 @@ impl DxContext {
         &mut self,
         chunk_vtx_bytes: usize,
         chunk_idx_bytes: usize,
-    ) -> Result<(), String> {
+    ) -> error::RenderResult<()> {
         self.wait_idle();
         let old_v_len = self.scene.geometry.vertex_buffer_view.SizeInBytes as u64;
         let old_i_len = self.scene.geometry.index_buffer_view.SizeInBytes as u64;
@@ -36,14 +36,12 @@ impl DxContext {
 
         // Buffers are created in COMMON; the CopyBufferRegion below implicitly
         // promotes the destination COMMON -> COPY_DEST.
-        let new_vbuf = create_buffer(
-            &self.hw.alloc,
+        let new_vbuf = self.hw.alloc.alloc_buffer(
             new_v_len,
             D3D12_HEAP_TYPE_DEFAULT,
             D3D12_RESOURCE_STATE_COMMON,
         )?;
-        let new_ibuf = create_buffer(
-            &self.hw.alloc,
+        let new_ibuf = self.hw.alloc.alloc_buffer(
             new_i_len,
             D3D12_HEAP_TYPE_DEFAULT,
             D3D12_RESOURCE_STATE_COMMON,
@@ -142,7 +140,9 @@ impl DxContext {
             frame,
         } = mesh;
         if vertices.is_empty() || indices.is_empty() {
-            return Err("add_chunk_mesh: empty chunk geometry".into());
+            return Err(error::RenderError::Other(
+                "add_chunk_mesh: empty chunk geometry".into(),
+            ));
         }
         self.chunk_stream.vtx_alloc.reclaim(frame);
         self.chunk_stream.idx_alloc.reclaim(frame);
@@ -246,8 +246,9 @@ impl DxContext {
         &mut self,
         draw_idx: usize,
         retire_frame: u64,
-    ) -> Result<(), String> {
-        let region = draw_slot::retire_chunk_slot(&mut self.draw.objects, draw_idx)?;
+    ) -> error::RenderResult<()> {
+        let region = draw_slot::retire_chunk_slot(&mut self.draw.objects, draw_idx)
+            .map_err(error::RenderError::Other)?;
         self.chunk_stream
             .vtx_alloc
             .free(region.vertex_offset, region.vertex_bytes, retire_frame);
@@ -264,7 +265,8 @@ impl DxContext {
         &mut self,
         draw_idx: usize,
         model: [[f32; 4]; 4],
-    ) -> Result<(), String> {
+    ) -> error::RenderResult<()> {
         draw_slot::set_chunk_model(&mut self.draw.objects, draw_idx, model)
+            .map_err(error::RenderError::Other)
     }
 }

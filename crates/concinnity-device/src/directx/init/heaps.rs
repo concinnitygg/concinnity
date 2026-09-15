@@ -9,6 +9,7 @@ use super::InitGpu;
 use super::bootstrap::DxgiSwapchain;
 use super::heap_layout::{DSV_SLOTS, RtvHeapLayout};
 use crate::directx::context::{FRAMES, SwapchainState};
+use crate::directx::error::map_hresult;
 
 // Sampler heap slots: [0] shadow comparison, [1] linear repeat, [2] cube
 // linear-clamp + mip, [3] linear clamp (text). Linear and cube are placed
@@ -81,7 +82,7 @@ pub(super) fn build_swapchain(
             ..Default::default()
         })
     }
-    .map_err(|e| format!("RTV heap: {e}"))?;
+    .map_err(|e| map_hresult(e.code(), "RTV heap"))?;
     let rtv_descriptor_size = descriptor_size(device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
     let mut back_buffers = Vec::with_capacity(FRAMES);
@@ -89,7 +90,7 @@ pub(super) fn build_swapchain(
         // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters
         // it fills are live locals that outlive the call.
         let buf: ID3D12Resource = unsafe { swapchain.handle.GetBuffer(i as u32) }
-            .map_err(|e| format!("GetBuffer[{i}]: {e}"))?;
+            .map_err(|e| map_hresult(e.code(), &format!("GetBuffer[{i}]")))?;
         let rtv_handle = cpu_handle(&rtv_heap, rtv_descriptor_size, i);
         // SAFETY: the view descriptor and the resource it names are live for the call, and the
         // destination handle addresses a slot this context reserved for the view in a heap it
@@ -129,7 +130,7 @@ pub(super) fn create_dsv_heap(device: &ID3D12Device) -> RenderResult<ID3D12Descr
             ..Default::default()
         })
     }
-    .map_err(|e| format!("DSV heap: {e}"))?;
+    .map_err(|e| map_hresult(e.code(), "DSV heap"))?;
     Ok(dsv_heap)
 }
 
@@ -148,7 +149,7 @@ pub(super) fn create_sampler_heap(
             ..Default::default()
         })
     }
-    .map_err(|e| format!("sampler heap: {e}"))?;
+    .map_err(|e| map_hresult(e.code(), "sampler heap"))?;
     let sampler_descriptor_size = descriptor_size(device, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER);
     create_samplers(
         device,

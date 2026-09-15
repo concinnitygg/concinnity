@@ -12,7 +12,7 @@
 //! Mirrors src/metal/line.rs.
 
 use concinnity_core::gfx::render_types::LineVertex;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::error::RenderResult;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -123,12 +123,8 @@ fn compile_line_shaders(msaa_samples: u32, hot_reload: bool) -> RenderResult<(Ve
     } else {
         &slang_builtins::LINE_FRAG
     };
-    let vs = slang_builtins::LINE_VERT
-        .compile(hot_reload)
-        .map_err(RenderError::ShaderCompile)?;
-    let ps = frag
-        .compile(hot_reload)
-        .map_err(RenderError::ShaderCompile)?;
+    let vs = slang_builtins::LINE_VERT.compile(hot_reload)?;
+    let ps = frag.compile(hot_reload)?;
     Ok((vs, ps))
 }
 
@@ -191,7 +187,7 @@ fn create_line_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootS
         pStaticSamplers: std::ptr::null(),
         Flags: D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
     };
-    Ok(serialize_desc_and_create(device, &desc, "line root sig")?)
+    serialize_desc_and_create(device, &desc, "line root sig")
 }
 
 // Vertex input elements for the line pass (32-byte `LineVertex` struct),

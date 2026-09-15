@@ -36,7 +36,7 @@ pub(super) fn one_shot_submit_nowait<F>(
     device: &ID3D12Device,
     queue: &ID3D12CommandQueue,
     f: F,
-) -> Result<(ID3D12CommandAllocator, ID3D12GraphicsCommandList), String>
+) -> RenderResult<(ID3D12CommandAllocator, ID3D12GraphicsCommandList)>
 where
     F: FnOnce(&ID3D12GraphicsCommandList),
 {
@@ -44,20 +44,22 @@ where
         // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
         // new COM object lands in a binding that owns it.
         unsafe { device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT) }
-            .map_err(|e| format!("one_shot allocator: {e}"))?;
+            .map_err(|e| map_hresult(e.code(), "one_shot allocator"))?;
 
     let cmd: ID3D12GraphicsCommandList =
         // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
         // new COM object lands in a binding that owns it.
         unsafe { device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None) }
-            .map_err(|e| format!("one_shot cmd list: {e}"))?;
+            .map_err(|e| map_hresult(e.code(), "one_shot cmd list"))?;
 
     f(&cmd);
 
     // SAFETY: the command list is live and in the recording state, which is what `Close` requires.
-    unsafe { cmd.Close() }.map_err(|e| format!("one_shot close: {e}"))?;
+    unsafe { cmd.Close() }.map_err(|e| map_hresult(e.code(), "one_shot close"))?;
 
-    let cmd_list: ID3D12CommandList = cmd.cast().map_err(|e| format!("one_shot cast: {e}"))?;
+    let cmd_list: ID3D12CommandList = cmd
+        .cast()
+        .map_err(|e| map_hresult(e.code(), "one_shot cast"))?;
     // SAFETY: every command list in the submission is live and closed, and the slice outlives the
     // call.
     unsafe { queue.ExecuteCommandLists(&[Some(cmd_list)]) };
@@ -69,53 +71,15 @@ pub(super) fn one_shot_submit<F>(
     device: &ID3D12Device,
     queue: &ID3D12CommandQueue,
     f: F,
-) -> Result<(), String>
+) -> RenderResult<()>
 where
     F: FnOnce(&ID3D12GraphicsCommandList),
 {
     let _keep_alive = one_shot_submit_nowait(device, queue, f)?;
-
-    // Fence-wait for completion.
-    // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
-    // COM object lands in a binding that owns it.
-    let fence: ID3D12Fence = unsafe { device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }
-        .map_err(|e| format!("one_shot fence: {e}"))?;
-    let event =
-        // SAFETY: an auto-reset, initially unsignaled event with no name and no security
-        // attributes; the call borrows nothing.
-        unsafe { windows::Win32::System::Threading::CreateEventW(None, false, false, None) }
-            .map_err(|e| format!("one_shot event: {e}"))?;
-    // SAFETY: the fence and the event were created from this device and are live for the call.
-    unsafe { queue.Signal(&fence, 1) }.map_err(|e| format!("one_shot signal: {e}"))?;
-    // SAFETY: the fence and the event were created from this device and are live for the call.
-    if unsafe { fence.GetCompletedValue() } < 1 {
-        // SAFETY: the fence and the event were created from this device and are live for the call.
-        unsafe { fence.SetEventOnCompletion(1, event) }
-            .map_err(|e| format!("one_shot set event: {e}"))?;
-        // SAFETY: `event` is the handle created above and is still open.
-        unsafe { windows::Win32::System::Threading::WaitForSingleObject(event, u32::MAX) };
-    }
-    // SAFETY: `event` was created above, every wait on it has returned, and it is closed exactly
-    // once.
-    unsafe { windows::Win32::Foundation::CloseHandle(event) }.ok();
-    Ok(())
+    wait_for_queue(device, queue)
 }
 
 // Buffer helpers
-
-// Place a buffer of the given heap type inside a pooled heap. Buffers are never
-// GPU-written through this path (`create_uav_buffer` is the compute-writable
-// one), so they suballocate; see `directx/allocator.rs`.
-pub(super) fn create_buffer(
-    alloc: &DeviceAllocator,
-    size: u64,
-    heap_type: D3D12_HEAP_TYPE,
-    initial_state: D3D12_RESOURCE_STATES,
-) -> Result<PooledBuffer, String> {
-    alloc
-        .alloc_buffer(size, heap_type, initial_state)
-        .map_err(|e| e.to_string())
-}
 
 // Create a default-heap buffer with `ALLOW_UNORDERED_ACCESS`, suitable for a
 // compute shader to write through a UAV. Used by the compute-cull
@@ -124,7 +88,7 @@ pub(super) fn create_uav_buffer(
     device: &ID3D12Device,
     size: u64,
     initial_state: D3D12_RESOURCE_STATES,
-) -> Result<ID3D12Resource, String> {
+) -> RenderResult<ID3D12Resource> {
     let heap_props = D3D12_HEAP_PROPERTIES {
         Type: D3D12_HEAP_TYPE_DEFAULT,
         ..Default::default()
@@ -156,8 +120,8 @@ pub(super) fn create_uav_buffer(
             &mut resource,
         )
     }
-    .map_err(|e| format!("create_uav_buffer: {e}"))?;
-    resource.ok_or_else(|| "create_uav_buffer returned None".to_string())
+    .map_err(|e| map_hresult(e.code(), "create_uav_buffer"))?;
+    resource.ok_or_else(|| RenderError::Other("create_uav_buffer returned None".into()))
 }
 
 // Upload raw bytes to a GPU-local buffer via a temporary upload heap.
@@ -166,7 +130,7 @@ pub(super) fn upload_buffer(
     alloc: &DeviceAllocator,
     data: &[u8],
     usage_state: D3D12_RESOURCE_STATES,
-) -> Result<PooledBuffer, String> {
+) -> RenderResult<PooledBuffer> {
     upload_buffer_padded(alloc, data, data.len() as u64, usage_state)
 }
 
@@ -180,11 +144,10 @@ pub(super) fn upload_buffer_padded(
     data: &[u8],
     size: u64,
     usage_state: D3D12_RESOURCE_STATES,
-) -> Result<PooledBuffer, String> {
+) -> RenderResult<PooledBuffer> {
     let size = size.max(data.len() as u64).max(4);
 
-    let upload = create_buffer(
-        alloc,
+    let upload = alloc.alloc_buffer(
         size,
         D3D12_HEAP_TYPE_UPLOAD,
         D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -194,7 +157,8 @@ pub(super) fn upload_buffer_padded(
     let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
     // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
     // receives the mapping.
-    unsafe { upload.Map(0, None, Some(&mut ptr)) }.map_err(|e| format!("upload map: {e}"))?;
+    unsafe { upload.Map(0, None, Some(&mut ptr)) }
+        .map_err(|e| map_hresult(e.code(), "upload map"))?;
     // SAFETY: `Map` returned a CPU-visible mapping of the whole `size`-byte
     // upload buffer, `data` is a distinct live allocation of `data.len()` bytes,
     // and `data.len() <= size` holds by the clamp above, so both the copy and
@@ -210,12 +174,7 @@ pub(super) fn upload_buffer_padded(
 
     // Buffers are always created in COMMON regardless of requested state, so
     // pass COMMON explicitly to avoid the debug layer warning.
-    let dest = create_buffer(
-        alloc,
-        size,
-        D3D12_HEAP_TYPE_DEFAULT,
-        D3D12_RESOURCE_STATE_COMMON,
-    )?;
+    let dest = alloc.alloc_buffer(size, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COMMON)?;
 
     // SAFETY: the command list is in the recording state, and every resource, descriptor and slice
     // these commands name is live for the call.
@@ -364,7 +323,7 @@ pub(super) fn upload_texture_image(
     image: &concinnity_core::bake::texture::TextureImage,
 ) -> RenderResult<PooledTexture> {
     let (texture, in_flight) = upload_texture_image_deferred(alloc, image)?;
-    wait_for_upload(alloc.device(), alloc.queue())?;
+    wait_for_queue(alloc.device(), alloc.queue())?;
     drop(in_flight);
     Ok(texture)
 }
@@ -530,14 +489,13 @@ pub(super) fn upload_texture_resource(
     pixels: &[u8],
 ) -> RenderResult<PooledTexture> {
     let (texture, in_flight) = upload_texture_resource_deferred(alloc, width, height, pixels)?;
-    wait_for_upload(alloc.device(), alloc.queue())?;
+    wait_for_queue(alloc.device(), alloc.queue())?;
     drop(in_flight);
     Ok(texture)
 }
 
-// Block until the upload queue drains, so a synchronous upload's transient
-// staging resources can be released.
-fn wait_for_upload(device: &ID3D12Device, queue: &ID3D12CommandQueue) -> RenderResult<()> {
+// Block until every list submitted to `queue` so far has executed.
+fn wait_for_queue(device: &ID3D12Device, queue: &ID3D12CommandQueue) -> RenderResult<()> {
     // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
     // COM object lands in a binding that owns it.
     let fence: ID3D12Fence = unsafe { device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }
@@ -635,7 +593,7 @@ pub(super) fn create_fallback_shadow_array(
     alloc: &DeviceAllocator,
     srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-) -> Result<GpuResource<ID3D12Resource>, String> {
+) -> RenderResult<GpuResource<ID3D12Resource>> {
     let device = alloc.device();
     let heap_props = D3D12_HEAP_PROPERTIES {
         Type: D3D12_HEAP_TYPE_DEFAULT,
@@ -667,9 +625,9 @@ pub(super) fn create_fallback_shadow_array(
             &mut tex_opt,
         )
     }
-    .map_err(|e| format!("create fallback shadow array: {e}"))?;
-    let texture =
-        tex_opt.ok_or_else(|| "create fallback shadow array returned None".to_string())?;
+    .map_err(|e| map_hresult(e.code(), "create fallback shadow array"))?;
+    let texture = tex_opt
+        .ok_or_else(|| RenderError::Other("create fallback shadow array returned None".into()))?;
 
     let mut layout = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
     // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters it fills
@@ -678,8 +636,7 @@ pub(super) fn create_fallback_shadow_array(
         device.GetCopyableFootprints(&desc, 0, 1, 0, Some(&mut layout), None, None, None);
     }
 
-    let upload = create_buffer(
-        alloc,
+    let upload = alloc.alloc_buffer(
         layout.Footprint.RowPitch as u64,
         D3D12_HEAP_TYPE_UPLOAD,
         D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -689,7 +646,7 @@ pub(super) fn create_fallback_shadow_array(
     // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
     // receives the mapping.
     unsafe { upload.Map(0, None, Some(&mut map_ptr)) }
-        .map_err(|e| format!("map fallback shadow array: {e}"))?;
+        .map_err(|e| map_hresult(e.code(), "map fallback shadow array"))?;
     // SAFETY: the resource is live and this code mapped it, and nothing keeps the mapping past this
     // call.
     unsafe {
@@ -764,7 +721,7 @@ pub(super) fn create_main_depth_texture(
     dsv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     sample_count: u32,
     shader_readable: bool,
-) -> Result<ID3D12Resource, String> {
+) -> RenderResult<ID3D12Resource> {
     let heap_props = D3D12_HEAP_PROPERTIES {
         Type: D3D12_HEAP_TYPE_DEFAULT,
         ..Default::default()
@@ -809,8 +766,9 @@ pub(super) fn create_main_depth_texture(
             &mut tex_opt,
         )
     }
-    .map_err(|e| format!("create main depth texture: {e}"))?;
-    let texture = tex_opt.ok_or_else(|| "create main depth texture returned None".to_string())?;
+    .map_err(|e| map_hresult(e.code(), "create main depth texture"))?;
+    let texture = tex_opt
+        .ok_or_else(|| RenderError::Other("create main depth texture returned None".into()))?;
 
     let dsv_desc = D3D12_DEPTH_STENCIL_VIEW_DESC {
         Format: DXGI_FORMAT_D32_FLOAT,
@@ -843,13 +801,10 @@ pub(super) fn create_shadow_map_array(
     dsv_stride: usize,
     srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-) -> Result<
-    (
-        GpuResource<ID3D12Resource>,
-        Vec<D3D12_CPU_DESCRIPTOR_HANDLE>,
-    ),
-    String,
-> {
+) -> RenderResult<(
+    GpuResource<ID3D12Resource>,
+    Vec<D3D12_CPU_DESCRIPTOR_HANDLE>,
+)> {
     let heap_props = D3D12_HEAP_PROPERTIES {
         Type: D3D12_HEAP_TYPE_DEFAULT,
         ..Default::default()
@@ -896,8 +851,9 @@ pub(super) fn create_shadow_map_array(
             &mut tex_opt,
         )
     }
-    .map_err(|e| format!("create shadow map array: {e}"))?;
-    let texture = tex_opt.ok_or_else(|| "create shadow map array returned None".to_string())?;
+    .map_err(|e| map_hresult(e.code(), "create shadow map array"))?;
+    let texture = tex_opt
+        .ok_or_else(|| RenderError::Other("create shadow map array returned None".into()))?;
 
     let mut dsvs = Vec::with_capacity(layers as usize);
     for i in 0..layers {
@@ -967,7 +923,7 @@ pub(super) fn create_hdr_color_target(
     sample_count: u32,
     rtv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     clear_color: [f32; 4],
-) -> Result<ID3D12Resource, String> {
+) -> RenderResult<ID3D12Resource> {
     let heap_props = D3D12_HEAP_PROPERTIES {
         Type: D3D12_HEAP_TYPE_DEFAULT,
         ..Default::default()
@@ -1003,8 +959,8 @@ pub(super) fn create_hdr_color_target(
             &mut res_opt,
         )
     }
-    .map_err(|e| format!("create hdr color target: {e}"))?;
-    let res = res_opt.ok_or_else(|| "create hdr color returned None".to_string())?;
+    .map_err(|e| map_hresult(e.code(), "create hdr color target"))?;
+    let res = res_opt.ok_or_else(|| RenderError::Other("create hdr color returned None".into()))?;
 
     let rtv_desc = D3D12_RENDER_TARGET_VIEW_DESC {
         Format: HDR_FORMAT,
@@ -1030,7 +986,7 @@ pub(super) fn create_hdr_resolve_target(
     device: &ID3D12Device,
     width: u32,
     height: u32,
-) -> Result<ID3D12Resource, String> {
+) -> RenderResult<ID3D12Resource> {
     create_hdr_sampled_target(device, width, height, [0.0; 4])
 }
 
@@ -1043,7 +999,7 @@ pub(super) fn create_hdr_sampled_target(
     width: u32,
     height: u32,
     clear_color: [f32; 4],
-) -> Result<ID3D12Resource, String> {
+) -> RenderResult<ID3D12Resource> {
     let heap_props = D3D12_HEAP_PROPERTIES {
         Type: D3D12_HEAP_TYPE_DEFAULT,
         ..Default::default()
@@ -1082,8 +1038,8 @@ pub(super) fn create_hdr_sampled_target(
             &mut res_opt,
         )
     }
-    .map_err(|e| format!("create hdr sampled target: {e}"))?;
-    res_opt.ok_or_else(|| "create hdr sampled target returned None".to_string())
+    .map_err(|e| map_hresult(e.code(), "create hdr sampled target"))?;
+    res_opt.ok_or_else(|| RenderError::Other("create hdr sampled target returned None".into()))
 }
 
 // Write an `HDR_FORMAT` Texture2D SRV at the given heap slot so the composite
@@ -1126,7 +1082,7 @@ pub(super) fn create_rt_target(
     width: u32,
     height: u32,
     format: DXGI_FORMAT,
-) -> Result<ID3D12Resource, String> {
+) -> RenderResult<ID3D12Resource> {
     create_rt_target_with_clear(device, width, height, format, [0.0; 4])
 }
 
@@ -1141,7 +1097,7 @@ pub(super) fn create_rt_target_with_clear(
     height: u32,
     format: DXGI_FORMAT,
     clear_color: [f32; 4],
-) -> Result<ID3D12Resource, String> {
+) -> RenderResult<ID3D12Resource> {
     let heap_props = D3D12_HEAP_PROPERTIES {
         Type: D3D12_HEAP_TYPE_DEFAULT,
         ..Default::default()
@@ -1177,8 +1133,8 @@ pub(super) fn create_rt_target_with_clear(
             &mut res_opt,
         )
     }
-    .map_err(|e| format!("create rt target: {e}"))?;
-    res_opt.ok_or_else(|| "create rt target returned None".to_string())
+    .map_err(|e| map_hresult(e.code(), "create rt target"))?;
+    res_opt.ok_or_else(|| RenderError::Other("create rt target returned None".into()))
 }
 
 // Write a single-sample Texture2D render-target view of the given format.
@@ -1550,7 +1506,7 @@ fn upload_face_major_into_cube(
     face_size: u32,
     mip_count: u32,
     mip_bytes: &[&[u8]],
-) -> Result<(), String> {
+) -> RenderResult<()> {
     let device = alloc.device();
     let num_subresources = 6 * mip_count;
     let mut layouts: Vec<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> =
@@ -1573,8 +1529,7 @@ fn upload_face_major_into_cube(
         );
     }
 
-    let upload = create_buffer(
-        alloc,
+    let upload = alloc.alloc_buffer(
         total_bytes.max(4),
         D3D12_HEAP_TYPE_UPLOAD,
         D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -1584,7 +1539,7 @@ fn upload_face_major_into_cube(
     // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
     // receives the mapping.
     unsafe { upload.Map(0, None, Some(&mut map_ptr)) }
-        .map_err(|e| format!("cube upload map: {e}"))?;
+        .map_err(|e| map_hresult(e.code(), "cube upload map"))?;
 
     // Layout in D3D12: subresource index = mip + face * MipLevels.
     // Source data layout: per-mip slab `mip_bytes[m]`, face-major within each.
@@ -1596,12 +1551,12 @@ fn upload_face_major_into_cube(
             // SAFETY: the resource is live and this code mapped it, and nothing keeps the mapping
             // past this call.
             unsafe { upload.Unmap(0, None) };
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "cube upload mip {} too short: {} bytes, need {}",
                 mip,
                 slab.len(),
                 6 * face_bytes
-            ));
+            )));
         }
         for face in 0..6u32 {
             let subres = mip + face * mip_count;

@@ -5,7 +5,7 @@
 //! lights instead of iterating every light. Mirrors src/metal/light_cull.rs.
 
 use concinnity_core::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIGHT_LIST_STRIDE, ClusterParams};
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::error::RenderResult;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
@@ -56,9 +56,7 @@ impl LightCullState {
 
 // Compile the clustered light-binning compute kernel to DXIL.
 pub(in crate::directx) fn compile_light_cull_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    slang_builtins::LIGHT_CULL
-        .compile(hot_reload)
-        .map_err(RenderError::ShaderCompile)
+    slang_builtins::LIGHT_CULL.compile(hot_reload)
 }
 
 // Root signature for the light-cull kernel: the `ClusterParams` CBV, the
@@ -107,11 +105,7 @@ pub(in crate::directx) fn create_light_cull_root_signature(
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
         ..Default::default()
     };
-    Ok(serialize_desc_and_create(
-        device,
-        &desc,
-        "light cull root sig",
-    )?)
+    serialize_desc_and_create(device, &desc, "light cull root sig")
 }
 
 // Compute pipeline state for the light-cull kernel.
@@ -144,7 +138,7 @@ pub(in crate::directx) fn build_cluster_light_buffer(
 ) -> RenderResult<ID3D12Resource> {
     let len =
         (CLUSTER_COUNT * CLUSTER_LIGHT_LIST_STRIDE) as u64 * std::mem::size_of::<u32>() as u64;
-    Ok(create_uav_buffer(device, len, D3D12_RESOURCE_STATE_COMMON)?)
+    create_uav_buffer(device, len, D3D12_RESOURCE_STATE_COMMON)
 }
 
 // Allocate + persistently map the per-frame `ClusterParams` constant buffers

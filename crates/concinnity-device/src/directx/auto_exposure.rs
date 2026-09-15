@@ -9,7 +9,7 @@
 
 use concinnity_core::gfx::auto_exposure;
 use concinnity_core::gfx::auto_exposure::HISTOGRAM_BINS;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::error::RenderResult;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
@@ -26,12 +26,8 @@ use crate::directx::texture::{create_uav_buffer, transition_barrier, uav_barrier
 pub(in crate::directx) fn compile_auto_exposure_shaders(
     hot_reload: bool,
 ) -> RenderResult<(Vec<u8>, Vec<u8>)> {
-    let build_cs = slang_builtins::AUTO_EXPOSURE_BUILD
-        .compile(hot_reload)
-        .map_err(RenderError::ShaderCompile)?;
-    let average_cs = slang_builtins::AUTO_EXPOSURE_AVERAGE
-        .compile(hot_reload)
-        .map_err(RenderError::ShaderCompile)?;
+    let build_cs = slang_builtins::AUTO_EXPOSURE_BUILD.compile(hot_reload)?;
+    let average_cs = slang_builtins::AUTO_EXPOSURE_AVERAGE.compile(hot_reload)?;
     Ok((build_cs, average_cs))
 }
 
@@ -228,11 +224,7 @@ fn create_build_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12Root
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
         ..Default::default()
     };
-    Ok(serialize_desc_and_create(
-        device,
-        &desc,
-        "auto-exposure build root sig",
-    )?)
+    serialize_desc_and_create(device, &desc, "auto-exposure build root sig")
 }
 
 // Root signature for the average kernel: 4 root constants (b0), root UAV for
@@ -277,11 +269,7 @@ fn create_average_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12Ro
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
         ..Default::default()
     };
-    Ok(serialize_desc_and_create(
-        device,
-        &desc,
-        "auto-exposure average root sig",
-    )?)
+    serialize_desc_and_create(device, &desc, "auto-exposure average root sig")
 }
 
 // Compute pipeline state for one of the auto-exposure kernels. Exposed to

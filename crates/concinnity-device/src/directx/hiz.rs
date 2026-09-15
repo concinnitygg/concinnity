@@ -87,15 +87,9 @@ pub(super) struct HiZResources {
 type HizShaders = (Vec<u8>, Vec<u8>, Vec<u8>);
 
 pub(in crate::directx) fn compile_hiz_shaders(hot_reload: bool) -> RenderResult<HizShaders> {
-    let single = slang_builtins::HIZ_SPD_SINGLE
-        .compile(hot_reload)
-        .map_err(RenderError::ShaderCompile)?;
-    let msaa = slang_builtins::HIZ_SPD_MSAA
-        .compile(hot_reload)
-        .map_err(RenderError::ShaderCompile)?;
-    let tail = slang_builtins::HIZ_SPD_TAIL
-        .compile(hot_reload)
-        .map_err(RenderError::ShaderCompile)?;
+    let single = slang_builtins::HIZ_SPD_SINGLE.compile(hot_reload)?;
+    let msaa = slang_builtins::HIZ_SPD_MSAA.compile(hot_reload)?;
+    let tail = slang_builtins::HIZ_SPD_TAIL.compile(hot_reload)?;
     Ok((single, msaa, tail))
 }
 
@@ -175,7 +169,7 @@ fn create_hiz_signature(
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
         ..Default::default()
     };
-    Ok(serialize_desc_and_create(device, &desc, label)?)
+    serialize_desc_and_create(device, &desc, label)
 }
 
 fn create_hiz_pso(

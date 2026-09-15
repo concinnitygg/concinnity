@@ -4,11 +4,12 @@
 //! streaming headroom.
 
 use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::super::context::*;
-use super::super::texture::{create_buffer, one_shot_submit, transition_barrier};
+use super::super::texture::{one_shot_submit, transition_barrier};
+use crate::directx::error::map_hresult;
 
 impl DxContext {
     // Copy `data` into a sub-region of a DEFAULT-heap geometry buffer.
@@ -25,12 +26,11 @@ impl DxContext {
         usage_state: D3D12_RESOURCE_STATES,
         offset: u64,
         data: &[u8],
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         if data.is_empty() {
             return Ok(());
         }
-        let upload = create_buffer(
-            &self.hw.alloc,
+        let upload = self.hw.alloc.alloc_buffer(
             data.len() as u64,
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -39,7 +39,7 @@ impl DxContext {
         // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local
         // that receives the mapping.
         unsafe { upload.Map(0, None, Some(&mut ptr)) }
-            .map_err(|e| format!("mesh region map: {e}"))?;
+            .map_err(|e| map_hresult(e.code(), "mesh region map"))?;
         // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the
         // source is a separate allocation, so the ranges cannot overlap.
         unsafe {
@@ -78,11 +78,12 @@ impl DxContext {
         indices: &[u16],
         frame: u64,
     ) -> RenderResult<()> {
-        let obj = self
-            .draw
-            .objects
-            .get(draw_idx)
-            .ok_or_else(|| format!("upload_mesh: draw object {} out of range", draw_idx))?;
+        let obj = self.draw.objects.get(draw_idx).ok_or_else(|| {
+            RenderError::Other(format!(
+                "upload_mesh: draw object {} out of range",
+                draw_idx
+            ))
+        })?;
         let (vertex_count, index_count) = (obj.vertex_count, obj.index_count);
         if vertices.len() != vertex_count {
             return Err(format!(
@@ -174,41 +175,41 @@ impl DxContext {
         vertices: &[Vertex],
         indices: &[u16],
         lod_alternates: &[(f32, Vec<u16>)],
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let obj = self.draw.objects.get(draw_idx).ok_or_else(|| {
-            format!(
+            RenderError::Other(format!(
                 "update_mesh_geometry: draw object {} out of range",
                 draw_idx
-            )
+            ))
         })?;
         if vertices.len() != obj.vertex_count {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "update_mesh_geometry: draw {} expects {} vertices, got {} \
                  (in-place path is size-matched only; size changes route through \
                  rebuild_static_geometry)",
                 draw_idx,
                 obj.vertex_count,
                 vertices.len()
-            ));
+            )));
         }
         if indices.len() != obj.index_count {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "update_mesh_geometry: draw {} expects {} indices, got {} \
                  (in-place path is size-matched only; size changes route through \
                  rebuild_static_geometry)",
                 draw_idx,
                 obj.index_count,
                 indices.len()
-            ));
+            )));
         }
         if lod_alternates.len() != obj.lod_alternates.len() {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "update_mesh_geometry: draw {} expects {} LOD alternate(s), got {} \
                  (LOD-count changes need rebuild_static_geometry)",
                 draw_idx,
                 obj.lod_alternates.len(),
                 lod_alternates.len()
-            ));
+            )));
         }
         for (lod_idx, ((_, alt_idx), slice)) in lod_alternates
             .iter()
@@ -216,14 +217,14 @@ impl DxContext {
             .enumerate()
         {
             if alt_idx.len() != slice.index_count {
-                return Err(format!(
+                return Err(RenderError::Other(format!(
                     "update_mesh_geometry: draw {} LOD{} expects {} indices, got {} \
                      (LOD size changes need rebuild_static_geometry)",
                     draw_idx,
                     lod_idx + 1,
                     slice.index_count,
                     alt_idx.len()
-                ));
+                )));
             }
         }
         let v_off = obj.vertex_offset as u64;
@@ -300,12 +301,10 @@ impl DxContext {
     // The region is not zeroed: the draw leaves the RT-relevant set here, so
     // the next RT update retires its BLAS rather than tracing the vacated
     // bytes, and every raster pass skips a non-resident draw.
-    pub(crate) fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String> {
-        let obj = self
-            .draw
-            .objects
-            .get(draw_idx)
-            .ok_or_else(|| format!("evict_mesh: draw object {} out of range", draw_idx))?;
+    pub(crate) fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> RenderResult<()> {
+        let obj = self.draw.objects.get(draw_idx).ok_or_else(|| {
+            RenderError::Other(format!("evict_mesh: draw object {} out of range", draw_idx))
+        })?;
         let v_off = obj.vertex_offset as u64;
         let v_len = (obj.vertex_count * std::mem::size_of::<Vertex>()) as u64;
         let i_off = (obj.index_offset * std::mem::size_of::<u32>()) as u64;

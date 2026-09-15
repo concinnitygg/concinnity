@@ -11,22 +11,28 @@
 //! probe-only path, never a per-frame one. Mirrors src/vulkan/cull_readback.rs.
 
 use concinnity_core::gfx::cull_status;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::context::{DxContext, FRAMES};
-use super::texture::{create_buffer, one_shot_submit};
+use super::texture::one_shot_submit;
+use crate::directx::error::map_hresult;
 
 impl DxContext {
     // Read the last submitted frame's cull-status buffer back to the host, one
     // u32 per live cull record. Distinct name from the
     // `RenderBackend::read_cull_status` trait method so the backend forwarder
     // is unambiguous.
-    pub(crate) fn read_cull_status_buffer(&mut self) -> Result<Vec<u32>, String> {
+    pub(crate) fn read_cull_status_buffer(&mut self) -> RenderResult<Vec<u32>> {
         if self.cull.cull_status_buffers.is_empty() {
-            return Err("cull-status: this world does not run the GPU-driven cull".into());
+            return Err(RenderError::Other(
+                "cull-status: this world does not run the GPU-driven cull".into(),
+            ));
         }
         if self.swapchain.last_present_index.is_none() {
-            return Err("cull-status: no frame has been submitted yet".into());
+            return Err(RenderError::Other(
+                "cull-status: no frame has been submitted yet".into(),
+            ));
         }
         let count = self.cull_count();
         if count == 0 {
@@ -44,8 +50,7 @@ impl DxContext {
         self.wait_idle();
 
         // READBACK-heap resources start in COPY_DEST and never need a barrier.
-        let readback = create_buffer(
-            &self.hw.alloc,
+        let readback = self.hw.alloc.alloc_buffer(
             byte_size,
             D3D12_HEAP_TYPE_READBACK,
             D3D12_RESOURCE_STATE_COPY_DEST,
@@ -67,11 +72,12 @@ impl DxContext {
         // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local
         // that receives the mapping.
         unsafe { readback.Map(0, None, Some(&mut map_ptr)) }
-            .map_err(|e| format!("cull-status: map readback: {e}"))?;
+            .map_err(|e| map_hresult(e.code(), "cull-status: map readback"))?;
         // SAFETY: the mapping covers `byte_size` bytes (the size the buffer was created at), and
         // the copy completed (one_shot_submit waits its fence).
         let raw = unsafe { std::slice::from_raw_parts(map_ptr as *const u8, byte_size as usize) };
-        let decoded = cull_status::decode(raw, count).map_err(|e| format!("cull-status: {e}"));
+        let decoded = cull_status::decode(raw, count)
+            .map_err(|e| RenderError::Other(format!("cull-status: {e}")));
         // SAFETY: the resource is live and this code mapped it, and nothing keeps the mapping past
         // this call.
         unsafe { readback.Unmap(0, None) };

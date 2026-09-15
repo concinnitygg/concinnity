@@ -222,18 +222,18 @@ impl DxContext {
         src_draw_idx: usize,
         model: [[f32; 4]; 4],
         dst: draw_slot::SlotAlloc,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         if runtime_reserve_full(&self.draw.objects, self.draw.n_objects, self.draw.n_runtime) {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "clone_static_draw_object: the runtime draw reserve ({}) is full",
                 self.draw.n_runtime
-            ));
+            )));
         }
         let src = self.draw.objects.get(src_draw_idx).ok_or_else(|| {
-            format!(
+            RenderError::Other(format!(
                 "clone_static_draw_object: src draw {} out of range",
                 src_draw_idx
-            )
+            ))
         })?;
         // A runtime spawn duplicates the template, swapping only the transform:
         // copy the source's material, pool slots, and cull distance.

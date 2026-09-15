@@ -8,6 +8,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use super::heap_layout::{RtvHeapLayout, SrvHeapLayout, SrvHeapParams};
 use super::{InitGpu, heaps};
 use crate::directx::context::{DxDescriptors, SwapchainState};
+use crate::directx::error::map_hresult;
 use crate::directx::post::descriptors::PostDescriptors;
 
 pub(super) fn build_descriptors(
@@ -34,7 +35,7 @@ pub(super) fn build_descriptors(
             ..Default::default()
         })
     }
-    .map_err(|e| format!("SRV heap: {e}"))?;
+    .map_err(|e| map_hresult(e.code(), "SRV heap"))?;
     let srv_descriptor_size =
         heaps::descriptor_size(device, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 

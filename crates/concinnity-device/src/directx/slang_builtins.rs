@@ -3,6 +3,7 @@
 // content-addressed cache, or a filesystem for. The declarations themselves are
 // re-exported here, so every call site still names them through this module.
 
+use concinnity_core::render::error::{RenderError, RenderResult};
 pub(super) use concinnity_core::render::slang_programs::dx::*;
 use concinnity_slang as slang;
 
@@ -15,7 +16,7 @@ pub(crate) trait SlangCompile {
     fn source(&self, hot_reload: bool) -> String;
     fn target(&self) -> slang::SlangTarget;
     fn cache_key<'a>(&self, source: &'a str) -> crate::shader::cache::Key<'a>;
-    fn compile(&self, hot_reload: bool) -> Result<Vec<u8>, String>;
+    fn compile(&self, hot_reload: bool) -> RenderResult<Vec<u8>>;
 }
 
 impl SlangCompile for SlangProgram {
@@ -51,7 +52,7 @@ impl SlangCompile for SlangProgram {
     // slangc installed to do it. Comparing digests instead means an unedited
     // shader takes the embedded artifact in every build, and an edited one is
     // recompiled in all of them.
-    fn compile(&self, hot_reload: bool) -> Result<Vec<u8>, String> {
+    fn compile(&self, hot_reload: bool) -> RenderResult<Vec<u8>> {
         let source = self.source(hot_reload);
         if let Some((digest, bytes)) = embedded_dxil(self.label)
             && digest == concinnity_core::render::slang_source::source_digest(&source)
@@ -60,7 +61,7 @@ impl SlangCompile for SlangProgram {
         }
         let key = self.cache_key(&source);
         crate::shader::cache::cached(&key, self.label, || compile_uncached(self, &source))
-            .map_err(|e| format!("{}: {e}", self.label))
+            .map_err(|e| e.context(self.label))
     }
 }
 
@@ -76,15 +77,15 @@ impl SlangCompile for SlangProgram {
 // `every_program_has_a_distinct_label` in `core::render` locks it.
 include!(concat!(env!("OUT_DIR"), "/engine_dxil.rs"));
 
-pub(super) fn compile_uncached(program: &SlangProgram, source: &str) -> Result<Vec<u8>, String> {
+pub(super) fn compile_uncached(program: &SlangProgram, source: &str) -> RenderResult<Vec<u8>> {
     let job = slang::SlangJob {
         source,
         file_name: program.file,
         entries: &[program.entry],
         target: program.target(),
     };
-    let work = crate::shader::compiler_work::dir()?;
-    slang::compile(&job, work.path())
+    let work = crate::shader::compiler_work::dir().map_err(RenderError::Other)?;
+    slang::compile(&job, work.path()).map_err(RenderError::ShaderCompile)
 }
 
 // Compile every declared program into `bundle`, reusing local cache artifacts

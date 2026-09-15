@@ -86,7 +86,7 @@ enum HeapKind {
 }
 
 impl HeapKind {
-    fn from_d3d12(heap_type: D3D12_HEAP_TYPE) -> Result<Self, String> {
+    fn from_d3d12(heap_type: D3D12_HEAP_TYPE) -> RenderResult<Self> {
         if heap_type == D3D12_HEAP_TYPE_DEFAULT {
             Ok(Self::Default)
         } else if heap_type == D3D12_HEAP_TYPE_UPLOAD {
@@ -94,10 +94,10 @@ impl HeapKind {
         } else if heap_type == D3D12_HEAP_TYPE_READBACK {
             Ok(Self::Readback)
         } else {
-            Err(format!(
+            Err(RenderError::Other(format!(
                 "allocator: heap type {} cannot back a pool",
                 heap_type.0
-            ))
+            )))
         }
     }
 
@@ -509,14 +509,16 @@ impl DeviceAllocator {
     fn allocation_info(
         &self,
         desc: &D3D12_RESOURCE_DESC,
-    ) -> Result<(D3D12_RESOURCE_DESC, D3D12_RESOURCE_ALLOCATION_INFO), String> {
+    ) -> RenderResult<(D3D12_RESOURCE_DESC, D3D12_RESOURCE_ALLOCATION_INFO)> {
         let mut standard = *desc;
         standard.Alignment = 0;
         // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters it
         // fills are live locals that outlive the call.
         let info = unsafe { self.device.GetResourceAllocationInfo(0, &[standard]) };
         if info.SizeInBytes == u64::MAX {
-            return Err("allocator: resource has no valid allocation size".to_string());
+            return Err(RenderError::Other(
+                "allocator: resource has no valid allocation size".into(),
+            ));
         }
         // Only a resource whose whole footprint already fits one page can
         // qualify. Asking about a larger one is refused, and the debug layer
@@ -544,9 +546,9 @@ impl DeviceAllocator {
         let pool = inner.pools.entry(key).or_insert_with(Pool::new);
 
         if let Some(placement) = pool.placement.alloc(size, align) {
-            let heap = pool.heaps[placement.block]
-                .clone()
-                .ok_or("allocator: placement named a released heap")?;
+            let heap = pool.heaps[placement.block].clone().ok_or_else(|| {
+                RenderError::Other("allocator: placement named a released heap".into())
+            })?;
             return Ok(Reservation {
                 heap,
                 key,
@@ -564,10 +566,9 @@ impl DeviceAllocator {
         } else {
             pool.heaps[index] = Some(heap.clone());
         }
-        let placement = pool
-            .placement
-            .alloc_in(index, size, align)
-            .ok_or("allocator: a block sized for a request failed to host it")?;
+        let placement = pool.placement.alloc_in(index, size, align).ok_or_else(|| {
+            RenderError::Other("allocator: a block sized for a request failed to host it".into())
+        })?;
         Ok(Reservation {
             heap,
             key,
@@ -581,7 +582,7 @@ impl DeviceAllocator {
     // Claim memory another resource used before: an aliasing barrier on its own
     // one-shot list, ordered ahead of every later submission by the in-order
     // queue. The list is parked until the GPU retires it.
-    fn activate(&self, resource: &ID3D12Resource) -> Result<(), String> {
+    fn activate(&self, resource: &ID3D12Resource) -> RenderResult<()> {
         let (allocator, cmd) =
             // SAFETY: the command list is in the recording state, and every resource, descriptor
             // and slice these commands name is live for the call.

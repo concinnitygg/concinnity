@@ -9,12 +9,12 @@ use windows::Win32::Graphics::Direct3D12::*;
 use super::CullPlan;
 use crate::directx::allocator::PooledBuffer;
 use crate::directx::context::{FRAMES, align256, dump_on_err};
+use crate::directx::error::map_hresult;
 use crate::directx::init::InitGpu;
 use crate::directx::init::pipelines::{
     BindlessMainShaders, BucketPipelineTargets, build_bucket_pipeline, build_world_pipeline_table,
     compile_main_bindless_shaders, create_main_bindless_root_signature,
 };
-use crate::directx::texture::create_buffer;
 
 pub(super) struct BindlessPass {
     pub(super) root_sig: ID3D12RootSignature,
@@ -91,8 +91,7 @@ pub(super) fn build_bindless_pass(
         // bindless buffers into a slot the frame never touches (it uses
         // `[0, FRAMES)`). See `directx/probe.rs::bake_ring_slot`.
         for _ in 0..FRAMES + 1 {
-            let buf = create_buffer(
-                &gpu.hw.alloc,
+            let buf = gpu.hw.alloc.alloc_buffer(
                 object_buffer_size,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -101,7 +100,7 @@ pub(super) fn build_bindless_pass(
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
             unsafe { buf.Map(0, None, Some(&mut ptr)) }
-                .map_err(|e| format!("map object buffer: {e}"))?;
+                .map_err(|e| map_hresult(e.code(), "map object buffer"))?;
             object_ptrs.push(ptr as *mut u8);
             object_buffers.push(buf);
         }

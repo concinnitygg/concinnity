@@ -14,10 +14,12 @@
 //! main + shadow in directx/init/pipelines.rs.
 
 use concinnity_core::gfx::render_types;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::com;
+use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::slang_builtins::SlangCompile;
 
 // Shared shader-compile + root-sig helpers
@@ -26,7 +28,7 @@ pub(super) fn serialize_and_create_root_sig(
     device: &ID3D12Device,
     params: &[D3D12_ROOT_PARAMETER],
     label: &str,
-) -> Result<ID3D12RootSignature, String> {
+) -> RenderResult<ID3D12RootSignature> {
     let desc = D3D12_ROOT_SIGNATURE_DESC {
         NumParameters: params.len() as u32,
         pParameters: params.as_ptr(),
@@ -40,7 +42,7 @@ pub(super) fn serialize_desc_and_create(
     device: &ID3D12Device,
     desc: &D3D12_ROOT_SIGNATURE_DESC,
     label: &str,
-) -> Result<ID3D12RootSignature, String> {
+) -> RenderResult<ID3D12RootSignature> {
     let mut blob: Option<windows::Win32::Graphics::Direct3D::ID3DBlob> = None;
     let mut error: Option<windows::Win32::Graphics::Direct3D::ID3DBlob> = None;
     // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
@@ -66,10 +68,10 @@ pub(super) fn serialize_desc_and_create(
                 String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(p, n) }).into_owned()
             })
             .unwrap_or_default();
-        format!("serialize {label}: {e} {msg}")
+        map_hresult(e.code(), &format!("serialize {label}: {msg}"))
     })?;
 
-    let b = blob.ok_or_else(|| format!("{label}: no blob after serialize"))?;
+    let b = blob.ok_or_else(|| RenderError::Other(format!("{label}: no blob after serialize")))?;
     // SAFETY: a property query on a live `ID3DBlob`; it only reads.
     let ptr = unsafe { b.GetBufferPointer() };
     // SAFETY: a property query on a live `ID3DBlob`; it only reads.
@@ -80,7 +82,8 @@ pub(super) fn serialize_desc_and_create(
 
     // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
     // COM object lands in a binding that owns it.
-    unsafe { device.CreateRootSignature(0, sig_bytes) }.map_err(|e| format!("create {label}: {e}"))
+    unsafe { device.CreateRootSignature(0, sig_bytes) }
+        .map_err(|e| map_hresult(e.code(), &format!("create {label}")))
 }
 
 // Shared vertex input layouts
@@ -224,7 +227,7 @@ fn text_input_layout() -> Vec<D3D12_INPUT_ELEMENT_DESC> {
 // the shared single-source fullscreen-triangle vertex every post pass uses.
 
 // Compile the composite (post-process) pass shaders. Returns (vs, ps).
-pub(super) fn compile_composite_shaders(hot_reload: bool) -> Result<(Vec<u8>, Vec<u8>), String> {
+pub(super) fn compile_composite_shaders(hot_reload: bool) -> RenderResult<(Vec<u8>, Vec<u8>)> {
     let vs = super::slang_builtins::FULLSCREEN_VERT.compile(hot_reload)?;
     let ps = super::slang_builtins::COMPOSITE_FRAG.compile(hot_reload)?;
     Ok((vs, ps))
@@ -249,7 +252,7 @@ pub(super) const COMPOSITE_ROOT_CONSTANTS: u32 =
 // edges and the LUT taps inside the cube.
 pub(super) fn create_composite_root_signature(
     device: &ID3D12Device,
-) -> Result<ID3D12RootSignature, String> {
+) -> RenderResult<ID3D12RootSignature> {
     let scene_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
         NumDescriptors: 1,
@@ -404,7 +407,7 @@ pub(super) fn create_composite_pso(
     vs: &[u8],
     ps: &[u8],
     rtv_format: DXGI_FORMAT,
-) -> Result<ID3D12PipelineState, String> {
+) -> RenderResult<ID3D12PipelineState> {
     create_blended_composite_pso(
         device,
         root_sig,
@@ -457,7 +460,7 @@ pub(super) fn create_blended_composite_pso(
     rtv_format: DXGI_FORMAT,
     blend: concinnity_core::render::post::device::PostBlend,
     label: &str,
-) -> Result<ID3D12PipelineState, String> {
+) -> RenderResult<ID3D12PipelineState> {
     let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
         pRootSignature: com::borrowed(root_sig),
         VS: D3D12_SHADER_BYTECODE {
@@ -511,7 +514,7 @@ pub(super) fn create_blended_composite_pso(
     // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
     // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
-        .map_err(|e| format!("create {label} PSO: {e}"))
+        .map_err(|e| map_pso_hresult(e.code(), &format!("create {label} PSO")))
 }
 
 // Text overlay pipeline
@@ -521,7 +524,7 @@ pub(super) fn create_blended_composite_pso(
 // dynamically by `encode_composite_and_text`.
 
 // Compile the text overlay shaders.
-pub(super) fn compile_text_shaders(hot_reload: bool) -> Result<(Vec<u8>, Vec<u8>), String> {
+pub(super) fn compile_text_shaders(hot_reload: bool) -> RenderResult<(Vec<u8>, Vec<u8>)> {
     let text_vs = super::slang_builtins::TEXT_VERT.compile(hot_reload)?;
     let text_ps = super::slang_builtins::TEXT_FRAG.compile(hot_reload)?;
     Ok((text_vs, text_ps))
@@ -529,7 +532,7 @@ pub(super) fn compile_text_shaders(hot_reload: bool) -> Result<(Vec<u8>, Vec<u8>
 
 pub(super) fn create_text_root_signature(
     device: &ID3D12Device,
-) -> Result<ID3D12RootSignature, String> {
+) -> RenderResult<ID3D12RootSignature> {
     let atlas_srv_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
         NumDescriptors: 1,
@@ -592,7 +595,7 @@ pub(super) fn create_text_pso(
     ps: &[u8],
     rtv_format: DXGI_FORMAT,
     sample_count: u32,
-) -> Result<ID3D12PipelineState, String> {
+) -> RenderResult<ID3D12PipelineState> {
     let layout = text_input_layout();
     let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
         pRootSignature: com::borrowed(root_sig),
@@ -659,5 +662,5 @@ pub(super) fn create_text_pso(
     // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
     // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
-        .map_err(|e| format!("create text PSO: {e}"))
+        .map_err(|e| map_pso_hresult(e.code(), "create text PSO"))
 }

@@ -6,7 +6,7 @@ use concinnity_core::bake;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::{AreaLightData, FALLBACK_TEXTURE_COUNT};
 use concinnity_core::render::backend_init::{MediaPayloads, SceneData};
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::ltc;
 use windows::Win32::Graphics::Direct3D12::*;
 
@@ -36,7 +36,7 @@ pub(super) fn build_scene_assets(
     // shader keys off prefilter_mip_count == 0 to skip IBL math.
     let env_map = if let Some(bytes) = media.env_map_bytes {
         let view = bake::environment_map::deserialize(bytes)
-            .map_err(|e| format!("EnvironmentMap payload malformed: {e}"))?;
+            .map_err(|e| RenderError::Other(format!("EnvironmentMap payload malformed: {e}")))?;
         upload_environment_map(
             &hw.alloc,
             crate::directx::texture::EnvironmentMapPayload {
@@ -148,7 +148,7 @@ pub(super) fn build_scene_assets(
     // identity LUT the grade is a no-op at any `lut_strength`.
     let color_lut = if let Some(bytes) = media.color_lut_bytes {
         let (size, data) = bake::color_lut::deserialize(bytes)
-            .map_err(|e| format!("ColorLut payload malformed: {e}"))?;
+            .map_err(|e| RenderError::Other(format!("ColorLut payload malformed: {e}")))?;
         upload_color_lut(
             &hw.alloc,
             size,
@@ -193,8 +193,7 @@ fn build_area_light(
     };
     let area_light_buffer = {
         let size = align256((area_light_data.len() * size_of::<AreaLightData>()) as u64);
-        let buf = create_buffer(
-            &hw.alloc,
+        let buf = hw.alloc.alloc_buffer(
             size,
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_RESOURCE_STATE_GENERIC_READ,

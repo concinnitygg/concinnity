@@ -49,26 +49,20 @@ pub(in crate::directx) use crate::directx::uniforms::CullParams;
 
 // Compile the phase-1 GPU-cull compute kernel (`main`) to DXBC.
 pub(in crate::directx) fn compile_cull_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    slang_builtins::CULL
-        .compile(hot_reload)
-        .map_err(RenderError::ShaderCompile)
+    slang_builtins::CULL.compile(hot_reload)
 }
 
 // Compile the phase-2 GPU-cull compute kernel (`main_phase2`) for two-pass
 // occlusion. Same source / root signature as phase 1, different entry point.
 pub(in crate::directx) fn compile_cull_shader_phase2(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    slang_builtins::CULL_PHASE2
-        .compile(hot_reload)
-        .map_err(RenderError::ShaderCompile)
+    slang_builtins::CULL_PHASE2.compile(hot_reload)
 }
 
 // Compile the GPU-driven shadow cull kernel (`main_shadow`): light-frustum only
 // (no Hi-Z, no distance cull, no status write). Same source / root signature as
 // phase 1, different entry point.
 pub(in crate::directx) fn compile_cull_shader_shadow(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    slang_builtins::CULL_SHADOW
-        .compile(hot_reload)
-        .map_err(RenderError::ShaderCompile)
+    slang_builtins::CULL_SHADOW.compile(hot_reload)
 }
 
 // Root signature for the GPU-cull compute kernel: a `CullParams` root-constant
@@ -166,7 +160,7 @@ pub(in crate::directx) fn create_cull_root_signature(
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
         ..Default::default()
     };
-    Ok(serialize_desc_and_create(device, &desc, "cull root sig")?)
+    serialize_desc_and_create(device, &desc, "cull root sig")
 }
 
 // Compute pipeline state for the GPU-cull kernel.

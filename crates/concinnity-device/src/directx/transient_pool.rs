@@ -20,6 +20,7 @@
 //! `ao_output` only when SSAO is on); `resource_for` returns `None` otherwise and
 //! the consumer keeps its disabled-feature fallback.
 
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::render_graph::{
     ClearValue, PixelFormat, PoolGates, TextureUsage, TransientSlot, TransientTexture,
     plan_pool_slots,
@@ -29,6 +30,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::texture::{one_shot_submit, transition_barrier};
+use crate::directx::error::map_hresult;
 
 // Everything about one label that is fixed once the pool is built: which placed
 // resource backs it, and which member it reclaims heap memory from. The executor
@@ -77,7 +79,7 @@ impl TransientResourcePool {
         device: &ID3D12Device,
         queue: &ID3D12CommandQueue,
         slots: &[TransientSlot],
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         let mut heaps = Vec::new();
         let mut resources = Vec::new();
         // `allocated_bytes` is what the pool really reserves (one heap per slot,
@@ -138,8 +140,9 @@ impl TransientResourcePool {
             // SAFETY: the create descriptor and every pointer it borrows are live for the call, and
             // the new COM object lands in a binding that owns it.
             unsafe { device.CreateHeap(&heap_desc, &mut heap) }
-                .map_err(|e| format!("transient pool heap: {e}"))?;
-            let heap = heap.ok_or("transient pool heap returned None")?;
+                .map_err(|e| map_hresult(e.code(), "transient pool heap"))?;
+            let heap =
+                heap.ok_or_else(|| RenderError::Other("transient pool heap returned None".into()))?;
 
             for (m, desc) in &descs {
                 let clear = clear_value(m);
@@ -156,8 +159,10 @@ impl TransientResourcePool {
                         &mut res,
                     )
                 }
-                .map_err(|e| format!("transient pool place {}: {e}", m.label))?;
-                let resource = res.ok_or("transient pool placed resource None")?;
+                .map_err(|e| map_hresult(e.code(), &format!("transient pool place {}", m.label)))?;
+                let resource = res.ok_or_else(|| {
+                    RenderError::Other("transient pool placed resource None".into())
+                })?;
                 if !shared {
                     to_init.push((resource.clone(), resting_state(m)));
                 }
@@ -257,7 +262,7 @@ impl TransientResourcePool {
         device: &ID3D12Device,
         queue: &ID3D12CommandQueue,
         slots: &[TransientSlot],
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         *self = Self::build(device, queue, slots)?;
         Ok(())
     }
@@ -394,7 +399,7 @@ pub(super) fn transient_slots(
     gbuffer_enabled: bool,
     render_extent: (u32, u32),
     output_extent: (u32, u32),
-) -> Result<Vec<TransientSlot>, String> {
+) -> RenderResult<Vec<TransientSlot>> {
     plan_pool_slots(
         PoolGates {
             ssao: ssao_enabled,
@@ -404,6 +409,7 @@ pub(super) fn transient_slots(
         render_extent,
         output_extent,
     )
+    .map_err(RenderError::Other)
 }
 
 #[cfg(test)]

@@ -10,7 +10,7 @@
 
 use concinnity_core::gfx::render_types::SsaoParams;
 use concinnity_core::gfx::ssao;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::device::PostBlend;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -42,15 +42,9 @@ struct SsaoShaders {
 // passes that read the unified G-buffer; neither has a geometry input.
 fn compile_ssao_shaders(hot_reload: bool) -> RenderResult<SsaoShaders> {
     Ok(SsaoShaders {
-        fullscreen_vs: slang_builtins::FULLSCREEN_VERT
-            .compile(hot_reload)
-            .map_err(RenderError::ShaderCompile)?,
-        kernel_ps: slang_builtins::SSAO_KERNEL
-            .compile(hot_reload)
-            .map_err(RenderError::ShaderCompile)?,
-        blur_ps: slang_builtins::SSAO_BLUR
-            .compile(hot_reload)
-            .map_err(RenderError::ShaderCompile)?,
+        fullscreen_vs: slang_builtins::FULLSCREEN_VERT.compile(hot_reload)?,
+        kernel_ps: slang_builtins::SSAO_KERNEL.compile(hot_reload)?,
+        blur_ps: slang_builtins::SSAO_BLUR.compile(hot_reload)?,
     })
 }
 
@@ -112,11 +106,7 @@ fn create_ssao_kernel_root_signature(device: &ID3D12Device) -> RenderResult<ID3D
         pStaticSamplers: &static_sampler,
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
     };
-    Ok(serialize_desc_and_create(
-        device,
-        &desc,
-        "ssao kernel root sig",
-    )?)
+    serialize_desc_and_create(device, &desc, "ssao kernel root sig")
 }
 
 // Root signature for the depth-aware blur pass: two 1-SRV descriptor tables
@@ -183,11 +173,7 @@ fn create_ssao_blur_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12
         pStaticSamplers: static_samplers.as_ptr(),
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
     };
-    Ok(serialize_desc_and_create(
-        device,
-        &desc,
-        "ssao blur root sig",
-    )?)
+    serialize_desc_and_create(device, &desc, "ssao blur root sig")
 }
 
 // Resources

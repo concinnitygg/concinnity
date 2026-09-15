@@ -11,7 +11,7 @@
 //! Mirrors src/metal/hot_reload.rs.
 
 use concinnity_core::render::backend_init;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -286,7 +286,7 @@ impl DxContext {
                 let (vs, ps) = super::init::pipelines::compile_main_bindless_shaders(hr)?;
                 let engine_pair = super::init::pipelines::BindlessMainShaders { vs, ps };
                 let pso = self.build_world_main_pso(self.world_shader.as_ref(), &engine_pair)?;
-                Ok::<_, String>((pso, engine_pair))
+                Ok::<_, RenderError>((pso, engine_pair))
             }
         );
         let cull_pso = rebuild_if_live!(
@@ -646,7 +646,7 @@ impl DxContext {
     pub(crate) fn update_world_shader_pipelines(
         &mut self,
         programs: &concinnity_core::components::ShaderPrograms,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let new_main =
             self.build_world_main_pso(Some(programs), &self.cull.bindless_main_shaders)?;
         // Drain the GPU before the swap releases the displaced PSO: a command
@@ -667,12 +667,12 @@ impl DxContext {
         &self,
         world: Option<&concinnity_core::components::ShaderPrograms>,
         engine_default: &super::init::pipelines::BindlessMainShaders,
-    ) -> Result<ID3D12PipelineState, String> {
+    ) -> RenderResult<ID3D12PipelineState> {
         let root_sig = self
             .cull
             .main_bindless_root_sig
             .as_ref()
-            .ok_or_else(|| "the GPU-driven main pass is not live".to_string())?;
+            .ok_or_else(|| RenderError::Other("the GPU-driven main pass is not live".into()))?;
         build_bucket_pipeline(
             &self.hw.device,
             self.hw.info_queue.as_ref(),

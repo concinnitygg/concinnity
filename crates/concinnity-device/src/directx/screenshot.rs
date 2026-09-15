@@ -17,33 +17,39 @@
 //! present returns a clean error rather than reading an unrendered buffer.
 
 use concinnity_core::gfx::image_decode::{self, PixelLayout};
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::hdr_output::HdrEncoding;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::com;
 use super::context::DxContext;
-use super::texture::{create_buffer, one_shot_submit, transition_barrier};
+use super::texture::{one_shot_submit, transition_barrier};
+use crate::directx::error::map_hresult;
 
 impl DxContext {
     // Capture the last presented frame to a PNG at `path`. Returns the path on
     // success. Distinct name from the `RenderBackend::screenshot` trait method
     // so the backend forwarder is unambiguous. Reached through the
     // `RenderBackend` vtable (bin-only `cn debug`).
-    pub(crate) fn capture_screenshot(&mut self, path: &str) -> Result<String, String> {
+    pub(crate) fn capture_screenshot(&mut self, path: &str) -> RenderResult<String> {
         let Some(back_idx) = self.swapchain.last_present_index else {
-            return Err("screenshot: no frame has been presented yet".into());
+            return Err(RenderError::Other(
+                "screenshot: no frame has been presented yet".into(),
+            ));
         };
         let back_buffer = self
             .swapchain
             .back_buffers
             .get(back_idx)
-            .ok_or("screenshot: stale back-buffer index")?
+            .ok_or_else(|| RenderError::Other("screenshot: stale back-buffer index".into()))?
             .clone();
         let width = self.targets.extent.output_width;
         let height = self.targets.extent.output_height;
         if width == 0 || height == 0 {
-            return Err("screenshot: zero-sized swapchain".into());
+            return Err(RenderError::Other(
+                "screenshot: zero-sized swapchain".into(),
+            ));
         }
 
         // The GPU must be idle: the last-presented buffer is then stable and no
@@ -88,8 +94,7 @@ impl DxContext {
 
         // Host-readable buffer sized for the padded footprint. READBACK heap
         // resources start in COPY_DEST and never need a barrier.
-        let readback = create_buffer(
-            &self.hw.alloc,
+        let readback = self.hw.alloc.alloc_buffer(
             total_size,
             D3D12_HEAP_TYPE_READBACK,
             D3D12_RESOURCE_STATE_COPY_DEST,
@@ -140,7 +145,7 @@ impl DxContext {
         // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local
         // that receives the mapping.
         unsafe { readback.Map(0, None, Some(&mut map_ptr)) }
-            .map_err(|e| format!("screenshot: map readback: {e}"))?;
+            .map_err(|e| map_hresult(e.code(), "screenshot: map readback"))?;
         // The copy completed (one_shot_submit waits its fence). Read each row's
         // tight span out of the padded footprint into a contiguous source image.
         let mut packed = vec![0u8; tight_row * height as usize];
@@ -196,18 +201,18 @@ fn classify(format: DXGI_FORMAT, encoding: Option<HdrEncoding>) -> PixelLayout {
 }
 
 // Write RGBA8 pixel data to a PNG file.
-fn encode_png(path: &str, width: u32, height: u32, rgba: &[u8]) -> Result<(), String> {
-    let file =
-        std::fs::File::create(path).map_err(|e| format!("screenshot: create {path}: {e}"))?;
+fn encode_png(path: &str, width: u32, height: u32, rgba: &[u8]) -> RenderResult<()> {
+    let file = std::fs::File::create(path)
+        .map_err(|e| RenderError::Other(format!("screenshot: create {path}: {e}")))?;
     let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
     let mut writer = encoder
         .write_header()
-        .map_err(|e| format!("screenshot: png header: {e}"))?;
+        .map_err(|e| RenderError::Other(format!("screenshot: png header: {e}")))?;
     writer
         .write_image_data(rgba)
-        .map_err(|e| format!("screenshot: png data: {e}"))?;
+        .map_err(|e| RenderError::Other(format!("screenshot: png data: {e}")))?;
     Ok(())
 }
 

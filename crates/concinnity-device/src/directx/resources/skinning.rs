@@ -16,7 +16,7 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use super::super::allocator::PooledBuffer;
 use super::super::com;
 use super::super::context::*;
-use super::super::error::map_hresult;
+use super::super::error::{map_hresult, map_pso_hresult};
 use super::super::pipeline::{serialize_and_create_root_sig, skinned_input_layout};
 use super::super::slang_builtins;
 use super::super::texture::*;
@@ -28,7 +28,7 @@ use crate::directx::slang_builtins::SlangCompile;
 // main-pass draws ride the GPU-driven pass through the skin fold.
 
 // The depth-only skinned shadow vertex, the engine's own.
-fn compile_skinned_shadow_shader(hot_reload: bool) -> Result<Vec<u8>, String> {
+fn compile_skinned_shadow_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
     slang_builtins::SKINNED_SHADOW_VERT.compile(hot_reload)
 }
 
@@ -36,7 +36,7 @@ fn compile_skinned_shadow_shader(hot_reload: bool) -> Result<Vec<u8>, String> {
 // (t0) carrying the per-object joint matrices. Used by the skinned shadow PSO.
 fn create_skinned_shadow_root_signature(
     device: &ID3D12Device,
-) -> Result<ID3D12RootSignature, String> {
+) -> RenderResult<ID3D12RootSignature> {
     let params = [
         // [0] Root constants: model mat4 (16) + cascade_idx + 3 pad = 20 DWORDs at b0
         D3D12_ROOT_PARAMETER {
@@ -83,7 +83,7 @@ fn create_skinned_shadow_pso(
     device: &ID3D12Device,
     root_sig: &ID3D12RootSignature,
     vs: &[u8],
-) -> Result<ID3D12PipelineState, String> {
+) -> RenderResult<ID3D12PipelineState> {
     let layout = skinned_input_layout();
     let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
         pRootSignature: com::borrowed(root_sig),
@@ -129,7 +129,7 @@ fn create_skinned_shadow_pso(
     // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
     // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
-        .map_err(|e| format!("create skinned shadow PSO: {e}"))
+        .map_err(|e| map_pso_hresult(e.code(), "create skinned shadow PSO"))
 }
 impl DxContext {
     // Upload skinned-mesh geometry, build the skinned shadow pipeline and the
@@ -363,34 +363,40 @@ impl DxContext {
         vertex_base: u32,
         vertices: &[SkinnedVertex],
         indices: &[u16],
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let obj = self
             .skinned
             .slots
             .draw_objects
             .get(skinned_index)
             .ok_or_else(|| {
-                format!(
+                RenderError::Other(format!(
                     "update_skinned_mesh_geometry: skinned object {} out of range",
                     skinned_index
-                )
+                ))
             })?;
         if indices.len() != obj.index_count {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "update_skinned_mesh_geometry: skinned {} expects {} indices, got {} \
                  (in-place path is size-matched only; size changes route through \
                  rebuild_skinned_geometry)",
                 skinned_index,
                 obj.index_count,
                 indices.len()
-            ));
+            )));
         }
-        let v_buf = self.skinned.vertex_buffer.clone().ok_or(
-            "update_skinned_mesh_geometry: no skinned vertex buffer (was upload_skinned called?)",
-        )?;
-        let i_buf = self.skinned.index_buffer.clone().ok_or(
-            "update_skinned_mesh_geometry: no skinned index buffer (was upload_skinned called?)",
-        )?;
+        let v_buf = self.skinned.vertex_buffer.clone().ok_or_else(|| {
+            RenderError::Other(
+                "update_skinned_mesh_geometry: no skinned vertex buffer (was upload_skinned called?)"
+                    .into(),
+            )
+        })?;
+        let i_buf = self.skinned.index_buffer.clone().ok_or_else(|| {
+            RenderError::Other(
+                "update_skinned_mesh_geometry: no skinned index buffer (was upload_skinned called?)"
+                    .into(),
+            )
+        })?;
         // Check the vertex region fits inside the live buffer. The shared
         // buffer was sized once at `upload_skinned` to hold every skinned
         // mesh's vertices; vertex_base + vertices.len() must stay within that
@@ -399,13 +405,13 @@ impl DxContext {
         let v_byte_len = std::mem::size_of_val(vertices);
         let v_buf_len = self.skinned.vertex_buffer_view.SizeInBytes as usize;
         if v_byte_off + v_byte_len > v_buf_len {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "update_skinned_mesh_geometry: vertex region [{}, {}) overruns skinned \
                  vertex buffer length {}",
                 v_byte_off,
                 v_byte_off + v_byte_len,
                 v_buf_len
-            ));
+            )));
         }
         let i_byte_off = (obj.index_offset * std::mem::size_of::<u32>()) as u64;
         let rebased: Vec<u32> = indices
@@ -439,10 +445,11 @@ impl DxContext {
         &mut self,
         skinned_index: usize,
         new_joint_count: usize,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         self.skinned
             .slots
             .update_skeleton(skinned_index, new_joint_count)
+            .map_err(RenderError::Other)
     }
 
     pub(crate) fn update_skinned_pose(&mut self, skinned_index: usize, matrices: &[[[f32; 4]; 4]]) {
@@ -499,7 +506,7 @@ impl DxContext {
     pub(in crate::directx) fn upload_skinned_morphs(
         &mut self,
         morphs: Vec<Option<std::sync::Arc<mesh_payload::PayloadMorphs>>>,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         use std::collections::HashMap;
 
         let n = self.skinned.slots.draw_objects.len();
@@ -555,20 +562,22 @@ impl DxContext {
                 let mut frame_ptrs: Vec<*mut u8> = Vec::with_capacity(n);
                 for count in &target_counts {
                     let bytes = ((*count).max(1) as u64) * std::mem::size_of::<f32>() as u64;
-                    let buf = create_buffer(
-                        &self.hw.alloc,
-                        bytes,
-                        D3D12_HEAP_TYPE_UPLOAD,
-                        D3D12_RESOURCE_STATE_GENERIC_READ,
-                    )
-                    .map_err(|e| format!("morph weight buf: {e}"))?;
+                    let buf = self
+                        .hw
+                        .alloc
+                        .alloc_buffer(
+                            bytes,
+                            D3D12_HEAP_TYPE_UPLOAD,
+                            D3D12_RESOURCE_STATE_GENERIC_READ,
+                        )
+                        .map_err(|e| e.context("morph weight buf"))?;
                     let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
                     // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this
                     // payload, and the source is a separate allocation, so the ranges cannot
                     // overlap.
                     unsafe {
                         buf.Map(0, None, Some(&mut ptr))
-                            .map_err(|e| format!("map morph weight buf: {e}"))?;
+                            .map_err(|e| map_hresult(e.code(), "map morph weight buf"))?;
                         std::ptr::write_bytes(ptr as *mut u8, 0, bytes as usize);
                     }
                     frame_bufs.push(buf);

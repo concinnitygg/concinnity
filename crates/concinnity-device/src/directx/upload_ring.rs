@@ -12,7 +12,7 @@
 //! fence (waited before a slot is reused) guarantees the GPU has finished
 //! reading a slot's buffer before the CPU overwrites or grows it.
 
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use std::cell::RefCell;
 use windows::Win32::Graphics::Direct3D12::*;
 // Sub-range offset rounding, shared with the other backends' text uploads.
@@ -118,15 +118,15 @@ impl UploadRing {
     // virtual address of the copy. Errors if the running total would exceed the
     // reserved capacity, which cannot happen when `reserve` was called with the
     // aligned-block sum of the same blocks.
-    pub(in crate::directx) fn push(&self, frame: usize, bytes: &[u8]) -> Result<u64, String> {
+    pub(in crate::directx) fn push(&self, frame: usize, bytes: &[u8]) -> RenderResult<u64> {
         let mut slot = self.slots[frame].borrow_mut();
         let offset = align_up(slot.cursor, UPLOAD_ALIGN);
         let end = offset + bytes.len() as u64;
         if end > slot.capacity {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "upload ring overflow: need {end} bytes, reserved {}",
                 slot.capacity
-            ));
+            )));
         }
         // SAFETY: `base` is the persistent map of a buffer of `capacity` bytes;
         // `offset + bytes.len() <= capacity` checked above; the slot is only

@@ -8,13 +8,15 @@
 use concinnity_core::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use concinnity_core::gfx::render_types::LodSlice;
 use concinnity_core::render::backend;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::rt_geom;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R32_UINT;
 
 use super::super::com;
 use super::super::context::DxContext;
-use super::super::texture::{create_buffer, one_shot_submit, transition_barrier};
+use super::super::texture::{one_shot_submit, transition_barrier};
+use crate::directx::error::map_hresult;
 
 // cn-debug-only asset hot-reload geometry rebuild; dead from the FFI lib
 // crate's roots, live in the concinnity binary. The two module-level helper fns
@@ -43,7 +45,7 @@ impl DxContext {
     pub(crate) fn rebuild_static_geometry(
         &mut self,
         changes: Vec<backend::DrawGeometryUpdate>,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         use std::collections::HashMap;
 
         // Stop the GPU + CPU pipelines so the readback + swap can run safely.
@@ -62,14 +64,12 @@ impl DxContext {
         // the destination.
         let old_v_bytes = self.scene.geometry.vertex_buffer_view.SizeInBytes as u64;
         let old_i_bytes = self.scene.geometry.index_buffer_view.SizeInBytes as u64;
-        let v_readback = create_buffer(
-            &self.hw.alloc,
+        let v_readback = self.hw.alloc.alloc_buffer(
             old_v_bytes,
             D3D12_HEAP_TYPE_READBACK,
             D3D12_RESOURCE_STATE_COPY_DEST,
         )?;
-        let i_readback = create_buffer(
-            &self.hw.alloc,
+        let i_readback = self.hw.alloc.alloc_buffer(
             old_i_bytes,
             D3D12_HEAP_TYPE_READBACK,
             D3D12_RESOURCE_STATE_COPY_DEST,
@@ -180,14 +180,14 @@ impl DxContext {
                 let v_start = obj.vertex_offset / std::mem::size_of::<Vertex>();
                 let v_end = v_start + obj.vertex_count;
                 if v_end > old_vertices.len() {
-                    return Err(format!(
+                    return Err(RenderError::Other(format!(
                         "rebuild_static_geometry: draw {} vertex region [{}, {}) out \
                          of bounds (buffer has {} vertices)",
                         draw_idx,
                         v_start,
                         v_end,
                         old_vertices.len()
-                    ));
+                    )));
                 }
                 new_vertices.extend_from_slice(&old_vertices[v_start..v_end]);
                 let old_base_u32 = if absolute_indices {
@@ -197,14 +197,14 @@ impl DxContext {
                 };
                 let i_end = obj.index_offset + obj.index_count;
                 if i_end > old_indices.len() {
-                    return Err(format!(
+                    return Err(RenderError::Other(format!(
                         "rebuild_static_geometry: draw {} index region [{}, {}) out \
                          of bounds (buffer has {} indices)",
                         draw_idx,
                         obj.index_offset,
                         i_end,
                         old_indices.len()
-                    ));
+                    )));
                 }
                 if absolute_indices {
                     for &idx in &old_indices[obj.index_offset..i_end] {
@@ -217,14 +217,14 @@ impl DxContext {
                 for slice in &obj.lod_alternates {
                     let alt_end = slice.index_offset + slice.index_count;
                     if alt_end > old_indices.len() {
-                        return Err(format!(
+                        return Err(RenderError::Other(format!(
                             "rebuild_static_geometry: draw {} LOD slice [{}, {}) out \
                              of bounds (buffer has {} indices)",
                             draw_idx,
                             slice.index_offset,
                             alt_end,
                             old_indices.len()
-                        ));
+                        )));
                     }
                     let alt_off = new_indices.len();
                     if absolute_indices {
@@ -260,11 +260,11 @@ impl DxContext {
         }
 
         if new_vertices.is_empty() || new_indices.is_empty() {
-            return Err(
+            return Err(RenderError::Other(
                 "rebuild_static_geometry: post-rebuild buffers would be empty (no \
                  static draws to ship)"
                     .into(),
-            );
+            ));
         }
 
         // Allocate the new DEFAULT-heap buffers + UPLOAD-heap staging copies
@@ -274,26 +274,22 @@ impl DxContext {
         let new_vertex_count = new_vertices.len();
         let new_v_bytes = std::mem::size_of_val(new_vertices.as_slice()) as u64;
         let new_i_bytes = std::mem::size_of_val(new_indices.as_slice()) as u64;
-        let new_vbuf = create_buffer(
-            &self.hw.alloc,
+        let new_vbuf = self.hw.alloc.alloc_buffer(
             new_v_bytes,
             D3D12_HEAP_TYPE_DEFAULT,
             D3D12_RESOURCE_STATE_COMMON,
         )?;
-        let new_ibuf = create_buffer(
-            &self.hw.alloc,
+        let new_ibuf = self.hw.alloc.alloc_buffer(
             new_i_bytes,
             D3D12_HEAP_TYPE_DEFAULT,
             D3D12_RESOURCE_STATE_COMMON,
         )?;
-        let v_upload = create_buffer(
-            &self.hw.alloc,
+        let v_upload = self.hw.alloc.alloc_buffer(
             new_v_bytes,
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_RESOURCE_STATE_GENERIC_READ,
         )?;
-        let i_upload = create_buffer(
-            &self.hw.alloc,
+        let i_upload = self.hw.alloc.alloc_buffer(
             new_i_bytes,
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -384,15 +380,21 @@ impl DxContext {
     pub(crate) fn rebuild_skinned_geometry(
         &mut self,
         changes: Vec<backend::SkinnedDrawGeometryUpdate>,
-    ) -> Result<Vec<backend::SkinnedSlotLayout>, String> {
+    ) -> RenderResult<Vec<backend::SkinnedSlotLayout>> {
         use std::collections::HashMap;
 
-        let v_buf = self.skinned.vertex_buffer.clone().ok_or(
-            "rebuild_skinned_geometry: no skinned vertex buffer (was upload_skinned called?)",
-        )?;
-        let i_buf = self.skinned.index_buffer.clone().ok_or(
-            "rebuild_skinned_geometry: no skinned index buffer (was upload_skinned called?)",
-        )?;
+        let v_buf = self.skinned.vertex_buffer.clone().ok_or_else(|| {
+            RenderError::Other(
+                "rebuild_skinned_geometry: no skinned vertex buffer (was upload_skinned called?)"
+                    .into(),
+            )
+        })?;
+        let i_buf = self.skinned.index_buffer.clone().ok_or_else(|| {
+            RenderError::Other(
+                "rebuild_skinned_geometry: no skinned index buffer (was upload_skinned called?)"
+                    .into(),
+            )
+        })?;
 
         self.wait_idle();
 
@@ -403,14 +405,12 @@ impl DxContext {
         // staging. Same one-shot pattern as `rebuild_static_geometry`.
         let old_v_bytes = self.skinned.vertex_buffer_view.SizeInBytes as u64;
         let old_i_bytes = self.skinned.index_buffer_view.SizeInBytes as u64;
-        let v_readback = create_buffer(
-            &self.hw.alloc,
+        let v_readback = self.hw.alloc.alloc_buffer(
             old_v_bytes,
             D3D12_HEAP_TYPE_READBACK,
             D3D12_RESOURCE_STATE_COPY_DEST,
         )?;
-        let i_readback = create_buffer(
-            &self.hw.alloc,
+        let i_readback = self.hw.alloc.alloc_buffer(
             old_i_bytes,
             D3D12_HEAP_TYPE_READBACK,
             D3D12_RESOURCE_STATE_COPY_DEST,
@@ -493,26 +493,26 @@ impl DxContext {
                 let v_start = obj.vertex_base as usize;
                 let v_end = v_start + obj.vertex_count;
                 if v_end > old_vertices.len() {
-                    return Err(format!(
+                    return Err(RenderError::Other(format!(
                         "rebuild_skinned_geometry: slot {} vertex region [{}, {}) \
                          out of bounds (buffer has {} vertices)",
                         skinned_index,
                         v_start,
                         v_end,
                         old_vertices.len()
-                    ));
+                    )));
                 }
                 new_vertices.extend_from_slice(&old_vertices[v_start..v_end]);
                 let i_end = obj.index_offset + obj.index_count;
                 if i_end > old_indices.len() {
-                    return Err(format!(
+                    return Err(RenderError::Other(format!(
                         "rebuild_skinned_geometry: slot {} index region [{}, {}) \
                          out of bounds (buffer has {} indices)",
                         skinned_index,
                         obj.index_offset,
                         i_end,
                         old_indices.len()
-                    ));
+                    )));
                 }
                 let old_base = obj.vertex_base;
                 // `idx - old_base + new_v_base`: the subtraction is still
@@ -520,10 +520,10 @@ impl DxContext {
                 // means the readback and the draw objects disagree.
                 for &abs in &old_indices[obj.index_offset..i_end] {
                     let local = abs.checked_sub(old_base).ok_or_else(|| {
-                        format!(
+                        RenderError::Other(format!(
                             "rebuild_skinned_geometry: stale index {abs} below \
                              vertex_base {old_base} on slot {skinned_index}"
-                        )
+                        ))
                     })?;
                     new_indices.push(local + new_v_base);
                 }
@@ -552,11 +552,11 @@ impl DxContext {
         }
 
         if new_vertices.is_empty() || new_indices.is_empty() {
-            return Err(
+            return Err(RenderError::Other(
                 "rebuild_skinned_geometry: post-rebuild buffers would be empty (no \
                  skinned draws to ship)"
                     .into(),
-            );
+            ));
         }
 
         // Allocate new DEFAULT-heap buffers + UPLOAD staging copies and ship
@@ -565,26 +565,22 @@ impl DxContext {
         let new_i_bytes = std::mem::size_of_val(new_indices.as_slice()) as u64;
         // Whole u32 words for the index buffer; see `upload_skinned`.
         let ibuf_bytes = rt_geom::skinned_index_buffer_bytes(new_indices.len()) as u64;
-        let new_vbuf = create_buffer(
-            &self.hw.alloc,
+        let new_vbuf = self.hw.alloc.alloc_buffer(
             new_v_bytes,
             D3D12_HEAP_TYPE_DEFAULT,
             D3D12_RESOURCE_STATE_COMMON,
         )?;
-        let new_ibuf = create_buffer(
-            &self.hw.alloc,
+        let new_ibuf = self.hw.alloc.alloc_buffer(
             ibuf_bytes,
             D3D12_HEAP_TYPE_DEFAULT,
             D3D12_RESOURCE_STATE_COMMON,
         )?;
-        let v_upload = create_buffer(
-            &self.hw.alloc,
+        let v_upload = self.hw.alloc.alloc_buffer(
             new_v_bytes,
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_RESOURCE_STATE_GENERIC_READ,
         )?;
-        let i_upload = create_buffer(
-            &self.hw.alloc,
+        let i_upload = self.hw.alloc.alloc_buffer(
             ibuf_bytes,
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -644,7 +640,7 @@ fn buffer_bytes(res: &ID3D12Resource) -> u64 {
 // caller has already gated the GPU writes (via `one_shot_submit`'s internal
 // fence wait), so the memcpy sees fully committed bytes. `T` must match the
 // buffer's stride exactly.
-fn read_typed_vec<T: Copy>(src: &ID3D12Resource, count: usize) -> Result<Vec<T>, String> {
+fn read_typed_vec<T: Copy>(src: &ID3D12Resource, count: usize) -> RenderResult<Vec<T>> {
     let want = (count * std::mem::size_of::<T>()) as u64;
     let have = buffer_bytes(src);
     assert!(
@@ -655,7 +651,7 @@ fn read_typed_vec<T: Copy>(src: &ID3D12Resource, count: usize) -> Result<Vec<T>,
     // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
     // receives the mapping.
     unsafe { src.Map(0, None, Some(&mut ptr)) }
-        .map_err(|e| format!("rebuild readback map: {e}"))?;
+        .map_err(|e| map_hresult(e.code(), "rebuild readback map"))?;
     let mut out: Vec<T> = Vec::with_capacity(count);
     // SAFETY: `Map` returned the live mapping of a READBACK buffer the assert above proved holds at
     // least `count` `T`s, `out` reserved that many, and the two are separate allocations, so the
@@ -670,7 +666,7 @@ fn read_typed_vec<T: Copy>(src: &ID3D12Resource, count: usize) -> Result<Vec<T>,
 
 // Map an UPLOAD-heap buffer and copy `bytes` into it. Standard UPLOAD-heap
 // idiom: Map (CPU writes), copy_nonoverlapping, Unmap (driver flushes).
-fn write_upload_buffer(dest: &ID3D12Resource, bytes: &[u8]) -> Result<(), String> {
+fn write_upload_buffer(dest: &ID3D12Resource, bytes: &[u8]) -> RenderResult<()> {
     let have = buffer_bytes(dest);
     assert!(
         bytes.len() as u64 <= have,
@@ -680,7 +676,8 @@ fn write_upload_buffer(dest: &ID3D12Resource, bytes: &[u8]) -> Result<(), String
     let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
     // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
     // receives the mapping.
-    unsafe { dest.Map(0, None, Some(&mut ptr)) }.map_err(|e| format!("rebuild upload map: {e}"))?;
+    unsafe { dest.Map(0, None, Some(&mut ptr)) }
+        .map_err(|e| map_hresult(e.code(), "rebuild upload map"))?;
     // SAFETY: `Map` returned the live mapping of an UPLOAD buffer the assert above proved is at
     // least `bytes.len()` long, and the source is a separate allocation, so the ranges cannot
     // overlap.

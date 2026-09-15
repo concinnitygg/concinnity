@@ -281,7 +281,7 @@ impl DxContext {
     fn build_rt_runtime(
         &mut self,
         settings: rt_reflections::RtReflectionSettings,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let hot_reload = self.hot_reload.enabled;
         let mut accel = match super::raytrace::build_rt_accel(super::raytrace::RtInitGeometry {
             alloc: &self.hw.alloc,

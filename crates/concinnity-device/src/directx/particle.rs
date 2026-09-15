@@ -58,15 +58,9 @@ type ParticleShaders = (Vec<u8>, Vec<u8>, Vec<u8>);
 pub(in crate::directx) fn compile_particle_shaders(
     hot_reload: bool,
 ) -> RenderResult<ParticleShaders> {
-    let cs = slang_builtins::PARTICLE_SIMULATE
-        .compile(hot_reload)
-        .map_err(RenderError::ShaderCompile)?;
-    let vs = slang_builtins::PARTICLE_VERT
-        .compile(hot_reload)
-        .map_err(RenderError::ShaderCompile)?;
-    let ps = slang_builtins::PARTICLE_FRAG
-        .compile(hot_reload)
-        .map_err(RenderError::ShaderCompile)?;
+    let cs = slang_builtins::PARTICLE_SIMULATE.compile(hot_reload)?;
+    let vs = slang_builtins::PARTICLE_VERT.compile(hot_reload)?;
+    let ps = slang_builtins::PARTICLE_FRAG.compile(hot_reload)?;
     Ok((cs, vs, ps))
 }
 
@@ -135,11 +129,7 @@ fn create_simulate_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12R
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
         ..Default::default()
     };
-    Ok(serialize_desc_and_create(
-        device,
-        &desc,
-        "particle simulate root sig",
-    )?)
+    serialize_desc_and_create(device, &desc, "particle simulate root sig")
 }
 
 // Graphics root signature for `particle_vertex` + `particle_fragment`. The two
@@ -222,11 +212,7 @@ fn create_render_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12Roo
         // The vertex shader emits the quad from SV_VertexID; no input layout.
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
     };
-    Ok(serialize_desc_and_create(
-        device,
-        &desc,
-        "particle render root sig",
-    )?)
+    serialize_desc_and_create(device, &desc, "particle render root sig")
 }
 
 fn create_simulate_pso(

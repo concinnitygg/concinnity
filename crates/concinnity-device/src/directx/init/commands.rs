@@ -10,6 +10,7 @@ use super::InitGpu;
 use crate::directx::context::{
     DxCommands, DxFrameSync, FRAMES, TimestampState, build_timestamp_resources,
 };
+use crate::directx::error::map_hresult;
 
 pub(super) fn build_commands(gpu: &InitGpu<'_>) -> RenderResult<DxCommands> {
     let hw = gpu.hw;
@@ -21,18 +22,18 @@ pub(super) fn build_commands(gpu: &InitGpu<'_>) -> RenderResult<DxCommands> {
             // SAFETY: the create descriptor and every pointer it borrows are live for the call,
             // and the new COM object lands in a binding that owns it.
             unsafe { hw.device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT) }
-                .map_err(|e| format!("command allocator: {e}"))?;
+                .map_err(|e| map_hresult(e.code(), "command allocator"))?;
         // SAFETY: the create descriptor and every pointer it borrows are live for the call, and
         // the new COM object lands in a binding that owns it.
         let list: ID3D12GraphicsCommandList = unsafe {
             hw.device
                 .CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &alloc, None)
         }
-        .map_err(|e| format!("command list: {e}"))?;
+        .map_err(|e| map_hresult(e.code(), "command list"))?;
         // Close immediately; we re-open each frame.
         // SAFETY: the command list is live and in the recording state, which is what `Close`
         // requires.
-        unsafe { list.Close() }.map_err(|e| format!("close cmd list: {e}"))?;
+        unsafe { list.Close() }.map_err(|e| map_hresult(e.code(), "close cmd list"))?;
         command_allocators.push(alloc);
         command_lists.push(list);
     }
@@ -52,18 +53,18 @@ pub(super) fn build_commands(gpu: &InitGpu<'_>) -> RenderResult<DxCommands> {
             // SAFETY: the create descriptor and every pointer it borrows are live for the call,
             // and the new COM object lands in a binding that owns it.
             unsafe { hw.device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT) }
-                .map_err(|e| format!("per-pass command allocator: {e}"))?;
+                .map_err(|e| map_hresult(e.code(), "per-pass command allocator"))?;
         // SAFETY: the create descriptor and every pointer it borrows are live for the call, and
         // the new COM object lands in a binding that owns it.
         let list: ID3D12GraphicsCommandList = unsafe {
             hw.device
                 .CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &alloc, None)
         }
-        .map_err(|e| format!("per-pass command list: {e}"))?;
+        .map_err(|e| map_hresult(e.code(), "per-pass command list"))?;
         // Close immediately; we re-open per-pass each frame as needed.
         // SAFETY: the command list is live and in the recording state, which is what `Close`
         // requires.
-        unsafe { list.Close() }.map_err(|e| format!("close per-pass cmd list: {e}"))?;
+        unsafe { list.Close() }.map_err(|e| map_hresult(e.code(), "close per-pass cmd list"))?;
         pass_allocators.push(alloc);
         pass_cmd_lists.push(list);
     }
@@ -78,17 +79,17 @@ pub(super) fn build_commands(gpu: &InitGpu<'_>) -> RenderResult<DxCommands> {
             // SAFETY: the create descriptor and every pointer it borrows are live for the call,
             // and the new COM object lands in a binding that owns it.
             unsafe { hw.device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT) }
-                .map_err(|e| format!("end command allocator: {e}"))?;
+                .map_err(|e| map_hresult(e.code(), "end command allocator"))?;
         // SAFETY: the create descriptor and every pointer it borrows are live for the call, and
         // the new COM object lands in a binding that owns it.
         let list: ID3D12GraphicsCommandList = unsafe {
             hw.device
                 .CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &alloc, None)
         }
-        .map_err(|e| format!("end command list: {e}"))?;
+        .map_err(|e| map_hresult(e.code(), "end command list"))?;
         // SAFETY: the command list is live and in the recording state, which is what `Close`
         // requires.
-        unsafe { list.Close() }.map_err(|e| format!("close end cmd list: {e}"))?;
+        unsafe { list.Close() }.map_err(|e| map_hresult(e.code(), "close end cmd list"))?;
         end_command_allocators.push(alloc);
         end_command_lists.push(list);
     }
@@ -107,11 +108,11 @@ pub(super) fn build_frame_sync(gpu: &InitGpu<'_>) -> RenderResult<DxFrameSync> {
     // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
     // new COM object lands in a binding that owns it.
     let fence: ID3D12Fence = unsafe { gpu.hw.device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }
-        .map_err(|e| format!("create fence: {e}"))?;
+        .map_err(|e| map_hresult(e.code(), "create fence"))?;
     // SAFETY: an auto-reset, initially unsignaled event with no name and no security
     // attributes; the call borrows nothing.
     let fence_event = unsafe { CreateEventW(None, false, false, None) }
-        .map_err(|e| format!("create fence event: {e}"))?;
+        .map_err(|e| map_hresult(e.code(), "create fence event"))?;
     Ok(DxFrameSync {
         fence,
         fence_values: vec![0u64; FRAMES],

@@ -43,26 +43,18 @@ pub(in crate::directx) fn compile_fog_shaders(
     msaa_samples: u32,
     hot_reload: bool,
 ) -> RenderResult<(Vec<u8>, Vec<u8>)> {
-    let vs = slang_builtins::FULLSCREEN_VERT
-        .compile(hot_reload)
-        .map_err(RenderError::ShaderCompile)?;
+    let vs = slang_builtins::FULLSCREEN_VERT.compile(hot_reload)?;
     let ps = if msaa_samples > 1 {
-        slang_builtins::FOG_FRAG_MSAA
-            .compile(hot_reload)
-            .map_err(RenderError::ShaderCompile)?
+        slang_builtins::FOG_FRAG_MSAA.compile(hot_reload)?
     } else {
-        slang_builtins::FOG_FRAG
-            .compile(hot_reload)
-            .map_err(RenderError::ShaderCompile)?
+        slang_builtins::FOG_FRAG.compile(hot_reload)?
     };
     Ok((vs, ps))
 }
 
 // Compile the froxel-volume compute kernel.
 pub(in crate::directx) fn compile_fog_froxel_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    slang_builtins::FOG_FROXEL
-        .compile(hot_reload)
-        .map_err(RenderError::ShaderCompile)
+    slang_builtins::FOG_FROXEL.compile(hot_reload)
 }
 
 // Rebuild the fog PSO against fresh shader source. Called from the DirectX
@@ -172,7 +164,7 @@ fn create_fog_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSi
         // The fullscreen pass uses SV_VertexID; no input assembler is needed.
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
     };
-    Ok(serialize_desc_and_create(device, &desc, "fog root sig")?)
+    serialize_desc_and_create(device, &desc, "fog root sig")
 }
 
 // Froxel compute root signature:
@@ -272,11 +264,7 @@ fn create_fog_froxel_root_signature(device: &ID3D12Device) -> RenderResult<ID3D1
         pStaticSamplers: &shadow_sampler,
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
     };
-    Ok(serialize_desc_and_create(
-        device,
-        &desc,
-        "fog froxel root sig",
-    )?)
+    serialize_desc_and_create(device, &desc, "fog froxel root sig")
 }
 
 // PSO for the fog pass. Writes the resolved HDR target with `(scattered,

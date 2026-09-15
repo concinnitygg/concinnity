@@ -59,7 +59,7 @@ impl SkinnedDraws for DxContext {
         fn reveal_skinned_instance(&mut self, instance_index: usize, model: [[f32; 4]; 4]);
         fn retire_skinned_draw_object(&mut self, skinned_index: usize);
         fn update_skinned_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]);
-        fn upload_skinned_morphs(&mut self, morphs: Vec<Option<std::sync::Arc<mesh_payload::PayloadMorphs>>>) -> RenderResult<()>;
+        fn upload_skinned_morphs(&mut self, morphs: Vec<Option<std::sync::Arc<mesh_payload::PayloadMorphs>>>) -> error::RenderResult<()>;
     }
 
     fn upload_skinned(
@@ -80,17 +80,14 @@ impl DrawStreaming for DxContext {
     forward! { assert = debug_assert_main_thread;
         fn evict_texture_slot(&mut self, slot: usize) -> error::RenderResult<()>;
         fn update_texture_slot(&mut self, slot: usize, image: &bake::texture::TextureImage) -> error::RenderResult<()>;
-        fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> RenderResult<()>;
+        fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> error::RenderResult<()>;
         fn seed_mesh_streaming(&mut self, vtx_offset: u64, vtx_bytes: u64, idx_offset: u64, idx_bytes: u64);
-        fn remove_chunk_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> RenderResult<()>;
-        fn set_chunk_model(&mut self, draw_idx: usize, model: [[f32; 4]; 4]) -> RenderResult<()>;
-        fn clone_static_draw_object(&mut self, src_draw_idx: usize, model: [[f32; 4]; 4], dst: draw_slot::SlotAlloc) -> RenderResult<()>;
+        fn remove_chunk_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> error::RenderResult<()>;
+        fn set_chunk_model(&mut self, draw_idx: usize, model: [[f32; 4]; 4]) -> error::RenderResult<()>;
+        fn clone_static_draw_object(&mut self, src_draw_idx: usize, model: [[f32; 4]; 4], dst: draw_slot::SlotAlloc) -> error::RenderResult<()>;
         fn evict_world_shader(&mut self, bucket: u32);
     }
 
-    // Typed-boundary forwarders: the inherent methods report `String` errors,
-    // which `?` coerces to `RenderError::Other`. Sites that can classify a
-    // failure construct the typed variant directly instead.
     fn upload_mesh(
         &mut self,
         draw_idx: usize,
@@ -108,11 +105,7 @@ impl DrawStreaming for DxContext {
         chunk_idx_bytes: usize,
     ) -> error::RenderResult<()> {
         debug_assert_main_thread("setup_chunk_streaming");
-        Ok(DxContext::setup_chunk_streaming(
-            self,
-            chunk_vtx_bytes,
-            chunk_idx_bytes,
-        )?)
+        DxContext::setup_chunk_streaming(self, chunk_vtx_bytes, chunk_idx_bytes)
     }
 
     fn add_chunk_mesh(
@@ -131,7 +124,6 @@ impl DrawStreaming for DxContext {
     ) -> error::RenderResult<()> {
         debug_assert_main_thread("install_world_shader");
         DxContext::install_world_shader(self, bucket, shader)
-            .map_err(error::RenderError::ShaderCompile)
     }
 }
 
@@ -174,11 +166,11 @@ impl LiveEdit for DxContext {
     forward! { assert = debug_assert_main_thread;
         fn update_color_lut(&mut self, size: u32, data: &[u8]) -> error::RenderResult<()>;
         fn update_environment_map(&mut self, payload: &[u8]) -> error::RenderResult<()>;
-        fn update_mesh_geometry(&mut self, draw_idx: usize, verts: &[mesh_payload::Vertex], idxs: &[u16], lod_alternates: &[(f32, Vec<u16>)]) -> RenderResult<()>;
-        fn update_world_shader_pipelines(&mut self, programs: &concinnity_core::components::ShaderPrograms) -> RenderResult<()>;
-        fn update_skinned_mesh_geometry(&mut self, skinned_index: usize, vertex_base: u32, verts: &[mesh_payload::SkinnedVertex], idxs: &[u16]) -> RenderResult<()>;
-        fn update_skinned_skeleton(&mut self, skinned_index: usize, new_joint_count: usize) -> RenderResult<()>;
-        fn rebuild_skinned_geometry(&mut self, changes: Vec<backend::SkinnedDrawGeometryUpdate>) -> RenderResult<Vec<backend::SkinnedSlotLayout>>;
+        fn update_mesh_geometry(&mut self, draw_idx: usize, verts: &[mesh_payload::Vertex], idxs: &[u16], lod_alternates: &[(f32, Vec<u16>)]) -> error::RenderResult<()>;
+        fn update_world_shader_pipelines(&mut self, programs: &concinnity_core::components::ShaderPrograms) -> error::RenderResult<()>;
+        fn update_skinned_mesh_geometry(&mut self, skinned_index: usize, vertex_base: u32, verts: &[mesh_payload::SkinnedVertex], idxs: &[u16]) -> error::RenderResult<()>;
+        fn update_skinned_skeleton(&mut self, skinned_index: usize, new_joint_count: usize) -> error::RenderResult<()>;
+        fn rebuild_skinned_geometry(&mut self, changes: Vec<backend::SkinnedDrawGeometryUpdate>) -> error::RenderResult<Vec<backend::SkinnedSlotLayout>>;
     }
 
     // The swapchain config this live context was built with. A live `cn editor`
@@ -200,7 +192,7 @@ impl LiveEdit for DxContext {
         changes: Vec<backend::DrawGeometryUpdate>,
     ) -> error::RenderResult<()> {
         debug_assert_main_thread("rebuild_static_geometry");
-        Ok(DxContext::rebuild_static_geometry(self, changes)?)
+        DxContext::rebuild_static_geometry(self, changes)
     }
 
     fn draw_geometry_size(&self, draw_idx: usize) -> Option<(usize, usize)> {
@@ -243,7 +235,7 @@ impl BackendProbe for DxContext {
     // recurse); kept explicit out of the `forward!` macro for that rename.
     fn screenshot(&mut self, path: &str) -> RenderResult<String> {
         debug_assert_main_thread("screenshot");
-        Ok(self.capture_screenshot(path)?)
+        self.capture_screenshot(path)
     }
 
     // Inherent method is named `read_cull_status_buffer` for the same reason
@@ -251,6 +243,6 @@ impl BackendProbe for DxContext {
     // trait method and recurse.
     fn read_cull_status(&mut self) -> RenderResult<Vec<u32>> {
         debug_assert_main_thread("read_cull_status");
-        Ok(self.read_cull_status_buffer()?)
+        self.read_cull_status_buffer()
     }
 }

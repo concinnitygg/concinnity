@@ -15,6 +15,7 @@
 // `docs/todos.md` for why the D3D12 pipeline-library equivalent is still open.
 
 use concinnity_core::render::backend_init;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::context::DxContext;
@@ -28,13 +29,11 @@ impl DxContext {
         &mut self,
         bucket: u32,
         shader: backend_init::WorldShader<'_>,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let slot = self.world_pipeline_slot(bucket)?;
-        let root_sig = self
-            .cull
-            .main_bindless_root_sig
-            .clone()
-            .ok_or_else(|| "shader buckets need the bindless main pass".to_string())?;
+        let root_sig = self.cull.main_bindless_root_sig.clone().ok_or_else(|| {
+            RenderError::Other("shader buckets need the bindless main pass".into())
+        })?;
         let pso = build_bucket_pipeline(
             &self.hw.device,
             self.hw.info_queue.as_ref(),
@@ -170,15 +169,15 @@ impl DxContext {
         }
     }
 
-    fn world_pipeline_slot(&self, bucket: u32) -> Result<usize, String> {
-        let slot = (bucket as usize)
-            .checked_sub(1)
-            .ok_or_else(|| "shader bucket 0 is the world default program".to_string())?;
+    fn world_pipeline_slot(&self, bucket: u32) -> RenderResult<usize> {
+        let slot = (bucket as usize).checked_sub(1).ok_or_else(|| {
+            RenderError::Other("shader bucket 0 is the world default program".into())
+        })?;
         if slot >= self.cull.world_pipelines.len() {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "shader bucket {bucket} is past the world's {} shader pipeline(s)",
                 self.cull.world_pipelines.len()
-            ));
+            )));
         }
         Ok(slot)
     }
