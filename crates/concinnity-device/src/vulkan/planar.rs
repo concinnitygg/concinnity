@@ -287,7 +287,7 @@ fn create_framebuffers(
             .layers(1);
         let fb = device
             .create_framebuffer(&info)
-            .map_err(|e| format!("planar framebuffer: {e}"))?;
+            .map_err(|e| super::error::map_vk_result(e, "planar framebuffer"))?;
         out.push(fb);
     }
     Ok(out)
@@ -515,7 +515,7 @@ impl PlanarReflectionSet {
         }
         let pool = device
             .create_descriptor_pool(&pool_info)
-            .map_err(|e| format!("planar descriptor pool: {e}"))?;
+            .map_err(|e| super::error::map_vk_result(e, "planar descriptor pool"))?;
 
         let layouts: Vec<_> = (0..ring).map(|_| global_set_layout).collect();
         let global_sets = alloc_descriptor_sets(device, pool.handle(), &layouts)?;

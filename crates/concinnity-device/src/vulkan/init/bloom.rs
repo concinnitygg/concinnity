@@ -64,7 +64,7 @@ pub(super) fn build_bloom(gpu: &InitGpu<'_>, inputs: BloomInputs<'_>) -> RenderR
                 .set_layouts(&set_layouts)
                 .push_constant_ranges(std::slice::from_ref(&post_pc_range)),
         )
-        .map_err(|e| format!("bloom pipeline layout: {e}"))?;
+        .map_err(|e| crate::vulkan::error::map_vk_result(e, "bloom pipeline layout"))?;
 
     // Bloom pipelines: prefilter, downsample and upsample.
     let bs = compile_bloom_shaders(hot_reload)?;
@@ -129,7 +129,7 @@ pub(super) fn build_bloom(gpu: &InitGpu<'_>, inputs: BloomInputs<'_>) -> RenderR
                 .pool_sizes(std::slice::from_ref(&bloom_pool_size))
                 .max_sets(bloom_pool_capacity),
         )
-        .map_err(|e| format!("bloom descriptor pool: {e}"))?;
+        .map_err(|e| crate::vulkan::error::map_vk_result(e, "bloom descriptor pool"))?;
     let input_sets = alloc_bloom_input_sets(
         device,
         descriptor_pool.handle(),

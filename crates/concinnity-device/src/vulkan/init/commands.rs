@@ -17,7 +17,7 @@ pub(super) fn create_command_pool(hw: &VkHardware) -> RenderResult<vk::CommandPo
     // SAFETY: the create-info and every slice it borrows are live for the call, and each
     // handle it names belongs to this device.
     let command_pool = unsafe { hw.device.create_command_pool(&info, None) }
-        .map_err(|e| format!("command pool: {e}"))?;
+        .map_err(|e| crate::vulkan::error::map_vk_result(e, "command pool"))?;
     Ok(command_pool)
 }
 
@@ -73,7 +73,7 @@ pub(super) fn build_frame_commands(
     // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
     // it names belongs to this device.
     let command_buffers = unsafe { device.allocate_command_buffers(&alloc_info) }
-        .map_err(|e| format!("allocate command buffers: {e}"))?;
+        .map_err(|e| crate::vulkan::error::map_vk_result(e, "allocate command buffers"))?;
 
     // Parallel command-buffer recording: a `start` outer buffer per frame
     // (leading timestamp) plus one command pool + primary buffer per
@@ -85,7 +85,7 @@ pub(super) fn build_frame_commands(
     let pass_pool_flags =
         vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER | vk::CommandPoolCreateFlags::TRANSIENT;
     let make_pool_with_buffer =
-        |device: &VkDevice| -> Result<(vk::CommandPool, vk::CommandBuffer), String> {
+        |device: &VkDevice| -> RenderResult<(vk::CommandPool, vk::CommandBuffer)> {
             // SAFETY: the create-info and every slice it borrows are live for the call, and
             // each handle it names belongs to this device.
             let pool = unsafe {
@@ -96,7 +96,7 @@ pub(super) fn build_frame_commands(
                     None,
                 )
             }
-            .map_err(|e| format!("per-pass command pool: {e}"))?;
+            .map_err(|e| crate::vulkan::error::map_vk_result(e, "per-pass command pool"))?;
             // SAFETY: the create-info and every slice it borrows are live for the call, and
             // each handle it names belongs to this device.
             let buf = unsafe {
@@ -107,7 +107,7 @@ pub(super) fn build_frame_commands(
                         .command_buffer_count(1),
                 )
             }
-            .map_err(|e| format!("per-pass command buffer: {e}"))?[0];
+            .map_err(|e| crate::vulkan::error::map_vk_result(e, "per-pass command buffer"))?[0];
             Ok((pool, buf))
         };
     let mut start_command_pools = Vec::with_capacity(frames);
@@ -141,7 +141,7 @@ pub(super) fn build_frame_commands(
             // SAFETY: the create-info and every slice it borrows are live for the call, and
             // each handle it names belongs to this device.
             unsafe { device.create_semaphore(&sem_info, None) }
-                .map_err(|e| format!("semaphore: {e}"))?,
+                .map_err(|e| crate::vulkan::error::map_vk_result(e, "semaphore"))?,
         );
     }
     for _ in 0..frames {
@@ -149,12 +149,13 @@ pub(super) fn build_frame_commands(
             // SAFETY: the create-info and every slice it borrows are live for the call, and
             // each handle it names belongs to this device.
             unsafe { device.create_semaphore(&sem_info, None) }
-                .map_err(|e| format!("semaphore: {e}"))?,
+                .map_err(|e| crate::vulkan::error::map_vk_result(e, "semaphore"))?,
         );
         in_flight.push(
             // SAFETY: the create-info and every slice it borrows are live for the call, and
             // each handle it names belongs to this device.
-            unsafe { device.create_fence(&fence_info, None) }.map_err(|e| format!("fence: {e}"))?,
+            unsafe { device.create_fence(&fence_info, None) }
+                .map_err(|e| crate::vulkan::error::map_vk_result(e, "fence"))?,
         );
     }
     Ok((

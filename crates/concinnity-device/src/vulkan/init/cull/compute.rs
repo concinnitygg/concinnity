@@ -129,7 +129,7 @@ pub(super) fn build_compute_cull(
             .create_descriptor_set_layout(
                 &vk::DescriptorSetLayoutCreateInfo::default().bindings(&set_bindings),
             )
-            .map_err(|e| format!("cull set layout: {e}"))?;
+            .map_err(|e| crate::vulkan::error::map_vk_result(e, "cull set layout"))?;
 
         // Hi-Z occlusion resources. Built under the same gating as the cull
         // pipeline; its `read_set_layout` becomes set 1 of the cull
@@ -165,7 +165,7 @@ pub(super) fn build_compute_cull(
                     .set_layouts(&layouts)
                     .push_constant_ranges(std::slice::from_ref(&push_range)),
             )
-            .map_err(|e| format!("cull pipeline layout: {e}"))?;
+            .map_err(|e| crate::vulkan::error::map_vk_result(e, "cull pipeline layout"))?;
 
         let cs = compile_cull_shader(hot_reload)?;
         let pipeline = create_cull_pipeline(device, pipeline_layout.handle(), &cs)?;

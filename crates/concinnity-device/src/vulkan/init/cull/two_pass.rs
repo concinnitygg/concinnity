@@ -115,7 +115,7 @@ pub(super) fn build_two_pass_cull(
                     .pool_sizes(std::slice::from_ref(&pool_size))
                     .max_sets(n_frames),
             )
-            .map_err(|e| format!("two-pass cull descriptor pool: {e}"))?;
+            .map_err(|e| crate::vulkan::error::map_vk_result(e, "two-pass cull descriptor pool"))?;
         let set_layouts2: Vec<_> = (0..frames).map(|_| set_layout.handle()).collect();
         let sets2 = alloc_descriptor_sets(device, pool.handle(), &set_layouts2)?;
         for (i, &set) in sets2.iter().enumerate() {

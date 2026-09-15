@@ -57,7 +57,7 @@ pub(super) fn build_shadow(
                     .set_layouts(&shadow_set_layouts)
                     .push_constant_ranges(std::slice::from_ref(&shadow_pc_range)),
             )
-            .map_err(|e| format!("shadow pipeline layout: {e}"))?;
+            .map_err(|e| crate::vulkan::error::map_vk_result(e, "shadow pipeline layout"))?;
         let pl =
             create_shadow_pipeline(device, render_pass.handle(), layout.handle(), &shadow_spv)?;
         let fbs = create_shadow_framebuffers(device, render_pass.handle(), &map, shadows.map_size)?;

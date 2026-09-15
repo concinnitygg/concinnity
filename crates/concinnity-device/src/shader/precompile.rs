@@ -16,7 +16,7 @@ use concinnity_host::store::cache::{CACHE_BUDGET_BYTES, Segment};
 use concinnity_host::store::paths::StateTree;
 use std::path::Path;
 
-use crate::shader::cache::Ensured;
+use crate::shader::cache::{EnsureError, Ensured};
 
 /// Outcome of a built-in shader precompile: how many artifacts were already in
 /// place or copied from the local cache, how many compiled fresh, and the
@@ -34,7 +34,11 @@ pub struct Report {
 }
 
 impl Report {
-    pub(crate) fn record(&mut self, label: &str, result: Result<Ensured, String>) {
+    pub(crate) fn record<E: std::fmt::Display>(
+        &mut self,
+        label: &str,
+        result: Result<Ensured, EnsureError<E>>,
+    ) {
         match result {
             Ok(Ensured::Present) | Ok(Ensured::Copied) => self.reused += 1,
             Ok(Ensured::Compiled) => self.compiled += 1,
@@ -82,13 +86,20 @@ mod tests {
     #[test]
     fn report_tallies_reuse_compile_and_failure() {
         let mut r = Report::default();
-        r.record("a", Ok(Ensured::Present));
-        r.record("b", Ok(Ensured::Copied));
-        r.record("c", Ok(Ensured::Compiled));
-        r.record("d ps_5_1", Err("boom".to_string()));
+        r.record("a", Ok::<_, EnsureError<String>>(Ensured::Present));
+        r.record("b", Ok::<_, EnsureError<String>>(Ensured::Copied));
+        r.record("c", Ok::<_, EnsureError<String>>(Ensured::Compiled));
+        r.record("d ps_5_1", Err(EnsureError::Compile("boom".to_string())));
+        r.record("e", Err(EnsureError::<String>::EmptyArtifact));
         assert_eq!(r.reused, 2);
         assert_eq!(r.compiled, 1);
         assert_eq!(r.cached(), 3);
-        assert_eq!(r.failed, vec!["d ps_5_1: boom".to_string()]);
+        assert_eq!(
+            r.failed,
+            vec![
+                "d ps_5_1: boom".to_string(),
+                "e: compile produced an empty artifact".to_string(),
+            ]
+        );
     }
 }

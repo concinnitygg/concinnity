@@ -257,8 +257,9 @@ impl VkContext {
     // only through the bin's `cn debug` runtime-mutation path (dead in the FFI
     // lib, live in the bin).
     pub(crate) fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()> {
-        let view = bake::environment_map::deserialize(payload)
-            .map_err(|e| format!("envmap hot-reload payload malformed: {e}"))?;
+        let view = bake::environment_map::deserialize(payload).map_err(|e| {
+            error::RenderError::Other(format!("envmap hot-reload payload malformed: {e}"))
+        })?;
         self.wait_idle();
         let new_env = super::super::texture::upload_environment_map(
             &GpuUploadContext {

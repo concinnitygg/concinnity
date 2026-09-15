@@ -95,7 +95,6 @@ impl DrawStreaming for VkContext {
     ) -> error::RenderResult<()> {
         debug_assert_main_thread("install_world_shader");
         VkContext::install_world_shader(self, bucket, shader)
-            .map_err(error::RenderError::ShaderCompile)
     }
 }
 
@@ -143,7 +142,7 @@ impl LiveEdit for VkContext {
     forward! { assert = debug_assert_main_thread;
         fn update_color_lut(&mut self, size: u32, data: &[u8]) -> error::RenderResult<()>;
         fn update_mesh_geometry(&mut self, draw_idx: usize, verts: &[mesh_payload::Vertex], idxs: &[u16], lod_alternates: &[(f32, Vec<u16>)]) -> error::RenderResult<()>;
-        fn update_world_shader_pipelines(&mut self, programs: &concinnity_core::components::ShaderPrograms) -> RenderResult<()>;
+        fn update_world_shader_pipelines(&mut self, programs: &concinnity_core::components::ShaderPrograms) -> error::RenderResult<()>;
         fn update_skinned_mesh_geometry(&mut self, skinned_index: usize, vertex_base: u32, verts: &[mesh_payload::SkinnedVertex], idxs: &[u16]) -> error::RenderResult<()>;
         fn update_skinned_skeleton(&mut self, skinned_index: usize, new_joint_count: usize) -> error::RenderResult<()>;
         fn rebuild_skinned_geometry(&mut self, changes: Vec<backend::SkinnedDrawGeometryUpdate>) -> error::RenderResult<Vec<backend::SkinnedSlotLayout>>;

@@ -121,7 +121,7 @@ pub(in crate::vulkan) fn build_spot_shadow(b: SpotShadowBuild<'_>) -> RenderResu
                 .pool_sizes(&pool_sizes)
                 .max_sets(set_count),
         )
-        .map_err(|e| format!("spot shadow descriptor pool: {e}"))?;
+        .map_err(|e| crate::vulkan::error::map_vk_result(e, "spot shadow descriptor pool"))?;
 
     let layouts: Vec<_> = (0..set_count).map(|_| set_layout).collect();
     let sets = alloc_descriptor_sets(device, descriptor_pool.handle(), &layouts)?;

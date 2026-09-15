@@ -105,12 +105,12 @@ pub(super) fn build_bindless_pass(
         }
         let set_layout = device
             .create_descriptor_set_layout(&set_info)
-            .map_err(|e| format!("bindless set layout: {e}"))?;
+            .map_err(|e| crate::vulkan::error::map_vk_result(e, "bindless set layout"))?;
 
         let layouts = [descriptors.global_set_layout.handle(), set_layout.handle()];
         let pipeline_layout = device
             .create_pipeline_layout(&vk::PipelineLayoutCreateInfo::default().set_layouts(&layouts))
-            .map_err(|e| format!("bindless pipeline layout: {e}"))?;
+            .map_err(|e| crate::vulkan::error::map_vk_result(e, "bindless pipeline layout"))?;
 
         // The engine's own pair is the program for every bucket that
         // declares no Shader and the source of the Wireframe twin; bucket 0

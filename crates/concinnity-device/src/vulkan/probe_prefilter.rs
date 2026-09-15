@@ -23,7 +23,7 @@
 //! SHADER_READ_ONLY_OPTIMAL at install.
 
 use ash::vk;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::reflection_probe::PrefilterPlan;
 use concinnity_core::render::uniforms::ProbePrefilterParams;
 
@@ -71,7 +71,7 @@ pub(super) struct ProbePrefilterPipelines {
 }
 
 impl ProbePrefilterPipelines {
-    pub(super) fn new(device: &VkDevice, hot_reload: bool) -> Result<Self, String> {
+    pub(super) fn new(device: &VkDevice, hot_reload: bool) -> RenderResult<Self> {
         use super::slang_builtins::SlangCompile;
         let mip_set_layout = create_set_layout(
             device,
@@ -273,12 +273,11 @@ impl super::context::VkContext {
         cmd: vk::CommandBuffer,
         gpu: &PrefilterGpu,
         plan: &PrefilterPlan,
-    ) -> Result<(), String> {
-        let pipelines = self
-            .probe
-            .prefilter
-            .as_ref()
-            .ok_or("probe: prefilter pipelines missing")?;
+    ) -> RenderResult<()> {
+        let pipelines =
+            self.probe.prefilter.as_ref().ok_or_else(|| {
+                RenderError::Other("probe: prefilter pipelines missing".to_string())
+            })?;
         let device = &self.hw.device;
 
         transition(
@@ -367,16 +366,15 @@ impl super::context::VkContext {
         gpu: &PrefilterGpu,
         plan: &PrefilterPlan,
         dst_mip: u32,
-    ) -> Result<(), String> {
-        let pipelines = self
-            .probe
-            .prefilter
-            .as_ref()
-            .ok_or("probe: prefilter pipelines missing")?;
+    ) -> RenderResult<()> {
+        let pipelines =
+            self.probe.prefilter.as_ref().ok_or_else(|| {
+                RenderError::Other("probe: prefilter pipelines missing".to_string())
+            })?;
         let set = *gpu
             .ggx_sets
             .get(dst_mip as usize - 1)
-            .ok_or("probe: convolution mip out of range")?;
+            .ok_or_else(|| RenderError::Other("probe: convolution mip out of range".to_string()))?;
         self.dispatch_prefilter(
             cmd,
             pipelines.ggx_pipeline_layout.handle(),
@@ -525,7 +523,7 @@ fn mip_storage_views(
 fn create_set_layout(
     device: &VkDevice,
     types: &[vk::DescriptorType],
-) -> Result<OwnedSetLayout, String> {
+) -> RenderResult<OwnedSetLayout> {
     let binds: Vec<_> = types
         .iter()
         .enumerate()
@@ -541,14 +539,14 @@ fn create_set_layout(
         .create_descriptor_set_layout(
             &vk::DescriptorSetLayoutCreateInfo::default().bindings(&binds),
         )
-        .map_err(|e| format!("probe prefilter set layout: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "probe prefilter set layout"))
 }
 
 fn create_pipeline_layout(
     device: &VkDevice,
     set_layout: vk::DescriptorSetLayout,
     push: vk::PushConstantRange,
-) -> Result<OwnedPipelineLayout, String> {
+) -> RenderResult<OwnedPipelineLayout> {
     let layouts = [set_layout];
     device
         .create_pipeline_layout(
@@ -556,12 +554,12 @@ fn create_pipeline_layout(
                 .set_layouts(&layouts)
                 .push_constant_ranges(std::slice::from_ref(&push)),
         )
-        .map_err(|e| format!("probe prefilter pipeline layout: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "probe prefilter pipeline layout"))
 }
 
 // One bake's sets: the mirror-mip copy plus one downsample and one GGX set per
 // destination mip past 0.
-fn create_pool(device: &VkDevice, steps: usize) -> Result<OwnedDescriptorPool, String> {
+fn create_pool(device: &VkDevice, steps: usize) -> RenderResult<OwnedDescriptorPool> {
     let steps = steps as u32;
     let sizes = [
         // mip0 (2) + downsample (2 each) + GGX dst (1 each).
@@ -581,7 +579,7 @@ fn create_pool(device: &VkDevice, steps: usize) -> Result<OwnedDescriptorPool, S
                 .pool_sizes(&sizes)
                 .max_sets(1 + 2 * steps),
         )
-        .map_err(|e| format!("probe prefilter descriptor pool: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "probe prefilter descriptor pool"))
 }
 
 // Bindings 0 and 1 of a mirror-copy or downsample set: the source mip and the
@@ -724,7 +722,7 @@ fn create_compute_pipeline(
     layout: vk::PipelineLayout,
     spv: &[u8],
     label: &str,
-) -> Result<OwnedPipeline, String> {
+) -> RenderResult<OwnedPipeline> {
     let module = super::pipeline::spv_module(device, spv)?;
     let stage = vk::PipelineShaderStageCreateInfo::default()
         .stage(vk::ShaderStageFlags::COMPUTE)
@@ -734,5 +732,5 @@ fn create_compute_pipeline(
         .stage(stage)
         .layout(layout);
     crate::vulkan::pipeline_cache::create_compute_pipeline(device, &info)
-        .map_err(|e| format!("create {label} pipeline: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, &format!("create {label} pipeline")))
 }

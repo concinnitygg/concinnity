@@ -29,7 +29,7 @@ use crate::vulkan::uniforms::AUTO_EXPOSURE_PUSH_BYTES;
 // and by shader hot-reload to rebuild the two compute pipelines.
 pub(in crate::vulkan) fn compile_auto_exposure_shaders(
     hot_reload: bool,
-) -> Result<(Vec<u8>, Vec<u8>), String> {
+) -> RenderResult<(Vec<u8>, Vec<u8>)> {
     let ctx = super::builtins::Ctx::plain(hot_reload);
     let build_cs = super::slang_builtins::AUTO_EXPOSURE_BUILD.compile(&ctx)?;
     let average_cs = super::slang_builtins::AUTO_EXPOSURE_AVERAGE.compile(&ctx)?;
@@ -102,7 +102,7 @@ impl AutoExposureResources {
                     .set_layouts(&build_layouts)
                     .push_constant_ranges(std::slice::from_ref(&push_range)),
             )
-            .map_err(|e| format!("auto-exposure build pipeline layout: {e}"))?;
+            .map_err(|e| super::error::map_vk_result(e, "auto-exposure build pipeline layout"))?;
         let average_layouts = [average_set_layout.handle()];
         let average_pipeline_layout = device
             .create_pipeline_layout(
@@ -110,7 +110,7 @@ impl AutoExposureResources {
                     .set_layouts(&average_layouts)
                     .push_constant_ranges(std::slice::from_ref(&push_range)),
             )
-            .map_err(|e| format!("auto-exposure average pipeline layout: {e}"))?;
+            .map_err(|e| super::error::map_vk_result(e, "auto-exposure average pipeline layout"))?;
 
         let (build_spv, average_spv) = compile_auto_exposure_shaders(hot_reload)?;
         let build_pipeline =
@@ -159,7 +159,7 @@ impl AutoExposureResources {
                     .max_sets((frames + 1) as u32)
                     .pool_sizes(&pool_sizes),
             )
-            .map_err(|e| format!("auto-exposure descriptor pool: {e}"))?;
+            .map_err(|e| super::error::map_vk_result(e, "auto-exposure descriptor pool"))?;
 
         // Allocate build sets (one per frame) + average set.
         let build_set_layouts: Vec<_> = (0..frames).map(|_| build_set_layout.handle()).collect();
@@ -172,7 +172,7 @@ impl AutoExposureResources {
                     .set_layouts(&build_set_layouts),
             )
         }
-        .map_err(|e| format!("auto-exposure build sets: {e}"))?;
+        .map_err(|e| super::error::map_vk_result(e, "auto-exposure build sets"))?;
         let avg_layouts_single = [average_set_layout.handle()];
         // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
         // it names belongs to this device.
@@ -183,7 +183,7 @@ impl AutoExposureResources {
                     .set_layouts(&avg_layouts_single),
             )
         }
-        .map_err(|e| format!("auto-exposure average set: {e}"))?[0];
+        .map_err(|e| super::error::map_vk_result(e, "auto-exposure average set"))?[0];
 
         // Write each build set's HDR sampled image + histogram bindings.
         let last_view_idx = hdr_resolve_views.len().saturating_sub(1);
@@ -246,7 +246,7 @@ impl AutoExposureResources {
         device: &VkDevice,
         layout: vk::PipelineLayout,
         spv: &[u8],
-    ) -> Result<OwnedPipeline, String> {
+    ) -> RenderResult<OwnedPipeline> {
         create_compute_pipeline(device, layout, spv)
     }
 
@@ -283,7 +283,7 @@ impl AutoExposureResources {
     }
 }
 
-fn create_build_set_layout(device: &VkDevice) -> Result<OwnedSetLayout, String> {
+fn create_build_set_layout(device: &VkDevice) -> RenderResult<OwnedSetLayout> {
     let bindings = [
         vk::DescriptorSetLayoutBinding::default()
             .binding(0)
@@ -299,10 +299,10 @@ fn create_build_set_layout(device: &VkDevice) -> Result<OwnedSetLayout, String> 
     let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
     device
         .create_descriptor_set_layout(&info)
-        .map_err(|e| format!("auto-exposure build set layout: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "auto-exposure build set layout"))
 }
 
-fn create_average_set_layout(device: &VkDevice) -> Result<OwnedSetLayout, String> {
+fn create_average_set_layout(device: &VkDevice) -> RenderResult<OwnedSetLayout> {
     let bindings = [
         vk::DescriptorSetLayoutBinding::default()
             .binding(0)
@@ -318,7 +318,7 @@ fn create_average_set_layout(device: &VkDevice) -> Result<OwnedSetLayout, String
     let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
     device
         .create_descriptor_set_layout(&info)
-        .map_err(|e| format!("auto-exposure average set layout: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "auto-exposure average set layout"))
 }
 
 fn write_build_set(
@@ -388,7 +388,7 @@ fn create_compute_pipeline(
     device: &VkDevice,
     layout: vk::PipelineLayout,
     spv: &[u8],
-) -> Result<OwnedPipeline, String> {
+) -> RenderResult<OwnedPipeline> {
     let module = spv_module(device, spv)?;
     let stage = vk::PipelineShaderStageCreateInfo::default()
         .stage(vk::ShaderStageFlags::COMPUTE)
@@ -398,7 +398,7 @@ fn create_compute_pipeline(
         .stage(stage)
         .layout(layout);
     let pipeline = crate::vulkan::pipeline_cache::create_compute_pipeline(device, &info)
-        .map_err(|e| format!("create auto-exposure pipeline: {e}"))?;
+        .map_err(|e| super::error::map_vk_result(e, "create auto-exposure pipeline"))?;
     Ok(pipeline)
 }
 

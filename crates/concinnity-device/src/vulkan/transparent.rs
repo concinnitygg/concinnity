@@ -435,7 +435,7 @@ use concinnity_core::render::transparent::ordered_visible;
 
 fn create_rt_set_layout(device: &VkDevice) -> RenderResult<OwnedSetLayout> {
     let frag = vk::ShaderStageFlags::FRAGMENT;
-    Ok(create_descriptor_set_layout(
+    create_descriptor_set_layout(
         device,
         &[
             (0, vk::DescriptorType::UNIFORM_BUFFER, frag),
@@ -446,7 +446,7 @@ fn create_rt_set_layout(device: &VkDevice) -> RenderResult<OwnedSetLayout> {
             (5, vk::DescriptorType::STORAGE_BUFFER, frag),
             (6, vk::DescriptorType::STORAGE_BUFFER, frag),
         ],
-    )?)
+    )
 }
 
 impl TransparentRt {

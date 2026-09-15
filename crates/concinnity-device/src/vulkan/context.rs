@@ -1820,7 +1820,7 @@ impl VkContext {
         // SAFETY: the fence belongs to this frame slot and was just waited on, so it is signaled
         // and not in use by a pending submission.
         unsafe { device.reset_fences(std::slice::from_ref(&self.frame_sync.in_flight[frame])) }
-            .map_err(|e| format!("reset fences: {e}"))?;
+            .map_err(|e| super::error::map_vk_result(e, "reset fences"))?;
 
         // Record the frame. `record_frame` records the leading timestamp into
         // the `start` buffer, fans each non-composite pass onto its own
@@ -1834,14 +1834,14 @@ impl VkContext {
         unsafe {
             device
                 .reset_command_buffer(cmd, vk::CommandBufferResetFlags::empty())
-                .map_err(|e| format!("reset cmd buf: {e}"))?;
+                .map_err(|e| super::error::map_vk_result(e, "reset cmd buf"))?;
             device
                 .begin_command_buffer(
                     cmd,
                     &vk::CommandBufferBeginInfo::default()
                         .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
                 )
-                .map_err(|e| format!("begin cmd buf: {e}"))?;
+                .map_err(|e| super::error::map_vk_result(e, "begin cmd buf"))?;
         }
 
         let mut submit_bufs = self.record_frame(
@@ -1863,7 +1863,8 @@ impl VkContext {
         )?;
 
         // SAFETY: `cmd` is in the recording state, which is what `end_command_buffer` requires.
-        unsafe { device.end_command_buffer(cmd) }.map_err(|e| format!("end cmd buf: {e}"))?;
+        unsafe { device.end_command_buffer(cmd) }
+            .map_err(|e| super::error::map_vk_result(e, "end cmd buf"))?;
         // The outer "end" buffer (Composite + post-graph work + trailing
         // timestamp) submits last, after every per-pass buffer.
         submit_bufs.push(cmd);

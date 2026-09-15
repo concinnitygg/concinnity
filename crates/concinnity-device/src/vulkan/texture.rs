@@ -732,7 +732,7 @@ fn upload_texture_levels_deferred(
         // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
         // it names belongs to this device.
         unsafe { device.create_image_view(&info, None) }
-            .map_err(|e| format!("create_image_view: {e}"))?
+            .map_err(|e| super::error::map_vk_result(e, "create_image_view"))?
     };
 
     Ok((
@@ -885,7 +885,7 @@ pub(super) fn upload_color_lut(
     // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
     // names belongs to this device.
     let view = unsafe { device.create_image_view(&view_info, None) }
-        .map_err(|e| format!("create_image_view (LUT): {e}"))?;
+        .map_err(|e| super::error::map_vk_result(e, "create_image_view (LUT)"))?;
 
     Ok(GpuImage::from_pooled(pooled, view))
 }
@@ -1010,7 +1010,7 @@ pub(super) fn upload_float_lut(
     // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
     // names belongs to this device.
     let view = unsafe { device.create_image_view(&view_info, None) }
-        .map_err(|e| format!("create_image_view (float LUT): {e}"))?;
+        .map_err(|e| super::error::map_vk_result(e, "create_image_view (float LUT)"))?;
 
     Ok(GpuImage::from_pooled(pooled, view))
 }
@@ -1113,7 +1113,7 @@ pub(super) fn create_shadow_map_array(
         // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
         // it names belongs to this device.
         unsafe { device.create_image_view(&info, None) }
-            .map_err(|e| format!("shadow array view: {e}"))?
+            .map_err(|e| super::error::map_vk_result(e, "shadow array view"))?
     };
 
     // Per-slice attachment views (one per cascade).
@@ -1134,7 +1134,7 @@ pub(super) fn create_shadow_map_array(
         // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
         // it names belongs to this device.
         let v = unsafe { device.create_image_view(&info, None) }
-            .map_err(|e| format!("shadow slice view {i}: {e}"))?;
+            .map_err(|e| super::error::map_vk_result(e, &format!("shadow slice view {i}")))?;
         aux_views.push(v);
     }
 
@@ -1278,7 +1278,7 @@ pub(super) fn create_hdr_resolve_image(
 pub(super) fn create_sampler_linear_repeat(
     device: &VkDevice,
     max_anisotropy: f32,
-) -> Result<OwnedSampler, String> {
+) -> RenderResult<OwnedSampler> {
     let aniso = max_anisotropy > 1.0;
     let info = vk::SamplerCreateInfo::default()
         .mag_filter(vk::Filter::LINEAR)
@@ -1296,11 +1296,11 @@ pub(super) fn create_sampler_linear_repeat(
         .max_lod(vk::LOD_CLAMP_NONE);
     device
         .create_sampler(&info)
-        .map_err(|e| format!("linear repeat sampler: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "linear repeat sampler"))
 }
 
 // Compare sampler for PCF shadow sampling (LessEqual compare op).
-pub(super) fn create_sampler_shadow(device: &VkDevice) -> Result<OwnedSampler, String> {
+pub(super) fn create_sampler_shadow(device: &VkDevice) -> RenderResult<OwnedSampler> {
     let info = vk::SamplerCreateInfo::default()
         .mag_filter(vk::Filter::LINEAR)
         .min_filter(vk::Filter::LINEAR)
@@ -1315,11 +1315,11 @@ pub(super) fn create_sampler_shadow(device: &VkDevice) -> Result<OwnedSampler, S
         .mipmap_mode(vk::SamplerMipmapMode::LINEAR);
     device
         .create_sampler(&info)
-        .map_err(|e| format!("shadow sampler: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "shadow sampler"))
 }
 
 // Linear clamp sampler for text atlas lookups.
-pub(super) fn create_sampler_linear_clamp(device: &VkDevice) -> Result<OwnedSampler, String> {
+pub(super) fn create_sampler_linear_clamp(device: &VkDevice) -> RenderResult<OwnedSampler> {
     let info = vk::SamplerCreateInfo::default()
         .mag_filter(vk::Filter::LINEAR)
         .min_filter(vk::Filter::LINEAR)
@@ -1333,7 +1333,7 @@ pub(super) fn create_sampler_linear_clamp(device: &VkDevice) -> Result<OwnedSamp
         .mipmap_mode(vk::SamplerMipmapMode::LINEAR);
     device
         .create_sampler(&info)
-        .map_err(|e| format!("linear clamp sampler: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "linear clamp sampler"))
 }
 
 // IBL textures produced by a single `EnvironmentMap` asset. Mirrors the Metal
@@ -1523,7 +1523,8 @@ fn create_cube_image(
             );
         // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
         // it names belongs to this device.
-        unsafe { device.create_image_view(&info, None) }.map_err(|e| format!("cube view: {e}"))?
+        unsafe { device.create_image_view(&info, None) }
+            .map_err(|e| super::error::map_vk_result(e, "cube view"))?
     };
 
     Ok(GpuImage::from_pooled(pooled, view))
@@ -1572,7 +1573,7 @@ pub(super) fn upload_environment_map(
 
 // Linear-clamp sampler with full mipmap support, used by the IBL prefilter
 // cube (roughness → mip selection) and the irradiance cube.
-pub(super) fn create_sampler_cube_linear(device: &VkDevice) -> Result<OwnedSampler, String> {
+pub(super) fn create_sampler_cube_linear(device: &VkDevice) -> RenderResult<OwnedSampler> {
     let info = vk::SamplerCreateInfo::default()
         .mag_filter(vk::Filter::LINEAR)
         .min_filter(vk::Filter::LINEAR)
@@ -1588,5 +1589,5 @@ pub(super) fn create_sampler_cube_linear(device: &VkDevice) -> Result<OwnedSampl
         .max_lod(vk::LOD_CLAMP_NONE);
     device
         .create_sampler(&info)
-        .map_err(|e| format!("cube sampler: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "cube sampler"))
 }

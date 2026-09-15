@@ -18,7 +18,7 @@ use concinnity_core::gfx::projection::perspective_rh;
 use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::render_types::{LightUniforms, LineVertex, ShadowUniforms, TextDrawCall};
 use concinnity_core::render::csm;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::lights;
 use concinnity_core::render::model_history::HistoryMode;
 use concinnity_core::render::render_graph;
@@ -552,7 +552,8 @@ impl VkContext {
         // after execution. A mismatch (or a cold cache) rebuilds.
         let graph = match self.draw.graph_cache.take() {
             Some((cached_inputs, cached_graph)) if cached_inputs == seed_inputs => cached_graph,
-            _ => build_frame_graph(&seed_inputs).map_err(|e| format!("frame graph: {e}"))?,
+            _ => build_frame_graph(&seed_inputs)
+                .map_err(|e| RenderError::Other(format!("frame graph: {e}")))?,
         };
         let params = GraphFrameParams {
             cmd,
@@ -678,14 +679,14 @@ impl VkContext {
         unsafe {
             device
                 .reset_command_buffer(start_cmd, vk::CommandBufferResetFlags::empty())
-                .map_err(|e| format!("reset start cmd buf: {e}"))?;
+                .map_err(|e| crate::vulkan::error::map_vk_result(e, "reset start cmd buf"))?;
             device
                 .begin_command_buffer(
                     start_cmd,
                     &vk::CommandBufferBeginInfo::default()
                         .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
                 )
-                .map_err(|e| format!("begin start cmd buf: {e}"))?;
+                .map_err(|e| crate::vulkan::error::map_vk_result(e, "begin start cmd buf"))?;
         }
         if let Some(pool) = self.hw.timestamp_query_pool {
             // Reset this frame's whole timestamp block (whole-frame pair + every
@@ -724,7 +725,7 @@ impl VkContext {
         unsafe {
             device
                 .end_command_buffer(start_cmd)
-                .map_err(|e| format!("end start cmd buf: {e}"))?;
+                .map_err(|e| crate::vulkan::error::map_vk_result(e, "end start cmd buf"))?;
         }
         Ok(start_cmd)
     }

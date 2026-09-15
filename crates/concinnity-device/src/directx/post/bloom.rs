@@ -7,6 +7,7 @@
 //! Karis 13-tap prefilter, same plain 13-tap downsample + 9-tap tent upsample.
 
 use concinnity_core::gfx::render_types::PostProcessParams;
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::fullscreen;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -318,7 +319,7 @@ impl fullscreen::BloomEncoder for DxContext {
         self.bloom.mips.len()
     }
 
-    fn begin_bloom(&self, cmd: &Self::Rec, _scene_srv: &Self::Args) -> Result<(), String> {
+    fn begin_bloom(&self, cmd: &Self::Rec, _scene_srv: &Self::Args) -> RenderResult<()> {
         let post = self.post_process;
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
@@ -344,7 +345,7 @@ impl fullscreen::BloomEncoder for DxContext {
         Ok(())
     }
 
-    fn bloom_prefilter(&self, cmd: &Self::Rec, scene_srv: &Self::Args) -> Result<(), String> {
+    fn bloom_prefilter(&self, cmd: &Self::Rec, scene_srv: &Self::Args) -> RenderResult<()> {
         // Mip 0 is the graph's `bloom_top`, so it arrives in RENDER_TARGET and
         // must leave in it. In between the downsample chain samples it, which is
         // the one state change this node owns.
@@ -371,7 +372,7 @@ impl fullscreen::BloomEncoder for DxContext {
         cmd: &Self::Rec,
         _scene_srv: &Self::Args,
         dst: usize,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         self.bloom_run_pass(
             cmd,
             BloomSubPass {
@@ -390,7 +391,7 @@ impl fullscreen::BloomEncoder for DxContext {
         cmd: &Self::Rec,
         _scene_srv: &Self::Args,
         dst: usize,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         // The chain walks back down to mip 0, whose last write hands
         // `bloom_top` back to the graph in RENDER_TARGET.
         let after = if dst == 0 {

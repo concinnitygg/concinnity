@@ -12,7 +12,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::cull_status;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 
 use super::context::VkContext;
 use super::texture::one_shot_submit;
@@ -45,7 +45,7 @@ impl VkContext {
         // in-flight cull dispatch is still writing the slot being copied.
         // SAFETY: a wait on this device's own queues; it takes no borrowed state.
         unsafe { self.hw.device.device_wait_idle() }
-            .map_err(|e| format!("cull-status: wait idle: {e}"))?;
+            .map_err(|e| super::error::map_vk_result(e, "cull-status: wait idle"))?;
 
         let readback = self.hw.alloc.create_buffer(
             byte_size,
@@ -75,6 +75,6 @@ impl VkContext {
         // SAFETY: the buffer is HOST_COHERENT and at least `byte_size` bytes long, and the copy
         // above completed (one_shot_submit waits its fence).
         let raw = unsafe { std::slice::from_raw_parts(readback.mapped_ptr(), byte_size as usize) };
-        Ok(cull_status::decode(raw, count).map_err(|e| format!("cull-status: {e}"))?)
+        cull_status::decode(raw, count).map_err(|e| RenderError::Other(format!("cull-status: {e}")))
     }
 }

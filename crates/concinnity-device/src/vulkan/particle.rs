@@ -60,15 +60,9 @@ pub(in crate::vulkan) fn compile_particle_shaders(
     hot_reload: bool,
 ) -> RenderResult<ParticleShaderSpirv> {
     let ctx = super::builtins::Ctx::plain(hot_reload);
-    let cs = super::slang_builtins::PARTICLE_SIMULATE
-        .compile(&ctx)
-        .map_err(RenderError::ShaderCompile)?;
-    let vs = super::slang_builtins::PARTICLE_VERT
-        .compile(&ctx)
-        .map_err(RenderError::ShaderCompile)?;
-    let fs = super::slang_builtins::PARTICLE_FRAG
-        .compile(&ctx)
-        .map_err(RenderError::ShaderCompile)?;
+    let cs = super::slang_builtins::PARTICLE_SIMULATE.compile(&ctx)?;
+    let vs = super::slang_builtins::PARTICLE_VERT.compile(&ctx)?;
+    let fs = super::slang_builtins::PARTICLE_FRAG.compile(&ctx)?;
     Ok((cs, vs, fs))
 }
 

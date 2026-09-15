@@ -202,7 +202,7 @@ fn build_hiz_pipelines(
     spd_tail_layout: vk::PipelineLayout,
     sample_count: u32,
     hot_reload: bool,
-) -> Result<(OwnedPipeline, OwnedPipeline), String> {
+) -> RenderResult<(OwnedPipeline, OwnedPipeline)> {
     // Phase 1 is a per-variant compile of the single-source `hiz_build.slang`:
     // the depth resource is a `Texture2DMS` when multisampled, a `Texture2D`
     // otherwise (a sampled image either way; the kernel reads texels by
@@ -223,7 +223,7 @@ fn create_compute_pipeline(
     device: &VkDevice,
     layout: vk::PipelineLayout,
     spv: &[u8],
-) -> Result<OwnedPipeline, String> {
+) -> RenderResult<OwnedPipeline> {
     let module = spv_module(device, spv)?;
     let stage = vk::PipelineShaderStageCreateInfo::default()
         .stage(vk::ShaderStageFlags::COMPUTE)
@@ -233,7 +233,7 @@ fn create_compute_pipeline(
         .stage(stage)
         .layout(layout);
     let pipeline = crate::vulkan::pipeline_cache::create_compute_pipeline(device, &info)
-        .map_err(|e| format!("create hiz pipeline: {e}"))?;
+        .map_err(|e| super::error::map_vk_result(e, "create hiz pipeline"))?;
     Ok(pipeline)
 }
 
@@ -440,7 +440,7 @@ impl HiZResources {
                     self.descriptor_pool.handle(),
                     vk::DescriptorPoolResetFlags::empty(),
                 )
-                .map_err(|e| format!("reset hiz pool: {e}"))?;
+                .map_err(|e| super::error::map_vk_result(e, "reset hiz pool"))?;
         }
         let frames = self.cull_ubos.len();
         let spd_layouts: Vec<_> = (0..frames).map(|_| self.spd_set_layout.handle()).collect();
@@ -539,7 +539,7 @@ impl HiZResources {
         &self,
         device: &VkDevice,
         hot_reload: bool,
-    ) -> Result<(OwnedPipeline, OwnedPipeline), String> {
+    ) -> RenderResult<(OwnedPipeline, OwnedPipeline)> {
         build_hiz_pipelines(
             device,
             self.spd_pipeline_layout.handle(),
@@ -665,7 +665,7 @@ fn as_bytes<T: bytemuck::NoUninit>(v: &T) -> &[u8] {
 fn create_set_layout(
     device: &VkDevice,
     bindings: &[(u32, vk::DescriptorType)],
-) -> Result<OwnedSetLayout, String> {
+) -> RenderResult<OwnedSetLayout> {
     let counted: Vec<_> = bindings.iter().map(|&(b, ty)| (b, ty, 1)).collect();
     create_set_layout_counted(device, &counted)
 }
@@ -675,7 +675,7 @@ fn create_set_layout(
 fn create_set_layout_counted(
     device: &VkDevice,
     bindings: &[(u32, vk::DescriptorType, u32)],
-) -> Result<OwnedSetLayout, String> {
+) -> RenderResult<OwnedSetLayout> {
     let binds: Vec<_> = bindings
         .iter()
         .map(|&(b, ty, count)| {
@@ -690,14 +690,14 @@ fn create_set_layout_counted(
         .create_descriptor_set_layout(
             &vk::DescriptorSetLayoutCreateInfo::default().bindings(&binds),
         )
-        .map_err(|e| format!("hiz set layout: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "hiz set layout"))
 }
 
 fn create_pipeline_layout(
     device: &VkDevice,
     set_layout: vk::DescriptorSetLayout,
     push_range: vk::PushConstantRange,
-) -> Result<OwnedPipelineLayout, String> {
+) -> RenderResult<OwnedPipelineLayout> {
     let layouts = [set_layout];
     device
         .create_pipeline_layout(
@@ -705,14 +705,14 @@ fn create_pipeline_layout(
                 .set_layouts(&layouts)
                 .push_constant_ranges(std::slice::from_ref(&push_range)),
         )
-        .map_err(|e| format!("hiz pipeline layout: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "hiz pipeline layout"))
 }
 
 fn create_pool(
     device: &VkDevice,
     frames: usize,
     two_pass: bool,
-) -> Result<OwnedDescriptorPool, String> {
+) -> RenderResult<OwnedDescriptorPool> {
     let f = frames as u32;
     // Two-pass occlusion adds one extra cull-read set per frame (phase 2),
     // each with a sampler + a UBO descriptor.
@@ -743,10 +743,10 @@ fn create_pool(
                 .pool_sizes(&sizes)
                 .max_sets(max_sets),
         )
-        .map_err(|e| format!("hiz descriptor pool: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "hiz descriptor pool"))
 }
 
-fn create_sampler(device: &VkDevice) -> Result<OwnedSampler, String> {
+fn create_sampler(device: &VkDevice) -> RenderResult<OwnedSampler> {
     let info = vk::SamplerCreateInfo::default()
         .mag_filter(vk::Filter::NEAREST)
         .min_filter(vk::Filter::NEAREST)
@@ -758,7 +758,7 @@ fn create_sampler(device: &VkDevice) -> Result<OwnedSampler, String> {
         .max_lod(MAX_HIZ_MIPS as f32);
     device
         .create_sampler(&info)
-        .map_err(|e| format!("hiz sampler: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "hiz sampler"))
 }
 
 fn write_sampler(

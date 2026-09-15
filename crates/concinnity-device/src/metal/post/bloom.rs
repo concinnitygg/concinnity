@@ -4,7 +4,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use crate::metal::error::allocation_failed;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -156,7 +156,7 @@ impl fullscreen::BloomEncoder for BloomChain<'_> {
 
     // Nothing to do: a Metal render encoder keeps no state across the sub-passes,
     // so each one binds its own inputs below.
-    fn begin_bloom(&self, _cmd: &Self::Rec, _args: &()) -> Result<(), String> {
+    fn begin_bloom(&self, _cmd: &Self::Rec, _args: &()) -> RenderResult<()> {
         Ok(())
     }
 
@@ -165,72 +165,78 @@ impl fullscreen::BloomEncoder for BloomChain<'_> {
     // Bloom's GPU-timing span runs from this prefilter through the final
     // upsample, so this encoder records the start sample. With a single mip (no
     // downsample / upsample) it is the only encoder and owns both.
-    fn bloom_prefilter(&self, cmd: &Self::Rec, _args: &()) -> Result<(), String> {
+    fn bloom_prefilter(&self, cmd: &Self::Rec, _args: &()) -> RenderResult<()> {
         let timer = if self.bloom_mip_count() <= 1 {
             PassTimer::Whole(crate::metal::pass_timing::PassId::Bloom)
         } else {
             PassTimer::First(crate::metal::pass_timing::PassId::Bloom)
         };
-        self.ctx.fullscreen_pass(
-            cmd,
-            FullscreenPass {
-                target: self.ctx.targets.bloom.mips[0].as_ref(),
-                load: MTLLoadAction::DontCare,
-                timer,
-                pipeline: &self.pipelines.prefilter,
-                label: "bloom prefilter",
-            },
-            |enc| {
-                enc.set_fragment_texture(self.scene_color, 0);
-                enc.set_fragment_sampler(&self.ctx.composite.sampler, 0);
-                enc.set_fragment_value(&self.ctx.post_process, 0);
-            },
-        )
+        self.ctx
+            .fullscreen_pass(
+                cmd,
+                FullscreenPass {
+                    target: self.ctx.targets.bloom.mips[0].as_ref(),
+                    load: MTLLoadAction::DontCare,
+                    timer,
+                    pipeline: &self.pipelines.prefilter,
+                    label: "bloom prefilter",
+                },
+                |enc| {
+                    enc.set_fragment_texture(self.scene_color, 0);
+                    enc.set_fragment_sampler(&self.ctx.composite.sampler, 0);
+                    enc.set_fragment_value(&self.ctx.post_process, 0);
+                },
+            )
+            .map_err(RenderError::Other)
     }
 
     // Downsample: mips[dst - 1] -> mips[dst].
-    fn bloom_downsample(&self, cmd: &Self::Rec, _args: &(), dst: usize) -> Result<(), String> {
+    fn bloom_downsample(&self, cmd: &Self::Rec, _args: &(), dst: usize) -> RenderResult<()> {
         let mips = &self.ctx.targets.bloom.mips;
-        self.ctx.fullscreen_pass(
-            cmd,
-            FullscreenPass {
-                target: mips[dst].as_ref(),
-                load: MTLLoadAction::DontCare,
-                timer: PassTimer::None,
-                pipeline: &self.pipelines.downsample,
-                label: "bloom downsample",
-            },
-            |enc| {
-                enc.set_fragment_texture(mips[dst - 1].as_ref(), 0);
-                enc.set_fragment_sampler(&self.ctx.composite.sampler, 0);
-            },
-        )
+        self.ctx
+            .fullscreen_pass(
+                cmd,
+                FullscreenPass {
+                    target: mips[dst].as_ref(),
+                    load: MTLLoadAction::DontCare,
+                    timer: PassTimer::None,
+                    pipeline: &self.pipelines.downsample,
+                    label: "bloom downsample",
+                },
+                |enc| {
+                    enc.set_fragment_texture(mips[dst - 1].as_ref(), 0);
+                    enc.set_fragment_sampler(&self.ctx.composite.sampler, 0);
+                },
+            )
+            .map_err(RenderError::Other)
     }
 
     // Upsample: mips[dst + 1] -> mips[dst], additively blended onto the
     // downsampled content already there. The chain walks back down to mips[0],
     // so that iteration is the span's last encoder and records its end sample.
-    fn bloom_upsample(&self, cmd: &Self::Rec, _args: &(), dst: usize) -> Result<(), String> {
+    fn bloom_upsample(&self, cmd: &Self::Rec, _args: &(), dst: usize) -> RenderResult<()> {
         let mips = &self.ctx.targets.bloom.mips;
         let timer = if dst == 0 {
             PassTimer::Last(crate::metal::pass_timing::PassId::Bloom)
         } else {
             PassTimer::None
         };
-        self.ctx.fullscreen_pass(
-            cmd,
-            FullscreenPass {
-                target: mips[dst].as_ref(),
-                load: MTLLoadAction::Load,
-                timer,
-                pipeline: &self.pipelines.upsample,
-                label: "bloom upsample",
-            },
-            |enc| {
-                enc.set_fragment_texture(mips[dst + 1].as_ref(), 0);
-                enc.set_fragment_sampler(&self.ctx.composite.sampler, 0);
-            },
-        )
+        self.ctx
+            .fullscreen_pass(
+                cmd,
+                FullscreenPass {
+                    target: mips[dst].as_ref(),
+                    load: MTLLoadAction::Load,
+                    timer,
+                    pipeline: &self.pipelines.upsample,
+                    label: "bloom upsample",
+                },
+                |enc| {
+                    enc.set_fragment_texture(mips[dst + 1].as_ref(), 0);
+                    enc.set_fragment_sampler(&self.ctx.composite.sampler, 0);
+                },
+            )
+            .map_err(RenderError::Other)
     }
 }
 
@@ -248,7 +254,7 @@ impl MtlContext {
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         scene_color: &ProtocolObject<dyn objc2_metal::MTLTexture>,
-    ) -> Result<u32, String> {
+    ) -> RenderResult<u32> {
         // Scene-less worlds build no bloom pipelines and the graph never
         // inserts the Bloom pass, so this is a defensive no-op there.
         let Some(pipelines) = &self.bloom_pipelines else {

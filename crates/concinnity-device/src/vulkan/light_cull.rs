@@ -6,7 +6,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIGHT_LIST_STRIDE, ClusterParams};
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::error::RenderResult;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
@@ -145,9 +145,8 @@ pub(in crate::vulkan) fn build_light_cull(
         .create_pipeline_layout(&layout_info)
         .map_err(|e| super::error::map_vk_result(e, "light cull pipeline layout"))?;
 
-    let spirv = super::slang_builtins::LIGHT_CULL
-        .compile(&super::builtins::Ctx::plain(hot_reload))
-        .map_err(RenderError::ShaderCompile)?;
+    let spirv =
+        super::slang_builtins::LIGHT_CULL.compile(&super::builtins::Ctx::plain(hot_reload))?;
     let module = spv_module(device, &spirv)?;
     let stage = vk::PipelineShaderStageCreateInfo::default()
         .stage(vk::ShaderStageFlags::COMPUTE)

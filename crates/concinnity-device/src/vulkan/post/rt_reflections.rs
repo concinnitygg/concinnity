@@ -56,7 +56,7 @@ pub(in crate::vulkan) fn compile_rt_shaders(
     hot_reload: bool,
     pool_size: usize,
     probe_cube_count: u32,
-) -> Result<RtShaders, String> {
+) -> RenderResult<RtShaders> {
     use super::super::{builtins, slang_builtins};
     // The probe array length comes from the global set layout's binding-8
     // descriptor count; the pool declaration needs at least one slot even where
@@ -147,7 +147,7 @@ unsafe impl Send for RtReflectionsResources {}
 // fullscreen triangle overwrites every pixel so `DONT_CARE` is safe on load.
 // Ends shader-readable for the bloom + composite passes. Mirrors the SSR resolve
 // render pass.
-fn create_rt_render_pass(device: &VkDevice) -> Result<OwnedRenderPass, String> {
+fn create_rt_render_pass(device: &VkDevice) -> RenderResult<OwnedRenderPass> {
     let attachment = vk::AttachmentDescription::default()
         .format(HDR_FORMAT)
         .samples(vk::SampleCountFlags::TYPE_1)
@@ -186,7 +186,7 @@ fn create_rt_render_pass(device: &VkDevice) -> Result<OwnedRenderPass, String> {
         .dependencies(std::slice::from_ref(&dep));
     device
         .create_render_pass(&info)
-        .map_err(|e| format!("RT reflections render pass: {e}"))
+        .map_err(|e| crate::vulkan::error::map_vk_result(e, "RT reflections render pass"))
 }
 
 // Build one fullscreen RT pipeline. No vertex input (procedural fullscreen
@@ -198,7 +198,7 @@ fn create_rt_pipeline(
     layout: vk::PipelineLayout,
     vert_spv: &[u8],
     frag_spv: &[u8],
-) -> Result<OwnedPipeline, String> {
+) -> RenderResult<OwnedPipeline> {
     let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
     let stages = modules.infos();
     let vert_input = vk::PipelineVertexInputStateCreateInfo::default();
@@ -240,7 +240,7 @@ fn create_rt_pipeline(
         .render_pass(render_pass)
         .subpass(0);
     let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &info)
-        .map_err(|e| format!("create rt reflections pso: {e}"))?;
+        .map_err(|e| crate::vulkan::error::map_vk_result(e, "create rt reflections pso"))?;
     Ok(pipeline)
 }
 
@@ -256,7 +256,7 @@ pub(in crate::vulkan) fn rebuild_rt_pipelines(
     device: &VkDevice,
     rt: &RtReflectionsResources,
     hot_reload: bool,
-) -> Result<RebuiltRtPipelines, String> {
+) -> RenderResult<RebuiltRtPipelines> {
     let shaders = compile_rt_shaders(hot_reload, rt.pool_size, rt.probe_cube_count)?;
     let flat = create_rt_pipeline(
         device,
@@ -453,7 +453,7 @@ impl RtReflectionsResources {
             .create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::default().set_layouts(&flat_layouts),
             )
-            .map_err(|e| format!("rt flat pipeline layout: {e}"))?;
+            .map_err(|e| crate::vulkan::error::map_vk_result(e, "rt flat pipeline layout"))?;
         let layout_textured = if let Some(bsl) = bindless_set_layout {
             let layouts = [set_layout.handle(), global_set_layout, bsl];
             Some(
@@ -461,7 +461,9 @@ impl RtReflectionsResources {
                     .create_pipeline_layout(
                         &vk::PipelineLayoutCreateInfo::default().set_layouts(&layouts),
                     )
-                    .map_err(|e| format!("rt textured pipeline layout: {e}"))?,
+                    .map_err(|e| {
+                        crate::vulkan::error::map_vk_result(e, "rt textured pipeline layout")
+                    })?,
             )
         } else {
             None
@@ -521,7 +523,7 @@ impl RtReflectionsResources {
                     .pool_sizes(&pool_sizes)
                     .max_sets(f),
             )
-            .map_err(|e| format!("rt descriptor pool: {e}"))?;
+            .map_err(|e| crate::vulkan::error::map_vk_result(e, "rt descriptor pool"))?;
         let layouts: Vec<_> = (0..frames).map(|_| set_layout.handle()).collect();
         let resolve_sets = alloc_descriptor_sets(device, descriptor_pool.handle(), &layouts)?;
 
@@ -622,7 +624,7 @@ impl RtReflectionsResources {
                     .height(h)
                     .layers(1),
             )
-            .map_err(|e| format!("rt framebuffer: {e}"))?;
+            .map_err(|e| crate::vulkan::error::map_vk_result(e, "rt framebuffer"))?;
         Ok(())
     }
 

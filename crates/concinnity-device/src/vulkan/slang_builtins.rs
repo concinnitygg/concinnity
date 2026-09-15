@@ -3,6 +3,7 @@
 // content-addressed cache, or a filesystem for. The declarations themselves are
 // re-exported here, so every call site still names them through this module.
 
+use concinnity_core::render::error::{RenderError, RenderResult};
 pub(super) use concinnity_core::render::slang_programs::vk::*;
 use concinnity_slang as slang;
 
@@ -16,7 +17,7 @@ use super::builtins::Ctx;
 pub(crate) trait SlangCompile {
     fn source(&self, ctx: &Ctx) -> String;
     fn cache_key<'a>(&self, source: &'a str) -> crate::shader::cache::Key<'a>;
-    fn compile(&self, ctx: &Ctx) -> Result<Vec<u8>, String>;
+    fn compile(&self, ctx: &Ctx) -> RenderResult<Vec<u8>>;
 }
 
 impl SlangCompile for SlangProgram {
@@ -60,7 +61,7 @@ impl SlangCompile for SlangProgram {
     // shader at startup and needing slangc to do it. It is also what lets a
     // device that sizes its pool or probe array differently from the build fall
     // through to a compile without any special case for it.
-    fn compile(&self, ctx: &Ctx) -> Result<Vec<u8>, String> {
+    fn compile(&self, ctx: &Ctx) -> RenderResult<Vec<u8>> {
         let source = self.source(ctx);
         // Only a program that reads the sample count has two artifacts; keying
         // the rest on it would miss the single one they do have.
@@ -72,7 +73,7 @@ impl SlangCompile for SlangProgram {
         }
         let key = self.cache_key(&source);
         crate::shader::cache::cached(&key, self.label, || compile_uncached(self, &source))
-            .map_err(|e| format!("{}: {e}", self.label))
+            .map_err(|e| e.context(self.label))
     }
 }
 
@@ -93,15 +94,15 @@ fn spirv_artifact_name(label: &str, msaa: bool) -> String {
     }
 }
 
-pub(super) fn compile_uncached(program: &SlangProgram, source: &str) -> Result<Vec<u8>, String> {
+pub(super) fn compile_uncached(program: &SlangProgram, source: &str) -> RenderResult<Vec<u8>> {
     let job = slang::SlangJob {
         source,
         file_name: program.file,
         entries: &[program.entry],
         target: slang::SlangTarget::Spirv,
     };
-    let work = crate::shader::compiler_work::dir()?;
-    slang::compile(&job, work.path())
+    let work = crate::shader::compiler_work::dir().map_err(RenderError::Other)?;
+    slang::compile(&job, work.path()).map_err(RenderError::ShaderCompile)
 }
 
 #[cfg(test)]

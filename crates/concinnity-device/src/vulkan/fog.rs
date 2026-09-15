@@ -19,7 +19,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types::{FogFroxelParams, FogParams, ShadowUniforms};
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
 use concinnity_core::render::volumetric_fog;
 use concinnity_core::transform::mat4_inverse;
@@ -746,21 +746,15 @@ fn compile_fog_shaders(hot_reload: bool, msaa: bool) -> RenderResult<(Vec<u8>, V
         msaa,
         ..super::builtins::Ctx::plain(hot_reload)
     };
-    let vert = super::slang_builtins::FULLSCREEN_VERT
-        .compile(&ctx)
-        .map_err(RenderError::ShaderCompile)?;
-    let frag = super::slang_builtins::FOG_FRAG
-        .compile(&ctx)
-        .map_err(RenderError::ShaderCompile)?;
+    let vert = super::slang_builtins::FULLSCREEN_VERT.compile(&ctx)?;
+    let frag = super::slang_builtins::FOG_FRAG.compile(&ctx)?;
     Ok((vert, frag))
 }
 
 // Compile the froxel-volume compute kernel. MSAA-independent (the kernel does
 // not read the scene depth attachment).
 fn compile_fog_froxel_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    super::slang_builtins::FOG_FROXEL
-        .compile(&super::builtins::Ctx::plain(hot_reload))
-        .map_err(RenderError::ShaderCompile)
+    super::slang_builtins::FOG_FROXEL.compile(&super::builtins::Ctx::plain(hot_reload))
 }
 
 // Rebuild the fog graphics pipeline against the existing render pass +

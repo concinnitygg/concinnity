@@ -181,7 +181,7 @@ pub(super) fn acquire_hardware(
     // SAFETY: the create-info and every slice it borrows are live for the call, and
     // each handle it names belongs to this device.
     let instance = unsafe { entry.create_instance(&instance_info, None) }
-        .map_err(|e| format!("create instance: {e}"))?;
+        .map_err(|e| crate::vulkan::error::map_vk_result(e, "create instance"))?;
     // A run with no layer messages looks exactly like a run the layer
     // found nothing wrong with, so say which one happened. Reaching
     // here with the layer requested means it loaded: a missing
@@ -219,7 +219,7 @@ pub(super) fn acquire_hardware(
         // SAFETY: the create-info and every slice it borrows are live for the call, and
         // each handle it names belongs to this device.
         let messenger = unsafe { du.create_debug_utils_messenger(&info, None) }
-            .map_err(|e| format!("debug messenger: {e}"))?;
+            .map_err(|e| crate::vulkan::error::map_vk_result(e, "debug messenger"))?;
         (Some(du), Some(messenger))
     } else {
         (None, None)

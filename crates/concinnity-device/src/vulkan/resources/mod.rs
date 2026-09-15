@@ -34,7 +34,7 @@ mod textures;
 pub(in crate::vulkan) fn create_descriptor_set_layout(
     device: &VkDevice,
     bindings: &[(u32, vk::DescriptorType, vk::ShaderStageFlags)],
-) -> Result<OwnedSetLayout, String> {
+) -> RenderResult<OwnedSetLayout> {
     let vk_bindings: Vec<_> = bindings
         .iter()
         .map(|&(b, ty, stage)| {
@@ -48,14 +48,14 @@ pub(in crate::vulkan) fn create_descriptor_set_layout(
     let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&vk_bindings);
     device
         .create_descriptor_set_layout(&info)
-        .map_err(|e| format!("descriptor set layout: {e}"))
+        .map_err(|e| crate::vulkan::error::map_vk_result(e, "descriptor set layout"))
 }
 
 pub(in crate::vulkan) fn alloc_descriptor_sets(
     device: &VkDevice,
     pool: vk::DescriptorPool,
     layouts: &[vk::DescriptorSetLayout],
-) -> Result<Vec<vk::DescriptorSet>, String> {
+) -> RenderResult<Vec<vk::DescriptorSet>> {
     if layouts.is_empty() {
         return Ok(vec![]);
     }
@@ -65,7 +65,7 @@ pub(in crate::vulkan) fn alloc_descriptor_sets(
     // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
     // names belongs to this device.
     unsafe { device.allocate_descriptor_sets(&alloc) }
-        .map_err(|e| format!("allocate descriptor sets: {e}"))
+        .map_err(|e| crate::vulkan::error::map_vk_result(e, "allocate descriptor sets"))
 }
 
 // Usage every (re)creation of the shared vertex / index buffers must carry, on

@@ -1019,26 +1019,20 @@ pub(super) fn build_skin_pipeline(
         .create_descriptor_set_layout(
             &vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings),
         )
-        .map_err(|e| format!("rt skin descriptor set layout: {e}"))?;
+        .map_err(|e| super::error::map_vk_result(e, "rt skin descriptor set layout"))?;
 
     let pc = vk::PushConstantRange::default()
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .offset(0)
         .size(std::mem::size_of::<SkinParams>() as u32);
     let set_layouts = [set_layout.handle()];
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
     let pipeline_layout = device
         .create_pipeline_layout(
             &vk::PipelineLayoutCreateInfo::default()
                 .set_layouts(&set_layouts)
                 .push_constant_ranges(std::slice::from_ref(&pc)),
         )
-        .map_err(|e| {
-            // SAFETY: the set layout was created from this device and is destroyed exactly once here,
-            // with no pipeline layout referencing it yet.
-            format!("rt skin pipeline layout: {e}")
-        })?;
+        .map_err(|e| super::error::map_vk_result(e, "rt skin pipeline layout"))?;
 
     let stage = vk::PipelineShaderStageCreateInfo::default()
         .stage(vk::ShaderStageFlags::COMPUTE)
@@ -1048,7 +1042,8 @@ pub(super) fn build_skin_pipeline(
         .stage(stage)
         .layout(pipeline_layout.handle());
     let pipeline = crate::vulkan::pipeline_cache::create_compute_pipeline(device, &info);
-    let pipeline = pipeline.map_err(|e| format!("create rt skin pipeline: {e}"))?;
+    let pipeline =
+        pipeline.map_err(|e| super::error::map_vk_result(e, "create rt skin pipeline"))?;
 
     // Sized to one `MorphEntry` so even a stray read of slot 0 stays in
     // bounds; `target_count == 0` keeps it unread.

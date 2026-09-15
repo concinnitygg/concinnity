@@ -209,9 +209,9 @@ fn create_global_set_layout(
     if budget.update_after_bind {
         info = info.flags(vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL);
     }
-    Ok(device
+    device
         .create_descriptor_set_layout(&info)
-        .map_err(|e| format!("global set layout: {e}"))?)
+        .map_err(|e| crate::vulkan::error::map_vk_result(e, "global set layout"))
 }
 
 // Create the shared descriptor pool, sized for every set allocated from it: the
@@ -336,10 +336,9 @@ fn create_descriptor_pool(
     if bindless_uab || budget.update_after_bind {
         pool_info = pool_info.flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND);
     }
-    Ok(hw
-        .device
+    hw.device
         .create_descriptor_pool(&pool_info)
-        .map_err(|e| format!("descriptor pool: {e}"))?)
+        .map_err(|e| crate::vulkan::error::map_vk_result(e, "descriptor pool"))
 }
 
 // Allocate and write the per-frame global sets.

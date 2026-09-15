@@ -546,12 +546,8 @@ fn compile_decal_shaders(hot_reload: bool, msaa: bool) -> RenderResult<(Vec<u8>,
         msaa,
         ..super::builtins::Ctx::plain(hot_reload)
     };
-    let vert = super::slang_builtins::DECAL_VERT
-        .compile(&ctx)
-        .map_err(RenderError::ShaderCompile)?;
-    let frag = super::slang_builtins::DECAL_FRAG
-        .compile(&ctx)
-        .map_err(RenderError::ShaderCompile)?;
+    let vert = super::slang_builtins::DECAL_VERT.compile(&ctx)?;
+    let frag = super::slang_builtins::DECAL_FRAG.compile(&ctx)?;
     Ok((vert, frag))
 }
 

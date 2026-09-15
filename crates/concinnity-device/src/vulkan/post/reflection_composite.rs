@@ -94,7 +94,7 @@ pub(in crate::vulkan) struct ReflectionCompositeShaders {
 // [0,1] UV convention, so the composite taps line up with the resolve's).
 pub(in crate::vulkan) fn compile_reflection_composite_shaders(
     hot_reload: bool,
-) -> Result<ReflectionCompositeShaders, String> {
+) -> RenderResult<ReflectionCompositeShaders> {
     use super::super::{builtins, slang_builtins};
     let ctx = builtins::Ctx::plain(hot_reload);
     Ok(ReflectionCompositeShaders {
@@ -114,7 +114,7 @@ pub(in crate::vulkan) fn rebuild_reflection_composite_pipelines(
     device: &VkDevice,
     rc: &ReflectionCompositeResources,
     hot_reload: bool,
-) -> Result<RebuiltReflectionComposite, String> {
+) -> RenderResult<RebuiltReflectionComposite> {
     let shaders = compile_reflection_composite_shaders(hot_reload)?;
     let blur = create_composite_pipeline(
         device,
@@ -137,7 +137,7 @@ pub(in crate::vulkan) fn rebuild_reflection_composite_pipelines(
 // triangle overwrites every pixel so DONT_CARE is safe on load. Ends shader-readable
 // for the next pass (composite -> bloom/TAA; blur -> composite). Mirrors the SSR
 // resolve render pass.
-fn create_composite_render_pass(device: &VkDevice) -> Result<OwnedRenderPass, String> {
+fn create_composite_render_pass(device: &VkDevice) -> RenderResult<OwnedRenderPass> {
     let attachment = vk::AttachmentDescription::default()
         .format(HDR_FORMAT)
         .samples(vk::SampleCountFlags::TYPE_1)
@@ -174,7 +174,7 @@ fn create_composite_render_pass(device: &VkDevice) -> Result<OwnedRenderPass, St
         .dependencies(std::slice::from_ref(&dep));
     device
         .create_render_pass(&info)
-        .map_err(|e| format!("reflection composite render pass: {e}"))
+        .map_err(|e| crate::vulkan::error::map_vk_result(e, "reflection composite render pass"))
 }
 
 // Per-frame views feeding the composite's static bindings: the scene HDR resolve
@@ -248,7 +248,7 @@ fn create_composite_pipeline(
     layout: vk::PipelineLayout,
     vert_spv: &[u8],
     frag_spv: &[u8],
-) -> Result<OwnedPipeline, String> {
+) -> RenderResult<OwnedPipeline> {
     let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
     let stages = modules.infos();
     let vert_input = vk::PipelineVertexInputStateCreateInfo::default();
@@ -290,7 +290,7 @@ fn create_composite_pipeline(
         .render_pass(render_pass)
         .subpass(0);
     let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &info)
-        .map_err(|e| format!("create reflection composite pso: {e}"))?;
+        .map_err(|e| crate::vulkan::error::map_vk_result(e, "create reflection composite pso"))?;
     Ok(pipeline)
 }
 
@@ -332,13 +332,13 @@ impl ReflectionCompositeResources {
             ],
         )?;
 
-        let make_layout = |set_layout: vk::DescriptorSetLayout, name: &str| -> Result<_, String> {
+        let make_layout = |set_layout: vk::DescriptorSetLayout, name: &str| -> RenderResult<_> {
             let layouts = [set_layout];
             device
                 .create_pipeline_layout(
                     &vk::PipelineLayoutCreateInfo::default().set_layouts(&layouts),
                 )
-                .map_err(|e| format!("{name}: {e}"))
+                .map_err(|e| crate::vulkan::error::map_vk_result(e, name))
         };
         let blur_pipeline_layout = make_layout(blur_set_layout.handle(), "reflection blur layout")?;
         let composite_pipeline_layout =
@@ -371,7 +371,9 @@ impl ReflectionCompositeResources {
                     .pool_sizes(&pool_sizes)
                     .max_sets(f * 2),
             )
-            .map_err(|e| format!("reflection composite descriptor pool: {e}"))?;
+            .map_err(|e| {
+                crate::vulkan::error::map_vk_result(e, "reflection composite descriptor pool")
+            })?;
         let blur_layouts: Vec<_> = (0..frames).map(|_| blur_set_layout.handle()).collect();
         let blur_sets = alloc_descriptor_sets(device, descriptor_pool.handle(), &blur_layouts)?;
         let composite_layouts: Vec<_> =
@@ -426,7 +428,7 @@ impl ReflectionCompositeResources {
             height: bh,
         };
 
-        let make_fb = |view: vk::ImageView, fw: u32, fh: u32| -> Result<OwnedFramebuffer, String> {
+        let make_fb = |view: vk::ImageView, fw: u32, fh: u32| -> RenderResult<OwnedFramebuffer> {
             device
                 .create_framebuffer(
                     &vk::FramebufferCreateInfo::default()
@@ -436,7 +438,9 @@ impl ReflectionCompositeResources {
                         .height(fh)
                         .layers(1),
                 )
-                .map_err(|e| format!("reflection composite framebuffer: {e}"))
+                .map_err(|e| {
+                    crate::vulkan::error::map_vk_result(e, "reflection composite framebuffer")
+                })
         };
         self.output_framebuffer = make_fb(self.output.view, w, h)?;
         self.blur_framebuffer = make_fb(self.blur.view, bw, bh)?;

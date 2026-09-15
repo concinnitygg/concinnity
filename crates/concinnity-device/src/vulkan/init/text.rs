@@ -55,7 +55,7 @@ pub(super) fn build_text(
                 .set_layouts(&text_set_layouts)
                 .push_constant_ranges(std::slice::from_ref(&text_pc_range)),
         )
-        .map_err(|e| format!("text pipeline layout: {e}"))?;
+        .map_err(|e| crate::vulkan::error::map_vk_result(e, "text pipeline layout"))?;
 
     // Text renders in the composite pass (post-tonemap, single-sample), so
     // its pipeline targets the composite render pass.

@@ -13,7 +13,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types::LineVertex;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::error::RenderResult;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
@@ -424,12 +424,8 @@ fn compile_line_shaders(hot_reload: bool, msaa: bool) -> RenderResult<(Vec<u8>, 
         msaa,
         ..super::builtins::Ctx::plain(hot_reload)
     };
-    let vert = super::slang_builtins::LINE_VERT
-        .compile(&ctx)
-        .map_err(RenderError::ShaderCompile)?;
-    let frag = super::slang_builtins::LINE_FRAG
-        .compile(&ctx)
-        .map_err(RenderError::ShaderCompile)?;
+    let vert = super::slang_builtins::LINE_VERT.compile(&ctx)?;
+    let frag = super::slang_builtins::LINE_FRAG.compile(&ctx)?;
     Ok((vert, frag))
 }
 

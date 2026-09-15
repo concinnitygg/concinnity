@@ -57,7 +57,9 @@ impl VkContext {
                             .set_layouts(&shadow_set_layouts)
                             .push_constant_ranges(std::slice::from_ref(&shadow_pc)),
                     )
-                    .map_err(|e| format!("skinned shadow pipeline layout: {e}"))?;
+                    .map_err(|e| {
+                        crate::vulkan::error::map_vk_result(e, "skinned shadow pipeline layout")
+                    })?;
                 let pipeline = create_skinned_shadow_pipeline(
                     &self.hw.device,
                     self.shadow.render_pass.handle(),
@@ -116,7 +118,7 @@ impl VkContext {
                     .max_sets((n * frames) as u32)
                     .pool_sizes(&pool_sizes),
             )
-            .map_err(|e| format!("skinned descriptor pool: {e}"))?;
+            .map_err(|e| crate::vulkan::error::map_vk_result(e, "skinned descriptor pool"))?;
 
         // Per-(frame, object) joint storage buffers seeded with identity
         // matrices so any not-yet-overwritten slot reads as identity.

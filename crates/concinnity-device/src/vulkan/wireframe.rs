@@ -15,6 +15,7 @@
 use super::context::VkContext;
 use super::pipeline::{MeshPipelineTargets, create_main_pipeline_wireframe};
 use crate::vulkan::owned::OwnedPipeline;
+use concinnity_core::render::error::RenderResult;
 
 // The Wireframe twin of the GPU-driven main pipeline. `None` means the pass
 // it mirrors is not live either (or the build failed), in which case the pass
@@ -68,7 +69,7 @@ impl VkContext {
         self.wireframe.destroy();
     }
 
-    fn build_wireframe_pipelines(&mut self) -> Result<(), String> {
+    fn build_wireframe_pipelines(&mut self) -> RenderResult<()> {
         let device = self.hw.device.clone();
         let msaa = self.targets.msaa_samples;
         let format = self.swapchain.format;
@@ -77,7 +78,7 @@ impl VkContext {
             built: true,
             ..Default::default()
         };
-        let mut build = || -> Result<(), String> {
+        let mut build = || -> RenderResult<()> {
             if let (Some(_), Some(layout)) = (
                 self.cull.bindless_pipeline.as_ref(),
                 self.cull.bindless_pipeline_layout.as_ref(),

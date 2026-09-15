@@ -78,11 +78,11 @@ static COMPILE_MICROS: AtomicU64 = AtomicU64::new(0);
 
 // Return the cached artifact for `key`, else run `compile`, store the result,
 // and return it. `label` names the shader in the miss log only.
-pub(crate) fn cached(
+pub(crate) fn cached<E>(
     key: &Key<'_>,
     label: &str,
-    compile: impl FnOnce() -> Result<Vec<u8>, String>,
-) -> Result<Vec<u8>, String> {
+    compile: impl FnOnce() -> Result<Vec<u8>, E>,
+) -> Result<Vec<u8>, E> {
     if !enabled() {
         return compile();
     }
@@ -118,6 +118,25 @@ pub(crate) enum Ensured {
     Compiled,
 }
 
+// Why `ensure_in` left the artifact out of the bundle: the compile failed, or
+// it succeeded with nothing to store.
+#[cfg(any(backend_dx, backend_vk))]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum EnsureError<E> {
+    Compile(E),
+    EmptyArtifact,
+}
+
+#[cfg(any(backend_dx, backend_vk))]
+impl<E: std::fmt::Display> std::fmt::Display for EnsureError<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EnsureError::Compile(e) => e.fmt(f),
+            EnsureError::EmptyArtifact => f.write_str("compile produced an empty artifact"),
+        }
+    }
+}
+
 // Make sure the artifact for `key` is in `bundle` (the segment `cn export`
 // ships), compiling only when neither it nor this machine's own cache tiers
 // already hold it. A fresh compile is also stored locally, so repeated exports
@@ -126,11 +145,11 @@ pub(crate) enum Ensured {
 //
 // Used by the export-time precompile; the runtime path stays on `cached`.
 #[cfg(any(backend_dx, backend_vk))]
-pub(crate) fn ensure_in(
+pub(crate) fn ensure_in<E>(
     bundle: &mut Segment,
     key: &Key<'_>,
-    compile: impl FnOnce() -> Result<Vec<u8>, String>,
-) -> Result<Ensured, String> {
+    compile: impl FnOnce() -> Result<Vec<u8>, E>,
+) -> Result<Ensured, EnsureError<E>> {
     if enabled() {
         verify_toolchain();
     }
@@ -144,9 +163,9 @@ pub(crate) fn ensure_in(
         bundle.put(KIND, &digest, &bytes);
         return Ok(Ensured::Copied);
     }
-    let bytes = compile()?;
+    let bytes = compile().map_err(EnsureError::Compile)?;
     if bytes.is_empty() {
-        return Err("compile produced an empty artifact".to_string());
+        return Err(EnsureError::EmptyArtifact);
     }
     bundle.put(KIND, &digest, &bytes);
     if enabled() {
@@ -283,12 +302,15 @@ mod tests {
         let mut bundle = Segment::read_from(&path);
         let k = key("ensure src", "main", "ps_5_1", 3);
 
-        let first = ensure_in(&mut bundle, &k, || Ok(vec![7, 7, 7])).unwrap();
+        let first = ensure_in(&mut bundle, &k, || Ok::<_, String>(vec![7, 7, 7])).unwrap();
         assert_eq!(first, Ensured::Compiled);
 
         // The second request must be served from the segment without
         // recompiling, and without having touched the filesystem yet.
-        let second = ensure_in(&mut bundle, &k, || panic!("must not recompile")).unwrap();
+        let second = ensure_in(&mut bundle, &k, || -> Result<Vec<u8>, String> {
+            panic!("must not recompile")
+        })
+        .unwrap();
         assert_eq!(second, Ensured::Present);
         assert!(!path.exists(), "warming is memory until the caller writes");
 
@@ -302,10 +324,13 @@ mod tests {
     fn ensure_in_propagates_a_compile_error_and_stores_nothing() {
         let mut bundle = Segment::read_from(std::path::Path::new("/nonexistent/cache/0"));
         let k = key("bad src", "main", "ps_5_1", 0);
-        assert!(ensure_in(&mut bundle, &k, || Err("boom".to_string())).is_err());
-        assert!(
-            ensure_in(&mut bundle, &k, || Ok(Vec::new())).is_err(),
-            "empty"
+        assert_eq!(
+            ensure_in(&mut bundle, &k, || Err("boom".to_string())),
+            Err(EnsureError::Compile("boom".to_string()))
+        );
+        assert_eq!(
+            ensure_in(&mut bundle, &k, || Ok::<_, String>(Vec::new())),
+            Err(EnsureError::EmptyArtifact)
         );
         assert_eq!(bundle.get(KIND, &k.digest()), None);
     }

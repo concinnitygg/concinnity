@@ -30,7 +30,7 @@
 
 use crate::gfx::render_types::TextDrawCall;
 use crate::math::{ceil, floor};
-use alloc::string::String;
+use crate::render::error::RenderResult;
 
 /// Convert a `TextDrawCall.clip_rect` (a rectangle `[x, y, w, h]` in overlay
 /// units, already mapped through the overlay transform by
@@ -106,18 +106,13 @@ pub trait BloomEncoder {
     /// per-mip hooks (DX root signature / heap / IA state and the post-process
     /// root constants; VK the post-process push constants). Metal binds per
     /// sub-pass encoder, so it has nothing to do here.
-    fn begin_bloom(&self, rec: &Self::Rec, args: &Self::Args) -> Result<(), String>;
+    fn begin_bloom(&self, rec: &Self::Rec, args: &Self::Args) -> RenderResult<()>;
     /// Prefilter: scene color -> mip 0 (soft-knee threshold + Karis average).
-    fn bloom_prefilter(&self, rec: &Self::Rec, args: &Self::Args) -> Result<(), String>;
+    fn bloom_prefilter(&self, rec: &Self::Rec, args: &Self::Args) -> RenderResult<()>;
     /// Downsample: mip `dst - 1` -> mip `dst`.
-    fn bloom_downsample(
-        &self,
-        rec: &Self::Rec,
-        args: &Self::Args,
-        dst: usize,
-    ) -> Result<(), String>;
+    fn bloom_downsample(&self, rec: &Self::Rec, args: &Self::Args, dst: usize) -> RenderResult<()>;
     /// Upsample: mip `dst + 1` -> mip `dst`, additively blended.
-    fn bloom_upsample(&self, rec: &Self::Rec, args: &Self::Args, dst: usize) -> Result<(), String>;
+    fn bloom_upsample(&self, rec: &Self::Rec, args: &Self::Args, dst: usize) -> RenderResult<()>;
 }
 
 /// The bloom chain orchestration, previously hand-duplicated in each backend's
@@ -131,7 +126,7 @@ pub fn encode_bloom_chain<E: BloomEncoder>(
     enc: &E,
     rec: &E::Rec,
     args: E::Args,
-) -> Result<(), String> {
+) -> RenderResult<()> {
     let n = enc.bloom_mip_count();
     if n == 0 {
         return Ok(());
@@ -286,8 +281,9 @@ mod tests {
     use crate::gfx::render_types::TextDrawCall;
     use core::cell::RefCell;
 
+    use crate::render::error::RenderError;
     use alloc::format;
-    use alloc::string::ToString;
+    use alloc::string::{String, ToString};
     use alloc::vec;
     use alloc::vec::Vec;
     #[test]
@@ -454,11 +450,11 @@ mod tests {
         }
 
         // Record one sub-pass, reporting failure where the test asked for it.
-        fn step(&self, entry: String) -> Result<(), String> {
+        fn step(&self, entry: String) -> RenderResult<()> {
             let failed = self.fail_at == Some(entry.as_str());
             self.log.borrow_mut().push(entry);
             if failed {
-                return Err("sub-pass failed".to_string());
+                return Err(RenderError::Other("sub-pass failed".to_string()));
             }
             Ok(())
         }
@@ -471,16 +467,16 @@ mod tests {
         fn bloom_mip_count(&self) -> usize {
             self.mips
         }
-        fn begin_bloom(&self, _rec: &(), _args: &()) -> Result<(), String> {
+        fn begin_bloom(&self, _rec: &(), _args: &()) -> RenderResult<()> {
             self.step("begin".to_string())
         }
-        fn bloom_prefilter(&self, _rec: &(), _args: &()) -> Result<(), String> {
+        fn bloom_prefilter(&self, _rec: &(), _args: &()) -> RenderResult<()> {
             self.step("prefilter".to_string())
         }
-        fn bloom_downsample(&self, _rec: &(), _args: &(), dst: usize) -> Result<(), String> {
+        fn bloom_downsample(&self, _rec: &(), _args: &(), dst: usize) -> RenderResult<()> {
             self.step(format!("down{dst}"))
         }
-        fn bloom_upsample(&self, _rec: &(), _args: &(), dst: usize) -> Result<(), String> {
+        fn bloom_upsample(&self, _rec: &(), _args: &(), dst: usize) -> RenderResult<()> {
             self.step(format!("up{dst}"))
         }
     }

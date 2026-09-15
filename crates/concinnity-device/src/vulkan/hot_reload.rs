@@ -12,7 +12,7 @@
 
 use ash::vk;
 use concinnity_core::render::backend_init;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -279,7 +279,7 @@ impl VkContext {
                 let engine_pair = compile_bindless_shaders(hr, self.descriptors.probe_cube_count)?;
                 let pipeline =
                     self.build_world_main_pipeline(self.world_shader.as_ref(), &engine_pair)?;
-                Ok::<_, String>((pipeline, engine_pair))
+                Ok::<_, RenderError>((pipeline, engine_pair))
             }
         );
         let cull_pipeline = rebuild_if_live!(
@@ -550,7 +550,7 @@ impl VkContext {
     pub(crate) fn update_world_shader_pipelines(
         &mut self,
         programs: &concinnity_core::components::ShaderPrograms,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let new_main =
             self.build_world_main_pipeline(Some(programs), &self.cull.bindless_main_spv)?;
         // Drain the GPU before destroying the displaced pipeline so no in-flight
@@ -572,12 +572,10 @@ impl VkContext {
         &self,
         world: Option<&concinnity_core::components::ShaderPrograms>,
         engine_pair: &(Vec<u8>, Vec<u8>),
-    ) -> Result<crate::vulkan::owned::OwnedPipeline, String> {
-        let layout = self
-            .cull
-            .bindless_pipeline_layout
-            .as_ref()
-            .ok_or_else(|| "the GPU-driven main pass is not live".to_string())?;
+    ) -> RenderResult<crate::vulkan::owned::OwnedPipeline> {
+        let layout = self.cull.bindless_pipeline_layout.as_ref().ok_or_else(|| {
+            RenderError::Other("the GPU-driven main pass is not live".to_string())
+        })?;
         build_bucket_pipeline(
             &self.hw.device,
             BucketPipelineTargets {

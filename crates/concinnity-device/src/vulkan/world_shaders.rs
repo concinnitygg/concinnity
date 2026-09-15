@@ -13,6 +13,7 @@
 
 use ash::vk;
 use concinnity_core::render::backend_init;
+use concinnity_core::render::error::{RenderError, RenderResult};
 
 use super::context::VkContext;
 use super::pipeline::{BucketPipelineTargets, build_bucket_pipeline};
@@ -26,13 +27,11 @@ impl VkContext {
         &mut self,
         bucket: u32,
         shader: backend_init::WorldShader<'_>,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let slot = self.world_pipeline_slot(bucket)?;
-        let layout = self
-            .cull
-            .bindless_pipeline_layout
-            .as_ref()
-            .ok_or_else(|| "shader buckets need the bindless main pass".to_string())?;
+        let layout = self.cull.bindless_pipeline_layout.as_ref().ok_or_else(|| {
+            RenderError::Other("shader buckets need the bindless main pass".to_string())
+        })?;
         let pipeline = build_bucket_pipeline(
             &self.hw.device,
             BucketPipelineTargets {
@@ -177,15 +176,15 @@ impl VkContext {
         }
     }
 
-    fn world_pipeline_slot(&self, bucket: u32) -> Result<usize, String> {
-        let slot = (bucket as usize)
-            .checked_sub(1)
-            .ok_or_else(|| "shader bucket 0 is the world default program".to_string())?;
+    fn world_pipeline_slot(&self, bucket: u32) -> RenderResult<usize> {
+        let slot = (bucket as usize).checked_sub(1).ok_or_else(|| {
+            RenderError::Other("shader bucket 0 is the world default program".to_string())
+        })?;
         if slot >= self.cull.world_pipelines.len() {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "shader bucket {bucket} is past the world's {} shader pipeline(s)",
                 self.cull.world_pipelines.len()
-            ));
+            )));
         }
         Ok(slot)
     }

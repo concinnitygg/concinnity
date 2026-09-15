@@ -15,7 +15,7 @@ use ash::vk;
 use concinnity_core::components::{MAX_WATER_WAVES, WaterSurface, WaterWave};
 use concinnity_core::geometry::water_grid::build_water_grid;
 use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::error::RenderResult;
 // `WaterParams` / `WaterWaveGpu` (the per-surface UBO and its wave lanes) are
 // GPU-free layout structs that live in `core::render`; re-export them so
 // `crate::vulkan::water::WaterParams` is unchanged for the `water_params_from`
@@ -87,12 +87,8 @@ fn compile_water_shaders(
         msaa,
         probe_count: probe_cube_count as usize,
     };
-    let vert = super::slang_builtins::WATER_VERT
-        .compile(&ctx)
-        .map_err(RenderError::ShaderCompile)?;
-    let frag = super::slang_builtins::WATER_FRAG
-        .compile(&ctx)
-        .map_err(RenderError::ShaderCompile)?;
+    let vert = super::slang_builtins::WATER_VERT.compile(&ctx)?;
+    let frag = super::slang_builtins::WATER_FRAG.compile(&ctx)?;
     Ok((vert, frag))
 }
 
@@ -123,18 +119,10 @@ fn compile_water_rt_shaders(
         msaa,
         probe_count: probe_cube_count as usize,
     };
-    let vs = super::slang_builtins::WATER_VERT
-        .compile(&ctx)
-        .map_err(RenderError::ShaderCompile)?;
-    let flat_fs = super::slang_builtins::WATER_FRAG_RT
-        .compile(&ctx)
-        .map_err(RenderError::ShaderCompile)?;
+    let vs = super::slang_builtins::WATER_VERT.compile(&ctx)?;
+    let flat_fs = super::slang_builtins::WATER_FRAG_RT.compile(&ctx)?;
     let textured_fs = if pool_size > 0 {
-        Some(
-            super::slang_builtins::WATER_FRAG_RT_TEXTURED
-                .compile(&ctx)
-                .map_err(RenderError::ShaderCompile)?,
-        )
+        Some(super::slang_builtins::WATER_FRAG_RT_TEXTURED.compile(&ctx)?)
     } else {
         None
     };

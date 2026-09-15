@@ -22,7 +22,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types::{GpuDrawArgs, GpuObjectData};
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::uniforms::{GBufferView, ModelHistoryParams};
 use concinnity_core::transform::IDENTITY;
 
@@ -65,7 +65,7 @@ pub(in crate::vulkan) const GBUFFER_VIEW_UBO_SIZE: vk::DeviceSize = 256;
 // without an extra barrier. The depth is STORE'd because the temporal upscaler
 // (FSR) consumes this render-resolution single-sample depth alongside the
 // motion vectors.
-fn create_prepass_render_pass(device: &VkDevice) -> Result<OwnedRenderPass, String> {
+fn create_prepass_render_pass(device: &VkDevice) -> RenderResult<OwnedRenderPass> {
     let attachments = [
         vk::AttachmentDescription::default()
             .format(GBUFFER_NORMAL_DEPTH_FORMAT)
@@ -145,7 +145,7 @@ fn create_prepass_render_pass(device: &VkDevice) -> Result<OwnedRenderPass, Stri
         .dependencies(std::slice::from_ref(&dep));
     device
         .create_render_pass(&info)
-        .map_err(|e| format!("gbuffer prepass render pass: {e}"))
+        .map_err(|e| crate::vulkan::error::map_vk_result(e, "gbuffer prepass render pass"))
 }
 
 // Render pass + pipeline layout a pre-pass pipeline binds against.
@@ -170,7 +170,7 @@ fn create_prepass_pipeline(
     device: &VkDevice,
     targets: PrepassPipelineTargets,
     shaders: PrepassPipelineShaders,
-) -> Result<OwnedPipeline, String> {
+) -> RenderResult<OwnedPipeline> {
     let PrepassPipelineTargets {
         render_pass,
         layout,
@@ -234,7 +234,7 @@ fn create_prepass_pipeline(
         .render_pass(render_pass)
         .subpass(0);
     let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &info)
-        .map_err(|e| format!("create gbuffer prepass pso: {e}"))?;
+        .map_err(|e| crate::vulkan::error::map_vk_result(e, "create gbuffer prepass pso"))?;
     Ok(pipeline)
 }
 
@@ -410,7 +410,7 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
     let layouts = [set_layout.handle(), bindless_set_layout];
     let pipeline_layout = device
         .create_pipeline_layout(&vk::PipelineLayoutCreateInfo::default().set_layouts(&layouts))
-        .map_err(|e| format!("gbuffer bindless pipeline layout: {e}"))?;
+        .map_err(|e| crate::vulkan::error::map_vk_result(e, "gbuffer bindless pipeline layout"))?;
 
     let (bindings, attrs) = vertex_56_dual_input();
     let pipeline = create_prepass_pipeline(
@@ -548,7 +548,7 @@ fn build_model_history(
     let layouts = [set_layout.handle()];
     let pipeline_layout = device
         .create_pipeline_layout(&vk::PipelineLayoutCreateInfo::default().set_layouts(&layouts))
-        .map_err(|e| format!("model history pipeline layout: {e}"))?;
+        .map_err(|e| crate::vulkan::error::map_vk_result(e, "model history pipeline layout"))?;
     let pipeline = create_cull_pipeline(device, pipeline_layout.handle(), &cs)?;
 
     // The record count never moves for a built world, so one host-visible UBO
@@ -751,18 +751,15 @@ impl GbufferResources {
         for f in 0..frames {
             // The three color channels come from the transient pool, which
             // holds one image per (label, frame) exactly as this loop expects.
-            let normal_depth = *pooled
-                .normal_depth
-                .get(f)
-                .ok_or("gbuffer: pooled normal_depth slot out of range")?;
-            let roughness = *pooled
-                .roughness
-                .get(f)
-                .ok_or("gbuffer: pooled roughness slot out of range")?;
-            let velocity = *pooled
-                .velocity
-                .get(f)
-                .ok_or("gbuffer: pooled velocity slot out of range")?;
+            let normal_depth = *pooled.normal_depth.get(f).ok_or_else(|| {
+                RenderError::Other("gbuffer: pooled normal_depth slot out of range".to_string())
+            })?;
+            let roughness = *pooled.roughness.get(f).ok_or_else(|| {
+                RenderError::Other("gbuffer: pooled roughness slot out of range".to_string())
+            })?;
+            let velocity = *pooled.velocity.get(f).ok_or_else(|| {
+                RenderError::Other("gbuffer: pooled velocity slot out of range".to_string())
+            })?;
             let depth = create_depth_image(
                 &GpuUploadContext {
                     alloc,
@@ -784,7 +781,9 @@ impl GbufferResources {
                         .height(h)
                         .layers(1),
                 )
-                .map_err(|e| format!("gbuffer prepass framebuffer: {e}"))?;
+                .map_err(|e| {
+                    crate::vulkan::error::map_vk_result(e, "gbuffer prepass framebuffer")
+                })?;
             self.normal_depth_images.push(normal_depth);
             self.roughness_images.push(roughness);
             self.velocity_images.push(velocity);

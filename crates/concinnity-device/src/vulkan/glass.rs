@@ -13,7 +13,7 @@ use ash::vk;
 use concinnity_core::components::GlassPanel;
 use concinnity_core::geometry::glass_quad::build_glass_quad;
 use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::error::RenderResult;
 // `GlassParams` (the per-panel UBO) is a GPU-free layout struct that lives in
 // `core::render`; re-export it so `crate::vulkan::glass::GlassParams` is
 // unchanged for the `glass_params_from` path.
@@ -56,12 +56,8 @@ fn compile_glass_shaders(
         msaa,
         probe_count: probe_cube_count as usize,
     };
-    let vert = super::slang_builtins::GLASS_VERT
-        .compile(&ctx)
-        .map_err(RenderError::ShaderCompile)?;
-    let frag = super::slang_builtins::GLASS_FRAG
-        .compile(&ctx)
-        .map_err(RenderError::ShaderCompile)?;
+    let vert = super::slang_builtins::GLASS_VERT.compile(&ctx)?;
+    let frag = super::slang_builtins::GLASS_FRAG.compile(&ctx)?;
     Ok((vert, frag))
 }
 
@@ -90,18 +86,10 @@ fn compile_glass_rt_shaders(
         msaa,
         probe_count: probe_cube_count as usize,
     };
-    let vs = super::slang_builtins::GLASS_VERT
-        .compile(&ctx)
-        .map_err(RenderError::ShaderCompile)?;
-    let flat_fs = super::slang_builtins::GLASS_FRAG_RT
-        .compile(&ctx)
-        .map_err(RenderError::ShaderCompile)?;
+    let vs = super::slang_builtins::GLASS_VERT.compile(&ctx)?;
+    let flat_fs = super::slang_builtins::GLASS_FRAG_RT.compile(&ctx)?;
     let textured_fs = if pool_size > 0 {
-        Some(
-            super::slang_builtins::GLASS_FRAG_RT_TEXTURED
-                .compile(&ctx)
-                .map_err(RenderError::ShaderCompile)?,
-        )
+        Some(super::slang_builtins::GLASS_FRAG_RT_TEXTURED.compile(&ctx)?)
     } else {
         None
     };
@@ -255,18 +243,10 @@ fn compile_glass_mesh_shaders(
         msaa,
         probe_count: probe_cube_count as usize,
     };
-    let vs = super::slang_builtins::GLASS_MESH_VERT
-        .compile(&ctx)
-        .map_err(RenderError::ShaderCompile)?;
-    let flat_fs = super::slang_builtins::GLASS_MESH_FRAG_RT
-        .compile(&ctx)
-        .map_err(RenderError::ShaderCompile)?;
+    let vs = super::slang_builtins::GLASS_MESH_VERT.compile(&ctx)?;
+    let flat_fs = super::slang_builtins::GLASS_MESH_FRAG_RT.compile(&ctx)?;
     let textured_fs = if pool_size > 0 {
-        Some(
-            super::slang_builtins::GLASS_MESH_FRAG_RT_TEXTURED
-                .compile(&ctx)
-                .map_err(RenderError::ShaderCompile)?,
-        )
+        Some(super::slang_builtins::GLASS_MESH_FRAG_RT_TEXTURED.compile(&ctx)?)
     } else {
         None
     };

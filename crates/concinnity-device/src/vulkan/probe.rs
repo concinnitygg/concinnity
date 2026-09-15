@@ -535,7 +535,7 @@ impl VkContext {
             // SAFETY: the create-info and every slice it borrows are live for the call, and each
             // handle it names belongs to this device.
             unsafe { device.allocate_command_buffers(&info) }
-                .map_err(|e| format!("probe face cmd alloc: {e}"))?[0]
+                .map_err(|e| super::error::map_vk_result(e, "probe face cmd alloc"))?[0]
         };
         // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
         // it names belongs to this device.
@@ -570,7 +570,7 @@ impl VkContext {
         // SAFETY: `cmd` was allocated from this device's pool and is not in flight (its face fence
         // was waited on), so it is in the initial state that `begin` requires.
         unsafe { device.begin_command_buffer(cmd, &begin) }
-            .map_err(|e| format!("probe face begin: {e}"))?;
+            .map_err(|e| super::error::map_vk_result(e, "probe face begin"))?;
         // Order the previous face's cube copy + indirect-draw read (a prior
         // frame's submit) before this face's cull (rewrites the shared indirect
         // buffer) and resolve (rewrites the shared color). Intra-queue, so the
@@ -705,11 +705,11 @@ impl VkContext {
             );
             device
                 .end_command_buffer(cmd)
-                .map_err(|e| format!("probe face end: {e}"))?;
+                .map_err(|e| super::error::map_vk_result(e, "probe face end"))?;
             let submit = vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&cmd));
             device
                 .queue_submit(self.hw.graphics_queue, std::slice::from_ref(&submit), fence)
-                .map_err(|e| format!("probe face submit: {e}"))?;
+                .map_err(|e| super::error::map_vk_result(e, "probe face submit"))?;
         }
 
         // The command buffer + fence are already tracked (registered at allocation);
@@ -1347,7 +1347,7 @@ impl BakeResources {
             .layers(1);
         let framebuffer = device
             .create_framebuffer(&fb_info)
-            .map_err(|e| format!("probe framebuffer: {e}"))?;
+            .map_err(|e| super::error::map_vk_result(e, "probe framebuffer"))?;
 
         // Bake-owned cull ring, sized like the per-frame rings.
         let n = ctx.cull_count();
@@ -1430,7 +1430,7 @@ impl BakeResources {
         }
         let pool = device
             .create_descriptor_pool(&pool_info)
-            .map_err(|e| format!("probe descriptor pool: {e}"))?;
+            .map_err(|e| super::error::map_vk_result(e, "probe descriptor pool"))?;
 
         // Cull set (set 0): object / draw-args / indirect / status SSBOs.
         let cull_set = alloc_descriptor_sets(

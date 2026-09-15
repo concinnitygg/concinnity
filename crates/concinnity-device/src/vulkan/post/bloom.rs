@@ -29,7 +29,7 @@ pub(in crate::vulkan) struct BloomShaders {
     pub upsample: Vec<u8>,
 }
 
-pub(in crate::vulkan) fn compile_bloom_shaders(hot_reload: bool) -> Result<BloomShaders, String> {
+pub(in crate::vulkan) fn compile_bloom_shaders(hot_reload: bool) -> RenderResult<BloomShaders> {
     use super::super::{builtins, slang_builtins};
     let ctx = builtins::Ctx::plain(hot_reload);
     Ok(BloomShaders {
@@ -51,7 +51,7 @@ pub(in crate::vulkan) fn create_bloom_pipeline(
     vert_spv: &[u8],
     frag_spv: &[u8],
     additive: bool,
-) -> Result<OwnedPipeline, String> {
+) -> RenderResult<OwnedPipeline> {
     let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
     let stages = modules.infos();
 
@@ -116,7 +116,7 @@ pub(in crate::vulkan) fn create_bloom_pipeline(
         .subpass(0);
 
     let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &pipeline_info)
-        .map_err(|e| format!("create bloom pipeline: {e}"))?;
+        .map_err(|e| crate::vulkan::error::map_vk_result(e, "create bloom pipeline"))?;
 
     Ok(pipeline)
 }
@@ -255,7 +255,7 @@ pub(in crate::vulkan) fn create_bloom_framebuffers(
     blend_pass: vk::RenderPass,
     bloom_mips: &[Vec<GpuImage>],
     extents: &[vk::Extent2D],
-) -> Result<BloomFramebuffers, String> {
+) -> RenderResult<BloomFramebuffers> {
     let make_fb = |rp: vk::RenderPass, view: vk::ImageView, ext: vk::Extent2D| {
         let fb_info = vk::FramebufferCreateInfo::default()
             .render_pass(rp)
@@ -265,7 +265,7 @@ pub(in crate::vulkan) fn create_bloom_framebuffers(
             .layers(1);
         device
             .create_framebuffer(&fb_info)
-            .map_err(|e| format!("bloom framebuffer: {e}"))
+            .map_err(|e| crate::vulkan::error::map_vk_result(e, "bloom framebuffer"))
     };
     let mut write = Vec::with_capacity(bloom_mips.len());
     let mut blend = Vec::with_capacity(bloom_mips.len());
@@ -317,7 +317,7 @@ pub(in crate::vulkan) fn alloc_bloom_input_sets(
     sampler: vk::Sampler,
     hdr_resolve_images: &[GpuImage],
     bloom_mips: &[Vec<GpuImage>],
-) -> Result<Vec<Vec<vk::DescriptorSet>>, String> {
+) -> RenderResult<Vec<Vec<vk::DescriptorSet>>> {
     let mut out = Vec::with_capacity(bloom_mips.len());
     for (frame, mips) in bloom_mips.iter().enumerate() {
         let layouts: Vec<_> = (0..mips.len() + 1).map(|_| layout).collect();
@@ -361,7 +361,7 @@ impl fullscreen::BloomEncoder for VkContext {
     // All three bloom pipelines share one layout, so the tunables pushed here
     // survive the pipeline switches and the render-pass boundaries between the
     // sub-passes; the rest of the render-pass state is set per sub-pass.
-    fn begin_bloom(&self, cmd: &Self::Rec, _frame_idx: &Self::Args) -> Result<(), String> {
+    fn begin_bloom(&self, cmd: &Self::Rec, _frame_idx: &Self::Args) -> RenderResult<()> {
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
@@ -377,7 +377,7 @@ impl fullscreen::BloomEncoder for VkContext {
     }
 
     // Prefilter: HDR resolve (input set 0) -> mip 0 (soft-knee + Karis).
-    fn bloom_prefilter(&self, cmd: &Self::Rec, frame_idx: &Self::Args) -> Result<(), String> {
+    fn bloom_prefilter(&self, cmd: &Self::Rec, frame_idx: &Self::Args) -> RenderResult<()> {
         let f = *frame_idx;
         self.bloom_run_pass(
             *cmd,
@@ -396,7 +396,7 @@ impl fullscreen::BloomEncoder for VkContext {
         cmd: &Self::Rec,
         frame_idx: &Self::Args,
         dst: usize,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let f = *frame_idx;
         self.bloom_run_pass(
             *cmd,
@@ -415,7 +415,7 @@ impl fullscreen::BloomEncoder for VkContext {
         cmd: &Self::Rec,
         frame_idx: &Self::Args,
         dst: usize,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let f = *frame_idx;
         self.bloom_run_pass(
             *cmd,

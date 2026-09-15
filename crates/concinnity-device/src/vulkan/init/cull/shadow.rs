@@ -91,7 +91,7 @@ pub(super) fn build_shadow_cull(
             .create_descriptor_set_layout(
                 &vk::DescriptorSetLayoutCreateInfo::default().bindings(&sc_bindings),
             )
-            .map_err(|e| format!("shadow cull set layout: {e}"))?;
+            .map_err(|e| crate::vulkan::error::map_vk_result(e, "shadow cull set layout"))?;
 
         let sc_push = vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::COMPUTE)
@@ -104,7 +104,7 @@ pub(super) fn build_shadow_cull(
                     .set_layouts(&sc_layouts)
                     .push_constant_ranges(std::slice::from_ref(&sc_push)),
             )
-            .map_err(|e| format!("shadow cull pipeline layout: {e}"))?;
+            .map_err(|e| crate::vulkan::error::map_vk_result(e, "shadow cull pipeline layout"))?;
         let sc_spv = compile_shadow_cull_shader(hot_reload)?;
         let sc_pipeline = create_cull_pipeline(device, sc_pl.handle(), &sc_spv)?;
 
@@ -122,7 +122,9 @@ pub(super) fn build_shadow_cull(
                     .set_layouts(&sb_layouts)
                     .push_constant_ranges(std::slice::from_ref(&sb_push)),
             )
-            .map_err(|e| format!("shadow bindless pipeline layout: {e}"))?;
+            .map_err(|e| {
+                crate::vulkan::error::map_vk_result(e, "shadow bindless pipeline layout")
+            })?;
         let sb_spv = compile_shadow_bindless_vs(hot_reload)?;
         let sb_pipeline =
             create_shadow_pipeline(device, shadow.render_pass.handle(), sb_pl.handle(), &sb_spv)?;

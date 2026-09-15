@@ -11,6 +11,7 @@
 //! which bounds them at one entry per (format, load) and one per live target.
 
 use ash::vk;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::post::device::PostLoadOp;
 use concinnity_core::render::render_graph::PixelFormat;
 use std::sync::Mutex;
@@ -61,7 +62,7 @@ fn create_render_pass(
     device: &VkDevice,
     format: PixelFormat,
     load: PostLoadOp,
-) -> Result<OwnedRenderPass, String> {
+) -> RenderResult<OwnedRenderPass> {
     let (load_op, initial) = attachment_open(load);
     let attachment = vk::AttachmentDescription::default()
         .format(image_format(format))
@@ -97,7 +98,7 @@ fn create_render_pass(
         .dependencies(std::slice::from_ref(&dependency));
     device
         .create_render_pass(&info)
-        .map_err(|e| format!("post render pass: {e}"))
+        .map_err(|e| crate::vulkan::error::map_vk_result(e, "post render pass"))
 }
 
 // The render passes and framebuffers every shared post pass draws through.
@@ -124,12 +125,12 @@ impl PostPassCache {
         device: &VkDevice,
         format: PixelFormat,
         load: PostLoadOp,
-    ) -> Result<vk::RenderPass, String> {
+    ) -> RenderResult<vk::RenderPass> {
         let key = PassKey { format, load };
         let mut passes = self
             .passes
             .lock()
-            .map_err(|_| "post render-pass cache poisoned".to_string())?;
+            .map_err(|_| RenderError::Other("post render-pass cache poisoned".to_string()))?;
         if let Some((_, rp)) = passes.iter().find(|(k, _)| *k == key) {
             return Ok(rp.handle());
         }
@@ -148,11 +149,11 @@ impl PostPassCache {
         render_pass: vk::RenderPass,
         view: vk::ImageView,
         extent: vk::Extent2D,
-    ) -> Result<vk::Framebuffer, String> {
+    ) -> RenderResult<vk::Framebuffer> {
         let mut fbs = self
             .framebuffers
             .lock()
-            .map_err(|_| "post framebuffer cache poisoned".to_string())?;
+            .map_err(|_| RenderError::Other("post framebuffer cache poisoned".to_string()))?;
         if let Some((_, _, fb)) = fbs
             .iter()
             .find(|(v, rp, _)| *v == view && *rp == render_pass)
@@ -168,7 +169,7 @@ impl PostPassCache {
                     .height(extent.height)
                     .layers(1),
             )
-            .map_err(|e| format!("post framebuffer: {e}"))?;
+            .map_err(|e| crate::vulkan::error::map_vk_result(e, "post framebuffer"))?;
         let handle = fb.handle();
         fbs.push((view, render_pass, fb));
         Ok(handle)

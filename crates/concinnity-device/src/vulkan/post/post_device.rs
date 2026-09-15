@@ -120,7 +120,7 @@ fn compile(
     program: PostProgram,
     hot_reload: bool,
     probe_count: usize,
-) -> Result<(Vec<u8>, Vec<u8>), String> {
+) -> RenderResult<(Vec<u8>, Vec<u8>)> {
     let ctx = crate::vulkan::builtins::Ctx {
         probe_count,
         ..crate::vulkan::builtins::Ctx::plain(hot_reload)
@@ -159,7 +159,7 @@ impl VkPostDevice<'_> {
     // The descriptor set layout for `n` combined image samplers at bindings
     // `0..n`, fragment-visible. Derived from the program's declared count rather
     // than written per pass, which is what keeps the single source the contract.
-    fn set_layout(&self, n: usize) -> Result<OwnedSetLayout, String> {
+    fn set_layout(&self, n: usize) -> RenderResult<OwnedSetLayout> {
         let bindings: Vec<_> = (0..n as u32)
             .map(|b| {
                 (

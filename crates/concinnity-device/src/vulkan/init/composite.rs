@@ -82,7 +82,7 @@ pub(super) fn build_composite(
                 .set_layouts(&set_layouts)
                 .push_constant_ranges(std::slice::from_ref(&composite_pc_range)),
         )
-        .map_err(|e| format!("composite pipeline layout: {e}"))?;
+        .map_err(|e| crate::vulkan::error::map_vk_result(e, "composite pipeline layout"))?;
     let pipeline = {
         let (cv, cf) = compile_composite_shaders(hot_reload)?;
         create_composite_pipeline(

@@ -293,7 +293,7 @@ impl VkContext {
                     self.bloom.descriptor_pool.handle(),
                     vk::DescriptorPoolResetFlags::empty(),
                 )
-                .map_err(|e| format!("reset bloom pool: {e}"))?;
+                .map_err(|e| super::error::map_vk_result(e, "reset bloom pool"))?;
         }
         self.bloom.input_sets = alloc_bloom_input_sets(
             &self.hw.device,
@@ -807,7 +807,7 @@ impl VkContext {
                 // each handle it names belongs to this device.
                 .map(|_| unsafe { self.hw.device.create_semaphore(&sem_info, None) })
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| format!("semaphore: {e}"))?;
+                .map_err(|e| super::error::map_vk_result(e, "semaphore"))?;
         }
         Ok(())
     }

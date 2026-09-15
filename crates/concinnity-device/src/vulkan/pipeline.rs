@@ -4,6 +4,7 @@
 
 use ash::vk;
 use concinnity_core::render::backend_init;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::shadow_bias;
 
 use super::builtins;
@@ -26,7 +27,7 @@ pub(super) fn is_spirv(bytes: &[u8]) -> bool {
 pub(super) fn compile_bindless_shaders(
     hot_reload: bool,
     probe_cube_count: u32,
-) -> Result<(Vec<u8>, Vec<u8>), String> {
+) -> RenderResult<(Vec<u8>, Vec<u8>)> {
     let ctx = builtins::Ctx {
         hot_reload,
         msaa: false,
@@ -59,7 +60,7 @@ pub(super) fn compile_bindless_shaders(
 pub(super) const CULL_PUSH_CONSTANT_BYTES: u32 = 120;
 
 // Compile the Compute cull compute kernel to SPIR-V.
-pub(super) fn compile_cull_shader(hot_reload: bool) -> Result<Vec<u8>, String> {
+pub(super) fn compile_cull_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
     super::slang_builtins::CULL.compile(&builtins::Ctx::plain(hot_reload))
 }
 
@@ -67,7 +68,7 @@ pub(super) fn compile_cull_shader(hot_reload: bool) -> Result<Vec<u8>, String> {
 // source as `compile_cull_shader`, with a `CULL_PHASE2` define selecting the
 // re-test of phase 1's Hi-Z-occluded objects against the rebuilt pyramid.
 // Mirrors the `#define` split the Hi-Z init kernel uses.
-pub(super) fn compile_cull_shader_phase2(hot_reload: bool) -> Result<Vec<u8>, String> {
+pub(super) fn compile_cull_shader_phase2(hot_reload: bool) -> RenderResult<Vec<u8>> {
     super::slang_builtins::CULL_PHASE2.compile(&builtins::Ctx::plain(hot_reload))
 }
 
@@ -75,12 +76,12 @@ pub(super) fn compile_cull_shader_phase2(hot_reload: bool) -> Result<Vec<u8>, St
 // `SHADOW_CULL` define, which drops the Hi-Z (set 1) + status (binding 3)
 // bindings and tests each cascade's light frustum only. Paired with the lean
 // 3-SSBO shadow cull set layout.
-pub(super) fn compile_shadow_cull_shader(hot_reload: bool) -> Result<Vec<u8>, String> {
+pub(super) fn compile_shadow_cull_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
     super::slang_builtins::CULL_SHADOW.compile(&builtins::Ctx::plain(hot_reload))
 }
 
 // Compile the GPU-driven shadow pass's depth-only bindless vertex shader.
-pub(super) fn compile_shadow_bindless_vs(hot_reload: bool) -> Result<Vec<u8>, String> {
+pub(super) fn compile_shadow_bindless_vs(hot_reload: bool) -> RenderResult<Vec<u8>> {
     super::slang_builtins::SHADOW_BINDLESS_VERT.compile(&builtins::Ctx::plain(hot_reload))
 }
 
@@ -91,7 +92,7 @@ pub(super) fn create_cull_pipeline(
     device: &VkDevice,
     layout: vk::PipelineLayout,
     spv: &[u8],
-) -> Result<OwnedPipeline, String> {
+) -> RenderResult<OwnedPipeline> {
     let module = spv_module(device, spv)?;
     let stage = vk::PipelineShaderStageCreateInfo::default()
         .stage(vk::ShaderStageFlags::COMPUTE)
@@ -101,7 +102,7 @@ pub(super) fn create_cull_pipeline(
         .stage(stage)
         .layout(layout);
     let pipeline = crate::vulkan::pipeline_cache::create_compute_pipeline(device, &info)
-        .map_err(|e| format!("create cull pipeline: {e}"))?;
+        .map_err(|e| super::error::map_vk_result(e, "create cull pipeline"))?;
     Ok(pipeline)
 }
 
@@ -131,12 +132,12 @@ impl Drop for SpvModule<'_> {
 // copy the bytes into an aligned `Vec<u32>`. A length that is not a whole
 // number of words means a truncated or corrupt module, so reject it here
 // rather than rounding it down.
-fn spirv_words(spv: &[u8]) -> Result<Vec<u32>, String> {
+fn spirv_words(spv: &[u8]) -> RenderResult<Vec<u32>> {
     if !spv.len().is_multiple_of(4) {
-        return Err(format!(
+        return Err(RenderError::Other(format!(
             "SPIR-V length {} is not a whole number of words",
             spv.len()
-        ));
+        )));
     }
     Ok(spv
         .chunks_exact(4)
@@ -147,13 +148,13 @@ fn spirv_words(spv: &[u8]) -> Result<Vec<u32>, String> {
 pub(in crate::vulkan) fn spv_module<'d>(
     device: &'d VkDevice,
     spv: &[u8],
-) -> Result<SpvModule<'d>, String> {
-    let code = spirv_words(spv).map_err(|e| format!("shader module: {e}"))?;
+) -> RenderResult<SpvModule<'d>> {
+    let code = spirv_words(spv).map_err(|e| e.context("shader module"))?;
     let info = vk::ShaderModuleCreateInfo::default().code(&code);
     // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
     // names belongs to this device.
     let module = unsafe { device.create_shader_module(&info, None) }
-        .map_err(|e| format!("shader module: {e}"))?;
+        .map_err(|e| super::error::map_vk_result(e, "shader module"))?;
     Ok(SpvModule { device, module })
 }
 
@@ -174,7 +175,7 @@ impl<'d> GraphicsStages<'d> {
         device: &'d VkDevice,
         vert_spv: &[u8],
         frag_spv: &[u8],
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         Ok(Self {
             vert: spv_module(device, vert_spv)?,
             frag: spv_module(device, frag_spv)?,
@@ -204,36 +205,38 @@ pub(super) fn world_entry(
     entry: &str,
     hot_reload: bool,
     probe_count: usize,
-) -> Result<Vec<u8>, String> {
+) -> RenderResult<Vec<u8>> {
     let req = crate::shader::surface_source::Request {
         platform: concinnity_core::platform::Platform::Glsl,
         probe_count,
         hot_reload,
     };
-    crate::shader::surface_source::artifact(world, entry, &req).map(|c| c.into_owned())
+    crate::shader::surface_source::artifact(world, entry, &req)
+        .map(|c| c.into_owned())
+        .map_err(RenderError::ShaderCompile)
 }
 
 // The depth-only skinned shadow vertex, the engine's own: skinned main-pass
 // draws ride the GPU-driven pass through the skin fold.
-pub(super) fn compile_skinned_shadow_shader(hot_reload: bool) -> Result<Vec<u8>, String> {
+pub(super) fn compile_skinned_shadow_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
     super::slang_builtins::SKINNED_SHADOW_VERT.compile(&builtins::Ctx::plain(hot_reload))
 }
 
 // The shadow vertex shader is engine-internal. Whether the shadow pass runs at
 // all is gated by `effective_shadow_size` at the call site, not here.
-pub(super) fn resolve_shadow_shader(hot_reload: bool) -> Result<Option<Vec<u8>>, String> {
+pub(super) fn resolve_shadow_shader(hot_reload: bool) -> RenderResult<Option<Vec<u8>>> {
     let spv = super::slang_builtins::SHADOW_VERT.compile(&builtins::Ctx::plain(hot_reload))?;
     Ok(Some(spv))
 }
 
-pub(super) fn compile_text_shaders(hot_reload: bool) -> Result<(Vec<u8>, Vec<u8>), String> {
+pub(super) fn compile_text_shaders(hot_reload: bool) -> RenderResult<(Vec<u8>, Vec<u8>)> {
     let ctx = builtins::Ctx::plain(hot_reload);
     let vert = super::slang_builtins::TEXT_VERT.compile(&ctx)?;
     let frag = super::slang_builtins::TEXT_FRAG.compile(&ctx)?;
     Ok((vert, frag))
 }
 
-pub(super) fn compile_composite_shaders(hot_reload: bool) -> Result<(Vec<u8>, Vec<u8>), String> {
+pub(super) fn compile_composite_shaders(hot_reload: bool) -> RenderResult<(Vec<u8>, Vec<u8>)> {
     let ctx = builtins::Ctx::plain(hot_reload);
     let vert = super::slang_builtins::FULLSCREEN_VERT.compile(&ctx)?;
     let frag = super::slang_builtins::COMPOSITE_FRAG.compile(&ctx)?;
@@ -381,7 +384,7 @@ pub(super) fn build_bucket_pipeline(
     bucket: usize,
     shader: backend_init::WorldShader<'_>,
     engine_default: &(Vec<u8>, Vec<u8>),
-) -> Result<OwnedPipeline, String> {
+) -> RenderResult<OwnedPipeline> {
     let (vert_spv, frag_spv) = match shader.programs {
         Some(programs) => (
             world_entry(
@@ -400,7 +403,9 @@ pub(super) fn build_bucket_pipeline(
         None => (engine_default.0.clone(), engine_default.1.clone()),
     };
     if vert_spv.is_empty() || frag_spv.is_empty() {
-        return Err(format!("shader bucket {bucket} carries no SPIR-V stages"));
+        return Err(RenderError::Other(format!(
+            "shader bucket {bucket} carries no SPIR-V stages"
+        )));
     }
     create_main_pipeline(
         device,
@@ -413,7 +418,7 @@ pub(super) fn build_bucket_pipeline(
         targets.msaa_samples,
         targets.swapchain_format,
     )
-    .map_err(|e| format!("shader bucket {bucket}: {e}"))
+    .map_err(|e| e.context(format_args!("shader bucket {bucket}")))
 }
 
 // Build the per-bucket pipeline table from the world's material-referenced
@@ -425,7 +430,7 @@ pub(super) fn build_world_pipeline_table(
     targets: BucketPipelineTargets,
     bucket_shaders: &[backend_init::WorldShader<'_>],
     engine_default: &(Vec<u8>, Vec<u8>),
-) -> Result<Vec<Option<OwnedPipeline>>, String> {
+) -> RenderResult<Vec<Option<OwnedPipeline>>> {
     let mut table = Vec::with_capacity(bucket_shaders.len());
     for (i, shader) in bucket_shaders.iter().enumerate() {
         if shader.deferred {
@@ -448,7 +453,7 @@ pub(super) fn create_main_pipeline(
     targets: MeshPipelineTargets<'_>,
     msaa: vk::SampleCountFlags,
     surface_format: vk::Format,
-) -> Result<OwnedPipeline, String> {
+) -> RenderResult<OwnedPipeline> {
     create_main_pipeline_filled(device, targets, msaa, surface_format, vk::PolygonMode::FILL)
 }
 
@@ -461,7 +466,7 @@ pub(super) fn create_main_pipeline_wireframe(
     targets: MeshPipelineTargets<'_>,
     msaa: vk::SampleCountFlags,
     surface_format: vk::Format,
-) -> Result<OwnedPipeline, String> {
+) -> RenderResult<OwnedPipeline> {
     create_main_pipeline_filled(device, targets, msaa, surface_format, vk::PolygonMode::LINE)
 }
 
@@ -471,7 +476,7 @@ fn create_main_pipeline_filled(
     msaa: vk::SampleCountFlags,
     _surface_format: vk::Format,
     polygon_mode: vk::PolygonMode,
-) -> Result<OwnedPipeline, String> {
+) -> RenderResult<OwnedPipeline> {
     let MeshPipelineTargets {
         render_pass,
         layout,
@@ -545,7 +550,7 @@ fn create_main_pipeline_filled(
         .subpass(0);
 
     let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &pipeline_info)
-        .map_err(|e| format!("create main pipeline: {e}"))?;
+        .map_err(|e| super::error::map_vk_result(e, "create main pipeline"))?;
 
     Ok(pipeline)
 }
@@ -555,7 +560,7 @@ pub(super) fn create_shadow_pipeline(
     render_pass: vk::RenderPass,
     layout: vk::PipelineLayout,
     vert_spv: &[u8],
-) -> Result<OwnedPipeline, String> {
+) -> RenderResult<OwnedPipeline> {
     let vert_mod = spv_module(device, vert_spv)?;
 
     let stages = [vk::PipelineShaderStageCreateInfo::default()
@@ -628,7 +633,7 @@ pub(super) fn create_shadow_pipeline(
         .subpass(0);
 
     let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &pipeline_info)
-        .map_err(|e| format!("create shadow pipeline: {e}"))?;
+        .map_err(|e| super::error::map_vk_result(e, "create shadow pipeline"))?;
 
     Ok(pipeline)
 }
@@ -640,7 +645,7 @@ pub(super) fn create_skinned_shadow_pipeline(
     render_pass: vk::RenderPass,
     layout: vk::PipelineLayout,
     vert_spv: &[u8],
-) -> Result<OwnedPipeline, String> {
+) -> RenderResult<OwnedPipeline> {
     let vert_mod = spv_module(device, vert_spv)?;
 
     let stages = [vk::PipelineShaderStageCreateInfo::default()
@@ -706,7 +711,7 @@ pub(super) fn create_skinned_shadow_pipeline(
         .subpass(0);
 
     let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &pipeline_info)
-        .map_err(|e| format!("create skinned shadow pipeline: {e}"))?;
+        .map_err(|e| super::error::map_vk_result(e, "create skinned shadow pipeline"))?;
 
     Ok(pipeline)
 }
@@ -718,7 +723,7 @@ pub(super) fn create_text_pipeline(
     vert_spv: &[u8],
     frag_spv: &[u8],
     msaa: vk::SampleCountFlags,
-) -> Result<OwnedPipeline, String> {
+) -> RenderResult<OwnedPipeline> {
     let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
     let stages = modules.infos();
 
@@ -787,7 +792,7 @@ pub(super) fn create_text_pipeline(
         .subpass(0);
 
     let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &pipeline_info)
-        .map_err(|e| format!("create text pipeline: {e}"))?;
+        .map_err(|e| super::error::map_vk_result(e, "create text pipeline"))?;
 
     Ok(pipeline)
 }
@@ -801,7 +806,7 @@ pub(super) fn create_composite_pipeline(
     layout: vk::PipelineLayout,
     vert_spv: &[u8],
     frag_spv: &[u8],
-) -> Result<OwnedPipeline, String> {
+) -> RenderResult<OwnedPipeline> {
     let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
     let stages = modules.infos();
 
@@ -861,7 +866,7 @@ pub(super) fn create_composite_pipeline(
         .subpass(0);
 
     let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &pipeline_info)
-        .map_err(|e| format!("create composite pipeline: {e}"))?;
+        .map_err(|e| super::error::map_vk_result(e, "create composite pipeline"))?;
 
     Ok(pipeline)
 }

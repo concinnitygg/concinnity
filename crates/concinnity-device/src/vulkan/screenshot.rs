@@ -47,7 +47,7 @@ impl VkContext {
         // in-flight command buffer still references the resources we touch.
         // SAFETY: a wait on this device's own queues; it takes no borrowed state.
         unsafe { self.hw.device.device_wait_idle() }
-            .map_err(|e| format!("screenshot: wait idle: {e}"))?;
+            .map_err(|e| super::error::map_vk_result(e, "screenshot: wait idle"))?;
 
         // Host-visible readback buffer, tightly packed at the swapchain
         // format's texel size. The SDR swapchain is `BGRA8_UNORM` (4 B/px), but

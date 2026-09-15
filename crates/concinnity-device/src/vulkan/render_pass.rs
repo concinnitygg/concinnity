@@ -2,6 +2,7 @@
 //! bloom passes.
 
 use ash::vk;
+use concinnity_core::render::error::RenderResult;
 
 use crate::vulkan::owned::{OwnedRenderPass, VkDevice};
 
@@ -9,7 +10,7 @@ pub(super) fn create_main_render_pass(
     device: &VkDevice,
     format: vk::Format,
     msaa: vk::SampleCountFlags,
-) -> Result<OwnedRenderPass, String> {
+) -> RenderResult<OwnedRenderPass> {
     let multisampled = msaa != vk::SampleCountFlags::TYPE_1;
 
     // When multisampled the resolve attachment ends shader-readable; the MSAA
@@ -109,7 +110,7 @@ pub(super) fn create_main_render_pass(
 
     device
         .create_render_pass(&rp_info)
-        .map_err(|e| format!("main render pass: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "main render pass"))
 }
 
 // Main-pass render pass for two-pass occlusion culling. Two variants share
@@ -133,7 +134,7 @@ pub(super) fn create_main_render_pass_two_pass(
     format: vk::Format,
     msaa: vk::SampleCountFlags,
     load: bool,
-) -> Result<OwnedRenderPass, String> {
+) -> RenderResult<OwnedRenderPass> {
     let multisampled = msaa != vk::SampleCountFlags::TYPE_1;
 
     // Phase 1 leaves the color in COLOR_ATTACHMENT_OPTIMAL for phase 2 to
@@ -258,10 +259,10 @@ pub(super) fn create_main_render_pass_two_pass(
 
     device
         .create_render_pass(&rp_info)
-        .map_err(|e| format!("two-pass main render pass: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "two-pass main render pass"))
 }
 
-pub(super) fn create_shadow_render_pass(device: &VkDevice) -> Result<OwnedRenderPass, String> {
+pub(super) fn create_shadow_render_pass(device: &VkDevice) -> RenderResult<OwnedRenderPass> {
     let attachment = vk::AttachmentDescription::default()
         .format(vk::Format::D32_SFLOAT)
         .samples(vk::SampleCountFlags::TYPE_1)
@@ -286,7 +287,7 @@ pub(super) fn create_shadow_render_pass(device: &VkDevice) -> Result<OwnedRender
 
     device
         .create_render_pass(&rp_info)
-        .map_err(|e| format!("shadow render pass: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "shadow render pass"))
 }
 
 // Composite render pass. A single subpass renders the fullscreen tonemap +
@@ -294,7 +295,7 @@ pub(super) fn create_shadow_render_pass(device: &VkDevice) -> Result<OwnedRender
 pub(super) fn create_composite_render_pass(
     device: &VkDevice,
     swapchain_format: vk::Format,
-) -> Result<OwnedRenderPass, String> {
+) -> RenderResult<OwnedRenderPass> {
     // The fullscreen triangle overwrites every pixel, so the backbuffer is
     // not cleared or loaded.
     let attachment = vk::AttachmentDescription::default()
@@ -336,7 +337,7 @@ pub(super) fn create_composite_render_pass(
 
     device
         .create_render_pass(&rp_info)
-        .map_err(|e| format!("composite render pass: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "composite render pass"))
 }
 
 // Create the off-screen HDR attachment set, `count` slots deep (one per
@@ -352,7 +353,7 @@ pub(super) fn create_bloom_render_pass(
     device: &VkDevice,
     format: vk::Format,
     load: bool,
-) -> Result<OwnedRenderPass, String> {
+) -> RenderResult<OwnedRenderPass> {
     let attachment = vk::AttachmentDescription::default()
         .format(format)
         .samples(vk::SampleCountFlags::TYPE_1)
@@ -404,5 +405,5 @@ pub(super) fn create_bloom_render_pass(
 
     device
         .create_render_pass(&rp_info)
-        .map_err(|e| format!("bloom render pass: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "bloom render pass"))
 }
