@@ -32,9 +32,6 @@ concinnity-core = { workspace = true }
 concinnity-host = { workspace = true }
 
 ciborium = { workspace = true }
-directories = "6.0.0"
-gltf = { workspace = true, features = ["utils", "names"] }
-ignore = "0.4.25"
 notify = { workspace = true, features = ["macos_fsevent"] }
 png = { workspace = true }
 rand = "0.10.2"
@@ -46,7 +43,7 @@ serde_json = { workspace = true, features = ["preserve_order"] }
 syn = { version = "3.0.4", features = ["full", "parsing"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
-ureq = "3.2.0"
+ureq = { version = "3.2.0", default-features = false }
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]

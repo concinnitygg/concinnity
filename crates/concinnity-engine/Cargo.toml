@@ -55,9 +55,9 @@ minidump-writer = "0.13"
 # The macOS run loop for `cn run` (app/run.rs drives NSApplication + the
 # CFRunLoop directly, and needs a MainThreadMarker). The Metal backend's wider
 # objc2 stack lives in concinnity-device.
-core-foundation = "0.10.1"
 objc2 = { workspace = true }
 objc2-app-kit = { workspace = true }
+objc2-core-foundation = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 # Host-memory queries (app/sysmem.rs): sysctl `hw.memsize` + mach `task_info`

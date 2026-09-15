@@ -79,20 +79,12 @@ pub fn run_loop(app: &mut App, pump_events: bool, mut on_tick: impl FnMut(&mut A
     }
 }
 
-// Drain all currently-pending Cocoa events without blocking.
-// CFRunLoopRunInMode is called with returnAfterSourceHandled=true so it returns
-// as soon as one source is handled (result == kCFRunLoopRunHandledSource == 4);
-// any other result means the queue is empty, so the drain stops and control
-// returns to the world step (or, pipelined, to the render half's wait).
+// Drain all currently-pending Cocoa events without blocking, one handled source at a time.
 #[cfg(target_os = "macos")]
 pub(crate) fn drain_cocoa_events() {
-    use core_foundation::runloop::{CFRunLoopRunInMode, kCFRunLoopDefaultMode};
-    loop {
-        // SAFETY: `kCFRunLoopDefaultMode` is a framework-owned static mode
-        // name and this thread is the one that started the run loop.
-        let result = unsafe { CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.0, true as u8) };
-        if result != 4 {
-            break;
-        }
-    }
+    use objc2_core_foundation::{CFRunLoop, CFRunLoopRunResult, kCFRunLoopDefaultMode};
+    // SAFETY: `kCFRunLoopDefaultMode` is an extern static that CoreFoundation
+    // initializes before any caller runs and never mutates.
+    let mode = unsafe { kCFRunLoopDefaultMode };
+    while CFRunLoop::run_in_mode(mode, 0.0, true) == CFRunLoopRunResult::HandledSource {}
 }

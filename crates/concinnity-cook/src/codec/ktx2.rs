@@ -266,7 +266,7 @@ fn decompress_level(
 // Decompress a zstd frame into its raw bytes.
 fn inflate_zstd(data: &[u8]) -> Result<Vec<u8>, String> {
     use std::io::Read;
-    let mut decoder = ruzstd::decoding::StreamingDecoder::new(data)
+    let mut decoder = ruzstd::StreamingDecoder::new(data)
         .map_err(|e| format!("zstd frame header invalid: {}", e))?;
     let mut out = Vec::new();
     decoder
@@ -409,6 +409,17 @@ mod tests {
     };
     use super::*;
 
+    // A single-segment zstd frame holding `data` as one raw (stored) block.
+    fn raw_zstd_frame(data: &[u8]) -> Vec<u8> {
+        let mut frame = 0xFD2F_B528u32.to_le_bytes().to_vec();
+        frame.push(0x20);
+        frame.push(data.len() as u8);
+        let block_header = ((data.len() as u32) << 3) | 1;
+        frame.extend_from_slice(&block_header.to_le_bytes()[..3]);
+        frame.extend_from_slice(data);
+        frame
+    }
+
     #[test]
     fn passthrough_bc1_with_mip_chain() {
         // Two levels: 4x4 and 2x2, one BC1 block each (8 bytes).
@@ -424,11 +435,7 @@ mod tests {
 
     #[test]
     fn zstd_supercompressed_bc1_passes_through() {
-        let block = bc1_red_block();
-        let compressed = ruzstd::encoding::compress_to_vec(
-            &block[..],
-            ruzstd::encoding::CompressionLevel::Uncompressed,
-        );
+        let compressed = raw_zstd_frame(&bc1_red_block());
         // Two levels so the passthrough path (not the RGBA8 fallback) is taken.
         let levels = vec![(4, 4, compressed.clone()), (2, 2, compressed)];
         let ktx = build_ktx2(VK_BC1_RGBA_UNORM, 2, 4, 4, &levels);
@@ -661,10 +668,7 @@ mod tests {
 
     #[test]
     fn rejects_a_zstd_level_whose_body_is_cut_short() {
-        let mut compressed = ruzstd::encoding::compress_to_vec(
-            &bc1_red_block()[..],
-            ruzstd::encoding::CompressionLevel::Uncompressed,
-        );
+        let mut compressed = raw_zstd_frame(&bc1_red_block());
         // The frame header survives; the compressed body does not.
         compressed.truncate(compressed.len() - 6);
         let levels = vec![(4, 4, compressed.clone()), (2, 2, compressed)];
