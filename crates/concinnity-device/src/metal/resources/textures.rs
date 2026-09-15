@@ -4,6 +4,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::bake;
+use concinnity_core::render::error::{RenderError, RenderResult};
 
 use crate::metal::context::MtlContext;
 use crate::metal::texture::{upload_texture, upload_texture_image};
@@ -19,14 +20,8 @@ impl MtlContext {
         &mut self,
         slot: usize,
         image: &concinnity_core::bake::texture::TextureImage,
-    ) -> Result<(), String> {
-        if slot >= self.scene.textures.len() {
-            return Err(format!(
-                "update_texture_slot: slot {} out of range (pool size {})",
-                slot,
-                self.scene.textures.len()
-            ));
-        }
+    ) -> RenderResult<()> {
+        texture_slot_in_range("update_texture_slot", slot, self.scene.textures.len())?;
         self.scene.textures[slot] = upload_texture_image(&self.hw.allocator, image)?;
         self.arg_buffers.texture_epoch += 1;
         Ok(())
@@ -38,14 +33,8 @@ impl MtlContext {
     // not yet resident; a later `update_texture_slot` brings the real texture
     // back. The gray is distinct from the white no-texture fallback so a
     // not-yet-streamed slot reads differently under inspection.
-    pub(crate) fn evict_texture_slot(&mut self, slot: usize) -> Result<(), String> {
-        if slot >= self.scene.textures.len() {
-            return Err(format!(
-                "evict_texture_slot: slot {} out of range (pool size {})",
-                slot,
-                self.scene.textures.len()
-            ));
-        }
+    pub(crate) fn evict_texture_slot(&mut self, slot: usize) -> RenderResult<()> {
+        texture_slot_in_range("evict_texture_slot", slot, self.scene.textures.len())?;
         self.scene.textures[slot] =
             upload_texture(&self.hw.allocator, 1, 1, &[128, 128, 128, 255])?;
         self.arg_buffers.texture_epoch += 1;
@@ -56,7 +45,7 @@ impl MtlContext {
     // asset hot-reload (`cn debug` only). The composite pass binds
     // `self.color_lut` every frame, so the new texture is sampled on the
     // next `draw_frame` with no pipeline rebuild.
-    pub(crate) fn update_color_lut(&mut self, size: u32, data: &[u8]) -> Result<(), String> {
+    pub(crate) fn update_color_lut(&mut self, size: u32, data: &[u8]) -> RenderResult<()> {
         let tex = crate::metal::texture::upload_color_lut(&self.hw.allocator, size, data)?;
         self.scene.color_lut = tex;
         Ok(())
@@ -68,9 +57,9 @@ impl MtlContext {
     // the new cubes are sampled on the next `draw_frame` with no pipeline
     // rebuild. The new payload may declare different mip / face sizes than
     // the original -- `EnvironmentMapTextures` is replaced wholesale.
-    pub(crate) fn update_environment_map(&mut self, payload: &[u8]) -> Result<(), String> {
+    pub(crate) fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()> {
         let view = bake::environment_map::deserialize(payload)
-            .map_err(|e| format!("envmap hot-reload payload malformed: {}", e))?;
+            .map_err(|e| RenderError::Other(format!("envmap hot-reload payload malformed: {e}")))?;
         let new_env = crate::metal::texture::upload_environment_map(
             &self.hw.allocator,
             view.irradiance_face,
@@ -81,5 +70,37 @@ impl MtlContext {
         self.scene.env_map = new_env;
         self.arg_buffers.texture_epoch += 1;
         Ok(())
+    }
+}
+
+fn texture_slot_in_range(op: &str, slot: usize, pool_size: usize) -> RenderResult<()> {
+    if slot < pool_size {
+        Ok(())
+    } else {
+        Err(RenderError::Other(format!(
+            "{op}: slot {slot} out of range (pool size {pool_size})"
+        )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slot_inside_the_pool_is_accepted() {
+        assert_eq!(texture_slot_in_range("op", 0, 1), Ok(()));
+        assert_eq!(texture_slot_in_range("op", 3, 4), Ok(()));
+    }
+
+    #[test]
+    fn slot_at_or_past_the_pool_size_is_other() {
+        assert_eq!(
+            texture_slot_in_range("evict_texture_slot", 4, 4),
+            Err(RenderError::Other(
+                "evict_texture_slot: slot 4 out of range (pool size 4)".to_string()
+            ))
+        );
+        assert!(texture_slot_in_range("op", 0, 0).is_err());
     }
 }

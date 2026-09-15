@@ -56,6 +56,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::frustum::Frustum;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::reflection_probe::{
     self, BakeAction, BakePhase, BakeSignals, PrefilterPlan,
 };
@@ -71,6 +72,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::context::MtlContext;
 use super::descriptors::TextureDesc;
+use super::error::allocation_failed;
 use super::probe_prefilter::{PrefilterGpu, create_capture_cube};
 
 // What a runtime capture bakes: face size, mip count, GGX sample count and
@@ -364,7 +366,7 @@ impl MtlContext {
         ) {
             BakeAction::RenderFace => {
                 let face = tex_args
-                    .ok_or_else(|| "probe: no bindless texture args".to_string())
+                    .ok_or_else(|| RenderError::Other("probe: no bindless texture args".into()))
                     .and_then(|tex_args| self.probe_render_next_face(tex_args));
                 if let Err(e) = face {
                     self.fail_bake(e);
@@ -388,7 +390,7 @@ impl MtlContext {
     // already installed. The queue cursor advanced when the current probe started,
     // so aborting (cursor -> end) is what keeps `probe.maps` aligned with the
     // placement list; the sky covers the remaining placements.
-    fn fail_bake(&mut self, e: String) {
+    fn fail_bake(&mut self, e: RenderError) {
         tracing::warn!(
             "reflection probe bake failed, keeping {} baked: {e}",
             self.probe.maps.len()
@@ -406,7 +408,7 @@ impl MtlContext {
     // and enter `Rendering` with the face cursor at 0. No face is submitted here; the
     // faces follow one per frame via `probe_render_next_face`, so a single frame never
     // pays the cost of all six full-scene captures.
-    fn probe_start_next(&mut self, near: f32, far: f32, elapsed: f32) -> Result<(), String> {
+    fn probe_start_next(&mut self, near: f32, far: f32, elapsed: f32) -> RenderResult<()> {
         let Some(index) = self.probe.bake_queue.take_next() else {
             return Ok(());
         };
@@ -424,22 +426,18 @@ impl MtlContext {
         // frustum-independent (only the per-face view/projection differs), so they are
         // built once and reused by every face.
         let object_buffer = self
-            .build_object_buffer(slot)
-            .map_err(|e| e.to_string())?
-            .ok_or("probe: no static geometry to bake")?;
+            .build_object_buffer(slot)?
+            .ok_or_else(|| RenderError::Other("probe: no static geometry to bake".into()))?;
         let draw_args = self
             .build_draw_args_buffer(
                 eye,
                 slot,
                 concinnity_core::render::model_history::HistoryMode::Untracked,
-            )
-            .map_err(|e| e.to_string())?
-            .ok_or("probe: no draw args to bake")?;
+            )?
+            .ok_or_else(|| RenderError::Other("probe: no draw args to bake".into()))?;
         let counts = self.draw_record_counts();
-        let joint_bufs = self.build_joint_buffers(slot).map_err(|e| e.to_string())?;
-        let morph_weight_bufs = self
-            .build_morph_weight_buffers(slot)
-            .map_err(|e| e.to_string())?;
+        let joint_bufs = self.build_joint_buffers(slot)?;
+        let morph_weight_bufs = self.build_morph_weight_buffers(slot)?;
         // The folded skinned tail draws compute-deformed vertices. The frame's
         // deformed ring is overwritten every frame, so an async capture needs its
         // OWN deformed buffer (Shared storage -- a Private one page-faults in this
@@ -452,7 +450,7 @@ impl MtlContext {
                         self.hw
                             .device
                             .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
-                            .ok_or("probe: failed to allocate deformed buffer")?,
+                            .ok_or_else(|| allocation_failed("probe deformed buffer"))?,
                     ),
                     _ => None,
                 }
@@ -504,9 +502,11 @@ impl MtlContext {
     fn probe_render_next_face(
         &mut self,
         tex_args: &Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let Some(bake) = self.probe.rendering.as_ref() else {
-            return Err("probe: render face with no capture in flight".into());
+            return Err(RenderError::Other(
+                "probe: render face with no capture in flight".into(),
+            ));
         };
         let (face, eye, near, far, elapsed, counts) = (
             bake.cursor,
@@ -521,8 +521,7 @@ impl MtlContext {
         // The shared ICB is otherwise sized from the frame's live draw list, which
         // this capture's snapshot does not follow; size it for the snapshot before
         // the face's cull encodes into it.
-        self.ensure_icb_capacity(counts.total)
-            .map_err(|e| e.to_string())?;
+        self.ensure_icb_capacity(counts.total)?;
 
         let vp = reflection_probe::face_view_projection(eye, face, near, far);
         let view = reflection_probe::face_view_matrix(eye, face);
@@ -535,11 +534,10 @@ impl MtlContext {
             .expect("probe capture was just checked");
 
         // Cull command buffer: fills the shared ICB for this face's frustum.
-        let cull_cb = self
-            .hw
-            .command_queue
-            .commandBuffer()
-            .ok_or("probe: failed to get cull command buffer")?;
+        let cull_cb =
+            self.hw.command_queue.commandBuffer().ok_or_else(|| {
+                RenderError::Other("probe: failed to get cull command buffer".into())
+            })?;
         // Skin once, on the first face: the deformed vertices are a pure function of
         // the bind pose + joint palettes (both loop-invariant), so the pose is
         // identical for every face. FIFO + hazard tracking on the Shared deformed
@@ -568,11 +566,9 @@ impl MtlContext {
         cull_cb.commit();
 
         // Render command buffer: reads the ICB into this face.
-        let render_cb = self
-            .hw
-            .command_queue
-            .commandBuffer()
-            .ok_or("probe: failed to get render command buffer")?;
+        let render_cb = self.hw.command_queue.commandBuffer().ok_or_else(|| {
+            RenderError::Other("probe: failed to get render command buffer".into())
+        })?;
         self.encode_main_into_face(
             &render_cb,
             crate::metal::draw::main::FaceTargets {
@@ -625,28 +621,25 @@ impl MtlContext {
     // convolves into, and dispatch the cheap half of the convolution -- the clamped
     // mirror mip plus the capture's source pyramid. The bake moves to Prefiltering
     // with the mip cursor at 1.
-    fn probe_begin_prefilter(&mut self) -> Result<(), String> {
+    fn probe_begin_prefilter(&mut self) -> RenderResult<()> {
         let RenderingBake {
             index,
             placement,
             gpu,
             ..
-        } = self
-            .probe
-            .rendering
-            .take()
-            .ok_or("probe: prefilter with no bake in flight")?;
+        } =
+            self.probe.rendering.take().ok_or_else(|| {
+                RenderError::Other("probe: prefilter with no bake in flight".into())
+            })?;
         let BakeGpu { capture, .. } = gpu;
         // Everything but the capture cube drops here -- safe, the GPU is done with
         // all of it (the last face's completion handler flagged `done`, observed
         // Acquire before this call).
 
         let prefilter_gpu = PrefilterGpu::new(&self.hw.allocator, capture, &PLAN)?;
-        let cmd_buf = self
-            .hw
-            .command_queue
-            .commandBuffer()
-            .ok_or("probe: failed to get prefilter command buffer")?;
+        let cmd_buf = self.hw.command_queue.commandBuffer().ok_or_else(|| {
+            RenderError::Other("probe: failed to get prefilter command buffer".into())
+        })?;
         self.encode_probe_pyramid(&cmd_buf, &prefilter_gpu, &PLAN)?;
         super::fault_log::attach_fault_logger(&cmd_buf, "reflection probe pyramid");
         cmd_buf.commit();
@@ -665,20 +658,16 @@ impl MtlContext {
     // buffers with no `waitUntilCompleted`: each reads the capture pyramid and writes
     // a mip nothing else touches, and single-queue FIFO ordering puts every one of
     // them after the pyramid build that produced their source.
-    fn probe_prefilter_next_mip(&mut self) -> Result<(), String> {
+    fn probe_prefilter_next_mip(&mut self) -> RenderResult<()> {
         let (cursor, gpu) = {
-            let bake = self
-                .probe
-                .prefiltering
-                .as_ref()
-                .ok_or("probe: convolve with no bake in flight")?;
+            let bake = self.probe.prefiltering.as_ref().ok_or_else(|| {
+                RenderError::Other("probe: convolve with no bake in flight".into())
+            })?;
             (bake.cursor, &bake.gpu)
         };
-        let cmd_buf = self
-            .hw
-            .command_queue
-            .commandBuffer()
-            .ok_or("probe: failed to get convolution command buffer")?;
+        let cmd_buf = self.hw.command_queue.commandBuffer().ok_or_else(|| {
+            RenderError::Other("probe: failed to get convolution command buffer".into())
+        })?;
         self.encode_probe_ggx_mip(&cmd_buf, gpu, &PLAN, cursor)?;
         super::fault_log::attach_fault_logger(&cmd_buf, "reflection probe convolution");
         cmd_buf.commit();
@@ -694,17 +683,16 @@ impl MtlContext {
     // is nothing to upload -- the cube was written in place -- and nothing to wait
     // for: the dispatches and the frames that will sample the cube share one queue,
     // so the reads are already ordered after the writes.
-    fn probe_install(&mut self) -> Result<(), String> {
+    fn probe_install(&mut self) -> RenderResult<()> {
         let PrefilteringBake {
             index,
             placement: p,
             gpu,
             ..
-        } = self
-            .probe
-            .prefiltering
-            .take()
-            .ok_or("probe: install with no bake in flight")?;
+        } =
+            self.probe.prefiltering.take().ok_or_else(|| {
+                RenderError::Other("probe: install with no bake in flight".into())
+            })?;
         debug_assert_eq!(index, self.probe.maps.len());
         self.probe.maps.push(super::context::ProbeCube {
             prefilter: gpu.into_probe_cube(),
@@ -740,7 +728,7 @@ fn make_face_color(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     size: u32,
     sample_count: u32,
-) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLTexture>>> {
     let desc = TextureDesc {
         kind: MTLTextureType::Type2DMultisample,
         format: MTLPixelFormat::RGBA16Float,
@@ -753,7 +741,7 @@ fn make_face_color(
     .build();
     device
         .newTextureWithDescriptor(&desc)
-        .ok_or_else(|| "probe: failed to create color face".into())
+        .ok_or_else(|| allocation_failed("probe color face"))
 }
 
 // Depth face: Depth32Float, render-target only, at the main pipelines' sample
@@ -762,7 +750,7 @@ fn make_face_depth(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     size: u32,
     sample_count: u32,
-) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLTexture>>> {
     let desc = TextureDesc {
         kind: if sample_count > 1 {
             MTLTextureType::Type2DMultisample
@@ -779,5 +767,5 @@ fn make_face_depth(
     .build();
     device
         .newTextureWithDescriptor(&desc)
-        .ok_or_else(|| "probe: failed to create depth face".into())
+        .ok_or_else(|| allocation_failed("probe depth face"))
 }

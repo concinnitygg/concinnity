@@ -233,7 +233,7 @@ impl MtlContext {
                         "ray-traced reflections toggled on but the scene has no static geometry; no BVH built"
                     ),
                     Err(e) => {
-                        let e = RenderError::from(format!("RT accel build: {e}"));
+                        let e = e.context("RT accel build");
                         if first_err.is_some() {
                             tracing::error!("apply_quality_settings: {e}");
                         } else {

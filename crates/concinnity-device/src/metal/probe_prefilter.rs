@@ -16,6 +16,7 @@
 //! bake now stays on the GPU timeline.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::reflection_probe::PrefilterPlan;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -29,6 +30,7 @@ use objc2_metal::{
 use super::allocator::{DeviceAllocator, PooledTexture};
 use super::descriptors::TextureDesc;
 use super::encode::ComputeEncode;
+use super::error::allocation_failed;
 use super::pipeline::ns_str;
 
 // Threadgroup tile size, matching the kernels' `[numthreads(8, 8, 1)]`. The
@@ -55,7 +57,7 @@ impl ProbePrefilterPipelines {
     pub(in crate::metal) fn new(
         device: &ProtocolObject<dyn MTLDevice>,
         hot_reload: bool,
-    ) -> Result<ProbePrefilterPipelines, String> {
+    ) -> RenderResult<ProbePrefilterPipelines> {
         Ok(ProbePrefilterPipelines {
             mip0: build_kernel(
                 device,
@@ -84,14 +86,16 @@ fn build_kernel(
     lib: &super::slang_builtins::SlangLib,
     entry: &str,
     hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn MTLComputePipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLComputePipelineState>>> {
     let library = lib.library(device, hot_reload)?;
-    let function = library
-        .newFunctionWithName(&ns_str(entry))
-        .ok_or_else(|| format!("{entry} not found in its probe prefilter library"))?;
+    let function = library.newFunctionWithName(&ns_str(entry)).ok_or_else(|| {
+        RenderError::ShaderCompile(format!("{entry} not found in its probe prefilter library"))
+    })?;
     device
         .newComputePipelineStateWithFunction_error(&function)
-        .map_err(|e| format!("failed to create {entry} pipeline: {e:?}"))
+        .map_err(|e| {
+            RenderError::ShaderCompile(format!("failed to create {entry} pipeline: {e:?}"))
+        })
 }
 
 /// The capture cube six faces render into: RGBA16Float, one slice per face, with
@@ -103,7 +107,7 @@ fn build_kernel(
 pub(in crate::metal) fn create_capture_cube(
     device: &ProtocolObject<dyn MTLDevice>,
     plan: &PrefilterPlan,
-) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLTexture>>> {
     let desc = TextureDesc {
         kind: MTLTextureType::TypeCube,
         format: PROBE_CUBE_FORMAT,
@@ -120,7 +124,7 @@ pub(in crate::metal) fn create_capture_cube(
     .build();
     device
         .newTextureWithDescriptor(&desc)
-        .ok_or_else(|| "probe: failed to create capture cube".into())
+        .ok_or_else(|| allocation_failed("probe capture cube"))
 }
 
 /// The cubes and per-mip views one convolution works between, held by the
@@ -146,7 +150,7 @@ impl PrefilterGpu {
         alloc: &DeviceAllocator,
         capture: Retained<ProtocolObject<dyn MTLTexture>>,
         plan: &PrefilterPlan,
-    ) -> Result<PrefilterGpu, String> {
+    ) -> RenderResult<PrefilterGpu> {
         let desc = TextureDesc {
             kind: MTLTextureType::TypeCube,
             format: PROBE_CUBE_FORMAT,
@@ -181,7 +185,7 @@ fn mip_array_views(
     texture: &ProtocolObject<dyn MTLTexture>,
     mips: u32,
     label: &str,
-) -> Result<Vec<Retained<ProtocolObject<dyn MTLTexture>>>, String> {
+) -> RenderResult<Vec<Retained<ProtocolObject<dyn MTLTexture>>>> {
     (0..mips)
         .map(|mip| {
             // SAFETY: `mip` is in `0..mips` and the texture was created with
@@ -195,7 +199,9 @@ fn mip_array_views(
                     NSRange::new(0, 6),
                 )
             }
-            .ok_or_else(|| format!("probe: failed to create {label} mip {mip} view"))
+            .ok_or_else(|| {
+                RenderError::Other(format!("probe: failed to create {label} mip {mip} view"))
+            })
         })
         .collect()
 }
@@ -214,16 +220,16 @@ impl super::context::MtlContext {
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         gpu: &PrefilterGpu,
         plan: &PrefilterPlan,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let pipelines = self
             .probe
             .prefilter
             .as_ref()
-            .ok_or("probe: prefilter pipelines missing")?;
+            .ok_or_else(|| RenderError::Other("probe: prefilter pipelines missing".into()))?;
         let enc = super::scoped_encoder::ScopedEncoder::new(
-            cmd_buf
-                .computeCommandEncoder()
-                .ok_or("probe: failed to get prefilter compute encoder")?,
+            cmd_buf.computeCommandEncoder().ok_or_else(|| {
+                RenderError::Other("probe: failed to get prefilter compute encoder".into())
+            })?,
             ns_string!("probe-pyramid"),
         );
 
@@ -255,16 +261,16 @@ impl super::context::MtlContext {
         gpu: &PrefilterGpu,
         plan: &PrefilterPlan,
         dst_mip: u32,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let pipelines = self
             .probe
             .prefilter
             .as_ref()
-            .ok_or("probe: prefilter pipelines missing")?;
+            .ok_or_else(|| RenderError::Other("probe: prefilter pipelines missing".into()))?;
         let enc = super::scoped_encoder::ScopedEncoder::new(
-            cmd_buf
-                .computeCommandEncoder()
-                .ok_or("probe: failed to get prefilter compute encoder")?,
+            cmd_buf.computeCommandEncoder().ok_or_else(|| {
+                RenderError::Other("probe: failed to get prefilter compute encoder".into())
+            })?,
             ns_string!("probe-ggx"),
         );
         let params = plan.ggx_params(dst_mip);

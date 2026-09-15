@@ -29,6 +29,9 @@ use objc2_metal::{
     MTLPrimitiveAccelerationStructureDescriptor, MTLResource as _, MTLResourceOptions,
 };
 
+use concinnity_core::render::error::RenderResult;
+
+use super::error::allocation_failed;
 use super::transient::grow_to;
 
 type Buffer = Retained<ProtocolObject<dyn MTLBuffer>>;
@@ -157,13 +160,13 @@ impl RtFrameSlot {
         &mut self,
         device: &ProtocolObject<dyn MTLDevice>,
         bytes: usize,
-    ) -> Result<(Buffer, bool), String> {
+    ) -> RenderResult<(Buffer, bool)> {
         let have = self.deformed.as_ref().map_or(0, |b| b.length());
         let mut fresh = false;
         if let Some(cap) = grow_to(have, bytes) {
             let buf = device
                 .newBufferWithLength_options(cap, MTLResourceOptions::StorageModeShared)
-                .ok_or("failed to allocate RT deformed-vertex buffer")?;
+                .ok_or_else(|| allocation_failed("RT deformed-vertex buffer"))?;
             buf.setLabel(Some(&super::pipeline::ns_str("rt_deformed_verts")));
             self.deformed = Some(buf);
             self.generation = self.generation.wrapping_add(1);
@@ -182,7 +185,7 @@ impl RtFrameSlot {
         &mut self,
         device: &ProtocolObject<dyn MTLDevice>,
         bytes: usize,
-    ) -> Result<Buffer, String> {
+    ) -> RenderResult<Buffer> {
         let have = self.instances.as_ref().map_or(0, |b| b.length());
         if let Some(cap) = grow_to(have, bytes) {
             self.instances = Some(shared_buffer(
@@ -206,7 +209,7 @@ impl RtFrameSlot {
         &mut self,
         device: &ProtocolObject<dyn MTLDevice>,
         bytes: usize,
-    ) -> Result<Buffer, String> {
+    ) -> RenderResult<Buffer> {
         let have = self.geom_table.as_ref().map_or(0, |b| b.length());
         if let Some(cap) = grow_to(have, bytes) {
             self.geom_table = Some(shared_buffer(
@@ -230,12 +233,12 @@ impl RtFrameSlot {
         &mut self,
         device: &ProtocolObject<dyn MTLDevice>,
         bytes: usize,
-    ) -> Result<Buffer, String> {
+    ) -> RenderResult<Buffer> {
         let have = self.scratch.as_ref().map_or(0, |b| b.length());
         if let Some(cap) = grow_to(have, bytes) {
             let buf = device
                 .newBufferWithLength_options(cap, MTLResourceOptions::StorageModePrivate)
-                .ok_or("failed to allocate RT scratch buffer")?;
+                .ok_or_else(|| allocation_failed("RT scratch buffer"))?;
             buf.setLabel(Some(&super::pipeline::ns_str("rt_scratch")));
             self.scratch = Some(buf);
         }
@@ -301,11 +304,11 @@ impl RtFrameSlot {
         &mut self,
         device: &ProtocolObject<dyn MTLDevice>,
         size: usize,
-    ) -> Result<Structure, String> {
+    ) -> RenderResult<Structure> {
         if self.tlas.is_none() || self.tlas_size < size {
             let tlas = device
                 .newAccelerationStructureWithSize(size.max(1))
-                .ok_or("failed to allocate TLAS")?;
+                .ok_or_else(|| allocation_failed("TLAS"))?;
             tlas.setLabel(Some(&super::pipeline::ns_str("rt_tlas")));
             self.tlas = Some(tlas);
             self.tlas_size = size;
@@ -389,10 +392,10 @@ fn shared_buffer(
     bytes: usize,
     label: &str,
     what: &str,
-) -> Result<Buffer, String> {
+) -> RenderResult<Buffer> {
     let buf = device
         .newBufferWithLength_options(bytes, MTLResourceOptions::StorageModeShared)
-        .ok_or_else(|| format!("failed to allocate buffer for {what}"))?;
+        .ok_or_else(|| allocation_failed(format_args!("buffer for {what}")))?;
     buf.setLabel(Some(&super::pipeline::ns_str(label)));
     Ok(buf)
 }

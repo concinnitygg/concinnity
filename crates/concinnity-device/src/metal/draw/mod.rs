@@ -1095,7 +1095,7 @@ impl MtlContext {
         &mut self,
         frame: super::raytrace::RtFrame,
         joint_buffers: &[Retained<ProtocolObject<dyn MTLBuffer>>],
-    ) -> Result<(), String> {
+    ) -> error::RenderResult<()> {
         use super::raytrace::RtDynamicMode;
         let frame_id = frame.id;
         if !self.rt.dynamic_mode.is_dynamic() {
@@ -1210,7 +1210,7 @@ impl MtlContext {
         albedo_count: usize,
         build_tlas: bool,
         frame_id: u64,
-    ) -> Result<(), String> {
+    ) -> error::RenderResult<()> {
         let device = self.hw.device.clone();
         let queue = self.hw.command_queue.clone();
         let vbuf = self.scene.vertex_buffer.retained();
@@ -1252,7 +1252,10 @@ impl MtlContext {
     // failure or an emptied scene leaves the previous BVH in place. The
     // immutable borrows of `self` all end when the build returns, before the
     // assignment, so there is no aliasing.
-    pub(in crate::metal) fn rebuild_rt_accel(&mut self, albedo_count: usize) -> Result<(), String> {
+    pub(in crate::metal) fn rebuild_rt_accel(
+        &mut self,
+        albedo_count: usize,
+    ) -> error::RenderResult<()> {
         use super::raytrace::SkinnedRtInputs;
         let skinned = match (
             &self.skinned.vertex_buffer,
@@ -1308,7 +1311,7 @@ impl MtlContext {
         albedo_count: usize,
         frame: super::raytrace::RtFrame,
         joint_buffers: &[Retained<ProtocolObject<dyn MTLBuffer>>],
-    ) -> Result<(), String> {
+    ) -> error::RenderResult<()> {
         use super::raytrace::SkinnedRtInputs;
         let device = self.hw.device.clone();
         let queue = self.hw.command_queue.clone();
@@ -1354,7 +1357,7 @@ impl MtlContext {
     // mutably while reading the device / queue / draw list, so clone the two
     // cheap handles and lift the draw list out (an O(1) `Vec` swap) to keep the
     // borrows from aliasing, then put the draw list back.
-    fn rebuild_rt_tlas(&mut self, albedo_count: usize) -> Result<(), String> {
+    fn rebuild_rt_tlas(&mut self, albedo_count: usize) -> error::RenderResult<()> {
         let device = self.hw.device.clone();
         let queue = self.hw.command_queue.clone();
         let draw_objects = std::mem::take(&mut self.draw.objects);

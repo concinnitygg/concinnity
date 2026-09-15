@@ -7,6 +7,7 @@ use concinnity_core::gfx::mesh_payload;
 use concinnity_core::gfx::mesh_payload::SkinnedVertex;
 use concinnity_core::gfx::render_types::SkinnedDrawObject;
 use concinnity_core::render::backend;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::rt_geom;
 use concinnity_core::render::skinned_slots::SkinnedSlots;
 use concinnity_core::transform::IDENTITY;
@@ -20,6 +21,7 @@ use objc2_metal::{
 
 use crate::metal::context::{MtlContext, bytes_of_slice, write_buffer_region, write_buffer_slice};
 use crate::metal::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
+use crate::metal::error::allocation_failed;
 
 // Upload a skinned index slice, sized by `skinned_index_buffer_bytes` (which
 // the DirectX and Vulkan hosts size the same buffer with).
@@ -489,7 +491,7 @@ impl MtlContext {
         vertices: &[SkinnedVertex],
         indices: &[u32],
         draw_objects: Vec<SkinnedDrawObject>,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         if draw_objects.is_empty() || vertices.is_empty() || indices.is_empty() {
             return Ok(());
         }
@@ -512,7 +514,7 @@ impl MtlContext {
         // those bytes into the new buffer before the call returns.
         let skinned_vertex_buffer = unsafe {
             let ptr = std::ptr::NonNull::new(vertices.as_ptr() as *mut _)
-                .ok_or("skinned vertex slice is empty")?;
+                .ok_or_else(|| RenderError::Other("skinned vertex slice is empty".into()))?;
             self.hw
                 .device
                 .newBufferWithBytes_length_options(
@@ -520,7 +522,7 @@ impl MtlContext {
                     std::mem::size_of_val(vertices),
                     MTLResourceOptions::StorageModeShared,
                 )
-                .ok_or("failed to create skinned vertex buffer")?
+                .ok_or_else(|| allocation_failed("skinned vertex buffer"))?
         };
         let skinned_index_buffer =
             upload_skinned_index_buffer(&self.hw.device, indices, "upload_skinned")?;
@@ -559,7 +561,7 @@ impl MtlContext {
                         deformed_bytes,
                         MTLResourceOptions::StorageModeShared,
                     )
-                    .ok_or("failed to allocate skinned deformed-vertex buffer")?;
+                    .ok_or_else(|| allocation_failed("skinned deformed-vertex buffer"))?;
                 deformed.push(buf);
             }
             self.skinned.skin_pipeline = Some(skin_pipeline);

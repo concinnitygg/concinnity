@@ -94,9 +94,6 @@ impl SkinnedDraws for MtlContext {
         fn upload_skinned_morphs(&mut self, morphs: Vec<Option<std::sync::Arc<mesh_payload::PayloadMorphs>>>) -> RenderResult<()>;
     }
 
-    // Typed-boundary forwarders: the inherent methods report `String` errors,
-    // which `?` coerces to `RenderError::Other`. Sites that can classify a
-    // failure construct the typed variant directly instead.
     fn upload_skinned(
         &mut self,
         vertices: &[SkinnedVertex],
@@ -104,18 +101,13 @@ impl SkinnedDraws for MtlContext {
         draw_objects: Vec<SkinnedDrawObject>,
     ) -> RenderResult<()> {
         debug_assert_main_thread("upload_skinned");
-        Ok(MtlContext::upload_skinned(
-            self,
-            vertices,
-            indices,
-            draw_objects,
-        )?)
+        MtlContext::upload_skinned(self, vertices, indices, draw_objects)
     }
 }
 
 impl DrawStreaming for MtlContext {
     forward! { assert = debug_assert_main_thread;
-        fn evict_texture_slot(&mut self, slot: usize) -> RenderResult<()>;
+        fn evict_texture_slot(&mut self, slot: usize) -> concinnity_core::render::error::RenderResult<()>;
         fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> RenderResult<()>;
         fn seed_mesh_streaming(&mut self, vtx_offset: u64, vtx_bytes: u64, idx_offset: u64, idx_bytes: u64);
         fn remove_chunk_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> RenderResult<()>;
@@ -130,7 +122,7 @@ impl DrawStreaming for MtlContext {
         image: &bake::texture::TextureImage,
     ) -> RenderResult<()> {
         debug_assert_main_thread("update_texture_slot");
-        Ok(MtlContext::update_texture_slot(self, slot, image)?)
+        MtlContext::update_texture_slot(self, slot, image)
     }
 
     fn upload_mesh(
@@ -214,7 +206,7 @@ impl RenderTuning for MtlContext {
 
 impl LiveEdit for MtlContext {
     forward! { assert = debug_assert_main_thread;
-        fn update_color_lut(&mut self, size: u32, data: &[u8]) -> RenderResult<()>;
+        fn update_color_lut(&mut self, size: u32, data: &[u8]) -> concinnity_core::render::error::RenderResult<()>;
         fn update_mesh_geometry(&mut self, draw_idx: usize, verts: &[mesh_payload::Vertex], idxs: &[u16], lod_alternates: &[(f32, Vec<u16>)]) -> RenderResult<()>;
         fn update_skinned_mesh_geometry(&mut self, skinned_index: usize, vertex_base: u32, verts: &[mesh_payload::SkinnedVertex], idxs: &[u16]) -> RenderResult<()>;
         fn rebuild_skinned_geometry(&mut self, changes: Vec<backend::SkinnedDrawGeometryUpdate>) -> RenderResult<Vec<backend::SkinnedSlotLayout>>;
@@ -226,7 +218,7 @@ impl LiveEdit for MtlContext {
 
     fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()> {
         debug_assert_main_thread("update_environment_map");
-        Ok(MtlContext::update_environment_map(self, payload)?)
+        MtlContext::update_environment_map(self, payload)
     }
 
     fn rebuild_static_geometry(

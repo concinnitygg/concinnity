@@ -42,6 +42,7 @@ use concinnity_core::gfx::render_types::{
     DrawObject, InstancedCluster, RtGeomEntry, SkinnedDrawObject,
 };
 use concinnity_core::gfx::rt_reflections::RtReflectionSettings;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::rt_geom::{cluster_geom_entry, geom_entry, skinned_geom_entry};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -67,6 +68,7 @@ use concinnity_core::render::uniforms::SkinParams;
 
 use super::context::write_buffer_slice;
 use super::encode::ComputeEncode;
+use super::error::{allocation_failed, classify_ns_error};
 use super::rt_ring::{BlasUpdate, RtFrameRing, SkinnedBlasSet, SkinnedShape, TlasKey};
 use super::transient::RetirePool;
 
@@ -624,13 +626,13 @@ fn dispatch_skin(
     skinned: &SkinnedRtInputs,
     skinned_objects: &[usize],
     deformed_verts: &ProtocolObject<dyn MTLBuffer>,
-) -> Result<(), String> {
+) -> RenderResult<()> {
     let skin_cmd = command_queue
         .commandBuffer()
-        .ok_or("failed to create RT skin command buffer")?;
+        .ok_or_else(|| RenderError::Other("failed to create RT skin command buffer".into()))?;
     let cenc = skin_cmd
         .computeCommandEncoder()
-        .ok_or("failed to create RT skin compute encoder")?;
+        .ok_or_else(|| RenderError::Other("failed to create RT skin compute encoder".into()))?;
     // Transient palette buffers must outlive the GPU work; held until the wait
     // below completes.
     let palette_bufs = encode_skin_dispatch(
@@ -674,7 +676,7 @@ fn encode_skin_dispatch(
     skinned_objects: &[usize],
     deformed_verts: &ProtocolObject<dyn MTLBuffer>,
     palettes: SkinPalettes,
-) -> Result<Vec<Retained<ProtocolObject<dyn MTLBuffer>>>, String> {
+) -> RenderResult<Vec<Retained<ProtocolObject<dyn MTLBuffer>>>> {
     cenc.set_pipeline(skinned.skin_pipeline);
     let threadgroup = skinned
         .skin_pipeline
@@ -798,7 +800,7 @@ impl crate::metal::context::MtlContext {
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         deformed: &ProtocolObject<dyn MTLBuffer>,
         bufs: MainSkinBuffers<'_>,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let MainSkinBuffers {
             joints: joint_bufs,
             morph_weights: weight_bufs,
@@ -812,9 +814,9 @@ impl crate::metal::context::MtlContext {
         if self.skinned.slots.draw_objects.is_empty() {
             return Ok(());
         }
-        let cenc = cmd_buf
-            .computeCommandEncoder()
-            .ok_or("failed to create main-skin compute encoder")?;
+        let cenc = cmd_buf.computeCommandEncoder().ok_or_else(|| {
+            RenderError::Other("failed to create main-skin compute encoder".into())
+        })?;
         cenc.set_pipeline(skin_pipeline);
         let tg = skin_pipeline.maxTotalThreadsPerThreadgroup().clamp(1, 64);
         for (i, obj) in self.skinned.slots.draw_objects.iter().enumerate() {
@@ -892,7 +894,7 @@ pub(crate) fn build_rt_accel(
     // like any other surface. Driven by `seethrough_meshes_enabled` (opt-in per
     // `Material::see_through`), not a global flag.
     exclude_seethrough: bool,
-) -> Result<Option<RtAccelData>, String> {
+) -> RenderResult<Option<RtAccelData>> {
     let RtGpu {
         device,
         command_queue,
@@ -967,13 +969,13 @@ pub(crate) fn build_rt_accel(
     // per-frame update stops publishing its ring slot.
     let deformed_dummy = device
         .newBufferWithLength_options(VERTEX_STRIDE, MTLResourceOptions::StorageModeShared)
-        .ok_or("failed to allocate RT deformed-vertex dummy buffer")?;
+        .ok_or_else(|| allocation_failed("RT deformed-vertex dummy buffer"))?;
     let deformed_verts = if skinned_objects.is_empty() {
         deformed_dummy.clone()
     } else {
         device
             .newBufferWithLength_options(deformed_bytes, MTLResourceOptions::StorageModeShared)
-            .ok_or("failed to allocate RT deformed-vertex buffer")?
+            .ok_or_else(|| allocation_failed("RT deformed-vertex buffer"))?
     };
     // The shared skinned index buffer the kernel + skinned BLAS address; a
     // dummy when there is no skinned geometry. The dummy is one u32 rather than
@@ -987,7 +989,7 @@ pub(crate) fn build_rt_accel(
                 std::mem::size_of::<u32>(),
                 MTLResourceOptions::StorageModePrivate,
             )
-            .ok_or("failed to allocate RT skinned-index dummy buffer")?,
+            .ok_or_else(|| allocation_failed("RT skinned-index dummy buffer"))?,
     };
 
     // One BLAS per draw object, then one per cluster, then one per skinned
@@ -1044,7 +1046,7 @@ pub(crate) fn build_rt_accel(
         let sizes = device.accelerationStructureSizesWithDescriptor(prim);
         let acc = device
             .newAccelerationStructureWithSize(sizes.accelerationStructureSize)
-            .ok_or("failed to allocate BLAS")?;
+            .ok_or_else(|| allocation_failed("BLAS"))?;
         max_scratch = max_scratch.max(sizes.buildScratchBufferSize);
         blas.push(acc);
     }
@@ -1099,14 +1101,14 @@ pub(crate) fn build_rt_accel(
     let tlas_sizes = device.accelerationStructureSizesWithDescriptor(&tlas_desc);
     let tlas = device
         .newAccelerationStructureWithSize(tlas_sizes.accelerationStructureSize)
-        .ok_or("failed to allocate TLAS")?;
+        .ok_or_else(|| allocation_failed("TLAS"))?;
     // Size the scratch for the largest of every BLAS build and the TLAS build
     // so the per-frame TLAS rebuild can reuse the same buffer.
     max_scratch = max_scratch.max(tlas_sizes.buildScratchBufferSize);
 
     let scratch = device
         .newBufferWithLength_options(max_scratch.max(1), MTLResourceOptions::StorageModePrivate)
-        .ok_or("failed to allocate RT scratch buffer")?;
+        .ok_or_else(|| allocation_failed("RT scratch buffer"))?;
 
     // Skin first (on its own committed-and-waited command buffer) so the
     // deformed buffer is complete before the BLAS build reads it; see
@@ -1133,11 +1135,11 @@ pub(crate) fn build_rt_accel(
     // the skinned BLAS) are ready before the first frame traces them.
     let cmd = command_queue
         .commandBuffer()
-        .ok_or("failed to create RT build command buffer")?;
+        .ok_or_else(|| RenderError::Other("failed to create RT build command buffer".into()))?;
     for (acc, prim) in blas.iter().zip(prim_descs.iter()) {
-        let enc = cmd
-            .accelerationStructureCommandEncoder()
-            .ok_or("failed to create acceleration-structure encoder")?;
+        let enc = cmd.accelerationStructureCommandEncoder().ok_or_else(|| {
+            RenderError::Other("failed to create acceleration-structure encoder".into())
+        })?;
         enc.buildAccelerationStructure_descriptor_scratchBuffer_scratchBufferOffset(
             acc, prim, &scratch, 0,
         );
@@ -1145,9 +1147,9 @@ pub(crate) fn build_rt_accel(
     }
     // The TLAS references every BLAS, all built on earlier encoders, so declare
     // them resident in this encoder.
-    let enc = cmd
-        .accelerationStructureCommandEncoder()
-        .ok_or("failed to create acceleration-structure encoder")?;
+    let enc = cmd.accelerationStructureCommandEncoder().ok_or_else(|| {
+        RenderError::Other("failed to create acceleration-structure encoder".into())
+    })?;
     declare_blas_resident(&enc, &blas);
     enc.buildAccelerationStructure_descriptor_scratchBuffer_scratchBufferOffset(
         &tlas, &tlas_desc, &scratch, 0,
@@ -1196,7 +1198,7 @@ fn allocate_skinned_blas(
     deformed_verts: &ProtocolObject<dyn MTLBuffer>,
     skinned_indices: &ProtocolObject<dyn MTLBuffer>,
     shapes: &[SkinnedShape],
-) -> Result<SkinnedBlasSet, String> {
+) -> RenderResult<SkinnedBlasSet> {
     let mut blas = Vec::with_capacity(shapes.len());
     let mut descs = Vec::with_capacity(shapes.len());
     let mut scratch_bytes = 0usize;
@@ -1213,7 +1215,7 @@ fn allocate_skinned_blas(
         let sizes = device.accelerationStructureSizesWithDescriptor(&prim);
         let acc = device
             .newAccelerationStructureWithSize(sizes.accelerationStructureSize)
-            .ok_or("failed to allocate skinned BLAS")?;
+            .ok_or_else(|| allocation_failed("skinned BLAS"))?;
         acc.setLabel(Some(&crate::metal::pipeline::ns_str("rt_skinned_blas")));
         scratch_bytes = scratch_bytes.max(sizes.buildScratchBufferSize);
         blas.push(acc);
@@ -1271,7 +1273,7 @@ impl RtAccelData {
         command_queue: &ProtocolObject<dyn objc2_metal::MTLCommandQueue>,
         draw_objects: &[DrawObject],
         albedo_count: usize,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         if !objects_current(&self.object_indices, draw_objects) {
             return Ok(());
         }
@@ -1299,7 +1301,7 @@ impl RtAccelData {
         let sizes = device.accelerationStructureSizesWithDescriptor(&tlas_desc);
         let tlas = device
             .newAccelerationStructureWithSize(sizes.accelerationStructureSize)
-            .ok_or("failed to allocate TLAS")?;
+            .ok_or_else(|| allocation_failed("TLAS"))?;
         // Reuse the scratch sized at init (the prior frame's build completed
         // before we got here, so it is free) -- but a topology refresh can change
         // the instance count, and a larger TLAS needs more build scratch than the
@@ -1312,15 +1314,15 @@ impl RtAccelData {
                     sizes.buildScratchBufferSize.max(1),
                     MTLResourceOptions::StorageModePrivate,
                 )
-                .ok_or("failed to grow RT scratch buffer")?;
+                .ok_or_else(|| allocation_failed("grown RT scratch buffer"))?;
         }
 
-        let cmd = command_queue
-            .commandBuffer()
-            .ok_or("failed to create RT rebuild command buffer")?;
-        let enc = cmd
-            .accelerationStructureCommandEncoder()
-            .ok_or("failed to create acceleration-structure encoder")?;
+        let cmd = command_queue.commandBuffer().ok_or_else(|| {
+            RenderError::Other("failed to create RT rebuild command buffer".into())
+        })?;
+        let enc = cmd.accelerationStructureCommandEncoder().ok_or_else(|| {
+            RenderError::Other("failed to create acceleration-structure encoder".into())
+        })?;
         // Every BLAS the rebuilt TLAS references was built on an earlier command
         // buffer (none are rebuilt here), so all must be declared resident.
         declare_blas_resident(&enc, &self.blas);
@@ -1389,7 +1391,7 @@ impl RtAccelData {
         draw_objects: &[DrawObject],
         texture_counts: RtTextureCounts,
         options: RtTopologyRefreshOptions,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let RtGpu {
             device,
             command_queue,
@@ -1460,7 +1462,7 @@ impl RtAccelData {
             let sizes = device.accelerationStructureSizesWithDescriptor(&prim);
             let acc = device
                 .newAccelerationStructureWithSize(sizes.accelerationStructureSize)
-                .ok_or("failed to allocate topology-refresh BLAS")?;
+                .ok_or_else(|| allocation_failed("topology-refresh BLAS"))?;
             acc.setLabel(Some(&crate::metal::pipeline::ns_str("rt_topology_blas")));
             max_scratch = max_scratch.max(sizes.buildScratchBufferSize);
             fresh[j] = Some(acc);
@@ -1520,7 +1522,7 @@ impl RtAccelData {
             max_scratch = max_scratch.max(tlas_sizes.buildScratchBufferSize);
             let tlas = device
                 .newAccelerationStructureWithSize(tlas_sizes.accelerationStructureSize)
-                .ok_or("failed to allocate TLAS")?;
+                .ok_or_else(|| allocation_failed("TLAS"))?;
             tlas.setLabel(Some(&crate::metal::pipeline::ns_str("rt_tlas")));
             let cached_models: Vec<[[f32; 4]; 4]> = objects.iter().map(|o| o.model).collect();
             Some((tlas, tlas_desc, instance_buffer, geom_table, cached_models))
@@ -1540,25 +1542,25 @@ impl RtAccelData {
                     max_scratch.max(1),
                     MTLResourceOptions::StorageModePrivate,
                 )
-                .ok_or("failed to allocate topology-refresh scratch buffer")?;
-            let cmd = command_queue
-                .commandBuffer()
-                .ok_or("failed to create topology-refresh command buffer")?;
+                .ok_or_else(|| allocation_failed("topology-refresh scratch buffer"))?;
+            let cmd = command_queue.commandBuffer().ok_or_else(|| {
+                RenderError::Other("failed to create topology-refresh command buffer".into())
+            })?;
             cmd.setLabel(Some(&crate::metal::pipeline::ns_str("rt_topology_build")));
             for (j, prim) in &build_jobs {
                 let acc = fresh[*j].as_ref().expect("fresh BLAS allocated above");
-                let enc = cmd
-                    .accelerationStructureCommandEncoder()
-                    .ok_or("failed to create acceleration-structure encoder")?;
+                let enc = cmd.accelerationStructureCommandEncoder().ok_or_else(|| {
+                    RenderError::Other("failed to create acceleration-structure encoder".into())
+                })?;
                 enc.buildAccelerationStructure_descriptor_scratchBuffer_scratchBufferOffset(
                     acc, prim, &scratch, 0,
                 );
                 enc.endEncoding();
             }
             if let Some((tlas, tlas_desc, _, _, _)) = &tlas_build {
-                let enc = cmd
-                    .accelerationStructureCommandEncoder()
-                    .ok_or("failed to create acceleration-structure encoder")?;
+                let enc = cmd.accelerationStructureCommandEncoder().ok_or_else(|| {
+                    RenderError::Other("failed to create acceleration-structure encoder".into())
+                })?;
                 declare_blas_resident(&enc, &new_blas);
                 enc.buildAccelerationStructure_descriptor_scratchBuffer_scratchBufferOffset(
                     tlas, tlas_desc, &scratch, 0,
@@ -1640,7 +1642,7 @@ impl RtAccelData {
         joint_buffers: &[Retained<ProtocolObject<dyn MTLBuffer>>],
         texture_counts: RtTextureCounts,
         frame: RtFrame,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let RtGpu {
             device,
             command_queue,
@@ -1782,13 +1784,13 @@ impl RtAccelData {
         // nothing transient has to outlive the async dispatch. A fault can no
         // longer be caught synchronously, so it is logged from a completion handler.
         {
-            let skin_cmd = command_queue
-                .commandBuffer()
-                .ok_or("failed to create RT skin command buffer")?;
+            let skin_cmd = command_queue.commandBuffer().ok_or_else(|| {
+                RenderError::Other("failed to create RT skin command buffer".into())
+            })?;
             skin_cmd.setLabel(Some(&crate::metal::pipeline::ns_str("rt_skin")));
-            let cenc = skin_cmd
-                .computeCommandEncoder()
-                .ok_or("failed to create RT skin compute encoder")?;
+            let cenc = skin_cmd.computeCommandEncoder().ok_or_else(|| {
+                RenderError::Other("failed to create RT skin compute encoder".into())
+            })?;
             encode_skin_dispatch(
                 &cenc,
                 &skinned,
@@ -1823,14 +1825,14 @@ impl RtAccelData {
         // static-only `rebuild_tlas` path never hit this because its BLAS were all
         // built on earlier command buffers.)
         {
-            let cmd = command_queue
-                .commandBuffer()
-                .ok_or("failed to create RT skinned rebuild command buffer")?;
+            let cmd = command_queue.commandBuffer().ok_or_else(|| {
+                RenderError::Other("failed to create RT skinned rebuild command buffer".into())
+            })?;
             cmd.setLabel(Some(&crate::metal::pipeline::ns_str("rt_build")));
             for (acc, prim) in slot.skinned_blas().iter().zip(slot.skinned_descs()) {
-                let enc = cmd
-                    .accelerationStructureCommandEncoder()
-                    .ok_or("failed to create acceleration-structure encoder")?;
+                let enc = cmd.accelerationStructureCommandEncoder().ok_or_else(|| {
+                    RenderError::Other("failed to create acceleration-structure encoder".into())
+                })?;
                 match update {
                     BlasUpdate::Build => {
                         enc.buildAccelerationStructure_descriptor_scratchBuffer_scratchBufferOffset(
@@ -1863,9 +1865,9 @@ impl RtAccelData {
             // references the persistent static/cluster head AND this frame's
             // skinned BLAS, all built on earlier encoders / command buffers, so
             // every one must be declared resident here.
-            let enc = cmd
-                .accelerationStructureCommandEncoder()
-                .ok_or("failed to create acceleration-structure encoder")?;
+            let enc = cmd.accelerationStructureCommandEncoder().ok_or_else(|| {
+                RenderError::Other("failed to create acceleration-structure encoder".into())
+            })?;
             declare_blas_resident(
                 &enc,
                 self.blas[..static_blas_count]
@@ -1971,15 +1973,17 @@ fn models_dirty(
 pub(crate) fn build_rt_skin_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>> {
     use objc2_metal::{MTLDevice as _, MTLLibrary as _};
     let library = crate::metal::slang_builtins::RT_SKIN.library(device, hot_reload)?;
     let func = library
         .newFunctionWithName(&crate::metal::pipeline::ns_str("rt_skin"))
-        .ok_or("rt_skin kernel not found")?;
+        .ok_or_else(|| RenderError::ShaderCompile("rt_skin kernel not found".into()))?;
     device
         .newComputePipelineStateWithFunction_error(&func)
-        .map_err(|e| format!("failed to create RT skin pipeline: {:?}", e))
+        .map_err(|e| {
+            RenderError::ShaderCompile(format!("failed to create RT skin pipeline: {e:?}"))
+        })
 }
 
 // Fail if a command buffer faulted on the GPU. `waitUntilCompleted` returns
@@ -1993,9 +1997,13 @@ pub(crate) fn build_rt_skin_pipeline(
 fn check_build_status(
     cmd: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
     what: &str,
-) -> Result<(), String> {
+) -> RenderResult<()> {
     if cmd.status() == MTLCommandBufferStatus::Error {
-        return Err(format!("RT {what} faulted on the GPU: {:?}", cmd.error()));
+        let stage = format!("RT {what} faulted on the GPU");
+        return Err(match cmd.error() {
+            Some(error) => classify_ns_error(&error).context(stage),
+            None => RenderError::Other(stage),
+        });
     }
     Ok(())
 }
@@ -2005,7 +2013,7 @@ fn upload_buffer<T: Copy>(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     data: &[T],
     what: &str,
-) -> Result<Retained<ProtocolObject<dyn MTLBuffer>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLBuffer>>> {
     let bytes = std::mem::size_of_val(data);
     if bytes == 0 {
         // Metal rejects a zero-length buffer, and `data.as_ptr()` on an empty
@@ -2013,16 +2021,16 @@ fn upload_buffer<T: Copy>(
         // 1-byte buffer the GPU never reads instead.
         return device
             .newBufferWithLength_options(1, MTLResourceOptions::StorageModeShared)
-            .ok_or_else(|| format!("failed to allocate buffer for {what}"));
+            .ok_or_else(|| allocation_failed(format_args!("buffer for {what}")));
     }
     let ptr = std::ptr::NonNull::new(data.as_ptr() as *mut std::ffi::c_void)
-        .ok_or_else(|| format!("{what}: null data pointer"))?;
+        .ok_or_else(|| RenderError::Other(format!("{what}: null data pointer")))?;
     // SAFETY: `ptr`/`bytes` describe the live, non-empty `data` slice, and
     // Metal copies those bytes into the new buffer before the call returns.
     unsafe {
         device.newBufferWithBytes_length_options(ptr, bytes, MTLResourceOptions::StorageModeShared)
     }
-    .ok_or_else(|| format!("failed to allocate buffer for {what}"))
+    .ok_or_else(|| allocation_failed(format_args!("buffer for {what}")))
 }
 
 #[cfg(test)]

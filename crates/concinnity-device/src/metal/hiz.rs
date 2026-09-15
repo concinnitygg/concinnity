@@ -98,7 +98,7 @@ pub(super) fn build_hiz_pipelines(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
     sample_count: u32,
-) -> Result<HizPipelines, String> {
+) -> RenderResult<HizPipelines> {
     let (init_lib, init_entry) = if sample_count > 1 {
         (
             super::slang_builtins::HIZ_INIT_MSAA.library(device, hot_reload)?,
@@ -113,16 +113,24 @@ pub(super) fn build_hiz_pipelines(
     let downsample_lib = super::slang_builtins::HIZ_DOWNSAMPLE.library(device, hot_reload)?;
     let init_fn = init_lib
         .newFunctionWithName(&ns_str(init_entry))
-        .ok_or("hiz init entry not found in hiz library")?;
+        .ok_or_else(|| {
+            RenderError::ShaderCompile(format!("{init_entry} not found in hiz library"))
+        })?;
     let downsample_fn = downsample_lib
         .newFunctionWithName(&ns_str("hiz_downsample"))
-        .ok_or("hiz_downsample not found in hiz library")?;
+        .ok_or_else(|| {
+            RenderError::ShaderCompile("hiz_downsample not found in hiz library".into())
+        })?;
     let init_pipeline = device
         .newComputePipelineStateWithFunction_error(&init_fn)
-        .map_err(|e| format!("failed to create {init_entry} pipeline: {:?}", e))?;
+        .map_err(|e| {
+            RenderError::ShaderCompile(format!("failed to create {init_entry} pipeline: {e:?}"))
+        })?;
     let downsample_pipeline = device
         .newComputePipelineStateWithFunction_error(&downsample_fn)
-        .map_err(|e| format!("failed to create hiz_downsample pipeline: {:?}", e))?;
+        .map_err(|e| {
+            RenderError::ShaderCompile(format!("failed to create hiz_downsample pipeline: {e:?}"))
+        })?;
     Ok((init_pipeline, downsample_pipeline))
 }
 
@@ -183,12 +191,11 @@ impl HiZResources {
         height: u32,
         hot_reload: bool,
         sample_count: u32,
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         let mip_count = hiz_mip_count(width, height);
         let (init_pipeline, downsample_pipeline) =
             build_hiz_pipelines(device, hot_reload, sample_count)?;
-        let (texture, mip_views) = create_hiz_texture_and_views(device, width, height, mip_count)
-            .map_err(|e| e.to_string())?;
+        let (texture, mip_views) = create_hiz_texture_and_views(device, width, height, mip_count)?;
         Ok(Self {
             init_pipeline,
             downsample_pipeline,
