@@ -20,6 +20,7 @@
 
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types::ParticleParams;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::particles::{ParticleEmitterRecord, ParticleSpawnState};
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -28,11 +29,12 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use crate::directx::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
+use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::{
-    HDR_FORMAT, create_buffer, create_uav_buffer, transition_barrier, write_texture_srv,
+    HDR_FORMAT, create_uav_buffer, transition_barrier, write_texture_srv,
 };
 
 // Cap on the number of simultaneously-live particle emitters. The SRV heap
@@ -55,10 +57,16 @@ type ParticleShaders = (Vec<u8>, Vec<u8>, Vec<u8>);
 
 pub(in crate::directx) fn compile_particle_shaders(
     hot_reload: bool,
-) -> Result<ParticleShaders, String> {
-    let cs = slang_builtins::PARTICLE_SIMULATE.compile(hot_reload)?;
-    let vs = slang_builtins::PARTICLE_VERT.compile(hot_reload)?;
-    let ps = slang_builtins::PARTICLE_FRAG.compile(hot_reload)?;
+) -> RenderResult<ParticleShaders> {
+    let cs = slang_builtins::PARTICLE_SIMULATE
+        .compile(hot_reload)
+        .map_err(RenderError::ShaderCompile)?;
+    let vs = slang_builtins::PARTICLE_VERT
+        .compile(hot_reload)
+        .map_err(RenderError::ShaderCompile)?;
+    let ps = slang_builtins::PARTICLE_FRAG
+        .compile(hot_reload)
+        .map_err(RenderError::ShaderCompile)?;
     Ok((cs, vs, ps))
 }
 
@@ -88,7 +96,7 @@ pub(in crate::directx) struct ParticleEmitterGpuState {
 //   [0] root CBV b0 : ParticleParams (per-emitter, per-frame)
 //   [1] root UAV u0 : pool (RWStructuredBuffer<Particle>)
 //   [2] root UAV u1 : spawn_counter (RWByteAddressBuffer)
-fn create_simulate_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignature, String> {
+fn create_simulate_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     let params = [
         D3D12_ROOT_PARAMETER {
             ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
@@ -127,7 +135,11 @@ fn create_simulate_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSig
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
         ..Default::default()
     };
-    serialize_desc_and_create(device, &desc, "particle simulate root sig")
+    Ok(serialize_desc_and_create(
+        device,
+        &desc,
+        "particle simulate root sig",
+    )?)
 }
 
 // Graphics root signature for `particle_vertex` + `particle_fragment`. The two
@@ -138,7 +150,7 @@ fn create_simulate_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSig
 //   [2] root SRV t0   : pool           (structured-buffer SRV)
 //   [3] descriptor table SRV t1 : emitter albedo texture
 //   static sampler s0 : linear clamp
-fn create_render_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignature, String> {
+fn create_render_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     let albedo_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
         NumDescriptors: 1,
@@ -210,14 +222,18 @@ fn create_render_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSigna
         // The vertex shader emits the quad from SV_VertexID; no input layout.
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
     };
-    serialize_desc_and_create(device, &desc, "particle render root sig")
+    Ok(serialize_desc_and_create(
+        device,
+        &desc,
+        "particle render root sig",
+    )?)
 }
 
 fn create_simulate_pso(
     device: &ID3D12Device,
     root_sig: &ID3D12RootSignature,
     cs: &[u8],
-) -> Result<ID3D12PipelineState, String> {
+) -> RenderResult<ID3D12PipelineState> {
     let desc = D3D12_COMPUTE_PIPELINE_STATE_DESC {
         pRootSignature: com::borrowed(root_sig),
         CS: D3D12_SHADER_BYTECODE {
@@ -229,7 +245,7 @@ fn create_simulate_pso(
     // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
     // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_compute(device, &desc) }
-        .map_err(|e| format!("create particle simulate PSO: {e}"))
+        .map_err(|e| map_pso_hresult(e.code(), "create particle simulate PSO"))
 }
 
 fn create_render_pso(
@@ -237,7 +253,7 @@ fn create_render_pso(
     root_sig: &ID3D12RootSignature,
     vs: &[u8],
     ps: &[u8],
-) -> Result<ID3D12PipelineState, String> {
+) -> RenderResult<ID3D12PipelineState> {
     let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
         pRootSignature: com::borrowed(root_sig),
         VS: D3D12_SHADER_BYTECODE {
@@ -299,7 +315,7 @@ fn create_render_pso(
     // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
     // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
-        .map_err(|e| format!("create particle render PSO: {e}"))
+        .map_err(|e| map_pso_hresult(e.code(), "create particle render PSO"))
 }
 
 // Pipelines + per-frame uniform rings shared across emitters. Owned by
@@ -342,7 +358,7 @@ impl ParticleResources {
         emitter_srv_base_slot: usize,
         info_queue: Option<&ID3D12InfoQueue>,
         hot_reload: bool,
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         let device = alloc.device();
         let (cs, vs, ps) = compile_particle_shaders(hot_reload)?;
 
@@ -362,8 +378,7 @@ impl ParticleResources {
         let mut view_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
         let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
         for _ in 0..FRAMES {
-            let buf = create_buffer(
-                alloc,
+            let buf = alloc.alloc_buffer(
                 view_size,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -372,7 +387,7 @@ impl ParticleResources {
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
             unsafe { buf.Map(0, None, Some(&mut ptr)) }
-                .map_err(|e| format!("map particle view ubo: {e}"))?;
+                .map_err(|e| map_hresult(e.code(), "map particle view ubo"))?;
             view_ubo_ptrs.push(ptr as *mut u8);
             view_ubo_resources.push(buf);
         }
@@ -384,8 +399,7 @@ impl ParticleResources {
         let mut params_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
         let mut params_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
         for _ in 0..FRAMES {
-            let buf = create_buffer(
-                alloc,
+            let buf = alloc.alloc_buffer(
                 params_total,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -394,7 +408,7 @@ impl ParticleResources {
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
             unsafe { buf.Map(0, None, Some(&mut ptr)) }
-                .map_err(|e| format!("map particle params ubo: {e}"))?;
+                .map_err(|e| map_hresult(e.code(), "map particle params ubo"))?;
             params_ubo_ptrs.push(ptr as *mut u8);
             params_ubo_resources.push(buf);
         }
@@ -407,8 +421,7 @@ impl ParticleResources {
         let mut budget_upload_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
         let mut budget_upload_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
         for _ in 0..FRAMES {
-            let buf = create_buffer(
-                alloc,
+            let buf = alloc.alloc_buffer(
                 budget_total,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -417,7 +430,7 @@ impl ParticleResources {
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
             unsafe { buf.Map(0, None, Some(&mut ptr)) }
-                .map_err(|e| format!("map particle budget upload: {e}"))?;
+                .map_err(|e| map_hresult(e.code(), "map particle budget upload"))?;
             budget_upload_ptrs.push(ptr as *mut u8);
             budget_upload_resources.push(buf);
         }
@@ -445,7 +458,7 @@ impl ParticleResources {
 pub(in crate::directx) fn build_emitter_gpu_state(
     alloc: &DeviceAllocator,
     record: &ParticleEmitterRecord,
-) -> Result<ParticleEmitterGpuState, String> {
+) -> RenderResult<ParticleEmitterGpuState> {
     let device = alloc.device();
     let slots = record.max_particles as u64;
     let pool_bytes = slots * std::mem::size_of::<GpuParticle>() as u64;
@@ -481,10 +494,9 @@ fn zero_default_buffer(
     alloc: &DeviceAllocator,
     target: &ID3D12Resource,
     bytes: u64,
-) -> Result<(), String> {
+) -> RenderResult<()> {
     let device = alloc.device();
-    let upload = create_buffer(
-        alloc,
+    let upload = alloc.alloc_buffer(
         bytes,
         D3D12_HEAP_TYPE_UPLOAD,
         D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -494,7 +506,7 @@ fn zero_default_buffer(
     // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
     // receives the mapping.
     unsafe { upload.Map(0, None, Some(&mut ptr)) }
-        .map_err(|e| format!("zero_default_buffer: map upload: {e}"))?;
+        .map_err(|e| map_hresult(e.code(), "zero_default_buffer: map upload"))?;
     // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the source
     // is a separate allocation, so the ranges cannot overlap.
     unsafe { std::ptr::write_bytes(ptr as *mut u8, 0, bytes as usize) };
@@ -507,12 +519,12 @@ fn zero_default_buffer(
         // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
         // new COM object lands in a binding that owns it.
         unsafe { device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT) }
-            .map_err(|e| format!("zero_default_buffer: alloc: {e}"))?;
+            .map_err(|e| map_hresult(e.code(), "zero_default_buffer: alloc"))?;
     let list: ID3D12GraphicsCommandList =
         // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
         // new COM object lands in a binding that owns it.
         unsafe { device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &cmd_alloc, None) }
-            .map_err(|e| format!("zero_default_buffer: list: {e}"))?;
+            .map_err(|e| map_hresult(e.code(), "zero_default_buffer: list"))?;
 
     let to_copy_dest = transition_barrier(
         target,
@@ -534,9 +546,9 @@ fn zero_default_buffer(
     // these commands name is live for the call.
     unsafe { list.ResourceBarrier(&[back_to_uav]) };
     // SAFETY: the command list is live and in the recording state, which is what `Close` requires.
-    unsafe { list.Close() }.map_err(|e| format!("zero_default_buffer: close: {e}"))?;
+    unsafe { list.Close() }.map_err(|e| map_hresult(e.code(), "zero_default_buffer: close"))?;
     let cmd: ID3D12CommandList = windows::core::Interface::cast(&list)
-        .map_err(|e| format!("zero_default_buffer: cast: {e}"))?;
+        .map_err(|e| map_hresult(e.code(), "zero_default_buffer: cast"))?;
     // SAFETY: every command list in the submission is live and closed, and the slice outlives the
     // call.
     unsafe { alloc.queue().ExecuteCommandLists(&[Some(cmd)]) };
@@ -547,20 +559,20 @@ fn zero_default_buffer(
     // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
     // COM object lands in a binding that owns it.
     let fence: ID3D12Fence = unsafe { device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }
-        .map_err(|e| format!("zero_default_buffer: fence: {e}"))?;
+        .map_err(|e| map_hresult(e.code(), "zero_default_buffer: fence"))?;
     // SAFETY: the fence and the event were created from this device and are live for the call.
     unsafe { alloc.queue().Signal(&fence, 1) }
-        .map_err(|e| format!("zero_default_buffer: signal: {e}"))?;
+        .map_err(|e| map_hresult(e.code(), "zero_default_buffer: signal"))?;
     // SAFETY: the fence and the event were created from this device and are live for the call.
     if unsafe { fence.GetCompletedValue() } < 1 {
         let event =
             // SAFETY: an auto-reset, initially unsignaled event with no name and no security
             // attributes; the call borrows nothing.
             unsafe { windows::Win32::System::Threading::CreateEventW(None, false, false, None) }
-                .map_err(|e| format!("zero_default_buffer: event: {e}"))?;
+                .map_err(|e| map_hresult(e.code(), "zero_default_buffer: event"))?;
         // SAFETY: the fence and the event were created from this device and are live for the call.
         unsafe { fence.SetEventOnCompletion(1, event) }
-            .map_err(|e| format!("zero_default_buffer: set event: {e}"))?;
+            .map_err(|e| map_hresult(e.code(), "zero_default_buffer: set event"))?;
         // SAFETY: `event` is the handle created above and is still open.
         unsafe { windows::Win32::System::Threading::WaitForSingleObject(event, u32::MAX) };
         // SAFETY: `event` was created above, the wait has returned, and it is closed exactly once.
@@ -945,7 +957,7 @@ impl DxContext {
     // that never declared an emitter pays zero pipeline cost until the
     // first add. Reuses tombstoned slots from a prior `remove_emitter`
     // before growing the vec.
-    pub(crate) fn add_emitter(&mut self, record: ParticleEmitterRecord) -> Result<usize, String> {
+    pub(crate) fn add_emitter(&mut self, record: ParticleEmitterRecord) -> RenderResult<usize> {
         if self.particle.resources.is_none() {
             let resources = ParticleResources::new(
                 &self.hw.alloc,
@@ -960,7 +972,9 @@ impl DxContext {
             .resources
             .as_ref()
             .map(|r| r.emitter_srv_base_slot)
-            .ok_or_else(|| "add_emitter: particle pipeline unavailable".to_string())?;
+            .ok_or_else(|| {
+                RenderError::Other("add_emitter: particle pipeline unavailable".to_string())
+            })?;
 
         let gpu_state = build_emitter_gpu_state(&self.hw.alloc, &record)?;
         let last_tex = self.scene.textures.len().saturating_sub(1);
@@ -973,9 +987,9 @@ impl DxContext {
             slot
         } else {
             if self.particle.records.len() >= MAX_EMITTERS {
-                return Err(format!(
+                return Err(RenderError::Other(format!(
                     "add_emitter: MAX_EMITTERS ({MAX_EMITTERS}) exceeded"
-                ));
+                )));
             }
             self.particle.records.push(Some(record));
             self.particle.emitter_state.push(Some(gpu_state));
@@ -1000,14 +1014,14 @@ impl DxContext {
     // the D3D12 driver keeps them alive until any in-flight command list
     // that referenced them completes, so this is safe to call mid-frame
     // between encode passes.
-    pub(crate) fn remove_emitter(&mut self, emitter_id: usize) -> Result<(), String> {
-        let rec_slot = self
-            .particle
-            .records
-            .get_mut(emitter_id)
-            .ok_or_else(|| format!("remove_emitter: id {emitter_id} out of range"))?;
+    pub(crate) fn remove_emitter(&mut self, emitter_id: usize) -> RenderResult<()> {
+        let rec_slot = self.particle.records.get_mut(emitter_id).ok_or_else(|| {
+            RenderError::Other(format!("remove_emitter: id {emitter_id} out of range"))
+        })?;
         if rec_slot.is_none() {
-            return Err(format!("remove_emitter: id {emitter_id} already removed"));
+            return Err(RenderError::Other(format!(
+                "remove_emitter: id {emitter_id} already removed"
+            )));
         }
         *rec_slot = None;
         if let Some(gpu_slot) = self.particle.emitter_state.get_mut(emitter_id) {

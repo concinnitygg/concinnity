@@ -23,12 +23,11 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
 use crate::directx::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
+use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::serialize_and_create_root_sig;
 use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
-use crate::directx::texture::{
-    create_buffer, create_main_depth_texture, write_format_rtv, write_format_srv,
-};
+use crate::directx::texture::{create_main_depth_texture, write_format_rtv, write_format_srv};
 
 // Normal+depth target: rgb = unit view-space normal, a = positive linear view
 // depth (-view_z). Alpha 0 (cleared background) marks "no geometry". Matches
@@ -68,7 +67,7 @@ fn create_gbuffer_pso(
     vs: &[u8],
     ps: &[u8],
     layout: &[D3D12_INPUT_ELEMENT_DESC],
-) -> Result<ID3D12PipelineState, String> {
+) -> RenderResult<ID3D12PipelineState> {
     let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
         pRootSignature: com::borrowed(root_sig),
         VS: D3D12_SHADER_BYTECODE {
@@ -132,7 +131,7 @@ fn create_gbuffer_pso(
     // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
     // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
-        .map_err(|e| format!("create gbuffer prepass PSO: {e}"))
+        .map_err(|e| map_pso_hresult(e.code(), "create gbuffer prepass PSO"))
 }
 
 // Vertex input layout for the GPU-driven (bindless) G-buffer pre-pass: the
@@ -197,7 +196,7 @@ fn gbuffer_bindless_input_layout() -> Vec<D3D12_INPUT_ELEMENT_DESC> {
 // the pixel shader through a flat varying; the FS reads no resources).
 fn create_gbuffer_bindless_root_signature(
     device: &ID3D12Device,
-) -> Result<ID3D12RootSignature, String> {
+) -> RenderResult<ID3D12RootSignature> {
     let params = [
         // [0] Root constant b0: object id (set per command by the command sig).
         D3D12_ROOT_PARAMETER {
@@ -256,7 +255,11 @@ fn create_gbuffer_bindless_root_signature(
             ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,
         },
     ];
-    serialize_and_create_root_sig(device, &params, "gbuffer bindless root sig")
+    Ok(serialize_and_create_root_sig(
+        device,
+        &params,
+        "gbuffer bindless root sig",
+    )?)
 }
 
 // Threads per group, matching `[numthreads(64, 1, 1)]` in model_history.slang.
@@ -278,9 +281,7 @@ fn uav_barrier(resource: &ID3D12Resource) -> D3D12_RESOURCE_BARRIER {
 
 // Root signature for the model-history snapshot kernel. slangc assigns
 // b0/t0/u0 from declaration order, which is what these three parameters bind.
-fn create_model_history_root_signature(
-    device: &ID3D12Device,
-) -> Result<ID3D12RootSignature, String> {
+fn create_model_history_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     let params = [
         // [0] Root constants b0: ModelHistoryParams (record count + padding).
         D3D12_ROOT_PARAMETER {
@@ -317,7 +318,11 @@ fn create_model_history_root_signature(
             ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
         },
     ];
-    serialize_and_create_root_sig(device, &params, "model history root sig")
+    Ok(serialize_and_create_root_sig(
+        device,
+        &params,
+        "model history root sig",
+    )?)
 }
 
 // Build the model-history snapshot kernel: the compute PSO and its root
@@ -484,7 +489,7 @@ impl GbufferResources {
         extent: GbufferExtent,
         slots: GbufferSlots,
         pooled: &GbufferPooled,
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         let GbufferDeviceCtx { alloc } = ctx;
         let device = alloc.device();
         let GbufferExtent { width, height } = extent;
@@ -507,8 +512,7 @@ impl GbufferResources {
         let mut view_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
         let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
         for _ in 0..FRAMES {
-            let buf = create_buffer(
-                alloc,
+            let buf = alloc.alloc_buffer(
                 view_size,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -517,7 +521,7 @@ impl GbufferResources {
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
             unsafe { buf.Map(0, None, Some(&mut ptr)) }
-                .map_err(|e| format!("map gbuffer view ubo: {e}"))?;
+                .map_err(|e| map_hresult(e.code(), "map gbuffer view ubo"))?;
             view_ubo_ptrs.push(ptr as *mut u8);
             view_ubo_resources.push(buf);
         }
@@ -554,7 +558,7 @@ impl GbufferResources {
         srv_cpu_base: D3D12_CPU_DESCRIPTOR_HANDLE,
         srv_gpu_base: D3D12_GPU_DESCRIPTOR_HANDLE,
         pooled: &GbufferPooled,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         self.repoint_pooled(device, srv_cpu_base, srv_gpu_base, pooled);
         self.depth = create_main_depth_texture(device, width, height, self.depth_dsv, 1, true)?;
         Ok(())

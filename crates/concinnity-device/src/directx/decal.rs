@@ -11,6 +11,7 @@
 
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::render::decal::DecalRecord;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::transform::mat4_inverse;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -19,10 +20,11 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
+use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
-use crate::directx::texture::{HDR_FORMAT, create_buffer, upload_buffer, write_texture_srv};
+use crate::directx::texture::{HDR_FORMAT, upload_buffer, write_texture_srv};
 
 // Compile the decal vertex + fragment shaders; the MSAA variant keeps the
 // fragment shader's depth SRV declaration in sync with the resource's
@@ -31,14 +33,18 @@ use crate::directx::texture::{HDR_FORMAT, create_buffer, upload_buffer, write_te
 pub(in crate::directx) fn compile_decal_shaders(
     msaa_samples: u32,
     hot_reload: bool,
-) -> Result<(Vec<u8>, Vec<u8>), String> {
+) -> RenderResult<(Vec<u8>, Vec<u8>)> {
     let frag = if msaa_samples > 1 {
         &slang_builtins::DECAL_FRAG_MSAA
     } else {
         &slang_builtins::DECAL_FRAG
     };
-    let vs = slang_builtins::DECAL_VERT.compile(hot_reload)?;
-    let ps = frag.compile(hot_reload)?;
+    let vs = slang_builtins::DECAL_VERT
+        .compile(hot_reload)
+        .map_err(RenderError::ShaderCompile)?;
+    let ps = frag
+        .compile(hot_reload)
+        .map_err(RenderError::ShaderCompile)?;
     Ok((vs, ps))
 }
 
@@ -51,7 +57,7 @@ pub(in crate::directx) fn rebuild_decal_pso(
     msaa_samples: u32,
     hot_reload: bool,
     info_queue: Option<&ID3D12InfoQueue>,
-) -> Result<ID3D12PipelineState, String> {
+) -> RenderResult<ID3D12PipelineState> {
     let (vs, ps) = compile_decal_shaders(msaa_samples, hot_reload)?;
     dump_on_err(info_queue, create_decal_pso(device, root_sig, &vs, &ps))
 }
@@ -91,7 +97,7 @@ pub(in crate::directx) use concinnity_core::render::uniforms::DecalView;
 //   [2] table  t0     scene depth SRV (Texture2D[MS]<float>)
 //   [3] table  t1     decal albedo SRV
 //   static sampler s0 : linear clamp
-fn create_decal_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignature, String> {
+fn create_decal_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     let depth_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
         NumDescriptors: 1,
@@ -169,7 +175,7 @@ fn create_decal_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignat
         pStaticSamplers: &samp,
         Flags: D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
     };
-    serialize_desc_and_create(device, &desc, "decal root sig")
+    Ok(serialize_desc_and_create(device, &desc, "decal root sig")?)
 }
 
 fn decal_input_layout() -> [D3D12_INPUT_ELEMENT_DESC; 1] {
@@ -194,7 +200,7 @@ fn create_decal_pso(
     root_sig: &ID3D12RootSignature,
     vs: &[u8],
     ps: &[u8],
-) -> Result<ID3D12PipelineState, String> {
+) -> RenderResult<ID3D12PipelineState> {
     let layout = decal_input_layout();
     let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
         pRootSignature: com::borrowed(root_sig),
@@ -263,7 +269,7 @@ fn create_decal_pso(
     // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
     // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
-        .map_err(|e| format!("create decal PSO: {e}"))
+        .map_err(|e| map_pso_hresult(e.code(), "create decal PSO"))
 }
 
 // Owned by `DxContext` exactly once: the decal pipeline, the unit-cube
@@ -319,7 +325,7 @@ impl DecalResources {
         depth_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
         info_queue: Option<&ID3D12InfoQueue>,
         hot_reload: bool,
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         let device = alloc.device();
         let (vs, ps) = compile_decal_shaders(msaa_samples, hot_reload)?;
 
@@ -351,8 +357,7 @@ impl DecalResources {
         let mut view_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
         let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
         for _ in 0..FRAMES {
-            let buf = create_buffer(
-                alloc,
+            let buf = alloc.alloc_buffer(
                 view_size,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -361,7 +366,7 @@ impl DecalResources {
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
             unsafe { buf.Map(0, None, Some(&mut ptr)) }
-                .map_err(|e| format!("map decal view ubo: {e}"))?;
+                .map_err(|e| map_hresult(e.code(), "map decal view ubo"))?;
             view_ubo_ptrs.push(ptr as *mut u8);
             view_ubo_resources.push(buf);
         }
@@ -373,8 +378,7 @@ impl DecalResources {
         let mut params_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
         let mut params_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
         for _ in 0..FRAMES {
-            let buf = create_buffer(
-                alloc,
+            let buf = alloc.alloc_buffer(
                 params_total,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -383,7 +387,7 @@ impl DecalResources {
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
             unsafe { buf.Map(0, None, Some(&mut ptr)) }
-                .map_err(|e| format!("map decal params ubo: {e}"))?;
+                .map_err(|e| map_hresult(e.code(), "map decal params ubo"))?;
             params_ubo_ptrs.push(ptr as *mut u8);
             params_ubo_resources.push(buf);
         }
@@ -610,12 +614,10 @@ impl DxContext {
     // Append a runtime decal. Writes the per-decal albedo SRV into the
     // reserved heap region; the encoder reads it next frame. Reuses
     // tombstoned slots from a prior `remove_decal` before growing the vec.
-    pub(crate) fn add_decal(&mut self, record: DecalRecord) -> Result<usize, String> {
-        let state = self
-            .decal
-            .state
-            .as_ref()
-            .ok_or_else(|| "add_decal: decal pipeline unavailable".to_string())?;
+    pub(crate) fn add_decal(&mut self, record: DecalRecord) -> RenderResult<usize> {
+        let state = self.decal.state.as_ref().ok_or_else(|| {
+            RenderError::Other("add_decal: decal pipeline unavailable".to_string())
+        })?;
         let base_slot = state.decal_srv_base_slot;
 
         let last_tex = self.scene.textures.len().saturating_sub(1);
@@ -624,11 +626,9 @@ impl DxContext {
         // Write the SRV for the chosen texture into this decal's heap slot.
         // The slot may be reused from a prior tombstone, in which case the
         // old descriptor is just overwritten.
-        let id = self
-            .decal
-            .set
-            .insert(record)
-            .map_err(|_| format!("add_decal: MAX_DECALS ({MAX_DECALS}) exceeded"))?;
+        let id = self.decal.set.insert(record).map_err(|_| {
+            RenderError::Other(format!("add_decal: MAX_DECALS ({MAX_DECALS}) exceeded"))
+        })?;
         let srv_cpu = D3D12_CPU_DESCRIPTOR_HANDLE {
             // SAFETY: a property query on a live descriptor heap; it only reads.
             ptr: unsafe {
@@ -645,10 +645,10 @@ impl DxContext {
     // Tombstone a runtime decal slot. The id becomes invalid; the next
     // `add_decal` may reuse it. Returns an error when the id is out of
     // range or already tombstoned.
-    pub(crate) fn remove_decal(&mut self, decal_id: usize) -> Result<(), String> {
+    pub(crate) fn remove_decal(&mut self, decal_id: usize) -> RenderResult<()> {
         self.decal
             .set
             .remove(decal_id)
-            .map_err(|e| format!("remove_decal: id {decal_id} {e}"))
+            .map_err(|e| RenderError::Other(format!("remove_decal: id {decal_id} {e}")))
     }
 }

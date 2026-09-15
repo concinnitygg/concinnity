@@ -14,6 +14,7 @@
 use concinnity_core::components::{MAX_WATER_WAVES, WaterSurface, WaterWave};
 use concinnity_core::geometry::water_grid::build_water_grid;
 use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use windows::Win32::Graphics::Direct3D12::*;
 // `WaterParams` / `WaterWaveGpu` (the per-surface cbuffer and its wave lanes)
 // are GPU-free layout structs that live in `core::render`; re-export them so
@@ -82,14 +83,18 @@ fn water_params_from(surface: &WaterSurface, planar: bool) -> WaterParams {
 pub(in crate::directx) fn compile_water_shaders(
     msaa_samples: u32,
     hot_reload: bool,
-) -> Result<(Vec<u8>, Vec<u8>), String> {
+) -> RenderResult<(Vec<u8>, Vec<u8>)> {
     let frag = if msaa_samples > 1 {
         &slang_builtins::WATER_FRAG_MSAA
     } else {
         &slang_builtins::WATER_FRAG
     };
-    let vs = slang_builtins::WATER_VERT.compile(hot_reload)?;
-    let ps = frag.compile(hot_reload)?;
+    let vs = slang_builtins::WATER_VERT
+        .compile(hot_reload)
+        .map_err(RenderError::ShaderCompile)?;
+    let ps = frag
+        .compile(hot_reload)
+        .map_err(RenderError::ShaderCompile)?;
     Ok((vs, ps))
 }
 
@@ -101,7 +106,7 @@ pub(in crate::directx) fn rebuild_water_pso(
     msaa_samples: u32,
     hot_reload: bool,
     info_queue: Option<&ID3D12InfoQueue>,
-) -> Result<ID3D12PipelineState, String> {
+) -> RenderResult<ID3D12PipelineState> {
     let (vs, ps) = compile_water_shaders(msaa_samples, hot_reload)?;
     dump_on_err(
         info_queue,
@@ -123,7 +128,7 @@ struct WaterRtShaders {
 // geometry SRVs claim t4..t10. Returns an `Err` (which the caller turns into a
 // None RT pipeline + the base path) when slangc is unavailable or the shader
 // fails to compile.
-fn compile_water_rt_shaders(msaa_samples: u32, hot_reload: bool) -> Result<WaterRtShaders, String> {
+fn compile_water_rt_shaders(msaa_samples: u32, hot_reload: bool) -> RenderResult<WaterRtShaders> {
     let msaa = msaa_samples > 1;
     let flat = if msaa {
         &slang_builtins::WATER_RT_FRAG_MSAA
@@ -136,9 +141,15 @@ fn compile_water_rt_shaders(msaa_samples: u32, hot_reload: bool) -> Result<Water
         &slang_builtins::WATER_RT_FRAG_TEXTURED
     };
     Ok(WaterRtShaders {
-        vs: slang_builtins::WATER_VERT.compile(hot_reload)?,
-        flat_ps: flat.compile(hot_reload)?,
-        textured_ps: textured.compile(hot_reload)?,
+        vs: slang_builtins::WATER_VERT
+            .compile(hot_reload)
+            .map_err(RenderError::ShaderCompile)?,
+        flat_ps: flat
+            .compile(hot_reload)
+            .map_err(RenderError::ShaderCompile)?,
+        textured_ps: textured
+            .compile(hot_reload)
+            .map_err(RenderError::ShaderCompile)?,
     })
 }
 
@@ -166,7 +177,7 @@ pub(in crate::directx) fn build_water_producer(
     // Per-surface planar resolve slot (aligned with `surfaces`); `None` surfaces
     // keep the probe/sky reflection. From `assign_planar_slots`.
     planar_slots: &[Option<usize>],
-) -> Result<TransparentProducer, String> {
+) -> RenderResult<TransparentProducer> {
     let WaterBuild {
         alloc,
         root_sig,
@@ -202,7 +213,8 @@ pub(in crate::directx) fn build_water_producer(
     for (i, surface) in surfaces.iter().enumerate() {
         let planar_slot = planar_slots.get(i).copied().flatten();
         let (verts, idxs) =
-            build_water_grid(surface.extent[0], surface.extent[1], surface.subdivisions)?;
+            build_water_grid(surface.extent[0], surface.extent[1], surface.subdivisions)
+                .map_err(RenderError::Other)?;
 
         // Flatten into the standard Vertex layout. Tangent and color are
         // placeholders: the water shader rebuilds its normal frame analytically
@@ -248,7 +260,7 @@ fn build_water_rt_pipelines(
     msaa_samples: u32,
     hot_reload: bool,
     info_queue: Option<&ID3D12InfoQueue>,
-) -> Result<(ID3D12PipelineState, ID3D12PipelineState), String> {
+) -> RenderResult<(ID3D12PipelineState, ID3D12PipelineState)> {
     let shaders = compile_water_rt_shaders(msaa_samples, hot_reload)?;
     let flat = dump_on_err(
         info_queue,

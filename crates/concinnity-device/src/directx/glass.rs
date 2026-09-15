@@ -18,6 +18,7 @@
 use concinnity_core::components::GlassPanel;
 use concinnity_core::geometry::glass_quad::build_glass_quad;
 use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use windows::Win32::Graphics::Direct3D12::*;
 // `GlassParams` (the per-panel cbuffer) is a GPU-free layout struct that lives
 // in `core::render`; re-export it so `crate::directx::glass::GlassParams` is
@@ -54,14 +55,18 @@ fn glass_params_from(panel: &GlassPanel, planar: f32) -> GlassParams {
 pub(in crate::directx) fn compile_glass_shaders(
     msaa_samples: u32,
     hot_reload: bool,
-) -> Result<(Vec<u8>, Vec<u8>), String> {
+) -> RenderResult<(Vec<u8>, Vec<u8>)> {
     let frag = if msaa_samples > 1 {
         &slang_builtins::GLASS_FRAG_MSAA
     } else {
         &slang_builtins::GLASS_FRAG
     };
-    let vs = slang_builtins::GLASS_VERT.compile(hot_reload)?;
-    let ps = frag.compile(hot_reload)?;
+    let vs = slang_builtins::GLASS_VERT
+        .compile(hot_reload)
+        .map_err(RenderError::ShaderCompile)?;
+    let ps = frag
+        .compile(hot_reload)
+        .map_err(RenderError::ShaderCompile)?;
     Ok((vs, ps))
 }
 
@@ -73,7 +78,7 @@ pub(in crate::directx) fn rebuild_glass_pso(
     msaa_samples: u32,
     hot_reload: bool,
     info_queue: Option<&ID3D12InfoQueue>,
-) -> Result<ID3D12PipelineState, String> {
+) -> RenderResult<ID3D12PipelineState> {
     let (vs, ps) = compile_glass_shaders(msaa_samples, hot_reload)?;
     dump_on_err(
         info_queue,
@@ -94,7 +99,7 @@ struct GlassRtShaders {
 // geometry SRVs claim t4..t10. Returns an `Err` (which the caller turns into a
 // None RT pipeline + the base path) when slangc is unavailable or the shader
 // fails to compile.
-fn compile_glass_rt_shaders(msaa_samples: u32, hot_reload: bool) -> Result<GlassRtShaders, String> {
+fn compile_glass_rt_shaders(msaa_samples: u32, hot_reload: bool) -> RenderResult<GlassRtShaders> {
     let msaa = msaa_samples > 1;
     let flat = if msaa {
         &slang_builtins::GLASS_RT_FRAG_MSAA
@@ -107,9 +112,15 @@ fn compile_glass_rt_shaders(msaa_samples: u32, hot_reload: bool) -> Result<Glass
         &slang_builtins::GLASS_RT_FRAG_TEXTURED
     };
     Ok(GlassRtShaders {
-        vs: slang_builtins::GLASS_VERT.compile(hot_reload)?,
-        flat_ps: flat.compile(hot_reload)?,
-        textured_ps: textured.compile(hot_reload)?,
+        vs: slang_builtins::GLASS_VERT
+            .compile(hot_reload)
+            .map_err(RenderError::ShaderCompile)?,
+        flat_ps: flat
+            .compile(hot_reload)
+            .map_err(RenderError::ShaderCompile)?,
+        textured_ps: textured
+            .compile(hot_reload)
+            .map_err(RenderError::ShaderCompile)?,
     })
 }
 
@@ -137,7 +148,7 @@ pub(in crate::directx) fn build_glass_producer(
     // Per-pane planar resolve slot (aligned with `panels`); `None` panes keep the
     // probe/sky reflection. From `assign_planar_slots`.
     planar_slots: &[Option<usize>],
-) -> Result<TransparentProducer, String> {
+) -> RenderResult<TransparentProducer> {
     let GlassBuild {
         alloc,
         root_sig,
@@ -220,7 +231,7 @@ fn build_glass_rt_pipelines(
     msaa_samples: u32,
     hot_reload: bool,
     info_queue: Option<&ID3D12InfoQueue>,
-) -> Result<(ID3D12PipelineState, ID3D12PipelineState), String> {
+) -> RenderResult<(ID3D12PipelineState, ID3D12PipelineState)> {
     let shaders = compile_glass_rt_shaders(msaa_samples, hot_reload)?;
     let flat = dump_on_err(
         info_queue,
@@ -248,10 +259,7 @@ pub(in crate::directx) struct GlassMeshBuild<'a> {
 // Compile the flat + textured see-through mesh fragments (SM 6.5, for the inline
 // ray query) and the vertex stage they share. Unlike the pane family there is no
 // non-RT pair: the trace is what makes the mesh see-through.
-fn compile_glass_mesh_shaders(
-    msaa_samples: u32,
-    hot_reload: bool,
-) -> Result<GlassRtShaders, String> {
+fn compile_glass_mesh_shaders(msaa_samples: u32, hot_reload: bool) -> RenderResult<GlassRtShaders> {
     let msaa = msaa_samples > 1;
     let flat = if msaa {
         &slang_builtins::GLASS_MESH_RT_FRAG_MSAA
@@ -264,9 +272,15 @@ fn compile_glass_mesh_shaders(
         &slang_builtins::GLASS_MESH_RT_FRAG_TEXTURED
     };
     Ok(GlassRtShaders {
-        vs: slang_builtins::GLASS_MESH_VERT.compile(hot_reload)?,
-        flat_ps: flat.compile(hot_reload)?,
-        textured_ps: textured.compile(hot_reload)?,
+        vs: slang_builtins::GLASS_MESH_VERT
+            .compile(hot_reload)
+            .map_err(RenderError::ShaderCompile)?,
+        flat_ps: flat
+            .compile(hot_reload)
+            .map_err(RenderError::ShaderCompile)?,
+        textured_ps: textured
+            .compile(hot_reload)
+            .map_err(RenderError::ShaderCompile)?,
     })
 }
 
@@ -277,7 +291,7 @@ fn compile_glass_mesh_shaders(
 pub(in crate::directx) fn build_glass_mesh_producer(
     build: GlassMeshBuild,
     object_indices: &[usize],
-) -> Result<GlassMeshProducer, String> {
+) -> RenderResult<GlassMeshProducer> {
     let GlassMeshBuild {
         alloc,
         rt_root_sig,

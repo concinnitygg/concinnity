@@ -38,6 +38,7 @@ use concinnity_core::gfx::lod;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::RtParams;
 use concinnity_core::gfx::rt_reflections::RtParamsInputs;
+use concinnity_core::render::error::RenderResult;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -46,9 +47,10 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
+use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::{main_input_layout, serialize_desc_and_create};
 use crate::directx::texture::{
-    HDR_FORMAT, create_buffer, create_hdr_resolve_target, transition_barrier, upload_buffer,
+    HDR_FORMAT, create_hdr_resolve_target, transition_barrier, upload_buffer,
 };
 
 // RtParams push size (144 B; see gfx::render_types::RtParams), shared with the
@@ -116,7 +118,7 @@ impl TransparentRecord {
     pub(in crate::directx) fn upload(
         alloc: &DeviceAllocator,
         upload: RecordUpload<'_>,
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         let vbytes = bytemuck::cast_slice(upload.vertices);
         let ibytes = bytemuck::cast_slice(upload.indices);
         let vertex_buffer = upload_buffer(
@@ -136,8 +138,7 @@ impl TransparentRecord {
             Format: DXGI_FORMAT_R16_UINT,
         };
 
-        let params_cbuffer = create_buffer(
-            alloc,
+        let params_cbuffer = alloc.alloc_buffer(
             align256(upload.params.len() as u64),
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -146,7 +147,7 @@ impl TransparentRecord {
         // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local
         // that receives the mapping.
         unsafe { params_cbuffer.Map(0, None, Some(&mut p)) }
-            .map_err(|e| format!("map transparent params cb: {e}"))?;
+            .map_err(|e| map_hresult(e.code(), "map transparent params cb"))?;
         // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the
         // source is a separate allocation, so the ranges cannot overlap. Persistently mapped,
         // never unmapped.
@@ -251,14 +252,13 @@ impl GlassMeshProducer {
         flat_rt_pso: ID3D12PipelineState,
         textured_rt_pso: Option<ID3D12PipelineState>,
         object_indices: Vec<usize>,
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         let block = align256(std::mem::size_of::<GlassMeshParams>() as u64);
         let ring_size = block * object_indices.len().max(1) as u64;
         let mut params_ring: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
         let mut params_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
         for _ in 0..FRAMES {
-            let buf = create_buffer(
-                alloc,
+            let buf = alloc.alloc_buffer(
                 ring_size,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -267,7 +267,7 @@ impl GlassMeshProducer {
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
             unsafe { buf.Map(0, None, Some(&mut ptr)) }
-                .map_err(|e| format!("map glass mesh params ring: {e}"))?;
+                .map_err(|e| map_hresult(e.code(), "map glass mesh params ring"))?;
             params_ptrs.push(ptr as *mut u8);
             params_ring.push(buf);
         }
@@ -365,7 +365,7 @@ use concinnity_core::render::transparent::ordered_visible;
 const PLANAR_ROOT_BASE: u32 = 7;
 const PLANAR_ROOT_RT: u32 = 15;
 
-fn create_transparent_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignature, String> {
+fn create_transparent_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     let scene_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
         NumDescriptors: 1,
@@ -467,7 +467,11 @@ fn create_transparent_root_signature(device: &ID3D12Device) -> Result<ID3D12Root
         pStaticSamplers: samplers.as_ptr(),
         Flags: D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
     };
-    serialize_desc_and_create(device, &desc, "transparent root sig")
+    Ok(serialize_desc_and_create(
+        device,
+        &desc,
+        "transparent root sig",
+    )?)
 }
 
 // PSO for a transparent producer. Writes the single-sample post-SSR scene target
@@ -479,7 +483,7 @@ pub(in crate::directx) fn create_transparent_pso(
     root_sig: &ID3D12RootSignature,
     vs: &[u8],
     ps: &[u8],
-) -> Result<ID3D12PipelineState, String> {
+) -> RenderResult<ID3D12PipelineState> {
     let layout = main_input_layout();
     let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
         pRootSignature: com::borrowed(root_sig),
@@ -544,7 +548,7 @@ pub(in crate::directx) fn create_transparent_pso(
     // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
     // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
-        .map_err(|e| format!("create transparent PSO: {e}"))
+        .map_err(|e| map_pso_hresult(e.code(), "create transparent PSO"))
 }
 
 // Root signature for the RT PSOs (binds 1:1 with the `DXIL_ABI` declarations
@@ -573,7 +577,7 @@ pub(in crate::directx) fn create_transparent_pso(
 // binds the table for every draw so no PSO runs under an unset root parameter.
 fn create_transparent_rt_root_signature(
     device: &ID3D12Device,
-) -> Result<ID3D12RootSignature, String> {
+) -> RenderResult<ID3D12RootSignature> {
     let table_range = |reg: u32, space: u32, count: u32| D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
         NumDescriptors: count,
@@ -672,19 +676,22 @@ fn create_transparent_rt_root_signature(
         pStaticSamplers: samplers.as_ptr(),
         Flags: D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
     };
-    serialize_desc_and_create(device, &desc, "transparent rt root sig")
+    Ok(serialize_desc_and_create(
+        device,
+        &desc,
+        "transparent rt root sig",
+    )?)
 }
 
 // The per-frame RtParams upload ring, built alongside the RT root signature.
 type RtParamsRing = (Vec<PooledBuffer>, Vec<*mut u8>);
 
-fn build_rt_params_ring(alloc: &DeviceAllocator) -> Result<RtParamsRing, String> {
+fn build_rt_params_ring(alloc: &DeviceAllocator) -> RenderResult<RtParamsRing> {
     let params_size = align256(RT_PARAMS_UBO_SIZE);
     let mut resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
     let mut ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
     for _ in 0..FRAMES {
-        let buf = create_buffer(
-            alloc,
+        let buf = alloc.alloc_buffer(
             params_size,
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -693,7 +700,7 @@ fn build_rt_params_ring(alloc: &DeviceAllocator) -> Result<RtParamsRing, String>
         // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local
         // that receives the mapping.
         unsafe { buf.Map(0, None, Some(&mut ptr)) }
-            .map_err(|e| format!("map transparent rt params ubo: {e}"))?;
+            .map_err(|e| map_hresult(e.code(), "map transparent rt params ubo"))?;
         ptrs.push(ptr as *mut u8);
         resources.push(buf);
     }
@@ -777,7 +784,7 @@ impl TransparentResources {
         scene: TransparentSceneTargets,
         content: TransparentContent,
         info_queue: Option<&ID3D12InfoQueue>,
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         let TransparentDeviceCtx { alloc } = device_ctx;
         let device = alloc.device();
         let TransparentBuildConfig {
@@ -884,8 +891,7 @@ impl TransparentResources {
         let mut view_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
         let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
         for _ in 0..FRAMES {
-            let buf = create_buffer(
-                alloc,
+            let buf = alloc.alloc_buffer(
                 view_size,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -894,7 +900,7 @@ impl TransparentResources {
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
             unsafe { buf.Map(0, None, Some(&mut ptr)) }
-                .map_err(|e| format!("map transparent view ubo: {e}"))?;
+                .map_err(|e| map_hresult(e.code(), "map transparent view ubo"))?;
             view_ubo_ptrs.push(ptr as *mut u8);
             view_ubo_resources.push(buf);
         }
@@ -992,7 +998,7 @@ impl TransparentResources {
         device: &ID3D12Device,
         width: u32,
         height: u32,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         self.scene_copy = create_hdr_resolve_target(device, width.max(1), height.max(1))?;
         write_scene_copy_srv(device, &self.scene_copy, self.scene_copy_srv_cpu);
         Ok(())
@@ -1155,7 +1161,7 @@ impl DxContext {
         // same values the RT-reflection resolve uses); only consumed on the RT path.
         fov_y_radians: f32,
         aspect: f32,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let transparent = match &self.transparent {
             Some(t) => t,
             None => return Ok(()),

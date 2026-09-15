@@ -10,6 +10,7 @@
 //! so the one twin stands in for every bucket's PSO while the mode is on, as
 //! Metal's encoder-state fill mode does.
 
+use concinnity_core::render::error::RenderResult;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::context::{DxContext, dump_on_err};
@@ -49,7 +50,7 @@ impl DxContext {
         self.wireframe = DxWireframe::default();
     }
 
-    fn build_wireframe_pipelines(&mut self) -> Result<(), String> {
+    fn build_wireframe_pipelines(&mut self) -> RenderResult<()> {
         let device = self.hw.device.clone();
         let iq = self.hw.info_queue.clone();
         let msaa = self.targets.hdr.msaa_samples;

@@ -224,10 +224,10 @@ impl LiveEdit for DxContext {
 
 impl SceneEffects for DxContext {
     forward! { assert = debug_assert_main_thread;
-        fn add_decal(&mut self, record: decal::DecalRecord) -> RenderResult<usize>;
-        fn remove_decal(&mut self, decal_id: usize) -> RenderResult<()>;
-        fn add_emitter(&mut self, record: particles::ParticleEmitterRecord) -> RenderResult<usize>;
-        fn remove_emitter(&mut self, emitter_id: usize) -> RenderResult<()>;
+        fn add_decal(&mut self, record: decal::DecalRecord) -> error::RenderResult<usize>;
+        fn remove_decal(&mut self, decal_id: usize) -> error::RenderResult<()>;
+        fn add_emitter(&mut self, record: particles::ParticleEmitterRecord) -> error::RenderResult<usize>;
+        fn remove_emitter(&mut self, emitter_id: usize) -> error::RenderResult<()>;
     }
 }
 

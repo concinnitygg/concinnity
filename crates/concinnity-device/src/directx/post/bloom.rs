@@ -7,7 +7,7 @@
 //! Karis 13-tap prefilter, same plain 13-tap downsample + 9-tap tent upsample.
 
 use concinnity_core::gfx::render_types::PostProcessParams;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::fullscreen;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -15,6 +15,7 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::directx::com;
 use crate::directx::context::DxContext;
+use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
@@ -32,12 +33,20 @@ pub(in crate::directx) struct BloomShaders {
 }
 
 // Compile the bloom prefilter / downsample / upsample shaders.
-pub(in crate::directx) fn compile_bloom_shaders(hot_reload: bool) -> Result<BloomShaders, String> {
+pub(in crate::directx) fn compile_bloom_shaders(hot_reload: bool) -> RenderResult<BloomShaders> {
     Ok(BloomShaders {
-        vs: slang_builtins::FULLSCREEN_VERT.compile(hot_reload)?,
-        prefilter_ps: slang_builtins::BLOOM_PREFILTER.compile(hot_reload)?,
-        downsample_ps: slang_builtins::BLOOM_DOWNSAMPLE.compile(hot_reload)?,
-        upsample_ps: slang_builtins::BLOOM_UPSAMPLE.compile(hot_reload)?,
+        vs: slang_builtins::FULLSCREEN_VERT
+            .compile(hot_reload)
+            .map_err(RenderError::ShaderCompile)?,
+        prefilter_ps: slang_builtins::BLOOM_PREFILTER
+            .compile(hot_reload)
+            .map_err(RenderError::ShaderCompile)?,
+        downsample_ps: slang_builtins::BLOOM_DOWNSAMPLE
+            .compile(hot_reload)
+            .map_err(RenderError::ShaderCompile)?,
+        upsample_ps: slang_builtins::BLOOM_UPSAMPLE
+            .compile(hot_reload)
+            .map_err(RenderError::ShaderCompile)?,
     })
 }
 
@@ -49,7 +58,7 @@ pub(in crate::directx) fn compile_bloom_shaders(hot_reload: bool) -> Result<Bloo
 // sampler at s0. Shared by the prefilter, downsample, and upsample PSOs.
 pub(in crate::directx) fn create_bloom_root_signature(
     device: &ID3D12Device,
-) -> Result<ID3D12RootSignature, String> {
+) -> RenderResult<ID3D12RootSignature> {
     let srv_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
         NumDescriptors: 1,
@@ -103,7 +112,7 @@ pub(in crate::directx) fn create_bloom_root_signature(
         pStaticSamplers: &static_sampler,
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
     };
-    serialize_desc_and_create(device, &desc, "bloom root sig")
+    Ok(serialize_desc_and_create(device, &desc, "bloom root sig")?)
 }
 
 // PSO for a bloom-chain pass: a vertex-buffer-less fullscreen triangle that
@@ -117,7 +126,7 @@ pub(in crate::directx) fn create_bloom_pso(
     ps: &[u8],
     rtv_format: DXGI_FORMAT,
     additive: bool,
-) -> Result<ID3D12PipelineState, String> {
+) -> RenderResult<ID3D12PipelineState> {
     let blend_rt = D3D12_RENDER_TARGET_BLEND_DESC {
         BlendEnable: additive.into(),
         SrcBlend: D3D12_BLEND_ONE,
@@ -180,7 +189,7 @@ pub(in crate::directx) fn create_bloom_pso(
     // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
     // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
-        .map_err(|e| format!("create bloom PSO: {e}"))
+        .map_err(|e| map_pso_hresult(e.code(), "create bloom PSO"))
 }
 
 // Targets
@@ -212,7 +221,7 @@ pub(in crate::directx) fn create_bloom_mips(
     width: u32,
     height: u32,
     top: ID3D12Resource,
-) -> Result<BloomMips, String> {
+) -> RenderResult<BloomMips> {
     let full_w = width.max(1);
     let full_h = height.max(1);
     let count = bloom_mip_count(full_w, full_h);
@@ -230,7 +239,7 @@ pub(in crate::directx) fn create_bloom_mips_at(
     height: u32,
     count: usize,
     top: ID3D12Resource,
-) -> Result<BloomMips, String> {
+) -> RenderResult<BloomMips> {
     let full_w = width.max(1);
     let full_h = height.max(1);
     let heap_props = D3D12_HEAP_PROPERTIES {
@@ -279,8 +288,10 @@ pub(in crate::directx) fn create_bloom_mips_at(
                 &mut res_opt,
             )
         }
-        .map_err(|e| format!("create bloom mip {i}: {e}"))?;
-        mips.push(res_opt.ok_or_else(|| format!("bloom mip {i} returned None"))?);
+        .map_err(|e| map_hresult(e.code(), &format!("create bloom mip {i}")))?;
+        mips.push(
+            res_opt.ok_or_else(|| RenderError::Other(format!("bloom mip {i} returned None")))?,
+        );
         extents.push((mw, mh));
     }
     Ok((mips, extents))

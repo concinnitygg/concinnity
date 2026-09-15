@@ -27,7 +27,7 @@
 use concinnity_core::gfx::auto_exposure;
 use concinnity_core::gfx::rt_reflections;
 use concinnity_core::render::backend::QualitySettings;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::context::DxContext;
@@ -352,7 +352,7 @@ impl DxContext {
         &mut self,
         ssao_enabled: bool,
         gbuffer_enabled: bool,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         self.targets.transient_pool.rebuild(
             &self.hw.device,
             &self.hw.command_queue,
@@ -393,7 +393,9 @@ impl DxContext {
                 .targets
                 .transient_pool
                 .resource_for("bloom_top")
-                .ok_or("transient pool missing bloom_top after rebuild")?
+                .ok_or_else(|| {
+                    RenderError::Other("transient pool missing bloom_top after rebuild".to_string())
+                })?
                 .clone();
             let (mips, extents) = create_bloom_mips_at(
                 &self.hw.device,

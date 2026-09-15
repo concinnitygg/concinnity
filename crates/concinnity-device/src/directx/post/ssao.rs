@@ -10,6 +10,7 @@
 
 use concinnity_core::gfx::render_types::SsaoParams;
 use concinnity_core::gfx::ssao;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::post::device::PostBlend;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -39,11 +40,17 @@ struct SsaoShaders {
 
 // Compile every SSAO shader stage. Both the kernel + blur are fullscreen
 // passes that read the unified G-buffer; neither has a geometry input.
-fn compile_ssao_shaders(hot_reload: bool) -> Result<SsaoShaders, String> {
+fn compile_ssao_shaders(hot_reload: bool) -> RenderResult<SsaoShaders> {
     Ok(SsaoShaders {
-        fullscreen_vs: slang_builtins::FULLSCREEN_VERT.compile(hot_reload)?,
-        kernel_ps: slang_builtins::SSAO_KERNEL.compile(hot_reload)?,
-        blur_ps: slang_builtins::SSAO_BLUR.compile(hot_reload)?,
+        fullscreen_vs: slang_builtins::FULLSCREEN_VERT
+            .compile(hot_reload)
+            .map_err(RenderError::ShaderCompile)?,
+        kernel_ps: slang_builtins::SSAO_KERNEL
+            .compile(hot_reload)
+            .map_err(RenderError::ShaderCompile)?,
+        blur_ps: slang_builtins::SSAO_BLUR
+            .compile(hot_reload)
+            .map_err(RenderError::ShaderCompile)?,
     })
 }
 
@@ -53,7 +60,7 @@ fn compile_ssao_shaders(hot_reload: bool) -> Result<SsaoShaders, String> {
 // constants at b0 (SsaoParams: radius, intensity, tan_half_fov_y, aspect),
 // a 1-SRV descriptor table at t0 (the pre-pass G-buffer), and a static
 // linear-clamp sampler at s0.
-fn create_ssao_kernel_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignature, String> {
+fn create_ssao_kernel_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     let gbuffer_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
         NumDescriptors: 1,
@@ -105,14 +112,18 @@ fn create_ssao_kernel_root_signature(device: &ID3D12Device) -> Result<ID3D12Root
         pStaticSamplers: &static_sampler,
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
     };
-    serialize_desc_and_create(device, &desc, "ssao kernel root sig")
+    Ok(serialize_desc_and_create(
+        device,
+        &desc,
+        "ssao kernel root sig",
+    )?)
 }
 
 // Root signature for the depth-aware blur pass: two 1-SRV descriptor tables
 // (raw occlusion at t0, G-buffer at t1) and static linear-clamp samplers at
 // s0 / s1 -- one per source, because slangc splits each combined sampler in the
 // single source into its own texture/sampler pair.
-fn create_ssao_blur_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignature, String> {
+fn create_ssao_blur_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     let ao_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
         NumDescriptors: 1,
@@ -172,7 +183,11 @@ fn create_ssao_blur_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSi
         pStaticSamplers: static_samplers.as_ptr(),
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
     };
-    serialize_desc_and_create(device, &desc, "ssao blur root sig")
+    Ok(serialize_desc_and_create(
+        device,
+        &desc,
+        "ssao blur root sig",
+    )?)
 }
 
 // Resources
@@ -235,7 +250,7 @@ impl SsaoResources {
         // SSAO writes its RTV + SRV but does not own it.
         ao_resource: &ID3D12Resource,
         hot_reload: bool,
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         let SsaoDeviceCtx { device, info_queue } = ctx;
         let SsaoDescriptorHandles {
             ao_raw_rtv,
@@ -316,7 +331,7 @@ impl SsaoResources {
         srv_gpu_base: D3D12_GPU_DESCRIPTOR_HANDLE,
         // The rebuilt pooled `ao_output` resource; SSAO rewrites its RTV + SRV.
         ao_resource: &ID3D12Resource,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let srv_cpu = |gpu: D3D12_GPU_DESCRIPTOR_HANDLE| D3D12_CPU_DESCRIPTOR_HANDLE {
             ptr: srv_cpu_base.ptr + (gpu.ptr - srv_gpu_base.ptr) as usize,
         };
@@ -350,7 +365,7 @@ pub(in crate::directx) fn rebuild_ssao_pipelines(
     ssao: &SsaoResources,
     hot_reload: bool,
     info_queue: Option<&ID3D12InfoQueue>,
-) -> Result<RebuiltSsaoPipelines, String> {
+) -> RenderResult<RebuiltSsaoPipelines> {
     let shaders = compile_ssao_shaders(hot_reload)?;
     let kernel_pso = dump_on_err(
         info_queue,

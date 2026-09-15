@@ -18,6 +18,7 @@
 //! Mirrors src/metal/fog.rs.
 
 use concinnity_core::gfx::render_types::{FogFroxelParams, FogParams};
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
 use concinnity_core::render::volumetric_fog;
 use concinnity_core::transform::mat4_inverse;
@@ -28,10 +29,11 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
+use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
-use crate::directx::texture::{HDR_FORMAT, create_buffer};
+use crate::directx::texture::HDR_FORMAT;
 
 // Compile the fog vertex + fragment shaders; the MSAA define keeps the
 // fragment shader's depth SRV declaration in sync with the resource's
@@ -40,19 +42,27 @@ use crate::directx::texture::{HDR_FORMAT, create_buffer};
 pub(in crate::directx) fn compile_fog_shaders(
     msaa_samples: u32,
     hot_reload: bool,
-) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let vs = slang_builtins::FULLSCREEN_VERT.compile(hot_reload)?;
+) -> RenderResult<(Vec<u8>, Vec<u8>)> {
+    let vs = slang_builtins::FULLSCREEN_VERT
+        .compile(hot_reload)
+        .map_err(RenderError::ShaderCompile)?;
     let ps = if msaa_samples > 1 {
-        slang_builtins::FOG_FRAG_MSAA.compile(hot_reload)?
+        slang_builtins::FOG_FRAG_MSAA
+            .compile(hot_reload)
+            .map_err(RenderError::ShaderCompile)?
     } else {
-        slang_builtins::FOG_FRAG.compile(hot_reload)?
+        slang_builtins::FOG_FRAG
+            .compile(hot_reload)
+            .map_err(RenderError::ShaderCompile)?
     };
     Ok((vs, ps))
 }
 
 // Compile the froxel-volume compute kernel.
-pub(in crate::directx) fn compile_fog_froxel_shader(hot_reload: bool) -> Result<Vec<u8>, String> {
-    slang_builtins::FOG_FROXEL.compile(hot_reload)
+pub(in crate::directx) fn compile_fog_froxel_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
+    slang_builtins::FOG_FROXEL
+        .compile(hot_reload)
+        .map_err(RenderError::ShaderCompile)
 }
 
 // Rebuild the fog PSO against fresh shader source. Called from the DirectX
@@ -63,7 +73,7 @@ pub(in crate::directx) fn rebuild_fog_pso(
     msaa_samples: u32,
     hot_reload: bool,
     info_queue: Option<&ID3D12InfoQueue>,
-) -> Result<ID3D12PipelineState, String> {
+) -> RenderResult<ID3D12PipelineState> {
     let (vs, ps) = compile_fog_shaders(msaa_samples, hot_reload)?;
     dump_on_err(info_queue, create_fog_pso(device, root_sig, &vs, &ps))
 }
@@ -74,7 +84,7 @@ pub(in crate::directx) fn rebuild_fog_froxel_pso(
     root_sig: &ID3D12RootSignature,
     hot_reload: bool,
     info_queue: Option<&ID3D12InfoQueue>,
-) -> Result<ID3D12PipelineState, String> {
+) -> RenderResult<ID3D12PipelineState> {
     let cs = compile_fog_froxel_shader(hot_reload)?;
     dump_on_err(info_queue, create_fog_froxel_pso(device, root_sig, &cs))
 }
@@ -85,7 +95,7 @@ pub(in crate::directx) fn rebuild_fog_froxel_pso(
 //   [2] table  t0     scene depth SRV (Texture2D[MS]<float>)
 //   [3] table  t1     froxel volume SRV (Texture3D<float4>)
 // Static linear-clamp sampler s0 for the trilinear volume sample.
-fn create_fog_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignature, String> {
+fn create_fog_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     let depth_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
         NumDescriptors: 1,
@@ -162,7 +172,7 @@ fn create_fog_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignatur
         // The fullscreen pass uses SV_VertexID; no input assembler is needed.
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
     };
-    serialize_desc_and_create(device, &desc, "fog root sig")
+    Ok(serialize_desc_and_create(device, &desc, "fog root sig")?)
 }
 
 // Froxel compute root signature:
@@ -172,7 +182,7 @@ fn create_fog_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignatur
 //   [3] table  t0     shadow map SRV (Texture2DArray<float>)
 //   [4] table  u0     froxel volume UAV (RWTexture3D<float4>)
 // Static comparison sampler s0 for the shadow tap.
-fn create_fog_froxel_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignature, String> {
+fn create_fog_froxel_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     let shadow_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
         NumDescriptors: 1,
@@ -262,7 +272,11 @@ fn create_fog_froxel_root_signature(device: &ID3D12Device) -> Result<ID3D12RootS
         pStaticSamplers: &shadow_sampler,
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
     };
-    serialize_desc_and_create(device, &desc, "fog froxel root sig")
+    Ok(serialize_desc_and_create(
+        device,
+        &desc,
+        "fog froxel root sig",
+    )?)
 }
 
 // PSO for the fog pass. Writes the resolved HDR target with `(scattered,
@@ -275,7 +289,7 @@ fn create_fog_pso(
     root_sig: &ID3D12RootSignature,
     vs: &[u8],
     ps: &[u8],
-) -> Result<ID3D12PipelineState, String> {
+) -> RenderResult<ID3D12PipelineState> {
     let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
         pRootSignature: com::borrowed(root_sig),
         VS: D3D12_SHADER_BYTECODE {
@@ -336,7 +350,7 @@ fn create_fog_pso(
     // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
     // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
-        .map_err(|e| format!("create fog PSO: {e}"))
+        .map_err(|e| map_pso_hresult(e.code(), "create fog PSO"))
 }
 
 // Compute PSO for the froxel kernel.
@@ -344,7 +358,7 @@ fn create_fog_froxel_pso(
     device: &ID3D12Device,
     root_sig: &ID3D12RootSignature,
     cs: &[u8],
-) -> Result<ID3D12PipelineState, String> {
+) -> RenderResult<ID3D12PipelineState> {
     let desc = D3D12_COMPUTE_PIPELINE_STATE_DESC {
         pRootSignature: com::borrowed(root_sig),
         CS: D3D12_SHADER_BYTECODE {
@@ -356,7 +370,7 @@ fn create_fog_froxel_pso(
     // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
     // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_compute(device, &desc) }
-        .map_err(|e| format!("create fog froxel PSO: {e}"))
+        .map_err(|e| map_pso_hresult(e.code(), "create fog froxel PSO"))
 }
 
 // Create the 3D `RGBA16Float` froxel volume. Rests in `PIXEL_SHADER_RESOURCE`
@@ -369,7 +383,7 @@ fn create_fog_froxel_volume(
     device: &ID3D12Device,
     uav_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-) -> Result<ID3D12Resource, String> {
+) -> RenderResult<ID3D12Resource> {
     let heap_props = D3D12_HEAP_PROPERTIES {
         Type: D3D12_HEAP_TYPE_DEFAULT,
         ..Default::default()
@@ -402,8 +416,9 @@ fn create_fog_froxel_volume(
             &mut tex_opt,
         )
     }
-    .map_err(|e| format!("create fog froxel volume: {e}"))?;
-    let resource = tex_opt.ok_or_else(|| "create fog froxel volume returned None".to_string())?;
+    .map_err(|e| map_hresult(e.code(), "create fog froxel volume"))?;
+    let resource = tex_opt
+        .ok_or_else(|| RenderError::Other("create fog froxel volume returned None".to_string()))?;
 
     let uav_desc = D3D12_UNORDERED_ACCESS_VIEW_DESC {
         Format: DXGI_FORMAT_R16G16B16A16_FLOAT,
@@ -522,7 +537,7 @@ impl FogResources {
         shader_resources: FogShaderResourceHandles,
         params: FogDeviceParams,
         info_queue: Option<&ID3D12InfoQueue>,
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         let device = alloc.device();
         let FogVolumeDescriptors {
             uav_cpu: volume_uav_cpu,
@@ -557,8 +572,7 @@ impl FogResources {
         let mut params_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
         let mut params_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
         for _ in 0..FRAMES {
-            let buf = create_buffer(
-                alloc,
+            let buf = alloc.alloc_buffer(
                 params_ubo_size,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -567,7 +581,7 @@ impl FogResources {
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
             unsafe { buf.Map(0, None, Some(&mut ptr)) }
-                .map_err(|e| format!("map fog params ubo: {e}"))?;
+                .map_err(|e| map_hresult(e.code(), "map fog params ubo"))?;
             params_ubo_ptrs.push(ptr as *mut u8);
             params_ubo_resources.push(buf);
         }
@@ -577,8 +591,7 @@ impl FogResources {
         let mut froxel_params_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
         let mut froxel_params_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
         for _ in 0..FRAMES {
-            let buf = create_buffer(
-                alloc,
+            let buf = alloc.alloc_buffer(
                 froxel_ubo_size,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -587,7 +600,7 @@ impl FogResources {
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
             unsafe { buf.Map(0, None, Some(&mut ptr)) }
-                .map_err(|e| format!("map fog froxel params ubo: {e}"))?;
+                .map_err(|e| map_hresult(e.code(), "map fog froxel params ubo"))?;
             froxel_params_ubo_ptrs.push(ptr as *mut u8);
             froxel_params_ubo_resources.push(buf);
         }

@@ -9,23 +9,29 @@
 
 use concinnity_core::gfx::auto_exposure;
 use concinnity_core::gfx::auto_exposure::HISTOGRAM_BINS;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
 use crate::directx::context::{DxContext, FRAMES};
+use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
-use crate::directx::texture::{create_buffer, create_uav_buffer, transition_barrier, uav_barrier};
+use crate::directx::texture::{create_uav_buffer, transition_barrier, uav_barrier};
 
 // Compile the auto-exposure `build` + `average` compute kernels. Used at
 // init and by shader hot-reload to rebuild the two compute PSOs.
 pub(in crate::directx) fn compile_auto_exposure_shaders(
     hot_reload: bool,
-) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let build_cs = slang_builtins::AUTO_EXPOSURE_BUILD.compile(hot_reload)?;
-    let average_cs = slang_builtins::AUTO_EXPOSURE_AVERAGE.compile(hot_reload)?;
+) -> RenderResult<(Vec<u8>, Vec<u8>)> {
+    let build_cs = slang_builtins::AUTO_EXPOSURE_BUILD
+        .compile(hot_reload)
+        .map_err(RenderError::ShaderCompile)?;
+    let average_cs = slang_builtins::AUTO_EXPOSURE_AVERAGE
+        .compile(hot_reload)
+        .map_err(RenderError::ShaderCompile)?;
     Ok((build_cs, average_cs))
 }
 
@@ -102,7 +108,7 @@ impl AutoExposureResources {
 
     // Build all auto-exposure resources. Called from `DxContext::new` only
     // when `PostProcessConfig.auto_exposure` is enabled.
-    pub(super) fn new(alloc: &DeviceAllocator, hot_reload: bool) -> Result<Self, String> {
+    pub(super) fn new(alloc: &DeviceAllocator, hot_reload: bool) -> RenderResult<Self> {
         let device = alloc.device();
         let (build_cs, average_cs) = compile_auto_exposure_shaders(hot_reload)?;
 
@@ -139,8 +145,7 @@ impl AutoExposureResources {
         let mut readback_bufs: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
         let mut readback_ptrs: Vec<*const f32> = Vec::with_capacity(FRAMES);
         for _ in 0..FRAMES {
-            let buf = create_buffer(
-                alloc,
+            let buf = alloc.alloc_buffer(
                 std::mem::size_of::<f32>() as u64,
                 D3D12_HEAP_TYPE_READBACK,
                 D3D12_RESOURCE_STATE_COPY_DEST,
@@ -151,7 +156,7 @@ impl AutoExposureResources {
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
             unsafe { buf.Map(0, None, Some(&mut ptr)) }
-                .map_err(|e| format!("auto-exposure readback map: {e}"))?;
+                .map_err(|e| map_hresult(e.code(), "auto-exposure readback map"))?;
             readback_ptrs.push(ptr as *const f32);
             readback_bufs.push(buf);
         }
@@ -173,7 +178,7 @@ impl AutoExposureResources {
 // a single-SRV descriptor table for the HDR texture (t0), and a root UAV for
 // the histogram (u0). The HDR SRV needs a descriptor table because root SRVs
 // are limited to raw / structured buffers, not Texture2D.
-fn create_build_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignature, String> {
+fn create_build_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     let hdr_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
         NumDescriptors: 1,
@@ -223,12 +228,16 @@ fn create_build_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignat
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
         ..Default::default()
     };
-    serialize_desc_and_create(device, &desc, "auto-exposure build root sig")
+    Ok(serialize_desc_and_create(
+        device,
+        &desc,
+        "auto-exposure build root sig",
+    )?)
 }
 
 // Root signature for the average kernel: 4 root constants (b0), root UAV for
 // the histogram (u0, read + clear), root UAV for the output (u1, write-once).
-fn create_average_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignature, String> {
+fn create_average_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     let params = [
         D3D12_ROOT_PARAMETER {
             ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
@@ -268,7 +277,11 @@ fn create_average_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSign
         Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
         ..Default::default()
     };
-    serialize_desc_and_create(device, &desc, "auto-exposure average root sig")
+    Ok(serialize_desc_and_create(
+        device,
+        &desc,
+        "auto-exposure average root sig",
+    )?)
 }
 
 // Compute pipeline state for one of the auto-exposure kernels. Exposed to
@@ -279,7 +292,7 @@ pub(in crate::directx) fn create_compute_pso(
     root_sig: &ID3D12RootSignature,
     cs: &[u8],
     label: &str,
-) -> Result<ID3D12PipelineState, String> {
+) -> RenderResult<ID3D12PipelineState> {
     let desc = D3D12_COMPUTE_PIPELINE_STATE_DESC {
         pRootSignature: com::borrowed(root_sig),
         CS: D3D12_SHADER_BYTECODE {
@@ -291,7 +304,7 @@ pub(in crate::directx) fn create_compute_pso(
     // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
     // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_compute(device, &desc) }
-        .map_err(|e| format!("create {label} PSO: {e}"))
+        .map_err(|e| map_pso_hresult(e.code(), &format!("create {label} PSO")))
 }
 
 impl DxContext {

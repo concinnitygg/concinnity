@@ -12,7 +12,7 @@
 //! Mirrors src/metal/line.rs.
 
 use concinnity_core::gfx::render_types::LineVertex;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -20,10 +20,11 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
+use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
-use crate::directx::texture::{HDR_FORMAT, create_buffer};
+use crate::directx::texture::HDR_FORMAT;
 use crate::directx::upload_ring::{UPLOAD_ALIGN, UploadRing, align_up};
 
 // How much of a line still shows where scene geometry is in front of it. A
@@ -78,7 +79,7 @@ impl LineResources {
         depth_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
         info_queue: Option<&ID3D12InfoQueue>,
         hot_reload: bool,
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         let device = alloc.device();
         let (vs, ps) = compile_line_shaders(msaa_samples, hot_reload)?;
         let root_sig = dump_on_err(info_queue, create_line_root_signature(device))?;
@@ -88,8 +89,7 @@ impl LineResources {
         let mut view_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
         let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
         for _ in 0..FRAMES {
-            let buf = create_buffer(
-                alloc,
+            let buf = alloc.alloc_buffer(
                 view_size,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -98,7 +98,7 @@ impl LineResources {
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
             unsafe { buf.Map(0, None, Some(&mut ptr)) }
-                .map_err(|e| format!("map line view ubo: {e}"))?;
+                .map_err(|e| map_hresult(e.code(), "map line view ubo"))?;
             view_ubo_ptrs.push(ptr as *mut u8);
             view_ubo_resources.push(buf);
         }
@@ -117,14 +117,18 @@ impl LineResources {
 // Compile the line vertex + fragment shaders; the MSAA variant keeps the
 // fragment shader's depth SRV declaration in sync with the resource's sample
 // count. Used by the lazy build and by shader hot-reload.
-fn compile_line_shaders(msaa_samples: u32, hot_reload: bool) -> Result<(Vec<u8>, Vec<u8>), String> {
+fn compile_line_shaders(msaa_samples: u32, hot_reload: bool) -> RenderResult<(Vec<u8>, Vec<u8>)> {
     let frag = if msaa_samples > 1 {
         &slang_builtins::LINE_FRAG_MSAA
     } else {
         &slang_builtins::LINE_FRAG
     };
-    let vs = slang_builtins::LINE_VERT.compile(hot_reload)?;
-    let ps = frag.compile(hot_reload)?;
+    let vs = slang_builtins::LINE_VERT
+        .compile(hot_reload)
+        .map_err(RenderError::ShaderCompile)?;
+    let ps = frag
+        .compile(hot_reload)
+        .map_err(RenderError::ShaderCompile)?;
     Ok((vs, ps))
 }
 
@@ -136,7 +140,7 @@ pub(in crate::directx) fn rebuild_line_pso(
     msaa_samples: u32,
     hot_reload: bool,
     info_queue: Option<&ID3D12InfoQueue>,
-) -> Result<ID3D12PipelineState, String> {
+) -> RenderResult<ID3D12PipelineState> {
     let (vs, ps) = compile_line_shaders(msaa_samples, hot_reload)?;
     dump_on_err(
         info_queue,
@@ -150,7 +154,7 @@ pub(in crate::directx) fn rebuild_line_pso(
 //   [0] root CBV b0   LineView (per-frame)
 //   [1] table  t0     scene depth SRV (Texture2D[MS]<float>)
 // No sampler: the fragment shader `Load`s the depth texel under the pixel.
-fn create_line_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignature, String> {
+fn create_line_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     let depth_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
         NumDescriptors: 1,
@@ -187,7 +191,7 @@ fn create_line_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignatu
         pStaticSamplers: std::ptr::null(),
         Flags: D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
     };
-    serialize_desc_and_create(device, &desc, "line root sig")
+    Ok(serialize_desc_and_create(device, &desc, "line root sig")?)
 }
 
 // Vertex input elements for the line pass (32-byte `LineVertex` struct),
@@ -234,7 +238,7 @@ fn create_line_pso(
     root_sig: &ID3D12RootSignature,
     vs: &[u8],
     ps: &[u8],
-) -> Result<ID3D12PipelineState, String> {
+) -> RenderResult<ID3D12PipelineState> {
     let layout = line_input_layout();
     let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
         pRootSignature: com::borrowed(root_sig),
@@ -299,7 +303,7 @@ fn create_line_pso(
     // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
     // and input-element array whose raw pointers it borrows.
     unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
-        .map_err(|e| format!("create line PSO: {e}"))
+        .map_err(|e| map_pso_hresult(e.code(), "create line PSO"))
 }
 
 // Encoder
