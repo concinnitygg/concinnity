@@ -19,7 +19,7 @@ use crate::editor::inject;
 use crate::editor::panels::form;
 use crate::editor::panels::form_panel::{self, FormAction};
 
-use crate::editor::panels::panel::{self, PanelAction};
+use crate::editor::panels::assets_panel::{self, PanelAction};
 use crate::editor::panels::registry::PanelKey;
 
 use crate::editor::widget;
@@ -32,7 +32,7 @@ fn field_snapshot_carries_typed_text_across_a_reinjection() {
     let mut old = World::new();
     inject::editor_hud(&mut old);
     widget::seed_field(&mut old, form_panel::NAME_INPUT, "my_light");
-    widget::seed_field(&mut old, panel::SEARCH_INPUT, "Point");
+    widget::seed_field(&mut old, assets_panel::SEARCH_INPUT, "Point");
     let snapshot = EditorHook::field_snapshot(&old);
 
     // A fresh HUD injection starts every field blank.
@@ -42,7 +42,10 @@ fn field_snapshot_carries_typed_text_across_a_reinjection() {
 
     EditorHook::restore_fields(&mut new, &snapshot);
     assert_eq!(widget::field_text(&new, form_panel::NAME_INPUT), "my_light");
-    assert_eq!(widget::field_text(&new, panel::SEARCH_INPUT), "Point");
+    assert_eq!(
+        widget::field_text(&new, assets_panel::SEARCH_INPUT),
+        "Point"
+    );
 }
 
 // While the "+" picker is open the field narrows its type options instead of
@@ -53,7 +56,7 @@ fn the_search_field_narrows_the_picker_while_it_is_open() {
     let mut world = world_with_fields();
     h.panel_open = true;
     h.apply_panel(PanelAction::TogglePicker, &mut world);
-    set_field(&mut world, panel::SEARCH_INPUT, "pointlight");
+    set_field(&mut world, assets_panel::SEARCH_INPUT, "pointlight");
     let opts = h.picker_options(&world).unwrap();
     assert_eq!(opts, ["PointLight"], "case-insensitive type narrowing");
     assert!(
@@ -247,7 +250,7 @@ fn picker_lists_types_alphabetically() {
     assert_eq!(opts, sorted, "the picker is alphabetized ascending");
     assert_eq!(
         opts.len(),
-        panel::picker_types().count(),
+        assets_panel::picker_types().count(),
         "every offered type shown (addables + config singletons)"
     );
     // Concretely: AudioCue sorts before Sprite, and a config singleton is mixed
@@ -279,7 +282,7 @@ fn clicking_a_list_row_opens_its_edit_form() {
     let po = h.origin(PanelKey::Assets, vp);
     // Row 0 is the World group header; row 1 is the asset. Aim at its name,
     // clear of the hide toggle now heading the row.
-    let row = panel::row_rect(po, panel::PANEL_W, 1);
+    let row = assets_panel::row_rect(po, assets_panel::PANEL_W, 1);
     let mut world = World::new();
     inject::editor_hud(&mut world);
     world.add_component(FrameInput {

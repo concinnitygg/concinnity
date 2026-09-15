@@ -14,7 +14,7 @@ use crate::editor::hook::{
     EditorHook, FormTarget, PanelData, entry_name, entry_type, scroll_step, short_status,
 };
 use crate::editor::panels::asset_tree::{self, TreeRow};
-use crate::editor::panels::panel::{self, PanelAction, PanelView};
+use crate::editor::panels::assets_panel::{self, PanelAction, PanelView};
 use crate::editor::panels::registry::PanelKey;
 use crate::editor::widget;
 
@@ -79,7 +79,7 @@ impl EditorHook {
         let filter = if self.picker_open {
             String::new()
         } else {
-            widget::field_text(world, panel::SEARCH_INPUT)
+            widget::field_text(world, assets_panel::SEARCH_INPUT)
         };
         asset_tree::rows(&self.tree_groups, &self.tree_unfolded, &filter)
     }
@@ -90,8 +90,8 @@ impl EditorHook {
         if !self.picker_open {
             return None;
         }
-        let filter = widget::field_text(world, panel::SEARCH_INPUT).to_lowercase();
-        let mut opts: Vec<String> = panel::picker_types()
+        let filter = widget::field_text(world, assets_panel::SEARCH_INPUT).to_lowercase();
+        let mut opts: Vec<String> = assets_panel::picker_types()
             .filter(|t| filter.is_empty() || t.to_lowercase().contains(&filter))
             .map(|t| t.to_string())
             .collect();
@@ -130,7 +130,7 @@ impl EditorHook {
     // The Assets panel's visible row count at its current (possibly resized)
     // height, for the scroll clamps.
     fn tree_rows_shown(&self) -> usize {
-        panel::visible_rows(self.effective_size(PanelKey::Assets)[1])
+        assets_panel::visible_rows(self.effective_size(PanelKey::Assets)[1])
     }
 
     pub(in crate::editor::hook) fn scroll_tree(&mut self, delta: f32, world: &World) {
@@ -183,7 +183,7 @@ impl EditorHook {
                     // A config singleton edits the world's existing instance if
                     // it has one, else adds it (edit-or-add); a multi-instance
                     // asset always adds a new one.
-                    let existing = panel::is_singleton(&ty)
+                    let existing = assets_panel::is_singleton(&ty)
                         .then(|| {
                             self.entries
                                 .iter()

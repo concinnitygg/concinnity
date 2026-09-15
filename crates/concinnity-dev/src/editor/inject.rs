@@ -4,7 +4,7 @@
 //! written back to the user's world.jsonl or blobs (the SAVE path serializes the
 //! authored entry list, not the live world). The elements are plain `Sprite` /
 //! `TextLabel` / `TextInput` components at reserved ids; the editor's
-//! `DebugHook` tick drives them each frame (see `hud.rs` / `panel.rs`). No
+//! `DebugHook` tick drives them each frame (see `hud.rs` / `assets_panel.rs`). No
 //! editor-specific component or system is involved, so nothing here reaches the
 //! shipped runtime. (The two `TextInput` fields do bring in the engine's general
 //! text-input system, which is real runtime code, not editor-only.)
@@ -319,7 +319,7 @@ fn text_field(id: AssetId, placeholder: &str, font: Option<FontHandle>) -> TextI
 
 #[cfg(test)]
 mod tests {
-    use super::super::panels::{form_panel, panel, preview, template, template_panel, view};
+    use super::super::panels::{assets_panel, form_panel, preview, template, template_panel, view};
     use super::*;
     use concinnity_core::resource::FontTable;
 
@@ -426,12 +426,12 @@ mod tests {
         // the whole Preview, View, and Templates panels (the tick shows them on
         // demand).
         for id in [
-            panel::PANEL_BG,
-            panel::PLUS_BG,
-            panel::PICKER_BG,
-            panel::MENU_BG,
-            panel::row_bg(0),
-            panel::picker_row_bg(0),
+            assets_panel::PANEL_BG,
+            assets_panel::PLUS_BG,
+            assets_panel::PICKER_BG,
+            assets_panel::MENU_BG,
+            assets_panel::row_bg(0),
+            assets_panel::picker_row_bg(0),
             preview::PANEL_BG,
             preview::ROW_BG,
             preview::CHECK_BOX,
@@ -458,7 +458,7 @@ mod tests {
         // a dragged panel slides behind it (matching the hook's hit-test order).
         let sprites: Vec<AssetId> = world.query::<Sprite>().map(|s| s.asset_id).collect();
         let pos = |id: AssetId| sprites.iter().position(|&x| x == id).unwrap();
-        assert!(pos(panel::PANEL_BG) < pos(hud::SAVE_BUTTON));
+        assert!(pos(assets_panel::PANEL_BG) < pos(hud::SAVE_BUTTON));
         assert!(pos(preview::PANEL_BG) < pos(hud::SAVE_BUTTON));
         assert!(pos(view::PANEL_BG) < pos(hud::SAVE_BUTTON));
         assert!(pos(template::PANEL_BG) < pos(hud::SAVE_BUTTON));
@@ -466,7 +466,7 @@ mod tests {
 
         // Both typed fields exist, hidden, and reference the reused font.
         let fields: Vec<AssetId> = world.query::<TextInput>().map(|t| t.asset_id).collect();
-        assert!(fields.contains(&panel::SEARCH_INPUT));
+        assert!(fields.contains(&assets_panel::SEARCH_INPUT));
         assert!(fields.contains(&form_panel::NAME_INPUT));
         assert!(world.query::<TextInput>().all(|t| !t.visible));
 

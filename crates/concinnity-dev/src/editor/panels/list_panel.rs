@@ -139,7 +139,7 @@ impl Row {
 // padding below the last row), the heading, the hover-tinted close button, and
 // each row's highlight, optional checkbox, and label. `mouse` drives the hover
 // highlight and the close-button tint.
-pub(crate) fn apply(
+pub(crate) fn place(
     world: &mut World,
     base: u32,
     o: [f32; 2],
@@ -314,9 +314,9 @@ mod tests {
 
     // The whole panel is one rounded chrome surface; rows highlight over it.
     #[test]
-    fn apply_draws_the_rounded_panel_surface() {
+    fn place_draws_the_rounded_panel_surface() {
         let mut world = injected_world(1);
-        apply(
+        place(
             &mut world,
             BASE,
             [20.0, 30.0],
@@ -335,11 +335,11 @@ mod tests {
     // A resized (taller / wider) panel grows its surface to the given size; the
     // rows stay anchored below the title bar and the extra space is padding.
     #[test]
-    fn apply_grows_the_surface_to_the_effective_size() {
+    fn place_grows_the_surface_to_the_effective_size() {
         let mut world = injected_world(1);
         let o = [20.0, 30.0];
         let tall_wide = [size(200.0, 1)[0] + 80.0, size(200.0, 1)[1] + 120.0];
-        apply(
+        place(
             &mut world,
             BASE,
             o,
@@ -366,11 +366,11 @@ mod tests {
     }
 
     #[test]
-    fn apply_draws_title_close_and_a_checkbox_row() {
+    fn place_draws_title_close_and_a_checkbox_row() {
         let mut world = injected_world(1);
         let o = [20.0, 20.0];
         let w = 200.0;
-        apply(
+        place(
             &mut world,
             BASE,
             o,
@@ -399,7 +399,7 @@ mod tests {
         assert_eq!(label.content, "Toggle");
         assert_eq!(label.x, o[0] + CHECK_LABEL_INSET);
         // Off flips the checkbox tint.
-        apply(
+        place(
             &mut world,
             BASE,
             o,
@@ -429,7 +429,7 @@ mod tests {
             });
         }
         let o = [20.0, 20.0];
-        apply(
+        place(
             &mut world,
             BASE,
             o,
@@ -455,7 +455,7 @@ mod tests {
         let o = [20.0, 20.0];
         let w = 200.0;
         let r0 = row_rect(o, w, 0);
-        apply(
+        place(
             &mut world,
             BASE,
             o,
@@ -476,7 +476,7 @@ mod tests {
             "the selected row is highlighted without a hover"
         );
         // An idle, unselected row draws no highlight at all.
-        apply(
+        place(
             &mut world,
             BASE,
             o,
@@ -491,7 +491,7 @@ mod tests {
     #[test]
     fn hide_all_blanks_every_listed_element() {
         let mut world = injected_world(2);
-        apply(
+        place(
             &mut world,
             BASE,
             [20.0, 20.0],

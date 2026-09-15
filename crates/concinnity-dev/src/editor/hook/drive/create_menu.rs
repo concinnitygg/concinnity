@@ -154,7 +154,7 @@ impl EditorHook {
         match (&self.create_menu, shown) {
             (Some(menu), true) => {
                 let items = self.create_menu_items();
-                create_menu::apply(world, menu.origin, &items, mouse);
+                create_menu::place(world, menu.origin, &items, mouse);
             }
             _ => create_menu::hide(world),
         }

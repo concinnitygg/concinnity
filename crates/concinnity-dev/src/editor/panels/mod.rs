@@ -10,7 +10,7 @@
 //!
 //! `registry` is the panel system itself -- one entry per panel, which the
 //! reserved-id allocation, the View panel's rows, HUD injection, the focus
-//! stack, dragging and click routing all derive from. `panel` is the Assets
+//! stack, dragging and click routing all derive from. `assets_panel` is the Assets
 //! panel, over the tree `asset_tree` builds and the grouping `asset_list`
 //! shares with the outliner. `form` and `form_panel` are the add / edit form
 //! every panel opens, and `list_panel` the shared chrome behind the simple row
@@ -21,6 +21,7 @@
 
 pub(crate) mod asset_list;
 pub(crate) mod asset_tree;
+pub(crate) mod assets_panel;
 pub(crate) mod character_shape;
 pub(crate) mod character_shape_panel;
 pub(crate) mod console;
@@ -34,7 +35,6 @@ pub(crate) mod import_panel;
 pub(crate) mod lighting;
 pub(crate) mod lighting_panel;
 pub(crate) mod list_panel;
-pub(crate) mod panel;
 pub(crate) mod preview;
 pub(crate) mod registry;
 pub(crate) mod story;

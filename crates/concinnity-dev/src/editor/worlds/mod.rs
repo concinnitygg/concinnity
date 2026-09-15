@@ -19,7 +19,7 @@ pub(crate) mod loading;
 
 use concinnity_core::ecs::World;
 use concinnity_host::thread::asset_id::AssetId;
-pub(crate) use draw::apply;
+pub(crate) use draw::place;
 pub(crate) use geometry::{Layout, Mode, hit_test};
 
 use super::panels::registry::{self, PanelKey};

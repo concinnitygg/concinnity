@@ -132,7 +132,7 @@ fn button_tint(danger: bool, hovered: bool) -> [f32; 4] {
     }
 }
 
-pub(crate) fn apply(
+pub(crate) fn place(
     world: &mut World,
     vp: [f32; 2],
     message: &str,
@@ -331,9 +331,9 @@ mod tests {
     }
 
     #[test]
-    fn apply_dims_the_whole_screen_behind_the_dialog() {
+    fn place_dims_the_whole_screen_behind_the_dialog() {
         let mut world = world_with_elements();
-        apply(
+        place(
             &mut world,
             VP,
             "Delete?",
@@ -354,7 +354,7 @@ mod tests {
     #[test]
     fn danger_styling_marks_the_flagged_button_only() {
         let mut world = world_with_elements();
-        apply(
+        place(
             &mut world,
             VP,
             "Discard changes?",
@@ -377,7 +377,7 @@ mod tests {
         let r1 = button_rect(p, 2, 1);
 
         let mut world = world_with_elements();
-        apply(
+        place(
             &mut world,
             VP,
             "m",
@@ -388,7 +388,7 @@ mod tests {
         assert_eq!(sprite(&world, button_bg(0)).tint, theme::HOVER_TINT);
         assert_eq!(sprite(&world, button_bg(1)).tint, DANGER_TINT);
 
-        apply(
+        place(
             &mut world,
             VP,
             "m",
@@ -403,7 +403,7 @@ mod tests {
     #[test]
     fn a_two_button_dialog_hides_the_third_slot_and_bounds_the_message() {
         let mut world = world_with_elements();
-        apply(
+        place(
             &mut world,
             VP,
             "a long message that must wrap inside the dialog",
@@ -422,7 +422,7 @@ mod tests {
     #[test]
     fn hide_blanks_every_element() {
         let mut world = world_with_elements();
-        apply(
+        place(
             &mut world,
             VP,
             "m",
@@ -441,7 +441,7 @@ mod tests {
     #[test]
     fn a_prompt_shows_a_focused_name_field_and_a_plain_dialog_does_not() {
         let mut world = world_with_elements();
-        apply(
+        place(
             &mut world,
             VP,
             "Name this world",
@@ -462,7 +462,7 @@ mod tests {
         assert!(field.y + field.height <= button[1], "and above the buttons");
         assert!(size(true)[1] > size(false)[1], "the prompt is taller");
 
-        apply(&mut world, VP, "Delete?", &[plain("No")], false, [0.0, 0.0]);
+        place(&mut world, VP, "Delete?", &[plain("No")], false, [0.0, 0.0]);
         assert!(world.query::<TextInput>().all(|t| !t.visible && !t.focused));
     }
 

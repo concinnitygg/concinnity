@@ -162,7 +162,7 @@ pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> Option<Con
 
 // Position + show the panel (`Some(view)`) at effective size `s`, or blank every
 // element (`None`).
-pub(crate) fn apply(world: &mut World, view: Option<&ConsoleView>, o: [f32; 2], s: [f32; 2]) {
+pub(crate) fn place(world: &mut World, view: Option<&ConsoleView>, o: [f32; 2], s: [f32; 2]) {
     let Some(view) = view else {
         hide_all(world);
         return;
@@ -339,7 +339,7 @@ mod tests {
         let mut world = injected_world();
         let l = lines(LINE_POOL_MAX);
         let tall = [CONSOLE_W, max_size()[1]];
-        apply(
+        place(
             &mut world,
             Some(&view(&l, LINE_POOL_MAX, 0)),
             [20.0, 20.0],
@@ -361,7 +361,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_colors_lines_by_severity_and_seeds_the_ghost() {
+    fn place_colors_lines_by_severity_and_seeds_the_ghost() {
         let mut world = injected_world();
         let l = vec![
             ConsoleLine {
@@ -377,7 +377,7 @@ mod tests {
             ghost: "cube",
             ..view(&l, 2, 0)
         };
-        apply(&mut world, Some(&v), [20.0, 20.0], size());
+        place(&mut world, Some(&v), [20.0, 20.0], size());
         let first = world
             .query::<TextLabel>()
             .find(|l| l.asset_id == row_label(0))
@@ -416,7 +416,7 @@ mod tests {
     fn long_log_shows_the_scrollbar() {
         let mut world = injected_world();
         let l = lines(LINE_POOL);
-        apply(&mut world, Some(&view(&l, 40, 10)), [20.0, 20.0], size());
+        place(&mut world, Some(&view(&l, 40, 10)), [20.0, 20.0], size());
         assert!(
             world
                 .query::<Sprite>()
@@ -434,8 +434,8 @@ mod tests {
             ghost: "cube",
             ..view(&l, 3, 0)
         };
-        apply(&mut world, Some(&v), [20.0, 20.0], size());
-        apply(&mut world, None, [0.0, 0.0], size());
+        place(&mut world, Some(&v), [20.0, 20.0], size());
+        place(&mut world, None, [0.0, 0.0], size());
         assert!(world.query::<Sprite>().all(|s| !s.visible));
         assert!(world.query::<TextLabel>().all(|l| !l.visible));
         let input = world.query::<TextInput>().next().unwrap();

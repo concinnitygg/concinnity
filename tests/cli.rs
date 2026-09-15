@@ -286,11 +286,10 @@ fn list_discovers_the_world_and_prints_the_asset_table() {
     assert!(printed.contains("1 asset(s)"), "got: {printed}");
 }
 
-// The legacy location: a `world.jsonl` at the project root, from before worlds
-// moved into `worlds/`. Discovery still finds it, so an existing project keeps
-// working untouched.
+// A `world.jsonl` at the project root is a supported location, and discovery
+// finds it.
 #[test]
-fn list_discovers_a_legacy_world_at_the_project_root() {
+fn list_discovers_a_world_at_the_project_root() {
     let project = Project::empty();
     std::fs::write(project.path().join("world.jsonl"), HELLO_WORLD).expect("write world");
 
@@ -299,21 +298,21 @@ fn list_discovers_a_legacy_world_at_the_project_root() {
     assert!(stdout(&out).contains("hello_world"), "{}", stdout(&out));
 }
 
-// With both present, `worlds/` wins: the legacy file is a fallback, not a peer.
+// `worlds/` wins over a root world.jsonl.
 #[test]
-fn a_world_in_worlds_outranks_the_legacy_one() {
+fn a_world_in_worlds_outranks_the_root_one() {
     let project = Project::with_world(HELLO_WORLD);
     std::fs::write(
         project.path().join("world.jsonl"),
-        "{\"name\":\"legacy_only\",\"type\":\"Logger\",\"args\":{}}\n",
+        "{\"name\":\"root_only\",\"type\":\"Logger\",\"args\":{}}\n",
     )
-    .expect("write legacy world");
+    .expect("write root world");
 
     let out = project.cn(&["list"]);
     expect_ok(&out, "cn list");
     let printed = stdout(&out);
     assert!(printed.contains("hello_world"), "got: {printed}");
-    assert!(!printed.contains("legacy_only"), "got: {printed}");
+    assert!(!printed.contains("root_only"), "got: {printed}");
 }
 
 // The expanded listing runs the build's front half, so it reports the injected
@@ -543,8 +542,8 @@ fn export_rejects_a_foreign_platform() {
     );
 }
 
-// A legacy `world.jsonl` at the project root still counts as a scaffolded
-// project, so `cn init` over one leaves it alone.
+// A `world.jsonl` at the project root counts as a scaffolded project, so
+// `cn init` over one leaves it alone.
 #[test]
 fn init_skips_a_directory_that_already_has_a_world() {
     let project = Project::empty();

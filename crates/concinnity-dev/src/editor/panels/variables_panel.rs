@@ -276,7 +276,7 @@ pub(crate) fn hit_test(
 
 // Position + show the panel (`Some(view)`) at effective size `s`, or blank every
 // element (`None`).
-pub(crate) fn apply(world: &mut World, view: Option<&VariablesView>, o: [f32; 2], s: [f32; 2]) {
+pub(crate) fn place(world: &mut World, view: Option<&VariablesView>, o: [f32; 2], s: [f32; 2]) {
     let Some(view) = view else {
         hide_all(world);
         return;
@@ -668,7 +668,7 @@ mod tests {
         let rows = vec![declared("visits", "int", "3")];
         let o = [20.0, 20.0];
         let s = size();
-        apply(&mut world, Some(&view(&rows)), o, s);
+        place(&mut world, Some(&view(&rows)), o, s);
 
         assert_eq!(label(&world, row_name(0)).content, "visits");
         assert_eq!(label(&world, row_type(0)).content, "int");
@@ -700,7 +700,7 @@ mod tests {
     fn an_undeclared_name_reads_as_missing_rather_than_as_a_declaration() {
         let mut world = injected_world();
         let rows = vec![declared("visits", "int", "3"), undeclared("score")];
-        apply(&mut world, Some(&view(&rows)), [20.0, 20.0], size());
+        place(&mut world, Some(&view(&rows)), [20.0, 20.0], size());
 
         assert_eq!(label(&world, row_name(1)).content, "score");
         assert_eq!(label(&world, row_type(1)).content, "undeclared");
@@ -719,7 +719,7 @@ mod tests {
         let mut world = injected_world();
         let rows = vec![declared("visits", "int", "3"), undeclared("score")];
         let o = [20.0, 20.0];
-        apply(&mut world, Some(&view(&rows)), o, size());
+        place(&mut world, Some(&view(&rows)), o, size());
         let held = label(&world, MODE_LABEL).content.clone();
         assert!(held.contains("1 variable used but not declared"), "{held}");
 
@@ -727,7 +727,7 @@ mod tests {
             authoritative: false,
             ..view(&rows)
         };
-        apply(&mut world, Some(&implicit), o, size());
+        place(&mut world, Some(&implicit), o, size());
         let loose = label(&world, MODE_LABEL).content.clone();
         assert!(loose.contains("no table"), "{loose}");
         assert!(!field(&world, NAME_INPUT).visible, "and no name to edit");
@@ -745,7 +745,7 @@ mod tests {
             selected: Some(0),
             ..view(&rows)
         };
-        apply(&mut world, Some(&v), o, s);
+        place(&mut world, Some(&v), o, s);
 
         assert!(field(&world, NAME_INPUT).visible);
         assert_eq!(field(&world, NAME_INPUT).content, "visits");
@@ -783,7 +783,7 @@ mod tests {
             selected: Some(0),
             ..view(&rows)
         };
-        apply(&mut world, Some(&v), o, s);
+        place(&mut world, Some(&v), o, s);
 
         assert_eq!(label(&world, TYPE_LABEL).content, "Declare");
         assert_eq!(label(&world, DEL_LABEL).color, theme::LABEL_DIM);
@@ -844,7 +844,7 @@ mod tests {
             scroll: 4,
             ..view(&rows)
         };
-        apply(&mut world, Some(&v), o, s);
+        place(&mut world, Some(&v), o, s);
         assert_eq!(label(&world, row_name(0)).content, "v4");
         assert!(sprite(&world, LIST_THUMB).visible, "20 rows overflow");
 
@@ -863,14 +863,14 @@ mod tests {
         let rows = vec![declared("visits", "int", "3")];
         let o = [20.0, 20.0];
         let s = size();
-        apply(&mut world, Some(&view(&rows)), o, s);
+        place(&mut world, Some(&view(&rows)), o, s);
         assert!(!sprite(&world, STATUS_BG).visible, "nothing to warn about");
 
         let warned = VariablesView {
             status: Some("this table is authoritative"),
             ..view(&rows)
         };
-        apply(&mut world, Some(&warned), o, s);
+        place(&mut world, Some(&warned), o, s);
         assert!(sprite(&world, STATUS_BG).visible);
         let b = status_rect(o, s);
         assert!(b[1] + b[3] <= o[1] + s[1], "it stays inside the panel");
@@ -888,8 +888,8 @@ mod tests {
             status: Some("something"),
             ..view(&rows)
         };
-        apply(&mut world, Some(&v), [20.0, 20.0], size());
-        apply(&mut world, None, [0.0, 0.0], size());
+        place(&mut world, Some(&v), [20.0, 20.0], size());
+        place(&mut world, None, [0.0, 0.0], size());
         assert!(world.query::<Sprite>().all(|s| !s.visible));
         assert!(world.query::<TextLabel>().all(|l| !l.visible));
         assert!(world.query::<TextInput>().all(|t| !t.visible && !t.focused));

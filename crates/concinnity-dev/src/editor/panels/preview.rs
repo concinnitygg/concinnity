@@ -118,7 +118,7 @@ pub(crate) struct PreviewState {
 }
 
 // Position + show the panel at origin `o`, coloring each checkbox by state.
-pub(crate) fn apply(world: &mut World, o: [f32; 2], state: PreviewState, mouse: [f32; 2]) {
+pub(crate) fn place(world: &mut World, o: [f32; 2], state: PreviewState, mouse: [f32; 2]) {
     let rows = [
         Row::checkbox("Play (Ctrl+P)", state.playing),
         Row::checkbox("Fly camera (F)", state.fly),
@@ -130,7 +130,7 @@ pub(crate) fn apply(world: &mut World, o: [f32; 2], state: PreviewState, mouse: 
         Row::checkbox("Align drop to surface", state.align),
         Row::label("Drop to floor (Ctrl+Down)"),
     ];
-    list_panel::apply(world, BASE, o, size(), "Preview", &rows, mouse);
+    list_panel::place(world, BASE, o, size(), "Preview", &rows, mouse);
 }
 
 // Hide every panel element (the F1-hidden pass).
@@ -212,9 +212,9 @@ mod tests {
     }
 
     #[test]
-    fn apply_shows_the_snap_steps_in_the_value_strips() {
+    fn place_shows_the_snap_steps_in_the_value_strips() {
         let mut world = injected_world();
-        apply(
+        place(
             &mut world,
             default_origin(),
             PreviewState {
@@ -242,7 +242,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_shows_heading_and_play_state() {
+    fn place_shows_heading_and_play_state() {
         let mut world = injected_world();
         let o = default_origin();
         let off_state = PreviewState {
@@ -252,7 +252,7 @@ mod tests {
             snap: SnapSettings::default(),
             align: false,
         };
-        apply(&mut world, o, off_state, [0.0, 0.0]);
+        place(&mut world, o, off_state, [0.0, 0.0]);
         let title = world
             .query::<TextLabel>()
             .find(|l| l.asset_id == title_label(BASE))
@@ -263,7 +263,7 @@ mod tests {
             .find(|s| s.asset_id == CHECK_BOX)
             .cloned()
             .unwrap();
-        apply(
+        place(
             &mut world,
             o,
             PreviewState {
@@ -282,7 +282,7 @@ mod tests {
     #[test]
     fn hide_all_blanks_every_element() {
         let mut world = injected_world();
-        apply(
+        place(
             &mut world,
             default_origin(),
             PreviewState {

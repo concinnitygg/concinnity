@@ -13,7 +13,7 @@ use crate::debug_hook::DebugHook;
 use crate::editor::panels::form::{self, FormField};
 use crate::editor::panels::form_panel::{FormAction, FormFocus};
 
-use crate::editor::panels::panel::PanelAction;
+use crate::editor::panels::assets_panel::PanelAction;
 use crate::editor::panels::preview;
 use crate::editor::panels::registry::PanelKey;
 

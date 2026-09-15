@@ -134,7 +134,7 @@ pub(crate) fn hit_test(view: &PaletteView, mx: f32, my: f32, o: [f32; 2]) -> Opt
 }
 
 // Position + show the panel (`Some(view)`), or blank every element (`None`).
-pub(crate) fn apply(world: &mut World, view: Option<&PaletteView>, o: [f32; 2]) {
+pub(crate) fn place(world: &mut World, view: Option<&PaletteView>, o: [f32; 2]) {
     let Some(view) = view else {
         hide_all(world);
         return;
@@ -316,10 +316,10 @@ mod tests {
     }
 
     #[test]
-    fn apply_draws_the_window_and_highlights_the_selection() {
+    fn place_draws_the_window_and_highlights_the_selection() {
         let mut world = injected_world();
         let backing = rows(3);
-        apply(&mut world, Some(&view(&backing, 1)), [20.0, 20.0]);
+        place(&mut world, Some(&view(&backing, 1)), [20.0, 20.0]);
         let caption = world
             .query::<TextLabel>()
             .find(|l| l.asset_id == row_label(0))
@@ -356,7 +356,7 @@ mod tests {
     fn an_empty_window_says_no_match() {
         let mut world = injected_world();
         let backing = rows(0);
-        apply(&mut world, Some(&view(&backing, 0)), [20.0, 20.0]);
+        place(&mut world, Some(&view(&backing, 0)), [20.0, 20.0]);
         let first = world
             .query::<TextLabel>()
             .find(|l| l.asset_id == row_label(0))
@@ -368,8 +368,8 @@ mod tests {
     fn hide_all_blanks_every_element() {
         let mut world = injected_world();
         let backing = rows(ROW_POOL);
-        apply(&mut world, Some(&view(&backing, 0)), [20.0, 20.0]);
-        apply(&mut world, None, [0.0, 0.0]);
+        place(&mut world, Some(&view(&backing, 0)), [20.0, 20.0]);
+        place(&mut world, None, [0.0, 0.0]);
         assert!(world.query::<Sprite>().all(|s| !s.visible));
         assert!(world.query::<TextLabel>().all(|l| !l.visible));
         let input = world.query::<TextInput>().next().unwrap();

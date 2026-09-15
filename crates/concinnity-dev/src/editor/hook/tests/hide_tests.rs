@@ -10,7 +10,7 @@ use super::fixtures::{entry, hook, row_of, seed_tree, world_with_input};
 
 use crate::debug_hook::DebugHook;
 
-use crate::editor::panels::panel::PanelAction;
+use crate::editor::panels::assets_panel::PanelAction;
 
 // The row eye and lock are editor-session state: they flip the hook's sets (the
 // hidden set publishing as ids each tick) and never touch the entries.

@@ -36,7 +36,7 @@ pub(crate) fn caption(name: Option<&str>) -> String {
 }
 
 // Cover `area` (the window the sidebar does not stand on) and caption it.
-pub(crate) fn apply(world: &mut World, area: [f32; 4], name: Option<&str>) {
+pub(crate) fn place(world: &mut World, area: [f32; 4], name: Option<&str>) {
     widget::place_sprite(world, COVER, area, COVER_TINT, true);
     if let Some(label) = widget::label_mut(world, CAPTION) {
         label.x = area[0] + area[2] * 0.5;
@@ -83,7 +83,7 @@ mod tests {
     #[test]
     fn the_cover_fills_its_area_and_names_what_is_loading() {
         let mut world = injected_world();
-        apply(&mut world, [280.0, 0.0, 1000.0, 720.0], Some("bistro"));
+        place(&mut world, [280.0, 0.0, 1000.0, 720.0], Some("bistro"));
 
         let cover = world.query::<Sprite>().next().expect("the cover");
         assert!(cover.visible);

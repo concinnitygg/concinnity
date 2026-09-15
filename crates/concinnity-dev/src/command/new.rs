@@ -50,7 +50,7 @@ fn init_in_dir(dir: &str) -> std::io::Result<()> {
 }
 
 // The world already scaffolded in `dir`, if any: the one a new project writes,
-// or the legacy `world.jsonl` at the project root.
+// or the `world.jsonl` at the project root.
 fn existing_world(dir: &Path) -> Option<PathBuf> {
     [worlds_dir(dir).join(WORLD_JSONL), dir.join(WORLD_JSONL)]
         .into_iter()
@@ -81,10 +81,10 @@ mod tests {
         assert!(err.to_string().contains(WORLD_JSONL), "got: {err}");
     }
 
-    // The legacy location counts too, so `cn new` over a project written before
-    // worlds moved still refuses rather than scaffolding a second world.
+    // A root `world.jsonl` counts too, so `cn new` refuses rather than
+    // scaffolding a second world.
     #[test]
-    fn new_refuses_a_directory_holding_only_a_legacy_world() {
+    fn new_refuses_a_directory_holding_only_a_root_world() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join(WORLD_JSONL), "").unwrap();
 
@@ -110,7 +110,7 @@ mod tests {
     }
 
     #[test]
-    fn init_in_dir_skips_a_legacy_world_at_the_project_root() {
+    fn init_in_dir_skips_a_root_world() {
         let dir = tempfile::tempdir().unwrap();
         let world = dir.path().join(WORLD_JSONL);
         std::fs::write(
@@ -122,7 +122,7 @@ mod tests {
         init_in_dir(dir.path().to_str().unwrap()).unwrap();
         assert!(
             !worlds_dir(dir.path()).exists(),
-            "a legacy world is left in place rather than duplicated into worlds/"
+            "a root world is left in place rather than duplicated into worlds/"
         );
     }
 }

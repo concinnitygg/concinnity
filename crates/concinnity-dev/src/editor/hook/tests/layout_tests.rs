@@ -24,7 +24,7 @@ use crate::editor::inject;
 
 use crate::editor::panels::form_panel;
 
-use crate::editor::panels::panel;
+use crate::editor::panels::assets_panel;
 use crate::editor::panels::preview;
 use crate::editor::panels::registry::PanelKey;
 
@@ -168,7 +168,7 @@ fn edit_panel_drags_by_its_title_bar() {
     assert_eq!(h.origin(PanelKey::Edit, vp), [100.0, 200.0]);
     assert_eq!(
         h.origin(PanelKey::Assets, vp),
-        panel::default_origin(vp[0]),
+        assets_panel::default_origin(vp[0]),
         "the Assets panel did not move"
     );
 }
@@ -202,7 +202,7 @@ fn publish_layers_ranks_panels_below_the_top_bar() {
     let layers = h.compute_layers();
     let layer = |id| *layers.get(&id).expect("id mapped");
     let edit = layer(form_panel::EDIT_BG);
-    let assets = layer(panel::PANEL_BG);
+    let assets = layer(assets_panel::PANEL_BG);
     let preview = layer(preview::PANEL_BG);
     assert!(
         edit > assets && edit > preview,
@@ -225,7 +225,7 @@ fn a_panel_press_brings_it_to_the_front() {
     h.panel_open = true;
     let vp = [1280.0, 720.0];
     let po = h.origin(PanelKey::Assets, vp);
-    let t = widget::title_rect(po, panel::PANEL_W);
+    let t = widget::title_rect(po, assets_panel::PANEL_W);
     // The title bar's interior (clear of the corner / edge resize band) drags.
     let claimed = h.try_panel_press(
         PanelKey::Assets,
@@ -386,7 +386,7 @@ fn templates_panel_press_drags_and_focuses() {
 }
 
 // Drive `tick` against a fully injected HUD world in each panel body state,
-// exercising the real `panel::apply` layout path (not just the pure hit-test /
+// exercising the real `assets_panel::place` layout path (not just the pure hit-test /
 // action logic the other tests cover).
 #[test]
 fn tick_lays_out_the_open_panel_in_every_state() {
@@ -417,8 +417,11 @@ fn tick_lays_out_the_open_panel_in_every_state() {
 
     // Tree: panel drawn, first row is the World group header.
     h.tick(&mut world);
-    assert!(sprite_visible(&world, panel::PANEL_BG), "panel bg shown");
-    let row0 = label(&world, panel::name_label(0));
+    assert!(
+        sprite_visible(&world, assets_panel::PANEL_BG),
+        "panel bg shown"
+    );
+    let row0 = label(&world, assets_panel::name_label(0));
     assert!(
         row0.visible && row0.content.starts_with("- World"),
         "first row is the World group header, got {:?}",
@@ -429,13 +432,13 @@ fn tick_lays_out_the_open_panel_in_every_state() {
     h.picker_open = true;
     h.tick(&mut world);
     assert!(
-        sprite_visible(&world, panel::PICKER_BG),
+        sprite_visible(&world, assets_panel::PICKER_BG),
         "picker backing shown"
     );
     assert!(
         world
             .query::<TextInput>()
-            .find(|t| t.asset_id == panel::SEARCH_INPUT)
+            .find(|t| t.asset_id == assets_panel::SEARCH_INPUT)
             .unwrap()
             .visible
     );
@@ -444,8 +447,14 @@ fn tick_lays_out_the_open_panel_in_every_state() {
     h.picker_open = false;
     h.row_menu = Some("a".to_string());
     h.tick(&mut world);
-    assert!(sprite_visible(&world, panel::MENU_BG), "row menu shown");
-    assert_eq!(label(&world, panel::MENU_DELETE_LABEL).content, "Delete");
+    assert!(
+        sprite_visible(&world, assets_panel::MENU_BG),
+        "row menu shown"
+    );
+    assert_eq!(
+        label(&world, assets_panel::MENU_DELETE_LABEL).content,
+        "Delete"
+    );
 
     // Form open: the edit panel shows alongside the browse list, with its
     // title bar, name heading, and confirm button.
@@ -470,7 +479,7 @@ fn tick_lays_out_the_open_panel_in_every_state() {
         "the name heading shows"
     );
     assert!(
-        label(&world, panel::name_label(0)).visible,
+        label(&world, assets_panel::name_label(0)).visible,
         "the tree stays visible beside the form"
     );
 
@@ -478,7 +487,10 @@ fn tick_lays_out_the_open_panel_in_every_state() {
     h.panel_open = false;
     h.close_form();
     h.tick(&mut world);
-    assert!(!sprite_visible(&world, panel::PANEL_BG), "panel bg hidden");
+    assert!(
+        !sprite_visible(&world, assets_panel::PANEL_BG),
+        "panel bg hidden"
+    );
     assert!(
         !sprite_visible(&world, form_panel::EDIT_BG),
         "form panel hidden"

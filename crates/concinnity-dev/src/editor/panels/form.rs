@@ -1639,7 +1639,7 @@ mod tests {
     // the cook side), so adding a type whose form mis-derives is caught here.
     #[test]
     fn every_add_type_form_round_trips_its_defaults() {
-        for ty in crate::editor::panels::panel::picker_types() {
+        for ty in crate::editor::panels::assets_panel::picker_types() {
             let fields = fields_for(ty, None);
             let texts: Vec<String> = fields.iter().map(|f| f.initial.clone()).collect();
             let args = assemble(ty, None, &fields, &texts);

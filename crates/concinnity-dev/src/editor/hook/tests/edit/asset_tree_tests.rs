@@ -13,7 +13,7 @@ use crate::editor::hook::{EditorHook, FormTarget};
 
 use crate::editor::panels::asset_tree::{self, TreeRow};
 
-use crate::editor::panels::panel::{self, PanelAction};
+use crate::editor::panels::assets_panel::{self, PanelAction};
 
 // The tree lists the world's own lines under `World` and each expansion's
 // output under whatever produced it, with the search field narrowing both.
@@ -48,9 +48,9 @@ fn tree_rows_group_by_origin_and_narrow_by_search() {
     assert_eq!(headers, [asset_tree::WORLD_GROUP, "fox"]);
 
     // The search field matches name or type, across every group.
-    set_field(&mut world, panel::SEARCH_INPUT, "mat");
+    set_field(&mut world, assets_panel::SEARCH_INPUT, "mat");
     assert_eq!(names(&h, &world), ["fox_mat"]);
-    set_field(&mut world, panel::SEARCH_INPUT, "PointLight");
+    set_field(&mut world, assets_panel::SEARCH_INPUT, "PointLight");
     assert_eq!(names(&h, &world), ["lamp"], "a type match reaches the row");
 }
 

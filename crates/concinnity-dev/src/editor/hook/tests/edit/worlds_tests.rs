@@ -17,8 +17,8 @@ use crate::editor::session_store;
 use crate::editor::widget;
 use crate::editor::worlds::{self, WorldRow, WorldsAction};
 
-// The listing is the project's worlds newest-edited first, the legacy root
-// world included, with the session's own world marked.
+// The listing is the project's worlds newest-edited first, the root world
+// included, with the session's own world marked.
 #[test]
 fn the_listing_is_newest_first_and_marks_the_open_world() {
     let _guard = crate::test_support::lock();

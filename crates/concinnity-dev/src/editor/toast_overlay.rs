@@ -142,7 +142,7 @@ fn sweep_offset(phase: f32, span: f32) -> f32 {
     pos * span
 }
 
-pub(crate) fn apply(world: &mut World, stack: &Stack, vp: [f32; 2], mouse: [f32; 2]) {
+pub(crate) fn place(world: &mut World, stack: &Stack, vp: [f32; 2], mouse: [f32; 2]) {
     let ops = shown_ops(stack);
     for i in 0..MAX_OPS {
         match (i < ops).then(|| &stack.ops[i]) {

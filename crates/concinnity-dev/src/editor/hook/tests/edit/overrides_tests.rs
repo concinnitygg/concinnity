@@ -13,8 +13,8 @@
 use crate::editor::hook::FormTarget;
 use crate::editor::panels::asset_tree;
 use crate::editor::panels::asset_tree::TreeGroup;
+use crate::editor::panels::assets_panel::PanelAction;
 use crate::editor::panels::form;
-use crate::editor::panels::panel::PanelAction;
 use crate::editor::panels::story_panel;
 use crate::editor::widget;
 use concinnity_core::components::TextInput;

@@ -5,7 +5,7 @@
 //! batch commits as ONE undo step.
 
 use super::{EditorHook, entry_name, entry_type};
-use crate::editor::panels::panel;
+use crate::editor::panels::assets_panel;
 
 impl EditorHook {
     // Duplicate every eligible selection member; the number of copies made.
@@ -25,7 +25,7 @@ impl EditorHook {
             let Some(ty) = entry_type(&self.entries[idx]) else {
                 continue;
             };
-            if panel::is_singleton(ty) {
+            if assets_panel::is_singleton(ty) {
                 continue;
             }
             let mut clone = self.entries[idx].clone();

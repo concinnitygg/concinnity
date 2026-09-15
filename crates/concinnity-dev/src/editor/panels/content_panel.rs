@@ -156,7 +156,7 @@ pub(crate) struct ContentView<'a> {
     pub mouse: [f32; 2],
 }
 
-pub(crate) fn apply(world: &mut World, view: &ContentView, o: [f32; 2]) {
+pub(crate) fn place(world: &mut World, view: &ContentView, o: [f32; 2]) {
     widget::place_panel(world, PANEL_BG, panel_rect(o));
     let title = widget::title_rect(o, size()[0]);
     widget::place_heading(world, TITLE_LABEL, title, "Content");

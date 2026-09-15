@@ -76,7 +76,7 @@ impl EditorHook {
         // the listing through a compile.
         match self.cinematic {
             Some(cine) if shown && !self.loading_preview() => {
-                worlds::cinematic::apply(world, vp, cine.fade_alpha())
+                worlds::cinematic::place(world, vp, cine.fade_alpha())
             }
             _ => worlds::cinematic::hide(world),
         }

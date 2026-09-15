@@ -70,7 +70,7 @@ pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> Option<Tem
 
 // Position + show the panel at origin `o`, effective size `s`, highlighting the
 // hovered row and the `selected` row (the one whose detail panel is open).
-pub(crate) fn apply(
+pub(crate) fn place(
     world: &mut World,
     o: [f32; 2],
     s: [f32; 2],
@@ -80,7 +80,7 @@ pub(crate) fn apply(
     let rows: Vec<Row> = (0..count())
         .map(|i| Row::label(title(i)).select(selected == Some(i)))
         .collect();
-    list_panel::apply(world, BASE, o, s, "Templates", &rows, mouse);
+    list_panel::place(world, BASE, o, s, "Templates", &rows, mouse);
 }
 
 // Hide every panel element (the F1-hidden pass, or when the panel is toggled off).
@@ -125,9 +125,9 @@ mod tests {
     }
 
     #[test]
-    fn apply_labels_rows_from_the_templates_crate() {
+    fn place_labels_rows_from_the_templates_crate() {
         let mut world = injected_world();
-        apply(&mut world, default_origin(1280.0), size(), None, [0.0, 0.0]);
+        place(&mut world, default_origin(1280.0), size(), None, [0.0, 0.0]);
         let title = world
             .query::<TextLabel>()
             .find(|l| l.asset_id == title_label(BASE))
@@ -151,14 +151,14 @@ mod tests {
         let mut world = injected_world();
         let o = default_origin(1280.0);
         // Idle tint first, then the selected tint differs.
-        apply(&mut world, o, size(), None, [0.0, 0.0]);
+        place(&mut world, o, size(), None, [0.0, 0.0]);
         let idle = world
             .query::<Sprite>()
             .find(|s| s.asset_id == row_bg(0))
             .cloned()
             .unwrap()
             .tint;
-        apply(&mut world, o, size(), Some(0), [0.0, 0.0]);
+        place(&mut world, o, size(), Some(0), [0.0, 0.0]);
         let selected = world
             .query::<Sprite>()
             .find(|s| s.asset_id == row_bg(0))
@@ -170,7 +170,7 @@ mod tests {
     #[test]
     fn hide_all_blanks_every_element() {
         let mut world = injected_world();
-        apply(&mut world, default_origin(1280.0), size(), None, [0.0, 0.0]);
+        place(&mut world, default_origin(1280.0), size(), None, [0.0, 0.0]);
         hide_all(&mut world);
         assert!(world.query::<Sprite>().all(|s| !s.visible));
         assert!(world.query::<TextLabel>().all(|l| !l.visible));

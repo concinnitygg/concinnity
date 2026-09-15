@@ -185,7 +185,7 @@ pub(super) fn camera_ray(world: &World, viewport: [f32; 2], mouse: [f32; 2]) -> 
 // Every PickIndex entry the ray strikes, nearest first. Locked assets (the
 // tree's pick lock) are skipped, so a click passes through to whatever
 // sits behind them.
-fn ray_hits(
+pub(super) fn ray_hits(
     world: &World,
     ray: &PickRay,
     locked: &std::collections::BTreeSet<String>,

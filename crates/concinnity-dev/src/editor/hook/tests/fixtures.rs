@@ -25,7 +25,7 @@ use crate::editor::panels::asset_tree::{self, TreeGroup};
 
 use crate::editor::panels::form_panel;
 
-use crate::editor::panels::panel::{self, PanelAction};
+use crate::editor::panels::assets_panel::{self, PanelAction};
 use crate::editor::panels::registry::{self, PanelKey};
 
 use crate::editor::viewport::gizmo;
@@ -69,7 +69,7 @@ pub(in crate::editor::hook) fn world_with_input(input: FrameInput) -> World {
 // combo filter, the form's name heading, and its arg-input pool).
 pub(in crate::editor::hook) fn world_with_fields() -> World {
     let mut world = World::new();
-    for id in panel::all_field_ids()
+    for id in assets_panel::all_field_ids()
         .into_iter()
         .chain(form_panel::all_field_ids())
     {

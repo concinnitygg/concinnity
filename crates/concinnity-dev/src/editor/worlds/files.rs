@@ -2,9 +2,8 @@
 //! new one has to pass. Pure filesystem work over paths the caller resolves, so
 //! the panel's listing, creation, and deletion are testable without a session.
 //!
-//! A project keeps its worlds in `worlds/*.jsonl`. A `world.jsonl` sitting at
-//! the project root is where worlds lived before that, and is still listed so a
-//! legacy project stays openable from the panel.
+//! A project keeps its worlds in `worlds/*.jsonl`. A `world.jsonl` at the
+//! project root is a supported location too, listed beside them.
 
 use concinnity_cook::authoring::world::WORLD_JSONL;
 use concinnity_cook::authoring::world::parse_world_jsonl;
@@ -47,9 +46,9 @@ pub(crate) fn list(worlds_dir: Option<&Path>, content_root: Option<&Path>) -> Ve
         }
     }
     if let Some(root) = content_root {
-        let legacy = root.join(WORLD_JSONL);
-        if !found.iter().any(|w| w.path == legacy)
-            && let Some(world) = world_at(&legacy)
+        let root_world = root.join(WORLD_JSONL);
+        if !found.iter().any(|w| w.path == root_world)
+            && let Some(world) = world_at(&root_world)
         {
             found.push(world);
         }
@@ -185,10 +184,10 @@ mod tests {
         assert_eq!(names(&list(Some(&dir), None)), ["a", "b"]);
     }
 
-    // A project that still keeps its world at the root lists it alongside the
-    // `worlds/` ones, so the panel can open it.
+    // A `world.jsonl` at the project root lists alongside the `worlds/` ones, so
+    // the panel can open it.
     #[test]
-    fn a_legacy_root_world_is_listed_too() {
+    fn a_root_world_is_listed_too() {
         let tree = concinnity_testing::TempTree::new();
         let dir = tree.path().join("worlds");
         std::fs::create_dir_all(&dir).unwrap();

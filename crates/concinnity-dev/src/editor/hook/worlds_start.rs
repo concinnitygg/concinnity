@@ -246,7 +246,7 @@ impl EditorHook {
     // readable and clickable through the wait.
     pub(super) fn drive_loading_draw(&self, world: &mut World, shown: bool) {
         match shown && self.loading_preview() {
-            true => worlds::loading::apply(
+            true => worlds::loading::place(
                 world,
                 self.worlds_layout().preview_rect(),
                 self.loading_name().as_deref(),

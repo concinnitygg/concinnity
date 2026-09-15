@@ -207,7 +207,7 @@ pub(crate) fn hit_test(
 
 // Position + show the panel (`Some(view)`) at effective size `s`, or blank every
 // element (`None`).
-pub(crate) fn apply(world: &mut World, view: Option<&LightingView>, o: [f32; 2], s: [f32; 2]) {
+pub(crate) fn place(world: &mut World, view: Option<&LightingView>, o: [f32; 2], s: [f32; 2]) {
     let Some(view) = view else {
         hide_all(world);
         return;
@@ -456,13 +456,13 @@ mod tests {
     }
 
     #[test]
-    fn apply_draws_sections_controls_and_swatch() {
+    fn place_draws_sections_controls_and_swatch() {
         let mut world = injected_world();
         let rows = lighting::rows(&[true, true, true, true]);
         let fields = derived_fields();
         let view = all_present_view(&rows, &fields);
         let o = [20.0, 20.0];
-        apply(&mut world, Some(&view), o, size(rows.len()));
+        place(&mut world, Some(&view), o, size(rows.len()));
         let title = world
             .query::<TextLabel>()
             .find(|l| l.asset_id == TITLE_LABEL)
@@ -522,7 +522,7 @@ mod tests {
         let mut world = injected_world();
         let rows_all = lighting::rows(&[true, true, true, true]);
         let fields_all = derived_fields();
-        apply(
+        place(
             &mut world,
             Some(&all_present_view(&rows_all, &fields_all)),
             [20.0, 20.0],
@@ -535,7 +535,7 @@ mod tests {
         for b in base..base + lighting::SECTIONS[1].fields.len() {
             fields[b] = None;
         }
-        apply(
+        place(
             &mut world,
             Some(&all_present_view(&rows, &fields)),
             [20.0, 20.0],
@@ -562,13 +562,13 @@ mod tests {
         let mut world = injected_world();
         let rows = lighting::rows(&[true, true, true, true]);
         let fields = derived_fields();
-        apply(
+        place(
             &mut world,
             Some(&all_present_view(&rows, &fields)),
             [20.0, 20.0],
             size(rows.len()),
         );
-        apply(&mut world, None, [0.0, 0.0], size(0));
+        place(&mut world, None, [0.0, 0.0], size(0));
         assert!(world.query::<Sprite>().all(|s| !s.visible));
         assert!(world.query::<TextLabel>().all(|l| !l.visible));
         assert!(world.query::<TextInput>().all(|t| !t.visible));

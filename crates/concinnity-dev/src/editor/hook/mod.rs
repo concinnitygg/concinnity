@@ -6,7 +6,7 @@
 //! code is compiled into a shipped game.
 //!
 //! The top bar (`hud.rs`) owns SAVE and the Templates dropdown. The Assets button
-//! opens the assets panel (`panel.rs`): a search field over every asset of the
+//! opens the assets panel (`assets_panel.rs`): a search field over every asset of the
 //! expanded world, grouped by origin into one collapsible tree (`asset_tree.rs`),
 //! and a "+" that opens a typed autocomplete of the addable types. Clicking a row
 //! (or picking a type from the "+" picker) opens the add / edit form in its own

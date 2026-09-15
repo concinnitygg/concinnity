@@ -73,8 +73,8 @@ pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> Option<Vie
 
 // Position + show the panel at origin `o`, effective size `s`, with the given
 // toggle rows (built by the hook from the registry).
-pub(crate) fn apply(world: &mut World, o: [f32; 2], s: [f32; 2], rows: &[Row], mouse: [f32; 2]) {
-    list_panel::apply(world, BASE, o, s, "View", rows, mouse);
+pub(crate) fn place(world: &mut World, o: [f32; 2], s: [f32; 2], rows: &[Row], mouse: [f32; 2]) {
+    list_panel::place(world, BASE, o, s, "View", rows, mouse);
 }
 
 // Hide every panel element (the F1-hidden pass, or when the panel is toggled off).
@@ -150,9 +150,9 @@ mod tests {
     }
 
     #[test]
-    fn apply_shows_heading_and_row_captions() {
+    fn place_shows_heading_and_row_captions() {
         let mut world = injected_world();
-        apply(
+        place(
             &mut world,
             default_origin(),
             size(),
@@ -175,7 +175,7 @@ mod tests {
     fn checkbox_tints_track_the_row_state() {
         let mut world = injected_world();
         let o = default_origin();
-        apply(
+        place(
             &mut world,
             o,
             size(),
@@ -188,7 +188,7 @@ mod tests {
             .cloned()
             .unwrap()
             .tint;
-        apply(
+        place(
             &mut world,
             o,
             size(),
@@ -206,7 +206,7 @@ mod tests {
     #[test]
     fn hide_all_blanks_every_element() {
         let mut world = injected_world();
-        apply(
+        place(
             &mut world,
             default_origin(),
             size(),

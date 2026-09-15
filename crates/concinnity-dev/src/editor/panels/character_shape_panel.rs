@@ -229,7 +229,7 @@ fn place_button(
 
 // Position + show the panel (`Some(view)`) at effective size `s`, or blank
 // every element (`None`).
-pub(crate) fn apply(world: &mut World, view: Option<&ShapeView>, o: [f32; 2], s: [f32; 2]) {
+pub(crate) fn place(world: &mut World, view: Option<&ShapeView>, o: [f32; 2], s: [f32; 2]) {
     let Some(view) = view else {
         hide_all(world);
         return;
@@ -504,11 +504,11 @@ mod tests {
     }
 
     #[test]
-    fn apply_draws_sections_sliders_and_values() {
+    fn place_draws_sections_sliders_and_values() {
         let mut world = injected_world();
         let (derived, rows, values) = fixture();
         let v = view(&rows, &derived, &values, Some("body_shape"));
-        apply(&mut world, Some(&v), [20.0, 20.0], size(rows.len()));
+        place(&mut world, Some(&v), [20.0, 20.0], size(rows.len()));
         let label = |world: &World, id: AssetId| {
             world
                 .query::<TextLabel>()
@@ -541,7 +541,7 @@ mod tests {
         let no_rows = character_shape::rows(&none, 0, false);
         let mut nv = view(&no_rows, &none, &[], None);
         nv.status = Some("Select a SkinnedMesh");
-        apply(&mut world, Some(&nv), [20.0, 20.0], size(1));
+        place(&mut world, Some(&nv), [20.0, 20.0], size(1));
         assert!(!sprite_visible(&world, RESET_BG));
         assert!(label(&world, STATUS_LABEL).visible);
         assert!(
@@ -570,7 +570,7 @@ mod tests {
             hit_test(&v, r2[0] + 5.0, r2[1] + 5.0, o, s),
             Some(ShapeAction::Preset(1))
         );
-        apply(&mut world, Some(&v), o, s);
+        place(&mut world, Some(&v), o, s);
         let label = |id: AssetId| {
             world
                 .query::<TextLabel>()
@@ -589,8 +589,8 @@ mod tests {
         let mut world = injected_world();
         let (derived, rows, values) = fixture();
         let v = view(&rows, &derived, &values, Some("body_shape"));
-        apply(&mut world, Some(&v), [20.0, 20.0], size(rows.len()));
-        apply(&mut world, None, [0.0, 0.0], size(0));
+        place(&mut world, Some(&v), [20.0, 20.0], size(rows.len()));
+        place(&mut world, None, [0.0, 0.0], size(0));
         assert!(world.query::<Sprite>().all(|s| !s.visible));
         assert!(world.query::<TextLabel>().all(|l| !l.visible));
     }

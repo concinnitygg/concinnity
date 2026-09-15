@@ -28,7 +28,7 @@ const DELETE_LABEL: [f32; 3] = [0.95, 0.60, 0.58];
 
 // Position + show the panel (`Some(view)`) at origin `o`, or blank every
 // element (`None`).
-pub(crate) fn apply(world: &mut World, view: Option<&WorldsView>, o: [f32; 2]) {
+pub(crate) fn place(world: &mut World, view: Option<&WorldsView>, o: [f32; 2]) {
     let Some(view) = view else {
         hide_all(world);
         return;
@@ -377,12 +377,12 @@ mod tests {
     }
 
     #[test]
-    fn apply_labels_rows_and_marks_the_open_world() {
+    fn place_labels_rows_and_marks_the_open_world() {
         let mut world = injected_world();
         let l = layout(Mode::Session);
         let o = l.default_origin();
         let rows = rows(2);
-        apply(&mut world, Some(&view(l, &rows, [0.0, 0.0])), o);
+        place(&mut world, Some(&view(l, &rows, [0.0, 0.0])), o);
         assert_eq!(label(&world, TITLE_LABEL).content, "Worlds");
         assert_eq!(label(&world, LIST_HEADER).content, "Worlds (2)");
         assert_eq!(label(&world, row_label(0)).content, "world0");
@@ -406,12 +406,12 @@ mod tests {
         let l = layout(Mode::Start);
         let o = l.default_origin();
         let rows = rows(2);
-        apply(&mut world, Some(&view(l, &rows, [0.0, 0.0])), o);
+        place(&mut world, Some(&view(l, &rows, [0.0, 0.0])), o);
         assert_eq!(label(&world, NEW_LABEL).content, "+");
         assert_eq!(sprite(&world, NEW_BG).tint[3], 0.0, "no fill at rest");
 
         let n = l.new_rect(o);
-        apply(
+        place(
             &mut world,
             Some(&view(l, &rows, [n[0] + 2.0, n[1] + 2.0])),
             o,
@@ -432,7 +432,7 @@ mod tests {
             previewing: Some(1),
             ..view(l, &rows, [0.0, 0.0])
         };
-        apply(&mut world, Some(&v), o);
+        place(&mut world, Some(&v), o);
 
         assert!(!label(&world, TITLE_LABEL).visible, "no heading at all");
         assert_eq!(label(&world, LIST_HEADER).content, "Worlds (3)");
@@ -453,7 +453,7 @@ mod tests {
         let o = l.default_origin();
         let rows = rows(3);
         let hovered = l.row_rect(o, 2);
-        apply(
+        place(
             &mut world,
             Some(&view(l, &rows, [hovered[0] + 4.0, hovered[1] + 4.0])),
             o,
@@ -469,7 +469,7 @@ mod tests {
         let caption = label(&world, row_label(2)).x;
 
         // Off every row: nothing carries the dots.
-        apply(&mut world, Some(&view(l, &rows, [0.0, 0.0])), o);
+        place(&mut world, Some(&view(l, &rows, [0.0, 0.0])), o);
         assert!(!sprite(&world, DOT1).visible);
         assert_eq!(
             label(&world, row_label(2)).x,
@@ -482,7 +482,7 @@ mod tests {
             menu: Some(0),
             ..view(l, &rows, [0.0, 0.0])
         };
-        apply(&mut world, Some(&v), o);
+        place(&mut world, Some(&v), o);
         assert!(sprite(&world, DOT_BG).visible);
         let d = l.dot_rect(o, 0);
         assert!(sprite(&world, DOT1).y > d[1]);
@@ -500,7 +500,7 @@ mod tests {
             menu: Some(1),
             ..view(l, &rows, [0.0, 0.0])
         };
-        apply(&mut world, Some(&v), o);
+        place(&mut world, Some(&v), o);
 
         assert!(sprite(&world, MENU_BG).visible);
         assert_eq!(label(&world, MENU_DELETE_LABEL).content, "Delete");
@@ -540,7 +540,7 @@ mod tests {
             menu: Some(1),
             ..view(l, &rows, [delete[0] + 4.0, delete[1] + 4.0])
         };
-        apply(&mut world, Some(&v), o);
+        place(&mut world, Some(&v), o);
         assert_eq!(sprite(&world, MENU_DELETE_BG).tint, theme::HOVER_TINT);
         assert_eq!(label(&world, MENU_DELETE_LABEL).color, DELETE_LABEL);
     }
@@ -556,7 +556,7 @@ mod tests {
             menu: Some(1),
             ..view(l, &rows, [0.0, 0.0])
         };
-        apply(&mut world, Some(&v), o);
+        place(&mut world, Some(&v), o);
         assert!(sprite(&world, MENU_DELETE_BG).visible);
         assert!(!sprite(&world, MENU_OPEN_BG).visible);
         assert!(!label(&world, MENU_OPEN_LABEL).visible);
@@ -571,9 +571,9 @@ mod tests {
         let inset = Layout::new(Mode::Start, VP, INSET);
         let rows = rows(2);
         let mut a = injected_world();
-        apply(&mut a, Some(&view(flush, &rows, [0.0, 0.0])), [0.0, 0.0]);
+        place(&mut a, Some(&view(flush, &rows, [0.0, 0.0])), [0.0, 0.0]);
         let mut b = injected_world();
-        apply(&mut b, Some(&view(inset, &rows, [0.0, 0.0])), [0.0, 0.0]);
+        place(&mut b, Some(&view(inset, &rows, [0.0, 0.0])), [0.0, 0.0]);
 
         assert_eq!(sprite(&b, NEW_BG).y - sprite(&a, NEW_BG).y, INSET);
         assert_eq!(sprite(&b, row_bg(0)).y - sprite(&a, row_bg(0)).y, INSET);
@@ -591,7 +591,7 @@ mod tests {
         let rows = rows(3);
         let mut sidebar = injected_world();
         let l = layout(Mode::Start);
-        apply(
+        place(
             &mut sidebar,
             Some(&view(l, &rows, [0.0, 0.0])),
             l.default_origin(),
@@ -610,7 +610,7 @@ mod tests {
 
         let mut switcher = injected_world();
         let l = layout(Mode::Session);
-        apply(
+        place(
             &mut switcher,
             Some(&view(l, &rows, [0.0, 0.0])),
             l.default_origin(),
@@ -636,7 +636,7 @@ mod tests {
             previewing: Some(1),
             ..view(l, &rows, [0.0, 0.0])
         };
-        apply(&mut world, Some(&v), o);
+        place(&mut world, Some(&v), o);
 
         let picked = sprite(&world, row_bg(1)).tint;
         assert_eq!(picked, theme::SELECTED_TINT);
@@ -658,7 +658,7 @@ mod tests {
         let mut world = injected_world();
         let rows = rows(2);
         let start = layout(Mode::Start);
-        apply(
+        place(
             &mut world,
             Some(&view(start, &rows, [0.0, 0.0])),
             start.default_origin(),
@@ -670,7 +670,7 @@ mod tests {
         // Switching back to the switcher restores the close button and the
         // smaller text, so no element keeps the start screen's presentation.
         let session = layout(Mode::Session);
-        apply(
+        place(
             &mut world,
             Some(&view(session, &rows, [0.0, 0.0])),
             session.default_origin(),
@@ -690,7 +690,7 @@ mod tests {
         let l = layout(Mode::Session);
         let o = l.default_origin();
         let rows = rows(POOL);
-        apply(&mut world, Some(&view(l, &rows, [0.0, 0.0])), o);
+        place(&mut world, Some(&view(l, &rows, [0.0, 0.0])), o);
         let shown = l.rows();
         assert!(shown < POOL, "the switcher shows fewer rows than the pool");
         assert!(sprite(&world, row_bg(shown - 1)).visible);
@@ -702,7 +702,7 @@ mod tests {
         let mut world = injected_world();
         let l = layout(Mode::Session);
         let o = l.default_origin();
-        apply(&mut world, Some(&view(l, &[], [0.0, 0.0])), o);
+        place(&mut world, Some(&view(l, &[], [0.0, 0.0])), o);
         assert!(label(&world, LIST_HEADER).content.contains("No worlds"));
         assert!(!label(&world, STATUS_LABEL).visible);
 
@@ -710,7 +710,7 @@ mod tests {
             status: Some("Open failed: 'arena' is not valid JSON"),
             ..view(l, &[], [0.0, 0.0])
         };
-        apply(&mut world, Some(&v), o);
+        place(&mut world, Some(&v), o);
         let status = label(&world, STATUS_LABEL);
         assert!(status.visible && status.content.contains("arena"));
         assert!(status.wrap_width > 0.0 && status.max_lines >= 1);
@@ -722,11 +722,11 @@ mod tests {
         let l = layout(Mode::Session);
         let o = l.default_origin();
         let short = rows(l.rows());
-        apply(&mut world, Some(&view(l, &short, [0.0, 0.0])), o);
+        place(&mut world, Some(&view(l, &short, [0.0, 0.0])), o);
         assert!(!sprite(&world, LIST_TRACK).visible);
 
         let long = rows(l.rows() + 4);
-        apply(&mut world, Some(&view(l, &long, [0.0, 0.0])), o);
+        place(&mut world, Some(&view(l, &long, [0.0, 0.0])), o);
         assert!(sprite(&world, LIST_TRACK).visible);
         assert!(sprite(&world, LIST_THUMB).visible);
     }
@@ -738,7 +738,7 @@ mod tests {
         let o = l.default_origin();
         let rows = rows(2);
         let r = l.row_rect(o, 1);
-        apply(
+        place(
             &mut world,
             Some(&view(l, &rows, [r[0] + 2.0, r[1] + 2.0])),
             o,
@@ -757,8 +757,8 @@ mod tests {
             menu: Some(0),
             ..view(l, &rows, [0.0, 0.0])
         };
-        apply(&mut world, Some(&v), l.default_origin());
-        apply(&mut world, None, [0.0, 0.0]);
+        place(&mut world, Some(&v), l.default_origin());
+        place(&mut world, None, [0.0, 0.0]);
         assert!(world.query::<Sprite>().all(|s| !s.visible));
         assert!(world.query::<TextLabel>().all(|l| !l.visible));
     }

@@ -199,7 +199,7 @@ pub(crate) fn hit_card(view: &ChartView, mx: f32, my: f32, band: [f32; 4]) -> Op
         .position(|c| point_in(mx, my, card_rect(c, band, view.pan)))
 }
 
-pub(crate) fn apply(world: &mut World, view: &ChartView, band: [f32; 4]) {
+pub(crate) fn place(world: &mut World, view: &ChartView, band: [f32; 4]) {
     layout_wires(world, view, band);
     layout_cards(world, view, band);
     layout_hint(world, view, band);
@@ -571,14 +571,14 @@ mod tests {
         let chart = branching();
         let mut world = injected_world();
         // Pan so the trigger card is cut by the band's left edge.
-        apply(&mut world, &view(&chart, [MARGIN + 60.0, 0.0]), BAND);
+        place(&mut world, &view(&chart, [MARGIN + 60.0, 0.0]), BAND);
         let bg = sprite(&world, card_bg(0));
         assert!(bg.visible);
         assert_eq!(bg.x, BAND[0]);
         assert_eq!(bg.width, CARD_W - 60.0);
         assert!(!label(&world, card_title(0)).visible, "text left the card");
         // A card entirely off the canvas is gone, not clamped to the edge.
-        apply(
+        place(
             &mut world,
             &view(&chart, [MARGIN + CARD_W + 40.0, 0.0]),
             BAND,
@@ -608,7 +608,7 @@ mod tests {
     fn check_wire_labels(chart: Chart) {
         let mut world = injected_world();
         let band = [100.0, 200.0, 2_000.0, 600.0];
-        apply(&mut world, &view(&chart, [0.0, 0.0]), band);
+        place(&mut world, &view(&chart, [0.0, 0.0]), band);
 
         let cards: Vec<[f32; 4]> = chart
             .cards
@@ -709,7 +709,7 @@ mod tests {
             &[(0, 1, "sets"), (0, 2, "hides")],
         );
         let mut world = injected_world();
-        apply(&mut world, &view(&chart, [0.0, 0.0]), WIDE);
+        place(&mut world, &view(&chart, [0.0, 0.0]), WIDE);
 
         let drawn = label_rects(&world);
         assert_eq!(drawn.len(), 2, "both wires are labeled");
@@ -731,7 +731,7 @@ mod tests {
             &[(0, 2, "hides"), (1, 2, "shows")],
         );
         let mut world = injected_world();
-        apply(&mut world, &view(&chart, [0.0, 0.0]), WIDE);
+        place(&mut world, &view(&chart, [0.0, 0.0]), WIDE);
 
         let drawn = label_rects(&world);
         assert_eq!(drawn.len(), 2, "neither wire loses its word");
@@ -746,7 +746,7 @@ mod tests {
     fn a_branch_wire_elbows_and_carries_its_pin_label() {
         let chart = branching();
         let mut world = injected_world();
-        apply(&mut world, &view(&chart, [0.0, 0.0]), BAND);
+        place(&mut world, &view(&chart, [0.0, 0.0]), BAND);
         let labels: Vec<String> = (0..WIRE_LABEL_POOL)
             .map(|i| label(&world, wire_label(i)))
             .filter(|l| l.visible)
@@ -815,7 +815,7 @@ mod tests {
             (0..CARD_POOL + 5).map(|_| json!({"save": {}})).collect();
         let chart = graph::chart(&json!({"on": "start", "do": body}));
         let mut world = injected_world();
-        apply(&mut world, &view(&chart, [0.0, 0.0]), BAND);
+        place(&mut world, &view(&chart, [0.0, 0.0]), BAND);
         let hint = label(&world, HINT_LABEL);
         assert!(hint.visible);
         assert!(hint.content.starts_with("7 more nodes"), "{}", hint.content);

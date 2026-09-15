@@ -9,7 +9,7 @@
 use concinnity_core::ecs::World;
 use concinnity_host::thread::asset_id::AssetId;
 
-use super::panels::panel;
+use super::panels::assets_panel;
 use super::panels::registry::ID_BASE;
 use super::theme;
 use super::viewport::billboards;
@@ -70,7 +70,7 @@ impl MenuItem {
 // construction: the former are not in `add_types`, the latter carry no
 // position.
 pub(crate) fn placeable_types() -> Vec<&'static str> {
-    let mut types: Vec<&'static str> = panel::add_types()
+    let mut types: Vec<&'static str> = assets_panel::add_types()
         .filter(|ty| billboards::eligible(ty))
         .collect();
     types.sort_unstable();
@@ -134,7 +134,7 @@ pub(crate) fn over(mx: f32, my: f32, o: [f32; 2], rows: usize) -> bool {
     point_in(mx, my, menu_rect(o, rows))
 }
 
-pub(crate) fn apply(world: &mut World, o: [f32; 2], items: &[MenuItem], mouse: [f32; 2]) {
+pub(crate) fn place(world: &mut World, o: [f32; 2], items: &[MenuItem], mouse: [f32; 2]) {
     widget::place_panel(world, MENU_BG, menu_rect(o, items.len()));
     widget::place_left_label(
         world,

@@ -151,7 +151,7 @@ pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2], snap: &HealthSnapshot) -> 
 }
 
 // Position + show the panel at origin `o`.
-pub(crate) fn apply(world: &mut World, snap: &HealthSnapshot, o: [f32; 2], mouse: [f32; 2]) {
+pub(crate) fn place(world: &mut World, snap: &HealthSnapshot, o: [f32; 2], mouse: [f32; 2]) {
     widget::place_panel(world, PANEL_BG, panel_rect(o, snap));
     let title = widget::title_rect(o, PANEL_W);
     widget::place_heading(world, TITLE_LABEL, title, "Health");
@@ -434,9 +434,9 @@ mod tests {
     }
 
     #[test]
-    fn apply_shows_the_heading_and_every_row() {
+    fn place_shows_the_heading_and_every_row() {
         let mut world = injected_world();
-        apply(&mut world, &snapshot(), [0.0, 0.0], [0.0, 0.0]);
+        place(&mut world, &snapshot(), [0.0, 0.0], [0.0, 0.0]);
         assert_eq!(label(&world, TITLE_LABEL).content, "Health");
         for (i, caption) in ["RAM", "VRAM", "CPU"].iter().enumerate() {
             assert_eq!(&label(&world, caption_label(i)).content, caption);
@@ -451,7 +451,7 @@ mod tests {
     fn fills_are_proportional_and_nested() {
         let mut world = injected_world();
         let o = [0.0, 0.0];
-        apply(&mut world, &snapshot(), o, [0.0, 0.0]);
+        place(&mut world, &snapshot(), o, [0.0, 0.0]);
 
         let bar = bar_rect(o, 0);
         let used = sprite(&world, used_fill(0));
@@ -472,7 +472,7 @@ mod tests {
     #[test]
     fn unknown_quantities_hide_their_fills() {
         let mut world = injected_world();
-        apply(
+        place(
             &mut world,
             &HealthSnapshot::default(),
             [0.0, 0.0],
@@ -490,11 +490,11 @@ mod tests {
         let mut world = injected_world();
         let mut snap = snapshot();
         snap.rss = Some(31 * GB);
-        apply(&mut world, &snap, [0.0, 0.0], [0.0, 0.0]);
+        place(&mut world, &snap, [0.0, 0.0], [0.0, 0.0]);
         assert_eq!(sprite(&world, used_fill(0)).tint, USED_WARN_TINT);
 
         snap.rss = Some(4 * GB);
-        apply(&mut world, &snap, [0.0, 0.0], [0.0, 0.0]);
+        place(&mut world, &snap, [0.0, 0.0], [0.0, 0.0]);
         assert_eq!(sprite(&world, used_fill(0)).tint, USED_TINT);
     }
 
@@ -507,7 +507,7 @@ mod tests {
             total_ram: Some(32 * GB),
             ..Default::default()
         };
-        apply(&mut world, &snap, [0.0, 0.0], [0.0, 0.0]);
+        place(&mut world, &snap, [0.0, 0.0], [0.0, 0.0]);
         let used = sprite(&world, used_fill(0));
         assert!(used.visible);
         assert!(used.width >= MIN_FILL_W);
@@ -519,19 +519,19 @@ mod tests {
     #[test]
     fn the_churn_line_hides_without_heap_stats() {
         let mut world = injected_world();
-        apply(&mut world, &snapshot(), [0.0, 0.0], [0.0, 0.0]);
+        place(&mut world, &snapshot(), [0.0, 0.0], [0.0, 0.0]);
         assert!(label(&world, CHURN_LABEL).visible);
 
         let mut snap = snapshot();
         snap.heap = None;
-        apply(&mut world, &snap, [0.0, 0.0], [0.0, 0.0]);
+        place(&mut world, &snap, [0.0, 0.0], [0.0, 0.0]);
         assert!(!label(&world, CHURN_LABEL).visible);
     }
 
     #[test]
     fn hide_all_blanks_every_element() {
         let mut world = injected_world();
-        apply(&mut world, &snapshot(), [0.0, 0.0], [0.0, 0.0]);
+        place(&mut world, &snapshot(), [0.0, 0.0], [0.0, 0.0]);
         hide_all(&mut world);
         assert!(world.query::<Sprite>().all(|s| !s.visible));
         assert!(world.query::<TextLabel>().all(|l| !l.visible));
@@ -568,7 +568,7 @@ mod tests {
     #[test]
     fn the_breakdown_draws_a_line_per_reported_tag() {
         let mut world = injected_world();
-        apply(&mut world, &tagged_snapshot(), [0.0, 0.0], [0.0, 0.0]);
+        place(&mut world, &tagged_snapshot(), [0.0, 0.0], [0.0, 0.0]);
 
         let names = ["Scratch", "Textures", "Meshes"];
         let realms = ["RAM", "VRAM", "VRAM"];
@@ -587,7 +587,7 @@ mod tests {
         let mut world = injected_world();
         let o = [0.0, 0.0];
         let snap = tagged_snapshot();
-        apply(&mut world, &snap, o, [0.0, 0.0]);
+        place(&mut world, &snap, o, [0.0, 0.0]);
 
         let panel = panel_rect(o, &snap);
         let mut last_y = f32::MIN;
@@ -637,9 +637,9 @@ mod tests {
         assert_eq!(size(&snap)[1], without[1] + TAG_ROW_H);
 
         let mut world = injected_world();
-        apply(&mut world, &snap, [0.0, 0.0], [0.0, 0.0]);
+        place(&mut world, &snap, [0.0, 0.0], [0.0, 0.0]);
         assert!(label(&world, DRIFT_LABEL).visible);
-        apply(&mut world, &snapshot(), [0.0, 0.0], [0.0, 0.0]);
+        place(&mut world, &snapshot(), [0.0, 0.0], [0.0, 0.0]);
         assert!(!label(&world, DRIFT_LABEL).visible);
     }
 
@@ -648,10 +648,10 @@ mod tests {
     #[test]
     fn an_unreported_ledger_draws_no_rows_and_shortens_the_panel() {
         let mut world = injected_world();
-        apply(&mut world, &tagged_snapshot(), [0.0, 0.0], [0.0, 0.0]);
+        place(&mut world, &tagged_snapshot(), [0.0, 0.0], [0.0, 0.0]);
         assert!(label(&world, tag_name_label(0)).visible);
 
-        apply(&mut world, &snapshot(), [0.0, 0.0], [0.0, 0.0]);
+        place(&mut world, &snapshot(), [0.0, 0.0], [0.0, 0.0]);
         for i in 0..health::MAX_TAG_ROWS {
             assert!(!label(&world, tag_name_label(i)).visible);
             assert!(!label(&world, tag_realm_label(i)).visible);
@@ -708,7 +708,7 @@ mod tests {
         };
 
         let mut world = injected_world();
-        apply(&mut world, &snap, [0.0, 0.0], [0.0, 0.0]);
+        place(&mut world, &snap, [0.0, 0.0], [0.0, 0.0]);
         assert_eq!(label(&world, tag_value_label(0)).color, OVER_BUDGET_LABEL);
         assert_eq!(label(&world, tag_name_label(0)).color, theme::LABEL);
     }
@@ -719,7 +719,7 @@ mod tests {
     fn the_hot_class_line_appears_only_when_the_allocator_measured_one() {
         let mut world = injected_world();
         let snap = tagged_snapshot();
-        apply(&mut world, &snap, [0.0, 0.0], [0.0, 0.0]);
+        place(&mut world, &snap, [0.0, 0.0], [0.0, 0.0]);
         assert!(!label(&world, HOT_CLASS_LABEL).visible);
         let without = label(&world, tag_name_label(0)).y;
 
@@ -732,7 +732,7 @@ mod tests {
             }),
             ..snap
         };
-        apply(&mut world, &measured, [0.0, 0.0], [0.0, 0.0]);
+        place(&mut world, &measured, [0.0, 0.0], [0.0, 0.0]);
         assert!(label(&world, HOT_CLASS_LABEL).visible);
         assert_eq!(label(&world, tag_name_label(0)).y - without, TAG_ROW_H);
         assert_eq!(size(&measured)[1] - size(&snap)[1], TAG_ROW_H);

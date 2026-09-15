@@ -181,6 +181,11 @@ pub(crate) fn anchored_path() -> Option<PathBuf> {
 fn open<'a>(held: &'a mut MutexGuard<'static, Option<Loaded>>) -> Option<&'a mut Loaded> {
     let path = anchored_path()?;
     let token = identity::token()?;
+    Some(open_at(held, path, token))
+}
+
+// The segment at `path`, reading its index when `held` has none for that file.
+fn open_at(held: &mut Option<Loaded>, path: PathBuf, token: u32) -> &mut Loaded {
     if held.as_ref().is_some_and(|loaded| loaded.path != path) {
         // A host re-anchored the cache after this segment was read. What this
         // build produced belongs to the old file, so write it back there before
@@ -189,12 +194,12 @@ fn open<'a>(held: &'a mut MutexGuard<'static, Option<Loaded>>) -> Option<&'a mut
             write(&previous);
         }
     }
-    Some(held.get_or_insert_with(|| Loaded {
+    held.get_or_insert_with(|| Loaded {
         index: Arc::new(Index::read(&path, token)),
         path,
         token,
         stored: HashMap::new(),
-    }))
+    })
 }
 
 // Serializes this process's access to the one segment it holds. Held only
@@ -202,4 +207,99 @@ fn open<'a>(held: &'a mut MutexGuard<'static, Option<Loaded>>) -> Option<&'a mut
 fn lock() -> MutexGuard<'static, Option<Loaded>> {
     static LOADED: Mutex<Option<Loaded>> = Mutex::new(None);
     LOADED.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+#[cfg(test)]
+mod tests {
+    use concinnity_testing::TempTree;
+
+    use super::*;
+
+    const PAYLOAD: CacheEntryKind = CacheEntryKind::Payload;
+    const TOKEN: u32 = 0xC0FFEE;
+
+    fn store_into(loaded: &mut Loaded, key: &str, bytes: &[u8]) {
+        loaded
+            .stored
+            .insert((PAYLOAD, key.to_owned()), bytes.to_vec().into());
+    }
+
+    fn stored_bytes(loaded: &Loaded, key: &str) -> Option<Vec<u8>> {
+        loaded
+            .stored
+            .get(&(PAYLOAD, key.to_owned()))
+            .map(|bytes| bytes.to_vec())
+    }
+
+    #[test]
+    fn a_fresh_segment_serves_a_store_before_any_file_exists() {
+        let tree = TempTree::new();
+        let path = tree.join("segment");
+        let mut held = None;
+        let loaded = open_at(&mut held, path.clone(), TOKEN);
+        assert!(loaded.stored.is_empty());
+
+        store_into(loaded, "cafe", &[1, 2, 3]);
+        assert_eq!(stored_bytes(loaded, "cafe"), Some(vec![1, 2, 3]));
+        assert!(!path.exists(), "a store stays in memory until written");
+    }
+
+    #[test]
+    fn a_written_segment_reads_back_through_a_fresh_index() {
+        let tree = TempTree::new();
+        let path = tree.join("segment");
+        let mut held = None;
+        let loaded = open_at(&mut held, path.clone(), TOKEN);
+        store_into(loaded, "cafe", &[1, 2, 3]);
+
+        assert!(write(loaded));
+        let index = Index::read(&path, TOKEN);
+        assert_eq!(index.get(PAYLOAD, "cafe"), Some(vec![1, 2, 3]));
+    }
+
+    #[test]
+    fn switching_paths_writes_the_previous_entries_back_to_their_own_file() {
+        let tree = TempTree::new();
+        let first = tree.join("first");
+        let second = tree.join("second");
+        let mut held = None;
+        store_into(open_at(&mut held, first.clone(), TOKEN), "cafe", &[1, 2, 3]);
+
+        let loaded = open_at(&mut held, second.clone(), TOKEN);
+        assert_eq!(loaded.path, second);
+        assert!(loaded.stored.is_empty(), "the new segment starts empty");
+        assert!(!second.exists());
+        let previous = Index::read(&first, TOKEN);
+        assert_eq!(previous.get(PAYLOAD, "cafe"), Some(vec![1, 2, 3]));
+    }
+
+    #[test]
+    fn reopening_the_same_path_keeps_what_was_stored() {
+        let tree = TempTree::new();
+        let path = tree.join("segment");
+        let mut held = None;
+        store_into(open_at(&mut held, path.clone(), TOKEN), "cafe", &[1, 2, 3]);
+
+        let loaded = open_at(&mut held, path.clone(), TOKEN);
+        assert_eq!(stored_bytes(loaded, "cafe"), Some(vec![1, 2, 3]));
+        assert!(!path.exists(), "reopening writes nothing");
+    }
+
+    #[test]
+    fn an_existing_segment_is_served_through_the_opened_index() {
+        let tree = TempTree::new();
+        let path = tree.join("segment");
+        let empty = Index::read(&path, TOKEN);
+        assert!(segment::write(
+            &path,
+            &empty,
+            &[(PAYLOAD, "cafe", &[4, 5])],
+            TOKEN
+        ));
+
+        let mut held = None;
+        let loaded = open_at(&mut held, path, TOKEN);
+        assert!(loaded.stored.is_empty());
+        assert_eq!(loaded.index.get(PAYLOAD, "cafe"), Some(vec![4, 5]));
+    }
 }

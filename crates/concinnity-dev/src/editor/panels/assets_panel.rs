@@ -428,7 +428,7 @@ pub(crate) enum PanelAction {
     Consume,
 }
 
-// The per-frame data the hook hands to `apply` / `hit_test`.
+// The per-frame data the hook hands to `place` / `hit_test`.
 pub(crate) struct PanelView<'a> {
     // The flattened tree (group headers plus the assets of unfolded groups).
     pub rows: &'a [TreeRow],
@@ -579,7 +579,7 @@ pub(crate) fn hit_test(
 
 // Position + show the panel's elements for this frame at origin `o`, or hide
 // them all when the panel is closed (`view` is `None`).
-pub(crate) fn apply(world: &mut World, view: Option<&PanelView>, o: [f32; 2], s: [f32; 2]) {
+pub(crate) fn place(world: &mut World, view: Option<&PanelView>, o: [f32; 2], s: [f32; 2]) {
     let Some(view) = view else {
         hide_all(world);
         return;
@@ -1282,7 +1282,7 @@ mod tests {
         }
     }
 
-    // A world with every panel element injected (hidden), for driving `apply`.
+    // A world with every panel element injected (hidden), for driving `place`.
     fn injected_world() -> World {
         crate::test_support::injected_world(&all_sprite_ids(), &all_label_ids(), &all_field_ids())
     }
@@ -1393,7 +1393,7 @@ mod tests {
         f.picker_options = vec!["PointLight".to_string()];
         let mut world = injected_world();
         let o = test_origin();
-        apply(&mut world, Some(&f.view()), o, size());
+        place(&mut world, Some(&f.view()), o, size());
         let l = label(&world, PLUS_LABEL);
         assert_eq!(l.content, "+");
         assert_eq!(sprite(&world, PLUS_BG).tint, PLUS_TINT);
@@ -1401,7 +1401,7 @@ mod tests {
             l.scale > 1.0,
             "the glyph draws larger than the body text (the box is unchanged)"
         );
-        apply(&mut world, Some(&f.picker_view()), o, size());
+        place(&mut world, Some(&f.picker_view()), o, size());
         assert_eq!(label(&world, PLUS_LABEL).content, "X");
         assert_eq!(
             sprite(&world, PLUS_BG).tint,
@@ -1418,7 +1418,7 @@ mod tests {
         let f = Fixture::new();
         let mut world = injected_world();
         let o = test_origin();
-        apply(&mut world, Some(&f.view()), o, size());
+        place(&mut world, Some(&f.view()), o, size());
         let title = label(&world, TITLE_LABEL);
         assert!(title.visible);
         assert_eq!(title.content, "Assets");
@@ -1509,7 +1509,7 @@ mod tests {
             Some(PanelAction::CloseOverlays)
         );
         let mut world = injected_world();
-        apply(&mut world, Some(&v), o, size());
+        place(&mut world, Some(&v), o, size());
         assert!(!sprite(&world, MENU_BG).visible);
         assert!(!label(&world, MENU_DELETE_LABEL).visible);
     }
@@ -1531,14 +1531,14 @@ mod tests {
     }
 
     #[test]
-    fn apply_draws_headers_types_and_toggle_states() {
+    fn place_draws_headers_types_and_toggle_states() {
         let mut world = injected_world();
         let mut f = Fixture::new();
         f.selection.replace("cam".to_string());
         f.hidden.insert("lamp".to_string());
         f.locked.insert("cam".to_string());
         let o = test_origin();
-        apply(&mut world, Some(&f.view()), o, size());
+        place(&mut world, Some(&f.view()), o, size());
 
         assert_eq!(label(&world, STATUS_LABEL).content, "Assets (3)");
         assert_eq!(label(&world, name_label(0)).content, "- World (2)");
@@ -1586,11 +1586,11 @@ mod tests {
                 .cloned()
                 .unwrap()
         };
-        apply(&mut world, Some(&f.view()), o, size());
+        place(&mut world, Some(&f.view()), o, size());
         let t = field(&world);
         assert!(t.visible && !t.focused, "shown, unfocused until clicked");
 
-        apply(&mut world, Some(&f.picker_view()), o, size());
+        place(&mut world, Some(&f.picker_view()), o, size());
         assert!(field(&world).focused, "the picker types into the field");
     }
 
@@ -1604,7 +1604,7 @@ mod tests {
         let r1 = row_rect(o, PANEL_W, 1);
 
         // Unhovered: the type reads, and the dot slot is already reserved.
-        apply(&mut world, Some(&f.view()), o, size());
+        place(&mut world, Some(&f.view()), o, size());
         let resting = label(&world, type_label(1));
         assert!(resting.visible && !sprite(&world, DOT1).visible);
 
@@ -1612,7 +1612,7 @@ mod tests {
             mouse: [r1[0] + 5.0, r1[1] + 5.0],
             ..f.view()
         };
-        apply(&mut world, Some(&v), o, size());
+        place(&mut world, Some(&v), o, size());
         assert!(sprite(&world, DOT1).visible, "hover reveals the dots");
         let hovered = label(&world, type_label(1));
         assert!(hovered.visible, "the hovered row's type keeps reading");
@@ -1627,7 +1627,7 @@ mod tests {
             mouse: [d[0] + 2.0, d[1] + 2.0],
             ..f.view()
         };
-        apply(&mut world, Some(&over), o, size());
+        place(&mut world, Some(&over), o, size());
         assert!(sprite(&world, DOT_BG).visible);
     }
 
@@ -1652,7 +1652,7 @@ mod tests {
         );
 
         let mut world = injected_world();
-        apply(&mut world, Some(&v), o, size());
+        place(&mut world, Some(&v), o, size());
         assert!(sprite(&world, MENU_BG).visible);
         assert_eq!(label(&world, MENU_DELETE_LABEL).content, "Delete");
     }
@@ -1686,7 +1686,7 @@ mod tests {
             Some(PanelAction::RowExport)
         );
         let mut world = injected_world();
-        apply(&mut world, Some(&v), o, size());
+        place(&mut world, Some(&v), o, size());
         assert!(sprite(&world, MENU_EXPORT_BG).visible);
         assert_eq!(label(&world, MENU_EXPORT_LABEL).content, "Export .glb");
 
@@ -1702,7 +1702,7 @@ mod tests {
             Some(PanelAction::CloseOverlays)
         );
         let mut world = injected_world();
-        apply(&mut world, Some(&v), o, size());
+        place(&mut world, Some(&v), o, size());
         assert!(!sprite(&world, MENU_EXPORT_BG).visible);
         assert!(!label(&world, MENU_EXPORT_LABEL).visible);
     }
@@ -1722,7 +1722,7 @@ mod tests {
             row_menu: Some("cam"),
             ..f.view()
         };
-        apply(&mut world, Some(&v), o, size());
+        place(&mut world, Some(&v), o, size());
         // The menu opens under slot 1 (cam) and is one row tall (Delete), so it
         // covers slot 2 (lamp). Slot 3 is the fox header, slot 4 the past_a row.
         assert!(
@@ -1803,7 +1803,7 @@ mod tests {
     fn picker_shows_an_empty_state_with_no_matching_options() {
         let f = Fixture::new();
         let mut world = injected_world();
-        apply(&mut world, Some(&f.picker_view()), test_origin(), size());
+        place(&mut world, Some(&f.picker_view()), test_origin(), size());
         let empty = label(&world, EMPTY_LABEL);
         assert!(empty.visible);
         assert_eq!(empty.content, "No matching types");
@@ -1818,7 +1818,7 @@ mod tests {
             status: Some("the world does not build"),
             ..f.view()
         };
-        apply(&mut world, Some(&v), test_origin(), size());
+        place(&mut world, Some(&v), test_origin(), size());
         let status = label(&world, STATUS_LABEL);
         assert_eq!(status.content, "the world does not build");
         assert_eq!(status.color, ERROR_LABEL);
@@ -1838,7 +1838,7 @@ mod tests {
             rows: &[],
             ..f.view()
         };
-        apply(&mut world, Some(&v), test_origin(), size());
+        place(&mut world, Some(&v), test_origin(), size());
         assert_eq!(label(&world, EMPTY_LABEL).content, "No matching assets");
     }
 
@@ -1853,11 +1853,11 @@ mod tests {
             scroll: 3,
             ..f.view()
         };
-        apply(&mut world, Some(&v), test_origin(), size());
+        place(&mut world, Some(&v), test_origin(), size());
         assert!(sprite(&world, LIST_THUMB).visible);
         // A short tree hides it again.
         let short = Fixture::new();
-        apply(&mut world, Some(&short.view()), test_origin(), size());
+        place(&mut world, Some(&short.view()), test_origin(), size());
         assert!(!sprite(&world, LIST_THUMB).visible);
     }
 
@@ -1865,8 +1865,8 @@ mod tests {
     fn hide_all_blanks_every_element() {
         let mut world = injected_world();
         let f = Fixture::new();
-        apply(&mut world, Some(&f.view()), test_origin(), size());
-        apply(&mut world, None, [0.0, 0.0], size());
+        place(&mut world, Some(&f.view()), test_origin(), size());
+        place(&mut world, None, [0.0, 0.0], size());
         assert!(world.query::<Sprite>().all(|s| !s.visible));
         assert!(world.query::<TextLabel>().all(|l| !l.visible));
         assert!(world.query::<TextInput>().all(|t| !t.visible));

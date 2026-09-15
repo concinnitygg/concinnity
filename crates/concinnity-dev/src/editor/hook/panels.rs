@@ -12,6 +12,7 @@ use super::EditorHook;
 use crate::editor::behavior;
 use crate::editor::behavior::panel::ViewMode;
 use crate::editor::palette;
+use crate::editor::panels::assets_panel;
 use crate::editor::panels::character_shape_panel;
 use crate::editor::panels::console_panel;
 use crate::editor::panels::content_panel;
@@ -21,7 +22,6 @@ use crate::editor::panels::health_panel;
 use crate::editor::panels::import_panel;
 use crate::editor::panels::lighting;
 use crate::editor::panels::lighting_panel;
-use crate::editor::panels::panel;
 use crate::editor::panels::preview::{self, PreviewAction};
 use crate::editor::panels::registry::{Panel, PanelKey};
 use crate::editor::panels::story_panel;
@@ -43,7 +43,7 @@ impl Panel for AssetsPanel {
         true
     }
     fn max_size(&self, _hook: &EditorHook) -> [f32; 2] {
-        panel::max_size()
+        assets_panel::max_size()
     }
     fn view_row(&self) -> Option<&'static str> {
         Some("Assets")
@@ -59,7 +59,7 @@ impl Panel for AssetsPanel {
             hook.tree_stale = true;
             hook.tree_scroll = 0;
             hook.search_focus = true;
-            widget::seed_field(world, panel::SEARCH_INPUT, "");
+            widget::seed_field(world, assets_panel::SEARCH_INPUT, "");
         }
     }
     // Closing keeps the tree state (like a View-checkbox untick); only the
@@ -70,19 +70,19 @@ impl Panel for AssetsPanel {
         hook.row_menu = None;
     }
     fn size(&self, _hook: &EditorHook) -> [f32; 2] {
-        panel::size()
+        assets_panel::size()
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
-        panel::default_origin(vp[0])
+        assets_panel::default_origin(vp[0])
     }
     fn sprite_ids(&self) -> Vec<AssetId> {
-        panel::all_sprite_ids()
+        assets_panel::all_sprite_ids()
     }
     fn label_ids(&self) -> Vec<AssetId> {
-        panel::all_label_ids()
+        assets_panel::all_label_ids()
     }
     fn field_ids(&self) -> Vec<(AssetId, &'static str)> {
-        vec![(panel::SEARCH_INPUT, "search")]
+        vec![(assets_panel::SEARCH_INPUT, "search")]
     }
     fn press(
         &self,
@@ -96,7 +96,7 @@ impl Panel for AssetsPanel {
         let action = {
             let data = hook.panel_data(world);
             let view = hook.make_view(&data, [mx, my]);
-            panel::hit_test(&view, mx, my, o, s)
+            assets_panel::hit_test(&view, mx, my, o, s)
         };
         match action {
             Some(a) => {
@@ -108,7 +108,7 @@ impl Panel for AssetsPanel {
     }
     fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
         let s = hook.effective_size(PanelKey::Assets);
-        panel::cursor_over_body(mx, my, o, s)
+        assets_panel::cursor_over_body(mx, my, o, s)
     }
     fn scroll(&self, hook: &mut EditorHook, world: &mut World, delta: f32) {
         hook.scroll_tree(delta, world);
@@ -120,10 +120,10 @@ impl Panel for AssetsPanel {
         let s = hook.effective_size(PanelKey::Assets);
         let data = hook.panel_data(world);
         let view = hook.make_view(&data, mouse);
-        panel::apply(world, Some(&view), o, s);
+        assets_panel::place(world, Some(&view), o, s);
     }
     fn hide(&self, world: &mut World) {
-        panel::apply(world, None, [0.0, 0.0], panel::size());
+        assets_panel::place(world, None, [0.0, 0.0], assets_panel::size());
     }
 }
 
@@ -208,10 +208,10 @@ impl Panel for EditPanel {
         let s = hook.effective_size(PanelKey::Edit);
         let data = hook.panel_data(world);
         let view = hook.make_form_view(&data, mouse);
-        form_panel::apply(world, Some(&view), o, s);
+        form_panel::place(world, Some(&view), o, s);
     }
     fn hide(&self, world: &mut World) {
-        form_panel::apply(world, None, [0.0, 0.0], form_panel::size(0));
+        form_panel::place(world, None, [0.0, 0.0], form_panel::size(0));
     }
 }
 
@@ -261,7 +261,7 @@ impl Panel for HealthPanel {
     // The snapshot is refreshed on the hook's throttled sample, not here: `draw`
     // only has `&EditorHook`, and the syscalls behind it must not run per frame.
     fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
-        health_panel::apply(world, hook.health.snapshot(), o, mouse);
+        health_panel::place(world, hook.health.snapshot(), o, mouse);
     }
     fn hide(&self, world: &mut World) {
         health_panel::hide_all(world);
@@ -348,7 +348,7 @@ impl Panel for PreviewPanel {
         }
     }
     fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
-        preview::apply(
+        preview::place(
             world,
             o,
             preview::PreviewState {
@@ -435,7 +435,7 @@ impl Panel for ContentPanel {
     }
     fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
         let (cells, total) = hook.content_cells(world);
-        content_panel::apply(
+        content_panel::place(
             world,
             &content_panel::ContentView {
                 cells: &cells,
@@ -499,7 +499,7 @@ impl Panel for ViewPanel {
     }
     fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
         let s = hook.effective_size(PanelKey::View);
-        view::apply(world, o, s, &hook.view_rows(), mouse);
+        view::place(world, o, s, &hook.view_rows(), mouse);
     }
     fn hide(&self, world: &mut World) {
         view::hide_all(world);
@@ -560,7 +560,7 @@ impl Panel for TemplatesPanel {
     }
     fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
         let s = hook.effective_size(PanelKey::Templates);
-        template::apply(world, o, s, hook.open_template, mouse);
+        template::place(world, o, s, hook.open_template, mouse);
     }
     fn hide(&self, world: &mut World) {
         template::hide_all(world);
@@ -653,10 +653,10 @@ impl Panel for TemplateDetailPanel {
         let s = hook.effective_size(PanelKey::TemplateDetail);
         let data = hook.template_detail_data(i);
         let view = hook.make_template_view(&data, mouse);
-        template_panel::apply(world, Some(&view), o, s);
+        template_panel::place(world, Some(&view), o, s);
     }
     fn hide(&self, world: &mut World) {
-        template_panel::apply(world, None, [0.0, 0.0], template_panel::size(0));
+        template_panel::place(world, None, [0.0, 0.0], template_panel::size(0));
     }
 }
 
@@ -732,10 +732,10 @@ impl Panel for LightingPanel {
         let s = hook.effective_size(PanelKey::Lighting);
         let data = hook.lighting_data();
         let view = hook.make_lighting_view(&data, mouse);
-        lighting_panel::apply(world, Some(&view), o, s);
+        lighting_panel::place(world, Some(&view), o, s);
     }
     fn hide(&self, world: &mut World) {
-        lighting_panel::apply(world, None, [0.0, 0.0], lighting_panel::size(0));
+        lighting_panel::place(world, None, [0.0, 0.0], lighting_panel::size(0));
     }
 }
 
@@ -818,10 +818,10 @@ impl Panel for CharacterShapePanel {
         let s = hook.effective_size(PanelKey::CharacterShape);
         let data = hook.shape_data(world);
         let view = hook.make_shape_view(&data, mouse);
-        character_shape_panel::apply(world, Some(&view), o, s);
+        character_shape_panel::place(world, Some(&view), o, s);
     }
     fn hide(&self, world: &mut World) {
-        character_shape_panel::apply(world, None, [0.0, 0.0], character_shape_panel::size(0));
+        character_shape_panel::place(world, None, [0.0, 0.0], character_shape_panel::size(0));
     }
 }
 
@@ -906,10 +906,10 @@ impl Panel for StoryPanel {
     fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
         let s = hook.effective_size(PanelKey::Story);
         let view = hook.make_story_view(mouse);
-        story_panel::apply(world, Some(&view), o, s);
+        story_panel::place(world, Some(&view), o, s);
     }
     fn hide(&self, world: &mut World) {
-        story_panel::apply(world, None, [0.0, 0.0], story_panel::size());
+        story_panel::place(world, None, [0.0, 0.0], story_panel::size());
     }
 }
 
@@ -990,10 +990,10 @@ impl Panel for ConsolePanel {
         let (lines, total, first) = hook.console_window();
         let ghost = hook.console_ghost(world);
         let view = hook.make_console_view(&lines, total, first, &ghost, mouse);
-        console_panel::apply(world, Some(&view), o, s);
+        console_panel::place(world, Some(&view), o, s);
     }
     fn hide(&self, world: &mut World) {
-        console_panel::apply(world, None, [0.0, 0.0], console_panel::size());
+        console_panel::place(world, None, [0.0, 0.0], console_panel::size());
     }
 }
 
@@ -1101,10 +1101,10 @@ impl Panel for BehaviorPanel {
         let s = hook.effective_size(PanelKey::Behavior);
         let data = hook.behavior_data();
         let view = hook.make_behavior_view(&data, mouse);
-        behavior::panel::apply(world, Some(&view), o, s);
+        behavior::panel::place(world, Some(&view), o, s);
     }
     fn hide(&self, world: &mut World) {
-        behavior::panel::apply(world, None, [0.0, 0.0], behavior::panel::size());
+        behavior::panel::place(world, None, [0.0, 0.0], behavior::panel::size());
     }
 }
 
@@ -1196,10 +1196,10 @@ impl Panel for VariablesPanel {
         let s = hook.effective_size(PanelKey::Variables);
         let data = hook.variables_data();
         let view = hook.make_variables_view(&data, mouse);
-        variables_panel::apply(world, Some(&view), o, s);
+        variables_panel::place(world, Some(&view), o, s);
     }
     fn hide(&self, world: &mut World) {
-        variables_panel::apply(world, None, [0.0, 0.0], variables_panel::size());
+        variables_panel::place(world, None, [0.0, 0.0], variables_panel::size());
     }
 }
 
@@ -1275,10 +1275,10 @@ impl Panel for PalettePanel {
     }
     fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
         let view = hook.make_palette_view(mouse);
-        palette::panel::apply(world, Some(&view), o);
+        palette::panel::place(world, Some(&view), o);
     }
     fn hide(&self, world: &mut World) {
-        palette::panel::apply(world, None, [0.0, 0.0]);
+        palette::panel::place(world, None, [0.0, 0.0]);
     }
 }
 
@@ -1367,10 +1367,10 @@ impl Panel for ImportPanel {
         let s = hook.effective_size(PanelKey::Import);
         let rows = hook.import_rows();
         let view = hook.make_import_view(&rows, mouse);
-        import_panel::apply(world, Some(&view), o, s);
+        import_panel::place(world, Some(&view), o, s);
     }
     fn hide(&self, world: &mut World) {
-        import_panel::apply(world, None, [0.0, 0.0], import_panel::size());
+        import_panel::place(world, None, [0.0, 0.0], import_panel::size());
     }
 }
 
@@ -1437,9 +1437,9 @@ impl Panel for WorldsPanel {
     }
     fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
         let view = hook.make_worlds_view(mouse);
-        worlds::apply(world, Some(&view), o);
+        worlds::place(world, Some(&view), o);
     }
     fn hide(&self, world: &mut World) {
-        worlds::apply(world, None, [0.0, 0.0]);
+        worlds::place(world, None, [0.0, 0.0]);
     }
 }

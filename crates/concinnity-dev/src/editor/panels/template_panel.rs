@@ -73,7 +73,7 @@ pub(crate) enum TemplateAction {
     Consume,
 }
 
-// The per-frame data the hook hands to `apply` / `hit_test`.
+// The per-frame data the hook hands to `place` / `hit_test`.
 pub(crate) struct TemplateView<'a> {
     // The title-bar heading, already prefixed ("Template Minimal 3D World").
     pub title: &'a str,
@@ -189,7 +189,7 @@ pub(crate) fn hit_test(
 
 // Position + show the panel's elements for this frame at origin `o`, effective
 // size `s`, or hide them all when the panel is closed (`view` is `None`).
-pub(crate) fn apply(world: &mut World, view: Option<&TemplateView>, o: [f32; 2], s: [f32; 2]) {
+pub(crate) fn place(world: &mut World, view: Option<&TemplateView>, o: [f32; 2], s: [f32; 2]) {
     let Some(view) = view else {
         hide_all(world);
         return;
@@ -441,14 +441,14 @@ mod tests {
         assert_eq!(hit_test(&v, 5.0, 5.0, o, s), None);
     }
 
-    // Applying lays out the title, description, Apply caption, and the grouped
+    // Placing lays out the title, description, Apply caption, and the grouped
     // asset rows (headers + indented names).
     #[test]
-    fn apply_renders_title_description_and_rows() {
+    fn place_renders_title_description_and_rows() {
         let rs = rows();
         let mut world = injected_world();
         let o = test_origin();
-        apply(&mut world, Some(&view(&rs)), o, size(rs.len()));
+        place(&mut world, Some(&view(&rs)), o, size(rs.len()));
         assert_eq!(
             label(&world, TITLE_LABEL).content,
             "Template Minimal 3D World"
@@ -473,7 +473,7 @@ mod tests {
     fn scrollbar_only_when_the_list_overflows() {
         let short = rows();
         let mut world = injected_world();
-        apply(
+        place(
             &mut world,
             Some(&view(&short)),
             test_origin(),
@@ -488,7 +488,7 @@ mod tests {
                 entry: Some(i),
             })
             .collect();
-        apply(
+        place(
             &mut world,
             Some(&view(&long)),
             test_origin(),
@@ -521,7 +521,7 @@ mod tests {
     fn hide_all_blanks_every_element() {
         let rs = rows();
         let mut world = injected_world();
-        apply(&mut world, Some(&view(&rs)), test_origin(), size(rs.len()));
+        place(&mut world, Some(&view(&rs)), test_origin(), size(rs.len()));
         hide_all(&mut world);
         assert!(world.query::<Sprite>().all(|s| !s.visible));
         assert!(world.query::<TextLabel>().all(|l| !l.visible));

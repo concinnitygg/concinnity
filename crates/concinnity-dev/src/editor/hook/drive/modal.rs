@@ -92,7 +92,7 @@ impl EditorHook {
         mouse: [f32; 2],
     ) {
         match (&self.modal, shown) {
-            (Some(state), true) => modal::apply(
+            (Some(state), true) => modal::place(
                 world,
                 vp,
                 &state.message,

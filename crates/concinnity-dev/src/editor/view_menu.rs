@@ -109,7 +109,7 @@ pub(crate) struct MenuState {
     pub extents: CategorySet,
 }
 
-pub(crate) fn apply(world: &mut World, vw: f32, state: MenuState, mouse: [f32; 2]) {
+pub(crate) fn place(world: &mut World, vw: f32, state: MenuState, mouse: [f32; 2]) {
     let o = origin(vw);
     widget::place_panel(world, MENU_BG, menu_rect(vw));
     widget::place_left_label(
@@ -226,10 +226,10 @@ mod tests {
     // captions (the accent background is their radio), and every toggle row
     // carries its on/off marker.
     #[test]
-    fn apply_labels_every_row_and_marks_the_toggles() {
+    fn place_labels_every_row_and_marks_the_toggles() {
         let vw = 1280.0;
         let mut world = injected_world();
-        apply(&mut world, vw, state(), [0.0, 0.0]);
+        place(&mut world, vw, state(), [0.0, 0.0]);
 
         assert_eq!(label_of(&world, HEADING), "View mode");
         for (i, row) in rows().into_iter().enumerate() {
@@ -252,12 +252,12 @@ mod tests {
     // as off, and the selected mode is the only row keeping a background with
     // the cursor away from the menu.
     #[test]
-    fn apply_reflects_the_selection_state() {
+    fn place_reflects_the_selection_state() {
         let vw = 1280.0;
         let mut world = injected_world();
         let mut s = state();
         s.show = ShowFlags::all().toggled(ShowFlags::FOG);
-        apply(&mut world, vw, s, [0.0, 0.0]);
+        place(&mut world, vw, s, [0.0, 0.0]);
 
         for (i, row) in rows().into_iter().enumerate() {
             let text = label_of(&world, row_label(i));
@@ -290,7 +290,7 @@ mod tests {
     // A hovered actionable row lights up; a hovered heading stays flat,
     // because there is nothing there to click.
     #[test]
-    fn apply_lights_a_hovered_row_but_never_a_heading() {
+    fn place_lights_a_hovered_row_but_never_a_heading() {
         let vw = 1280.0;
         let rows = rows();
         let flag = rows
@@ -305,7 +305,7 @@ mod tests {
         for (i, expected) in [(flag, true), (heading, false)] {
             let mut world = injected_world();
             let r = row_rect(vw, i);
-            apply(&mut world, vw, state(), [r[0] + 2.0, r[1] + 2.0]);
+            place(&mut world, vw, state(), [r[0] + 2.0, r[1] + 2.0]);
             assert_eq!(
                 sprite_visible(&world, row_bg(i)),
                 expected,
@@ -320,7 +320,7 @@ mod tests {
     #[test]
     fn hide_blanks_everything_apply_drew() {
         let mut world = injected_world();
-        apply(&mut world, 1280.0, state(), [0.0, 0.0]);
+        place(&mut world, 1280.0, state(), [0.0, 0.0]);
         hide(&mut world);
         assert!(world.query::<Sprite>().all(|s| !s.visible));
         assert!(world.query::<TextLabel>().all(|l| !l.visible));

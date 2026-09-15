@@ -67,7 +67,7 @@ impl EditorHook {
             view_menu::hide(world);
             return;
         }
-        view_menu::apply(
+        view_menu::place(
             world,
             vp[0],
             view_menu::MenuState {

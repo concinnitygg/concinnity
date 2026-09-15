@@ -166,7 +166,7 @@ const INSTANCE_ONLY_TINT: [f32; 4] = [0.55, 0.58, 0.68, 1.0];
 // panel's default anchor, below the top bar.
 pub(crate) fn default_origin(vw: f32) -> [f32; 2] {
     [
-        vw - super::panel::PANEL_W - GAP - EDIT_W,
+        vw - super::assets_panel::PANEL_W - GAP - EDIT_W,
         crate::editor::hud::body_top(),
     ]
 }
@@ -491,7 +491,7 @@ pub(crate) struct OverridesView<'a> {
     pub entity_menu: Option<&'a [String]>,
 }
 
-// The per-frame data the hook hands to `apply` / `hit_test`.
+// The per-frame data the hook hands to `place` / `hit_test`.
 pub(crate) struct FormView<'a> {
     // The title-bar heading ("Edit Camera3D" / "New PointLight").
     pub title: &'a str,
@@ -659,7 +659,7 @@ pub(crate) fn hit_test(
 
 // Position + show the panel's elements for this frame at origin `o`, effective
 // size `s`, or hide them all when the form is closed (`view` is `None`).
-pub(crate) fn apply(world: &mut World, view: Option<&FormView>, o: [f32; 2], s: [f32; 2]) {
+pub(crate) fn place(world: &mut World, view: Option<&FormView>, o: [f32; 2], s: [f32; 2]) {
     let Some(view) = view else {
         hide_all(world);
         return;
@@ -1384,7 +1384,7 @@ mod tests {
         let mut world = injected_world();
         let fields = float_fields(form::FIELD_POOL_MAX);
         let tall = [EDIT_W, max_size(fields.len())[1]];
-        apply(&mut world, Some(&view(&fields)), [20.0, 20.0], tall);
+        place(&mut world, Some(&view(&fields)), [20.0, 20.0], tall);
         assert!(
             input(&world, form_input(form::FIELD_POOL)).visible,
             "a row past the default window shows only because we grew"
@@ -1428,11 +1428,11 @@ mod tests {
     // The title bar carries the heading, the confirm button is captioned "Apply"
     // while editing and "Add" for a new asset, and the name heading draws larger.
     #[test]
-    fn apply_shows_title_confirm_caption_and_scaled_name() {
+    fn place_shows_title_confirm_caption_and_scaled_name() {
         let fields = float_fields(1);
         let mut world = injected_world();
         let o = test_origin();
-        apply(&mut world, Some(&view(&fields)), o, size(fields.len()));
+        place(&mut world, Some(&view(&fields)), o, size(fields.len()));
         assert_eq!(label(&world, TITLE_LABEL).content, "New PointLight");
         assert_eq!(label(&world, APPLY_LABEL).content, "Add");
         assert_eq!(
@@ -1446,7 +1446,7 @@ mod tests {
         let mut editing = view(&fields);
         editing.editing = true;
         editing.title = "Edit Camera3D";
-        apply(
+        place(
             &mut world,
             Some(&editing),
             o,
@@ -1464,7 +1464,7 @@ mod tests {
         let fields = float_fields(form::FIELD_POOL + 4);
         let mut world = injected_world();
         let v = view(&fields);
-        apply(&mut world, Some(&v), o, size(v.form_fields.len()));
+        place(&mut world, Some(&v), o, size(v.form_fields.len()));
         assert!(
             sprite_visible(&world, FORM_THUMB),
             "the form scrollbar shows"
@@ -1506,7 +1506,7 @@ mod tests {
     fn a_form_within_the_pool_has_no_scrollbar() {
         let fields = float_fields(1);
         let mut world = injected_world();
-        apply(
+        place(
             &mut world,
             Some(&view(&fields)),
             test_origin(),
@@ -1538,7 +1538,7 @@ mod tests {
             variants: Vec::new(),
             variant_idx: 0,
         }];
-        apply(
+        place(
             &mut world,
             Some(&view(&fields)),
             test_origin(),
@@ -1573,7 +1573,7 @@ mod tests {
             variant_idx: 0,
         }];
         let v = view(&fields);
-        apply(&mut world, Some(&v), o, size(v.form_fields.len()));
+        place(&mut world, Some(&v), o, size(v.form_fields.len()));
         assert!(!sprite_visible(&world, form_swatch(0)), "no color swatch");
         assert!(
             !input(&world, form_input(0)).visible,
@@ -1626,7 +1626,7 @@ mod tests {
             elem("2"),
         ];
         let v = view(&fields);
-        apply(&mut world, Some(&v), o, size(v.form_fields.len()));
+        place(&mut world, Some(&v), o, size(v.form_fields.len()));
         // The header caret is now `v` (its element leaves follow it).
         assert_eq!(label(&world, form_enum_label(0)).content, "[3] v");
         // Slots 1..=3 are the axis-labeled element fields.
@@ -1665,7 +1665,7 @@ mod tests {
             variant_idx: 1,
         }];
         let v = view(&small);
-        apply(&mut world, Some(&v), o, size(v.form_fields.len()));
+        place(&mut world, Some(&v), o, size(v.form_fields.len()));
         assert!(
             sprite_visible(&world, form_toggle_bg(0)),
             "cycle button shows"
@@ -1729,7 +1729,7 @@ mod tests {
         ];
         let mut v = view(&fields);
         v.field_dropdown = Some(0);
-        apply(
+        place(
             &mut world,
             Some(&v),
             test_origin(),
@@ -1791,7 +1791,7 @@ mod tests {
             variant_idx: 3,
         }];
         let v = view(&fields);
-        apply(&mut world, Some(&v), o, size(v.form_fields.len()));
+        place(&mut world, Some(&v), o, size(v.form_fields.len()));
         assert!(
             sprite_visible(&world, form_toggle_bg(0)),
             "add button shows"
@@ -1823,7 +1823,7 @@ mod tests {
         let mut world = injected_world();
         let mut v = view(&fields);
         v.form_error = Some("Invalid argument");
-        apply(
+        place(
             &mut world,
             Some(&v),
             test_origin(),
@@ -1832,7 +1832,7 @@ mod tests {
         let status = label(&world, FORM_STATUS);
         assert!(status.visible);
         assert_eq!(status.content, "Invalid argument");
-        apply(&mut world, None, [0.0, 0.0], size(0));
+        place(&mut world, None, [0.0, 0.0], size(0));
         assert!(world.query::<Sprite>().all(|s| !s.visible));
         assert!(world.query::<TextLabel>().all(|l| !l.visible));
         assert!(world.query::<TextInput>().all(|t| !t.visible));
@@ -1900,7 +1900,7 @@ mod tests {
         let fields = vec![ref_field(10)];
         let mut world = injected_world();
         let o = test_origin();
-        apply(
+        place(
             &mut world,
             Some(&view_with_dropdown(&fields, 0, [0.0, 0.0])),
             o,

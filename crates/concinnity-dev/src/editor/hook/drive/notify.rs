@@ -35,7 +35,7 @@ impl EditorHook {
             }
             return;
         }
-        toast_overlay::apply(world, &stack, vp, mouse);
+        toast_overlay::place(world, &stack, vp, mouse);
         self.toasts_hidden = false;
     }
 

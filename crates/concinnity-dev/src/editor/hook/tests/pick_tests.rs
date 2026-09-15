@@ -7,14 +7,16 @@ use concinnity_core::components::FrameInput;
 use concinnity_core::components::Sprite;
 use concinnity_core::ecs::World;
 use concinnity_host::thread::asset_id;
+use std::collections::BTreeSet;
 
 use super::fixtures::{click_at, entry, hook, pick_world, release_at, set_input};
 use crate::debug_hook::DebugHook;
 use crate::editor::hook::FormTarget;
+use crate::editor::hook::pick::{camera_ray, ray_hits};
 
 use crate::editor::panels::asset_tree::{self, TreeGroup};
 
-use crate::editor::panels::panel;
+use crate::editor::panels::assets_panel;
 
 use crate::editor::sim;
 use crate::editor::viewport::highlight;
@@ -217,6 +219,85 @@ fn locked_assets_are_skipped_by_viewport_picking() {
     assert!(h.marquee.is_some(), "the click fell through to empty space");
 }
 
+const PICK_VIEWPORT: [f32; 2] = [1280.0, 720.0];
+const CENTER_PIXEL: [f32; 2] = [640.0, 360.0];
+
+// A camera-less world has nothing 3D to pick, so no ray is built.
+#[test]
+fn camera_ray_needs_a_camera() {
+    assert!(camera_ray(&World::new(), PICK_VIEWPORT, CENTER_PIXEL).is_none());
+}
+
+// The center pixel's ray starts at the camera and looks down its -Z view axis.
+#[test]
+fn camera_ray_through_the_center_follows_the_view_axis() {
+    let world = pick_world([0.0; 3], vec![]);
+    let ray = camera_ray(&world, PICK_VIEWPORT, CENTER_PIXEL).expect("the world has a camera");
+    assert_eq!(ray.origin, [0.0; 3]);
+    let [x, y, z] = ray.dir;
+    assert!(
+        x.abs() < 1e-2 && y.abs() < 1e-2 && (z + 1.0).abs() < 1e-2,
+        "got {:?}",
+        ray.dir
+    );
+}
+
+// Hits come back near-to-far whatever order the PickIndex lists them in.
+#[test]
+fn ray_hits_orders_near_before_far_regardless_of_index_order() {
+    asset_id::reset_interner();
+    let near = asset_id::intern("box_near");
+    let far = asset_id::intern("box_far");
+    let world = pick_world(
+        [0.0; 3],
+        vec![
+            (far, [-1.0, -1.0, -11.0], [1.0, 1.0, -9.0]),
+            (near, [-1.0, -1.0, -6.0], [1.0, 1.0, -4.0]),
+        ],
+    );
+    let ray = camera_ray(&world, PICK_VIEWPORT, CENTER_PIXEL).unwrap();
+    assert_eq!(ray_hits(&world, &ray, &BTreeSet::new()), vec![near, far]);
+}
+
+#[test]
+fn ray_hits_skips_locked_names() {
+    asset_id::reset_interner();
+    let near = asset_id::intern("box_near");
+    let far = asset_id::intern("box_far");
+    let world = pick_world(
+        [0.0; 3],
+        vec![
+            (near, [-1.0, -1.0, -6.0], [1.0, 1.0, -4.0]),
+            (far, [-1.0, -1.0, -11.0], [1.0, 1.0, -9.0]),
+        ],
+    );
+    let ray = camera_ray(&world, PICK_VIEWPORT, CENTER_PIXEL).unwrap();
+    let locked = BTreeSet::from(["box_near".to_string()]);
+    assert_eq!(ray_hits(&world, &ray, &locked), vec![far]);
+}
+
+#[test]
+fn ray_hits_is_empty_without_a_pick_index() {
+    let ray = camera_ray(&pick_world([0.0; 3], vec![]), PICK_VIEWPORT, CENTER_PIXEL).unwrap();
+    assert!(ray_hits(&World::new(), &ray, &BTreeSet::new()).is_empty());
+}
+
+#[test]
+fn ray_hits_leaves_out_a_box_the_ray_misses() {
+    asset_id::reset_interner();
+    let near = asset_id::intern("box_near");
+    let aside = asset_id::intern("box_aside");
+    let world = pick_world(
+        [0.0; 3],
+        vec![
+            (aside, [5.0, -1.0, -6.0], [7.0, 1.0, -4.0]),
+            (near, [-1.0, -1.0, -6.0], [1.0, 1.0, -4.0]),
+        ],
+    );
+    let ray = camera_ray(&world, PICK_VIEWPORT, CENTER_PIXEL).unwrap();
+    assert_eq!(ray_hits(&world, &ray, &BTreeSet::new()), vec![near]);
+}
+
 // A viewport pick unfolds the picked asset's group and scrolls its row into
 // the tree's window.
 #[test]
@@ -240,9 +321,9 @@ fn viewport_pick_reveals_the_tree_row() {
     h.reveal_in_tree("a25", &world);
     assert_eq!(h.tree_unfolded, vec![0], "the group unfolds");
     // Rows: header at 0, a25 at 26; the scroll clamps to the last window.
-    assert_eq!(h.tree_scroll, 31 - panel::ROW_POOL);
+    assert_eq!(h.tree_scroll, 31 - assets_panel::ROW_POOL);
 
     // A revealed row already inside the window leaves the scroll alone.
     h.reveal_in_tree("a20", &world);
-    assert_eq!(h.tree_scroll, 31 - panel::ROW_POOL);
+    assert_eq!(h.tree_scroll, 31 - assets_panel::ROW_POOL);
 }

@@ -11,8 +11,8 @@ use crate::editor::build_renderable;
 use crate::editor::live;
 use crate::editor::modal;
 use crate::editor::notify;
+use crate::editor::panels::assets_panel;
 use crate::editor::panels::form_panel;
-use crate::editor::panels::panel;
 use crate::editor::widget;
 
 impl EditorHook {
@@ -236,7 +236,7 @@ impl EditorHook {
     // heading and arg inputs) by reserved id, so a live rebuild's fresh HUD
     // injection does not blank an open form.
     pub(super) fn field_snapshot(world: &World) -> Vec<(AssetId, String)> {
-        panel::all_field_ids()
+        assets_panel::all_field_ids()
             .into_iter()
             .chain(form_panel::all_field_ids())
             .chain(behavior::panel::all_field_ids())

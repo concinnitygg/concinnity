@@ -711,8 +711,8 @@ under it, so the blobs, the lock, the caches, the settings and the saves stay
 out of sight. That name is the CLI's convention and lives in the CLI binary; no
 library crate knows it.
 
-A world at the project root named `world.jsonl` is still discovered when
-`worlds/` holds none, which is the layout projects used before worlds moved.
+A world at the project root named `world.jsonl` is a supported location for an
+ad hoc world, discovered when `worlds/` holds none.
 
 **Shipped.** The player installs the directory beside its own executable (or
 `Contents/Resources` inside a macOS bundle), so `data`, `saves/`, and `settings`

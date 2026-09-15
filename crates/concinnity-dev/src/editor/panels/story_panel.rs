@@ -205,7 +205,7 @@ pub(crate) fn hit_test(
 
 // Position + show the panel (`Some(view)`) at effective size `s`, or blank every
 // element (`None`).
-pub(crate) fn apply(world: &mut World, view: Option<&StoryView>, o: [f32; 2], s: [f32; 2]) {
+pub(crate) fn place(world: &mut World, view: Option<&StoryView>, o: [f32; 2], s: [f32; 2]) {
     let Some(view) = view else {
         hide_all(world);
         return;
@@ -475,10 +475,10 @@ mod tests {
     }
 
     #[test]
-    fn apply_draws_the_edit_line_as_the_input_and_others_as_labels() {
+    fn place_draws_the_edit_line_as_the_input_and_others_as_labels() {
         let mut world = injected_world();
         let l = lines(4);
-        apply(&mut world, Some(&view(&l, 0, 1)), [20.0, 20.0], size());
+        place(&mut world, Some(&view(&l, 0, 1)), [20.0, 20.0], size());
         let input = world
             .query::<TextInput>()
             .find(|t| t.asset_id == LINE_INPUT)
@@ -517,7 +517,7 @@ mod tests {
     fn edit_line_outside_the_window_hides_the_input() {
         let mut world = injected_world();
         let l = lines(40);
-        apply(&mut world, Some(&view(&l, 20, 3)), [20.0, 20.0], size());
+        place(&mut world, Some(&view(&l, 20, 3)), [20.0, 20.0], size());
         let input = world
             .query::<TextInput>()
             .find(|t| t.asset_id == LINE_INPUT)
@@ -541,7 +541,7 @@ mod tests {
             create: true,
             ..view(&l, 0, 0)
         };
-        apply(&mut world, Some(&v), [20.0, 20.0], size());
+        place(&mut world, Some(&v), [20.0, 20.0], size());
         let r0 = world
             .query::<TextLabel>()
             .find(|l| l.asset_id == row_label(0))
@@ -576,8 +576,8 @@ mod tests {
     fn hide_all_blanks_every_element() {
         let mut world = injected_world();
         let l = lines(4);
-        apply(&mut world, Some(&view(&l, 0, 1)), [20.0, 20.0], size());
-        apply(&mut world, None, [0.0, 0.0], size());
+        place(&mut world, Some(&view(&l, 0, 1)), [20.0, 20.0], size());
+        place(&mut world, None, [0.0, 0.0], size());
         assert!(world.query::<Sprite>().all(|s| !s.visible));
         assert!(world.query::<TextLabel>().all(|l| !l.visible));
         assert!(world.query::<TextInput>().all(|t| !t.visible));

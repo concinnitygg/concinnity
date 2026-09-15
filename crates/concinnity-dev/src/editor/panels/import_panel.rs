@@ -288,7 +288,7 @@ pub(crate) fn hit_test(
 
 // Position + show the panel (`Some(view)`) at effective size `s`, or blank every
 // element (`None`).
-pub(crate) fn apply(world: &mut World, view: Option<&ImportView>, o: [f32; 2], s: [f32; 2]) {
+pub(crate) fn place(world: &mut World, view: Option<&ImportView>, o: [f32; 2], s: [f32; 2]) {
     let Some(view) = view else {
         hide_all(world);
         return;
@@ -559,10 +559,10 @@ mod tests {
     }
 
     #[test]
-    fn apply_draws_header_rows_and_empty_list_note() {
+    fn place_draws_header_rows_and_empty_list_note() {
         let mut world = injected_world();
         let r = rows(2);
-        apply(&mut world, Some(&view(&r, 0)), [20.0, 20.0], size());
+        place(&mut world, Some(&view(&r, 0)), [20.0, 20.0], size());
         let title = world
             .query::<TextLabel>()
             .find(|l| l.asset_id == TITLE_LABEL)
@@ -589,7 +589,7 @@ mod tests {
             .unwrap();
         assert!(browse.visible && browse.content == "Browse...");
         // An empty list keeps the header but no rows.
-        apply(&mut world, Some(&view(&[], 0)), [20.0, 20.0], size());
+        place(&mut world, Some(&view(&[], 0)), [20.0, 20.0], size());
         let header = world
             .query::<TextLabel>()
             .find(|l| l.asset_id == LIST_HEADER)
@@ -609,7 +609,7 @@ mod tests {
         let mut world = injected_world();
         let r = rows(30);
         let v = view(&r, 10);
-        apply(&mut world, Some(&v), [20.0, 20.0], size());
+        place(&mut world, Some(&v), [20.0, 20.0], size());
         assert!(
             world
                 .query::<Sprite>()
@@ -652,7 +652,7 @@ mod tests {
         let mut world = injected_world();
         let r = rows(IMPORT_POOL_MAX);
         let tall = [IMPORT_W, max_size()[1]];
-        apply(&mut world, Some(&view(&r, 0)), [20.0, 20.0], tall);
+        place(&mut world, Some(&view(&r, 0)), [20.0, 20.0], tall);
         // The row just past the default pool is visible only because we grew.
         assert!(
             world
@@ -667,8 +667,8 @@ mod tests {
     fn hide_all_blanks_every_element() {
         let mut world = injected_world();
         let r = rows(2);
-        apply(&mut world, Some(&view(&r, 0)), [20.0, 20.0], size());
-        apply(&mut world, None, [0.0, 0.0], size());
+        place(&mut world, Some(&view(&r, 0)), [20.0, 20.0], size());
+        place(&mut world, None, [0.0, 0.0], size());
         assert!(world.query::<Sprite>().all(|s| !s.visible));
         assert!(world.query::<TextLabel>().all(|l| !l.visible));
         assert!(world.query::<TextInput>().all(|t| !t.visible));

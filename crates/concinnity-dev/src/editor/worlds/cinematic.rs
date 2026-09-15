@@ -257,7 +257,7 @@ fn aimed(position: [f32; 3], target: [f32; 3]) -> CameraPose {
 // rather than a tint: a shot hands over through darkness, not through a dim.
 // It is a UI-layer sprite, drawn over the tonemapped image, so it never reaches
 // the scene the auto-exposure meters.
-pub(crate) fn apply(world: &mut World, vp: [f32; 2], alpha: f32) {
+pub(crate) fn place(world: &mut World, vp: [f32; 2], alpha: f32) {
     let tint = [0.0, 0.0, 0.0, alpha.clamp(0.0, 1.0)];
     widget::place_sprite(world, FADE, [0.0, 0.0, vp[0], vp[1]], tint, alpha > 0.0);
 }

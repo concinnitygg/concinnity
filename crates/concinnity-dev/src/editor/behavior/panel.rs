@@ -720,7 +720,7 @@ pub(crate) fn hit_test(
 
 // Position + show the panel (`Some(view)`) at effective size `s`, or blank every
 // element (`None`).
-pub(crate) fn apply(world: &mut World, view: Option<&BehaviorView>, o: [f32; 2], s: [f32; 2]) {
+pub(crate) fn place(world: &mut World, view: Option<&BehaviorView>, o: [f32; 2], s: [f32; 2]) {
     let Some(view) = view else {
         hide_all(world);
         return;
@@ -742,7 +742,7 @@ pub(crate) fn apply(world: &mut World, view: Option<&BehaviorView>, o: [f32; 2],
         }
         widget::set_sprite_visible(world, LIST_TRACK, false);
         widget::set_sprite_visible(world, LIST_THUMB, false);
-        chart::apply(world, &chart_view(view), chart_band(o, s, view.mode));
+        chart::place(world, &chart_view(view), chart_band(o, s, view.mode));
     } else {
         chart::hide_all(world);
         hide_inspector(world, view);
@@ -1687,7 +1687,7 @@ mod tests {
             Some(BehaviorAction::New)
         );
         let mut world = injected_world();
-        apply(&mut world, Some(&v), o, s);
+        place(&mut world, Some(&v), o, s);
         assert_eq!(
             label(&world, NAME_LABEL).content,
             "no behaviors yet -- press New"
@@ -1703,7 +1703,7 @@ mod tests {
         let mut world = injected_world();
         let rows = sample_rows();
         let (o, s) = ([20.0, 20.0], size());
-        apply(&mut world, Some(&view(&rows, &[])), o, s);
+        place(&mut world, Some(&view(&rows, &[])), o, s);
         let f = field(&world, NAME_INPUT);
         assert!(f.visible && !f.focused);
         assert_eq!(f.content, "chase");
@@ -1714,7 +1714,7 @@ mod tests {
             name_focus: true,
             ..view(&rows, &[])
         };
-        apply(&mut world, Some(&typing), o, s);
+        place(&mut world, Some(&typing), o, s);
         let f = field(&world, NAME_INPUT);
         assert!(
             f.focused,
@@ -1723,7 +1723,7 @@ mod tests {
         assert_eq!(f.content, "half typed", "and what is typed stands");
 
         // Losing focus puts the world's own name back in front of the user.
-        apply(&mut world, Some(&view(&rows, &[])), o, s);
+        place(&mut world, Some(&view(&rows, &[])), o, s);
         assert_eq!(field(&world, NAME_INPUT).content, "chase");
     }
 
@@ -1734,7 +1734,7 @@ mod tests {
         let mut world = injected_world();
         let rows = sample_rows();
         let (o, s) = ([20.0, 20.0], size());
-        apply(&mut world, Some(&view(&rows, &[])), o, s);
+        place(&mut world, Some(&view(&rows, &[])), o, s);
         assert_eq!(label(&world, REMOVE_LABEL).content, "Remove");
         let idle = sprite(&world, REMOVE_BG).tint;
 
@@ -1742,7 +1742,7 @@ mod tests {
             remove_armed: true,
             ..view(&rows, &[])
         };
-        apply(&mut world, Some(&armed), o, s);
+        place(&mut world, Some(&armed), o, s);
         assert_eq!(label(&world, REMOVE_LABEL).content, "Confirm");
         assert_ne!(
             sprite(&world, REMOVE_BG).tint,
@@ -1752,7 +1752,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_draws_the_outline_indented_with_a_value_column() {
+    fn place_draws_the_outline_indented_with_a_value_column() {
         let mut world = injected_world();
         let rows = sample_rows();
         let v = BehaviorView {
@@ -1760,7 +1760,7 @@ mod tests {
             ..view(&rows, &[])
         };
         let o = [20.0, 20.0];
-        apply(&mut world, Some(&v), o, size());
+        place(&mut world, Some(&v), o, size());
         assert_eq!(label(&world, TITLE_LABEL).content, "Behavior");
         assert_eq!(label(&world, NAME_LABEL).content, "1/1");
         let first = label(&world, row_label(0));
@@ -1791,7 +1791,7 @@ mod tests {
         };
         let o = [20.0, 20.0];
         let s = size();
-        apply(&mut world, Some(&v), o, s);
+        place(&mut world, Some(&v), o, s);
         let backing = sprite(&world, DROP_BG);
         assert!(backing.visible);
         assert!(
@@ -1805,7 +1805,7 @@ mod tests {
             "the node vocabulary overflows the palette window"
         );
         // Closing it blanks every option row.
-        apply(&mut world, Some(&view(&rows, &picks)), o, s);
+        place(&mut world, Some(&view(&rows, &picks)), o, s);
         assert!(!sprite(&world, DROP_BG).visible);
         assert!(!label(&world, pick_label(0)).visible);
     }
@@ -1822,7 +1822,7 @@ mod tests {
             .position(|r| r.label == "target")
             .expect("the hide node's target row");
 
-        apply(
+        place(
             &mut world,
             Some(&BehaviorView {
                 fault_row: Some(target),
@@ -1845,7 +1845,7 @@ mod tests {
         );
 
         // In the chart the same fault lights the node that carries the field.
-        apply(
+        place(
             &mut world,
             Some(&BehaviorView {
                 mode: ViewMode::Chart,
@@ -1922,7 +1922,7 @@ mod tests {
             hit_test(&on_member, d[0] + 3.0, d[1] + 3.0, o, s),
             Some(BehaviorAction::Duplicate),
         );
-        apply(&mut world, Some(&on_member), o, s);
+        place(&mut world, Some(&on_member), o, s);
         let live = label(&world, DUP_LABEL).color;
 
         // A row that is not a member leaves the chip dim, like Del beside it.
@@ -1930,7 +1930,7 @@ mod tests {
             .iter()
             .position(|r| r.element.is_none())
             .expect("the source row is not a member");
-        apply(
+        place(
             &mut world,
             Some(&BehaviorView {
                 selected: Some(not_member),
@@ -1975,7 +1975,7 @@ mod tests {
             card: Some(0),
             ..view(&rows, &[])
         };
-        apply(&mut world, Some(&v), [20.0, 20.0], overview_size());
+        place(&mut world, Some(&v), [20.0, 20.0], overview_size());
         assert_eq!(sprite(&world, chart::card_bg(1)).border_width, 2.0);
         assert_eq!(sprite(&world, chart::card_bg(0)).border_width, 1.0);
     }
@@ -1998,7 +1998,7 @@ mod tests {
             filter_focus: true,
             ..view(&rows, &picks)
         };
-        apply(&mut world, Some(&v), o, s);
+        place(&mut world, Some(&v), o, s);
 
         let f = field(&world, FILTER_INPUT);
         assert!(f.visible && f.focused, "the filter takes the keyboard");
@@ -2041,7 +2041,7 @@ mod tests {
             filter_focus: true,
             ..view(&rows, &picks)
         };
-        apply(&mut world, Some(&v), [20.0, 20.0], size());
+        place(&mut world, Some(&v), [20.0, 20.0], size());
         assert!(sprite(&world, DROP_BG).visible, "the palette is still up");
         assert!(field(&world, FILTER_INPUT).visible, "and still typeable");
         assert_eq!(label(&world, pick_label(0)).content, "no option matches");
@@ -2064,7 +2064,7 @@ mod tests {
             pick: 2,
             ..view(&rows, &picks)
         };
-        apply(&mut world, Some(&v), [20.0, 20.0], size());
+        place(&mut world, Some(&v), [20.0, 20.0], size());
         assert_eq!(sprite(&world, pick_bg(2)).tint, theme::SELECTED_TINT);
         assert_ne!(sprite(&world, pick_bg(1)).tint, theme::SELECTED_TINT);
 
@@ -2075,7 +2075,7 @@ mod tests {
             pick_scroll: 2,
             ..view(&rows, &picks)
         };
-        apply(&mut world, Some(&scrolled), [20.0, 20.0], size());
+        place(&mut world, Some(&scrolled), [20.0, 20.0], size());
         assert_eq!(sprite(&world, pick_bg(0)).tint, theme::SELECTED_TINT);
         assert_ne!(sprite(&world, pick_bg(2)).tint, theme::SELECTED_TINT);
     }
@@ -2103,7 +2103,7 @@ mod tests {
             selected: Some(0),
             ..view(&rows, &picks)
         };
-        apply(&mut world, Some(&open), o, s);
+        place(&mut world, Some(&open), o, s);
         assert!(sprite(&world, DROP_BG).visible, "the palette backing draws");
         for slot in 0..visible_rows(s[1]).min(rows.len()) {
             assert!(
@@ -2158,7 +2158,7 @@ mod tests {
             status: Some(&error),
             ..view(&rows, &[])
         };
-        apply(&mut world, Some(&v), [20.0, 20.0], size());
+        place(&mut world, Some(&v), [20.0, 20.0], size());
         let status = label(&world, STATUS_LABEL);
         assert!(status.visible && status.color == theme::LOG_ERROR);
         let backing = sprite(&world, STATUS_BG);
@@ -2168,7 +2168,7 @@ mod tests {
             status: Some(&Status::Ok),
             ..view(&rows, &[])
         };
-        apply(&mut world, Some(&v), [20.0, 20.0], size());
+        place(&mut world, Some(&v), [20.0, 20.0], size());
         assert!(!label(&world, STATUS_LABEL).visible);
         assert!(!sprite(&world, STATUS_BG).visible);
     }
@@ -2217,7 +2217,7 @@ mod tests {
         let fields = node_fields(&rows);
         assert!(fields.len() > 1, "the sample node has settings");
         let (o, s) = ([20.0, 20.0], chart_size());
-        apply(&mut world, Some(&chart_view_of(&rows, &fields)), o, s);
+        place(&mut world, Some(&chart_view_of(&rows, &fields)), o, s);
 
         let head = label(&world, INSPECT_LABEL);
         assert!(head.visible && head.content == sample_chart().cards[1].title);
@@ -2294,7 +2294,7 @@ mod tests {
             mode: ViewMode::Chart,
             ..view(&rows, &[])
         };
-        apply(&mut world, Some(&v), [20.0, 20.0], chart_size());
+        place(&mut world, Some(&v), [20.0, 20.0], chart_size());
         assert_eq!(label(&world, INSPECT_LABEL).content, "select a card");
         assert!(!label(&world, row_label(0)).visible);
     }
@@ -2335,7 +2335,7 @@ mod tests {
             ..view(&rows, &[])
         };
         let o = [20.0, 20.0];
-        apply(&mut world, Some(&v), o, size());
+        place(&mut world, Some(&v), o, size());
         assert!(sprite(&world, LIST_THUMB).visible);
         let r0 = row_rect(o, BEHAVIOR_W, 0);
         assert_eq!(
@@ -2358,8 +2358,8 @@ mod tests {
             selected: Some(0),
             ..view(&rows, &picks)
         };
-        apply(&mut world, Some(&v), [20.0, 20.0], size());
-        apply(&mut world, None, [0.0, 0.0], size());
+        place(&mut world, Some(&v), [20.0, 20.0], size());
+        place(&mut world, None, [0.0, 0.0], size());
         assert!(world.query::<Sprite>().all(|s| !s.visible));
         assert!(world.query::<TextLabel>().all(|l| !l.visible));
         assert!(world.query::<TextInput>().all(|t| !t.visible && !t.focused));
