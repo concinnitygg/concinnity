@@ -6,10 +6,12 @@
 //! system: this module is available on every build of the crate,
 //! `--no-default-features` included.
 //!
-//! The baked bytes go into a [`World`](crate::World) through its data-entry
+//! The baked payloads go into a [`World`](crate::World) through its data-entry
 //! methods ([`add_mesh`](crate::World::add_mesh),
-//! [`add_environment_map`](crate::World::add_environment_map)), which hand
-//! back the handle a component references the result by:
+//! [`add_environment_map`](crate::World::add_environment_map),
+//! [`add_font`](crate::World::add_font)), which hand back the handle a
+//! component references the result by. Each bake returns its own payload type,
+//! so a payload only fits the method for its kind:
 //!
 //! ```no_run
 //! use concinnity::components::{DirectionalLight, ProceduralMesh, Prop};
@@ -47,7 +49,6 @@
 //! `source` naming a file, a generator that decodes an image) is refused with
 //! an error naming the cook module.
 
-use alloc::string::String;
 use alloc::vec::Vec;
 
 /// The bakeable types that [`components`](crate::components) does not carry.
@@ -64,18 +65,67 @@ pub use concinnity_core::components::cook::{
 
 use concinnity_core::components::{self, ProceduralMesh};
 
+// A payload only a bake in this module constructs, so what a data-entry method
+// takes is known to be the kind it installs.
+macro_rules! payload {
+    ($(#[$doc:meta])* $name:ident) => {
+        $(#[$doc])*
+        #[derive(Clone, PartialEq, Eq)]
+        pub struct $name(Vec<u8>);
+
+        impl $name {
+            /// The baked bytes.
+            pub fn as_bytes(&self) -> &[u8] {
+                &self.0
+            }
+
+            pub(crate) fn into_bytes(self) -> Vec<u8> {
+                self.0
+            }
+        }
+
+        impl core::fmt::Debug for $name {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                f.debug_struct(stringify!($name))
+                    .field("len", &self.0.len())
+                    .finish()
+            }
+        }
+    };
+}
+
+payload! {
+    /// Baked geometry, for [`World::add_mesh`](crate::World::add_mesh).
+    MeshPayload
+}
+
+payload! {
+    /// Baked image-based lighting, for
+    /// [`World::add_environment_map`](crate::World::add_environment_map).
+    EnvironmentMapPayload
+}
+
+payload! {
+    /// A baked glyph atlas, for [`World::add_font`](crate::World::add_font).
+    FontPayload
+}
+
 /// Bake a [`ProceduralMesh`]'s generator into its geometry payload, for
 /// [`World::add_mesh`](crate::World::add_mesh).
-pub fn procedural_mesh(mesh: &ProceduralMesh) -> Result<Vec<u8>, String> {
+pub fn procedural_mesh(mesh: &ProceduralMesh) -> Result<MeshPayload, crate::Error> {
     concinnity_core::bake::payload::procedural_mesh(mesh)
+        .map(MeshPayload)
+        .map_err(crate::Error::Bake)
 }
 
 /// Bake a raw [`Mesh`]'s vertices and indices into its geometry payload, for
 /// [`World::add_mesh`](crate::World::add_mesh). Normals and tangents are
 /// derived from the triangles; a `source` naming a model file needs the cook
 /// module's importer.
-pub fn mesh(mesh: &Mesh) -> Result<Vec<u8>, String> {
+pub fn mesh(mesh: &Mesh) -> Result<MeshPayload, crate::Error> {
     concinnity_core::bake::payload::mesh(mesh)
+        .map(MeshPayload)
+        .map_err(crate::Error::Bake)
 }
 
 /// Convolve an [`EnvironmentMap`]'s generator into its image-based-lighting
@@ -85,25 +135,32 @@ pub fn mesh(mesh: &Mesh) -> Result<Vec<u8>, String> {
 /// default sizes. On the std tier the convolutions are spread over the
 /// engine's job pool; without it they run on the calling thread.
 #[cfg(feature = "std")]
-pub fn environment_map(map: &EnvironmentMap) -> Result<Vec<u8>, String> {
+pub fn environment_map(map: &EnvironmentMap) -> Result<EnvironmentMapPayload, crate::Error> {
     concinnity_core::bake::payload::environment_map(map, &concinnity_host::thread::jobs::PoolRows)
+        .map(EnvironmentMapPayload)
+        .map_err(crate::Error::Bake)
 }
 
 /// Convolve an [`EnvironmentMap`]'s generator into its image-based-lighting
 /// payload, for [`World::add_environment_map`](crate::World::add_environment_map),
 /// on the calling thread.
 #[cfg(not(feature = "std"))]
-pub fn environment_map(map: &EnvironmentMap) -> Result<Vec<u8>, String> {
+pub fn environment_map(map: &EnvironmentMap) -> Result<EnvironmentMapPayload, crate::Error> {
     concinnity_core::bake::payload::environment_map(
         map,
         &concinnity_core::bake::environment_map::Serial,
     )
+    .map(EnvironmentMapPayload)
+    .map_err(crate::Error::Bake)
 }
 
-/// Rasterize a [`Font`] into its glyph-atlas payload. Only the built-in face
-/// bakes; a `path` naming a TTF file needs the cook module's importer.
-pub fn font(font: &Font) -> Result<Vec<u8>, String> {
+/// Rasterize a [`Font`] into its glyph-atlas payload, for
+/// [`World::add_font`](crate::World::add_font). Only the built-in face bakes;
+/// a `path` naming a TTF file needs the cook module's importer.
+pub fn font(font: &Font) -> Result<FontPayload, crate::Error> {
     concinnity_core::bake::payload::font(font)
+        .map(FontPayload)
+        .map_err(crate::Error::Bake)
 }
 
 /// Bake an authored [`Camera3D`] into the runtime component: the view matrix
@@ -125,6 +182,7 @@ pub fn camera_track(args: CameraTrack) -> components::CameraTrack {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::string::ToString;
 
     // The doc example's whole path, minus the window: bake, hand over, run.
     #[test]
@@ -182,6 +240,34 @@ mod tests {
         crate::test_support::assert_starts_headless(crate::App::from_world(world));
     }
 
+    // The built-in face takes the same path: bake, hand over, reference, run.
+    #[test]
+    fn a_baked_font_reaches_a_text_label_that_starts() {
+        let payload = font(&Font::default()).expect("the built-in face bakes");
+
+        let mut world = crate::World::new();
+        let handle = world.add_font(payload);
+        world.add_component(components::TextLabel {
+            content: "Hello, world!".into(),
+            font: Some(handle),
+            ..Default::default()
+        });
+
+        let table = world
+            .inner()
+            .resource::<concinnity_core::resource::FontTable>()
+            .expect("the font table");
+        assert!(
+            table
+                .0
+                .get(handle.index())
+                .and_then(|entry| entry.baked_bytes())
+                .is_some_and(|bytes| !bytes.is_empty()),
+            "the atlas is installed at its handle"
+        );
+        crate::test_support::assert_starts_headless(crate::App::from_world(world));
+    }
+
     // What cannot be computed is refused with directions, not a wrong payload.
     #[test]
     fn a_file_backed_value_is_refused_toward_the_cook() {
@@ -190,21 +276,24 @@ mod tests {
             ..Default::default()
         })
         .expect_err("an image-decoding generator");
-        assert!(err.contains("cook"), "{err}");
+        assert!(matches!(err, crate::Error::Bake(_)), "{err:?}");
+        assert!(err.to_string().contains("cook"), "{err}");
 
         let err = font(&Font {
             path: "face.ttf".into(),
             ..Default::default()
         })
         .expect_err("a file-backed face");
-        assert!(err.contains("cook"), "{err}");
+        assert!(matches!(err, crate::Error::Bake(_)), "{err:?}");
+        assert!(err.to_string().contains("cook"), "{err}");
 
         let err = mesh(&Mesh {
             source: "chair.glb".into(),
             ..Default::default()
         })
         .expect_err("a file-backed mesh");
-        assert!(err.contains("cook"), "{err}");
+        assert!(matches!(err, crate::Error::Bake(_)), "{err:?}");
+        assert!(err.to_string().contains("cook"), "{err}");
     }
 
     #[test]
@@ -227,7 +316,7 @@ mod tests {
             ..Default::default()
         })
         .expect("the sky bakes");
-        let view = concinnity_core::bake::environment_map::deserialize(&payload)
+        let view = concinnity_core::bake::environment_map::deserialize(payload.as_bytes())
             .expect("the payload reads back");
         assert_eq!(view.prefilter_face, 16);
 

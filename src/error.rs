@@ -1,14 +1,19 @@
-//! The failure an [`App`](crate::App) reports, on every build of the crate.
+//! The facade's failure type, on every build of the crate.
 
+use alloc::string::String;
+#[cfg(feature = "cook")]
+use alloc::vec::Vec;
 #[cfg(feature = "std")]
 use std::path::PathBuf;
 
 use concinnity_core::error::CnError;
 
-/// Why an application could not load its world, or could not run it.
+/// The facade's failure type: why a value could not be baked, a world could not
+/// be compiled or loaded, or an app could not run it.
 ///
 /// The variants naming a file exist only where there is a filesystem to name
-/// one in, so a `no_std` build reports [`Runtime`](Error::Runtime) alone.
+/// one in, so a `no_std` build reports [`Bake`](Error::Bake) and
+/// [`Runtime`](Error::Runtime) alone.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
@@ -48,6 +53,26 @@ pub enum Error {
     #[error("no state directory was installed, so there is nowhere to read world data from")]
     NoStateRoot,
 
+    /// A value the [`bake`](crate::bake) functions could not compute, usually
+    /// one that needs the `cook` module's importers.
+    #[error("{0}")]
+    Bake(String),
+
+    /// The declared world failed validation, one message per problem found.
+    #[cfg(feature = "cook")]
+    #[error("world validation failed:\n{}", .0.join("\n"))]
+    Validation(Vec<String>),
+
+    /// Compiling or writing the declared world failed.
+    #[cfg(feature = "cook")]
+    #[error("{message}")]
+    Build {
+        /// The category of the underlying failure.
+        kind: std::io::ErrorKind,
+        /// What the failing step reported.
+        message: String,
+    },
+
     /// The world refused to start, or a system stopped it with a failure.
     #[error(transparent)]
     Runtime(#[from] CnError),
@@ -63,6 +88,11 @@ impl Error {
             Error::UnreadableData { .. }
             | Error::OverflowUnsupported { .. }
             | Error::Runtime(CnError::InvalidData) => std::io::ErrorKind::InvalidData,
+            Error::Bake(_) => std::io::ErrorKind::InvalidInput,
+            #[cfg(feature = "cook")]
+            Error::Validation(_) => std::io::ErrorKind::InvalidData,
+            #[cfg(feature = "cook")]
+            Error::Build { kind, .. } => *kind,
             Error::Runtime(_) => std::io::ErrorKind::Other,
         }
     }
@@ -92,6 +122,16 @@ pub(crate) fn from_startup(error: concinnity_engine::StartupError) -> Error {
     }
 }
 
+// A free function for the same reason as `from_startup`: a public
+// `From<io::Error>` would let any io failure pass as a build failure.
+#[cfg(feature = "cook")]
+pub(crate) fn from_io(error: std::io::Error) -> Error {
+    Error::Build {
+        kind: error.kind(),
+        message: error.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::Error;
@@ -105,6 +145,14 @@ mod tests {
         let error = Error::from(CnError::InvalidState);
         assert_eq!(error, Error::Runtime(CnError::InvalidState));
         assert_eq!(error.to_string(), CnError::InvalidState.to_string());
+    }
+
+    // A bake failure is its message, since that message is the direction to
+    // the cook module.
+    #[test]
+    fn a_bake_failure_displays_its_message() {
+        let error = Error::Bake("compile it with the cook module".into());
+        assert_eq!(error.to_string(), "compile it with the cook module");
     }
 
     #[cfg(feature = "std")]
@@ -185,6 +233,7 @@ mod tests {
                 ),
                 (Error::Runtime(CnError::InvalidData), ErrorKind::InvalidData),
                 (Error::Runtime(CnError::InvalidState), ErrorKind::Other),
+                (Error::Bake("unbakeable".into()), ErrorKind::InvalidInput),
             ];
 
             for (error, kind) in cases {
@@ -233,6 +282,37 @@ mod tests {
             for (startup, expected) in cases {
                 assert_eq!(super::super::from_startup(startup), expected);
             }
+        }
+
+        // Every validation problem reaches the reader, not only the first.
+        #[cfg(feature = "cook")]
+        #[test]
+        fn a_validation_failure_lists_every_message_as_invalid_data() {
+            let error = Error::Validation(vec!["first problem".into(), "second problem".into()]);
+            let message = error.to_string();
+            assert!(message.contains("first problem"), "{message}");
+            assert!(message.contains("second problem"), "{message}");
+            let io: std::io::Error = error.into();
+            assert_eq!(io.kind(), ErrorKind::InvalidData);
+        }
+
+        // A build failure keeps the kind the io step reported.
+        #[cfg(feature = "cook")]
+        #[test]
+        fn an_io_failure_becomes_a_build_error_of_the_same_kind() {
+            let error = super::super::from_io(std::io::Error::new(
+                ErrorKind::PermissionDenied,
+                "data/0 is read-only",
+            ));
+            assert_eq!(
+                error,
+                Error::Build {
+                    kind: ErrorKind::PermissionDenied,
+                    message: "data/0 is read-only".into(),
+                }
+            );
+            let io: std::io::Error = error.into();
+            assert_eq!(io.kind(), ErrorKind::PermissionDenied);
         }
     }
 }

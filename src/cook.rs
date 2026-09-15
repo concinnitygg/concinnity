@@ -122,7 +122,7 @@ pub use concinnity_cook::authoring::registry::build_only::{
 };
 pub use concinnity_core::components::cook::*;
 
-use crate::World;
+use crate::{World, error};
 
 /// A world under construction: typed authored assets, compiled together into
 /// a runnable [`World`] or a blob file.
@@ -138,7 +138,7 @@ pub struct WorldBuilder {
     declared: Vec<(String, &'static str)>,
     // The first serialization failure, held until the compile so the call
     // chain stays borrow-friendly.
-    error: Option<std::io::Error>,
+    error: Option<crate::Error>,
 }
 
 /// Start an empty world.
@@ -170,7 +170,7 @@ impl WorldBuilder {
                 self.declared.push((name, T::TYPE));
             }
             Err(e) => {
-                self.error.get_or_insert(e);
+                self.error.get_or_insert(error::from_io(e));
             }
         }
         self
@@ -204,24 +204,24 @@ impl WorldBuilder {
     ///     .reference("target", "hero");
     /// ```
     pub fn reference(&mut self, field: &str, target: impl Into<String>) -> &mut Self {
-        let invalid = |msg: String| std::io::Error::new(std::io::ErrorKind::InvalidInput, msg);
         let Some(line) = self.lines.pop() else {
-            self.error.get_or_insert(invalid(format!(
-                "reference(\"{field}\") before any asset was added"
-            )));
+            self.error.get_or_insert(crate::Error::Build {
+                kind: std::io::ErrorKind::InvalidInput,
+                message: format!("reference(\"{field}\") before any asset was added"),
+            });
             return self;
         };
         match set_reference(&line, field, &target.into()) {
             Ok(patched) => self.lines.push(patched),
             Err(e) => {
-                self.error.get_or_insert(e);
+                self.error.get_or_insert(error::from_io(e));
             }
         }
         self
     }
 
     /// Compile every declared asset into a runnable [`World`].
-    pub fn compile(&self) -> std::io::Result<World> {
+    pub fn compile(&self) -> Result<World, crate::Error> {
         let mut result = self.build()?;
 
         let payload_sections: Vec<Option<Vec<u8>>> = std::mem::take(&mut result.payloads)
@@ -231,12 +231,7 @@ impl WorldBuilder {
         let mut world = concinnity_engine::blob::world_from(BlobData::new(payload_sections));
 
         for def in &result.defs {
-            let mut component = ComponentAsset::from_baked(def).map_err(|e| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("asset construction failed: {e:?}"),
-                )
-            })?;
+            let mut component = ComponentAsset::from_baked(def).map_err(crate::Error::Runtime)?;
             if let Some(locator) = &def.payload {
                 component.inject_locator(locator.clone());
             }
@@ -258,18 +253,19 @@ impl WorldBuilder {
     /// Payloads too large for one blob spill into siblings named by index, so
     /// a world written to `data/0` may also write `data/1`, `data/2`, ...
     /// [`App::from_blob`](crate::App::from_blob) reads that layout back.
-    pub fn write_blob(&self, path: impl AsRef<Path>) -> std::io::Result<()> {
+    pub fn write_blob(&self, path: impl AsRef<Path>) -> Result<(), crate::Error> {
         let result = self.build()?;
-        concinnity_cook::pipeline::write_blobs_to(&result, path.as_ref())?;
+        concinnity_cook::pipeline::write_blobs_to(&result, path.as_ref())
+            .map_err(error::from_io)?;
         Ok(())
     }
 
     // Validate, expand and compile the declarations. The shared front half of
     // `compile` and `write_blob`: both need every payload built, and differ
     // only in where the result lands.
-    fn build(&self) -> std::io::Result<PipelineResult> {
+    fn build(&self) -> Result<PipelineResult, crate::Error> {
         if let Some(e) = &self.error {
-            return Err(std::io::Error::new(e.kind(), e.to_string()));
+            return Err(e.clone());
         }
 
         // Bare `source` filenames resolve under the root the embedder named
@@ -281,10 +277,8 @@ impl WorldBuilder {
         // process.
         let platform = concinnity_engine::platform::current();
         let loaded: LoadedWorld = prepare_world(&self.lines.concat(), assets_dir.as_deref())
-            .map_err(|errs| {
-                std::io::Error::new(std::io::ErrorKind::InvalidData, errs.join("\n"))
-            })?;
-        build_compiled(loaded.assets, assets_dir.as_deref(), None, platform)
+            .map_err(crate::Error::Validation)?;
+        build_compiled(loaded.assets, assets_dir.as_deref(), None, platform).map_err(error::from_io)
     }
 }
 
@@ -347,8 +341,13 @@ mod tests {
         )
         .reference("target", "no_such_body");
         let err = spec.compile().expect_err("an unresolved reference fails");
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
-        assert!(err.to_string().contains("no_such_body"), "got: {err}");
+        let crate::Error::Validation(errs) = err else {
+            panic!("expected a validation failure, got {err:?}");
+        };
+        assert!(
+            errs.iter().any(|e| e.contains("no_such_body")),
+            "got: {errs:?}"
+        );
     }
 
     #[test]
@@ -420,6 +419,16 @@ mod tests {
             .reference("target", "hero")
             .compile()
             .expect_err("nothing to reference");
+        assert!(
+            matches!(
+                err,
+                crate::Error::Build {
+                    kind: std::io::ErrorKind::InvalidInput,
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
         assert!(err.to_string().contains("before any asset"), "{err}");
     }
 

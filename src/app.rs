@@ -47,7 +47,8 @@ impl App {
     /// them under `mygame/`. A world that declares an `AppConfig` with a `home`
     /// chooses the location itself.
     ///
-    /// Loading and running report the same [`Error`], so one `?` carries both.
+    /// Loading and running report the same [`Error`] a bake failure does, so
+    /// one `?` carries all of them.
     ///
     /// ```no_run
     /// # use concinnity::{App, Error};

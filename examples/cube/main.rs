@@ -86,7 +86,7 @@ fn main() {
     App::from_world(world).run().expect("the app runs");
 }
 
-fn cube_world() -> Result<World, String> {
+fn cube_world() -> Result<World, concinnity::Error> {
     let mut world = World::new();
 
     world.add_component(Window {
@@ -362,7 +362,7 @@ mod tests {
     }
 
     // The bakes are checked here, not by the compiler: an unknown generator or
-    // an unbakeable declaration surfaces as the error string it returns.
+    // an unbakeable declaration surfaces as the error it returns.
     #[test]
     fn the_cube_world_bakes() {
         cube_world().expect("the cube world bakes");

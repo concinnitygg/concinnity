@@ -8,9 +8,11 @@ use alloc::vec::Vec;
 
 use crate::components::{File, FileKind, Material, ProceduralMesh, VoxelChunk, validate};
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{EnvironmentMapHandle, MaterialHandle, MeshHandle, PipelineContext};
+use crate::ecs::{EnvironmentMapHandle, FontHandle, MaterialHandle, MeshHandle, PipelineContext};
 
-use super::{EnvironmentMapTable, MaterialTable, MeshTable, ResourceEntry, RuntimeMeshPayloads};
+use super::{
+    EnvironmentMapTable, FontTable, MaterialTable, MeshTable, ResourceEntry, RuntimeMeshPayloads,
+};
 
 /// Record `payload` as `id`'s geometry and return the handle it lands on.
 ///
@@ -57,6 +59,18 @@ pub fn append_environment_map(ctx: &mut PipelineContext, payload: Vec<u8>) -> En
     EnvironmentMapHandle(table.append(ResourceEntry::baked(payload)))
 }
 
+/// Install a baked glyph-atlas `payload` into the world's font table and
+/// return the handle a text component references it by.
+pub fn append_font(ctx: &mut PipelineContext, payload: Vec<u8>) -> FontHandle {
+    if ctx.resource::<FontTable>().is_none() {
+        ctx.insert_resource(FontTable::default());
+    }
+    let table = ctx
+        .resource_mut::<FontTable>()
+        .expect("the table was just ensured");
+    FontHandle(table.append(ResourceEntry::baked(payload)))
+}
+
 // How many mesh handles the build handed out: the four compiled blocks,
 // counted the way the renderer enumerates them.
 fn build_assigned(ctx: &PipelineContext) -> usize {
@@ -100,6 +114,17 @@ mod tests {
             .resource::<EnvironmentMapTable>()
             .expect("the table exists");
         assert_eq!(table.0[0].baked_bytes(), Some(&[1u8, 2, 3][..]));
+    }
+
+    #[test]
+    fn installed_fonts_take_handles_0_and_1() {
+        let mut world = World::default();
+        let mut ctx = world.context();
+        let first = append_font(&mut ctx, vec![1]);
+        let second = append_font(&mut ctx, vec![2, 3]);
+        assert_eq!((first.0, second.0), (0, 1));
+        let table = ctx.resource::<FontTable>().expect("the table exists");
+        assert_eq!(table.0[1].baked_bytes(), Some(&[2u8, 3][..]));
     }
 
     #[test]

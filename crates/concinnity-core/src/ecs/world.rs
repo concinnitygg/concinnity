@@ -20,9 +20,9 @@ use crate::ecs::user_system::{self, UserSystem};
 use crate::ecs::waves::{self, ExecSchedule};
 use crate::ecs::{
     BuiltSystem, Clock, ComponentAsset, ComponentId, ComponentSlot, ComponentStorage, Entity,
-    EnvironmentMapHandle, EventStore, Events, FrameContext, MaterialHandle, MeshHandle, NoPayloads,
-    PayloadStore, Phase, PipelineContext, Resources, RuntimeComponent, StepResult, System,
-    SystemEntry, SystemTable,
+    EnvironmentMapHandle, EventStore, Events, FontHandle, FrameContext, MaterialHandle, MeshHandle,
+    NoPayloads, PayloadStore, Phase, PipelineContext, Resources, RuntimeComponent, StepResult,
+    System, SystemEntry, SystemTable,
 };
 use crate::error::CnError;
 use crate::gfx::profile::FrameProfile;
@@ -225,6 +225,13 @@ impl World {
     /// and return its handle. The renderer lights with the map at handle 0.
     pub fn add_environment_map(&mut self, payload: Vec<u8>) -> EnvironmentMapHandle {
         crate::resource::append_environment_map(&mut self.context(), payload)
+    }
+
+    /// Add a baked glyph-atlas `payload` (see
+    /// [`bake::payload::font`](crate::bake::payload::font)) and return the
+    /// handle a text component references it by.
+    pub fn add_font(&mut self, payload: Vec<u8>) -> FontHandle {
+        crate::resource::append_font(&mut self.context(), payload)
     }
 
     /// Remove and drop every component of type C.

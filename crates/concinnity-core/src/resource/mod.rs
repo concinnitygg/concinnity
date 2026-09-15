@@ -13,7 +13,7 @@ mod install;
 mod runtime;
 
 pub use handles::{MeshBlock, ResourceHandles};
-pub use install::{append_environment_map, append_material, append_mesh};
+pub use install::{append_environment_map, append_font, append_material, append_mesh};
 pub use runtime::RuntimeMeshPayloads;
 
 use alloc::collections::BTreeSet;

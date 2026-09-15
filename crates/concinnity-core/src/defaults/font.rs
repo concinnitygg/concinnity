@@ -8,7 +8,7 @@ use alloc::vec::Vec;
 use crate::bake;
 use crate::ecs::{FontHandle, PipelineContext};
 use crate::error::CnError;
-use crate::resource::{FontTable, ResourceEntry};
+use crate::resource::append_font;
 
 /// Pixel size the injected HUD face is rasterized at. Chips draw it minified,
 /// so the atlas is supersampled from here rather than authored larger.
@@ -54,16 +54,7 @@ pub fn hud_font(ctx: &mut PipelineContext) -> Result<FontHandle, CnError> {
     if let Some(HudFont(handle)) = ctx.resource::<HudFont>().copied() {
         return Ok(handle);
     }
-    let payload = payload()?.to_vec();
-    // The table is created when the world carries none: one assembled in code
-    // rather than loaded from a blob.
-    if ctx.resource::<FontTable>().is_none() {
-        ctx.insert_resource(FontTable::default());
-    }
-    let table = ctx
-        .resource_mut::<FontTable>()
-        .ok_or(CnError::InvalidState)?;
-    let handle = FontHandle(table.append(ResourceEntry::baked(payload)));
+    let handle = append_font(ctx, payload()?.to_vec());
     ctx.insert_resource(HudFont(handle));
     Ok(handle)
 }
@@ -72,6 +63,7 @@ pub fn hud_font(ctx: &mut PipelineContext) -> Result<FontHandle, CnError> {
 mod tests {
     use super::*;
     use crate::ecs::World;
+    use crate::resource::FontTable;
 
     // The signed-distance pass over the bundled glyphs is the expensive half of
     // a bake, and it runs on a constant: the same face at the same size. A

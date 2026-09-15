@@ -1,13 +1,12 @@
 //! The world an application is assembled from.
 
-use alloc::vec::Vec;
-
 use concinnity_core::components::Material;
 use concinnity_core::ecs::{BakedMesh, RuntimeComponent};
 
+use crate::bake::{EnvironmentMapPayload, FontPayload, MeshPayload};
 use crate::system::{ComponentSlot, Entity, Phase, System};
 
-use crate::{EnvironmentMapHandle, MaterialHandle, MeshHandle};
+use crate::{EnvironmentMapHandle, FontHandle, MaterialHandle, MeshHandle};
 
 // One world on both tiers: it carries the components and the systems built over
 // them, and needs no operating system to do either. What differs is what a tier
@@ -161,8 +160,8 @@ impl World {
     /// generated for it, or a raw [`bake::Mesh`](crate::bake::Mesh) with the
     /// payload [`bake::mesh`](crate::bake::mesh) packed from its vertices.
     /// Handles count up in the order meshes are added.
-    pub fn add_mesh<M: BakedMesh>(&mut self, mesh: M, payload: Vec<u8>) -> MeshHandle {
-        self.inner.add_mesh(mesh, payload)
+    pub fn add_mesh<M: BakedMesh>(&mut self, mesh: M, payload: MeshPayload) -> MeshHandle {
+        self.inner.add_mesh(mesh, payload.into_bytes())
     }
 
     /// Add a material, returning the handle a
@@ -176,8 +175,27 @@ impl World {
     /// Add a baked image-based-lighting payload, from
     /// [`bake::environment_map`](crate::bake::environment_map). The renderer
     /// lights with the map at handle 0.
-    pub fn add_environment_map(&mut self, payload: Vec<u8>) -> EnvironmentMapHandle {
-        self.inner.add_environment_map(payload)
+    ///
+    /// Only an environment-map payload fits; a mesh's does not:
+    ///
+    /// ```compile_fail
+    /// # use concinnity::{World, bake};
+    /// # fn main() -> Result<(), concinnity::Error> {
+    /// let mut world = World::new();
+    /// let geometry = bake::mesh(&bake::Mesh::default())?;
+    /// world.add_environment_map(geometry);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn add_environment_map(&mut self, payload: EnvironmentMapPayload) -> EnvironmentMapHandle {
+        self.inner.add_environment_map(payload.into_bytes())
+    }
+
+    /// Add a baked glyph atlas, from [`bake::font`](crate::bake::font),
+    /// returning the handle a [`TextLabel`](crate::components::TextLabel)
+    /// references it by.
+    pub fn add_font(&mut self, payload: FontPayload) -> FontHandle {
+        self.inner.add_font(payload.into_bytes())
     }
 
     // Only the cook module compiles a core world it then wraps; the raw path
