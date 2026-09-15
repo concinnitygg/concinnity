@@ -57,6 +57,9 @@ use std::collections::HashMap;
 use std::ops::Deref;
 use std::rc::{Rc, Weak};
 
+use concinnity_core::render::error::{RenderError, RenderResult};
+
+use super::error::allocation_failed;
 use crate::suballoc::block_alloc::{BlockAllocator, Placement};
 
 // Largest block the pool asks for. Big enough that a heavy world holds its
@@ -92,14 +95,14 @@ impl PoolKey {
 
     // Reject the storage modes `MTLHeapDescriptor` refuses, so a mispooled
     // resource fails at its allocation rather than at heap creation.
-    fn check_heap_backed(self) -> Result<Self, String> {
+    fn check_heap_backed(self) -> RenderResult<Self> {
         if self.storage == MTLStorageMode::Shared || self.storage == MTLStorageMode::Private {
             Ok(self)
         } else {
-            Err(format!(
+            Err(RenderError::Other(format!(
                 "allocator: storage mode {} cannot back a heap",
                 self.storage.0
-            ))
+            )))
         }
     }
 }
@@ -111,7 +114,7 @@ const MTL_RESOURCE_STORAGE_MODE_SHIFT: usize = 4;
 
 // The pool an allocation belongs to, recovered from the options a caller asked
 // for.
-fn pool_key(options: MTLResourceOptions) -> Result<PoolKey, String> {
+fn pool_key(options: MTLResourceOptions) -> RenderResult<PoolKey> {
     PoolKey {
         storage: MTLStorageMode((options.0 >> MTL_RESOURCE_STORAGE_MODE_SHIFT) & 0xf),
         cache: MTLCPUCacheMode((options.0 >> MTL_RESOURCE_CPU_CACHE_MODE_SHIFT) & 0xf),
@@ -294,7 +297,7 @@ impl DeviceAllocator {
         &self,
         len: usize,
         options: MTLResourceOptions,
-    ) -> Result<PooledBuffer, String> {
+    ) -> RenderResult<PooledBuffer> {
         let key = pool_key(options)?;
         let len = len.max(1);
         let sizing = self
@@ -318,7 +321,7 @@ impl DeviceAllocator {
             }),
             None => {
                 self.release(reservation);
-                Err(format!("allocator: failed to place {len}-byte buffer"))
+                Err(allocation_failed(format_args!("{len}-byte pooled buffer")))
             }
         }
     }
@@ -330,9 +333,11 @@ impl DeviceAllocator {
         &self,
         src: &[u8],
         options: MTLResourceOptions,
-    ) -> Result<PooledBuffer, String> {
+    ) -> RenderResult<PooledBuffer> {
         if pool_key(options)?.storage != MTLStorageMode::Shared {
-            return Err("allocator: initialized buffers need shared storage".to_string());
+            return Err(RenderError::Other(
+                "allocator: initialized buffers need shared storage".to_string(),
+            ));
         }
         let buffer = self.alloc_buffer(src.len(), options)?;
         super::context::write_buffer_region(&buffer, 0, src)?;
@@ -345,7 +350,7 @@ impl DeviceAllocator {
     pub(in crate::metal) fn alloc_texture(
         &self,
         desc: &MTLTextureDescriptor,
-    ) -> Result<PooledTexture, String> {
+    ) -> RenderResult<PooledTexture> {
         let key = PoolKey {
             storage: desc.storageMode(),
             cache: desc.cpuCacheMode(),
@@ -367,10 +372,10 @@ impl DeviceAllocator {
             }),
             None => {
                 self.release(reservation);
-                Err(format!(
-                    "allocator: failed to place {}-byte texture",
+                Err(allocation_failed(format_args!(
+                    "{}-byte pooled texture",
                     sizing.size
-                ))
+                )))
             }
         }
     }
@@ -406,14 +411,14 @@ impl DeviceAllocator {
 
     // Reserve `size` bytes at `align` in `key`'s pool, opening a heap when no
     // existing block can host them.
-    fn reserve(&self, key: PoolKey, size: u64, align: u64) -> Result<Reservation, String> {
+    fn reserve(&self, key: PoolKey, size: u64, align: u64) -> RenderResult<Reservation> {
         let mut inner = self.inner.borrow_mut();
         let pool = inner.pools.entry(key).or_insert_with(Pool::new);
 
         if let Some(placement) = pool.placement.alloc(size, align) {
-            let heap = pool.heaps[placement.block]
-                .clone()
-                .ok_or("allocator: placement named a released heap")?;
+            let heap = pool.heaps[placement.block].clone().ok_or_else(|| {
+                RenderError::Other("allocator: placement named a released heap".to_string())
+            })?;
             return Ok(Reservation {
                 heap,
                 key,
@@ -430,10 +435,11 @@ impl DeviceAllocator {
         } else {
             pool.heaps[index] = Some(heap.clone());
         }
-        let placement = pool
-            .placement
-            .alloc_in(index, size, align)
-            .ok_or("allocator: a block sized for a request failed to host it")?;
+        let placement = pool.placement.alloc_in(index, size, align).ok_or_else(|| {
+            RenderError::Other(
+                "allocator: a block sized for a request failed to host it".to_string(),
+            )
+        })?;
         Ok(Reservation {
             heap,
             key,
@@ -469,7 +475,7 @@ fn new_heap(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     key: PoolKey,
     size: u64,
-) -> Result<Retained<ProtocolObject<dyn MTLHeap>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLHeap>>> {
     let desc = MTLHeapDescriptor::new();
     desc.setType(MTLHeapType::Placement);
     desc.setStorageMode(key.storage);
@@ -478,7 +484,7 @@ fn new_heap(
     desc.setSize(size.max(1) as usize);
     device
         .newHeapWithDescriptor(&desc)
-        .ok_or_else(|| format!("allocator: failed to create a {size}-byte heap"))
+        .ok_or_else(|| allocation_failed(format_args!("{size}-byte placement heap")))
 }
 
 #[cfg(test)]
@@ -540,6 +546,18 @@ mod tests {
         // allocation rather than at heap creation.
         assert!(pool_key(MTLResourceOptions::StorageModeManaged).is_err());
         assert!(pool_key(MTLResourceOptions::StorageModeMemoryless).is_err());
+    }
+
+    #[test]
+    fn a_refused_storage_mode_is_other_not_out_of_memory() {
+        // A mispooled request is a caller bug, so it must not read as device
+        // memory pressure to the streaming budget.
+        let refused = pool_key(MTLResourceOptions::StorageModeManaged)
+            .expect_err("managed cannot back a heap");
+        assert_eq!(
+            refused,
+            RenderError::Other("allocator: storage mode 1 cannot back a heap".to_string())
+        );
     }
 
     #[test]

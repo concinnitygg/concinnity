@@ -52,10 +52,9 @@ use objc2_metal::{
     MTLAccelerationStructureGeometryDescriptor, MTLAccelerationStructureInstanceDescriptor,
     MTLAccelerationStructureInstanceDescriptorType, MTLAccelerationStructureInstanceOptions,
     MTLAccelerationStructureTriangleGeometryDescriptor, MTLAccelerationStructureUsage,
-    MTLAttributeFormat, MTLBuffer, MTLCommandBuffer as _, MTLCommandBufferStatus,
-    MTLCommandEncoder as _, MTLCommandQueue as _, MTLComputeCommandEncoder as _,
-    MTLComputePipelineState, MTLDevice as _, MTLIndexType,
-    MTLInstanceAccelerationStructureDescriptor, MTLPackedFloat3, MTLPackedFloat4x3,
+    MTLAttributeFormat, MTLBuffer, MTLCommandBuffer as _, MTLCommandEncoder as _,
+    MTLCommandQueue as _, MTLComputeCommandEncoder as _, MTLComputePipelineState, MTLDevice as _,
+    MTLIndexType, MTLInstanceAccelerationStructureDescriptor, MTLPackedFloat3, MTLPackedFloat4x3,
     MTLPrimitiveAccelerationStructureDescriptor, MTLRenderCommandEncoder, MTLRenderPipelineState,
     MTLRenderStages, MTLResource, MTLResourceOptions, MTLResourceUsage, MTLSize,
 };
@@ -68,7 +67,7 @@ use concinnity_core::render::uniforms::SkinParams;
 
 use super::context::write_buffer_slice;
 use super::encode::ComputeEncode;
-use super::error::{allocation_failed, classify_ns_error};
+use super::error::{allocation_failed, completed_command_buffer};
 use super::rt_ring::{BlasUpdate, RtFrameRing, SkinnedBlasSet, SkinnedShape, TlasKey};
 use super::transient::RetirePool;
 
@@ -1998,14 +1997,7 @@ fn check_build_status(
     cmd: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
     what: &str,
 ) -> RenderResult<()> {
-    if cmd.status() == MTLCommandBufferStatus::Error {
-        let stage = format!("RT {what} faulted on the GPU");
-        return Err(match cmd.error() {
-            Some(error) => classify_ns_error(&error).context(stage),
-            None => RenderError::Other(stage),
-        });
-    }
-    Ok(())
+    completed_command_buffer(cmd, format_args!("RT {what}"))
 }
 
 // Upload a `#[repr(C)]` slice to a new shared GPU buffer.

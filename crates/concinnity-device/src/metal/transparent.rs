@@ -21,6 +21,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::render_types;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::transparent;
 use concinnity_core::render::uniforms::TransparentView;
 use objc2::rc::Retained;
@@ -116,16 +117,16 @@ impl MtlContext {
         draws: &[TransparentDraw],
         rt_params: Option<&render_types::RtParams>,
         bindless_tex_args: Option<&Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
-    ) -> Result<u32, String> {
+    ) -> RenderResult<u32> {
         if draws.is_empty() {
             return Ok(0);
         }
 
         // Snapshot the pre-transparent scene so refraction taps read a stable
         // copy instead of the attachment being written.
-        let blit = cmd_buf
-            .blitCommandEncoder()
-            .ok_or("failed to get transparent scene-copy blit encoder")?;
+        let blit = cmd_buf.blitCommandEncoder().ok_or_else(|| {
+            RenderError::Other("failed to get transparent scene-copy blit encoder".to_string())
+        })?;
         blit.pushDebugGroup(&NSString::from_str("transparent_scene_copy"));
         // SAFETY: both textures are HDR scene targets created with the same format and dimensions,
         // which is what a whole-texture blit copy requires.
@@ -158,7 +159,9 @@ impl MtlContext {
         let enc = ScopedEncoder::new(
             cmd_buf
                 .renderCommandEncoderWithDescriptor(&pass_desc)
-                .ok_or("failed to get transparent render encoder")?,
+                .ok_or_else(|| {
+                    RenderError::Other("failed to get transparent render encoder".to_string())
+                })?,
             ns_string!("transparent"),
         );
 
@@ -265,7 +268,9 @@ impl MtlContext {
             unsafe {
                 enc.set_vertex_buffer(&d.vertex_buffer, 0, 1);
                 let params_ptr = std::ptr::NonNull::new(d.params.as_ptr() as *mut std::ffi::c_void)
-                    .ok_or("transparent draw params blob is null")?;
+                    .ok_or_else(|| {
+                        RenderError::Other("transparent draw params blob is null".to_string())
+                    })?;
                 enc.setVertexBytes_length_atIndex(params_ptr, d.params.len(), 6);
                 enc.setFragmentBytes_length_atIndex(params_ptr, d.params.len(), 6);
                 for (slot, tex) in &d.fragment_textures {

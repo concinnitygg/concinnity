@@ -20,6 +20,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::image_decode::{self, PixelLayout};
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::hdr_output::HdrEncoding;
 use objc2_metal::{
     MTLBlitCommandEncoder as _, MTLCommandBuffer as _, MTLCommandEncoder as _,
@@ -29,24 +30,29 @@ use objc2_metal::{
 
 use super::context::MtlContext;
 use super::descriptors::TextureDesc;
+use super::error::{allocation_failed, completed_command_buffer};
 
 impl MtlContext {
     // Capture the last presented frame to a PNG at `path`. Returns the path on
     // success. Distinct name from the `RenderBackend::screenshot` trait method
     // so the backend forwarder is unambiguous. Reached through the
     // `RenderBackend` vtable (bin-only `cn debug`).
-    pub(in crate::metal) fn capture_screenshot(&mut self, path: &str) -> Result<String, String> {
+    pub(in crate::metal) fn capture_screenshot(&mut self, path: &str) -> RenderResult<String> {
         // `None` both before the first present and in production (capture is a
         // `cn debug`-only feature; see `last_present_texture`). The retained
         // texture keeps the drawable's color surface alive for the read-back.
-        let src = self
-            .last_present_texture
-            .clone()
-            .ok_or("screenshot: no frame has been presented yet (capture is cn debug only)")?;
+        let src = self.last_present_texture.clone().ok_or_else(|| {
+            RenderError::Other(
+                "screenshot: no frame has been presented yet (capture is cn debug only)"
+                    .to_string(),
+            )
+        })?;
         let width = src.width();
         let height = src.height();
         if width == 0 || height == 0 {
-            return Err("screenshot: zero-sized drawable".into());
+            return Err(RenderError::Other(
+                "screenshot: zero-sized drawable".to_string(),
+            ));
         }
 
         // Host-readable staging texture matching the drawable's format. The
@@ -66,20 +72,18 @@ impl MtlContext {
             .hw
             .device
             .newTextureWithDescriptor(&desc)
-            .ok_or("screenshot: failed to create staging texture")?;
+            .ok_or_else(|| allocation_failed("screenshot staging texture"))?;
 
         // One-shot blit: drawable color -> staging. Committed after every
         // frame command buffer on the shared queue, so FIFO order has the
         // composite pass (which wrote the drawable) complete first; the
         // `waitUntilCompleted` then guarantees the copy is done before the read.
-        let cmd_buf = self
-            .hw
-            .command_queue
-            .commandBuffer()
-            .ok_or("screenshot: failed to get command buffer")?;
-        let blit = cmd_buf
-            .blitCommandEncoder()
-            .ok_or("screenshot: failed to get blit encoder")?;
+        let cmd_buf = self.hw.command_queue.commandBuffer().ok_or_else(|| {
+            RenderError::Other("screenshot: failed to get command buffer".to_string())
+        })?;
+        let blit = cmd_buf.blitCommandEncoder().ok_or_else(|| {
+            RenderError::Other("screenshot: failed to get blit encoder".to_string())
+        })?;
         // SAFETY: `staging` was created with the same format and at least `width` x `height` texels
         // as `src`, and the origin/size cover exactly that region of slice 0, mip 0 of both.
         unsafe {
@@ -98,6 +102,7 @@ impl MtlContext {
         blit.endEncoding();
         cmd_buf.commit();
         cmd_buf.waitUntilCompleted();
+        completed_command_buffer(&cmd_buf, "screenshot blit")?;
 
         // Read the staging texture back tightly (no row padding) and decode.
         let bytes_per_pixel = swapchain_bytes_per_pixel(self.hw.swap_pixel_format) as usize;
@@ -116,8 +121,9 @@ impl MtlContext {
         // the blit completed (`waitUntilCompleted` above), so the copy is valid.
         unsafe {
             staging.getBytes_bytesPerRow_fromRegion_mipmapLevel(
-                std::ptr::NonNull::new(raw.as_mut_ptr() as *mut std::ffi::c_void)
-                    .ok_or("screenshot: null readback pointer")?,
+                std::ptr::NonNull::new(raw.as_mut_ptr() as *mut std::ffi::c_void).ok_or_else(
+                    || RenderError::Other("screenshot: null readback pointer".to_string()),
+                )?,
                 bytes_per_row,
                 region,
                 0,
@@ -159,18 +165,18 @@ fn classify(format: MTLPixelFormat, encoding: Option<HdrEncoding>) -> PixelLayou
 }
 
 // Write RGBA8 pixel data to a PNG file.
-fn encode_png(path: &str, width: u32, height: u32, rgba: &[u8]) -> Result<(), String> {
-    let file =
-        std::fs::File::create(path).map_err(|e| format!("screenshot: create {path}: {e}"))?;
+fn encode_png(path: &str, width: u32, height: u32, rgba: &[u8]) -> RenderResult<()> {
+    let file = std::fs::File::create(path)
+        .map_err(|e| RenderError::Other(format!("screenshot: create {path}: {e}")))?;
     let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
     let mut writer = encoder
         .write_header()
-        .map_err(|e| format!("screenshot: png header: {e}"))?;
+        .map_err(|e| RenderError::Other(format!("screenshot: png header: {e}")))?;
     writer
         .write_image_data(rgba)
-        .map_err(|e| format!("screenshot: png data: {e}"))?;
+        .map_err(|e| RenderError::Other(format!("screenshot: png data: {e}")))?;
     Ok(())
 }
 

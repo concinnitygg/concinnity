@@ -174,7 +174,7 @@ impl MtlContext {
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         params: &super::graph_exec::GraphFrameParams,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let Some(set) = self.planar_reflection.as_ref() else {
             return Ok(());
         };

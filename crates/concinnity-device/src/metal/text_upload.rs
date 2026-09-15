@@ -20,12 +20,14 @@
 //! read-only field access (see `metal/parallel_encoder.rs`).
 
 use concinnity_core::gfx::render_types::TextDrawCall;
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::fullscreen;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLDevice, MTLResourceOptions};
 
 use super::context::write_buffer_region;
+use super::error::allocation_failed;
 use super::transient::grow_to;
 
 // Sub-range alignment. 256 bytes satisfies the strictest offset rule a Metal
@@ -96,7 +98,7 @@ impl TextUploadRing {
         device: &ProtocolObject<dyn MTLDevice>,
         slot: usize,
         text_calls: &[TextDrawCall],
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let Self {
             slots,
             ranges,
@@ -113,7 +115,7 @@ impl TextUploadRing {
             slots[idx] = Some(
                 device
                     .newBufferWithLength_options(capacity, MTLResourceOptions::StorageModeShared)
-                    .ok_or("failed to allocate text upload buffer")?,
+                    .ok_or_else(|| allocation_failed("text upload buffer"))?,
             );
         }
         let buffer = slots[idx]

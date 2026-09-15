@@ -14,6 +14,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::render_types::{NUM_SHADOW_CASCADES, ShadowPassPush};
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::shadow_bias;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -61,7 +62,7 @@ impl MtlContext {
         // shadow cast and the live surface agree. `None` when no volume opts
         // into `cast_shadows`. Mirrors the DirectX shadow pass.
         raymarch_view: Option<&crate::metal::raymarch::RaymarchView>,
-    ) -> Result<u32, String> {
+    ) -> RenderResult<u32> {
         // The shadow map and its cascade set stand up together with the
         // depth-only pipeline; without it there is nothing to render into.
         if self.shadow.pipeline_state.is_none() {
@@ -117,7 +118,9 @@ impl MtlContext {
             let shadow_enc = ScopedEncoder::new(
                 cmd_buf
                     .renderCommandEncoderWithDescriptor(&shadow_pass_desc)
-                    .ok_or("failed to get shadow render encoder")?,
+                    .ok_or_else(|| {
+                        RenderError::Other("failed to get shadow render encoder".to_string())
+                    })?,
                 ns_string!("shadow cascade"),
             );
 

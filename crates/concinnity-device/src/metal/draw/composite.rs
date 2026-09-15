@@ -17,6 +17,7 @@ use std::cell::Cell;
 
 use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::render_types::TextDrawCall;
+use concinnity_core::render::error::RenderError;
 use concinnity_core::render::fullscreen;
 use concinnity_core::render::fullscreen::TextBindCache;
 use objc2::rc::Retained;
@@ -214,7 +215,7 @@ impl MtlContext {
             .window()
             .view
             .currentRenderPassDescriptor()
-            .ok_or("no current render pass descriptor")?;
+            .ok_or_else(|| RenderError::Other("no current render pass descriptor".to_string()))?;
         // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
         // declares.
         unsafe {
@@ -255,7 +256,9 @@ impl MtlContext {
         let post_encoder = ScopedEncoder::new(
             cmd_buf
                 .renderCommandEncoderWithDescriptor(&composite_pass_desc)
-                .ok_or("failed to get post-process render encoder")?,
+                .ok_or_else(|| {
+                    RenderError::Other("failed to get post-process render encoder".to_string())
+                })?,
             ns_string!("composite"),
         );
 

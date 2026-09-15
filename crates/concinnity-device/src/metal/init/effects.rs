@@ -11,7 +11,7 @@ use concinnity_core::gfx::ssao::SsaoSettings;
 use concinnity_core::gfx::ssgi::SsgiSettings;
 use concinnity_core::gfx::ssr::SsrSettings;
 use concinnity_core::render::backend_init::PostSettings;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::post::device::PostExtent;
 use concinnity_core::render::post::ssgi::SsgiPass;
 use concinnity_core::render::post::ssr::SsrPass;
@@ -23,6 +23,7 @@ use super::InitGpu;
 use crate::metal::allocator::DeviceAllocator;
 use crate::metal::auto_exposure::{AutoExposureGpu, build_auto_exposure_pipelines};
 use crate::metal::context::{CompositeState, MtlSceneAssets};
+use crate::metal::error::allocation_failed;
 use crate::metal::post::post_device::MtlPostDevice;
 use crate::metal::post::{
     GBufferState, MetalFXUpscaler, SsaoState, SsgiState, SsrState, TaaState, UpscaleState,
@@ -363,38 +364,40 @@ pub(in crate::metal) fn build_auto_exposure(
 // readback at the top of the next frame without an explicit GPU<->CPU sync.
 fn make_auto_exposure_histogram(
     device: &ProtocolObject<dyn MTLDevice>,
-) -> Result<Retained<ProtocolObject<dyn MTLBuffer>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLBuffer>>> {
     let hist_bytes = vec![0u8; std::mem::size_of::<u32>() * auto_exposure::HISTOGRAM_BINS];
     // SAFETY: the pointer and length describe the live `hist_bytes` allocation, and Metal copies
     // those bytes into the new buffer before the call returns.
     unsafe {
-        let ptr = std::ptr::NonNull::new(hist_bytes.as_ptr() as *mut _)
-            .ok_or("auto-exposure histogram allocation failed")?;
+        let ptr = std::ptr::NonNull::new(hist_bytes.as_ptr() as *mut _).ok_or_else(|| {
+            RenderError::Other("auto-exposure histogram bytes pointer is null".to_string())
+        })?;
         device
             .newBufferWithBytes_length_options(
                 ptr,
                 hist_bytes.len(),
                 MTLResourceOptions::StorageModeShared,
             )
-            .ok_or_else(|| "failed to create auto-exposure histogram buffer".to_string())
+            .ok_or_else(|| allocation_failed("auto-exposure histogram buffer"))
     }
 }
 
 fn make_auto_exposure_output(
     device: &ProtocolObject<dyn MTLDevice>,
-) -> Result<Retained<ProtocolObject<dyn MTLBuffer>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLBuffer>>> {
     let out_bytes = vec![0u8; std::mem::size_of::<f32>()];
     // SAFETY: the pointer and length describe the live `out_bytes` allocation, and Metal copies
     // those bytes into the new buffer before the call returns.
     unsafe {
-        let ptr = std::ptr::NonNull::new(out_bytes.as_ptr() as *mut _)
-            .ok_or("auto-exposure output allocation failed")?;
+        let ptr = std::ptr::NonNull::new(out_bytes.as_ptr() as *mut _).ok_or_else(|| {
+            RenderError::Other("auto-exposure output bytes pointer is null".to_string())
+        })?;
         device
             .newBufferWithBytes_length_options(
                 ptr,
                 out_bytes.len(),
                 MTLResourceOptions::StorageModeShared,
             )
-            .ok_or_else(|| "failed to create auto-exposure output buffer".to_string())
+            .ok_or_else(|| allocation_failed("auto-exposure output buffer"))
     }
 }

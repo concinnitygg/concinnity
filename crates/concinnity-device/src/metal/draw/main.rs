@@ -19,6 +19,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::render_types;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::uniforms::ViewUniforms;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -105,7 +106,7 @@ impl MtlContext {
         camera: MainPassCamera,
         gpu: GpuFrameBuffers,
         world_hidden: bool,
-    ) -> Result<u32, String> {
+    ) -> RenderResult<u32> {
         let MainPassCamera {
             elapsed,
             vp,
@@ -186,7 +187,7 @@ impl MtlContext {
         let encoder = ScopedEncoder::new(
             cmd_buf
                 .renderCommandEncoderWithDescriptor(&main_pass_desc)
-                .ok_or("failed to get render encoder")?,
+                .ok_or_else(|| RenderError::Other("failed to get render encoder".to_string()))?,
             ns_string!("main pass"),
         );
         // Wireframe view: fill mode is encoder state that indirect commands
@@ -243,7 +244,7 @@ impl MtlContext {
         // render passes its slot's mirror ICB (culled against the reflected
         // frustum); the probe capture passes `None` (reuses the main cull ICB).
         icb_override: Option<&ProtocolObject<dyn objc2_metal::MTLIndirectCommandBuffer>>,
-    ) -> Result<u32, String> {
+    ) -> RenderResult<u32> {
         let FaceTargets {
             color_msaa: face_color_msaa,
             depth: face_depth,
@@ -295,7 +296,9 @@ impl MtlContext {
         let encoder = ScopedEncoder::new(
             cmd_buf
                 .renderCommandEncoderWithDescriptor(&desc)
-                .ok_or("failed to get probe render encoder")?,
+                .ok_or_else(|| {
+                    RenderError::Other("failed to get probe render encoder".to_string())
+                })?,
             ns_string!("probe face"),
         );
 
@@ -340,7 +343,7 @@ impl MtlContext {
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         camera: MainPassCamera,
         gpu: GpuFrameBuffers,
-    ) -> Result<u32, String> {
+    ) -> RenderResult<u32> {
         let MainPassCamera {
             elapsed,
             vp,
@@ -396,7 +399,7 @@ impl MtlContext {
         let encoder = ScopedEncoder::new(
             cmd_buf
                 .renderCommandEncoderWithDescriptor(&main_pass_desc)
-                .ok_or("failed to get render encoder")?,
+                .ok_or_else(|| RenderError::Other("failed to get render encoder".to_string()))?,
             ns_string!("main2 pass"),
         );
         if self.view.mode == concinnity_core::gfx::view_modes::ViewMode::Wireframe {

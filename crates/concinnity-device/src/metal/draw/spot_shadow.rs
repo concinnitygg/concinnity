@@ -14,6 +14,7 @@ use concinnity_core::components;
 use concinnity_core::gfx::lod;
 use concinnity_core::gfx::render_types::{ShadowPassPush, ShadowUniforms, SpotShadowData};
 use concinnity_core::render::csm;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::shadow_bias;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -57,7 +58,7 @@ impl MtlContext {
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         skinned_joint_bufs: &[Retained<ProtocolObject<dyn MTLBuffer>>],
         cam_pos: [f32; 3],
-    ) -> Result<u32, String> {
+    ) -> RenderResult<u32> {
         let Some(shadow_pipeline) = self.shadow.pipeline_state.clone() else {
             return Ok(0);
         };
@@ -110,7 +111,9 @@ impl MtlContext {
             let enc = ScopedEncoder::new(
                 cmd_buf
                     .renderCommandEncoderWithDescriptor(&pass_desc)
-                    .ok_or("failed to get spot shadow render encoder")?,
+                    .ok_or_else(|| {
+                        RenderError::Other("failed to get spot shadow render encoder".to_string())
+                    })?,
                 ns_string!("spot shadow slice"),
             );
 

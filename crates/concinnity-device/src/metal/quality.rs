@@ -188,7 +188,7 @@ impl MtlContext {
         // are still correct.
         match self.targets.transient_pool.bloom_top() {
             Ok(top) => self.targets.bloom.mips[0] = top,
-            Err(e) => first_err = Some(format!("bloom top mip: {e}").into()),
+            Err(e) => first_err = Some(e.context("bloom top mip")),
         }
         self.ssr = effects.ssr;
         self.gbuffer = effects.gbuffer;

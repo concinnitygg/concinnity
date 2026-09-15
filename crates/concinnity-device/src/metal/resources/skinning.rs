@@ -29,14 +29,14 @@ fn upload_skinned_index_buffer(
     device: &ProtocolObject<dyn MTLDevice>,
     indices: &[u32],
     label: &str,
-) -> Result<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>> {
     let buffer = device
         .newBufferWithLength_options(
             rt_geom::skinned_index_buffer_bytes(indices.len()),
             MTLResourceOptions::StorageModeShared,
         )
-        .ok_or_else(|| format!("{label}: failed to create skinned index buffer"))?;
-    write_buffer_slice(&buffer, indices).map_err(|e| format!("{label}: {e}"))?;
+        .ok_or_else(|| allocation_failed(format_args!("{label} skinned index buffer")))?;
+    write_buffer_slice(&buffer, indices).map_err(|e| e.context(label))?;
     Ok(buffer)
 }
 
@@ -185,7 +185,7 @@ pub(crate) fn build_skinned_shadow_pipeline(
     device: &ProtocolObject<dyn MTLDevice>,
     vdesc: &MTLVertexDescriptor,
     hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     let shadow_fn = crate::metal::slang_builtins::entry_function(
         device,
         &crate::metal::slang_builtins::SHADOW_VERT_SKINNED,
@@ -198,7 +198,11 @@ pub(crate) fn build_skinned_shadow_pipeline(
     sdesc.setDepthAttachmentPixelFormat(MTLPixelFormat::Depth32Float);
     device
         .newRenderPipelineStateWithDescriptor_error(&sdesc)
-        .map_err(|e| format!("failed to create skinned shadow pipeline state: {:?}", e))
+        .map_err(|e| {
+            RenderError::ShaderCompile(format!(
+                "failed to create skinned shadow pipeline state: {e:?}"
+            ))
+        })
 }
 
 impl MtlContext {
@@ -224,15 +228,21 @@ impl MtlContext {
     pub(crate) fn rebuild_skinned_geometry(
         &mut self,
         changes: Vec<backend::SkinnedDrawGeometryUpdate>,
-    ) -> Result<Vec<backend::SkinnedSlotLayout>, String> {
+    ) -> RenderResult<Vec<backend::SkinnedSlotLayout>> {
         use std::collections::HashMap;
 
-        let v_buf = self.skinned.vertex_buffer.as_ref().ok_or(
-            "rebuild_skinned_geometry: no skinned vertex buffer (was upload_skinned called?)",
-        )?;
-        let i_buf = self.skinned.index_buffer.as_ref().ok_or(
-            "rebuild_skinned_geometry: no skinned index buffer (was upload_skinned called?)",
-        )?;
+        let v_buf = self.skinned.vertex_buffer.as_ref().ok_or_else(|| {
+            RenderError::Other(
+                "rebuild_skinned_geometry: no skinned vertex buffer (was upload_skinned called?)"
+                    .to_string(),
+            )
+        })?;
+        let i_buf = self.skinned.index_buffer.as_ref().ok_or_else(|| {
+            RenderError::Other(
+                "rebuild_skinned_geometry: no skinned index buffer (was upload_skinned called?)"
+                    .to_string(),
+            )
+        })?;
 
         // Stop the GPU + CPU pipelines so we can safely read the old buffers
         // and atomically swap. Costs a frame-time stall but only fires under
@@ -299,26 +309,26 @@ impl MtlContext {
                 let v_start = obj.vertex_base as usize;
                 let v_end = v_start + obj.vertex_count;
                 if v_end > old_v_slice.len() {
-                    return Err(format!(
+                    return Err(RenderError::Other(format!(
                         "rebuild_skinned_geometry: slot {} vertex region [{}, {}) \
                          out of bounds (buffer has {} vertices)",
                         skinned_index,
                         v_start,
                         v_end,
                         old_v_slice.len()
-                    ));
+                    )));
                 }
                 new_vertices.extend_from_slice(&old_v_slice[v_start..v_end]);
                 let i_end = obj.index_offset + obj.index_count;
                 if i_end > old_i_slice.len() {
-                    return Err(format!(
+                    return Err(RenderError::Other(format!(
                         "rebuild_skinned_geometry: slot {} index region [{}, {}) \
                          out of bounds (buffer has {} indices)",
                         skinned_index,
                         obj.index_offset,
                         i_end,
                         old_i_slice.len()
-                    ));
+                    )));
                 }
                 let old_base = obj.vertex_base;
                 // `idx - old_base + new_v_base` -- both subtraction and
@@ -326,10 +336,10 @@ impl MtlContext {
                 // just placed at new_v_base).
                 for &abs in &old_i_slice[obj.index_offset..i_end] {
                     let local = abs.checked_sub(old_base).ok_or_else(|| {
-                        format!(
+                        RenderError::Other(format!(
                             "rebuild_skinned_geometry: stale index {abs} below \
                              vertex_base {old_base} on slot {skinned_index}"
-                        )
+                        ))
                     })?;
                     new_indices.push(local + new_v_base);
                 }
@@ -358,11 +368,11 @@ impl MtlContext {
         }
 
         if new_vertices.is_empty() || new_indices.is_empty() {
-            return Err(
+            return Err(RenderError::Other(
                 "rebuild_skinned_geometry: post-rebuild buffers would be empty (no \
                  skinned draws to ship)"
-                    .into(),
-            );
+                    .to_string(),
+            ));
         }
 
         // Create new MTL buffers sized to the rebuilt layout.
@@ -370,8 +380,11 @@ impl MtlContext {
         // copies those bytes into the new buffer before the call returns.
         let new_vertex_buffer = unsafe {
             let v_bytes = std::mem::size_of_val(new_vertices.as_slice());
-            let ptr = std::ptr::NonNull::new(new_vertices.as_ptr() as *mut _)
-                .ok_or("rebuild_skinned_geometry: vertex slice pointer is null")?;
+            let ptr = std::ptr::NonNull::new(new_vertices.as_ptr() as *mut _).ok_or_else(|| {
+                RenderError::Other(
+                    "rebuild_skinned_geometry: vertex slice pointer is null".to_string(),
+                )
+            })?;
             self.hw
                 .device
                 .newBufferWithBytes_length_options(
@@ -379,7 +392,7 @@ impl MtlContext {
                     v_bytes,
                     MTLResourceOptions::StorageModeShared,
                 )
-                .ok_or("rebuild_skinned_geometry: failed to create new vertex buffer")?
+                .ok_or_else(|| allocation_failed("rebuild_skinned_geometry vertex buffer"))?
         };
         let new_index_buffer =
             upload_skinned_index_buffer(&self.hw.device, &new_indices, "rebuild_skinned_geometry")?;
@@ -426,34 +439,40 @@ impl MtlContext {
         vertex_base: u32,
         vertices: &[SkinnedVertex],
         indices: &[u16],
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let obj = self
             .skinned
             .slots
             .draw_objects
             .get(skinned_index)
             .ok_or_else(|| {
-                format!(
+                RenderError::Other(format!(
                     "update_skinned_mesh_geometry: skinned object {} out of range",
                     skinned_index
-                )
+                ))
             })?;
         if indices.len() != obj.index_count {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "update_skinned_mesh_geometry: skinned {} expects {} indices, got {} \
                  (in-place path is size-matched only; size changes route through \
                  rebuild_skinned_geometry)",
                 skinned_index,
                 obj.index_count,
                 indices.len()
-            ));
+            )));
         }
-        let v_buf = self.skinned.vertex_buffer.as_ref().ok_or(
-            "update_skinned_mesh_geometry: no skinned vertex buffer (was upload_skinned called?)",
-        )?;
-        let i_buf = self.skinned.index_buffer.as_ref().ok_or(
-            "update_skinned_mesh_geometry: no skinned index buffer (was upload_skinned called?)",
-        )?;
+        let v_buf = self.skinned.vertex_buffer.as_ref().ok_or_else(|| {
+            RenderError::Other(
+                "update_skinned_mesh_geometry: no skinned vertex buffer (was upload_skinned called?)"
+                    .to_string(),
+            )
+        })?;
+        let i_buf = self.skinned.index_buffer.as_ref().ok_or_else(|| {
+            RenderError::Other(
+                "update_skinned_mesh_geometry: no skinned index buffer (was upload_skinned called?)"
+                    .to_string(),
+            )
+        })?;
         // Check the vertex region fits inside the live buffer. The shared
         // buffer was sized once at upload_skinned to hold every skinned
         // mesh's vertices; vertex_base + vertices.len() must stay within
@@ -461,13 +480,13 @@ impl MtlContext {
         let v_byte_off = (vertex_base as usize) * std::mem::size_of::<SkinnedVertex>();
         let v_byte_len = std::mem::size_of_val(vertices);
         if v_byte_off + v_byte_len > v_buf.length() {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "update_skinned_mesh_geometry: vertex region [{}, {}) overruns skinned \
                  vertex buffer length {}",
                 v_byte_off,
                 v_byte_off + v_byte_len,
                 v_buf.length()
-            ));
+            )));
         }
         let i_byte_off = obj.index_offset * std::mem::size_of::<u32>();
         let rebased: Vec<u32> = indices
@@ -593,7 +612,7 @@ impl MtlContext {
     pub(crate) fn upload_skinned_morphs(
         &mut self,
         morphs: Vec<Option<std::sync::Arc<mesh_payload::PayloadMorphs>>>,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         use std::collections::HashMap;
 
         let mut by_source: HashMap<usize, MorphBinding> = HashMap::new();
@@ -614,7 +633,9 @@ impl MtlContext {
                             // returns.
                             let buffer = unsafe {
                                 let ptr = std::ptr::NonNull::new(bytes.as_ptr() as *mut _)
-                                    .ok_or("morph entry slice is empty")?;
+                                    .ok_or_else(|| {
+                                        RenderError::Other("morph entry slice is empty".to_string())
+                                    })?;
                                 self.hw
                                     .device
                                     .newBufferWithBytes_length_options(
@@ -622,7 +643,7 @@ impl MtlContext {
                                         bytes.len(),
                                         MTLResourceOptions::StorageModeShared,
                                     )
-                                    .ok_or("failed to create morph entry buffer")?
+                                    .ok_or_else(|| allocation_failed("morph entry buffer"))?
                             };
                             let b = MorphBinding {
                                 buffer,
@@ -663,10 +684,11 @@ impl MtlContext {
         &mut self,
         skinned_index: usize,
         new_joint_count: usize,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         self.skinned
             .slots
             .update_skeleton(skinned_index, new_joint_count)
+            .map_err(RenderError::Other)
     }
 
     pub(crate) fn reveal_skinned_instance(&mut self, instance_index: usize, model: [[f32; 4]; 4]) {

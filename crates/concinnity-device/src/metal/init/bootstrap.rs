@@ -6,7 +6,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::render::backend_init::{EmbeddedSurface, SwapchainConfig};
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::hdr_output;
 use concinnity_core::render::hdr_output::HdrOutputMode;
 use objc2::MainThreadOnly;
@@ -166,7 +166,7 @@ pub(crate) fn setup_window_and_view(
     device: &ProtocolObject<dyn MTLDevice>,
     config: WindowConfig,
     hdr: HdrRequest,
-) -> Result<WindowSetup, String> {
+) -> RenderResult<WindowSetup> {
     // Resolve the swapchain color-output mode. EDR support is per-display,
     // so the answer depends on which screen the window will land on. In
     // windowed mode we use `NSWindow::screen()` after attaching; in embedded
@@ -224,7 +224,8 @@ pub(crate) fn setup_window_and_view(
             config.width,
             config.height,
             config.title_bar,
-        )?;
+        )
+        .map_err(RenderError::Other)?;
         let content_rect = window.contentRectForFrameRect(window.frame());
         let mtk_view =
             MTKView::initWithFrame_device(MTKView::alloc(mtm), content_rect, Some(device));

@@ -35,7 +35,7 @@ pub(super) const PROBE_CUBE_ARG_BUFFER_INDEX: usize = 11;
 pub(super) fn probe_cube_arg_encoder(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn MTLArgumentEncoder>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLArgumentEncoder>>> {
     let frag = super::slang_builtins::entry_function(
         device,
         &super::slang_builtins::SSR_RESOLVE,

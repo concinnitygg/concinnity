@@ -7,7 +7,7 @@
 use concinnity_core::components::{GlassPanel, SdfVolume, WaterSurface};
 use concinnity_core::gfx::render_types::DrawObject;
 use concinnity_core::render::decal::{DecalRecord, DecalSet};
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::particles::ParticleEmitterRecord;
 use concinnity_core::render::planar_reflection::{self, PlanarAssignment};
 use concinnity_core::render::volumetric_fog::FogSettings;
@@ -21,6 +21,7 @@ use objc2_metal::{
 use super::{Features, InitGpu};
 use crate::metal::context::{GlassState, RaymarchState, WaterState};
 use crate::metal::decal::{DecalState, build_decal_pipeline};
+use crate::metal::error::allocation_failed;
 use crate::metal::fog::{
     FogState, build_fog_froxel_pipeline, build_fog_froxel_volume, build_fog_pipeline,
 };
@@ -50,7 +51,7 @@ pub(super) fn build_decals(
     let mut set = DecalSet::new(usize::MAX, gpu.frames_in_flight);
     for record in decals {
         set.insert(record)
-            .map_err(|_| "decals: decal slot table is full".to_string())?;
+            .map_err(|_| RenderError::Other("decals: decal slot table is full".to_string()))?;
     }
     Ok(DecalState {
         set,
@@ -78,7 +79,7 @@ type DecalResources = (
 pub(in crate::metal) fn build_decal_resources_for_runtime(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
-) -> Result<DecalResources, String> {
+) -> RenderResult<DecalResources> {
     let ps = build_decal_pipeline(device, hot_reload)?;
     #[repr(C)]
     #[derive(Copy, Clone)]
@@ -119,27 +120,27 @@ pub(in crate::metal) fn build_decal_resources_for_runtime(
     // those bytes into the new buffer before the call returns.
     let vbuf = unsafe {
         let ptr = std::ptr::NonNull::new(CUBE_VERTS.as_ptr() as *mut _)
-            .ok_or("decal cube vertex slice is null")?;
+            .ok_or_else(|| RenderError::Other("decal cube vertex slice is null".to_string()))?;
         device
             .newBufferWithBytes_length_options(
                 ptr,
                 std::mem::size_of_val(&CUBE_VERTS),
                 MTLResourceOptions::StorageModeShared,
             )
-            .ok_or("failed to create decal cube vertex buffer")?
+            .ok_or_else(|| allocation_failed("decal cube vertex buffer"))?
     };
     // SAFETY: the pointer and length describe the live `CUBE_INDICES` allocation, and Metal copies
     // those bytes into the new buffer before the call returns.
     let ibuf = unsafe {
         let ptr = std::ptr::NonNull::new(CUBE_INDICES.as_ptr() as *mut _)
-            .ok_or("decal cube index slice is null")?;
+            .ok_or_else(|| RenderError::Other("decal cube index slice is null".to_string()))?;
         device
             .newBufferWithBytes_length_options(
                 ptr,
                 std::mem::size_of_val(&CUBE_INDICES),
                 MTLResourceOptions::StorageModeShared,
             )
-            .ok_or("failed to create decal cube index buffer")?
+            .ok_or_else(|| allocation_failed("decal cube index buffer"))?
     };
     let samp = {
         let desc = MTLSamplerDescriptor::new();
@@ -149,7 +150,7 @@ pub(in crate::metal) fn build_decal_resources_for_runtime(
         desc.setTAddressMode(MTLSamplerAddressMode::ClampToEdge);
         device
             .newSamplerStateWithDescriptor(&desc)
-            .ok_or("failed to create decal sampler state")?
+            .ok_or_else(|| RenderError::Other("failed to create decal sampler state".to_string()))?
     };
     Ok((ps, vbuf, ibuf, samp))
 }

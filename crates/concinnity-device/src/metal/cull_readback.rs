@@ -19,48 +19,50 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::cull_status;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use objc2_metal::{
     MTLBlitCommandEncoder as _, MTLBuffer as _, MTLCommandBuffer as _, MTLCommandEncoder as _,
     MTLCommandQueue as _, MTLDevice as _, MTLResourceOptions,
 };
 
 use super::context::MtlContext;
+use super::error::{allocation_failed, completed_command_buffer};
 
 impl MtlContext {
     // Read the cull-status buffer back to the host, one u32 per live cull
     // record. Distinct name from the `RenderBackend::read_cull_status` trait
     // method so the backend forwarder is unambiguous.
-    pub(in crate::metal) fn read_cull_status_buffer(&mut self) -> Result<Vec<u32>, String> {
+    pub(in crate::metal) fn read_cull_status_buffer(&mut self) -> RenderResult<Vec<u32>> {
         // `None` both on a non-bindless world (no cull pipeline, so
         // `ensure_icb_capacity` allocates nothing) and before the first frame.
-        let src = self
-            .cull
-            .status_buffer
-            .clone()
-            .ok_or("cull-status: this world does not run the GPU-driven cull")?;
+        let src = self.cull.status_buffer.clone().ok_or_else(|| {
+            RenderError::Other(
+                "cull-status: this world does not run the GPU-driven cull".to_string(),
+            )
+        })?;
         let count = self.cull_count();
         if count == 0 {
             return Ok(Vec::new());
         }
         let byte_size = count * std::mem::size_of::<u32>();
         if byte_size > src.length() {
-            return Err("cull-status: status buffer is smaller than the live object count".into());
+            return Err(RenderError::Other(
+                "cull-status: status buffer is smaller than the live object count".to_string(),
+            ));
         }
 
         let staging = self
             .hw
             .device
             .newBufferWithLength_options(byte_size, MTLResourceOptions::StorageModeShared)
-            .ok_or("cull-status: failed to create staging buffer")?;
+            .ok_or_else(|| allocation_failed("cull-status staging buffer"))?;
 
-        let cmd_buf = self
-            .hw
-            .command_queue
-            .commandBuffer()
-            .ok_or("cull-status: failed to get command buffer")?;
-        let blit = cmd_buf
-            .blitCommandEncoder()
-            .ok_or("cull-status: failed to get blit encoder")?;
+        let cmd_buf = self.hw.command_queue.commandBuffer().ok_or_else(|| {
+            RenderError::Other("cull-status: failed to get command buffer".to_string())
+        })?;
+        let blit = cmd_buf.blitCommandEncoder().ok_or_else(|| {
+            RenderError::Other("cull-status: failed to get blit encoder".to_string())
+        })?;
         // SAFETY: both buffers are at least `byte_size` bytes long (checked above for `src`,
         // requested for `staging`), so the copied range is in bounds on each.
         unsafe {
@@ -71,12 +73,13 @@ impl MtlContext {
         blit.endEncoding();
         cmd_buf.commit();
         cmd_buf.waitUntilCompleted();
+        completed_command_buffer(&cmd_buf, "cull-status readback")?;
 
         // SAFETY: the staging buffer is `StorageModeShared` and `byte_size` bytes long, and the
         // blit completed (`waitUntilCompleted` above), so its contents are readable and settled.
         let raw = unsafe {
             std::slice::from_raw_parts(staging.contents().as_ptr().cast::<u8>(), byte_size)
         };
-        cull_status::decode(raw, count).map_err(|e| format!("cull-status: {e}"))
+        cull_status::decode(raw, count).map_err(|e| RenderError::Other(format!("cull-status: {e}")))
     }
 }

@@ -529,7 +529,7 @@ impl MtlContext {
     pub(super) fn update_world_shader_pipelines(
         &mut self,
         programs: &concinnity_core::components::ShaderPrograms,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let world = Some(programs);
 
         // Build everything into temporaries first. Any `?` early-return

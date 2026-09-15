@@ -34,7 +34,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use super::error::allocation_failed;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::render_graph::{
     PixelFormat, PoolGates, TextureUsage, TransientSlot, TransientTexture, plan_pool_slots,
 };
@@ -139,10 +139,10 @@ impl TransientTexturePool {
     // The pooled `bloom_top` (bloom mip 0) as an owned handle for the bloom
     // chain to hold. Always managed, so a missing entry is a build bug rather
     // than a disabled feature.
-    pub(super) fn bloom_top(&self) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, String> {
+    pub(super) fn bloom_top(&self) -> RenderResult<Retained<ProtocolObject<dyn MTLTexture>>> {
         self.lookup("bloom_top")
             .map(|t| t.texture.clone())
-            .ok_or_else(|| "bloom_top missing from transient pool".to_string())
+            .ok_or_else(|| RenderError::Other("bloom_top missing from transient pool".to_string()))
     }
 
     // Total bytes the slot heaps occupy: the pool's aliased footprint, as Metal
@@ -272,7 +272,7 @@ pub(super) fn transient_slots(
     gbuffer_enabled: bool,
     render_extent: (u32, u32),
     output_extent: (u32, u32),
-) -> Result<Vec<TransientSlot>, String> {
+) -> RenderResult<Vec<TransientSlot>> {
     plan_pool_slots(
         PoolGates {
             ssao: ssao_enabled,
@@ -282,6 +282,7 @@ pub(super) fn transient_slots(
         render_extent,
         output_extent,
     )
+    .map_err(RenderError::Other)
 }
 
 impl MtlContext {

@@ -6,6 +6,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIGHT_LIST_STRIDE, ClusterParams};
+use concinnity_core::render::error::{RenderError, RenderResult};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
@@ -16,6 +17,7 @@ use objc2_metal::{
 
 use super::context::MtlContext;
 use super::encode::ComputeEncode;
+use super::error::allocation_failed;
 use super::pipeline::ns_str;
 use super::scoped_encoder::ScopedEncoder;
 
@@ -37,7 +39,7 @@ impl MtlContext {
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         cluster_params: &ClusterParams,
-    ) -> Result<u32, String> {
+    ) -> RenderResult<u32> {
         let pipeline = match &self.light_cull.pipeline {
             Some(p) => p,
             None => return Ok(0),
@@ -50,7 +52,9 @@ impl MtlContext {
         let enc = ScopedEncoder::new(
             cmd_buf
                 .computeCommandEncoderWithDescriptor(&desc)
-                .ok_or("failed to get light-cull compute encoder")?,
+                .ok_or_else(|| {
+                    RenderError::Other("failed to get light-cull compute encoder".to_string())
+                })?,
             ns_string!("clustered light cull"),
         );
         enc.set_pipeline(pipeline);
@@ -81,14 +85,16 @@ impl MtlContext {
 pub(super) fn build_light_cull_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn MTLComputePipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLComputePipelineState>>> {
     let library = super::slang_builtins::LIGHT_CULL.library(device, hot_reload)?;
     let func = library
         .newFunctionWithName(&ns_str("light_cull_kernel"))
-        .ok_or("light_cull_kernel not found")?;
+        .ok_or_else(|| RenderError::ShaderCompile("light_cull_kernel not found".to_string()))?;
     device
         .newComputePipelineStateWithFunction_error(&func)
-        .map_err(|e| format!("failed to create light cull pipeline: {:?}", e))
+        .map_err(|e| {
+            RenderError::ShaderCompile(format!("failed to create light cull pipeline: {e:?}"))
+        })
 }
 
 // Allocate the per-cluster light-index buffer: CLUSTER_COUNT blocks of
@@ -96,9 +102,9 @@ pub(super) fn build_light_cull_pipeline(
 // Private storage: written only by the compute kernel, read only by the shader.
 pub(super) fn build_cluster_light_buffer(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
-) -> Result<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>> {
     let len = (CLUSTER_COUNT * CLUSTER_LIGHT_LIST_STRIDE) as usize * std::mem::size_of::<u32>();
     device
         .newBufferWithLength_options(len, MTLResourceOptions::StorageModePrivate)
-        .ok_or_else(|| "failed to allocate cluster light buffer".to_string())
+        .ok_or_else(|| allocation_failed("cluster light buffer"))
 }

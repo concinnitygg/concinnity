@@ -7,7 +7,7 @@ use concinnity_core::gfx::cull_status::CullStatus;
 use concinnity_core::gfx::frustum::{Frustum, transform_aabb};
 use concinnity_core::gfx::lod;
 use concinnity_core::gfx::render_types;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::model_history::HistoryMode;
 use concinnity_core::transform::IDENTITY;
 use objc2::rc::Retained;
@@ -544,7 +544,7 @@ impl MtlContext {
         frustum: &Frustum,
         cam_pos: [f32; 3],
         counts: crate::metal::context::DrawRecordCounts,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let (Some(arg_buf), Some(status)) = (&self.cull.icb_arg_buffer, &self.cull.status_buffer)
         else {
             return Ok(());
@@ -590,7 +590,7 @@ impl MtlContext {
         frustum: &Frustum,
         cam_pos: [f32; 3],
         slot: usize,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let (Some(mirror), Some(status)) =
             (self.cull.mirror_slots.get(slot), &self.cull.mirror_status)
         else {
@@ -631,7 +631,7 @@ impl MtlContext {
         view: CullView,
         target: CullOutputTarget,
         options: CullDispatchOptions,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let CullSceneBuffers {
             object_buffer,
             draw_args_buffer,
@@ -706,7 +706,7 @@ impl MtlContext {
         let enc = ScopedEncoder::new(
             cmd_buf
                 .computeCommandEncoderWithDescriptor(&cull_pass_desc)
-                .ok_or("failed to get compute encoder")?,
+                .ok_or_else(|| RenderError::Other("failed to get compute encoder".to_string()))?,
             label,
         );
         enc.set_pipeline(pipeline);
@@ -772,7 +772,7 @@ impl MtlContext {
         draw_args_buffer: &ProtocolObject<dyn objc2_metal::MTLBuffer>,
         frustum: &Frustum,
         cam_pos: [f32; 3],
-    ) -> Result<u32, String> {
+    ) -> RenderResult<u32> {
         use objc2_metal::{MTLComputeCommandEncoder as _, MTLResourceUsage};
         let (Some(pipeline), Some(encode), Some(arg_buf), Some(status), Some(hiz)) = (
             &self.cull.pipeline_phase2,
@@ -825,7 +825,7 @@ impl MtlContext {
         let enc = ScopedEncoder::new(
             cmd_buf
                 .computeCommandEncoderWithDescriptor(&cull_pass_desc)
-                .ok_or("failed to get compute encoder")?,
+                .ok_or_else(|| RenderError::Other("failed to get compute encoder".to_string()))?,
             ns_string!("cull phase2"),
         );
         enc.set_pipeline(pipeline);
@@ -884,7 +884,7 @@ impl MtlContext {
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         object_buffer: &ProtocolObject<dyn objc2_metal::MTLBuffer>,
         draw_args_buffer: &ProtocolObject<dyn objc2_metal::MTLBuffer>,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         use concinnity_core::gfx::render_types::NUM_SHADOW_CASCADES;
         use objc2_metal::{MTLComputeCommandEncoder as _, MTLResourceUsage};
         let (Some(pipeline), Some(encode), Some(icb), Some(arg_buf), Some(status)) = (
@@ -914,7 +914,9 @@ impl MtlContext {
         let enc = ScopedEncoder::new(
             cmd_buf
                 .computeCommandEncoderWithDescriptor(&cull_pass_desc)
-                .ok_or("failed to get shadow cull compute encoder")?,
+                .ok_or_else(|| {
+                    RenderError::Other("failed to get shadow cull compute encoder".to_string())
+                })?,
             ns_string!("shadow cull"),
         );
         enc.set_pipeline(pipeline);
@@ -1200,17 +1202,19 @@ fn compute_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     function: &ProtocolObject<dyn objc2_metal::MTLFunction>,
     what: &str,
-) -> Result<Retained<ProtocolObject<dyn MTLComputePipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLComputePipelineState>>> {
     device
         .newComputePipelineStateWithFunction_error(function)
-        .map_err(|e| format!("failed to create {what} pipeline state: {e:?}"))
+        .map_err(|e| {
+            RenderError::ShaderCompile(format!("failed to create {what} pipeline state: {e:?}"))
+        })
 }
 
 fn decision_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     lib: &super::slang_builtins::SlangLib,
     hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn MTLComputePipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLComputePipelineState>>> {
     let function = super::slang_builtins::entry_function(device, lib, hot_reload)?;
     compute_pipeline(device, &function, lib.name)
 }
@@ -1223,13 +1227,15 @@ fn decision_pipeline(
 pub(super) fn build_cull_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
-) -> Result<CullPipeline, String> {
+) -> RenderResult<CullPipeline> {
     let decide = decision_pipeline(device, &super::slang_builtins::CULL_PHASE1, hot_reload)?;
     let decide_phase2 = decision_pipeline(device, &super::slang_builtins::CULL_PHASE2, hot_reload)?;
     let library = shader_library(device, hot_reload, "cull_encode.metal")?;
     let encode_fn = library
         .newFunctionWithName(&ns_str("cull_encode"))
-        .ok_or("cull_encode not found in cull_encode library")?;
+        .ok_or_else(|| {
+            RenderError::ShaderCompile("cull_encode not found in cull_encode library".to_string())
+        })?;
     let encode = compute_pipeline(device, &encode_fn, "cull encode")?;
     // SAFETY: CULL_ICB_BUFFER_INDEX is the static buffer index the encode
     // kernel declares its argument-buffer parameter at.
@@ -1251,7 +1257,7 @@ pub(super) fn build_cull_pipeline(
 pub(super) fn build_shadow_cull_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn MTLComputePipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLComputePipelineState>>> {
     decision_pipeline(device, &super::slang_builtins::CULL_SHADOW, hot_reload)
 }
 

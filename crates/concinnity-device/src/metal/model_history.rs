@@ -8,6 +8,7 @@
 //! same 64 bytes per record a second time.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::uniforms::ModelHistoryParams;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -36,7 +37,7 @@ impl MtlContext {
         object_buffer: &Retained<ProtocolObject<dyn MTLBuffer>>,
         targets: &[Retained<ProtocolObject<dyn MTLBuffer>>],
         record_count: usize,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let Some(pipeline) = &self.gbuffer.history_pipeline else {
             return Ok(());
         };
@@ -56,7 +57,9 @@ impl MtlContext {
         let enc = ScopedEncoder::new(
             cmd_buf
                 .computeCommandEncoderWithDescriptor(&desc)
-                .ok_or("failed to get model-history compute encoder")?,
+                .ok_or_else(|| {
+                    RenderError::Other("failed to get model-history compute encoder".to_string())
+                })?,
             ns_string!("model history"),
         );
         enc.set_pipeline(pipeline);
@@ -86,12 +89,14 @@ impl MtlContext {
 pub(super) fn build_model_history_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn MTLComputePipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLComputePipelineState>>> {
     let library = super::slang_builtins::MODEL_HISTORY.library(device, hot_reload)?;
     let func = library
         .newFunctionWithName(&ns_str("model_history_kernel"))
-        .ok_or("model_history_kernel not found")?;
+        .ok_or_else(|| RenderError::ShaderCompile("model_history_kernel not found".to_string()))?;
     device
         .newComputePipelineStateWithFunction_error(&func)
-        .map_err(|e| format!("failed to create model history pipeline: {:?}", e))
+        .map_err(|e| {
+            RenderError::ShaderCompile(format!("failed to create model history pipeline: {e:?}"))
+        })
 }

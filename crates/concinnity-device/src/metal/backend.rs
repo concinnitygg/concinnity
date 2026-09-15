@@ -91,7 +91,7 @@ impl SkinnedDraws for MtlContext {
         fn reveal_skinned_instance(&mut self, instance_index: usize, model: [[f32; 4]; 4]);
         fn retire_skinned_draw_object(&mut self, skinned_index: usize);
         fn update_skinned_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]);
-        fn upload_skinned_morphs(&mut self, morphs: Vec<Option<std::sync::Arc<mesh_payload::PayloadMorphs>>>) -> RenderResult<()>;
+        fn upload_skinned_morphs(&mut self, morphs: Vec<Option<std::sync::Arc<mesh_payload::PayloadMorphs>>>) -> concinnity_core::render::error::RenderResult<()>;
     }
 
     fn upload_skinned(
@@ -108,11 +108,11 @@ impl SkinnedDraws for MtlContext {
 impl DrawStreaming for MtlContext {
     forward! { assert = debug_assert_main_thread;
         fn evict_texture_slot(&mut self, slot: usize) -> concinnity_core::render::error::RenderResult<()>;
-        fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> RenderResult<()>;
+        fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> concinnity_core::render::error::RenderResult<()>;
         fn seed_mesh_streaming(&mut self, vtx_offset: u64, vtx_bytes: u64, idx_offset: u64, idx_bytes: u64);
-        fn remove_chunk_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> RenderResult<()>;
-        fn set_chunk_model(&mut self, draw_idx: usize, model: [[f32; 4]; 4]) -> RenderResult<()>;
-        fn clone_static_draw_object(&mut self, src_draw_idx: usize, model: [[f32; 4]; 4], dst: draw_slot::SlotAlloc) -> RenderResult<()>;
+        fn remove_chunk_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> concinnity_core::render::error::RenderResult<()>;
+        fn set_chunk_model(&mut self, draw_idx: usize, model: [[f32; 4]; 4]) -> concinnity_core::render::error::RenderResult<()>;
+        fn clone_static_draw_object(&mut self, src_draw_idx: usize, model: [[f32; 4]; 4], dst: draw_slot::SlotAlloc) -> concinnity_core::render::error::RenderResult<()>;
         fn evict_world_shader(&mut self, bucket: u32);
     }
 
@@ -163,7 +163,7 @@ impl DrawStreaming for MtlContext {
         chunk_idx_bytes: usize,
     ) -> RenderResult<()> {
         debug_assert_main_thread("setup_chunk_streaming");
-        Ok(self.setup_chunk_streaming(chunk_vtx_bytes, chunk_idx_bytes)?)
+        MtlContext::setup_chunk_streaming(self, chunk_vtx_bytes, chunk_idx_bytes)
     }
 }
 
@@ -207,13 +207,13 @@ impl RenderTuning for MtlContext {
 impl LiveEdit for MtlContext {
     forward! { assert = debug_assert_main_thread;
         fn update_color_lut(&mut self, size: u32, data: &[u8]) -> concinnity_core::render::error::RenderResult<()>;
-        fn update_mesh_geometry(&mut self, draw_idx: usize, verts: &[mesh_payload::Vertex], idxs: &[u16], lod_alternates: &[(f32, Vec<u16>)]) -> RenderResult<()>;
-        fn update_skinned_mesh_geometry(&mut self, skinned_index: usize, vertex_base: u32, verts: &[mesh_payload::SkinnedVertex], idxs: &[u16]) -> RenderResult<()>;
-        fn rebuild_skinned_geometry(&mut self, changes: Vec<backend::SkinnedDrawGeometryUpdate>) -> RenderResult<Vec<backend::SkinnedSlotLayout>>;
-        fn update_skinned_skeleton(&mut self, skinned_index: usize, new_joint_count: usize) -> RenderResult<()>;
+        fn update_mesh_geometry(&mut self, draw_idx: usize, verts: &[mesh_payload::Vertex], idxs: &[u16], lod_alternates: &[(f32, Vec<u16>)]) -> concinnity_core::render::error::RenderResult<()>;
+        fn update_skinned_mesh_geometry(&mut self, skinned_index: usize, vertex_base: u32, verts: &[mesh_payload::SkinnedVertex], idxs: &[u16]) -> concinnity_core::render::error::RenderResult<()>;
+        fn rebuild_skinned_geometry(&mut self, changes: Vec<backend::SkinnedDrawGeometryUpdate>) -> concinnity_core::render::error::RenderResult<Vec<backend::SkinnedSlotLayout>>;
+        fn update_skinned_skeleton(&mut self, skinned_index: usize, new_joint_count: usize) -> concinnity_core::render::error::RenderResult<()>;
         fn set_draw_material(&mut self, draw_idx: usize, material: MaterialUniforms, texture_slot: usize, normal_map_slot: usize);
         fn set_draw_cull_distance(&mut self, draw_idx: usize, cull_distance: f32);
-        fn update_world_shader_pipelines(&mut self, programs: &concinnity_core::components::ShaderPrograms) -> RenderResult<()>;
+        fn update_world_shader_pipelines(&mut self, programs: &concinnity_core::components::ShaderPrograms) -> concinnity_core::render::error::RenderResult<()>;
     }
 
     fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()> {
@@ -226,7 +226,7 @@ impl LiveEdit for MtlContext {
         changes: Vec<backend::DrawGeometryUpdate>,
     ) -> RenderResult<()> {
         debug_assert_main_thread("rebuild_static_geometry");
-        Ok(MtlContext::rebuild_static_geometry(self, changes)?)
+        MtlContext::rebuild_static_geometry(self, changes)
     }
 
     fn shader_reload_flag(&self) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
@@ -268,10 +268,10 @@ impl LiveEdit for MtlContext {
 
 impl SceneEffects for MtlContext {
     forward! { assert = debug_assert_main_thread;
-        fn add_decal(&mut self, record: decal::DecalRecord) -> RenderResult<usize>;
-        fn remove_decal(&mut self, decal_id: usize) -> RenderResult<()>;
-        fn add_emitter(&mut self, record: particles::ParticleEmitterRecord) -> RenderResult<usize>;
-        fn remove_emitter(&mut self, emitter_id: usize) -> RenderResult<()>;
+        fn add_decal(&mut self, record: decal::DecalRecord) -> concinnity_core::render::error::RenderResult<usize>;
+        fn remove_decal(&mut self, decal_id: usize) -> concinnity_core::render::error::RenderResult<()>;
+        fn add_emitter(&mut self, record: particles::ParticleEmitterRecord) -> concinnity_core::render::error::RenderResult<usize>;
+        fn remove_emitter(&mut self, emitter_id: usize) -> concinnity_core::render::error::RenderResult<()>;
     }
 }
 
@@ -287,7 +287,7 @@ impl BackendProbe for MtlContext {
     // recurse). Mirrors the DX/VK backends.
     fn screenshot(&mut self, path: &str) -> RenderResult<String> {
         debug_assert_main_thread("screenshot");
-        Ok(self.capture_screenshot(path)?)
+        self.capture_screenshot(path)
     }
 
     // Inherent method is named `read_cull_status_buffer` for the same reason
@@ -295,6 +295,6 @@ impl BackendProbe for MtlContext {
     // trait method and recurse.
     fn read_cull_status(&mut self) -> RenderResult<Vec<u32>> {
         debug_assert_main_thread("read_cull_status");
-        Ok(self.read_cull_status_buffer()?)
+        self.read_cull_status_buffer()
     }
 }

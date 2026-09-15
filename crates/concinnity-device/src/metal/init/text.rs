@@ -24,7 +24,7 @@ pub(super) fn build_text(
         let mut gpu_atlases = Vec::with_capacity(text_atlases.len());
         for (i, (aw, ah, pixels)) in text_atlases.iter().enumerate() {
             let tex = upload_texture(&gpu.hw.allocator, *aw, *ah, pixels)
-                .map_err(|e| format!("text_atlas[{}]: {}", i, e))?;
+                .map_err(|e| e.context(format_args!("text_atlas[{i}]")))?;
             gpu_atlases.push(tex);
         }
         (Some(text_ps), gpu_atlases)

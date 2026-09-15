@@ -3,9 +3,10 @@
 //! command buffers, so the completion handler classifies here and parks the
 //! result on the context for the next draw_frame to report.
 
-use concinnity_core::render::error::{DeviceLostReason, RenderError};
+use concinnity_core::render::error::{DeviceLostReason, RenderError, RenderResult};
+use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSError;
-use objc2_metal::MTLCommandBufferError;
+use objc2_metal::{MTLCommandBuffer, MTLCommandBufferError, MTLCommandBufferStatus};
 
 // Pure mapping from a command-buffer error code to the boundary class, so the
 // table is testable without a GPU. `detail` is the NSError's description.
@@ -57,9 +58,39 @@ pub(super) fn classify_ns_error(error: &NSError) -> RenderError {
     }
 }
 
+// The outcome of a command buffer that has finished executing: `Ok` unless it
+// faulted, in which case its NSError is classified. A faulted buffer that
+// carries no error object stays `Other`.
+pub(super) fn completed_command_buffer(
+    cmd: &ProtocolObject<dyn MTLCommandBuffer>,
+    what: impl core::fmt::Display,
+) -> RenderResult<()> {
+    if cmd.status() != MTLCommandBufferStatus::Error {
+        return Ok(());
+    }
+    let stage = format!("{what} faulted on the GPU");
+    Err(match cmd.error() {
+        Some(error) => classify_ns_error(&error).context(stage),
+        None => RenderError::Other(stage),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use objc2_metal::{MTLCommandQueue as _, MTLDevice as _};
+
+    #[test]
+    fn a_command_buffer_that_completed_cleanly_is_ok() {
+        let Some(device) = objc2_metal::MTLCreateSystemDefaultDevice() else {
+            return;
+        };
+        let queue = device.newCommandQueue().expect("command queue");
+        let cmd = queue.commandBuffer().expect("command buffer");
+        cmd.commit();
+        cmd.waitUntilCompleted();
+        assert_eq!(completed_command_buffer(&cmd, "empty buffer"), Ok(()));
+    }
 
     fn classify(code: MTLCommandBufferError) -> RenderError {
         classify_command_buffer_error(code.0, "gpu fault".to_string())

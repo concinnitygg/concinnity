@@ -6,7 +6,7 @@ use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::DrawObject;
 use concinnity_core::render::backend::ChunkMesh;
 use concinnity_core::render::draw_slot;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use objc2_metal::{MTLBuffer, MTLResourceOptions};
 
 use crate::metal::context::*;
@@ -23,7 +23,7 @@ impl MtlContext {
         &mut self,
         chunk_vtx_bytes: usize,
         chunk_idx_bytes: usize,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let old_v_len = self.scene.vertex_buffer.length();
         let old_i_len = self.scene.index_buffer.length();
 
@@ -34,7 +34,7 @@ impl MtlContext {
                 old_v_len + chunk_vtx_bytes,
                 MTLResourceOptions::StorageModeShared,
             )
-            .map_err(|e| format!("setup_chunk_streaming: chunk vertex buffer: {e}"))?;
+            .map_err(|e| e.context("setup_chunk_streaming: chunk vertex buffer"))?;
         let new_ibuf = self
             .hw
             .allocator
@@ -42,7 +42,7 @@ impl MtlContext {
                 old_i_len + chunk_idx_bytes,
                 MTLResourceOptions::StorageModeShared,
             )
-            .map_err(|e| format!("setup_chunk_streaming: chunk index buffer: {e}"))?;
+            .map_err(|e| e.context("setup_chunk_streaming: chunk index buffer"))?;
 
         // Copy the build-time geometry into the start of the grown buffers so
         // every existing draw's offsets stay valid.
@@ -162,8 +162,9 @@ impl MtlContext {
         &mut self,
         draw_idx: usize,
         retire_frame: u64,
-    ) -> Result<(), String> {
-        let region = draw_slot::retire_chunk_slot(&mut self.draw.objects, draw_idx)?;
+    ) -> RenderResult<()> {
+        let region = draw_slot::retire_chunk_slot(&mut self.draw.objects, draw_idx)
+            .map_err(RenderError::Other)?;
         zero_buffer_region(
             &self.scene.vertex_buffer,
             region.vertex_offset as usize,
@@ -190,7 +191,8 @@ impl MtlContext {
         &mut self,
         draw_idx: usize,
         model: [[f32; 4]; 4],
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         draw_slot::set_chunk_model(&mut self.draw.objects, draw_idx, model)
+            .map_err(RenderError::Other)
     }
 }

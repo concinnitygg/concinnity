@@ -5,6 +5,7 @@
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::LodSlice;
 use concinnity_core::render::backend;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use objc2_metal::{MTLBuffer as _, MTLResourceOptions};
 
 use crate::metal::context::{MtlContext, bytes_of_slice};
@@ -30,7 +31,7 @@ impl MtlContext {
     pub(crate) fn rebuild_static_geometry(
         &mut self,
         changes: Vec<backend::DrawGeometryUpdate>,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         use std::collections::HashMap;
 
         // Stop the GPU + CPU pipelines so we can safely read the old
@@ -119,14 +120,14 @@ impl MtlContext {
                 let v_start = obj.vertex_offset / std::mem::size_of::<Vertex>();
                 let v_end = v_start + obj.vertex_count;
                 if v_end > old_v_slice.len() {
-                    return Err(format!(
+                    return Err(RenderError::Other(format!(
                         "rebuild_static_geometry: draw {} vertex region [{}, {}) out \
                          of bounds (buffer has {} vertices)",
                         draw_idx,
                         v_start,
                         v_end,
                         old_v_slice.len()
-                    ));
+                    )));
                 }
                 new_vertices.extend_from_slice(&old_v_slice[v_start..v_end]);
                 let old_base_u32 = if absolute_indices {
@@ -136,14 +137,14 @@ impl MtlContext {
                 };
                 let i_end = obj.index_offset + obj.index_count;
                 if i_end > old_i_slice.len() {
-                    return Err(format!(
+                    return Err(RenderError::Other(format!(
                         "rebuild_static_geometry: draw {} index region [{}, {}) out \
                          of bounds (buffer has {} indices)",
                         draw_idx,
                         obj.index_offset,
                         i_end,
                         old_i_slice.len()
-                    ));
+                    )));
                 }
                 if absolute_indices {
                     for &idx in &old_i_slice[obj.index_offset..i_end] {
@@ -156,14 +157,14 @@ impl MtlContext {
                 for slice in &obj.lod_alternates {
                     let alt_end = slice.index_offset + slice.index_count;
                     if alt_end > old_i_slice.len() {
-                        return Err(format!(
+                        return Err(RenderError::Other(format!(
                             "rebuild_static_geometry: draw {} LOD slice [{}, {}) out \
                              of bounds (buffer has {} indices)",
                             draw_idx,
                             slice.index_offset,
                             alt_end,
                             old_i_slice.len()
-                        ));
+                        )));
                     }
                     let alt_off = new_indices.len();
                     if absolute_indices {
@@ -199,11 +200,11 @@ impl MtlContext {
         }
 
         if new_vertices.is_empty() || new_indices.is_empty() {
-            return Err(
+            return Err(RenderError::Other(
                 "rebuild_static_geometry: post-rebuild buffers would be empty (no \
                  static draws to ship)"
-                    .into(),
-            );
+                    .to_string(),
+            ));
         }
 
         // Place new buffers sized to the rebuilt layout. The outgoing pair is
@@ -216,7 +217,7 @@ impl MtlContext {
                 bytes_of_slice(new_vertices.as_slice()),
                 MTLResourceOptions::StorageModeShared,
             )
-            .map_err(|e| format!("rebuild_static_geometry: vertex buffer: {e}"))?;
+            .map_err(|e| e.context("rebuild_static_geometry: vertex buffer"))?;
         let new_index_buffer = self
             .hw
             .allocator
@@ -224,7 +225,7 @@ impl MtlContext {
                 bytes_of_slice(new_indices.as_slice()),
                 MTLResourceOptions::StorageModeShared,
             )
-            .map_err(|e| format!("rebuild_static_geometry: index buffer: {e}"))?;
+            .map_err(|e| e.context("rebuild_static_geometry: index buffer"))?;
 
         // Apply the new per-draw layout.
         for (i, (v_off, v_count, i_off, i_count, base_v, lods)) in

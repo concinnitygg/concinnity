@@ -112,7 +112,7 @@ pub(super) fn build_spot_shadow(
             MTLResourceOptions::StorageModeShared,
         )
     }
-    .map_err(|e| format!("spot-shadow buffer: {e}"))?;
+    .map_err(|e| e.context("spot-shadow buffer"))?;
     Ok(SpotShadowState {
         map,
         buffer,

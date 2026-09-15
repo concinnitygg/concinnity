@@ -545,13 +545,11 @@ impl MtlHardware {
     // `reload_world`: clones of the device and command queue, with the window
     // and the graph queues moved out. The successor places into a fresh
     // allocator; the outgoing world releases into its own.
-    pub(super) fn hand_over(&mut self) -> Result<Self, String> {
+    pub(super) fn hand_over(&mut self) -> error::RenderResult<Self> {
         Ok(Self {
-            window: Some(
-                self.window
-                    .take()
-                    .ok_or("apply_world_reload: window already taken")?,
-            ),
+            window: Some(self.window.take().ok_or_else(|| {
+                error::RenderError::Other("apply_world_reload: window already taken".to_string())
+            })?),
             graph_queues: self.graph_queues.take(),
             allocator: DeviceAllocator::new(&self.device, self.swapchain_config.frames_in_flight),
             device: self.device.clone(),
@@ -1397,12 +1395,12 @@ impl MtlContext {
         src_draw_idx: usize,
         model: [[f32; 4]; 4],
         dst: draw_slot::SlotAlloc,
-    ) -> Result<(), String> {
+    ) -> error::RenderResult<()> {
         let src = self.draw.objects.get(src_draw_idx).ok_or_else(|| {
-            format!(
+            error::RenderError::Other(format!(
                 "clone_static_draw_object: src draw {} out of range",
                 src_draw_idx
-            )
+            ))
         })?;
         let obj = DrawObject {
             vertex_offset: src.vertex_offset,
@@ -1469,7 +1467,7 @@ impl MtlContext {
     // A vacated slot from [`Self::remove_decal`] is reused before growing
     // the slot table so a steady-state spawn/despawn pattern (bullet holes,
     // footprints) stays bounded.
-    pub(crate) fn add_decal(&mut self, record: decal::DecalRecord) -> Result<usize, String> {
+    pub(crate) fn add_decal(&mut self, record: decal::DecalRecord) -> error::RenderResult<usize> {
         if self.decal.pipeline.is_none() {
             let (ps, vbuf, ibuf, samp) = super::init::world_fx::build_decal_resources_for_runtime(
                 &self.hw.device,
@@ -1483,7 +1481,7 @@ impl MtlContext {
         self.decal
             .set
             .insert(record)
-            .map_err(|_| "add_decal: decal set is full".to_string())
+            .map_err(|_| error::RenderError::Other("add_decal: decal set is full".to_string()))
     }
 
     // Tombstone a runtime decal slot. The slot index returned by
@@ -1491,11 +1489,11 @@ impl MtlContext {
     // Returns an error when the index is out of range or already tombstoned.
     // The decal pipeline + unit-cube buffers are kept around so a later add
     // does not pay the rebuild cost.
-    pub(crate) fn remove_decal(&mut self, decal_id: usize) -> Result<(), String> {
+    pub(crate) fn remove_decal(&mut self, decal_id: usize) -> error::RenderResult<()> {
         self.decal
             .set
             .remove(decal_id)
-            .map_err(|e| format!("remove_decal: id {decal_id} {e}"))
+            .map_err(|e| error::RenderError::Other(format!("remove_decal: id {decal_id} {e}")))
     }
 
     // Append a particle-emitter record at runtime, returning a stable slot
@@ -1507,7 +1505,7 @@ impl MtlContext {
     pub(crate) fn add_emitter(
         &mut self,
         record: particles::ParticleEmitterRecord,
-    ) -> Result<usize, String> {
+    ) -> error::RenderResult<usize> {
         if self.particle.pipelines.is_none() {
             let pipelines = super::particle::build_particle_pipelines(
                 &self.hw.device,
@@ -1538,14 +1536,14 @@ impl MtlContext {
     // to call mid-frame between encode passes (a debug tool call runs in
     // the `DebugHook::tick` window before the world step). Returns an error
     // when the index is out of range or already tombstoned.
-    pub(crate) fn remove_emitter(&mut self, emitter_id: usize) -> Result<(), String> {
-        let rec_slot = self
-            .particle
-            .records
-            .get_mut(emitter_id)
-            .ok_or_else(|| format!("remove_emitter: id {} out of range", emitter_id))?;
+    pub(crate) fn remove_emitter(&mut self, emitter_id: usize) -> error::RenderResult<()> {
+        let rec_slot = self.particle.records.get_mut(emitter_id).ok_or_else(|| {
+            error::RenderError::Other(format!("remove_emitter: id {emitter_id} out of range"))
+        })?;
         if rec_slot.is_none() {
-            return Err(format!("remove_emitter: id {} already removed", emitter_id));
+            return Err(error::RenderError::Other(format!(
+                "remove_emitter: id {emitter_id} already removed"
+            )));
         }
         *rec_slot = None;
         if let Some(gpu_slot) = self.particle.emitter_state.get_mut(emitter_id) {
@@ -1651,16 +1649,16 @@ pub(super) fn bytes_of_slice<T: bytemuck::NoUninit>(slice: &[T]) -> &[u8] {
 pub(super) fn write_buffer_slice<T: Copy>(
     buffer: &ProtocolObject<dyn MTLBuffer>,
     data: &[T],
-) -> Result<(), String> {
+) -> error::RenderResult<()> {
     let bytes = std::mem::size_of_val(data);
     if bytes == 0 {
         return Ok(());
     }
     let len = buffer.length();
     if bytes > len {
-        return Err(format!(
+        return Err(error::RenderError::Other(format!(
             "buffer write of {bytes} bytes exceeds buffer length {len}"
-        ));
+        )));
     }
     // SAFETY: `buffer` is shared storage so `contents()` is a live CPU mapping, and the bounds
     // check above proved it holds `bytes`. `data` is a separate live borrow of exactly that
@@ -1681,15 +1679,15 @@ pub(super) fn write_buffer_region(
     buffer: &ProtocolObject<dyn MTLBuffer>,
     offset: usize,
     src: &[u8],
-) -> Result<(), String> {
+) -> error::RenderResult<()> {
     let len = buffer.length();
     if offset.checked_add(src.len()).is_none_or(|end| end > len) {
-        return Err(format!(
+        return Err(error::RenderError::Other(format!(
             "buffer write [{}, {}) exceeds buffer length {}",
             offset,
             offset.saturating_add(src.len()),
             len
-        ));
+        )));
     }
     if src.is_empty() {
         return Ok(());
@@ -1710,15 +1708,15 @@ pub(super) fn zero_buffer_region(
     buffer: &ProtocolObject<dyn MTLBuffer>,
     offset: usize,
     len: usize,
-) -> Result<(), String> {
+) -> error::RenderResult<()> {
     let buf_len = buffer.length();
     if offset.checked_add(len).is_none_or(|end| end > buf_len) {
-        return Err(format!(
+        return Err(error::RenderError::Other(format!(
             "buffer zero [{}, {}) exceeds buffer length {}",
             offset,
             offset.saturating_add(len),
             buf_len
-        ));
+        )));
     }
     if len == 0 {
         return Ok(());

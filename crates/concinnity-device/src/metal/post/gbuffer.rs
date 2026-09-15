@@ -9,7 +9,7 @@
 
 use crate::metal::error::allocation_failed;
 use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::uniforms::GBufferView;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -156,7 +156,7 @@ pub(crate) fn gbuffer_bindless_vertex_descriptor() -> Retained<MTLVertexDescript
 pub(crate) fn build_gbuffer_bindless_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     let vert_fn = slang_builtins::entry_function(
         device,
         &slang_builtins::GBUFFER_PREPASS_VERT_BINDLESS,
@@ -192,7 +192,11 @@ pub(crate) fn build_gbuffer_bindless_pipeline(
 
     device
         .newRenderPipelineStateWithDescriptor_error(&desc)
-        .map_err(|e| format!("failed to create G-buffer bindless pipeline: {:?}", e))
+        .map_err(|e| {
+            RenderError::ShaderCompile(format!(
+                "failed to create G-buffer bindless pipeline: {e:?}"
+            ))
+        })
 }
 
 // Encoder
@@ -234,7 +238,7 @@ impl MtlContext {
         view: &GBufferView,
         gpu: GbufferGpuBuffers,
         velocity_active: bool,
-    ) -> Result<u32, String> {
+    ) -> RenderResult<u32> {
         let Some(targets) = &self.gbuffer.targets else {
             return Ok(0);
         };
@@ -249,11 +253,11 @@ impl MtlContext {
         ) {
             (Some(n), Some(r), Some(v)) => (n, r, v),
             _ => {
-                return Err(
+                return Err(RenderError::Other(
                     "G-buffer pre-pass: the transient pool is missing a color channel; \
                      its build gate disagrees with the pre-pass's"
                         .to_string(),
-                );
+                ));
             }
         };
 
@@ -313,7 +317,9 @@ impl MtlContext {
             let enc = ScopedEncoder::new(
                 cmd_buf
                     .renderCommandEncoderWithDescriptor(&desc)
-                    .ok_or("failed to get G-buffer pre-pass encoder")?,
+                    .ok_or_else(|| {
+                        RenderError::Other("failed to get G-buffer pre-pass encoder".to_string())
+                    })?,
                 ns_string!("g-buffer prepass"),
             );
 

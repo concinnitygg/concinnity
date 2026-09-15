@@ -1,7 +1,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use super::error::allocation_failed;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::mipmap;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -22,16 +22,16 @@ pub(super) fn upload_texture(
     width: u32,
     height: u32,
     pixels: &[u8],
-) -> Result<PooledTexture, String> {
+) -> RenderResult<PooledTexture> {
     let base = (width as usize) * (height as usize) * 4;
     if pixels.len() < base {
-        return Err(format!(
+        return Err(RenderError::Other(format!(
             "pixel data too short for {}x{} RGBA texture ({} bytes, need {})",
             width,
             height,
             pixels.len(),
             base
-        ));
+        )));
     }
 
     let chain = mipmap::generate_mip_chain(width, height, pixels);
@@ -66,7 +66,7 @@ pub(super) fn upload_texture(
                 region,
                 mip,
                 std::ptr::NonNull::new(level.pixels.as_ptr() as *mut _)
-                    .ok_or("pixel slice is empty")?,
+                    .ok_or_else(|| RenderError::Other("pixel slice is empty".to_string()))?,
                 bytes_per_row,
             );
         }
@@ -82,7 +82,7 @@ pub(super) fn upload_texture(
 pub(super) fn upload_texture_image(
     alloc: &DeviceAllocator,
     image: &concinnity_core::bake::texture::TextureImage,
-) -> Result<PooledTexture, String> {
+) -> RenderResult<PooledTexture> {
     use concinnity_core::bake::texture::TextureFormat;
     let (pixel_format, block_bytes) = match image.format {
         TextureFormat::Bc1 => (MTLPixelFormat::BC1_RGBA, 8usize),
@@ -90,18 +90,16 @@ pub(super) fn upload_texture_image(
         TextureFormat::Bc5 => (MTLPixelFormat::BC5_RGUnorm, 16),
         TextureFormat::Bc7 => (MTLPixelFormat::BC7_RGBAUnorm, 16),
         TextureFormat::Rgba8 => {
-            let mip = image
-                .mips
-                .first()
-                .ok_or("RGBA8 texture image has no mip level")?;
+            let mip = image.mips.first().ok_or_else(|| {
+                RenderError::Other("RGBA8 texture image has no mip level".to_string())
+            })?;
             return upload_texture(alloc, mip.width, mip.height, &mip.data);
         }
     };
 
-    let base = image
-        .mips
-        .first()
-        .ok_or("compressed texture image has no mip level")?;
+    let base = image.mips.first().ok_or_else(|| {
+        RenderError::Other("compressed texture image has no mip level".to_string())
+    })?;
 
     let desc = TextureDesc {
         format: pixel_format,
@@ -120,14 +118,14 @@ pub(super) fn upload_texture_image(
         let bytes_per_row = blocks_x * block_bytes;
         let needed = bytes_per_row * blocks_y;
         if level.data.len() < needed {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "compressed mip {} ({}x{}) is {} bytes, need {}",
                 mip,
                 level.width,
                 level.height,
                 level.data.len(),
                 needed
-            ));
+            )));
         }
         // SAFETY: `region` covers exactly mip `mip` of `texture`, and the length check above proved
         // `level.data` holds at least `bytes_per_row * blocks_y` bytes.
@@ -144,8 +142,9 @@ pub(super) fn upload_texture_image(
             texture.replaceRegion_mipmapLevel_withBytes_bytesPerRow(
                 region,
                 mip,
-                std::ptr::NonNull::new(level.data.as_ptr() as *mut _)
-                    .ok_or("compressed mip data is empty")?,
+                std::ptr::NonNull::new(level.data.as_ptr() as *mut _).ok_or_else(|| {
+                    RenderError::Other("compressed mip data is empty".to_string())
+                })?,
                 bytes_per_row,
             );
         }
@@ -154,7 +153,7 @@ pub(super) fn upload_texture_image(
 }
 
 // Create a 1x1 opaque white RGBA texture used when no Texture asset is present.
-pub(super) fn create_fallback_texture(alloc: &DeviceAllocator) -> Result<PooledTexture, String> {
+pub(super) fn create_fallback_texture(alloc: &DeviceAllocator) -> RenderResult<PooledTexture> {
     upload_texture(alloc, 1, 1, &[255u8, 255, 255, 255])
 }
 
@@ -167,7 +166,7 @@ pub(super) fn create_fallback_texture(alloc: &DeviceAllocator) -> Result<PooledT
 // disabled and enabled cases.
 pub(super) fn create_shadow_map_fallback(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
-) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLTexture>>> {
     let desc = TextureDesc {
         kind: MTLTextureType::Type2DArray,
         format: MTLPixelFormat::Depth32Float,
@@ -177,7 +176,7 @@ pub(super) fn create_shadow_map_fallback(
     .build();
     let texture = device
         .newTextureWithDescriptor(&desc)
-        .ok_or("failed to create shadow map fallback texture")?;
+        .ok_or_else(|| allocation_failed("shadow map fallback texture"))?;
     let depth: f32 = 1.0;
     // SAFETY: `region` is the texture's single 1x1 texel and `depth` is one f32, matching the
     // Depth32Float format's 4-byte row stride.
@@ -196,7 +195,7 @@ pub(super) fn create_shadow_map_fallback(
             0,
             0,
             std::ptr::NonNull::new(std::ptr::addr_of!(depth) as *mut _)
-                .ok_or("depth ptr is null")?,
+                .ok_or_else(|| RenderError::Other("depth ptr is null".to_string()))?,
             4,
             4,
         );
@@ -212,16 +211,16 @@ pub(super) fn upload_cubemap(
     alloc: &DeviceAllocator,
     face_size: u32,
     bytes: &[u8],
-) -> Result<PooledTexture, String> {
+) -> RenderResult<PooledTexture> {
     let face_bytes = (face_size as usize) * (face_size as usize) * 4 * 4;
     let needed = 6 * face_bytes;
     if bytes.len() < needed {
-        return Err(format!(
+        return Err(RenderError::Other(format!(
             "cubemap data too short for face_size {}: {} bytes, need {}",
             face_size,
             bytes.len(),
             needed
-        ));
+        )));
     }
 
     let desc = TextureDesc {
@@ -257,7 +256,8 @@ pub(super) fn upload_cubemap(
                 region,
                 0,
                 face,
-                std::ptr::NonNull::new(face_ptr).ok_or("cube face pointer is null")?,
+                std::ptr::NonNull::new(face_ptr)
+                    .ok_or_else(|| RenderError::Other("cube face pointer is null".to_string()))?,
                 bytes_per_row,
                 bytes_per_image,
             );
@@ -283,7 +283,7 @@ pub(super) struct EnvironmentMapTextures {
 pub(super) fn create_fallback_cubemap(
     alloc: &DeviceAllocator,
     value: [f32; 4],
-) -> Result<PooledTexture, String> {
+) -> RenderResult<PooledTexture> {
     let desc = TextureDesc {
         kind: MTLTextureType::TypeCube,
         format: MTLPixelFormat::RGBA32Float,
@@ -311,8 +311,9 @@ pub(super) fn create_fallback_cubemap(
                 region,
                 0,
                 face,
-                std::ptr::NonNull::new(value.as_ptr() as *mut _)
-                    .ok_or("fallback cube value pointer null")?,
+                std::ptr::NonNull::new(value.as_ptr() as *mut _).ok_or_else(|| {
+                    RenderError::Other("fallback cube value pointer null".to_string())
+                })?,
                 bytes_per_row,
                 bytes_per_image,
             );
@@ -329,16 +330,16 @@ pub(super) fn upload_color_lut(
     alloc: &DeviceAllocator,
     size: u32,
     bytes: &[u8],
-) -> Result<PooledTexture, String> {
+) -> RenderResult<PooledTexture> {
     let n = size as usize;
     let needed = n * n * n * 4;
     if bytes.len() < needed {
-        return Err(format!(
+        return Err(RenderError::Other(format!(
             "color LUT data too short for size {}: {} bytes, need {}",
             size,
             bytes.len(),
             needed
-        ));
+        )));
     }
 
     let desc = TextureDesc {
@@ -370,7 +371,8 @@ pub(super) fn upload_color_lut(
             region,
             0,
             0,
-            std::ptr::NonNull::new(bytes.as_ptr() as *mut _).ok_or("color LUT pointer is null")?,
+            std::ptr::NonNull::new(bytes.as_ptr() as *mut _)
+                .ok_or_else(|| RenderError::Other("color LUT pointer is null".to_string()))?,
             bytes_per_row,
             bytes_per_image,
         );
@@ -382,7 +384,7 @@ pub(super) fn upload_color_lut(
 // Trilinear interpolation across the corners reproduces the input exactly, so
 // the composite pass becomes a no-op when no `ColorLut` asset is declared.
 // The 3D LUT binding must still resolve to a valid texture regardless.
-pub(super) fn create_fallback_color_lut(alloc: &DeviceAllocator) -> Result<PooledTexture, String> {
+pub(super) fn create_fallback_color_lut(alloc: &DeviceAllocator) -> RenderResult<PooledTexture> {
     let mut data = Vec::with_capacity(2 * 2 * 2 * 4);
     for b in 0..2u8 {
         for g in 0..2u8 {
@@ -408,14 +410,16 @@ pub(super) fn upload_environment_map(
     irradiance_bytes: &[u8],
     prefilter_face: u32,
     mip_bytes: &[&[u8]],
-) -> Result<EnvironmentMapTextures, String> {
+) -> RenderResult<EnvironmentMapTextures> {
     if mip_bytes.is_empty() {
-        return Err("envmap upload: prefilter mip_bytes must not be empty".into());
+        return Err(RenderError::Other(
+            "envmap upload: prefilter mip_bytes must not be empty".to_string(),
+        ));
     }
     let irradiance = upload_cubemap(alloc, irradiance_face, irradiance_bytes)
-        .map_err(|e| format!("envmap irradiance: {}", e))?;
+        .map_err(|e| e.context("envmap irradiance"))?;
     let prefilter = upload_prefilter_cube(alloc, prefilter_face, mip_bytes)
-        .map_err(|e| format!("envmap prefilter: {}", e))?;
+        .map_err(|e| e.context("envmap prefilter"))?;
     Ok(EnvironmentMapTextures {
         irradiance,
         prefilter,
@@ -429,7 +433,7 @@ fn upload_prefilter_cube(
     alloc: &DeviceAllocator,
     face_size: u32,
     mip_bytes: &[&[u8]],
-) -> Result<PooledTexture, String> {
+) -> RenderResult<PooledTexture> {
     let mip_count = mip_bytes.len() as u32;
     let desc = TextureDesc {
         kind: MTLTextureType::TypeCube,
@@ -445,20 +449,20 @@ fn upload_prefilter_cube(
     for (mip, bytes) in mip_bytes.iter().enumerate() {
         let mip_face_size = face_size >> mip;
         if mip_face_size == 0 {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "prefilter mip {} would have zero face size (face_size {} too small)",
                 mip, face_size
-            ));
+            )));
         }
         let face_bytes = (mip_face_size as usize) * (mip_face_size as usize) * 4 * 4;
         let needed = 6 * face_bytes;
         if bytes.len() < needed {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "prefilter mip {} too short: {} bytes, need {}",
                 mip,
                 bytes.len(),
                 needed
-            ));
+            )));
         }
         let bytes_per_row = (mip_face_size as usize) * 4 * 4;
         let bytes_per_image = bytes_per_row * (mip_face_size as usize);
@@ -481,7 +485,9 @@ fn upload_prefilter_cube(
                     region,
                     mip,
                     face,
-                    std::ptr::NonNull::new(face_ptr).ok_or("prefilter face pointer null")?,
+                    std::ptr::NonNull::new(face_ptr).ok_or_else(|| {
+                        RenderError::Other("prefilter face pointer null".to_string())
+                    })?,
                     bytes_per_row,
                     bytes_per_image,
                 );
@@ -499,7 +505,7 @@ pub(super) fn create_shadow_map_array(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     size: u32,
     layers: u32,
-) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLTexture>>> {
     let desc = TextureDesc {
         kind: MTLTextureType::Type2DArray,
         format: MTLPixelFormat::Depth32Float,
@@ -513,7 +519,7 @@ pub(super) fn create_shadow_map_array(
     .build();
     device
         .newTextureWithDescriptor(&desc)
-        .ok_or("failed to create shadow map array texture".to_string())
+        .ok_or_else(|| allocation_failed("shadow map array texture"))
 }
 
 // Off-screen HDR render targets for the post-process pipeline. The main pass
@@ -739,18 +745,22 @@ pub(super) fn create_lut_texture(
     texels: &[f32],
     size: u32,
     components: usize,
-) -> Result<PooledTexture, String> {
+) -> RenderResult<PooledTexture> {
     let needed = (size as usize) * (size as usize) * components;
     if texels.len() < needed {
-        return Err(format!(
+        return Err(RenderError::Other(format!(
             "LUT data too short for {size}x{size}x{components}: {} values, need {needed}",
             texels.len()
-        ));
+        )));
     }
     let format = match components {
         2 => MTLPixelFormat::RG32Float,
         4 => MTLPixelFormat::RGBA32Float,
-        n => return Err(format!("unsupported LUT component count {n}")),
+        n => {
+            return Err(RenderError::Other(format!(
+                "unsupported LUT component count {n}"
+            )));
+        }
     };
 
     let desc = TextureDesc {
@@ -780,7 +790,8 @@ pub(super) fn create_lut_texture(
         texture.replaceRegion_mipmapLevel_withBytes_bytesPerRow(
             region,
             0,
-            std::ptr::NonNull::new(ptr).ok_or("LUT texel pointer is null")?,
+            std::ptr::NonNull::new(ptr)
+                .ok_or_else(|| RenderError::Other("LUT texel pointer is null".to_string()))?,
             bytes_per_row,
         );
     }

@@ -7,7 +7,7 @@ use concinnity_core::bake;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::{AreaLightData, GpuLight};
 use concinnity_core::render::backend_init::{MediaPayloads, SceneData};
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::ltc;
 use objc2_metal::{
     MTLDevice as _, MTLResourceOptions, MTLSamplerAddressMode, MTLSamplerDescriptor,
@@ -65,7 +65,7 @@ pub(super) fn build_scene_assets(
             MTLResourceOptions::StorageModeShared,
         )
     }
-    .map_err(|e| format!("vertex buffer: {e}"))?;
+    .map_err(|e| e.context("vertex buffer"))?;
 
     let index_buffer = if indices.is_empty() {
         allocator.alloc_buffer(
@@ -78,7 +78,7 @@ pub(super) fn build_scene_assets(
             MTLResourceOptions::StorageModeShared,
         )
     }
-    .map_err(|e| format!("index buffer: {e}"))?;
+    .map_err(|e| e.context("index buffer"))?;
 
     // Per-scene local-light storage buffer bound to the forward pass at
     // fragment buffer(8). Metal rejects a zero-length buffer, so a scene with
@@ -95,7 +95,7 @@ pub(super) fn build_scene_assets(
             MTLResourceOptions::StorageModeShared,
         )
     }
-    .map_err(|e| format!("local-light buffer: {e}"))?;
+    .map_err(|e| e.context("local-light buffer"))?;
 
     // Per-scene rect area-light table, indexed by `GpuLight.data_index`.
     // Static like the lights themselves, so it uploads once. Metal rejects a
@@ -112,7 +112,7 @@ pub(super) fn build_scene_assets(
             MTLResourceOptions::StorageModeShared,
         )
     }
-    .map_err(|e| format!("area-light buffer: {e}"))?;
+    .map_err(|e| e.context("area-light buffer"))?;
 
     // Area-light LTC tables. Scene-independent (they depend only on the
     // build-time fit), so they are created unconditionally and the shader
@@ -135,7 +135,8 @@ pub(super) fn build_scene_assets(
             .iter()
             .enumerate()
             .map(|(i, image)| {
-                upload_texture_image(allocator, image).map_err(|e| format!("texture[{}]: {}", i, e))
+                upload_texture_image(allocator, image)
+                    .map_err(|e| e.context(format_args!("texture[{i}]")))
             })
             .collect::<Result<Vec<_>, _>>()?
     };
@@ -147,9 +148,9 @@ pub(super) fn build_scene_assets(
     // pool) at their own handle; only these two live in `fallback_textures`,
     // past the last real texture.
     let flat_normal = upload_texture(allocator, 1, 1, &[128u8, 128, 255, 255])
-        .map_err(|e| format!("flat normal fallback: {}", e))?;
+        .map_err(|e| e.context("flat normal fallback"))?;
     let white = upload_texture(allocator, 1, 1, &[255u8, 255, 255, 255])
-        .map_err(|e| format!("white fallback: {}", e))?;
+        .map_err(|e| e.context("white fallback"))?;
     let fallback_textures = vec![flat_normal, white];
 
     // The bindless static pass binds every texture plus the flat-normal
@@ -208,7 +209,7 @@ pub(super) fn build_scene_assets(
     // detect the fallback and skip IBL math.
     let env_map = if let Some(bytes) = media.env_map_bytes {
         let view = bake::environment_map::deserialize(bytes)
-            .map_err(|e| format!("EnvironmentMap payload malformed: {}", e))?;
+            .map_err(|e| RenderError::Other(format!("EnvironmentMap payload malformed: {e}")))?;
         upload_environment_map(
             allocator,
             view.irradiance_face,
@@ -229,7 +230,7 @@ pub(super) fn build_scene_assets(
     // texture. With the identity LUT the grade is a no-op at any strength.
     let color_lut = if let Some(bytes) = media.color_lut_bytes {
         let (size, data) = bake::color_lut::deserialize(bytes)
-            .map_err(|e| format!("ColorLut payload malformed: {}", e))?;
+            .map_err(|e| RenderError::Other(format!("ColorLut payload malformed: {e}")))?;
         upload_color_lut(allocator, size, data)?
     } else {
         create_fallback_color_lut(allocator)?

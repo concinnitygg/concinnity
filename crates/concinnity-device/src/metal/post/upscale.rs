@@ -11,6 +11,7 @@
 //! its sub-pixel offset.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::render::error::{RenderError, RenderResult};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLDevice as _, MTLPixelFormat, MTLTexture, MTLTextureUsage};
@@ -18,6 +19,7 @@ use objc2_metal_fx::{MTLFXTemporalScaler, MTLFXTemporalScalerBase, MTLFXTemporal
 
 use crate::metal::context::MtlContext;
 use crate::metal::descriptors::TextureDesc;
+use crate::metal::error::allocation_failed;
 
 // All MetalFX-temporal-upscaling state grouped into one feature unit: the
 // scaler instance, the input/output scale ratio, the per-frame projection
@@ -113,7 +115,7 @@ impl MetalFXUpscaler {
         output_width: u32,
         output_height: u32,
         scale: f32,
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         // Apple's `inputContentMin/MaxScale` reports the OUTPUT-over-INPUT
         // ratio: a 1.0 minimum means "the smallest upscale is no upscale";
         // a 3.0 maximum means "the largest upscale is 3× per axis". Our
@@ -164,8 +166,10 @@ impl MetalFXUpscaler {
 
         // SAFETY: `descriptor` is fully configured above and `device` is live; MetalFX returns None
         // rather than faulting when the configuration is unsupported.
-        let scaler = unsafe { descriptor.newTemporalScalerWithDevice(device) }
-            .ok_or_else(|| "MetalFX: failed to create temporal scaler".to_string())?;
+        let scaler =
+            unsafe { descriptor.newTemporalScalerWithDevice(device) }.ok_or_else(|| {
+                RenderError::Other("MetalFX: failed to create temporal scaler".to_string())
+            })?;
 
         // The scaler enforces a minimum texture-usage set on the output
         // texture; query it and union with the bloom + composite read
@@ -186,7 +190,7 @@ impl MetalFXUpscaler {
         .build();
         let output = device
             .newTextureWithDescriptor(&output_desc)
-            .ok_or("MetalFX: failed to create upscaler output texture")?;
+            .ok_or_else(|| allocation_failed("MetalFX upscaler output texture"))?;
 
         Ok(MetalFXUpscaler {
             scaler,
@@ -220,22 +224,20 @@ impl MtlContext {
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         scene_pre_taa: &Retained<ProtocolObject<dyn MTLTexture>>,
-    ) -> Result<u32, String> {
-        let upscaler = self
-            .upscale
-            .scaler
-            .as_ref()
-            .ok_or("Upscale enabled but upscaler missing")?;
+    ) -> RenderResult<u32> {
+        let upscaler = self.upscale.scaler.as_ref().ok_or_else(|| {
+            RenderError::Other("Upscale enabled but upscaler missing".to_string())
+        })?;
         // The pre-pass depth stays feature-owned; its motion channel is
         // pool-owned and fetched at encode time.
-        let gbuf = self
-            .gbuffer
-            .targets
-            .as_ref()
-            .ok_or("Upscale enabled but G-buffer targets missing")?;
-        let velocity = self
-            .gbuffer_velocity()
-            .ok_or("Upscale enabled but the pooled G-buffer velocity is missing")?;
+        let gbuf = self.gbuffer.targets.as_ref().ok_or_else(|| {
+            RenderError::Other("Upscale enabled but G-buffer targets missing".to_string())
+        })?;
+        let velocity = self.gbuffer_velocity().ok_or_else(|| {
+            RenderError::Other(
+                "Upscale enabled but the pooled G-buffer velocity is missing".to_string(),
+            )
+        })?;
 
         // SAFETY: every texture set here is owned by `self` or the upscaler and outlives the encode
         // below, and each matches the format the descriptor declared for that slot.
