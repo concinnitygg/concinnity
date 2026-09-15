@@ -301,7 +301,7 @@ impl VkContext {
     fn build_rt_runtime(
         &mut self,
         settings: rt_reflections::RtReflectionSettings,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let accel = match crate::vulkan::raytrace::build_rt_accel(
             crate::vulkan::raytrace::RtDeviceCtx {
                 alloc: &self.hw.alloc,

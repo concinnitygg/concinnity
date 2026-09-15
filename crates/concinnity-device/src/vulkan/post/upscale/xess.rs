@@ -21,7 +21,7 @@
 )]
 
 use ash::vk;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use std::cell::Cell;
 use std::ffi::{CString, c_char, c_void};
 use std::ptr;
@@ -569,7 +569,7 @@ impl VkUpscaleBackend for XessUpscaler {
         cmd: vk::CommandBuffer,
         inputs: UpscaleInputs<'_>,
         camera: UpscaleCamera,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let UpscaleInputs {
             color,
             depth,
@@ -619,7 +619,7 @@ impl VkUpscaleBackend for XessUpscaler {
         // live for the call.
         let rc = unsafe { (self.xess.execute)(self.ctx, cmd, &params) };
         if rc != XESS_RESULT_SUCCESS {
-            return Err(format!("xessVKExecute returned {rc}"));
+            return Err(RenderError::Other(format!("xessVKExecute returned {rc}")));
         }
         Ok(())
     }

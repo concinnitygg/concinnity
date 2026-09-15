@@ -13,6 +13,7 @@
 use concinnity_core::components::{InputKey, WindowMode};
 use concinnity_core::render::display_mode;
 use concinnity_core::render::display_mode::DisplayMode;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::input;
 use concinnity_core::render::input::InputSnapshot;
 use concinnity_core::render::keymap::KeyMap;
@@ -202,14 +203,15 @@ impl GlfwWindow {
         mode: &WindowMode,
         resizable: bool,
         title_bar: bool,
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         concinnity_core::window_policy::assert_windows_allowed("the GLFW window");
 
         // No error callback: glfw-rs transmutes the code into an Error enum
         // that stops at GLFW 3.3, so a 3.4 code (PlatformUnavailable on a
         // headless host, FeatureUnavailable on Wayland) aborts the process.
-        let mut glfw = glfw::init_no_callbacks()
-            .map_err(|e| format!("glfw init: {e} (no window platform available?)"))?;
+        let mut glfw = glfw::init_no_callbacks().map_err(|e| {
+            RenderError::Other(format!("glfw init: {e} (no window platform available?)"))
+        })?;
 
         glfw.window_hint(glfw::WindowHint::ClientApi(glfw::ClientApiHint::NoApi));
         glfw.window_hint(glfw::WindowHint::Resizable(resizable));
@@ -233,12 +235,16 @@ impl GlfwWindow {
         let (mut window, events) = match mode {
             WindowMode::Windowed => glfw
                 .create_window(width, height, title, glfw::WindowMode::Windowed)
-                .ok_or_else(|| "Failed to create GLFW window (windowed)".to_string())?,
+                .ok_or_else(|| {
+                    RenderError::Other("Failed to create GLFW window (windowed)".to_string())
+                })?,
 
             WindowMode::Fullscreen => glfw.with_primary_monitor(|glfw, monitor| {
                 let monitor = monitor.ok_or("No primary monitor")?;
                 glfw.create_window(width, height, title, glfw::WindowMode::FullScreen(monitor))
-                    .ok_or_else(|| "Failed to create GLFW window (fullscreen)".to_string())
+                    .ok_or_else(|| {
+                        RenderError::Other("Failed to create GLFW window (fullscreen)".to_string())
+                    })
             })?,
 
             WindowMode::Borderless => glfw.with_primary_monitor(|glfw, monitor| {
@@ -253,7 +259,9 @@ impl GlfwWindow {
                     title,
                     glfw::WindowMode::Windowed, // borderless = undecorated windowed
                 )
-                .ok_or_else(|| "Failed to create GLFW window (borderless)".to_string())
+                .ok_or_else(|| {
+                    RenderError::Other("Failed to create GLFW window (borderless)".to_string())
+                })
             })?,
         };
 
@@ -731,7 +739,7 @@ impl GlfwWindow {
         &mut self,
         _entry: &ash::Entry,
         instance: &ash::Instance,
-    ) -> Result<ash::vk::SurfaceKHR, String> {
+    ) -> RenderResult<ash::vk::SurfaceKHR> {
         use ash::vk::Handle;
         let mut raw_surface: usize = 0;
         // SAFETY: `instance.handle()` is the live Vulkan instance and `raw_surface` is a live local
@@ -744,8 +752,9 @@ impl GlfwWindow {
             )
         };
         if result != 0 {
-            Err(format!(
-                "glfwCreateWindowSurface failed: VkResult({result})"
+            Err(super::error::map_vk_result(
+                ash::vk::Result::from_raw(result),
+                "glfwCreateWindowSurface",
             ))
         } else {
             Ok(ash::vk::SurfaceKHR::from_raw(raw_surface as u64))

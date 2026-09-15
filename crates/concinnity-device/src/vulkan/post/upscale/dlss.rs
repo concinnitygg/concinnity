@@ -19,7 +19,7 @@
 //! Validated against NGX SDK 1.5.0 by the constant + layout asserts in the tests.
 
 use ash::vk;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use std::cell::Cell;
 use std::ffi::{CString, c_char, c_void};
 use std::ptr;
@@ -628,7 +628,7 @@ impl VkUpscaleBackend for DlssUpscaler {
         cmd: vk::CommandBuffer,
         inputs: UpscaleInputs<'_>,
         camera: UpscaleCamera,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let UpscaleInputs {
             color,
             depth,
@@ -730,7 +730,9 @@ impl VkUpscaleBackend for DlssUpscaler {
             NVSDK_NGX_VULKAN_EvaluateFeature_C(cmd, self.handle, self.params, ptr::null())
         };
         if !ngx_succeeded(rc) {
-            return Err(format!("NVSDK_NGX_VULKAN_EvaluateFeature returned {rc:#x}"));
+            return Err(RenderError::Other(format!(
+                "NVSDK_NGX_VULKAN_EvaluateFeature returned {rc:#x}"
+            )));
         }
         Ok(())
     }

@@ -176,7 +176,7 @@ fn create_hiz_view(
     image: vk::Image,
     base_mip: u32,
     level_count: u32,
-) -> Result<vk::ImageView, String> {
+) -> RenderResult<vk::ImageView> {
     let info = vk::ImageViewCreateInfo::default()
         .image(image)
         .view_type(vk::ImageViewType::TYPE_2D)
@@ -190,7 +190,8 @@ fn create_hiz_view(
         });
     // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
     // names belongs to this device.
-    unsafe { device.create_image_view(&info, None) }.map_err(|e| format!("hiz view: {e}"))
+    unsafe { device.create_image_view(&info, None) }
+        .map_err(|e| super::error::map_vk_result(e, "hiz view"))
 }
 
 // Build the phase-1 SPD and tail pipelines for the given MSAA mode. Returns the

@@ -482,11 +482,7 @@ fn create_cube_image(
 }
 
 // All-mips CUBE view, the shape a sampler reads.
-fn create_cube_view(
-    device: &VkDevice,
-    image: vk::Image,
-    mips: u32,
-) -> Result<vk::ImageView, String> {
+fn create_cube_view(device: &VkDevice, image: vk::Image, mips: u32) -> RenderResult<vk::ImageView> {
     let info = vk::ImageViewCreateInfo::default()
         .image(image)
         .view_type(vk::ImageViewType::CUBE)
@@ -494,7 +490,8 @@ fn create_cube_view(
         .subresource_range(cube_range(mips));
     // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
     // names belongs to this device.
-    unsafe { device.create_image_view(&info, None) }.map_err(|e| format!("probe cube view: {e}"))
+    unsafe { device.create_image_view(&info, None) }
+        .map_err(|e| super::error::map_vk_result(e, "probe cube view"))
 }
 
 // One single-mip 2D_ARRAY storage view per mip. A cube is a six-layer array, so
@@ -503,7 +500,7 @@ fn mip_storage_views(
     device: &VkDevice,
     image: vk::Image,
     mips: u32,
-) -> Result<Vec<vk::ImageView>, String> {
+) -> RenderResult<Vec<vk::ImageView>> {
     (0..mips)
         .map(|mip| {
             let info = vk::ImageViewCreateInfo::default()
@@ -520,7 +517,7 @@ fn mip_storage_views(
             // SAFETY: the create-info and every slice it borrows are live for the call, and each
             // handle it names belongs to this device.
             unsafe { device.create_image_view(&info, None) }
-                .map_err(|e| format!("probe mip {mip} view: {e}"))
+                .map_err(|e| super::error::map_vk_result(e, &format!("probe mip {mip} view")))
         })
         .collect()
 }

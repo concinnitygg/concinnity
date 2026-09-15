@@ -240,7 +240,7 @@ pub trait CompositeEncoder {
         idx: usize,
         call: &TextDrawCall,
         cache: &mut TextBindCache,
-    ) -> Result<(), String>;
+    ) -> crate::render::error::RenderResult<()>;
     /// End the pass: DX transitions the back-buffer back to PRESENT; VK ends the
     /// render pass. Runs however the chain leaves, a failed text draw included,
     /// so no backend is left with a pass or a resource state half-open. Nothing
@@ -261,7 +261,7 @@ pub fn encode_composite_chain<E: CompositeEncoder>(
     rec: &E::Rec,
     args: &E::Args,
     text_calls: &[TextDrawCall],
-) -> Result<(), String> {
+) -> crate::render::error::RenderResult<()> {
     enc.begin_composite(rec, args);
     enc.composite_draw(rec, args);
     let mut result = Ok(());
@@ -575,7 +575,7 @@ mod tests {
             idx: usize,
             call: &TextDrawCall,
             cache: &mut TextBindCache,
-        ) -> Result<(), String> {
+        ) -> crate::render::error::RenderResult<()> {
             let mut n = self.text_seen.borrow_mut();
             // The driver's index and the encoder's own call count must agree, so
             // a backend addressing pre-uploaded geometry by position can trust it.

@@ -29,7 +29,7 @@
 
 use ash::vk;
 use ash::vk::Handle;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use std::cell::Cell;
 use std::ffi::c_void;
 use std::ptr;
@@ -621,7 +621,7 @@ impl VkUpscaleBackend for FsrUpscaler {
         cmd: vk::CommandBuffer,
         inputs: UpscaleInputs<'_>,
         camera: UpscaleCamera,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let UpscaleInputs {
             color,
             depth,
@@ -742,7 +742,9 @@ impl VkUpscaleBackend for FsrUpscaler {
         };
         let _ = &mut desc.header;
         if rc != FFX_API_RETURN_OK {
-            return Err(format!("ffxDispatch (upscale, vulkan) returned {rc}"));
+            return Err(RenderError::Other(format!(
+                "ffxDispatch (upscale, vulkan) returned {rc}"
+            )));
         }
         Ok(())
     }

@@ -1,19 +1,21 @@
 //! Vulkan physical/logical device selection and queue-family queries.
 
 use ash::{Device, vk};
+use concinnity_core::render::error::{RenderError, RenderResult};
 use std::ffi::{CStr, CString, c_void};
 
+use super::error::map_vk_result;
 use crate::vulkan::post::{ResolvedBackend, UpscaleSdk};
 
 pub(super) fn pick_physical_device(
     instance: &ash::Instance,
     surface_loader: &ash::khr::surface::Instance,
     surface: vk::SurfaceKHR,
-) -> Result<(vk::PhysicalDevice, u32, u32), String> {
+) -> RenderResult<(vk::PhysicalDevice, u32, u32)> {
     // SAFETY: an enumeration query on a live instance handle; it only reads, and ash sizes the
     // output vector from the count the driver reports.
     let devices = unsafe { instance.enumerate_physical_devices() }
-        .map_err(|e| format!("enumerate physical devices: {e}"))?;
+        .map_err(|e| map_vk_result(e, "enumerate physical devices"))?;
     for pd in devices {
         if let Ok((gf, pf)) = query_queue_families(instance, pd, surface_loader, surface) {
             let extensions =
@@ -31,7 +33,9 @@ pub(super) fn pick_physical_device(
             }
         }
     }
-    Err("no suitable Vulkan physical device found".to_string())
+    Err(RenderError::Other(
+        "no suitable Vulkan physical device found".to_string(),
+    ))
 }
 
 pub(super) fn query_queue_families(
@@ -39,7 +43,7 @@ pub(super) fn query_queue_families(
     pd: vk::PhysicalDevice,
     surface_loader: &ash::khr::surface::Instance,
     surface: vk::SurfaceKHR,
-) -> Result<(u32, u32), String> {
+) -> RenderResult<(u32, u32)> {
     // SAFETY: a property query on a live handle; it only reads.
     let families = unsafe { instance.get_physical_device_queue_family_properties(pd) };
     let mut graphics = None;
@@ -57,7 +61,7 @@ pub(super) fn query_queue_families(
     }
     match (graphics, present) {
         (Some(g), Some(p)) => Ok((g, p)),
-        _ => Err("no suitable queue families".to_string()),
+        _ => Err(RenderError::Other("no suitable queue families".to_string())),
     }
 }
 
@@ -99,7 +103,7 @@ pub(super) fn create_logical_device(
     present_family: u32,
     validation: bool,
     upscaler_sdk: &UpscaleSdk,
-) -> Result<LogicalDevice, String> {
+) -> RenderResult<LogicalDevice> {
     let priority = [1.0f32];
     let mut queue_infos = vec![
         vk::DeviceQueueCreateInfo::default()
@@ -472,7 +476,7 @@ pub(super) fn create_logical_device(
         // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
         // it names belongs to this device.
         let device = unsafe { instance.create_device(pd, &device_info, None) }
-            .map_err(|e| format!("create device (xess features): {e}"))?;
+            .map_err(|e| map_vk_result(e, "create device (xess features)"))?;
         // Neither RT nor update-after-bind is ever co-enabled with XeSS (see
         // `rt_capable` / `want_update_after_bind` above).
         return Ok(LogicalDevice {
@@ -518,7 +522,7 @@ pub(super) fn create_logical_device(
     // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
     // names belongs to this device.
     let device = unsafe { instance.create_device(pd, &device_info, None) }
-        .map_err(|e| format!("create device: {e}"))?;
+        .map_err(|e| map_vk_result(e, "create device"))?;
     Ok(LogicalDevice {
         device,
         memory_budget: has_memory_budget,

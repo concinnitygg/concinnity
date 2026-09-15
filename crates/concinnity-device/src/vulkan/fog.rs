@@ -712,7 +712,7 @@ fn create_volume_image(alloc: &DeviceAllocator) -> RenderResult<PooledImage> {
 
 // A whole-image 3D view of the froxel volume (used for both the compute
 // storage bind and the fragment sampled bind).
-fn create_volume_view(device: &VkDevice, image: vk::Image) -> Result<vk::ImageView, String> {
+fn create_volume_view(device: &VkDevice, image: vk::Image) -> RenderResult<vk::ImageView> {
     let info = vk::ImageViewCreateInfo::default()
         .image(image)
         .view_type(vk::ImageViewType::TYPE_3D)
@@ -726,7 +726,8 @@ fn create_volume_view(device: &VkDevice, image: vk::Image) -> Result<vk::ImageVi
         });
     // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
     // names belongs to this device.
-    unsafe { device.create_image_view(&info, None) }.map_err(|e| format!("fog volume view: {e}"))
+    unsafe { device.create_image_view(&info, None) }
+        .map_err(|e| super::error::map_vk_result(e, "fog volume view"))
 }
 
 // Linear clamp-to-edge sampler for the trilinear volume read.

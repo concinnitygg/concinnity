@@ -7,7 +7,7 @@
 //! GPU buffers are allocated.
 
 use concinnity_core::gfx::render_types::{CompositeParams, TextDrawCall, TextUniforms, TextVertex};
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::fullscreen;
 use concinnity_core::render::fullscreen::TextBindCache;
 use windows::Win32::Foundation::RECT;
@@ -174,7 +174,7 @@ impl fullscreen::CompositeEncoder for DxContext {
         _idx: usize,
         call: &TextDrawCall,
         binds: &mut TextBindCache,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         if call.vertices.is_empty() || self.text.atlas_srv_gpus.is_empty() {
             return Ok(());
         }
@@ -293,6 +293,6 @@ impl DxContext {
                 0
             },
         };
-        fullscreen::encode_composite_chain(self, cmd, &args, text_calls).map_err(RenderError::Other)
+        fullscreen::encode_composite_chain(self, cmd, &args, text_calls)
     }
 }

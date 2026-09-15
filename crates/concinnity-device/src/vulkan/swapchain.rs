@@ -67,14 +67,14 @@ impl VkContext {
     // The extent a rebuild would create the swapchain at, read from the surface
     // instead of the window. See `rebuild_swapchain` for why the distinction
     // matters.
-    pub(super) fn surface_extent(&self) -> Result<vk::Extent2D, String> {
+    pub(super) fn surface_extent(&self) -> RenderResult<vk::Extent2D> {
         // SAFETY: a property query on a live handle; it only reads.
         let caps = unsafe {
             self.hw
                 .surface_loader
                 .get_physical_device_surface_capabilities(self.hw.physical_device, self.hw.surface)
         }
-        .map_err(|e| format!("surface caps: {e}"))?;
+        .map_err(|e| super::error::map_vk_result(e, "surface caps"))?;
         let (width, height) = self.window().framebuffer_size();
         Ok(resolve_swapchain_extent(
             &caps,
@@ -888,7 +888,7 @@ pub(super) fn create_swapchain_inner(
     surface: &SwapchainSurface,
     families: SwapchainQueueFamilies,
     config: SwapchainConfig,
-) -> Result<(vk::SwapchainKHR, Vec<vk::Image>, vk::Format, vk::Extent2D), String> {
+) -> RenderResult<(vk::SwapchainKHR, Vec<vk::Image>, vk::Format, vk::Extent2D)> {
     let &SwapchainSurface {
         instance: _instance,
         device: _device,
@@ -911,14 +911,14 @@ pub(super) fn create_swapchain_inner(
     use concinnity_core::render::hdr_output::{HdrEncoding, HdrOutputMode};
     // SAFETY: a property query on a live handle; it only reads.
     let caps = unsafe { surface_loader.get_physical_device_surface_capabilities(pd, surface) }
-        .map_err(|e| format!("surface caps: {e}"))?;
+        .map_err(|e| super::error::map_vk_result(e, "surface caps"))?;
     // SAFETY: a property query on a live handle; it only reads.
     let formats = unsafe { surface_loader.get_physical_device_surface_formats(pd, surface) }
-        .map_err(|e| format!("surface formats: {e}"))?;
+        .map_err(|e| super::error::map_vk_result(e, "surface formats"))?;
     let present_modes =
         // SAFETY: a property query on a live handle; it only reads.
         unsafe { surface_loader.get_physical_device_surface_present_modes(pd, surface) }
-            .map_err(|e| format!("present modes: {e}"))?;
+            .map_err(|e| super::error::map_vk_result(e, "present modes"))?;
 
     // Pick surface format. scRGB HDR: `R16G16B16A16_SFLOAT` + scRGB-linear
     // (Rec.709 primaries, gamma 1.0, extended range; `1.0` = SDR reference
@@ -1019,7 +1019,7 @@ pub(super) fn create_swapchain_inner(
     // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
     // names belongs to this device.
     let swapchain = unsafe { swapchain_loader.create_swapchain(&sc_info, None) }
-        .map_err(|e| format!("create swapchain: {e}"))?;
+        .map_err(|e| super::error::map_vk_result(e, "create swapchain"))?;
 
     if old_swapchain != vk::SwapchainKHR::null() {
         // SAFETY: `old_swapchain` was created from this device and was retired into the new
@@ -1030,7 +1030,7 @@ pub(super) fn create_swapchain_inner(
 
     // SAFETY: a property query on a live handle; it only reads.
     let images = unsafe { swapchain_loader.get_swapchain_images(swapchain) }
-        .map_err(|e| format!("get swapchain images: {e}"))?;
+        .map_err(|e| super::error::map_vk_result(e, "get swapchain images"))?;
 
     Ok((swapchain, images, surface_format.format, extent))
 }
@@ -1039,7 +1039,7 @@ pub(super) fn create_swapchain_image_views(
     device: &VkDevice,
     images: &[vk::Image],
     format: vk::Format,
-) -> Result<Vec<vk::ImageView>, String> {
+) -> RenderResult<Vec<vk::ImageView>> {
     images
         .iter()
         .map(|&img| create_image_view(device, img, format, vk::ImageAspectFlags::COLOR))
@@ -1108,7 +1108,7 @@ pub(super) fn create_main_framebuffers(
     resolve_images: &[GpuImage],
     extent: vk::Extent2D,
     msaa: vk::SampleCountFlags,
-) -> Result<Vec<OwnedFramebuffer>, String> {
+) -> RenderResult<Vec<OwnedFramebuffer>> {
     (0..resolve_images.len())
         .map(|i| {
             let attachments: Vec<vk::ImageView> = if msaa != vk::SampleCountFlags::TYPE_1 {
@@ -1128,7 +1128,7 @@ pub(super) fn create_main_framebuffers(
                 .layers(1);
             device
                 .create_framebuffer(&fb_info)
-                .map_err(|e| format!("framebuffer[{i}]: {e}"))
+                .map_err(|e| super::error::map_vk_result(e, &format!("framebuffer[{i}]")))
         })
         .collect()
 }
@@ -1139,7 +1139,7 @@ pub(super) fn create_composite_framebuffers(
     render_pass: vk::RenderPass,
     swapchain_views: &[vk::ImageView],
     extent: vk::Extent2D,
-) -> Result<Vec<OwnedFramebuffer>, String> {
+) -> RenderResult<Vec<OwnedFramebuffer>> {
     swapchain_views
         .iter()
         .enumerate()
@@ -1152,7 +1152,7 @@ pub(super) fn create_composite_framebuffers(
                 .layers(1);
             device
                 .create_framebuffer(&fb_info)
-                .map_err(|e| format!("composite framebuffer[{i}]: {e}"))
+                .map_err(|e| super::error::map_vk_result(e, &format!("composite framebuffer[{i}]")))
         })
         .collect()
 }
@@ -1246,7 +1246,7 @@ pub(super) fn create_shadow_framebuffers(
     render_pass: vk::RenderPass,
     shadow_map: &GpuImage,
     size: u32,
-) -> Result<Vec<OwnedFramebuffer>, String> {
+) -> RenderResult<Vec<OwnedFramebuffer>> {
     let mut fbs = Vec::with_capacity(shadow_map.aux_views.len());
     for &view in &shadow_map.aux_views {
         let fb_info = vk::FramebufferCreateInfo::default()
@@ -1257,7 +1257,7 @@ pub(super) fn create_shadow_framebuffers(
             .layers(1);
         let fb = device
             .create_framebuffer(&fb_info)
-            .map_err(|e| format!("shadow framebuffer: {e}"))?;
+            .map_err(|e| super::error::map_vk_result(e, "shadow framebuffer"))?;
         fbs.push(fb);
     }
     Ok(fbs)

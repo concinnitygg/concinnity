@@ -2721,7 +2721,7 @@ impl RtAccelData {
     // Ensure the per-(frame, object) compute descriptor sets cover `object_count`
     // skinned objects. Allocated lazily on the first skinned rebuild (the count
     // is unknown at init, before `upload_skinned`). Idempotent once sized.
-    fn ensure_skin_sets(&mut self, device: &VkDevice, object_count: usize) -> Result<(), String> {
+    fn ensure_skin_sets(&mut self, device: &VkDevice, object_count: usize) -> RenderResult<()> {
         let frames = self.frames_in_flight_usize;
         let skin = self
             .skin
@@ -2761,7 +2761,7 @@ pub(super) fn ensure_skin_sets(
     skin: &mut SkinPipeline,
     frames: usize,
     object_count: usize,
-) -> Result<(), String> {
+) -> RenderResult<()> {
     let have = skin.sets.first().map(|s| s.len()).unwrap_or(0);
     if object_count == 0 || have >= object_count {
         return Ok(());
@@ -2780,7 +2780,7 @@ pub(super) fn ensure_skin_sets(
                 .pool_sizes(std::slice::from_ref(&pool_size))
                 .max_sets(total),
         )
-        .map_err(|e| format!("skin descriptor pool: {e}"))?;
+        .map_err(|e| super::error::map_vk_result(e, "skin descriptor pool"))?;
     let mut sets: Vec<Vec<vk::DescriptorSet>> = Vec::with_capacity(frames);
     for _ in 0..frames {
         let layouts: Vec<vk::DescriptorSetLayout> = (0..object_count)
@@ -2795,7 +2795,7 @@ pub(super) fn ensure_skin_sets(
                     .set_layouts(&layouts),
             )
         }
-        .map_err(|e| format!("alloc skin descriptor sets: {e}"))?;
+        .map_err(|e| super::error::map_vk_result(e, "alloc skin descriptor sets"))?;
         sets.push(alloc);
     }
     skin.descriptor_pool = pool;

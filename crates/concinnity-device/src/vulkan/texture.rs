@@ -8,6 +8,7 @@ use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::mipmap;
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledImage};
+use super::error::map_vk_result;
 use crate::vulkan::owned::{OwnedSampler, VkDevice};
 
 // Opaque handle to a GPU image: cached raw handles for the bind sites, backed
@@ -87,7 +88,7 @@ pub(super) fn find_memory_type(
     physical_device: vk::PhysicalDevice,
     type_filter: u32,
     properties: vk::MemoryPropertyFlags,
-) -> Result<u32, String> {
+) -> RenderResult<u32> {
     // SAFETY: a property query on a live handle; it only reads.
     let mem_props = unsafe { instance.get_physical_device_memory_properties(physical_device) };
     for i in 0..mem_props.memory_type_count {
@@ -99,7 +100,9 @@ pub(super) fn find_memory_type(
             return Ok(i);
         }
     }
-    Err("no suitable memory type found".to_string())
+    Err(error::RenderError::Other(
+        "no suitable memory type found".to_string(),
+    ))
 }
 
 // Immutable description of a 2-D image to allocate.
@@ -152,7 +155,7 @@ pub(super) fn create_image_view(
     image: vk::Image,
     format: vk::Format,
     aspect: vk::ImageAspectFlags,
-) -> Result<vk::ImageView, String> {
+) -> RenderResult<vk::ImageView> {
     let view_info = vk::ImageViewCreateInfo::default()
         .image(image)
         .view_type(vk::ImageViewType::TYPE_2D)
@@ -168,7 +171,7 @@ pub(super) fn create_image_view(
     // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
     // names belongs to this device.
     unsafe { device.create_image_view(&view_info, None) }
-        .map_err(|e| format!("create_image_view: {e}"))
+        .map_err(|e| map_vk_result(e, "create_image_view"))
 }
 
 // Record and submit a short-lived command buffer without waiting for it.
@@ -181,7 +184,7 @@ pub(super) fn one_shot_submit_nowait<F>(
     command_pool: vk::CommandPool,
     queue: vk::Queue,
     f: F,
-) -> Result<vk::CommandBuffer, String>
+) -> RenderResult<vk::CommandBuffer>
 where
     F: FnOnce(vk::CommandBuffer),
 {
@@ -192,26 +195,26 @@ where
     // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
     // names belongs to this device.
     let cmd = unsafe { device.allocate_command_buffers(&alloc_info) }
-        .map_err(|e| format!("one_shot allocate: {e}"))?[0];
+        .map_err(|e| map_vk_result(e, "one_shot allocate"))?[0];
 
     let begin_info =
         vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
     // SAFETY: `cmd` was allocated from this device's pool and is not in flight (its face fence was
     // waited on), so it is in the initial state that `begin` requires.
     unsafe { device.begin_command_buffer(cmd, &begin_info) }
-        .map_err(|e| format!("one_shot begin: {e}"))?;
+        .map_err(|e| map_vk_result(e, "one_shot begin"))?;
 
     f(cmd);
 
     // SAFETY: `cmd` is in the recording state, which is what `end_command_buffer` requires.
-    unsafe { device.end_command_buffer(cmd) }.map_err(|e| format!("one_shot end: {e}"))?;
+    unsafe { device.end_command_buffer(cmd) }.map_err(|e| map_vk_result(e, "one_shot end"))?;
 
     let submit_info = vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&cmd));
     // SAFETY: every command buffer in `submit_bufs` was ended and belongs to this frame slot, the
     // semaphores and fence were created from this device, and `submit_info` borrows all of them for
     // the call.
     unsafe { device.queue_submit(queue, std::slice::from_ref(&submit_info), vk::Fence::null()) }
-        .map_err(|e| format!("one_shot submit: {e}"))?;
+        .map_err(|e| map_vk_result(e, "one_shot submit"))?;
     Ok(cmd)
 }
 
@@ -221,13 +224,13 @@ pub(super) fn one_shot_submit<F>(
     command_pool: vk::CommandPool,
     queue: vk::Queue,
     f: F,
-) -> Result<(), String>
+) -> RenderResult<()>
 where
     F: FnOnce(vk::CommandBuffer),
 {
     let cmd = one_shot_submit_nowait(device, command_pool, queue, f)?;
     // SAFETY: `queue` belongs to this device; the wait takes no borrowed state.
-    unsafe { device.queue_wait_idle(queue) }.map_err(|e| format!("one_shot wait: {e}"))?;
+    unsafe { device.queue_wait_idle(queue) }.map_err(|e| map_vk_result(e, "one_shot wait"))?;
     // SAFETY: every handle here was created from this device and is destroyed exactly once; the
     // caller has already waited for the device to go idle, so no submission still references them.
     unsafe { device.free_command_buffers(command_pool, std::slice::from_ref(&cmd)) };
@@ -576,12 +579,10 @@ pub(super) fn upload_texture_image(
 // idles, the command buffer returns to the pool, and the dropped staging
 // retires immediately so an upload loop reuses one staging range instead of
 // accumulating every upload's.
-pub(super) fn finish_upload(
-    ctx: &GpuUploadContext,
-    in_flight: UploadInFlight,
-) -> Result<(), String> {
+pub(super) fn finish_upload(ctx: &GpuUploadContext, in_flight: UploadInFlight) -> RenderResult<()> {
     // SAFETY: `ctx.queue` belongs to `ctx.device`; the wait takes no borrowed state.
-    unsafe { ctx.device.queue_wait_idle(ctx.queue) }.map_err(|e| format!("upload wait: {e}"))?;
+    unsafe { ctx.device.queue_wait_idle(ctx.queue) }
+        .map_err(|e| map_vk_result(e, "upload wait"))?;
     // SAFETY: every handle here was created from this device and is destroyed exactly once; the
     // caller has already waited for the device to go idle, so no submission still references them.
     unsafe {

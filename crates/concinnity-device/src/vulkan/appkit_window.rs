@@ -14,6 +14,7 @@
 use ash::vk;
 use concinnity_core::components::WindowMode;
 use concinnity_core::render::display_mode::DisplayMode;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::input::InputSnapshot;
 use concinnity_core::render::keymap::KeyMap;
 use objc2::MainThreadOnly;
@@ -42,9 +43,10 @@ impl AppKitVkWindow {
         mode: &WindowMode,
         _resizable: bool,
         title_bar: bool,
-    ) -> Result<Self, String> {
-        let mtm = objc2::MainThreadMarker::new()
-            .ok_or_else(|| "the Vulkan window must be created on the main thread".to_string())?;
+    ) -> RenderResult<Self> {
+        let mtm = objc2::MainThreadMarker::new().ok_or_else(|| {
+            RenderError::Other("the Vulkan window must be created on the main thread".to_string())
+        })?;
         let window = chrome::create_window(mtm, title, width, height, title_bar)?;
         let content_rect = window.contentRectForFrameRect(window.frame());
 
@@ -187,14 +189,14 @@ impl AppKitVkWindow {
         &mut self,
         entry: &ash::Entry,
         instance: &ash::Instance,
-    ) -> Result<vk::SurfaceKHR, String> {
+    ) -> RenderResult<vk::SurfaceKHR> {
         let info =
             vk::MetalSurfaceCreateInfoEXT::default().layer(Retained::as_ptr(&self.layer).cast());
         let loader = ash::ext::metal_surface::Instance::new(entry, instance);
         // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
         // it names belongs to this device.
         unsafe { loader.create_metal_surface(&info, None) }
-            .map_err(|e| format!("vkCreateMetalSurfaceEXT: {e}"))
+            .map_err(|e| super::error::map_vk_result(e, "vkCreateMetalSurfaceEXT"))
     }
 
     // Vulkan instance extensions required for surface creation on macOS.

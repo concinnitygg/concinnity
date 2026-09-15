@@ -287,10 +287,11 @@ impl VkContext {
         &mut self,
         skinned_index: usize,
         new_joint_count: usize,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         self.skinned
             .slots
             .update_skeleton(skinned_index, new_joint_count)
+            .map_err(concinnity_core::render::error::RenderError::Other)
     }
 
     pub(crate) fn update_skinned_pose(&mut self, skinned_index: usize, matrices: &[[[f32; 4]; 4]]) {

@@ -114,7 +114,7 @@ pub(in crate::vulkan) trait VkUpscaleBackend: Send {
         cmd: vk::CommandBuffer,
         inputs: UpscaleInputs<'_>,
         camera: UpscaleCamera,
-    ) -> Result<(), String>;
+    ) -> RenderResult<()>;
     // Tear down owned GPU + SDK resources. Called from `VkContext::drop` after
     // `device_wait_idle`.
     fn destroy(&mut self, device: &VkDevice);
@@ -660,7 +660,7 @@ impl VkContext {
         &self,
         cmd: vk::CommandBuffer,
         params: &GraphFrameParams<'_>,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let upscaler = match &self.upscale {
             Some(u) => u,
             None => return Ok(()),

@@ -21,11 +21,13 @@
 //! otherwise and the consumer falls back exactly as it did before.
 
 use ash::vk;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::render_graph::{
     PixelFormat, PoolGates, TextureUsage, TransientSlot, TransientTexture, plan_pool_slots,
 };
 use std::collections::HashMap;
 
+use super::error::map_vk_result;
 use super::texture::{
     create_image_view, find_memory_type, one_shot_submit, transition_image_layout,
 };
@@ -105,7 +107,7 @@ impl TransientImagePool {
         ctx: &TransientPoolGpu,
         frames: usize,
         slots: &[TransientSlot],
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         let &TransientPoolGpu {
             instance,
             device,
@@ -163,15 +165,16 @@ impl TransientImagePool {
                         None,
                     )
                 }
-                .map_err(|e| format!("transient pool slot memory: {e}"))?;
+                .map_err(|e| map_vk_result(e, "transient pool slot memory"))?;
                 slot_memories.push(memory);
 
                 for (spec, image) in member_images {
                     // SAFETY: the resource and the memory were both created from this device, the
                     // reservation's offset satisfies the alignment its memory requirements
                     // reported, and nothing is bound to the resource yet.
-                    unsafe { device.bind_image_memory(image, memory, 0) }
-                        .map_err(|e| format!("transient pool bind {}: {e}", spec.label))?;
+                    unsafe { device.bind_image_memory(image, memory, 0) }.map_err(|e| {
+                        map_vk_result(e, &format!("transient pool bind {}", spec.label))
+                    })?;
                     let aspect = image_aspect(spec.format);
                     let view = create_image_view(device, image, image_format(spec.format), aspect)?;
                     images.push(TransientImage {
@@ -303,7 +306,7 @@ impl TransientImagePool {
         ctx: &TransientPoolGpu,
         frames: usize,
         slots: &[TransientSlot],
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         self.destroy(ctx.device);
         *self = Self::build(ctx, frames, slots)?;
         Ok(())
@@ -365,7 +368,7 @@ fn index_labels(
 // allocation afterward (so several aliased images can share one allocation).
 // Mirrors `texture::create_image` minus the allocate + bind, and translates the
 // graph's declared shape rather than restating it.
-fn create_image_unbound(device: &VkDevice, spec: &TransientTexture) -> Result<vk::Image, String> {
+fn create_image_unbound(device: &VkDevice, spec: &TransientTexture) -> RenderResult<vk::Image> {
     let info = vk::ImageCreateInfo::default()
         .image_type(if spec.depth.max(1) > 1 {
             vk::ImageType::TYPE_3D
@@ -387,7 +390,8 @@ fn create_image_unbound(device: &VkDevice, spec: &TransientTexture) -> Result<vk
         .samples(sample_count(spec.sample_count));
     // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
     // names belongs to this device.
-    unsafe { device.create_image(&info, None) }.map_err(|e| format!("transient pool image: {e}"))
+    unsafe { device.create_image(&info, None) }
+        .map_err(|e| map_vk_result(e, "transient pool image"))
 }
 
 pub(in crate::vulkan) fn image_format(format: PixelFormat) -> vk::Format {
@@ -457,7 +461,7 @@ pub(super) fn transient_slots(
     gbuffer_enabled: bool,
     render_extent: vk::Extent2D,
     output_extent: vk::Extent2D,
-) -> Result<Vec<TransientSlot>, String> {
+) -> RenderResult<Vec<TransientSlot>> {
     plan_pool_slots(
         PoolGates {
             ssao: ssao_enabled,
@@ -467,6 +471,7 @@ pub(super) fn transient_slots(
         (render_extent.width, render_extent.height),
         (output_extent.width, output_extent.height),
     )
+    .map_err(RenderError::Other)
 }
 
 #[cfg(test)]

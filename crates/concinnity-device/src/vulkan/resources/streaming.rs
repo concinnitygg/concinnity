@@ -188,7 +188,7 @@ impl VkContext {
         &mut self,
         draw_idx: usize,
         retire_frame: u64,
-    ) -> Result<(), String> {
+    ) -> error::RenderResult<()> {
         let region = draw_slot::retire_chunk_slot(&mut self.draw.objects, draw_idx)?;
         self.chunk_stream
             .vtx_alloc
@@ -206,7 +206,8 @@ impl VkContext {
         &mut self,
         draw_idx: usize,
         model: [[f32; 4]; 4],
-    ) -> Result<(), String> {
+    ) -> error::RenderResult<()> {
         draw_slot::set_chunk_model(&mut self.draw.objects, draw_idx, model)
+            .map_err(error::RenderError::Other)
     }
 }

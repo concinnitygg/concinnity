@@ -728,7 +728,7 @@ fn create_render_pipeline(
 // alternative and trivially correct since `vkCmdFillBuffer` writes a
 // 32-bit pattern; `bytes` is guaranteed to be a multiple of 4 for both
 // the pool (32 bytes per slot) and the counter (4 bytes).
-fn zero_device_buffer(gpu: GpuUploadContext, target: vk::Buffer, bytes: u64) -> Result<(), String> {
+fn zero_device_buffer(gpu: GpuUploadContext, target: vk::Buffer, bytes: u64) -> RenderResult<()> {
     let GpuUploadContext {
         device,
         command_pool,

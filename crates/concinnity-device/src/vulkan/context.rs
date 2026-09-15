@@ -1234,7 +1234,7 @@ impl VkHardware {
     // the outgoing `Drop` leaves them alone. Vulkan handles are not refcounted,
     // so that `Drop` also skips the shared surface and swapchain (gated on
     // `reused_by_successor`).
-    pub(super) fn hand_over(&mut self) -> Result<Self, String> {
+    pub(super) fn hand_over(&mut self) -> error::RenderResult<Self> {
         Ok(Self {
             window: Some(
                 self.window

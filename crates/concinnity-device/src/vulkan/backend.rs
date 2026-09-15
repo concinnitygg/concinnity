@@ -77,14 +77,14 @@ impl DrawStreaming for VkContext {
     forward! { assert = debug_assert_main_thread;
         fn evict_texture_slot(&mut self, slot: usize) -> error::RenderResult<()>;
         fn update_texture_slot(&mut self, slot: usize, image: &bake::texture::TextureImage) -> error::RenderResult<()>;
-        fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> RenderResult<()>;
+        fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> error::RenderResult<()>;
         fn upload_mesh(&mut self, draw_idx: usize, verts: &[Vertex], idxs: &[u16], frame: u64) -> error::RenderResult<()>;
         fn seed_mesh_streaming(&mut self, vtx_offset: u64, vtx_bytes: u64, idx_offset: u64, idx_bytes: u64);
         fn setup_chunk_streaming(&mut self, chunk_vtx_bytes: usize, chunk_idx_bytes: usize) -> error::RenderResult<()>;
         fn add_chunk_mesh(&mut self, mesh: ChunkMesh<'_>, dst: draw_slot::SlotAlloc) -> error::RenderResult<()>;
-        fn remove_chunk_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> RenderResult<()>;
-        fn set_chunk_model(&mut self, draw_idx: usize, model: [[f32; 4]; 4]) -> RenderResult<()>;
-        fn clone_static_draw_object(&mut self, src_draw_idx: usize, model: [[f32; 4]; 4], dst: draw_slot::SlotAlloc) -> RenderResult<()>;
+        fn remove_chunk_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> error::RenderResult<()>;
+        fn set_chunk_model(&mut self, draw_idx: usize, model: [[f32; 4]; 4]) -> error::RenderResult<()>;
+        fn clone_static_draw_object(&mut self, src_draw_idx: usize, model: [[f32; 4]; 4], dst: draw_slot::SlotAlloc) -> error::RenderResult<()>;
         fn evict_world_shader(&mut self, bucket: u32);
     }
 
@@ -145,7 +145,7 @@ impl LiveEdit for VkContext {
         fn update_mesh_geometry(&mut self, draw_idx: usize, verts: &[mesh_payload::Vertex], idxs: &[u16], lod_alternates: &[(f32, Vec<u16>)]) -> error::RenderResult<()>;
         fn update_world_shader_pipelines(&mut self, programs: &concinnity_core::components::ShaderPrograms) -> RenderResult<()>;
         fn update_skinned_mesh_geometry(&mut self, skinned_index: usize, vertex_base: u32, verts: &[mesh_payload::SkinnedVertex], idxs: &[u16]) -> error::RenderResult<()>;
-        fn update_skinned_skeleton(&mut self, skinned_index: usize, new_joint_count: usize) -> RenderResult<()>;
+        fn update_skinned_skeleton(&mut self, skinned_index: usize, new_joint_count: usize) -> error::RenderResult<()>;
         fn rebuild_skinned_geometry(&mut self, changes: Vec<backend::SkinnedDrawGeometryUpdate>) -> error::RenderResult<Vec<backend::SkinnedSlotLayout>>;
     }
 

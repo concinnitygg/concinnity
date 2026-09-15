@@ -15,8 +15,10 @@
 //! last time round has retired.
 
 use ash::vk;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use std::sync::Mutex;
 
+use crate::vulkan::error::map_vk_result;
 use crate::vulkan::owned::{OwnedDescriptorPool, VkDevice};
 
 // Sets one frame's post passes may allocate. Six fullscreen post passes exist,
@@ -42,7 +44,7 @@ struct PoolSlot {
 
 impl PostSetArena {
     // A pool per frame in flight.
-    pub(in crate::vulkan) fn new(device: &VkDevice, frames: usize) -> Result<Self, String> {
+    pub(in crate::vulkan) fn new(device: &VkDevice, frames: usize) -> RenderResult<Self> {
         let sizes = [vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .descriptor_count(SAMPLERS_PER_FRAME)];
@@ -54,7 +56,7 @@ impl PostSetArena {
                         .pool_sizes(&sizes)
                         .max_sets(SETS_PER_FRAME),
                 )
-                .map_err(|e| format!("post descriptor pool: {e}"))?;
+                .map_err(|e| map_vk_result(e, "post descriptor pool"))?;
             slots.push(Mutex::new(PoolSlot { pool }));
         }
         Ok(Self { slots })
@@ -84,15 +86,15 @@ impl PostSetArena {
         device: &VkDevice,
         frame: usize,
         layout: vk::DescriptorSetLayout,
-    ) -> Result<vk::DescriptorSet, String> {
+    ) -> RenderResult<vk::DescriptorSet> {
         let slot = self.slots[frame % self.slots.len()]
             .lock()
-            .map_err(|_| "post descriptor arena poisoned".to_string())?;
+            .map_err(|_| RenderError::Other("post descriptor arena poisoned".to_string()))?;
         let layouts = [layout];
         let sets =
             crate::vulkan::resources::alloc_descriptor_sets(device, slot.pool.handle(), &layouts)?;
         sets.into_iter()
             .next()
-            .ok_or_else(|| "post descriptor arena returned no set".to_string())
+            .ok_or_else(|| RenderError::Other("post descriptor arena returned no set".to_string()))
     }
 }

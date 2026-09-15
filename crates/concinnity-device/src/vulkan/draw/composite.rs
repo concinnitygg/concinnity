@@ -161,7 +161,7 @@ impl fullscreen::CompositeEncoder for VkContext {
         _idx: usize,
         call: &TextDrawCall,
         binds: &mut TextBindCache,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         if call.vertices.is_empty() || self.text.atlas_sets.is_empty() {
             return Ok(());
         }
@@ -261,8 +261,6 @@ impl VkContext {
             image_index: image_index as usize,
             frame_idx,
         };
-        Ok(fullscreen::encode_composite_chain(
-            self, &cmd, &args, text_calls,
-        )?)
+        fullscreen::encode_composite_chain(self, &cmd, &args, text_calls)
     }
 }

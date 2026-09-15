@@ -875,7 +875,7 @@ impl VkContext {
         vp_mat: [[f32; 4]; 4],
         cam_pos: [f32; 3],
         elapsed: f32,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let Some(set) = self.planar_reflection.as_ref() else {
             return Ok(());
         };

@@ -723,7 +723,7 @@ impl DeviceAllocator {
         &self,
         type_filter: u32,
         props: vk::MemoryPropertyFlags,
-    ) -> Result<u32, String> {
+    ) -> error::RenderResult<u32> {
         for i in 0..self.memory_props.memory_type_count {
             if (type_filter & (1 << i)) != 0
                 && self.memory_props.memory_types[i as usize]
@@ -733,7 +733,9 @@ impl DeviceAllocator {
                 return Ok(i);
             }
         }
-        Err("no suitable memory type found".to_string())
+        Err(error::RenderError::Other(
+            "no suitable memory type found".to_string(),
+        ))
     }
 
     // Allocate one block and map it when its memory type is host-visible.

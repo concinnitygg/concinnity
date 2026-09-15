@@ -5,6 +5,7 @@
 //! Homebrew's prefix for a leaf name. So the plain load is followed by the known
 //! install paths, tried in order.
 
+use concinnity_core::render::error::{RenderError, RenderResult};
 use std::path::Path;
 
 // Absolute paths to try after `ash::Entry::load` fails, in preference order.
@@ -23,7 +24,7 @@ const FALLBACK_PATHS: &[&str] = &[];
 // Load the Vulkan loader, falling back to the platform's known install paths.
 // The error carries the dynamic linker's own message plus the paths tried, so a
 // missing SDK is diagnosable from the log alone.
-pub(super) fn load_entry() -> Result<ash::Entry, String> {
+pub(super) fn load_entry() -> RenderResult<ash::Entry> {
     // SAFETY: loading the Vulkan loader shared library and resolving its entry points. The process
     // must not already hold a conflicting loader; this runs once during init, before any Vulkan
     // call.
@@ -43,10 +44,10 @@ pub(super) fn load_entry() -> Result<ash::Entry, String> {
             Err(e) => tracing::warn!("Vulkan loader at {path} failed to load: {e}"),
         }
     }
-    Err(match FALLBACK_PATHS {
+    Err(RenderError::Other(match FALLBACK_PATHS {
         [] => format!("load vulkan: {err}"),
         paths => format!("load vulkan: {err}; also tried {}", paths.join(", ")),
-    })
+    }))
 }
 
 // The candidates that are present on disk, so a missing path is skipped without

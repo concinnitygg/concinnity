@@ -121,15 +121,15 @@ impl UploadRing {
         &self,
         frame: usize,
         bytes: &[u8],
-    ) -> Result<(vk::Buffer, vk::DeviceSize), String> {
+    ) -> RenderResult<(vk::Buffer, vk::DeviceSize)> {
         let mut slot = self.slots[frame % self.slots.len()].borrow_mut();
         let offset = align_up(slot.cursor, UPLOAD_ALIGN);
         let end = offset + bytes.len() as u64;
         if end > slot.capacity {
-            return Err(format!(
+            return Err(concinnity_core::render::error::RenderError::Other(format!(
                 "text upload ring overflow: need {end} bytes, reserved {}",
                 slot.capacity
-            ));
+            )));
         }
         slot.buffer.write_bytes(offset as usize, bytes);
         slot.cursor = end;

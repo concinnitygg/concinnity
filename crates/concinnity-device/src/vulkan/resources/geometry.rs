@@ -254,12 +254,10 @@ impl VkContext {
 
     // Return a streamed mesh's geometry region to the sub-allocators and mark
     // the draw non-resident so it is skipped in every pass.
-    pub(crate) fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> Result<(), String> {
-        let obj = self
-            .draw
-            .objects
-            .get(draw_idx)
-            .ok_or_else(|| format!("evict_mesh: draw object {} out of range", draw_idx))?;
+    pub(crate) fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> RenderResult<()> {
+        let obj = self.draw.objects.get(draw_idx).ok_or_else(|| {
+            error::RenderError::Other(format!("evict_mesh: draw object {draw_idx} out of range"))
+        })?;
         let v_off = obj.vertex_offset as u64;
         let v_len = (obj.vertex_count * std::mem::size_of::<Vertex>()) as u64;
         let i_off = (obj.index_offset * std::mem::size_of::<u32>()) as u64;

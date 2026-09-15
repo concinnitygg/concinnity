@@ -17,7 +17,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::image_decode::{self, PixelLayout};
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::hdr_output::{HdrEncoding, HdrOutputMode};
 
 use super::context::VkContext;
@@ -150,7 +150,7 @@ impl VkContext {
                 image_decode::decode_to_rgba8(raw, classify(self.swapchain.format, encoding));
             encode_png(path, width, height, &rgba)
         });
-        Ok(result.map(|()| path.to_string())?)
+        result.map(|()| path.to_string())
     }
 }
 
@@ -210,18 +210,18 @@ fn classify(format: vk::Format, encoding: Option<HdrEncoding>) -> PixelLayout {
 }
 
 // Write RGBA8 pixel data to a PNG file.
-fn encode_png(path: &str, width: u32, height: u32, rgba: &[u8]) -> Result<(), String> {
-    let file =
-        std::fs::File::create(path).map_err(|e| format!("screenshot: create {path}: {e}"))?;
+fn encode_png(path: &str, width: u32, height: u32, rgba: &[u8]) -> RenderResult<()> {
+    let file = std::fs::File::create(path)
+        .map_err(|e| RenderError::Other(format!("screenshot: create {path}: {e}")))?;
     let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
     let mut writer = encoder
         .write_header()
-        .map_err(|e| format!("screenshot: png header: {e}"))?;
+        .map_err(|e| RenderError::Other(format!("screenshot: png header: {e}")))?;
     writer
         .write_image_data(rgba)
-        .map_err(|e| format!("screenshot: png data: {e}"))?;
+        .map_err(|e| RenderError::Other(format!("screenshot: png data: {e}")))?;
     Ok(())
 }
 

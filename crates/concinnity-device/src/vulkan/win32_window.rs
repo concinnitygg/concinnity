@@ -9,6 +9,7 @@
 use ash::vk;
 use concinnity_core::components::WindowMode;
 use concinnity_core::render::display_mode::DisplayMode;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::input::InputSnapshot;
 use concinnity_core::render::keymap::KeyMap;
 
@@ -38,7 +39,7 @@ impl Win32Window {
         mode: &WindowMode,
         _resizable: bool,
         title_bar: bool,
-    ) -> Result<Self, String> {
+    ) -> RenderResult<Self> {
         let (_hwnd, win_state) = create_window(title, width, height, title_bar)?;
         let mut this = Self {
             win_state,
@@ -166,11 +167,11 @@ impl Win32Window {
         &mut self,
         entry: &ash::Entry,
         instance: &ash::Instance,
-    ) -> Result<vk::SurfaceKHR, String> {
+    ) -> RenderResult<vk::SurfaceKHR> {
         // SAFETY: passing None asks for the handle of the current process image, which is always
         // valid.
         let hinstance = unsafe { windows::Win32::System::LibraryLoader::GetModuleHandleW(None) }
-            .map_err(|e| format!("GetModuleHandleW: {e}"))?;
+            .map_err(|e| RenderError::Other(format!("GetModuleHandleW: {e}")))?;
         let info = vk::Win32SurfaceCreateInfoKHR::default()
             .hinstance(hinstance.0 as isize)
             .hwnd(self.win_state.hwnd.0 as isize);
@@ -178,7 +179,7 @@ impl Win32Window {
         // SAFETY: `info` borrows the module handle and HWND for the call; both name live Win32
         // objects owned by this window.
         unsafe { loader.create_win32_surface(&info, None) }
-            .map_err(|e| format!("vkCreateWin32SurfaceKHR: {e}"))
+            .map_err(|e| super::error::map_vk_result(e, "vkCreateWin32SurfaceKHR"))
     }
 
     // Vulkan instance extensions required for surface creation on Windows.

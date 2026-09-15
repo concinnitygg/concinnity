@@ -262,17 +262,13 @@ impl VkContext {
         ) {
             BakeAction::PrefilterMip => {
                 if let Err(e) = self.probe_prefilter_next_mip() {
-                    self.fail_bake(
-                        concinnity_core::render::error::RenderError::OutOfDeviceMemory(e),
-                    );
+                    self.fail_bake(e);
                     return Ok(());
                 }
             }
             BakeAction::Install => {
                 if let Err(e) = self.probe_install() {
-                    self.fail_bake(
-                        concinnity_core::render::error::RenderError::OutOfDeviceMemory(e),
-                    );
+                    self.fail_bake(e);
                     return Ok(());
                 }
             }
@@ -776,7 +772,7 @@ impl VkContext {
             self.submit_prefilter_command(cmd, fence)
         })();
         self.probe.prefiltering = Some(bake);
-        Ok(result?)
+        result
     }
 
     // Convolve one destination mip of the in-flight probe cube (one per frame, so
@@ -784,7 +780,7 @@ impl VkContext {
     // pyramid and writes a mip nothing else touches, so consecutive mips need no
     // barrier; queue submission order puts every one of them after the pyramid
     // build that produced their source.
-    fn probe_prefilter_next_mip(&mut self) -> Result<(), String> {
+    fn probe_prefilter_next_mip(&mut self) -> RenderResult<()> {
         let mut bake = self
             .probe
             .prefiltering
@@ -812,7 +808,7 @@ impl VkContext {
     fn begin_prefilter_command(
         &self,
         bake: &mut PrefilteringBake,
-    ) -> Result<(vk::CommandBuffer, vk::Fence), String> {
+    ) -> RenderResult<(vk::CommandBuffer, vk::Fence)> {
         let device = &self.hw.device;
         let info = vk::CommandBufferAllocateInfo::default()
             .command_pool(self.commands.command_pool)
@@ -821,7 +817,7 @@ impl VkContext {
         // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
         // it names belongs to this device.
         let cmd = unsafe { device.allocate_command_buffers(&info) }
-            .map_err(|e| format!("probe convolve cmd alloc: {e}"))?[0];
+            .map_err(|e| super::error::map_vk_result(e, "probe convolve cmd alloc"))?[0];
         // SAFETY: the create-info is live for the call and names only this device.
         let fence = match unsafe { device.create_fence(&vk::FenceCreateInfo::default(), None) } {
             Ok(f) => f,
@@ -835,7 +831,7 @@ impl VkContext {
                         std::slice::from_ref(&cmd),
                     );
                 }
-                return Err(format!("probe convolve fence: {e}"));
+                return Err(super::error::map_vk_result(e, "probe convolve fence"));
             }
         };
         bake.cmds.push(cmd);
@@ -845,7 +841,7 @@ impl VkContext {
         // SAFETY: `cmd` was allocated from this device's pool moments ago and has never been
         // submitted, so it is in the initial state that `begin` requires.
         unsafe { device.begin_command_buffer(cmd, &begin) }
-            .map_err(|e| format!("probe convolve begin: {e}"))?;
+            .map_err(|e| super::error::map_vk_result(e, "probe convolve begin"))?;
         Ok((cmd, fence))
     }
 
@@ -853,19 +849,19 @@ impl VkContext {
         &self,
         cmd: vk::CommandBuffer,
         fence: vk::Fence,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         // SAFETY: `cmd` is in the recording state and every handle these calls name belongs to this
         // device; the fence is unsignaled and not already in use.
         unsafe {
             self.hw
                 .device
                 .end_command_buffer(cmd)
-                .map_err(|e| format!("probe convolve end: {e}"))?;
+                .map_err(|e| super::error::map_vk_result(e, "probe convolve end"))?;
             let submit = vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&cmd));
             self.hw
                 .device
                 .queue_submit(self.hw.graphics_queue, std::slice::from_ref(&submit), fence)
-                .map_err(|e| format!("probe convolve submit: {e}"))
+                .map_err(|e| super::error::map_vk_result(e, "probe convolve submit"))
         }
     }
 
@@ -880,7 +876,7 @@ impl VkContext {
     // same one-off idle the cube upload used to perform inside its own submit; the
     // fence gate on this transition means everything but the in-flight frames has
     // already retired, so it costs a fraction of a frame, once per probe.
-    fn probe_install(&mut self) -> Result<(), String> {
+    fn probe_install(&mut self) -> RenderResult<()> {
         let bake = self
             .probe
             .prefiltering

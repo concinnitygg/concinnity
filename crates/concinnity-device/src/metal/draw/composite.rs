@@ -135,7 +135,7 @@ impl fullscreen::CompositeEncoder for CompositePass<'_> {
         idx: usize,
         call: &TextDrawCall,
         binds: &mut TextBindCache,
-    ) -> Result<(), String> {
+    ) -> concinnity_core::render::error::RenderResult<()> {
         if call.vertices.is_empty() {
             return Ok(());
         }
@@ -209,7 +209,7 @@ impl MtlContext {
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         scene_color: &Retained<ProtocolObject<dyn MTLTexture>>,
         text_calls: &[TextDrawCall],
-    ) -> Result<u32, String> {
+    ) -> concinnity_core::render::error::RenderResult<u32> {
         let composite_pass_desc = self
             .window()
             .view
