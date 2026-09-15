@@ -29,7 +29,7 @@ use concinnity_core::gfx::lod;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::RtParams;
 use concinnity_core::gfx::rt_reflections::RtParamsInputs;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::lights;
 pub(in crate::vulkan) use concinnity_core::render::uniforms::TransparentView;
 use concinnity_core::transform::mat4_inverse;
@@ -307,7 +307,7 @@ impl GlassMeshProducer {
                     .max_sets(sets_needed.max(1))
                     .pool_sizes(&sizes),
             )
-            .map_err(|e| format!("glass mesh descriptor pool: {e}"))?;
+            .map_err(|e| super::error::map_vk_result(e, "glass mesh descriptor pool"))?;
         let layouts: Vec<_> = (0..frames * count).map(|_| ctx.params_set_layout).collect();
         let params_sets = alloc_descriptor_sets(device, pool.handle(), &layouts)?;
         for frame in 0..frames {
@@ -433,9 +433,9 @@ fn align_up(size: u64, align: u64) -> u64 {
 
 use concinnity_core::render::transparent::ordered_visible;
 
-fn create_rt_set_layout(device: &VkDevice) -> Result<OwnedSetLayout, String> {
+fn create_rt_set_layout(device: &VkDevice) -> RenderResult<OwnedSetLayout> {
     let frag = vk::ShaderStageFlags::FRAGMENT;
-    create_descriptor_set_layout(
+    Ok(create_descriptor_set_layout(
         device,
         &[
             (0, vk::DescriptorType::UNIFORM_BUFFER, frag),
@@ -446,7 +446,7 @@ fn create_rt_set_layout(device: &VkDevice) -> Result<OwnedSetLayout, String> {
             (5, vk::DescriptorType::STORAGE_BUFFER, frag),
             (6, vk::DescriptorType::STORAGE_BUFFER, frag),
         ],
-    )
+    )?)
 }
 
 impl TransparentRt {
@@ -619,7 +619,7 @@ fn build_transparent_rt(
     ];
     let layout_flat = device
         .create_pipeline_layout(&vk::PipelineLayoutCreateInfo::default().set_layouts(&flat_layouts))
-        .map_err(|e| format!("transparent rt flat pipeline layout: {e}"))?;
+        .map_err(|e| super::error::map_vk_result(e, "transparent rt flat pipeline layout"))?;
     // The textured variant binds 5 sets (view / params / global / rt-geom / bindless
     // pool); the flat variant binds 4. The Vulkan spec only guarantees
     // `maxBoundDescriptorSets >= 4`, so on a device that reports exactly 4 fall back
@@ -644,7 +644,9 @@ fn build_transparent_rt(
                     .create_pipeline_layout(
                         &vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts),
                     )
-                    .map_err(|e| format!("transparent rt textured pipeline layout: {e}"))?,
+                    .map_err(|e| {
+                        super::error::map_vk_result(e, "transparent rt textured pipeline layout")
+                    })?,
             )
         }
         _ => None,
@@ -681,7 +683,7 @@ fn build_transparent_rt(
                 .pool_sizes(&pool_sizes)
                 .max_sets(f),
         )
-        .map_err(|e| format!("transparent rt descriptor pool: {e}"))?;
+        .map_err(|e| super::error::map_vk_result(e, "transparent rt descriptor pool"))?;
     let set_handles: Vec<_> = (0..frames).map(|_| set_layout.handle()).collect();
     let sets = alloc_descriptor_sets(device, pool.handle(), &set_handles)?;
 
@@ -728,7 +730,7 @@ fn build_transparent_rt(
 fn create_transparent_render_pass(
     device: &VkDevice,
     format: vk::Format,
-) -> Result<OwnedRenderPass, String> {
+) -> RenderResult<OwnedRenderPass> {
     let color = vk::AttachmentDescription::default()
         .format(format)
         .samples(vk::SampleCountFlags::TYPE_1)
@@ -764,14 +766,14 @@ fn create_transparent_render_pass(
         .dependencies(std::slice::from_ref(&dependency));
     device
         .create_render_pass(&info)
-        .map_err(|e| format!("transparent render pass: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "transparent render pass"))
 }
 
 // Set 0: the per-frame view UBO (0), the scene snapshot (1) and this frame's
 // main depth (2). The view UBO is visible to the vertex stage as well: both
 // producers project through `vp`, and water reads `time` there for its wave
 // phase.
-fn create_view_set_layout(device: &VkDevice) -> Result<OwnedSetLayout, String> {
+fn create_view_set_layout(device: &VkDevice) -> RenderResult<OwnedSetLayout> {
     let frag = vk::ShaderStageFlags::FRAGMENT;
     let bindings = [
         vk::DescriptorSetLayoutBinding::default()
@@ -793,13 +795,13 @@ fn create_view_set_layout(device: &VkDevice) -> Result<OwnedSetLayout, String> {
     let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
     device
         .create_descriptor_set_layout(&info)
-        .map_err(|e| format!("transparent view set layout: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "transparent view set layout"))
 }
 
 // Set 1: one record's params UBO (0) and the planar reflection target it samples
 // (1). The UBO is visible to the vertex stage because the water vertex stage
 // reads its wave table out of it.
-fn create_params_set_layout(device: &VkDevice) -> Result<OwnedSetLayout, String> {
+fn create_params_set_layout(device: &VkDevice) -> RenderResult<OwnedSetLayout> {
     let bindings = [
         vk::DescriptorSetLayoutBinding::default()
             .binding(0)
@@ -815,14 +817,14 @@ fn create_params_set_layout(device: &VkDevice) -> Result<OwnedSetLayout, String>
     let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
     device
         .create_descriptor_set_layout(&info)
-        .map_err(|e| format!("transparent params set layout: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "transparent params set layout"))
 }
 
 fn create_descriptor_pool(
     device: &VkDevice,
     frames: usize,
     records: usize,
-) -> Result<OwnedDescriptorPool, String> {
+) -> RenderResult<OwnedDescriptorPool> {
     let f = frames as u32;
     let r = records as u32;
     let sizes = [
@@ -842,7 +844,7 @@ fn create_descriptor_pool(
         .pool_sizes(&sizes);
     device
         .create_descriptor_pool(&info)
-        .map_err(|e| format!("transparent descriptor pool: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "transparent descriptor pool"))
 }
 
 // Write one per-frame view set: the view UBO (binding 0), the shared scene
@@ -969,7 +971,7 @@ pub(in crate::vulkan) fn create_transparent_pipeline(
     vert_spv: &[u8],
     frag_spv: &[u8],
     vertex_input: TransparentVertexInput,
-) -> Result<OwnedPipeline, String> {
+) -> RenderResult<OwnedPipeline> {
     let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
     let stages = modules.infos();
 
@@ -1039,7 +1041,7 @@ pub(in crate::vulkan) fn create_transparent_pipeline(
         .layout(layout)
         .render_pass(render_pass);
     let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &info)
-        .map_err(|e| format!("create transparent pipeline: {e}"))?;
+        .map_err(|e| super::error::map_vk_result(e, "create transparent pipeline"))?;
     Ok(pipeline)
 }
 
@@ -1294,7 +1296,7 @@ impl TransparentResources {
             let info = vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
             device
                 .create_pipeline_layout(&info)
-                .map_err(|e| format!("transparent pipeline layout: {e}"))?
+                .map_err(|e| super::error::map_vk_result(e, "transparent pipeline layout"))?
         };
 
         // The shared RT layouts + descriptor ring, when the device is RT-capable. A
@@ -1686,7 +1688,7 @@ fn create_framebuffers(
     scene_views: &[vk::ImageView],
     width: u32,
     height: u32,
-) -> Result<Vec<OwnedFramebuffer>, String> {
+) -> RenderResult<Vec<OwnedFramebuffer>> {
     let mut out = Vec::with_capacity(scene_views.len());
     for &view in scene_views {
         let info = vk::FramebufferCreateInfo::default()
@@ -1697,7 +1699,7 @@ fn create_framebuffers(
             .layers(1);
         let fb = device
             .create_framebuffer(&info)
-            .map_err(|e| format!("transparent framebuffer: {e}"))?;
+            .map_err(|e| super::error::map_vk_result(e, "transparent framebuffer"))?;
         out.push(fb);
     }
     Ok(out)
@@ -1854,7 +1856,7 @@ impl VkContext {
         // same values the RT-reflection resolve uses); only consumed on the RT path.
         fov_y_radians: f32,
         aspect: f32,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let Some(transparent) = self.transparent.as_ref() else {
             return Ok(());
         };
@@ -1890,28 +1892,26 @@ impl VkContext {
         let scene_image = *transparent
             .scene_images
             .get(frame_idx)
-            .ok_or("transparent: scene image index OOB")?;
+            .ok_or_else(|| RenderError::Other("transparent: scene image index OOB".to_string()))?;
         let snapshot = transparent.snapshot.image;
 
         // Upload this frame's view UBO.
         transparent
             .view_ubos
             .get(frame_idx)
-            .ok_or("transparent: view_ubos index OOB")?
+            .ok_or_else(|| RenderError::Other("transparent: view_ubos index OOB".to_string()))?
             .write_val(0, view);
 
         // On the RT path, upload this frame's RtParams (sun + ray tunables) into the
         // shared RtParams ring, mirroring `encode_rt_reflections`'s build. The
         // settings come from the RT-reflection pass (always present when `rt_live`).
         if rt_live {
-            let rtres = self
-                .rt_reflections
-                .as_ref()
-                .ok_or("transparent rt_live but rt_reflections missing")?;
-            let rt = transparent
-                .rt
-                .as_ref()
-                .ok_or("transparent rt_live but rt pipelines missing")?;
+            let rtres = self.rt_reflections.as_ref().ok_or_else(|| {
+                RenderError::Other("transparent rt_live but rt_reflections missing".to_string())
+            })?;
+            let rt = transparent.rt.as_ref().ok_or_else(|| {
+                RenderError::Other("transparent rt_live but rt pipelines missing".to_string())
+            })?;
             let v = self.view.matrix;
             let inv_view_rot = [
                 [v[0][0], v[1][0], v[2][0], 0.0],

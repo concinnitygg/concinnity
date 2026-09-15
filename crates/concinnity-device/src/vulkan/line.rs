@@ -13,7 +13,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types::LineVertex;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
@@ -163,7 +163,7 @@ impl LineResources {
         // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
         // it names belongs to this device.
         let view_sets = unsafe { device.allocate_descriptor_sets(&info) }
-            .map_err(|e| format!("line descriptor sets: {e}"))?;
+            .map_err(|e| super::error::map_vk_result(e, "line descriptor sets"))?;
         for (i, &set) in view_sets.iter().enumerate() {
             write_view_set(
                 device,
@@ -207,7 +207,7 @@ impl LineResources {
         hdr_resolve_views: &[vk::ImageView],
         depth_views: &[vk::ImageView],
         extent: vk::Extent2D,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         self.framebuffers.clear();
         for &view in hdr_resolve_views.iter().take(self.view_ubos.len()) {
             self.framebuffers.push(create_line_framebuffer(
@@ -270,7 +270,7 @@ fn create_line_framebuffer(
     render_pass: vk::RenderPass,
     view: vk::ImageView,
     extent: vk::Extent2D,
-) -> Result<OwnedFramebuffer, String> {
+) -> RenderResult<OwnedFramebuffer> {
     let attachments = [view];
     let info = vk::FramebufferCreateInfo::default()
         .render_pass(render_pass)
@@ -280,15 +280,12 @@ fn create_line_framebuffer(
         .layers(1);
     device
         .create_framebuffer(&info)
-        .map_err(|e| format!("line framebuffer: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "line framebuffer"))
 }
 
 // Render pass / pipeline construction
 
-fn create_line_render_pass(
-    device: &VkDevice,
-    format: vk::Format,
-) -> Result<OwnedRenderPass, String> {
+fn create_line_render_pass(device: &VkDevice, format: vk::Format) -> RenderResult<OwnedRenderPass> {
     // One color attachment: the resolved HDR scene. The preceding pass left it
     // in SHADER_READ_ONLY_OPTIMAL; we want it in COLOR_ATTACHMENT during the
     // subpass, then SHADER_READ_ONLY_OPTIMAL again on exit so SSR / TAA / bloom
@@ -334,10 +331,10 @@ fn create_line_render_pass(
         .dependencies(&deps);
     device
         .create_render_pass(&info)
-        .map_err(|e| format!("line render pass: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "line render pass"))
 }
 
-fn create_line_set_layout(device: &VkDevice) -> Result<OwnedSetLayout, String> {
+fn create_line_set_layout(device: &VkDevice) -> RenderResult<OwnedSetLayout> {
     let bindings = [
         vk::DescriptorSetLayoutBinding::default()
             .binding(0)
@@ -353,24 +350,24 @@ fn create_line_set_layout(device: &VkDevice) -> Result<OwnedSetLayout, String> {
     let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
     device
         .create_descriptor_set_layout(&info)
-        .map_err(|e| format!("line view set layout: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "line view set layout"))
 }
 
 fn create_line_pipeline_layout(
     device: &VkDevice,
     view_set_layout: vk::DescriptorSetLayout,
-) -> Result<OwnedPipelineLayout, String> {
+) -> RenderResult<OwnedPipelineLayout> {
     let set_layouts = [view_set_layout];
     let info = vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
     device
         .create_pipeline_layout(&info)
-        .map_err(|e| format!("line pipeline layout: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "line pipeline layout"))
 }
 
 fn create_line_descriptor_pool(
     device: &VkDevice,
     frames: usize,
-) -> Result<OwnedDescriptorPool, String> {
+) -> RenderResult<OwnedDescriptorPool> {
     let frames = frames as u32;
     let sizes = [
         vk::DescriptorPoolSize {
@@ -387,7 +384,7 @@ fn create_line_descriptor_pool(
         .pool_sizes(&sizes);
     device
         .create_descriptor_pool(&info)
-        .map_err(|e| format!("line descriptor pool: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "line descriptor pool"))
 }
 
 fn write_view_set(
@@ -422,13 +419,17 @@ fn write_view_set(
     unsafe { device.update_descriptor_sets(&writes, &[]) };
 }
 
-fn compile_line_shaders(hot_reload: bool, msaa: bool) -> Result<(Vec<u8>, Vec<u8>), String> {
+fn compile_line_shaders(hot_reload: bool, msaa: bool) -> RenderResult<(Vec<u8>, Vec<u8>)> {
     let ctx = super::builtins::Ctx {
         msaa,
         ..super::builtins::Ctx::plain(hot_reload)
     };
-    let vert = super::slang_builtins::LINE_VERT.compile(&ctx)?;
-    let frag = super::slang_builtins::LINE_FRAG.compile(&ctx)?;
+    let vert = super::slang_builtins::LINE_VERT
+        .compile(&ctx)
+        .map_err(RenderError::ShaderCompile)?;
+    let frag = super::slang_builtins::LINE_FRAG
+        .compile(&ctx)
+        .map_err(RenderError::ShaderCompile)?;
     Ok((vert, frag))
 }
 
@@ -440,7 +441,7 @@ pub(in crate::vulkan) fn rebuild_line_pipeline(
     lines: &LineResources,
     msaa: bool,
     hot_reload: bool,
-) -> Result<OwnedPipeline, String> {
+) -> RenderResult<OwnedPipeline> {
     let (vert_spv, frag_spv) = compile_line_shaders(hot_reload, msaa)?;
     create_line_pipeline(
         device,
@@ -457,7 +458,7 @@ fn create_line_pipeline(
     layout: vk::PipelineLayout,
     vert_spv: &[u8],
     frag_spv: &[u8],
-) -> Result<OwnedPipeline, String> {
+) -> RenderResult<OwnedPipeline> {
     let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
     let stages = modules.infos();
     // `LineVertex` (position, edge, color) at 32 bytes, asserted by
@@ -533,7 +534,7 @@ fn create_line_pipeline(
         .layout(layout)
         .render_pass(render_pass);
     let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &info)
-        .map_err(|e| format!("create line pipeline: {e}"))?;
+        .map_err(|e| super::error::map_vk_result(e, "create line pipeline"))?;
     Ok(pipeline)
 }
 

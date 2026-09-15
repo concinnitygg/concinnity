@@ -19,7 +19,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types::{FogFroxelParams, FogParams, ShadowUniforms};
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
 use concinnity_core::render::volumetric_fog;
 use concinnity_core::transform::mat4_inverse;
@@ -261,7 +261,7 @@ impl FogResources {
                 .layers(1);
             let fb = device
                 .create_framebuffer(&fb_info)
-                .map_err(|e| format!("fog framebuffer: {e}"))?;
+                .map_err(|e| super::error::map_vk_result(e, "fog framebuffer"))?;
             framebuffers.push(fb);
         }
 
@@ -297,7 +297,7 @@ impl FogResources {
         hdr_resolve_views: &[vk::ImageView],
         depth_views: &[vk::ImageView],
         extent: vk::Extent2D,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         self.framebuffers.clear();
         for &view in hdr_resolve_views.iter().take(self.params_ubos.len()) {
             let attachments = [view];
@@ -309,7 +309,7 @@ impl FogResources {
                 .layers(1);
             let fb = device
                 .create_framebuffer(&fb_info)
-                .map_err(|e| format!("fog framebuffer (rebuild): {e}"))?;
+                .map_err(|e| super::error::map_vk_result(e, "fog framebuffer (rebuild)"))?;
             self.framebuffers.push(fb);
         }
         let last_depth = depth_views.len().saturating_sub(1);
@@ -361,10 +361,7 @@ fn alloc_ubo_ring(
 
 // Render pass / pipeline construction
 
-fn create_fog_render_pass(
-    device: &VkDevice,
-    format: vk::Format,
-) -> Result<OwnedRenderPass, String> {
+fn create_fog_render_pass(device: &VkDevice, format: vk::Format) -> RenderResult<OwnedRenderPass> {
     // One color attachment: the resolved HDR scene. The main pass (and
     // any preceding decal pass) left it in SHADER_READ_ONLY_OPTIMAL; we
     // want it in COLOR_ATTACHMENT during the subpass and
@@ -411,10 +408,10 @@ fn create_fog_render_pass(
         .dependencies(&deps);
     device
         .create_render_pass(&info)
-        .map_err(|e| format!("fog render pass: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "fog render pass"))
 }
 
-fn create_fog_set_layout(device: &VkDevice) -> Result<OwnedSetLayout, String> {
+fn create_fog_set_layout(device: &VkDevice) -> RenderResult<OwnedSetLayout> {
     let bindings = [
         // 0: FogParams UBO.
         vk::DescriptorSetLayoutBinding::default()
@@ -444,10 +441,10 @@ fn create_fog_set_layout(device: &VkDevice) -> Result<OwnedSetLayout, String> {
     let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
     device
         .create_descriptor_set_layout(&info)
-        .map_err(|e| format!("fog set layout: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "fog set layout"))
 }
 
-fn create_froxel_set_layout(device: &VkDevice) -> Result<OwnedSetLayout, String> {
+fn create_froxel_set_layout(device: &VkDevice) -> RenderResult<OwnedSetLayout> {
     let bindings = [
         // 0: FogParams UBO.
         vk::DescriptorSetLayoutBinding::default()
@@ -483,35 +480,35 @@ fn create_froxel_set_layout(device: &VkDevice) -> Result<OwnedSetLayout, String>
     let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
     device
         .create_descriptor_set_layout(&info)
-        .map_err(|e| format!("fog froxel set layout: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "fog froxel set layout"))
 }
 
 fn create_fog_pipeline_layout(
     device: &VkDevice,
     view_set_layout: vk::DescriptorSetLayout,
-) -> Result<OwnedPipelineLayout, String> {
+) -> RenderResult<OwnedPipelineLayout> {
     let set_layouts = [view_set_layout];
     let info = vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
     device
         .create_pipeline_layout(&info)
-        .map_err(|e| format!("fog pipeline layout: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "fog pipeline layout"))
 }
 
 fn create_froxel_pipeline_layout(
     device: &VkDevice,
     froxel_set_layout: vk::DescriptorSetLayout,
-) -> Result<OwnedPipelineLayout, String> {
+) -> RenderResult<OwnedPipelineLayout> {
     let set_layouts = [froxel_set_layout];
     let info = vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
     device
         .create_pipeline_layout(&info)
-        .map_err(|e| format!("fog froxel pipeline layout: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "fog froxel pipeline layout"))
 }
 
 fn create_fog_descriptor_pool(
     device: &VkDevice,
     frames: usize,
-) -> Result<OwnedDescriptorPool, String> {
+) -> RenderResult<OwnedDescriptorPool> {
     let f = frames as u32;
     let sizes = [
         // view: FogParams + FogFroxelParams (2). froxel: FogParams +
@@ -536,21 +533,21 @@ fn create_fog_descriptor_pool(
         .pool_sizes(&sizes);
     device
         .create_descriptor_pool(&info)
-        .map_err(|e| format!("fog descriptor pool: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "fog descriptor pool"))
 }
 
 fn alloc_descriptor_sets(
     device: &VkDevice,
     pool: vk::DescriptorPool,
     layouts: &[vk::DescriptorSetLayout],
-) -> Result<Vec<vk::DescriptorSet>, String> {
+) -> RenderResult<Vec<vk::DescriptorSet>> {
     let info = vk::DescriptorSetAllocateInfo::default()
         .descriptor_pool(pool)
         .set_layouts(layouts);
     // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
     // names belongs to this device.
     unsafe { device.allocate_descriptor_sets(&info) }
-        .map_err(|e| format!("fog descriptor sets: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "fog descriptor sets"))
 }
 
 // The four bindings of a per-frame fog-render view set: the FogParams +
@@ -731,7 +728,7 @@ fn create_volume_view(device: &VkDevice, image: vk::Image) -> RenderResult<vk::I
 }
 
 // Linear clamp-to-edge sampler for the trilinear volume read.
-fn create_volume_sampler(device: &VkDevice) -> Result<OwnedSampler, String> {
+fn create_volume_sampler(device: &VkDevice) -> RenderResult<OwnedSampler> {
     let info = vk::SamplerCreateInfo::default()
         .mag_filter(vk::Filter::LINEAR)
         .min_filter(vk::Filter::LINEAR)
@@ -741,23 +738,29 @@ fn create_volume_sampler(device: &VkDevice) -> Result<OwnedSampler, String> {
         .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE);
     device
         .create_sampler(&info)
-        .map_err(|e| format!("fog volume sampler: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "fog volume sampler"))
 }
 
-fn compile_fog_shaders(hot_reload: bool, msaa: bool) -> Result<(Vec<u8>, Vec<u8>), String> {
+fn compile_fog_shaders(hot_reload: bool, msaa: bool) -> RenderResult<(Vec<u8>, Vec<u8>)> {
     let ctx = super::builtins::Ctx {
         msaa,
         ..super::builtins::Ctx::plain(hot_reload)
     };
-    let vert = super::slang_builtins::FULLSCREEN_VERT.compile(&ctx)?;
-    let frag = super::slang_builtins::FOG_FRAG.compile(&ctx)?;
+    let vert = super::slang_builtins::FULLSCREEN_VERT
+        .compile(&ctx)
+        .map_err(RenderError::ShaderCompile)?;
+    let frag = super::slang_builtins::FOG_FRAG
+        .compile(&ctx)
+        .map_err(RenderError::ShaderCompile)?;
     Ok((vert, frag))
 }
 
 // Compile the froxel-volume compute kernel. MSAA-independent (the kernel does
 // not read the scene depth attachment).
-fn compile_fog_froxel_shader(hot_reload: bool) -> Result<Vec<u8>, String> {
-    super::slang_builtins::FOG_FROXEL.compile(&super::builtins::Ctx::plain(hot_reload))
+fn compile_fog_froxel_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
+    super::slang_builtins::FOG_FROXEL
+        .compile(&super::builtins::Ctx::plain(hot_reload))
+        .map_err(RenderError::ShaderCompile)
 }
 
 // Rebuild the fog graphics pipeline against the existing render pass +
@@ -769,7 +772,7 @@ pub(in crate::vulkan) fn rebuild_fog_pipeline(
     fog: &FogResources,
     msaa: bool,
     hot_reload: bool,
-) -> Result<OwnedPipeline, String> {
+) -> RenderResult<OwnedPipeline> {
     let (vert_spv, frag_spv) = compile_fog_shaders(hot_reload, msaa)?;
     create_fog_pipeline(
         device,
@@ -785,7 +788,7 @@ pub(in crate::vulkan) fn rebuild_fog_froxel_pipeline(
     device: &VkDevice,
     fog: &FogResources,
     hot_reload: bool,
-) -> Result<OwnedPipeline, String> {
+) -> RenderResult<OwnedPipeline> {
     let spv = compile_fog_froxel_shader(hot_reload)?;
     create_compute_pipeline(device, fog.froxel_pipeline_layout.handle(), &spv)
 }
@@ -794,7 +797,7 @@ fn create_compute_pipeline(
     device: &VkDevice,
     layout: vk::PipelineLayout,
     spv: &[u8],
-) -> Result<OwnedPipeline, String> {
+) -> RenderResult<OwnedPipeline> {
     let module = spv_module(device, spv)?;
     let stage = vk::PipelineShaderStageCreateInfo::default()
         .stage(vk::ShaderStageFlags::COMPUTE)
@@ -804,7 +807,7 @@ fn create_compute_pipeline(
         .stage(stage)
         .layout(layout);
     let pipeline = crate::vulkan::pipeline_cache::create_compute_pipeline(device, &info)
-        .map_err(|e| format!("create fog froxel pipeline: {e}"))?;
+        .map_err(|e| super::error::map_vk_result(e, "create fog froxel pipeline"))?;
     Ok(pipeline)
 }
 
@@ -814,7 +817,7 @@ fn create_fog_pipeline(
     layout: vk::PipelineLayout,
     vert_spv: &[u8],
     frag_spv: &[u8],
-) -> Result<OwnedPipeline, String> {
+) -> RenderResult<OwnedPipeline> {
     let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
     let stages = modules.infos();
     // Fullscreen triangle is emitted by gl_VertexIndex; no vertex buffer.
@@ -868,7 +871,7 @@ fn create_fog_pipeline(
         .layout(layout)
         .render_pass(render_pass);
     let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &info)
-        .map_err(|e| format!("create fog pipeline: {e}"))?;
+        .map_err(|e| super::error::map_vk_result(e, "create fog pipeline"))?;
     Ok(pipeline)
 }
 

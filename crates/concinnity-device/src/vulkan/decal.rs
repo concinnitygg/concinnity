@@ -13,7 +13,7 @@
 use ash::vk;
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::render::decal::DecalRecord;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::transform::mat4_inverse;
 use std::cell::Cell;
 // `DecalView` (per-frame, 144 bytes) is the layout struct shared with the other
@@ -253,7 +253,7 @@ impl DecalResources {
                 .layers(1);
             let fb = device
                 .create_framebuffer(&fb_info)
-                .map_err(|e| format!("decal framebuffer: {e}"))?;
+                .map_err(|e| super::error::map_vk_result(e, "decal framebuffer"))?;
             framebuffers.push(fb);
         }
 
@@ -287,7 +287,7 @@ impl DecalResources {
         hdr_resolve_views: &[vk::ImageView],
         depth_views: &[vk::ImageView],
         extent: vk::Extent2D,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         self.framebuffers.clear();
         for &view in hdr_resolve_views.iter().take(self.view_ubos.len()) {
             let attachments = [view];
@@ -299,7 +299,7 @@ impl DecalResources {
                 .layers(1);
             let fb = device
                 .create_framebuffer(&fb_info)
-                .map_err(|e| format!("decal framebuffer (rebuild): {e}"))?;
+                .map_err(|e| super::error::map_vk_result(e, "decal framebuffer (rebuild)"))?;
             self.framebuffers.push(fb);
         }
         // Re-point each per-frame view set's depth binding (binding 2)
@@ -338,7 +338,7 @@ impl DecalResources {
 fn create_decal_render_pass(
     device: &VkDevice,
     format: vk::Format,
-) -> Result<OwnedRenderPass, String> {
+) -> RenderResult<OwnedRenderPass> {
     // One color attachment: the resolved HDR scene. The main pass left
     // it in SHADER_READ_ONLY_OPTIMAL; we want it in COLOR_ATTACHMENT
     // during the subpass, then SHADER_READ_ONLY_OPTIMAL again on exit so
@@ -394,10 +394,10 @@ fn create_decal_render_pass(
         .dependencies(&deps);
     device
         .create_render_pass(&info)
-        .map_err(|e| format!("decal render pass: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "decal render pass"))
 }
 
-fn create_decal_set_layouts(device: &VkDevice) -> Result<(OwnedSetLayout, OwnedSetLayout), String> {
+fn create_decal_set_layouts(device: &VkDevice) -> RenderResult<(OwnedSetLayout, OwnedSetLayout)> {
     // set 0: per-frame view UBO + per-decal params dynamic UBO + depth.
     let view_bindings = [
         vk::DescriptorSetLayoutBinding::default()
@@ -419,7 +419,7 @@ fn create_decal_set_layouts(device: &VkDevice) -> Result<(OwnedSetLayout, OwnedS
     let view_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&view_bindings);
     let view_set_layout = device
         .create_descriptor_set_layout(&view_info)
-        .map_err(|e| format!("decal view set layout: {e}"))?;
+        .map_err(|e| super::error::map_vk_result(e, "decal view set layout"))?;
 
     // set 1: per-decal albedo sampler.
     let albedo_bindings = [vk::DescriptorSetLayoutBinding::default()
@@ -430,7 +430,7 @@ fn create_decal_set_layouts(device: &VkDevice) -> Result<(OwnedSetLayout, OwnedS
     let albedo_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&albedo_bindings);
     let albedo_set_layout = device
         .create_descriptor_set_layout(&albedo_info)
-        .map_err(|e| format!("decal albedo set layout: {e}"))?;
+        .map_err(|e| super::error::map_vk_result(e, "decal albedo set layout"))?;
 
     Ok((view_set_layout, albedo_set_layout))
 }
@@ -439,18 +439,18 @@ fn create_decal_pipeline_layout(
     device: &VkDevice,
     view_set_layout: vk::DescriptorSetLayout,
     albedo_set_layout: vk::DescriptorSetLayout,
-) -> Result<OwnedPipelineLayout, String> {
+) -> RenderResult<OwnedPipelineLayout> {
     let set_layouts = [view_set_layout, albedo_set_layout];
     let info = vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
     device
         .create_pipeline_layout(&info)
-        .map_err(|e| format!("decal pipeline layout: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "decal pipeline layout"))
 }
 
 fn create_decal_descriptor_pool(
     device: &VkDevice,
     frames: usize,
-) -> Result<OwnedDescriptorPool, String> {
+) -> RenderResult<OwnedDescriptorPool> {
     let frames = frames as u32;
     let max_decals = MAX_DECALS as u32;
     // Pool sizing: FRAMES sets for view + (MAX_DECALS) sets for albedo.
@@ -476,21 +476,21 @@ fn create_decal_descriptor_pool(
         .pool_sizes(&sizes);
     device
         .create_descriptor_pool(&info)
-        .map_err(|e| format!("decal descriptor pool: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "decal descriptor pool"))
 }
 
 fn alloc_descriptor_sets(
     device: &VkDevice,
     pool: vk::DescriptorPool,
     layouts: &[vk::DescriptorSetLayout],
-) -> Result<Vec<vk::DescriptorSet>, String> {
+) -> RenderResult<Vec<vk::DescriptorSet>> {
     let info = vk::DescriptorSetAllocateInfo::default()
         .descriptor_pool(pool)
         .set_layouts(layouts);
     // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
     // names belongs to this device.
     unsafe { device.allocate_descriptor_sets(&info) }
-        .map_err(|e| format!("decal descriptor sets: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "decal descriptor sets"))
 }
 
 fn write_view_set(
@@ -539,15 +539,19 @@ fn write_view_set(
     unsafe { device.update_descriptor_sets(&writes, &[]) };
 }
 
-fn compile_decal_shaders(hot_reload: bool, msaa: bool) -> Result<(Vec<u8>, Vec<u8>), String> {
+fn compile_decal_shaders(hot_reload: bool, msaa: bool) -> RenderResult<(Vec<u8>, Vec<u8>)> {
     // The vert source doesn't branch on USE_MSAA but it costs nothing to
     // define it there too.
     let ctx = super::builtins::Ctx {
         msaa,
         ..super::builtins::Ctx::plain(hot_reload)
     };
-    let vert = super::slang_builtins::DECAL_VERT.compile(&ctx)?;
-    let frag = super::slang_builtins::DECAL_FRAG.compile(&ctx)?;
+    let vert = super::slang_builtins::DECAL_VERT
+        .compile(&ctx)
+        .map_err(RenderError::ShaderCompile)?;
+    let frag = super::slang_builtins::DECAL_FRAG
+        .compile(&ctx)
+        .map_err(RenderError::ShaderCompile)?;
     Ok((vert, frag))
 }
 
@@ -560,7 +564,7 @@ pub(in crate::vulkan) fn rebuild_decal_pipeline(
     decals: &DecalResources,
     msaa: bool,
     hot_reload: bool,
-) -> Result<OwnedPipeline, String> {
+) -> RenderResult<OwnedPipeline> {
     let (vert_spv, frag_spv) = compile_decal_shaders(hot_reload, msaa)?;
     create_decal_pipeline(
         device,
@@ -577,7 +581,7 @@ fn create_decal_pipeline(
     layout: vk::PipelineLayout,
     vert_spv: &[u8],
     frag_spv: &[u8],
-) -> Result<OwnedPipeline, String> {
+) -> RenderResult<OwnedPipeline> {
     let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
     let stages = modules.infos();
     let bindings = [vk::VertexInputBindingDescription::default()
@@ -644,7 +648,7 @@ fn create_decal_pipeline(
         .layout(layout)
         .render_pass(render_pass);
     let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &info)
-        .map_err(|e| format!("create decal pipeline: {e}"))?;
+        .map_err(|e| super::error::map_vk_result(e, "create decal pipeline"))?;
     Ok(pipeline)
 }
 
@@ -822,24 +826,20 @@ impl VkContext {
     // into the reserved slot for `id`; the encoder reads it next frame.
     // Reuses tombstoned slots from a prior `remove_decal` before growing
     // the vec.
-    pub(crate) fn add_decal(&mut self, record: DecalRecord) -> Result<usize, String> {
+    pub(crate) fn add_decal(&mut self, record: DecalRecord) -> RenderResult<usize> {
         let last_tex = self.scene.textures.len().saturating_sub(1);
         let tex_idx = record.texture_slot.min(last_tex);
 
-        let id = self
-            .decal
-            .set
-            .insert(record)
-            .map_err(|_| format!("add_decal: MAX_DECALS ({MAX_DECALS}) exceeded"))?;
+        let id = self.decal.set.insert(record).map_err(|_| {
+            RenderError::Other(format!("add_decal: MAX_DECALS ({MAX_DECALS}) exceeded"))
+        })?;
 
         // Write the albedo descriptor for this slot. The texture pool
         // entry is referenced live; a future eviction routes through
         // `rewrite_texture_slot` to re-point.
-        let decals = self
-            .decal
-            .resources
-            .as_ref()
-            .ok_or_else(|| "add_decal: decal pipeline unavailable".to_string())?;
+        let decals = self.decal.resources.as_ref().ok_or_else(|| {
+            RenderError::Other("add_decal: decal pipeline unavailable".to_string())
+        })?;
         write_albedo_set(
             &self.hw.device,
             decals.albedo_sets[id],
@@ -855,11 +855,11 @@ impl VkContext {
     // Tombstone a runtime decal slot. The id becomes invalid; the next
     // `add_decal` may reuse it. Reached only through the bin's `cn debug`
     // runtime-mutation path (dead in the FFI lib, live in the bin).
-    pub(crate) fn remove_decal(&mut self, decal_id: usize) -> Result<(), String> {
+    pub(crate) fn remove_decal(&mut self, decal_id: usize) -> RenderResult<()> {
         self.decal
             .set
             .remove(decal_id)
-            .map_err(|e| format!("remove_decal: id {decal_id} {e}"))?;
+            .map_err(|e| RenderError::Other(format!("remove_decal: id {decal_id} {e}")))?;
         if let Some(decals) = &self.decal.resources {
             let mut slots = decals.decal_texture_slots.get();
             slots[decal_id] = usize::MAX;
@@ -934,13 +934,13 @@ impl VkContext {
     pub(in crate::vulkan) fn upload_initial_decals(
         &mut self,
         records: Vec<DecalRecord>,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         if records.len() > MAX_DECALS {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "decals: {} authored decals exceed MAX_DECALS ({})",
                 records.len(),
                 MAX_DECALS
-            ));
+            )));
         }
         for rec in records {
             self.add_decal(rec)?;

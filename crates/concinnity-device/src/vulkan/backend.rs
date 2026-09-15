@@ -199,8 +199,8 @@ impl LiveEdit for VkContext {
 
 impl SceneEffects for VkContext {
     forward! { assert = debug_assert_main_thread;
-        fn add_decal(&mut self, record: decal::DecalRecord) -> RenderResult<usize>;
-        fn remove_decal(&mut self, decal_id: usize) -> RenderResult<()>;
+        fn add_decal(&mut self, record: decal::DecalRecord) -> error::RenderResult<usize>;
+        fn remove_decal(&mut self, decal_id: usize) -> error::RenderResult<()>;
     }
 
     // Inherent particle methods carry the `_particle_` infix; the trait names
@@ -212,7 +212,7 @@ impl SceneEffects for VkContext {
 
     fn remove_emitter(&mut self, emitter_id: usize) -> RenderResult<()> {
         debug_assert_main_thread("remove_emitter");
-        Ok(self.remove_particle_emitter(emitter_id)?)
+        self.remove_particle_emitter(emitter_id)
     }
 }
 

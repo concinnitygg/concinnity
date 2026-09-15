@@ -13,7 +13,7 @@ use ash::vk;
 use concinnity_core::components::GlassPanel;
 use concinnity_core::geometry::glass_quad::build_glass_quad;
 use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 // `GlassParams` (the per-panel UBO) is a GPU-free layout struct that lives in
 // `core::render`; re-export it so `crate::vulkan::glass::GlassParams` is
 // unchanged for the `glass_params_from` path.
@@ -50,14 +50,18 @@ fn compile_glass_shaders(
     hot_reload: bool,
     msaa: bool,
     probe_cube_count: u32,
-) -> Result<(Vec<u8>, Vec<u8>), String> {
+) -> RenderResult<(Vec<u8>, Vec<u8>)> {
     let ctx = super::builtins::Ctx {
         hot_reload,
         msaa,
         probe_count: probe_cube_count as usize,
     };
-    let vert = super::slang_builtins::GLASS_VERT.compile(&ctx)?;
-    let frag = super::slang_builtins::GLASS_FRAG.compile(&ctx)?;
+    let vert = super::slang_builtins::GLASS_VERT
+        .compile(&ctx)
+        .map_err(RenderError::ShaderCompile)?;
+    let frag = super::slang_builtins::GLASS_FRAG
+        .compile(&ctx)
+        .map_err(RenderError::ShaderCompile)?;
     Ok((vert, frag))
 }
 
@@ -80,16 +84,24 @@ fn compile_glass_rt_shaders(
     msaa: bool,
     pool_size: usize,
     probe_cube_count: u32,
-) -> Result<GlassRtShaders, String> {
+) -> RenderResult<GlassRtShaders> {
     let ctx = super::builtins::Ctx {
         hot_reload,
         msaa,
         probe_count: probe_cube_count as usize,
     };
-    let vs = super::slang_builtins::GLASS_VERT.compile(&ctx)?;
-    let flat_fs = super::slang_builtins::GLASS_FRAG_RT.compile(&ctx)?;
+    let vs = super::slang_builtins::GLASS_VERT
+        .compile(&ctx)
+        .map_err(RenderError::ShaderCompile)?;
+    let flat_fs = super::slang_builtins::GLASS_FRAG_RT
+        .compile(&ctx)
+        .map_err(RenderError::ShaderCompile)?;
     let textured_fs = if pool_size > 0 {
-        Some(super::slang_builtins::GLASS_FRAG_RT_TEXTURED.compile(&ctx)?)
+        Some(
+            super::slang_builtins::GLASS_FRAG_RT_TEXTURED
+                .compile(&ctx)
+                .map_err(RenderError::ShaderCompile)?,
+        )
     } else {
         None
     };
@@ -200,7 +212,7 @@ type GlassRtPipelines = (
 fn build_glass_rt_pipelines(
     ctx: &ProducerCtx,
     flat_layout: vk::PipelineLayout,
-) -> Result<GlassRtPipelines, String> {
+) -> RenderResult<GlassRtPipelines> {
     let shaders = compile_glass_rt_shaders(
         ctx.hot_reload,
         ctx.msaa,
@@ -237,16 +249,24 @@ fn compile_glass_mesh_shaders(
     msaa: bool,
     pool_size: usize,
     probe_cube_count: u32,
-) -> Result<GlassRtShaders, String> {
+) -> RenderResult<GlassRtShaders> {
     let ctx = super::builtins::Ctx {
         hot_reload,
         msaa,
         probe_count: probe_cube_count as usize,
     };
-    let vs = super::slang_builtins::GLASS_MESH_VERT.compile(&ctx)?;
-    let flat_fs = super::slang_builtins::GLASS_MESH_FRAG_RT.compile(&ctx)?;
+    let vs = super::slang_builtins::GLASS_MESH_VERT
+        .compile(&ctx)
+        .map_err(RenderError::ShaderCompile)?;
+    let flat_fs = super::slang_builtins::GLASS_MESH_FRAG_RT
+        .compile(&ctx)
+        .map_err(RenderError::ShaderCompile)?;
     let textured_fs = if pool_size > 0 {
-        Some(super::slang_builtins::GLASS_MESH_FRAG_RT_TEXTURED.compile(&ctx)?)
+        Some(
+            super::slang_builtins::GLASS_MESH_FRAG_RT_TEXTURED
+                .compile(&ctx)
+                .map_err(RenderError::ShaderCompile)?,
+        )
     } else {
         None
     };

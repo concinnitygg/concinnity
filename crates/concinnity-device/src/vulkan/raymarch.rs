@@ -27,7 +27,7 @@ use concinnity_core::components::sdf_programs::SdfPrograms;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::{LightUniforms, ShadowUniforms};
 use concinnity_core::platform::Platform;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::slang_programs::raymarch::{self, Family};
 use concinnity_core::transform::mat4_inverse;
 use concinnity_slang::SlangTarget;
@@ -236,9 +236,9 @@ fn family_spirv(
     family: Family,
     hot_reload: bool,
     label: &str,
-) -> Result<(Vec<u8>, Vec<u8>), String> {
+) -> RenderResult<(Vec<u8>, Vec<u8>)> {
     let mut stages = raymarch::ALL.iter().filter(|p| p.family == family);
-    let spirv = |entry: &str| -> Result<Vec<u8>, String> {
+    let spirv = |entry: &str| -> RenderResult<Vec<u8>> {
         crate::shader::raymarch_source::artifact(
             programs,
             &crate::shader::raymarch_source::Request {
@@ -251,6 +251,7 @@ fn family_spirv(
             },
         )
         .map(|bytes| bytes.into_owned())
+        .map_err(RenderError::ShaderCompile)
     };
     let vert = spirv(
         stages
@@ -323,7 +324,7 @@ fn build_cube_buffers(alloc: &DeviceAllocator) -> RenderResult<CubeBuffers> {
 fn create_raymarch_render_pass_single(
     device: &VkDevice,
     format: vk::Format,
-) -> Result<OwnedRenderPass, String> {
+) -> RenderResult<OwnedRenderPass> {
     let attachments = [
         vk::AttachmentDescription::default()
             .format(format)
@@ -376,10 +377,10 @@ fn create_raymarch_render_pass_single(
         .dependencies(std::slice::from_ref(&dependency));
     device
         .create_render_pass(&info)
-        .map_err(|e| format!("raymarch render pass: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "raymarch render pass"))
 }
 
-fn create_view_set_layout(device: &VkDevice) -> Result<OwnedSetLayout, String> {
+fn create_view_set_layout(device: &VkDevice) -> RenderResult<OwnedSetLayout> {
     let vert_frag = vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT;
     let frag = vk::ShaderStageFlags::FRAGMENT;
     let ubo = |b: u32, stages: vk::ShaderStageFlags| {
@@ -408,10 +409,10 @@ fn create_view_set_layout(device: &VkDevice) -> Result<OwnedSetLayout, String> {
     let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
     device
         .create_descriptor_set_layout(&info)
-        .map_err(|e| format!("raymarch view set layout: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "raymarch view set layout"))
 }
 
-fn create_volume_set_layout(device: &VkDevice) -> Result<OwnedSetLayout, String> {
+fn create_volume_set_layout(device: &VkDevice) -> RenderResult<OwnedSetLayout> {
     let binding = vk::DescriptorSetLayoutBinding::default()
         .binding(0)
         .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
@@ -421,7 +422,7 @@ fn create_volume_set_layout(device: &VkDevice) -> Result<OwnedSetLayout, String>
         vk::DescriptorSetLayoutCreateInfo::default().bindings(std::slice::from_ref(&binding));
     device
         .create_descriptor_set_layout(&info)
-        .map_err(|e| format!("raymarch volume set layout: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "raymarch volume set layout"))
 }
 
 fn create_descriptor_pool(
@@ -429,7 +430,7 @@ fn create_descriptor_pool(
     frames: usize,
     volumes: usize,
     has_shadow: bool,
-) -> Result<OwnedDescriptorPool, String> {
+) -> RenderResult<OwnedDescriptorPool> {
     let f = frames as u32;
     let v = volumes as u32;
     // Shadow view sets (when any volume casts shadows): 3 UBOs each per frame.
@@ -452,14 +453,14 @@ fn create_descriptor_pool(
         .pool_sizes(&sizes);
     device
         .create_descriptor_pool(&info)
-        .map_err(|e| format!("raymarch descriptor pool: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "raymarch descriptor pool"))
 }
 
 // Minimal 3-UBO descriptor set layout for the shadow-caster pass: RaymarchView
 // (view_time), lights (sun direction), and the cascade light VPs. No texture
 // bindings (the shadow march never samples), so the shadow map being written
 // this pass is never also bound as a descriptor.
-fn create_shadow_view_set_layout(device: &VkDevice) -> Result<OwnedSetLayout, String> {
+fn create_shadow_view_set_layout(device: &VkDevice) -> RenderResult<OwnedSetLayout> {
     let frag = vk::ShaderStageFlags::FRAGMENT;
     let vert_frag = vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT;
     let ubo = |b: u32, stages: vk::ShaderStageFlags| {
@@ -477,7 +478,7 @@ fn create_shadow_view_set_layout(device: &VkDevice) -> Result<OwnedSetLayout, St
     let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
     device
         .create_descriptor_set_layout(&info)
-        .map_err(|e| format!("raymarch shadow view set layout: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "raymarch shadow view set layout"))
 }
 
 fn write_shadow_view_set(
@@ -519,14 +520,14 @@ fn alloc_sets(
     device: &VkDevice,
     pool: vk::DescriptorPool,
     layouts: &[vk::DescriptorSetLayout],
-) -> Result<Vec<vk::DescriptorSet>, String> {
+) -> RenderResult<Vec<vk::DescriptorSet>> {
     let info = vk::DescriptorSetAllocateInfo::default()
         .descriptor_pool(pool)
         .set_layouts(layouts);
     // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
     // names belongs to this device.
     unsafe { device.allocate_descriptor_sets(&info) }
-        .map_err(|e| format!("raymarch descriptor sets: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "raymarch descriptor sets"))
 }
 
 // The three UBOs bound into one per-frame view set: the per-frame RaymarchView,
@@ -650,7 +651,7 @@ fn create_pipeline(
     msaa_samples: vk::SampleCountFlags,
     vert_spv: &[u8],
     frag_spv: &[u8],
-) -> Result<OwnedPipeline, String> {
+) -> RenderResult<OwnedPipeline> {
     let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
     let stages = modules.infos();
 
@@ -713,7 +714,7 @@ fn create_pipeline(
         .layout(layout)
         .render_pass(render_pass);
     let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &info)
-        .map_err(|e| format!("create raymarch pipeline: {e}"))?;
+        .map_err(|e| super::error::map_vk_result(e, "create raymarch pipeline"))?;
     Ok(pipeline)
 }
 
@@ -730,7 +731,7 @@ fn create_volumetric_pipeline(
     msaa_samples: vk::SampleCountFlags,
     vert_spv: &[u8],
     frag_spv: &[u8],
-) -> Result<OwnedPipeline, String> {
+) -> RenderResult<OwnedPipeline> {
     let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
     let stages = modules.infos();
 
@@ -795,7 +796,7 @@ fn create_volumetric_pipeline(
         .layout(layout)
         .render_pass(render_pass);
     let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &info)
-        .map_err(|e| format!("create raymarch volumetric pipeline: {e}"))?;
+        .map_err(|e| super::error::map_vk_result(e, "create raymarch volumetric pipeline"))?;
     Ok(pipeline)
 }
 
@@ -809,7 +810,7 @@ fn create_shadow_pipeline(
     layout: vk::PipelineLayout,
     vert_spv: &[u8],
     frag_spv: &[u8],
-) -> Result<OwnedPipeline, String> {
+) -> RenderResult<OwnedPipeline> {
     let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
     let stages = modules.infos();
 
@@ -863,7 +864,7 @@ fn create_shadow_pipeline(
         .layout(layout)
         .render_pass(shadow_render_pass);
     let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &info)
-        .map_err(|e| format!("create raymarch shadow pipeline: {e}"))?;
+        .map_err(|e| super::error::map_vk_result(e, "create raymarch shadow pipeline"))?;
     Ok(pipeline)
 }
 
@@ -1022,7 +1023,7 @@ impl RaymarchResources {
             let info = vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
             device
                 .create_pipeline_layout(&info)
-                .map_err(|e| format!("raymarch pipeline layout: {e}"))?
+                .map_err(|e| super::error::map_vk_result(e, "raymarch pipeline layout"))?
         };
 
         let (cube_vb, cube_ib) = build_cube_buffers(alloc)?;
@@ -1085,7 +1086,7 @@ impl RaymarchResources {
                 .push_constant_ranges(std::slice::from_ref(&push));
             shadow_pipeline_layout = device
                 .create_pipeline_layout(&info)
-                .map_err(|e| format!("raymarch shadow pipeline layout: {e}"))?;
+                .map_err(|e| super::error::map_vk_result(e, "raymarch shadow pipeline layout"))?;
 
             for _ in 0..frames {
                 shadow_view_ubos.push(alloc.create_buffer(
@@ -1448,7 +1449,7 @@ impl VkContext {
         cmd: vk::CommandBuffer,
         frame_idx: usize,
         view: &RaymarchView,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let Some(rm) = self.raymarch.as_ref() else {
             return Ok(());
         };
@@ -1461,7 +1462,7 @@ impl VkContext {
             .targets
             .hdr_resolve_images
             .get(frame_idx)
-            .ok_or("raymarch: hdr_resolve index OOB")?
+            .ok_or_else(|| RenderError::Other("raymarch: hdr_resolve index OOB".to_string()))?
             .image;
         let snapshot = rm.snapshot.image;
         // The snapshot feeds the scene tap and nothing else. Skipping it leaves
@@ -1472,7 +1473,7 @@ impl VkContext {
         // Upload this frame's view.
         rm.view_ubos
             .get(frame_idx)
-            .ok_or("raymarch: view_ubos index OOB")?
+            .ok_or_else(|| RenderError::Other("raymarch: view_ubos index OOB".to_string()))?
             .write_val(0, view);
 
         let color_aspect = vk::ImageSubresourceRange {

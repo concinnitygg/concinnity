@@ -6,7 +6,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIGHT_LIST_STRIDE, ClusterParams};
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
@@ -61,7 +61,7 @@ impl VkLightCull {
 
 // Descriptor set layout for the light-cull kernel: the `ClusterParams` UBO, the
 // per-scene `GpuLight` SSBO, and the per-cluster list SSBO.
-fn create_light_cull_set_layout(device: &VkDevice) -> Result<OwnedSetLayout, String> {
+fn create_light_cull_set_layout(device: &VkDevice) -> RenderResult<OwnedSetLayout> {
     let bindings = [
         vk::DescriptorSetLayoutBinding::default()
             .binding(0)
@@ -82,7 +82,7 @@ fn create_light_cull_set_layout(device: &VkDevice) -> Result<OwnedSetLayout, Str
     let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
     device
         .create_descriptor_set_layout(&info)
-        .map_err(|e| format!("light cull set layout: {e}"))
+        .map_err(|e| super::error::map_vk_result(e, "light cull set layout"))
 }
 
 // Build the whole clustered-lighting state. `local_light_buffer` is the
@@ -143,10 +143,11 @@ pub(in crate::vulkan) fn build_light_cull(
     let layout_info = vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
     let pipeline_layout = device
         .create_pipeline_layout(&layout_info)
-        .map_err(|e| format!("light cull pipeline layout: {e}"))?;
+        .map_err(|e| super::error::map_vk_result(e, "light cull pipeline layout"))?;
 
-    let spirv =
-        super::slang_builtins::LIGHT_CULL.compile(&super::builtins::Ctx::plain(hot_reload))?;
+    let spirv = super::slang_builtins::LIGHT_CULL
+        .compile(&super::builtins::Ctx::plain(hot_reload))
+        .map_err(RenderError::ShaderCompile)?;
     let module = spv_module(device, &spirv)?;
     let stage = vk::PipelineShaderStageCreateInfo::default()
         .stage(vk::ShaderStageFlags::COMPUTE)
@@ -156,7 +157,7 @@ pub(in crate::vulkan) fn build_light_cull(
         .stage(stage)
         .layout(pipeline_layout.handle());
     let pipeline = crate::vulkan::pipeline_cache::create_compute_pipeline(device, &pipeline_info)
-        .map_err(|e| format!("light cull pipeline: {e}"))?;
+        .map_err(|e| super::error::map_vk_result(e, "light cull pipeline"))?;
 
     // One compute set per frame, each pointing at that frame's params UBO.
     let f = frames as u32;
@@ -175,7 +176,7 @@ pub(in crate::vulkan) fn build_light_cull(
         .pool_sizes(&sizes);
     let descriptor_pool = device
         .create_descriptor_pool(&pool_info)
-        .map_err(|e| format!("light cull descriptor pool: {e}"))?;
+        .map_err(|e| super::error::map_vk_result(e, "light cull descriptor pool"))?;
     let layouts: Vec<_> = (0..frames).map(|_| set_layout.handle()).collect();
     let alloc_info = vk::DescriptorSetAllocateInfo::default()
         .descriptor_pool(descriptor_pool.handle())
@@ -183,7 +184,7 @@ pub(in crate::vulkan) fn build_light_cull(
     // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
     // names belongs to this device.
     let sets = unsafe { device.allocate_descriptor_sets(&alloc_info) }
-        .map_err(|e| format!("light cull descriptor sets: {e}"))?;
+        .map_err(|e| super::error::map_vk_result(e, "light cull descriptor sets"))?;
 
     for (i, &set) in sets.iter().enumerate() {
         let params_info = vk::DescriptorBufferInfo::default()
