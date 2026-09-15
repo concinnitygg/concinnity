@@ -1,7 +1,6 @@
 //! Remove an asset from a world JSONL by its unique `name` field and rebuild.
 
 use concinnity_cook::authoring::world::{WORLD_JSONL, known_names, patch_world_jsonl};
-use concinnity_cook::build_from_path;
 
 /// Remove the asset named `name` from `world_path` and rebuild.
 ///
@@ -47,11 +46,7 @@ pub fn rm_at_path(world_path: &str, name: &str) -> std::io::Result<()> {
         ));
     }
 
-    build_from_path(
-        &crate::project::require()?,
-        world_path,
-        crate::cook_platform(),
-    )
+    super::build_world_file(world_path)
 }
 
 #[cfg(test)]

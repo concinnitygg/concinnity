@@ -26,7 +26,7 @@ use concinnity_host::store::blob::BlobData;
 // prepares through concinnity_cook directly and does not use this.
 pub(crate) fn prepare(content: &str) -> std::io::Result<LoadedWorld> {
     let loaded = concinnity_cook::prepare_world(content, crate::project::assets_dir().as_deref())
-        .map_err(|errs| concinnity_cook::check::report_validation_errors(&errs))?;
+        .map_err(|errs| crate::authoring::report_validation_errors(&errs))?;
 
     Ok(loaded)
 }
@@ -205,6 +205,17 @@ pub(crate) fn build_world_and_shadows(
 pub fn build_world_from_path(world_path: &str) -> std::io::Result<World> {
     let content = std::fs::read_to_string(world_path)?;
     build_world_from_str(&content)
+}
+
+// Compile the world file at `json_path` into the project's state tree, printing
+// every validation error before failing. The CLI commands that rebuild a world
+// file go through here.
+pub(crate) fn build_world_file(json_path: &str) -> std::io::Result<()> {
+    let tree = crate::project::require()?;
+    let content = std::fs::read_to_string(json_path)?;
+    let loaded = concinnity_cook::prepare_world(&content, Some(&tree.assets_dir()))
+        .map_err(|errs| crate::authoring::report_validation_errors(&errs))?;
+    concinnity_cook::build_loaded(&tree, loaded, crate::cook_platform())
 }
 
 /// Compile a world.jsonl file and write the compiled blobs + world-lock.json to

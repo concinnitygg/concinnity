@@ -274,7 +274,7 @@ fn records_of(
         .resources
         .iter()
         .zip(result.resource_locks.iter())
-        .filter(move |(r, _)| r.resource_kind == kind as u8)
+        .filter(move |(r, _)| r.resource_kind == kind)
         .map(|(r, l)| (r, l.name.as_str()))
 }
 
@@ -397,7 +397,7 @@ mod tests {
 
     fn record(kind: ResourceKind, handle: u32, blob: u32, offset: u64, len: u64) -> ResourceRecord {
         ResourceRecord {
-            resource_kind: kind as u8,
+            resource_kind: kind,
             handle,
             payload: Some(PayloadLocator {
                 blob_index: blob,
@@ -535,7 +535,7 @@ mod tests {
             ..Default::default()
         };
         result.resources.push(ResourceRecord {
-            resource_kind: ResourceKind::Material as u8,
+            resource_kind: ResourceKind::Material,
             handle: 0,
             payload: None,
             data_bytes: postcard::to_allocvec(&mat).unwrap(),
@@ -563,7 +563,7 @@ mod tests {
             ..Default::default()
         };
         result.resources.push(ResourceRecord {
-            resource_kind: ResourceKind::Material as u8,
+            resource_kind: ResourceKind::Material,
             handle: 0,
             payload: None,
             data_bytes: postcard::to_allocvec(&mat).unwrap(),

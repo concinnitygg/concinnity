@@ -118,7 +118,7 @@ mod tests {
     fn meta() -> BlobMeta {
         let defs = vec![def(3, vec![1, 2]), def(9, vec![])];
         let resources = vec![ResourceRecord {
-            resource_kind: ResourceKind::AudioClip as u8,
+            resource_kind: ResourceKind::AudioClip,
             handle: 0,
             payload: Some(PayloadLocator {
                 blob_index: 0,

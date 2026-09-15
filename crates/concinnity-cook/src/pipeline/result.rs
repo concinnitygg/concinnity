@@ -48,9 +48,9 @@ pub struct PipelineResult {
     /// Asset name of each def, index-aligned with `defs` (defs only carry the
     /// interned id; the lock file records the readable name).
     pub names: Vec<String>,
-    /// The blob's resource stream: compiled resources addressed by their dense
-    /// per-kind handle, carried alongside the component defs. Empty until a
-    /// resource kind migrates off the component registry (AudioClip first).
+    /// The blob's resource stream: every compiled resource of every
+    /// `ResourceKind`, addressed by its dense per-kind handle and carried
+    /// alongside the component defs.
     pub resources: Vec<ResourceRecord>,
     /// Per-scene exclusively-owned blob content, in scene declaration order.
     pub scene_groups: Vec<SceneGroup>,
@@ -91,7 +91,7 @@ impl PipelineResult {
     pub fn resource_names(&self, kind: ResourceKind) -> Vec<u32> {
         let mut names = Vec::new();
         for (record, lock) in self.resources.iter().zip(self.resource_locks.iter()) {
-            if record.resource_kind != kind as u8 {
+            if record.resource_kind != kind {
                 continue;
             }
             let slot = record.handle as usize;
@@ -112,7 +112,7 @@ impl PipelineResult {
             .resources
             .iter()
             .zip(self.resource_locks.iter())
-            .find(|(r, l)| r.resource_kind == kind as u8 && l.name == name)?
+            .find(|(r, l)| r.resource_kind == kind && l.name == name)?
             .0;
         let loc = record.payload.as_ref()?;
         let blob = self.payloads.get(loc.blob_index as usize)?;

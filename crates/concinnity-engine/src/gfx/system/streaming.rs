@@ -83,7 +83,7 @@ pub(super) fn deferred_texture_slots(
     let Some(groups) = ctx.resource::<crate::ecs::BlobSceneGroups>() else {
         return deferred;
     };
-    let texture_kind = concinnity_core::ecs::ResourceKind::Texture as u8;
+    let texture_kind = concinnity_core::ecs::ResourceKind::Texture;
     for group in &groups.0 {
         if group.scene == start {
             continue;
@@ -122,7 +122,7 @@ pub(super) fn deferred_mesh_sources(
         out.counts
             .insert(record.handle, (record.vertex_count, record.index_count));
     }
-    let mesh_kind = concinnity_core::ecs::ResourceKind::Mesh as u8;
+    let mesh_kind = concinnity_core::ecs::ResourceKind::Mesh;
     for group in &groups.0 {
         if group.scene == start {
             continue;
@@ -223,7 +223,7 @@ impl GraphicsSystem {
         if let Some(streamer) = &self.texture_streamer
             && let Some(groups) = ctx.resource::<crate::ecs::BlobSceneGroups>()
         {
-            let texture_kind = concinnity_core::ecs::ResourceKind::Texture as u8;
+            let texture_kind = concinnity_core::ecs::ResourceKind::Texture;
             for group in &groups.0 {
                 let Some(&idx) = scene_idx.get(&group.scene) else {
                     continue;
@@ -715,7 +715,11 @@ mod tests {
         }
     }
 
-    fn group(scene: AssetId, resources: Vec<(u8, u32)>, defs: Vec<AssetId>) -> SceneGroup {
+    fn group(
+        scene: AssetId,
+        resources: Vec<(ResourceKind, u32)>,
+        defs: Vec<AssetId>,
+    ) -> SceneGroup {
         SceneGroup {
             scene,
             resources,
@@ -733,8 +737,10 @@ mod tests {
         }
     }
 
-    const TEXTURE_KIND: u8 = concinnity_core::ecs::ResourceKind::Texture as u8;
-    const MESH_KIND: u8 = concinnity_core::ecs::ResourceKind::Mesh as u8;
+    use concinnity_core::ecs::ResourceKind;
+
+    const TEXTURE_KIND: ResourceKind = ResourceKind::Texture;
+    const MESH_KIND: ResourceKind = ResourceKind::Mesh;
 
     const START: AssetId = AssetId(10);
     const LATER: AssetId = AssetId(11);

@@ -99,7 +99,7 @@ use std::path::Path;
 
 use concinnity_cook::build_only::LoadedWorld;
 use concinnity_cook::pipeline::PipelineResult;
-use concinnity_cook::{build_compiled, check::report_validation_errors, prepare_world};
+use concinnity_cook::{build_compiled, prepare_world};
 use concinnity_core::ecs::ComponentAsset;
 use concinnity_host::store::blob::BlobData;
 
@@ -281,7 +281,9 @@ impl WorldBuilder {
         // process.
         let platform = concinnity_engine::platform::current();
         let loaded: LoadedWorld = prepare_world(&self.lines.concat(), assets_dir.as_deref())
-            .map_err(|errs| report_validation_errors(&errs))?;
+            .map_err(|errs| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, errs.join("\n"))
+            })?;
         build_compiled(loaded.assets, assets_dir.as_deref(), None, platform)
     }
 }
@@ -346,6 +348,7 @@ mod tests {
         .reference("target", "no_such_body");
         let err = spec.compile().expect_err("an unresolved reference fails");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("no_such_body"), "got: {err}");
     }
 
     #[test]

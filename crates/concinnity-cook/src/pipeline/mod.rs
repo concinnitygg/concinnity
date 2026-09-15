@@ -24,7 +24,7 @@ mod validate;
 mod fixtures;
 
 pub use entry::{
-    BuildProgress, build_compiled, build_compiled_with_progress, build_from_path,
+    BuildProgress, build_compiled, build_compiled_with_progress, build_from_path, build_loaded,
     build_pipeline_from_str, write_blobs_to, write_build_outputs,
 };
 pub use result::{MeshSourceInfo, PipelineResult, TextureSourceInfo};

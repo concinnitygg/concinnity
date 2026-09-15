@@ -32,20 +32,6 @@ pub(crate) mod voxel_world;
 
 use crate::authoring::world::WorldJsonlAsset;
 
-/// Print each validation error in CLI form and collapse them into a single
-/// io::Error. Shared by the `cn test` command and the build orchestrator so a
-/// failed world surfaces every problem in one pass.
-pub fn report_validation_errors(errors: &[String]) -> std::io::Error {
-    for e in errors {
-        eprintln!("error:   {}", e);
-    }
-    eprintln!("\nvalidation failed ({} error(s))", errors.len());
-    std::io::Error::new(
-        std::io::ErrorKind::InvalidData,
-        format!("validation failed with {} error(s)", errors.len()),
-    )
-}
-
 // The pure per-asset checks: JSON-shape validation that runs no compiler.
 fn check_authored_asset(
     type_norm: &str,
@@ -58,10 +44,10 @@ fn check_authored_asset(
         "variables" => behavior::check_variables(name, args),
         "shader" => shader::check(name, args),
         "prop" => prop::check(name, args),
-        "sdfvolume" | "sdf" => sdf_volume::check(name, args),
-        "voxelchunk" | "chunk" => voxel_chunk::check(name, args),
+        "sdfvolume" => sdf_volume::check(name, args),
+        "voxelchunk" => voxel_chunk::check(name, args),
         "voxelworld" => voxel_world::check(name, args),
-        "instancedprop" | "instanced" => instanced_prop::check(name, args),
+        "instancedprop" => instanced_prop::check(name, args),
         "triggervolume" => physics::check(name, args),
         "audioemitter" => audio::check_emitter(name, args),
         "audiocue" => audio::check_cue(name, args),
@@ -78,8 +64,8 @@ fn check_compiled_asset(
 ) -> Result<(), String> {
     match type_norm {
         "texture" => texture::check(name, args),
-        "cubemaptexture" | "cubemap" => cubemap_texture::check(name, args),
-        "environmentmap" | "envmap" | "ibl" => environment_map::check(name, args),
+        "cubemaptexture" => cubemap_texture::check(name, args),
+        "environmentmap" => environment_map::check(name, args),
         "mesh" | "proceduralmesh" => mesh::check(name, args),
         _ => Ok(()),
     }
@@ -209,22 +195,16 @@ mod tests {
         assert!(errs.iter().any(|e| e.contains("not_a_generator")));
     }
 
-    // Every spelling of a compile-backed asset type reaches the same check.
+    // Each compile-backed asset type reaches its own check.
     #[test]
-    fn check_asset_routes_each_type_alias() {
-        for alias in ["cubemaptexture", "cubemap"] {
-            let args = serde_json::json!({"source": "studio.png"});
-            let err = check_asset(alias, "c", &args).unwrap_err();
-            assert!(err.contains("Radiance .hdr"), "{alias}: {err}");
-        }
-        for alias in ["environmentmap", "envmap", "ibl"] {
-            let args = serde_json::json!({"generator": "aurora"});
-            let err = check_asset(alias, "e", &args).unwrap_err();
-            assert!(
-                err.contains("unknown EnvironmentMap generator"),
-                "{alias}: {err}"
-            );
-        }
+    fn check_asset_routes_compile_backed_types() {
+        let args = serde_json::json!({"source": "studio.png"});
+        let err = check_asset("cubemaptexture", "c", &args).unwrap_err();
+        assert!(err.contains("Radiance .hdr"), "{err}");
+
+        let args = serde_json::json!({"generator": "aurora"});
+        let err = check_asset("environmentmap", "e", &args).unwrap_err();
+        assert!(err.contains("unknown EnvironmentMap generator"), "{err}");
     }
 
     #[test]

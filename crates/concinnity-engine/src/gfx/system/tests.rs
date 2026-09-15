@@ -186,7 +186,7 @@ impl WorldBuilder {
         let mesh_handle = MeshHandle(self.mesh_records.len() as u32);
         self.mesh_records
             .push(concinnity_core::ecs::ResourceRecord {
-                resource_kind: concinnity_core::ecs::ResourceKind::Mesh as u8,
+                resource_kind: concinnity_core::ecs::ResourceKind::Mesh,
                 handle: mesh_handle.0,
                 payload: Some(mesh_loc),
                 data_bytes: Vec::new(),
@@ -198,7 +198,7 @@ impl WorldBuilder {
         let handle = self.texture_records.len() as u32;
         self.texture_records
             .push(concinnity_core::ecs::ResourceRecord {
-                resource_kind: concinnity_core::ecs::ResourceKind::Texture as u8,
+                resource_kind: concinnity_core::ecs::ResourceKind::Texture,
                 handle,
                 payload: Some(tex_loc),
                 data_bytes: Vec::new(),
@@ -215,7 +215,7 @@ impl WorldBuilder {
         .unwrap();
         self.material_records
             .push(concinnity_core::ecs::ResourceRecord {
-                resource_kind: concinnity_core::ecs::ResourceKind::Material as u8,
+                resource_kind: concinnity_core::ecs::ResourceKind::Material,
                 handle: mat_handle,
                 payload: None,
                 data_bytes: mat_bytes,
@@ -3094,7 +3094,7 @@ impl WorldBuilder {
         let handle = self.kind_records(kind).len() as u32;
         self.kind_records(kind)
             .push(concinnity_core::ecs::ResourceRecord {
-                resource_kind: kind as u8,
+                resource_kind: kind,
                 handle,
                 payload: Some(locator),
                 data_bytes: Vec::new(),
@@ -3364,7 +3364,7 @@ fn an_unreadable_environment_map_payload_fails_init() {
     // A locator past the end of the blob's only section.
     b.env_map_records
         .push(concinnity_core::ecs::ResourceRecord {
-            resource_kind: concinnity_core::ecs::ResourceKind::EnvironmentMap as u8,
+            resource_kind: concinnity_core::ecs::ResourceKind::EnvironmentMap,
             handle: 0,
             payload: Some(PayloadLocator {
                 blob_index: 0,
@@ -3629,7 +3629,7 @@ fn push_skinned_payload(b: &mut WorldBuilder, name: AssetId, sm: SkinnedMesh, pa
     let data = postcard::to_allocvec(&(name.0, sm)).unwrap();
     b.skinned_records
         .push(concinnity_core::ecs::ResourceRecord {
-            resource_kind: concinnity_core::ecs::ResourceKind::SkinnedMesh as u8,
+            resource_kind: concinnity_core::ecs::ResourceKind::SkinnedMesh,
             handle,
             payload: Some(locator),
             data_bytes: data,
@@ -3854,7 +3854,7 @@ fn a_skinned_mesh_without_usable_geometry_fails_init() {
         ))
         .unwrap();
         b.skinned_records.push(ResourceRecord {
-            resource_kind: ResourceKind::SkinnedMesh as u8,
+            resource_kind: ResourceKind::SkinnedMesh,
             handle: 0,
             payload,
             data_bytes: data,
@@ -3879,7 +3879,7 @@ fn a_skinned_mesh_without_usable_geometry_fails_init() {
     // Baked data that does not decode as a SkinnedMesh record.
     let mut b = scene_builder();
     b.skinned_records.push(ResourceRecord {
-        resource_kind: ResourceKind::SkinnedMesh as u8,
+        resource_kind: ResourceKind::SkinnedMesh,
         handle: 0,
         payload: None,
         data_bytes: vec![0xFF; 3],
@@ -3974,7 +3974,7 @@ impl WorldBuilder {
         let handle = self.material_records.len() as u32;
         self.material_records
             .push(concinnity_core::ecs::ResourceRecord {
-                resource_kind: concinnity_core::ecs::ResourceKind::Material as u8,
+                resource_kind: concinnity_core::ecs::ResourceKind::Material,
                 handle,
                 payload: None,
                 data_bytes: postcard::to_allocvec(&mat).unwrap(),
@@ -4089,7 +4089,7 @@ fn an_undecodable_material_record_fails_init() {
     let mut b = scene_builder();
     b.material_records
         .push(concinnity_core::ecs::ResourceRecord {
-            resource_kind: concinnity_core::ecs::ResourceKind::Material as u8,
+            resource_kind: concinnity_core::ecs::ResourceKind::Material,
             handle: 1,
             payload: None,
             data_bytes: vec![0xFF; 2],
@@ -4188,7 +4188,7 @@ fn skinned_lod_alternates_rebase_onto_their_slot_vertex_region() {
     ))
     .unwrap();
     b.skinned_records.push(ResourceRecord {
-        resource_kind: ResourceKind::SkinnedMesh as u8,
+        resource_kind: ResourceKind::SkinnedMesh,
         handle: 0,
         payload: Some(locator),
         data_bytes: data,

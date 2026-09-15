@@ -12,7 +12,7 @@ pub fn explain(name: &str, json_path: Option<&str>) -> std::io::Result<()> {
     let content = std::fs::read_to_string(&json_path)?;
 
     let loaded = concinnity_cook::prepare_world(&content, crate::project::assets_dir().as_deref())
-        .map_err(|errs| concinnity_cook::check::report_validation_errors(&errs))?;
+        .map_err(|errs| crate::authoring::report_validation_errors(&errs))?;
 
     let Some(asset) = loaded.assets.iter().find(|a| a.name == name) else {
         let mut close: Vec<&str> = loaded

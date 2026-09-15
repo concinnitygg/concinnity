@@ -138,7 +138,7 @@ pub fn list(json_path: Option<&str>, expanded: bool, systems: bool) -> std::io::
 // semantic validation), so the listing is exactly what lands in the blob.
 fn list_expanded(content: &str, json_path: &str) -> std::io::Result<()> {
     let loaded = concinnity_cook::prepare_world(content, crate::project::assets_dir().as_deref())
-        .map_err(|errs| concinnity_cook::check::report_validation_errors(&errs))?;
+        .map_err(|errs| crate::authoring::report_validation_errors(&errs))?;
 
     if loaded.assets.is_empty() {
         println!("{} expands to no assets.", json_path);

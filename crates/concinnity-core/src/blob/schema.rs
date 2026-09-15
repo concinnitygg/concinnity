@@ -6,6 +6,7 @@
 
 use crate::ecs::PayloadLocator;
 use crate::ecs::asset_id::AssetId;
+use crate::error::CnError;
 use alloc::vec::Vec;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -29,8 +30,10 @@ pub struct BlobAssetDef {
 /// space per kind. The `#[repr(u8)]` discriminant is the resource stream's
 /// `resource_kind` tag (like `ComponentTag` for components); cook writes it and
 /// the runtime selects the table by it. Order is the assignment order cook uses.
+/// Serialized as that `u8`, so an unknown tag fails to deserialize.
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "u8", into = "u8")]
 pub enum ResourceKind {
     /// Static mesh geometry.
     Mesh,
@@ -52,9 +55,34 @@ pub enum ResourceKind {
     SkinnedMesh,
 }
 
+impl From<ResourceKind> for u8 {
+    fn from(kind: ResourceKind) -> u8 {
+        kind as u8
+    }
+}
+
+impl TryFrom<u8> for ResourceKind {
+    type Error = CnError;
+
+    fn try_from(tag: u8) -> Result<Self, CnError> {
+        Ok(match tag {
+            0 => Self::Mesh,
+            1 => Self::Texture,
+            2 => Self::Material,
+            3 => Self::Font,
+            4 => Self::AudioClip,
+            5 => Self::CubemapTexture,
+            6 => Self::EnvironmentMap,
+            7 => Self::ColorLut,
+            8 => Self::SkinnedMesh,
+            _ => return Err(CnError::InvalidData),
+        })
+    }
+}
+
 /// One entry in the blob's resource stream: a compiled resource addressed by its
 /// dense per-kind handle, carried alongside the component stream. `resource_kind`
-/// selects the per-kind table (`ResourceKind as u8`); `handle` is the dense index
+/// selects the per-kind table; `handle` is the dense index
 /// within that kind (== the record's position within its kind). A payload
 /// resource (mesh, texture, audio clip) carries a `PayloadLocator` into the blob
 /// payload section; a data resource (a baked Material) carries its runtime bytes
@@ -62,8 +90,8 @@ pub enum ResourceKind {
 /// kind uses one branch (AudioClip uses `payload`).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ResourceRecord {
-    /// Which per-kind table this record belongs to (`ResourceKind as u8`).
-    pub resource_kind: u8,
+    /// Which per-kind table this record belongs to.
+    pub resource_kind: ResourceKind,
     /// Dense index within that kind.
     pub handle: u32,
     /// Where the compiled payload lives, for a payload resource.
@@ -196,7 +224,7 @@ pub struct SceneGroup {
     /// The scene that exclusively owns this content.
     pub scene: AssetId,
     /// (resource_kind, handle) pairs from the resource stream.
-    pub resources: Vec<(u8, u32)>,
+    pub resources: Vec<(ResourceKind, u32)>,
     /// Names of payload-carrying component defs.
     pub defs: Vec<AssetId>,
 }
@@ -218,7 +246,7 @@ mod tests {
             }),
         }];
         let resources = vec![ResourceRecord {
-            resource_kind: ResourceKind::Material as u8,
+            resource_kind: ResourceKind::Material,
             handle: 5,
             payload: None,
             data_bytes: vec![1, 2, 3, 4],
@@ -230,7 +258,7 @@ mod tests {
             manifest,
             scene_groups: vec![SceneGroup {
                 scene: AssetId(7),
-                resources: vec![(ResourceKind::Material as u8, 5)],
+                resources: vec![(ResourceKind::Material, 5)],
                 defs: vec![AssetId(3)],
             }],
             mesh_bounds: vec![MeshBoundsRecord {
@@ -267,7 +295,7 @@ mod tests {
     #[test]
     fn resource_record_round_trips_both_branches() {
         let payload_res = ResourceRecord {
-            resource_kind: ResourceKind::AudioClip as u8,
+            resource_kind: ResourceKind::AudioClip,
             handle: 0,
             payload: Some(PayloadLocator {
                 blob_index: 0,
@@ -277,7 +305,7 @@ mod tests {
             data_bytes: Vec::new(),
         };
         let data_res = ResourceRecord {
-            resource_kind: ResourceKind::Material as u8,
+            resource_kind: ResourceKind::Material,
             handle: 1,
             payload: None,
             data_bytes: vec![0xAA, 0xBB],
@@ -306,7 +334,7 @@ mod tests {
         };
         let defs = vec![def(7, 0), def(7, 2), def(3, 1)];
         let resources = vec![ResourceRecord {
-            resource_kind: ResourceKind::Texture as u8,
+            resource_kind: ResourceKind::Texture,
             handle: 0,
             payload: Some(PayloadLocator {
                 blob_index: 4,
@@ -336,5 +364,36 @@ mod tests {
         assert_eq!(ResourceKind::EnvironmentMap as u8, 6);
         assert_eq!(ResourceKind::ColorLut as u8, 7);
         assert_eq!(ResourceKind::SkinnedMesh as u8, 8);
+        for tag in 0..=8u8 {
+            let kind = ResourceKind::try_from(tag).expect("a known tag");
+            assert_eq!(u8::from(kind), tag);
+        }
+    }
+
+    // The serialized kind is its bare `u8` tag, so the blob bytes match a raw tag.
+    #[test]
+    fn resource_kind_serializes_as_its_u8_tag() {
+        assert_eq!(
+            postcard::to_allocvec(&ResourceKind::SkinnedMesh).expect("serialize"),
+            postcard::to_allocvec(&8u8).expect("serialize")
+        );
+    }
+
+    #[test]
+    fn a_resource_record_with_an_unknown_kind_tag_fails_to_deserialize() {
+        let record = ResourceRecord {
+            resource_kind: ResourceKind::Mesh,
+            handle: 0,
+            payload: None,
+            data_bytes: Vec::new(),
+        };
+        let mut bytes = postcard::to_allocvec(&record).expect("serialize");
+        assert_eq!(bytes[0], 0, "the kind tag leads the record");
+        bytes[0] = 9;
+        assert!(postcard::from_bytes::<ResourceRecord>(&bytes).is_err());
+        assert!(matches!(
+            ResourceKind::try_from(9),
+            Err(CnError::InvalidData)
+        ));
     }
 }

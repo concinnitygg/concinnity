@@ -155,7 +155,7 @@ mod tests {
     // branch of the footprint sum has something to add.
     fn record(kind: ResourceKind, handle: u32) -> ResourceRecord {
         ResourceRecord {
-            resource_kind: kind as u8,
+            resource_kind: kind,
             handle,
             payload: Some(PayloadLocator {
                 blob_index: 0,

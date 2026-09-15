@@ -17,7 +17,6 @@
 use concinnity_cook::asset_api::{AssetRequest, create_asset_def};
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::{WORLD_JSONL, patch_world_jsonl_to};
-use concinnity_cook::build_from_path;
 
 /// Add an asset to `world_path` and rebuild. See module docs.
 ///
@@ -112,11 +111,7 @@ pub fn add_to_path(
         Ok(())
     })?;
 
-    match build_from_path(
-        &crate::project::require()?,
-        &tmp_path,
-        crate::cook_platform(),
-    ) {
+    match super::build_world_file(&tmp_path) {
         Ok(()) => std::fs::rename(&tmp_path, world_path).inspect_err(|_e| {
             let _ = std::fs::remove_file(&tmp_path);
         }),

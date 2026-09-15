@@ -61,17 +61,16 @@ pub(crate) fn resource_table(
     records: &mut [ResourceRecord],
     kind: ResourceKind,
 ) -> Vec<ResourceEntry> {
-    let tag = kind as u8;
     let Some(max_handle) = records
         .iter()
-        .filter(|r| r.resource_kind == tag)
+        .filter(|r| r.resource_kind == kind)
         .map(|r| r.handle)
         .max()
     else {
         return Vec::new();
     };
     let mut table = vec![ResourceEntry::default(); max_handle as usize + 1];
-    for record in records.iter_mut().filter(|r| r.resource_kind == tag) {
+    for record in records.iter_mut().filter(|r| r.resource_kind == kind) {
         table[record.handle as usize] = ResourceEntry {
             payload: record.payload.clone(),
             data_bytes: core::mem::take(&mut record.data_bytes),
@@ -225,7 +224,7 @@ mod tests {
 
     fn rec(kind: ResourceKind, handle: u32, blob_index: u32) -> ResourceRecord {
         ResourceRecord {
-            resource_kind: kind as u8,
+            resource_kind: kind,
             handle,
             payload: Some(PayloadLocator {
                 blob_index,

@@ -12,7 +12,6 @@
 //! built for (host-only for now; see the --platform check).
 
 use concinnity_cook::authoring::world::WorldJsonlAsset;
-use concinnity_cook::build_from_path;
 use concinnity_cook::build_only::prepare_world;
 use concinnity_cook::paths::StateTree;
 use concinnity_host::scratch;
@@ -74,8 +73,7 @@ pub fn export(
     // Build the world exactly like `cn build` (validates, compiles, writes the
     // blobs + world-lock.json, reuses the build cache).
     let world_path = resolve_world_path(json_path)?;
-    let tree = crate::project::require()?;
-    build_from_path(&tree, &world_path, crate::cook_platform())?;
+    crate::authoring::build_world_file(&world_path)?;
 
     // Read the app metadata from the expanded world. The build above already
     // validated it, so this cannot fail on validation; map any error plainly.

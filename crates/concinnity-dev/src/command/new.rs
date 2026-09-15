@@ -1,5 +1,4 @@
 use concinnity_cook::authoring::world::WORLD_JSONL;
-use concinnity_cook::build_from_path;
 use concinnity_host::store::paths::StateTree;
 use std::path::{Path, PathBuf};
 
@@ -47,11 +46,7 @@ fn init_in_dir(dir: &str) -> std::io::Result<()> {
     println!("Created {}", world_path.display());
 
     let world_path_str = world_path.to_str().unwrap_or(WORLD_JSONL);
-    build_from_path(
-        &crate::project::require()?,
-        world_path_str,
-        crate::cook_platform(),
-    )
+    crate::authoring::build_world_file(world_path_str)
 }
 
 // The world already scaffolded in `dir`, if any: the one a new project writes,

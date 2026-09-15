@@ -1,5 +1,4 @@
 use concinnity_cook::authoring::world::find_world_jsonl;
-use concinnity_cook::build_from_path;
 
 // Compile a world to binary blobs and write world-lock.json.
 // Entry point for the `cn build` CLI subcommand.
@@ -22,9 +21,5 @@ pub fn build(json_path: Option<&str>) -> std::io::Result<()> {
             resolved.as_str()
         }
     };
-    build_from_path(
-        &crate::project::require()?,
-        json_path,
-        crate::cook_platform(),
-    )
+    crate::authoring::build_world_file(json_path)
 }

@@ -479,7 +479,7 @@ mod tests {
             component_def(4, None),
         ];
         let resources = vec![ResourceRecord {
-            resource_kind: 2,
+            resource_kind: concinnity_core::blob::ResourceKind::Material,
             handle: 0,
             payload: Some(locator(1, 0, 4)),
             data_bytes: vec![9, 9],

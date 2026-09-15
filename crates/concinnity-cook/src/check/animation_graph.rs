@@ -4,9 +4,8 @@
 // graph-ownership rules (one graph per mesh, no unreferenced clips) are
 // world-global passes in crate::check::cross_reference.
 
+use concinnity_core::animation::anim_graph::CmpOp;
 use serde_json::Value;
-
-const OPS: [&str; 6] = ["lt", "le", "gt", "ge", "eq", "ne"];
 
 pub(crate) fn check(name: &str, args: &Value) -> Result<(), String> {
     let err = |detail: String| Err(format!("AnimationGraph '{name}': {detail}"));
@@ -146,13 +145,10 @@ pub(crate) fn check(name: &str, args: &Value) -> Result<(), String> {
                     "transition #{i} condition #{j}: parameter '{param}' is not declared"
                 ));
             }
-            if let Some(op) = cond.get("op").and_then(|v| v.as_str())
-                && !OPS.contains(&op)
+            if let Some(op) = cond.get("op")
+                && let Err(e) = serde_json::from_value::<CmpOp>(op.clone())
             {
-                return err(format!(
-                    "transition #{i} condition #{j}: unknown op '{op}' (expected one of {})",
-                    OPS.join(", ")
-                ));
+                return err(format!("transition #{i} condition #{j}: {e}"));
             }
         }
     }
@@ -399,7 +395,41 @@ mod tests {
     fn unknown_op_fails() {
         let mut v = base();
         v["transitions"][0]["conditions"][0]["op"] = serde_json::json!("between");
-        assert!(check("g", &v).unwrap_err().contains("between"));
+        let e = check("g", &v).unwrap_err();
+        assert!(e.contains("between"), "got: {e}");
+        assert!(e.contains("condition #0"), "got: {e}");
+        assert!(e.contains("`ne`"), "the known ops are listed: {e}");
+    }
+
+    #[test]
+    fn non_string_op_fails() {
+        let mut v = base();
+        v["transitions"][0]["conditions"][0]["op"] = serde_json::json!(5);
+        let e = check("g", &v).unwrap_err();
+        assert!(e.contains("condition #0"), "got: {e}");
+    }
+
+    // The blend kinds matched above are the tags core's `AnimationBlend` writes.
+    #[test]
+    fn blend_kinds_match_the_animation_blend_tags() {
+        use concinnity_core::components::AnimationBlend;
+
+        let kind = |blend: AnimationBlend| serde_json::to_value(blend).unwrap()["kind"].clone();
+        let blend1d = AnimationBlend::Blend1d {
+            parameter: "p".into(),
+            points: vec![],
+            sync: false,
+        };
+        let blend2d = AnimationBlend::Blend2d {
+            parameter_x: "x".into(),
+            parameter_y: "y".into(),
+            x_values: vec![],
+            y_values: vec![],
+            rows: vec![],
+            sync: false,
+        };
+        assert_eq!(kind(blend1d), "blend1d");
+        assert_eq!(kind(blend2d), "blend2d");
     }
 
     #[test]

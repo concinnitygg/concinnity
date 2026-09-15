@@ -130,7 +130,7 @@ const RESOURCE_CACHE_DISC_BASE: u8 = 128;
 // (SkinnedMesh) carries alongside its payload (empty for everything else; it
 // bakes from the authored args, so it sits outside the payload cache).
 struct PendingResource {
-    kind: u8,
+    kind: crate::resource_handles::ResourceKind,
     handle: u32,
     bytes: Vec<u8>,
     is_data: bool,
@@ -211,36 +211,36 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
         progress,
     } = pack_ctx;
 
-    let compiled_indices: Vec<usize> = named
+    let compiled: Vec<(usize, RegisteredType)> = named
         .iter()
         .enumerate()
-        .filter(|(i, (_, def))| {
-            let Some(ct) = RegisteredType::from_discriminant(def.discriminant) else {
-                return false;
-            };
-            if ct.as_str() == "File" {
+        .filter_map(|(i, (_, def))| {
+            let ct = RegisteredType::from_discriminant(def.discriminant)?;
+            let compiles = if ct == RegisteredType::File {
                 // only compile File assets whose kind maps to a supported payload
                 // `named[i]` maps to `assets[named_src[i]]`.
-                return assets[named_src[*i]]
+                assets[named_src[i]]
                     .args
                     .get("kind")
                     .and_then(|k| k.as_str())
                     .and_then(FileKind::from_ext)
                     .map(|fk| fk.is_mesh())
-                    .unwrap_or(false);
-            }
-            ct.registration().needs_compilation()
+                    .unwrap_or(false)
+            } else {
+                ct.registration().needs_compilation()
+            };
+            compiles.then_some((i, ct))
         })
-        .map(|(i, _)| i)
         .collect();
 
     // Snapshot each job's inputs so the parallel compile borrows nothing from
-    // `named`, which is mutated afterwards to record payload locators.
-    let jobs: Vec<(usize, String, u8)> = compiled_indices
+    // `named`, which is mutated afterwards to record payload locators. The raw
+    // discriminant stays alongside the type because the payload cache keys on it.
+    let jobs: Vec<(usize, String, RegisteredType, u8)> = compiled
         .iter()
-        .map(|&idx| {
+        .map(|&(idx, ct)| {
             let (name, def) = &named[idx];
-            (idx, name.clone(), def.discriminant)
+            (idx, name.clone(), ct, def.discriminant)
         })
         .collect();
 
@@ -264,13 +264,8 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
     let pending: Vec<(usize, Vec<u8>)> = jobs
         .par_iter()
         .map(
-            |(idx, name, discriminant)| -> std::io::Result<(usize, Vec<u8>)> {
-                let ct = RegisteredType::from_discriminant(*discriminant).ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        format!("Invalid RegisteredType discriminant for asset '{}'", name),
-                    )
-                })?;
+            |(idx, name, ct, discriminant)| -> std::io::Result<(usize, Vec<u8>)> {
+                let ct = *ct;
 
                 // The job carries the `named` index; map it to its source asset
                 // via `named_src` (`named` is not 1:1 with `assets` once resource
@@ -373,7 +368,7 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
             }
         };
         resource_pending.push(PendingResource {
-            kind: job_resource_kind(*rt) as u8,
+            kind: job_resource_kind(*rt),
             handle: *handle,
             bytes,
             is_data: rt.is_data(),
@@ -439,7 +434,7 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
                 .iter()
                 .zip(&res_owners)
                 .filter(|(_, o)| **o == Owner::Scene(s))
-                .map(|((_, rt, handle), _)| (job_resource_kind(*rt) as u8, *handle))
+                .map(|((_, rt, handle), _)| (job_resource_kind(*rt), *handle))
                 .collect(),
             defs: pending
                 .iter()
@@ -660,7 +655,7 @@ mod tests {
             (resource.blob_index, resource.offset, resource.len),
             (0, 3, 4)
         );
-        assert_eq!(out.resources[0].resource_kind, ResourceKind::Mesh as u8);
+        assert_eq!(out.resources[0].resource_kind, ResourceKind::Mesh);
         assert_eq!(out.resources[0].handle, 0);
     }
 
@@ -737,10 +732,7 @@ mod tests {
         assert_eq!((bg.blob_index, bg.offset, bg.len), (0, 0, 2));
 
         assert_eq!(out.scene_groups.len(), 1);
-        assert_eq!(
-            out.scene_groups[0].resources,
-            vec![(ResourceKind::Mesh as u8, 0)]
-        );
+        assert_eq!(out.scene_groups[0].resources, vec![(ResourceKind::Mesh, 0)]);
         assert!(out.scene_groups[0].defs.is_empty());
     }
 

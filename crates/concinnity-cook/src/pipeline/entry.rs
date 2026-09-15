@@ -29,10 +29,21 @@ pub fn build_from_path(
     platform: Platform,
 ) -> std::io::Result<()> {
     let content = std::fs::read_to_string(json_path)?;
-    let assets_dir = tree.assets_dir();
-    let loaded = crate::build_only::prepare_world(&content, Some(&assets_dir))
-        .map_err(|errs| crate::check::report_validation_errors(&errs))?;
+    let loaded = crate::build_only::prepare_world(&content, Some(&tree.assets_dir()))
+        .map_err(errors_to_io)?;
+    build_loaded(tree, loaded, platform)
+}
 
+/// Compile a world that already passed
+/// [`prepare_world`](crate::build_only::prepare_world) against the tree's
+/// `assets/`, and write its blobs and lock into `tree`. The tail of
+/// [`build_from_path`], for a host that reports validation errors itself.
+pub fn build_loaded(
+    tree: &crate::paths::StateTree,
+    loaded: crate::build_only::LoadedWorld,
+    platform: Platform,
+) -> std::io::Result<()> {
+    let assets_dir = tree.assets_dir();
     let result = build_compiled(loaded.assets, Some(&assets_dir), None, platform)?;
 
     let pack_result = write_build_outputs(tree, &result, &loaded.injected, &loaded.shadowed)?;
@@ -596,6 +607,30 @@ mod tests {
         let err = build_from_path(&tree, world.to_str().unwrap(), Platform::Metal)
             .expect_err("malformed world");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    // A library caller gets every validation message, not just a count.
+    #[test]
+    fn build_from_path_carries_every_validation_message() {
+        let dir = concinnity_testing::TempTree::new();
+        let world = dir.path().join("world.jsonl");
+        std::fs::write(
+            &world,
+            concat!(
+                r#"{"name":"bad_prop","type":"Prop","args":{}}"#,
+                "\n",
+                r#"{"name":"bad_mat","type":"Material","args":{"albedo":"ghost"}}"#,
+                "\n",
+            ),
+        )
+        .expect("write world");
+        let tree = crate::paths::StateTree::at(dir.path());
+        let err = build_from_path(&tree, world.to_str().unwrap(), Platform::Metal)
+            .expect_err("an invalid world");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        let msg = err.to_string();
+        assert!(msg.contains("bad_prop"), "got: {msg}");
+        assert!(msg.contains("ghost"), "got: {msg}");
     }
 
     // A lock that cannot be written fails the build: shipping blobs without the

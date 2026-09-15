@@ -13,10 +13,7 @@
 //! an asset's args and sources into its payload, and `pipeline` / `blob` /
 //! `cache` at the root drive the whole run.
 //!
-//! Bridge: the vocabulary and compute modules below are re-exported crate-wide
-//! so code moved here keeps resolving its `crate::{components,ecs,gfx,result}`
-//! paths. `crate::components` is the runtime half only; the authoring-only
-//! types this crate expands away are named from
+//! The authoring-only types this crate expands away are named from
 //! `crate::authoring::registry::build_only` where they are used, so a use site
 //! says which half it works on. The payload *decoders* and shared payload types
 //! live in `concinnity_core::bake`; this crate's modules call back into them.
@@ -74,5 +71,6 @@ pub mod resource_handles;
 pub use build_only::prepare_world;
 pub use pipeline::{
     BuildProgress, PipelineResult, build_compiled, build_compiled_with_progress, build_from_path,
-    build_pipeline_from_str, validate_asset, validate_world_jsonl, write_build_outputs,
+    build_loaded, build_pipeline_from_str, validate_asset, validate_world_jsonl,
+    write_build_outputs,
 };

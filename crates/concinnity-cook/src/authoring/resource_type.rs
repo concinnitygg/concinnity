@@ -48,7 +48,7 @@ pub(crate) fn mesh_source_block(asset_type: &str, args: &serde_json::Value) -> O
     match norm_type(asset_type).as_str() {
         "mesh" => Some(MeshBlock::Mesh),
         "proceduralmesh" => Some(MeshBlock::ProceduralMesh),
-        "voxelchunk" | "chunk" => Some(MeshBlock::VoxelChunk),
+        "voxelchunk" => Some(MeshBlock::VoxelChunk),
         "file" => file_is_mesh(args).then_some(MeshBlock::File),
         _ => None,
     }

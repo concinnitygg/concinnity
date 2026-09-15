@@ -549,7 +549,7 @@ mod tests {
             let handle = AudioClipHandle(self.clips.len() as u32);
             let locator = self.payload(bytes);
             self.clips.push(ResourceRecord {
-                resource_kind: ResourceKind::AudioClip as u8,
+                resource_kind: ResourceKind::AudioClip,
                 handle: handle.0,
                 payload: Some(locator),
                 data_bytes: Vec::new(),

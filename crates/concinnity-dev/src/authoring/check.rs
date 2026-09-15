@@ -20,13 +20,35 @@ pub fn check_from_str(content: &str, label: &str) -> std::io::Result<()> {
             println!("ok: {} asset(s) passed in {}", loaded.assets.len(), label);
             Ok(())
         }
-        Err(errors) => Err(concinnity_cook::check::report_validation_errors(&errors)),
+        Err(errors) => Err(report_validation_errors(&errors)),
     }
+}
+
+/// Print each validation error in CLI form and collapse them into a single
+/// io::Error naming the count, so a failed world surfaces every problem in one
+/// pass.
+pub(crate) fn report_validation_errors(errors: &[String]) -> std::io::Error {
+    for e in errors {
+        eprintln!("error:   {}", e);
+    }
+    eprintln!("\nvalidation failed ({} error(s))", errors.len());
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        format!("validation failed with {} error(s)", errors.len()),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn report_validation_errors_names_the_count() {
+        let errors = vec!["first".to_string(), "second".to_string()];
+        let err = report_validation_errors(&errors);
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("2 error(s)"), "got: {err}");
+    }
 
     #[test]
     fn check_from_str_accepts_a_valid_world() {

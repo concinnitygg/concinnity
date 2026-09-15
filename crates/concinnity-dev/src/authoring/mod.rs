@@ -10,10 +10,13 @@ mod rm;
 mod template_spec;
 
 pub use add::add_to_path;
-pub(crate) use build::{build_world_and_shadows, build_world_str_to_disk_with_progress};
+pub(crate) use build::{
+    build_world_and_shadows, build_world_file, build_world_str_to_disk_with_progress,
+};
 pub use build::{
     build_world_from_path, build_world_from_str, build_world_to_disk, world_from_loaded,
 };
+pub(crate) use check::report_validation_errors;
 pub use check::{check_at_path, check_from_str};
 pub use rm::rm_at_path;
 pub use template_spec::{arg_value_to_json, spec_args, spec_to_value, world_template_entries};

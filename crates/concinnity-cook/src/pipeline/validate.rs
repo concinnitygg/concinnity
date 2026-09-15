@@ -6,6 +6,7 @@ use std::path::Path;
 
 use super::errors_to_io;
 use crate::asset_api::{self, AssetRequest};
+use crate::authoring::registry::{AssetOrigin, RegisteredType};
 
 /// Validate a single asset's type and generator without running the full build
 /// pipeline. Called by the server on each world_add so the LLM gets per-asset
@@ -30,28 +31,17 @@ pub fn validate_asset(
     asset_id::reset_interner();
     crate::resource_handles::reset_resource_handles();
     let type_norm = asset_type.to_lowercase().replace('_', "");
+    let registered = RegisteredType::parse(asset_type);
 
-    // Build-time types are valid in world.jsonl; they are consumed by expansion
+    // Build-only types are valid in world.jsonl; they are consumed by expansion
     // functions before the runtime asset registry sees them.
-    if matches!(
-        type_norm.as_str(),
-        "environment"
-            | "lightrig"
-            | "materialpalette"
-            | "camerashot"
-            | "prefab"
-            | "sceneimport"
-            | "characterschema"
-            | "charactermodel"
-    ) {
+    if registered.is_some_and(|t| t.registration().origin == AssetOrigin::BuildOnly) {
         return Ok(());
     }
 
     // A resource asset never builds a component def; validate it as a known type
     // with a structural check instead of routing through `create_asset_def`.
-    if crate::authoring::registry::RegisteredType::parse(asset_type)
-        .is_some_and(|t| t.is_resource())
-    {
+    if registered.is_some_and(|t| t.is_resource()) {
         crate::check::check_asset(&type_norm, name, args)?;
         return Ok(());
     }
@@ -134,18 +124,18 @@ mod tests {
 
     #[test]
     fn validate_asset_accepts_build_time_expansion_types() {
-        // Build-time types are expanded before the runtime registry sees
+        // Build-only types are expanded before the runtime registry sees
         // them, so they validate structurally regardless of args.
-        for ty in [
-            "SceneImport",
-            "Environment",
-            "LightRig",
-            "Prefab",
-            "CharacterSchema",
-            "CharacterModel",
-        ] {
-            validate_asset(ty, "x", &serde_json::json!({}))
-                .unwrap_or_else(|e| panic!("{ty} should validate: {e}"));
+        let build_only: Vec<RegisteredType> = RegisteredType::all()
+            .iter()
+            .copied()
+            .filter(|t| t.registration().origin == AssetOrigin::BuildOnly)
+            .collect();
+        assert!(build_only.contains(&RegisteredType::MainMenu));
+        assert!(build_only.contains(&RegisteredType::Slider));
+        for ty in build_only {
+            validate_asset(ty.as_str(), "x", &serde_json::json!({}))
+                .unwrap_or_else(|e| panic!("{} should validate: {e}", ty.as_str()));
         }
     }
 
