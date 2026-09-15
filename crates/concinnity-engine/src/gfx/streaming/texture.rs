@@ -253,6 +253,23 @@ impl TextureStreamer {
         applied
     }
 
+    // Roll a slot whose recorded upload was refused back to `Unloaded`, so the
+    // planner re-dispatches it. Unloading removes its bytes from the resident
+    // sum.
+    pub(crate) fn note_upload_failed(&mut self, slot: usize) {
+        tracing::debug!(
+            "texture stream: upload of slot {} deferred, will retry",
+            slot
+        );
+        self.planner.mark_unloaded(slot);
+    }
+
+    // Restore a slot whose recorded eviction failed: the texture is still on
+    // the GPU, so its bytes count toward the resident sum again.
+    pub(crate) fn note_evict_failed(&mut self, slot: usize, frame: u64) {
+        self.planner.restore_resident(slot, frame);
+    }
+
     // `(resident, pending, unloaded)` slot counts, for diagnostics.
     pub(crate) fn stats(&self) -> (usize, usize, usize) {
         self.planner.counts()
@@ -445,6 +462,40 @@ mod tests {
         assert_eq!(uploads, 0, "a failed load uploads no pixels");
         assert_eq!(streamer.stats(), (1, 0, 0));
         assert_eq!(streamer.resident_bytes(), 0);
+    }
+
+    #[test]
+    fn upload_failure_rolls_back_to_unloaded_for_retry() {
+        let centers = vec![vec![[1.0, 0.0, 0.0]]];
+        let mut streamer = TextureStreamer::new(Arc::new(ConstSource), centers, 4, 8);
+        streamer.update_scores([0.0, 0.0, 0.0], 1);
+        streamer.plan_and_dispatch();
+        assert_eq!(drain_until(&mut streamer, 1, 1), 1);
+        streamer.note_upload_failed(0);
+        assert_eq!(streamer.stats(), (0, 0, 1));
+
+        streamer.update_scores([0.0, 0.0, 0.0], 2);
+        streamer.plan_and_dispatch();
+        drain_until(&mut streamer, 2, 1);
+        assert_eq!(streamer.stats().0, 1);
+    }
+
+    #[test]
+    fn evict_failure_restores_the_slot_to_resident() {
+        let centers = vec![vec![[1.0, 0.0, 0.0]]];
+        let mut streamer = TextureStreamer::new(Arc::new(ConstSource), centers, 4, 8);
+        streamer.update_scores([0.0, 0.0, 0.0], 1);
+        streamer.plan_and_dispatch();
+        drain_until(&mut streamer, 1, 1);
+        let resident_bytes = streamer.resident_bytes();
+        assert!(resident_bytes > 0);
+
+        streamer.set_blocked(0, true);
+        assert_eq!(streamer.plan_and_dispatch(), vec![0]);
+        assert_eq!(streamer.resident_bytes(), 0);
+        streamer.note_evict_failed(0, 2);
+        assert_eq!(streamer.stats(), (1, 0, 0));
+        assert_eq!(streamer.resident_bytes(), resident_bytes);
     }
 
     #[test]

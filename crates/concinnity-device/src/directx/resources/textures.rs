@@ -6,6 +6,7 @@
 use concinnity_core::bake;
 use concinnity_core::gfx::render_types::*;
 use concinnity_core::render::draw_slot;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::super::context::*;
@@ -81,13 +82,13 @@ impl DxContext {
         &mut self,
         slot: usize,
         image: &bake::texture::TextureImage,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         if slot >= self.scene.textures.len() {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "update_texture_slot: slot {} out of range (pool size {})",
                 slot,
                 self.scene.textures.len()
-            ));
+            )));
         }
         if self.streamed_slot_needs_drain() {
             self.wait_idle();
@@ -146,7 +147,7 @@ impl DxContext {
     // not yet resident; a later `update_texture_slot` brings the real texture
     // back. The gray is distinct from the white no-texture fallback so a
     // not-yet-streamed slot reads differently under inspection.
-    pub(crate) fn evict_texture_slot(&mut self, slot: usize) -> Result<(), String> {
+    pub(crate) fn evict_texture_slot(&mut self, slot: usize) -> RenderResult<()> {
         let gray = bake::texture::TextureImage::rgba8(1, 1, vec![128, 128, 128, 255]);
         self.update_texture_slot(slot, &gray)
     }
@@ -159,7 +160,7 @@ impl DxContext {
     // guarantees no in-flight command list still references the old texture
     // (or the now-stale SRV) before it is overwritten and dropped. Mirrors
     // `MtlContext::update_color_lut`.
-    pub(crate) fn update_color_lut(&mut self, size: u32, data: &[u8]) -> Result<(), String> {
+    pub(crate) fn update_color_lut(&mut self, size: u32, data: &[u8]) -> RenderResult<()> {
         self.wait_idle();
         let srv_cpu = self.scene.color_lut.srv_cpu;
         let srv_gpu = self.scene.color_lut.srv_gpu;
@@ -179,9 +180,9 @@ impl DxContext {
     // no in-flight command list still references the old cubes (or the
     // now-stale SRVs) before they are overwritten and dropped. Mirrors
     // `MtlContext::update_environment_map`.
-    pub(crate) fn update_environment_map(&mut self, payload: &[u8]) -> Result<(), String> {
+    pub(crate) fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()> {
         let view = bake::environment_map::deserialize(payload)
-            .map_err(|e| format!("envmap hot-reload payload malformed: {e}"))?;
+            .map_err(|e| RenderError::Other(format!("envmap hot-reload payload malformed: {e}")))?;
         self.wait_idle();
         let irr_srv_cpu = self.scene.env_map.irradiance.srv_cpu;
         let irr_srv_gpu = self.scene.env_map.irradiance.srv_gpu;

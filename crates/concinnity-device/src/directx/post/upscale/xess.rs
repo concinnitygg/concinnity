@@ -11,6 +11,7 @@
     reason = "inline XeSS bindings keep the SDK's own C type names"
 )]
 
+use concinnity_core::render::error::{RenderError, RenderResult};
 use std::ffi::{CStr, c_void};
 use std::ptr;
 use windows::Win32::Foundation::HMODULE;
@@ -232,7 +233,7 @@ impl XessUpscaler {
         output_uav_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
         output_srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
         output_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-    ) -> Result<Option<Self>, String> {
+    ) -> RenderResult<Option<Self>> {
         let xess = match XessApi::load() {
             Some(api) => api,
             None => {
@@ -386,7 +387,7 @@ impl super::UpscaleBackend for XessUpscaler {
         cmd: &ID3D12GraphicsCommandList,
         inputs: super::UpscaleInputs<'_>,
         camera: super::UpscaleCamera,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let super::UpscaleInputs {
             color,
             depth,
@@ -422,7 +423,9 @@ impl super::UpscaleBackend for XessUpscaler {
         // alive for the frame.
         let rc = unsafe { (self.xess.execute)(self.ctx, cmd_list_raw(cmd), &params) };
         if rc != XESS_RESULT_SUCCESS {
-            return Err(format!("xessD3D12Execute returned {rc}"));
+            return Err(RenderError::Other(format!(
+                "xessD3D12Execute returned {rc}"
+            )));
         }
         Ok(())
     }

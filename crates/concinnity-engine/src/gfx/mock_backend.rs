@@ -179,6 +179,10 @@ pub(crate) struct MockState {
     pub(crate) fail_reload: Option<String>,
     // When set, upload_skinned_morphs returns this error instead of Ok.
     pub(crate) fail_morph_upload: Option<RenderError>,
+    // When set, update_texture_slot returns this error instead of Ok.
+    pub(crate) fail_texture_upload: Option<RenderError>,
+    // When set, evict_texture_slot returns this error instead of Ok.
+    pub(crate) fail_texture_evict: Option<RenderError>,
     // When set, apply_quality_settings returns this error instead of Ok.
     pub(crate) fail_quality: Option<RenderError>,
     // Snapshot the next take_input() returns, then reset to default
@@ -206,6 +210,8 @@ impl Default for MockState {
             fail_draw: None,
             fail_reload: None,
             fail_morph_upload: None,
+            fail_texture_upload: None,
+            fail_texture_evict: None,
             fail_quality: None,
             next_input: InputSnapshot::default(),
             logical_size: (1280.0, 720.0),
@@ -455,8 +461,9 @@ impl SkinnedDraws for MockBackend {
 
 impl DrawStreaming for MockBackend {
     fn evict_texture_slot(&mut self, slot: usize) -> RenderResult<()> {
-        self.record(Call::EvictTextureSlot(slot));
-        Ok(())
+        let mut s = self.state.lock().unwrap();
+        s.calls.push(Call::EvictTextureSlot(slot));
+        s.fail_texture_evict.clone().map_or(Ok(()), Err)
     }
 
     fn update_texture_slot(
@@ -464,12 +471,13 @@ impl DrawStreaming for MockBackend {
         slot: usize,
         image: &texture::TextureImage,
     ) -> RenderResult<()> {
-        self.record(Call::UpdateTextureSlot {
+        let mut s = self.state.lock().unwrap();
+        s.calls.push(Call::UpdateTextureSlot {
             slot,
             w: image.width(),
             h: image.height(),
         });
-        Ok(())
+        s.fail_texture_upload.clone().map_or(Ok(()), Err)
     }
 
     fn evict_mesh(&mut self, draw_idx: usize, _retire_frame: u64) -> RenderResult<()> {

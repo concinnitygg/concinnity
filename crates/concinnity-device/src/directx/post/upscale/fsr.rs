@@ -26,6 +26,7 @@
     reason = "inline FFX bindings keep the SDK's own C type names"
 )]
 
+use concinnity_core::render::error::{RenderError, RenderResult};
 use std::ffi::{CStr, c_void};
 use std::ptr;
 use windows::Win32::Foundation::HMODULE;
@@ -418,7 +419,7 @@ impl FsrUpscaler {
         output_uav_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
         output_srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
         output_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-    ) -> Result<Option<Self>, String> {
+    ) -> RenderResult<Option<Self>> {
         // FFX FSR3 needs the Agility SDK bundled at build time. Microsoft's
         // `d3d12.dll` reads `D3D12SDKVersion` + `D3D12SDKPath` exports from
         // the host EXE at process start and loads a recent `D3D12Core.dll`
@@ -703,7 +704,7 @@ impl super::UpscaleBackend for FsrUpscaler {
         cmd: &ID3D12GraphicsCommandList,
         inputs: super::UpscaleInputs<'_>,
         camera: super::UpscaleCamera,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let super::UpscaleInputs {
             color,
             depth,
@@ -833,7 +834,9 @@ impl super::UpscaleBackend for FsrUpscaler {
         // re-order any of its initialization past the call.
         let _ = &mut desc.header;
         if rc != FFX_API_RETURN_OK {
-            return Err(format!("ffxDispatch (upscale) returned {rc}"));
+            return Err(RenderError::Other(format!(
+                "ffxDispatch (upscale) returned {rc}"
+            )));
         }
         Ok(())
     }
@@ -856,7 +859,7 @@ impl crate::directx::context::DxContext {
         &self,
         cmd: &windows::Win32::Graphics::Direct3D12::ID3D12GraphicsCommandList,
         params: &crate::directx::graph_exec::GraphFrameParams<'_>,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         use windows::Win32::Graphics::Direct3D12::*;
         let upscaler = match &self.upscale.backend {
             Some(u) => u,
@@ -879,9 +882,9 @@ impl crate::directx::context::DxContext {
                 // Init forces the G-buffer to be built when upscale is on (it
                 // owns the velocity + depth FSR consumes); the only way to hit
                 // this branch is a programming error in init.
-                return Err(
+                return Err(RenderError::Other(
                     "Upscale enabled but G-buffer resources (velocity / depth) are missing".into(),
-                );
+                ));
             }
         };
 

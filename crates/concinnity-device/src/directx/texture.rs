@@ -2,6 +2,7 @@
 // All texture uploads use an upload heap (CPU-visible) that is copied to a
 // default heap (GPU-local) via CopyTextureRegion on a one-shot command list.
 
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::mipmap;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -9,6 +10,7 @@ use windows::core::Interface;
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledTexture};
 use super::com;
+use super::error::map_hresult;
 
 // GPU resource handle
 
@@ -281,16 +283,16 @@ pub(super) fn upload_texture_resource_deferred(
     width: u32,
     height: u32,
     pixels: &[u8],
-) -> Result<(PooledTexture, UploadInFlight), String> {
+) -> RenderResult<(PooledTexture, UploadInFlight)> {
     let base = (width as usize) * (height as usize) * 4;
     if pixels.len() < base {
-        return Err(format!(
+        return Err(RenderError::Other(format!(
             "pixel data too short for {}x{} texture ({} bytes, need {})",
             width,
             height,
             pixels.len(),
             base
-        ));
+        )));
     }
 
     // Box-filtered mip chain so the texture minifies through hardware trilinear /
@@ -335,13 +337,13 @@ fn dxgi_texture_format(format: concinnity_core::bake::texture::TextureFormat) ->
 pub(super) fn upload_texture_image_deferred(
     alloc: &DeviceAllocator,
     image: &concinnity_core::bake::texture::TextureImage,
-) -> Result<(PooledTexture, UploadInFlight), String> {
+) -> RenderResult<(PooledTexture, UploadInFlight)> {
     use concinnity_core::bake::texture::TextureFormat;
     if image.format == TextureFormat::Rgba8 {
         let mip = image
             .mips
             .first()
-            .ok_or("RGBA8 texture image has no mip level")?;
+            .ok_or_else(|| RenderError::Other("RGBA8 texture image has no mip level".into()))?;
         return upload_texture_resource_deferred(alloc, mip.width, mip.height, &mip.data);
     }
     let levels: Vec<TextureLevel<'_>> = image
@@ -360,7 +362,7 @@ pub(super) fn upload_texture_image_deferred(
 pub(super) fn upload_texture_image(
     alloc: &DeviceAllocator,
     image: &concinnity_core::bake::texture::TextureImage,
-) -> Result<PooledTexture, String> {
+) -> RenderResult<PooledTexture> {
     let (texture, in_flight) = upload_texture_image_deferred(alloc, image)?;
     wait_for_upload(alloc.device(), alloc.queue())?;
     drop(in_flight);
@@ -375,9 +377,11 @@ fn upload_texture_levels_deferred(
     alloc: &DeviceAllocator,
     format: DXGI_FORMAT,
     levels: &[TextureLevel<'_>],
-) -> Result<(PooledTexture, UploadInFlight), String> {
+) -> RenderResult<(PooledTexture, UploadInFlight)> {
     let device = alloc.device();
-    let base = levels.first().ok_or("texture upload has no mip level")?;
+    let base = levels
+        .first()
+        .ok_or_else(|| RenderError::Other("texture upload has no mip level".into()))?;
     let (width, height) = (base.width, base.height);
     let mip_count = levels.len() as u32;
 
@@ -422,8 +426,7 @@ fn upload_texture_levels_deferred(
     }
 
     // Upload heap holding every mip packed at its footprint offset.
-    let upload = create_buffer(
-        alloc,
+    let upload = alloc.alloc_buffer(
         total_size,
         D3D12_HEAP_TYPE_UPLOAD,
         D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -432,7 +435,7 @@ fn upload_texture_levels_deferred(
     // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
     // receives the mapping.
     unsafe { upload.Map(0, None, Some(&mut map_ptr)) }
-        .map_err(|e| format!("upload tex map: {e}"))?;
+        .map_err(|e| map_hresult(e.code(), "upload tex map"))?;
     for (m, level) in levels.iter().enumerate() {
         let src_row = row_sizes[m] as usize;
         let rows = row_counts[m] as usize;
@@ -441,14 +444,14 @@ fn upload_texture_levels_deferred(
             // SAFETY: the resource is live and this code mapped it, and nothing keeps the mapping
             // past this call.
             unsafe { upload.Unmap(0, None) };
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "texture mip {} ({}x{}) is {} bytes, need {}",
                 m,
                 level.width,
                 level.height,
                 level.data.len(),
                 needed
-            ));
+            )));
         }
         let dst_pitch = layouts[m].Footprint.RowPitch as usize;
         let base_off = layouts[m].Offset as usize;
@@ -525,7 +528,7 @@ pub(super) fn upload_texture_resource(
     width: u32,
     height: u32,
     pixels: &[u8],
-) -> Result<PooledTexture, String> {
+) -> RenderResult<PooledTexture> {
     let (texture, in_flight) = upload_texture_resource_deferred(alloc, width, height, pixels)?;
     wait_for_upload(alloc.device(), alloc.queue())?;
     drop(in_flight);
@@ -534,23 +537,23 @@ pub(super) fn upload_texture_resource(
 
 // Block until the upload queue drains, so a synchronous upload's transient
 // staging resources can be released.
-fn wait_for_upload(device: &ID3D12Device, queue: &ID3D12CommandQueue) -> Result<(), String> {
+fn wait_for_upload(device: &ID3D12Device, queue: &ID3D12CommandQueue) -> RenderResult<()> {
     // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
     // COM object lands in a binding that owns it.
     let fence: ID3D12Fence = unsafe { device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }
-        .map_err(|e| format!("upload fence: {e}"))?;
+        .map_err(|e| map_hresult(e.code(), "upload fence"))?;
     let event =
         // SAFETY: an auto-reset, initially unsignaled event with no name and no security
         // attributes; the call borrows nothing.
         unsafe { windows::Win32::System::Threading::CreateEventW(None, false, false, None) }
-            .map_err(|e| format!("upload event: {e}"))?;
+            .map_err(|e| map_hresult(e.code(), "upload event"))?;
     // SAFETY: the fence and the event were created from this device and are live for the call.
-    unsafe { queue.Signal(&fence, 1) }.map_err(|e| format!("upload signal: {e}"))?;
+    unsafe { queue.Signal(&fence, 1) }.map_err(|e| map_hresult(e.code(), "upload signal"))?;
     // SAFETY: the fence and the event were created from this device and are live for the call.
     if unsafe { fence.GetCompletedValue() } < 1 {
         // SAFETY: the fence and the event were created from this device and are live for the call.
         unsafe { fence.SetEventOnCompletion(1, event) }
-            .map_err(|e| format!("upload set event: {e}"))?;
+            .map_err(|e| map_hresult(e.code(), "upload set event"))?;
         // SAFETY: `event` is the handle created above and is still open.
         unsafe { windows::Win32::System::Threading::WaitForSingleObject(event, u32::MAX) };
     }
@@ -599,7 +602,7 @@ pub(super) fn upload_texture(
     pixels: &[u8],
     srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-) -> Result<GpuResource, String> {
+) -> RenderResult<GpuResource> {
     let texture = upload_texture_resource(alloc, width, height, pixels)?;
     write_texture_srv(alloc.device(), &texture, srv_cpu);
     Ok(GpuResource {
@@ -612,14 +615,14 @@ pub(super) fn upload_texture(
 // Create a 1×1 opaque white RGBA texture (no SRV write; caller binds it).
 pub(super) fn create_fallback_white_resource(
     alloc: &DeviceAllocator,
-) -> Result<PooledTexture, String> {
+) -> RenderResult<PooledTexture> {
     upload_texture_resource(alloc, 1, 1, &[255u8, 255, 255, 255])
 }
 
 // Create a 1×1 flat-normal RGBA texture (tangent-space no-op 128,128,255,255).
 pub(super) fn create_fallback_flat_normal_resource(
     alloc: &DeviceAllocator,
-) -> Result<PooledTexture, String> {
+) -> RenderResult<PooledTexture> {
     upload_texture_resource(alloc, 1, 1, &[128u8, 128, 255, 255])
 }
 
@@ -1367,7 +1370,7 @@ pub(super) fn create_fallback_cubemap(
     value: [f32; 4],
     srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-) -> Result<GpuResource, String> {
+) -> RenderResult<GpuResource> {
     let face_bytes = [value; 1]; // 16 bytes = one RGBA32F pixel per face
     let mut all_faces = Vec::with_capacity(6 * 16);
     for _ in 0..6 {
@@ -1421,7 +1424,7 @@ pub(super) fn upload_environment_map(
     alloc: &DeviceAllocator,
     payload: EnvironmentMapPayload,
     descriptors: EnvironmentMapDescriptors,
-) -> Result<EnvironmentMapTextures, String> {
+) -> RenderResult<EnvironmentMapTextures> {
     let device = alloc.device();
     let EnvironmentMapPayload {
         irradiance_face,
@@ -1436,14 +1439,16 @@ pub(super) fn upload_environment_map(
         pre_srv_gpu,
     } = descriptors;
     if mip_bytes.is_empty() {
-        return Err("envmap upload: prefilter mip_bytes must not be empty".into());
+        return Err(RenderError::Other(
+            "envmap upload: prefilter mip_bytes must not be empty".into(),
+        ));
     }
     let irradiance_res = upload_cube_resource(alloc, irradiance_face, 1, irradiance_bytes)
-        .map_err(|e| format!("envmap irradiance: {e}"))?;
+        .map_err(|e| e.context("envmap irradiance"))?;
     write_cube_srv_single_mip(device, &irradiance_res, irr_srv_cpu);
 
     let prefilter_res = upload_prefilter_cube_resource(alloc, prefilter_face, mip_bytes)
-        .map_err(|e| format!("envmap prefilter: {e}"))?;
+        .map_err(|e| e.context("envmap prefilter"))?;
     write_cube_srv_mips(device, &prefilter_res, mip_bytes.len() as u32, pre_srv_cpu);
 
     Ok(EnvironmentMapTextures {
@@ -1468,16 +1473,16 @@ fn upload_cube_resource(
     face_size: u32,
     mip_count: u32,
     bytes: &[u8],
-) -> Result<PooledTexture, String> {
+) -> RenderResult<PooledTexture> {
     let face_bytes_mip0 = (face_size as usize) * (face_size as usize) * 16;
     let needed = 6 * face_bytes_mip0 * mip_count as usize;
     if mip_count == 1 && bytes.len() < needed {
-        return Err(format!(
+        return Err(RenderError::Other(format!(
             "cubemap data too short for face_size {}: {} bytes, need {}",
             face_size,
             bytes.len(),
             needed
-        ));
+        )));
     }
 
     let desc = D3D12_RESOURCE_DESC {
@@ -1509,7 +1514,7 @@ fn upload_prefilter_cube_resource(
     alloc: &DeviceAllocator,
     face_size: u32,
     mip_bytes: &[&[u8]],
-) -> Result<PooledTexture, String> {
+) -> RenderResult<PooledTexture> {
     let mip_count = mip_bytes.len() as u32;
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
@@ -1692,17 +1697,17 @@ pub(super) fn upload_color_lut(
     data: &[u8],
     srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-) -> Result<GpuResource, String> {
+) -> RenderResult<GpuResource> {
     let device = alloc.device();
     let n = size as usize;
     let needed = n * n * n * 4;
     if data.len() < needed {
-        return Err(format!(
+        return Err(RenderError::Other(format!(
             "color LUT data too short for size {}: {} bytes, need {}",
             size,
             data.len(),
             needed
-        ));
+        )));
     }
 
     // 3D texture resource (pooled default heap, copy-dest initially).
@@ -1743,8 +1748,7 @@ pub(super) fn upload_color_lut(
         );
     }
 
-    let upload = create_buffer(
-        alloc,
+    let upload = alloc.alloc_buffer(
         total_size,
         D3D12_HEAP_TYPE_UPLOAD,
         D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -1757,7 +1761,7 @@ pub(super) fn upload_color_lut(
     // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
     // receives the mapping.
     unsafe { upload.Map(0, None, Some(&mut map_ptr)) }
-        .map_err(|e| format!("color LUT upload map: {e}"))?;
+        .map_err(|e| map_hresult(e.code(), "color LUT upload map"))?;
     let src_row = n * 4;
     let dst_pitch = layout.Footprint.RowPitch as usize;
     let slice_pitch = dst_pitch * n;
@@ -1827,21 +1831,25 @@ pub(super) fn upload_float_lut(
     texels: &[f32],
     srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-) -> Result<GpuResource, String> {
+) -> RenderResult<GpuResource> {
     let device = alloc.device();
     let n = size as usize;
     let comp = components as usize;
     let needed = n * n * comp;
     if texels.len() < needed {
-        return Err(format!(
+        return Err(RenderError::Other(format!(
             "float LUT data too short for {size}x{size}x{components}: {} floats, need {needed}",
             texels.len()
-        ));
+        )));
     }
     let format = match components {
         4 => DXGI_FORMAT_R32G32B32A32_FLOAT,
         2 => DXGI_FORMAT_R32G32_FLOAT,
-        other => return Err(format!("unsupported float LUT component count {other}")),
+        other => {
+            return Err(RenderError::Other(format!(
+                "unsupported float LUT component count {other}"
+            )));
+        }
     };
 
     let desc = D3D12_RESOURCE_DESC {
@@ -1880,8 +1888,7 @@ pub(super) fn upload_float_lut(
         );
     }
 
-    let upload = create_buffer(
-        alloc,
+    let upload = alloc.alloc_buffer(
         total_size,
         D3D12_HEAP_TYPE_UPLOAD,
         D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -1892,7 +1899,7 @@ pub(super) fn upload_float_lut(
     // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
     // receives the mapping.
     unsafe { upload.Map(0, None, Some(&mut map_ptr)) }
-        .map_err(|e| format!("float LUT upload map: {e}"))?;
+        .map_err(|e| map_hresult(e.code(), "float LUT upload map"))?;
     let src_row = n * comp;
     let dst_pitch = layout.Footprint.RowPitch as usize;
     for y in 0..n {
@@ -1968,7 +1975,7 @@ pub(super) fn create_fallback_color_lut(
     alloc: &DeviceAllocator,
     srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-) -> Result<GpuResource, String> {
+) -> RenderResult<GpuResource> {
     // Red-fastest, then green, then blue, matching the payload texel order.
     let mut data = Vec::with_capacity(2 * 2 * 2 * 4);
     for b in 0..2u8 {

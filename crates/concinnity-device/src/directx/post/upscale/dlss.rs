@@ -12,6 +12,7 @@
 //! (linked from the static lib), validated against NGX SDK 1.5.0 by the
 //! constant asserts in the tests.
 
+use concinnity_core::render::error::{RenderError, RenderResult};
 use std::ffi::c_void;
 use std::ptr;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -189,7 +190,7 @@ impl DlssUpscaler {
     pub(in crate::directx) fn try_new(
         params: DlssCreateParams<'_>,
         descriptors: DlssOutputDescriptors,
-    ) -> Result<Option<Self>, String> {
+    ) -> RenderResult<Option<Self>> {
         let DlssCreateParams {
             device,
             command_queue,
@@ -391,7 +392,7 @@ impl super::UpscaleBackend for DlssUpscaler {
         cmd: &ID3D12GraphicsCommandList,
         inputs: super::UpscaleInputs<'_>,
         camera: super::UpscaleCamera,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let super::UpscaleInputs {
             color,
             depth,
@@ -448,7 +449,9 @@ impl super::UpscaleBackend for DlssUpscaler {
             )
         };
         if !ngx_succeeded(rc) {
-            return Err(format!("NVSDK_NGX_D3D12_EvaluateFeature returned {rc:#x}"));
+            return Err(RenderError::Other(format!(
+                "NVSDK_NGX_D3D12_EvaluateFeature returned {rc:#x}"
+            )));
         }
         Ok(())
     }

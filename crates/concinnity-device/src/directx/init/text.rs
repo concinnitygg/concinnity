@@ -32,7 +32,7 @@ pub(super) fn build_text(
             descriptors.slot_cpu(s),
             descriptors.slot_gpu(s),
         )
-        .map_err(|e| format!("text_atlas[{i}]: {e}"))?;
+        .map_err(|e| e.context(format!("text_atlas[{i}]")))?;
         atlas_srv_gpus.push(descriptors.slot_gpu(s));
         atlas_textures.push(res);
     }

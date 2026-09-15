@@ -100,7 +100,8 @@ pub(super) fn build_scene_assets(
             .iter()
             .enumerate()
             .map(|(i, image)| {
-                upload_texture_image(&hw.alloc, image).map_err(|e| format!("texture[{i}]: {e}"))
+                upload_texture_image(&hw.alloc, image)
+                    .map_err(|e| e.context(format!("texture[{i}]")))
             })
             .collect::<Result<Vec<_>, _>>()?
     };

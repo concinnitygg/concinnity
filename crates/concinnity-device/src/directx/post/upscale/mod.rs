@@ -14,8 +14,11 @@
 
 use concinnity_core::components::UpscalerBackend;
 use concinnity_core::gfx::jitter;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
+
+use crate::directx::error::map_hresult;
 
 #[cfg(ngx_sdk_bundled)]
 mod dlss;
@@ -61,7 +64,7 @@ pub(in crate::directx) trait UpscaleBackend: Send {
         cmd: &ID3D12GraphicsCommandList,
         inputs: UpscaleInputs<'_>,
         camera: UpscaleCamera,
-    ) -> Result<(), String>;
+    ) -> RenderResult<()>;
 }
 
 // Render-resolution inputs the upscale consumes for one frame (each transitioned
@@ -107,7 +110,7 @@ fn create_output_texture(
     device: &ID3D12Device,
     width: u32,
     height: u32,
-) -> Result<ID3D12Resource, String> {
+) -> RenderResult<ID3D12Resource> {
     let heap_props = D3D12_HEAP_PROPERTIES {
         Type: D3D12_HEAP_TYPE_DEFAULT,
         ..Default::default()
@@ -139,8 +142,8 @@ fn create_output_texture(
             &mut tex_opt,
         )
     }
-    .map_err(|e| format!("create upscale output texture: {e}"))?;
-    tex_opt.ok_or_else(|| "create upscale output texture returned None".to_string())
+    .map_err(|e| map_hresult(e.code(), "create upscale output texture"))?;
+    tex_opt.ok_or_else(|| RenderError::Other("create upscale output texture returned None".into()))
 }
 
 fn write_output_uav(device: &ID3D12Device, res: &ID3D12Resource, cpu: D3D12_CPU_DESCRIPTOR_HANDLE) {
@@ -237,7 +240,7 @@ pub(in crate::directx) fn build_upscaler(
     upscale_scale: f32,
     descriptors: UpscalerDescriptors,
     requested: UpscalerBackend,
-) -> Result<(Option<Box<dyn UpscaleBackend>>, ResolvedBackend), String> {
+) -> RenderResult<(Option<Box<dyn UpscaleBackend>>, ResolvedBackend)> {
     let UpscalerDescriptors {
         uav_cpu: output_uav_cpu,
         srv_cpu: output_srv_cpu,

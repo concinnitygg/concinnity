@@ -3,9 +3,9 @@
 //! camera-relative view the draw consumes. Streaming policy (scoring, dispatch,
 //! residency) runs here; the GPU effects are recorded into the frame's op
 //! queue with owned payloads and replayed at submission, with slot decisions
-//! from the engine's `RenderSlots` allocator. An upload the backend refuses
-//! comes back one tick later as a `RenderOpFailures` entry and is rolled back
-//! at the top of the next step.
+//! from the engine's `RenderSlots` allocator. A texture upload or eviction, mesh
+//! upload, or chunk add the backend refuses comes back one tick later as a
+//! `RenderOpFailures` entry and is rolled back at the top of the next step.
 //!
 //! Scheduled immediately before GraphicsSystem, so a chunk world's view rebase
 //! (see `CameraRelativeView`) is ready for this same frame's submit, and any
@@ -423,9 +423,10 @@ impl StreamingState {
     }
 
     // Roll back the recorded ops that failed at the previous frame's replay:
-    // a refused streamed-mesh upload returns to `Unloaded` (retried once
-    // freed space reclaims), a failed chunk add drops its tracking and frees
-    // its draw slot.
+    // a refused streamed-mesh or texture upload returns to `Unloaded` (retried
+    // once freed space reclaims), a failed texture eviction returns to
+    // resident (the texture is still on the GPU), and a failed chunk add drops
+    // its tracking and frees its draw slot.
     pub(crate) fn apply_op_failures(&mut self, failures: &[OpFailure], slots: &mut RenderSlots) {
         for &failure in failures {
             match failure {
@@ -435,6 +436,22 @@ impl StreamingState {
                     }
                     if let Some(residency) = &mut self.scene_residency {
                         residency.note_resident((CHANNEL_MESH, stream_id as u32), false);
+                    }
+                }
+                OpFailure::TextureUpload { slot } => {
+                    if let Some(streamer) = &mut self.texture_streamer {
+                        streamer.note_upload_failed(slot);
+                    }
+                    if let Some(residency) = &mut self.scene_residency {
+                        residency.note_resident((CHANNEL_TEXTURE, slot as u32), false);
+                    }
+                }
+                OpFailure::TextureEvict { slot } => {
+                    if let Some(streamer) = &mut self.texture_streamer {
+                        streamer.note_evict_failed(slot, self.frame_count);
+                    }
+                    if let Some(residency) = &mut self.scene_residency {
+                        residency.note_resident((CHANNEL_TEXTURE, slot as u32), true);
                     }
                 }
                 OpFailure::ChunkAdd { coord } => {
@@ -523,9 +540,12 @@ impl StreamingState {
             streamer.update_scores(cam_pos, self.frame_count);
             if !loads_frozen {
                 for slot in streamer.plan_and_dispatch() {
-                    ops.record(move |backend| {
+                    ops.record_with(move |backend, out| {
                         if let Err(e) = backend.evict_texture_slot(slot) {
                             tracing::warn!("StreamingSystem: texture evict slot {}: {}", slot, e);
+                            out.memory_pressure |=
+                                matches!(e, error::RenderError::OutOfDeviceMemory(_));
+                            out.failures.push(OpFailure::TextureEvict { slot });
                         }
                     });
                     if let Some(residency) = self.scene_residency.as_mut() {
@@ -535,9 +555,19 @@ impl StreamingState {
             }
             let residency = &mut self.scene_residency;
             streamer.drain_completed(self.frame_count, |slot, image| {
-                ops.record(move |backend| {
+                // The slot is marked resident on handoff; a refused upload
+                // comes back as an op failure and `apply_op_failures` rolls it
+                // back to Unloaded next tick.
+                ops.record_with(move |backend, out| {
                     if let Err(e) = backend.update_texture_slot(slot, &image) {
-                        tracing::warn!("StreamingSystem: texture upload slot {}: {}", slot, e);
+                        tracing::debug!(
+                            "StreamingSystem: texture upload slot {} deferred: {}",
+                            slot,
+                            e
+                        );
+                        out.memory_pressure |=
+                            matches!(e, error::RenderError::OutOfDeviceMemory(_));
+                        out.failures.push(OpFailure::TextureUpload { slot });
                     }
                 });
                 if let Some(residency) = residency.as_mut() {
@@ -955,6 +985,7 @@ mod tests {
     use concinnity_core::gfx::mesh_payload::Vertex;
     use concinnity_core::gfx::profile::FrameProfile;
     use concinnity_core::render::chunk_window::ChunkDetail;
+    use concinnity_core::render::ops::ReplayOutcome;
     use concinnity_host::store::blob::BlobData;
     use pressure::StreamPressureStage;
     use std::sync::Arc;
@@ -1437,6 +1468,102 @@ mod tests {
         // Dispatch moves an item off Unloaded the same frame it is planned.
         assert!(state.texture_streamer.as_ref().unwrap().stats().2 < 2);
         assert!(state.mesh_streamer.as_ref().unwrap().stats().2 < 2);
+    }
+
+    // Drive and replay until a replay reports a failure `wanted` accepts,
+    // applying every earlier replay's failures. Returns that replay's outcome
+    // with its failures not yet applied.
+    fn replay_until_failure(
+        state: &mut StreamingState,
+        backend: &mut MockBackend,
+        slots: &mut RenderSlots,
+        wanted: impl Fn(&OpFailure) -> bool,
+    ) -> ReplayOutcome {
+        for _ in 0..MAX_DRIVE_SPINS {
+            let mut ops = RenderOps::default();
+            state.drive(&mut ops, slots, [0.0; 3], IDENTITY4, false, None);
+            let outcome = ops.replay(backend);
+            if outcome.failures.iter().any(&wanted) {
+                return outcome;
+            }
+            state.apply_op_failures(&outcome.failures, slots);
+            std::thread::yield_now();
+        }
+        panic!("no matching op failure after {MAX_DRIVE_SPINS} drives");
+    }
+
+    // A texture upload refused for device memory feeds the streaming valve and
+    // rolls the slot back so the planner retries it.
+    #[test]
+    fn an_out_of_memory_texture_upload_raises_pressure_and_rolls_back() {
+        let (recorded, mut backend) = recording_backend();
+        recorded.lock().unwrap().fail_texture_upload =
+            Some(error::RenderError::OutOfDeviceMemory("texture heap".into()));
+        let mut state = pooled_state(8);
+        let mut slots = RenderSlots::new(0, true, &[]);
+        let outcome = replay_until_failure(&mut state, &mut backend, &mut slots, |f| {
+            matches!(f, OpFailure::TextureUpload { .. })
+        });
+        assert!(outcome.memory_pressure);
+
+        state.apply_op_failures(&outcome.failures, &mut slots);
+        assert_eq!(state.texture_streamer.as_ref().unwrap().stats().0, 0);
+    }
+
+    #[test]
+    fn a_non_memory_texture_upload_failure_rolls_back_without_pressure() {
+        let (recorded, mut backend) = recording_backend();
+        recorded.lock().unwrap().fail_texture_upload =
+            Some(error::RenderError::Other("bad image".into()));
+        let mut state = pooled_state(8);
+        let mut slots = RenderSlots::new(0, true, &[]);
+        let outcome = replay_until_failure(&mut state, &mut backend, &mut slots, |f| {
+            matches!(f, OpFailure::TextureUpload { .. })
+        });
+        assert!(!outcome.memory_pressure);
+
+        state.apply_op_failures(&outcome.failures, &mut slots);
+        assert_eq!(state.texture_streamer.as_ref().unwrap().stats().0, 0);
+    }
+
+    // A failed eviction leaves the texture on the GPU, so the slot returns to
+    // resident in the streamer and in scene residency, and its bytes count again.
+    #[test]
+    fn an_out_of_memory_texture_evict_raises_pressure_and_restores_residency() {
+        let (recorded, mut backend) = recording_backend();
+        let mut state = pooled_state(8);
+        let scene = AssetId(80);
+        state.scene_residency = Some(SceneResidency::new(vec![(
+            scene,
+            vec![(CHANNEL_TEXTURE, 1)],
+        )]));
+        drive_until(&mut state, &mut backend, [0.0; 3], |s| {
+            s.texture_streamer.as_ref().unwrap().stats().0 == 2
+        });
+        let resident_bytes = state.texture_streamer.as_ref().unwrap().resident_bytes();
+        let progress = |s: &StreamingState| s.scene_residency.as_ref().unwrap().progress(scene);
+        assert_eq!(progress(&state), Some(1.0));
+
+        recorded.lock().unwrap().fail_texture_evict =
+            Some(error::RenderError::OutOfDeviceMemory("evict".into()));
+        state
+            .texture_streamer
+            .as_mut()
+            .unwrap()
+            .set_blocked(1, true);
+        let mut slots = RenderSlots::new(0, true, &[]);
+        let outcome = replay_until_failure(&mut state, &mut backend, &mut slots, |f| {
+            matches!(f, OpFailure::TextureEvict { .. })
+        });
+        assert!(outcome.memory_pressure);
+        assert_eq!(outcome.failures, vec![OpFailure::TextureEvict { slot: 1 }]);
+        assert_eq!(progress(&state), Some(0.0));
+
+        state.apply_op_failures(&outcome.failures, &mut slots);
+        let streamer = state.texture_streamer.as_ref().unwrap();
+        assert_eq!(streamer.stats().0, 2);
+        assert_eq!(streamer.resident_bytes(), resident_bytes);
+        assert_eq!(progress(&state), Some(1.0));
     }
 
     // Scene residency over the pools: only the pinned scene's members stream;

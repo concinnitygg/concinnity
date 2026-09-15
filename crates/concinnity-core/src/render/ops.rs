@@ -22,6 +22,18 @@ pub enum OpFailure {
         /// The streamed mesh that failed to upload.
         stream_id: usize,
     },
+    /// A streamed texture upload was refused; the streamer rolls the slot back
+    /// to unloaded and retries.
+    TextureUpload {
+        /// The texture-pool slot that failed to upload.
+        slot: usize,
+    },
+    /// A streamed texture eviction failed; the texture is still on the GPU, so
+    /// the streamer restores the slot to resident and its bytes count again.
+    TextureEvict {
+        /// The texture-pool slot that failed to evict.
+        slot: usize,
+    },
     /// A chunk-mesh add failed; the chunk's tracking and draw slot roll back.
     ChunkAdd {
         /// The chunk whose mesh add failed.

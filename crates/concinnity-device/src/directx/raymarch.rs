@@ -44,6 +44,7 @@ use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::render_types::LightUniforms;
 use concinnity_core::platform::Platform;
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::slang_programs::raymarch::{self, Family};
 use concinnity_slang::SlangTarget;
 use std::ffi::c_void;
@@ -60,6 +61,7 @@ pub(in crate::directx) use concinnity_core::render::uniforms::{
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledTexture};
 use crate::directx::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
+use crate::directx::error::map_hresult;
 use crate::directx::pipeline::{main_input_layout, serialize_desc_and_create};
 use crate::directx::texture::{
     HDR_FORMAT, create_buffer, create_fallback_white_resource, create_hdr_resolve_target,
@@ -948,7 +950,7 @@ impl RaymarchResources {
         handles: RaymarchDescriptorHandles,
         sdf_volumes: &[(SdfVolume, Vec<u8>, String)],
         hot_reload: bool,
-    ) -> Result<Option<Self>, String> {
+    ) -> RenderResult<Option<Self>> {
         let RaymarchDeviceContext { alloc, info_queue } = ctx;
         let device = alloc.device();
         let RaymarchTargetConfig {
@@ -989,8 +991,7 @@ impl RaymarchResources {
         let mut view_cbuffers: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
         let mut view_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
         for _ in 0..FRAMES {
-            let buf = create_buffer(
-                alloc,
+            let buf = alloc.alloc_buffer(
                 view_size,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -999,7 +1000,7 @@ impl RaymarchResources {
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
             unsafe { buf.Map(0, None, Some(&mut p)) }
-                .map_err(|e| format!("raymarch view ubo map: {e}"))?;
+                .map_err(|e| map_hresult(e.code(), "raymarch view ubo map"))?;
             view_ptrs.push(p as *mut u8);
             view_cbuffers.push(buf);
         }
@@ -1063,8 +1064,7 @@ impl RaymarchResources {
             // `params` don't change frame-to-frame).
             let uniforms = volume_uniforms_from(vol);
             let cb_size = align256(std::mem::size_of::<RaymarchVolumeUniforms>() as u64);
-            let cb = create_buffer(
-                alloc,
+            let cb = alloc.alloc_buffer(
                 cb_size,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,
@@ -1073,7 +1073,7 @@ impl RaymarchResources {
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
             unsafe { cb.Map(0, None, Some(&mut p)) }
-                .map_err(|e| format!("raymarch volume cb map: {e}"))?;
+                .map_err(|e| map_hresult(e.code(), "raymarch volume cb map"))?;
             // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and
             // the source is a separate allocation, so the ranges cannot overlap.
             unsafe {

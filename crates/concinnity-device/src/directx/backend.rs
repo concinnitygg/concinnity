@@ -78,7 +78,8 @@ impl SkinnedDraws for DxContext {
 
 impl DrawStreaming for DxContext {
     forward! { assert = debug_assert_main_thread;
-        fn evict_texture_slot(&mut self, slot: usize) -> RenderResult<()>;
+        fn evict_texture_slot(&mut self, slot: usize) -> error::RenderResult<()>;
+        fn update_texture_slot(&mut self, slot: usize, image: &bake::texture::TextureImage) -> error::RenderResult<()>;
         fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> RenderResult<()>;
         fn seed_mesh_streaming(&mut self, vtx_offset: u64, vtx_bytes: u64, idx_offset: u64, idx_bytes: u64);
         fn remove_chunk_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> RenderResult<()>;
@@ -90,15 +91,6 @@ impl DrawStreaming for DxContext {
     // Typed-boundary forwarders: the inherent methods report `String` errors,
     // which `?` coerces to `RenderError::Other`. Sites that can classify a
     // failure construct the typed variant directly instead.
-    fn update_texture_slot(
-        &mut self,
-        slot: usize,
-        image: &bake::texture::TextureImage,
-    ) -> error::RenderResult<()> {
-        debug_assert_main_thread("update_texture_slot");
-        Ok(DxContext::update_texture_slot(self, slot, image)?)
-    }
-
     fn upload_mesh(
         &mut self,
         draw_idx: usize,
@@ -180,7 +172,8 @@ impl RenderTuning for DxContext {
 
 impl LiveEdit for DxContext {
     forward! { assert = debug_assert_main_thread;
-        fn update_color_lut(&mut self, size: u32, data: &[u8]) -> RenderResult<()>;
+        fn update_color_lut(&mut self, size: u32, data: &[u8]) -> error::RenderResult<()>;
+        fn update_environment_map(&mut self, payload: &[u8]) -> error::RenderResult<()>;
         fn update_mesh_geometry(&mut self, draw_idx: usize, verts: &[mesh_payload::Vertex], idxs: &[u16], lod_alternates: &[(f32, Vec<u16>)]) -> RenderResult<()>;
         fn update_world_shader_pipelines(&mut self, programs: &concinnity_core::components::ShaderPrograms) -> RenderResult<()>;
         fn update_skinned_mesh_geometry(&mut self, skinned_index: usize, vertex_base: u32, verts: &[mesh_payload::SkinnedVertex], idxs: &[u16]) -> RenderResult<()>;
@@ -200,11 +193,6 @@ impl LiveEdit for DxContext {
     // shadow-and-recurse (mirrors the Metal backend).
     fn reload_world(&mut self, init: backend_init::BackendInit<'_>) -> error::RenderResult<()> {
         self.apply_world_reload(init)
-    }
-
-    fn update_environment_map(&mut self, payload: &[u8]) -> error::RenderResult<()> {
-        debug_assert_main_thread("update_environment_map");
-        Ok(DxContext::update_environment_map(self, payload)?)
     }
 
     fn rebuild_static_geometry(

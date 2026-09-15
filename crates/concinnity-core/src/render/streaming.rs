@@ -185,6 +185,16 @@ impl StreamPlanner {
         }
     }
 
+    /// Return item `id` to `Resident` after an eviction that did not take
+    /// effect, refreshing its LRU timestamp. Its retained byte weight counts
+    /// toward `resident_bytes` again. Out-of-range ids are ignored.
+    pub fn restore_resident(&mut self, id: usize, frame: u64) {
+        if let Some(item) = self.items.get_mut(id) {
+            item.state = StreamState::Resident;
+            item.last_touch = frame;
+        }
+    }
+
     /// Total bytes of all currently Resident items, for diagnostics and the
     /// byte-budget policy. Pending and Unloaded items are excluded.
     pub fn resident_bytes(&self) -> u64 {
@@ -606,6 +616,22 @@ mod tests {
         // An unloaded item stops counting even though it keeps its weight.
         p.mark_unloaded(0);
         assert_eq!(p.resident_bytes(), 250);
+    }
+
+    #[test]
+    fn restore_resident_counts_an_evicted_item_again() {
+        let mut p = StreamPlanner::new(2, 4, 8);
+        p.mark_resident(0, 1, 100);
+        p.mark_resident(1, 1, 250);
+        let before = p.resident_bytes();
+        p.set_blocked(1, true);
+        assert_eq!(p.plan().to_evict, vec![1]);
+        assert_eq!(p.resident_bytes(), 100);
+
+        p.restore_resident(1, 2);
+        p.restore_resident(9, 2);
+        assert_eq!(p.state(1), Some(StreamState::Resident));
+        assert_eq!(p.resident_bytes(), before);
     }
 
     #[test]

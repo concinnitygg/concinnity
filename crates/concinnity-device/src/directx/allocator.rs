@@ -406,16 +406,14 @@ impl DeviceAllocator {
         desc: &D3D12_RESOURCE_DESC,
         heap_type: D3D12_HEAP_TYPE,
         initial_state: D3D12_RESOURCE_STATES,
-    ) -> Result<PooledTexture, String> {
+    ) -> RenderResult<PooledTexture> {
         if is_gpu_written(desc) {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "allocator: resource flags {:#x} are GPU-written and stay committed",
                 desc.Flags.0
-            ));
+            )));
         }
-        let (resource, heap, lease) = self
-            .place(desc, heap_type, initial_state)
-            .map_err(|e| e.to_string())?;
+        let (resource, heap, lease) = self.place(desc, heap_type, initial_state)?;
         Ok(PooledTexture {
             resource,
             heap,
@@ -1033,15 +1031,14 @@ mod tests {
         };
         let mut desc = texture_desc(64);
         desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
-        assert!(
-            alloc
-                .alloc_texture(
-                    &desc,
-                    D3D12_HEAP_TYPE_DEFAULT,
-                    D3D12_RESOURCE_STATE_RENDER_TARGET
-                )
-                .is_err()
-        );
+        assert!(matches!(
+            alloc.alloc_texture(
+                &desc,
+                D3D12_HEAP_TYPE_DEFAULT,
+                D3D12_RESOURCE_STATE_RENDER_TARGET
+            ),
+            Err(RenderError::Other(_))
+        ));
     }
 
     #[test]
