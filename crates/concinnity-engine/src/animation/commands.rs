@@ -5,8 +5,8 @@
 //! editor's per-frame `DebugHook::tick` (not from `step`) so an MCP client
 //! blocked on a reply is never starved while a menu pauses playback.
 
+use concinnity_core::animation::anim_graph::normalized_time;
 use concinnity_core::ecs::SkinnedMeshHandle;
-use concinnity_core::gfx::anim_graph::normalized_time;
 
 use super::flat::Transition;
 use super::graph::GraphTarget;
@@ -170,9 +170,9 @@ mod tests {
     use super::*;
     use crate::animation::runtime_queue::{CrossfadeRequest, SetParamRequest};
     use crate::gfx::skinned_mesh_map::SkinnedMeshNameIndex;
+    use concinnity_core::animation::anim_graph::GraphCursor;
+    use concinnity_core::animation::skeleton::AnimationClip;
     use concinnity_core::components::AnimationGraph;
-    use concinnity_core::gfx::anim_graph::GraphCursor;
-    use concinnity_core::gfx::skeleton::AnimationClip;
     use concinnity_host::thread::asset_id;
     use concinnity_host::thread::asset_id::AssetId;
 

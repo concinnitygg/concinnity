@@ -10,8 +10,8 @@ use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::{
     DrawObject, InstancedCluster, LodSlice, MaterialUniforms, NO_NORMAL_MAP_SLOT,
 };
-pub(crate) use concinnity_core::gfx::transform::IDENTITY as IDENTITY4;
 use concinnity_core::resource::MeshTable;
+pub(crate) use concinnity_core::transform::IDENTITY as IDENTITY4;
 use concinnity_host::thread::asset_id::AssetId;
 
 use crate::gfx::material_entry::{MaterialEntry, resolve_material_slots};

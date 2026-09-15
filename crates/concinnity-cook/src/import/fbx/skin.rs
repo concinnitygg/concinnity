@@ -9,7 +9,7 @@
 // scene-pose transform instead.
 
 use concinnity_core::components::{SkeletonJoint, SkinnedVertexData, VertexData};
-use concinnity_core::gfx::transform::{
+use concinnity_core::transform::{
     IDENTITY, Mat4, decompose, euler_yxz_from_quat, mat4_affine_inverse, mat4_mul,
 };
 use fbxcel::tree::v7400::NodeHandle;

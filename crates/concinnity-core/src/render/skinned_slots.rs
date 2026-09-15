@@ -19,8 +19,8 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::gfx::render_types::{MAX_JOINTS, SkinnedDrawObject};
-use crate::gfx::transform::IDENTITY;
 use crate::render::model_history::ModelHistory;
+use crate::transform::IDENTITY;
 
 /// The skinned draw objects and their parallel pose arrays.
 #[derive(Default)]

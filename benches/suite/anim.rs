@@ -7,12 +7,12 @@
 //! every iteration so keyframe search never settles on one branch.
 
 use crate::support::{Bench, Rng};
-use concinnity_core::gfx::ik::{TwoBoneChain, apply_two_bone_ik};
-use concinnity_core::gfx::pose_blend::PoseBlend;
-use concinnity_core::gfx::skeleton::{
+use concinnity_core::animation::ik::{TwoBoneChain, apply_two_bone_ik};
+use concinnity_core::animation::pose_blend::PoseBlend;
+use concinnity_core::animation::skeleton::{
     AnimationClip, Joint, JointPose, JointTrack, Keyframe, Skeleton,
 };
-use concinnity_core::gfx::transform::Mat4;
+use concinnity_core::transform::Mat4;
 
 const JOINTS: usize = 64;
 const BAKED_KEYS: usize = 61;

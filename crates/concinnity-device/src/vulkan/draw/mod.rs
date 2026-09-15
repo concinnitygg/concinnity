@@ -17,14 +17,14 @@ use concinnity_core::gfx::lod;
 use concinnity_core::gfx::projection::perspective_rh;
 use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::render_types::{LightUniforms, LineVertex, ShadowUniforms, TextDrawCall};
-use concinnity_core::gfx::transform::mat4_inverse;
-use concinnity_core::gfx::transform::mat4_mul;
 use concinnity_core::render::csm;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::lights;
 use concinnity_core::render::model_history::HistoryMode;
 use concinnity_core::render::render_graph;
 use concinnity_core::render::render_graph::{FrameGraphInputs, build_frame_graph};
+use concinnity_core::transform::mat4_inverse;
+use concinnity_core::transform::mat4_mul;
 // `ViewUniforms` (the std140 main-pass `ViewBlock` UBO) is a GPU-free layout
 // struct that lives in `core::render`; re-export it so
 // `crate::vulkan::draw::ViewUniforms` is unchanged for the passes that fill it.

@@ -24,10 +24,10 @@
 
 use crate::gfx::projection::{look_at, normalize3, ortho_rh};
 use crate::gfx::render_types::{NUM_SHADOW_CASCADES, ShadowUniforms};
-use crate::gfx::transform::IDENTITY;
-use crate::gfx::transform::mat4_mul;
 use crate::math::vec3::{add, cross, dot, scale, sub};
 use crate::math::{powf, round, sqrt, tan};
+use crate::transform::IDENTITY;
+use crate::transform::mat4_mul;
 
 const SPLIT_LAMBDA: f32 = 0.5;
 

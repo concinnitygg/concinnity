@@ -15,12 +15,12 @@ use concinnity_core::gfx::render_types::{
     CLUSTER_GRID_X, CLUSTER_GRID_Y, CLUSTER_GRID_Z, ClusterParams, LightUniforms, LineVertex,
     ShadowUniforms, TextDrawCall,
 };
-use concinnity_core::gfx::transform::mat4_inverse;
-use concinnity_core::gfx::transform::mat4_mul;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::lights;
 use concinnity_core::render::render_graph;
 use concinnity_core::render::render_graph::{FrameGraphInputs, build_frame_graph};
+use concinnity_core::transform::mat4_inverse;
+use concinnity_core::transform::mat4_mul;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::com;

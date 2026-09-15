@@ -28,7 +28,7 @@ impl InstancedProp {
     /// scale, then YXZ rotation, then translation.
     pub fn instance_model_matrix(&self, idx: usize) -> Option<[[f32; 4]; 4]> {
         let xform = self.instances.get(idx)?;
-        Some(crate::gfx::transform::trs_matrix(
+        Some(crate::transform::trs_matrix(
             xform.position,
             xform.rotation_deg,
             xform.scale,

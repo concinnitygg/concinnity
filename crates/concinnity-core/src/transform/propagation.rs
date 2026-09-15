@@ -20,7 +20,7 @@ use alloc::vec::Vec;
 
 use crate::components::{GlobalTransform, Parent, Transform};
 use crate::ecs::{ColumnTicks, Entity, MAX_CHANGE_AGE, PipelineContext, Tick};
-use crate::gfx::transform::{IDENTITY, mat4_mul};
+use crate::transform::{IDENTITY, mat4_mul};
 
 /// A resolved world matrix, column-major like every other matrix here.
 pub type WorldMatrix = [[f32; 4]; 4];

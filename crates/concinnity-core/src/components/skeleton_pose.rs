@@ -1,10 +1,10 @@
 use alloc::vec::Vec;
 
+use crate::animation::pose_scratch::PoseScratch;
+use crate::animation::proportions::ProportionLayer;
+use crate::animation::skeleton::Skeleton;
 use crate::ecs::SkinnedMeshHandle;
-use crate::gfx::pose_scratch::PoseScratch;
-use crate::gfx::proportions::ProportionLayer;
-use crate::gfx::skeleton::Skeleton;
-use crate::gfx::transform::Mat4;
+use crate::transform::Mat4;
 
 /// Runtime-only link between a skinned mesh and its animation state.
 ///
@@ -105,7 +105,7 @@ impl SkeletonPose {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gfx::skeleton::{Joint, JointPose};
+    use crate::animation::skeleton::{Joint, JointPose};
     use alloc::string::String;
     use alloc::vec;
 

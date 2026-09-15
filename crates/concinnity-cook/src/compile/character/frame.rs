@@ -5,8 +5,8 @@
 // region's joints, so a region boundary is exactly as smooth as the skinning.
 
 use concinnity_core::components::{SkeletonJoint, SkinnedVertexData};
-use concinnity_core::gfx::transform::Mat4;
 use concinnity_core::math::vec3;
+use concinnity_core::transform::Mat4;
 
 // One joint's bind-pose frame in model space.
 #[derive(Debug, Clone, PartialEq)]

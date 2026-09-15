@@ -9,9 +9,9 @@
 //! they have to agree: a shadow cascade's ortho and a probe face's perspective
 //! are sampled by the same shaders as the main camera's.
 
-use crate::gfx::transform::Mat4;
 use crate::math::vec3::{cross, dot, sub};
 use crate::math::{sqrt, tan};
+use crate::transform::Mat4;
 
 // Floor applied to the half-FOV tangent. A zero or near-zero vertical FOV would
 // otherwise divide by zero and fill the matrix with infinities.

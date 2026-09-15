@@ -22,7 +22,7 @@ mod skin;
 pub(crate) use anim::fbx_animation_names;
 pub use anim::import_fbx_animation;
 use concinnity_core::components::VertexData;
-use concinnity_core::gfx::transform::{IDENTITY, Mat4, decompose, euler_yxz_from_quat, mat4_mul};
+use concinnity_core::transform::{IDENTITY, Mat4, decompose, euler_yxz_from_quat, mat4_mul};
 use fbxcel::low::v7400::AttributeValue;
 use fbxcel::tree::any::AnyTree;
 use fbxcel::tree::v7400::NodeHandle;

@@ -29,10 +29,10 @@ use concinnity_core::gfx::lod;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::RtParams;
 use concinnity_core::gfx::rt_reflections::RtParamsInputs;
-use concinnity_core::gfx::transform::mat4_inverse;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::lights;
 pub(in crate::vulkan) use concinnity_core::render::uniforms::TransparentView;
+use concinnity_core::transform::mat4_inverse;
 // `TransparentView` (the per-frame view UBO) is a GPU-free layout struct that
 // lives in `core::render`; re-export it so the encode path and the graph's
 // view builder can keep naming it through this module.

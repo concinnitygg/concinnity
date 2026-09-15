@@ -5,7 +5,7 @@
 //! the setter (`apply_reloaded_clip`). Mirrors the path the desugar pass takes at
 //! build time, so a hot-reloaded clip is byte-identical to a fresh `cn build`.
 
-use concinnity_core::gfx::skeleton::{AnimationClip, JointTrack, Keyframe};
+use concinnity_core::animation::skeleton::{AnimationClip, JointTrack, Keyframe};
 use concinnity_engine::animation::AnimationSystem;
 use std::collections::HashMap;
 

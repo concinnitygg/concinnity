@@ -17,7 +17,7 @@
 
 use concinnity_core::components::{GlobalTransform, Parent, Prop, Transform};
 use concinnity_core::ecs::Entity;
-use concinnity_core::gfx::transform_propagation::{TransformCache, propagate_transforms_cached};
+use concinnity_core::transform::propagation::{TransformCache, propagate_transforms_cached};
 
 use super::{BenchWorld, bench};
 

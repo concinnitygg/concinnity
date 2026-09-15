@@ -1,9 +1,9 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use crate::animation::skeleton::{self as skinning, JointPose};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{SkinnedMeshHandle, de_opt_skinned_mesh_handle};
-use crate::gfx::skeleton::{self as skinning, JointPose};
 
 /// One keyframe in an animation track: a joint pose sampled at `time` seconds.
 /// The pose fields (`translation`, `rotation_deg`, `scale`) are given directly
@@ -155,7 +155,7 @@ pub struct Animation {
     /// The displacement curve baked out of the root joint by the build when
     /// `root_motion` is set. Filled by the build; not usually authored by
     /// hand.
-    pub root_track: Vec<crate::gfx::root_motion::RootKey>,
+    pub root_track: Vec<crate::animation::root_motion::RootKey>,
     /// Per-joint keyframe channels.
     pub tracks: Vec<AnimationTrack>,
     /// Morph-target weight keys for the target mesh, in time order. Each key
@@ -225,7 +225,7 @@ impl Animation {
                 .iter()
                 .map(|k| (k.time, k.weights.clone()))
                 .collect(),
-            root: (!self.root_track.is_empty()).then(|| crate::gfx::root_motion::RootTrack {
+            root: (!self.root_track.is_empty()).then(|| crate::animation::root_motion::RootTrack {
                 keys: self.root_track.clone(),
             }),
         }

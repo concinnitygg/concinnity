@@ -19,11 +19,11 @@ use concinnity_core::components::{
     GamepadAction, GraphicsConfig, IndirectLighting, PostProcessConfig,
 };
 use concinnity_core::ecs::{Entity, PipelineContext, StepResult, System};
-use concinnity_core::gfx::transform_propagation;
 use concinnity_core::render::backend::RenderBackend;
 use concinnity_core::render::{
     backend, keymap, overlay_maps, scene_flow, snapshot, text, volumetric_fog,
 };
+use concinnity_core::transform::propagation;
 use concinnity_host::store::paths::StateTree;
 use concinnity_host::thread::asset_id::AssetId;
 use std::time::Instant;
@@ -163,9 +163,9 @@ pub struct GraphicsSystem {
     // is grayed out and made inert. Held in memory only, never persisted.
     caps: backend::DeviceCapabilities,
     // Reused scratch + change-tracking for the per-frame transform propagation
-    // (`transform_propagation::propagate_transforms_cached`): buffers are refilled in place
+    // (`propagation::propagate_transforms_cached`): buffers are refilled in place
     // and the pass is skipped on frames where no Transform / Parent changed.
-    transform_cache: transform_propagation::TransformCache,
+    transform_cache: propagation::TransformCache,
     // The sky angle the directional-light set was last carried at. `None` until
     // the first frame, so a world whose sky never turns carries it exactly once.
     pushed_sky_angle: Option<f32>,
@@ -301,7 +301,7 @@ impl GraphicsSystem {
             clip_rects: overlay_maps::ClipRects::new(),
             // All-capable until the backend reports otherwise at init.
             caps: backend::DeviceCapabilities::ALL,
-            transform_cache: transform_propagation::TransformCache::default(),
+            transform_cache: propagation::TransformCache::default(),
             pushed_sky_angle: None,
             model_push: model_push::ModelPushCache::default(),
             skinned_model_push: model_push::ModelPushCache::default(),

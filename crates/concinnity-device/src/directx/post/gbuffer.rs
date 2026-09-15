@@ -13,7 +13,7 @@
 //! un-jittered current / previous VPs in-shader so projection jitter never
 //! contaminates motion. Mirrors src/metal/post/gbuffer.rs.
 
-use concinnity_core::gfx::transform::IDENTITY;
+use concinnity_core::transform::IDENTITY;
 use std::cell::RefCell;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;

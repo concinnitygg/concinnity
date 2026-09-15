@@ -19,10 +19,10 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types::{FogFroxelParams, FogParams, ShadowUniforms};
-use concinnity_core::gfx::transform::mat4_inverse;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
 use concinnity_core::render::volumetric_fog;
+use concinnity_core::transform::mat4_inverse;
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledImage};
 use super::context::VkContext;

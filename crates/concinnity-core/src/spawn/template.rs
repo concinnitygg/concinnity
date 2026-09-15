@@ -225,11 +225,11 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
+    use crate::animation::skeleton::Skeleton;
     use crate::ecs::{
         Arena, ComponentStorage, FrameContext, NoPayloads, Resources, SkinnedMeshHandle,
     };
     use crate::gfx::profile::FrameProfile;
-    use crate::gfx::skeleton::Skeleton;
 
     // Build an isolated PipelineContext over fresh storage, mirroring the
     // despawn tests, so the spawn/despawn loop can run without a backend.

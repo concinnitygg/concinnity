@@ -51,7 +51,7 @@ impl Default for FrameScalars {
             fov_y_radians: core::f32::consts::FRAC_PI_4,
             near: 0.05,
             far: 200.0,
-            view: crate::gfx::transform::IDENTITY,
+            view: crate::transform::IDENTITY,
             cam_pos: [0.0; 3],
             view_mode: ViewMode::default(),
             show: ShowFlags::default(),

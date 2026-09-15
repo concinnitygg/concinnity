@@ -2,12 +2,12 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::ecs::asset_id::{AssetId, de_opt_asset_ref};
-use crate::ecs::{SkinnedMeshHandle, de_opt_skinned_mesh_handle};
-use crate::gfx::anim_graph::{
+use crate::animation::anim_graph::{
     Blend1D, Blend2D, ClipPlay, CmpOp, CompiledCondition, CompiledGraph, CompiledState,
     CompiledTransition, ParamSpec, StatePlay,
 };
+use crate::ecs::asset_id::{AssetId, de_opt_asset_ref};
+use crate::ecs::{SkinnedMeshHandle, de_opt_skinned_mesh_handle};
 
 /// A named float parameter driving a graph's transitions. Gameplay systems
 /// (or the `anim-param` debug command) write parameter values at runtime;

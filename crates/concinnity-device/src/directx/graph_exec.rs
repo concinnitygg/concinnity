@@ -44,13 +44,13 @@
 
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types::{LineVertex, TextDrawCall};
-use concinnity_core::gfx::transform::mat4_inverse;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::lights;
 use concinnity_core::render::render_graph;
 use concinnity_core::render::render_graph::{
     BarrierOp, CompiledGraph, CompiledPass, GraphResourceClass, PassId, final_states,
 };
+use concinnity_core::transform::mat4_inverse;
 use concinnity_host::thread::jobs;
 use std::sync::Mutex;
 use windows::Win32::Graphics::Direct3D12::*;

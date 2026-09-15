@@ -5,17 +5,17 @@
 //! into a mesh-space target for the analytic two-bone solve, applied to the
 //! sampled locals just before the skinning matrices.
 
+use concinnity_core::animation::ik;
+use concinnity_core::animation::ik::TwoBoneChain;
+use concinnity_core::animation::pose_scratch::PoseScratch;
+use concinnity_core::animation::skeleton::Skeleton;
 use concinnity_core::components::AnimationParam;
 use concinnity_core::components::SkeletonPose;
 use concinnity_core::components::{
     AnimationIkChain, AnimationParams, CharacterRig, GroundProbe, GroundProbes,
 };
 use concinnity_core::ecs::{PipelineContext, SkinnedMeshHandle};
-use concinnity_core::gfx::ik;
-use concinnity_core::gfx::ik::TwoBoneChain;
-use concinnity_core::gfx::pose_scratch::PoseScratch;
-use concinnity_core::gfx::skeleton::Skeleton;
-use concinnity_core::gfx::transform::{Mat4, mat4_affine_inverse};
+use concinnity_core::transform::{Mat4, mat4_affine_inverse};
 use concinnity_host::thread::asset_id::AssetId;
 use std::collections::{BTreeMap, HashMap};
 
@@ -284,8 +284,8 @@ fn transform_point(m: &Mat4, p: [f32; 3]) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::animation::skeleton::{Joint, JointPose, Skeleton};
     use concinnity_core::components::AnimationParam;
-    use concinnity_core::gfx::skeleton::{Joint, JointPose, Skeleton};
 
     // A valid hip -> knee -> foot chain (each the direct child of the last),
     // plus an extra unrelated root joint the broken-parentage case names.

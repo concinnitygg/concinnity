@@ -2,11 +2,11 @@
 //! owns the target, playing one state at a time and crossfading over
 //! transitions. Transition conditions read the target's `AnimationParams`
 //! component, which gameplay systems (or the `anim-param` debug command)
-//! write; the graph math itself lives in `concinnity_core::gfx::anim_graph`.
+//! write; the graph math itself lives in `concinnity_core::animation::anim_graph`.
 
+use concinnity_core::animation::anim_graph::{CompiledGraph, GraphCursor};
 use concinnity_core::components::{AnimationGraph, AnimationParams, GroundProbes, SkeletonPose};
 use concinnity_core::ecs::{PipelineContext, SkinnedMeshHandle};
-use concinnity_core::gfx::anim_graph::{CompiledGraph, GraphCursor};
 use concinnity_host::thread::asset_id::AssetId;
 use std::collections::{BTreeMap, HashMap};
 
@@ -146,11 +146,11 @@ pub(super) fn step_target(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::animation::skeleton;
     use concinnity_core::ecs::Arena;
     use concinnity_core::ecs::FrameContext;
     use concinnity_core::ecs::{ComponentSlot, ComponentStorage, Resources};
     use concinnity_core::gfx::profile::FrameProfile;
-    use concinnity_core::gfx::skeleton;
     use concinnity_host::store::blob::BlobData;
     use concinnity_host::thread::asset_id;
     use concinnity_host::thread::asset_id::intern;

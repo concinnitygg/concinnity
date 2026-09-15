@@ -13,11 +13,11 @@ use concinnity_core::ecs::{
 };
 use concinnity_core::gfx::frustum;
 use concinnity_core::gfx::profile;
-use concinnity_core::gfx::transform_propagation;
 use concinnity_core::render::input;
 use concinnity_core::render::overlay_maps;
 use concinnity_core::render::scene_flow;
 use concinnity_core::render::snapshot::{FrameScalars, RenderSnapshot, SceneOpRecorder};
+use concinnity_core::transform::propagation;
 use concinnity_host::thread::asset_id::AssetId;
 
 use super::sky_follow;
@@ -328,7 +328,7 @@ impl GraphicsSystem {
         // slots. The cached path reuses its scratch and skips the resolve
         // entirely when no Transform / Parent changed; the push gate drops
         // slots whose matrix is unchanged, so a static scene sends nothing.
-        transform_propagation::propagate_transforms_cached(ctx, &mut self.transform_cache);
+        propagation::propagate_transforms_cached(ctx, &mut self.transform_cache);
         for (_entity, global, handle) in ctx.join2::<GlobalTransform, RenderHandle>() {
             for &slot in &handle.draws {
                 self.model_push
@@ -611,9 +611,9 @@ impl GraphicsSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::animation::skeleton;
     use concinnity_core::ecs::Arena;
     use concinnity_core::ecs::FrameContext;
-    use concinnity_core::gfx::skeleton;
     use concinnity_core::render::feedback;
     use std::collections::HashSet;
 

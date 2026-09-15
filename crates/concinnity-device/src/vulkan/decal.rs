@@ -12,9 +12,9 @@
 
 use ash::vk;
 use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::transform::mat4_inverse;
 use concinnity_core::render::decal::DecalRecord;
 use concinnity_core::render::error::RenderResult;
+use concinnity_core::transform::mat4_inverse;
 use std::cell::Cell;
 // `DecalView` (per-frame, 144 bytes) is the layout struct shared with the other
 // backends; the per-decal `DecalParams` (160 bytes, inside the 256-byte stride

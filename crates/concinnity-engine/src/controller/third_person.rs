@@ -360,7 +360,7 @@ mod tests {
     use concinnity_core::components::PropCollider;
     use concinnity_core::components::{FollowController, FrameInput};
     use concinnity_core::ecs::World;
-    use concinnity_core::gfx::transform;
+    use concinnity_core::transform;
     use concinnity_host::thread::asset_id::intern;
     use std::time::Duration;
 

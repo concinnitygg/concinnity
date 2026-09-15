@@ -46,7 +46,6 @@ use concinnity_core::ecs::{
 use concinnity_core::gfx::chunk_coord;
 use concinnity_core::gfx::mesh_payload;
 use concinnity_core::gfx::profile::FrameProfile;
-use concinnity_core::gfx::transform_propagation;
 use concinnity_core::render::backend;
 use concinnity_core::render::backend::{GpuProfile, GpuTier, GpuVendor};
 use concinnity_core::render::backend_init::SwapchainConfig;
@@ -60,6 +59,7 @@ use concinnity_core::resource::MaterialTable;
 use concinnity_core::resource::MeshTable;
 use concinnity_core::resource::SkinnedMeshTable;
 use concinnity_core::resource::TextureTable;
+use concinnity_core::transform::propagation;
 use concinnity_host::store::blob::BlobData;
 use concinnity_host::thread::asset_id::AssetId;
 use std::sync::{Arc, Mutex};
@@ -1716,7 +1716,7 @@ fn reparent_request_with_an_unresolved_parent_is_skipped() {
     // Park the child under a real parent first, so a wrongful detach shows.
     {
         let mut ctx = world.ctx();
-        transform_propagation::reparent(&mut ctx, child, Some(parent));
+        propagation::reparent(&mut ctx, child, Some(parent));
         ctx.events_mut::<ReparentRequest>().send(ReparentRequest {
             child: OTHER.into(),
             parent: Some(GHOST.into()),
@@ -1747,7 +1747,7 @@ fn reparent_request_without_a_parent_detaches_the_child() {
 
     {
         let mut ctx = world.ctx();
-        transform_propagation::reparent(&mut ctx, child, Some(parent));
+        propagation::reparent(&mut ctx, child, Some(parent));
         ctx.events_mut::<ReparentRequest>().send(ReparentRequest {
             child: OTHER.into(),
             parent: None,

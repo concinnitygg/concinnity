@@ -1,6 +1,7 @@
 // GraphicsSystem one-time setup: backend creation, draw-list build, and the
 // shader / texture / streaming wiring performed on the first tick.
 
+use concinnity_core::animation::skeleton;
 use concinnity_core::bake::font;
 use concinnity_core::bake::texture;
 use concinnity_core::components::CharacterCapsule;
@@ -46,9 +47,7 @@ use concinnity_core::ecs::SkinnedMeshHandle;
 use concinnity_core::ecs::TextureHandle;
 use concinnity_core::geometry::payload_joints_to_defs;
 use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::gfx::{
-    mesh_payload, mesh_seed, render_types, skeleton, transform_propagation,
-};
+use concinnity_core::gfx::{mesh_payload, mesh_seed, render_types};
 use concinnity_core::render::{
     backend, backend_init, decal, display_mode, lights, particles, reflection_probe, text,
     volumetric_fog,
@@ -60,6 +59,7 @@ use concinnity_core::resource::FontTable;
 use concinnity_core::resource::MaterialTable;
 use concinnity_core::resource::SkinnedMeshTable;
 use concinnity_core::resource::TextureTable;
+use concinnity_core::transform::propagation;
 use concinnity_host::store::blob::blob_path;
 use concinnity_host::store::blob::payload_section_start;
 use concinnity_host::thread::asset_id;
@@ -1949,7 +1949,7 @@ impl GraphicsSystem {
         // renderer fields from MeshRenderer/ModelRenderer, world matrices from
         // Transform/Parent. `items` / `world_mats` are column-aligned with
         // `prop_entities`.
-        let resolved = transform_propagation::resolve_world_matrices(ctx);
+        let resolved = propagation::resolve_world_matrices(ctx);
         let entity_name: std::collections::HashMap<Entity, AssetId> = ctx
             .resource::<concinnity_core::ecs::EntityByName>()
             .map(|n| n.0.iter().map(|(&id, &e)| (e, id)).collect())

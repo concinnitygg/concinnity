@@ -4,14 +4,14 @@
 // capsule follows, and the shape asset is consumed. The mesh that comes out
 // is a plain SkinnedMesh with no shape work left for the runtime.
 
+use concinnity_core::animation::proportions::ProportionLayer;
 use concinnity_core::components::{
     CharacterCapsule, CharacterShape, MorphDelta, SkeletonJoint, SkinnedMesh,
     build_skeleton_from_joint_defs,
 };
 use concinnity_core::ecs::Component;
-use concinnity_core::gfx::proportions::ProportionLayer;
-use concinnity_core::gfx::transform::{self, Mat4};
 use concinnity_core::math::vec3;
+use concinnity_core::transform::{self, Mat4};
 
 use crate::authoring::world::WorldJsonlAsset;
 

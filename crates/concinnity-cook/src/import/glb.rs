@@ -11,9 +11,9 @@
 //! wrappers (`import_skinned_glb`, `import_glb_animation`, ...) live in
 //! `crate::import::gltf` and call into here.
 
+use concinnity_core::animation::skeleton::JointPose;
 use concinnity_core::components::{MorphDelta, SkeletonJoint, SkinnedVertexData, VertexData};
-use concinnity_core::gfx::skeleton::JointPose;
-use concinnity_core::gfx::transform::euler_yxz_from_quat;
+use concinnity_core::transform::euler_yxz_from_quat;
 use concinnity_host::store::source::resolve_source_path;
 use std::collections::HashMap;
 use std::path::Path;

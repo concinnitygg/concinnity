@@ -24,10 +24,10 @@
 use ash::vk;
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types;
-use concinnity_core::gfx::transform::mat4_inverse;
-use concinnity_core::gfx::transform::mat4_mul;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::planar_reflection;
+use concinnity_core::transform::mat4_inverse;
+use concinnity_core::transform::mat4_mul;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::{HDR_FORMAT, VkContext};

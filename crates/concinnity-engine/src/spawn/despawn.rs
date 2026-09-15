@@ -212,8 +212,8 @@ mod tests {
 
     #[test]
     fn despawn_retires_a_skinned_instance_slot() {
+        use concinnity_core::animation::skeleton::Skeleton;
         use concinnity_core::components::SkeletonPose;
-        use concinnity_core::gfx::skeleton::Skeleton;
         run(|ctx| {
             // A skinned entity carries a SkeletonPose (no RenderHandle); its
             // skinned_index is the slot to retire.

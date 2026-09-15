@@ -3,10 +3,10 @@
 //! side-effect bundle, and `run_frame`, the per-frame entry the debug drive
 //! calls. Built from `HotReloadSources` (captured in the lib at init).
 
+use concinnity_core::animation::skeleton;
 use concinnity_core::components::SkeletonJoint;
 use concinnity_core::components::Story;
 use concinnity_core::gfx::mesh_payload;
-use concinnity_core::gfx::skeleton;
 use concinnity_engine::gfx::system::HotReloadApplyParts;
 use concinnity_engine::gfx::system::hot_reload_sources::*;
 use std::sync::atomic::{AtomicBool, Ordering};

@@ -26,10 +26,10 @@ use concinnity_core::components::SdfVolume;
 use concinnity_core::components::sdf_programs::SdfPrograms;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::{LightUniforms, ShadowUniforms};
-use concinnity_core::gfx::transform::mat4_inverse;
 use concinnity_core::platform::Platform;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::slang_programs::raymarch::{self, Family};
+use concinnity_core::transform::mat4_inverse;
 use concinnity_slang::SlangTarget;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};

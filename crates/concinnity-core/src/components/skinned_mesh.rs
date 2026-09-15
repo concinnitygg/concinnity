@@ -2,7 +2,7 @@
 //! its SkinnedVertexData / SkeletonJoint / CharacterCapsule, and their Defaults) lives
 //! above; SkinnedMesh is a resource (compiled by cook into the
 //! blob's resource stream, no `Component` impl), so this file keeps only the
-//! skeleton builder and the model matrix, both built through `gfx::skeleton`.
+//! skeleton builder and the model matrix, both built through `animation::skeleton`.
 
 use crate::ecs::MaterialHandle;
 use crate::ecs::PayloadLocator;
@@ -309,8 +309,10 @@ mod tests {
 /// mark roots), and each `SkeletonJoint`'s translation / rotation / scale becomes the
 /// joint's bind `JointPose`. Used at init and by the asset hot-reload's
 /// skeleton-shape change path.
-pub fn build_skeleton_from_joint_defs(defs: &[SkeletonJoint]) -> crate::gfx::skeleton::Skeleton {
-    use crate::gfx::skeleton as skinning;
+pub fn build_skeleton_from_joint_defs(
+    defs: &[SkeletonJoint],
+) -> crate::animation::skeleton::Skeleton {
+    use crate::animation::skeleton as skinning;
     let joints = defs
         .iter()
         .map(|jd| skinning::Joint {
@@ -330,7 +332,7 @@ impl SkinnedMesh {
     /// Column-major world matrix built from the mesh's transform, in the same
     /// construction order (scale, YXZ rotation, translate) as `Prop::model_matrix`.
     pub fn model_matrix(&self) -> [[f32; 4]; 4] {
-        crate::gfx::skeleton::JointPose {
+        crate::animation::skeleton::JointPose {
             translation: self.position,
             rotation_deg: self.rotation_deg,
             scale: self.scale,

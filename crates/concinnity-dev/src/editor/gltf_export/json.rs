@@ -4,7 +4,7 @@
 //! accessor tables packed by `buffer.rs`.
 
 use concinnity_core::components::SkeletonJoint;
-use concinnity_core::gfx::transform::{decompose, trs_matrix};
+use concinnity_core::transform::{decompose, trs_matrix};
 use serde_json::{Value, json};
 
 use super::buffer::BinBuffer;

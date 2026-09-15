@@ -1,8 +1,9 @@
 //! concinnity-core: the engine's RUNTIME vocabulary and the CPU compute over it.
 //! The types the renderer, the cook pipeline, the subsystem crates, and the
 //! editor all have to agree on and none of them owns: the backend-agnostic GPU
-//! data layouts the CPU and the shaders both name, the transform and skeleton
-//! math those layouts are expressed in, the ECS storage mechanism plus the
+//! data layouts the CPU and the shaders both name, the transform math those
+//! layouts are expressed in, the skeleton, clip, and morph-target types
+//! animation is authored and sampled in, the ECS storage mechanism plus the
 //! component definitions and the registry built from them, the post-process /
 //! quality setting structs, the behavior virtual machine that evaluates
 //! declarative logic, and the `.cnb` blob container format the cooked world
@@ -56,6 +57,7 @@ extern crate std;
 /// exactly, so a stale record fails the load on its own.
 pub const SCHEMA_VERSION: u32 = 2;
 
+pub mod animation;
 mod app;
 pub mod bake;
 pub mod behavior;
@@ -78,6 +80,7 @@ pub mod sky;
 pub mod spawn;
 #[cfg(test)]
 mod test_support;
+pub mod transform;
 pub mod window_policy;
 
 // The headless driver over a world and the trait any loop that runs one

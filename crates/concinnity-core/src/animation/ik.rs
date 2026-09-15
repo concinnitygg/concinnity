@@ -8,8 +8,8 @@ use crate::math::vec3::{add, cross, dot, length, scale, sub};
 use crate::math::{acos, atan2, sin_cos};
 use alloc::vec::Vec;
 
-use crate::gfx::skeleton::Skeleton;
-use crate::gfx::transform::{Mat4, mat4_affine_inverse, mat4_mul};
+use crate::animation::skeleton::Skeleton;
+use crate::transform::{Mat4, mat4_affine_inverse, mat4_mul};
 
 type Vec3 = [f32; 3];
 type Mat3 = [[f32; 3]; 3];
@@ -242,7 +242,7 @@ pub fn apply_two_bone_ik(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gfx::skeleton::{Joint, JointPose};
+    use crate::animation::skeleton::{Joint, JointPose};
     use alloc::string::ToString;
     use alloc::vec;
 

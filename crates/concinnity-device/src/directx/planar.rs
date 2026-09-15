@@ -25,9 +25,9 @@
 //! (the bindless face render omits the skinned tail), exactly like the probe capture.
 
 use concinnity_core::gfx::frustum::{Frustum, Plane};
-use concinnity_core::gfx::transform::mat4_inverse;
-use concinnity_core::gfx::transform::mat4_mul;
 use concinnity_core::render::planar_reflection;
+use concinnity_core::transform::mat4_inverse;
+use concinnity_core::transform::mat4_mul;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 

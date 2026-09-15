@@ -7,9 +7,9 @@ use ash::vk;
 use concinnity_core::gfx::mesh_payload;
 use concinnity_core::gfx::mesh_payload::SkinnedVertex;
 use concinnity_core::gfx::render_types::*;
-use concinnity_core::gfx::transform::IDENTITY;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::rt_geom;
+use concinnity_core::transform::IDENTITY;
 
 use super::super::context::*;
 use super::super::pipeline::{compile_skinned_shadow_shader, create_skinned_shadow_pipeline};

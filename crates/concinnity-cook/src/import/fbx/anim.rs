@@ -12,8 +12,8 @@
 // pivots / offsets / PostRotation are outside the supported envelope and log
 // a warning instead of silently mis-posing.
 
-use concinnity_core::gfx::skeleton;
-use concinnity_core::gfx::transform::{decompose, euler_yxz_from_quat, mat4_mul};
+use concinnity_core::animation::skeleton;
+use concinnity_core::transform::{decompose, euler_yxz_from_quat, mat4_mul};
 use fbxcel::tree::v7400::NodeHandle;
 use std::collections::{BTreeMap, HashMap};
 

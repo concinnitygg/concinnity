@@ -107,8 +107,8 @@ impl SsrSettings {
 mod tests {
     use super::*;
     use crate::gfx::camera::MIN_ASPECT;
-    use crate::gfx::transform::IDENTITY;
     use crate::sky::SkyOrientation;
+    use crate::transform::IDENTITY;
 
     #[test]
     fn resolve_clamps_intensity_and_distance() {

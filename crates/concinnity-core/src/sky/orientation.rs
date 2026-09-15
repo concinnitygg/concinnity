@@ -1,5 +1,5 @@
-use crate::gfx::transform::quat_to_mat3;
 use crate::math::{euler_yxz_deg_from_quat, quat_from_axis_angle};
+use crate::transform::quat_to_mat3;
 
 /// Where the celestial sphere has turned to, published once per tick by
 /// [`SkyRotationSystem`](super::SkyRotationSystem) and read by every consumer
@@ -66,7 +66,7 @@ impl SkyOrientation {
     /// The same rotation as engine Euler degrees, for the transform the
     /// component's entity carries.
     pub fn euler_deg(&self) -> [f32; 3] {
-        euler_yxz_deg_from_quat(crate::gfx::transform::quat_from_mat3(self.rotation))
+        euler_yxz_deg_from_quat(crate::transform::quat_from_mat3(self.rotation))
     }
 }
 
@@ -121,7 +121,7 @@ mod tests {
         let sky = SkyOrientation::new([1.0, 0.0, 0.0], 120.0);
         let dir = [0.0, 0.0, 1.0];
         let by_matrix = sky.rotate(dir);
-        let m = crate::gfx::transform::trs_matrix([0.0; 3], sky.euler_deg(), [1.0; 3]);
+        let m = crate::transform::trs_matrix([0.0; 3], sky.euler_deg(), [1.0; 3]);
         let by_euler: [f32; 3] =
             core::array::from_fn(|i| m[0][i] * dir[0] + m[1][i] * dir[1] + m[2][i] * dir[2]);
         assert!(close(by_matrix, by_euler), "{by_matrix:?} {by_euler:?}");

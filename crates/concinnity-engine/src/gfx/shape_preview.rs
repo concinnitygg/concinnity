@@ -106,8 +106,8 @@ pub fn apply(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::animation::skeleton::{Joint, JointPose, Skeleton};
     use concinnity_core::components::{JointProportion, ShapeSlider};
-    use concinnity_core::gfx::skeleton::{Joint, JointPose, Skeleton};
 
     fn chain() -> Skeleton {
         let joint = |name: &str, parent: Option<usize>, y: f32| Joint {

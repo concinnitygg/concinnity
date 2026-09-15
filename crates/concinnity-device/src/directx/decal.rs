@@ -10,8 +10,8 @@
 //! the scene. Mirrors src/metal/decal.rs.
 
 use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::transform::mat4_inverse;
 use concinnity_core::render::decal::DecalRecord;
+use concinnity_core::transform::mat4_inverse;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;

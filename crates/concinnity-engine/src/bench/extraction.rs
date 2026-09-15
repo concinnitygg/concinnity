@@ -6,9 +6,9 @@
 //! copy extraction added over the old borrow-through path (joint matrices
 //! into the snapshot's span buffer).
 
+use concinnity_core::animation::skeleton;
 use concinnity_core::components::{GlobalTransform, Prop, RenderHandle, SkeletonPose};
 use concinnity_core::ecs::{Entity, SkinnedMeshHandle};
-use concinnity_core::gfx::skeleton;
 use concinnity_core::render::snapshot::RenderSnapshot;
 
 use super::{BenchWorld, bench};

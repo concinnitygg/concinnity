@@ -1,3 +1,4 @@
+use concinnity_core::animation::skeleton;
 use concinnity_core::components::{
     Animation, AnimationGraph, AnimationParams, CharacterRig, PhysicsConfig, Prop, PropCollider,
     RootMotionEvent, SkeletonPose,
@@ -6,8 +7,7 @@ use concinnity_core::ecs::EventCursor;
 use concinnity_core::ecs::MenuActive;
 use concinnity_core::ecs::SkinnedMeshHandle;
 use concinnity_core::ecs::World;
-use concinnity_core::gfx::skeleton;
-use concinnity_core::gfx::transform;
+use concinnity_core::transform;
 use concinnity_host::thread::asset_id;
 use concinnity_host::thread::asset_id::intern;
 use std::time::{Duration, Instant};
@@ -371,7 +371,7 @@ fn root_motion_events_emit_in_handle_order() {
 // clipping through it.
 #[test]
 fn ik_pins_the_foot_to_a_raised_ledge() {
-    use concinnity_core::gfx::skeleton::{Joint, JointPose, Skeleton};
+    use concinnity_core::animation::skeleton::{Joint, JointPose, Skeleton};
 
     let target = SkinnedMeshHandle(intern("hero_ik").0);
     let mut world = World::new();
@@ -623,7 +623,7 @@ fn debug_impl_summarizes_target_and_reload_counts() {
 
 // A one-joint pose for `target`, used to observe the flat sampling arms.
 fn single_joint_pose(target: SkinnedMeshHandle) -> SkeletonPose {
-    use concinnity_core::gfx::skeleton::{Joint, JointPose, Skeleton};
+    use concinnity_core::animation::skeleton::{Joint, JointPose, Skeleton};
     let skeleton = Skeleton::new(vec![Joint {
         name: "root".to_string(),
         parent: None,
@@ -683,8 +683,8 @@ fn flat_fade_in_blends_multiple_clips_into_the_pose() {
 // morph track leaves the base layer uploaded as-is.
 #[test]
 fn morph_base_layer_composes_with_clip_morph_tracks() {
+    use concinnity_core::animation::proportions::ProportionLayer;
     use concinnity_core::components::MorphKey;
-    use concinnity_core::gfx::proportions::ProportionLayer;
 
     let target = SkinnedMeshHandle(intern("morph_base_pose").0);
     let mut world = World::new();
@@ -731,8 +731,8 @@ fn morph_base_layer_composes_with_clip_morph_tracks() {
 // the skinning matrix the clip writes each frame.
 #[test]
 fn proportions_apply_to_the_sampled_pose() {
+    use concinnity_core::animation::proportions::ProportionLayer;
     use concinnity_core::components::JointProportion;
-    use concinnity_core::gfx::proportions::ProportionLayer;
 
     let target = SkinnedMeshHandle(intern("proportioned_pose").0);
     let mut world = World::new();

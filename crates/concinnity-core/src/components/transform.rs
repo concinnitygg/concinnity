@@ -27,6 +27,6 @@ impl Transform {
     /// Build a column-major model matrix from this transform.
     /// Order: scale, then YXZ Euler rotation, then translation.
     pub fn model_matrix(&self) -> [[f32; 4]; 4] {
-        crate::gfx::transform::trs_matrix(self.position, self.rotation_deg, self.scale)
+        crate::transform::trs_matrix(self.position, self.rotation_deg, self.scale)
     }
 }

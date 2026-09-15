@@ -11,13 +11,13 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use crate::animation::root_motion::RootTrack;
 use crate::gfx::render_types::MAX_JOINTS;
-use crate::gfx::root_motion::RootTrack;
-use crate::gfx::transform::{
+use crate::math::rem_euclid;
+use crate::transform::{
     IDENTITY, Mat4, compose, mat4_affine_inverse, mat4_mul, quat_from_mat3, quat_slerp,
     quat_to_mat3, rotation_mat3, trs_matrix,
 };
-use crate::math::rem_euclid;
 
 /// A joint's local transform: translation, YXZ Euler rotation in degrees, and
 /// per-axis scale. Used both for the bind pose and for animation keyframes.
@@ -54,7 +54,7 @@ impl JointPose {
     /// joint rotation follows the correct path. `f` in `[0, 1]`.
     ///
     /// Slerps the poses' own Euler rotations rather than going through
-    /// [`blend_matrices`](crate::gfx::transform::blend_matrices), which would
+    /// [`blend_matrices`](crate::transform::blend_matrices), which would
     /// have to recover them from the composed matrices first.
     pub fn blend_matrix(&self, other: &JointPose, f: f32) -> Mat4 {
         let mix = |a: [f32; 3], b: [f32; 3]| {
@@ -352,8 +352,8 @@ impl AnimationClip {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gfx::transform::blend_matrices;
     use crate::math::atan2;
+    use crate::transform::blend_matrices;
     use alloc::vec;
 
     fn approx(a: f32, b: f32) -> bool {

@@ -20,6 +20,9 @@ pub mod runtime_queue;
 #[cfg(test)]
 mod tests;
 
+use concinnity_core::animation::anim_graph;
+use concinnity_core::animation::pose_blend::PoseBlend;
+use concinnity_core::animation::skeleton::AnimationClip;
 use concinnity_core::components::Animation;
 use concinnity_core::components::AnimationParams;
 use concinnity_core::components::CharacterRig;
@@ -29,9 +32,6 @@ use concinnity_core::components::SkeletonPose;
 use concinnity_core::ecs::{
     Access, MenuActive, PipelineContext, SkinnedMeshHandle, StepResult, System,
 };
-use concinnity_core::gfx::anim_graph;
-use concinnity_core::gfx::pose_blend::PoseBlend;
-use concinnity_core::gfx::skeleton::AnimationClip;
 use concinnity_host::thread::asset_id::AssetId;
 use concinnity_host::thread::jobs;
 use flat::{ClipEntry, FlatState, Transition};

@@ -14,8 +14,8 @@
 use crate::components::SpotLight;
 use crate::gfx::projection::{look_at, perspective_rh, up_for};
 use crate::gfx::render_types::{MAX_SHADOWED_SPOTS, SpotShadowData};
-use crate::gfx::transform::mat4_mul;
 use crate::math::vec3::{add, scale};
+use crate::transform::mat4_mul;
 use alloc::vec;
 use alloc::vec::Vec;
 

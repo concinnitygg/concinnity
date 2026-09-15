@@ -69,15 +69,7 @@ mod waves;
 mod world;
 
 #[cfg(test)]
-mod declared_component_tests;
-#[cfg(test)]
-mod join_bench;
-#[cfg(test)]
-mod registration_tests;
-#[cfg(test)]
-mod storage_bench;
-#[cfg(test)]
-mod world_run_tests;
+mod tests;
 
 // The storage primitives. `Column`, `Entities`, `JoinIndex` and `AtomicTick`
 // are named by the expansion of `define_component_storage!`, so they are public

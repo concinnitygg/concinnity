@@ -6,8 +6,8 @@
 // `quat_slerp` (see `convert` for the one-time Euler conversion at the
 // Transform write boundary).
 
-use crate::gfx::transform::quat_slerp;
 use crate::math::vec3::lerp;
+use crate::transform::quat_slerp;
 
 // A position with prev/curr tick snapshots.
 #[derive(Debug, Clone, Copy)]

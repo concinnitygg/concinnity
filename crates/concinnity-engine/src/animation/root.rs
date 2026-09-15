@@ -1,7 +1,8 @@
 //! Root-motion publication for flat clip buckets: the displacement the
 //! bucket's weighted blend covered between two absolute clip times. Graph
-//! buckets get the equivalent from `gfx::anim_graph::cursor_root_delta`;
-//! both feed the per-frame `RootMotionEvent` events consumed by the rig drive in
+//! buckets get the equivalent from
+//! `concinnity_core::animation::anim_graph::cursor_root_delta`; both feed the
+//! per-frame `RootMotionEvent` events consumed by the rig drive in
 //! PhysicsSystem.
 
 use concinnity_core::math::vec3::{add, scale};
@@ -44,8 +45,8 @@ pub(super) fn flat_root_delta(clips: &[ClipEntry], weights: &[f32], t0: f32, t1:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::gfx::root_motion::{RootKey, RootTrack};
-    use concinnity_core::gfx::skeleton::AnimationClip;
+    use concinnity_core::animation::root_motion::{RootKey, RootTrack};
+    use concinnity_core::animation::skeleton::AnimationClip;
 
     // A clip whose root travels `per` along +X over its whole duration, linear.
     fn moving_clip(duration: f32, looping: bool, per: f32) -> ClipEntry {

@@ -1,6 +1,7 @@
 //! Unit tests for the hot-reload machinery (moved here from the single-file
 //! module). Pull each submodule's items in explicitly.
 
+use concinnity_core::animation::skeleton;
 use concinnity_core::components::ProceduralMesh;
 use concinnity_core::components::SkeletonJoint;
 use concinnity_core::components::Story;
@@ -9,7 +10,6 @@ use concinnity_core::ecs::EventCursor;
 use concinnity_core::ecs::World;
 use concinnity_core::gfx::mesh_payload;
 use concinnity_core::gfx::render_types;
-use concinnity_core::gfx::skeleton;
 use concinnity_core::render::backend;
 use concinnity_core::render::draw_slot;
 use concinnity_core::render::error;
@@ -2363,8 +2363,8 @@ fn armed_driver_survives_a_drive_over_an_empty_world() {
 
 #[test]
 fn apply_effects_splices_the_matching_skeleton_pose_only() {
+    use concinnity_core::animation::skeleton::{Joint, JointPose, Skeleton};
     use concinnity_core::components::SkeletonPose;
-    use concinnity_core::gfx::skeleton::{Joint, JointPose, Skeleton};
 
     let mut world = World::new();
     world.add_component(SkeletonPose::new(

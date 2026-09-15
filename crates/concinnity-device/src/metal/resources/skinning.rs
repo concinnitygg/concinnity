@@ -6,10 +6,10 @@
 use concinnity_core::gfx::mesh_payload;
 use concinnity_core::gfx::mesh_payload::SkinnedVertex;
 use concinnity_core::gfx::render_types::SkinnedDrawObject;
-use concinnity_core::gfx::transform::IDENTITY;
 use concinnity_core::render::backend;
 use concinnity_core::render::rt_geom;
 use concinnity_core::render::skinned_slots::SkinnedSlots;
+use concinnity_core::transform::IDENTITY;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{

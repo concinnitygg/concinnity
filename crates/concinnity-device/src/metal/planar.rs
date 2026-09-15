@@ -26,10 +26,10 @@
 
 use super::error::allocation_failed;
 use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::transform::mat4_inverse;
-use concinnity_core::gfx::transform::mat4_mul;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::planar_reflection;
+use concinnity_core::transform::mat4_inverse;
+use concinnity_core::transform::mat4_mul;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLDevice, MTLPixelFormat, MTLTexture, MTLTextureType, MTLTextureUsage};

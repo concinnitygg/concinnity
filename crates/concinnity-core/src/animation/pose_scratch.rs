@@ -2,7 +2,7 @@
 
 use alloc::vec::Vec;
 
-use crate::gfx::transform::Mat4;
+use crate::transform::Mat4;
 
 /// Reusable buffers for the per-frame pose sampling chain (sample, blend, IK,
 /// skinning). Each animated target owns one; the buffers reach steady-state

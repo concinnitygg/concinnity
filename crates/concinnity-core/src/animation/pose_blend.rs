@@ -3,7 +3,7 @@
 //! uses between keyframes, so a blended pose is continuous with a clip's own
 //! sampling.
 
-use crate::gfx::transform::{Mat4, blend_matrices};
+use crate::transform::{Mat4, blend_matrices};
 use alloc::vec::Vec;
 
 // Blend `other` into `acc` in place by weight `f`, clamped to `[0, 1]`:
@@ -75,8 +75,8 @@ impl<'a> PoseBlend<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gfx::skeleton::JointPose;
-    use crate::gfx::transform::IDENTITY;
+    use crate::animation::skeleton::JointPose;
+    use crate::transform::IDENTITY;
     use alloc::vec;
 
     fn approx(a: f32, b: f32) -> bool {

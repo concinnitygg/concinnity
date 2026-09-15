@@ -18,7 +18,7 @@ use std::time::Instant;
 
 use crate::ecs::asset_id::AssetId;
 use crate::gfx::render_types::{DrawObject, MaterialUniforms, SkinnedDrawObject};
-use crate::gfx::transform::IDENTITY;
+use crate::transform::IDENTITY;
 
 // One measured pass runs at least this long before its time is trusted.
 const TARGET_NS: u128 = 200_000_000;

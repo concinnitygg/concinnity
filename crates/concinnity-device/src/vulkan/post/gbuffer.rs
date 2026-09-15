@@ -22,9 +22,9 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types::{GpuDrawArgs, GpuObjectData};
-use concinnity_core::gfx::transform::IDENTITY;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::uniforms::{GBufferView, ModelHistoryParams};
+use concinnity_core::transform::IDENTITY;
 
 use super::super::allocator::{DeviceAllocator, PooledBuffer};
 use super::super::context::VkContext;

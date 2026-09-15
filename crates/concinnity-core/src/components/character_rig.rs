@@ -1,6 +1,6 @@
 use crate::ecs::SkinnedMeshHandle;
-use crate::gfx::transform::Mat4;
 use crate::math::sin_cos;
+use crate::transform::Mat4;
 
 /// Runtime-only link between a skinned mesh and its character capsule.
 ///
@@ -116,7 +116,7 @@ mod tests {
     #[test]
     fn world_delta_maps_through_rotation_and_scale() {
         // 90-degree yaw + uniform scale 2: local +Z becomes world +X, doubled.
-        let pose = crate::gfx::skeleton::JointPose {
+        let pose = crate::animation::skeleton::JointPose {
             translation: [5.0, 0.0, 1.0],
             rotation_deg: [0.0, 90.0, 0.0],
             scale: [2.0, 2.0, 2.0],
@@ -135,7 +135,7 @@ mod tests {
         let mut rig = CharacterRig::new(
             SkinnedMeshHandle(1),
             0,
-            crate::gfx::transform::IDENTITY,
+            crate::transform::IDENTITY,
             0.5,
             0.3,
         );
@@ -152,7 +152,7 @@ mod tests {
         );
         // Yaw composes on top of the authored rotation: with a 90-degree
         // authored yaw as well, local -Z ends up at world +Z (180 total).
-        let pose = crate::gfx::skeleton::JointPose {
+        let pose = crate::animation::skeleton::JointPose {
             translation: [0.0; 3],
             rotation_deg: [0.0, 90.0, 0.0],
             scale: [1.0, 1.0, 1.0],
@@ -166,7 +166,7 @@ mod tests {
 
     #[test]
     fn model_replaces_translation_only() {
-        let pose = crate::gfx::skeleton::JointPose {
+        let pose = crate::animation::skeleton::JointPose {
             translation: [1.0, 2.0, 3.0],
             rotation_deg: [0.0, 45.0, 0.0],
             scale: [1.0, 1.0, 1.0],

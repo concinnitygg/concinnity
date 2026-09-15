@@ -3,11 +3,11 @@
 //! then crossfaded with the outgoing state while a transition fade is in
 //! flight.
 
-use crate::gfx::pose_blend::{PoseBlend, blend_locals_in_place};
-use crate::gfx::pose_scratch::PoseScratch;
-use crate::gfx::skeleton::{AnimationClip, Skeleton};
-use crate::gfx::transform::Mat4;
+use crate::animation::pose_blend::{PoseBlend, blend_locals_in_place};
+use crate::animation::pose_scratch::PoseScratch;
+use crate::animation::skeleton::{AnimationClip, Skeleton};
 use crate::math::fract;
+use crate::transform::Mat4;
 use alloc::vec::Vec;
 
 use super::{CompiledGraph, CompiledState, GraphCursor};

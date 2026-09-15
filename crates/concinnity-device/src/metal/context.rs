@@ -152,7 +152,7 @@ impl ViewState {
             scene_fade: 0.0,
             mode: Default::default(),
             far: 1.0,
-            matrix: concinnity_core::gfx::transform::IDENTITY,
+            matrix: concinnity_core::transform::IDENTITY,
             sky_rot: concinnity_core::sky::SkyOrientation::IDENTITY_ROWS,
         }
     }

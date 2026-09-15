@@ -4,10 +4,10 @@
 //! re-skinned onto it. Mirrors the cook's bake pass (character/bake.rs) on the
 //! export form so a baked file needs no shape work in the target tool.
 
+use concinnity_core::animation::proportions::ProportionLayer;
 use concinnity_core::components::{CharacterShape, SkeletonJoint, build_skeleton_from_joint_defs};
-use concinnity_core::gfx::proportions::ProportionLayer;
-use concinnity_core::gfx::transform::{Mat4, decompose, euler_yxz_from_quat};
 use concinnity_core::math::vec3;
+use concinnity_core::transform::{Mat4, decompose, euler_yxz_from_quat};
 
 use super::ExportMesh;
 

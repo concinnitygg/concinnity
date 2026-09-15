@@ -2,7 +2,7 @@
 //! plays simultaneously, mixed by a live weight vector. Startup fade-ins and
 //! runtime `anim-crossfade` commands are both ramps between weight vectors.
 
-use concinnity_core::gfx::skeleton::AnimationClip;
+use concinnity_core::animation::skeleton::AnimationClip;
 
 // A runtime clip plus the static metadata captured from its `Animation`
 // asset. The live blend weight is stored separately on the owning

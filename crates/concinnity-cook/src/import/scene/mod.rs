@@ -35,7 +35,7 @@
 mod gltf_material;
 mod rig;
 
-use concinnity_core::gfx::transform::{IDENTITY, Mat4, decompose, euler_yxz_from_quat, mat4_mul};
+use concinnity_core::transform::{IDENTITY, Mat4, decompose, euler_yxz_from_quat, mat4_mul};
 use rig::{SkinnedPart, rig_entries};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;

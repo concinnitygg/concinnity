@@ -81,7 +81,7 @@ impl Slot {
 /// `frames` is its frames in flight, which sizes the per-slot upload tracking.
 ///
 /// ```rust
-/// # use concinnity_core::gfx::transform::IDENTITY;
+/// # use concinnity_core::transform::IDENTITY;
 /// # use concinnity_core::render::decal::{DecalRecord, DecalSet};
 /// # let record = DecalRecord {
 /// #     model: IDENTITY,

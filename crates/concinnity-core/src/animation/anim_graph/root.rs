@@ -3,7 +3,7 @@
 //! snapshots. Mirrors the pose sampler's weighting exactly, so the character
 //! moves at the speed the blended feet imply.
 
-use crate::gfx::skeleton::AnimationClip;
+use crate::animation::skeleton::AnimationClip;
 use crate::math::vec3::{add, scale};
 
 use super::{CompiledGraph, CompiledState, GraphCursor};
@@ -84,7 +84,7 @@ mod tests {
         Blend1D, ClipPlay, CompiledGraph, CompiledState, CompiledTransition, GraphCursor, StatePlay,
     };
     use super::*;
-    use crate::gfx::root_motion::{RootKey, RootTrack};
+    use crate::animation::root_motion::{RootKey, RootTrack};
     use alloc::vec;
     use alloc::vec::Vec;
 

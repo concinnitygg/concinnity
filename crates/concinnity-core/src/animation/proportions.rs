@@ -7,8 +7,8 @@ use alloc::vec::Vec;
 
 use crate::components::JointProportion;
 
-use crate::gfx::skeleton::Skeleton;
-use crate::gfx::transform::Mat4;
+use crate::animation::skeleton::Skeleton;
+use crate::transform::Mat4;
 
 // One child pushed along its bind direction by the parent's `length`.
 #[derive(Debug, Clone, PartialEq)]
@@ -132,7 +132,7 @@ fn normalize(v: [f32; 3]) -> Option<[f32; 3]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gfx::skeleton::{Joint, JointPose};
+    use crate::animation::skeleton::{Joint, JointPose};
     use alloc::string::String;
     use alloc::vec;
 

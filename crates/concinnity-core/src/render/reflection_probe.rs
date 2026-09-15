@@ -12,9 +12,9 @@
 use crate::bake::environment_map as em;
 use crate::gfx::cubemap::FACE_BASIS;
 use crate::gfx::projection::{perspective_rh, view_from_basis};
-use crate::gfx::transform::mat4_mul;
 use crate::math::{ceil, floor, powi, round, sqrt};
 use crate::render::uniforms::ProbePrefilterParams;
+use crate::transform::mat4_mul;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::f32::consts::FRAC_PI_2;

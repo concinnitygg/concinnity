@@ -12,8 +12,8 @@
 //! `[nx, ny, nz, d]` with `n` unit-length, satisfying `n . p + d = 0` for points
 //! on it; `n . p + d > 0` is the side the normal points toward.
 
-use crate::gfx::transform::{Mat4, mat4_inverse, mat4_mul};
 use crate::math::sqrt;
+use crate::transform::{Mat4, mat4_inverse, mat4_mul};
 use alloc::vec::Vec;
 
 type Vec4 = [f32; 4];

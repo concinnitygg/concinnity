@@ -4,8 +4,8 @@
 //! back through the inverse and tests it against that box.
 
 use crate::components::Decal;
-use crate::gfx::transform::trs_matrix;
 use crate::math::sqrt;
+use crate::transform::trs_matrix;
 use alloc::vec::Vec;
 
 /// Per-decal data the renderer consumes each frame. Built once at
@@ -146,7 +146,7 @@ pub fn build_decal_records(decals: &[&Decal], texture_count: usize) -> Vec<Decal
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gfx::transform::{IDENTITY, mat4_mul};
+    use crate::transform::{IDENTITY, mat4_mul};
 
     fn near(a: [[f32; 4]; 4], b: [[f32; 4]; 4]) -> bool {
         a.iter().zip(b.iter()).all(|(ac, bc)| {
