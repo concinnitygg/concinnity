@@ -6,24 +6,16 @@
 // The blue channel is set to 2.0 (outside the [0, 1] scene range) so the
 // fragment shader can identify sky vertices with a simple threshold and skip
 // diffuse lighting on them.
-//
-// UV layout is present for legacy compatibility; sky rendering now uses the
-// view-direction rather than UV so the values do not affect the output.
 
 use alloc::vec::Vec;
 
 use super::Vert;
 
-// A skybox face: four corner positions, the inward normal, then the four UVs
-// (one per corner).
-type SkyboxFace = (
-    [f32; 3],
-    [f32; 3],
-    [f32; 3],
-    [f32; 3],
-    [f32; 3],
-    [[f32; 2]; 4],
-);
+// The sky is shaded from the view direction, so every vertex carries a zero UV.
+const SKY_UV: [f32; 2] = [0.0, 0.0];
+
+// A skybox face: four corner positions, then the inward normal.
+type SkyboxFace = ([f32; 3], [f32; 3], [f32; 3], [f32; 3], [f32; 3]);
 
 /// Build an inside-facing skybox cube with half-extent `size` on all axes.
 /// Keep `size` below the camera's far plane so the sky is not clipped.
@@ -42,7 +34,6 @@ pub fn build_skybox(size: f32) -> (Vec<Vert>, Vec<u16>) {
             [s, s, -s],
             [s, s, s],
             [0.0, -1.0, 0.0],
-            [[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0]],
         ),
         // floor (-Y, viewed from above) -- CCW from interior requires reversed vertex order
         (
@@ -51,7 +42,6 @@ pub fn build_skybox(size: f32) -> (Vec<Vert>, Vec<u16>) {
             [s, -s, s],
             [s, -s, -s],
             [0.0, 1.0, 0.0],
-            [[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0]],
         ),
         // north wall (+Z)
         (
@@ -60,7 +50,6 @@ pub fn build_skybox(size: f32) -> (Vec<Vert>, Vec<u16>) {
             [-s, s, s],
             [s, s, s],
             [0.0, 0.0, -1.0],
-            [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]],
         ),
         // south wall (-Z)
         (
@@ -69,7 +58,6 @@ pub fn build_skybox(size: f32) -> (Vec<Vert>, Vec<u16>) {
             [s, s, -s],
             [-s, s, -s],
             [0.0, 0.0, 1.0],
-            [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]],
         ),
         // east wall (+X)
         (
@@ -78,7 +66,6 @@ pub fn build_skybox(size: f32) -> (Vec<Vert>, Vec<u16>) {
             [s, s, s],
             [s, s, -s],
             [-1.0, 0.0, 0.0],
-            [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]],
         ),
         // west wall (-X)
         (
@@ -87,17 +74,16 @@ pub fn build_skybox(size: f32) -> (Vec<Vert>, Vec<u16>) {
             [-s, s, -s],
             [-s, s, s],
             [1.0, 0.0, 0.0],
-            [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]],
         ),
     ];
 
-    for (a, b, c, d, normal, uvs) in faces {
+    for (a, b, c, d, normal) in faces {
         let base = verts.len() as u16;
         verts.extend_from_slice(&[
-            (*a, *normal, color, uvs[0]),
-            (*b, *normal, color, uvs[1]),
-            (*c, *normal, color, uvs[2]),
-            (*d, *normal, color, uvs[3]),
+            (*a, *normal, color, SKY_UV),
+            (*b, *normal, color, SKY_UV),
+            (*c, *normal, color, SKY_UV),
+            (*d, *normal, color, SKY_UV),
         ]);
         idxs.extend_from_slice(&[base, base + 1, base + 2, base + 2, base + 3, base]);
     }
@@ -139,5 +125,26 @@ mod tests {
                 .iter()
                 .all(|(_, _, color, _)| *color == [1.0, 1.0, 2.0])
         );
+    }
+
+    #[test]
+    fn skybox_emits_zero_uvs() {
+        let (verts, _) = build_skybox(1.0);
+        assert!(verts.iter().all(|(.., uv)| *uv == [0.0, 0.0]));
+    }
+
+    #[test]
+    fn skybox_tangents_are_finite_with_zero_uvs() {
+        let (verts, idxs) = build_skybox(1.0);
+        let tangents = super::super::compute_tangents(&verts, &idxs);
+        assert_eq!(tangents.len(), verts.len());
+        for t in &tangents {
+            assert!(t.iter().all(|c| c.is_finite()), "non-finite tangent {t:?}");
+            let len_sq = t[0] * t[0] + t[1] * t[1] + t[2] * t[2];
+            assert!(
+                (len_sq - 1.0).abs() < 1e-5,
+                "tangent {t:?} is not unit length"
+            );
+        }
     }
 }

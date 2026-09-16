@@ -17,9 +17,10 @@
 //! `vulkan/main.rs`). When single-sampled the main pass already leaves the scene
 //! in `hdr_resolve`, so the pass loads it directly and re-stores it (no resolve).
 //!
-//! Backend filter. The asset's `fragment_shader` path picks the backend: Vulkan
-//! consumes `.glsl` payloads; `.metal` / `.hlsl` SDFs are skipped at init with a
-//! logged warning and the rest of the world renders unchanged.
+//! Every `SdfVolume` builds here from its one distance-field payload, the same
+//! payload the other backends consume. `try_new` returns `Ok(None)` only when the
+//! world declares no volumes; a payload decode or pipeline compile failure aborts
+//! init.
 
 use ash::vk;
 use concinnity_core::components::SdfVolume;
@@ -175,8 +176,8 @@ struct RaymarchVolumeRecord {
     refractive: bool,
 }
 
-// Engine-side raymarch resources. Built only when at least one `.glsl`
-// `SdfVolume` landed at init; `VkContext::raymarch` stays `None` otherwise and
+// Engine-side raymarch resources. Built only when at least one `SdfVolume`
+// landed at init; `VkContext::raymarch` stays `None` otherwise and
 // the pass is omitted from the frame graph.
 pub(in crate::vulkan) struct RaymarchResources {
     // The raymarch render pass. MSAA: the two-pass `load = true` main pass
@@ -955,11 +956,8 @@ pub(in crate::vulkan) struct RaymarchSharedBindings<'a> {
 
 impl RaymarchResources {
     // Build every raymarch resource + the per-volume records. `sdf_volumes` is
-    // the drained-and-payload-paired list from `gfx::system::init`; each
-    // volume's `fragment_shader` path is checked here: `.glsl` payloads compile,
-    // anything else (Metal-first `.metal` / DirectX `.hlsl`) is skipped with a
-    // logged warning. Returns `Ok(None)` when no volume survived the filter so
-    // the engine omits the pass.
+    // the drained-and-payload-paired list from `gfx::system::init`. Returns
+    // `Ok(None)` when `sdf_volumes` is empty so the engine omits the pass.
     pub(in crate::vulkan) fn try_new(
         ctx: RaymarchDeviceContext,
         target: RaymarchTargetConfig,
@@ -990,9 +988,6 @@ impl RaymarchResources {
             shadow_ubos,
             shadow_render_pass,
         } = bindings;
-        // Every volume is this backend's: one distance field serves all three,
-        // so there is no per-backend source to select between and nothing to
-        // filter out. This used to drop anything not named `.glsl`.
         let active: Vec<&(SdfVolume, Vec<u8>, String)> = sdf_volumes.iter().collect();
         if active.is_empty() {
             return Ok(None);
@@ -1111,7 +1106,7 @@ impl RaymarchResources {
         }
 
         // Build per-volume records. A compile error in an active volume is a
-        // developer-time bug, so it aborts init (unlike the .glsl filter above).
+        // developer-time bug, so it aborts init.
         let mut volumes: Vec<RaymarchVolumeRecord> = Vec::with_capacity(active.len());
         for (vol, payload, label) in &active {
             let programs = crate::shader::raymarch_source::decode(payload, label)

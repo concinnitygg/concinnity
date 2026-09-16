@@ -205,8 +205,7 @@ impl TextBindCache {
 /// frame-in-flight slot, reserved up front with [`text_upload_bytes`] and
 /// appended to per call, and binds sub-ranges of it: no GPU buffer is created
 /// per label per frame anywhere. DX and VK append inside `text_draw`; Metal
-/// (which drives its own composite loop rather than this trait) writes the whole
-/// frame's geometry into its slot before the render graph runs.
+/// writes the whole frame's geometry into its slot before the render graph runs.
 pub trait CompositeEncoder {
     /// Per-backend command recorder (DX `ID3D12GraphicsCommandList`, VK
     /// `vk::CommandBuffer`, Metal the render encoder the caller opened for the

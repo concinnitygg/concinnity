@@ -75,9 +75,10 @@ impl DxContext {
             if mask & (1u32 << slice) == 0 {
                 continue;
             }
-            // Spot casters go through the legacy CPU sub-encoders: the shadow
-            // ICB the bindless cull fills is laid out per CSM cascade, so it has
-            // no slots for these slices.
+            // Spot casters go through the per-draw CPU encoders
+            // (`encode_shadow_casters_into` / `encode_shadow_skinned_into`): the
+            // shadow ICB the bindless cull fills is laid out per CSM cascade, so it
+            // has no slots for these slices.
             let ubo_gva = self.spot_shadow.slice_ubo_gva(slice);
             let dsv = self.spot_shadow.dsvs[slice as usize];
             // SAFETY: the command list is in the recording state, and every resource, descriptor

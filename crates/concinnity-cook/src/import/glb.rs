@@ -310,9 +310,8 @@ pub(crate) struct ImportedSkeleton {
 }
 
 // Build the engine's skeleton (joints in parents-before-children order) from
-// a glTF skin. Public so the animation importer can reuse the remap +
-// node-to-joint table without re-deriving them.
-pub(crate) fn import_skeleton(skin: &gltf::Skin<'_>) -> Result<ImportedSkeleton, String> {
+// a glTF skin.
+fn import_skeleton(skin: &gltf::Skin<'_>) -> Result<ImportedSkeleton, String> {
     let joint_nodes: Vec<gltf::Node<'_>> = skin.joints().collect();
     let n = joint_nodes.len();
     if n == 0 {

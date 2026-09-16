@@ -481,9 +481,8 @@ pub(super) fn build_world_effects(
     };
 
     // Raymarched SDF volumes: per-volume pipelines + the shared view ring,
-    // descriptor pool, render passes, and scene snapshot. `None` when no
-    // `.glsl` `SdfVolume` survived the backend filter, so the Raymarch pass
-    // is omitted from the frame graph.
+    // descriptor pool, render passes, and scene snapshot. `None` when the world
+    // declares no `SdfVolume`, so the Raymarch pass is omitted from the frame graph.
     let raymarch = crate::vulkan::raymarch::RaymarchResources::try_new(
         crate::vulkan::raymarch::RaymarchDeviceContext {
             alloc,

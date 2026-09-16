@@ -24,11 +24,15 @@ pub struct AssetRequest {
 /// Returns Err if:
 /// - The type name is unknown
 /// - The type's origin is not External (not addable)
-/// - The resolved args cannot be serialized
+/// - The type is a resource asset (External, but compiles into the resource
+///   stream and has no component discriminant)
+/// - The resolved args do not deserialize into the type's args, or the baked
+///   component cannot be serialized
 ///
-/// Does not perform payload compilation (shaders, images, etc.). The build
-/// step calls this first, then runs its compilation pass over the resulting
-/// defs. The HTTP API follows the same two-step pattern
+/// Does not perform payload compilation (shaders, images, etc.). The cook
+/// pipeline (entry, pack, and validate) calls this first, then runs its
+/// compilation pass over the resulting defs; concinnity-dev's asset-adding path
+/// (`cn add` and its FFI entry) calls it to validate each entry before writing it.
 pub fn create_asset_def(req: &AssetRequest) -> Result<BlobAssetDef, CnError> {
     if let Some(ct) = RegisteredType::parse(&req.asset_type) {
         let reg = ct.registration();

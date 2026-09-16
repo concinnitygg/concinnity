@@ -551,7 +551,7 @@ pub(in crate::directx) struct GraphFrameParams<'a> {
     // scene).
     pub light_gva: u64,
     // GPU virtual address of the static per-scene `GpuLight` storage
-    // buffer. Consumed by Main's bindless + legacy sub-passes as a root SRV.
+    // buffer. Consumed by Main's bindless pass as a root SRV.
     pub local_lights_gva: u64,
     // Jittered camera view-projection matrix (sub-pixel Halton jitter
     // applied when TAA is on). Consumed by Main and Velocity (the

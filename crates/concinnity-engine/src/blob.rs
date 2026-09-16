@@ -28,7 +28,7 @@ pub fn world_from(blob: BlobData) -> World {
 //
 // Each component that has a compiled payload carries its `PayloadLocator`
 // injected into it (see `ComponentAsset::inject_locator`). Only blob 0's payload
-// section is read into memory by `load_raw`; overflow blobs are read from disk
+// section is read into memory by `load_raw_at`; overflow blobs are read from disk
 // lazily on first access.
 // A loaded component paired with its def's name id, so the caller can index
 // the entity it mints for it (the world's name -> entity map).

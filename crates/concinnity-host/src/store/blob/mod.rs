@@ -1,5 +1,5 @@
 //! Runtime blob access: the state root's `data/` path layout, the payload
-//! residency store, and all blob file I/O. The concinnity-blob crate owns the
+//! residency store, and all blob file I/O. `concinnity_core::blob` owns the
 //! format contract (schema, header, version, bytes <-> metadata) and is
 //! deliberately I/O-free, so every read below is `fs` here plus a pure parse
 //! there. Blob data is read-only at runtime; concinnity-cook writes what
@@ -150,7 +150,7 @@ pub fn load_raw_at(primary: &Path) -> Result<(BlobMeta, BlobData), CnError> {
     load_raw_from(blob_path)
 }
 
-// `load_raw` against an injected layout, so the eager/deferred split can be
+// `load_raw_at` against an injected layout, so the eager/deferred split can be
 // exercised without the process-global data-dir anchor.
 fn load_raw_from(
     blob_path: impl Fn(u32) -> Option<String>,
@@ -301,7 +301,7 @@ mod tests {
         };
 
         // Blob 0: one def whose payload lives in overflow blob 1. The manifest
-        // is derived exactly as cook derives it; `load_raw` trusts its
+        // is derived exactly as cook derives it; `load_raw_from` trusts its
         // `max_blob_index` to name the overflow file.
         let defs = vec![BlobAssetDef {
             name: None,

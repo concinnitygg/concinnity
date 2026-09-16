@@ -1,8 +1,8 @@
 // Payload residency: which blob payload sections are in memory right now.
 //
-// This is runtime memory policy, not format, so it sits here rather than in the
-// concinnity-blob format crate -- it deals in file paths and lazy disk reads,
-// both of which that crate is deliberately free of.
+// This is runtime memory policy, not format, so it sits here rather than in
+// `concinnity_core::blob` -- it deals in file paths and lazy disk reads, both of
+// which that module is deliberately free of.
 
 use concinnity_core::ecs::PayloadLocator;
 use concinnity_core::error::CnError;
@@ -25,7 +25,7 @@ enum BlobSlot {
 /// Holds the raw payload sections of each blob file.
 ///
 /// Indexed by `PayloadLocator::blob_index`. Blob 0's payload section is loaded
-/// eagerly by `load_raw()` -- it carries the defs and the primary payloads and
+/// eagerly by [`super::load_raw_at`] -- it carries the defs and the primary payloads and
 /// is needed immediately. Overflow blobs (1, 2, ...) start `Unloaded` and are
 /// read from disk on demand the first time a locator references them, so a
 /// large world does not pay the RAM (or I/O) cost of every overflow blob at

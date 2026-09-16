@@ -1,7 +1,7 @@
 //! The blob WRITE side (build output): pack compiled payloads + the def table
 //! into .cnb files and emit world-lock.json. The byte format itself -- the
 //! header, the record schema, and the `encode_cnb` image builder -- is owned by
-//! the I/O-free concinnity-blob crate; this file owns the packing POLICY
+//! the I/O-free `concinnity_core::blob` module; this file owns the packing POLICY
 //! (payload distribution across overflow blobs, the size ceiling), the lock, and
 //! the writes themselves.
 
@@ -811,7 +811,7 @@ mod tests {
         assert_eq!(b.blob_index, 2, "group content exceeding the cap rolls on");
     }
 
-    // The byte-format round-trip tests live in the concinnity-blob crate with
+    // The byte-format round-trip tests live in `concinnity_core::blob` with
     // the encoder; here the tests cover cook's packing policy and the lock.
 
     #[test]

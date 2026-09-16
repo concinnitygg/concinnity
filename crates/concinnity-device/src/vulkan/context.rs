@@ -231,8 +231,7 @@ pub(super) struct VkSkinned {
     // frame. While false the GPU-driven G-buffer velocity binds the current
     // deformed buffer as the previous one (prev_pos == cur_pos), so an unposed
     // ring slot never feeds a garbage skinned motion vector on the first frame
-    // (or after a runtime ring rebuild). Mirrors the legacy joint priming. Reset
-    // by `build_main_skin` / `upload_skinned`. Atomic, not `Cell`: the G-buffer
+    // (or after a runtime ring rebuild). Reset by `build_main_skin` / `upload_skinned`. Atomic, not `Cell`: the G-buffer
     // pass encodes on a `jobs::pool()` rayon worker thread (the parallel per-pass
     // encoder shares `&self` across workers), so any interior mutation reachable
     // from `encode_pass_into` must be atomic, like `draw_calls_accum`.
@@ -1106,8 +1105,8 @@ pub(super) struct VkSceneAssets {
     // Owned IBL cube textures.
     pub(super) env_map: EnvironmentMapTextures,
     // Number of mip levels in the bound IBL prefilter cubemap. 0 = no
-    // EnvironmentMap declared; the fragment shader uses this as the IBL
-    // on/off signal and falls back to the legacy ambient path.
+    // EnvironmentMap declared; the fragment shader then draws the gradient sky
+    // and the flat albedo ambient term instead of IBL.
     pub(super) prefilter_mip_count: u32,
     // 3D color-grading LUT sampled in the composite pass. Holds the declared
     // `ColorLut` payload, or a 2x2x2 identity LUT when the world declares none.
@@ -1394,8 +1393,7 @@ pub(crate) struct VkContext {
     pub(super) fog: FogState,
 
     // Raymarched SDF volumes. `Some` only when the world declared at least one
-    // `SdfVolume` whose `fragment_shader` is a `.glsl` payload; the `Raymarch`
-    // pass is omitted from the frame graph otherwise. Built at init; the encoder
+    // `SdfVolume`; the `Raymarch` pass is omitted from the frame graph otherwise. Built at init; the encoder
     // composites each visible volume into the scene between `AutoExposure` and
     // `Decals`. While present, the main pass switches to a STORE-color render
     // pass (MSAA) so this pass can load + re-resolve the multisampled color.

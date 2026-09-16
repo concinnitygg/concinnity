@@ -194,7 +194,7 @@ impl DxContext {
         // frame's data, not previous-frame leftovers. No-op when no
         // instanced cluster declared LOD alternates (every cluster
         // collapses to a single LOD0 bucket containing all instances,
-        // same byte order as the legacy single-draw path).
+        // same byte order as an unbucketed upload).
         if !world_hidden && !self.instanced.clusters.is_empty() {
             self.build_instance_upload(cam_pos);
         }
@@ -265,11 +265,8 @@ impl DxContext {
             // Transparent node and the executor draws every record back-to-front
             // over the post-SSR scene.
             transparent_enabled: self.transparent_enabled(),
-            // Raymarched SDF volumes.
-            // Gated on whether any `.hlsl`-payload `SdfVolume` survived
-            // the init filter and is currently visible. Metal-only
-            // (`.metal`) volumes degrade with a logged warning at init
-            // and never flip this flag on the DX backend.
+            // Raymarched SDF volumes. Gated on the resources existing and a
+            // currently visible volume.
             raymarch_enabled: self.raymarch_enabled(),
             // Two-pass Hi-Z occlusion: inserts HizBuild / Cull2 / Main2 after
             // Main when the world requested `occlusion_two_pass` and the bindless

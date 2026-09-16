@@ -108,9 +108,7 @@ pub(super) fn build_timestamp_resources(
     }
     // Heap holds one block of [whole_frame_start, whole_frame_end, then
     // PASS_COUNT (start, end) pairs] per in-flight frame. See
-    // `directx/pass_timing.rs` for the slot layout. Whole-frame stays at
-    // the front of each block so legacy `gpu_frame_us` indexing keeps
-    // working with only a stride adjustment.
+    // `concinnity_core::render::pass_timing` for the slot layout.
     //
     // Timing: `execute_graph` issues an EndQuery before and after each pass's
     // encode, and the resolve at the end of the command list copies the whole block
@@ -239,8 +237,7 @@ pub(super) struct SkinnedState {
     // G-buffer velocity binds the current deformed buffer as the previous one
     // (prev_pos == cur_pos), so an unposed ring slot never feeds a garbage
     // skinned motion vector on the first frame (or after a runtime ring rebuild).
-    // Mirrors the legacy joint buffers' identity seeding + Metal's prev-palette
-    // priming. Reset by `upload_skinned`. Atomic, not `Cell`: the G-buffer pass
+    // Matches Metal's `deformed_primed` gate. Reset by `upload_skinned`. Atomic, not `Cell`: the G-buffer pass
     // encodes on a `jobs::pool()` rayon worker thread (the parallel per-pass
     // encoder shares `&self` across workers), so any interior mutation reachable
     // from `encode_pass_into` must be atomic, like `draw_calls_accum`.
@@ -1136,8 +1133,8 @@ pub(super) struct DxTargets {
 pub(super) struct DxSceneAssets {
     // IBL resources. The fragment shader always samples these; when no
     // EnvironmentMap was supplied, both are 1x1 gray fallback cubes and
-    // ViewUniforms::prefilter_mip_count is 0 (the shader takes the legacy
-    // ambient/skybox path).
+    // ViewUniforms::prefilter_mip_count is 0, so the shader draws the gradient
+    // sky and the flat albedo ambient term instead of IBL.
     pub env_map: EnvironmentMapTextures,
     // 3D color-grading LUT sampled in the composite pass. Holds the declared
     // `ColorLut` payload baked into a Texture3D, or a 2x2x2 identity LUT when
@@ -1390,13 +1387,10 @@ pub(crate) struct DxContext {
     // that publishes lines. See [`super::line::LineState`].
     pub(super) lines: super::line::LineState,
 
-    // Raymarched SDF volumes. `Some` when at least one `SdfVolume` whose
-    // `fragment_shader` resolves to `.hlsl` survived the init filter, i.e.
-    // the world declares SDF volumes authored for DirectX. Metal-first
-    // (`.metal`) volumes degrade with a logged warning at init and do not
-    // contribute to this field. Render-graph `PassId::Raymarch` is gated
-    // on `Self::raymarch_enabled()` so worlds with no DX-targeted SDF skip
-    // the slot entirely.
+    // Raymarched SDF volumes. `Some` when the world declares at least one
+    // `SdfVolume`. Render-graph `PassId::Raymarch` is gated on
+    // `Self::raymarch_enabled()` so worlds with no visible SDF skip the slot
+    // entirely.
     pub(super) raymarch: Option<super::raymarch::RaymarchResources>,
 
     // The shared `PassId::Transparent` slot and its two producers, translucent
@@ -1687,8 +1681,8 @@ impl DxContext {
         //
         // The frame's block in the readback buffer is laid out as
         // [whole_frame_start, whole_frame_end, then PASS_COUNT (start, end)
-        // pairs]; see directx/pass_timing.rs. The whole-frame pair sits
-        // at the front, exactly where the legacy layout placed it.
+        // pairs]; see `concinnity_core::render::pass_timing`. The whole-frame
+        // pair sits at the front of each frame's block.
         let timestamps_live =
             !self.timestamps.readback_ptr.is_null() && self.timestamps.frequency > 0;
         let ticks_to_micros = |ticks: u64| -> u32 {

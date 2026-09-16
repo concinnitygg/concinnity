@@ -643,8 +643,9 @@ pub(super) struct MtlSceneAssets {
     // IBL cubemaps + mip count. Always Some: the runtime synthesizes a 1x1
     // gray fallback for both cubes when no EnvironmentMap was supplied, so
     // the fragment shader's texture(3) / texture(4) bindings are always
-    // valid. `prefilter_mip_count == 0` is the "IBL disabled" signal the
-    // shader uses to fall back to the legacy ambient/skybox path.
+    // valid. `prefilter_mip_count == 0` means no EnvironmentMap is declared,
+    // and the fragment shader draws the gradient sky and the flat albedo
+    // ambient term instead of IBL.
     pub env_map: EnvironmentMapTextures,
     // 3D color-grading LUT sampled in the composite pass. Holds the declared
     // `ColorLut` payload, or a 2x2x2 identity LUT when the world declares

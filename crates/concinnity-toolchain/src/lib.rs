@@ -194,6 +194,12 @@ fn setup_for(features: BackendFeatures) -> Option<Backend> {
 /// `backend_dx` / `backend_vk`), then sets up the optional graphics SDKs.
 /// Returns the backend so a build script with steps of its own can branch.
 ///
+/// The NGX link directive is scoped to the package that emits it, so every
+/// package whose final links (bins, examples, tests, benches) pull in the DLSS
+/// code calls this itself. The SDK runtime DLLs are bundled beside each binary
+/// kind the package's manifest declares: bins in `target/<profile>/`, examples in
+/// `target/<profile>/examples/`.
+///
 /// `None` is a build with no backend: a CPU-only runtime with no GPU code in
 /// it. That emits no backend cfg, and the check-cfg list still declares all
 /// three, so the source gating on them compiles.

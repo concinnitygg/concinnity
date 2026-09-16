@@ -18,8 +18,7 @@ pub struct BlobAssetDef {
     /// The component type's registry tag.
     pub discriminant: u8,
     /// The serialized runtime component (cook already ran the asset -> component
-    /// translation), loaded via `Component::from_baked`. Every record is baked;
-    /// the transitional authored-args record kind is retired.
+    /// translation), loaded via `Component::from_baked`.
     #[serde(with = "serde_bytes")]
     pub args_bytes: Vec<u8>,
     /// Where the component's compiled payload lives, when it has one.

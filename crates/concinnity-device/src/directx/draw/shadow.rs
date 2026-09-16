@@ -84,8 +84,8 @@ impl DxContext {
             self.shadow.render_mask
         };
 
-        // Viewport + scissor + topology are common to both the GPU-driven and the
-        // legacy raster paths.
+        // Viewport + scissor + topology are common to the GPU-driven cascade raster
+        // and the raymarched SDF casters.
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {

@@ -781,8 +781,8 @@ pub(in crate::metal) struct MainSkinBuffers<'a> {
 impl crate::metal::context::MtlContext {
     // Per-frame pre-skin for the GPU-driven skinned fold: deform every
     // skinned object's bind-pose vertices into `deformed` (this frame's ring
-    // slot) using the per-object joint-palette buffers the main / shadow passes
-    // already build for the legacy skinned VS. Reuses the `rt_skin` kernel.
+    // slot) using the per-object joint-palette buffers `build_joint_buffers`
+    // writes into the joint ring each frame. Reuses the `rt_skin` kernel.
     //
     // Encoded into the Cull pass's command buffer (its own compute encoder),
     // which commits before the Main pass: Metal's automatic hazard tracking then

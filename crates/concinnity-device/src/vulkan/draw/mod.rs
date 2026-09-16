@@ -782,9 +782,9 @@ impl VkContext {
             // `self.ssr` exists (built for SSR resolve *or* SSGI).
             ssr_prepass_enabled: self.ssr.is_some(),
             ssao_enabled: self.ssao.is_some(),
-            // Gated on the resources (built at init when at least one `.glsl`
-            // SdfVolume survived the filter) AND a currently-visible volume, so
-            // an all-hidden world drops the pass from the graph.
+            // Gated on the resources (built at init when the world declares at
+            // least one SdfVolume) AND a currently-visible volume, so an
+            // all-hidden world drops the pass from the graph.
             raymarch_enabled: self.raymarch.as_ref().is_some_and(|r| r.any_visible()),
             // Temporal upscaling (FSR via FidelityFX). `Some` only when the
             // world opted in AND the FFX VK runtime + context built; the shared

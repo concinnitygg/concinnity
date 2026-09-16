@@ -485,12 +485,10 @@ pub(super) fn build_auto_exposure(
     })
 }
 
-// Raymarched SDF volumes. Builds per-volume PSOs from `.hlsl`
-// payloads and writes the raymarch SRV + sampler tables into
-// their reserved blocks. `.metal` payloads are filtered out
-// inside `try_new` with a logged warning; if every volume is
-// Metal-first (the current showcase shape), this returns `None`
-// and the render graph never adds `PassId::Raymarch`. The
+// Raymarched SDF volumes. Builds per-volume PSOs from each volume's
+// distance-field payload and writes the raymarch SRV + sampler tables into
+// their reserved blocks. With no volumes this returns `None` and the render
+// graph never adds `PassId::Raymarch`. The
 // shadow + IBL handles passed here mirror the matching slot-0/1/2
 // bindings the main pass uses, so raymarched surfaces sample the
 // same CSM cascades + IBL cubes as rasterized geometry.

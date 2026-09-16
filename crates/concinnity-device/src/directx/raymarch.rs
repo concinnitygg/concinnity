@@ -24,13 +24,10 @@
 //!     writes hit depth via `SV_DepthLessEqual` so downstream passes
 //!     (decals, fog, SSR, TAA, ...) see the raymarched surface.
 //!
-//! Backend filter. The asset's `fragment_shader` field holds a path
-//! to the user shader; the build pipeline packs the file bytes verbatim
-//! into the payload. On D3D12 we can only consume `.hlsl` payloads:
-//! `.metal` SDFs (the Metal-first authoring path) are skipped at init
-//! with a logged warning, and the rest of the world renders unchanged.
-//! Authors who want cross-backend SDFs ship parallel `.metal` + `.hlsl`
-//! files and declare one `SdfVolume` per backend.
+//! Every `SdfVolume` builds here from its one distance-field payload, the same
+//! payload the other backends consume. `try_new` returns `Ok(None)` only when the
+//! world declares no volumes; a payload decode or pipeline compile failure aborts
+//! init.
 //!
 //! Currently unimplemented on DirectX:
 //!   * No `depth_copy` snapshot, so no in-shader rasterized-depth early-
@@ -113,8 +110,8 @@ pub(in crate::directx) struct RaymarchVolumeRecord {
 
 // Engine-side raymarch resources: shared cube buffers, per-frame view
 // cbuffer ring, scene-color fallback texture, root signature, per-
-// volume records. Built only when at least one `.hlsl` `SdfVolume`
-// landed at init; the encoder is a no-op otherwise.
+// volume records. Built only when at least one `SdfVolume` landed at
+// init; the encoder is a no-op otherwise.
 pub(in crate::directx) struct RaymarchResources {
     pub(in crate::directx) root_sig: ID3D12RootSignature,
     // Depth-only root signature for raymarched shadow casters. Only
@@ -932,11 +929,8 @@ pub(in crate::directx) struct RaymarchDescriptorHandles {
 
 impl RaymarchResources {
     // Build every raymarch resource and the per-volume records. `sdf_volumes`
-    // is the drained-and-payload-paired list from `gfx::system::init`;
-    // each volume's `fragment_shader` path is checked here: `.hlsl`
-    // payloads compile, anything else (today: `.metal` for Metal-first
-    // authors) is skipped with a logged warning. Returns `Ok(None)`
-    // when no volume survived the filter so the engine simply omits
+    // is the drained-and-payload-paired list from `gfx::system::init`.
+    // Returns `Ok(None)` when `sdf_volumes` is empty so the engine omits
     // the pass.
     pub(in crate::directx) fn try_new(
         ctx: RaymarchDeviceContext,
@@ -967,9 +961,6 @@ impl RaymarchResources {
             sampler_base_gpu,
             sampler_descriptor_size,
         } = handles;
-        // Every volume is this backend's: one distance field serves all three,
-        // so there is no per-backend source to select between and nothing to
-        // filter out. This used to drop anything not named `.hlsl`.
         let active: Vec<&(SdfVolume, Vec<u8>, String)> = sdf_volumes.iter().collect();
         if active.is_empty() {
             return Ok(None);
@@ -1012,9 +1003,8 @@ impl RaymarchResources {
         // where a frame that skips the copy leaves it.
         let hdr_resolve_copy = create_hdr_resolve_target(device, width.max(1), height.max(1))?;
 
-        // Build per-volume records. Any failure here aborts init:
-        // unlike the .hlsl filter above, a compile error in an active
-        // volume is a developer-time bug, not a graceful fallback.
+        // Build per-volume records. Any failure here aborts init: a compile
+        // error in an active volume is a developer-time bug.
         let mut volumes: Vec<RaymarchVolumeRecord> = Vec::with_capacity(active.len());
         for (vol, payload, label) in &active {
             let programs = crate::shader::raymarch_source::decode(payload, label)
