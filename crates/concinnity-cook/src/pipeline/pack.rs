@@ -7,7 +7,7 @@ use concinnity_core::ecs::{BlobAssetDef, ResourceRecord};
 use concinnity_host::thread::asset_id;
 use std::path::Path;
 
-use super::dispatch::{cache_inputs_by_type, compile_by_type};
+use super::dispatch::build_asset;
 use super::entry::BuildProgress;
 use super::{MESH_TYPE, SKINNED_MESH_TYPE};
 use crate::authoring::registry::RegisteredType;
@@ -276,6 +276,14 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
                     artifacts_dir,
                     all_assets: assets,
                 };
+                let build = build_asset(ct).ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!(
+                            "Asset '{name}' is marked Compiled but has no BuildAsset impl (RegisteredType {ct:?})"
+                        ),
+                    )
+                })?;
 
                 // GLB-sourced Mesh / SkinnedMesh assets are probed before
                 // desugar; honor those results here so the .glb parse really
@@ -286,20 +294,20 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
                         cache_hits.fetch_add(1, Ordering::Relaxed);
                         return Ok((*idx, bytes.clone()));
                     }
-                    let compiled_bytes = compile_by_type(ct, asset_args, &ctx)?;
+                    let compiled_bytes = (build.compile)(asset_args, &ctx)?;
                     crate::cache::store(PAYLOAD, &entry.key, &compiled_bytes);
                     return Ok((*idx, compiled_bytes));
                 }
 
                 // Reuse a cached payload when the asset's inputs are unchanged;
                 // otherwise compile and populate the cache for the next build.
-                let inputs = cache_inputs_by_type(ct, asset_args, &ctx);
+                let inputs = (build.cache_inputs)(asset_args, &ctx);
                 let key = crate::cache::payload_key(*discriminant, asset_args, &ctx, &inputs);
                 if let Some(bytes) = crate::cache::load(PAYLOAD, &key) {
                     cache_hits.fetch_add(1, Ordering::Relaxed);
                     return Ok((*idx, bytes));
                 }
-                let compiled_bytes = compile_by_type(ct, asset_args, &ctx)?;
+                let compiled_bytes = (build.compile)(asset_args, &ctx)?;
                 crate::cache::store(PAYLOAD, &key, &compiled_bytes);
                 Ok((*idx, compiled_bytes))
             },

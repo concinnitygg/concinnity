@@ -12,10 +12,12 @@ use super::desugar::{
     desugar_gltf_skinned_meshes, desugar_root_motion,
 };
 use super::errors_to_io;
+use super::hot_reload_sources::hot_reload_sources;
+use super::lock_provenance::lock_provenance;
 use super::pack::{PackContext, compile_and_pack_payloads, probe_mesh_payload_cache};
-use super::result::{MeshSourceInfo, PipelineResult, TextureSourceInfo};
+use super::partition::{Partitioned, partition_components};
+use super::result::PipelineResult;
 use super::scene_refs::resolve_scene_refs;
-use crate::asset_api::{self, AssetRequest};
 use crate::authoring::world::WorldJsonlAsset;
 
 /// Build the world at `json_path` for `platform` into `tree` and write its
@@ -225,7 +227,7 @@ pub fn build_compiled_with_progress(
     })?;
 
     // Intern every asset name to a dense AssetId in declaration order, then
-    // resolve the scene-by-naming-convention references that the runtime can
+    // resolve the scene-by-naming-convention references.
     asset_id::reset_interner();
     let names: Vec<&str> = assets.iter().map(|a| a.name.as_str()).collect();
     asset_id::intern_all(&names);
@@ -259,130 +261,17 @@ pub fn build_compiled_with_progress(
     // handle while partitioning below.
     crate::resource_handles::install_resource_handles(resource_handles.clone());
 
-    // Partition the world into component assets (each becomes a `BlobAssetDef`)
-    // and resource assets (each becomes a resource-stream record). A resource
-    // asset (AudioClip) has left the component registry, so it never goes through
-    // `create_asset_def`; it is compiled + packed as a resource below. `named` is
-    // therefore no longer 1:1 with `assets`, so `named_src[i]` records the source
-    // asset index of each component def.
-    use crate::authoring::registry::RegisteredType;
-    let mut named: Vec<(String, BlobAssetDef)> = Vec::new();
-    let mut named_src: Vec<usize> = Vec::new();
-    let mut resource_jobs: Vec<(usize, RegisteredType, u32)> = Vec::new();
-    for (i, asset) in assets.iter().enumerate() {
-        if let Some((rt, kind)) =
-            RegisteredType::parse(&asset.asset_type).and_then(|t| t.resource_kind().map(|k| (t, k)))
-        {
-            let id = asset_id::intern(&asset.name);
-            let handle = resource_handles
-                .get(kind, id)
-                .expect("resource asset was assigned a handle above");
-            resource_jobs.push((i, rt, handle));
-            continue;
-        }
-        let req = AssetRequest {
-            asset_type: asset.asset_type.clone(),
-            args: Some(asset.args.clone()),
-        };
-        let mut def = asset_api::create_asset_def(&req).map_err(|e| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("Asset '{}': {}", asset.name, e),
-            )
-        })?;
-        def.name = Some(asset_id::intern(&asset.name));
-        named.push((asset.name.clone(), def));
-        named_src.push(i);
-    }
+    // Component assets become `BlobAssetDef`s; resource assets become
+    // resource-stream jobs, keyed by the handles assigned above.
+    let Partitioned {
+        mut named,
+        named_src,
+        resource_jobs,
+    } = partition_components(&assets, &resource_handles)?;
 
-    // Dev-only: the file source behind each texture handle, so `cn debug`'s
-    // hot-reload watcher can map a saved file back to its handle. Built in
-    // handle order from the same resource jobs; a procedural texture (generator
-    // set) leaves an empty source (nothing to watch).
-    let texture_count = resource_jobs
-        .iter()
-        .filter(|(_, rt, _)| *rt == RegisteredType::Texture)
-        .map(|(_, _, h)| *h as usize + 1)
-        .max()
-        .unwrap_or(0);
-    let mut texture_sources = vec![TextureSourceInfo::default(); texture_count];
-    for (asset_idx, rt, handle) in &resource_jobs {
-        if *rt != RegisteredType::Texture {
-            continue;
-        }
-        let asset = &assets[*asset_idx];
-        let generator = asset
-            .args
-            .get("generator")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let (source, image_index) = if generator.is_empty() {
-            (
-                asset
-                    .args
-                    .get("source")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                asset
-                    .args
-                    .get("image_index")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as u32,
-            )
-        } else {
-            (String::new(), 0)
-        };
-        texture_sources[*handle as usize] = TextureSourceInfo {
-            name_id: asset_id::intern(&asset.name).0,
-            source,
-            image_index,
-        };
-    }
-
-    // Dev-only: the file source behind each mesh handle, so `cn debug`'s
-    // hot-reload watcher can re-import a saved `.glb`/`.fbx` into its draw
-    // slots. Mesh handles are dense from 0 (the Mesh block leads the shared
-    // mesh-source space); an inline-authored mesh leaves an empty source.
-    let mesh_count = resource_jobs
-        .iter()
-        .filter(|(_, rt, _)| *rt == RegisteredType::Mesh)
-        .map(|(_, _, h)| *h as usize + 1)
-        .max()
-        .unwrap_or(0);
-    let mut mesh_sources = vec![MeshSourceInfo::default(); mesh_count];
-    for (asset_idx, rt, handle) in &resource_jobs {
-        if *rt != RegisteredType::Mesh {
-            continue;
-        }
-        let args = &assets[*asset_idx].args;
-        let str_arg = |key: &str| {
-            args.get(key)
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string()
-        };
-        let u32_arg = |key: &str, default: u32| {
-            args.get(key)
-                .and_then(|v| v.as_u64())
-                .unwrap_or(default as u64) as u32
-        };
-        mesh_sources[*handle as usize] = MeshSourceInfo {
-            source: str_arg("source"),
-            primitive_index: u32_arg("primitive_index", 0),
-            lod_levels: u32_arg("lod_levels", 1),
-            lod_distances: args
-                .get("lod_distances")
-                .and_then(|v| v.as_array())
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|d| d.as_f64())
-                        .map(|d| d as f32)
-                        .collect()
-                })
-                .unwrap_or_default(),
-        };
-    }
+    // Dev-only: the file source behind each texture and mesh handle, for
+    // `cn debug`'s hot-reload watcher.
+    let (texture_sources, mesh_sources) = hot_reload_sources(&assets, &resource_jobs);
 
     // Scene payload ownership, derived from the resolved scene memberships and
     // the reference graph; drives the grouped packing below.
@@ -410,43 +299,13 @@ pub fn build_compiled_with_progress(
         },
     )?;
 
-    // Lock-file provenance for the resource stream: `compiled.resources` is
-    // emitted in `resource_jobs` order, so the two zip index-aligned. Texture
-    // and Mesh records also carry their hot-reload source info so a blob boot
-    // can reconstruct the catalogs without the authored args.
-    let resource_locks: Vec<crate::blob::LockedResource> = resource_jobs
-        .iter()
-        .zip(compiled.resources.iter())
-        .map(|((asset_idx, rt, handle), record)| {
-            let asset = &assets[*asset_idx];
-            crate::blob::LockedResource {
-                name: asset.name.clone(),
-                // Already interned by the declaration-order pass above, so
-                // this is a lookup of the id the build assigned.
-                id: Some(asset_id::intern(&asset.name).0),
-                kind: rt.as_str().to_string(),
-                handle: *handle,
-                args_hash: crate::blob::checksum(asset.args.to_string().as_bytes()),
-                payload_blob: record.payload.as_ref().map(|p| p.blob_index),
-                texture_source: (*rt == RegisteredType::Texture).then(|| {
-                    let t = &texture_sources[*handle as usize];
-                    crate::blob::LockedTextureSource {
-                        source: t.source.clone(),
-                        image_index: t.image_index,
-                    }
-                }),
-                mesh_source: (*rt == RegisteredType::Mesh).then(|| {
-                    let m = &mesh_sources[*handle as usize];
-                    crate::blob::LockedMeshSource {
-                        source: m.source.clone(),
-                        primitive_index: m.primitive_index,
-                        lod_levels: m.lod_levels,
-                        lod_distances: m.lod_distances.clone(),
-                    }
-                }),
-            }
-        })
-        .collect();
+    let resource_locks = lock_provenance(
+        &assets,
+        &resource_jobs,
+        &compiled.resources,
+        &texture_sources,
+        &mesh_sources,
+    );
 
     // The blob carries components (emitted in declaration order) plus the
     // resource stream. (System run order is no longer a build concern: every
@@ -480,6 +339,7 @@ mod tests {
     use super::*;
     use crate::pipeline::MESH_TYPE;
     use crate::pipeline::fixtures::{wja, write_fixture};
+    use crate::pipeline::result::{MeshSourceInfo, TextureSourceInfo};
     use concinnity_core::components::Material;
     use concinnity_core::components::Prop;
     use concinnity_core::ecs::MeshHandle;

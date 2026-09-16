@@ -209,6 +209,26 @@ mod tests {
         }
     }
 
+    // Each compile runs in its own scratch directory, so a payload that differs
+    // between two compiles of the same files has stamped that directory in.
+    #[test]
+    fn a_shader_payload_is_the_same_on_every_compile() {
+        if !concinnity_slang::shader_tests_enabled() {
+            return;
+        }
+        let sources = Sources {
+            vertex: Some(TRANSFORM),
+            fragment: SHADE,
+        };
+        for platform in hosts() {
+            let compile = || {
+                compile_world_shader("sway", &sources, platform)
+                    .unwrap_or_else(|e| panic!("{platform:?}: {e}"))
+            };
+            assert_eq!(compile(), compile(), "{platform:?}");
+        }
+    }
+
     // A fragment file without `shade` fails naming the Shader and the hook,
     // at build time rather than at a renderer's init.
     #[test]

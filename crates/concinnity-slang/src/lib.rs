@@ -295,10 +295,10 @@ struct Produced {
 // Each invocation gets its own subdirectory: two compiles of the same
 // `file_name` can run at once (one shared source serves several programs -- the
 // fullscreen vertex is compiled by every post pass), and a shared path means
-// one deletes the artifact the other is still reading. The scratch path reaches
-// only slangc's diagnostics and the `#line` directives of the text targets;
-// neither the metallib nor the SPIR-V embeds it, so per-invocation naming costs
-// no artifact determinism.
+// one deletes the artifact the other is still reading. slangc runs inside that
+// directory and is given bare file names, because the `#line` directives of the
+// text targets quote the path exactly as passed: an absolute one would stamp the
+// process-unique directory into the artifact and make it differ per compile.
 fn run(job: &SlangJob<'_>, work_dir: &Path, reflection: bool) -> Result<Produced, String> {
     let slangc = match resolved() {
         Ok(found) => found.path.as_path(),
@@ -307,19 +307,23 @@ fn run(job: &SlangJob<'_>, work_dir: &Path, reflection: bool) -> Result<Produced
     let scratch = work_dir.join(scratch_name());
     std::fs::create_dir_all(&scratch)
         .map_err(|e| format!("slang: create {}: {e}", scratch.display()))?;
-    let src_path = scratch.join(job.file_name);
-    let out_path = src_path.with_extension(job.target.extension());
-    let refl_path = src_path.with_extension("reflection.json");
+    let src_name = Path::new(job.file_name);
+    let out_name = src_name.with_extension(job.target.extension());
+    let refl_name = src_name.with_extension("reflection.json");
+    let src_path = scratch.join(src_name);
+    let out_path = scratch.join(&out_name);
+    let refl_path = scratch.join(&refl_name);
     std::fs::write(&src_path, job.source)
         .map_err(|e| format!("slang: write {}: {e}", src_path.display()))?;
 
     let mut cmd = Command::new(slangc);
-    cmd.arg(&src_path)
+    cmd.current_dir(&scratch)
+        .arg(src_name)
         .args(command_args(job))
         .arg("-o")
-        .arg(&out_path);
+        .arg(&out_name);
     if reflection {
-        cmd.arg("-reflection-json").arg(&refl_path);
+        cmd.arg("-reflection-json").arg(&refl_name);
     }
     let output = cmd
         .output()
@@ -653,6 +657,49 @@ mod tests {
         let bytes = compile(&job, dir).expect("trivial slang compile");
         // SPIR-V magic.
         assert_eq!(&bytes[0..4], &0x0723_0203u32.to_le_bytes());
+    }
+
+    // A text target quotes the source in its `#line` directives, and the name it
+    // quotes is the job's file name alone: the per-invocation scratch directory
+    // would otherwise make every compile of the same source differ.
+    #[test]
+    fn text_targets_carry_no_scratch_path() {
+        if !shader_tests_enabled() {
+            return;
+        }
+        let tree = concinnity_testing::TempTree::new();
+        let dir = tree.path();
+        let source = "RWStructuredBuffer<float> o;\n[shader(\"compute\")] [numthreads(1,1,1)]\n\
+                      void k(uint3 t : SV_DispatchThreadID) { o[t.x] = 1.0; }\n";
+        for target in [SlangTarget::Metal, SlangTarget::Hlsl("cs_6_0")] {
+            let job = SlangJob {
+                source,
+                file_name: "stable.slang",
+                entries: &["k"],
+                target,
+            };
+            let first = compile(&job, dir).expect("text compile");
+            assert_eq!(
+                first,
+                compile(&job, dir).expect("text compile"),
+                "{target:?}"
+            );
+            let text = String::from_utf8(first).expect("text target is UTF-8");
+            let quoted: Vec<&str> = text
+                .lines()
+                .filter(|l| l.starts_with("#line"))
+                .filter_map(|l| l.split('"').nth(1))
+                .collect();
+            assert!(
+                !quoted.is_empty(),
+                "{target:?} emitted no named #line:\n{text}"
+            );
+            assert!(
+                quoted.iter().all(|q| *q == "stable.slang"),
+                "{target:?}: {quoted:?}"
+            );
+            assert!(!text.contains(&*dir.to_string_lossy()), "{target:?}");
+        }
     }
 
     // Reflection is the layout oracle the shader-struct checks read, so it has

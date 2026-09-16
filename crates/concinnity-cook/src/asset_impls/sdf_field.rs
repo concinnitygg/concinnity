@@ -154,6 +154,27 @@ mod tests {
         assert!(message.contains("slangc"), "{message}");
     }
 
+    // Each compile runs in its own scratch directory, so a payload that differs
+    // between two compiles of the same field has stamped that directory in.
+    #[test]
+    fn a_volume_payload_is_the_same_on_every_compile() {
+        if !concinnity_slang::shader_tests_enabled() {
+            return;
+        }
+        let field = "float map(float3 p, SdfParams q, float t) { return sdSphere(p, 0.5); }\n\
+             SdfSurface shade(float3 p, float3 n, SdfParams q, float t, float2 uv) {\n\
+                 SdfSurface s; s.albedo = float3(1.0, 1.0, 1.0); s.roughness = 0.5;\n\
+                 s.metallic = 0.0; s.emissive = float3(0.0, 0.0, 0.0);\n\
+                 s.transmitted = float3(0.0, 0.0, 0.0); return s; }\n";
+        for platform in [Platform::Metal, Platform::Glsl] {
+            let compile = || {
+                compile_with("blob", field, platform, false, true, true)
+                    .unwrap_or_else(|e| panic!("{platform:?}: {e}"))
+            };
+            assert_eq!(compile(), compile(), "{platform:?}");
+        }
+    }
+
     // Every host takes the target its renderer can load without a toolchain of
     // its own: Metal source text for `newLibraryWithSource`, and a container
     // for the two that consume bytecode.

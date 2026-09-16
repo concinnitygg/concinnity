@@ -1,73 +1,51 @@
 //! Per-type dispatch for the compile pass: which `BuildAsset` impl compiles a
 //! payload, and which inputs that compile reads.
 
+use crate::asset::{BuildAsset, BuildCtx, CacheInputs};
 use crate::authoring::registry::RegisteredType;
+use concinnity_core::components::{File, ProceduralMesh, Room, SdfVolume, Shader, VoxelChunk};
 
-// Dispatch payload compilation by RegisteredType. Every variant listed below
-// has a `BuildAsset` impl in its asset file; the body of each call here is a
-// one-liner that delegates to the trait. Adding a new compiled component
-// means:
-//   1. impl `Component` with `PAYLOAD = AssetPayload::Compiled` for the type
-//   2. impl `BuildAsset` for the type in its asset file
-//   3. Add one match arm here
-pub(super) fn compile_by_type(
-    ct: RegisteredType,
-    args: &serde_json::Value,
-    ctx: &crate::asset::BuildCtx<'_>,
-) -> std::io::Result<Vec<u8>> {
-    use crate::asset::BuildAsset;
-    use concinnity_core::components::{File, ProceduralMesh, Room, SdfVolume, Shader, VoxelChunk};
-    match ct {
-        RegisteredType::ProceduralMesh => {
-            <ProceduralMesh as BuildAsset>::compile_payload(args, ctx)
+type CompileFn = fn(&serde_json::Value, &BuildCtx<'_>) -> std::io::Result<Vec<u8>>;
+type CacheInputsFn = fn(&serde_json::Value, &BuildCtx<'_>) -> CacheInputs;
+
+// One compiled component's `BuildAsset` impl: its payload compile and the
+// inputs that compile reads, for the payload cache key.
+#[derive(Clone, Copy)]
+pub(super) struct BuildAssetEntry {
+    pub(super) compile: CompileFn,
+    pub(super) cache_inputs: CacheInputsFn,
+}
+
+impl BuildAssetEntry {
+    fn of<T: BuildAsset>() -> Self {
+        Self {
+            compile: T::compile_payload,
+            cache_inputs: cache_inputs_of::<T>,
         }
-        RegisteredType::VoxelChunk => <VoxelChunk as BuildAsset>::compile_payload(args, ctx),
-        RegisteredType::File => <File as BuildAsset>::compile_payload(args, ctx),
-        RegisteredType::Room => <Room as BuildAsset>::compile_payload(args, ctx),
-        RegisteredType::Shader => <Shader as BuildAsset>::compile_payload(args, ctx),
-        RegisteredType::SdfVolume => <SdfVolume as BuildAsset>::compile_payload(args, ctx),
-        other => Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!(
-                "Asset '{}' is marked Compiled but has no BuildAsset impl (RegisteredType {:?})",
-                ctx.name, other
-            ),
-        )),
     }
 }
 
-// Dispatch each asset's payload-cache contribution by RegisteredType. Mirrors
-// `compile_by_type` so the cache layer can fold a hash of every input the
-// compile reads into its payload key. Types with no `BuildAsset` impl, or with
-// the trait default, contribute nothing.
-//
-// `source_files` and `TARGET_DEPENDENT` are read together per arm: a new
-// asset whose payload differs per backend cannot pick up one without the
-// other.
-pub(super) fn cache_inputs_by_type(
-    ct: RegisteredType,
-    args: &serde_json::Value,
-    ctx: &crate::asset::BuildCtx<'_>,
-) -> crate::asset::CacheInputs {
-    use crate::asset::{BuildAsset, CacheInputs};
-    use concinnity_core::components::{File, ProceduralMesh, Room, SdfVolume, Shader, VoxelChunk};
-    macro_rules! inputs {
-        ($t:ty) => {
-            CacheInputs {
-                sources: <$t as BuildAsset>::source_files(args, ctx),
-                target_dependent: <$t as BuildAsset>::TARGET_DEPENDENT,
-            }
-        };
+// `source_files` and `TARGET_DEPENDENT` are read together, so a type whose
+// payload differs per backend cannot report one without the other.
+fn cache_inputs_of<T: BuildAsset>(args: &serde_json::Value, ctx: &BuildCtx<'_>) -> CacheInputs {
+    CacheInputs {
+        sources: T::source_files(args, ctx),
+        target_dependent: T::TARGET_DEPENDENT,
     }
-    match ct {
-        RegisteredType::ProceduralMesh => inputs!(ProceduralMesh),
-        RegisteredType::VoxelChunk => inputs!(VoxelChunk),
-        RegisteredType::File => inputs!(File),
-        RegisteredType::Room => inputs!(Room),
-        RegisteredType::Shader => inputs!(Shader),
-        RegisteredType::SdfVolume => inputs!(SdfVolume),
-        _ => CacheInputs::extra(Vec::new()),
-    }
+}
+
+// The `BuildAsset` impl behind a compiled component type, or `None` for a type
+// that has none.
+pub(super) fn build_asset(ct: RegisteredType) -> Option<BuildAssetEntry> {
+    Some(match ct {
+        RegisteredType::ProceduralMesh => BuildAssetEntry::of::<ProceduralMesh>(),
+        RegisteredType::VoxelChunk => BuildAssetEntry::of::<VoxelChunk>(),
+        RegisteredType::File => BuildAssetEntry::of::<File>(),
+        RegisteredType::Room => BuildAssetEntry::of::<Room>(),
+        RegisteredType::Shader => BuildAssetEntry::of::<Shader>(),
+        RegisteredType::SdfVolume => BuildAssetEntry::of::<SdfVolume>(),
+        _ => return None,
+    })
 }
 
 #[cfg(test)]
@@ -115,31 +93,38 @@ mod tests {
         }
     }
 
-    #[test]
-    fn compile_by_type_without_build_impl_errors() {
-        let ct = RegisteredType::parse("Prop").expect("Prop is a registered component");
-        let err = compile_by_type(ct, &serde_json::json!({}), &ctx())
-            .expect_err("Prop has no BuildAsset impl");
-        assert!(err.to_string().contains("no BuildAsset impl"), "got: {err}");
+    fn ct(name: &str) -> RegisteredType {
+        RegisteredType::parse(name).unwrap_or_else(|| panic!("{name} is a registered component"))
+    }
+
+    fn entry(name: &str) -> BuildAssetEntry {
+        build_asset(ct(name)).unwrap_or_else(|| panic!("{name} has a build_asset entry"))
     }
 
     #[test]
-    fn cache_inputs_by_type_defaults_to_empty_extras() {
-        use crate::asset::SourceFiles;
-        let ct = RegisteredType::parse("Prop").expect("Prop is a registered component");
-        let inputs = cache_inputs_by_type(ct, &serde_json::json!({}), &ctx());
-        assert_eq!(inputs.sources, SourceFiles::Extra(Vec::new()));
-        assert!(!inputs.target_dependent);
+    fn build_asset_has_no_entry_for_a_type_without_a_build_impl() {
+        assert!(build_asset(ct("Prop")).is_none());
+    }
+
+    // Every component that compiles a payload outside the resource stream must
+    // reach its `BuildAsset` impl, or cooking a world that declares it fails.
+    #[test]
+    fn build_asset_covers_every_compiled_component() {
+        for &rt in RegisteredType::all() {
+            if rt.registration().needs_compilation() && rt.resource_kind().is_none() {
+                assert!(build_asset(rt).is_some(), "{rt:?} has no build_asset entry");
+            }
+        }
     }
 
     // The arms that take the trait default report no inputs of their own: every
     // file they read is named by an args string, which the payload cache's
     // generic walk already hashes.
     #[test]
-    fn cache_inputs_by_type_covers_the_args_walk_arms() {
+    fn cache_inputs_entry_covers_the_args_walk_arms() {
         use crate::asset::SourceFiles;
         for name in ["ProceduralMesh", "VoxelChunk", "File", "Room"] {
-            let inputs = cache_inputs_by_type(ct(name), &serde_json::json!({}), &ctx());
+            let inputs = (entry(name).cache_inputs)(&serde_json::json!({}), &ctx());
             assert_eq!(
                 inputs.sources,
                 SourceFiles::Extra(Vec::new()),
@@ -152,7 +137,7 @@ mod tests {
         }
     }
 
-    // AudioClip compiles through `RegisteredType` now, not `compile_by_type`
+    // AudioClip compiles through `RegisteredType` now, not `build_asset`
     // (it left the component registry). Its source-less error still surfaces, and
     // its source file is folded into the payload cache key.
     #[test]
@@ -281,18 +266,11 @@ mod tests {
         assert_eq!(glb, vec!["scene.glb".to_string()]);
     }
 
-    // Dispatch coverage: compile_by_type / source_files_by_type route each
-    // compiled RegisteredType to its asset_impls wrapper.
-
-    fn ct(name: &str) -> RegisteredType {
-        RegisteredType::parse(name).unwrap_or_else(|| panic!("{name} is a registered component"))
-    }
-
     // Arms whose outcome is deterministic from inline args alone: a valid
     // minimal payload for the ones that need no source file, and the expected
     // error for the ones that require a source but got none.
     #[test]
-    fn compile_by_type_dispatches_deterministic_arms() {
+    fn compile_entry_dispatches_deterministic_arms() {
         // Mesh is a resource asset now: it compiles through
         // `RegisteredType::compile_payload`, not the RegisteredType dispatch.
         let mesh_bytes = crate::authoring::registry::RegisteredType::Mesh
@@ -313,7 +291,7 @@ mod tests {
         for case in ok_cases {
             let name = case.0;
             let args = &case.1;
-            let bytes = compile_by_type(ct(name), args, &ctx())
+            let bytes = (entry(name).compile)(args, &ctx())
                 .unwrap_or_else(|e| panic!("{name} should compile: {e}"));
             assert!(!bytes.is_empty(), "{name} payload should be non-empty");
         }
@@ -324,7 +302,7 @@ mod tests {
             let name = case.0;
             let args = &case.1;
             let needle = case.2;
-            let err = compile_by_type(ct(name), args, &ctx())
+            let err = (entry(name).compile)(args, &ctx())
                 .expect_err(&format!("{name} with empty args should error"));
             assert!(
                 err.to_string().contains(needle),
@@ -335,12 +313,12 @@ mod tests {
 
     // The File wrapper decodes an OBJ mesh source into a non-empty payload.
     #[test]
-    fn compile_by_type_file_compiles_an_obj_source() {
+    fn compile_entry_file_compiles_an_obj_source() {
         let dir = tempfile::tempdir().expect("tempdir");
         let obj = dir.path().join("tri.obj");
         std::fs::write(&obj, "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n").expect("write obj");
         let args = serde_json::json!({"path": obj.to_str().unwrap(), "kind": "obj"});
-        let bytes = compile_by_type(ct("File"), &args, &ctx()).expect("obj compiles");
+        let bytes = (entry("File").compile)(&args, &ctx()).expect("obj compiles");
         assert!(!bytes.is_empty());
     }
 
@@ -403,7 +381,7 @@ mod tests {
     // The VoxelChunk wrapper resolves its palette from sibling BlockType assets
     // in the build context.
     #[test]
-    fn compile_by_type_voxel_chunk_resolves_palette_from_ctx() {
+    fn compile_entry_voxel_chunk_resolves_palette_from_ctx() {
         let blocks = vec![
             wja("air", "BlockType", serde_json::json!({"solid": false})),
             wja(
@@ -425,7 +403,7 @@ mod tests {
             "blocks": [1, 1],
             "block_size": 1.0,
         });
-        let bytes = compile_by_type(ct("VoxelChunk"), &args, &vctx).expect("voxel compiles");
+        let bytes = (entry("VoxelChunk").compile)(&args, &vctx).expect("voxel compiles");
         assert!(!bytes.is_empty());
     }
 
@@ -433,7 +411,7 @@ mod tests {
     // so a field that does not compile fails the build here rather than a
     // renderer's init. A missing source is a hard error, not an empty payload.
     #[test]
-    fn compile_by_type_sdf_volume_compiles_the_declared_field() {
+    fn compile_entry_sdf_volume_compiles_the_declared_field() {
         use concinnity_core::components::sdf_programs::SdfPrograms;
         if !concinnity_slang::shader_tests_enabled() {
             return;
@@ -451,7 +429,7 @@ mod tests {
         .expect("write field");
         let args = serde_json::json!({ "fragment_shader": field.to_str().unwrap() });
 
-        let bytes = compile_by_type(ct("SdfVolume"), &args, &ctx()).expect("sdf compiles");
+        let bytes = (entry("SdfVolume").compile)(&args, &ctx()).expect("sdf compiles");
         let programs: SdfPrograms = postcard::from_bytes(&bytes).expect("payload decodes");
         // A surface volume that casts no shadow compiles its own pair only.
         // How those two entries are grouped into artifacts is the backend's
@@ -466,7 +444,7 @@ mod tests {
         assert!(programs.programs.iter().all(|p| !p.artifact.is_empty()));
         assert!(programs.field.contains("float map("));
 
-        let err = compile_by_type(ct("SdfVolume"), &serde_json::json!({}), &ctx())
+        let err = (entry("SdfVolume").compile)(&serde_json::json!({}), &ctx())
             .expect_err("no distance field");
         assert!(
             err.to_string().contains("no distance field declared"),
@@ -478,8 +456,8 @@ mod tests {
     // file is a hard error before any compiler runs, so the test stays
     // backend-agnostic.
     #[test]
-    fn compile_by_type_shader_without_a_fragment_file_does_not_shell_out() {
-        let err = compile_by_type(ct("Shader"), &serde_json::json!({}), &ctx())
+    fn compile_entry_shader_without_a_fragment_file_does_not_shell_out() {
+        let err = (entry("Shader").compile)(&serde_json::json!({}), &ctx())
             .expect_err("no fragment file");
         assert!(
             err.to_string().contains("no `fragment` file declared"),
@@ -487,11 +465,11 @@ mod tests {
         );
     }
 
-    // cache_inputs_by_type routes to the two overriding wrappers. Both report
+    // The cache-inputs entry routes to the two overriding wrappers. Both report
     // `Only` -- the complete input set the current backend reads -- so an edit
     // to a sibling backend's shader leaves this backend's payload cached.
     #[test]
-    fn cache_inputs_by_type_covers_the_overriding_wrappers() {
+    fn cache_inputs_entry_covers_the_overriding_wrappers() {
         use crate::asset::SourceFiles;
         let dir = tempfile::tempdir().expect("tempdir");
         let shader = dir.path().join("blob.slang");
@@ -501,16 +479,16 @@ mod tests {
         // SdfVolume reports the one declared field, and compiles it to a
         // different artifact per backend, so the target is an input too.
         let sdf_args = serde_json::json!({ "fragment_shader": path });
-        let sdf = cache_inputs_by_type(ct("SdfVolume"), &sdf_args, &ctx());
+        let sdf = (entry("SdfVolume").cache_inputs)(&sdf_args, &ctx());
         assert_eq!(sdf.sources, SourceFiles::Only(vec![path.to_string()]));
         assert!(sdf.target_dependent);
         assert_eq!(
-            cache_inputs_by_type(ct("SdfVolume"), &serde_json::json!({}), &ctx()).sources,
+            (entry("SdfVolume").cache_inputs)(&serde_json::json!({}), &ctx()).sources,
             SourceFiles::Only(Vec::new())
         );
 
         // Shader compiles its files per backend, so the target is an input.
-        let no_source = cache_inputs_by_type(ct("Shader"), &serde_json::json!({}), &ctx());
+        let no_source = (entry("Shader").cache_inputs)(&serde_json::json!({}), &ctx());
         assert_eq!(no_source.sources, SourceFiles::Only(Vec::new()));
         assert!(no_source.target_dependent);
     }
