@@ -28,7 +28,6 @@ use concinnity_core::render::backend_init;
 use concinnity_core::render::decal;
 use concinnity_core::render::display_mode;
 use concinnity_core::render::draw_slot;
-use concinnity_core::render::error;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::input::InputSnapshot;
 use concinnity_core::render::keymap::KeyMap;
@@ -45,7 +44,7 @@ impl RenderBackend for VkContext {
         fn capture_cursor(&mut self);
         fn take_input(&mut self) -> InputSnapshot;
         fn wait_idle(&self);
-        fn draw_frame(&mut self, params: FrameParams<'_>) -> error::RenderResult<()>;
+        fn draw_frame(&mut self, params: FrameParams<'_>) -> RenderResult<()>;
         fn update_view(&mut self, matrix: [[f32; 4]; 4]);
         fn update_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]);
         fn retire_draw_object(&mut self, draw_idx: usize);
@@ -59,32 +58,23 @@ impl SkinnedDraws for VkContext {
         fn reveal_skinned_instance(&mut self, instance_index: usize, model: [[f32; 4]; 4]);
         fn retire_skinned_draw_object(&mut self, skinned_index: usize);
         fn update_skinned_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]);
-        fn upload_skinned_morphs(&mut self, morphs: Vec<Option<std::sync::Arc<mesh_payload::PayloadMorphs>>>) -> error::RenderResult<()>;
-    }
-
-    fn upload_skinned(
-        &mut self,
-        vertices: &[SkinnedVertex],
-        indices: &[u32],
-        draw_objects: Vec<SkinnedDrawObject>,
-    ) -> error::RenderResult<()> {
-        debug_assert_main_thread("upload_skinned");
-        self.upload_skinned(vertices, indices, draw_objects)
+        fn upload_skinned_morphs(&mut self, morphs: Vec<Option<std::sync::Arc<mesh_payload::PayloadMorphs>>>) -> RenderResult<()>;
+        fn upload_skinned(&mut self, vertices: &[SkinnedVertex], indices: &[u32], draw_objects: Vec<SkinnedDrawObject>) -> RenderResult<()>;
     }
 }
 
 impl DrawStreaming for VkContext {
     forward! { assert = debug_assert_main_thread;
-        fn evict_texture_slot(&mut self, slot: usize) -> error::RenderResult<()>;
-        fn update_texture_slot(&mut self, slot: usize, image: &bake::texture::TextureImage) -> error::RenderResult<()>;
-        fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> error::RenderResult<()>;
-        fn upload_mesh(&mut self, draw_idx: usize, verts: &[Vertex], idxs: &[u16], frame: u64) -> error::RenderResult<()>;
+        fn evict_texture_slot(&mut self, slot: usize) -> RenderResult<()>;
+        fn update_texture_slot(&mut self, slot: usize, image: &bake::texture::TextureImage) -> RenderResult<()>;
+        fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> RenderResult<()>;
+        fn upload_mesh(&mut self, draw_idx: usize, verts: &[Vertex], idxs: &[u16], frame: u64) -> RenderResult<()>;
         fn seed_mesh_streaming(&mut self, vtx_offset: u64, vtx_bytes: u64, idx_offset: u64, idx_bytes: u64);
-        fn setup_chunk_streaming(&mut self, chunk_vtx_bytes: usize, chunk_idx_bytes: usize) -> error::RenderResult<()>;
-        fn add_chunk_mesh(&mut self, mesh: ChunkMesh<'_>, dst: draw_slot::SlotAlloc) -> error::RenderResult<()>;
-        fn remove_chunk_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> error::RenderResult<()>;
-        fn set_chunk_model(&mut self, draw_idx: usize, model: [[f32; 4]; 4]) -> error::RenderResult<()>;
-        fn clone_static_draw_object(&mut self, src_draw_idx: usize, model: [[f32; 4]; 4], dst: draw_slot::SlotAlloc) -> error::RenderResult<()>;
+        fn setup_chunk_streaming(&mut self, chunk_vtx_bytes: usize, chunk_idx_bytes: usize) -> RenderResult<()>;
+        fn add_chunk_mesh(&mut self, mesh: ChunkMesh<'_>, dst: draw_slot::SlotAlloc) -> RenderResult<()>;
+        fn remove_chunk_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> RenderResult<()>;
+        fn set_chunk_model(&mut self, draw_idx: usize, model: [[f32; 4]; 4]) -> RenderResult<()>;
+        fn clone_static_draw_object(&mut self, src_draw_idx: usize, model: [[f32; 4]; 4], dst: draw_slot::SlotAlloc) -> RenderResult<()>;
         fn evict_world_shader(&mut self, bucket: u32);
     }
 
@@ -92,7 +82,7 @@ impl DrawStreaming for VkContext {
         &mut self,
         bucket: u32,
         shader: backend_init::WorldShader<'_>,
-    ) -> error::RenderResult<()> {
+    ) -> RenderResult<()> {
         debug_assert_main_thread("install_world_shader");
         VkContext::install_world_shader(self, bucket, shader)
     }
@@ -125,7 +115,7 @@ impl RenderTuning for VkContext {
         fn set_ambient_intensity(&mut self, value: f32);
         fn update_directional_lights(&mut self, lights: &[components::DirectionalLight]);
         fn set_reflection_probes(&mut self, probes: &[reflection_probe::ProbePlacement]);
-        fn apply_quality_settings(&mut self, settings: backend::QualitySettings) -> error::RenderResult<()>;
+        fn apply_quality_settings(&mut self, settings: backend::QualitySettings) -> RenderResult<()>;
         fn set_shadow_update(&mut self, update: components::ShadowUpdate);
         fn set_shadow_distance(&mut self, distance: u32);
         fn set_shadow_cascades(&mut self, count: u32);
@@ -140,12 +130,14 @@ impl RenderTuning for VkContext {
 
 impl LiveEdit for VkContext {
     forward! { assert = debug_assert_main_thread;
-        fn update_color_lut(&mut self, size: u32, data: &[u8]) -> error::RenderResult<()>;
-        fn update_mesh_geometry(&mut self, draw_idx: usize, verts: &[mesh_payload::Vertex], idxs: &[u16], lod_alternates: &[(f32, Vec<u16>)]) -> error::RenderResult<()>;
-        fn update_world_shader_pipelines(&mut self, programs: &concinnity_core::components::ShaderPrograms) -> error::RenderResult<()>;
-        fn update_skinned_mesh_geometry(&mut self, skinned_index: usize, vertex_base: u32, verts: &[mesh_payload::SkinnedVertex], idxs: &[u16]) -> error::RenderResult<()>;
-        fn update_skinned_skeleton(&mut self, skinned_index: usize, new_joint_count: usize) -> error::RenderResult<()>;
-        fn rebuild_skinned_geometry(&mut self, changes: Vec<backend::SkinnedDrawGeometryUpdate>) -> error::RenderResult<Vec<backend::SkinnedSlotLayout>>;
+        fn update_color_lut(&mut self, size: u32, data: &[u8]) -> RenderResult<()>;
+        fn update_mesh_geometry(&mut self, draw_idx: usize, verts: &[mesh_payload::Vertex], idxs: &[u16], lod_alternates: &[(f32, Vec<u16>)]) -> RenderResult<()>;
+        fn update_world_shader_pipelines(&mut self, programs: &concinnity_core::components::ShaderPrograms) -> RenderResult<()>;
+        fn update_skinned_mesh_geometry(&mut self, skinned_index: usize, vertex_base: u32, verts: &[mesh_payload::SkinnedVertex], idxs: &[u16]) -> RenderResult<()>;
+        fn update_skinned_skeleton(&mut self, skinned_index: usize, new_joint_count: usize) -> RenderResult<()>;
+        fn rebuild_skinned_geometry(&mut self, changes: Vec<backend::SkinnedDrawGeometryUpdate>) -> RenderResult<Vec<backend::SkinnedSlotLayout>>;
+        fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()>;
+        fn rebuild_static_geometry(&mut self, changes: Vec<backend::DrawGeometryUpdate>) -> RenderResult<()>;
     }
 
     fn shader_reload_flag(&self) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
@@ -177,29 +169,16 @@ impl LiveEdit for VkContext {
     // Rebuild a new world's GPU content on this already-constructed backend,
     // reusing the window + Vulkan device + swapchain. Inherent method named
     // `apply_world_reload` so this forwarder does not shadow-and-recurse.
-    fn reload_world(&mut self, init: backend_init::BackendInit<'_>) -> error::RenderResult<()> {
+    fn reload_world(&mut self, init: backend_init::BackendInit<'_>) -> RenderResult<()> {
         debug_assert_main_thread("reload_world");
         self.apply_world_reload(init)
-    }
-
-    fn update_environment_map(&mut self, payload: &[u8]) -> error::RenderResult<()> {
-        debug_assert_main_thread("update_environment_map");
-        VkContext::update_environment_map(self, payload)
-    }
-
-    fn rebuild_static_geometry(
-        &mut self,
-        changes: Vec<backend::DrawGeometryUpdate>,
-    ) -> error::RenderResult<()> {
-        debug_assert_main_thread("rebuild_static_geometry");
-        VkContext::rebuild_static_geometry(self, changes)
     }
 }
 
 impl SceneEffects for VkContext {
     forward! { assert = debug_assert_main_thread;
-        fn add_decal(&mut self, record: decal::DecalRecord) -> error::RenderResult<usize>;
-        fn remove_decal(&mut self, decal_id: usize) -> error::RenderResult<()>;
+        fn add_decal(&mut self, record: decal::DecalRecord) -> RenderResult<usize>;
+        fn remove_decal(&mut self, decal_id: usize) -> RenderResult<()>;
     }
 
     // Inherent particle methods carry the `_particle_` infix; the trait names

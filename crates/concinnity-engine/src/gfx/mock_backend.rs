@@ -41,7 +41,7 @@ pub(crate) struct TestHooks {
 }
 
 pub(crate) type BackendFactory =
-    Box<dyn FnMut(BackendInit<'_>) -> Option<Box<dyn RenderBackend>> + Send>;
+    Box<dyn FnMut(BackendInit<'_>) -> RenderResult<Box<dyn RenderBackend>> + Send>;
 
 // The parts of the assembled `BackendInit` worth asserting on, captured by the
 // factory before the mock backend is handed back. `draw_objects` is moved out
@@ -176,7 +176,7 @@ pub(crate) struct MockState {
     pub(crate) fail_draw: Option<RenderError>,
     // When set, reload_world returns this error instead of Ok (exercising the
     // hot-swap failure path where GraphicsSystem marks itself failed).
-    pub(crate) fail_reload: Option<String>,
+    pub(crate) fail_reload: Option<RenderError>,
     // When set, upload_skinned_morphs returns this error instead of Ok.
     pub(crate) fail_morph_upload: Option<RenderError>,
     // When set, update_texture_slot returns this error instead of Ok.
@@ -324,7 +324,7 @@ pub(crate) fn recording_hooks_with(
         // backend built here can later be transplanted onto another world.
         let hot_swap = Some(init.swapchain_config());
         record_init(&factory_state, init);
-        Some(Box::new(MockBackend {
+        Ok(Box::new(MockBackend {
             state: Arc::clone(&factory_state),
             hot_swap,
         }) as Box<dyn RenderBackend>)
@@ -656,7 +656,7 @@ impl LiveEdit for MockBackend {
         let fail = self.state.lock().unwrap().fail_reload.clone();
         self.record(Call::ReloadWorld);
         if let Some(e) = fail {
-            return Err(e.into());
+            return Err(e);
         }
         // Record the reloaded world's content into this (transplanted) backend's
         // state, exactly as the factory would for a fresh build, so a test can

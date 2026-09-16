@@ -2478,18 +2478,12 @@ impl GraphicsSystem {
         // Tests inject a mock backend factory through `test_hooks`; production
         // always routes to the compile-time-selected real backend.
         let built = match reuse_backend {
-            Some(mut backend) => match backend.reload_world(backend_init) {
-                Ok(()) => {
-                    tracing::info!(
-                        "GraphicsSystem: reused live backend (world reloaded in place, window kept)"
-                    );
-                    Some(backend)
-                }
-                Err(e) => {
-                    tracing::error!("GraphicsSystem: reload_world failed: {e}");
-                    None
-                }
-            },
+            Some(mut backend) => backend.reload_world(backend_init).map(|()| {
+                tracing::info!(
+                    "GraphicsSystem: reused live backend (world reloaded in place, window kept)"
+                );
+                backend
+            }),
             None => {
                 #[cfg(test)]
                 {
@@ -2498,7 +2492,9 @@ impl GraphicsSystem {
                         // A test builds no real device: one that forgets its
                         // hooks fails its own assertions instead of opening a
                         // window.
-                        None => None,
+                        None => Err(concinnity_core::render::error::RenderError::Other(
+                            "no test backend factory".into(),
+                        )),
                     }
                 }
                 #[cfg(not(test))]
@@ -2507,8 +2503,13 @@ impl GraphicsSystem {
                 }
             }
         };
-        self.backend = built;
-        self.backend.as_ref()?;
+        match built {
+            Ok(backend) => self.backend = Some(backend),
+            Err(e) => {
+                tracing::error!("GraphicsSystem: backend build failed: {e}");
+                return None;
+            }
+        }
 
         // Apply a persisted or authored non-windowed window mode at startup. The
         // window is always created as a standard titled window, so a Borderless

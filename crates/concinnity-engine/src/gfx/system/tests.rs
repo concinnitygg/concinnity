@@ -606,7 +606,10 @@ fn reload_world_failure_marks_graphics_failed() {
     let mut world_a = scene_builder().build();
     let _gs_a = init_graphics(&mut world_a, hooks_a);
     let backend_a = crate::ecs::ActiveRenderBackend::take(&mut world_a.resources).unwrap();
-    state_a.lock().unwrap().fail_reload = Some("boom".to_string());
+    state_a.lock().unwrap().fail_reload = Some(error::RenderError::DeviceLost {
+        reason: error::DeviceLostReason::Removed,
+        detail: "boom".to_string(),
+    });
 
     let (_state_b, hooks_b) = recording_hooks();
     let mut world_b = scene_builder().build();
@@ -3558,7 +3561,11 @@ fn one_shot_world_fx_are_resolved_and_drained_at_init() {
 #[test]
 fn a_backend_that_fails_to_build_marks_graphics_failed() {
     let (state, mut hooks) = recording_hooks();
-    hooks.backend_factory = Box::new(|_init| None);
+    hooks.backend_factory = Box::new(|_init| {
+        Err(error::RenderError::OutOfDeviceMemory(
+            "no device memory".to_string(),
+        ))
+    });
     let mut world = scene_builder().build();
     let gs = init_graphics(&mut world, hooks);
 
@@ -3570,6 +3577,20 @@ fn a_backend_that_fails_to_build_marks_graphics_failed() {
     // with no window and no frame pacing.
     let mut gs = gs;
     assert_eq!(step(&mut gs, &mut world), StepResult::Stop);
+}
+
+// A build with no backend compiled in reports `Unsupported` from the factory,
+// which reaches init as any other build failure does.
+#[test]
+fn an_unsupported_backend_marks_graphics_failed() {
+    let (_state, mut hooks) = recording_hooks();
+    hooks.backend_factory =
+        Box::new(|_init| Err(error::RenderError::Unsupported { op: "init_backend" }));
+    let mut world = scene_builder().build();
+    let gs = init_graphics(&mut world, hooks);
+
+    assert!(gs.failed);
+    assert!(!backend_parked(&world));
 }
 
 // A two-triangle skinned strip bound to a two-joint chain, in the compiled

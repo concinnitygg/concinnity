@@ -54,9 +54,14 @@ pub(crate) fn show(title: &str, message: &str) -> bool {
     crate::app::runloop::activate_app_macos();
 
     let init = BackendInit::minimal(&window, atlases);
-    let Some(mut backend) = crate::device::init_backend(init) else {
-        tracing::error!("error screen: no render backend; reporting on the console instead");
-        return false;
+    let mut backend = match crate::device::init_backend(init) {
+        Ok(backend) => backend,
+        Err(e) => {
+            tracing::error!(
+                "error screen: no render backend ({e}); reporting on the console instead"
+            );
+            return false;
+        }
     };
 
     run_loop(backend.as_mut(), message, &fonts);

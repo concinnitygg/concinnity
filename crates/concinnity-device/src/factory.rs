@@ -1,12 +1,12 @@
 //! The backend factory: route the assembled inputs to the backend selected at
 //! compile time. The three backend_* cfgs are mutually exclusive, so at most one
-//! arm compiles; a build with no backend feature compiles none and reports the
-//! same "no backend" the callers already handle. This is the single construction
-//! choke point - the client holds only a `Box<dyn RenderBackend>` and never names
-//! a concrete backend context.
+//! arm compiles; a build with no backend feature compiles none and reports
+//! `Unsupported`. This is the single construction choke point - the client holds
+//! only a `Box<dyn RenderBackend>` and never names a concrete backend context.
 
 use concinnity_core::render::backend;
 use concinnity_core::render::backend_init;
+use concinnity_core::render::error::RenderResult;
 
 /// Probe a cheap throwaway device handle to classify the GPU, so the auto-config
 /// quality ceiling can influence the render targets / effect pipelines the backend
@@ -36,43 +36,28 @@ pub fn probe_gpu_profile() -> backend::GpuProfile {
 /// Construction inputs are documented on `BackendInit` itself.
 pub fn init_backend(
     init: backend_init::BackendInit<'_>,
-) -> Option<Box<dyn backend::RenderBackend>> {
+) -> RenderResult<Box<dyn backend::RenderBackend>> {
     #[cfg(backend_dx)]
     {
-        match crate::directx::DxContext::new(init) {
-            Ok(dx) => Some(Box::new(dx)),
-            Err(e) => {
-                tracing::error!("GraphicsSystem: D3D12 init failed: {}", e);
-                None
-            }
-        }
+        crate::directx::DxContext::new(init)
+            .map(|dx| Box::new(dx) as Box<dyn backend::RenderBackend>)
     }
 
     #[cfg(backend_vk)]
     {
-        match crate::vulkan::VkContext::new(init) {
-            Ok(vk) => Some(Box::new(vk)),
-            Err(e) => {
-                tracing::error!("GraphicsSystem: Vulkan init failed: {}", e);
-                None
-            }
-        }
+        crate::vulkan::VkContext::new(init)
+            .map(|vk| Box::new(vk) as Box<dyn backend::RenderBackend>)
     }
 
     #[cfg(backend_metal)]
     {
-        match crate::metal::MtlContext::new(init) {
-            Ok(mtl) => Some(Box::new(mtl)),
-            Err(e) => {
-                tracing::error!("GraphicsSystem: Metal init failed: {}", e);
-                None
-            }
-        }
+        crate::metal::MtlContext::new(init)
+            .map(|mtl| Box::new(mtl) as Box<dyn backend::RenderBackend>)
     }
 
     #[cfg(not(any(backend_dx, backend_vk, backend_metal)))]
     {
         let _ = init;
-        None
+        Err(concinnity_core::render::error::RenderError::Unsupported { op: "init_backend" })
     }
 }
