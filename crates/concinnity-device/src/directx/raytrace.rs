@@ -38,6 +38,7 @@ use concinnity_core::gfx::render_types::{
     DrawObject, InstancedCluster, RtGeomEntry, SkinnedDrawObject,
 };
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::rt_geom::RtDynamicMode;
 use concinnity_core::render::rt_geom::{
     cluster_geom_entry, geom_entry, models_dirty, skinned_geom_entry,
 };
@@ -46,9 +47,6 @@ use concinnity_core::render::rt_topology::{GeomSig, plan_topology_refresh};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::core::Interface;
-// The dynamic-update mode ladder lives in `core::render`; re-exported so the
-// `super::raytrace::RtDynamicMode` path (init + context) keeps resolving.
-pub(super) use concinnity_core::render::rt_geom::RtDynamicMode;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
@@ -63,9 +61,8 @@ use crate::directx::slang_builtins::SlangCompile;
 // buffer the skin kernel writes carries the same 56-byte layout.
 const VERTEX_STRIDE: u64 = 56;
 
-// Shared with the Metal and Vulkan hosts: one `.slang` declares it now.
-// Re-exported so `crate::directx::raytrace::SkinParams` keeps resolving.
-pub(in crate::directx) use concinnity_core::render::uniforms::SkinParams;
+// Shared with the Metal and Vulkan hosts: one `.slang` declares it.
+use concinnity_core::render::uniforms::SkinParams;
 
 // Whether the active GPU supports the DXR feature tier inline `RayQuery` needs.
 // Tier 1.1 is required because the reflection pass traces from a pixel shader

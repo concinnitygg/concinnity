@@ -26,9 +26,6 @@ use concinnity_core::geometry::{PaletteSlot, Vert, build_voxel_mesh, compute_tan
 use concinnity_core::gfx::lod;
 use concinnity_core::gfx::mesh_payload;
 use concinnity_core::math::vec3::{vec3_add, vec3_face_normal, vec3_normalize};
-// Re-exported so cook code that also needs the runtime-side joint conversion
-// (mesh_reimport) can reach it through `crate::compile::geometry`.
-pub(crate) use concinnity_core::geometry::payload_joints_to_defs;
 
 // Raw inline vertex form: position, color, uv (inline input, before normals
 // are derived).

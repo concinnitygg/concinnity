@@ -4,7 +4,7 @@
 //! `editor/palette/`; the drive in `hook/edit/palette.rs`.
 
 use concinnity_core::ecs::World;
-use concinnity_host::thread::asset_id::AssetId;
+use concinnity_core::ecs::asset_id::AssetId;
 
 use crate::editor::panels::registry::{self, PanelKey};
 use crate::editor::theme;

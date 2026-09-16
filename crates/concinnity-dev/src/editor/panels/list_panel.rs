@@ -9,7 +9,7 @@
 //! in `asset_list.rs` instead.)
 
 use concinnity_core::ecs::World;
-use concinnity_host::thread::asset_id::AssetId;
+use concinnity_core::ecs::asset_id::AssetId;
 
 use crate::editor::theme;
 use crate::editor::widget::{self, place_rounded, point_in};

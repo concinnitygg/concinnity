@@ -18,10 +18,10 @@ use concinnity_core::components::{
     CueKind, InputKey, Story, StoryCompareOp, StoryGate, StoryImage, StoryOp, StoryScaffold,
     StoryStage,
 };
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{
     Access, AudioClipHandle, EventCursor, PipelineContext, StepResult, System, TransientSaves,
 };
-use concinnity_host::thread::asset_id::AssetId;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::Instant;

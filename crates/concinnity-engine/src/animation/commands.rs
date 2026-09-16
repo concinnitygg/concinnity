@@ -173,8 +173,8 @@ mod tests {
     use concinnity_core::animation::anim_graph::GraphCursor;
     use concinnity_core::animation::skeleton::AnimationClip;
     use concinnity_core::components::AnimationGraph;
+    use concinnity_core::ecs::asset_id::AssetId;
     use concinnity_host::thread::asset_id;
-    use concinnity_host::thread::asset_id::AssetId;
 
     const TARGET: SkinnedMeshHandle = SkinnedMeshHandle(1);
     const MISSING: SkinnedMeshHandle = SkinnedMeshHandle(9);

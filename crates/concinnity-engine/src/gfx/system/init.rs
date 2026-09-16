@@ -45,6 +45,7 @@ use concinnity_core::ecs::PickIndex;
 use concinnity_core::ecs::PipelineContext;
 use concinnity_core::ecs::SkinnedMeshHandle;
 use concinnity_core::ecs::TextureHandle;
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::geometry::payload_joints_to_defs;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::{mesh_payload, mesh_seed, render_types};
@@ -63,7 +64,6 @@ use concinnity_core::window::display_mode;
 use concinnity_host::store::blob::blob_path;
 use concinnity_host::store::blob::payload_section_start;
 use concinnity_host::thread::asset_id;
-use concinnity_host::thread::asset_id::AssetId;
 use std::time::Instant;
 
 use super::draw_geometry::{draw_object_position, gather_auto_seed_triangles};

@@ -7,11 +7,11 @@
 
 use concinnity_core::components::MorphDelta;
 use concinnity_core::components::SkinnedVertexData;
+use concinnity_core::geometry::payload_joints_to_defs;
 use concinnity_core::gfx::mesh_payload::{deserialize_skinned, deserialize_with_lods};
 
 use crate::compile::geometry::{
     SkinnedLods, compile_mesh_payload, compile_skinned_mesh_payload_with_lods,
-    payload_joints_to_defs,
 };
 
 // LOD alternates: (switch_distance, index buffer) pairs.

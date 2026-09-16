@@ -434,7 +434,7 @@ mod tests {
     fn initial_view_fires_its_cue() {
         use concinnity_core::components::{AudioCue, Screen};
         use concinnity_core::ecs::AudioClipHandle;
-        use concinnity_host::thread::asset_id::AssetId;
+        use concinnity_core::ecs::asset_id::AssetId;
 
         let mut world = World::new();
         let screen = AssetId(90);

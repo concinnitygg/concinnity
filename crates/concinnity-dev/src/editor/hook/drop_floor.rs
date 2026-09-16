@@ -9,8 +9,9 @@
 use concinnity_core::components::Transform;
 use concinnity_core::ecs::PickIndex;
 use concinnity_core::ecs::World;
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::math::pick::{PickRay, ray_aabb};
-use concinnity_host::thread::asset_id::{self, AssetId};
+use concinnity_host::thread::asset_id;
 
 use super::EditorHook;
 use super::drag;

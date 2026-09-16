@@ -9,7 +9,7 @@
 //! The title bar, close button, and row draw come from the shared `list_panel`.
 
 use concinnity_core::ecs::World;
-use concinnity_host::thread::asset_id::AssetId;
+use concinnity_core::ecs::asset_id::AssetId;
 
 use super::list_panel::{self, Row};
 use super::registry::{self, PanelKey};

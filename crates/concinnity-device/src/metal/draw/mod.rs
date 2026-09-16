@@ -1101,7 +1101,7 @@ impl MtlContext {
         frame: super::raytrace::RtFrame,
         joint_buffers: &[Retained<ProtocolObject<dyn MTLBuffer>>],
     ) -> error::RenderResult<()> {
-        use super::raytrace::RtDynamicMode;
+        use concinnity_core::render::rt_geom::RtDynamicMode;
         let frame_id = frame.id;
         if !self.rt.dynamic_mode.is_dynamic() {
             return Ok(());

@@ -8,7 +8,7 @@
 //! layer sits above all other chrome.
 
 use concinnity_core::ecs::World;
-use concinnity_host::thread::asset_id::AssetId;
+use concinnity_core::ecs::asset_id::AssetId;
 
 use super::panels::registry::ID_BASE;
 use super::widget::{self, point_in};

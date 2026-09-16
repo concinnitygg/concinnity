@@ -58,15 +58,13 @@ use concinnity_core::gfx::render_types::{
 };
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::fullscreen::align_up;
+use concinnity_core::render::rt_geom::RtDynamicMode;
 use concinnity_core::render::rt_geom::{
     cluster_geom_entry, geom_entry, models_dirty, skinned_geom_entry,
 };
 use concinnity_core::render::rt_refit::{BlasUpdate, SkinnedRefit, SkinnedShape};
 use concinnity_core::render::rt_topology::{GeomSig, plan_topology_refresh};
 use concinnity_core::render::uniforms::SkinParams;
-// The dynamic-update mode ladder lives in `core::render`; re-exported so the
-// `crate::vulkan::raytrace::RtDynamicMode` path (init + context) keeps resolving.
-pub(super) use concinnity_core::render::rt_geom::RtDynamicMode;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::pipeline::{SHADER_ENTRY, spv_module};

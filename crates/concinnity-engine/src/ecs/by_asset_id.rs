@@ -4,8 +4,8 @@
 // live component before writing it.
 
 use concinnity_core::components::{Sprite, TextInput, TextLabel};
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{ComponentSlot, PipelineContext};
-use concinnity_host::thread::asset_id::AssetId;
 
 // A component that carries the id of the asset it was built from.
 pub(crate) trait Identified: ComponentSlot {

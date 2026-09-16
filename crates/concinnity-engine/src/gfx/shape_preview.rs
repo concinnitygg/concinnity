@@ -6,8 +6,8 @@
 //! pose through an edited shape.
 
 use concinnity_core::components::{CharacterCapsule, CharacterRig, CharacterShape, SkeletonPose};
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{SkinnedMeshHandle, World};
-use concinnity_host::thread::asset_id::AssetId;
 
 use crate::gfx::system::character_shape;
 

@@ -5,8 +5,8 @@
 //! hook (`hook/drive/view_menu.rs`) owns the open state and routing.
 
 use concinnity_core::ecs::World;
+use concinnity_core::ecs::asset_id::AssetId;
 pub(crate) use concinnity_core::gfx::view_modes::{ShowFlags, ViewMode};
-use concinnity_host::thread::asset_id::AssetId;
 
 use super::outlines::{Category, CategorySet};
 use super::panels::registry::ID_BASE;

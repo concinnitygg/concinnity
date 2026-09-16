@@ -242,11 +242,11 @@ pub fn build_compiled_with_progress(
     // index / resource-table slot).
     crate::resource_handles::reset_resource_handles();
     let resource_assets = assets.iter().filter_map(|a| {
-        crate::resource_handles::asset_resource_kind(&a.asset_type)
+        crate::authoring::resource_type::asset_resource_kind(&a.asset_type)
             .map(|kind| (asset_id::intern(&a.name), kind))
     });
     let mut resource_handles =
-        crate::resource_handles::ResourceHandles::from_assets(resource_assets);
+        concinnity_core::resource::ResourceHandles::from_assets(resource_assets);
     // The mesh-source handle space spans four kinds (Mesh, ProceduralMesh,
     // VoxelChunk, mesh-kind File) and File is polymorphic, so it is assigned in a
     // second pass in the fixed block order the runtime enumerates mesh sources
@@ -483,6 +483,7 @@ mod tests {
     use concinnity_core::components::Material;
     use concinnity_core::components::Prop;
     use concinnity_core::ecs::MeshHandle;
+    use concinnity_core::ecs::asset_id::AssetId;
 
     #[test]
     fn build_pipeline_interns_names_and_resolves_refs() {
@@ -502,14 +503,14 @@ mod tests {
         let prop = result
             .defs
             .iter()
-            .find(|d| d.name == Some(asset_id::AssetId(2)))
+            .find(|d| d.name == Some(AssetId(2)))
             .expect("day_crate def present with interned id 2");
 
         let baked: Prop = postcard::from_bytes(&prop.args_bytes).unwrap();
         // The `mesh` reference resolved to box's handle (0).
         assert_eq!(baked.mesh, Some(MeshHandle(0)));
         // The `day_` name prefix resolved to Scene `day`'s id (1).
-        assert_eq!(baked.scene, Some(asset_id::AssetId(1)));
+        assert_eq!(baked.scene, Some(AssetId(1)));
     }
 
     // A world with physics content but no PhysicsConfig receives one at world

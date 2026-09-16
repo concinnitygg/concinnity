@@ -11,7 +11,7 @@
 // interned name id), translates that id to the handle keying the web.
 
 use concinnity_core::ecs::SkinnedMeshHandle;
-use concinnity_host::thread::asset_id::AssetId;
+use concinnity_core::ecs::asset_id::AssetId;
 use std::collections::HashMap;
 
 // Interned-name -> handle index for the skinned meshes, published as a world

@@ -20,6 +20,7 @@
 //! scores, dispatches, and applies their results each frame.
 
 use concinnity_core::components::Camera3D;
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{PipelineContext, StepResult, System};
 use concinnity_core::gfx::chunk_coord;
 use concinnity_core::gfx::render_types;
@@ -33,7 +34,6 @@ use concinnity_core::render::scene_residency;
 use concinnity_core::render::scene_residency::{
     CHANNEL_MESH, CHANNEL_SHADER, CHANNEL_TEXTURE, SceneResidency,
 };
-use concinnity_host::thread::asset_id::AssetId;
 
 use crate::ecs::RenderOpFailures;
 use crate::gfx::overlay::OverlayFrame;

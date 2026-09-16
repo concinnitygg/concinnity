@@ -6,7 +6,7 @@
 
 use concinnity_core::components::FrameInput;
 use concinnity_core::ecs::World;
-use concinnity_host::thread::asset_id::AssetId;
+use concinnity_core::ecs::asset_id::AssetId;
 
 use super::EditorHook;
 use crate::editor::behavior;

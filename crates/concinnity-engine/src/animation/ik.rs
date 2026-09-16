@@ -14,9 +14,9 @@ use concinnity_core::components::SkeletonPose;
 use concinnity_core::components::{
     AnimationIkChain, AnimationParams, CharacterRig, GroundProbe, GroundProbes,
 };
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{PipelineContext, SkinnedMeshHandle};
 use concinnity_core::transform::{Mat4, mat4_affine_inverse};
-use concinnity_host::thread::asset_id::AssetId;
 use std::collections::{BTreeMap, HashMap};
 
 // Probe ray extents around the animated foot: the ray starts `PROBE_UP`

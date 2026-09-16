@@ -9,7 +9,7 @@ use concinnity_core::components::Sprite;
 use concinnity_core::components::TextInput;
 use concinnity_core::components::TextLabel;
 use concinnity_core::ecs::World;
-use concinnity_host::thread::asset_id;
+use concinnity_core::ecs::asset_id::AssetId;
 
 use super::fixtures::{
     behavior, behavior_session, close_rect_of, entry, hook, seed_tree, select_behavior, set_input,
@@ -390,13 +390,13 @@ fn templates_panel_press_drags_and_focuses() {
 // action logic the other tests cover).
 #[test]
 fn tick_lays_out_the_open_panel_in_every_state() {
-    let sprite_visible = |w: &World, id: asset_id::AssetId| {
+    let sprite_visible = |w: &World, id: AssetId| {
         w.query::<Sprite>()
             .find(|s| s.asset_id == id)
             .unwrap()
             .visible
     };
-    let label = |w: &World, id: asset_id::AssetId| {
+    let label = |w: &World, id: AssetId| {
         w.query::<TextLabel>()
             .find(|l| l.asset_id == id)
             .unwrap()

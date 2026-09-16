@@ -21,12 +21,12 @@ use concinnity_core::components::TextLabel;
 use concinnity_core::components::{
     HitRegion, InputKey, KeyBinding, NavDirection, Screen, ScrollPanel, SettingOp,
 };
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{
     Access, DropdownView, EventCursor, FontHandle, OpenDropdown, PipelineContext, ScreenStack,
     StepResult, System,
 };
 use concinnity_core::gfx::overlay::{OverlayTransform, UI_REFERENCE_SIZE};
-use concinnity_host::thread::asset_id::AssetId;
 use screen::{ScreenMeta, ScreenRegistry};
 use scroll_layout::RowSpec;
 use std::collections::HashMap;

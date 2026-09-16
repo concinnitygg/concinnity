@@ -14,8 +14,8 @@
 use concinnity_core::components::InputKey;
 use concinnity_core::components::SettingOp;
 use concinnity_core::components::StoryCommand;
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_engine::animation::runtime_queue;
-use concinnity_host::thread::asset_id;
 const SPAWN_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
 // Run one runtime command end to end: open a one-shot reply channel, hand its
@@ -244,7 +244,7 @@ pub(super) fn handle_anim_crossfade(text: &str, names: &[String]) -> String {
             req.target
         ));
     };
-    let target = asset_id::AssetId(asset_idx as u32);
+    let target = AssetId(asset_idx as u32);
     run_with_reply(
         "anim-crossfade",
         SPAWN_REPLY_TIMEOUT,
@@ -265,14 +265,14 @@ pub(super) fn handle_anim_crossfade(text: &str, names: &[String]) -> String {
 // Resolve a `target` asset name against the interner names table (indexed by
 // `AssetId`; a small linear scan is fine for a debug command that fires at
 // most a few times per second).
-fn resolve_target(cmd: &str, target: &str, names: &[String]) -> Result<asset_id::AssetId, String> {
+fn resolve_target(cmd: &str, target: &str, names: &[String]) -> Result<AssetId, String> {
     if target.is_empty() {
         return Err(format!("{cmd}: missing 'target'"));
     }
     names
         .iter()
         .position(|n| n == target)
-        .map(|idx| asset_id::AssetId(idx as u32))
+        .map(|idx| AssetId(idx as u32))
         .ok_or_else(|| format!("{cmd}: unknown asset name '{target}'"))
 }
 
@@ -882,6 +882,7 @@ mod tests {
     use concinnity_core::components::AnimationGraph;
     use concinnity_core::ecs::World;
     use concinnity_engine::animation;
+    use concinnity_host::thread::asset_id;
 
     #[test]
     fn camera_set_request_parses_full_payload() {
@@ -1115,7 +1116,7 @@ mod tests {
     fn resolve_target_maps_a_name_to_its_table_index() {
         let names = vec!["a".to_string(), "b".to_string()];
         let id = resolve_target("cmd", "b", &names).expect("known name resolves");
-        assert_eq!(id, asset_id::AssetId(1));
+        assert_eq!(id, AssetId(1));
     }
 
     // The reply shape a Hi-Z A/B reads: every outcome counted, plus the two

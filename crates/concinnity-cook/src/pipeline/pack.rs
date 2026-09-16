@@ -13,7 +13,6 @@ use super::{MESH_TYPE, SKINNED_MESH_TYPE};
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::WorldJsonlAsset;
 use crate::blob::PayloadPacker;
-use crate::resource_handles::ResourceAssetCompile;
 
 // Every entry this stage stores is a compiled payload; the scene expansion that
 // shares the segment stores its own kind upstream.
@@ -23,7 +22,7 @@ const PAYLOAD: crate::cache::CacheEntryKind = crate::cache::CacheEntryKind::Payl
 // there was chosen by having one, so the lookup cannot fail.
 fn job_resource_kind(
     rt: crate::authoring::registry::RegisteredType,
-) -> crate::resource_handles::ResourceKind {
+) -> concinnity_core::blob::ResourceKind {
     rt.resource_kind()
         .expect("a resource job carries a resource type")
 }
@@ -54,8 +53,6 @@ pub(in crate::pipeline) fn probe_mesh_payload_cache(
     artifacts_dir: Option<&str>,
     platform: concinnity_core::platform::Platform,
 ) -> std::collections::HashMap<String, MeshCacheEntry> {
-    use crate::resource_handles::{RegisteredType, ResourceAssetCompile};
-
     let mut out = std::collections::HashMap::new();
     let empty: [WorldJsonlAsset; 0] = [];
     for asset in assets {
@@ -130,7 +127,7 @@ const RESOURCE_CACHE_DISC_BASE: u8 = 128;
 // (SkinnedMesh) carries alongside its payload (empty for everything else; it
 // bakes from the authored args, so it sits outside the payload cache).
 struct PendingResource {
-    kind: crate::resource_handles::ResourceKind,
+    kind: concinnity_core::blob::ResourceKind,
     handle: u32,
     bytes: Vec<u8>,
     is_data: bool,
@@ -181,7 +178,7 @@ pub(in crate::pipeline) struct PackContext<'a> {
     pub(in crate::pipeline) resource_jobs:
         &'a [(usize, crate::authoring::registry::RegisteredType, u32)],
     pub(in crate::pipeline) partition: &'a crate::compile::scene_partition::ScenePartition,
-    pub(in crate::pipeline) mesh_source_handles: &'a crate::resource_handles::ResourceHandles,
+    pub(in crate::pipeline) mesh_source_handles: &'a concinnity_core::resource::ResourceHandles,
     pub(in crate::pipeline) max_blob_bytes: u64,
     pub(in crate::pipeline) assets_dir: Option<&'a Path>,
     pub(in crate::pipeline) artifacts_dir: Option<&'a str>,
@@ -406,12 +403,11 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
     let mut mesh_component_names: Vec<(u32, String)> = Vec::new();
     for (idx, bytes) in &pending {
         let asset = &assets[named_src[*idx]];
-        if !crate::resource_handles::is_mesh_source(&asset.asset_type, &asset.args) {
+        if !crate::authoring::resource_type::is_mesh_source(&asset.asset_type, &asset.args) {
             continue;
         }
         let id = asset_id::intern(&asset.name);
-        if let Some(handle) =
-            mesh_source_handles.get(crate::resource_handles::ResourceKind::Mesh, id)
+        if let Some(handle) = mesh_source_handles.get(concinnity_core::blob::ResourceKind::Mesh, id)
         {
             // Handle -> asset name for mesh payloads riding component defs,
             // so a consumer can find any sub-mesh payload by unified handle
@@ -575,7 +571,7 @@ mod tests {
         assert!(probed.contains_key("m"));
     }
 
-    use crate::resource_handles::{RegisteredType, ResourceKind};
+    use concinnity_core::blob::ResourceKind;
 
     fn procedural_mesh_def() -> BlobAssetDef {
         asset_api::create_asset_def(&AssetRequest {
@@ -746,7 +742,7 @@ mod tests {
             serde_json::json!({"generator": "box"}),
         )];
         let mut named = vec![("shape".to_string(), procedural_mesh_def())];
-        let mut handles = crate::resource_handles::ResourceHandles::default();
+        let mut handles = concinnity_core::resource::ResourceHandles::default();
         crate::resource_handles::assign_mesh_source_handles(&mut handles, &assets);
         let out = compile_and_pack_payloads(
             &mut named,

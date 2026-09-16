@@ -9,6 +9,7 @@
 //! spaces, the resolver seams a reference name deserializes through, and the
 //! per-type compile dispatch.
 
+use concinnity_core::blob::ResourceKind;
 use concinnity_core::components::Material;
 use concinnity_core::components::SkeletonJoint;
 use concinnity_core::components::SkinnedMesh;
@@ -19,50 +20,23 @@ use concinnity_core::ecs::set_mesh_handle_resolver;
 use concinnity_core::ecs::set_shader_handle_resolver;
 use concinnity_core::ecs::set_skinned_mesh_handle_resolver;
 use concinnity_core::ecs::set_texture_handle_resolver;
-pub(crate) use concinnity_core::resource::ResourceHandles;
+use concinnity_core::resource::ResourceHandles;
 use concinnity_host::thread::asset_id;
 use serde::Deserialize;
 use std::cell::RefCell;
 use std::path::Path;
 use std::sync::Once;
 
-pub use crate::authoring::resource_type::ResourceKind;
-pub(crate) use crate::authoring::resource_type::{asset_resource_kind, is_mesh_source};
-// The vocabulary half -- `RegisteredType` and the classifiers
-// (`asset_resource_kind`, `is_mesh_source`) -- lives in `crate::authoring`;
-// re-exported here so cook code keeps resolving `resource_handles::...`
-// paths. The assignment rules come from core.
-pub(crate) use crate::authoring::registry::RegisteredType;
+use crate::authoring::registry::RegisteredType;
 
-// Compile dispatch for resource assets, as an extension trait: the vocabulary
-// enum is authoring-side, so the per-type compile arms attach here, where the
-// compilers live.
-pub(crate) trait ResourceAssetCompile {
-    // Compile this resource's payload from its authored args, resolving bare
-    // source filenames under `assets_dir`. Bypasses the `BuildAsset` trait
-    // (which requires `Component`, a thing a resource no longer is) and calls
-    // the concrete compiler directly.
-    fn compile_payload(
-        self,
-        args: &serde_json::Value,
-        assets_dir: Option<&Path>,
-    ) -> std::io::Result<Vec<u8>>;
-    // The source files this resource reads, folded into its payload cache key
-    // so an unchanged source is a cache hit.
-    fn source_files(self, args: &serde_json::Value, assets_dir: Option<&Path>) -> Vec<String>;
-    // The baked runtime data that rides the resource record's `data_bytes`
-    // ALONGSIDE a compiled payload, or `None`. SkinnedMesh is the only such
-    // hybrid today: its geometry compiles into a blob payload while its
-    // authored placement/material/capsule fields bake here. (Material, a pure
-    // data resource, routes its bytes through `compile_payload` + `is_data`
-    // instead.) `name` is the asset's declared name, interned into the baked
-    // form where the runtime needs the identity.
-    fn compile_data(self, name: &str, args: &serde_json::Value)
-    -> std::io::Result<Option<Vec<u8>>>;
-}
-
-impl ResourceAssetCompile for RegisteredType {
-    fn compile_payload(
+// Compile dispatch for resource assets: the vocabulary enum is authoring-side,
+// so the per-type compile arms attach here, where the compilers live.
+impl RegisteredType {
+    /// Compile this resource's payload from its authored args, resolving bare
+    /// source filenames under `assets_dir`. Bypasses the `BuildAsset` trait
+    /// (which requires `Component`, a thing a resource no longer is) and calls
+    /// the concrete compiler directly.
+    pub(crate) fn compile_payload(
         self,
         args: &serde_json::Value,
         assets_dir: Option<&Path>,
@@ -98,7 +72,13 @@ impl ResourceAssetCompile for RegisteredType {
         }
     }
 
-    fn source_files(self, args: &serde_json::Value, assets_dir: Option<&Path>) -> Vec<String> {
+    /// The source files this resource reads, folded into its payload cache key
+    /// so an unchanged source is a cache hit.
+    pub(crate) fn source_files(
+        self,
+        args: &serde_json::Value,
+        assets_dir: Option<&Path>,
+    ) -> Vec<String> {
         match self {
             Self::AudioClip
             | Self::Texture
@@ -150,7 +130,14 @@ impl ResourceAssetCompile for RegisteredType {
         }
     }
 
-    fn compile_data(
+    /// The baked runtime data that rides the resource record's `data_bytes`
+    /// ALONGSIDE a compiled payload, or `None`. SkinnedMesh is the only such
+    /// hybrid today: its geometry compiles into a blob payload while its
+    /// authored placement/material/capsule fields bake here. (Material, a pure
+    /// data resource, routes its bytes through `compile_payload` + `is_data`
+    /// instead.) `name` is the asset's declared name, interned into the baked
+    /// form where the runtime needs the identity.
+    pub(crate) fn compile_data(
         self,
         name: &str,
         args: &serde_json::Value,
@@ -344,7 +331,6 @@ pub(crate) fn reset_resource_handles() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::authoring::registry::RegisteredType;
     use concinnity_core::components::AudioCue;
     use concinnity_core::components::AudioEmitter;
     use concinnity_core::components::Decal;

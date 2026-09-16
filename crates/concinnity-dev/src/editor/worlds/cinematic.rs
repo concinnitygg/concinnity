@@ -11,7 +11,7 @@
 //! back the moment the screen hands the session a world.
 
 use concinnity_core::ecs::World;
-use concinnity_host::thread::asset_id::AssetId;
+use concinnity_core::ecs::asset_id::AssetId;
 
 use crate::editor::panels::registry::ID_BASE;
 use crate::editor::viewport::framing::{CameraPose, bounding_sphere, fit_distance};

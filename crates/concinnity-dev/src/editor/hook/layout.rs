@@ -4,7 +4,7 @@
 use concinnity_core::ecs::CursorShape;
 use concinnity_core::ecs::HudLayers;
 use concinnity_core::ecs::World;
-use concinnity_host::thread::asset_id::AssetId;
+use concinnity_core::ecs::asset_id::AssetId;
 
 use super::{EditorHook, TOP_BAR_LAYER};
 use crate::editor::create_menu;

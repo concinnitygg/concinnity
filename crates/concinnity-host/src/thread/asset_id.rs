@@ -5,18 +5,14 @@
 //! This module owns the interner and installs it into the runtime crate's
 //! resolver seam (`concinnity_core::ecs::resolver::set_name_resolver`) so a name-string
 //! reference deserializes to a dense id during a build. At runtime references
-//! are already integers, so the seam is never consulted. The identity types the
-//! seam produces are re-exported from concinnity-core under the same path.
+//! are already integers, so the seam is never consulted.
 
 use std::cell::RefCell;
 use std::sync::Once;
 
-use super::name_interner::NameInterner;
+use concinnity_core::ecs::asset_id::AssetId;
 
-// The asset identity + typed reference primitives, defined in concinnity-core.
-pub use concinnity_core::ecs::asset_id::{
-    AssetId, AssetRef, de_opt_asset_ref, de_opt_asset_ref_typed,
-};
+use super::name_interner::NameInterner;
 
 thread_local! {
     static INTERNER: RefCell<NameInterner> = RefCell::new(NameInterner::default());
@@ -105,6 +101,7 @@ pub fn intern_all(names: &[&str]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::ecs::asset_id::de_opt_asset_ref;
 
     #[test]
     fn intern_is_idempotent_and_dense() {

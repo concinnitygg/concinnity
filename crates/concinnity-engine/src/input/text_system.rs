@@ -6,9 +6,9 @@
 //! place.
 
 use concinnity_core::components::{FrameInput, InputKey, SpriteFit, TextInput};
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{Access, PipelineContext, StepResult, System};
 use concinnity_core::gfx::overlay::OverlayTransform;
-use concinnity_host::thread::asset_id::AssetId;
 
 // One text edit applied at the caret in a single frame.
 #[derive(Debug, Clone, Copy, PartialEq)]

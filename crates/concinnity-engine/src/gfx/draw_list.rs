@@ -3,6 +3,7 @@
 
 use concinnity_core::components::InstancedProp;
 use concinnity_core::components::{File, FileKind, ProceduralMesh, Room, SubMeshRef, VoxelChunk};
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{Entity, MaterialHandle, MeshHandle, PayloadLocator, PipelineContext};
 use concinnity_core::gfx::frustum;
 use concinnity_core::gfx::mesh_payload;
@@ -12,7 +13,6 @@ use concinnity_core::gfx::render_types::{
 };
 use concinnity_core::resource::MeshTable;
 pub(crate) use concinnity_core::transform::IDENTITY as IDENTITY4;
-use concinnity_host::thread::asset_id::AssetId;
 
 use crate::gfx::material_entry::{MaterialEntry, resolve_material_slots};
 

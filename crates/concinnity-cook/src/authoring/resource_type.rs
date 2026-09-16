@@ -8,13 +8,9 @@
 //! than just its type name. The per-type compile dispatch lives in
 //! concinnity-cook, where the compilers are.
 
-// The resource kinds (and their `resource_kind` blob tag) are defined with the
-// blob format; re-exported here for the classifiers and the cook-side handle
-// assigner so both sides agree on the kind and its tag. `MeshBlock` comes from
-// the same crate, with the handle-assignment rules it orders.
 use concinnity_core::components::FileKind;
-pub use concinnity_core::ecs::ResourceKind;
-pub(crate) use concinnity_core::resource::MeshBlock;
+use concinnity_core::ecs::ResourceKind;
+use concinnity_core::resource::MeshBlock;
 
 // The mesh-source handle space is shared across every geometry-producing kind
 // (Mesh, ProceduralMesh, VoxelChunk, and mesh-kind File), so it is not assigned

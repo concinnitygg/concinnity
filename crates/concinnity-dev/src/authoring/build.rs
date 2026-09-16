@@ -107,9 +107,8 @@ pub fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
     )?;
 
     // The material name catalog, read before the result is taken apart below.
-    let material_names = MaterialNames(
-        result.resource_names(concinnity_cook::resource_handles::ResourceKind::Material),
-    );
+    let material_names =
+        MaterialNames(result.resource_names(concinnity_core::blob::ResourceKind::Material));
 
     let payload_sections: Vec<Option<Vec<u8>>> = result.payloads.into_iter().map(Some).collect();
     let mut world = concinnity_engine::blob::world_from(BlobData::new(payload_sections));

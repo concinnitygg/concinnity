@@ -39,6 +39,7 @@ use concinnity_core::ecs::MenuOverride;
 use concinnity_core::ecs::MeshHandle;
 use concinnity_core::ecs::PickIndex;
 use concinnity_core::ecs::ScreenStack;
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{
     ComponentSlot, ComponentStorage, PayloadLocator, PipelineContext, Resources, StepResult,
     TextureHandle,
@@ -61,7 +62,6 @@ use concinnity_core::resource::SkinnedMeshTable;
 use concinnity_core::resource::TextureTable;
 use concinnity_core::transform::propagation;
 use concinnity_host::store::blob::BlobData;
-use concinnity_host::thread::asset_id::AssetId;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 

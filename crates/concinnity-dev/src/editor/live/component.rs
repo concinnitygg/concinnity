@@ -18,8 +18,8 @@ use concinnity_cook::authoring::world::WorldJsonlAsset;
 use concinnity_core::blob::BlobAssetDef;
 use concinnity_core::ecs::ComponentAsset;
 use concinnity_core::ecs::World;
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_host::thread::asset_id;
-use concinnity_host::thread::asset_id::AssetId;
 use serde_json::{Map, Value};
 
 use super::Apply;

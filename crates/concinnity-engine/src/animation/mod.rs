@@ -29,10 +29,10 @@ use concinnity_core::components::CharacterRig;
 use concinnity_core::components::GroundProbes;
 use concinnity_core::components::RootMotionEvent;
 use concinnity_core::components::SkeletonPose;
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{
     Access, MenuActive, PipelineContext, SkinnedMeshHandle, StepResult, System,
 };
-use concinnity_host::thread::asset_id::AssetId;
 use concinnity_host::thread::jobs;
 use flat::{ClipEntry, FlatState, Transition};
 use graph::GraphTarget;

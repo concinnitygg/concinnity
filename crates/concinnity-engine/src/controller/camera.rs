@@ -452,7 +452,7 @@ mod tests {
     #[test]
     fn camera_and_ui_share_frame_input() {
         use concinnity_core::components::{FrameInput, KeyBinding, Screen, ScreenCommand};
-        use concinnity_host::thread::asset_id::AssetId;
+        use concinnity_core::ecs::asset_id::AssetId;
 
         let mut world = World::new();
         world.add_component(camera(Some(CameraController::default())));
@@ -494,7 +494,7 @@ mod tests {
     // interact input. Shared by the interact decomposition tests.
     fn interact_world() -> World {
         use concinnity_core::components::Prop;
-        use concinnity_host::thread::asset_id::AssetId;
+        use concinnity_core::ecs::asset_id::AssetId;
 
         let mut world = World::new();
         let ctrl = CameraController {

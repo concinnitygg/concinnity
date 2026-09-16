@@ -7,13 +7,13 @@ use concinnity_core::components::{
 use concinnity_core::ecs::MaterialHandle;
 use concinnity_core::ecs::PayloadLocator;
 use concinnity_core::ecs::PipelineContext;
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::geometry::ChunkBlockType;
 use concinnity_core::gfx::chunk_coord;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::mesh_seed;
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::scene_residency;
-use concinnity_host::thread::asset_id::AssetId;
 
 use super::stream_sources::{block_type_to_chunk, build_texture_payload_source};
 use super::*;

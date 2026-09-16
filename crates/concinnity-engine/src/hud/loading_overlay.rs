@@ -9,10 +9,10 @@ use concinnity_core::components::LoadingOverlay;
 use concinnity_core::components::ScreenCommand;
 use concinnity_core::components::Sprite;
 use concinnity_core::components::TextLabel;
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{Access, PipelineContext, ScreenStack, StepResult, System};
 use concinnity_core::render::scene_flow::FadePhase;
 use concinnity_core::render::scene_residency::SceneLoadState;
-use concinnity_host::thread::asset_id::AssetId;
 use std::time::{Duration, Instant};
 
 // Seconds the backdrop takes to fade out over the freshly resident scene.

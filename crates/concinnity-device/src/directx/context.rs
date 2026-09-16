@@ -1165,7 +1165,7 @@ pub(super) struct DxRayTracing {
     pub accel: Option<super::raytrace::RtAccelData>,
     // How the acceleration structure is kept current as props move (the
     // launch's `--rt-dynamic` request; `Auto` by default).
-    pub dynamic_mode: super::raytrace::RtDynamicMode,
+    pub dynamic_mode: concinnity_core::render::rt_geom::RtDynamicMode,
     // Whether skinned meshes join the BVH (the launch's `--rt-skinned-geometry`
     // request; in by default). Clear it and the BVH covers static + instanced
     // geometry only, isolating the skinned trace path.

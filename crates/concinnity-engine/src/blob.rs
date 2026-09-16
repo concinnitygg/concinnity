@@ -4,12 +4,12 @@
 
 use concinnity_core::ecs::ComponentAsset;
 use concinnity_core::ecs::World;
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::error::CnError;
 use concinnity_host::store::blob::BlobData;
 use concinnity_host::store::blob::BlobMeta;
 use concinnity_host::store::blob::ResourceRecord;
 use concinnity_host::store::blob::WorldManifest;
-use concinnity_host::thread::asset_id::AssetId;
 
 /// A world that reads its compiled payloads from `blob`. The world names the
 /// payload store only through its access seam, so this is where the blob file

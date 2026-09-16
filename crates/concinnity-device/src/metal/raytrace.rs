@@ -43,6 +43,7 @@ use concinnity_core::gfx::render_types::{
 };
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::post::rt_reflections::RtReflectionSettings;
+use concinnity_core::render::rt_geom::RtDynamicMode;
 use concinnity_core::render::rt_geom::{cluster_geom_entry, geom_entry, skinned_geom_entry};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -59,10 +60,7 @@ use objc2_metal::{
     MTLRenderStages, MTLResource, MTLResourceOptions, MTLResourceUsage, MTLSize,
 };
 use std::ptr::NonNull;
-// The dynamic-update mode ladder lives in `core::render`; re-exported so the
-// `super::raytrace::RtDynamicMode` path (init + draw) keeps resolving.
-pub(crate) use concinnity_core::render::rt_geom::RtDynamicMode;
-// Shared with the Vulkan and DirectX hosts: one `.slang` declares it now.
+// Shared with the Vulkan and DirectX hosts: one `.slang` declares it.
 use concinnity_core::render::uniforms::SkinParams;
 
 use super::context::write_buffer_slice;

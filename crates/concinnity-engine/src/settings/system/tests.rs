@@ -13,6 +13,7 @@ use concinnity_core::components::{
     AudioCommand, ControlsCommand, IndirectLighting, InputKey, SettingCommand, SettingOp,
     ShadowUpdate, Sprite, TextLabel, WindowMode,
 };
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{
     Arena, ComponentStorage, FrameContext, FrameRateCap, HudPrefs, PipelineContext, Resources,
     StepResult, System,
@@ -24,7 +25,6 @@ use concinnity_core::render::backend::{GpuProfile, GpuVendor};
 use concinnity_core::render::ops;
 use concinnity_core::window::display_mode::DisplayMode;
 use concinnity_host::store::blob::BlobData;
-use concinnity_host::thread::asset_id::AssetId;
 use std::sync::{Arc, Mutex};
 
 use super::SettingsState;

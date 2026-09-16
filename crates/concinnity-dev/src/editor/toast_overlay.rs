@@ -7,7 +7,7 @@
 //! above all of that chrome.
 
 use concinnity_core::ecs::World;
-use concinnity_host::thread::asset_id::AssetId;
+use concinnity_core::ecs::asset_id::AssetId;
 
 use super::notify::{Level, Stack};
 use super::panels::registry::ID_BASE;

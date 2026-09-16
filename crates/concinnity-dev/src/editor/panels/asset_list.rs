@@ -7,7 +7,7 @@
 //! triple-dot menu, and delete); that stays in `assets_panel.rs`, layered over this base.
 
 use concinnity_core::ecs::World;
-use concinnity_host::thread::asset_id::AssetId;
+use concinnity_core::ecs::asset_id::AssetId;
 
 use crate::editor::theme;
 use crate::editor::widget::{self, place_rounded, place_sprite};

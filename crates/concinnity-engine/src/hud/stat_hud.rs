@@ -9,8 +9,8 @@
 
 use concinnity_core::components::StatHud;
 use concinnity_core::components::TextLabel;
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{Access, HudPrefs, PipelineContext, StepResult, System};
-use concinnity_host::thread::asset_id::AssetId;
 use std::time::Instant;
 
 // How often the chip text is rebuilt, in seconds. The frame rate is averaged

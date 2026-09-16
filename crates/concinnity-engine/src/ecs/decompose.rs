@@ -18,8 +18,8 @@ use concinnity_core::components::{
     BodyDynamics, Children, Collider, Held, Interactable, MeshRenderer, ModelRenderer, Parent,
     Pickup, Prop, PropInstance, SceneMember, SkyRotation, Transform,
 };
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{Entity, EntityByName, PipelineContext};
-use concinnity_host::thread::asset_id::AssetId;
 use std::collections::{BTreeMap, HashMap};
 
 // Decompose every loaded Prop into per-instance components on its own entity,

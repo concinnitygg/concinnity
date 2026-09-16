@@ -6,8 +6,8 @@
 
 use concinnity_core::animation::anim_graph::{CompiledGraph, GraphCursor};
 use concinnity_core::components::{AnimationGraph, AnimationParams, GroundProbes, SkeletonPose};
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{PipelineContext, SkinnedMeshHandle};
-use concinnity_host::thread::asset_id::AssetId;
 use std::collections::{BTreeMap, HashMap};
 
 use super::{TargetMode, TargetState};

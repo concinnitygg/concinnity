@@ -7,8 +7,8 @@ use concinnity_core::components::{
     Behavior, BehaviorExpr, BehaviorNode, BehaviorSource, Prop, PropInstance,
 };
 use concinnity_core::components::{BehaviorQuery, Camera3D, Transform, Variables};
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{MeshHandle, World};
-use concinnity_host::thread::asset_id::AssetId;
 
 use crate::ecs::SYSTEMS;
 

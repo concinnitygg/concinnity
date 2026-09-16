@@ -6,6 +6,7 @@
 use concinnity_core::components::PointLight;
 use concinnity_core::components::Transform;
 use concinnity_core::ecs::World;
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_host::thread::asset_id;
 
 use crate::editor::hook::tests::fixtures::{click_at, entry, hook, pick_world};
@@ -15,10 +16,7 @@ use crate::editor::viewport::billboards;
 // Billboard test rig: the pick rig plus a PointLight entity indexed by name
 // (as the loaders' name -> entity index would) and the injected billboard
 // pools.
-fn billboard_world(
-    light_pos: [f32; 3],
-    picks: Vec<(asset_id::AssetId, [f32; 3], [f32; 3])>,
-) -> World {
+fn billboard_world(light_pos: [f32; 3], picks: Vec<(AssetId, [f32; 3], [f32; 3])>) -> World {
     let mut world = pick_world([0.0; 3], picks);
     for s in billboards::sprites() {
         world.add_component(s);

@@ -15,11 +15,11 @@ use concinnity_core::components::Material;
 use concinnity_core::components::MeshRenderer;
 use concinnity_core::components::ModelRenderer;
 use concinnity_core::components::RenderHandle;
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{Entity, MaterialHandle, World};
 use concinnity_core::render::ops::RenderOps;
 use concinnity_core::resource::MaterialTable;
 use concinnity_core::resource::TextureTable;
-use concinnity_host::thread::asset_id::AssetId;
 
 use crate::ecs::ActiveRenderQueues;
 use crate::gfx::material_entry::{self, MaterialEntry};

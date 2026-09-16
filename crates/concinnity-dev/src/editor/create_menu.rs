@@ -7,7 +7,7 @@
 //! flow lives in `hook/drive/create_menu.rs`.
 
 use concinnity_core::ecs::World;
-use concinnity_host::thread::asset_id::AssetId;
+use concinnity_core::ecs::asset_id::AssetId;
 
 use super::panels::assets_panel;
 use super::panels::registry::ID_BASE;

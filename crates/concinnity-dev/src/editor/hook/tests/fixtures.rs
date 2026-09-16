@@ -14,6 +14,7 @@ use concinnity_core::ecs::Entity;
 use concinnity_core::ecs::PickEntry;
 use concinnity_core::ecs::PickIndex;
 use concinnity_core::ecs::World;
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_host::thread::asset_id;
 
 use crate::debug_hook::DebugHook;
@@ -81,7 +82,7 @@ pub(in crate::editor::hook) fn world_with_fields() -> World {
     world
 }
 
-pub(in crate::editor::hook) fn set_field(world: &mut World, id: asset_id::AssetId, text: &str) {
+pub(in crate::editor::hook) fn set_field(world: &mut World, id: AssetId, text: &str) {
     for t in world.query_mut::<TextInput>() {
         if t.asset_id == id {
             t.content = text.to_string();
@@ -178,7 +179,7 @@ pub(in crate::editor::hook) fn set_input(world: &mut World, input: FrameInput) {
 // PickIndex resource carrying the given (id, bb_min, bb_max) entries.
 pub(in crate::editor::hook) fn pick_world(
     cam_pos: [f32; 3],
-    picks: Vec<(asset_id::AssetId, [f32; 3], [f32; 3])>,
+    picks: Vec<(AssetId, [f32; 3], [f32; 3])>,
 ) -> World {
     let mut world = world_with_fields();
     world.add_component(Camera3D {

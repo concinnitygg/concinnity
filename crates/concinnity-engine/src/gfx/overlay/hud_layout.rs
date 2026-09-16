@@ -4,8 +4,8 @@
 
 use concinnity_core::components::{LabelBox, LabelPlacement, LayoutContainer, TextLabel};
 use concinnity_core::ecs::PipelineContext;
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::render::text;
-use concinnity_host::thread::asset_id::AssetId;
 
 // Scratch for the per-frame label layout, kept on the overlay system so the
 // pass reuses its capacity instead of reallocating each frame.

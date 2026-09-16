@@ -29,6 +29,7 @@ use concinnity_core::components::UpscaleQuality;
 use concinnity_core::components::UpscalerBackend;
 use concinnity_core::components::Window;
 use concinnity_core::components::WindowMode;
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{EventCursor, HudPrefs, PipelineContext, StepResult, System};
 use concinnity_core::gfx::render_types;
 use concinnity_core::input::keymap;
@@ -37,7 +38,6 @@ use concinnity_core::render::ops::RenderOps;
 use concinnity_core::render::scene_flow;
 use concinnity_core::render::snapshot;
 use concinnity_core::window::display_mode;
-use concinnity_host::thread::asset_id::AssetId;
 
 mod apply;
 mod quality;

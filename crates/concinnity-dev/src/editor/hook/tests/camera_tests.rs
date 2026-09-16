@@ -10,7 +10,8 @@ use concinnity_core::components::{Camera3D, FrameInput, InputKey, Transform};
 use concinnity_core::ecs::PickEntry;
 use concinnity_core::ecs::PickIndex;
 use concinnity_core::ecs::World;
-use concinnity_host::thread::asset_id::{self, AssetId};
+use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_host::thread::asset_id;
 
 use super::fixtures::VP;
 use crate::editor::hook::EditorHook;

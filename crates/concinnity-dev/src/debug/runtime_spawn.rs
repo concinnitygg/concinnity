@@ -657,6 +657,7 @@ mod tests {
     use crate::test_support;
     use concinnity_core::components::Camera3D;
     use concinnity_core::ecs::EventCursor;
+    use concinnity_core::ecs::asset_id::AssetId;
 
     #[test]
     fn enqueue_drain_round_trip() {
@@ -1199,7 +1200,7 @@ mod tests {
 
         // Interned name present in the pool map -> its resolved slot.
         let mut map = std::collections::HashMap::new();
-        map.insert(asset_id::AssetId(0), 5usize);
+        map.insert(AssetId(0), 5usize);
         let reload = WorldReloadState {
             texture_name_to_slot: map,
         };
@@ -1354,7 +1355,7 @@ mod tests {
         let mut cursor = EventCursor::default();
         let seen: Vec<_> = events.read(&mut cursor).collect();
         assert_eq!(seen.len(), 1);
-        assert_eq!(seen[0].target.name().unwrap(), asset_id::AssetId(1));
+        assert_eq!(seen[0].target.name().unwrap(), AssetId(1));
 
         // An unknown name is a clean error.
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
@@ -1396,11 +1397,8 @@ mod tests {
                 .expect("reparent request queued");
             let seen: Vec<_> = events.read(&mut cursor).collect();
             assert_eq!(seen.len(), 1);
-            assert_eq!(seen[0].child.name().unwrap(), asset_id::AssetId(0));
-            assert_eq!(
-                seen[0].parent.and_then(|p| p.name()),
-                Some(asset_id::AssetId(1))
-            );
+            assert_eq!(seen[0].child.name().unwrap(), AssetId(0));
+            assert_eq!(seen[0].parent.and_then(|p| p.name()), Some(AssetId(1)));
         }
 
         // A None parent detaches the child to a root.
@@ -1480,9 +1478,9 @@ mod tests {
                 .expect("spawn request queued");
             let seen: Vec<_> = events.read(&mut cursor).collect();
             assert_eq!(seen.len(), 1);
-            assert_eq!(seen[0].template, asset_id::AssetId(0));
+            assert_eq!(seen[0].template, AssetId(0));
             // The new instance name was interned to the next id.
-            assert_eq!(seen[0].name, Some(asset_id::AssetId(1)));
+            assert_eq!(seen[0].name, Some(AssetId(1)));
             assert_eq!(seen[0].transform.position, [1.0, 2.0, 3.0]);
             assert_eq!(seen[0].transform.scale, [2.0, 2.0, 2.0]);
             assert_eq!(seen[0].lifetime_secs, Some(5.0));

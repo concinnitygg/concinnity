@@ -4,8 +4,8 @@
 
 use concinnity_core::components::FpsCounter;
 use concinnity_core::components::TextLabel;
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{Access, PipelineContext, StepResult, System};
-use concinnity_host::thread::asset_id::AssetId;
 use std::time::Instant;
 
 #[derive(Debug)]
@@ -82,7 +82,7 @@ mod tests {
     #[test]
     fn rate_written_into_label_after_a_second() {
         use concinnity_core::components::TextLabel;
-        use concinnity_host::thread::asset_id::AssetId;
+        use concinnity_core::ecs::asset_id::AssetId;
         use std::time::{Duration, Instant};
 
         let mut world = World::new();

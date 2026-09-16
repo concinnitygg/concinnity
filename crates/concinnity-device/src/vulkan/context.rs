@@ -1125,7 +1125,7 @@ pub(super) struct VkRayTracing {
     // How the TLAS is kept current when props move (the launch's `--rt-dynamic`
     // request); read by the per-frame `rt_dynamic_update`. Inert when `accel`
     // is `None`.
-    pub(super) dynamic_mode: crate::vulkan::raytrace::RtDynamicMode,
+    pub(super) dynamic_mode: concinnity_core::render::rt_geom::RtDynamicMode,
     // Whether skinned meshes join the TLAS (the launch's `--rt-skinned-geometry`
     // request; in by default). Clear it and the BVH covers static + instanced
     // geometry only, isolating the skinned trace path.

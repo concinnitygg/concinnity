@@ -17,7 +17,7 @@ use concinnity_core::ecs::FontHandle;
 use concinnity_core::ecs::PickIndex;
 use concinnity_core::ecs::TransientSaves;
 use concinnity_core::ecs::World;
-use concinnity_host::thread::asset_id::AssetId;
+use concinnity_core::ecs::asset_id::AssetId;
 
 use super::hud;
 use super::panels::registry::{self, PanelKey};

@@ -12,8 +12,7 @@
 
 use concinnity_core::components::{FrameInput, Sprite, TextInput, TextLabel};
 use concinnity_core::ecs::World;
-use concinnity_host::thread::asset_id;
-use concinnity_host::thread::asset_id::AssetId;
+use concinnity_core::ecs::asset_id::AssetId;
 
 use super::fixtures::{hook, set_input, world_with_input};
 use crate::debug_hook::DebugHook;
@@ -451,13 +450,13 @@ fn preview_rows_toggle_play_mode_and_fly() {
 // Templates panel (the same click path a real session drives).
 #[test]
 fn tick_view_button_opens_view_then_a_row_opens_templates() {
-    let vis = |w: &World, id: asset_id::AssetId| {
+    let vis = |w: &World, id: AssetId| {
         w.query::<Sprite>()
             .find(|s| s.asset_id == id)
             .map(|s| s.visible)
             .unwrap_or(false)
     };
-    let rect = |w: &World, id: asset_id::AssetId| {
+    let rect = |w: &World, id: AssetId| {
         let s = w.query::<Sprite>().find(|s| s.asset_id == id).unwrap();
         [s.x, s.y, s.width, s.height]
     };
@@ -517,13 +516,13 @@ fn tick_view_button_opens_view_then_a_row_opens_templates() {
 // the detail. Drives the whole flow through `tick` end to end.
 #[test]
 fn tick_picking_a_template_spawns_the_detail_panel_then_apply_adds() {
-    let vis = |w: &World, id: asset_id::AssetId| {
+    let vis = |w: &World, id: AssetId| {
         w.query::<Sprite>()
             .find(|s| s.asset_id == id)
             .map(|s| s.visible)
             .unwrap_or(false)
     };
-    let rect = |w: &World, id: asset_id::AssetId| {
+    let rect = |w: &World, id: AssetId| {
         let s = w.query::<Sprite>().find(|s| s.asset_id == id).unwrap();
         [s.x, s.y, s.width, s.height]
     };

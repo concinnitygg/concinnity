@@ -74,7 +74,6 @@ pub(super) fn cache_inputs_by_type(
 mod tests {
     use super::*;
     use crate::pipeline::fixtures::wja;
-    use crate::resource_handles::ResourceAssetCompile;
     use concinnity_core::components::SkinnedMesh;
     use concinnity_host::thread::asset_id;
 

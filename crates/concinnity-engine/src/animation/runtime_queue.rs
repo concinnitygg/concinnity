@@ -10,7 +10,7 @@
 //! menu pauses playback, so a blocked MCP client always gets its reply. Each
 //! command carries a reply channel the drain fulfils synchronously.
 
-use concinnity_host::thread::asset_id::AssetId;
+use concinnity_core::ecs::asset_id::AssetId;
 use std::sync::Mutex;
 
 /// One queued crossfade request. `target` is the `SkinnedMesh` asset id the

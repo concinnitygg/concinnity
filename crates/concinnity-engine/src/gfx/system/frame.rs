@@ -7,6 +7,7 @@ use concinnity_core::components::{
     Camera3D, CharacterRig, DirectionalLight, FrameInput, GlobalTransform, HitRegion, RenderHandle,
     ScrollPanel, SkeletonPose, TextLabel, Transform,
 };
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{
     FlyCam, HiddenAssets, MenuOverride, PickEntry, PickIndex, PipelineContext, StepResult,
     ViewOverrides,
@@ -18,7 +19,6 @@ use concinnity_core::render::overlay_maps;
 use concinnity_core::render::scene_flow;
 use concinnity_core::render::snapshot::{FrameScalars, RenderSnapshot, SceneOpRecorder};
 use concinnity_core::transform::propagation;
-use concinnity_host::thread::asset_id::AssetId;
 
 use super::sky_follow;
 use super::*;

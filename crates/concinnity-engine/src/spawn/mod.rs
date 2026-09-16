@@ -21,10 +21,10 @@ use concinnity_core::components::SkeletonPose;
 use concinnity_core::components::{
     DespawnRequest, EntityTarget, ReparentRequest, SpawnRequest, VisibilityRequest,
 };
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{Entity, EventCursor, MenuActive, PipelineContext, StepResult, System};
 use concinnity_core::render::ops::RenderOps;
 use concinnity_core::transform::propagation;
-use concinnity_host::thread::asset_id::AssetId;
 use std::time::Instant;
 
 use crate::ecs::ActiveRenderQueues;

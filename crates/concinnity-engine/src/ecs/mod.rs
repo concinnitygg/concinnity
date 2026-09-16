@@ -39,11 +39,11 @@ mod world_queries;
 use concinnity_core::ecs::MeshBoundsRecord;
 use concinnity_core::ecs::Resources;
 use concinnity_core::ecs::SceneGroup;
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::render::backend;
 use concinnity_core::render::scene_flow;
 use concinnity_core::render::scene_residency;
 use concinnity_core::window::display_mode;
-use concinnity_host::thread::asset_id;
 // The `SYSTEMS` table is written client-side, since its gates name the client's
 // own system types (see `registry`); a gate builds one `BuiltSystem` per
 // present entry. Everything that runs it is in concinnity-core.
@@ -210,7 +210,7 @@ pub struct BlobMeshBounds(pub Vec<MeshBoundsRecord>);
 // whenever it changes: `(scene, state, fraction of members resident)` in
 // declaration order. Consumers (menus, loading screens) read, never write.
 pub(crate) struct SceneResidencyStatus {
-    pub scenes: Vec<(asset_id::AssetId, scene_residency::SceneLoadState, f32)>,
+    pub scenes: Vec<(AssetId, scene_residency::SceneLoadState, f32)>,
 }
 
 // Setting rows the engine has disabled at runtime (their keys, e.g. `show_fps`

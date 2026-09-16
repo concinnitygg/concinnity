@@ -1,17 +1,15 @@
 // The DirectX half of the single-source shader compile: everything the
 // declarations in `concinnity_core::render::slang_programs::dx` need a compiler, a
-// content-addressed cache, or a filesystem for. The declarations themselves are
-// re-exported here, so every call site still names them through this module.
+// content-addressed cache, or a filesystem for, over the declarations it
+// brings into the backend's scope.
 
 use concinnity_core::render::error::{RenderError, RenderResult};
 pub(super) use concinnity_core::render::slang_programs::dx::*;
 use concinnity_slang as slang;
 
 // What a declaration can do once a compiler and a cache are in reach. A trait
-// rather than an inherent impl because `SlangProgram` is defined in
-// `core::render`, which is `no_std` and knows nothing about either; bringing
-// this into scope is what keeps `PROGRAM.compile(..)` reading the same at every
-// call site it did before the declarations moved.
+// because `SlangProgram` is defined in `core::render`, which is `no_std` and
+// knows nothing about either.
 pub(crate) trait SlangCompile {
     fn source(&self, hot_reload: bool) -> String;
     fn target(&self) -> slang::SlangTarget;

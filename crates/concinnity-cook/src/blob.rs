@@ -439,7 +439,7 @@ pub(crate) mod test_output {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_host::thread::asset_id::AssetId;
+    use concinnity_core::ecs::asset_id::AssetId;
     use test_output::Output;
 
     fn locator(blob_index: u32, offset: u64, len: u64) -> PayloadLocator {

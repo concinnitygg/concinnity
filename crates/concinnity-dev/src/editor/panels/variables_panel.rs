@@ -10,7 +10,7 @@
 //! actions and `editor/panels/variables.rs` turns the args into these rows.
 
 use concinnity_core::ecs::World;
-use concinnity_host::thread::asset_id::AssetId;
+use concinnity_core::ecs::asset_id::AssetId;
 
 use super::registry::{self, PanelKey};
 use super::variables::Row;

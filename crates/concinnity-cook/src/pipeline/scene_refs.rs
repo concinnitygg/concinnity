@@ -98,6 +98,7 @@ mod tests {
     use crate::pipeline::build_pipeline_from_str;
     use crate::pipeline::fixtures::wja;
     use concinnity_core::components::{HitRegion, KeyBinding, Sprite, TextLabel};
+    use concinnity_core::ecs::asset_id::AssetId;
     use concinnity_host::thread::asset_id;
 
     // `screen:show:<name>` / `screen:toggle:<name>` action targets are
@@ -123,7 +124,7 @@ mod tests {
         let btn = result
             .defs
             .iter()
-            .find(|d| d.name == Some(asset_id::AssetId(1)))
+            .find(|d| d.name == Some(AssetId(1)))
             .expect("HitRegion def");
         let baked: HitRegion = postcard::from_bytes(&btn.args_bytes).unwrap();
         assert_eq!(baked.action, "screen:toggle:0");
@@ -131,7 +132,7 @@ mod tests {
         let esc = result
             .defs
             .iter()
-            .find(|d| d.name == Some(asset_id::AssetId(2)))
+            .find(|d| d.name == Some(AssetId(2)))
             .expect("KeyBinding def");
         let baked: KeyBinding = postcard::from_bytes(&esc.args_bytes).unwrap();
         assert_eq!(baked.action, "screen:toggle:0");
@@ -165,7 +166,7 @@ mod tests {
             let def = result
                 .defs
                 .iter()
-                .find(|d| d.name == Some(asset_id::AssetId(id)))
+                .find(|d| d.name == Some(AssetId(id)))
                 .unwrap_or_else(|| panic!("expected a def for {expect}"));
             let ct =
                 crate::authoring::registry::RegisteredType::from_discriminant(def.discriminant)
@@ -196,7 +197,7 @@ mod tests {
         ] {
             assert_eq!(
                 baked_view(id, name),
-                Some(asset_id::AssetId(0)),
+                Some(AssetId(0)),
                 "expected {name} to have screen=0"
             );
         }

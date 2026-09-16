@@ -18,6 +18,7 @@ use concinnity_core::components::LayoutContainer;
 use concinnity_core::components::Sprite;
 use concinnity_core::components::TextInput;
 use concinnity_core::components::TextLabel;
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{
     Access, CursorState, DesiredCursor, HudLayers, MenuActive, MenuOverride, OpenDropdown,
     PipelineContext, ScreenStack, StepResult, System,
@@ -28,7 +29,6 @@ use concinnity_core::render::cursor;
 use concinnity_core::render::overlay_maps;
 use concinnity_core::render::sprite as gfx_sprite;
 use concinnity_core::render::text;
-use concinnity_host::thread::asset_id::AssetId;
 use std::time::Instant;
 
 mod hud_layout;

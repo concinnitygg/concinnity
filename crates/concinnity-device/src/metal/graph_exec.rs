@@ -86,6 +86,7 @@ use concinnity_core::gfx::render_types::{
 };
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::planar_reflection;
+#[cfg(debug_assertions)]
 use concinnity_core::render::render_graph;
 use concinnity_core::render::render_graph::{CompiledGraph, PassId, PassQueue};
 use concinnity_core::render::uniforms::GBufferView;

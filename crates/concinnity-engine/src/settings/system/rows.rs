@@ -7,9 +7,9 @@ use concinnity_core::components::{
     GamepadAction, HitRegion, ScrollPanel, Sprite, TextLabel, WindowMode,
 };
 use concinnity_core::ecs::PipelineContext;
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::input::keymap;
 use concinnity_core::window::display_mode;
-use concinnity_host::thread::asset_id::AssetId;
 
 use super::SettingsState;
 use crate::gfx::system::{PadRebindViz, RebindViz, SliderViz};

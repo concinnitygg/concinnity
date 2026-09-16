@@ -4,8 +4,8 @@
 
 use concinnity_core::components::{Sprite, SpriteFit, TextAlign, TextInput, TextLabel};
 use concinnity_core::ecs::DropdownView;
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::render::text;
-use concinnity_host::thread::asset_id::AssetId;
 
 // Persistent buffers for the synthesized elements, kept on the overlay system
 // so a steady-state frame reuses their capacity (including every label's

@@ -3,8 +3,8 @@
 use concinnity_core::components::{Hidden, RenderHandle, Scene, SceneMember};
 use concinnity_core::ecs::Entity;
 use concinnity_core::ecs::PipelineContext;
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::render::scene_flow;
-use concinnity_host::thread::asset_id::AssetId;
 
 use super::*;
 

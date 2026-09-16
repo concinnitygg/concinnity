@@ -9,7 +9,7 @@
 //! the part still inside it and drops its text once too little is left to read.
 
 use concinnity_core::ecs::World;
-use concinnity_host::thread::asset_id::AssetId;
+use concinnity_core::ecs::asset_id::AssetId;
 
 use super::graph::{Card, CardKind, Chart};
 use super::panel::{CHAR_W, LIST_THUMB, LIST_TRACK};

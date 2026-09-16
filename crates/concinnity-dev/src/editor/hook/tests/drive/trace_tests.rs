@@ -4,6 +4,7 @@
 //! breakpoint.
 
 use concinnity_core::ecs::World;
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_host::thread::asset_id;
 
 use crate::editor::behavior::graph::CardKind;
@@ -14,7 +15,7 @@ use crate::editor::hook::tests::fixtures::{behavior, hook, playing_hook};
 use crate::editor::sim;
 
 // A world carrying one published trace tick for behavior `b`'s first node.
-fn traced_world(id: asset_id::AssetId, hit: bool) -> World {
+fn traced_world(id: AssetId, hit: bool) -> World {
     use concinnity_core::ecs::{ExecutionTrace, TraceEvent, TracePaths, TraceStep, TraceVal};
     let mut world = World::new();
     let event = TraceEvent {

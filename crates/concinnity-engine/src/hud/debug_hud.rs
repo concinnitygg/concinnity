@@ -10,9 +10,9 @@ use concinnity_core::components::Camera3D;
 use concinnity_core::components::DebugHud;
 use concinnity_core::components::FrameInput;
 use concinnity_core::components::TextLabel;
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{Access, PipelineContext, StepResult, System};
 use concinnity_core::profile::PassTiming;
-use concinnity_host::thread::asset_id::AssetId;
 use std::time::Instant;
 
 // How often the process resident-set-size syscall is resampled while the HUD
