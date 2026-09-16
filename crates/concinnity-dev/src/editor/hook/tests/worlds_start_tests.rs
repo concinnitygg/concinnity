@@ -88,7 +88,7 @@ fn start_layout() -> worlds::Layout {
 // The middle of listed row `i` on the start screen.
 fn row_mid(h: &EditorHook, i: usize) -> (f32, f32) {
     let o = h.origin(PanelKey::Worlds, VP);
-    let r = start_layout().row_rect(o, i - h.worlds_scroll);
+    let r = start_layout().row_rect(o, i - h.worlds.scroll);
     (r[0] + 20.0, r[1] + r[3] * 0.5)
 }
 
@@ -100,7 +100,7 @@ fn the_start_screen_suppresses_the_top_bar_and_every_other_panel() {
     // Panels a session would have open behind it.
     h.panel_open = true;
     h.preview_open = true;
-    h.console_open = true;
+    h.console.open = true;
     h.view_open = true;
 
     assert!(!h.hud_state().visible, "the top bar is not drawn");
@@ -364,7 +364,7 @@ fn selecting_a_row_previews_it_without_retargeting_the_session() {
         "and swapped in on the next frame"
     );
     assert_eq!(h.world_path, placeholder, "the session was not retargeted");
-    assert!(h.start_mode && h.worlds_open, "the screen stays up over it");
+    assert!(h.start_mode && h.worlds.open, "the screen stays up over it");
     assert!(!h.dirty && !h.can_undo(), "a preview is not an edit");
     assert_eq!(h.saved, h.entries, "and never reads as unsaved");
     let view = h.make_worlds_view([0.0, 0.0]);
@@ -392,7 +392,7 @@ fn selecting_an_unparseable_world_reports_it_and_keeps_the_preview() {
     let i = world_row_index(&h, "broken");
     h.apply_worlds_action(WorldsAction::Select(i), &mut world);
 
-    assert!(h.worlds_status.is_some(), "the failure is reported");
+    assert!(h.worlds.status.is_some(), "the failure is reported");
     assert_eq!(entry_names(&h), ["desk"], "lobby is still what shows");
     assert!(!h.rebuild_preview, "nothing was staged to rebuild");
 
@@ -435,8 +435,8 @@ fn opening_the_previewed_world_commits_it_without_rebuilding() {
         "the adopted world keeps its template baselines"
     );
     assert!(!h.start_mode, "the start screen is over for the session");
-    assert!(!h.worlds_open);
-    assert!(h.worlds_selected.is_none() && h.worlds_preview.is_none());
+    assert!(!h.worlds.open);
+    assert!(h.worlds.selected.is_none() && h.worlds.preview.is_none());
     assert!(h.hud_state().visible && h.panel_shown(PanelKey::Preview));
 
     crate::test_support::isolate_state_dir();
@@ -456,7 +456,7 @@ fn opening_a_row_that_is_not_showing_compiles_it() {
     let mut h = start_hook(dir.path(), Some("lobby"));
     settle_rebuild(&mut h);
     // A selection with no preview behind it, as a delete leaves.
-    h.worlds_preview = None;
+    h.worlds.preview = None;
 
     let mut world = world_with_name_field();
     let i = world_row_index(&h, "arena");
@@ -494,7 +494,7 @@ fn deleting_the_previewed_world_falls_back_to_the_empty_scene() {
     assert!(!lobby.exists());
     assert!(h.entries.is_empty(), "the scene behind it is empty again");
     assert!(h.rebuild_preview, "and swaps in on the next frame");
-    assert!(h.worlds_preview.is_none());
+    assert!(h.worlds.preview.is_none());
     assert_eq!(world_names(&h), ["arena"]);
     let view = h.make_worlds_view([0.0, 0.0]);
     assert_eq!(view.selected, Some(0), "the next row takes the selection");
@@ -614,7 +614,7 @@ fn an_in_session_row_click_opens_behind_the_guard_and_never_previews() {
     write_world(&worlds_dir, "lobby", &[prop_entry("desk")], 3_000);
 
     let mut h = hook_at(&arena, vec![prop_entry("crate_a")]);
-    h.worlds_open = true;
+    h.worlds.open = true;
     h.entries.push(prop_entry("crate_b"));
     h.mark_changed();
     h.rebuild_preview = false;
@@ -641,7 +641,7 @@ fn an_in_session_row_click_opens_behind_the_guard_and_never_previews() {
         "nothing was staged"
     );
     assert!(!h.rebuild_preview, "and the live world was not touched");
-    assert!(h.worlds_preview.is_none() && h.worlds_selected.is_none());
+    assert!(h.worlds.preview.is_none() && h.worlds.selected.is_none());
 
     press_modal(&mut h, &mut world, "Cancel");
     assert_eq!(h.world_path, arena.to_string_lossy());
@@ -674,7 +674,7 @@ fn start_mode_routing_reaches_the_panel_and_nothing_else() {
     // Where the top bar would be: it is not drawn, so its chips resolve nothing.
     click_at(&mut h, &mut world, VP[0] - 20.0, hud::BAR_H * 0.5);
     assert!(!h.view_open, "no View panel behind a bar that is not there");
-    assert!(h.start_mode && h.worlds_open);
+    assert!(h.start_mode && h.worlds.open);
 
     // A row press previews that world.
     let arena = world_row_index(&h, "arena");
@@ -718,7 +718,7 @@ fn the_row_menus_open_commits_that_row() {
         dot[0] + dot[2] * 0.5,
         dot[1] + dot[3] * 0.5,
     );
-    assert!(h.worlds_menu.is_some(), "the triple-dot opened the menu");
+    assert!(h.worlds.menu.is_some(), "the triple-dot opened the menu");
 
     let (_, open, _) = start_layout().menu_rects(o, 0);
     click_at(
@@ -729,7 +729,7 @@ fn the_row_menus_open_commits_that_row() {
     );
 
     assert_eq!(h.world_path, lobby.to_string_lossy());
-    assert!(!h.start_mode && !h.worlds_open);
+    assert!(!h.start_mode && !h.worlds.open);
     assert!(
         !h.rebuild_preview,
         "the chip commits what is already showing"
@@ -782,7 +782,7 @@ fn scrolling_follows_the_visible_row_window() {
     // The sidebar is sized by the window it docks to, so the hook needs one.
     h.viewport = VP;
     let shown = h.worlds_layout().rows();
-    h.worlds_rows = (0..shown + 3)
+    h.worlds.rows = (0..shown + 3)
         .map(|i| WorldRow {
             name: format!("w{i}"),
             path: format!("/p/worlds/w{i}.jsonl"),
@@ -793,11 +793,11 @@ fn scrolling_follows_the_visible_row_window() {
     for _ in 0..10 {
         h.scroll_worlds(1.0);
     }
-    assert_eq!(h.worlds_scroll, 3, "the last row scrolls into the window");
+    assert_eq!(h.worlds.scroll, 3, "the last row scrolls into the window");
     for _ in 0..10 {
         h.scroll_worlds(-1.0);
     }
-    assert_eq!(h.worlds_scroll, 0);
+    assert_eq!(h.worlds.scroll, 0);
 }
 
 // A preview whose compile failed is not showing, so opening its row compiles
@@ -868,14 +868,14 @@ fn deleting_the_boot_pick_before_it_compiles_drops_the_pick() {
     write_world(&worlds_dir, "lobby", &[prop_entry("desk")], 3_000);
 
     let mut h = booting_hook(dir.path(), Some("lobby"));
-    let lobby_path = h.worlds_rows[world_row_index(&h, "lobby")].path.clone();
+    let lobby_path = h.worlds.rows[world_row_index(&h, "lobby")].path.clone();
     h.delete_world(&lobby_path);
     assert!(h.start_preview.is_none());
 
     h.start_drawn = EditorHook::START_PREVIEW_DELAY;
     h.drive_start_preview();
     assert_eq!(
-        h.worlds_preview, None,
+        h.worlds.preview, None,
         "nothing is staged for a deleted world"
     );
     assert_eq!(world_names(&h), ["arena"]);
@@ -907,7 +907,7 @@ fn the_scroll_follows_the_window_when_it_grows() {
     for _ in 0..40 {
         h.scroll_worlds(1.0);
     }
-    assert_eq!(h.worlds_scroll, 30 - short_rows);
+    assert_eq!(h.worlds.scroll, 30 - short_rows);
 
     h.viewport = [1280.0, 1400.0];
     let tall_rows = h.worlds_layout().rows();

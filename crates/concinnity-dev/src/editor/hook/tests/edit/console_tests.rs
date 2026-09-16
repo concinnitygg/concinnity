@@ -67,15 +67,15 @@ fn scrolling_off_the_tail_unpins_and_returning_re_pins() {
     let mut h = hook(Vec::new());
     let shown = console_panel::visible_lines(h.effective_size(PanelKey::Console)[1]);
     fill_log(&h, shown + 10);
-    assert!(h.console_pinned);
+    assert!(h.console.pinned);
 
     h.scroll_console(-1.0);
-    assert!(!h.console_pinned, "stepping back leaves the tail");
+    assert!(!h.console.pinned, "stepping back leaves the tail");
     let (_, _, first) = h.console_window();
     assert_eq!(first, 9);
 
     h.scroll_console(1.0);
-    assert!(h.console_pinned, "stepping onto the last line re-pins");
+    assert!(h.console.pinned, "stepping onto the last line re-pins");
     assert_eq!(h.console_window().2, 10);
 }
 
@@ -93,7 +93,7 @@ fn scrolling_stays_in_bounds_on_a_short_log() {
         h.scroll_console(-1.0);
     }
     assert_eq!(h.console_window().2, 0);
-    assert!(h.console_pinned);
+    assert!(h.console.pinned);
 }
 
 // Clicking the command line focuses it; clicking the surrounding chrome blurs
@@ -104,10 +104,10 @@ fn the_panel_actions_focus_and_blur_the_command_line() {
     let mut world = console_world();
 
     h.apply_console_action(ConsoleAction::FocusInput, &mut world);
-    assert!(h.console_focus);
+    assert!(h.console.focus);
 
     h.apply_console_action(ConsoleAction::Consume, &mut world);
-    assert!(!h.console_focus);
+    assert!(!h.console.focus);
 }
 
 // Enter submits the trimmed line, echoes it, and clears the field ready for
@@ -116,7 +116,7 @@ fn the_panel_actions_focus_and_blur_the_command_line() {
 fn enter_submits_the_line_and_clears_the_field() {
     let mut h = hook(Vec::new());
     let mut world = console_world();
-    h.console_focus = true;
+    h.console.focus = true;
     widget::seed_field(&mut world, console_panel::INPUT, "  /help  ");
 
     h.console_keys(
@@ -138,7 +138,7 @@ fn enter_submits_the_line_and_clears_the_field() {
 fn enter_on_a_blank_line_submits_nothing() {
     let mut h = hook(Vec::new());
     let mut world = console_world();
-    h.console_focus = true;
+    h.console.focus = true;
     widget::seed_field(&mut world, console_panel::INPUT, "   ");
 
     h.console_keys(
@@ -157,7 +157,7 @@ fn enter_on_a_blank_line_submits_nothing() {
 fn the_keys_are_ignored_while_the_command_line_is_unfocused() {
     let mut h = hook(Vec::new());
     let mut world = console_world();
-    h.console_focus = false;
+    h.console.focus = false;
     widget::seed_field(&mut world, console_panel::INPUT, "/help");
 
     h.console_keys(
@@ -178,7 +178,7 @@ fn tab_accepts_the_del_ghost() {
         serde_json::json!({"name":"lantern_post","type":"PointLight","args":{}}),
     ]);
     let mut world = console_world();
-    h.console_focus = true;
+    h.console.focus = true;
     widget::seed_field(&mut world, console_panel::INPUT, "/del lant");
     assert_eq!(h.console_ghost(&world), "ern_post");
 
@@ -207,7 +207,7 @@ fn right_accepts_the_ghost_only_at_the_end_of_the_line() {
 
     let mut at_end = hook(entries.clone());
     let mut world = console_world();
-    at_end.console_focus = true;
+    at_end.console.focus = true;
     widget::focus_field_with(&mut world, console_panel::INPUT, "/del lant");
     at_end.console_keys(&mut world, &key);
     assert_eq!(
@@ -217,7 +217,7 @@ fn right_accepts_the_ghost_only_at_the_end_of_the_line() {
 
     let mut mid = hook(entries);
     let mut world = console_world();
-    mid.console_focus = true;
+    mid.console.focus = true;
     widget::focus_field_with(&mut world, console_panel::INPUT, "/del lant");
     if let Some(t) = widget::input_mut(&mut world, console_panel::INPUT) {
         t.caret = 2;
@@ -235,7 +235,7 @@ fn right_accepts_the_ghost_only_at_the_end_of_the_line() {
 fn the_accept_keys_are_inert_without_a_ghost() {
     let mut h = hook(Vec::new());
     let mut world = console_world();
-    h.console_focus = true;
+    h.console.focus = true;
     widget::focus_field_with(&mut world, console_panel::INPUT, "/del nothing");
     assert_eq!(h.console_ghost(&world), "");
 
@@ -460,7 +460,7 @@ fn backtick_toggles_the_console_with_a_one_frame_blur() {
     };
 
     h.drive_console_toggle(&input, &mut world);
-    assert!(h.console_open && h.console_focus && h.console_blur);
+    assert!(h.console.open && h.console.focus && h.console.blur);
     assert_eq!(h.panel_order.last(), Some(&PanelKey::Console));
     let (lines, total, first) = h.console_window();
     assert!(
@@ -469,7 +469,7 @@ fn backtick_toggles_the_console_with_a_one_frame_blur() {
         "the opening frame never asserts field focus"
     );
     // The next frame clears the blur (the tick does this) and focus asserts.
-    h.console_blur = false;
+    h.console.blur = false;
     let (lines, total, first) = h.console_window();
     assert!(
         h.make_console_view(&lines, total, first, "", [0.0, 0.0])
@@ -477,12 +477,12 @@ fn backtick_toggles_the_console_with_a_one_frame_blur() {
     );
 
     h.drive_console_toggle(&input, &mut world);
-    assert!(!h.console_open && !h.console_focus, "second press closes");
+    assert!(!h.console.open && !h.console.focus, "second press closes");
 
     // While another text field is focused, backtick is just a character.
-    h.story_focus = true;
+    h.story.focus = true;
     h.drive_console_toggle(&input, &mut world);
-    assert!(!h.console_open);
+    assert!(!h.console.open);
 }
 
 // The /del ghost completes against authored names, and Tab accepts it into
@@ -499,7 +499,7 @@ fn console_ghost_completes_del_names_and_tab_accepts() {
     });
 
     assert_eq!(h.console_ghost(&world), "be_red");
-    h.console_focus = true;
+    h.console.focus = true;
     let tab = FrameInput {
         captured_key: Some(InputKey::Tab),
         ..Default::default()
@@ -538,7 +538,7 @@ fn tick_opens_the_console_blurred_then_focuses() {
     let mut h = hook(Vec::new());
 
     h.tick(&mut world);
-    assert!(h.console_open);
+    assert!(h.console.open);
     let input = world
         .query::<TextInput>()
         .find(|t| t.asset_id == console_panel::INPUT)

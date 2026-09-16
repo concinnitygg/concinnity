@@ -145,12 +145,12 @@ impl Panel for EditPanel {
         hook.apply_form(FormAction::Close, world);
     }
     fn size(&self, hook: &EditorHook) -> [f32; 2] {
-        form_panel::size(hook.form_fields.len())
+        form_panel::size(hook.form.fields.len())
     }
     // The field list tracks the type's args; the height resizes only when there
     // are more fields than the default window shows.
     fn max_size(&self, hook: &EditorHook) -> [f32; 2] {
-        form_panel::max_size(hook.form_fields.len())
+        form_panel::max_size(hook.form.fields.len())
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         form_panel::default_origin(vp[0])
@@ -167,10 +167,10 @@ impl Panel for EditPanel {
         ids
     }
     fn overlay_ids(&self, hook: &EditorHook) -> Vec<AssetId> {
-        if hook.field_dropdown.is_some() {
+        if hook.form.field_dropdown.is_some() {
             return form_panel::dropdown_ids();
         }
-        if hook.override_menu.is_some() || hook.entity_menu_open {
+        if hook.form.override_menu.is_some() || hook.form.entity_menu_open {
             return form_panel::override_menu_ids();
         }
         Vec::new()
@@ -834,18 +834,18 @@ impl Panel for StoryPanel {
         Some("Story")
     }
     fn is_open(&self, hook: &EditorHook) -> bool {
-        hook.story_open
+        hook.story.open
     }
     // Opening (re)loads the source file, so the panel always starts from the
     // on-disk truth.
     fn toggle(&self, hook: &mut EditorHook, world: &mut World) {
-        hook.story_open = !hook.story_open;
-        if hook.story_open {
+        hook.story.open = !hook.story.open;
+        if hook.story.open {
             hook.load_story(world);
         }
     }
     fn close(&self, hook: &mut EditorHook, _world: &mut World) {
-        hook.story_open = false;
+        hook.story.open = false;
     }
     fn size(&self, _hook: &EditorHook) -> [f32; 2] {
         story_panel::size()
@@ -922,7 +922,7 @@ impl Panel for ConsolePanel {
         Some("Console")
     }
     fn is_open(&self, hook: &EditorHook) -> bool {
-        hook.console_open
+        hook.console.open
     }
     // Opening focuses a cleared command line (backtick does the same through
     // the hook's key drive).
@@ -930,8 +930,8 @@ impl Panel for ConsolePanel {
         hook.toggle_console(world);
     }
     fn close(&self, hook: &mut EditorHook, _world: &mut World) {
-        hook.console_open = false;
-        hook.console_focus = false;
+        hook.console.open = false;
+        hook.console.focus = false;
     }
     fn size(&self, _hook: &EditorHook) -> [f32; 2] {
         console_panel::size()
@@ -1002,7 +1002,7 @@ impl Panel for BehaviorPanel {
     // The outline's row pool caps how tall it is worth growing the panel; a
     // chart has no such pool, so there it grows to the screen.
     fn max_size(&self, hook: &EditorHook) -> [f32; 2] {
-        match hook.behavior_mode {
+        match hook.behavior.mode {
             ViewMode::Outline => behavior::panel::max_size(),
             _ => [f32::INFINITY, f32::INFINITY],
         }
@@ -1011,25 +1011,22 @@ impl Panel for BehaviorPanel {
         Some("Behavior")
     }
     fn is_open(&self, hook: &EditorHook) -> bool {
-        hook.behavior_open
+        hook.behavior.open
     }
     // Opening re-reads the world's behaviors, so the panel always starts from
     // the current entry list rather than a stale selection.
     fn toggle(&self, hook: &mut EditorHook, world: &mut World) {
-        hook.behavior_open = !hook.behavior_open;
-        if hook.behavior_open {
+        hook.behavior.open = !hook.behavior.open;
+        if hook.behavior.open {
             hook.open_behavior(world);
         }
     }
     fn close(&self, hook: &mut EditorHook, _world: &mut World) {
-        hook.behavior_open = false;
-        hook.behavior_focus = false;
-        hook.behavior_name_focus = false;
-        hook.behavior_remove_armed = false;
-        hook.behavior_picking = false;
+        hook.behavior.open = false;
+        hook.behavior.blur_inputs();
     }
     fn size(&self, hook: &EditorHook) -> [f32; 2] {
-        match hook.behavior_mode {
+        match hook.behavior.mode {
             ViewMode::Chart => behavior::panel::chart_size(),
             ViewMode::Overview => behavior::panel::overview_size(),
             ViewMode::Outline => behavior::panel::size(),
@@ -1053,7 +1050,7 @@ impl Panel for BehaviorPanel {
     }
     fn overlay_ids(&self, hook: &EditorHook) -> Vec<AssetId> {
         let mut ids = behavior::panel::status_ids();
-        if hook.behavior_picking {
+        if hook.behavior.picking {
             ids.extend(behavior::panel::palette_ids());
         }
         ids
@@ -1203,7 +1200,7 @@ impl Panel for PalettePanel {
         PanelKey::Palette
     }
     fn is_open(&self, hook: &EditorHook) -> bool {
-        hook.palette_open
+        hook.palette.open
     }
     // Opening rebuilds the item list and clears the query, ready to type.
     fn toggle(&self, hook: &mut EditorHook, world: &mut World) {
@@ -1377,18 +1374,18 @@ impl Panel for WorldsPanel {
         Some("Worlds")
     }
     fn is_open(&self, hook: &EditorHook) -> bool {
-        hook.worlds_open
+        hook.worlds.open
     }
     // Opening re-reads the project's worlds.
     fn toggle(&self, hook: &mut EditorHook, _world: &mut World) {
-        match hook.worlds_open {
-            true => hook.worlds_open = false,
+        match hook.worlds.open {
+            true => hook.worlds.open = false,
             false => hook.open_worlds_panel(),
         }
     }
     fn close(&self, hook: &mut EditorHook, _world: &mut World) {
-        hook.worlds_open = false;
-        hook.worlds_menu = None;
+        hook.worlds.open = false;
+        hook.worlds.menu = None;
     }
     fn size(&self, hook: &EditorHook) -> [f32; 2] {
         hook.worlds_layout().size()

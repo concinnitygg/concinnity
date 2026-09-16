@@ -34,7 +34,7 @@ const AUTHORED: CameraPose = CameraPose {
 fn start_hook() -> EditorHook {
     let mut h = EditorHook::new("unused.jsonl".to_string(), Vec::new());
     h.start_mode = true;
-    h.worlds_open = true;
+    h.worlds.open = true;
     h.viewport = VP;
     h
 }
@@ -347,7 +347,8 @@ fn selecting_another_world_restarts_the_cycle() {
     let running = pose(&world);
 
     let i = h
-        .worlds_rows
+        .worlds
+        .rows
         .iter()
         .position(|r| r.name == "arena")
         .expect("the listing has it");
@@ -391,8 +392,8 @@ fn opening_the_preview_hands_the_world_its_own_camera_back() {
 
     let mut h = start_hook();
     h.refresh_worlds();
-    h.worlds_selected = Some(path.clone());
-    h.worlds_preview = Some(path.clone());
+    h.worlds.selected = Some(path.clone());
+    h.worlds.preview = Some(path.clone());
     h.entries = vec![prop_entry("desk")];
     h.world_entries = h.entries.clone();
     let mut world = preview_world(None, true);

@@ -496,14 +496,15 @@ pub(in crate::editor::hook) fn set_world_name(world: &mut World, text: &str) {
 }
 
 pub(in crate::editor::hook) fn world_row_index(h: &EditorHook, name: &str) -> usize {
-    h.worlds_rows
+    h.worlds
+        .rows
         .iter()
         .position(|r| r.name == name)
         .unwrap_or_else(|| panic!("{name} is not listed"))
 }
 
 pub(in crate::editor::hook) fn world_names(h: &EditorHook) -> Vec<String> {
-    h.worlds_rows.iter().map(|r| r.name.clone()).collect()
+    h.worlds.rows.iter().map(|r| r.name.clone()).collect()
 }
 
 // Press one of the open dialog's buttons.

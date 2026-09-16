@@ -107,7 +107,7 @@ fn dragging_does_not_trigger_controls_it_crosses() {
 fn apply_form_focus_toggle_and_consume() {
     let mut world = world_with_fields();
     let mut h = hook(Vec::new());
-    h.form_fields = vec![FormField {
+    h.form.fields = vec![FormField {
         key: "on".into(),
         kind: form::FieldKind::Bool,
         initial: String::new(),
@@ -116,14 +116,14 @@ fn apply_form_focus_toggle_and_consume() {
         variant_idx: 0,
     }];
     h.apply_form(FormAction::FocusField(0), &mut world);
-    assert!(matches!(h.form_focus, FormFocus::Field(0)));
+    assert!(matches!(h.form.focus, FormFocus::Field(0)));
     h.apply_form(FormAction::FocusName, &mut world);
-    assert!(matches!(h.form_focus, FormFocus::Name));
+    assert!(matches!(h.form.focus, FormFocus::Name));
     h.apply_form(FormAction::ToggleField(0), &mut world);
-    assert!(h.form_fields[0].boolval, "the bool field flipped");
+    assert!(h.form.fields[0].boolval, "the bool field flipped");
     // A click that hits no control is swallowed without side effects.
     h.apply_form(FormAction::Consume, &mut world);
-    assert!(h.form_fields[0].boolval);
+    assert!(h.form.fields[0].boolval);
 }
 
 #[test]
@@ -150,7 +150,7 @@ fn apply_panel_pick_option_opens_the_add_form() {
 
     // A pick with the picker already closed is a no-op: there is no option
     // list to index into.
-    h.close_form();
+    h.form.close();
     h.apply_panel(PanelAction::PickOption(0), &mut world);
     assert!(!h.form_open());
 }
@@ -159,7 +159,7 @@ fn apply_panel_pick_option_opens_the_add_form() {
 fn confirm_form_without_a_selected_type_just_closes() {
     let mut world = world_with_fields();
     let mut h = hook(Vec::new());
-    h.selected_type = None;
+    h.form.selected_type = None;
     h.confirm_form(&mut world);
     assert!(!h.form_open());
 }

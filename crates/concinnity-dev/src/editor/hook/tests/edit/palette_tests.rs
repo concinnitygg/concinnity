@@ -47,10 +47,10 @@ fn either_platform_modifier_opens_the_palette() {
         let mut h = hook(Vec::new());
         let mut world = palette_world();
         h.drive_palette_toggle(&chord(InputKey::K, ctrl, cmd), &mut world);
-        assert!(h.palette_open, "ctrl={ctrl} cmd={cmd} did not open it");
+        assert!(h.palette.open, "ctrl={ctrl} cmd={cmd} did not open it");
         // The same chord closes it again.
         h.drive_palette_toggle(&chord(InputKey::K, ctrl, cmd), &mut world);
-        assert!(!h.palette_open);
+        assert!(!h.palette.open);
     }
 }
 
@@ -60,7 +60,7 @@ fn an_unmodified_k_leaves_the_palette_closed() {
     let mut h = hook(Vec::new());
     let mut world = palette_world();
     h.drive_palette_toggle(&chord(InputKey::K, false, false), &mut world);
-    assert!(!h.palette_open);
+    assert!(!h.palette.open);
 }
 
 // Opening blurs the field for one frame, so the keypress that opened it cannot
@@ -70,7 +70,7 @@ fn opening_blurs_the_query_for_one_frame() {
     let mut h = hook(Vec::new());
     let mut world = palette_world();
     h.drive_palette_toggle(&chord(InputKey::K, true, false), &mut world);
-    assert!(h.palette_blur);
+    assert!(h.palette.blur);
     assert!(!h.make_palette_view([0.0, 0.0]).focus, "blurred this frame");
 }
 
@@ -81,18 +81,18 @@ fn typing_reranks_and_rehomes_the_highlight() {
     let mut h = hook(Vec::new());
     let mut world = palette_world();
     h.drive_palette_toggle(&chord(InputKey::K, true, false), &mut world);
-    let opened = h.palette_matches.len();
+    let opened = h.palette.matches.len();
     assert!(opened > 0, "the launch list is not empty");
 
-    h.palette_pick = 3;
+    h.palette.pick = 3;
     widget::seed_field(&mut world, palette::panel::INPUT, "cook");
     h.sample_palette_query(&world);
     assert_eq!(
-        h.palette_pick, 0,
+        h.palette.pick, 0,
         "a narrowed list starts at its best answer"
     );
-    assert!(h.palette_matches.len() < opened);
-    let first = &h.palette_items[h.palette_matches[0]];
+    assert!(h.palette.matches.len() < opened);
+    let first = &h.palette.items[h.palette.matches[0]];
     assert_eq!(first.label, "/cook");
 }
 
@@ -104,11 +104,11 @@ fn the_arrows_walk_the_matches_and_stop_at_the_ends() {
     h.drive_palette_toggle(&chord(InputKey::K, true, false), &mut world);
 
     h.palette_keys(&mut world, &chord(InputKey::Down, false, false));
-    assert_eq!(h.palette_pick, 1);
+    assert_eq!(h.palette.pick, 1);
     h.palette_keys(&mut world, &chord(InputKey::Up, false, false));
-    assert_eq!(h.palette_pick, 0);
+    assert_eq!(h.palette.pick, 0);
     h.palette_keys(&mut world, &chord(InputKey::Up, false, false));
-    assert_eq!(h.palette_pick, 0, "stops at the top");
+    assert_eq!(h.palette.pick, 0, "stops at the top");
 }
 
 // Committing a panel row opens that panel and closes the palette.
@@ -118,14 +118,15 @@ fn committing_a_panel_row_opens_it() {
     let mut world = palette_world();
     h.drive_palette_toggle(&chord(InputKey::K, true, false), &mut world);
     let at = h
-        .palette_matches
+        .palette
+        .matches
         .iter()
-        .position(|&i| h.palette_items[i].action == PaletteAction::OpenPanel(PanelKey::Variables))
+        .position(|&i| h.palette.items[i].action == PaletteAction::OpenPanel(PanelKey::Variables))
         .expect("the Variables panel is a palette row");
-    h.palette_pick = at;
+    h.palette.pick = at;
 
     h.palette_keys(&mut world, &chord(InputKey::Enter, false, false));
-    assert!(!h.palette_open, "committing closes the palette");
+    assert!(!h.palette.open, "committing closes the palette");
     assert!(h.variables_open, "the panel opened");
     assert_eq!(
         h.panel_order.last().copied(),
@@ -142,14 +143,15 @@ fn committing_an_argument_command_seeds_command_mode() {
     let mut world = palette_world();
     h.drive_palette_toggle(&chord(InputKey::K, true, false), &mut world);
     let at = h
-        .palette_matches
+        .palette
+        .matches
         .iter()
-        .position(|&i| h.palette_items[i].label == "/add")
+        .position(|&i| h.palette.items[i].label == "/add")
         .expect("/add is a palette row");
-    h.palette_pick = at;
+    h.palette.pick = at;
 
     h.palette_keys(&mut world, &chord(InputKey::Enter, false, false));
-    assert!(h.palette_open, "the palette stays up for the arguments");
+    assert!(h.palette.open, "the palette stays up for the arguments");
     assert_eq!(widget::field_text(&world, palette::panel::INPUT), "/add ");
 }
 
@@ -161,16 +163,17 @@ fn a_commit_is_remembered_for_the_next_launch_list() {
     let mut world = palette_world();
     h.drive_palette_toggle(&chord(InputKey::K, true, false), &mut world);
     let at = h
-        .palette_matches
+        .palette
+        .matches
         .iter()
-        .position(|&i| h.palette_items[i].action == PaletteAction::OpenPanel(PanelKey::Variables))
+        .position(|&i| h.palette.items[i].action == PaletteAction::OpenPanel(PanelKey::Variables))
         .expect("the Variables panel is a palette row");
-    let label = h.palette_items[h.palette_matches[at]].label.clone();
-    h.palette_pick = at;
+    let label = h.palette.items[h.palette.matches[at]].label.clone();
+    h.palette.pick = at;
     h.palette_keys(&mut world, &chord(InputKey::Enter, false, false));
 
     h.drive_palette_toggle(&chord(InputKey::K, true, false), &mut world);
-    let first = &h.palette_items[h.palette_matches[0]];
+    let first = &h.palette.items[h.palette.matches[0]];
     assert_eq!(first.label, label, "the last commit leads the list");
 }
 
@@ -194,7 +197,7 @@ fn a_press_outside_dismisses_without_reaching_the_world() {
         !h.route_palette_dismiss(&inside, vp),
         "a press on the palette is left to its own hit test"
     );
-    assert!(h.palette_open);
+    assert!(h.palette.open);
 
     let outside = FrameInput {
         mouse_x: o[0] - 40.0,
@@ -205,7 +208,7 @@ fn a_press_outside_dismisses_without_reaching_the_world() {
         h.route_palette_dismiss(&outside, vp),
         "the press is claimed"
     );
-    assert!(!h.palette_open);
+    assert!(!h.palette.open);
 }
 
 // The world's assets reach the palette: a behavior is offered as an asset row
@@ -220,7 +223,8 @@ fn world_assets_become_rows_routed_by_type() {
     h.drive_palette_toggle(&chord(InputKey::K, true, false), &mut world);
 
     let row = h
-        .palette_items
+        .palette
+        .items
         .iter()
         .find(|it| it.label == "greeter")
         .expect("the authored behavior is a palette row");

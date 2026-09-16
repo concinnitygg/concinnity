@@ -24,7 +24,7 @@ impl EditorHook {
     // command palette). Called from the frame drive rather than from each
     // edit, so a burst of edits costs one expansion, not one each.
     pub(in crate::editor::hook) fn refresh_tree_if_needed(&mut self) {
-        if !(self.panel_open || self.content_open || self.palette_open) || !self.tree_stale {
+        if !(self.panel_open || self.content_open || self.palette.open) || !self.tree_stale {
             return;
         }
         self.tree_stale = false;
@@ -301,7 +301,7 @@ impl EditorHook {
             }
             return;
         }
-        self.close_form();
+        self.form.close();
     }
 
     // Remove the authored line called `name`, if the world has one. Generated

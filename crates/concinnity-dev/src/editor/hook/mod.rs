@@ -42,19 +42,16 @@ use concinnity_engine::app::state::App;
 use concinnity_engine::ecs::PendingBackend;
 
 use super::behavior;
-use super::behavior::panel::{Status, ViewMode};
 use super::history::History;
 use super::hud;
 use super::live;
 use super::notify;
 use super::outlines;
 use super::overrides;
-use super::palette;
 use super::panels::asset_list::ListRow;
 use super::panels::asset_tree::{TreeGroup, TreeRow};
 use super::panels::console::ConsoleSink;
 use super::panels::form::FormField;
-use super::panels::form_panel::FormFocus;
 use super::panels::health::HealthState;
 use super::panels::import_panel::ImportStatus;
 use super::panels::lighting;
@@ -69,8 +66,14 @@ use super::viewport::gizmo;
 use super::viewport::resize;
 use super::viewport::snap;
 use super::widget;
-use super::worlds::{self, WorldRow};
+use super::worlds;
 use crate::debug_hook::DebugHook;
+use edit::behavior_state::BehaviorState;
+use edit::console_state::ConsoleState;
+use edit::palette_state::PaletteState;
+use edit::story_state::StoryState;
+use edit::worlds_state::WorldsState;
+use form_state::{FormState, FormTarget, FormTemplate};
 
 // Draw layer for the top bar: far above the floating panels' layers (which are a
 // small 1..=6 rank), so the bar always sits on top even under a dragged panel.
@@ -147,37 +150,15 @@ pub(crate) struct EditorHook {
     shape_status: Option<String>,
     shape_seed: u64,
     shape_drag: Option<drag::shape::ShapeDrag>,
-    // The Story panel: shown state, the loaded source's lines / edit line /
-    // window scroll, whether the edit line holds keyboard focus, the source
-    // path shown in the header, and the last parse / IO error. `story_blur`
-    // suppresses the edit line's focus for one frame after a Backspace line
-    // join, so the text system does not also apply that Backspace to the
-    // freshly joined content.
-    story_open: bool,
-    story_lines: Vec<String>,
-    story_line: usize,
-    story_scroll: usize,
-    story_focus: bool,
-    story_path: String,
-    story_status: Option<String>,
-    story_blur: bool,
+    story: StoryState,
     // The Import panel: shown state, whether the path field holds keyboard
     // focus, the list window scroll, and the last Add's outcome.
     import_open: bool,
     import_focus: bool,
     import_scroll: usize,
     import_status: Option<ImportStatus>,
-    // The Console panel: shown state, whether the command line holds keyboard
-    // focus (suppressed for one frame after a backtick open so the text
-    // system does not type the backtick into it), the log window's scroll
-    // position with its pinned-to-bottom flag (pinned auto-scrolls on new
-    // lines until the user scrolls up), the shared log sink, and whether a
-    // worker is mid-build (the /cook guard).
-    console_open: bool,
-    console_focus: bool,
-    console_blur: bool,
-    console_scroll: usize,
-    console_pinned: bool,
+    console: ConsoleState,
+    // The shared log sink, and whether a worker is mid-build (the /cook guard).
     console_sink: ConsoleSink,
     console_build_running: std::sync::Arc<std::sync::atomic::AtomicBool>,
     // The toast queue (`editor/notify.rs`): result sites push, the per-frame
@@ -186,32 +167,7 @@ pub(crate) struct EditorHook {
     // lock check a frame.
     notifier: notify::Notifier,
     toasts_hidden: bool,
-    // The Behavior panel: shown state, which of the world's Behavior entries is
-    // open (an ordinal into them, so an unrelated add / delete cannot retarget
-    // it), the selected outline row, the outline and palette scrolls, whether
-    // the palette is up and which of its options the keyboard is on, whether the
-    // value field holds keyboard focus, and the world checker's verdict on the
-    // open behavior. The name field carries its own focus, and
-    // `behavior_remove_armed` is the removal chip waiting on the press that
-    // carries it out.
-    behavior_open: bool,
-    behavior_index: usize,
-    behavior_row: Option<usize>,
-    behavior_scroll: usize,
-    behavior_picking: bool,
-    behavior_pick_scroll: usize,
-    behavior_pick: usize,
-    // The palette's filter text, mirrored off its field once a frame so the
-    // presses and draws that follow all narrow by the same query.
-    behavior_filter: String,
-    behavior_focus: bool,
-    behavior_name_focus: bool,
-    behavior_remove_armed: bool,
-    behavior_status: Option<Status>,
-    behavior_mode: ViewMode,
-    // The chart's scroll offset, and the anchor an in-flight canvas pan holds.
-    behavior_pan: [f32; 2],
-    behavior_pan_drag: Option<[f32; 2]>,
+    behavior: BehaviorState,
     // The Variables panel: shown state, the selected row of the table, the row
     // window's scroll, and which of its two fields holds the keyboard.
     variables_open: bool,
@@ -219,22 +175,7 @@ pub(crate) struct EditorHook {
     variables_scroll: usize,
     variables_name_focus: bool,
     variables_value_focus: bool,
-    // The list member held for a paste, with the kind of list it came out of so
-    // it can only land in one of the same kind. Session state, not an edit, and
-    // deliberately not cleared by opening another behavior: carrying a node
-    // between two of them is most of the point.
-    behavior_clip: Option<crate::editor::behavior::clip::Clip>,
-    // The overview's selected card. The map's cards stand for whole behaviors
-    // and the things they reach rather than for places inside one, so the
-    // outline row the other two views share cannot address them.
-    behavior_overview_card: Option<usize>,
-    // Live-debug state fed by the runtime's execution trace while a play
-    // session runs with the Behavior or Variables panel open
-    // (`hook/drive/trace.rs`). Pulses cover the OPEN behavior only (paths are
-    // per-body); breakpoints are held by behavior NAME + node path so they
-    // survive preview rebuilds and body edits shifting node ids.
-    behavior_pulses: Vec<crate::editor::behavior::pulse::NodePulse>,
-    behavior_breakpoints: Vec<(String, crate::editor::behavior::path::Path)>,
+    // Live-debug values fed by the runtime's execution trace (`hook/drive/trace.rs`).
     trace_seen: u64,
     live_vars: Vec<(String, String, String)>,
     live_locals: Vec<(String, String, String)>,
@@ -296,16 +237,7 @@ pub(crate) struct EditorHook {
     // while open every press and wheel is swallowed before any other routing,
     // and only one of its buttons closes it.
     modal: Option<drive::modal::ModalState>,
-    // The Worlds panel (`hook/edit/worlds.rs`): shown state, the project's
-    // worlds as of the last refresh (the listing changes only when the panel
-    // acts on it, so it is not re-read every frame), the row window's scroll,
-    // the path of the row whose triple-dot menu is open, and why the last
-    // preview failed.
-    worlds_open: bool,
-    worlds_rows: Vec<WorldRow>,
-    worlds_scroll: usize,
-    worlds_menu: Option<String>,
-    worlds_status: Option<String>,
+    worlds: WorldsState,
     // Whether the session's world has never been named: `+` starts one, the
     // whole editor comes up on it, and the first SAVE asks what to call it
     // before anything reaches disk.
@@ -315,13 +247,6 @@ pub(crate) struct EditorHook {
     // window and previews the picked world behind itself. Set at construction
     // and cleared for good the first time a world is opened.
     start_mode: bool,
-    // The path of the start screen's selected row, and of the world its
-    // background preview was compiled from. They part company when the
-    // previewed world is deleted (the background drops back to the seeded
-    // empty scene) or its compile fails. Both `None` outside the start screen,
-    // which has no selection model.
-    worlds_selected: Option<String>,
-    worlds_preview: Option<String>,
     // The world the start screen picked before it had a window to show it in
     // (`hook/worlds_start.rs`): held until the screen itself is up and drawn,
     // then staged like any other preview. `start_drawn` counts the frames the
@@ -336,19 +261,7 @@ pub(crate) struct EditorHook {
     // Whether the running cycle has taken its first frame.
     cinematic_ticking: bool,
     cinematic_restore: Option<framing::CameraPose>,
-    // The command palette (`hook/edit/palette.rs`): shown state, a one-frame
-    // focus blur after the Ctrl+K open, the query mirrored off its field once
-    // a frame, the item list built on open with the matches the query keeps,
-    // the highlighted match with its window scroll, and the labels of recent
-    // commits (session state, the empty query's launch list).
-    palette_open: bool,
-    palette_blur: bool,
-    palette_query: String,
-    palette_items: Vec<palette::PaletteItem>,
-    palette_matches: Vec<usize>,
-    palette_pick: usize,
-    palette_scroll: usize,
-    palette_recent: Vec<String>,
+    palette: PaletteState,
     // Whether the Preview panel is shown (starts shown; toggled from the View
     // panel).
     preview_open: bool,
@@ -369,45 +282,11 @@ pub(crate) struct EditorHook {
     // The Display menu's always-on extent-outline categories (selection
     // outlines regardless; `hook/drive/outline.rs`).
     extent_show: outlines::CategorySet,
-    // The type of the open add / edit form; `None` means the form panel is
-    // closed.
-    selected_type: Option<String>,
-    // What confirming the open form commits to: a new asset, an existing line,
-    // or the promotion of a generated asset.
-    form_target: FormTarget,
-    // The editable arg fields of the open form (derived from the type's default
-    // args). Empty while the form is closed.
-    form_fields: Vec<FormField>,
-    // First visible field of the form's scroll window (its physical control pool is
-    // fixed size, so a form wider than `form::FIELD_POOL` scrolls). Reset on open /
-    // structural change.
-    form_scroll: usize,
-    // Which form input has keyboard focus.
-    form_focus: FormFocus,
-    // A validation message from the last rejected Add, shown under the form.
-    form_error: Option<String>,
-    // The form arg field whose value dropdown is open (a large enum / ref set),
-    // and its scroll offset. `None` outside an open dropdown.
-    field_dropdown: Option<usize>,
-    field_dropdown_scroll: usize,
-    // The open form's working args tree: the fields are derived from it, and it is
-    // mutated by add / remove (structure) and, on capture, by the controls. Empty
-    // outside AddForm.
-    form_args: serde_json::Map<String, serde_json::Value>,
-    // The template behind the open form when it edits a template-derived asset:
-    // confirming writes the minimal patch against this baseline, and the rows
-    // show per-field override state. `None` for plain authored / new assets.
-    form_template: Option<FormTemplate>,
-    // The field whose override menu (Revert / Apply-to-template) is open, and
-    // whether the header's entity-level menu is open.
-    override_menu: Option<usize>,
-    entity_menu_open: bool,
+    // The add / edit form (`hook/editing.rs`).
+    form: FormState,
     // Template baselines for every template-derived asset, derived from the
     // working entries. Invalidated by every edit, rebuilt on demand.
     template_index: Option<overrides::TemplateIndex>,
-    // The paths of the form's non-color vector fields currently disclosed into
-    // per-element leaves. Cleared when the form opens / closes.
-    vec_expanded: std::collections::HashSet<String>,
     // The viewport selection set (`editor/selection.rs`), held by NAME: every
     // live-preview rebuild resets the interner and re-interns names, so a
     // stored AssetId could silently drift to a different asset. Members are
@@ -457,9 +336,7 @@ pub(crate) struct EditorHook {
     // edit input, cleared on open / apply), so no per-frame comparisons. The
     // panels suffix their heading with "*" while set. Behavior / Variables
     // commit per change and never hold unapplied state, so they carry none.
-    form_touched: bool,
     lighting_touched: bool,
-    story_touched: bool,
     // The preview rebuild blocks the frame loop, so when the last one measured
     // slow its card goes up ahead of the stall: `rebuild_op` holds the card,
     // `rebuild_countdown` the frames left before the rebuild runs (the card
@@ -468,17 +345,6 @@ pub(crate) struct EditorHook {
     rebuild_op: Option<notify::OpHandle>,
     rebuild_countdown: u8,
     last_rebuild_secs: f32,
-}
-
-// The template a form-edited asset derives from.
-#[derive(Debug, Clone)]
-pub(crate) struct FormTemplate {
-    pub name: String,
-    // Effective template args: the type's defaults with the generated args
-    // merged over them, the baseline a field is inherited from.
-    pub baseline: serde_json::Map<String, serde_json::Value>,
-    // The authored asset or injection pass that produced the asset.
-    pub generated_by: String,
 }
 
 // Owned per-tick data backing a `PanelView` (computed from the cooked tree + the
@@ -496,39 +362,6 @@ struct FormOverridesData {
     count: usize,
     field_menu: Option<(usize, Vec<String>)>,
     entity_menu: Option<Vec<String>>,
-}
-
-// What confirming the open add / edit form commits to.
-#[derive(Debug, Clone, PartialEq, Default)]
-pub(crate) enum FormTarget {
-    // A new asset: confirming appends it under a unique name.
-    #[default]
-    New,
-    // Working-entry `idx`: confirming updates that line in place.
-    Entry(usize),
-    // An asset the build generates, which has no world.jsonl line of its own.
-    // The form is seeded from the entry the expansion produced, and confirming
-    // appends that line -- which then overrides the expansion, since the cook
-    // drops a generated asset in favour of an authored one of the same name and
-    // type. Renaming it in the form instead leaves the generated asset in place
-    // and adds a separate one, which is the honest reading of a rename.
-    Promote(serde_json::Value),
-}
-
-impl FormTarget {
-    // The working-entry index the form updates in place, if any.
-    fn entry(&self) -> Option<usize> {
-        match self {
-            FormTarget::Entry(i) => Some(*i),
-            _ => None,
-        }
-    }
-
-    // Whether the form is editing an asset that already exists (in the world or
-    // in the build), rather than adding a brand-new one.
-    fn is_edit(&self) -> bool {
-        !matches!(self, FormTarget::New)
-    }
 }
 
 // Owned per-tick data backing a `TemplateView` (the open template's title,
@@ -611,6 +444,7 @@ mod duplicate;
 mod editing;
 mod edits;
 mod fly;
+mod form_state;
 mod hide;
 mod layout;
 // The per-panel `Panel` impls, reachable by the registry (`editor/panels/registry.rs`).
@@ -661,51 +495,22 @@ impl EditorHook {
             shape_status: None,
             shape_seed: 0,
             shape_drag: None,
-            story_open: false,
-            story_lines: vec![String::new()],
-            story_line: 0,
-            story_scroll: 0,
-            story_focus: false,
-            story_path: String::new(),
-            story_status: None,
-            story_blur: false,
+            story: StoryState::default(),
             import_open: false,
             import_focus: false,
             import_scroll: 0,
             import_status: None,
-            console_open: false,
-            console_focus: false,
-            console_blur: false,
-            console_scroll: 0,
-            console_pinned: true,
+            console: ConsoleState::default(),
             console_sink: ConsoleSink::default(),
             console_build_running: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             notifier: notify::Notifier::default(),
             toasts_hidden: true,
-            behavior_open: false,
-            behavior_index: 0,
-            behavior_row: None,
-            behavior_scroll: 0,
-            behavior_picking: false,
-            behavior_pick_scroll: 0,
-            behavior_pick: 0,
-            behavior_filter: String::new(),
-            behavior_focus: false,
-            behavior_name_focus: false,
-            behavior_remove_armed: false,
-            behavior_status: None,
-            behavior_mode: ViewMode::default(),
-            behavior_pan: [0.0, 0.0],
-            behavior_pan_drag: None,
+            behavior: BehaviorState::default(),
             variables_open: false,
             variables_row: None,
             variables_scroll: 0,
             variables_name_focus: false,
             variables_value_focus: false,
-            behavior_clip: None,
-            behavior_overview_card: None,
-            behavior_pulses: Vec::new(),
-            behavior_breakpoints: Vec::new(),
             trace_seen: 0,
             live_vars: Vec::new(),
             live_locals: Vec::new(),
@@ -733,28 +538,15 @@ impl EditorHook {
             content_drag: None,
             create_menu: None,
             modal: None,
-            worlds_open: false,
-            worlds_rows: Vec::new(),
-            worlds_scroll: 0,
-            worlds_menu: None,
-            worlds_status: None,
+            worlds: WorldsState::default(),
             untitled: false,
             start_mode: false,
-            worlds_selected: None,
-            worlds_preview: None,
             start_preview: None,
             start_drawn: 0,
             cinematic: None,
             cinematic_ticking: false,
             cinematic_restore: None,
-            palette_open: false,
-            palette_blur: false,
-            palette_query: String::new(),
-            palette_items: Vec::new(),
-            palette_matches: Vec::new(),
-            palette_pick: 0,
-            palette_scroll: 0,
-            palette_recent: Vec::new(),
+            palette: PaletteState::default(),
             preview_open: true,
             health_open: false,
             health: HealthState::new(),
@@ -764,20 +556,8 @@ impl EditorHook {
             show_flags: view_menu::ShowFlags::default(),
             show_billboards: true,
             extent_show: outlines::CategorySet::default(),
-            selected_type: None,
-            form_target: FormTarget::New,
-            form_fields: Vec::new(),
-            form_scroll: 0,
-            form_focus: FormFocus::Name,
-            form_error: None,
-            field_dropdown: None,
-            field_dropdown_scroll: 0,
-            form_args: serde_json::Map::new(),
-            form_template: None,
-            override_menu: None,
-            entity_menu_open: false,
+            form: FormState::default(),
             template_index: None,
-            vec_expanded: std::collections::HashSet::new(),
             selection: Selection::default(),
             pick_last: None,
             marquee: None,
@@ -797,9 +577,7 @@ impl EditorHook {
             // the Template detail panel frontmost, over the Templates list it
             // spawns from).
             panel_order: PanelKey::ALL.to_vec(),
-            form_touched: false,
             lighting_touched: false,
-            story_touched: false,
             rebuild_op: None,
             rebuild_countdown: 0,
             last_rebuild_secs: 0.0,
@@ -824,8 +602,8 @@ impl EditorHook {
     // seconds to compile does not hold the window closed for them.
     pub(crate) fn with_start_screen(mut self, picked: Option<String>) -> Self {
         self.start_mode = true;
-        self.worlds_open = true;
-        self.worlds_selected = picked.clone();
+        self.worlds.open = true;
+        self.worlds.selected = picked.clone();
         self.start_preview = picked;
         self.refresh_worlds();
         self
@@ -845,17 +623,17 @@ impl EditorHook {
     // Read the palette's filter off its field. Mirrored onto the hook because
     // the data a press and a draw resolve against is built without world access.
     fn sample_behavior_filter(&mut self, world: &World) {
-        let typed = match self.behavior_picking {
+        let typed = match self.behavior.picking {
             true => widget::field_text(world, behavior::panel::FILTER_INPUT),
             false => String::new(),
         };
-        if typed != self.behavior_filter {
+        if typed != self.behavior.filter {
             // A narrowed palette is a different list, so the highlight starts
             // again at its best answer rather than keeping a place that may no
             // longer be in it.
-            self.behavior_pick = 0;
-            self.behavior_pick_scroll = 0;
-            self.behavior_filter = typed;
+            self.behavior.pick = 0;
+            self.behavior.pick_scroll = 0;
+            self.behavior.filter = typed;
         }
     }
 
@@ -870,7 +648,7 @@ impl EditorHook {
     }
 
     fn text_focus_active(&self) -> bool {
-        self.non_console_text_focus() || self.console_focus
+        self.non_console_text_focus() || self.console.focus
     }
 
     // The same, excluding the console's own command line: the backtick toggle
@@ -880,17 +658,17 @@ impl EditorHook {
         self.search_focus
             || self.content_search_focus
             || self.picker_open
-            || self.selected_type.is_some()
+            || self.form.selected_type.is_some()
             || self.lighting_focus.is_some()
-            || self.story_focus
+            || self.story.focus
             || self.import_focus
-            || self.behavior_focus
-            || self.behavior_name_focus
-            || self.behavior_picking
+            || self.behavior.focus
+            || self.behavior.name_focus
+            || self.behavior.picking
             || self.variables_name_focus
             || self.variables_value_focus
             || self.naming_world()
-            || self.palette_open
+            || self.palette.open
     }
 }
 
@@ -926,11 +704,11 @@ impl DebugHook for EditorHook {
             // because only the frontmost panel's field owns the keyboard.
             if input.typed_char.is_some() {
                 match self.frontmost_open_panel() {
-                    Some(PanelKey::Edit) => self.form_touched = true,
+                    Some(PanelKey::Edit) => self.form.touched = true,
                     Some(PanelKey::Lighting) if self.lighting_focus.is_some() => {
                         self.lighting_touched = true;
                     }
-                    Some(PanelKey::Story) if self.story_focus => self.story_touched = true,
+                    Some(PanelKey::Story) if self.story.focus => self.story.touched = true,
                     _ => {}
                 }
             }

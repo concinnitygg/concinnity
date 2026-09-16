@@ -50,15 +50,15 @@ fn viewport_click_picks_the_nearest_prop_without_opening_a_form() {
 
     // An already-open form follows the pick instead.
     h.open_asset_form("box_far", &mut world);
-    assert_eq!(h.form_target, FormTarget::Entry(1));
+    assert_eq!(h.form.target, FormTarget::Entry(1));
     // Off the repeat-click slop, so this is a fresh pick and not a cycle.
     click_at(&mut world, &mut h, [650.0, 370.0]);
     assert_eq!(
-        h.form_target,
+        h.form.target,
         FormTarget::Entry(0),
         "the open form retargets to the picked entry"
     );
-    assert_eq!(h.selected_type.as_deref(), Some("Sprite"));
+    assert_eq!(h.form.selected_type.as_deref(), Some("Sprite"));
 }
 
 // A second click on the same spot cycles to the occluded hit; a click away
@@ -138,7 +138,7 @@ fn viewport_click_on_an_unknown_asset_selects_without_a_form() {
     click_at(&mut world, &mut h, [640.0, 360.0]);
     assert_eq!(h.selection.active(), Some("some_generated_asset"));
     assert!(!h.panel_open, "no panel opens on a viewport click");
-    assert_eq!(h.form_target, FormTarget::New);
+    assert_eq!(h.form.target, FormTarget::New);
     assert!(!h.form_open());
 }
 

@@ -40,12 +40,12 @@ impl EditorHook {
     // cooked model plus the live search field, then borrowed for both
     // hit-testing and layout.
     pub(super) fn panel_data(&self, world: &World) -> PanelData {
-        let mut form_title = match (self.form_target.is_edit(), &self.selected_type) {
+        let mut form_title = match (self.form.target.is_edit(), &self.form.selected_type) {
             (true, Some(t)) => format!("Edit {t}"),
             (false, Some(t)) => format!("New {t}"),
             _ => "New asset".to_string(),
         };
-        if self.form_touched {
+        if self.form.touched {
             form_title.push_str(" *");
         }
         PanelData {
@@ -66,7 +66,7 @@ impl EditorHook {
             .filter(|m| **m != overrides::FieldOrigin::Inherited)
             .count();
         Some(FormOverridesData {
-            field_menu: self.override_menu.map(|i| {
+            field_menu: self.form.override_menu.map(|i| {
                 let labels = self
                     .override_menu_options(i)
                     .into_iter()
@@ -74,7 +74,7 @@ impl EditorHook {
                     .collect();
                 (i, labels)
             }),
-            entity_menu: self.entity_menu_open.then(|| {
+            entity_menu: self.form.entity_menu_open.then(|| {
                 self.entity_menu_options()
                     .into_iter()
                     .map(|(_, l)| l)
@@ -88,13 +88,13 @@ impl EditorHook {
     pub(super) fn make_form_view<'a>(&'a self, d: &'a PanelData, mouse: [f32; 2]) -> FormView<'a> {
         FormView {
             title: &d.form_title,
-            editing: self.form_target.is_edit(),
-            form_fields: &self.form_fields,
-            form_scroll: self.form_scroll,
-            form_focus: self.form_focus,
-            field_dropdown: self.field_dropdown,
-            field_dropdown_scroll: self.field_dropdown_scroll,
-            form_error: self.form_error.as_deref(),
+            editing: self.form.target.is_edit(),
+            form_fields: &self.form.fields,
+            form_scroll: self.form.scroll,
+            form_focus: self.form.focus,
+            field_dropdown: self.form.field_dropdown,
+            field_dropdown_scroll: self.form.field_dropdown_scroll,
+            form_error: self.form.error.as_deref(),
             overrides: d
                 .form_overrides
                 .as_ref()

@@ -25,7 +25,7 @@ impl EditorHook {
             return;
         };
         if !armed {
-            self.behavior_remove_armed = true;
+            self.behavior.remove_armed = true;
             return;
         }
         self.remove_entry_at(idx);
@@ -37,22 +37,22 @@ impl EditorHook {
     // Take the keyboard for the name field. Re-pressing a focused field leaves
     // what is typed there alone; arriving at it fresh seeds it from the entry.
     pub(super) fn focus_behavior_name(&mut self, world: &mut World) {
-        if self.behavior_entry().is_none() || self.behavior_name_focus {
+        if self.behavior_entry().is_none() || self.behavior.name_focus {
             return;
         }
-        self.behavior_focus = false;
-        self.behavior_picking = false;
+        self.behavior.focus = false;
+        self.behavior.picking = false;
         self.seed_behavior_name(world);
-        self.behavior_name_focus = true;
+        self.behavior.name_focus = true;
     }
 
     // Give up the name field without committing, reverting an abandoned edit
     // rather than leaving it in the field to be committed by a later Enter.
     pub(super) fn blur_behavior_name(&mut self, world: &mut World) {
-        if !self.behavior_name_focus {
+        if !self.behavior.name_focus {
             return;
         }
-        self.behavior_name_focus = false;
+        self.behavior.name_focus = false;
         self.seed_behavior_name(world);
     }
 
@@ -76,7 +76,7 @@ impl EditorHook {
         };
         let typed = widget::field_text(world, behavior::panel::NAME_INPUT);
         if typed.trim().is_empty() {
-            self.behavior_status = Some(Status::message("a behavior needs a name"));
+            self.behavior.status = Some(Status::message("a behavior needs a name"));
             self.blur_behavior_name(world);
             return;
         }
@@ -85,7 +85,7 @@ impl EditorHook {
             entry.insert("name".to_string(), Value::String(name));
         }
         self.mark_changed();
-        self.behavior_name_focus = false;
+        self.behavior.name_focus = false;
         // The checker's messages carry the behavior's name, so its verdict is
         // re-read under the new one rather than left quoting the old.
         let prev_fault = self.behavior_fault_message();

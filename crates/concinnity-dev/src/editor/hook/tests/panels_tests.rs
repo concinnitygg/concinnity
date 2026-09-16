@@ -46,10 +46,10 @@ fn open_every_panel(h: &mut EditorHook, world: &mut World) {
             p.toggle(h, world);
         }
     }
-    h.selected_type = Some("Sprite".to_string());
+    h.form.selected_type = Some("Sprite".to_string());
     h.view_open = true;
     h.open_template = Some(0);
-    h.palette_open = true;
+    h.palette.open = true;
 }
 
 // Every declared element of `p`, forced visible so a `hide` that misses one is
@@ -315,7 +315,7 @@ fn draw_shows_chrome_that_hide_takes_back() {
 #[test]
 fn overlay_ids_are_declared_elements() {
     let mut h = empty_hook();
-    h.field_dropdown = None;
+    h.form.field_dropdown = None;
     for key in PanelKey::ALL {
         let p = registry::panel(key);
         let declared = p.sprite_ids();

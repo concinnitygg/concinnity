@@ -183,7 +183,7 @@ fn import_rows_list_and_open_in_the_edit_form() {
     assert!(h.panel_open, "the Assets UI comes up with the form");
     assert!(h.form_open());
     assert_eq!(
-        h.form_target,
+        h.form.target,
         FormTarget::Entry(1),
         "the clicked entry is being edited"
     );

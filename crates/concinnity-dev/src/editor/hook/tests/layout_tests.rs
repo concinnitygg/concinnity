@@ -345,7 +345,7 @@ fn the_behavior_panel_leaves_the_other_panels_pressable_in_every_view() {
     h.focus_panel(PanelKey::Behavior);
 
     for mode in [ViewMode::Outline, ViewMode::Chart, ViewMode::Overview] {
-        h.behavior_mode = mode;
+        h.behavior.mode = mode;
         for key in [PanelKey::Preview, PanelKey::View] {
             let title = title_rect_of(&h, key, vp);
             let (mx, my) = (title[0] + 5.0, title[1] + 5.0);
@@ -485,7 +485,7 @@ fn tick_lays_out_the_open_panel_in_every_state() {
 
     // Closing the panel + form blanks both.
     h.panel_open = false;
-    h.close_form();
+    h.form.close();
     h.tick(&mut world);
     assert!(
         !sprite_visible(&world, assets_panel::PANEL_BG),

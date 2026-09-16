@@ -7,8 +7,8 @@
 //!
 //! A module small and pure enough to read alongside its own assertions keeps an
 //! inline `#[cfg(test)] mod tests` beside its code instead, which is the shape
-//! the rest of the crate uses: `camera_pose`, `fly`, `drive/axes` and
-//! `drive/outline`. The one companion here that covers a family rather than a
+//! the rest of the crate uses: `camera_pose`, `fly`, `drive/axes`,
+//! `drive/outline`, `form_state` and the `edit/*_state` panel state modules. The one companion here that covers a family rather than a
 //! single module is `camera_tests`, whose three drives are interlocked -- a
 //! bookmark recall rides the glide and cancels a tumble.
 

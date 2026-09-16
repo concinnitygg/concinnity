@@ -90,11 +90,12 @@ fn apply_all_writes_the_mappable_paths_and_keeps_the_rest() {
     );
     assert_eq!(patch["args"]["cull_distance"], 42.0);
     assert!(
-        h.form_error
+        h.form
+            .error
             .as_ref()
             .is_some_and(|e| e.contains("cull_distance")),
         "the kept path is reported, got {:?}",
-        h.form_error
+        h.form.error
     );
 }
 
@@ -117,7 +118,7 @@ fn apply_all_over_a_fully_mappable_patch_removes_the_line() {
         before - 1,
         "the emptied patch line is gone"
     );
-    assert!(h.form_error.is_none(), "nothing was kept back");
+    assert!(h.form.error.is_none(), "nothing was kept back");
 
     h.undo(&mut world);
     assert_eq!(h.entries.len(), before);
@@ -134,7 +135,8 @@ fn apply_all_over_a_fully_mappable_patch_removes_the_line() {
 fn baseline_of(h: &mut EditorHook, name: &str, key: &str) -> serde_json::Value {
     let mut world = world_with_fields();
     h.open_asset_form(name, &mut world);
-    h.form_template
+    h.form
+        .template
         .as_ref()
         .expect("a template-derived form")
         .baseline
@@ -262,11 +264,11 @@ fn jump_to_override_cycles_through_the_marked_fields() {
         "both pinned fields are marked, got {marked:?}"
     );
 
-    let max = h.form_fields.len().saturating_sub(h.form_window());
+    let max = h.form.fields.len().saturating_sub(h.form_window());
     let mut seen = Vec::new();
     for _ in 0..marked.len() + 1 {
         h.jump_to_override(&mut world);
-        seen.push(h.form_scroll);
+        seen.push(h.form.scroll);
     }
     assert!(
         seen.iter().all(|s| marked.contains(s) || *s == max),
@@ -285,10 +287,10 @@ fn jump_to_override_is_a_no_op_without_marks() {
     let mut h = prefab_hook(serde_json::json!({}));
     let mut world = world_with_fields();
     h.open_asset_form("i1_a", &mut world);
-    h.form_scroll = 0;
+    h.form.scroll = 0;
 
     h.jump_to_override(&mut world);
-    assert_eq!(h.form_scroll, 0);
+    assert_eq!(h.form.scroll, 0);
 }
 
 // Change one field of the open template-derived form through its control so a
@@ -297,17 +299,19 @@ fn jump_to_override_is_a_no_op_without_marks() {
 // field's dotted key.
 fn diverge_a_form_field(h: &mut EditorHook, world: &mut World) -> String {
     if let Some(j) = h
-        .form_fields
+        .form
+        .fields
         .iter()
         .position(|f| matches!(f.kind, form::FieldKind::Bool))
     {
-        let key = h.form_fields[j].key.clone();
+        let key = h.form.fields[j].key.clone();
         h.apply_form(FormAction::ToggleField(j), world);
         return key;
     }
     let window = h.form_window();
     let j = h
-        .form_fields
+        .form
+        .fields
         .iter()
         .position(|f| {
             matches!(
@@ -317,7 +321,7 @@ fn diverge_a_form_field(h: &mut EditorHook, world: &mut World) -> String {
         })
         .filter(|&j| j < window)
         .expect("a visible scalar field to diverge");
-    let key = h.form_fields[j].key.clone();
+    let key = h.form.fields[j].key.clone();
     widget::seed_field(world, form_panel::form_input(j), "42424");
     key
 }
@@ -339,11 +343,11 @@ fn editing_a_generated_asset_writes_a_minimal_patch_on_confirm() {
     h.apply_panel(PanelAction::SelectRow(gi, ai), &mut world);
     assert!(h.form_open(), "a generated asset still opens the form");
     assert!(
-        matches!(h.form_target, FormTarget::Promote(_)),
+        matches!(h.form.target, FormTarget::Promote(_)),
         "seeded from the expansion, not from an entry"
     );
     assert!(
-        h.form_template.is_some(),
+        h.form.template.is_some(),
         "the form knows its template baseline"
     );
     assert_eq!(
@@ -419,8 +423,8 @@ fn a_patched_asset_relists_under_its_origin_as_overridden() {
     let (g2, i2) = row_of(&h, &name);
     let before = h.entries.len();
     h.apply_panel(PanelAction::SelectRow(g2, i2), &mut world);
-    assert!(matches!(h.form_target, FormTarget::Entry(_)));
-    assert!(h.form_template.is_some());
+    assert!(matches!(h.form.target, FormTarget::Entry(_)));
+    assert!(h.form.template.is_some());
     h.apply_form(FormAction::Confirm, &mut world);
     assert_eq!(h.entries.len(), before, "edited in place, not appended");
 }
@@ -449,11 +453,12 @@ fn an_overridden_field_marks_and_offers_revert_and_apply() {
     let mut h = two_instance_prefab_hook();
     let mut world = world_with_fields();
     h.open_asset_form("i1_a", &mut world);
-    assert!(h.form_template.is_some(), "i1_a derives from the prefab");
+    assert!(h.form.template.is_some(), "i1_a derives from the prefab");
 
     let marks = h.form_override_marks().expect("marks for a template form");
     let j = h
-        .form_fields
+        .form
+        .fields
         .iter()
         .position(|f| f.key == "position")
         .expect("a position field");
@@ -462,7 +467,7 @@ fn an_overridden_field_marks_and_offers_revert_and_apply() {
         marks
             .iter()
             .enumerate()
-            .filter(|(i, _)| !h.form_fields[*i].key.starts_with("position"))
+            .filter(|(i, _)| !h.form.fields[*i].key.starts_with("position"))
             .all(|(_, m)| *m == overrides::FieldOrigin::Inherited),
         "only the pinned field is marked"
     );
@@ -483,7 +488,8 @@ fn reverting_the_only_override_removes_the_patch_line_and_undoes_in_one_step() {
     let before = h.entries.len();
     h.open_asset_form("i1_a", &mut world);
     let j = h
-        .form_fields
+        .form
+        .fields
         .iter()
         .position(|f| f.key == "position")
         .unwrap();
@@ -519,7 +525,8 @@ fn applying_an_override_updates_the_prefab_entry_and_drops_the_patch() {
     let before = h.entries.len();
     h.open_asset_form("i1_a", &mut world);
     let j = h
-        .form_fields
+        .form
+        .fields
         .iter()
         .position(|f| f.key == "position")
         .unwrap();
@@ -637,36 +644,36 @@ fn unapplied_markers_follow_edit_and_apply() {
     let mut world = world_with_fields();
     // The Edit form: opening starts clean, a control edit marks, closing clears.
     h.open_form(&mut world, "PointLight".to_string(), FormTarget::Entry(0));
-    assert!(!h.form_touched);
+    assert!(!h.form.touched);
     assert!(!h.panel_data(&world).form_title.ends_with('*'));
     h.apply_form(FormAction::CycleField(0), &mut world);
-    assert!(h.form_touched, "a control edit marks the form");
+    assert!(h.form.touched, "a control edit marks the form");
     assert!(h.panel_data(&world).form_title.ends_with('*'));
     // Focus moves alone do not mark.
     h.open_form(&mut world, "PointLight".to_string(), FormTarget::Entry(0));
     h.apply_form(FormAction::FocusName, &mut world);
-    assert!(!h.form_touched, "focus is not an edit");
-    h.form_touched = true;
-    h.close_form();
-    assert!(!h.form_touched, "closing discards the marker");
+    assert!(!h.form.touched, "focus is not an edit");
+    h.form.touched = true;
+    h.form.close();
+    assert!(!h.form.touched, "closing discards the marker");
     // Lighting: re-seeding (open / apply / undo) clears the marker.
     h.lighting_touched = true;
     h.seed_lighting(&mut world);
     assert!(!h.lighting_touched);
     // Story: a changed line marks on commit; loading clears.
-    h.story_lines = vec!["hello".to_string()];
-    h.story_line = 0;
+    h.story.lines = vec!["hello".to_string()];
+    h.story.line = 0;
     world.add_component(TextInput {
         asset_id: story_panel::LINE_INPUT,
         ..Default::default()
     });
     set_field(&mut world, story_panel::LINE_INPUT, "hello edited");
     h.commit_story_line(&world);
-    assert!(h.story_touched, "a changed line marks the story");
+    assert!(h.story.touched, "a changed line marks the story");
     // An unchanged commit does not re-mark after a clear.
-    h.story_touched = false;
+    h.story.touched = false;
     h.commit_story_line(&world);
-    assert!(!h.story_touched, "an identical line is not an edit");
+    assert!(!h.story.touched, "an identical line is not an edit");
     let dirty_view = h.make_story_view([0.0, 0.0]);
     assert!(!dirty_view.dirty);
 }

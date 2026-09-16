@@ -74,8 +74,8 @@ impl EditorHook {
         match action {
             notify::Action::OpenConsole => self.open_console_panel(world),
             notify::Action::GoToBehaviorFault => {
-                if !self.behavior_open {
-                    self.behavior_open = true;
+                if !self.behavior.open {
+                    self.behavior.open = true;
                     self.open_behavior(world);
                 }
                 self.focus_panel(PanelKey::Behavior);
@@ -85,7 +85,7 @@ impl EditorHook {
     }
 
     fn open_console_panel(&mut self, world: &mut World) {
-        if self.console_open {
+        if self.console.open {
             self.focus_panel(PanelKey::Console);
         } else {
             self.toggle_console(world);
@@ -97,7 +97,7 @@ impl EditorHook {
     // Keyed on the message so per-keystroke re-checks of the same fault stay
     // quiet.
     pub(in crate::editor::hook) fn notify_behavior_fault(&mut self, prev_fault: Option<String>) {
-        let Some(message) = self.behavior_status.as_ref().and_then(|s| s.error()) else {
+        let Some(message) = self.behavior.status.as_ref().and_then(|s| s.error()) else {
             return;
         };
         if prev_fault.as_deref() == Some(message) {
@@ -113,7 +113,8 @@ impl EditorHook {
     // The open behavior's current fault message, captured before a refresh so
     // `notify_behavior_fault` can tell a new fault from a persisting one.
     pub(in crate::editor::hook) fn behavior_fault_message(&self) -> Option<String> {
-        self.behavior_status
+        self.behavior
+            .status
             .as_ref()
             .and_then(|s| s.error())
             .map(String::from)

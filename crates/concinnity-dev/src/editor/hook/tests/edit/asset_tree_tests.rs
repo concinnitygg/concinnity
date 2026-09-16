@@ -121,7 +121,7 @@ fn tree_row_click_selects_and_opens_the_form() {
     assert_eq!(h.selection.active(), Some("box"));
     assert!(h.panel_open, "the assets UI comes up around the form");
     assert_eq!(
-        h.form_target,
+        h.form.target,
         FormTarget::Entry(0),
         "the form targets the clicked entry"
     );

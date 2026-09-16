@@ -61,7 +61,7 @@ impl EditorHook {
     // empty for a pristine asset. Live (un-applied) control edits are not a
     // patch yet, so the marks reflect what is actually authored.
     pub(super) fn committed_patch(&self) -> serde_json::Value {
-        match self.form_target.entry() {
+        match self.form.target.entry() {
             Some(idx) => self
                 .entries
                 .get(idx)
@@ -76,11 +76,12 @@ impl EditorHook {
     pub(in crate::editor::hook) fn form_override_marks(
         &self,
     ) -> Option<Vec<overrides::FieldOrigin>> {
-        let t = self.form_template.as_ref()?;
+        let t = self.form.template.as_ref()?;
         let template = serde_json::Value::Object(t.baseline.clone());
         let patch = self.committed_patch();
         Some(
-            self.form_fields
+            self.form
+                .fields
                 .iter()
                 .map(|f| overrides::classify(&template, &patch, &f.key))
                 .collect(),
@@ -93,7 +94,7 @@ impl EditorHook {
         &self,
         field: usize,
     ) -> Vec<(OverrideOption, String)> {
-        let Some(key) = self.form_fields.get(field).map(|f| f.key.clone()) else {
+        let Some(key) = self.form.fields.get(field).map(|f| f.key.clone()) else {
             return Vec::new();
         };
         let patch = self.committed_patch();
@@ -104,7 +105,7 @@ impl EditorHook {
             OverrideOption::Revert(covered.clone()),
             format!("Revert '{covered}'"),
         )];
-        if let Some(t) = self.form_template.clone()
+        if let Some(t) = self.form.template.clone()
             && let Ok((slot, _)) = self.resolve_slot(&t, &covered)
         {
             let n = overrides::instance_count(&self.entries, &slot.def_name);
@@ -123,7 +124,7 @@ impl EditorHook {
 
     // The entity-level menu's options (the "..." button in the form header).
     pub(in crate::editor::hook) fn entity_menu_options(&self) -> Vec<(OverrideOption, String)> {
-        let Some(t) = self.form_template.clone() else {
+        let Some(t) = self.form.template.clone() else {
             return Vec::new();
         };
         let patch = self.committed_patch();
@@ -171,7 +172,7 @@ impl EditorHook {
     }
 
     pub(in crate::editor::hook) fn pick_override_option(&mut self, k: usize, world: &mut World) {
-        let Some(field) = self.override_menu.take() else {
+        let Some(field) = self.form.override_menu.take() else {
             return;
         };
         let mut options = self.override_menu_options(field);
@@ -181,10 +182,10 @@ impl EditorHook {
     }
 
     pub(in crate::editor::hook) fn pick_entity_option(&mut self, k: usize, world: &mut World) {
-        if !self.entity_menu_open {
+        if !self.form.entity_menu_open {
             return;
         }
-        self.entity_menu_open = false;
+        self.form.entity_menu_open = false;
         let mut options = self.entity_menu_options();
         if k < options.len() {
             self.run_override_option(options.remove(k).0, world);
@@ -192,7 +193,7 @@ impl EditorHook {
     }
 
     fn run_override_option(&mut self, option: OverrideOption, world: &mut World) {
-        let Some(t) = self.form_template.clone() else {
+        let Some(t) = self.form.template.clone() else {
             return;
         };
         let result = match option {
@@ -206,11 +207,11 @@ impl EditorHook {
         let status = result.err().map(|e| short_status(&e));
         // Re-derive the form from the changed entries (same scroll, so the
         // reverted row stays under the cursor).
-        let scroll = self.form_scroll;
+        let scroll = self.form.scroll;
         self.open_asset_form(&t.name, world);
-        self.form_scroll = scroll.min(self.form_fields.len().saturating_sub(1));
+        self.form.scroll = scroll.min(self.form.fields.len().saturating_sub(1));
         self.refresh_form(world);
-        self.form_error = status;
+        self.form.error = status;
     }
 
     // Remove the covered key from the instance's patch line; an emptied patch
@@ -354,14 +355,14 @@ impl EditorHook {
         }
         let next = marked
             .iter()
-            .find(|&&i| i > self.form_scroll)
+            .find(|&&i| i > self.form.scroll)
             .or(marked.first())
             .copied()
             .unwrap_or(0);
-        let max = self.form_fields.len().saturating_sub(self.form_window());
+        let max = self.form.fields.len().saturating_sub(self.form_window());
         self.capture_controls(world);
-        self.form_scroll = next.min(max);
-        self.form_focus = FormFocus::Name;
+        self.form.scroll = next.min(max);
+        self.form.focus = FormFocus::Name;
         self.refresh_form(world);
     }
 
@@ -388,6 +389,7 @@ impl EditorHook {
         covered: &str,
     ) -> Result<(prefab_map::TemplateSlot, prefab_map::FieldMap), String> {
         let ty = self
+            .form
             .selected_type
             .clone()
             .ok_or("no form type".to_string())?;

@@ -478,7 +478,7 @@ fn gizmo_mode_keys_switch_unless_typing() {
     assert!(!h.fly, "Shift+F again stops it");
 
     // A focused text field keeps the keys for typing.
-    h.story_focus = true;
+    h.story.focus = true;
     key(&mut h, InputKey::R);
     assert_eq!(h.gizmo_mode, gizmo::GizmoMode::Translate);
     shift_f(&mut h);

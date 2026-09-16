@@ -25,7 +25,7 @@ impl EditorHook {
     // against this rather than reading the directory every frame.
     pub(in crate::editor::hook) fn refresh_worlds(&mut self) {
         let open = Path::new(&self.world_path);
-        self.worlds_rows = worlds::files::list(
+        self.worlds.rows = worlds::files::list(
             crate::project::worlds_dir().as_deref(),
             crate::project::content_root().as_deref(),
         )
@@ -37,15 +37,12 @@ impl EditorHook {
         })
         .collect();
         let max = self.worlds_max_scroll();
-        self.worlds_scroll = self.worlds_scroll.min(max);
+        self.worlds.scroll = self.worlds.scroll.min(max);
     }
 
     // Show the panel, with a fresh listing.
     pub(in crate::editor::hook) fn open_worlds_panel(&mut self) {
-        self.worlds_open = true;
-        self.worlds_status = None;
-        self.worlds_scroll = 0;
-        self.worlds_menu = None;
+        self.worlds.open();
         self.refresh_worlds();
     }
 
@@ -54,29 +51,29 @@ impl EditorHook {
         mouse: [f32; 2],
     ) -> WorldsView<'a> {
         WorldsView {
-            rows: &self.worlds_rows,
+            rows: &self.worlds.rows,
             // The window follows the viewport, so a listing scrolled to its end
             // in a short window is pulled back when the window grows.
-            scroll: self.worlds_scroll.min(self.worlds_max_scroll()),
+            scroll: self.worlds.scroll.min(self.worlds_max_scroll()),
             layout: self.worlds_layout(),
-            selected: self.worlds_row_of(self.worlds_selected.as_ref()),
-            previewing: self.worlds_row_of(self.worlds_preview.as_ref()),
-            menu: self.worlds_row_of(self.worlds_menu.as_ref()),
-            status: self.worlds_status.as_deref(),
+            selected: self.worlds_row_of(self.worlds.selected.as_ref()),
+            previewing: self.worlds_row_of(self.worlds.preview.as_ref()),
+            menu: self.worlds_row_of(self.worlds.menu.as_ref()),
+            status: self.worlds.status.as_deref(),
             mouse,
         }
     }
 
     pub(in crate::editor::hook) fn scroll_worlds(&mut self, delta: f32) {
         let max = self.worlds_max_scroll();
-        self.worlds_scroll = scroll_step(self.worlds_scroll, delta, max);
+        self.worlds.scroll = scroll_step(self.worlds.scroll, delta, max);
     }
 
     // How far the listing scrolls: the rows it holds past the window the
     // current presentation shows.
     fn worlds_max_scroll(&self) -> usize {
         let window = self.worlds_layout().rows();
-        self.worlds_rows.len().saturating_sub(window)
+        self.worlds.rows.len().saturating_sub(window)
     }
 
     // Route a resolved Worlds-panel click. Every action but opening the menu
@@ -93,19 +90,19 @@ impl EditorHook {
             WorldsAction::Select(i) => self.select_world(i),
             WorldsAction::Open(i) if self.start_mode => self.open_from_start(i, world),
             WorldsAction::Open(i) => {
-                if let Some(row) = self.worlds_rows.get(i) {
+                if let Some(row) = self.worlds.rows.get(i) {
                     let target = WorldTarget::Open(row.path.clone());
                     self.request_world(target, world);
                 }
             }
             WorldsAction::OpenMenu(i) => {
-                self.worlds_menu = self.worlds_rows.get(i).map(|r| r.path.clone());
+                self.worlds.menu = self.worlds.rows.get(i).map(|r| r.path.clone());
             }
             WorldsAction::Delete(i) => self.confirm_delete_world(i),
             WorldsAction::CloseMenu | WorldsAction::Consume => {}
         }
         if !opening_menu {
-            self.worlds_menu = None;
+            self.worlds.menu = None;
         }
     }
 
@@ -186,7 +183,7 @@ impl EditorHook {
     fn open_world(&mut self, path: String) {
         match worlds::files::read_entries(Path::new(&path)) {
             Ok(entries) => self.retarget(path, entries, Adopt::No),
-            Err(e) => self.worlds_status = Some(e),
+            Err(e) => self.worlds.status = Some(e),
         }
     }
 
@@ -222,7 +219,7 @@ impl EditorHook {
     // onto `worlds/<name>.jsonl` and saves there, and on a rejected one the
     // prompt comes back carrying the reason.
     pub(in crate::editor::hook) fn name_untitled_world(&mut self, typed: &str) {
-        let existing: Vec<String> = self.worlds_rows.iter().map(|r| r.name.clone()).collect();
+        let existing: Vec<String> = self.worlds.rows.iter().map(|r| r.name.clone()).collect();
         let name = match worlds::files::validate_name(typed, &existing) {
             Ok(name) => name,
             Err(reason) => return self.prompt_world_name(Some(reason)),
@@ -247,7 +244,7 @@ impl EditorHook {
     // Ask before removing a world file: it is the authored source, and nothing
     // else in the project holds a copy of it.
     fn confirm_delete_world(&mut self, i: usize) {
-        let Some(row) = self.worlds_rows.get(i) else {
+        let Some(row) = self.worlds.rows.get(i) else {
             return;
         };
         let (name, path) = (row.name.clone(), row.path.clone());
@@ -274,7 +271,7 @@ impl EditorHook {
     // as unsaved, so a later SAVE writes the file back.
     pub(in crate::editor::hook) fn delete_world(&mut self, path: &str) {
         if let Err(e) = worlds::files::delete(Path::new(path)) {
-            self.worlds_status = Some(format!("Delete failed: {e}"));
+            self.worlds.status = Some(format!("Delete failed: {e}"));
             return;
         }
         let key = session_store::world_key(path);
@@ -284,7 +281,7 @@ impl EditorHook {
             tracing::warn!("editor: could not clear the session entry for {key}: {e}");
         }
         // Where the selection lands once the row is gone.
-        let was_at = self.worlds_rows.iter().position(|r| r.path == path);
+        let was_at = self.worlds.rows.iter().position(|r| r.path == path);
         if !self.start_mode && path == self.world_path {
             self.saved = Vec::new();
             self.dirty = !self.entries.is_empty();
@@ -340,7 +337,7 @@ impl EditorHook {
         self.tree_status = None;
         self.tree_stale = true;
         self.template_index = None;
-        self.close_form();
+        self.form.close();
         self.row_menu = None;
         self.picker_open = false;
         self.selection.clear();
@@ -354,32 +351,19 @@ impl EditorHook {
         self.hidden_assets.clear();
         self.locked_assets.clear();
         self.isolate = None;
-        self.behavior_index = 0;
-        self.behavior_row = None;
-        self.behavior_scroll = 0;
-        self.behavior_status = None;
+        self.behavior.reset_for_world();
         self.variables_row = None;
         self.variables_scroll = 0;
         self.lighting_focus = None;
         self.lighting_status = None;
-        self.story_lines = vec![String::new()];
-        self.story_line = 0;
-        self.story_scroll = 0;
-        self.story_focus = false;
-        self.story_path = String::new();
-        self.story_status = None;
-        self.form_touched = false;
+        self.story.reset_for_world();
         self.lighting_touched = false;
-        self.story_touched = false;
 
         // The panel has done its job; it stays a registered panel, so the View
         // row reopens it as a switcher. The session owns a world now, so the
         // start screen is over for good and the rest of the editor comes back.
         self.leave_start_screen();
-        self.worlds_open = false;
-        self.worlds_menu = None;
-        self.worlds_status = None;
-        self.worlds_scroll = 0;
+        self.worlds.close();
         self.untitled = false;
         self.refresh_worlds();
     }

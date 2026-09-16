@@ -75,18 +75,18 @@ impl EditorHook {
     // them onto another world).
     pub(super) fn worlds_row_of(&self, path: Option<&String>) -> Option<usize> {
         let path = path?;
-        self.worlds_rows.iter().position(|r| &r.path == path)
+        self.worlds.rows.iter().position(|r| &r.path == path)
     }
 
     // Select listed world `i` and show it behind the screen. The session is not
     // retargeted: the path a SAVE would write, the history, and the watcher all
     // stay where they are until the world is opened.
     pub(super) fn select_world(&mut self, i: usize) {
-        let Some(row) = self.worlds_rows.get(i) else {
+        let Some(row) = self.worlds.rows.get(i) else {
             return;
         };
         let path = row.path.clone();
-        self.worlds_selected = Some(path.clone());
+        self.worlds.selected = Some(path.clone());
         // A pick the screen opened on is superseded rather than compiled after
         // the row the user actually asked for.
         self.start_preview = None;
@@ -127,7 +127,7 @@ impl EditorHook {
         let path = self
             .start_preview
             .as_deref()
-            .or(self.worlds_preview.as_deref())?;
+            .or(self.worlds.preview.as_deref())?;
         Some(session_store::world_key(path))
     }
 
@@ -137,13 +137,13 @@ impl EditorHook {
     fn preview_world(&mut self, path: &str) {
         match worlds::files::read_entries(Path::new(path)) {
             Ok(entries) => {
-                self.worlds_status = None;
-                self.worlds_preview = Some(path.to_string());
+                self.worlds.status = None;
+                self.worlds.preview = Some(path.to_string());
                 self.stage_preview(entries);
             }
             // A world that will not parse cannot be shown: the screen says so
             // and keeps whatever was already behind it.
-            Err(e) => self.worlds_status = Some(e),
+            Err(e) => self.worlds.status = Some(e),
         }
     }
 
@@ -151,14 +151,14 @@ impl EditorHook {
     // so the next press on it compiles again rather than opens, and the panel
     // says why. The world that was up stays up.
     pub(super) fn preview_failed(&mut self, error: &str) {
-        self.worlds_preview = None;
-        self.worlds_status = Some(short_status(error));
+        self.worlds.preview = None;
+        self.worlds.status = Some(short_status(error));
     }
 
     // Drop the background back to the seeded empty scene, which is what a
     // session with no world to show opens on.
     fn clear_preview(&mut self) {
-        self.worlds_preview = None;
+        self.worlds.preview = None;
         self.stage_preview(Vec::new());
     }
 
@@ -187,11 +187,11 @@ impl EditorHook {
     // preview that failed, or a selection the deleted world left behind) is
     // read and compiled the usual way.
     pub(super) fn open_from_start(&mut self, i: usize, world: &mut World) {
-        let Some(row) = self.worlds_rows.get(i) else {
+        let Some(row) = self.worlds.rows.get(i) else {
             return;
         };
         let path = row.path.clone();
-        if self.worlds_preview.as_deref() == Some(path.as_str()) {
+        if self.worlds.preview.as_deref() == Some(path.as_str()) {
             // The attract camera ends here: the session is about to adopt this
             // very world, and it must open on the camera the world declared.
             self.stop_cinematic(world);
@@ -207,7 +207,7 @@ impl EditorHook {
                 self.retarget(path, entries, Adopt::No);
             }
             // A file that will not parse leaves the screen as it stands.
-            Err(e) => self.worlds_status = Some(e),
+            Err(e) => self.worlds.status = Some(e),
         }
     }
 
@@ -216,13 +216,13 @@ impl EditorHook {
     // and the selection moves to the row that took its place (the next one
     // down, or the last row once the list has been used up).
     pub(super) fn reselect_after_delete(&mut self, path: &str, was_at: Option<usize>) {
-        if self.worlds_selected.as_deref() == Some(path) {
+        if self.worlds.selected.as_deref() == Some(path) {
             let next = was_at
-                .and_then(|i| self.worlds_rows.get(i))
-                .or_else(|| self.worlds_rows.last());
-            self.worlds_selected = next.map(|r| r.path.clone());
+                .and_then(|i| self.worlds.rows.get(i))
+                .or_else(|| self.worlds.rows.last());
+            self.worlds.selected = next.map(|r| r.path.clone());
         }
-        if self.worlds_preview.as_deref() == Some(path) {
+        if self.worlds.preview.as_deref() == Some(path) {
             self.clear_preview();
         }
         if self.start_preview.as_deref() == Some(path) {
@@ -234,8 +234,8 @@ impl EditorHook {
     // bar, the panels, and the viewport overlays all come back.
     pub(super) fn leave_start_screen(&mut self) {
         self.start_mode = false;
-        self.worlds_selected = None;
-        self.worlds_preview = None;
+        self.worlds.selected = None;
+        self.worlds.preview = None;
         self.start_preview = None;
     }
 }

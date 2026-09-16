@@ -88,21 +88,21 @@ impl EditorHook {
         // Ctrl carries the clipboard, and only while no field holds the keyboard:
         // a copy is about the selected node, not about the text being typed.
         if input.ctrl {
-            if !self.behavior_focus && !self.behavior_name_focus {
+            if !self.behavior.focus && !self.behavior.name_focus {
                 self.clipboard_behavior_key(key, world);
             }
             return;
         }
         match key {
             InputKey::Enter => self.commit_behavior_key(world),
-            _ if self.behavior_name_focus => {}
+            _ if self.behavior.name_focus => {}
             InputKey::Tab => {
                 self.apply_behavior_action(BehaviorAction::ToggleView, world, [0.0, 0.0])
             }
             // Left and Right belong to the caret while the value field holds
             // the keyboard.
             _ => {
-                let step = direction(key).filter(|d| !(self.behavior_focus && d.horizontal()));
+                let step = direction(key).filter(|d| !(self.behavior.focus && d.horizontal()));
                 if let Some(dir) = step {
                     self.step_behavior_selection(dir, world);
                 }
@@ -123,7 +123,7 @@ impl EditorHook {
     // Whether the palette is not just up but showing something to pick, which is
     // the same test the panel draws and hit-tests by.
     fn behavior_palette_open(&self) -> bool {
-        self.behavior_picking && !self.behavior_data().picks.is_empty()
+        self.behavior.picking && !self.behavior_data().picks.is_empty()
     }
 
     fn behavior_palette_key(&mut self, key: InputKey, world: &mut World) {
@@ -131,7 +131,7 @@ impl EditorHook {
             InputKey::Enter => {
                 // The highlight counts kept options, so it resolves through the
                 // filter before it can name one.
-                let Some(&at) = self.behavior_data().matches.get(self.behavior_pick) else {
+                let Some(&at) = self.behavior_data().matches.get(self.behavior.pick) else {
                     return;
                 };
                 self.apply_behavior_action(BehaviorAction::Choose(at), world, [0.0, 0.0]);
@@ -139,12 +139,12 @@ impl EditorHook {
             InputKey::Up | InputKey::Down => {
                 let total = self.behavior_data().matches.len();
                 let delta = if key == InputKey::Up { -1 } else { 1 };
-                let Some(at) = navigate::step(Some(self.behavior_pick), delta, total) else {
+                let Some(at) = navigate::step(Some(self.behavior.pick), delta, total) else {
                     return;
                 };
-                self.behavior_pick = at;
-                self.behavior_pick_scroll =
-                    navigate::scroll_to(at, self.behavior_pick_scroll, behavior::panel::PICK_POOL);
+                self.behavior.pick = at;
+                self.behavior.pick_scroll =
+                    navigate::scroll_to(at, self.behavior.pick_scroll, behavior::panel::PICK_POOL);
             }
             _ => {}
         }
@@ -155,33 +155,33 @@ impl EditorHook {
             self.apply_behavior_action(BehaviorAction::Dismiss, world, [0.0, 0.0]);
             return;
         }
-        if std::mem::take(&mut self.behavior_remove_armed) {
+        if std::mem::take(&mut self.behavior.remove_armed) {
             return;
         }
-        if self.behavior_name_focus {
+        if self.behavior.name_focus {
             self.blur_behavior_name(world);
             return;
         }
-        self.behavior_focus = false;
+        self.behavior.focus = false;
     }
 
     fn commit_behavior_key(&mut self, world: &mut World) {
-        if self.behavior_name_focus {
+        if self.behavior.name_focus {
             self.rename_behavior(world);
             return;
         }
-        if self.behavior_focus {
+        if self.behavior.focus {
             self.commit_behavior_value(world);
             return;
         }
-        let action = match self.behavior_mode {
-            ViewMode::Overview => match self.behavior_overview_card {
+        let action = match self.behavior.mode {
+            ViewMode::Overview => match self.behavior.overview_card {
                 Some(card) => BehaviorAction::OpenCard(card),
                 None => return,
             },
             // A row offering nothing has no palette to open, so the press is
             // left alone rather than toggling one that never shows.
-            _ if self.behavior_row.is_some() && !self.behavior_data().picks.is_empty() => {
+            _ if self.behavior.row.is_some() && !self.behavior_data().picks.is_empty() => {
                 BehaviorAction::Palette
             }
             _ => return,
@@ -190,13 +190,13 @@ impl EditorHook {
     }
 
     fn step_behavior_selection(&mut self, dir: Dir, world: &mut World) {
-        match self.behavior_mode {
+        match self.behavior.mode {
             ViewMode::Outline => {
                 let Some(delta) = dir.list_step() else {
                     return;
                 };
                 let total = self.behavior_rows().len();
-                let Some(row) = navigate::step(self.behavior_row, delta, total) else {
+                let Some(row) = navigate::step(self.behavior.row, delta, total) else {
                     return;
                 };
                 self.apply_behavior_action(BehaviorAction::Select(row), world, [0.0, 0.0]);
@@ -212,11 +212,11 @@ impl EditorHook {
             ViewMode::Overview => {
                 let data = self.behavior_data();
                 let cards = reachable(&data.overview.cards);
-                let from = self.behavior_overview_card.filter(|&i| i < cards.len());
+                let from = self.behavior.overview_card.filter(|&i| i < cards.len());
                 let Some(card) = navigate::nearest(cards, from, dir) else {
                     return;
                 };
-                self.behavior_overview_card = Some(card);
+                self.behavior.overview_card = Some(card);
             }
         }
         self.ensure_behavior_visible();

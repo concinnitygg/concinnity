@@ -29,9 +29,9 @@ fn story_session(lines: &[&str]) -> (EditorHook, World) {
     let mut world = World::new();
     inject::editor_hud(&mut world);
     let mut h = hook(vec![story_import("unused.md")]);
-    h.story_open = true;
-    h.story_lines = lines.iter().map(|s| s.to_string()).collect();
-    h.story_focus = true;
+    h.story.open = true;
+    h.story.lines = lines.iter().map(|s| s.to_string()).collect();
+    h.story.focus = true;
     h.focus_panel(PanelKey::Story);
     h.seed_story_line(&mut world);
     (h, world)
@@ -50,25 +50,25 @@ fn story_enter_splits_and_backspace_joins() {
     let (mut h, mut world) = story_session(&["hello world"]);
     line_caret(&mut world, 5);
     h.story_keys(&mut world, &story_key_input(InputKey::Enter));
-    assert_eq!(h.story_lines, ["hello", " world"]);
-    assert_eq!(h.story_line, 1);
+    assert_eq!(h.story.lines, ["hello", " world"]);
+    assert_eq!(h.story.line, 1);
     let input = widget::input(&world, story_panel::LINE_INPUT).unwrap();
     assert_eq!(input.content, " world");
     assert_eq!(input.caret, 0, "the caret starts the new line");
 
     h.story_keys(&mut world, &story_key_input(InputKey::Backspace));
-    assert_eq!(h.story_lines, ["hello world"]);
-    assert_eq!(h.story_line, 0);
+    assert_eq!(h.story.lines, ["hello world"]);
+    assert_eq!(h.story.line, 0);
     let input = widget::input(&world, story_panel::LINE_INPUT).unwrap();
     assert_eq!(input.caret, 5, "the caret sits at the join point");
-    assert!(h.story_blur, "the control blurs for the join frame");
+    assert!(h.story.blur, "the control blurs for the join frame");
     assert!(
         !h.make_story_view([0.0, 0.0]).focus,
         "the view yields focus that frame"
     );
     // The next key frame clears the blur.
     h.story_keys(&mut world, &story_key_input(InputKey::Left));
-    assert!(!h.story_blur);
+    assert!(!h.story.blur);
 }
 
 // Up / Down commit the edited line and move; typed text is never lost.
@@ -77,15 +77,15 @@ fn story_up_down_commit_and_navigate() {
     let (mut h, mut world) = story_session(&["one", "two", "three"]);
     widget::seed_field(&mut world, story_panel::LINE_INPUT, "ONE edited");
     h.story_keys(&mut world, &story_key_input(InputKey::Down));
-    assert_eq!(h.story_lines[0], "ONE edited", "moving commits the edit");
-    assert_eq!(h.story_line, 1);
+    assert_eq!(h.story.lines[0], "ONE edited", "moving commits the edit");
+    assert_eq!(h.story.line, 1);
     let input = widget::input(&world, story_panel::LINE_INPUT).unwrap();
     assert_eq!(input.content, "two");
     h.story_keys(&mut world, &story_key_input(InputKey::Up));
-    assert_eq!(h.story_line, 0);
+    assert_eq!(h.story.line, 0);
     // Up at the first line stays put.
     h.story_keys(&mut world, &story_key_input(InputKey::Up));
-    assert_eq!(h.story_line, 0);
+    assert_eq!(h.story.line, 0);
 }
 
 // Apply validates with the real story parser before writing: a broken story
@@ -100,31 +100,31 @@ fn story_apply_validates_then_writes() {
     let mut world = World::new();
     inject::editor_hud(&mut world);
     let mut h = hook(vec![story_import(&src)]);
-    h.story_open = true;
+    h.story.open = true;
     h.load_story(&mut world);
-    assert_eq!(h.story_status, None);
-    assert_eq!(h.story_path, src);
-    assert!(h.story_lines.len() > 5, "the starter story loaded");
+    assert_eq!(h.story.status, None);
+    assert_eq!(h.story.path, src);
+    assert!(h.story.lines.len() > 5, "the starter story loaded");
 
     // Break the story (no frontmatter): Apply rejects and writes nothing.
-    h.story_lines = vec!["just prose, no frontmatter".to_string()];
-    h.story_line = 0;
+    h.story.lines = vec!["just prose, no frontmatter".to_string()];
+    h.story.line = 0;
     h.seed_story_line(&mut world);
     h.apply_story(&mut world);
-    assert!(h.story_status.is_some(), "parse failure shown");
+    assert!(h.story.status.is_some(), "parse failure shown");
     assert!(!h.rebuild_preview);
     let on_disk = std::fs::read_to_string(&path).unwrap();
     assert_eq!(on_disk, story::STARTER_STORY, "file untouched");
 
     // A valid edit writes and requests the preview rebuild; the world.jsonl
     // dirty flag stays clear (no entry changed).
-    h.story_lines = story::lines_of(story::STARTER_STORY);
-    let last = h.story_lines.len() - 1;
-    h.story_line = last;
+    h.story.lines = story::lines_of(story::STARTER_STORY);
+    let last = h.story.lines.len() - 1;
+    h.story.line = last;
     h.seed_story_line(&mut world);
     widget::seed_field(&mut world, story_panel::LINE_INPUT, "And they lived on.");
     h.apply_story(&mut world);
-    assert_eq!(h.story_status, None);
+    assert_eq!(h.story.status, None);
     assert!(h.rebuild_preview, "preview refresh requested");
     assert!(!h.dirty, "no world.jsonl change");
     let on_disk = std::fs::read_to_string(&path).unwrap();
@@ -138,10 +138,10 @@ fn story_load_missing_file_shows_status() {
     let mut world = World::new();
     inject::editor_hud(&mut world);
     let mut h = hook(vec![story_import("/no/such/dir/story.md")]);
-    h.story_open = true;
+    h.story.open = true;
     h.load_story(&mut world);
-    assert!(h.story_status.is_some());
-    assert_eq!(h.story_lines, [""]);
+    assert!(h.story.status.is_some());
+    assert_eq!(h.story.lines, [""]);
 }
 
 // Create writes the starter file, adds the StoryImport entry (a normal world
@@ -157,7 +157,7 @@ fn story_create_writes_starter_and_adds_the_import() {
     let mut world = World::new();
     inject::editor_hud(&mut world);
     let mut h = hook(Vec::new());
-    h.story_open = true;
+    h.story.open = true;
     h.load_story(&mut world);
     assert!(
         h.make_story_view([0.0, 0.0]).create,
@@ -169,7 +169,7 @@ fn story_create_writes_starter_and_adds_the_import() {
     assert_eq!(h.entries[0]["type"], "StoryImport");
     assert_eq!(h.entries[0]["args"]["source"], "story.md");
     assert!(h.dirty, "the new entry is a world edit");
-    assert!(h.story_lines.len() > 5, "the starter story is loaded");
+    assert!(h.story.lines.len() > 5, "the starter story is loaded");
     assert!(!h.make_story_view([0.0, 0.0]).create);
     let written = std::fs::read_to_string(tree.join("story.md")).unwrap();
     assert_eq!(written, story::STARTER_STORY);

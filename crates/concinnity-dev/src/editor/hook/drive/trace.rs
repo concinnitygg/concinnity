@@ -20,7 +20,7 @@ use crate::editor::sim;
 
 impl EditorHook {
     pub(in crate::editor::hook) fn drive_trace(&mut self, world: &mut World) {
-        if !self.behavior_open && !self.variables_open {
+        if !self.behavior.open && !self.variables_open {
             world.remove_resource::<TraceRequest>();
             self.clear_trace();
             return;
@@ -35,7 +35,7 @@ impl EditorHook {
     }
 
     fn clear_trace(&mut self) {
-        self.behavior_pulses.clear();
+        self.behavior.pulses.clear();
         self.live_vars.clear();
         self.live_locals.clear();
     }
@@ -89,7 +89,8 @@ impl EditorHook {
         let Some(table) = world.resource::<TracePaths>() else {
             return Vec::new();
         };
-        self.behavior_breakpoints
+        self.behavior
+            .breakpoints
             .iter()
             .filter_map(|(name, path)| {
                 let id = trace::id_of(name)?;
@@ -134,12 +135,13 @@ impl EditorHook {
                 continue;
             };
             match self
-                .behavior_pulses
+                .behavior
+                .pulses
                 .iter_mut()
                 .find(|p| p.node == event.node)
             {
                 Some(p) => p.age = 0.0,
-                None => self.behavior_pulses.push(NodePulse {
+                None => self.behavior.pulses.push(NodePulse {
                     node: event.node,
                     path: path.clone(),
                     age: 0.0,
@@ -192,7 +194,7 @@ impl EditorHook {
 
     // Age every pulse by this frame's `dt`, dropping the ones that have faded.
     fn age_pulses(&mut self, dt: f32) {
-        self.behavior_pulses.retain_mut(|p| {
+        self.behavior.pulses.retain_mut(|p| {
             p.age += dt.max(0.0);
             p.age < pulse::PULSE_SECS
         });
@@ -205,15 +207,6 @@ impl EditorHook {
         if name.is_empty() {
             return;
         }
-        match self
-            .behavior_breakpoints
-            .iter()
-            .position(|(n, p)| n == &name && p == path)
-        {
-            Some(i) => {
-                self.behavior_breakpoints.remove(i);
-            }
-            None => self.behavior_breakpoints.push((name, path.clone())),
-        }
+        self.behavior.toggle_breakpoint(name, path);
     }
 }

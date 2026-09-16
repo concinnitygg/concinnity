@@ -93,9 +93,9 @@ impl EditorHook {
         }
         self.entries.remove(idx);
         self.mark_changed();
-        match self.form_target {
-            FormTarget::Entry(e) if e == idx => self.close_form(),
-            FormTarget::Entry(e) if e > idx => self.form_target = FormTarget::Entry(e - 1),
+        match self.form.target {
+            FormTarget::Entry(e) if e == idx => self.form.close(),
+            FormTarget::Entry(e) if e > idx => self.form.target = FormTarget::Entry(e - 1),
             _ => {}
         }
     }
@@ -162,7 +162,7 @@ impl EditorHook {
         self.rebuild_preview = true;
         self.tree_stale = true;
         self.template_index = None;
-        self.close_form();
+        self.form.close();
         self.row_menu = None;
         self.picker_open = false;
         self.selection.clear();

@@ -34,7 +34,7 @@ fn toast_presses_claim_cards_and_fall_through_elsewhere() {
     // A press on the newest card claims it, runs its action, and dismisses.
     let r = toast_overlay::card_rect(vp, 0, 0);
     assert!(h.try_toast_press(r[0] + 5.0, r[1] + 5.0, vp, &mut world));
-    assert!(h.console_open, "the error's action opened the Console");
+    assert!(h.console.open, "the error's action opened the Console");
     assert!(h.notifier.is_empty(), "the card dismissed");
 }
 
@@ -60,7 +60,7 @@ fn toast_drive_settles_hidden_when_the_queue_empties() {
 #[test]
 fn behavior_fault_toasts_only_on_a_new_fault() {
     let mut h = hook(Vec::new());
-    h.behavior_status = Some(Status::message("a behavior needs a name"));
+    h.behavior.status = Some(Status::message("a behavior needs a name"));
     h.notify_behavior_fault(None);
     assert!(!h.notifier.is_empty(), "a fresh fault toasts");
     h.notifier.click_card(0);

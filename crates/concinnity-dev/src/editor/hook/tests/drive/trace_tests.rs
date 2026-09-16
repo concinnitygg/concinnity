@@ -46,13 +46,13 @@ fn trace_events_become_pulses_and_live_values() {
             "on": "start", "do": [{"save": {}}],
         }),
     )]);
-    h.behavior_open = true;
+    h.behavior.open = true;
     let mut world = traced_world(id, false);
     h.drive_trace(&mut world);
 
-    assert_eq!(h.behavior_pulses.len(), 1);
+    assert_eq!(h.behavior.pulses.len(), 1);
     assert_eq!(
-        h.behavior_pulses[0].path,
+        h.behavior.pulses[0].path,
         vec![path::field("do"), path::Step::Index(0)],
         "the pulse addresses the node the way a checker fault would"
     );
@@ -69,7 +69,7 @@ fn trace_events_become_pulses_and_live_values() {
     assert_eq!(data.pulse_rows.len(), 1, "so does its outline row");
     // The same frame again reports nothing new; the pulse just decays.
     h.drive_trace(&mut world);
-    assert_eq!(h.behavior_pulses.len(), 1);
+    assert_eq!(h.behavior.pulses.len(), 1);
 
     // Live values reach the Variables panel and retitle its value column.
     let vdata = h.variables_data();
@@ -93,10 +93,10 @@ fn pulses_decay_by_frame_time() {
             "on": "start", "do": [{"save": {}}],
         }),
     )]);
-    h.behavior_open = true;
+    h.behavior.open = true;
     let mut world = traced_world(id, false);
     h.drive_trace(&mut world);
-    assert_eq!(h.behavior_pulses[0].age, 0.0, "a fresh firing");
+    assert_eq!(h.behavior.pulses[0].age, 0.0, "a fresh firing");
 
     let half = crate::editor::behavior::pulse::PULSE_SECS * 0.5;
     world.insert_resource(FrameTime {
@@ -104,10 +104,10 @@ fn pulses_decay_by_frame_time() {
         elapsed: 0.0,
     });
     h.drive_trace(&mut world);
-    assert_eq!(h.behavior_pulses.len(), 1, "half the window keeps it");
-    assert!((h.behavior_pulses[0].age - half).abs() < 1e-6);
+    assert_eq!(h.behavior.pulses.len(), 1, "half the window keeps it");
+    assert!((h.behavior.pulses[0].age - half).abs() < 1e-6);
     h.drive_trace(&mut world);
-    assert!(h.behavior_pulses.is_empty(), "the full window drops it");
+    assert!(h.behavior.pulses.is_empty(), "the full window drops it");
 }
 
 #[test]
@@ -120,11 +120,11 @@ fn a_breakpoint_hit_pauses_and_lands_on_the_node() {
             "on": "start", "do": [{"save": {}}],
         }),
     )]);
-    h.behavior_open = true;
+    h.behavior.open = true;
     let mut world = traced_world(id, true);
     h.drive_trace(&mut world);
     assert_eq!(h.sim.state, sim::SimState::Paused, "the hit froze the run");
-    let row = h.behavior_row.expect("the panel landed on the node");
+    let row = h.behavior.row.expect("the panel landed on the node");
     assert_eq!(
         h.behavior_rows()[row].path,
         vec![path::field("do"), path::Step::Index(0)]
@@ -141,14 +141,14 @@ fn stopping_clears_the_live_state() {
             "on": "start", "do": [{"save": {}}],
         }),
     )]);
-    h.behavior_open = true;
+    h.behavior.open = true;
     let mut world = traced_world(id, false);
     h.drive_trace(&mut world);
-    assert!(!h.behavior_pulses.is_empty() && !h.live_vars.is_empty());
+    assert!(!h.behavior.pulses.is_empty() && !h.live_vars.is_empty());
 
     assert!(h.sim.stop());
     h.drive_trace(&mut world);
-    assert!(h.behavior_pulses.is_empty(), "Stop shows authored data");
+    assert!(h.behavior.pulses.is_empty(), "Stop shows authored data");
     assert!(h.live_vars.is_empty());
     assert!(!h.variables_data().live);
 }
@@ -162,7 +162,7 @@ fn ctrl_click_toggles_a_card_breakpoint() {
         }),
     )]);
     let mut world = World::new();
-    h.behavior_open = true;
+    h.behavior.open = true;
     let data = h.behavior_data();
     let card = data
         .chart
@@ -173,8 +173,8 @@ fn ctrl_click_toggles_a_card_breakpoint() {
 
     h.ctrl_held = true;
     h.apply_behavior_action(BehaviorAction::SelectCard(card), &mut world, [0.0, 0.0]);
-    assert_eq!(h.behavior_breakpoints.len(), 1);
-    assert_eq!(h.behavior_breakpoints[0].0, "b", "held by behavior name");
+    assert_eq!(h.behavior.breakpoints.len(), 1);
+    assert_eq!(h.behavior.breakpoints[0].0, "b", "held by behavior name");
     assert_eq!(
         h.behavior_data().break_cards,
         vec![card],
@@ -182,12 +182,12 @@ fn ctrl_click_toggles_a_card_breakpoint() {
     );
     h.apply_behavior_action(BehaviorAction::SelectCard(card), &mut world, [0.0, 0.0]);
     assert!(
-        h.behavior_breakpoints.is_empty(),
+        h.behavior.breakpoints.is_empty(),
         "a second toggle removes it"
     );
 
     // A plain click still selects.
     h.ctrl_held = false;
     h.apply_behavior_action(BehaviorAction::SelectCard(card), &mut world, [0.0, 0.0]);
-    assert!(h.behavior_row.is_some());
+    assert!(h.behavior.row.is_some());
 }

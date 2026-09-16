@@ -123,7 +123,7 @@ fn write_jsonl_persists_entries_atomically() {
     })]);
     h.world_path = path_str.clone();
     let mut world = world_with_fields();
-    h.selected_type = Some("PointLight".to_string());
+    h.form.selected_type = Some("PointLight".to_string());
     set_field(&mut world, form_panel::NAME_INPUT, "lamp");
     h.apply_form(FormAction::Confirm, &mut world);
     h.write_jsonl().unwrap();
@@ -229,17 +229,17 @@ fn undo_drops_entry_indexed_ui_state() {
     let mut h = hook(vec![entry("a", "Sprite")]);
     h.entries.push(entry("b", "Sprite"));
     h.mark_changed();
-    h.selected_type = Some("Sprite".to_string());
-    h.form_target = FormTarget::Entry(1);
+    h.form.selected_type = Some("Sprite".to_string());
+    h.form.target = FormTarget::Entry(1);
     h.row_menu = Some("b".to_string());
 
     h.undo(&mut world);
     assert_eq!(
-        h.form_target,
+        h.form.target,
         FormTarget::New,
         "the form no longer targets a live row"
     );
-    assert_eq!(h.selected_type, None);
+    assert_eq!(h.form.selected_type, None);
     assert_eq!(h.row_menu, None);
 }
 
@@ -262,14 +262,14 @@ fn ctrl_z_y_step_history_unless_typing_or_playing() {
     h.mark_changed();
 
     // Typing in the Story panel: the shortcut must not fire.
-    h.story_focus = true;
+    h.story.focus = true;
     step(&mut h, InputKey::Z);
     assert_eq!(
         h.entries.len(),
         1,
         "suppressed while a text field is focused"
     );
-    h.story_focus = false;
+    h.story.focus = false;
 
     // Play mode: the world owns the keyboard.
     h.sim.state = sim::SimState::Playing;

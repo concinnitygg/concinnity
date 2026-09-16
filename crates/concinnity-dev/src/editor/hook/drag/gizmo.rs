@@ -426,7 +426,7 @@ impl EditorHook {
         // re-derive it from the committed args. (Dragging and typing cannot
         // overlap, so no in-progress field edit is lost.) Through the by-name
         // path so a template-derived asset keeps its override state.
-        if let Some(idx) = self.form_target.entry()
+        if let Some(idx) = self.form.target.entry()
             && changed.contains(&idx)
             && let Some(name) = self.entries.get(idx).and_then(entry_name).map(String::from)
         {

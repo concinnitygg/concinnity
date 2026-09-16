@@ -21,20 +21,21 @@ impl EditorHook {
     // otherwise the field window moves (folding the visible controls into the
     // working args first, so no in-progress edit is lost).
     pub(super) fn scroll_form(&mut self, delta: f32, world: &mut World) {
-        if let Some(open) = self.field_dropdown {
-            let total = self.form_fields.get(open).map_or(0, |f| f.variants.len());
+        if let Some(open) = self.form.field_dropdown {
+            let total = self.form.fields.get(open).map_or(0, |f| f.variants.len());
             let max = total.saturating_sub(form_panel::MAX_DROP_ROWS);
-            self.field_dropdown_scroll = scroll_step(self.field_dropdown_scroll, delta, max);
+            self.form.field_dropdown_scroll =
+                scroll_step(self.form.field_dropdown_scroll, delta, max);
         } else {
             // The same capture / refresh cycle an array add / remove uses.
-            let max = self.form_fields.len().saturating_sub(self.form_window());
-            let next = scroll_step(self.form_scroll, delta, max);
-            if next == self.form_scroll {
+            let max = self.form.fields.len().saturating_sub(self.form_window());
+            let next = scroll_step(self.form.scroll, delta, max);
+            if next == self.form.scroll {
                 return;
             }
             self.capture_controls(world);
-            self.form_scroll = next;
-            self.form_focus = FormFocus::Name;
+            self.form.scroll = next;
+            self.form.focus = FormFocus::Name;
             self.refresh_form(world);
         }
     }
@@ -171,10 +172,10 @@ impl EditorHook {
         // Backtick toggles the console. The flag cleared here is the
         // one-frame focus blur a backtick open sets, so the text
         // system never types that backtick into the command line.
-        self.console_blur = false;
+        self.console.blur = false;
         self.drive_console_toggle(input, world);
         // Ctrl+K toggles the palette, with the same one-frame blur.
-        self.palette_blur = false;
+        self.palette.blur = false;
         self.drive_palette_toggle(input, world);
         // Ctrl+Z / Ctrl+Y step the entry list through the history,
         // unless the world owns the keyboard (play mode), a text
@@ -224,7 +225,7 @@ impl EditorHook {
         if self.modal.is_none() && input.scroll_delta.abs() > 0.5 {
             let (mx, my) = (input.mouse_x, input.mouse_y);
             let form_shown = registry::panel(PanelKey::Edit).is_open(self);
-            if form_shown && self.field_dropdown.is_some() {
+            if form_shown && self.form.field_dropdown.is_some() {
                 self.scroll_form(input.scroll_delta, world);
             } else {
                 let front_to_back: Vec<PanelKey> = self.panel_order.iter().rev().copied().collect();

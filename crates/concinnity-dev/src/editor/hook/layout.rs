@@ -122,7 +122,7 @@ impl EditorHook {
 
     // Whether the add / edit form panel is open.
     pub(super) fn form_open(&self) -> bool {
-        self.selected_type.is_some()
+        self.form.selected_type.is_some()
     }
 
     // Whether panel `key` shows and routes this frame. The start screen is the

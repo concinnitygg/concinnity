@@ -44,7 +44,7 @@ fn transport_keys_play_pause_stop_and_step() {
     );
 
     // A focused text field owns the keyboard.
-    h.story_focus = true;
+    h.story.focus = true;
     h.sim_keys(&key(InputKey::P, false));
     assert_eq!(h.sim.state, sim::SimState::Stopped);
 }
@@ -260,10 +260,10 @@ fn the_trace_request_follows_the_live_debug_panels() {
         world.resource::<TraceRequest>().is_none(),
         "no panel open, no request"
     );
-    h.behavior_open = true;
+    h.behavior.open = true;
     h.drive_trace(&mut world);
     assert!(world.resource::<TraceRequest>().is_some());
-    h.behavior_open = false;
+    h.behavior.open = false;
     h.drive_trace(&mut world);
     assert!(
         world.resource::<TraceRequest>().is_none(),

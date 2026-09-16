@@ -27,17 +27,17 @@ impl EditorHook {
     // injected form-field length cap (inline JSON runs long); closing
     // releases focus.
     pub(in crate::editor::hook) fn toggle_console(&mut self, world: &mut World) {
-        self.console_open = !self.console_open;
-        if self.console_open {
-            self.console_focus = true;
-            self.console_pinned = true;
+        self.console.open = !self.console.open;
+        if self.console.open {
+            self.console.focus = true;
+            self.console.pinned = true;
             widget::seed_field(world, console_panel::INPUT, "");
             if let Some(t) = widget::input_mut(world, console_panel::INPUT) {
                 t.max_len = 0;
             }
             self.focus_panel(PanelKey::Console);
         } else {
-            self.console_focus = false;
+            self.console.focus = false;
         }
     }
 
@@ -57,10 +57,10 @@ impl EditorHook {
             return;
         }
         self.toggle_console(world);
-        if self.console_open {
+        if self.console.open {
             // The same keypress delivers a '`' typed_char after this tick;
             // one unfocused frame keeps it out of the fresh command line.
-            self.console_blur = true;
+            self.console.blur = true;
         }
     }
 
@@ -73,10 +73,10 @@ impl EditorHook {
         let shown = console_panel::visible_lines(self.effective_size(PanelKey::Console)[1]);
         let total = self.console_sink.len();
         let max_first = total.saturating_sub(shown);
-        let first = if self.console_pinned {
+        let first = if self.console.pinned {
             max_first
         } else {
-            self.console_scroll.min(max_first)
+            self.console.scroll.min(max_first)
         };
         (self.console_sink.window(first, shown), total, first)
     }
@@ -96,8 +96,8 @@ impl EditorHook {
             // Focus is asserted only while frontmost (see the other panels'
             // matching guard) and not in the one-frame blur after a backtick
             // open.
-            focus: self.console_focus
-                && !self.console_blur
+            focus: self.console.focus
+                && !self.console.blur
                 && self.panel_order.last() == Some(&PanelKey::Console),
             ghost,
             mouse,
@@ -115,14 +115,14 @@ impl EditorHook {
     pub(in crate::editor::hook) fn scroll_console(&mut self, delta: f32) {
         let shown = console_panel::visible_lines(self.effective_size(PanelKey::Console)[1]);
         let max = self.console_sink.len().saturating_sub(shown);
-        let cur = if self.console_pinned {
+        let cur = if self.console.pinned {
             max
         } else {
-            self.console_scroll.min(max)
+            self.console.scroll.min(max)
         };
         let next = scroll_step(cur, delta, max);
-        self.console_scroll = next;
-        self.console_pinned = next >= max;
+        self.console.scroll = next;
+        self.console.pinned = next >= max;
     }
 
     pub(in crate::editor::hook) fn apply_console_action(
@@ -131,16 +131,16 @@ impl EditorHook {
         _world: &mut World,
     ) {
         match action {
-            ConsoleAction::FocusInput => self.console_focus = true,
+            ConsoleAction::FocusInput => self.console.focus = true,
             // A click on panel chrome blurs the command line.
-            ConsoleAction::Consume => self.console_focus = false,
+            ConsoleAction::Consume => self.console.focus = false,
         }
     }
 
     // The per-frame editing keys while the command line is focused: Enter
     // submits, Tab (or Right at the caret's end) accepts the ghost.
     pub(in crate::editor::hook) fn console_keys(&mut self, world: &mut World, input: &FrameInput) {
-        if !self.console_focus {
+        if !self.console.focus {
             return;
         }
         match input.captured_key {
@@ -177,7 +177,7 @@ impl EditorHook {
     pub(in crate::editor::hook) fn run_console_line(&mut self, world: &mut World, line: &str) {
         self.console_sink
             .push(console::Severity::Command, &format!("> {line}"));
-        self.console_pinned = true;
+        self.console.pinned = true;
         match console::parse_command(line) {
             // The echo above is the whole behavior of a bare line.
             Ok(console::Command::Echo(_)) => {}
@@ -263,9 +263,9 @@ impl EditorHook {
         let ty = entry_type(&self.entries[idx]).unwrap_or("?").to_string();
         self.entries.remove(idx);
         self.mark_changed();
-        match self.form_target {
-            FormTarget::Entry(e) if e == idx => self.close_form(),
-            FormTarget::Entry(e) if e > idx => self.form_target = FormTarget::Entry(e - 1),
+        match self.form.target {
+            FormTarget::Entry(e) if e == idx => self.form.close(),
+            FormTarget::Entry(e) if e > idx => self.form.target = FormTarget::Entry(e - 1),
             _ => {}
         }
         self.row_menu = None;

@@ -97,7 +97,7 @@ impl EditorHook {
     // undo cannot silently retarget it at another asset.
     pub(in crate::editor::hook) fn behavior_entry(&self) -> Option<usize> {
         let all = self.behavior_entries();
-        all.get(self.behavior_index.min(all.len().saturating_sub(1)))
+        all.get(self.behavior.index.min(all.len().saturating_sub(1)))
             .copied()
     }
 
@@ -128,7 +128,7 @@ impl EditorHook {
     pub(in crate::editor::hook) fn behavior_data(&self) -> BehaviorData {
         let all = self.behavior_entries();
         let rows = self.behavior_rows();
-        let selected = self.behavior_row.and_then(|i| rows.get(i));
+        let selected = self.behavior.row.and_then(|i| rows.get(i));
         let chart = match self.behavior_entry() {
             Some(_) => graph::chart(&self.behavior_args()),
             None => Chart::default(),
@@ -142,7 +142,7 @@ impl EditorHook {
             .to_string();
         let mut pulse_cards = Vec::new();
         let mut pulse_rows = Vec::new();
-        for p in &self.behavior_pulses {
+        for p in &self.behavior.pulses {
             let alpha = pulse::alpha(p.age);
             if alpha <= 0.0 {
                 continue;
@@ -155,23 +155,24 @@ impl EditorHook {
             }
         }
         let break_cards = self
-            .behavior_breakpoints
+            .behavior
+            .breakpoints
             .iter()
             .filter(|(n, _)| *n == name)
             .filter_map(|(_, path)| chart.cards.iter().position(|c| &c.path == path))
             .collect();
         BehaviorData {
             name,
-            index: self.behavior_index.min(all.len().saturating_sub(1)),
+            index: self.behavior.index.min(all.len().saturating_sub(1)),
             total: all.len(),
-            matches: filter::matching(&picks, &self.behavior_filter),
+            matches: filter::matching(&picks, &self.behavior.filter),
             picks,
             editable: selected
                 .is_some_and(|r| edit::text_value(&self.behavior_args(), r).is_some()),
             fields: card
                 .map(|i| fields::own_rows(&rows, &chart.cards, i))
                 .unwrap_or_default(),
-            overview: match self.behavior_mode {
+            overview: match self.behavior.mode {
                 ViewMode::Overview => {
                     relations::map(&self.behavior_pairs(), &self.declared_assets())
                 }
@@ -221,37 +222,38 @@ impl EditorHook {
             index: data.index,
             total: data.total,
             rows: &data.rows,
-            scroll: self.behavior_scroll,
-            selected: self.behavior_row,
+            scroll: self.behavior.scroll,
+            selected: self.behavior.row,
             chart: &data.chart,
             overview: &data.overview,
-            mode: self.behavior_mode,
-            pan: self.behavior_pan,
+            mode: self.behavior.mode,
+            pan: self.behavior.pan,
             card: data.card,
             fields: &data.fields,
             picks: &data.picks,
             matches: &data.matches,
-            picking: self.behavior_picking && !data.picks.is_empty(),
-            pick_scroll: self.behavior_pick_scroll,
-            pick: self.behavior_pick,
-            filter_focus: self.behavior_picking
+            picking: self.behavior.picking && !data.picks.is_empty(),
+            pick_scroll: self.behavior.pick_scroll,
+            pick: self.behavior.pick,
+            filter_focus: self.behavior.picking
                 && !data.picks.is_empty()
                 && self.panel_order.last() == Some(&PanelKey::Behavior),
-            overview_card: self.behavior_overview_card,
+            overview_card: self.behavior.overview_card,
             editable: data.editable,
             // Focus is asserted only while frontmost, so a buried panel's field
             // cannot steal the keyboard.
-            focus: self.behavior_focus
+            focus: self.behavior.focus
                 && data.editable
                 && self.panel_order.last() == Some(&PanelKey::Behavior),
-            name_focus: self.behavior_name_focus
+            name_focus: self.behavior.name_focus
                 && self.panel_order.last() == Some(&PanelKey::Behavior),
-            remove_armed: self.behavior_remove_armed,
+            remove_armed: self.behavior.remove_armed,
             fault_row: self
-                .behavior_status
+                .behavior
+                .status
                 .as_ref()
                 .and_then(|s| fault::row_of(&data.rows, s.at())),
-            status: self.behavior_status.as_ref(),
+            status: self.behavior.status.as_ref(),
             pulse_cards: &data.pulse_cards,
             pulse_rows: &data.pulse_rows,
             break_cards: &data.break_cards,
@@ -263,14 +265,14 @@ impl EditorHook {
     // selection and palette, seed the value field, and re-run the checker.
     pub(in crate::editor::hook) fn open_behavior(&mut self, world: &mut World) {
         let all = self.behavior_entries();
-        self.behavior_index = self.behavior_index.min(all.len().saturating_sub(1));
-        self.behavior_row = None;
-        self.behavior_scroll = 0;
-        self.behavior_picking = false;
+        self.behavior.index = self.behavior.index.min(all.len().saturating_sub(1));
+        self.behavior.row = None;
+        self.behavior.scroll = 0;
+        self.behavior.picking = false;
         self.clear_behavior_filter(world);
-        self.behavior_focus = false;
-        self.behavior_name_focus = false;
-        self.behavior_remove_armed = false;
+        self.behavior.focus = false;
+        self.behavior.name_focus = false;
+        self.behavior.remove_armed = false;
         self.refresh_behavior_status();
         self.seed_behavior_value(world);
         self.seed_behavior_name(world);
@@ -280,13 +282,13 @@ impl EditorHook {
     // message is the checker's own, so the panel never disagrees with the build.
     pub(in crate::editor::hook) fn refresh_behavior_status(&mut self) {
         let Some(idx) = self.behavior_entry() else {
-            self.behavior_status = None;
+            self.behavior.status = None;
             return;
         };
         let name = entry_name(&self.entries[idx]).unwrap_or("").to_string();
         let args = self.behavior_args();
         let vars = self.variables_args();
-        self.behavior_status = Some(
+        self.behavior.status = Some(
             match concinnity_cook::check::behavior::check_with_variables(
                 &name,
                 &args,
@@ -308,7 +310,8 @@ impl EditorHook {
     pub(super) fn seed_behavior_value(&mut self, world: &mut World) {
         let args = self.behavior_args();
         let text = self
-            .behavior_row
+            .behavior
+            .row
             .and_then(|i| self.behavior_rows().get(i).cloned())
             .and_then(|r| edit::text_value(&args, &r))
             .unwrap_or_default();
@@ -345,7 +348,7 @@ impl EditorHook {
         // next, and the keyboard cannot stay in a field they have clicked away
         // from. Both are taken before the action runs, so the press that arms
         // the chip is not also the press that disarms it.
-        let armed = std::mem::take(&mut self.behavior_remove_armed);
+        let armed = std::mem::take(&mut self.behavior.remove_armed);
         if action != BehaviorAction::FocusName {
             self.blur_behavior_name(world);
         }
@@ -356,18 +359,18 @@ impl EditorHook {
             BehaviorAction::FocusName => self.focus_behavior_name(world),
             BehaviorAction::Select(i) => self.select_behavior_row(i, world),
             BehaviorAction::Palette => {
-                self.behavior_picking = !self.behavior_picking;
+                self.behavior.picking = !self.behavior.picking;
                 self.clear_behavior_filter(world);
-                self.behavior_focus = false;
+                self.behavior.focus = false;
             }
             BehaviorAction::Choose(i) => self.choose_behavior_pick(i, world),
             BehaviorAction::Dismiss => {
-                self.behavior_picking = false;
+                self.behavior.picking = false;
                 self.clear_behavior_filter(world);
             }
             BehaviorAction::Delete => self.delete_behavior_row(world),
             BehaviorAction::Move(delta) => self.move_behavior_row(delta as isize, world),
-            BehaviorAction::FocusValue => self.behavior_focus = true,
+            BehaviorAction::FocusValue => self.behavior.focus = true,
             BehaviorAction::ToggleView => self.toggle_behavior_view(),
             BehaviorAction::SelectCard(i) => self.select_behavior_card(i, world),
             BehaviorAction::OpenCard(i) => self.open_behavior_card(i, world),
@@ -377,7 +380,7 @@ impl EditorHook {
             BehaviorAction::Copy => self.copy_behavior_row(),
             BehaviorAction::Paste => self.paste_behavior_row(world),
             BehaviorAction::Duplicate => self.duplicate_behavior_row(world),
-            BehaviorAction::Consume => self.behavior_focus = false,
+            BehaviorAction::Consume => self.behavior.focus = false,
         }
     }
 
@@ -387,8 +390,8 @@ impl EditorHook {
         if total == 0 {
             return;
         }
-        let at = self.behavior_index.min(total - 1) as i32;
-        self.behavior_index = (at + delta).rem_euclid(total as i32) as usize;
+        let at = self.behavior.index.min(total - 1) as i32;
+        self.behavior.index = (at + delta).rem_euclid(total as i32) as usize;
         self.open_behavior(world);
     }
 
@@ -401,7 +404,7 @@ impl EditorHook {
             "name": name, "type": "Behavior", "args": {"on": "start", "do": []},
         }));
         self.mark_changed();
-        self.behavior_index = self.behavior_entries().len().saturating_sub(1);
+        self.behavior.index = self.behavior_entries().len().saturating_sub(1);
         self.open_behavior(world);
     }
 
@@ -409,30 +412,30 @@ impl EditorHook {
     // Pick button, and a row that takes typed text is ready to type into
     // straight away.
     pub(in crate::editor::hook) fn select_behavior_row(&mut self, i: usize, world: &mut World) {
-        self.behavior_row = Some(i);
-        self.behavior_picking = false;
+        self.behavior.row = Some(i);
+        self.behavior.picking = false;
         let Some(row) = self.behavior_rows().get(i).cloned() else {
             return;
         };
         self.seed_behavior_value(world);
-        self.behavior_focus = edit::text_value(&self.behavior_args(), &row).is_some();
+        self.behavior.focus = edit::text_value(&self.behavior_args(), &row).is_some();
     }
 
     // A palette opens on the whole vocabulary: a query is about the pick being
     // made, so it never outlives it.
     fn clear_behavior_filter(&mut self, world: &mut World) {
-        self.behavior_filter.clear();
-        self.behavior_pick = 0;
-        self.behavior_pick_scroll = 0;
+        self.behavior.filter.clear();
+        self.behavior.pick = 0;
+        self.behavior.pick_scroll = 0;
         widget::seed_field(world, behavior::panel::FILTER_INPUT, "");
     }
 
     fn choose_behavior_pick(&mut self, i: usize, world: &mut World) {
-        self.behavior_picking = false;
+        self.behavior.picking = false;
         self.clear_behavior_filter(world);
         let data = self.behavior_data();
         let (Some(row), Some(pick)) = (
-            self.behavior_row.and_then(|r| data.rows.get(r)),
+            self.behavior.row.and_then(|r| data.rows.get(r)),
             data.picks.get(i),
         ) else {
             return;
@@ -446,7 +449,8 @@ impl EditorHook {
 
     fn delete_behavior_row(&mut self, world: &mut World) {
         let Some(row) = self
-            .behavior_row
+            .behavior
+            .row
             .and_then(|i| self.behavior_rows().get(i).cloned())
         else {
             return;
@@ -457,14 +461,15 @@ impl EditorHook {
             // The removed row is gone; whatever slid into its place is not what
             // the user had selected, so the selection is dropped rather than
             // silently retargeted.
-            self.behavior_row = None;
-            self.behavior_focus = false;
+            self.behavior.row = None;
+            self.behavior.focus = false;
         }
     }
 
     fn move_behavior_row(&mut self, delta: isize, world: &mut World) {
         let Some(row) = self
-            .behavior_row
+            .behavior
+            .row
             .and_then(|i| self.behavior_rows().get(i).cloned())
         else {
             return;
@@ -476,7 +481,7 @@ impl EditorHook {
         self.commit_behavior(args, world);
         // Follow the member to wherever it landed, so repeated moves keep
         // acting on the same node rather than on whatever took its row.
-        self.behavior_row = self
+        self.behavior.row = self
             .behavior_rows()
             .iter()
             .position(|r| r.element.as_ref() == Some(&moved));
@@ -484,11 +489,12 @@ impl EditorHook {
     }
 
     pub(in crate::editor::hook) fn commit_behavior_value(&mut self, world: &mut World) {
-        if !self.behavior_focus {
+        if !self.behavior.focus {
             return;
         }
         let Some(row) = self
-            .behavior_row
+            .behavior
+            .row
             .and_then(|i| self.behavior_rows().get(i).cloned())
         else {
             return;
@@ -497,7 +503,7 @@ impl EditorHook {
         let mut args = self.behavior_args();
         match edit::apply_text(&mut args, &row, &text) {
             Ok(()) => self.commit_behavior(args, world),
-            Err(e) => self.behavior_status = Some(Status::message(e)),
+            Err(e) => self.behavior.status = Some(Status::message(e)),
         }
     }
 
@@ -505,15 +511,12 @@ impl EditorHook {
     // chart are over the same rows: a card selected in the chart is the row the
     // outline opens on. The pan does not, because each chart is its own shape.
     fn toggle_behavior_view(&mut self) {
-        self.behavior_mode = self.behavior_mode.other();
-        self.behavior_picking = false;
-        self.behavior_pan_drag = None;
-        self.behavior_pan = [0.0, 0.0];
-        if self.behavior_mode == ViewMode::Overview {
+        self.behavior.toggle_view();
+        if self.behavior.mode == ViewMode::Overview {
             // The map opens on the behavior that was showing, so it says where
             // the panel already is rather than starting from nothing.
             let data = self.behavior_data();
-            self.behavior_overview_card = data
+            self.behavior.overview_card = data
                 .overview
                 .cards
                 .iter()
@@ -534,9 +537,9 @@ impl EditorHook {
         else {
             return;
         };
-        self.behavior_index = at;
-        self.behavior_mode = ViewMode::Chart;
-        self.behavior_pan = [0.0, 0.0];
+        self.behavior.index = at;
+        self.behavior.mode = ViewMode::Chart;
+        self.behavior.pan = [0.0, 0.0];
         self.open_behavior(world);
     }
 
@@ -544,16 +547,16 @@ impl EditorHook {
     // takes no history snapshot.
     fn copy_behavior_row(&mut self) {
         let data = self.behavior_data();
-        let Some(row) = self.behavior_row.and_then(|i| data.rows.get(i)) else {
+        let Some(row) = self.behavior.row.and_then(|i| data.rows.get(i)) else {
             return;
         };
         if let Some(held) = clip::of(&self.behavior_args(), &data.rows, row) {
-            self.behavior_clip = Some(held);
+            self.behavior.clip = Some(held);
         }
     }
 
     fn paste_behavior_row(&mut self, world: &mut World) {
-        let Some(held) = self.behavior_clip.clone() else {
+        let Some(held) = self.behavior.clip.clone() else {
             return;
         };
         self.place_behavior_clip(&held, world);
@@ -563,7 +566,7 @@ impl EditorHook {
     // held for a later paste alone.
     fn duplicate_behavior_row(&mut self, world: &mut World) {
         let data = self.behavior_data();
-        let Some(row) = self.behavior_row.and_then(|i| data.rows.get(i)) else {
+        let Some(row) = self.behavior.row.and_then(|i| data.rows.get(i)) else {
             return;
         };
         let Some(held) = clip::of(&self.behavior_args(), &data.rows, row) else {
@@ -576,7 +579,7 @@ impl EditorHook {
     // acts on what just landed rather than on what it came from.
     fn place_behavior_clip(&mut self, held: &clip::Clip, world: &mut World) {
         let data = self.behavior_data();
-        let Some(row) = self.behavior_row.and_then(|i| data.rows.get(i)) else {
+        let Some(row) = self.behavior.row.and_then(|i| data.rows.get(i)) else {
             return;
         };
         let mut args = self.behavior_args();
@@ -584,7 +587,7 @@ impl EditorHook {
             return;
         };
         self.commit_behavior(args, world);
-        self.behavior_row = self
+        self.behavior.row = self
             .behavior_rows()
             .iter()
             .position(|r| r.element.as_ref() == Some(&landed));
@@ -599,15 +602,16 @@ impl EditorHook {
     pub(in crate::editor::hook) fn select_behavior_fault(&mut self, world: &mut World) {
         let data = self.behavior_data();
         let Some(row) = self
-            .behavior_status
+            .behavior
+            .status
             .as_ref()
             .and_then(|s| fault::row_of(&data.rows, s.at()))
         else {
             return;
         };
-        if self.behavior_mode == ViewMode::Overview {
-            self.behavior_mode = ViewMode::Chart;
-            self.behavior_pan = [0.0, 0.0];
+        if self.behavior.mode == ViewMode::Overview {
+            self.behavior.mode = ViewMode::Chart;
+            self.behavior.pan = [0.0, 0.0];
         }
         self.select_behavior_row(row, world);
         self.ensure_behavior_visible();
@@ -653,40 +657,40 @@ impl EditorHook {
     // The anchor is the pan plus the cursor, so `anchor - cursor` keeps the
     // point grabbed under the cursor for as long as the button is held.
     fn start_behavior_pan(&mut self, mouse: [f32; 2]) {
-        self.behavior_focus = false;
-        self.behavior_pan_drag = Some([
-            self.behavior_pan[0] + mouse[0],
-            self.behavior_pan[1] + mouse[1],
+        self.behavior.focus = false;
+        self.behavior.pan_drag = Some([
+            self.behavior.pan[0] + mouse[0],
+            self.behavior.pan[1] + mouse[1],
         ]);
     }
 
     // While a canvas pan is held the chart tracks the cursor; releasing the
     // button ends it.
     pub(in crate::editor::hook) fn drive_behavior_pan(&mut self, input: &FrameInput) {
-        let Some(anchor) = self.behavior_pan_drag else {
+        let Some(anchor) = self.behavior.pan_drag else {
             return;
         };
         if !input.left_button_down {
-            self.behavior_pan_drag = None;
+            self.behavior.pan_drag = None;
             return;
         }
         let want = [anchor[0] - input.mouse_x, anchor[1] - input.mouse_y];
         let chart = self.behavior_shown_chart();
-        self.behavior_pan = behavior::chart::clamp_pan(want, &chart, self.behavior_canvas());
+        self.behavior.pan = behavior::chart::clamp_pan(want, &chart, self.behavior_canvas());
     }
 
     // The chart the panel is drawing: the open behavior's body, or the world's
     // behaviors mapped. Panning acts on whichever is on screen.
     fn behavior_shown_chart(&self) -> Chart {
         let data = self.behavior_data();
-        match self.behavior_mode {
+        match self.behavior.mode {
             ViewMode::Overview => data.overview,
             _ => data.chart,
         }
     }
 
     fn behavior_canvas(&self) -> [f32; 2] {
-        behavior::panel::chart_canvas(self.effective_size(PanelKey::Behavior), self.behavior_mode)
+        behavior::panel::chart_canvas(self.effective_size(PanelKey::Behavior), self.behavior.mode)
     }
 
     fn behavior_rows_shown(&self) -> usize {
@@ -696,19 +700,19 @@ impl EditorHook {
     // Bring what is selected into view, whichever view is showing it: the
     // outline scrolls to its row, and either chart pans to its card.
     pub(in crate::editor::hook) fn ensure_behavior_visible(&mut self) {
-        match self.behavior_mode {
+        match self.behavior.mode {
             ViewMode::Overview => self.pan_to_overview_card(),
             ViewMode::Chart => {
-                if let Some(row) = self.behavior_row {
+                if let Some(row) = self.behavior.row {
                     self.pan_to_behavior_row(row);
                 }
             }
             ViewMode::Outline => {
-                let Some(row) = self.behavior_row else {
+                let Some(row) = self.behavior.row else {
                     return;
                 };
                 let shown = self.behavior_rows_shown();
-                self.behavior_scroll = navigate::scroll_to(row, self.behavior_scroll, shown);
+                self.behavior.scroll = navigate::scroll_to(row, self.behavior.scroll, shown);
             }
         }
     }
@@ -716,15 +720,16 @@ impl EditorHook {
     fn pan_to_overview_card(&mut self) {
         let data = self.behavior_data();
         let Some(card) = self
-            .behavior_overview_card
+            .behavior
+            .overview_card
             .and_then(|i| data.overview.cards.get(i))
         else {
             return;
         };
-        self.behavior_pan = behavior::chart::pan_to(
+        self.behavior.pan = behavior::chart::pan_to(
             card,
             self.behavior_canvas(),
-            self.behavior_pan,
+            self.behavior.pan,
             &data.overview,
         );
     }
@@ -742,39 +747,39 @@ impl EditorHook {
         else {
             return;
         };
-        self.behavior_pan =
-            behavior::chart::pan_to(card, self.behavior_canvas(), self.behavior_pan, &data.chart);
+        self.behavior.pan =
+            behavior::chart::pan_to(card, self.behavior_canvas(), self.behavior.pan, &data.chart);
     }
 
     // The wheel scrolls the open palette while it is up, pans the chart in chart
     // view, and scrolls the outline otherwise.
     pub(in crate::editor::hook) fn scroll_behavior(&mut self, delta: f32) {
-        if self.behavior_picking {
+        if self.behavior.picking {
             let total = self.behavior_data().matches.len();
             let max = total.saturating_sub(behavior::panel::PICK_POOL);
-            self.behavior_pick_scroll = scroll_step(self.behavior_pick_scroll, delta, max);
+            self.behavior.pick_scroll = scroll_step(self.behavior.pick_scroll, delta, max);
             return;
         }
-        if self.behavior_mode.drawn_as_chart() {
+        if self.behavior.mode.drawn_as_chart() {
             let chart = self.behavior_shown_chart();
             let canvas = self.behavior_canvas();
             let step = if delta > 0.0 { WHEEL_PAN } else { -WHEEL_PAN };
             // The wheel moves along whichever axis has anywhere to go, so a
             // chart that is wide and one row tall scrolls sideways rather than
             // not at all.
-            let pan = self.behavior_pan;
+            let pan = self.behavior.pan;
             let want = if behavior::chart::max_pan(&chart, canvas)[1] > 0.0 {
                 [pan[0], pan[1] + step]
             } else {
                 [pan[0] + step, pan[1]]
             };
-            self.behavior_pan = behavior::chart::clamp_pan(want, &chart, canvas);
+            self.behavior.pan = behavior::chart::clamp_pan(want, &chart, canvas);
             return;
         }
         let max = self
             .behavior_rows()
             .len()
             .saturating_sub(self.behavior_rows_shown());
-        self.behavior_scroll = scroll_step(self.behavior_scroll, delta, max);
+        self.behavior.scroll = scroll_step(self.behavior.scroll, delta, max);
     }
 }

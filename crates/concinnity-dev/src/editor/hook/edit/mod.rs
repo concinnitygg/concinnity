@@ -12,18 +12,27 @@
 //! One module per surface: `asset_tree`, `behavior`, `character_shape`,
 //! `console`, `content`, `export`, `import`, `lighting`, `overrides`,
 //! `palette`, `select`, `story`, `variables` and `worlds`.
+//!
+//! A panel whose state outgrew a few hook fields keeps it in a `*_state` sibling
+//! (`behavior_state`, `console_state`, `palette_state`, `story_state` and
+//! `worlds_state`), a plain struct with the resets that touch nothing else.
 
 pub(super) mod asset_tree;
 pub(super) mod behavior;
+pub(super) mod behavior_state;
 pub(super) mod character_shape;
 pub(super) mod console;
+pub(super) mod console_state;
 pub(super) mod content;
 pub(super) mod export;
 pub(super) mod import;
 pub(super) mod lighting;
 pub(super) mod overrides;
 pub(super) mod palette;
+pub(super) mod palette_state;
 pub(super) mod select;
 pub(super) mod story;
+pub(super) mod story_state;
 pub(super) mod variables;
 pub(super) mod worlds;
+pub(super) mod worlds_state;

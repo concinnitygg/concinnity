@@ -42,25 +42,25 @@ impl EditorHook {
     // (Re)load the story from its source file: on panel open, after Create,
     // and never implicitly in between (in-progress edits are not clobbered).
     pub(in crate::editor::hook) fn load_story(&mut self, world: &mut World) {
-        self.story_status = None;
-        self.story_touched = false;
-        self.story_line = 0;
-        self.story_scroll = 0;
-        self.story_focus = false;
+        self.story.status = None;
+        self.story.touched = false;
+        self.story.line = 0;
+        self.story.scroll = 0;
+        self.story.focus = false;
         match self.story_source() {
             Some(path) => {
                 match std::fs::read_to_string(&path) {
-                    Ok(content) => self.story_lines = story::lines_of(&content),
+                    Ok(content) => self.story.lines = story::lines_of(&content),
                     Err(e) => {
-                        self.story_lines = story::lines_of("");
-                        self.story_status = Some(short_status(&format!("{path}: {e}")));
+                        self.story.lines = story::lines_of("");
+                        self.story.status = Some(short_status(&format!("{path}: {e}")));
                     }
                 }
-                self.story_path = path;
+                self.story.path = path;
             }
             None => {
-                self.story_lines = story::lines_of("");
-                self.story_path = String::new();
+                self.story.lines = story::lines_of("");
+                self.story.path = String::new();
             }
         }
         self.seed_story_line(world);
@@ -71,8 +71,9 @@ impl EditorHook {
     // limit, so the cap is lifted here (0 = unlimited).
     pub(in crate::editor::hook) fn seed_story_line(&mut self, world: &mut World) {
         let text = self
-            .story_lines
-            .get(self.story_line)
+            .story
+            .lines
+            .get(self.story.line)
             .cloned()
             .unwrap_or_default();
         widget::seed_field(world, story_panel::LINE_INPUT, &text);
@@ -83,10 +84,10 @@ impl EditorHook {
 
     // Fold the edit control's live text back into the current line.
     pub(in crate::editor::hook) fn commit_story_line(&mut self, world: &World) {
-        if let Some(line) = self.story_lines.get_mut(self.story_line) {
+        if let Some(line) = self.story.lines.get_mut(self.story.line) {
             let text = widget::field_text(world, story_panel::LINE_INPUT);
             if *line != text {
-                self.story_touched = true;
+                self.story.touched = true;
                 *line = text;
             }
         }
@@ -96,9 +97,9 @@ impl EditorHook {
     // inside the visible window.
     pub(super) fn set_story_line(&mut self, world: &mut World, i: usize) {
         self.commit_story_line(world);
-        self.story_line = i.min(self.story_lines.len().saturating_sub(1));
+        self.story.line = i.min(self.story.lines.len().saturating_sub(1));
         self.seed_story_line(world);
-        self.story_focus = true;
+        self.story.focus = true;
         self.ensure_story_visible();
     }
 
@@ -107,36 +108,32 @@ impl EditorHook {
     }
 
     fn ensure_story_visible(&mut self) {
-        let rows_shown = self.story_rows_shown();
-        if self.story_line < self.story_scroll {
-            self.story_scroll = self.story_line;
-        } else if self.story_line >= self.story_scroll + rows_shown {
-            self.story_scroll = self.story_line + 1 - rows_shown;
-        }
+        self.story.ensure_line_visible(self.story_rows_shown());
     }
 
     pub(in crate::editor::hook) fn scroll_story(&mut self, delta: f32) {
         let max = self
-            .story_lines
+            .story
+            .lines
             .len()
             .saturating_sub(self.story_rows_shown());
-        self.story_scroll = scroll_step(self.story_scroll, delta, max);
+        self.story.scroll = scroll_step(self.story.scroll, delta, max);
     }
 
     pub(in crate::editor::hook) fn make_story_view(&self, mouse: [f32; 2]) -> StoryView<'_> {
         StoryView {
-            lines: &self.story_lines,
-            scroll: self.story_scroll,
-            current: self.story_line,
+            lines: &self.story.lines,
+            scroll: self.story.scroll,
+            current: self.story.line,
             // Focus is asserted only while frontmost (see the lighting panel's
             // matching guard) and not in the one-frame blur after a line join.
-            focus: self.story_focus
-                && !self.story_blur
+            focus: self.story.focus
+                && !self.story.blur
                 && self.panel_order.last() == Some(&PanelKey::Story),
-            path: &self.story_path,
-            status: self.story_status.as_deref(),
+            path: &self.story.path,
+            status: self.story.status.as_deref(),
             create: self.story_import_index().is_none(),
-            dirty: self.story_touched,
+            dirty: self.story.touched,
             mouse,
         }
     }
@@ -152,7 +149,7 @@ impl EditorHook {
             StoryAction::Create => self.create_story(world),
             StoryAction::Apply => self.apply_story(world),
             // A click on panel chrome blurs the edit line.
-            StoryAction::Consume => self.story_focus = false,
+            StoryAction::Consume => self.story.focus = false,
         }
     }
 
@@ -160,8 +157,8 @@ impl EditorHook {
     // line focused: Enter splits at the caret, Up / Down move lines, and
     // Backspace at column 0 joins with the previous line.
     pub(in crate::editor::hook) fn story_keys(&mut self, world: &mut World, input: &FrameInput) {
-        self.story_blur = false;
-        if !self.story_focus || self.story_import_index().is_none() {
+        self.story.blur = false;
+        if !self.story.focus || self.story_import_index().is_none() {
             return;
         }
         let caret = widget::input(world, story_panel::LINE_INPUT)
@@ -170,30 +167,30 @@ impl EditorHook {
         match input.captured_key {
             Some(InputKey::Enter) => {
                 self.commit_story_line(world);
-                self.story_line = story::split_line(&mut self.story_lines, self.story_line, caret);
+                self.story.line = story::split_line(&mut self.story.lines, self.story.line, caret);
                 self.seed_story_line(world);
                 self.set_story_caret(world, 0);
                 self.ensure_story_visible();
             }
-            Some(InputKey::Up) if self.story_line > 0 => {
-                self.set_story_line(world, self.story_line - 1);
+            Some(InputKey::Up) if self.story.line > 0 => {
+                self.set_story_line(world, self.story.line - 1);
             }
-            Some(InputKey::Down) if self.story_line + 1 < self.story_lines.len() => {
-                self.set_story_line(world, self.story_line + 1);
+            Some(InputKey::Down) if self.story.line + 1 < self.story.lines.len() => {
+                self.set_story_line(world, self.story.line + 1);
             }
             Some(InputKey::Backspace) if caret == 0 => {
                 self.commit_story_line(world);
                 if let Some((line, caret)) =
-                    story::join_with_previous(&mut self.story_lines, self.story_line)
+                    story::join_with_previous(&mut self.story.lines, self.story.line)
                 {
-                    self.story_line = line;
+                    self.story.line = line;
                     self.seed_story_line(world);
                     self.set_story_caret(world, caret);
                     self.ensure_story_visible();
                     // The text system processes this same Backspace after the
                     // tick; blurring the control for this frame keeps it from
                     // also deleting the character before the join point.
-                    self.story_blur = true;
+                    self.story.blur = true;
                 }
             }
             _ => {}
@@ -216,16 +213,16 @@ impl EditorHook {
         let Some(path) = self.story_source() else {
             return;
         };
-        self.story_status = None;
-        let content = story::join_lines(&self.story_lines);
+        self.story.status = None;
+        let content = story::join_lines(&self.story.lines);
         if let Err(e) = concinnity_cook::build_only::validate_story_source(&content) {
-            self.story_status = Some(short_status(&e));
+            self.story.status = Some(short_status(&e));
             self.notifier
                 .error_with(&format!("Story rejected: {e}"), notify::Action::OpenConsole);
             return;
         }
         if let Err(e) = std::fs::write(&path, content) {
-            self.story_status = Some(short_status(&format!("{path}: {e}")));
+            self.story.status = Some(short_status(&format!("{path}: {e}")));
             self.notifier.error_with(
                 &format!("Story write failed: {path}: {e}"),
                 notify::Action::OpenConsole,
@@ -233,7 +230,7 @@ impl EditorHook {
             return;
         }
         self.notifier.success(&format!("Applied story {path}"));
-        self.story_touched = false;
+        self.story.touched = false;
         // The cook reads the story from disk, so nothing in the entry list
         // describes what changed: only a rebuild picks the new source up.
         self.require_rebuild();
@@ -248,7 +245,7 @@ impl EditorHook {
         }
         let path = free_story_path();
         if let Err(e) = std::fs::write(&path, story::STARTER_STORY) {
-            self.story_status = Some(short_status(&format!("{path}: {e}")));
+            self.story.status = Some(short_status(&format!("{path}: {e}")));
             return;
         }
         let name = self.unique_name("story");
@@ -257,7 +254,7 @@ impl EditorHook {
         }));
         self.mark_changed();
         self.load_story(world);
-        self.story_focus = true;
+        self.story.focus = true;
     }
 }
 

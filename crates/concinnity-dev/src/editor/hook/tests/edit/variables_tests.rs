@@ -306,7 +306,7 @@ fn retyping_a_variable_re_checks_the_behaviors_reading_it() {
         ),
     ]);
     registry::panel(PanelKey::Behavior).toggle(&mut h, &mut world);
-    assert_eq!(h.behavior_status, Some(behavior::panel::Status::Ok));
+    assert_eq!(h.behavior.status, Some(behavior::panel::Status::Ok));
 
     // The types cycle bool -> int -> float -> vec3, so two steps from int lands
     // on a type an int value no longer satisfies.
@@ -315,7 +315,8 @@ fn retyping_a_variable_re_checks_the_behaviors_reading_it() {
     h.apply_variables_action(VariablesAction::Retype, &mut world);
     assert_eq!(h.variables_data().rows[0].ty, "vec3");
     let status = h
-        .behavior_status
+        .behavior
+        .status
         .as_ref()
         .and_then(behavior::panel::Status::error)
         .expect("the behavior no longer checks out");

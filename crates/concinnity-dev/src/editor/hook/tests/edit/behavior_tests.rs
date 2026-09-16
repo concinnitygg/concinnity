@@ -60,7 +60,7 @@ fn behavior_new_appends_a_blank_behavior_and_opens_it() {
     assert!(h.dirty && h.rebuild_preview, "adding one is a world edit");
     assert_eq!(open_args(&h), serde_json::json!({"on": "start", "do": []}));
     // A blank behavior still checks out, so the panel opens on a clean slate.
-    assert!(matches!(h.behavior_status, Some(Status::Ok)));
+    assert!(matches!(h.behavior.status, Some(Status::Ok)));
 }
 
 // The status line is the world checker's own message, not a second opinion.
@@ -70,8 +70,8 @@ fn behavior_status_reports_the_checkers_message() {
         "broken",
         serde_json::json!({"do": [{"despawn": {"target": {"bind": "nope"}}}]}),
     )]);
-    let Some(Status::Error { message: e, .. }) = &h.behavior_status else {
-        panic!("expected an error status, got {:?}", h.behavior_status);
+    let Some(Status::Error { message: e, .. }) = &h.behavior.status else {
+        panic!("expected an error status, got {:?}", h.behavior.status);
     };
     assert!(e.contains("unbound name 'nope'"), "{e}");
     assert!(e.starts_with("Behavior 'broken'"), "{e}");
@@ -90,8 +90,8 @@ fn behavior_status_enforces_the_declared_variable_table() {
             serde_json::json!({"do": [{"set": {"var": "helth", "value": {"float": 1.0}}}]}),
         ),
     ]);
-    let Some(Status::Error { message: e, .. }) = &h.behavior_status else {
-        panic!("expected an error status, got {:?}", h.behavior_status);
+    let Some(Status::Error { message: e, .. }) = &h.behavior.status else {
+        panic!("expected an error status, got {:?}", h.behavior.status);
     };
     assert!(e.contains("undeclared variable 'helth'"), "{e}");
 }
@@ -101,7 +101,7 @@ fn behavior_picking_a_node_appends_it_and_refreshes_the_preview() {
     let (mut h, mut world) = behavior_session(vec![behavior("b", serde_json::json!({}))]);
     select_behavior(&mut h, &mut world, "do");
     h.apply_behavior_action(BehaviorAction::Palette, &mut world, [0.0, 0.0]);
-    assert!(h.behavior_picking);
+    assert!(h.behavior.picking);
 
     let at = h
         .behavior_data()
@@ -110,7 +110,7 @@ fn behavior_picking_a_node_appends_it_and_refreshes_the_preview() {
         .position(|p| p.verb == "hide")
         .expect("hide is offered");
     h.apply_behavior_action(BehaviorAction::Choose(at), &mut world, [0.0, 0.0]);
-    assert!(!h.behavior_picking, "picking closes the palette");
+    assert!(!h.behavior.picking, "picking closes the palette");
     assert_eq!(
         open_args(&h)["do"],
         serde_json::json!([{"hide": {"target": "self"}}])
@@ -120,7 +120,7 @@ fn behavior_picking_a_node_appends_it_and_refreshes_the_preview() {
         "the edited body runs in the live world straight away"
     );
     // A world-scoped `self` is exactly what the checker objects to, and it says so.
-    let Some(Status::Error { message: e, .. }) = &h.behavior_status else {
+    let Some(Status::Error { message: e, .. }) = &h.behavior.status else {
         panic!("expected the scope error");
     };
     assert!(e.contains("`self` needs a `scope`"), "{e}");
@@ -170,7 +170,7 @@ fn behavior_value_field_commits_on_enter_and_reports_a_bad_value() {
         serde_json::json!({"delay": 0.0, "do": []}),
     )]);
     select_behavior(&mut h, &mut world, "delay");
-    assert!(h.behavior_focus, "a typed row is ready to type into");
+    assert!(h.behavior.focus, "a typed row is ready to type into");
 
     widget::seed_field(&mut world, behavior::panel::VALUE_INPUT, "2.5");
     h.behavior_keys(&mut world, &story_key_input(InputKey::Enter));
@@ -183,7 +183,7 @@ fn behavior_value_field_commits_on_enter_and_reports_a_bad_value() {
         serde_json::json!(2.5),
         "a rejected value leaves the old one standing"
     );
-    let Some(Status::Error { message: e, .. }) = &h.behavior_status else {
+    let Some(Status::Error { message: e, .. }) = &h.behavior.status else {
         panic!("expected a parse error");
     };
     assert!(e.contains("'soon' is not a number"), "{e}");
@@ -200,7 +200,7 @@ fn behavior_delete_and_move_act_on_the_selected_member() {
     h.apply_behavior_action(BehaviorAction::Move(-1), &mut world, [0.0, 0.0]);
     assert!(open_args(&h)["do"][0].get("hide").is_some());
     assert_eq!(
-        h.behavior_row,
+        h.behavior.row,
         Some(behavior_row(&h, "hide")),
         "the selection follows the node it moved"
     );
@@ -208,7 +208,7 @@ fn behavior_delete_and_move_act_on_the_selected_member() {
     h.apply_behavior_action(BehaviorAction::Delete, &mut world, [0.0, 0.0]);
     assert_eq!(open_args(&h)["do"].as_array().unwrap().len(), 1);
     assert!(
-        h.behavior_row.is_none(),
+        h.behavior.row.is_none(),
         "the removed row's selection is dropped, not retargeted"
     );
 }
@@ -242,11 +242,11 @@ fn behavior_remove_takes_the_open_behavior_not_a_node() {
 fn behavior_remove_arms_first_and_any_other_press_cancels() {
     let (mut h, mut world) = behavior_session(vec![behavior("greet", serde_json::json!({}))]);
     press_remove(&mut h, &mut world);
-    assert!(h.behavior_remove_armed, "the first press only arms");
+    assert!(h.behavior.remove_armed, "the first press only arms");
     assert_eq!(h.behavior_data().total, 1, "and destroys nothing");
 
     h.apply_behavior_action(BehaviorAction::ToggleView, &mut world, [0.0, 0.0]);
-    assert!(!h.behavior_remove_armed, "another press disarms it");
+    assert!(!h.behavior.remove_armed, "another press disarms it");
     press_remove(&mut h, &mut world);
     assert_eq!(
         h.behavior_data().total,
@@ -282,7 +282,7 @@ fn behavior_remove_reopens_whatever_holds_that_ordinal() {
     }
     let data = h.behavior_data();
     assert_eq!((data.name.as_str(), data.total), ("", 0));
-    assert!(h.behavior_status.is_none(), "and nothing to check");
+    assert!(h.behavior.status.is_none(), "and nothing to check");
 }
 
 // Removal is an ordinary entry edit, so the history covers it: the two-press
@@ -308,7 +308,7 @@ fn behavior_rename_commits_on_enter() {
         behavior("chase", serde_json::json!({})),
     ]);
     h.apply_behavior_action(BehaviorAction::FocusName, &mut world, [0.0, 0.0]);
-    assert!(h.behavior_name_focus);
+    assert!(h.behavior.name_focus);
     assert_eq!(
         widget::field_text(&world, behavior::panel::NAME_INPUT),
         "greet",
@@ -318,7 +318,7 @@ fn behavior_rename_commits_on_enter() {
     type_name(&mut world, "  welcome  ");
     h.behavior_keys(&mut world, &story_key_input(InputKey::Enter));
     assert_eq!(h.behavior_data().name, "welcome", "trimmed on the way in");
-    assert!(!h.behavior_name_focus, "committing gives up the keyboard");
+    assert!(!h.behavior.name_focus, "committing gives up the keyboard");
     assert!(h.dirty && h.rebuild_preview, "renaming is a world edit");
     // The ordinal is untouched: renaming does not reorder the world.
     assert_eq!(h.behavior_data().index, 0);
@@ -357,8 +357,8 @@ fn behavior_rename_refuses_a_blank_name() {
 
     assert_eq!(h.behavior_data().name, "greet", "nothing was written");
     assert!(!h.dirty, "and no edit was recorded");
-    let Some(Status::Error { message: e, .. }) = &h.behavior_status else {
-        panic!("expected the panel to say why, got {:?}", h.behavior_status);
+    let Some(Status::Error { message: e, .. }) = &h.behavior.status else {
+        panic!("expected the panel to say why, got {:?}", h.behavior.status);
     };
     assert!(e.contains("needs a name"), "{e}");
     assert_eq!(
@@ -380,7 +380,7 @@ fn behavior_rename_reruns_the_checker_under_the_new_name() {
     type_name(&mut world, "still_broken");
     h.behavior_keys(&mut world, &story_key_input(InputKey::Enter));
 
-    let Some(Status::Error { message: e, .. }) = &h.behavior_status else {
+    let Some(Status::Error { message: e, .. }) = &h.behavior.status else {
         panic!("expected the error to survive the rename");
     };
     assert!(e.starts_with("Behavior 'still_broken'"), "{e}");
@@ -395,7 +395,7 @@ fn behavior_name_reverts_when_it_loses_focus() {
     type_name(&mut world, "half typed");
 
     h.apply_behavior_action(BehaviorAction::Consume, &mut world, [0.0, 0.0]);
-    assert!(!h.behavior_name_focus);
+    assert!(!h.behavior.name_focus);
     assert_eq!(
         widget::field_text(&world, behavior::panel::NAME_INPUT),
         "greet"
@@ -414,13 +414,13 @@ fn behavior_name_and_value_fields_do_not_share_the_keyboard() {
         serde_json::json!({"delay": 0.0, "do": []}),
     )]);
     select_behavior(&mut h, &mut world, "delay");
-    assert!(h.behavior_focus && !h.behavior_name_focus);
+    assert!(h.behavior.focus && !h.behavior.name_focus);
 
     h.apply_behavior_action(BehaviorAction::FocusName, &mut world, [0.0, 0.0]);
-    assert!(h.behavior_name_focus && !h.behavior_focus);
+    assert!(h.behavior.name_focus && !h.behavior.focus);
 
     h.apply_behavior_action(BehaviorAction::FocusValue, &mut world, [0.0, 0.0]);
-    assert!(h.behavior_focus && !h.behavior_name_focus);
+    assert!(h.behavior.focus && !h.behavior.name_focus);
 }
 
 // The value field's contents survive the live-preview rebuild an edit triggers,
@@ -452,15 +452,15 @@ fn behavior_view_cycles_through_the_three_views() {
         "chase",
         serde_json::json!({"on": "tick", "do": [{"hide": {"target": "self"}}]}),
     )]);
-    assert_eq!(h.behavior_mode, ViewMode::Outline);
+    assert_eq!(h.behavior.mode, ViewMode::Outline);
     select_behavior(&mut h, &mut world, "hide");
-    let selected = h.behavior_row;
+    let selected = h.behavior.row;
 
     for want in [ViewMode::Chart, ViewMode::Overview, ViewMode::Outline] {
         h.apply_behavior_action(BehaviorAction::ToggleView, &mut world, [0.0, 0.0]);
-        assert_eq!(h.behavior_mode, want);
+        assert_eq!(h.behavior.mode, want);
         assert_eq!(
-            h.behavior_row, selected,
+            h.behavior.row, selected,
             "the selection survives every switch"
         );
     }
@@ -488,7 +488,7 @@ fn behavior_card_selects_the_row_it_stands_for() {
 
     h.apply_behavior_action(BehaviorAction::SelectCard(card), &mut world, [0.0, 0.0]);
     let rows = h.behavior_rows();
-    assert_eq!(rows[h.behavior_row.unwrap()].label, "hide");
+    assert_eq!(rows[h.behavior.row.unwrap()].label, "hide");
     // And the palette that selection offers is the node palette, so picking
     // from a card replaces the node the card draws.
     assert!(
@@ -517,7 +517,7 @@ fn behavior_overview_opens_the_behavior_a_card_stands_for() {
     for _ in 0..2 {
         h.apply_behavior_action(BehaviorAction::ToggleView, &mut world, [0.0, 0.0]);
     }
-    assert_eq!(h.behavior_mode, ViewMode::Overview);
+    assert_eq!(h.behavior.mode, ViewMode::Overview);
 
     let overview = h.behavior_data().overview;
     let card = overview
@@ -531,10 +531,10 @@ fn behavior_overview_opens_the_behavior_a_card_stands_for() {
     );
 
     h.apply_behavior_action(BehaviorAction::OpenCard(card), &mut world, [0.0, 0.0]);
-    assert_eq!(h.behavior_index, 1);
+    assert_eq!(h.behavior.index, 1);
     assert_eq!(h.behavior_data().name, "react");
     assert_eq!(
-        h.behavior_mode,
+        h.behavior.mode,
         ViewMode::Chart,
         "and lands on the body it named"
     );
@@ -660,7 +660,7 @@ fn behavior_inspector_holds_the_node_while_its_fields_are_selected() {
     let after = h.behavior_data();
     assert_eq!(after.card, Some(card), "the inspector holds the node");
     assert_eq!(after.fields, data.fields, "and lists the same settings");
-    assert!(h.behavior_focus, "a typed setting is ready to type into");
+    assert!(h.behavior.focus, "a typed setting is ready to type into");
 }
 
 // A node's own field is its own; the nodes nested inside it are cards of their
@@ -741,8 +741,8 @@ fn behavior_wheel_pans_the_chart_within_its_extent() {
     h.scroll_behavior(1.0);
     // This body is one row tall and wider than the canvas, so the wheel moves
     // along the axis that has room.
-    assert!(h.behavior_pan[0] > 0.0, "{:?}", h.behavior_pan);
-    assert_eq!(h.behavior_scroll, 0, "the outline's scroll is untouched");
+    assert!(h.behavior.pan[0] > 0.0, "{:?}", h.behavior.pan);
+    assert_eq!(h.behavior.scroll, 0, "the outline's scroll is untouched");
 
     for _ in 0..200 {
         h.scroll_behavior(1.0);
@@ -751,8 +751,8 @@ fn behavior_wheel_pans_the_chart_within_its_extent() {
     let canvas =
         behavior::panel::chart_canvas(h.effective_size(PanelKey::Behavior), ViewMode::Chart);
     assert_eq!(
-        h.behavior_pan,
-        crate::editor::behavior::chart::clamp_pan(h.behavior_pan, &chart, canvas)
+        h.behavior.pan,
+        crate::editor::behavior::chart::clamp_pan(h.behavior.pan, &chart, canvas)
     );
 }
 
@@ -779,14 +779,14 @@ fn behavior_selection_pans_an_off_canvas_card_into_view() {
     h.apply_behavior_action(BehaviorAction::Move(-1), &mut world, [0.0, 0.0]);
 
     let data = h.behavior_data();
-    let path = &data.rows[h.behavior_row.unwrap()].path;
+    let path = &data.rows[h.behavior.row.unwrap()].path;
     let card = data.chart.cards.iter().find(|c| &c.path == path).unwrap();
     let band = behavior::panel::chart_band(
         [0.0, 0.0],
         h.effective_size(PanelKey::Behavior),
         ViewMode::Chart,
     );
-    let rect = crate::editor::behavior::chart::card_rect(card, band, h.behavior_pan);
+    let rect = crate::editor::behavior::chart::card_rect(card, band, h.behavior.pan);
     assert!(rect[0] >= band[0], "{rect:?} left of {band:?}");
     assert!(rect[0] + rect[2] <= band[0] + band[2] + 0.01, "{rect:?}");
 }
@@ -861,9 +861,9 @@ fn behavior_go_to_fault_selects_the_faulting_row() {
             {"hide": {"target": {"int": 1}}},
         ]}),
     )]);
-    assert_eq!(h.behavior_row, None);
+    assert_eq!(h.behavior.row, None);
     h.apply_behavior_action(BehaviorAction::GoToFault, &mut world, [0.0, 0.0]);
-    let row = h.behavior_row.expect("the fault was selected");
+    let row = h.behavior.row.expect("the fault was selected");
     assert_eq!(h.behavior_rows()[row].label, "target");
 }
 
@@ -878,11 +878,11 @@ fn behavior_go_to_fault_leaves_the_overview_for_the_body() {
     for _ in 0..2 {
         h.apply_behavior_action(BehaviorAction::ToggleView, &mut world, [0.0, 0.0]);
     }
-    assert_eq!(h.behavior_mode, ViewMode::Overview);
+    assert_eq!(h.behavior.mode, ViewMode::Overview);
 
     h.apply_behavior_action(BehaviorAction::GoToFault, &mut world, [0.0, 0.0]);
-    assert_eq!(h.behavior_mode, ViewMode::Chart);
-    let row = h.behavior_row.expect("the fault was selected");
+    assert_eq!(h.behavior.mode, ViewMode::Chart);
+    let row = h.behavior.row.expect("the fault was selected");
     assert_eq!(h.behavior_rows()[row].label, "target");
 }
 
@@ -938,7 +938,7 @@ fn type_filter(h: &mut EditorHook, world: &mut World, text: &str) {
 fn open_palette(h: &mut EditorHook, world: &mut World, row: &str) {
     select_behavior(h, world, row);
     h.apply_behavior_action(BehaviorAction::Palette, world, [0.0, 0.0]);
-    assert!(h.behavior_picking, "the palette is open");
+    assert!(h.behavior.picking, "the palette is open");
 }
 
 // The point of typing is that the first answer is the one wanted, so Enter after
@@ -980,7 +980,7 @@ fn behavior_palette_filter_clears_when_the_palette_closes() {
 
     // Picking closes it, and the filter goes with it.
     press_behavior_key(&mut h, &mut world, InputKey::Enter);
-    assert!(h.behavior_filter.is_empty());
+    assert!(h.behavior.filter.is_empty());
     assert_eq!(
         widget::field_text(&world, behavior::panel::FILTER_INPUT),
         "",
@@ -991,8 +991,8 @@ fn behavior_palette_filter_clears_when_the_palette_closes() {
     open_palette(&mut h, &mut world, "do");
     type_filter(&mut h, &mut world, "spawn");
     h.behavior_keys(&mut world, &behavior_escape_input());
-    assert!(!h.behavior_picking);
-    assert!(h.behavior_filter.is_empty());
+    assert!(!h.behavior.picking);
+    assert!(h.behavior.filter.is_empty());
     open_palette(&mut h, &mut world, "do");
     assert_eq!(h.behavior_data().matches.len(), unfiltered);
 }
@@ -1009,12 +1009,12 @@ fn behavior_palette_filter_resets_the_highlight_it_may_have_excluded() {
     for _ in 0..4 {
         press_behavior_key(&mut h, &mut world, InputKey::Down);
     }
-    assert_eq!(h.behavior_pick, 4);
+    assert_eq!(h.behavior.pick, 4);
 
     // A query keeping fewer options than that would have stranded the highlight.
     type_filter(&mut h, &mut world, "spawn");
-    assert_eq!(h.behavior_pick, 0);
-    assert_eq!(h.behavior_pick_scroll, 0);
+    assert_eq!(h.behavior.pick, 0);
+    assert_eq!(h.behavior.pick_scroll, 0);
     assert!(h.behavior_data().matches.len() <= 4);
 
     press_behavior_key(&mut h, &mut world, InputKey::Enter);
@@ -1036,11 +1036,11 @@ fn behavior_palette_survives_a_query_nothing_answers() {
     open_palette(&mut h, &mut world, "do");
     type_filter(&mut h, &mut world, "zzzz");
     assert!(h.behavior_data().matches.is_empty());
-    assert!(h.behavior_picking, "the palette is still up");
+    assert!(h.behavior.picking, "the palette is still up");
 
     // Enter has nothing to insert, and nothing is written.
     press_behavior_key(&mut h, &mut world, InputKey::Enter);
-    assert!(h.behavior_picking);
+    assert!(h.behavior.picking);
     assert_eq!(open_args(&h)["do"].as_array().map(Vec::len), Some(0));
 
     // Correcting the query brings the options back.
