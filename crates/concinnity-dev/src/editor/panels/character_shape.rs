@@ -8,7 +8,6 @@
 use concinnity_cook::authoring::registry::build_only::CharacterSchema;
 use concinnity_cook::authoring::registry::build_only::ShapePreset;
 use concinnity_core::components::{JointProportion, ShapeSlider};
-use rand::{RngExt, SeedableRng};
 
 // The trailing section for keys and groups the schema does not place.
 pub(crate) const OTHER_SECTION: &str = "Other";
@@ -281,10 +280,10 @@ impl ShapeValues {
     // Every row to a seeded random value inside `RANDOM_BAND`, so the body
     // stays plausible.
     pub(crate) fn randomize(&mut self, rows: &[SliderRow], joints: &[String], seed: u64) {
-        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+        let mut rng = SplitMix64::new(seed);
         for row in rows {
             let (lo, hi) = random_band(&row.kind);
-            self.set(row, rng.random_range(lo..=hi), joints);
+            self.set(row, rng.next_in(lo, hi), joints);
         }
     }
 
@@ -303,6 +302,29 @@ pub(crate) const RANDOM_BAND: f32 = 0.6;
 pub(crate) fn random_band(kind: &RowKind) -> (f32, f32) {
     let (lo, hi) = kind.range();
     (lo * RANDOM_BAND, hi * RANDOM_BAND)
+}
+
+// A SplitMix64 generator: small, seedable, and stable across releases.
+struct SplitMix64(u64);
+
+impl SplitMix64 {
+    fn new(seed: u64) -> Self {
+        Self(seed)
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    }
+
+    // A draw in `lo..=hi`, from the top 53 bits mapped onto [0, 1].
+    fn next_in(&mut self, lo: f32, hi: f32) -> f32 {
+        let unit = (self.next_u64() >> 11) as f64 / ((1u64 << 53) - 1) as f64;
+        (lo as f64 + (hi as f64 - lo as f64) * unit) as f32
+    }
 }
 
 fn round2(v: f32) -> f32 {
@@ -519,6 +541,25 @@ mod tests {
         v.reset(&rows.sliders, &[]);
         assert_eq!(v.sliders.len(), 1);
         assert_eq!(v.sliders[0].name, "tail");
+    }
+
+    #[test]
+    fn splitmix64_matches_the_reference_sequence() {
+        let mut rng = SplitMix64::new(0);
+        assert_eq!(rng.next_u64(), 0xe220_a839_7b1d_cdaf);
+        assert_eq!(rng.next_u64(), 0x6e78_9e6a_a1b9_65f4);
+        assert_eq!(rng.next_u64(), 0x06c4_5d18_8009_454f);
+    }
+
+    #[test]
+    fn splitmix64_draws_stay_in_band() {
+        let mut rng = SplitMix64::new(7);
+        for _ in 0..10_000 {
+            let v = rng.next_in(-0.6, 0.6);
+            assert!((-0.6..=0.6).contains(&v), "{v}");
+        }
+        let mut edges = SplitMix64::new(0);
+        assert_eq!(edges.next_in(0.25, 0.25), 0.25);
     }
 
     #[test]

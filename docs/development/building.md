@@ -368,7 +368,7 @@ Ubuntu; translate them to your distribution's equivalents as needed.
    sudo apt update
    sudo apt install \
      build-essential cmake pkg-config git python3 \
-     libssl-dev libasound2-dev \
+     libasound2-dev \
      libglfw3 libglfw3-dev \
      libwayland-dev libwayland-bin wayland-protocols \
      libx11-dev libxkbcommon-dev libxrandr-dev libxinerama-dev \
@@ -377,7 +377,6 @@ Ubuntu; translate them to your distribution's equivalents as needed.
 
    - `build-essential`, `cmake`, `git`, `python3` — build GLFW from source when
      no prebuilt library is found.
-   - `libssl-dev` — TLS for the networking client.
    - `libasound2-dev` — ALSA, used by the audio backend.
    - `libglfw3` / `libglfw3-dev` and the `libx*` packages — windowing and input
      (GLFW's X11 backend).

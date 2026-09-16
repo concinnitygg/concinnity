@@ -22,7 +22,7 @@ default = ["native"]
 native = []
 metal = []
 directx = []
-vulkan = ["dep:ash"]
+vulkan = ["dep:ash", "dep:libloading"]
 
 [dependencies]
 concinnity-core = { workspace = true }
@@ -31,7 +31,6 @@ concinnity-slang = { workspace = true }
 
 bytemuck = { workspace = true, features = ["derive"] }
 hex = { workspace = true }
-libloading = "0.9.0"
 png = { workspace = true }
 rayon = { workspace = true }
 tracing = { workspace = true }
@@ -40,16 +39,19 @@ sha2 = { workspace = true }
 
 [target.'cfg(not(any(target_vendor = "apple", target_os = "windows")))'.dependencies]
 ash = { workspace = true }
+libloading = "0.8"
 
 [target.'cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))'.dependencies]
 glfw = { version = "0.62.0", default-features = false, features = ["vulkan", "x11", "wayland", "prebuilt-libs", "raw-window-handle-v0-6"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 ash = { workspace = true, optional = true }
+libloading = { version = "0.8", optional = true }
 windows = { workspace = true, features = ["Win32_Foundation", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D12", "Win32_Graphics_Direct3D_Dxc", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Gdi", "Win32_Security", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_UI_Input", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_vendor = "apple")'.dependencies]
 ash = { workspace = true, optional = true }
+libloading = { version = "0.8", optional = true }
 block2 = "0.6.2"
 dispatch2 = "0.3.1"
 objc2 = { workspace = true }

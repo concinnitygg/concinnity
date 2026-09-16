@@ -34,13 +34,12 @@ concinnity-host = { workspace = true }
 ciborium = { workspace = true }
 notify = { workspace = true, features = ["macos_fsevent"] }
 png = { workspace = true }
-rand = "0.10.2"
 rayon = { workspace = true }
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
 serde = { workspace = true, features = ["derive", "std"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
 # `cn docs` reads the asset prose out of the engine's own sources.
-syn = { version = "3.0.4", features = ["full", "parsing"] }
+syn = { version = "2", features = ["full"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 ureq = { version = "3.2.0", default-features = false }

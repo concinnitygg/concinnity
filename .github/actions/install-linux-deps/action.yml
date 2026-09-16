@@ -10,7 +10,7 @@ runs:
         sudo apt-get update
         sudo apt-get install --no-install-recommends -y \
           build-essential cmake pkg-config git python3 \
-          libssl-dev libasound2-dev \
+          libasound2-dev \
           libglfw3 libglfw3-dev \
           libwayland-dev libwayland-bin wayland-protocols \
           libx11-dev libxkbcommon-dev libxrandr-dev libxinerama-dev \
