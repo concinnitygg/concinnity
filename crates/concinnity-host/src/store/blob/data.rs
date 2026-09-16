@@ -98,7 +98,7 @@ impl BlobData {
         let idx = locator.blob_index as usize;
         let slot = self.slots.get_mut(idx).ok_or_else(|| {
             tracing::error!("BlobData: blob {} is out of range", locator.blob_index);
-            CnError::FileIo
+            CnError::InvalidData
         })?;
         if let BlobSlot::Unloaded(path) = slot {
             tracing::debug!(
@@ -113,10 +113,10 @@ impl BlobData {
             BlobSlot::Loaded(bytes) => bytes,
             BlobSlot::Released => {
                 tracing::error!("BlobData: blob {} has been released", locator.blob_index);
-                return Err(CnError::FileIo);
+                return Err(CnError::InvalidState);
             }
             // Unreachable: an Unloaded slot was loaded just above.
-            BlobSlot::Unloaded(_) => return Err(CnError::FileIo),
+            BlobSlot::Unloaded(_) => return Err(CnError::InvalidState),
         };
 
         let start = locator.offset as usize;
@@ -127,7 +127,7 @@ impl BlobData {
                 locator.len,
                 locator.blob_index
             );
-            CnError::FileIo
+            CnError::InvalidData
         })?;
         section.get(start..end).ok_or_else(|| {
             tracing::error!(
@@ -137,7 +137,7 @@ impl BlobData {
                 locator.blob_index,
                 section.len()
             );
-            CnError::FileIo
+            CnError::InvalidData
         })
     }
 
@@ -261,7 +261,7 @@ mod tests {
     fn read_errors_on_released_blob() {
         // a `None` section is treated as already released
         let mut bd = BlobData::new(vec![None]);
-        assert!(bd.read(&locator(0, 0, 1)).is_err());
+        assert_eq!(bd.read(&locator(0, 0, 1)), Err(CnError::InvalidState));
     }
 
     #[test]
@@ -270,7 +270,7 @@ mod tests {
         assert_eq!(bd.read(&locator(0, 0, 2)).expect("read ok"), b"ab");
         bd.release(0);
         assert!(!bd.is_loaded(0));
-        assert!(bd.read(&locator(0, 0, 2)).is_err());
+        assert_eq!(bd.read(&locator(0, 0, 2)), Err(CnError::InvalidState));
     }
 
     #[test]
@@ -284,7 +284,7 @@ mod tests {
         assert_eq!(freed, 4, "blob 0's four bytes were freed");
         assert!(!bd.is_loaded(0));
         // The freed section now errors on read rather than reloading.
-        assert!(bd.read(&locator(0, 0, 1)).is_err());
+        assert_eq!(bd.read(&locator(0, 0, 1)), Err(CnError::InvalidState));
         // A second sweep frees nothing (idempotent).
         assert_eq!(bd.release_all_resident(), 0);
     }
@@ -292,13 +292,13 @@ mod tests {
     #[test]
     fn read_errors_on_out_of_range_blob() {
         let mut bd = BlobData::empty();
-        assert!(bd.read(&locator(3, 0, 1)).is_err());
+        assert_eq!(bd.read(&locator(3, 0, 1)), Err(CnError::InvalidData));
     }
 
     #[test]
     fn read_errors_when_the_locator_runs_past_the_section() {
         let mut bd = BlobData::new(vec![Some(b"abcd".to_vec())]);
-        assert!(bd.read(&locator(0, 2, 99)).is_err());
-        assert!(bd.read(&locator(0, u64::MAX, 1)).is_err());
+        assert_eq!(bd.read(&locator(0, 2, 99)), Err(CnError::InvalidData));
+        assert_eq!(bd.read(&locator(0, u64::MAX, 1)), Err(CnError::InvalidData));
     }
 }

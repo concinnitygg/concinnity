@@ -87,19 +87,17 @@ impl App {
     /// builds the app with [`in_tree`](Self::in_tree) instead. The world's own
     /// `AppConfig.home` overrides either at `start`.
     pub fn from_blob(path: &std::path::Path) -> Result<Self, StartupError> {
-        let loaded = blob::load_at(path)
-            .map_err(|e| StartupError::from_blob_failure(path.to_path_buf(), e))?;
         let mut app = Self::new();
+        app.load_blob_from(path)?;
         app.state = state_dir_for_blob(path).map(StateTree::at);
-        app.install(loaded);
         Ok(app)
     }
 
     /// Load assets and blob payload data from the primary blob under this app's
     /// state tree, and populate the world. Replaces any previously loaded
     /// world. `NoStateRoot` when the app has no tree to read from.
-    pub fn load_blob(&mut self) -> Result<(), CnError> {
-        let primary = self.primary_blob().ok_or(CnError::NoStateRoot)?;
+    pub fn load_blob(&mut self) -> Result<(), StartupError> {
+        let primary = self.primary_blob().ok_or(StartupError::NoStateRoot)?;
         self.load_blob_from(&primary)?;
         Ok(())
     }
@@ -115,8 +113,12 @@ impl App {
     // `load_blob` against a primary blob file named directly, returning the
     // world's highest blob index so the caller can check the layout it resolved
     // can actually hold it.
-    pub(crate) fn load_blob_from(&mut self, primary: &std::path::Path) -> Result<u32, CnError> {
-        let loaded = blob::load_at(primary)?;
+    pub(crate) fn load_blob_from(
+        &mut self,
+        primary: &std::path::Path,
+    ) -> Result<u32, StartupError> {
+        let loaded = blob::load_at(primary)
+            .map_err(|e| StartupError::from_blob_failure(primary.to_path_buf(), e))?;
         let max_blob_index = loaded.manifest.max_blob_index;
         self.install(loaded);
         Ok(max_blob_index)
@@ -552,7 +554,7 @@ mod tests {
 
         let mut app = App::new();
         assert_eq!(app.primary_blob(), None);
-        assert_eq!(app.load_blob(), Err(CnError::NoStateRoot));
+        assert_eq!(app.load_blob(), Err(StartupError::NoStateRoot));
         app.start().unwrap();
         assert!(app.world().resource::<StateTree>().is_none());
         assert!(
@@ -560,6 +562,18 @@ mod tests {
             "the previous anchor no longer takes entries"
         );
         assert!(!cache::flush(), "nothing is left to write");
+    }
+
+    #[test]
+    fn a_tree_without_a_build_reports_its_primary_blob_missing() {
+        let tmp = concinnity_testing::TempTree::new();
+        let mut app = App::new().in_tree(StateTree::at(tmp.path()));
+        let primary = app.primary_blob().expect("a tree names a primary blob");
+
+        assert_eq!(
+            app.load_blob(),
+            Err(StartupError::MissingData { blob: primary })
+        );
     }
 
     // A blob named directly anchors the state tree beside the world it holds,

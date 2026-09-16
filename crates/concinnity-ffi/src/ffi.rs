@@ -55,15 +55,14 @@ unsafe impl Send for HostState {}
 static STATE: OnceLock<Mutex<HostState>> = OnceLock::new();
 
 /// Initialize logging and the host state. Call once, from the thread that owns
-/// the view, before any other `cn_` function. Returns 1.
+/// the view, before any other `cn_` function.
 ///
 /// The log level is not a parameter: it follows the same default the player
 /// uses and `RUST_LOG` overrides it.
 #[unsafe(no_mangle)]
-pub extern "C" fn cn_init() -> c_int {
+pub extern "C" fn cn_init() {
     concinnity_engine::app::run::init_logging();
     STATE.get_or_init(|| Mutex::new(HostState { world: None }));
-    1
 }
 
 /// Open the built world under `root` and render it into `view`.
@@ -89,6 +88,7 @@ pub unsafe extern "C" fn cn_world_open(
 ) -> c_int {
     // SAFETY: the caller's contract above; `ptr_to_string` handles null.
     let Some(root) = (unsafe { ptr_to_string(root) }) else {
+        tracing::error!("cn_world_open: root is null or not UTF-8");
         return 0;
     };
     let Some(view) = NonNull::new(view) else {
@@ -157,9 +157,7 @@ fn open_world(root: &str, surface: EmbeddedSurface) -> Result<App, String> {
         return Err(format!("{} is not a directory", root.display()));
     }
     let mut world = App::new().in_tree(StateTree::at(root));
-    world
-        .load_blob()
-        .map_err(|e| format!("loading the world under {} failed: {e:?}", root.display()))?;
+    world.load_blob().map_err(|e| e.to_string())?;
     world.world_mut().insert_resource(surface);
     world
         .start()
@@ -280,6 +278,22 @@ mod tests {
         let opened = unsafe { cn_world_open(root.as_ptr(), some_view(&mut byte), 0) };
         assert_eq!(opened, 0);
         assert_eq!(cn_world_step(), CnStep::NoWorld);
+    }
+
+    // The refusal carries the load failure's own text, so a host's log says
+    // what was missing and how to produce it.
+    #[test]
+    fn opening_a_root_holding_no_world_names_the_missing_blob() {
+        let tree = TempTree::new();
+        let mut byte = 0u8;
+        let surface = EmbeddedSurface {
+            view: NonNull::new(some_view(&mut byte)).expect("a live pointer is non-null"),
+            pump_events: false,
+        };
+
+        let error = open_world(&tree.root_path(), surface).expect_err("no world was built");
+        assert!(error.contains("concinnity build"), "{error}");
+        assert!(error.contains(&tree.root_path()), "{error}");
     }
 
     #[test]

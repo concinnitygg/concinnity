@@ -15,11 +15,11 @@ typedef enum {
 } CnStep;
 
 // Initialize logging and the host state. Call once, from the thread that owns
-// the view, before any other `cn_` function. Returns 1.
+// the view, before any other `cn_` function.
 //
 // The log level is not a parameter: it follows the same default the player
 // uses and `RUST_LOG` overrides it.
-int cn_init(void);
+void cn_init(void);
 
 // Open the built world under `root` and render it into `view`.
 //

@@ -4,6 +4,7 @@
 //! the classification happens here where the paths involved are still known.
 
 use concinnity_core::error::CnError;
+use std::fmt;
 use std::path::PathBuf;
 
 /// Why the runtime could not reach a playable state.
@@ -78,34 +79,32 @@ impl StartupError {
             StartupError::NoStateRoot => "Failed to find this app's data.".to_string(),
         }
     }
+}
 
-    // The developer-facing line, carrying the status the user message omits.
-    pub(crate) fn log_line(&self) -> String {
+/// The developer-facing line, carrying the status the user message omits.
+impl fmt::Display for StartupError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            StartupError::MissingData { blob } => {
-                format!(
-                    "no compiled world data at {} -- run `concinnity build` first",
-                    blob.display()
-                )
-            }
-            StartupError::UnreadableData { blob, cause } => {
-                format!(
-                    "compiled world data at {} failed to load: {cause}",
-                    blob.display()
-                )
-            }
-            StartupError::OverflowUnsupported { blob, needed } => {
-                format!(
-                    "{} is a single blob file, but this world spans {} more; \
-                     re-export it so the player ships a `data/` directory",
-                    blob.display(),
-                    needed
-                )
-            }
-            StartupError::NoStateRoot => {
-                "no state directory was installed, so there is nowhere to read world data from"
-                    .to_string()
-            }
+            StartupError::MissingData { blob } => write!(
+                f,
+                "no compiled world data at {} -- run `concinnity build` first",
+                blob.display()
+            ),
+            StartupError::UnreadableData { blob, cause } => write!(
+                f,
+                "compiled world data at {} failed to load: {cause}",
+                blob.display()
+            ),
+            StartupError::OverflowUnsupported { blob, needed } => write!(
+                f,
+                "{} is a single blob file, but this world spans {} more; \
+                 re-export it so the player ships a `data/` directory",
+                blob.display(),
+                needed
+            ),
+            StartupError::NoStateRoot => f.write_str(
+                "no state directory was installed, so there is nowhere to read world data from",
+            ),
         }
     }
 }
@@ -122,7 +121,7 @@ mod tests {
         let err = StartupError::from_blob_failure(blob, CnError::FileIo);
         assert!(matches!(err, StartupError::MissingData { .. }));
         assert!(err.user_message().contains("Failed to find"));
-        assert!(err.log_line().contains("concinnity build"));
+        assert!(err.to_string().contains("concinnity build"));
     }
 
     #[test]
@@ -136,7 +135,7 @@ mod tests {
         assert!(matches!(err, StartupError::UnreadableData { .. }));
         assert!(err.user_message().contains("Failed to read"));
         // The status the user message deliberately omits stays in the log line.
-        assert!(err.log_line().contains(&CnError::FileIo.to_string()));
+        assert!(err.to_string().contains(&CnError::FileIo.to_string()));
     }
 
     // Both messages name the path, which is the part the reader can act on.
@@ -156,7 +155,7 @@ mod tests {
             },
         ] {
             assert!(err.user_message().contains("/somewhere/data/0"));
-            assert!(err.log_line().contains("/somewhere/data/0"));
+            assert!(err.to_string().contains("/somewhere/data/0"));
         }
     }
 
@@ -168,9 +167,9 @@ mod tests {
             blob: PathBuf::from("/apps/MyGame/data"),
             needed: 3,
         };
-        assert!(err.log_line().contains("single blob file"), "{err:?}");
-        assert!(err.log_line().contains("`data/` directory"), "{err:?}");
-        assert!(err.log_line().contains('3'), "{err:?}");
+        assert!(err.to_string().contains("single blob file"), "{err:?}");
+        assert!(err.to_string().contains("`data/` directory"), "{err:?}");
+        assert!(err.to_string().contains('3'), "{err:?}");
         assert_eq!(err.io_kind(), std::io::ErrorKind::InvalidData);
     }
 
@@ -180,6 +179,6 @@ mod tests {
     fn no_state_root_reports_not_found_without_a_path() {
         let err = StartupError::NoStateRoot;
         assert_eq!(err.io_kind(), std::io::ErrorKind::NotFound);
-        assert!(err.log_line().contains("no state directory"));
+        assert!(err.to_string().contains("no state directory"));
     }
 }

@@ -98,16 +98,10 @@ pub fn run(tree: &StateTree, options: RunOptions) -> std::io::Result<()> {
     init_logging();
 
     let mut app = App::new().in_tree(tree.clone());
-    let primary = app.primary_blob();
-
-    if let Err(e) = app.load_blob() {
-        report_startup_error(match primary {
-            Some(blob) => StartupError::from_blob_failure(blob, e),
-            None => StartupError::NoStateRoot,
-        });
-        return Ok(());
+    let data_dir = tree.data_dir();
+    if let Err(error) = load_world(&mut app, BlobSource::Directory(&data_dir)) {
+        return Err(report_startup_error(error));
     }
-
     start_runtime(app, options).map_err(start_failure)
 }
 
@@ -119,13 +113,23 @@ fn start_failure(e: CnError) -> std::io::Error {
 // Report a fatal startup failure: always to the log, and on screen as well when
 // a window can be stood up, so a packaged app that a user double-clicked says
 // something rather than exiting silently. The screen blocks until dismissed.
-fn report_startup_error(error: StartupError) {
-    tracing::error!("{}", error.log_line());
+// The process still exits non-zero with the returned error: the screen is how
+// the user learns what happened, not a substitute for failing.
+fn report_startup_error(error: StartupError) -> std::io::Error {
+    tracing::error!("{error}");
     if !crate::error_screen::show("Concinnity", &error.user_message()) {
         // No window, so the log line above is the whole report; repeat it on
         // stderr, which a console user sees regardless of the tracing filter.
-        eprintln!("{}", error.log_line());
+        eprintln!("{error}");
     }
+    std::io::Error::new(error.io_kind(), error.to_string())
+}
+
+// Populate `app` with the world `source` holds, refusing a layout that cannot
+// hold every blob the world spans.
+fn load_world(app: &mut App, source: BlobSource<'_>) -> Result<(), StartupError> {
+    let max_blob_index = app.load_blob_from(&source.primary())?;
+    source.check_span(max_blob_index).map_or(Ok(()), Err)
 }
 
 /// Where a shipped app's compiled world sits. Both forms make the same file
@@ -174,17 +178,9 @@ impl BlobSource<'_> {
 pub fn run_from(tree: &StateTree, blob: BlobSource<'_>) -> std::io::Result<()> {
     init_logging();
 
-    let primary = blob.primary();
     let mut app = App::new().in_tree(tree.clone());
-    let failure = match app.load_blob_from(&primary) {
-        Ok(max_blob_index) => blob.check_span(max_blob_index),
-        Err(e) => Some(StartupError::from_blob_failure(primary, e)),
-    };
-    if let Some(error) = failure {
-        report_startup_error(error.clone());
-        // The process still exits non-zero: the screen is how the user learns
-        // what happened, not a substitute for failing.
-        return Err(std::io::Error::new(error.io_kind(), error.log_line()));
+    if let Err(error) = load_world(&mut app, blob) {
+        return Err(report_startup_error(error));
     }
     start_runtime(app, RunOptions::default()).map_err(start_failure)
 }
@@ -318,6 +314,33 @@ mod tests {
         let dir = Path::new("/apps/MyGame/data");
         assert_eq!(BlobSource::Directory(dir).check_span(0), None);
         assert_eq!(BlobSource::Directory(dir).check_span(7), None);
+    }
+
+    // A tree with no build behind it is a missing-data failure in either
+    // layout, which is what makes `cn run` exit non-zero rather than start empty.
+    #[test]
+    fn loading_a_world_that_was_never_built_reports_missing_data() {
+        let tmp = concinnity_testing::TempTree::new();
+        let tree = StateTree::at(tmp.path());
+
+        let data_dir = tree.data_dir();
+        let mut app = App::new().in_tree(tree.clone());
+        let error = load_world(&mut app, BlobSource::Directory(&data_dir))
+            .expect_err("an empty tree has no world");
+        assert_eq!(
+            error,
+            StartupError::MissingData {
+                blob: data_dir.join("0")
+            }
+        );
+        assert_eq!(error.io_kind(), std::io::ErrorKind::NotFound);
+
+        let file = tmp.join("missing.blob");
+        let mut app = App::new().in_tree(tree);
+        assert_eq!(
+            load_world(&mut app, BlobSource::File(&file)),
+            Err(StartupError::MissingData { blob: file })
+        );
     }
 
     // A world that refuses to start reports it through the return value. The
