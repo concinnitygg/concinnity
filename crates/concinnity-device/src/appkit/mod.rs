@@ -1,6 +1,6 @@
 // Native AppKit windowing, input, and display-mode switching, shared by every
 // backend that renders into an NSView on macOS: Metal always, and Vulkan (via
-// vulkan/appkit_window.rs) instead of GLFW, so the two backends get one
+// vulkan/window/appkit.rs) instead of GLFW, so the two backends get one
 // window/input implementation with identical behavior. GLFW remains the
 // windowing layer on Linux only.
 //

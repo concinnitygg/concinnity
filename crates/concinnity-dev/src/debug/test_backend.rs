@@ -23,7 +23,7 @@ impl backend::RenderBackend for StubBackend {
     fn window_closed(&mut self) -> bool {
         false
     }
-    fn capture_cursor(&mut self) {}
+    fn request_cursor_capture(&mut self) {}
     fn take_input(&mut self) -> InputSnapshot {
         InputSnapshot::default()
     }

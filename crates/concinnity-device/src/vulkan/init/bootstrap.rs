@@ -73,7 +73,7 @@ pub(super) fn acquire_hardware(
     let hdr_display = post.hdr_display;
     let (temporal_upscaling, upscale_backend) = (post.temporal_upscaling, post.upscale_backend);
     // Platform window: native Win32 on Windows, AppKit on macOS, GLFW on Linux.
-    let mut window = crate::vulkan::PlatformWindow::new(
+    let mut window = crate::vulkan::window::PlatformWindow::new(
         title,
         width,
         height,

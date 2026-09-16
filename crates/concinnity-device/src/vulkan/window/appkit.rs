@@ -2,7 +2,7 @@
 //! AppKit layer (crate::appkit) the Metal backend also uses, so the two
 //! NSView-rendering backends share one window/input/display-mode implementation
 //! with identical behavior (event pump, cursor capture/confinement, window modes,
-//! Resolution-row mode switching). GLFW (window.rs) remains the windowing layer
+//! Resolution-row mode switching). GLFW (window/glfw.rs) remains the windowing layer
 //! on Linux only.
 //!
 //! Metal renders through an `MTKView`, which owns its `CAMetalLayer` and sizes
@@ -118,7 +118,7 @@ impl AppKitVkWindow {
         self.win.take_input()
     }
 
-    pub(crate) fn capture_cursor(&mut self) {
+    pub(crate) fn request_cursor_capture(&mut self) {
         self.win.capture_cursor();
     }
 
@@ -197,7 +197,7 @@ impl AppKitVkWindow {
         // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
         // it names belongs to this device.
         unsafe { loader.create_metal_surface(&info, None) }
-            .map_err(|e| super::error::map_vk_result(e, "vkCreateMetalSurfaceEXT"))
+            .map_err(|e| crate::vulkan::error::map_vk_result(e, "vkCreateMetalSurfaceEXT"))
     }
 
     // Vulkan instance extensions required for surface creation on macOS.

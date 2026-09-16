@@ -1,5 +1,5 @@
 //! Window style selection, shared by window creation and the settings-menu mode
-//! switch (`window::do_set_window_mode`) so both agree on what a windowed window
+//! switch (`window::set_window_mode`) so both agree on what a windowed window
 //! looks like. Mirrors `metal::chrome`.
 
 use windows::Win32::UI::WindowsAndMessaging::{

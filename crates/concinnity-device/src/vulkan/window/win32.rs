@@ -3,7 +3,7 @@
 //! HWND-rendering backends share one window/input/display-mode implementation
 //! with identical behavior (wnd_proc, raw-input camera deltas, cursor
 //! capture/confinement, window modes, Resolution-row mode switching). GLFW
-//! (window.rs) remains the windowing layer on Linux only; the surface is
+//! (window/glfw.rs) remains the windowing layer on Linux only; the surface is
 //! created directly through VK_KHR_win32_surface.
 
 use ash::vk;
@@ -14,10 +14,8 @@ use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::window::display_mode::DisplayMode;
 
 use crate::win32::display_mode::{self, FullscreenDisplayMode};
-use crate::win32::window::{
-    WindowState, create_window, do_capture_cursor, do_release_cursor, do_set_ui_cursor_hidden,
-    do_set_window_mode, do_set_window_size, frame_tick, take_input_snapshot,
-};
+use crate::win32::window;
+use crate::win32::window::{WindowState, create_window, frame_tick, take_input_snapshot};
 
 pub(crate) struct Win32Window {
     win_state: Box<WindowState>,
@@ -68,14 +66,14 @@ impl Win32Window {
     // freshly spawned window may not be focused, and grabbing before the user
     // interacts is jarring. The first content click captures (the same flow
     // as DirectX and as GLFW's focus-gated engage on Linux).
-    pub(crate) fn capture_cursor(&mut self) {
+    pub(crate) fn request_cursor_capture(&mut self) {
         self.win_state.recapture_on_click = true;
     }
 
     // Hide or show the OS cursor for an in-engine UI cursor (e.g. a MainMenu),
     // without engaging camera capture. Edge-triggered in the helper.
     pub(crate) fn set_ui_cursor_hidden(&mut self, hidden: bool) {
-        do_set_ui_cursor_hidden(&mut self.win_state, hidden);
+        window::set_ui_cursor_hidden(&mut self.win_state, hidden);
     }
 
     // A togglable menu coexists with a captured camera; see
@@ -86,7 +84,7 @@ impl Win32Window {
     }
 
     // Edge-triggered capture: capture for camera control, release while a
-    // menu is open. Unlike the startup `capture_cursor` (which arms
+    // menu is open. Unlike the startup `request_cursor_capture` (which arms
     // click-to-capture), closing the menu recaptures immediately so the
     // camera resumes without an extra click.
     pub(crate) fn set_camera_capture(&mut self, capture: bool) {
@@ -95,9 +93,9 @@ impl Win32Window {
         }
         if capture {
             let hwnd = self.win_state.hwnd;
-            do_capture_cursor(hwnd, &mut self.win_state);
+            window::capture_cursor(hwnd, &mut self.win_state);
         } else {
-            do_release_cursor(&mut self.win_state);
+            window::release_cursor(&mut self.win_state);
         }
     }
 
@@ -114,11 +112,11 @@ impl Win32Window {
     }
 
     pub(crate) fn set_window_mode(&mut self, mode: WindowMode) {
-        do_set_window_mode(&mut self.win_state, mode);
+        window::set_window_mode(&mut self.win_state, mode);
     }
 
     pub(crate) fn set_window_size(&mut self, width: u32, height: u32) {
-        do_set_window_size(&mut self.win_state, width, height);
+        window::set_window_size(&mut self.win_state, width, height);
     }
 
     // The display modes of the window's monitor, feeding the Resolution
@@ -180,7 +178,7 @@ impl Win32Window {
         // SAFETY: `info` borrows the module handle and HWND for the call; both name live Win32
         // objects owned by this window.
         unsafe { loader.create_win32_surface(&info, None) }
-            .map_err(|e| super::error::map_vk_result(e, "vkCreateWin32SurfaceKHR"))
+            .map_err(|e| crate::vulkan::error::map_vk_result(e, "vkCreateWin32SurfaceKHR"))
     }
 
     // Vulkan instance extensions required for surface creation on Windows.

@@ -632,7 +632,7 @@ fn init_pushes_startup_backend_state() {
     let s = lock(&state);
     // A camera with no UI: plain first-person capture, menu mode off.
     assert!(s.saw(&Call::SetMenuMode(false)));
-    assert!(s.saw(&Call::CaptureCursor));
+    assert!(s.saw(&Call::RequestCursorCapture));
     // The ambient scale + keymap are pushed once after construction.
     assert!(s.saw(&Call::SetAmbientIntensity(1.0)));
     assert!(s.saw(&Call::SetKeymap));
@@ -661,7 +661,7 @@ fn menu_driven_init_skips_the_first_person_cursor_grab() {
 
     let s = lock(&state);
     assert!(
-        !s.saw(&Call::CaptureCursor),
+        !s.saw(&Call::RequestCursorCapture),
         "a menu/editor driver owns capture; init must not auto-grab"
     );
     // Menu mode still reflects the world's own UI (none here), unchanged.
@@ -690,7 +690,7 @@ fn ui_only_world_trims_scene_features() {
         "screen-space effects trimmed with the scene"
     );
     // No camera: the cursor is never captured.
-    assert!(!s.saw(&Call::CaptureCursor));
+    assert!(!s.saw(&Call::RequestCursorCapture));
 }
 
 #[test]

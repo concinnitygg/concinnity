@@ -1223,7 +1223,7 @@ pub(super) struct VkHardware {
     // menu / keymap state) into the successor context instead of opening a new
     // OS window; `None` only transiently on the outgoing context, which is
     // dropped immediately after (see the `window` / `window_mut` accessors).
-    pub(super) window: Option<super::PlatformWindow>,
+    pub(super) window: Option<super::window::PlatformWindow>,
     // Keep Entry alive for the lifetime of the instance
     pub(super) _entry: ash::Entry,
 }
@@ -1975,7 +1975,7 @@ impl VkContext {
     // only on the outgoing context of a `reload_world` (its window was moved
     // into the successor), which is dropped without any further window access.
     #[inline]
-    pub(super) fn window(&self) -> &super::PlatformWindow {
+    pub(super) fn window(&self) -> &super::window::PlatformWindow {
         self.hw
             .window
             .as_ref()
@@ -1983,7 +1983,7 @@ impl VkContext {
     }
 
     #[inline]
-    pub(super) fn window_mut(&mut self) -> &mut super::PlatformWindow {
+    pub(super) fn window_mut(&mut self) -> &mut super::window::PlatformWindow {
         self.hw
             .window
             .as_mut()
@@ -2082,8 +2082,8 @@ impl VkContext {
             .fetch_add(n, std::sync::atomic::Ordering::Relaxed);
     }
 
-    pub(crate) fn capture_cursor(&mut self) {
-        self.window_mut().capture_cursor();
+    pub(crate) fn request_cursor_capture(&mut self) {
+        self.window_mut().request_cursor_capture();
     }
 
     // Hide or show the OS cursor for an in-engine UI cursor (e.g. a MainMenu),

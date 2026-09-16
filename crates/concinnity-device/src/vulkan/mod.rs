@@ -3,8 +3,6 @@
 // feature. macOS runs over the MoltenVK portability driver.
 
 mod allocator;
-#[cfg(target_os = "macos")]
-mod appkit_window;
 mod auto_exposure;
 mod backend;
 mod barrier_translate;
@@ -24,7 +22,6 @@ mod graph_exec;
 mod hiz;
 mod hot_reload;
 mod init;
-mod input;
 mod instance_exts;
 mod light_cull;
 mod line;
@@ -52,24 +49,10 @@ mod transient_pool;
 mod transparent;
 mod upload_ring;
 mod water;
-#[cfg(target_os = "windows")]
-mod win32_window;
-#[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
-pub(crate) mod window;
+mod window;
 mod wire_cache;
 mod wireframe;
 mod world_shaders;
 
-// The platform window VkContext owns: the shared native Win32 layer on Windows
-// and the shared native AppKit layer on macOS (one window/input implementation
-// with the DirectX and Metal backends respectively), GLFW on the desktop Unix
-// tier. The gate matches the manifest's, so a target with no window layer
-// fails naming this alias rather than naming a missing crate.
-#[cfg(target_os = "macos")]
-pub(crate) use appkit_window::AppKitVkWindow as PlatformWindow;
 pub(crate) use context::VkContext;
 pub(crate) use gpu_profile::probe_gpu_profile;
-#[cfg(target_os = "windows")]
-pub(crate) use win32_window::Win32Window as PlatformWindow;
-#[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
-pub(crate) use window::GlfwWindow as PlatformWindow;

@@ -112,8 +112,8 @@ pub trait RenderBackend:
 {
     /// Whether the window has been asked to close, polled once a frame.
     fn window_closed(&mut self) -> bool;
-    /// Confine the cursor to the window.
-    fn capture_cursor(&mut self);
+    /// Ask the window to capture the cursor; a backend may defer until the first content click.
+    fn request_cursor_capture(&mut self);
     /// Take the input sampled since the last call.
     fn take_input(&mut self) -> InputSnapshot;
     /// Block until the GPU has drained every submitted frame.
@@ -160,7 +160,7 @@ pub(crate) mod test_stub {
         fn window_closed(&mut self) -> bool {
             false
         }
-        fn capture_cursor(&mut self) {}
+        fn request_cursor_capture(&mut self) {}
         fn take_input(&mut self) -> InputSnapshot {
             InputSnapshot::default()
         }

@@ -52,7 +52,7 @@ pub(crate) struct KeyState {
     pub hud_toggle_pending: bool,
     // One-shot: set on Escape-down when the cursor is *not* captured.
     // (When the cursor is captured the wnd_proc routes Escape through
-    // `do_release_cursor` instead, matching the Metal backend.)
+    // `release_cursor` instead, matching the Metal backend.)
     pub escape_pending: bool,
     // One-shot: the canonical key pressed since the last `take`, for the
     // settings-menu rebind capture. Set on any mapped key-down; reset by `take`.
@@ -125,7 +125,7 @@ impl KeyState {
     }
 
     // Note an Escape press while the cursor is *not* captured. The wnd_proc
-    // keeps swallowing Escape into `do_release_cursor` while captured, so
+    // keeps swallowing Escape into `release_cursor` while captured, so
     // this is only called for the "menu / UI" case; mirrors the Metal
     // `escape_pulse` rule.
     pub(crate) fn on_escape_uncaptured(&mut self) {

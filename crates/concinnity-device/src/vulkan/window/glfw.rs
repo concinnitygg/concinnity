@@ -1,8 +1,8 @@
 //! GLFW window and input for the Vulkan backend on Linux. (On Windows the
-//! backend uses the shared native Win32 layer instead -- see win32_window.rs;
+//! backend uses the shared native Win32 layer instead -- see window/win32.rs;
 //! this module is compiled only off-Windows.)
 //!
-//! Input design mirrors metal.rs: events accumulate into an InputSnapshot between
+//! Input design mirrors the AppKit layer (appkit/input.rs): events accumulate into an InputSnapshot between
 //! poll() calls; GraphicsSystem drains the state each step via take_input()
 //! and deposits it as a FrameInput component for Camera3DSystem to consume.
 //!
@@ -315,7 +315,11 @@ impl GlfwWindow {
     // Hide the cursor and begin delivering relative mouse deltas via CursorPos
     // events. Should be called once after the window is shown, when a
     // Camera3D component is present.
-    pub(crate) fn capture_cursor(&mut self) {
+    pub(crate) fn request_cursor_capture(&mut self) {
+        self.capture_cursor();
+    }
+
+    fn capture_cursor(&mut self) {
         self.cursor_captured = true;
         self.apply_cursor_mode();
         // enable raw mouse motion if the platform supports it -- bypasses
@@ -753,7 +757,7 @@ impl GlfwWindow {
             )
         };
         if result != 0 {
-            Err(super::error::map_vk_result(
+            Err(crate::vulkan::error::map_vk_result(
                 ash::vk::Result::from_raw(result),
                 "glfwCreateWindowSurface",
             ))

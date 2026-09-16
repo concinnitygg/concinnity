@@ -41,7 +41,7 @@ use crate::forward::forward;
 impl RenderBackend for DxContext {
     forward! { assert = debug_assert_main_thread;
         fn window_closed(&mut self) -> bool;
-        fn capture_cursor(&mut self);
+        fn request_cursor_capture(&mut self);
         fn take_input(&mut self) -> InputSnapshot;
         fn wait_idle(&self);
         fn draw_frame(&mut self, params: FrameParams<'_>) -> RenderResult<()>;

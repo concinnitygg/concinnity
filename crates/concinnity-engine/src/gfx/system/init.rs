@@ -1400,7 +1400,7 @@ impl GraphicsSystem {
             // own default seed when there is no override.
             backend.set_keymap(&settings.keymap);
             if has_camera && !has_ui && !menu_driven {
-                backend.capture_cursor();
+                backend.request_cursor_capture();
             }
         }
         self.caps = device_caps;

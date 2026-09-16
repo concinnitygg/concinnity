@@ -52,8 +52,12 @@ use crate::forward::forward;
 impl RenderBackend for MtlContext {
     forward! { assert = debug_assert_main_thread,
         via = self.window().appkit, via_mut = self.window_mut().appkit;
-        fn capture_cursor(&mut self);
         fn take_input(&mut self) -> InputSnapshot;
+    }
+
+    fn request_cursor_capture(&mut self) {
+        debug_assert_main_thread("request_cursor_capture");
+        self.window_mut().appkit.capture_cursor();
     }
 
     forward! { assert = debug_assert_main_thread;

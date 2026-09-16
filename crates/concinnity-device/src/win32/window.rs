@@ -1,6 +1,6 @@
 //! Win32 window creation, the window proc, cursor capture/release, and the
 //! message pump, shared by the DirectX backend and the Vulkan backend's
-//! Windows window (vulkan/win32_window.rs).
+//! Windows window (vulkan/window/win32.rs).
 
 use concinnity_core::components::WindowMode;
 use concinnity_core::input::snapshot::{InputSnapshot, wheel_notches_to_scroll_delta};
@@ -79,9 +79,9 @@ pub(crate) struct WindowState {
     // The current window mode. Tracked so the per-frame cursor confinement
     // knows whether to confine (Fullscreen) or hide the in-engine arrow on
     // leave (Windowed / Borderless). The window is always created windowed;
-    // `do_set_window_mode` keeps this in sync as the settings menu cycles it.
+    // `set_window_mode` keeps this in sync as the settings menu cycles it.
     pub(crate) window_mode: WindowMode,
-    // The world's authored `Window.title_bar`. Held because `do_set_window_mode`
+    // The world's authored `Window.title_bar`. Held because `set_window_mode`
     // rebuilds the style every time the settings menu cycles back to Windowed
     // and has to reinstate the authored chrome, not a standard caption.
     pub(crate) title_bar: bool,
@@ -121,7 +121,7 @@ impl Drop for WindowState {
 // Cursor capture/release helpers shared by the wnd_proc and the backends'
 // context methods. Both callers need them, and the wnd_proc cannot reach the
 // context because it only has the WindowState pointer stored in GWLP_USERDATA.
-pub(crate) fn do_capture_cursor(hwnd: HWND, state: &mut WindowState) {
+pub(crate) fn capture_cursor(hwnd: HWND, state: &mut WindowState) {
     // Capture only while the window is foreground. Engaging from the
     // background half-works: RIDEV_INPUTSINK raw input flows (the camera
     // moves) but the OS ignores a background ClipCursor and the keyboard
@@ -170,7 +170,7 @@ pub(crate) fn do_capture_cursor(hwnd: HWND, state: &mut WindowState) {
     state.mouse_dy = 0.0;
 }
 
-pub(crate) fn do_release_cursor(state: &mut WindowState) {
+pub(crate) fn release_cursor(state: &mut WindowState) {
     if !state.cursor_captured {
         return;
     }
@@ -188,7 +188,7 @@ pub(crate) fn do_release_cursor(state: &mut WindowState) {
 // without engaging camera capture. Edge-triggered on `ui_cursor_hidden`: Win32
 // keeps a per-thread cursor display count, so we flip ShowCursor only on a
 // transition to keep it balanced against capture's own hide/show.
-pub(crate) fn do_set_ui_cursor_hidden(state: &mut WindowState, hidden: bool) {
+pub(crate) fn set_ui_cursor_hidden(state: &mut WindowState, hidden: bool) {
     if hidden == state.ui_cursor_hidden {
         return;
     }
@@ -240,7 +240,7 @@ fn client_screen_rect(hwnd: HWND) -> Option<RECT> {
 pub(crate) fn update_ui_cursor_confinement(state: &mut WindowState) {
     // While captured the pointer is already clipped + hidden for the camera, so
     // there is no in-engine arrow to hide and nothing to confine here. Capture
-    // owns the clip now (`do_capture_cursor` set its own), so just relinquish our
+    // owns the clip now (`capture_cursor` set its own), so just relinquish our
     // flag without releasing -- releasing would undo capture's clip.
     if state.cursor_captured {
         state.menu_clip_active = false;
@@ -314,7 +314,7 @@ fn release_menu_clip(state: &mut WindowState) {
 // (SetFullscreenState) is deliberately avoided -- it is documented as fraught
 // with alt-tab, multi-display, and resolution-change issues. SetWindowPos fires
 // WM_SIZE, which the resize path turns into a ResizeBuffers.
-pub(crate) fn do_set_window_mode(state: &mut WindowState, mode: WindowMode) {
+pub(crate) fn set_window_mode(state: &mut WindowState, mode: WindowMode) {
     let hwnd = state.hwnd;
     // Record the mode so the per-frame cursor confinement can tell fullscreen
     // (confine) from windowed / borderless (hide the arrow on leave).
@@ -367,7 +367,7 @@ pub(crate) fn do_set_window_mode(state: &mut WindowState, mode: WindowMode) {
 // Resize the window's content area (windowed mode only). AdjustWindowRect
 // converts the desired client size to the full window rect; WM_SIZE then drives
 // ResizeBuffers.
-pub(crate) fn do_set_window_size(state: &mut WindowState, width: u32, height: u32) {
+pub(crate) fn set_window_size(state: &mut WindowState, width: u32, height: u32) {
     let hwnd = state.hwnd;
     // SAFETY: `hwnd` is this window's live handle, and `rect` is a live local `AdjustWindowRect`
     // fills before `SetWindowPos` reads it.
@@ -451,7 +451,7 @@ unsafe extern "system" fn wnd_proc(
                     if state.menu_mode || !state.cursor_captured {
                         state.key.on_escape_uncaptured();
                     } else {
-                        do_release_cursor(state);
+                        release_cursor(state);
                     }
                 }
                 state.key.on_key_down(vk);
@@ -555,7 +555,7 @@ unsafe extern "system" fn wnd_proc(
                     // In menu mode a click fires a UI action; capture is driven
                     // by the active menu, not by clicking (mirrors metal/input.rs).
                     if !state.menu_mode && state.recapture_on_click {
-                        do_capture_cursor(hwnd, state);
+                        capture_cursor(hwnd, state);
                     } else {
                         state.left_click_pending = true;
                         // Begin a held-button (UI drag) gesture.
@@ -803,7 +803,7 @@ pub(crate) fn frame_tick(
     let mode = state.window_mode;
     let fullscreen = matches!(mode, WindowMode::Fullscreen);
     if display.reconcile(state.hwnd, fullscreen) && !matches!(mode, WindowMode::Windowed) {
-        do_set_window_mode(state, mode);
+        set_window_mode(state, mode);
     }
     state.closed
 }

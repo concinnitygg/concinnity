@@ -50,7 +50,8 @@ use super::post::ssr::*;
 use super::post::taa::*;
 use super::texture::*;
 use crate::directx::error::map_hresult;
-use crate::win32::window::*;
+use crate::win32::window;
+use crate::win32::window::{WindowState, frame_tick, take_input_snapshot};
 
 // Constants
 pub(super) const FRAMES: usize = 3; // triple-buffered
@@ -2389,7 +2390,7 @@ impl DxContext {
         }
     }
 
-    pub(crate) fn capture_cursor(&mut self) {
+    pub(crate) fn request_cursor_capture(&mut self) {
         // Don't grab the cursor immediately. A freshly spawned window may not be
         // focused yet, and clipping + hiding the system cursor before the user
         // has interacted with the window is jarring; it also diverges from the
@@ -2405,7 +2406,7 @@ impl DxContext {
     // without engaging camera capture. Edge-triggered in the helper, so calling
     // it every frame with the same value is cheap.
     pub(crate) fn set_ui_cursor_hidden(&mut self, hidden: bool) {
-        do_set_ui_cursor_hidden(self.win_mut(), hidden);
+        window::set_ui_cursor_hidden(self.win_mut(), hidden);
     }
 
     // Whether the real cursor has left the window so the renderer should stop
@@ -2425,7 +2426,7 @@ impl DxContext {
 
     // Edge-triggered capture: capture for camera control, release while a menu
     // is open. GraphicsSystem calls this each frame in menu mode. Unlike the
-    // startup `capture_cursor` (which arms click-to-capture), closing the menu
+    // startup `request_cursor_capture` (which arms click-to-capture), closing the menu
     // recaptures immediately so the camera resumes without an extra click.
     pub(crate) fn set_camera_capture(&mut self, capture: bool) {
         if capture == self.win().cursor_captured {
@@ -2433,9 +2434,9 @@ impl DxContext {
         }
         if capture {
             let hwnd = self.win().hwnd;
-            do_capture_cursor(hwnd, self.win_mut());
+            window::capture_cursor(hwnd, self.win_mut());
         } else {
-            do_release_cursor(self.win_mut());
+            window::release_cursor(self.win_mut());
         }
     }
 
@@ -2454,11 +2455,11 @@ impl DxContext {
     // and content-size presets). The Win32 work lives in `window.rs`; the resize
     // path picks up the resulting WM_SIZE.
     pub(crate) fn set_window_mode(&mut self, mode: components::WindowMode) {
-        do_set_window_mode(self.win_mut(), mode);
+        window::set_window_mode(self.win_mut(), mode);
     }
 
     pub(crate) fn set_window_size(&mut self, width: u32, height: u32) {
-        do_set_window_size(self.win_mut(), width, height);
+        window::set_window_size(self.win_mut(), width, height);
     }
 
     // The display modes (resolution + refresh rate) of the monitor the window
@@ -2676,7 +2677,7 @@ impl Drop for DxContext {
         // if the caller didn't release explicitly. `None` on the outgoing context
         // of a `reload_world` (the window moved to its successor), so guard it.
         if let Some(ws) = self.hw.win_state.as_mut() {
-            do_release_cursor(ws);
+            window::release_cursor(ws);
         }
         // Unmap persistent CBV mappings (view + shadow).
         self.uniforms.unmap();

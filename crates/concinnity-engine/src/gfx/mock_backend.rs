@@ -80,7 +80,7 @@ pub(crate) struct InitSnapshot {
 // One recorded backend call with the parameters tests assert on.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Call {
-    CaptureCursor,
+    RequestCursorCapture,
     WaitIdle,
     // A live world reload was applied onto this (transplanted) backend instead
     // of building a fresh one -- the `cn editor` hot-swap path.
@@ -374,8 +374,8 @@ impl RenderBackend for MockBackend {
         self.state.lock().unwrap().window_closed
     }
 
-    fn capture_cursor(&mut self) {
-        self.record(Call::CaptureCursor);
+    fn request_cursor_capture(&mut self) {
+        self.record(Call::RequestCursorCapture);
     }
 
     fn take_input(&mut self) -> InputSnapshot {
