@@ -76,8 +76,9 @@ pub(super) fn setup(
     vsync: bool,
 ) -> RenderResult<(MtlHardware, (u32, u32))> {
     // all Metal and AppKit calls must happen on the main thread
-    let mtm = objc2::MainThreadMarker::new()
-        .ok_or("MtlContext::new must be called from the main thread")?;
+    let mtm = objc2::MainThreadMarker::new().ok_or_else(|| {
+        RenderError::Other("MtlContext::new must be called from the main thread".into())
+    })?;
     let swapchain_config = SwapchainConfig {
         frames_in_flight: frames_in_flight.max(1),
         hdr_display: hdr.display_requested,
@@ -90,7 +91,9 @@ pub(super) fn setup(
             let view = &hw
                 .window
                 .as_ref()
-                .ok_or("reload_world: handed-over hardware has no window")?
+                .ok_or_else(|| {
+                    RenderError::Other("reload_world: handed-over hardware has no window".into())
+                })?
                 .view;
             let (hdr_mode, initial_w, initial_h) = reconfigure_view(mtm, view, config, hdr);
             hw.swap_pixel_format = swap_pixel_format(hdr_mode);
@@ -99,10 +102,11 @@ pub(super) fn setup(
             (hw, initial_w, initial_h)
         }
         None => {
-            let device = MTLCreateSystemDefaultDevice().ok_or("no default Metal device")?;
+            let device = MTLCreateSystemDefaultDevice()
+                .ok_or_else(|| RenderError::Other("no default Metal device".into()))?;
             let command_queue = device
                 .newCommandQueue()
-                .ok_or("failed to create Metal command queue")?;
+                .ok_or_else(|| RenderError::Other("failed to create Metal command queue".into()))?;
             // The block pool the world's persistent buffers and textures are
             // placed in, per context: a live reload hands its successor a
             // fresh one, so the outgoing context's heaps go with it.

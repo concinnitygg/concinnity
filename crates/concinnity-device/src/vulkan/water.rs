@@ -15,7 +15,7 @@ use ash::vk;
 use concinnity_core::components::{MAX_WATER_WAVES, WaterSurface, WaterWave};
 use concinnity_core::geometry::water_grid::build_water_grid;
 use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 // `WaterParams` / `WaterWaveGpu` (the per-surface UBO and its wave lanes) are
 // GPU-free layout structs that live in `core::render`; re-export them so
 // `crate::vulkan::water::WaterParams` is unchanged for the `water_params_from`
@@ -142,7 +142,8 @@ fn build_surface_record(
     planar_slot: Option<usize>,
 ) -> RenderResult<TransparentRecord> {
     let (verts, idxs) =
-        build_water_grid(surface.extent[0], surface.extent[1], surface.subdivisions)?;
+        build_water_grid(surface.extent[0], surface.extent[1], surface.subdivisions)
+            .map_err(RenderError::Other)?;
 
     // Flatten into the standard engine `Vertex` layout. Tangent and color are
     // placeholders: the water shader rebuilds its normal frame analytically from

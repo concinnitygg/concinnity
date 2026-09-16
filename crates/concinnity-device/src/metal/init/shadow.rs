@@ -6,7 +6,7 @@ use concinnity_core::gfx::render_types::{
 };
 use concinnity_core::render::backend_init::ShadowParams;
 use concinnity_core::render::csm;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::lights;
 use objc2_metal::{
     MTLCompareFunction, MTLDevice as _, MTLResourceOptions, MTLSamplerAddressMode,
@@ -58,7 +58,7 @@ pub(super) fn build_shadow(
         desc.setSupportArgumentBuffers(true);
         device
             .newSamplerStateWithDescriptor(&desc)
-            .ok_or("failed to create shadow sampler state")?
+            .ok_or_else(|| RenderError::Other("failed to create shadow sampler state".into()))?
     };
 
     // Cache the first directional light's direction; per-frame CSM updates

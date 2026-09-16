@@ -31,28 +31,27 @@ impl MtlContext {
         indices: &[u16],
         frame: u64,
     ) -> RenderResult<()> {
-        let obj = self
-            .draw
-            .objects
-            .get(draw_idx)
-            .ok_or_else(|| format!("upload_mesh: draw object {} out of range", draw_idx))?;
+        let obj = self.draw.objects.get(draw_idx).ok_or_else(|| {
+            RenderError::Other(format!(
+                "upload_mesh: draw object {} out of range",
+                draw_idx
+            ))
+        })?;
         if vertices.len() != obj.vertex_count {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "upload_mesh: draw {} expects {} vertices, got {}",
                 draw_idx,
                 obj.vertex_count,
                 vertices.len()
-            )
-            .into());
+            )));
         }
         if indices.len() != obj.index_count {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "upload_mesh: draw {} expects {} indices, got {}",
                 draw_idx,
                 obj.index_count,
                 indices.len()
-            )
-            .into());
+            )));
         }
 
         // Reclaim frees whose in-flight frames have retired, then place the

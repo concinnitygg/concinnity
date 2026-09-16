@@ -15,7 +15,7 @@
 //! SRV/RTV heap layout stable so everything past the bloom block stays at its
 //! originally-allocated slot.
 
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::*;
 
@@ -303,7 +303,9 @@ impl DxContext {
                 .targets
                 .transient_pool
                 .resource_for("bloom_top")
-                .ok_or("transient pool missing bloom_top on resize")?
+                .ok_or_else(|| {
+                    RenderError::Other("transient pool missing bloom_top on resize".into())
+                })?
                 .clone();
             let new_mips =
                 create_bloom_mips_at(&self.hw.device, new_w, new_h, bloom_count, bloom_top)?;

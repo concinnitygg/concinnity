@@ -6,7 +6,7 @@
 use ash::vk;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::render::error;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 
 use super::super::context::*;
 use super::super::texture;
@@ -69,29 +69,28 @@ impl VkContext {
         indices: &[u16],
         frame: u64,
     ) -> error::RenderResult<()> {
-        let obj = self
-            .draw
-            .objects
-            .get(draw_idx)
-            .ok_or_else(|| format!("upload_mesh: draw object {} out of range", draw_idx))?;
+        let obj = self.draw.objects.get(draw_idx).ok_or_else(|| {
+            RenderError::Other(format!(
+                "upload_mesh: draw object {} out of range",
+                draw_idx
+            ))
+        })?;
         let (vertex_count, index_count) = (obj.vertex_count, obj.index_count);
         if vertices.len() != vertex_count {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "upload_mesh: draw {} expects {} vertices, got {}",
                 draw_idx,
                 vertex_count,
                 vertices.len()
-            )
-            .into());
+            )));
         }
         if indices.len() != index_count {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "upload_mesh: draw {} expects {} indices, got {}",
                 draw_idx,
                 index_count,
                 indices.len()
-            )
-            .into());
+            )));
         }
 
         self.geometry.mesh_vtx_alloc.reclaim(frame);
@@ -148,42 +147,39 @@ impl VkContext {
         lod_alternates: &[(f32, Vec<u16>)],
     ) -> RenderResult<()> {
         let obj = self.draw.objects.get(draw_idx).ok_or_else(|| {
-            format!(
+            RenderError::Other(format!(
                 "update_mesh_geometry: draw object {} out of range",
                 draw_idx
-            )
+            ))
         })?;
         if vertices.len() != obj.vertex_count {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "update_mesh_geometry: draw {} expects {} vertices, got {} \
                  (in-place path is size-matched only; size changes route through \
                  rebuild_static_geometry)",
                 draw_idx,
                 obj.vertex_count,
                 vertices.len()
-            )
-            .into());
+            )));
         }
         if indices.len() != obj.index_count {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "update_mesh_geometry: draw {} expects {} indices, got {} \
                  (in-place path is size-matched only; size changes route through \
                  rebuild_static_geometry)",
                 draw_idx,
                 obj.index_count,
                 indices.len()
-            )
-            .into());
+            )));
         }
         if lod_alternates.len() != obj.lod_alternates.len() {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "update_mesh_geometry: draw {} expects {} LOD alternate(s), got {} \
                  (LOD-count changes need rebuild_static_geometry)",
                 draw_idx,
                 obj.lod_alternates.len(),
                 lod_alternates.len()
-            )
-            .into());
+            )));
         }
         for (lod_idx, ((_, alt_idx), slice)) in lod_alternates
             .iter()
@@ -191,15 +187,14 @@ impl VkContext {
             .enumerate()
         {
             if alt_idx.len() != slice.index_count {
-                return Err(format!(
+                return Err(RenderError::Other(format!(
                     "update_mesh_geometry: draw {} LOD{} expects {} indices, got {} \
                      (LOD size changes need rebuild_static_geometry)",
                     draw_idx,
                     lod_idx + 1,
                     slice.index_count,
                     alt_idx.len()
-                )
-                .into());
+                )));
             }
         }
 

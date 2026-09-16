@@ -54,11 +54,11 @@ pub(super) fn build_bindless_pass(
             )));
         }
         if !active {
-            return Err(
+            return Err(RenderError::Other(
                 "material-referenced Shaders need the GPU-driven main pass, which a \
                         world with no 3D scene content does not build"
                     .into(),
-            );
+            ));
         }
         pipelines::build_world_pipeline_table(
             device,

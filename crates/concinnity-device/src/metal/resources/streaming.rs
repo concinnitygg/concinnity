@@ -83,7 +83,9 @@ impl MtlContext {
             frame,
         } = mesh;
         if vertices.is_empty() || indices.is_empty() {
-            return Err("add_chunk_mesh: empty chunk geometry".into());
+            return Err(RenderError::Other(
+                "add_chunk_mesh: empty chunk geometry".into(),
+            ));
         }
         self.geometry_alloc.chunk_vtx.reclaim(frame);
         self.geometry_alloc.chunk_idx.reclaim(frame);

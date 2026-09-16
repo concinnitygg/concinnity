@@ -2,12 +2,10 @@
 //! their native failure codes (VkResult, HRESULT, MTLCommandBuffer status) into
 //! these classes at the detection sites; the frame loop dispatches recovery
 //! policy on the class, never on prose. `Other` is the unclassified bucket: a
-//! failure no detection site classified, including any `String` error lifted
-//! through `?`.
+//! failure no detection site classified.
 
 use alloc::format;
 use alloc::string::String;
-use alloc::string::ToString;
 use thiserror::Error;
 
 /// Why the GPU device stopped servicing work, as reported by the backend API.
@@ -88,30 +86,10 @@ impl RenderError {
     }
 }
 
-impl From<String> for RenderError {
-    fn from(message: String) -> Self {
-        RenderError::Other(message)
-    }
-}
-
-impl From<&str> for RenderError {
-    fn from(message: &str) -> Self {
-        RenderError::Other(message.to_string())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn string_coerces_to_other() {
-        fn fails() -> RenderResult<()> {
-            Err::<(), String>("boom".to_string())?;
-            Ok(())
-        }
-        assert_eq!(fails(), Err(RenderError::Other("boom".to_string())));
-    }
+    use alloc::string::ToString;
 
     #[test]
     fn display_includes_reason_and_detail() {

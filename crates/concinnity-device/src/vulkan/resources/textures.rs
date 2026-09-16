@@ -9,7 +9,7 @@ use concinnity_core::bake;
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::draw_slot;
 use concinnity_core::render::error;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 
 use super::super::context::*;
 use super::super::texture::{
@@ -99,12 +99,11 @@ impl VkContext {
         image: &bake::texture::TextureImage,
     ) -> error::RenderResult<()> {
         if slot >= self.scene.textures.len() {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "update_texture_slot: slot {} out of range (pool size {})",
                 slot,
                 self.scene.textures.len()
-            )
-            .into());
+            )));
         }
         let ctx = GpuUploadContext {
             alloc: &self.hw.alloc,

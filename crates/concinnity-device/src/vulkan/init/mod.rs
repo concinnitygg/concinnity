@@ -19,7 +19,7 @@
 use ash::vk;
 use concinnity_core::gfx::render_types::PostProcessParams;
 use concinnity_core::render::backend_init::{BackendInit, PostSettings, WorldShader};
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 
 use super::context::*;
 use super::light_cull::VkLightCull;
@@ -176,7 +176,7 @@ impl VkContext {
             deferred: _,
         } = world_shaders
             .first()
-            .ok_or_else(|| "BackendInit carried no shaders".to_string())?;
+            .ok_or_else(|| RenderError::Other("BackendInit carried no shaders".to_string()))?;
         // Record this (main) thread so the `RenderBackend` mutation entry points
         // can `debug_assert_main_thread` against it; the Send invariant rests on
         // the context being touched from this thread alone.

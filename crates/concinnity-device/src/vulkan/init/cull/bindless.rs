@@ -5,7 +5,7 @@
 use ash::vk;
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::backend_init::WorldShader;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 
 use super::CullPlan;
 use crate::vulkan::context::{VkDescriptors, VkSceneAssets, VkTargets};
@@ -239,11 +239,10 @@ pub(super) fn build_world_pipelines(
             (Some(layout), false) => {
                 let max = render_types::MAX_SHADER_BUCKETS;
                 if bucket_shaders.len() + 1 > max {
-                    return Err(format!(
+                    return Err(RenderError::Other(format!(
                         "world declares {} Shaders but at most {max} can be routed",
                         bucket_shaders.len() + 1
-                    )
-                    .into());
+                    )));
                 }
                 build_world_pipeline_table(
                     &hw.device,

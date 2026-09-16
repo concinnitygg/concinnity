@@ -657,9 +657,9 @@ impl DeviceAllocator {
 
         // An existing block first; only open a new one when none can host it.
         if let Some(placement) = pool.placement.alloc(reqs.size, align) {
-            let block = pool.blocks[placement.block]
-                .as_ref()
-                .ok_or("allocator: placement named a released block")?;
+            let block = pool.blocks[placement.block].as_ref().ok_or_else(|| {
+                error::RenderError::Other("allocator: placement named a released block".into())
+            })?;
             return Ok(Reservation {
                 memory: block.memory,
                 mapped: block.mapped,
@@ -686,7 +686,11 @@ impl DeviceAllocator {
         let placement = pool
             .placement
             .alloc_in(index, reqs.size, align)
-            .ok_or("allocator: a block sized for a request failed to host it")?;
+            .ok_or_else(|| {
+                error::RenderError::Other(
+                    "allocator: a block sized for a request failed to host it".into(),
+                )
+            })?;
         Ok(Reservation {
             memory,
             mapped,

@@ -214,6 +214,14 @@ unsafe impl<'a> Send for GraphFrameParams<'a> {}
 // SAFETY: as for `Send` above.
 unsafe impl<'a> Sync for GraphFrameParams<'a> {}
 
+fn pass_input<T>(value: Option<T>, pass: PassId, input: &str) -> RenderResult<T> {
+    value.ok_or_else(|| {
+        RenderError::Other(format!(
+            "graph executor: {pass:?} pass requires {input} but none was supplied"
+        ))
+    })
+}
+
 fn encode_waits(
     cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
     queues: &GraphQueues,
@@ -337,10 +345,10 @@ impl MtlContext {
                                 None => {
                                     let mut e = first_error_ref.lock().unwrap();
                                     if e.is_none() {
-                                        *e = Some(
+                                        *e = Some(RenderError::Other(
                                             "graph executor: failed to mint per-pass cmd buf"
                                                 .into(),
-                                        );
+                                        ));
                                     }
                                     return;
                                 }
@@ -390,9 +398,9 @@ impl MtlContext {
 
         // Commit every worker-encoded cmd buf onto its own queue, walking the
         // compiled order so each queue sees its passes in graph order.
-        let slots = worker_slots
-            .into_inner()
-            .map_err(|_| "graph executor: worker slot mutex poisoned".to_string())?;
+        let slots = worker_slots.into_inner().map_err(|_| {
+            RenderError::Other("graph executor: worker slot mutex poisoned".to_string())
+        })?;
         for (idx, slot) in slots.into_iter().enumerate() {
             if let Some(cb) = slot {
                 // Each pass commits its own command buffer, so its handler names
@@ -508,12 +516,10 @@ impl MtlContext {
     ) -> RenderResult<u32> {
         Ok(match pass_id {
             PassId::Cull => {
-                let object_buffer = params.object_buffer.ok_or(
-                    "graph executor: Cull pass requires object_buffer but none was supplied",
-                )?;
-                let draw_args_buffer = params.draw_args_buffer.ok_or(
-                    "graph executor: Cull pass requires draw_args_buffer but none was supplied",
-                )?;
+                let object_buffer =
+                    pass_input(params.object_buffer, PassId::Cull, "object_buffer")?;
+                let draw_args_buffer =
+                    pass_input(params.draw_args_buffer, PassId::Cull, "draw_args_buffer")?;
                 // Skinned fold: pre-skin into this frame's deformed
                 // buffer in the Cull command buffer (before the cull dispatch).
                 // Committed before Main, so Metal hazard-tracks the deformed
@@ -555,12 +561,10 @@ impl MtlContext {
                 0
             }
             PassId::Cull2 => {
-                let object_buffer = params.object_buffer.ok_or(
-                    "graph executor: Cull2 pass requires object_buffer but none was supplied",
-                )?;
-                let draw_args_buffer = params.draw_args_buffer.ok_or(
-                    "graph executor: Cull2 pass requires draw_args_buffer but none was supplied",
-                )?;
+                let object_buffer =
+                    pass_input(params.object_buffer, PassId::Cull2, "object_buffer")?;
+                let draw_args_buffer =
+                    pass_input(params.draw_args_buffer, PassId::Cull2, "draw_args_buffer")?;
                 self.encode_cull_phase2(
                     cmd_buf,
                     object_buffer,
@@ -623,9 +627,7 @@ impl MtlContext {
             )?,
             PassId::AutoExposure => self.encode_auto_exposure(cmd_buf, params.ring_slot)?,
             PassId::Bloom => {
-                let scene_color = params.scene_color.ok_or(
-                    "graph executor: Bloom pass requires scene_color but none was supplied",
-                )?;
+                let scene_color = pass_input(params.scene_color, PassId::Bloom, "scene_color")?;
                 self.encode_bloom(cmd_buf, scene_color)?
             }
             PassId::GBufferPrepass => {
@@ -662,26 +664,23 @@ impl MtlContext {
                 )?
             }
             PassId::TaaResolve => {
-                let scene_pre_taa = params.scene_pre_taa.ok_or(
-                    "graph executor: TaaResolve pass requires scene_pre_taa but none was supplied",
-                )?;
+                let scene_pre_taa =
+                    pass_input(params.scene_pre_taa, PassId::TaaResolve, "scene_pre_taa")?;
                 self.encode_taa(cmd_buf, scene_pre_taa)?
             }
             PassId::SsrResolve => {
-                let ssr_params = params.ssr_params.ok_or(
-                    "graph executor: SsrResolve pass requires ssr_params but none was supplied",
-                )?;
+                let ssr_params = pass_input(params.ssr_params, PassId::SsrResolve, "ssr_params")?;
                 self.encode_ssr_resolve(cmd_buf, ssr_params)?
             }
             PassId::Ssgi => {
-                let ssgi_params = params.ssgi_params.ok_or(
-                    "graph executor: Ssgi pass requires ssgi_params but none was supplied",
-                )?;
+                let ssgi_params = pass_input(params.ssgi_params, PassId::Ssgi, "ssgi_params")?;
                 self.encode_ssgi(cmd_buf, ssgi_params)?
             }
             PassId::RtReflections => {
-                let rt_params = params.rt_reflection_params.ok_or(
-                    "graph executor: RtReflections pass requires rt_reflection_params but none was supplied",
+                let rt_params = pass_input(
+                    params.rt_reflection_params,
+                    PassId::RtReflections,
+                    "rt_reflection_params",
                 )?;
                 self.encode_rt_reflections(cmd_buf, rt_params, params.bindless_tex_args)?
             }
@@ -691,9 +690,7 @@ impl MtlContext {
                 // pre-pass output, so SSAO runs no geometry redraw of its own;
                 // per-pass timing for the sub-passes is wired inline inside
                 // `encode_ssao`.
-                let ssao_params = params.ssao_params.ok_or(
-                    "graph executor: SsaoBlur pass requires ssao_params but none was supplied",
-                )?;
+                let ssao_params = pass_input(params.ssao_params, PassId::SsaoBlur, "ssao_params")?;
                 self.encode_ssao(cmd_buf, ssao_params)?
             }
             PassId::SsaoPrepass | PassId::SsaoKernel => {
@@ -725,27 +722,23 @@ impl MtlContext {
                 self.encode_decals(cmd_buf, params.vp, params.inv_vp, params.frustum)?
             }
             PassId::Fog => {
-                let fog_params = params
-                    .fog_params
-                    .ok_or("graph executor: Fog pass requires fog_params but none was supplied")?;
-                let fog_froxel_params = params.fog_froxel_params.ok_or(
-                    "graph executor: Fog pass requires fog_froxel_params but none was supplied",
-                )?;
+                let fog_params = pass_input(params.fog_params, PassId::Fog, "fog_params")?;
+                let fog_froxel_params =
+                    pass_input(params.fog_froxel_params, PassId::Fog, "fog_froxel_params")?;
                 self.encode_fog(cmd_buf, fog_params, fog_froxel_params)?
             }
             PassId::FogFroxel => {
-                let fog_params = params.fog_params.ok_or(
-                    "graph executor: FogFroxel pass requires fog_params but none was supplied",
+                let fog_params = pass_input(params.fog_params, PassId::FogFroxel, "fog_params")?;
+                let fog_froxel_params = pass_input(
+                    params.fog_froxel_params,
+                    PassId::FogFroxel,
+                    "fog_froxel_params",
                 )?;
-                let fog_froxel_params = params.fog_froxel_params.ok_or(
-                        "graph executor: FogFroxel pass requires fog_froxel_params but none was supplied",
-                    )?;
                 self.encode_fog_froxel(cmd_buf, fog_params, fog_froxel_params)?
             }
             PassId::LightCull => {
-                let cluster_params = params.cluster_params.ok_or(
-                    "graph executor: LightCull pass requires cluster_params but none was supplied",
-                )?;
+                let cluster_params =
+                    pass_input(params.cluster_params, PassId::LightCull, "cluster_params")?;
                 self.encode_light_cull(cmd_buf, cluster_params)?
             }
             PassId::ParticlesSim => {
@@ -771,21 +764,17 @@ impl MtlContext {
             }
             PassId::Lines => self.encode_lines(cmd_buf, params.vp)?,
             PassId::Composite => {
-                let scene_color = params.scene_color.ok_or(
-                    "graph executor: Composite pass requires scene_color but none was supplied",
-                )?;
+                let scene_color = pass_input(params.scene_color, PassId::Composite, "scene_color")?;
                 self.encode_composite_and_text(cmd_buf, scene_color, params.text_calls)?
             }
             PassId::Upscale => {
-                let scene_pre_taa = params.scene_pre_taa.ok_or(
-                    "graph executor: Upscale pass requires scene_pre_taa but none was supplied",
-                )?;
+                let scene_pre_taa =
+                    pass_input(params.scene_pre_taa, PassId::Upscale, "scene_pre_taa")?;
                 self.encode_upscale(cmd_buf, scene_pre_taa)?
             }
             PassId::Transparent => {
-                let scene_pre_taa = params.scene_pre_taa.ok_or(
-                    "graph executor: Transparent pass requires scene_pre_taa but none was supplied",
-                )?;
+                let scene_pre_taa =
+                    pass_input(params.scene_pre_taa, PassId::Transparent, "scene_pre_taa")?;
                 let inv_vp = params.inv_vp;
                 let (sun_dir, sun_color) =
                     concinnity_core::render::lights::glint_sun(&self.light_uniforms);
@@ -860,5 +849,21 @@ impl MtlContext {
                 self.encode_raymarch(cmd_buf, &view, params.frustum)?
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pass_input_names_the_pass_and_the_missing_input() {
+        assert_eq!(pass_input(Some(7), PassId::Fog, "fog_params"), Ok(7));
+        assert_eq!(
+            pass_input::<u32>(None, PassId::Fog, "fog_params"),
+            Err(RenderError::Other(
+                "graph executor: Fog pass requires fog_params but none was supplied".into()
+            ))
+        );
     }
 }

@@ -56,7 +56,7 @@ use ash::vk;
 use concinnity_core::gfx::render_types::{
     DrawObject, InstancedCluster, RtGeomEntry, SkinnedDrawObject,
 };
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::rt_geom::{
     cluster_geom_entry, geom_entry, models_dirty, skinned_geom_entry,
 };
@@ -2258,10 +2258,9 @@ impl RtAccelData {
             device,
             pd,
         } = ctx;
-        let skin = self
-            .skin
-            .as_ref()
-            .ok_or("rebuild_skinned called without a skin pipeline")?;
+        let skin = self.skin.as_ref().ok_or_else(|| {
+            RenderError::Other("rebuild_skinned called without a skin pipeline".into())
+        })?;
         let pipeline = skin.pipeline.handle();
         let pipeline_layout = skin.pipeline_layout.handle();
 
@@ -2718,10 +2717,9 @@ impl RtAccelData {
     // is unknown at init, before `upload_skinned`). Idempotent once sized.
     fn ensure_skin_sets(&mut self, device: &VkDevice, object_count: usize) -> RenderResult<()> {
         let frames = self.frames_in_flight_usize;
-        let skin = self
-            .skin
-            .as_mut()
-            .ok_or("ensure_skin_sets called without a skin pipeline")?;
+        let skin = self.skin.as_mut().ok_or_else(|| {
+            RenderError::Other("ensure_skin_sets called without a skin pipeline".into())
+        })?;
         ensure_skin_sets(device, skin, frames, object_count)
     }
 

@@ -7,7 +7,7 @@ use ash::vk;
 use concinnity_core::gfx::mesh_payload;
 use concinnity_core::gfx::mesh_payload::SkinnedVertex;
 use concinnity_core::gfx::render_types::*;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::rt_geom;
 use concinnity_core::transform::IDENTITY;
 
@@ -224,21 +224,20 @@ impl VkContext {
             .draw_objects
             .get(skinned_index)
             .ok_or_else(|| {
-                format!(
+                RenderError::Other(format!(
                     "update_skinned_mesh_geometry: skinned object {} out of range",
                     skinned_index
-                )
+                ))
             })?;
         if indices.len() != obj.index_count {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "update_skinned_mesh_geometry: skinned {} expects {} indices, got {} \
                  (in-place path is size-matched only; size changes route through \
                  rebuild_skinned_geometry)",
                 skinned_index,
                 obj.index_count,
                 indices.len()
-            )
-            .into());
+            )));
         }
         if self.skinned.vertex_buffer.is_null() || self.skinned.index_buffer.is_null() {
             return Err(
@@ -254,14 +253,13 @@ impl VkContext {
         let v_byte_len = std::mem::size_of_val(vertices);
         let v_buf_len = self.skinned.vertex_buffer_bytes as usize;
         if v_byte_off + v_byte_len > v_buf_len {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "update_skinned_mesh_geometry: vertex region [{}, {}) overruns skinned \
                  vertex buffer length {}",
                 v_byte_off,
                 v_byte_off + v_byte_len,
                 v_buf_len
-            )
-            .into());
+            )));
         }
         let i_byte_off = (obj.index_offset * std::mem::size_of::<u32>()) as u64;
         let rebased: Vec<u32> = indices

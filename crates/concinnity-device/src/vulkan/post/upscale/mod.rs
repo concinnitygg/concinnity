@@ -23,7 +23,7 @@
 use ash::vk;
 use concinnity_core::components::UpscalerBackend;
 use concinnity_core::gfx::jitter;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use std::cell::Cell;
 use std::ffi::{CStr, CString, c_char};
 
@@ -683,17 +683,18 @@ impl VkContext {
         // merged pre-pass whenever upscaling is on (it forces `taa_enabled`), so it
         // is always present here; velocity rests in SHADER_READ_ONLY and depth in
         // DEPTH_STENCIL_ATTACHMENT so the barriers below are unchanged.
-        let gb = self.gbuffer.as_ref().ok_or(
-            "Upscale enabled but the unified G-buffer pre-pass is absent; upscaling needs its motion + depth",
-        )?;
-        let velocity = gb
-            .velocity_images
-            .get(frame)
-            .ok_or("upscale: gbuffer velocity slot out of range")?;
+        let gb = self.gbuffer.as_ref().ok_or_else(|| {
+            RenderError::Other(
+                "upscale: enabled but the unified G-buffer pre-pass is absent".into(),
+            )
+        })?;
+        let velocity = gb.velocity_images.get(frame).ok_or_else(|| {
+            RenderError::Other("upscale: gbuffer velocity slot out of range".into())
+        })?;
         let depth = gb
             .depth_images
             .get(frame)
-            .ok_or("upscale: gbuffer depth slot out of range")?;
+            .ok_or_else(|| RenderError::Other("upscale: gbuffer depth slot out of range".into()))?;
 
         // Scene color: the reflection composite's output when a reflection
         // resolve ran, else this slot's HDR resolve. Either rests in

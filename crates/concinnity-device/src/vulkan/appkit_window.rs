@@ -47,7 +47,8 @@ impl AppKitVkWindow {
         let mtm = objc2::MainThreadMarker::new().ok_or_else(|| {
             RenderError::Other("the Vulkan window must be created on the main thread".to_string())
         })?;
-        let window = chrome::create_window(mtm, title, width, height, title_bar)?;
+        let window = chrome::create_window(mtm, title, width, height, title_bar)
+            .map_err(RenderError::Other)?;
         let content_rect = window.contentRectForFrameRect(window.frame());
 
         // A layer-hosting NSView: assigning the layer before `wantsLayer` makes

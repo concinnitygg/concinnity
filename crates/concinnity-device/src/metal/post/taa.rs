@@ -5,7 +5,7 @@
 //! `MtlPostDevice`.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::post::device::PostExtent;
 use concinnity_core::render::post::taa::{TaaInputs, TaaPass, TaaRing};
 use objc2::rc::Retained;
@@ -80,16 +80,15 @@ impl MtlContext {
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         scene_input: &ProtocolObject<dyn objc2_metal::MTLTexture>,
     ) -> RenderResult<u32> {
-        let pass = self
-            .taa
-            .pass
-            .as_ref()
-            .ok_or("TAA enabled but the resolve is missing")?;
+        let pass =
+            self.taa.pass.as_ref().ok_or_else(|| {
+                RenderError::Other("TAA enabled but the resolve is missing".into())
+            })?;
         // Pool-owned, so it is fetched at encode time: a pool rebuild repacks
         // every slot, and a cached handle would point at another resource.
-        let velocity = self
-            .gbuffer_velocity()
-            .ok_or("TAA enabled but the pooled G-buffer velocity is missing")?;
+        let velocity = self.gbuffer_velocity().ok_or_else(|| {
+            RenderError::Other("TAA enabled but the pooled G-buffer velocity is missing".into())
+        })?;
         let device = self.post_device();
         pass.encode(
             &device,

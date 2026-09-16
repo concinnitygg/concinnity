@@ -112,7 +112,11 @@ impl DxContext {
                 .targets
                 .transient_pool
                 .gbuffer_pooled()
-                .ok_or("transient pool missing the gbuffer color targets after enable")?;
+                .ok_or_else(|| {
+                    RenderError::Other(
+                        "transient pool missing the gbuffer color targets after enable".into(),
+                    )
+                })?;
             let gbuffer = super::post::gbuffer::GbufferResources::new(
                 super::post::gbuffer::GbufferDeviceCtx {
                     alloc: &self.hw.alloc,
@@ -240,7 +244,9 @@ impl DxContext {
                 .targets
                 .transient_pool
                 .resource_for("ao_output")
-                .ok_or("transient pool missing ao_output after SSAO enable")?
+                .ok_or_else(|| {
+                    RenderError::Other("transient pool missing ao_output after SSAO enable".into())
+                })?
                 .clone();
             let settings = q.ssao.expect("desired_ssao implies ssao settings");
             let ssao = super::post::ssao::SsaoResources::new(

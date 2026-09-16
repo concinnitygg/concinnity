@@ -1031,23 +1031,21 @@ impl VkContext {
                 self.encode_ssao(rec, params.frame_idx, params.fov_y_radians, params.aspect);
             }
             PassId::SsaoPrepass | PassId::SsaoKernel => {
-                return Err(format!(
+                return Err(RenderError::Other(format!(
                     "graph executor (vulkan): pass {} is bundled inside SsaoBlur \
                      (encode_ssao encodes the SSAO kernel + blur sub-passes); it \
                      should not appear as its own graph node",
                     pass_id.name()
-                )
-                .into());
+                )));
             }
             PassId::ReflectionComposite => {
                 // Metal-only inline pass; never scheduled on Vulkan. Handled here
                 // only to keep the dispatch match exhaustive.
-                return Err(format!(
+                return Err(RenderError::Other(format!(
                     "graph executor (vulkan): pass {} is a Metal-only inline \
                      reflection composite and should not appear as a graph node",
                     pass_id.name()
-                )
-                .into());
+                )));
             }
             PassId::SsrResolve => {
                 self.encode_ssr_resolve(
@@ -1230,9 +1228,12 @@ impl VkContext {
                 // buffer is built whenever any of these consumers is on, so a
                 // missing `self.gbuffer` here means the builder emitted this node
                 // with no merged buffer present, a programming error.
-                let gb = self.gbuffer.as_ref().ok_or(
-                    "graph executor (vulkan): GBufferPrepass emitted but self.gbuffer is None",
-                )?;
+                let gb = self.gbuffer.as_ref().ok_or_else(|| {
+                    RenderError::Other(
+                        "graph executor (vulkan): GBufferPrepass emitted but self.gbuffer is None"
+                            .into(),
+                    )
+                })?;
                 let velocity_active = self.taa.is_some() || self.upscale.is_some();
                 self.encode_gbuffer_prepass(
                     gb,

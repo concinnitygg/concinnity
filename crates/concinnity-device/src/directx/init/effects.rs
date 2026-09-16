@@ -191,7 +191,9 @@ pub(super) fn build_ssao(
         let ao_resource = targets
             .transient_pool
             .resource_for("ao_output")
-            .ok_or("transient pool missing ao_output while SSAO is enabled")?;
+            .ok_or_else(|| {
+                RenderError::Other("transient pool missing ao_output while SSAO is enabled".into())
+            })?;
         Some(SsaoResources::new(
             SsaoDeviceCtx {
                 device,
@@ -276,10 +278,9 @@ pub(super) fn build_gbuffer(
     let gbuffer = if gbuffer_enabled {
         // The three color targets are pooled, so the pool (built with the
         // render targets, before this) is what owns them.
-        let pooled = targets
-            .transient_pool
-            .gbuffer_pooled()
-            .ok_or("transient pool missing the gbuffer color targets")?;
+        let pooled = targets.transient_pool.gbuffer_pooled().ok_or_else(|| {
+            RenderError::Other("transient pool missing the gbuffer color targets".into())
+        })?;
         Some(GbufferResources::new(
             crate::directx::post::gbuffer::GbufferDeviceCtx {
                 alloc: &gpu.hw.alloc,
@@ -340,9 +341,9 @@ pub(super) fn build_decals(
     // the slot whose albedo SRV was just written above, in the same order.
     let mut decal_set = decal::DecalSet::new(crate::directx::decal::MAX_DECALS, FRAMES);
     for record in decals {
-        decal_set
-            .insert(record)
-            .map_err(|_| "decals: authored decals exceed MAX_DECALS".to_string())?;
+        decal_set.insert(record).map_err(|_| {
+            RenderError::Other("decals: authored decals exceed MAX_DECALS".to_string())
+        })?;
     }
     Ok(DecalState {
         state: decals_state,

@@ -240,7 +240,8 @@ impl GlfwWindow {
                 })?,
 
             WindowMode::Fullscreen => glfw.with_primary_monitor(|glfw, monitor| {
-                let monitor = monitor.ok_or("No primary monitor")?;
+                let monitor =
+                    monitor.ok_or_else(|| RenderError::Other("No primary monitor".to_string()))?;
                 glfw.create_window(width, height, title, glfw::WindowMode::FullScreen(monitor))
                     .ok_or_else(|| {
                         RenderError::Other("Failed to create GLFW window (fullscreen)".to_string())
@@ -248,10 +249,11 @@ impl GlfwWindow {
             })?,
 
             WindowMode::Borderless => glfw.with_primary_monitor(|glfw, monitor| {
-                let monitor = monitor.ok_or("No primary monitor")?;
-                let vid_mode = monitor
-                    .get_video_mode()
-                    .ok_or("Could not query primary monitor video mode")?;
+                let monitor =
+                    monitor.ok_or_else(|| RenderError::Other("No primary monitor".to_string()))?;
+                let vid_mode = monitor.get_video_mode().ok_or_else(|| {
+                    RenderError::Other("Could not query primary monitor video mode".to_string())
+                })?;
                 glfw.window_hint(glfw::WindowHint::Decorated(false));
                 glfw.create_window(
                     vid_mode.width,

@@ -1,7 +1,7 @@
 //! Bloom: the mip chain with its RTVs and SRVs, and the prefilter, downsample
 //! and upsample pipelines.
 
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::InitGpu;
@@ -39,7 +39,7 @@ pub(super) fn build_bloom(gpu: &InitGpu<'_>, inputs: BloomInputs<'_>) -> RenderR
     let bloom_top = targets
         .transient_pool
         .resource_for("bloom_top")
-        .ok_or("transient pool missing bloom_top")?
+        .ok_or_else(|| RenderError::Other("transient pool missing bloom_top".into()))?
         .clone();
     let (bloom_mips, bloom_mip_extents) = create_bloom_mips(device, width, height, bloom_top)?;
     let mut bloom_mip_rtvs: Vec<D3D12_CPU_DESCRIPTOR_HANDLE> = Vec::with_capacity(bloom_mips.len());

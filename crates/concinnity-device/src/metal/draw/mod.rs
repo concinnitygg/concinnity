@@ -78,8 +78,9 @@ impl MtlContext {
             show,
             sky_rot,
         } = params;
-        let mtm = objc2::MainThreadMarker::new()
-            .ok_or("draw_frame must be called from the main thread")?;
+        let mtm = objc2::MainThreadMarker::new().ok_or_else(|| {
+            error::RenderError::Other("draw_frame must be called from the main thread".into())
+        })?;
         // Snapped for the pass encoders (wireframe fill mode, unlit shading,
         // the composite's channel visualization + depth normalization).
         self.view.mode = view_mode;
@@ -210,7 +211,7 @@ impl MtlContext {
             .hw
             .command_queue
             .commandBuffer()
-            .ok_or("failed to get command buffer")?;
+            .ok_or_else(|| error::RenderError::Other("failed to get command buffer".into()))?;
 
         // Shader hot-reload: if either the filesystem watcher or the debug
         // `reload-shaders` command set the flag, rebuild every built-in
@@ -626,7 +627,9 @@ impl MtlContext {
             self.ssr
                 .targets
                 .as_ref()
-                .ok_or("reflections enabled but SSR targets missing")?
+                .ok_or_else(|| {
+                    error::RenderError::Other("reflections enabled but SSR targets missing".into())
+                })?
                 .output
                 .clone()
         } else {

@@ -22,7 +22,7 @@
 
 use concinnity_core::gfx::render_types::{FALLBACK_TEXTURE_COUNT, PostProcessParams};
 use concinnity_core::render::backend_init::{self, BackendInit, PostSettings, WorldShader};
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 
 use self::heap_layout::{RtvHeapLayout, SrvHeapParams};
 use super::context::*;
@@ -178,7 +178,7 @@ impl DxContext {
             deferred: _,
         } = world_shaders
             .first()
-            .ok_or_else(|| "BackendInit carried no shaders".to_string())?;
+            .ok_or_else(|| RenderError::Other("BackendInit carried no shaders".to_string()))?;
         let output = (window.width, window.height);
         // Record this (main) thread so the `RenderBackend` mutation entry
         // points can `debug_assert_main_thread` against it; the Send invariant

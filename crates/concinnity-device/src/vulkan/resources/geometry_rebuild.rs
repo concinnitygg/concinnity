@@ -19,7 +19,7 @@ use concinnity_core::gfx::render_types::LodSlice;
 use concinnity_core::render::backend::{
     DrawGeometryUpdate, SkinnedDrawGeometryUpdate, SkinnedSlotLayout,
 };
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::rt_geom;
 use std::collections::HashMap;
 
@@ -121,15 +121,14 @@ impl VkContext {
                 let v_start = obj.vertex_offset / std::mem::size_of::<Vertex>();
                 let v_end = v_start + obj.vertex_count;
                 if v_end > old_vertices.len() {
-                    return Err(format!(
+                    return Err(RenderError::Other(format!(
                         "rebuild_static_geometry: draw {} vertex region [{}, {}) out \
                          of bounds (buffer has {} vertices)",
                         draw_idx,
                         v_start,
                         v_end,
                         old_vertices.len()
-                    )
-                    .into());
+                    )));
                 }
                 new_vertices.extend_from_slice(&old_vertices[v_start..v_end]);
                 let old_base_u32 = if absolute_indices {
@@ -139,15 +138,14 @@ impl VkContext {
                 };
                 let i_end = obj.index_offset + obj.index_count;
                 if i_end > old_indices.len() {
-                    return Err(format!(
+                    return Err(RenderError::Other(format!(
                         "rebuild_static_geometry: draw {} index region [{}, {}) out \
                          of bounds (buffer has {} indices)",
                         draw_idx,
                         obj.index_offset,
                         i_end,
                         old_indices.len()
-                    )
-                    .into());
+                    )));
                 }
                 if absolute_indices {
                     for &idx in &old_indices[obj.index_offset..i_end] {
@@ -160,15 +158,14 @@ impl VkContext {
                 for slice in &obj.lod_alternates {
                     let alt_end = slice.index_offset + slice.index_count;
                     if alt_end > old_indices.len() {
-                        return Err(format!(
+                        return Err(RenderError::Other(format!(
                             "rebuild_static_geometry: draw {} LOD slice [{}, {}) out \
                              of bounds (buffer has {} indices)",
                             draw_idx,
                             slice.index_offset,
                             alt_end,
                             old_indices.len()
-                        )
-                        .into());
+                        )));
                     }
                     let alt_off = new_indices.len();
                     if absolute_indices {
@@ -204,11 +201,11 @@ impl VkContext {
         }
 
         if new_vertices.is_empty() || new_indices.is_empty() {
-            return Err(
+            return Err(RenderError::Other(
                 "rebuild_static_geometry: post-rebuild buffers would be empty (no \
                  static draws to ship)"
                     .into(),
-            );
+            ));
         }
 
         // Allocate new DEVICE_LOCAL buffers + ship the rebuilt contents
@@ -292,11 +289,11 @@ impl VkContext {
         changes: Vec<SkinnedDrawGeometryUpdate>,
     ) -> RenderResult<Vec<SkinnedSlotLayout>> {
         if self.skinned.vertex_buffer.is_null() || self.skinned.index_buffer.is_null() {
-            return Err(
+            return Err(RenderError::Other(
                 "rebuild_skinned_geometry: no skinned vertex/index buffer (was \
                  upload_skinned called?)"
                     .into(),
-            );
+            ));
         }
 
         self.wait_idle();
@@ -352,36 +349,34 @@ impl VkContext {
                 let v_start = obj.vertex_base as usize;
                 let v_end = v_start + obj.vertex_count;
                 if v_end > old_vertices.len() {
-                    return Err(format!(
+                    return Err(RenderError::Other(format!(
                         "rebuild_skinned_geometry: slot {} vertex region [{}, {}) \
                          out of bounds (buffer has {} vertices)",
                         skinned_index,
                         v_start,
                         v_end,
                         old_vertices.len()
-                    )
-                    .into());
+                    )));
                 }
                 new_vertices.extend_from_slice(&old_vertices[v_start..v_end]);
                 let i_end = obj.index_offset + obj.index_count;
                 if i_end > old_indices.len() {
-                    return Err(format!(
+                    return Err(RenderError::Other(format!(
                         "rebuild_skinned_geometry: slot {} index region [{}, {}) \
                          out of bounds (buffer has {} indices)",
                         skinned_index,
                         obj.index_offset,
                         i_end,
                         old_indices.len()
-                    )
-                    .into());
+                    )));
                 }
                 let old_base = obj.vertex_base;
                 for &abs in &old_indices[obj.index_offset..i_end] {
                     let local = abs.checked_sub(old_base).ok_or_else(|| {
-                        format!(
+                        RenderError::Other(format!(
                             "rebuild_skinned_geometry: stale index {abs} below \
                              vertex_base {old_base} on slot {skinned_index}"
-                        )
+                        ))
                     })?;
                     new_indices.push(local + new_v_base);
                 }
@@ -410,11 +405,11 @@ impl VkContext {
         }
 
         if new_vertices.is_empty() || new_indices.is_empty() {
-            return Err(
+            return Err(RenderError::Other(
                 "rebuild_skinned_geometry: post-rebuild buffers would be empty (no \
                  skinned draws to ship)"
                     .into(),
-            );
+            ));
         }
 
         // Allocate new DEVICE_LOCAL skinned buffers + ship through staging. The
@@ -483,11 +478,10 @@ fn readback_typed<T: Copy>(ctx: &VkContext, src: vk::Buffer, bytes: u64) -> Rend
     }
     let stride = std::mem::size_of::<T>() as u64;
     if !bytes.is_multiple_of(stride) {
-        return Err(format!(
+        return Err(RenderError::Other(format!(
             "readback_typed: buffer size {} not a multiple of T stride {}",
             bytes, stride
-        )
-        .into());
+        )));
     }
     let count = (bytes / stride) as usize;
     let staging = ctx.hw.alloc.create_buffer(

@@ -1,7 +1,7 @@
 //! The HUD text state: the glyph atlases, the text pipeline, its sampler, and
 //! the per-frame geometry ring.
 
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use objc2_metal::{
     MTLDevice as _, MTLSamplerAddressMode, MTLSamplerDescriptor, MTLSamplerMinMagFilter,
 };
@@ -38,7 +38,7 @@ pub(super) fn build_text(
         desc.setTAddressMode(MTLSamplerAddressMode::ClampToEdge);
         device
             .newSamplerStateWithDescriptor(&desc)
-            .ok_or("failed to create text sampler state")?
+            .ok_or_else(|| RenderError::Other("failed to create text sampler state".into()))?
     };
 
     Ok(TextState {

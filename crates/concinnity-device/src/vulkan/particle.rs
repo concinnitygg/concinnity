@@ -1155,7 +1155,9 @@ impl VkContext {
         // The cap check is independent of slot availability.
         let live_count = self.particle.records.iter().filter(|s| s.is_some()).count();
         if live_count >= MAX_EMITTERS {
-            return Err(format!("add_emitter: MAX_EMITTERS ({MAX_EMITTERS}) exceeded").into());
+            return Err(RenderError::Other(format!(
+                "add_emitter: MAX_EMITTERS ({MAX_EMITTERS}) exceeded"
+            )));
         }
 
         let gpu_state = build_emitter_gpu_state(
@@ -1266,12 +1268,11 @@ impl VkContext {
             return Ok(());
         }
         if records.len() > MAX_EMITTERS {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "particles: {} authored emitters exceed MAX_EMITTERS ({})",
                 records.len(),
                 MAX_EMITTERS
-            )
-            .into());
+            )));
         }
         for record in records {
             self.add_particle_emitter(record)?;

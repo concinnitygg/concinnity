@@ -417,7 +417,7 @@ impl VkContext {
             .probe
             .prefilter
             .as_ref()
-            .ok_or("probe: prefilter pipelines missing")?;
+            .ok_or_else(|| RenderError::Other("probe: prefilter pipelines missing".into()))?;
         let prefilter = PrefilterGpu::new(&self.hw.device, &self.hw.alloc, pipelines, &PLAN)?;
 
         self.probe.rendering = Some(RenderingBake {
@@ -496,11 +496,9 @@ impl VkContext {
             copy_src,
             capture,
         ) = {
-            let r = self
-                .probe
-                .rendering
-                .as_ref()
-                .ok_or("probe: render face with no bake in flight")?;
+            let r = self.probe.rendering.as_ref().ok_or_else(|| {
+                RenderError::Other("probe: render face with no bake in flight".into())
+            })?;
             let b = &r.bake;
             (
                 r.cursor,
@@ -552,7 +550,7 @@ impl VkContext {
                         std::slice::from_ref(&cmd),
                     );
                 }
-                return Err(format!("probe face fence: {e}").into());
+                return Err(super::error::map_vk_result(e, "probe face fence"));
             }
         };
         {
@@ -560,7 +558,7 @@ impl VkContext {
                 .probe
                 .rendering
                 .as_mut()
-                .ok_or("probe: render face slot vanished")?;
+                .ok_or_else(|| RenderError::Other("probe: render face slot vanished".into()))?;
             r.face_cmds.push(cmd);
             r.face_fences.push(fence);
         }
@@ -719,7 +717,7 @@ impl VkContext {
             .probe
             .rendering
             .as_mut()
-            .ok_or("probe: render face slot vanished")?;
+            .ok_or_else(|| RenderError::Other("probe: render face slot vanished".into()))?;
         r.cursor += 1;
         Ok(())
     }
@@ -730,11 +728,10 @@ impl VkContext {
     // the firefly-clamped mirror mip plus the capture's source pyramid. The bake
     // moves to the Prefiltering slot with the mip cursor at 1.
     fn probe_begin_prefilter(&mut self) -> RenderResult<()> {
-        let rendering = self
-            .probe
-            .rendering
-            .take()
-            .ok_or("probe: convolve with no bake in flight")?;
+        let rendering =
+            self.probe.rendering.take().ok_or_else(|| {
+                RenderError::Other("probe: convolve with no bake in flight".into())
+            })?;
         let device = self.hw.device.clone();
         let RenderingBake {
             index,
@@ -781,11 +778,9 @@ impl VkContext {
     // barrier; queue submission order puts every one of them after the pyramid
     // build that produced their source.
     fn probe_prefilter_next_mip(&mut self) -> RenderResult<()> {
-        let mut bake = self
-            .probe
-            .prefiltering
-            .take()
-            .ok_or("probe: convolve mip with no bake in flight")?;
+        let mut bake = self.probe.prefiltering.take().ok_or_else(|| {
+            RenderError::Other("probe: convolve mip with no bake in flight".into())
+        })?;
         let result = (|| {
             let cursor = bake.cursor;
             let (cmd, fence) = self.begin_prefilter_command(&mut bake)?;
@@ -877,11 +872,10 @@ impl VkContext {
     // fence gate on this transition means everything but the in-flight frames has
     // already retired, so it costs a fraction of a frame, once per probe.
     fn probe_install(&mut self) -> RenderResult<()> {
-        let bake = self
-            .probe
-            .prefiltering
-            .take()
-            .ok_or("probe: install with no bake in flight")?;
+        let bake =
+            self.probe.prefiltering.take().ok_or_else(|| {
+                RenderError::Other("probe: install with no bake in flight".into())
+            })?;
         self.wait_idle();
         let device = self.hw.device.clone();
         let PrefilteringBake {

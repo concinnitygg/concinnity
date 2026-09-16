@@ -40,7 +40,8 @@ impl Win32Window {
         _resizable: bool,
         title_bar: bool,
     ) -> RenderResult<Self> {
-        let (_hwnd, win_state) = create_window(title, width, height, title_bar)?;
+        let (_hwnd, win_state) =
+            create_window(title, width, height, title_bar).map_err(RenderError::Other)?;
         let mut this = Self {
             win_state,
             fullscreen_display: FullscreenDisplayMode::new(),

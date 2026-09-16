@@ -4,7 +4,7 @@
 
 use ash::vk;
 use concinnity_core::render::error;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::mipmap;
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledImage};
@@ -494,14 +494,13 @@ pub(super) fn upload_texture_deferred(
 ) -> error::RenderResult<(GpuImage, UploadInFlight)> {
     let base = (width as usize) * (height as usize) * 4;
     if pixels.len() < base {
-        return Err(format!(
+        return Err(RenderError::Other(format!(
             "pixel data too short for {}x{} RGBA texture ({} bytes, need {})",
             width,
             height,
             pixels.len(),
             base
-        )
-        .into());
+        )));
     }
 
     let chain = mipmap::generate_mip_chain(width, height, pixels);
@@ -550,7 +549,7 @@ pub(super) fn upload_texture_image_deferred(
         let mip = image
             .mips
             .first()
-            .ok_or("RGBA8 texture image has no mip level")?;
+            .ok_or_else(|| RenderError::Other("RGBA8 texture image has no mip level".into()))?;
         return upload_texture_deferred(ctx, mip.width, mip.height, &mip.data);
     }
     let levels: Vec<TextureLevel<'_>> = image
@@ -609,7 +608,9 @@ fn upload_texture_levels_deferred(
         command_pool,
         queue,
     } = ctx;
-    let base = levels.first().ok_or("texture upload has no mip level")?;
+    let base = levels
+        .first()
+        .ok_or_else(|| RenderError::Other("texture upload has no mip level".into()))?;
     let (width, height) = (base.width, base.height);
     let mip_count = levels.len() as u32;
 
@@ -783,13 +784,12 @@ pub(super) fn upload_color_lut(
     } = ctx;
     let needed = (size as usize).pow(3) * 4;
     if data.len() < needed {
-        return Err(format!(
+        return Err(RenderError::Other(format!(
             "color LUT data too short for size {}: {} bytes, need {}",
             size,
             data.len(),
             needed
-        )
-        .into());
+        )));
     }
 
     // Staging buffer (host visible).
@@ -908,16 +908,19 @@ pub(super) fn upload_float_lut(
     } = *ctx;
     let needed = (size as usize) * (size as usize) * components as usize;
     if texels.len() < needed {
-        return Err(format!(
+        return Err(RenderError::Other(format!(
             "float LUT data too short for {size}x{size}x{components}: {} floats, need {needed}",
             texels.len()
-        )
-        .into());
+        )));
     }
     let format = match components {
         4 => vk::Format::R32G32B32A32_SFLOAT,
         2 => vk::Format::R32G32_SFLOAT,
-        other => return Err(format!("unsupported float LUT component count {other}").into()),
+        other => {
+            return Err(RenderError::Other(format!(
+                "unsupported float LUT component count {other}"
+            )));
+        }
     };
 
     let byte_size = (needed * std::mem::size_of::<f32>()) as vk::DeviceSize;
@@ -1364,7 +1367,9 @@ fn create_cube_image(
     } = ctx;
     let mip_count = mip_bytes.len() as u32;
     if mip_count == 0 {
-        return Err("cubemap upload: mip_bytes must not be empty".into());
+        return Err(RenderError::Other(
+            "cubemap upload: mip_bytes must not be empty".into(),
+        ));
     }
 
     // Validate each mip and compute the staging buffer footprint.
@@ -1373,22 +1378,20 @@ fn create_cube_image(
     for (m, bytes) in mip_bytes.iter().enumerate() {
         let s = (face_size >> m) as usize;
         if s == 0 {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "cubemap mip {} would have zero face size (face_size {} too small)",
                 m, face_size
-            )
-            .into());
+            )));
         }
         let face_bytes = s * s * 16;
         let needed = 6 * face_bytes;
         if bytes.len() < needed {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "cubemap mip {} too short: {} bytes, need {}",
                 m,
                 bytes.len(),
                 needed
-            )
-            .into());
+            )));
         }
         mip_sizes.push(needed);
         total += needed;
@@ -1558,7 +1561,9 @@ pub(super) fn upload_environment_map(
     mip_bytes: &[&[u8]],
 ) -> RenderResult<EnvironmentMapTextures> {
     if mip_bytes.is_empty() {
-        return Err("envmap upload: prefilter mip_bytes must not be empty".into());
+        return Err(RenderError::Other(
+            "envmap upload: prefilter mip_bytes must not be empty".into(),
+        ));
     }
     let irradiance = create_cube_image(ctx, irradiance_face, &[irradiance_bytes])
         .map_err(|e| e.context("envmap irradiance"))?;

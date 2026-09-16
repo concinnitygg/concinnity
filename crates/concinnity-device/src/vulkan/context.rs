@@ -1236,11 +1236,9 @@ impl VkHardware {
     // `reused_by_successor`).
     pub(super) fn hand_over(&mut self) -> error::RenderResult<Self> {
         Ok(Self {
-            window: Some(
-                self.window
-                    .take()
-                    .ok_or("apply_world_reload: window already taken")?,
-            ),
+            window: Some(self.window.take().ok_or_else(|| {
+                error::RenderError::Other("apply_world_reload: window already taken".into())
+            })?),
             instance: self.instance.clone(),
             device: self.device.clone(),
             physical_device: self.physical_device,

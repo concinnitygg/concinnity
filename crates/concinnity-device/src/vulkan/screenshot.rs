@@ -30,17 +30,21 @@ impl VkContext {
     // `RenderBackend` vtable (bin-only `cn debug`).
     pub(in crate::vulkan) fn capture_screenshot(&mut self, path: &str) -> RenderResult<String> {
         let Some(image_index) = self.swapchain.last_present_index else {
-            return Err("screenshot: no frame has been presented yet".into());
+            return Err(RenderError::Other(
+                "screenshot: no frame has been presented yet".into(),
+            ));
         };
         let src_image = *self
             .swapchain
             .images
             .get(image_index as usize)
-            .ok_or("screenshot: stale swapchain image index")?;
+            .ok_or_else(|| RenderError::Other("screenshot: stale swapchain image index".into()))?;
         let width = self.swapchain.extent.width;
         let height = self.swapchain.extent.height;
         if width == 0 || height == 0 {
-            return Err("screenshot: zero-sized swapchain".into());
+            return Err(RenderError::Other(
+                "screenshot: zero-sized swapchain".into(),
+            ));
         }
 
         // The GPU must be idle: the last-presented image is then stable and no

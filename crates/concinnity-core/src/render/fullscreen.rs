@@ -583,7 +583,7 @@ mod tests {
             let fail = self.fail_at == Some(*n);
             *n += 1;
             if fail {
-                return Err("text upload failed".into());
+                return Err(RenderError::Other("text upload failed".into()));
             }
             Ok(())
         }
@@ -612,7 +612,7 @@ mod tests {
         let enc = MockComposite::new(true, Some(0));
         let calls = [text_call(), text_call()];
         let r = encode_composite_chain(&enc, &(), &(), &calls);
-        assert_eq!(r, Err("text upload failed".into()));
+        assert_eq!(r, Err(RenderError::Other("text upload failed".into())));
         assert_eq!(
             *enc.log.borrow(),
             ["begin", "draw", "begin_text", "text0", "end"]

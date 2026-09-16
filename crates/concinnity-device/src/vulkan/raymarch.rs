@@ -1114,7 +1114,8 @@ impl RaymarchResources {
         // developer-time bug, so it aborts init (unlike the .glsl filter above).
         let mut volumes: Vec<RaymarchVolumeRecord> = Vec::with_capacity(active.len());
         for (vol, payload, label) in &active {
-            let programs = crate::shader::raymarch_source::decode(payload, label)?;
+            let programs = crate::shader::raymarch_source::decode(payload, label)
+                .map_err(RenderError::Other)?;
             // A medium authors `sampleVolume` and renders alpha-blended without a
             // depth write; a surface volume authors `map` and `shade` and
             // sphere-traces an opaque surface. The asset's flag selects which.

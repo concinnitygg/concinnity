@@ -797,7 +797,7 @@ impl backend::DrawStreaming for RecordingBackend {
         self.texture_updates
             .push((slot, image.width(), image.height()));
         if self.fail_texture_updates {
-            return Err("texture update rejected".into());
+            return Err(error::RenderError::Other("texture update rejected".into()));
         }
         Ok(())
     }
@@ -843,7 +843,7 @@ impl backend::LiveEdit for RecordingBackend {
     fn update_color_lut(&mut self, size: u32, _: &[u8]) -> error::RenderResult<()> {
         self.lut_updates.push(size);
         if self.fail_lut_updates {
-            return Err("lut update rejected".into());
+            return Err(error::RenderError::Other("lut update rejected".into()));
         }
         Ok(())
     }
@@ -862,7 +862,7 @@ impl backend::LiveEdit for RecordingBackend {
     ) -> error::RenderResult<()> {
         self.mesh_updates.push(draw_idx);
         if self.fail_mesh_updates {
-            return Err("mesh update rejected".into());
+            return Err(error::RenderError::Other("mesh update rejected".into()));
         }
         Ok(())
     }
@@ -872,7 +872,7 @@ impl backend::LiveEdit for RecordingBackend {
     ) -> error::RenderResult<()> {
         self.static_rebuild_change_counts.push(changes.len());
         if self.fail_static_rebuild {
-            return Err("static rebuild rejected".into());
+            return Err(error::RenderError::Other("static rebuild rejected".into()));
         }
         Ok(())
     }
@@ -885,7 +885,7 @@ impl backend::LiveEdit for RecordingBackend {
     ) -> error::RenderResult<()> {
         self.skinned_updates.push(skinned_index);
         if self.fail_skinned_updates {
-            return Err("skinned update rejected".into());
+            return Err(error::RenderError::Other("skinned update rejected".into()));
         }
         Ok(())
     }
@@ -895,7 +895,7 @@ impl backend::LiveEdit for RecordingBackend {
     ) -> error::RenderResult<Vec<backend::SkinnedSlotLayout>> {
         self.skinned_rebuild_change_counts.push(changes.len());
         if self.fail_skinned_rebuild {
-            return Err("skinned rebuild rejected".into());
+            return Err(error::RenderError::Other("skinned rebuild rejected".into()));
         }
         Ok(self
             .skinned_layouts
@@ -917,14 +917,16 @@ impl backend::LiveEdit for RecordingBackend {
     ) -> error::RenderResult<()> {
         self.skeleton_updates.push((skinned_index, new_joint_count));
         if self.fail_skeleton_update {
-            return Err("skeleton update rejected".into());
+            return Err(error::RenderError::Other("skeleton update rejected".into()));
         }
         Ok(())
     }
     fn update_environment_map(&mut self, _: &[u8]) -> error::RenderResult<()> {
         self.env_updates += 1;
         if self.fail_env_updates {
-            return Err("environment map update rejected".into());
+            return Err(error::RenderError::Other(
+                "environment map update rejected".into(),
+            ));
         }
         Ok(())
     }

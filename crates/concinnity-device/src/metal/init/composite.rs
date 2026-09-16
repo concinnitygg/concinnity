@@ -1,6 +1,6 @@
 //! The composite pass state: the post-process pipeline and its sampler.
 
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use objc2_metal::{
     MTLDevice as _, MTLSamplerAddressMode, MTLSamplerDescriptor, MTLSamplerMinMagFilter,
 };
@@ -26,7 +26,7 @@ pub(super) fn build_composite(gpu: &InitGpu<'_>) -> RenderResult<CompositeState>
         desc.setRAddressMode(MTLSamplerAddressMode::ClampToEdge);
         device
             .newSamplerStateWithDescriptor(&desc)
-            .ok_or("failed to create post sampler state")?
+            .ok_or_else(|| RenderError::Other("failed to create post sampler state".into()))?
     };
     Ok(CompositeState { pipeline, sampler })
 }

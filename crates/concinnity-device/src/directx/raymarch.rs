@@ -1017,7 +1017,8 @@ impl RaymarchResources {
         // volume is a developer-time bug, not a graceful fallback.
         let mut volumes: Vec<RaymarchVolumeRecord> = Vec::with_capacity(active.len());
         for (vol, payload, label) in &active {
-            let programs = crate::shader::raymarch_source::decode(payload, label)?;
+            let programs = crate::shader::raymarch_source::decode(payload, label)
+                .map_err(RenderError::Other)?;
             let pso = dump_on_err(
                 info_queue,
                 if vol.volumetric {

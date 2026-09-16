@@ -183,7 +183,7 @@ pub(super) fn build_scene_assets(
         desc.setSupportArgumentBuffers(true);
         device
             .newSamplerStateWithDescriptor(&desc)
-            .ok_or("failed to create sampler state")?
+            .ok_or_else(|| RenderError::Other("failed to create sampler state".into()))?
     };
 
     // Cube sampler: linear filter + clamp-to-edge + mipmap linear for prefilter
@@ -200,7 +200,7 @@ pub(super) fn build_scene_assets(
         desc.setSupportArgumentBuffers(true);
         device
             .newSamplerStateWithDescriptor(&desc)
-            .ok_or("failed to create cube sampler state")?
+            .ok_or_else(|| RenderError::Other("failed to create cube sampler state".into()))?
     };
 
     // IBL: either upload the supplied EnvironmentMap payload or build a

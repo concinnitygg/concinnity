@@ -86,22 +86,20 @@ impl DxContext {
         })?;
         let (vertex_count, index_count) = (obj.vertex_count, obj.index_count);
         if vertices.len() != vertex_count {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "upload_mesh: draw {} expects {} vertices, got {}",
                 draw_idx,
                 vertex_count,
                 vertices.len()
-            )
-            .into());
+            )));
         }
         if indices.len() != index_count {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "upload_mesh: draw {} expects {} indices, got {}",
                 draw_idx,
                 index_count,
                 indices.len()
-            )
-            .into());
+            )));
         }
 
         // Reclaim frees whose in-flight frames have retired, then place the

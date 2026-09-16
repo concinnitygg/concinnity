@@ -101,7 +101,9 @@ impl VkContext {
             frame,
         } = mesh;
         if vertices.is_empty() || indices.is_empty() {
-            return Err("add_chunk_mesh: empty chunk geometry".into());
+            return Err(error::RenderError::Other(
+                "add_chunk_mesh: empty chunk geometry".into(),
+            ));
         }
         self.chunk_stream.vtx_alloc.reclaim(frame);
         self.chunk_stream.idx_alloc.reclaim(frame);
@@ -189,7 +191,8 @@ impl VkContext {
         draw_idx: usize,
         retire_frame: u64,
     ) -> error::RenderResult<()> {
-        let region = draw_slot::retire_chunk_slot(&mut self.draw.objects, draw_idx)?;
+        let region = draw_slot::retire_chunk_slot(&mut self.draw.objects, draw_idx)
+            .map_err(error::RenderError::Other)?;
         self.chunk_stream
             .vtx_alloc
             .free(region.vertex_offset, region.vertex_bytes, retire_frame);

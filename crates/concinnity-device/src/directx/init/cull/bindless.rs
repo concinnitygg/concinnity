@@ -3,7 +3,7 @@
 
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::backend_init::WorldShader;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::CullPlan;
@@ -44,7 +44,7 @@ pub(super) fn build_bindless_pass(
     let world_default = world_shaders
         .first()
         .copied()
-        .ok_or_else(|| "BackendInit carried no shaders".to_string())?;
+        .ok_or_else(|| RenderError::Other("BackendInit carried no shaders".to_string()))?;
     let bucket_shaders = world_shaders.get(1..).unwrap_or(&[]);
     // The GPU-driven main pass. The engine's pair is compiled regardless of the
     // world default: it is the program for every bucket that declares no Shader
@@ -69,11 +69,10 @@ pub(super) fn build_bindless_pass(
     } else {
         let max = render_types::MAX_SHADER_BUCKETS;
         if bucket_shaders.len() + 1 > max {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "world declares {} Shaders but at most {max} can be routed",
                 bucket_shaders.len() + 1
-            )
-            .into());
+            )));
         }
         build_world_pipeline_table(device, info_queue, targets, bucket_shaders)?
     };

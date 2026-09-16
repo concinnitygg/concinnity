@@ -24,10 +24,14 @@ impl VkContext {
     // is unambiguous.
     pub(in crate::vulkan) fn read_cull_status_buffer(&mut self) -> RenderResult<Vec<u32>> {
         if self.cull.cull_status_buffers.is_empty() {
-            return Err("cull-status: this world does not run the GPU-driven cull".into());
+            return Err(RenderError::Other(
+                "cull-status: this world does not run the GPU-driven cull".into(),
+            ));
         }
         if self.swapchain.last_present_index.is_none() {
-            return Err("cull-status: no frame has been submitted yet".into());
+            return Err(RenderError::Other(
+                "cull-status: no frame has been submitted yet".into(),
+            ));
         }
         let count = self.cull_count();
         if count == 0 {
