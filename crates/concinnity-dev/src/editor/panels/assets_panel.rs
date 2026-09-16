@@ -1914,7 +1914,7 @@ mod tests {
                  {{\"name\":\"probe\",\"type\":\"{ty}\",\"args\":{{}}}}\n"
             )
         };
-        crate::build_pipeline_from_str(
+        concinnity_cook::build_pipeline_from_str(
             &world,
             crate::project::assets_dir().as_deref(),
             None,

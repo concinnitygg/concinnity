@@ -9,8 +9,7 @@ the world authoring and in-memory build code, the implementation behind
 each CLI subcommand, the asset-reference generator, bundle packaging and
 export, the in-engine editor HUD with save-back, and the localhost debug
 server. The binary itself is just a clap command tree that dispatches into
-this crate, which is what lets the same entry points serve an out-of-tree
-host with no argv at all.
+this crate.
 
 ## Constraints
 

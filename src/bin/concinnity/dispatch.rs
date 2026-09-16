@@ -5,6 +5,7 @@
 
 use crate::cli::{Cli, Commands};
 use concinnity_dev::command;
+use concinnity_dev::export::ExportOptions;
 use concinnity_engine::StateTree;
 use concinnity_engine::app::dev_flags;
 
@@ -63,15 +64,15 @@ pub(crate) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
             let path = args.file.as_deref().unwrap_or("");
             command::check(path)
         }
-        Commands::Export(args) => concinnity_dev::export::export(
-            args.file.as_deref(),
-            args.name.as_deref(),
-            args.version.as_deref(),
-            args.platform.as_deref(),
-            &args.out,
-            &args.format,
-            args.dmg,
-        ),
+        Commands::Export(args) => concinnity_dev::export::export(&ExportOptions {
+            world: args.file.clone(),
+            name: args.name.clone(),
+            version: args.version.clone(),
+            platform: args.platform.clone(),
+            out: args.out.clone(),
+            format: args.format.into(),
+            dmg: args.dmg,
+        }),
         Commands::Mcp(args) => concinnity_dev::run_mcp(args.debug_port),
         Commands::Version => command::version(),
     }

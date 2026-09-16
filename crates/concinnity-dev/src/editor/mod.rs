@@ -399,7 +399,8 @@ mod tests {
             write_world_jsonl(&renderable_entries("stale")).unwrap(),
         )
         .unwrap();
-        crate::build_world_to_disk(world_path.to_str().unwrap()).expect("the build writes blobs");
+        let content = std::fs::read_to_string(&world_path).unwrap();
+        crate::authoring::build_world_str_to_disk(&content, None).expect("the build writes blobs");
         let blob = concinnity_host::store::blob::primary_in(&build_root.join("data"));
         let before = std::fs::read(&blob).expect("the build wrote a primary blob");
 

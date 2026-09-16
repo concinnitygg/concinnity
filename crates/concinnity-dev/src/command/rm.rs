@@ -1,8 +1,8 @@
-//! Discovery wrapper around `crate::rm_at_path`.
+//! Discovery wrapper around `crate::authoring::rm_at_path`.
 
 use concinnity_cook::authoring::world::find_world_jsonl;
 
-use crate::rm_at_path;
+use crate::authoring::rm_at_path;
 
 /// Delete the asset named `name` from the discovered world.
 pub fn rm(name: &str) -> std::io::Result<()> {

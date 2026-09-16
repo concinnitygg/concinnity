@@ -1,6 +1,6 @@
 //! Add an asset to a world JSONL and rebuild.
 //!
-//! The CLI and FFI both funnel through `add_to_path`, which:
+//! `cn add` and the editor funnel through `add_to_path`, which:
 //!   - bootstraps a missing world from a `.glb` / `.txt` / `.md` target (a
 //!     text target becomes a `TextLabel` whose content is the file body); the
 //!     renderer stack itself is injected at build time from the entries'
@@ -24,7 +24,7 @@ use concinnity_cook::authoring::world::{WORLD_JSONL, patch_world_jsonl_to};
 /// (target is `.glb`, world has no renderer trigger). `None` uses the
 /// default scaffold; `Some("minimal-3d-world")` layers that template's
 /// entries. Unknown names error out before touching the world file.
-pub fn add_to_path(
+pub(crate) fn add_to_path(
     world_path: &str,
     name: Option<&str>,
     target: &str,

@@ -257,7 +257,7 @@ fn inject_top_bar(world: &mut World, font: Option<FontHandle>) {
 // pipeline runs on a world line. The reserved `asset_id` and the reused font are
 // set by the caller afterward (neither is part of the spec's args).
 fn materialize<T: serde::de::DeserializeOwned>(spec: AssetSpec) -> T {
-    serde_json::from_value(crate::spec_args(&spec))
+    serde_json::from_value(crate::authoring::spec_args(&spec))
         .expect("editor HUD spec deserializes into its component")
 }
 

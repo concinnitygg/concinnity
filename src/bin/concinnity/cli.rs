@@ -4,6 +4,7 @@
 //
 // Parsing only. What each command does lives in concinnity-dev; `dispatch`
 // is the one file that joins the two.
+use concinnity_dev::export::BundleFormat;
 use concinnity_engine::app::dev_flags;
 use concinnity_engine::app::dev_flags::{QualityPreset, RtDynamicMode};
 
@@ -216,6 +217,23 @@ impl From<QualityPresetArg> for QualityPreset {
     }
 }
 
+// The argv face of the export `BundleFormat`: concinnity-dev carries no clap
+// dependency either.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub(crate) enum BundleFormatArg {
+    Zip,
+    Dir,
+}
+
+impl From<BundleFormatArg> for BundleFormat {
+    fn from(f: BundleFormatArg) -> Self {
+        match f {
+            BundleFormatArg::Zip => BundleFormat::Zip,
+            BundleFormatArg::Dir => BundleFormat::Dir,
+        }
+    }
+}
+
 // The argv face of the render layer's `RtDynamicMode`, for the same reason.
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
 pub(crate) enum RtDynamicArg {
@@ -419,9 +437,9 @@ pub(crate) struct ExportArgs {
     #[arg(long, default_value = "dist")]
     pub out: String,
 
-    /// Output format: zip (default) or dir
-    #[arg(long, default_value = "zip")]
-    pub(crate) format: String,
+    /// Output format
+    #[arg(long, value_enum, default_value = "zip")]
+    pub(crate) format: BundleFormatArg,
 
     /// Also produce a .dmg wrapping the .app (macOS-only)
     #[arg(long)]
@@ -622,8 +640,14 @@ mod tests {
             panic!("expected export");
         };
         assert_eq!(e.out, "dist");
-        assert_eq!(e.format, "zip");
+        assert_eq!(e.format, BundleFormatArg::Zip);
         assert!(!e.dmg);
+    }
+
+    #[test]
+    fn export_rejects_an_unknown_format() {
+        let err = Cli::try_parse_from(["concinnity", "export", "--format", "tarball"]).unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::InvalidValue);
     }
 
     #[test]
@@ -841,7 +865,7 @@ mod tests {
         assert_eq!(e.version.as_deref(), Some("2.0.0"));
         assert_eq!(e.platform.as_deref(), Some("macos"));
         assert_eq!(e.out, "build");
-        assert_eq!(e.format, "dir");
+        assert_eq!(e.format, BundleFormatArg::Dir);
         assert!(e.dmg);
     }
 

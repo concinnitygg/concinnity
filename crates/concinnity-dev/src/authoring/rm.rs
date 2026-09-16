@@ -6,7 +6,7 @@ use concinnity_cook::authoring::world::{WORLD_JSONL, known_names, patch_world_js
 ///
 /// Errors if `name` is not present. When it isn't, the error message includes
 /// the known asset names from the world so the caller can suggest a fix.
-pub fn rm_at_path(world_path: &str, name: &str) -> std::io::Result<()> {
+pub(crate) fn rm_at_path(world_path: &str, name: &str) -> std::io::Result<()> {
     let mut removed = false;
 
     patch_world_jsonl(world_path, |assets| {

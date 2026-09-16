@@ -5,7 +5,8 @@
 //!
 //! Schemas describe the request body's parameters only. The transport adds the
 //! `"cmd"` field, so it is not a property here and `additionalProperties` stays
-//! closed. A parameter is `required` when the server rejects the request without
+//! closed: the request parser strips `"cmd"` and rejects any other undeclared
+//! key. A parameter is `required` when the server rejects the request without
 //! it; every other parameter carries its default in its description.
 //!
 //! A drift test below scrapes the dispatcher's own match arms, so a new verb
@@ -778,13 +779,24 @@ mod tests {
     }
 
     // Every declared parameter must deserialize into the request struct the live
-    // handler parses, so a schema that drifts from `super::commands` fails here.
+    // handler parses, and nothing else may, so a schema that drifts from
+    // `super::commands` in either direction fails here.
     #[test]
     fn schemas_deserialize_into_the_request_structs() {
         for command in all().iter().filter(|c| !c.params.is_empty()) {
             let payload = sample_payload(command);
             super::super::commands::parse_probe(command.name, &payload)
                 .unwrap_or_else(|e| panic!("{} rejects its own schema: {e}", command.name));
+
+            let mut undeclared: Value = serde_json::from_str(&payload).unwrap();
+            undeclared["positon"] = json!([1.0, 2.0, 3.0]);
+            let err = super::super::commands::parse_probe(command.name, &undeclared.to_string())
+                .expect_err(&format!("{} accepts an undeclared key", command.name));
+            assert!(
+                err.contains("unknown field `positon`"),
+                "{} names the wrong problem: {err}",
+                command.name
+            );
         }
     }
 

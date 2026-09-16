@@ -1,4 +1,4 @@
-//! Discovery wrapper around `crate::add_to_path`.
+//! Discovery wrapper around `crate::authoring::add_to_path`.
 //!
 //! The CLI binary handles world-path discovery: try the standard `worlds/`
 //! location first, then fall back to `world.jsonl` in cwd. When the fallback is
@@ -7,7 +7,7 @@
 
 use concinnity_cook::authoring::world::{WORLD_JSONL, find_world_jsonl};
 
-use crate::add_to_path;
+use crate::authoring::add_to_path;
 
 /// Create an asset from `target` and apply it to the discovered world.
 ///

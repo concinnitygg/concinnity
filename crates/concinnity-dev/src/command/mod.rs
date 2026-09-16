@@ -5,7 +5,7 @@
 //! This is where stdout lives. The authoring API returns values and errors; a
 //! command resolves which world was meant, calls it, and formats the result for
 //! a terminal. Keeping that split means the same authoring call is equally
-//! usable from the editor, the debug server, and an out-of-tree host.
+//! usable from the editor and the debug server.
 
 mod add;
 mod build;

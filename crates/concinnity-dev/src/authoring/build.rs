@@ -21,7 +21,7 @@ use concinnity_host::store::blob::BlobData;
 // validation front half and is ready for concinnity_cook::build_compiled.
 //
 // This is the shared front half of every in-memory build: `build_world_from_path`
-// (the CLI interpreted `run` and the FFI preview) funnels through here so
+// (the interpreted `cn debug` run) funnels through here so
 // validation and asset fetching behave identically. The `cn build` blob path
 // prepares through concinnity_cook directly and does not use this.
 pub(crate) fn prepare(content: &str) -> std::io::Result<LoadedWorld> {
@@ -89,7 +89,7 @@ fn scan_environment_map_source(
 
 /// Compile a prepared world and assemble it into an in-memory World, ready to
 /// run without touching any blob files on disk.
-pub fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
+fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
     // Capture the dev-only hot-reload source info for the singleton ColorLut and
     // EnvironmentMap resources BEFORE `build_compiled` consumes the asset list.
     // These kinds are authored (never injected by an expansion pass), so the raw
@@ -181,7 +181,7 @@ pub fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
 /// ready-to-run World without touching any blob files on disk. The editor uses
 /// this to boot an empty (or otherwise non-renderable) world from a seeded
 /// GraphicsConfig so a window still opens.
-pub fn build_world_from_str(content: &str) -> std::io::Result<World> {
+pub(crate) fn build_world_from_str(content: &str) -> std::io::Result<World> {
     Ok(build_world_and_shadows(content)?.0)
 }
 
@@ -201,7 +201,7 @@ pub(crate) fn build_world_and_shadows(
 /// returning a ready-to-run World. The interpreted `run` (in the CLI crate)
 /// loads its world through here; it is the file-backed counterpart of `prepare`
 /// + `world_from_loaded`.
-pub fn build_world_from_path(world_path: &str) -> std::io::Result<World> {
+pub(crate) fn build_world_from_path(world_path: &str) -> std::io::Result<World> {
     let content = std::fs::read_to_string(world_path)?;
     build_world_from_str(&content)
 }
@@ -217,28 +217,11 @@ pub(crate) fn build_world_file(json_path: &str) -> std::io::Result<()> {
     concinnity_cook::build_loaded(&tree, loaded, crate::cook_platform())
 }
 
-/// Compile a world.jsonl file and write the compiled blobs + world-lock.json to
-/// the active state dir's `data/`, exactly as `cn build` does. This is
-/// `cn build` as a library call: the editor's SAVE goes through here to persist
-/// edits, reusing the validated compile + blob-write tail rather than patching
-/// blobs directly. Same-process recompiles are fast because the payload / expand
-/// caches are warm.
-pub fn build_world_to_disk(world_path: &str) -> std::io::Result<()> {
-    let content = std::fs::read_to_string(world_path)?;
-    build_world_str_to_disk(&content)
-}
-
-// The string-backed tail of `build_world_to_disk`: compile world content and
-// write the blobs + lock without reading (or writing) a world.jsonl. The
-// editor console's build command goes through here so it compiles the
-// in-memory entries as they stand, saved or not.
-pub(crate) fn build_world_str_to_disk(content: &str) -> std::io::Result<()> {
-    build_world_str_to_disk_with_progress(content, None)
-}
-
-// `build_world_str_to_disk` with a compile-progress callback (the editor's
-// cook workers feed their operation card through it).
-pub(crate) fn build_world_str_to_disk_with_progress(
+// Compile world content and write the blobs + world-lock.json to the open
+// project's build root, without reading (or writing) a world.jsonl, so the
+// editor's cook workers compile the in-memory entries as they stand, saved or
+// not. `progress` feeds their operation card.
+pub(crate) fn build_world_str_to_disk(
     content: &str,
     progress: Option<&(dyn Fn(concinnity_cook::BuildProgress) + Sync)>,
 ) -> std::io::Result<()> {
@@ -470,12 +453,12 @@ mod tests {
         );
     }
 
-    // build_world_to_disk compiles a world.jsonl and writes the blobs + lock to
+    // build_world_str_to_disk compiles world content and writes the blobs + lock to
     // the open project's build root, exactly as `cn build` does. Uses a
     // payload-free world (PhysicsConfig) so it needs no source files or shader
     // compilation.
     #[test]
-    fn build_world_to_disk_writes_blobs_and_lock() {
+    fn build_world_str_to_disk_writes_blobs_and_lock() {
         // Opening the session's project is a process-global write.
         let _guard = crate::test_support::lock();
         let dir = concinnity_testing::TempTree::new();
@@ -493,7 +476,8 @@ mod tests {
         )
         .unwrap();
 
-        build_world_to_disk(world.to_str().unwrap()).expect("compile + write should succeed");
+        let content = std::fs::read_to_string(&world).unwrap();
+        build_world_str_to_disk(&content, None).expect("compile + write should succeed");
 
         // The primary blob (data/0) and the provenance lock both land under the
         // build root, not beside the authored world.

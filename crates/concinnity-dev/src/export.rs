@@ -33,28 +33,51 @@ struct AppMeta {
     icon: Option<PathBuf>,
 }
 
+/// How an exported bundle is written to the output directory.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BundleFormat {
+    /// The bundle archived to a `.zip`.
+    #[default]
+    Zip,
+    /// The bundle left as a plain directory.
+    Dir,
+}
+
+/// What [`export`] packages and where it writes the result.
+#[derive(Clone, Debug, Default)]
+pub struct ExportOptions {
+    /// The world JSONL to build; discovered from `worlds/` when `None`.
+    pub world: Option<String>,
+    /// Overrides the application name the world's `AppConfig` declares.
+    pub name: Option<String>,
+    /// Overrides the application version the world's `AppConfig` declares.
+    pub version: Option<String>,
+    /// The target platform; must name this host when set.
+    pub platform: Option<String>,
+    /// The output directory.
+    pub out: String,
+    /// Whether the bundle is zipped or left as a directory.
+    pub format: BundleFormat,
+    /// Also wrap the `.app` in a `.dmg` (macOS only).
+    pub dmg: bool,
+}
+
 /// Package a built world into a distributable bundle: the player binary, the
-/// blob, and a warmed runtime cache segment, written to `out` as a zip or a
-/// directory.
-pub fn export(
-    json_path: Option<&str>,
-    name: Option<&str>,
-    version: Option<&str>,
-    platform: Option<&str>,
-    out: &str,
-    format: &str,
-    dmg: bool,
-) -> io::Result<()> {
-    let make_zip = match format {
-        "zip" => true,
-        "dir" => false,
-        other => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("unknown --format '{other}' (expected 'zip' or 'dir')"),
-            ));
-        }
-    };
+/// blob, and a warmed runtime cache segment, written to `options.out` as a zip
+/// or a directory.
+pub fn export(options: &ExportOptions) -> io::Result<()> {
+    let ExportOptions {
+        world,
+        name,
+        version,
+        platform,
+        out,
+        format,
+        dmg,
+    } = options;
+    let (name, version, platform) = (name.as_deref(), version.as_deref(), platform.as_deref());
+    let make_zip = *format == BundleFormat::Zip;
+    let dmg = *dmg;
     if dmg && !cfg!(target_os = "macos") {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
@@ -72,7 +95,7 @@ pub fn export(
 
     // Build the world exactly like `cn build` (validates, compiles, writes the
     // blobs + world-lock.json, reuses the build cache).
-    let world_path = resolve_world_path(json_path)?;
+    let world_path = resolve_world_path(world.as_deref())?;
     crate::authoring::build_world_file(&world_path)?;
 
     // Read the app metadata from the expanded world. The build above already
@@ -1198,19 +1221,15 @@ mod tests {
         assert_eq!(fs::read_dir(&dest).unwrap().count(), 0);
     }
 
-    #[test]
-    fn export_rejects_an_unknown_format_up_front() {
-        // The format check runs before any path resolution or build, so this
-        // touches nothing on disk.
-        let err = export(None, None, None, None, "out", "tarball", false).unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
-        assert!(err.to_string().contains("tarball"), "got: {err}");
-    }
-
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn export_rejects_dmg_off_macos() {
-        let err = export(None, None, None, None, "out", "zip", true).unwrap_err();
+        let options = ExportOptions {
+            out: "out".to_string(),
+            dmg: true,
+            ..ExportOptions::default()
+        };
+        let err = export(&options).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::Unsupported);
     }
 

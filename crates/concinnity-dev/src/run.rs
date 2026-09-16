@@ -58,7 +58,7 @@ pub(crate) fn run_interpreted(
     concinnity_engine::app::dev_flags::set_world_jsonl_path(Some(json_path.to_string()));
 
     let mut app = crate::project::app();
-    *app.world_mut() = crate::build_world_from_path(json_path).map_err(|e| {
+    *app.world_mut() = crate::authoring::build_world_from_path(json_path).map_err(|e| {
         tracing::error!("Could not build world from {json_path}: {e}");
         e
     })?;

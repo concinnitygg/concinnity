@@ -40,16 +40,19 @@ fn run_with_reply<T>(
 }
 
 // Parse a command's JSON body, tagging a decode failure with `label` (the
-// command name) as a ready-to-return `error_reply` string.
+// command name) as a ready-to-return `error_reply` string. The transport's
+// `"cmd"` key is stripped first, so every other key must be a declared field.
 fn parse_request<T: serde::de::DeserializeOwned>(label: &str, text: &str) -> Result<T, String> {
-    serde_json::from_str(text).map_err(|e| error_reply(&format!("{label}: {e}")))
+    let fail = |e: serde_json::Error| error_reply(&format!("{label}: {e}"));
+    let mut body: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(text).map_err(fail)?;
+    body.remove("cmd");
+    serde_json::from_value(serde_json::Value::Object(body)).map_err(fail)
 }
 
 #[derive(serde::Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 struct DecalAddRequest {
-    #[serde(skip)]
-    _cmd: String,
     texture: Option<String>,
     position: [f32; 3],
     rotation_deg: [f32; 3],
@@ -60,7 +63,6 @@ struct DecalAddRequest {
 impl Default for DecalAddRequest {
     fn default() -> Self {
         Self {
-            _cmd: String::new(),
             texture: None,
             position: [0.0, 0.0, 0.0],
             rotation_deg: [0.0, 0.0, 0.0],
@@ -96,6 +98,7 @@ pub(super) fn handle_decal_add(text: &str) -> String {
 }
 
 #[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct IdRequest {
     id: usize,
 }
@@ -119,10 +122,8 @@ pub(super) fn handle_decal_remove(text: &str) -> String {
 }
 
 #[derive(serde::Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 struct EmitterAddRequest {
-    #[serde(skip)]
-    _cmd: String,
     texture: Option<String>,
     position: [f32; 3],
     direction: [f32; 3],
@@ -144,7 +145,6 @@ impl Default for EmitterAddRequest {
     fn default() -> Self {
         let d = super::runtime_spawn::EmitterSpawnArgs::default();
         Self {
-            _cmd: String::new(),
             texture: d.texture,
             position: d.position,
             direction: d.direction,
@@ -218,6 +218,7 @@ pub(super) fn handle_emitter_remove(text: &str) -> String {
 }
 
 #[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AnimCrossfadeRequest {
     #[serde(default)]
     target: String,
@@ -277,6 +278,7 @@ fn resolve_target(cmd: &str, target: &str, names: &[String]) -> Result<AssetId, 
 }
 
 #[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AnimParamRequest {
     #[serde(default)]
     target: String,
@@ -316,6 +318,7 @@ pub(super) fn handle_anim_param(text: &str, names: &[String]) -> String {
 }
 
 #[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AnimStateRequest {
     #[serde(default)]
     target: String,
@@ -362,6 +365,7 @@ pub(super) fn handle_anim_state(text: &str, names: &[String]) -> String {
 const SCREENSHOT_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 #[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ScreenshotRequest {
     #[serde(default)]
     path: String,
@@ -440,10 +444,8 @@ fn cull_status_reply(raw: &[u32]) -> String {
 // defaults below, matching the decal / emitter request shape. `yaw` / `pitch`
 // are radians; `fov_y_degrees` is omitted to leave the camera's FOV untouched.
 #[derive(serde::Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 struct CameraSetRequest {
-    #[serde(skip)]
-    _cmd: String,
     position: [f32; 3],
     yaw: f32,
     pitch: f32,
@@ -453,7 +455,6 @@ struct CameraSetRequest {
 impl Default for CameraSetRequest {
     fn default() -> Self {
         Self {
-            _cmd: String::new(),
             position: [0.0, 0.0, 0.0],
             yaw: 0.0,
             pitch: 0.0,
@@ -490,10 +491,8 @@ pub(super) fn handle_camera_set(text: &str) -> String {
 // (taa / ssao / ssr / ssgi / auto_exposure); `op` cycles it (next | prev,
 // both flip a binary toggle). Defaults match the decal / camera request shape.
 #[derive(serde::Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 struct QualitySetRequest {
-    #[serde(skip)]
-    _cmd: String,
     setting: String,
     op: String,
 }
@@ -501,7 +500,6 @@ struct QualitySetRequest {
 impl Default for QualitySetRequest {
     fn default() -> Self {
         Self {
-            _cmd: String::new(),
             setting: String::new(),
             op: "next".to_string(),
         }
@@ -549,10 +547,8 @@ pub(super) fn handle_quality_set(text: &str) -> String {
 // `key_jump` / `key_interact`); `key` is a canonical `InputKey` variant name
 // (`W`, `Space`, `Shift`, `Num1`, `Up`, ...).
 #[derive(serde::Deserialize, Default)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 struct RebindRequest {
-    #[serde(skip)]
-    _cmd: String,
     setting: String,
     key: String,
 }
@@ -596,10 +592,8 @@ pub(super) fn handle_rebind(text: &str) -> String {
 
 // Despawn an authored placement by its declared name.
 #[derive(serde::Deserialize, Default)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 struct DespawnCmdRequest {
-    #[serde(skip)]
-    _cmd: String,
     target: String,
 }
 
@@ -634,10 +628,8 @@ pub(super) fn handle_despawn(text: &str) -> String {
 // (with an `option` index), or one of the quick-row controls (`auto`,
 // `skip`, `log`, `save`, `load`).
 #[derive(serde::Deserialize, Default)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 struct StoryCmdRequest {
-    #[serde(skip)]
-    _cmd: String,
     action: String,
     option: usize,
 }
@@ -683,10 +675,8 @@ pub(super) fn handle_story(text: &str) -> String {
 // Re-parent an authored placement. `child` is moved under `parent`; a null or
 // omitted `parent` detaches the child to a root.
 #[derive(serde::Deserialize, Default)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 struct ReparentCmdRequest {
-    #[serde(skip)]
-    _cmd: String,
     target: String,
     parent: Option<String>,
 }
@@ -726,10 +716,8 @@ pub(super) fn handle_reparent(text: &str) -> String {
 // `lifetime` (seconds) makes the instance auto-despawn after that long, which
 // is what exercises draw-slot recycling.
 #[derive(serde::Deserialize, Default)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 struct SpawnCmdRequest {
-    #[serde(skip)]
-    _cmd: String,
     template: String,
     name: String,
     position: [f32; 3],
@@ -778,10 +766,8 @@ pub(super) fn handle_spawn(text: &str) -> String {
 // `camera-stop`); a profiling harness can then sustain motion mid-screenshot to
 // surface temporal effects. `yaw` / `pitch` are radians.
 #[derive(serde::Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 struct CameraMoveRequest {
-    #[serde(skip)]
-    _cmd: String,
     forward: f32,
     right: f32,
     up: f32,
@@ -793,7 +779,6 @@ struct CameraMoveRequest {
 impl Default for CameraMoveRequest {
     fn default() -> Self {
         Self {
-            _cmd: String::new(),
             forward: 0.0,
             right: 0.0,
             up: 0.0,
@@ -886,7 +871,7 @@ mod tests {
 
     #[test]
     fn camera_set_request_parses_full_payload() {
-        let req: CameraSetRequest = serde_json::from_str(
+        let req: CameraSetRequest = parse_request("camera-set",
             r#"{"cmd":"camera-set","position":[1.0,2.0,3.0],"yaw":0.5,"pitch":-0.25,"fov_y_degrees":60.0}"#,
         )
         .expect("valid payload parses");
@@ -898,7 +883,8 @@ mod tests {
 
     #[test]
     fn camera_set_request_fov_optional() {
-        let req: CameraSetRequest = serde_json::from_str(
+        let req: CameraSetRequest = parse_request(
+            "camera-set",
             r#"{"cmd":"camera-set","position":[0.0,1.0,0.0],"yaw":0.0,"pitch":0.0}"#,
         )
         .expect("payload without fov parses");
@@ -909,7 +895,7 @@ mod tests {
     #[test]
     fn camera_set_request_defaults_for_missing_fields() {
         let req: CameraSetRequest =
-            serde_json::from_str(r#"{"cmd":"camera-set"}"#).expect("bare command parses");
+            parse_request("camera-set", r#"{"cmd":"camera-set"}"#).expect("bare command parses");
         assert_eq!(req.position, [0.0, 0.0, 0.0]);
         assert_eq!(req.yaw, 0.0);
         assert_eq!(req.pitch, 0.0);
@@ -920,14 +906,17 @@ mod tests {
     fn camera_set_request_rejects_malformed() {
         // position must be three numbers; a string is a hard parse error.
         assert!(
-            serde_json::from_str::<CameraSetRequest>(r#"{"cmd":"camera-set","position":"nope"}"#)
-                .is_err()
+            parse_request::<CameraSetRequest>(
+                "camera-set",
+                r#"{"cmd":"camera-set","position":"nope"}"#
+            )
+            .is_err()
         );
     }
 
     #[test]
     fn camera_move_request_parses_full_payload() {
-        let req: CameraMoveRequest = serde_json::from_str(
+        let req: CameraMoveRequest = parse_request("camera-move",
             r#"{"cmd":"camera-move","forward":2.0,"right":-1.0,"up":0.5,"yaw":0.1,"pitch":-0.2,"frames":30}"#,
         )
         .expect("valid payload parses");
@@ -944,7 +933,7 @@ mod tests {
         // A bare command leaves every delta at 0 and frames at 0 (indefinite
         // hold), matching the spawn-request default convention.
         let req: CameraMoveRequest =
-            serde_json::from_str(r#"{"cmd":"camera-move"}"#).expect("bare command parses");
+            parse_request("camera-move", r#"{"cmd":"camera-move"}"#).expect("bare command parses");
         assert_eq!(req.forward, 0.0);
         assert_eq!(req.frames, 0);
     }
@@ -953,20 +942,23 @@ mod tests {
     fn camera_move_request_rejects_malformed() {
         // frames must be an unsigned integer; a string is a hard parse error.
         assert!(
-            serde_json::from_str::<CameraMoveRequest>(r#"{"cmd":"camera-move","frames":"lots"}"#)
-                .is_err()
+            parse_request::<CameraMoveRequest>(
+                "camera-move",
+                r#"{"cmd":"camera-move","frames":"lots"}"#
+            )
+            .is_err()
         );
     }
 
     #[test]
     fn story_request_parses_action_and_option() {
         let req: StoryCmdRequest =
-            serde_json::from_str(r#"{"cmd":"story","action":"choose","option":1}"#)
+            parse_request("story", r#"{"cmd":"story","action":"choose","option":1}"#)
                 .expect("valid parses");
         assert_eq!(req.action, "choose");
         assert_eq!(req.option, 1);
         let req: StoryCmdRequest =
-            serde_json::from_str(r#"{"cmd":"story","action":"advance"}"#).expect("valid parses");
+            parse_request("story", r#"{"cmd":"story","action":"advance"}"#).expect("valid parses");
         assert_eq!(req.action, "advance");
         assert_eq!(req.option, 0);
     }
@@ -974,22 +966,25 @@ mod tests {
     #[test]
     fn despawn_request_parses_target() {
         let req: DespawnCmdRequest =
-            serde_json::from_str(r#"{"cmd":"despawn","target":"crate_a"}"#).expect("valid parses");
+            parse_request("despawn", r#"{"cmd":"despawn","target":"crate_a"}"#)
+                .expect("valid parses");
         assert_eq!(req.target, "crate_a");
     }
 
     #[test]
     fn despawn_request_defaults_to_an_empty_target() {
         let req: DespawnCmdRequest =
-            serde_json::from_str(r#"{"cmd":"despawn"}"#).expect("bare command parses");
+            parse_request("despawn", r#"{"cmd":"despawn"}"#).expect("bare command parses");
         assert!(req.target.is_empty());
     }
 
     #[test]
     fn reparent_request_parses_target_and_parent() {
-        let req: ReparentCmdRequest =
-            serde_json::from_str(r#"{"cmd":"reparent","target":"box_a","parent":"frame"}"#)
-                .expect("valid parses");
+        let req: ReparentCmdRequest = parse_request(
+            "reparent",
+            r#"{"cmd":"reparent","target":"box_a","parent":"frame"}"#,
+        )
+        .expect("valid parses");
         assert_eq!(req.target, "box_a");
         assert_eq!(req.parent.as_deref(), Some("frame"));
     }
@@ -997,7 +992,7 @@ mod tests {
     #[test]
     fn reparent_request_parent_optional() {
         let req: ReparentCmdRequest =
-            serde_json::from_str(r#"{"cmd":"reparent","target":"box_a"}"#)
+            parse_request("reparent", r#"{"cmd":"reparent","target":"box_a"}"#)
                 .expect("bare parent parses");
         assert_eq!(req.target, "box_a");
         assert!(req.parent.is_none());

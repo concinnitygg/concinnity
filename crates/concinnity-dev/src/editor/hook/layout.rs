@@ -234,7 +234,7 @@ impl EditorHook {
     pub(super) fn template_entries(&self, i: usize) -> Vec<serde_json::Value> {
         concinnity_cook::authoring::template::TEMPLATES
             .get(i)
-            .map(crate::world_template_entries)
+            .map(crate::authoring::world_template_entries)
             .unwrap_or_default()
     }
 

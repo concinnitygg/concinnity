@@ -1,11 +1,11 @@
-//! Discovery wrapper around `crate::check_at_path`.
+//! Discovery wrapper around `crate::authoring::check_at_path`.
 //!
 //! `cn test` accepts an optional --file path. When the path is missing or
 //! doesn't exist on disk, fall back to discovery via find_world_jsonl.
 
 use concinnity_cook::authoring::world::find_world_jsonl;
 
-use crate::check_at_path;
+use crate::authoring::check_at_path;
 
 /// Validate a world and report its errors without building blobs.
 ///

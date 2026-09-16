@@ -196,7 +196,7 @@ fn list_expanded(content: &str, json_path: &str) -> std::io::Result<()> {
 // condition from its registry entry. The world is built exactly as the runtime
 // would, so the reported schedule cannot drift from what actually runs.
 fn list_systems(content: &str, json_path: &str) -> std::io::Result<()> {
-    let mut world = crate::build_world_from_str(content)?;
+    let mut world = crate::authoring::build_world_from_str(content)?;
     complete(&mut world)?;
     let lines = manifest_lines(&world);
 
@@ -272,7 +272,7 @@ mod tests {
     // condition that includes it.
     #[test]
     fn manifest_lines_report_the_world_schedule_with_reasons() {
-        let world = crate::build_world_from_str(
+        let world = crate::authoring::build_world_from_str(
             "{\"name\":\"gfx\",\"type\":\"GraphicsConfig\",\"args\":{}}\n\
              {\"name\":\"cam\",\"type\":\"Camera3D\",\"args\":{\"controller\":{\"free_fly\":true}}}\n",
         )
@@ -293,7 +293,7 @@ mod tests {
     // listing completes the world first, exactly as `World::start` does.
     #[test]
     fn the_manifest_reports_systems_the_engine_defaults_turn_on() {
-        let mut world = crate::build_world_from_str(
+        let mut world = crate::authoring::build_world_from_str(
             "{\"name\":\"gfx\",\"type\":\"GraphicsConfig\",\"args\":{}}\n",
         )
         .unwrap();
@@ -475,7 +475,7 @@ mod tests {
 
     #[test]
     fn manifest_lines_of_an_empty_world_are_empty() {
-        let world = crate::build_world_from_str("").unwrap();
+        let world = crate::authoring::build_world_from_str("").unwrap();
         assert!(manifest_lines(&world).is_empty());
     }
 }

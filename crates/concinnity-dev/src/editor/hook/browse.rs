@@ -20,7 +20,7 @@ impl EditorHook {
         };
         // The template's typed specs become world-line entries via the app bridge;
         // no JSON string is parsed here.
-        let entries = crate::world_template_entries(t);
+        let entries = crate::authoring::world_template_entries(t);
         let mut added = 0;
         for entry in entries {
             if entry_name(&entry).is_some_and(|n| self.name_taken(n)) {
