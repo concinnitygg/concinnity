@@ -3,10 +3,15 @@
 // any `HitRegion`, `Screen`, or `KeyBinding`, then it processes hover/click,
 // screen overlays, and key bindings each frame.
 
+mod capture;
 pub(crate) mod dropdown;
 mod focus;
+mod intent;
+mod key_bindings;
+mod regions;
 mod screen;
 mod scroll_layout;
+mod slider;
 
 use concinnity_core::components::FrameInput;
 use concinnity_core::components::SceneCommand;
@@ -19,7 +24,7 @@ use concinnity_core::components::StoryCommand;
 use concinnity_core::components::TextInput;
 use concinnity_core::components::TextLabel;
 use concinnity_core::components::{
-    HitRegion, InputKey, KeyBinding, NavDirection, Screen, ScrollPanel, SettingOp,
+    HitRegion, KeyBinding, NavDirection, Screen, ScrollPanel, SettingOp,
 };
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{
@@ -27,6 +32,7 @@ use concinnity_core::ecs::{
     StepResult, System,
 };
 use concinnity_core::gfx::overlay::{OverlayTransform, UI_REFERENCE_SIZE};
+use regions::RegionFrame;
 use screen::{ScreenMeta, ScreenRegistry};
 use scroll_layout::RowSpec;
 use std::collections::HashMap;
@@ -35,9 +41,6 @@ use crate::settings;
 
 // How many reference-space pixels one unit of scroll-wheel delta moves a panel.
 const WHEEL_SCROLL_SPEED: f32 = 2.0;
-// Shown in a rebind row's value label while it waits for the user to press a key.
-const REBIND_PROMPT: &str = "Press a key...";
-const PAD_REBIND_PROMPT: &str = "Press a button...";
 
 // Per-hit-region bookkeeping stored after init().
 #[derive(Debug)]
@@ -225,20 +228,6 @@ struct OpenRequest {
     scale: Option<f32>,
 }
 
-// An in-progress key rebind: a Controls-tab rebind row was clicked and is
-// waiting for the user to press a key. The next `FrameInput.captured_key` binds
-// it; Escape cancels and restores the row's previous value text.
-#[derive(Debug)]
-struct Capture {
-    // The rebind setting key, e.g. `"key_forward"`.
-    setting_key: String,
-    // The value `TextLabel` showing the bound key (set to a prompt while
-    // capturing; GraphicsSystem rewrites it after the bind).
-    value_label: Option<AssetId>,
-    // The label's text before capture began, restored if the user cancels.
-    prev_text: String,
-}
-
 // HitRegion / Screen / KeyBinding input dispatch behavior. Constructed
 // internally by `World::start` when the world declares any `HitRegion`,
 // `Screen`, or `KeyBinding`; never a world-declared asset, so it carries no
@@ -266,7 +255,7 @@ pub(crate) struct UiInputSystem {
     // A pending key rebind (a Controls-tab rebind row is capturing), or `None`.
     // While set, the menu consumes the frame for capture: the next pressed key
     // binds it and Escape cancels.
-    capturing: Option<Capture>,
+    capturing: Option<capture::Capture>,
     // The open settings dropdown, or `None`. While set, its floating list
     // overlays the menu and consumes input until a pick / dismiss.
     open_dropdown: Option<OpenDropdownState>,
@@ -499,492 +488,80 @@ impl System for UiInputSystem {
     }
 
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
-        // Apply ScreenCommands sent last frame first, so a click last frame takes
-        // effect before this frame's hit-testing reads `active`. Clone them out
-        // of the queue to release the ctx borrow before apply_screen_command,
-        // which needs &mut ctx.
-        let screen_cmds: Vec<ScreenCommand> = match ctx.events::<ScreenCommand>() {
-            Some(events) => events.read(&mut self.screen_cmd_cursor).cloned().collect(),
-            None => Vec::new(),
-        };
-        for cmd in screen_cmds {
-            self.apply_screen_command(cmd, ctx);
-        }
+        self.apply_pending_screen_commands(ctx);
 
-        // Read (not drain) the per-frame input snapshot so this system can
-        // coexist with Camera3DSystem (both query it; GraphicsSystem clears it
-        // before the next push). Take the most recent if more than one exists.
-        let input = match ctx.query::<FrameInput>().last().cloned() {
-            Some(i) => i,
-            None => return StepResult::Continue,
+        // Read (not drain) the latest input snapshot: Camera3DSystem queries it
+        // too, and GraphicsSystem clears it before the next push.
+        let Some(input) = ctx.query::<FrameInput>().last().cloned() else {
+            return StepResult::Continue;
         };
 
         // While any visible TextInput has keyboard focus, typed keys belong to
-        // the field: ordinary KeyBindings and the focus pulses are suspended
-        // so typing cannot fire actions (screen toggles below stay live).
+        // the field: ordinary KeyBindings and the focus pulses are suspended.
         let typing = ctx.query::<TextInput>().any(|t| t.visible && t.focused);
-
-        // The pad's menu pulses engage only while a capturing screen is
-        // active; during play the same buttons keep their gameplay meanings.
-        let screen_active = self.screens.top_capture().is_some();
+        let intent = intent::frame_intent(
+            &input,
+            typing,
+            self.screens.top_capture().is_some(),
+            self.focus.is_some(),
+            self.last_cursor,
+        );
         // Mouse movement dismisses the focus cursor: the menu returns to
         // hover-driven interaction until the next pulse.
-        let cursor_moved = self
-            .last_cursor
-            .is_some_and(|(px, py)| (input.mouse_x - px).abs() + (input.mouse_y - py).abs() > 2.0);
         self.last_cursor = Some((input.mouse_x, input.mouse_y));
-        if cursor_moved {
+        if intent.cursor_moved {
             self.focus = None;
         }
-        // The keyboard arrows drive the same focus model as the pad pulse.
-        let nav = if screen_active && !typing {
-            input.nav.or(match input.captured_key {
-                Some(InputKey::Up) => Some(NavDirection::Up),
-                Some(InputKey::Down) => Some(NavDirection::Down),
-                Some(InputKey::Left) => Some(NavDirection::Left),
-                Some(InputKey::Right) => Some(NavDirection::Right),
-                _ => None,
-            })
-        } else {
-            None
-        };
-        // Confirm fires the focused control: the pad's South button, or Enter
-        // while something is focused (an unfocused Enter still reaches the
-        // KeyBindings, e.g. a story's advance binding).
-        let enter_pressed = screen_active && !typing && input.captured_key == Some(InputKey::Enter);
-        let enter_confirm = enter_pressed && self.focus.is_some();
-        let confirm = (screen_active && !typing && input.confirm) || enter_confirm;
-        // The pad's East button backs out like Escape while a screen is up.
-        let ui_escape = input.escape || (input.back && screen_active);
 
-        // An open settings dropdown's floating list overlays the menu and
-        // consumes this frame: hover tracks the option under the cursor, a click
-        // picks it (or, outside the list, dismisses), and Escape / a scroll close
-        // it. Handled before the Escape keybinding + hit-test passes so it takes
-        // priority (Escape closes the list rather than the menu, a click on an
-        // option does not fall through to the row behind it).
+        // An open dropdown's floating list consumes the frame ahead of the
+        // key bindings and regions, so Escape closes the list rather than the
+        // menu and a pick never falls through to the row behind it.
         if self.open_dropdown.is_some() {
-            // Enter always picks inside the list, focused or not.
-            let pick = confirm || enter_pressed;
-            self.step_open_dropdown(
-                &input,
-                nav,
-                DropdownPulses {
-                    confirm: pick,
-                    escape: ui_escape,
-                    cursor_moved,
-                },
-                ctx,
-            );
+            let pulses = DropdownPulses::from_intent(&intent);
+            self.step_open_dropdown(&input, intent.nav, pulses, ctx);
             self.publish_dropdown(ctx);
             return StepResult::Continue;
         }
-
-        // A pending rebind (a Controls-tab rebind row was clicked) consumes
-        // the whole frame: the next pressed key (or gamepad button, for a
-        // `pad_*` row) binds it, Escape cancels (and restores the row's
-        // previous text), otherwise it keeps waiting. No clicks, hover, or
-        // other key bindings fire while capturing; input of the other kind is
-        // ignored, so a stray key press never lands in a button row.
         if self.capturing.is_some() {
-            let wants_button = self
-                .capturing
-                .as_ref()
-                .is_some_and(|c| c.setting_key.starts_with("pad_"));
-            let op = if wants_button {
-                input.captured_button.map(SettingOp::RebindButton)
-            } else {
-                input.captured_key.map(SettingOp::Rebind)
-            };
-            if input.escape {
-                self.cancel_capture(ctx);
-            } else if let Some(op) = op {
-                let cap = self.capturing.take().expect("capturing is some");
-                ctx.events_mut::<SettingCommand>().send(SettingCommand {
-                    setting: cap.setting_key,
-                    op,
-                    value_label: cap.value_label,
-                    persist: true,
-                });
-                // GraphicsSystem rewrites the value label to the new binding
-                // when it reads the command next tick; the prompt shows until
-                // then.
-            }
-            return StepResult::Continue;
+            return self.step_rebind_capture(&input, ctx);
+        }
+        if let Some(result) = self.dispatch_key_bindings(&intent, typing, ctx) {
+            return result;
         }
 
-        // A Screen's `toggle_key` opens / closes it from anywhere, ahead of
-        // ordinary KeyBindings and immune to the typing suppression (so a
-        // console screen's own key still closes it while its field has
-        // focus). A matched toggle consumes the key press. The pad's back
-        // pulse rides the Escape name, so it pops toggled screens and fires
-        // Escape bindings exactly like the key.
-        let pressed_key = if ui_escape {
-            Some("Escape".to_string())
-        } else {
-            input.captured_key.map(|k| k.name().to_string())
-        };
-        let toggled_key = pressed_key.as_deref().is_some_and(|name| {
-            let toggles = self.screens.toggles_for_key(name);
-            for id in &toggles {
-                ctx.events_mut::<ScreenCommand>()
-                    .send(ScreenCommand::Toggle(*id));
-            }
-            !toggles.is_empty()
-        });
-
-        // Handle KeyBindings before HitRegion clicks so an Esc-toggle-pause
-        // beats a click that landed on the same frame. A binding scoped to a
-        // screen only fires while that screen is on top of the stack. Escape is
-        // matched separately (it is not a `InputKey` variant, so it never arrives as
-        // a `captured_key`); every other binding matches the one-frame pressed
-        // key by its canonical name -- e.g. a story's Space / Enter advance
-        // bindings. Rebind capture and an open dropdown already returned above,
-        // so this cannot steal a key those flows want; an Enter consumed as
-        // confirm never doubles into an Enter binding.
-        if !toggled_key
-            && !typing
-            && !enter_confirm
-            && let Some(name) = pressed_key.as_deref()
-        {
-            let top = self.screens.top();
-            for kb in &self.bindings {
-                let scoped_out = kb.screen.is_some() && kb.screen != top;
-                if kb.key == name && !kb.action.is_empty() && !scoped_out {
-                    // KeyBindings carry no label (no settings row binds a key).
-                    if let Some(result) = fire_action(&kb.action, None, ctx) {
-                        return result;
-                    }
-                    break;
-                }
-            }
-        }
-
-        let mx = input.mouse_x;
-        let my = input.mouse_y;
-        let clicked = input.left_click;
-        let down = input.left_button_down;
-        // Regions gate on the topmost input-capturing screen (a passthrough
-        // screen above it only draws): its regions fire; with no capturing
-        // screen active, screen-less regions fire.
         let active_screen = self.screens.top_capture();
-        // Screen-owned regions are overlay UI authored in the reference canvas and
-        // scaled onto the window; map the live cursor back into reference space
-        // before testing it against their (reference-space) rects. Screen-less
-        // regions stay in window pixels (see crate::gfx::overlay).
+        // Screen-owned UI is authored in the reference canvas (crate::gfx::overlay).
         let overlay = OverlayTransform::from_viewport(input.viewport);
-        // Alternate mappings a region may opt into via `fit` (bottom-anchored
-        // dialog furniture); the fit transform above stays the default.
-        let overlay_bottom = OverlayTransform::bottom_anchored_from_viewport(input.viewport);
-        let overlay_cover = OverlayTransform::cover_from_viewport(input.viewport);
-        let [vw, vh] = input.viewport;
-
-        // Scroll-wheel + scrollbar-thumb input for the active screen's panel; both
-        // adjust the panel's scroll offset (clamped later in the apply pass). A
-        // thumb drag suppresses the slider + click passes so the gutter doesn't
-        // double as a control.
+        // A thumb drag suppresses the slider and region passes so the gutter
+        // does not double as a control.
         let thumb_active = self.handle_scroll_input(&input, active_screen, &overlay);
-
-        // Per-panel bands (reference space), so a scroll-content region only
-        // fires while the cursor is inside its panel window. Copied into frame
-        // scratch so the region loop below can borrow `self` mutably.
-        let panel_bands = ctx.frame.collect(self.panels.iter().map(|p| p.band));
-
-        // Slider drag pass. A slider's track region is driven here, not by the
-        // click-to-fire loop below: the press edge (`clicked`) over a track
-        // begins a drag, the held button (`down`) tracks the cursor each frame,
-        // and release commits the final value. The dragged region is remembered
-        // so the drag continues even when the cursor leaves the track.
-        if !thumb_active && !down {
-            // Release: commit the dragged slider's final position (persists).
-            if let Some(i) = self.dragging.take()
-                && self.regions[i].screen == active_screen
-                && let Some(key) = self.regions[i].slider_key.clone()
-            {
-                // Slider tracks are overlay UI: map the cursor to reference space.
-                let (qx, _) = overlay.inverse(mx, my);
-                let r = &self.regions[i].region;
-                let frac = ((qx - r.x) / r.width).clamp(0.0, 1.0);
-                let label = r.label;
-                ctx.events_mut::<SettingCommand>().send(SettingCommand {
-                    setting: key,
-                    op: SettingOp::SetFraction(frac),
-                    value_label: label,
-                    persist: true,
-                });
-            }
-        } else if !thumb_active {
-            // Slider tracks are overlay UI: map the cursor to reference space.
-            let (qx, qy) = overlay.inverse(mx, my);
-            for i in 0..self.regions.len() {
-                if self.regions[i].screen != active_screen {
-                    continue;
-                }
-                let Some(key) = self.regions[i].slider_key.clone() else {
-                    continue;
-                };
-                let (rx, ry, rw, rh, label) = {
-                    let r = &self.regions[i].region;
-                    (r.x, r.y, r.width, r.height, r.label)
-                };
-                let over = qx >= rx && qx < rx + rw && qy >= ry && qy < ry + rh;
-                if self.dragging.is_none() && clicked && over {
-                    self.dragging = Some(i);
-                }
-                if self.dragging == Some(i) {
-                    let frac = ((qx - rx) / rw).clamp(0.0, 1.0);
-                    // In-progress: apply live but skip the disk write (persist
-                    // only on release, above).
-                    ctx.events_mut::<SettingCommand>().send(SettingCommand {
-                        setting: key,
-                        op: SettingOp::SetFraction(frac),
-                        value_label: label,
-                        persist: false,
-                    });
-                }
-            }
+        if !thumb_active {
+            self.step_slider_drag(&input, active_screen, &overlay, ctx);
         }
-
-        // A group-toggle click recorded here is applied after the loop (the loop
-        // borrows the regions mutably; the panels are mutated below).
-        let mut toggle_group: Option<usize> = None;
-        // A rebind-row click recorded here (setting key + value label) starts a
-        // capture after the loop, for the same borrow reason.
-        let mut start_capture: Option<(String, Option<AssetId>)> = None;
-        // A dropdown-row click recorded here opens its floating list after the
-        // loop (resolving the value label + options needs ctx, borrowed by the
-        // loop).
-        let mut start_open: Option<OpenRequest> = None;
-        // Setting rows the engine disabled this frame (e.g. show_fps / show_vram
-        // while the "Display performance stats" master is off): inert and grayed,
-        // like the init-time capability gating but driven at runtime. Refresh the
-        // owned cache only when the published set changes (a cheap set compare
-        // otherwise), so the resource borrow ends before the mutable region loop
-        // without cloning it every frame.
-        let disabled_changed = match ctx.resource::<crate::ecs::DisabledSettingRows>() {
-            Some(d) => d.0 != self.disabled_rows_cache,
-            None => !self.disabled_rows_cache.is_empty(),
-        };
-        if disabled_changed {
-            self.disabled_rows_cache = ctx
-                .resource::<crate::ecs::DisabledSettingRows>()
-                .map(|d| d.0.clone())
-                .unwrap_or_default();
-        }
-
-        // A nav pulse moves the focus cursor (or adjusts the focused value
-        // row); only pulse frames pay for the target derivation.
-        if let Some(dir) = nav {
+        self.refresh_disabled_rows(ctx);
+        if let Some(dir) = intent.nav {
             self.step_focus(dir, active_screen, ctx);
         }
-        // Confirm fires the focused region in the loop below; with no focus it
-        // falls back to a full-canvas region ("press anywhere" advance).
-        let focus_index = self.focus.as_ref().map(|f| f.index);
-        let confirm_fallback = confirm && focus_index.is_none();
-        let mut confirm_used = false;
 
-        // Resolve each followed label's (y, is-empty) in one query pass, so the
-        // loop below reads a map instead of scanning every TextLabel per region.
-        self.follow_labels.clear();
-        if !self.follow_label_ids.is_empty() {
-            for l in ctx.query::<TextLabel>() {
-                if self.follow_label_ids.contains(&l.asset_id) {
-                    self.follow_labels
-                        .entry(l.asset_id)
-                        .or_insert((l.y, l.content.is_empty()));
-                }
-            }
+        let bands = ctx.frame.collect(self.panels.iter().map(|p| p.band));
+        let frame = RegionFrame::new(input.viewport, active_screen, thumb_active, overlay, bands);
+        let outcome = self.hit_test_regions(&input, &intent, frame, ctx);
+        if let Some(result) = outcome.fired {
+            return result;
         }
-        let follow_labels = &self.follow_labels;
-
-        let disabled_rows = &self.disabled_rows_cache;
-        for (i, entry) in self.regions.iter_mut().enumerate() {
-            // A region is inert this frame when it cannot hover or fire:
-            //   - the scrollbar thumb is being dragged (no region reacts),
-            //   - it is a slider track (driven by the drag pass above),
-            //   - its screen is not the active one (behind an overlay, or screen-less
-            //     while a screen is shown),
-            //   - its scroll-content row is collapsed, or
-            //   - the engine disabled its setting row at runtime (grayed).
-            // Restore any hover styling first so a region hovered when it goes
-            // inert (e.g. the clicked button whose screen is being hidden) does not
-            // strand its hover color, then clear the hover flag and skip it.
-            let disabled = !disabled_rows.is_empty()
-                && crate::settings::action::key(&entry.region.action)
-                    .is_some_and(|key| disabled_rows.contains(key));
-            // A follow-label region tracks its label's y and goes inert while
-            // the label is empty (a hidden menu entry catches no clicks).
-            let follow_inert = if let Some((label_id, offset)) = entry.follow {
-                match follow_labels.get(&label_id).copied() {
-                    Some((ly, empty)) => {
-                        entry.region.y = ly + offset;
-                        empty
-                    }
-                    None => true,
-                }
-            } else {
-                false
-            };
-            // A focused slider track stays in the pass so it shows the focus
-            // highlight; its confirm dispatch is a recognized no-op and the
-            // cursor cannot fire it while focus is set.
-            let pad_focused = focus_index == Some(i);
-            let inert = thumb_active
-                || (entry.slider_key.is_some() && !pad_focused)
-                || entry.screen != active_screen
-                || (entry.scroll_row.is_some() && entry.hidden)
-                || disabled
-                || follow_inert;
-            if inert {
-                if entry.was_hovered {
-                    set_label_style(
-                        ctx,
-                        entry.region.label,
-                        entry.original_color,
-                        entry.original_scale,
-                    );
-                    entry.was_hovered = false;
-                }
-                continue;
-            }
-
-            // Overlay (screen-owned) regions hit-test in reference space (through
-            // the region's own `fit`); HUD regions in window pixels. A region
-            // spanning the whole reference canvas covers the full window (so a
-            // full-canvas advance region catches clicks in the letterbox too).
-            let full_window = entry.screen.is_some() && region_covers_canvas(&entry.region);
-            let (qx, qy) = if entry.screen.is_none() {
-                (mx, my)
-            } else {
-                match entry.fit {
-                    SpriteFit::Bottom => overlay_bottom.inverse(mx, my),
-                    SpriteFit::Cover => overlay_cover.inverse(mx, my),
-                    SpriteFit::Fit => overlay.inverse(mx, my),
-                }
-            };
-            let group_toggle = entry.group_toggle;
-            let r = &entry.region;
-            let mut mouse_hovered = if full_window {
-                mx >= 0.0 && mx < vw && my >= 0.0 && my < vh
-            } else {
-                qx >= r.x && qx < r.x + r.width && qy >= r.y && qy < r.y + r.height
-            };
-            // A scroll-content region only counts as hovered inside its band, so
-            // a row scrolled past the edge does not catch clicks over the chrome.
-            if let Some((pi, _)) = entry.scroll_row
-                && let Some(band) = panel_bands.get(pi)
-            {
-                mouse_hovered = mouse_hovered && point_in_rect(qx, qy, *band);
-            }
-            // While the focus cursor is set it owns the hover slot: the
-            // focused region styles + fires and the cursor's row does neither
-            // (mouse movement clears the focus first, so this never masks a
-            // live hover). Confirm with no focus falls through to a
-            // full-canvas region, once.
-            let hovered = if focus_index.is_some() {
-                pad_focused
-            } else {
-                mouse_hovered
-            };
-            let fallback_fire = confirm_fallback && full_window && !confirm_used;
-            let fire = if focus_index.is_some() {
-                pad_focused && confirm
-            } else {
-                (mouse_hovered && clicked) || fallback_fire
-            };
-
-            // Apply hover styling on hover-in, restore the captured style on
-            // hover-out.
-            if hovered && !entry.was_hovered {
-                set_label_style(ctx, r.label, r.hover_color, r.hover_scale);
-            } else if !hovered && entry.was_hovered {
-                set_label_style(ctx, r.label, entry.original_color, entry.original_scale);
-            }
-
-            entry.was_hovered = hovered;
-
-            if fire {
-                if fallback_fire {
-                    confirm_used = true;
-                }
-                // A group header toggles its panel's group (handled after the
-                // loop) instead of firing an action.
-                if let Some(gid) = group_toggle {
-                    toggle_group = Some(gid);
-                } else if let Some(key) =
-                    crate::settings::action::key_with_verb(&r.action, "rebind")
-                {
-                    // A rebind row enters capture (started after the loop)
-                    // instead of firing an action immediately.
-                    start_capture = Some((key.to_string(), r.label));
-                } else if let Some(key) = crate::settings::action::key_with_verb(&r.action, "open")
-                {
-                    // A dropdown row opens its floating list (started after the
-                    // loop) instead of firing an action. Snapshot the control
-                    // rect + the row's un-hovered value style now.
-                    start_open = Some(OpenRequest {
-                        setting: key.to_string(),
-                        value_label: r.label,
-                        anchor: [r.x, r.y, r.width, r.height],
-                        screen: entry.screen,
-                        color: entry.original_color,
-                        scale: entry.original_scale,
-                    });
-                } else if !r.action.is_empty()
-                    && let Some(result) = fire_action(&r.action, r.label, ctx)
-                {
-                    return result;
-                }
-            }
+        if let Some((setting_key, value_label)) = outcome.start_capture {
+            self.begin_capture(setting_key, value_label, ctx);
         }
-
-        // Begin a rebind capture for a clicked rebind row: stash the value
-        // label's current text (to restore on cancel) and show the prompt for
-        // the input kind the row captures.
-        if let Some((setting_key, value_label)) = start_capture {
-            let prev_text = value_label
-                .and_then(|id| {
-                    ctx.query::<TextLabel>()
-                        .find(|l| l.asset_id == id)
-                        .map(|l| l.content.clone())
-                })
-                .unwrap_or_default();
-            if let Some(id) = value_label {
-                let prompt = if setting_key.starts_with("pad_") {
-                    PAD_REBIND_PROMPT
-                } else {
-                    REBIND_PROMPT
-                };
-                crate::ecs::by_asset_id::set_text(ctx, id, prompt);
-            }
-            self.capturing = Some(Capture {
-                setting_key,
-                value_label,
-                prev_text,
-            });
-        }
-
-        // Open a dropdown for a clicked dropdown row: seed its list from the
-        // shared option registry + the value label's current text, then take
-        // over input from the next frame.
-        if let Some(req) = start_open {
+        if let Some(req) = outcome.start_open {
             self.open_dropdown = Self::build_open_dropdown(req, ctx);
         }
-
-        // Apply a recorded group toggle to the active screen's panel, then solve
-        // every panel so the next frame draws + hit-tests the reflowed layout.
-        if let Some(gid) = toggle_group
-            && let Some(panel) = self.panels.iter_mut().find(|p| p.screen == active_screen)
-            && let Some(g) = panel.groups.get_mut(gid)
-        {
-            g.collapsed = !g.collapsed;
+        if let Some(gid) = outcome.toggle_group {
+            self.toggle_group(active_screen, gid);
         }
+        // Solve every panel so the next frame draws and hit-tests the reflowed
+        // layout, then publish the dropdown state (a just-opened list, or none).
         self.apply_scroll_layout(ctx);
-
-        // Publish the current dropdown state (a just-opened list, or `None` when
-        // closed) for GraphicsSystem to draw next tick.
         self.publish_dropdown(ctx);
-
         StepResult::Continue
     }
 }
@@ -1224,9 +801,7 @@ impl UiInputSystem {
     // Whether the engine disabled this region's setting row at runtime
     // (mirrors the hit-test loop's gating).
     fn row_disabled(&self, entry: &RegionEntry) -> bool {
-        !self.disabled_rows_cache.is_empty()
-            && crate::settings::action::key(&entry.region.action)
-                .is_some_and(|key| self.disabled_rows_cache.contains(key))
+        regions::setting_row_disabled(&self.disabled_rows_cache, &entry.region.action)
     }
 
     // Advance the focus cursor for one directional pulse: Left/Right on a
@@ -1276,7 +851,7 @@ impl UiInputSystem {
             })
             .map(|(i, e)| focus::Candidate {
                 index: i,
-                rect: [e.region.x, e.region.y, e.region.width, e.region.height],
+                rect: region_rect(&e.region),
                 action: e.region.action.clone(),
             })
             .collect();
@@ -1337,6 +912,18 @@ impl UiInputSystem {
         }
     }
 
+    // Apply the ScreenCommands queued since last frame, ahead of this frame's
+    // hit-testing. They are cloned out to release the ctx borrow for the apply.
+    fn apply_pending_screen_commands(&mut self, ctx: &mut PipelineContext) {
+        let screen_cmds: Vec<ScreenCommand> = match ctx.events::<ScreenCommand>() {
+            Some(events) => events.read(&mut self.screen_cmd_cursor).cloned().collect(),
+            None => Vec::new(),
+        };
+        for cmd in screen_cmds {
+            self.apply_screen_command(cmd, ctx);
+        }
+    }
+
     fn apply_screen_command(&mut self, cmd: ScreenCommand, ctx: &mut PipelineContext) {
         let Some(transition) = self.screens.apply(cmd) else {
             return;
@@ -1389,16 +976,6 @@ impl UiInputSystem {
             pauses_world: self.screens.pauses_world(),
             captures_input: self.screens.captures_input(),
         });
-    }
-
-    // Cancel a pending rebind capture, restoring the row's previous value text.
-    fn cancel_capture(&mut self, ctx: &mut PipelineContext) {
-        if let Some(cap) = self.capturing.take()
-            && let Some(id) = cap.value_label
-        {
-            let prev = cap.prev_text.clone();
-            crate::ecs::by_asset_id::set_text(ctx, id, &prev);
-        }
     }
 
     fn set_screen_visibility(&self, screen_id: AssetId, visible: bool, ctx: &mut PipelineContext) {
@@ -1593,6 +1170,15 @@ impl UiInputSystem {
         self.thumb_drag.is_some()
     }
 
+    // Flip one collapsible group on the active screen's panel.
+    fn toggle_group(&mut self, active_screen: Option<AssetId>, gid: usize) {
+        if let Some(panel) = self.panels.iter_mut().find(|p| p.screen == active_screen)
+            && let Some(g) = panel.groups.get_mut(gid)
+        {
+            g.collapsed = !g.collapsed;
+        }
+    }
+
     // Solve every panel's vertical layout and write the result back: element y +
     // visibility, region reflow + hidden flag, the scrollbar thumb position +
     // size, and each group header's `+`/`-` prefix. Only the active screen's panel
@@ -1731,9 +1317,25 @@ struct DropdownPulses {
     cursor_moved: bool,
 }
 
+impl DropdownPulses {
+    fn from_intent(intent: &intent::UiIntent) -> Self {
+        Self {
+            // Enter always picks inside the list, focused or not.
+            confirm: intent.confirm || intent.enter_pressed,
+            escape: intent.ui_escape,
+            cursor_moved: intent.cursor_moved,
+        }
+    }
+}
+
 // Whether a point lies inside an `[x, y, width, height]` rectangle.
 fn point_in_rect(x: f32, y: f32, rect: [f32; 4]) -> bool {
     x >= rect[0] && x < rect[0] + rect[2] && y >= rect[1] && y < rect[1] + rect[3]
+}
+
+// A region's `[x, y, width, height]` rectangle.
+fn region_rect(r: &HitRegion) -> [f32; 4] {
+    [r.x, r.y, r.width, r.height]
 }
 
 // Whether a region spans the whole reference canvas (a full-screen "click
@@ -1897,9 +1499,11 @@ mod tests {
     // UiInputSystem is internal: each test seeds the gating components
     // (HitRegion / Screen / KeyBinding) before `world.start(SYSTEMS)`, which constructs
     // the system from them via the build schedule.
+    use super::capture::REBIND_PROMPT;
     use super::*;
     use crate::ecs::SYSTEMS;
     use concinnity_core::components::GamepadButton;
+    use concinnity_core::components::InputKey;
     use concinnity_core::components::TextAlign;
     use concinnity_core::components::{HitRegion, ScrollGroup, ScrollRow, TextLabel};
     use concinnity_core::ecs::World;
