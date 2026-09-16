@@ -15,7 +15,7 @@ pub(crate) fn slug(text: &str) -> String {
 
 // A variable name: lowercase alphanumerics, `_`, `-` (the same alphabet as
 // heading slugs, so scripts read consistently with anchors).
-pub(super) fn parse_flag(word: &str) -> Result<String, String> {
+pub(super) fn parse_var_name(word: &str) -> Result<String, String> {
     if word.is_empty()
         || !word
             .chars()

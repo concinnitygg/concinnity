@@ -1,10 +1,9 @@
-// Build-time expansion: StoryImport -> Font / Screen / Sprite / TextLabel /
-// HitRegion. A Markdown story file (frontmatter + headings + paragraphs +
-// link lists) becomes a click-through, branching flow built entirely from
-// existing UI assets: one Screen per page, a full-canvas HitRegion advancing to
-// the next page, and choice buttons targeting other nodes. The whole graph is
-// validated here, so a dangling jump or an undeclared speaker fails the build
-// rather than the playthrough.
+// Build-time expansion: StoryImport -> Story / Font / Screen / Sprite /
+// TextLabel / HitRegion. A Markdown story file (frontmatter + headings +
+// paragraphs + link lists) becomes a compiled node graph that plays inside one
+// stage screen the story system fills page by page, beside generated title and
+// ending screens. The whole graph is validated here, so a dangling jump or an
+// undeclared speaker fails the build rather than the playthrough.
 
 use std::collections::HashSet;
 
@@ -12,10 +11,13 @@ use super::expand::{asset_name, type_norm};
 use crate::import::scene::sanitize_name;
 
 mod emit;
+mod frontmatter;
 mod helpers;
 mod image;
 mod model;
 mod parse;
+mod parser;
+mod script;
 
 #[cfg(test)]
 mod tests;

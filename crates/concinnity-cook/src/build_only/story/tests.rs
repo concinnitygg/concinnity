@@ -1,4 +1,5 @@
-use super::emit::{CHOICE_BOX_RADIUS, DIALOG_BOX_RADIUS};
+use super::emit::choices::CHOICE_BOX_RADIUS;
+use super::emit::stage::DIALOG_BOX_RADIUS;
 use super::helpers::{slug, wrap_text};
 use super::*;
 

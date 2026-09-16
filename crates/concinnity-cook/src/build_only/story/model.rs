@@ -30,7 +30,7 @@ pub(crate) struct Node {
     pub(crate) choice_music: Option<String>,
     pub(crate) choice_sounds: Vec<String>,
     pub(crate) choice_stage: Stage,
-    pub(crate) choice_ops: Vec<FlagOp>,
+    pub(crate) choice_ops: Vec<VarOp>,
     pub(crate) choice_gates: Vec<Gate>,
 }
 
@@ -60,7 +60,7 @@ pub(crate) struct Page {
     pub(crate) music: Option<String>,
     pub(crate) sounds: Vec<String>,
     pub(crate) stage: Stage,
-    pub(crate) ops: Vec<FlagOp>,
+    pub(crate) ops: Vec<VarOp>,
     pub(crate) gates: Vec<Gate>,
 }
 
@@ -72,11 +72,11 @@ pub(crate) struct Choice {
 }
 
 // A `set` / `clear` / `add` line from a ```story script block, run when the
-// page (or choice menu) it precedes shows. All story state is named integer
-// variables (a flag is a variable set to 1 / cleared to 0): `set x` assigns
-// 1, `clear x` assigns 0, `set x = n` assigns n, `add x n` adds n.
+// page (or choice menu) it precedes shows. Story state is named integer
+// variables: `set x` assigns 1, `clear x` assigns 0, `set x = n` assigns n,
+// `add x n` adds n.
 #[derive(Debug, Clone)]
-pub(crate) struct FlagOp {
+pub(crate) struct VarOp {
     pub(crate) name: String,
     pub(crate) value: i32,
     pub(crate) add: bool,
@@ -113,7 +113,7 @@ pub(super) enum Directive {
 
 // One parsed line of a ```story script block.
 pub(super) enum ScriptLine {
-    Op(FlagOp),
+    Op(VarOp),
     Gate(Gate),
 }
 
