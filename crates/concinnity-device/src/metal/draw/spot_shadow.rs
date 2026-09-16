@@ -27,7 +27,7 @@ use objc2_metal::{
 use crate::metal::context::MtlContext;
 use crate::metal::encode::RenderEncode;
 use crate::metal::scoped_encoder::ScopedEncoder;
-use crate::metal::uniforms::ModelUniforms;
+use concinnity_core::render::uniforms::metal::ModelUniforms;
 
 // A spot slice's matrix always lands in slot 0 of its one-matrix
 // `ShadowUniforms`, so the shadow VS's cascade index is constant here.

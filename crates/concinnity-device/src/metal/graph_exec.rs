@@ -101,7 +101,7 @@ use super::graph_events;
 use super::graph_events::PassSync;
 use super::graph_queues::GraphQueues;
 use super::parallel_encoder::{ParallelCtxRef, SendableCmdBuf};
-use super::uniforms::VelocityUniforms;
+use concinnity_core::render::uniforms::metal::VelocityUniforms;
 
 // What `execute_graph` leaves for `draw_frame` to finish. The composite pass
 // rides the command buffer `draw_frame` owns, so the graphics queue's frame

@@ -1043,8 +1043,8 @@ mod tests {
     use concinnity_core::ecs::FrameContext;
     use concinnity_core::ecs::Resources;
     use concinnity_core::ecs::TextureHandle;
-    use concinnity_core::gfx::profile;
     use concinnity_core::gfx::render_types::NO_ALBEDO_SLOT;
+    use concinnity_core::profile;
     use concinnity_core::resource::ResourceEntry;
     use concinnity_host::store::blob::BlobData;
 
@@ -1257,7 +1257,7 @@ mod tests {
     fn decomposed_renderable_item_matches_a_mesh_prop() {
         use concinnity_core::components::{Collider, MeshRenderer, Pickup, PropCollider};
         use concinnity_core::ecs::{ComponentStorage, PipelineContext, Resources};
-        use concinnity_core::gfx::profile::FrameProfile;
+        use concinnity_core::profile::FrameProfile;
         use concinnity_host::store::blob::BlobData;
 
         let mut prop = make_prop([0.0; 3]);
@@ -2081,7 +2081,7 @@ mod tests {
     fn decomposed_renderable_item_matches_a_model_prop() {
         use concinnity_core::components::ModelRenderer;
         use concinnity_core::ecs::{ComponentStorage, PipelineContext, Resources};
-        use concinnity_core::gfx::profile::FrameProfile;
+        use concinnity_core::profile::FrameProfile;
         use concinnity_host::store::blob::BlobData;
 
         let mut prop = make_prop([0.0; 3]);

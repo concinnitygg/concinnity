@@ -247,9 +247,9 @@ mod tests {
     use super::*;
 
     use crate::components::ShaderPrograms;
-    use crate::gfx::profile::RenderStats;
     use crate::gfx::render_types::{MaterialUniforms, PostProcessTunables};
     use crate::input::keymap::KeyMap;
+    use crate::profile::RenderStats;
     use crate::render::backend_init::BackendInit;
     use alloc::vec;
 

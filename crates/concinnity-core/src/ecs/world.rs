@@ -25,7 +25,7 @@ use crate::ecs::{
     System, SystemEntry, SystemTable,
 };
 use crate::error::CnError;
-use crate::gfx::profile::FrameProfile;
+use crate::profile::FrameProfile;
 
 // The per-frame scratch reserve. An engine constant rather than an authored
 // field: a schema field would be blob churn for a knob nobody should have to

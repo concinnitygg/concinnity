@@ -21,9 +21,9 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types::RtParams;
-use concinnity_core::gfx::rt_reflections::{RtParamsInputs, RtReflectionSettings};
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::planar_reflection;
+use concinnity_core::render::post::rt_reflections::{RtParamsInputs, RtReflectionSettings};
 
 use super::super::allocator::{DeviceAllocator, PooledBuffer};
 use super::super::context::{HDR_FORMAT, VkContext};

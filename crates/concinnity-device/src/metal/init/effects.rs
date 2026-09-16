@@ -6,15 +6,15 @@
 
 use concinnity_core::gfx::auto_exposure;
 use concinnity_core::gfx::auto_exposure::{AutoExposureSettings, AutoExposureState};
-use concinnity_core::gfx::rt_reflections::RtReflectionSettings;
-use concinnity_core::gfx::ssao::SsaoSettings;
-use concinnity_core::gfx::ssgi::SsgiSettings;
-use concinnity_core::gfx::ssr::SsrSettings;
 use concinnity_core::render::backend_init::PostSettings;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::post::device::PostExtent;
+use concinnity_core::render::post::rt_reflections::RtReflectionSettings;
+use concinnity_core::render::post::ssao::SsaoSettings;
 use concinnity_core::render::post::ssgi::SsgiPass;
+use concinnity_core::render::post::ssgi::settings::SsgiSettings;
 use concinnity_core::render::post::ssr::SsrPass;
+use concinnity_core::render::post::ssr::settings::SsrSettings;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLDevice, MTLResourceOptions};

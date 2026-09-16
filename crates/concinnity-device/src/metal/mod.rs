@@ -58,9 +58,5 @@ mod transparent;
 mod water;
 mod world_shaders;
 
-// GPU-free host-side pieces live in core's `render` module (compiled
-// unconditionally so their unit tests count toward coverage); re-exported here
-// so the backend keeps its `super::uniforms` path.
-pub(crate) use concinnity_core::render::metal::uniforms;
 pub(crate) use context::MtlContext;
 pub(crate) use gpu_profile::probe_gpu_profile;

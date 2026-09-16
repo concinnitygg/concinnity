@@ -25,9 +25,9 @@
 //! so no rewire or rebuild is needed.
 
 use concinnity_core::gfx::auto_exposure;
-use concinnity_core::gfx::rt_reflections;
 use concinnity_core::render::backend::QualitySettings;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::post::rt_reflections;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::context::DxContext;

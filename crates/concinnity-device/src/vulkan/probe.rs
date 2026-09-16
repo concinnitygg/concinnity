@@ -35,14 +35,14 @@ use concinnity_core::render::uniforms::ProbeUniforms;
 
 use super::allocator::PooledBuffer;
 use super::context::{HDR_FORMAT, VkContext};
-use super::cull::CullParams;
 use super::descriptor_layout::{LOCAL_LIGHT_SSBO_BINDING, PROBE_CUBE_ARRAY_BINDING};
 use super::draw::ViewUniforms;
-use super::hiz::CullHizParams;
 use super::probe_prefilter::PrefilterGpu;
 use super::resources::alloc_descriptor_sets;
 use super::texture::{GpuImage, ImageSpec, create_image, create_image_view};
 use crate::vulkan::owned::{OwnedDescriptorPool, OwnedFramebuffer, VkDevice};
+use concinnity_core::render::uniforms::vulkan::CullHizParams;
+use concinnity_core::render::uniforms::vulkan::CullParams;
 
 // What a runtime capture bakes: face size, mip count, GGX sample count and firefly
 // clamp, shared with the DirectX and Metal backends (and with the build-time CPU

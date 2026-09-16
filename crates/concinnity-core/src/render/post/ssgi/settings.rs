@@ -8,6 +8,7 @@
 //! this module owns only the parameter math so it can be unit-tested without a
 //! GPU.
 
+use crate::components::{IndirectLighting, PostProcessConfig};
 use crate::gfx::camera::view_ray_scale;
 
 use crate::gfx::render_types::SsgiParams;
@@ -69,6 +70,23 @@ pub struct SsgiSettings {
 }
 
 impl SsgiSettings {
+    /// Resolve the SSGI tunables into clamped settings, or `None` when
+    /// `indirect_lighting` is not `Ssgi`, or its intensity scales the gathered
+    /// bounce to zero, so the backend can skip the SSGI passes.
+    pub fn from_config(cfg: &PostProcessConfig) -> Option<Self> {
+        (cfg.indirect_lighting == IndirectLighting::Ssgi)
+            .then(|| {
+                Self::resolve(
+                    cfg.ssgi_intensity,
+                    cfg.ssgi_max_distance,
+                    cfg.ssgi_rays,
+                    cfg.ssgi_steps,
+                    cfg.ssgi_resolution.scale_divisor(),
+                )
+            })
+            .filter(|s| s.contributes())
+    }
+
     /// Clamp the authored tunables into safe ranges.
     pub fn resolve(
         intensity: f32,
@@ -127,7 +145,63 @@ impl SsgiSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::SsgiResolution;
     use crate::gfx::camera::MIN_ASPECT;
+
+    #[test]
+    fn from_config_follows_indirect_lighting() {
+        assert!(SsgiSettings::from_config(&PostProcessConfig::default()).is_some());
+        let ibl = PostProcessConfig {
+            indirect_lighting: IndirectLighting::Ibl,
+            ..Default::default()
+        };
+        assert!(SsgiSettings::from_config(&ibl).is_none());
+    }
+
+    #[test]
+    fn from_config_drops_an_inert_intensity() {
+        let inert = PostProcessConfig {
+            indirect_lighting: IndirectLighting::Ssgi,
+            ssgi_intensity: 0.0,
+            ..Default::default()
+        };
+        assert!(SsgiSettings::from_config(&inert).is_none());
+
+        let faint = PostProcessConfig {
+            indirect_lighting: IndirectLighting::Ssgi,
+            ssgi_intensity: 0.05,
+            ..Default::default()
+        };
+        assert!(SsgiSettings::from_config(&faint).is_some());
+    }
+
+    #[test]
+    fn from_config_carries_resolution_and_counts() {
+        let cfg = PostProcessConfig {
+            indirect_lighting: IndirectLighting::Ssgi,
+            ssgi_resolution: SsgiResolution::Quarter,
+            ssgi_rays: 4,
+            ssgi_steps: 20,
+            ..Default::default()
+        };
+        let s = SsgiSettings::from_config(&cfg).expect("ssgi on");
+        assert_eq!(s.rays, 4);
+        assert_eq!(s.steps, 20);
+        assert_eq!(s.gi_scale, 4);
+    }
+
+    #[test]
+    fn from_config_resolves_and_clamps_when_enabled() {
+        let cfg = PostProcessConfig {
+            indirect_lighting: IndirectLighting::Ssgi,
+            ssgi_intensity: 99.0,
+            ssgi_max_distance: 1.0e6,
+            ..Default::default()
+        };
+        let s = SsgiSettings::from_config(&cfg).expect("ssgi on");
+        assert_eq!(s.intensity, 4.0);
+        assert!(s.max_distance > 0.0 && s.max_distance.is_finite());
+    }
 
     #[test]
     fn resolve_clamps_intensity_and_distance() {

@@ -111,7 +111,7 @@ float3 probe_cube_sample_bias(uint i, float3 dir, float lod)
 static const int   SSR_MAX_STEPS = 48;
 static const int   SSR_REFINE    = 5;
 // Surfaces rougher than REFLECTION_ROUGHNESS_CUT get no SSR; glossiness ramps
-// in below it. Locked to concinnity_core::gfx::ssr::REFLECTION_ROUGHNESS_CUT by
+// in below it. Locked to concinnity_core::render::post::ssr::settings::REFLECTION_ROUGHNESS_CUT by
 // unit test so the SSR, RT, and composite passes can never disagree on it.
 static const float REFLECTION_ROUGHNESS_CUT = 0.6;
 // Dielectric base reflectance (water, glass, polished stone) for the Fresnel.

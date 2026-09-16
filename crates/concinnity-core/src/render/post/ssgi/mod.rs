@@ -22,6 +22,9 @@ use super::device::{
 };
 use super::program::PostProgram;
 
+/// Clamped SSGI tunables and the per-frame uniform they build.
+pub mod settings;
+
 /// The per-frame inputs both draws read and write.
 pub struct SsgiInputs<'t, D: PostPassDevice + ?Sized + 't> {
     /// The lit scene the gather samples its bounce radiance from.
@@ -221,9 +224,9 @@ fn screen<'t, D: PostPassDevice + ?Sized + 't>(texture: D::TextureRef<'t>) -> Po
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gfx::ssgi::SsgiSettings;
     use crate::render::post::device::resolve_extent;
     use crate::render::post::mock::{MockDevice, MockTexture};
+    use crate::render::post::ssgi::settings::SsgiSettings;
 
     fn params() -> SsgiParams {
         SsgiParams {

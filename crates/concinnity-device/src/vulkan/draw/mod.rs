@@ -21,6 +21,7 @@ use concinnity_core::render::csm;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::lights;
 use concinnity_core::render::model_history::HistoryMode;
+use concinnity_core::render::pass_timing;
 use concinnity_core::render::render_graph;
 use concinnity_core::render::render_graph::{FrameGraphInputs, build_frame_graph};
 use concinnity_core::transform::mat4_inverse;
@@ -632,7 +633,7 @@ impl VkContext {
         // End-of-frame timestamp for the profiler overlay. Pairs with the
         // TOP_OF_PIPE write near the top of the function (the block's first pair).
         if let Some(pool) = self.hw.timestamp_query_pool {
-            let (_, wf_end) = super::pass_timing::whole_frame_pair(frame_idx);
+            let (_, wf_end) = pass_timing::whole_frame_pair(frame_idx);
             // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
             // these commands name is live for the call.
             unsafe {
@@ -695,8 +696,8 @@ impl VkContext {
             // queue order. The whole-frame start goes in the block's first slot;
             // each pass writes its own pair (see graph_exec); the whole-frame end
             // is the block's second slot, written in the end buffer below.
-            let block_base = super::pass_timing::frame_block_base(frame_idx);
-            let (wf_start, _) = super::pass_timing::whole_frame_pair(frame_idx);
+            let block_base = pass_timing::frame_block_base(frame_idx);
+            let (wf_start, _) = pass_timing::whole_frame_pair(frame_idx);
             // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
             // these commands name is live for the call.
             unsafe {
@@ -704,7 +705,7 @@ impl VkContext {
                     start_cmd,
                     pool,
                     block_base,
-                    super::pass_timing::SLOTS_PER_FRAME as u32,
+                    pass_timing::SLOTS_PER_FRAME as u32,
                 );
                 device.cmd_write_timestamp(
                     start_cmd,

@@ -6,9 +6,9 @@
 //! reflection probes from.
 
 use ash::vk;
-use concinnity_core::gfx::ssr;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::device::PostPassDevice;
+use concinnity_core::render::post::ssr::settings::SsrSettings;
 use concinnity_core::render::post::ssr::{SsrInputs, SsrPass, target_desc};
 
 use crate::vulkan::context::VkContext;
@@ -23,7 +23,7 @@ const TARGET_LABEL: &str = "ssr_reflection";
 pub(in crate::vulkan) struct SsrResources {
     // Authored tunables, turned into a per-frame `SsrParams` push; `None` when
     // only SSGI or RT built these resources.
-    pub(in crate::vulkan) settings: Option<ssr::SsrSettings>,
+    pub(in crate::vulkan) settings: Option<SsrSettings>,
     pass: SsrPass<PostPipeline>,
     // Reflected radiance + composite weight, which the reflection composite
     // blurs by roughness and blends over the scene.
@@ -34,7 +34,7 @@ impl SsrResources {
     // Build the resolve pipeline and the reflection target at `extent`.
     pub(in crate::vulkan) fn new(
         device: &VkPostDevice,
-        settings: Option<ssr::SsrSettings>,
+        settings: Option<SsrSettings>,
         extent: vk::Extent2D,
     ) -> RenderResult<Self> {
         Ok(Self {

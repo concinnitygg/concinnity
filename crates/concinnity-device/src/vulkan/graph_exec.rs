@@ -35,6 +35,7 @@ use ash::vk;
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types::{LineVertex, TextDrawCall};
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::pass_timing;
 use concinnity_core::render::render_graph;
 use concinnity_core::render::render_graph::{
     BarrierOp, CompiledGraph, CompiledPass, GraphResourceClass, PassId, final_states,
@@ -676,7 +677,7 @@ impl VkContext {
                         // leaves its slots unwritten; the readback's
                         // `WITH_AVAILABILITY` reports those as 0.
                         if let Some(pool) = ctx.hw.timestamp_query_pool {
-                            let (ts_start, _) = super::pass_timing::pass_pair(frame_idx, pass_id);
+                            let (ts_start, _) = pass_timing::pass_pair(frame_idx, pass_id);
                             rec.write_timestamp(
                                 vk::PipelineStageFlags::TOP_OF_PIPE,
                                 pool,
@@ -696,7 +697,7 @@ impl VkContext {
                         }
                         emit_pass_epilogue(device_ref, buf, registry_ref, pass);
                         if let Some(pool) = ctx.hw.timestamp_query_pool {
-                            let (_, ts_end) = super::pass_timing::pass_pair(frame_idx, pass_id);
+                            let (_, ts_end) = pass_timing::pass_pair(frame_idx, pass_id);
                             rec.write_timestamp(
                                 vk::PipelineStageFlags::BOTTOM_OF_PIPE,
                                 pool,
@@ -725,7 +726,7 @@ impl VkContext {
         // carries the whole-frame end timestamp written later in `record_frame`).
         if let Some(idx) = composite_idx {
             if let Some(pool) = self.hw.timestamp_query_pool {
-                let (ts_start, _) = super::pass_timing::pass_pair(frame_idx, PassId::Composite);
+                let (ts_start, _) = pass_timing::pass_pair(frame_idx, PassId::Composite);
                 // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
                 // slice these commands name is live for the call.
                 unsafe {
@@ -752,7 +753,7 @@ impl VkContext {
             self.encode_pass_into(PassId::Composite, &rec, params, particle_frame.as_ref())?;
             emit_pass_epilogue(&self.hw.device, params.cmd, registry, &graph.passes[idx]);
             if let Some(pool) = self.hw.timestamp_query_pool {
-                let (_, ts_end) = super::pass_timing::pass_pair(frame_idx, PassId::Composite);
+                let (_, ts_end) = pass_timing::pass_pair(frame_idx, PassId::Composite);
                 // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
                 // slice these commands name is live for the call.
                 unsafe {

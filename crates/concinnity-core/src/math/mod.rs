@@ -2,6 +2,7 @@
 //! built from: the f32 transcendentals `core` leaves to a math library, the
 //! 3-component vector ops every layout and transform reaches for, and the
 //! quaternion / Euler convention rotations are authored and stepped in.
+pub mod pick;
 mod rotation;
 mod scalar;
 pub mod vec3;

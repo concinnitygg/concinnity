@@ -264,7 +264,7 @@ mod tests {
     use concinnity_core::ecs::ComponentStorage;
     use concinnity_core::ecs::FrameContext;
     use concinnity_core::ecs::Resources;
-    use concinnity_core::gfx::profile;
+    use concinnity_core::profile;
     use concinnity_host::store::blob::BlobData;
     use std::collections::HashSet;
 

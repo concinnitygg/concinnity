@@ -46,6 +46,7 @@ use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types::{LineVertex, TextDrawCall};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::lights;
+use concinnity_core::render::pass_timing;
 use concinnity_core::render::render_graph;
 use concinnity_core::render::render_graph::{
     BarrierOp, CompiledGraph, CompiledPass, GraphResourceClass, PassId, final_states,
@@ -706,9 +707,9 @@ impl DxContext {
                         // block is resolved by the "end" outer cmd list
                         // at the end of the frame and read back at the
                         // top of the next frame. See
-                        // [`super::pass_timing`] for the slot layout.
+                        // [`pass_timing`] for the slot layout.
                         if let Some(heap) = ctx.timestamps.query_heap.as_ref() {
-                            let (start_slot, _) = super::pass_timing::pass_pair(frame_idx, pass_id);
+                            let (start_slot, _) = pass_timing::pass_pair(frame_idx, pass_id);
                             // SAFETY: the command list is in the recording state, and every
                             // resource, descriptor and slice these commands name is live for the
                             // call.
@@ -727,7 +728,7 @@ impl DxContext {
                         }
 
                         if let Some(heap) = ctx.timestamps.query_heap.as_ref() {
-                            let (_, end_slot) = super::pass_timing::pass_pair(frame_idx, pass_id);
+                            let (_, end_slot) = pass_timing::pass_pair(frame_idx, pass_id);
                             // SAFETY: the command list is in the recording state, and every
                             // resource, descriptor and slice these commands name is live for the
                             // call.
@@ -777,7 +778,7 @@ impl DxContext {
         // ride one submission.
         if let Some(idx) = composite_idx {
             if let Some(heap) = self.timestamps.query_heap.as_ref() {
-                let (start_slot, _) = super::pass_timing::pass_pair(frame_idx, PassId::Composite);
+                let (start_slot, _) = pass_timing::pass_pair(frame_idx, PassId::Composite);
                 // SAFETY: the command list is in the recording state, and every resource,
                 // descriptor and slice these commands name is live for the call.
                 unsafe {
@@ -814,7 +815,7 @@ impl DxContext {
             )?;
             emit_pass_epilogue(params.cmd, &registry, &graph.passes[idx]);
             if let Some(heap) = self.timestamps.query_heap.as_ref() {
-                let (_, end_slot) = super::pass_timing::pass_pair(frame_idx, PassId::Composite);
+                let (_, end_slot) = pass_timing::pass_pair(frame_idx, PassId::Composite);
                 // SAFETY: the command list is in the recording state, and every resource,
                 // descriptor and slice these commands name is live for the call.
                 unsafe {

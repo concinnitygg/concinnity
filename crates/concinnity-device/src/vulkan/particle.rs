@@ -1352,7 +1352,7 @@ mod tests {
     use super::*;
 
     // The `GpuParticle` / `ParticleView` layout tests live with the structs in
-    // `concinnity_core::render::vulkan::uniforms`.
+    // `concinnity_core::render::uniforms::vulkan`.
 
     #[test]
     fn particle_params_push_size_matches_glsl() {

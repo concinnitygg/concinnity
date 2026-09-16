@@ -447,7 +447,7 @@ mod tests {
 
     use crate::components::Children;
     use crate::ecs::{Arena, ComponentStorage, FrameContext, NoPayloads, Resources};
-    use crate::gfx::profile::FrameProfile;
+    use crate::profile::FrameProfile;
 
     const IDENTITY4: WorldMatrix = IDENTITY;
 

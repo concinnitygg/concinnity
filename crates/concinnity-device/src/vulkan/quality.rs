@@ -25,9 +25,9 @@
 
 use ash::vk;
 use concinnity_core::gfx::auto_exposure;
-use concinnity_core::gfx::rt_reflections;
 use concinnity_core::render::backend::QualitySettings;
 use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::post::rt_reflections;
 
 use super::context::VkContext;
 

@@ -1,7 +1,4 @@
-//! Shared GPU data types used by all rendering backends. Defined here (no
-//! #[cfg] gate) so a future Vulkan backend can import them without pulling in
-//! Metal-specific code. metal.rs imports from this module rather than defining
-//! its own copies.
+//! The `repr(C)` GPU layouts every backend and the render prep share with the shaders.
 
 use alloc::vec;
 use alloc::vec::Vec;

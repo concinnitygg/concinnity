@@ -22,7 +22,7 @@ use crate::ecs::{
 #[cfg(debug_assertions)]
 use crate::ecs::access_check;
 use crate::error::CnError;
-use crate::gfx::profile::FrameProfile;
+use crate::profile::FrameProfile;
 
 // Debug-only touch reporters for the accessors below, so each accessor carries
 // one line. Compiled out of release builds.

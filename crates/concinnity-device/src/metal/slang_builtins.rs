@@ -614,7 +614,7 @@ pub(super) fn entry_function(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::gfx::ssr;
+    use concinnity_core::render::post::ssr::settings::REFLECTION_ROUGHNESS_CUT;
 
     // The values the build script baked into the precompiled metallibs must
     // match the capacities the host binds, or the shader indexes past what
@@ -685,7 +685,7 @@ mod tests {
     fn reflection_roughness_cut_matches_canonical() {
         let expected = format!(
             "static const float REFLECTION_ROUGHNESS_CUT = {:?};",
-            ssr::REFLECTION_ROUGHNESS_CUT
+            REFLECTION_ROUGHNESS_CUT
         );
         for (name, src) in [
             (
@@ -705,7 +705,7 @@ mod tests {
             assert!(
                 src.contains(&expected),
                 "{name} REFLECTION_ROUGHNESS_CUT drifted from \
-                 concinnity_core::gfx::ssr::REFLECTION_ROUGHNESS_CUT"
+                 concinnity_core::render::post::ssr::settings::REFLECTION_ROUGHNESS_CUT"
             );
         }
     }

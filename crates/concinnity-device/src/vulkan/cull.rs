@@ -19,13 +19,9 @@
 use ash::vk;
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types;
+use concinnity_core::render::uniforms::vulkan::{CullHizParams, CullParams};
 
 use super::context::VkContext;
-use super::hiz::CullHizParams;
-// `CullParams` (the GPU-cull push constant) is a GPU-free layout struct that
-// lives in `core::render`; re-export it so `crate::vulkan::cull::CullParams`
-// is unchanged. Size pinned by `pipeline::CULL_PUSH_CONSTANT_BYTES`.
-pub(in crate::vulkan) use crate::vulkan::uniforms::CullParams;
 
 // Byte stride of one `VkDrawIndexedIndirectCommand` in the cull kernel's output.
 pub(in crate::vulkan) const INDIRECT_COMMAND_STRIDE: u32 =
@@ -417,7 +413,7 @@ impl VkContext {
 #[cfg(test)]
 mod tests {
     // The `CullParams` layout test lives with the struct in
-    // `concinnity_core::render::vulkan::uniforms`. The struct-size == push-range
+    // `concinnity_core::render::uniforms::vulkan`. The struct-size == push-range
     // cross-check stays here, where `CULL_PUSH_CONSTANT_BYTES` is defined.
     #[test]
     fn cull_params_size_matches_push_range() {

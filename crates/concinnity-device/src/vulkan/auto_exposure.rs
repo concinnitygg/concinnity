@@ -23,7 +23,7 @@ use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout, VkDevice,
 };
 use crate::vulkan::slang_builtins::SlangCompile;
-use crate::vulkan::uniforms::AUTO_EXPOSURE_PUSH_BYTES;
+use concinnity_core::render::uniforms::vulkan::AUTO_EXPOSURE_PUSH_BYTES;
 
 // Compile the auto-exposure build + average compute kernels. Used at init
 // and by shader hot-reload to rebuild the two compute pipelines.

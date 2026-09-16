@@ -1,6 +1,6 @@
 // What the sampler records for one frame, and the run it accumulates into.
 
-use concinnity_core::gfx::profile::{MAX_PASS_TIMINGS, RenderStats};
+use concinnity_core::profile::{MAX_PASS_TIMINGS, RenderStats};
 
 /// How many per-system CPU timings a sample carries. The engine's own table is
 /// well inside this, and a world registering its own systems has headroom.

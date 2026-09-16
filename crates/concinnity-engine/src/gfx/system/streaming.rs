@@ -657,8 +657,8 @@ mod tests {
     use concinnity_core::ecs::MeshBoundsRecord;
     use concinnity_core::ecs::Resources;
     use concinnity_core::ecs::SceneGroup;
-    use concinnity_core::gfx::profile;
     use concinnity_core::gfx::render_types::{MaterialUniforms, NO_NORMAL_MAP_SLOT};
+    use concinnity_core::profile;
     use concinnity_host::store::blob::BlobData;
 
     const MIB: u64 = 1024 * 1024;

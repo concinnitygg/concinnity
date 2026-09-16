@@ -2397,7 +2397,7 @@ mod tests {
     }
 
     // The `SkinParams` layout test lives with the struct in
-    // `concinnity_core::render::directx::uniforms`. The root-constant DWORD-count
+    // `concinnity_core::render::uniforms::directx`. The root-constant DWORD-count
     // cross-check stays here, where `SKIN_PARAMS_DWORDS` is defined.
     #[test]
     fn skin_params_dwords_matches_size() {

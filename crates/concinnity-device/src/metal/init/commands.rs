@@ -4,7 +4,7 @@
 use std::sync::atomic::AtomicU32;
 use std::sync::{Arc, Mutex};
 
-use concinnity_core::gfx::profile::RenderStats;
+use concinnity_core::profile::RenderStats;
 
 use super::InitGpu;
 use crate::metal::context::{Diagnostics, FrameRings};

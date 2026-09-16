@@ -4,8 +4,8 @@
 //! `concinnity_core::render::post::ssgi` and reach Vulkan through `VkPostDevice`.
 
 use ash::vk;
-use concinnity_core::gfx::ssgi::SsgiSettings;
 use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::post::ssgi::settings::SsgiSettings;
 use concinnity_core::render::post::ssgi::{SsgiInputs, SsgiPass, SsgiPipelines};
 
 use crate::vulkan::context::VkContext;

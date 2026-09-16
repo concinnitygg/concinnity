@@ -7,6 +7,7 @@ use concinnity_core::components;
 use concinnity_core::render::backend_init::{self, PostSettings};
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::hdr_output;
+use concinnity_core::render::pass_timing;
 use std::ffi::{CStr, CString, c_char};
 
 use crate::vulkan::context::{SwapchainState, VkHardware};
@@ -300,9 +301,19 @@ pub(super) fn acquire_hardware(
     let timestamp_query_pool = if timestamps_supported {
         // One per-frame block of `SLOTS_PER_FRAME` slots (whole-frame pair +
         // one pair per render pass) per frame in flight.
+        //
+        // Timing: the start buffer resets the whole block and writes the
+        // whole-frame start; each per-pass command buffer writes its own pair
+        // around its encode; the end buffer writes the whole-frame end. Unlike
+        // D3D12, which can pre-write every slot so a pass that did not run still
+        // reads a value, Vulkan forbids writing a timestamp to a query already
+        // written without an intervening reset. A pass absent from this frame's
+        // graph therefore leaves its reset-but-unwritten slots unavailable; the
+        // readback uses WITH_AVAILABILITY and reports 0 for any pair that is not
+        // both available.
         let info = vk::QueryPoolCreateInfo::default()
             .query_type(vk::QueryType::TIMESTAMP)
-            .query_count((crate::vulkan::pass_timing::SLOTS_PER_FRAME * frames) as u32);
+            .query_count((pass_timing::SLOTS_PER_FRAME * frames) as u32);
         // SAFETY: the create-info and every slice it borrows are live for the call, and
         // each handle it names belongs to this device.
         match unsafe { device.create_query_pool(&info, None) } {

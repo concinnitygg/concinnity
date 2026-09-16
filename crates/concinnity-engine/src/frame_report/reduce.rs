@@ -345,7 +345,7 @@ fn pass_shares(
 mod tests {
     use super::*;
     use crate::frame_report::sample::MAX_SYSTEM_TIMINGS;
-    use concinnity_core::gfx::profile::MAX_PASS_TIMINGS;
+    use concinnity_core::profile::MAX_PASS_TIMINGS;
 
     // A sample with the fields a test cares about and zeroes elsewhere.
     fn sample(run_seconds: f32, segment: Option<u32>, frame_us: u32) -> FrameSample {

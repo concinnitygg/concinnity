@@ -4,7 +4,7 @@
 //! the one `.slang` block Vulkan alone declares.
 //!
 //! Blocks whose shader counterpart is a single-source `.slang` declaration are
-//! declared once for every backend in `crate::render::uniforms`; what is left here is
+//! declared once for every backend in the parent module; what is left here is
 //! what only this backend binds. Their layouts are checked by `shader_layout` in
 //! concinnity-device, which reads the expected offsets out of slangc's
 //! reflection per target. The hand-written asserts below are for the families

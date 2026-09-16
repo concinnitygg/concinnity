@@ -883,7 +883,7 @@ mod tests {
     use super::*;
 
     // The `GBufferView` layout test lives with the struct in
-    // `concinnity_core::render::directx::uniforms`. `GBufferView` fitting the
+    // `concinnity_core::render::uniforms::directx`. `GBufferView` fitting the
     // 256-aligned UBO allocation is checked here, where `align256` +
     // `GBUFFER_VIEW_UBO_SIZE` live.
     #[test]

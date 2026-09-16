@@ -266,7 +266,7 @@ mod tests {
         use concinnity_core::ecs::{
             Access, ComponentStorage, FrameContext, PipelineContext, Resources,
         };
-        use concinnity_core::gfx::profile::FrameProfile;
+        use concinnity_core::profile::FrameProfile;
         use concinnity_host::store::blob::BlobData;
 
         struct Parts {

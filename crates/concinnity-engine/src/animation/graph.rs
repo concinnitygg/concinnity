@@ -150,7 +150,7 @@ mod tests {
     use concinnity_core::ecs::Arena;
     use concinnity_core::ecs::FrameContext;
     use concinnity_core::ecs::{ComponentSlot, ComponentStorage, Resources};
-    use concinnity_core::gfx::profile::FrameProfile;
+    use concinnity_core::profile::FrameProfile;
     use concinnity_host::store::blob::BlobData;
     use concinnity_host::thread::asset_id;
     use concinnity_host::thread::asset_id::intern;

@@ -11,7 +11,7 @@ use concinnity_core::components::{Camera3D, FrameInput, Transform};
 use concinnity_core::ecs::Entity;
 use concinnity_core::ecs::PickIndex;
 use concinnity_core::ecs::World;
-use concinnity_core::gfx::pick::ray_aabb;
+use concinnity_core::math::pick::ray_aabb;
 use concinnity_host::thread::asset_id;
 
 use crate::editor::hook::pick;

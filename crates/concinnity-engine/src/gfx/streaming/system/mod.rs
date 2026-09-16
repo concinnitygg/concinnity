@@ -983,7 +983,7 @@ mod tests {
     use concinnity_core::ecs::{ComponentStorage, Resources};
     use concinnity_core::gfx::chunk_coord::ChunkCoord;
     use concinnity_core::gfx::mesh_payload::Vertex;
-    use concinnity_core::gfx::profile::FrameProfile;
+    use concinnity_core::profile::FrameProfile;
     use concinnity_core::render::chunk_window::ChunkDetail;
     use concinnity_core::render::ops::ReplayOutcome;
     use concinnity_host::store::blob::BlobData;

@@ -4,11 +4,11 @@
 
 use concinnity_core::components;
 use concinnity_core::gfx::auto_exposure;
-use concinnity_core::gfx::profile;
 use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::render_types::*;
 use concinnity_core::input::keymap::KeyMap;
 use concinnity_core::input::snapshot::InputSnapshot;
+use concinnity_core::profile;
 use concinnity_core::render::backend;
 use concinnity_core::render::backend::FrameParams;
 use concinnity_core::render::backend_init;
@@ -19,6 +19,7 @@ use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::hdr_output;
 use concinnity_core::render::lights;
 use concinnity_core::render::particles;
+use concinnity_core::render::pass_timing;
 use concinnity_core::render::planar_reflection;
 use concinnity_core::render::reflection_probe;
 use concinnity_core::render::render_graph;
@@ -109,9 +110,17 @@ pub(super) fn build_timestamp_resources(
     // `directx/pass_timing.rs` for the slot layout. Whole-frame stays at
     // the front of each block so legacy `gpu_frame_us` indexing keeps
     // working with only a stride adjustment.
+    //
+    // Timing: `execute_graph` issues an EndQuery before and after each pass's
+    // encode, and the resolve at the end of the command list copies the whole block
+    // into the persistently-mapped readback buffer. The CPU reads the previous
+    // frame's block at the top of `draw_frame`, after the matching fence wait gates
+    // the GPU writes. SsaoPrepass and SsaoKernel are bundled inside their parent
+    // encoder, and the FogFroxel / Upscale / Transparent / Raymarch arms are no-ops
+    // here, so those slots stay zero and drop out of the on-screen chip.
     let heap_desc = D3D12_QUERY_HEAP_DESC {
         Type: D3D12_QUERY_HEAP_TYPE_TIMESTAMP,
-        Count: (super::pass_timing::SLOTS_PER_FRAME * FRAMES) as u32,
+        Count: (pass_timing::SLOTS_PER_FRAME * FRAMES) as u32,
         NodeMask: 0,
     };
     let mut heap: Option<ID3D12QueryHeap> = None;
@@ -122,7 +131,7 @@ pub(super) fn build_timestamp_resources(
         return (None, None, std::ptr::null(), 0);
     }
     let readback = match alloc.alloc_buffer(
-        super::pass_timing::FRAME_BLOCK_BYTES * FRAMES as u64,
+        pass_timing::FRAME_BLOCK_BYTES * FRAMES as u64,
         D3D12_HEAP_TYPE_READBACK,
         D3D12_RESOURCE_STATE_COPY_DEST,
     ) {
@@ -144,7 +153,7 @@ pub(super) fn build_timestamp_resources(
 
 // Per-pass GPU timestamp query state. `query_heap` + `readback` are `None`
 // when the command queue does not expose a non-zero timestamp frequency; the
-// per-pass chip then reports 0 us. See [`super::pass_timing`] for the slot
+// per-pass chip then reports 0 us. See [`pass_timing`] for the slot
 // helpers and [`build_timestamp_resources`] for construction.
 pub(super) struct TimestampState {
     // Timestamp query heap with `SLOTS_PER_FRAME * FRAMES` slots: one block
@@ -1694,7 +1703,7 @@ impl DxContext {
             unsafe {
                 self.timestamps
                     .readback_ptr
-                    .add(frame * super::pass_timing::SLOTS_PER_FRAME)
+                    .add(frame * pass_timing::SLOTS_PER_FRAME)
             }
         } else {
             std::ptr::null()
@@ -1820,8 +1829,8 @@ impl DxContext {
         // `ts_end > ts_start` evaluates false on readback and they
         // cleanly report 0 µs.
         if let Some(heap) = self.timestamps.query_heap.as_ref() {
-            let (start_slot, _) = super::pass_timing::whole_frame_pair(frame);
-            let block_base = (frame * super::pass_timing::SLOTS_PER_FRAME) as u32;
+            let (start_slot, _) = pass_timing::whole_frame_pair(frame);
+            let block_base = (frame * pass_timing::SLOTS_PER_FRAME) as u32;
             // SAFETY: the command list is in the recording state, and every resource, descriptor
             // and slice these commands name is live for the call.
             unsafe {
@@ -1830,7 +1839,7 @@ impl DxContext {
                 // start** so inactive passes wind up with `ts_start >
                 // ts_end` and the readback's `ts_end > ts_start` check
                 // returns false (clean 0 µs reading).
-                let pass_count = super::pass_timing::SLOTS_PER_FRAME / 2 - 1;
+                let pass_count = pass_timing::SLOTS_PER_FRAME / 2 - 1;
                 for pass_idx in 0..pass_count as u32 {
                     let pair_start = block_base + 2 + 2 * pass_idx;
                     let pair_end = pair_start + 1;
@@ -1984,7 +1993,7 @@ impl DxContext {
             self.timestamps.query_heap.as_ref(),
             self.timestamps.readback.as_ref(),
         ) {
-            let (_, end_slot) = super::pass_timing::whole_frame_pair(frame);
+            let (_, end_slot) = pass_timing::whole_frame_pair(frame);
             // SAFETY: the command list is in the recording state, and every resource, descriptor
             // and slice these commands name is live for the call.
             unsafe {
@@ -1992,10 +2001,10 @@ impl DxContext {
                 end_cmd.ResolveQueryData(
                     heap,
                     D3D12_QUERY_TYPE_TIMESTAMP,
-                    super::pass_timing::frame_block_base(frame),
-                    super::pass_timing::SLOTS_PER_FRAME as u32,
+                    pass_timing::frame_block_base(frame),
+                    pass_timing::SLOTS_PER_FRAME as u32,
                     &**readback,
-                    super::pass_timing::frame_readback_byte_offset(frame),
+                    pass_timing::frame_readback_byte_offset(frame),
                 );
             }
         }

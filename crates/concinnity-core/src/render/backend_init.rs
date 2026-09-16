@@ -14,12 +14,12 @@ use crate::gfx::render_types::{
     AreaLightData, DrawObject, GpuLight, InstancedCluster, LightUniforms, PostProcessTunables,
     SpotShadowData,
 };
-use crate::gfx::rt_reflections::RtReflectionSettings;
-use crate::gfx::ssao::SsaoSettings;
-use crate::gfx::ssgi::SsgiSettings;
-use crate::gfx::ssr::SsrSettings;
 use crate::render::decal::DecalRecord;
 use crate::render::particles::ParticleEmitterRecord;
+use crate::render::post::rt_reflections::RtReflectionSettings;
+use crate::render::post::ssao::SsaoSettings;
+use crate::render::post::ssgi::settings::SsgiSettings;
+use crate::render::post::ssr::settings::SsrSettings;
 use crate::render::rt_geom::RtDynamicMode;
 use crate::render::volumetric_fog::FogSettings;
 use alloc::string::String;

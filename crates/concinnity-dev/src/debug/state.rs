@@ -3,7 +3,7 @@
 //! reads it to answer client queries. Kept as plain data (no sockets, no engine
 //! driving) so the dispatcher stays unit-testable against a hand-built snapshot.
 
-use concinnity_core::gfx::profile;
+use concinnity_core::profile;
 use concinnity_engine::gfx::streaming::system::StreamingStats;
 use concinnity_engine::shutdown::ShutdownToken;
 use std::sync::Arc;

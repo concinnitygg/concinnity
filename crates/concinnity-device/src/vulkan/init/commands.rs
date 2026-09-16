@@ -4,6 +4,7 @@
 
 use ash::vk;
 use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::pass_timing;
 use concinnity_core::render::render_graph;
 
 use super::InitGpu;
@@ -47,7 +48,7 @@ pub(super) fn reset_timestamp_queries(gpu: &InitGpu<'_>) -> RenderResult<()> {
                     cmd,
                     pool,
                     0,
-                    (crate::vulkan::pass_timing::SLOTS_PER_FRAME * frames) as u32,
+                    (pass_timing::SLOTS_PER_FRAME * frames) as u32,
                 );
             },
         )?;

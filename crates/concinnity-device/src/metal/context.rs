@@ -1,11 +1,11 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::components;
-use concinnity_core::gfx::profile;
 use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::render_types::{
     ClusterParams, DrawObject, InstancedCluster, LightUniforms, NUM_SHADOW_CASCADES, ShadowUniforms,
 };
+use concinnity_core::profile;
 use concinnity_core::render::backend;
 use concinnity_core::render::backend_init;
 use concinnity_core::render::decal;

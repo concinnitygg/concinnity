@@ -17,9 +17,9 @@ use concinnity_core::ecs::{
     Arena, ComponentStorage, FrameContext, FrameRateCap, HudPrefs, PipelineContext, Resources,
     StepResult, System,
 };
-use concinnity_core::gfx::profile::FrameProfile;
 use concinnity_core::gfx::render_types;
 use concinnity_core::input::keymap::{Bindable, KeyMap};
+use concinnity_core::profile::FrameProfile;
 use concinnity_core::render::backend::{GpuProfile, GpuVendor};
 use concinnity_core::render::ops;
 use concinnity_core::window::display_mode::DisplayMode;

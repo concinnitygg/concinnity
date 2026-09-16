@@ -4,7 +4,7 @@
 // the snapshot and everything it produces leaves through SubmitOutcome.
 
 use concinnity_core::ecs::StepResult;
-use concinnity_core::gfx::profile::RenderStats;
+use concinnity_core::profile::RenderStats;
 use concinnity_core::render::backend::{FrameParams, RenderBackend};
 use concinnity_core::render::error;
 use concinnity_core::render::ops::ReplayOutcome;

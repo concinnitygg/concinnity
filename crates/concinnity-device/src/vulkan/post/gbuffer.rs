@@ -1241,7 +1241,7 @@ mod tests {
     use super::*;
 
     // The `GBufferView` layout test lives with the struct in
-    // `concinnity_core::render::vulkan::uniforms`. `GBufferView` fitting the
+    // `concinnity_core::render::uniforms::vulkan`. `GBufferView` fitting the
     // `GBUFFER_VIEW_UBO_SIZE` allocation is checked here, where the size const
     // (typed `vk::DeviceSize`) lives.
     #[test]

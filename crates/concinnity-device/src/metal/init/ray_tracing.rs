@@ -1,9 +1,9 @@
 //! Hardware ray-traced reflections: the resolve and skinning pipelines, and the
 //! scene acceleration structure built over the uploaded geometry.
 
-use concinnity_core::gfx::rt_reflections::RtReflectionSettings;
 use concinnity_core::render::backend_init::{PostSettings, SceneData};
 use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::post::rt_reflections::RtReflectionSettings;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLDevice;
 

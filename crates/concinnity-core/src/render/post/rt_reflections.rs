@@ -9,6 +9,7 @@
 //! from SSR to RT keeps the same look knobs) but trace a real ray against the
 //! scene BVH, so reflected geometry that is off-screen still appears.
 
+use crate::components::PostProcessConfig;
 use crate::gfx::camera::{camera_to_world, view_ray_scale};
 
 use crate::gfx::render_types::RtParams;
@@ -67,6 +68,16 @@ pub struct RtParamsInputs {
 }
 
 impl RtReflectionSettings {
+    /// Resolve the ray-traced-reflection tunables into clamped settings, or
+    /// `None` when `ray_traced_reflections` is off. Reuses the SSR intensity /
+    /// distance fields; the backend additionally gates on GPU ray-tracing
+    /// support. Not gated on the intensity, for the same specular-handover
+    /// reason as [`SsrSettings::from_config`](super::ssr::settings::SsrSettings::from_config).
+    pub fn from_config(cfg: &PostProcessConfig) -> Option<Self> {
+        cfg.ray_traced_reflections
+            .then(|| Self::resolve(cfg.ssr_intensity, cfg.ssr_max_distance))
+    }
+
     /// Clamp the authored intensity / distance into a safe range.
     pub fn resolve(intensity: f32, max_distance: f32) -> Self {
         Self {
@@ -114,6 +125,40 @@ mod tests {
     use crate::gfx::camera::MIN_ASPECT;
     use crate::sky::SkyOrientation;
     use crate::transform::IDENTITY;
+
+    #[test]
+    fn from_config_follows_the_toggle() {
+        assert!(RtReflectionSettings::from_config(&PostProcessConfig::default()).is_some());
+        let off = PostProcessConfig {
+            ray_traced_reflections: false,
+            ..Default::default()
+        };
+        assert!(RtReflectionSettings::from_config(&off).is_none());
+    }
+
+    #[test]
+    fn from_config_keeps_a_zero_intensity() {
+        let cfg = PostProcessConfig {
+            ray_traced_reflections: true,
+            ssr_intensity: 0.0,
+            ..Default::default()
+        };
+        assert!(RtReflectionSettings::from_config(&cfg).is_some());
+    }
+
+    #[test]
+    fn from_config_reuses_ssr_tunables_when_enabled() {
+        let cfg = PostProcessConfig {
+            ray_traced_reflections: true,
+            ssr_intensity: 9.0,
+            ssr_max_distance: 1.0e6,
+            ..Default::default()
+        };
+        let s = RtReflectionSettings::from_config(&cfg).expect("rt on");
+        // Reuses the SSR intensity / distance fields, clamped by the RT resolve.
+        assert_eq!(s.intensity, 1.0);
+        assert!(s.max_distance > 0.0 && s.max_distance.is_finite());
+    }
 
     #[test]
     fn resolve_clamps_intensity_and_distance() {

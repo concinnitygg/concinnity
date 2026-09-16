@@ -403,7 +403,7 @@ mod tests {
         MenuOverride, OpenDropdown, Resources, ScreenStack,
     };
     use concinnity_core::gfx::font;
-    use concinnity_core::gfx::profile::FrameProfile;
+    use concinnity_core::profile::FrameProfile;
     use concinnity_host::store::blob::BlobData;
 
     const FONT: FontHandle = FontHandle(0);

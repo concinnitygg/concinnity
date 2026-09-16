@@ -7,12 +7,12 @@ use concinnity_core::bake;
 use concinnity_core::components;
 use concinnity_core::gfx::mesh_payload;
 use concinnity_core::gfx::mesh_payload::{SkinnedVertex, Vertex};
-use concinnity_core::gfx::profile::RenderStats;
 use concinnity_core::gfx::render_types::{
     MaterialUniforms, PostProcessTunables, SkinnedDrawObject,
 };
 use concinnity_core::input::keymap::KeyMap;
 use concinnity_core::input::snapshot::InputSnapshot;
+use concinnity_core::profile::RenderStats;
 use concinnity_core::render::backend;
 use concinnity_core::render::backend::{
     BackendProbe, ChunkMesh, DrawStreaming, FrameParams, LiveEdit, QualitySettings, RenderBackend,

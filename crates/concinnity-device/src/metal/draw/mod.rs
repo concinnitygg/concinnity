@@ -20,16 +20,16 @@ mod spot_shadow;
 
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::jitter;
-use concinnity_core::gfx::profile;
 use concinnity_core::gfx::projection::perspective_rh;
 use concinnity_core::gfx::render_types;
-use concinnity_core::gfx::rt_reflections::RtParamsInputs;
+use concinnity_core::profile;
 use concinnity_core::render::backend::FrameParams;
 use concinnity_core::render::csm;
 use concinnity_core::render::error;
 use concinnity_core::render::lights;
 use concinnity_core::render::model_history::HistoryMode;
 use concinnity_core::render::post::device::PostExtent;
+use concinnity_core::render::post::rt_reflections::RtParamsInputs;
 use concinnity_core::render::render_graph;
 use concinnity_core::render::render_graph::FrameGraphInputs;
 use concinnity_core::transform::mat4_inverse;
@@ -40,7 +40,7 @@ use objc2_metal::{MTLBuffer, MTLCommandBuffer as _, MTLCommandQueue as _, MTLDev
 
 use super::context::MtlContext;
 use super::graph_exec::GraphFrameParams;
-use super::uniforms::*;
+use concinnity_core::render::uniforms::metal::*;
 
 impl MtlContext {
     // Pump the NSEvent queue and encode one frame to the GPU.

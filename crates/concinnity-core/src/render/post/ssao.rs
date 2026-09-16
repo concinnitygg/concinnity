@@ -4,6 +4,7 @@
 //! itself lives in each backend's shader; this module owns only the parameter
 //! math so it can be unit-tested without a GPU.
 
+use crate::components::PostProcessConfig;
 use crate::gfx::camera::view_ray_scale;
 
 use crate::gfx::render_types::SsaoParams;
@@ -27,6 +28,15 @@ pub struct SsaoSettings {
 }
 
 impl SsaoSettings {
+    /// Resolve the SSAO tunables into clamped settings, or `None` when the
+    /// `ssao` toggle is off -- or on with an intensity that cannot darken
+    /// anything -- so the backend can skip the SSAO passes entirely.
+    pub fn from_config(cfg: &PostProcessConfig) -> Option<Self> {
+        cfg.ssao
+            .then(|| Self::resolve(cfg.ssao_radius, cfg.ssao_intensity))
+            .filter(|s| s.contributes())
+    }
+
     /// Clamp the authored radius / intensity into a safe range.
     pub fn resolve(radius: f32, intensity: f32) -> Self {
         Self {
@@ -63,6 +73,49 @@ impl SsaoSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn from_config_follows_the_toggle() {
+        assert!(SsaoSettings::from_config(&PostProcessConfig::default()).is_some());
+        let off = PostProcessConfig {
+            ssao: false,
+            ..Default::default()
+        };
+        assert!(SsaoSettings::from_config(&off).is_none());
+    }
+
+    #[test]
+    fn from_config_drops_an_inert_intensity() {
+        // The backends read presence, so a toggle left on with a value that
+        // cannot change a pixel has to resolve away here or the passes run for
+        // nothing. Verified pixel-for-pixel neutral.
+        let inert = PostProcessConfig {
+            ssao: true,
+            ssao_intensity: 0.0,
+            ..Default::default()
+        };
+        assert!(SsaoSettings::from_config(&inert).is_none());
+
+        let faint = PostProcessConfig {
+            ssao: true,
+            ssao_intensity: 0.05,
+            ..Default::default()
+        };
+        assert!(SsaoSettings::from_config(&faint).is_some());
+    }
+
+    #[test]
+    fn from_config_resolves_and_clamps_when_enabled() {
+        let cfg = PostProcessConfig {
+            ssao: true,
+            ssao_radius: -1.0,
+            ssao_intensity: 99.0,
+            ..Default::default()
+        };
+        let s = SsaoSettings::from_config(&cfg).expect("ssao on");
+        assert!(s.radius > 0.0);
+        assert_eq!(s.intensity, 4.0);
+    }
 
     #[test]
     fn zero_intensity_does_not_contribute() {

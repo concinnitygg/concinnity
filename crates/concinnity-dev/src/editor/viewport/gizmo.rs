@@ -7,7 +7,7 @@
 
 use concinnity_core::components::Sprite;
 use concinnity_core::ecs::World;
-use concinnity_core::gfx::pick::PickRay;
+use concinnity_core::math::pick::PickRay;
 use concinnity_host::thread::asset_id::AssetId;
 
 use crate::editor::panels::registry::ID_BASE;

@@ -1,15 +1,8 @@
 //! The `#[repr(C)]` blocks the CPU uploads into a single-source `.slang` shader,
 //! declared once for every backend.
 //!
-//! These used to be declared per backend, in `metal/uniforms.rs`,
-//! `vulkan/uniforms.rs` and `directx/uniforms.rs`, from the days when each
-//! backend had its own shader source and its own idea of the layout. The
-//! single-source migration collapsed the shader side to one declaration, and
-//! `shader_layout` in concinnity-device then proved the CPU sides byte-identical
-//! on all three targets -- so a second and third copy could only ever drift.
-//!
-//! What stays per backend is what is genuinely per backend: a block only one
-//! host binds (Metal's `ModelUniforms`), or one whose shader is still
+//! The `metal`, `directx` and `vulkan` children are the exception: a block only
+//! one backend binds (Metal's `ModelUniforms`), or one whose shader is still
 //! hand-written per backend (the cull kernel, the per-draw morph kernel, Metal's
 //! water).
 //!
@@ -18,12 +11,15 @@
 //! that binds it.
 
 pub mod bindless;
+pub mod directx;
 pub mod geometry;
+pub mod metal;
 pub mod post;
 pub mod probe;
 pub mod raymarch;
 pub mod transparent;
 pub mod view;
+pub mod vulkan;
 
 pub use bindless::BINDLESS_POOL_SIZE;
 pub use geometry::{

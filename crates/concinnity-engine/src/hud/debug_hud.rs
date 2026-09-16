@@ -11,7 +11,7 @@ use concinnity_core::components::DebugHud;
 use concinnity_core::components::FrameInput;
 use concinnity_core::components::TextLabel;
 use concinnity_core::ecs::{Access, PipelineContext, StepResult, System};
-use concinnity_core::gfx::profile::PassTiming;
+use concinnity_core::profile::PassTiming;
 use concinnity_host::thread::asset_id::AssetId;
 use std::time::Instant;
 

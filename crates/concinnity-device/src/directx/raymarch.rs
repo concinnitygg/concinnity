@@ -1539,4 +1539,4 @@ impl DxContext {
 const _LIGHT_LAYOUT_REF: usize = std::mem::size_of::<LightUniforms>();
 
 // The `RaymarchView` / `RaymarchVolumeUniforms` layout tests live with the
-// structs in `concinnity_core::render::directx::uniforms`.
+// structs in `concinnity_core::render::uniforms::directx`.

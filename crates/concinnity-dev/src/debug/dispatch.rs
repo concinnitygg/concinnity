@@ -373,7 +373,7 @@ pub(crate) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> Str
 mod tests {
     use super::*;
     use crate::debug::state::{AssetEntry, CameraSnapshot};
-    use concinnity_core::gfx::profile::RenderStats;
+    use concinnity_core::profile::RenderStats;
     use concinnity_engine::gfx::streaming::system::StreamingStats;
     use std::sync::atomic::{AtomicBool, Ordering};
 

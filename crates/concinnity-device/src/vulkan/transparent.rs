@@ -28,9 +28,9 @@ use concinnity_core::components::{GlassPanel, WaterSurface};
 use concinnity_core::gfx::lod;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::RtParams;
-use concinnity_core::gfx::rt_reflections::RtParamsInputs;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::lights;
+use concinnity_core::render::post::rt_reflections::RtParamsInputs;
 pub(in crate::vulkan) use concinnity_core::render::uniforms::TransparentView;
 use concinnity_core::transform::mat4_inverse;
 // `TransparentView` (the per-frame view UBO) is a GPU-free layout struct that

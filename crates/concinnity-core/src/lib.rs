@@ -75,6 +75,7 @@ pub mod math;
 pub mod memory;
 pub mod physics;
 pub mod platform;
+pub mod profile;
 pub mod render;
 pub mod resource;
 pub mod settings;

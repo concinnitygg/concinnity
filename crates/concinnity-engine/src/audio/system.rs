@@ -496,7 +496,7 @@ mod tests {
         FrameContext, PayloadLocator, PipelineContext, ResourceKind, ResourceRecord, Resources,
         StepResult, System,
     };
-    use concinnity_core::gfx::profile::FrameProfile;
+    use concinnity_core::profile::FrameProfile;
     use concinnity_core::resource::AudioClipTable;
     use concinnity_host::store::blob::BlobData;
 

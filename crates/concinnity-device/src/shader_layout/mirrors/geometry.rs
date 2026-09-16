@@ -7,12 +7,12 @@
 //! everything else is one declaration for all three.
 
 use concinnity_core::gfx::render_types::{ParticleParams, ShadowPassPush, TextUniforms};
-use concinnity_core::render::directx::uniforms::CullParams as DxCullParams;
-use concinnity_core::render::metal::uniforms::{CullUniforms as MetalCullParams, ModelUniforms};
+use concinnity_core::render::uniforms::directx::CullParams as DxCullParams;
+use concinnity_core::render::uniforms::metal::{CullUniforms as MetalCullParams, ModelUniforms};
+use concinnity_core::render::uniforms::vulkan::{CullHizParams, CullParams as VkCullParams};
 use concinnity_core::render::uniforms::{
     DecalParams, DecalView, GBufferView, GpuParticle, LineView, ParticleView, SkinParams,
 };
-use concinnity_core::render::vulkan::uniforms::{CullHizParams, CullParams as VkCullParams};
 
 use crate::shader_layout::mirror::{Case, everywhere, mirror, on};
 use crate::shader_layout::programs::Target;

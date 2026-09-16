@@ -12,8 +12,8 @@ use concinnity_core::ecs::{
     ViewOverrides,
 };
 use concinnity_core::gfx::frustum;
-use concinnity_core::gfx::profile;
 use concinnity_core::input::snapshot::InputPacket;
+use concinnity_core::profile;
 use concinnity_core::render::overlay_maps;
 use concinnity_core::render::scene_flow;
 use concinnity_core::render::snapshot::{FrameScalars, RenderSnapshot, SceneOpRecorder};
@@ -620,7 +620,7 @@ mod tests {
     use crate::gfx::overlay::OverlayFrame;
     use concinnity_core::components::{GlobalTransform, RenderHandle, SkeletonPose};
     use concinnity_core::ecs::{ComponentStorage, Resources, SkinnedMeshHandle};
-    use concinnity_core::gfx::profile::FrameProfile;
+    use concinnity_core::profile::FrameProfile;
     use concinnity_core::render::snapshot::SceneOp;
     use concinnity_host::store::blob::BlobData;
 

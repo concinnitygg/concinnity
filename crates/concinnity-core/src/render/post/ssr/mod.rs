@@ -24,6 +24,9 @@ use super::device::{
 };
 use super::program::PostProgram;
 
+/// Clamped SSR tunables and the per-frame uniform they build.
+pub mod settings;
+
 /// The per-frame inputs one resolve draw reads and writes.
 pub struct SsrInputs<'t, D: PostPassDevice + ?Sized + 't> {
     /// The reflection target: radiance in `.rgb`, composite weight in `.a`.

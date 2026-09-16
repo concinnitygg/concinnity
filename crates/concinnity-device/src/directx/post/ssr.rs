@@ -6,9 +6,9 @@
 //! `DxPostDevice`, which also binds the probe cube table and the frame's
 //! ProbeSet a missed ray falls back to.
 
-use concinnity_core::gfx::ssr;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::device::{PostExtent, PostPassDevice};
+use concinnity_core::render::post::ssr::settings::SsrSettings;
 use concinnity_core::render::post::ssr::{SsrInputs, SsrPass, target_desc};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -25,7 +25,7 @@ const TARGET_LABEL: &str = "ssr_reflection";
 // The SSR resolve, `Some` only when SSR itself is authored on.
 pub(in crate::directx) struct SsrResolve {
     // Resolved authored tunables; turned into a per-frame `SsrParams` block.
-    pub(in crate::directx) settings: ssr::SsrSettings,
+    pub(in crate::directx) settings: SsrSettings,
     pass: SsrPass<PostPipeline>,
     // Reflected radiance + composite weight, which the reflection composite
     // blurs by roughness and blends over the scene.
@@ -46,7 +46,7 @@ impl SsrResources {
         device: &DxPostDevice,
         width: u32,
         height: u32,
-        resolve_settings: Option<ssr::SsrSettings>,
+        resolve_settings: Option<SsrSettings>,
     ) -> RenderResult<Self> {
         let resolve = match resolve_settings {
             Some(settings) => Some(SsrResolve {

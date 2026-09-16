@@ -9,9 +9,9 @@
 //! 1.0. Mirrors src/metal/post/ssao.rs.
 
 use concinnity_core::gfx::render_types::SsaoParams;
-use concinnity_core::gfx::ssao;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::device::PostBlend;
+use concinnity_core::render::post::ssao;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;

@@ -21,6 +21,10 @@ use concinnity_core::components::{
 use concinnity_core::ecs::{Entity, PipelineContext, StepResult, System};
 use concinnity_core::input::keymap;
 use concinnity_core::render::backend::RenderBackend;
+use concinnity_core::render::post::rt_reflections::RtReflectionSettings;
+use concinnity_core::render::post::ssao::SsaoSettings;
+use concinnity_core::render::post::ssgi::settings::SsgiSettings;
+use concinnity_core::render::post::ssr::settings::SsrSettings;
 use concinnity_core::render::{backend, overlay_maps, scene_flow, snapshot, text, volumetric_fog};
 use concinnity_core::transform::propagation;
 use concinnity_host::store::paths::StateTree;
@@ -511,15 +515,15 @@ pub(crate) fn clamp_quality_cycle(
 }
 
 // Derive the backend's per-feature `QualitySettings` from a resolved config.
-// Mirrors the init-time derivation (the same `*_settings()` methods), so a
+// Mirrors the init-time derivation (the same resolves), so a
 // live rebuild reproduces exactly what a launch with this config would build.
 pub(crate) fn derive_quality_settings(cfg: &PostProcessConfig) -> backend::QualitySettings {
     backend::QualitySettings {
         taa: cfg.aa_mode.taa_enabled(),
-        ssao: cfg.ssao_settings(),
-        ssr: cfg.ssr_settings(),
-        rt_reflections: cfg.rt_reflection_settings(),
-        ssgi: cfg.ssgi_settings(),
+        ssao: SsaoSettings::from_config(cfg),
+        ssr: SsrSettings::from_config(cfg),
+        rt_reflections: RtReflectionSettings::from_config(cfg),
+        ssgi: SsgiSettings::from_config(cfg),
         reflection_blur_scale: cfg.reflection_blur_divisor(),
         auto_exposure: cfg.auto_exposure_settings(),
         auto_exposure_bias_ev: cfg.exposure_ev,

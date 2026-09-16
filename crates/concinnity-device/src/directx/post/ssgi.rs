@@ -4,9 +4,9 @@
 //! reduced gather target and both draws -- are written once in
 //! `concinnity_core::render::post::ssgi` and reach D3D12 through `DxPostDevice`.
 
-use concinnity_core::gfx::ssgi::SsgiSettings;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::device::PostExtent;
+use concinnity_core::render::post::ssgi::settings::SsgiSettings;
 use concinnity_core::render::post::ssgi::{SsgiPass, SsgiPipelines};
 use windows::Win32::Graphics::Direct3D12::*;
 

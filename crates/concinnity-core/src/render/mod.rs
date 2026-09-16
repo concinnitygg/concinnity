@@ -1,11 +1,15 @@
 //! The backend-agnostic, GPU-free render-prep layer: the
 //! `RenderBackend`/`SceneControl` trait seam the device backends implement, plus
-//! the record builders, render graph, and CPU-side math that turn components
+//! the per-frame record builders, render graph, and passes that turn components
 //! into GPU-ready data.
 //!
-//! Sits above [`crate::gfx`], which holds the layouts and the kernels this
-//! prepares into, and owns no device or window handle of its own: a frame's
-//! work is built here and handed to whichever backend implements the seam.
+//! The rule that separates this from [`crate::gfx`]: gfx holds `repr(C)`
+//! layouts and pure math kernels; render holds the per-frame builders, the
+//! passes, and the backend seam. This layer owns no device or window handle of
+//! its own: a frame's work is built here and handed to whichever backend
+//! implements the seam. The one layout exception is [`uniforms`]: a block only
+//! one backend binds, or whose shader is still per backend, stays beside the
+//! shared blocks in a per-backend child.
 //!
 //! Three crates consume it. The device backends (concinnity-device) implement
 //! it, and the runtime driver (concinnity-engine) drives a frame through it,
@@ -64,23 +68,8 @@ pub mod streaming;
 pub mod text;
 pub mod transparent;
 
-/// The `#[repr(C)]` blocks the CPU uploads into the single-source `.slang`
-/// shaders, declared once for every backend (see `uniforms/mod.rs`).
+/// The `#[repr(C)]` blocks the CPU uploads into the shaders, declared once for
+/// every backend except where only one backend binds a block.
 pub mod uniforms;
 
 pub mod volumetric_fog;
-
-/// GPU-free host-side layout contract for the Metal backend's shader structs
-/// (uniform structs, math, shader-layout asserts). Metal-specific but device-free,
-/// so it is compiled unconditionally and its layout tests run on every platform's
-/// CI. The Metal backend (concinnity-device) re-exports it under its own `metal`.
-pub mod metal;
-
-/// The same for the DirectX and Vulkan backends: their repr(C) uniform / probe
-/// structs + GPU-timing slot arithmetic (mirrored in the HLSL / GLSL shaders).
-/// Backend-specific but device-free (plain repr(C), no windows/ash types), so
-/// they compile unconditionally and their layout tests count toward coverage.
-/// The DirectX / Vulkan backends (concinnity-device) re-export them under their
-/// own `directx` / `vulkan`.
-pub mod directx;
-pub mod vulkan;

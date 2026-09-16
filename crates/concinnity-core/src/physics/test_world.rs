@@ -13,7 +13,7 @@ use crate::ecs::{
     Arena, ComponentStorage, Entity, EntityByName, FrameContext, NoPayloads, PipelineContext,
     Resources,
 };
-use crate::gfx::profile::FrameProfile;
+use crate::profile::FrameProfile;
 
 pub(super) struct TestWorld {
     pub(super) components: ComponentStorage,

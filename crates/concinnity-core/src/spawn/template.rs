@@ -229,7 +229,7 @@ mod tests {
     use crate::ecs::{
         Arena, ComponentStorage, FrameContext, NoPayloads, Resources, SkinnedMeshHandle,
     };
-    use crate::gfx::profile::FrameProfile;
+    use crate::profile::FrameProfile;
 
     // Build an isolated PipelineContext over fresh storage, mirroring the
     // despawn tests, so the spawn/despawn loop can run without a backend.

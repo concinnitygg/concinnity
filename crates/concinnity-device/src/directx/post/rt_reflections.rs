@@ -15,9 +15,9 @@
 //! Vulkan hosts bind the same source at their own slots.
 
 use concinnity_core::gfx::render_types::RtParams;
-use concinnity_core::gfx::rt_reflections::{RtParamsInputs, RtReflectionSettings};
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::device::PostBlend;
+use concinnity_core::render::post::rt_reflections::{RtParamsInputs, RtReflectionSettings};
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 

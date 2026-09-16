@@ -5,8 +5,8 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::render_types;
-use concinnity_core::gfx::ssgi::SsgiSettings;
 use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::post::ssgi::settings::SsgiSettings;
 use concinnity_core::render::post::ssgi::{SsgiInputs, SsgiPass};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;

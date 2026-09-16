@@ -132,7 +132,7 @@ mod tests {
     use crate::frame_report::reduce::ReduceOptions;
     use crate::frame_report::sample::MAX_SYSTEM_TIMINGS;
     use crate::frame_report::sample::{FrameRun, FrameSample};
-    use concinnity_core::gfx::profile::MAX_PASS_TIMINGS;
+    use concinnity_core::profile::MAX_PASS_TIMINGS;
 
     fn sample(run_seconds: f32, segment: Option<u32>, frame_us: u32) -> FrameSample {
         FrameSample {

@@ -59,7 +59,7 @@ mod tests {
     use concinnity_core::ecs::FrameContext;
     use concinnity_core::ecs::{ComponentStorage, PipelineContext, Resources};
     use concinnity_core::gfx::camera;
-    use concinnity_core::gfx::profile::FrameProfile;
+    use concinnity_core::profile::FrameProfile;
     use concinnity_host::store::blob::BlobData;
 
     // Owns the storage a PipelineContext borrows from; the build reads only the

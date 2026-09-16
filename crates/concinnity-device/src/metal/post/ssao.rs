@@ -9,8 +9,8 @@
 
 use crate::metal::error::allocation_failed;
 use concinnity_core::gfx::render_types;
-use concinnity_core::gfx::ssao::SsaoSettings;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::post::ssao::SsaoSettings;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{

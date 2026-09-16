@@ -414,7 +414,7 @@ impl ReflectionBlurResolution {
 
 /// Default SSGI hemisphere-ray and ray-march-step counts for the authored
 /// `ssgi_rays` / `ssgi_steps` fields. Defined here (the schema default) and
-/// re-exported by `concinnity-core`' `gfx::ssgi` for its runtime clamp path, so
+/// re-exported by `render::post::ssgi::settings` for its runtime clamp path, so
 /// the authored default and the runtime code stay a single source of truth.
 pub const DEFAULT_SSGI_RAYS: u32 = 8;
 /// Default ray-march steps per SSGI ray. See [`DEFAULT_SSGI_RAYS`].
@@ -650,62 +650,6 @@ impl PostProcessConfig {
         self.reflection_blur_resolution.scale_divisor()
     }
 
-    /// Resolve the SSAO tunables into clamped `SsaoSettings`, or `None` when the
-    /// `ssao` toggle is off -- or on with an intensity that cannot darken
-    /// anything -- so the backend can skip the SSAO passes entirely.
-    pub fn ssao_settings(&self) -> Option<crate::gfx::ssao::SsaoSettings> {
-        self.ssao
-            .then(|| crate::gfx::ssao::SsaoSettings::resolve(self.ssao_radius, self.ssao_intensity))
-            .filter(|s| s.contributes())
-    }
-
-    /// Resolve the SSR tunables into clamped `SsrSettings`, or `None` when the
-    /// `ssr` toggle is off.
-    ///
-    /// Deliberately NOT gated on the intensity, unlike SSAO / SSGI: when a
-    /// resolve is active the forward pass hands its glossy dielectric specular
-    /// over to the resolve's composite (`ViewUniforms::reflections_enabled`), so
-    /// a zero-intensity resolve still carries that term and dropping the pass
-    /// changes the image. Measured at 1.53M of 3.28M pixels on a glossy floor.
-    pub fn ssr_settings(&self) -> Option<crate::gfx::ssr::SsrSettings> {
-        self.ssr.then(|| {
-            crate::gfx::ssr::SsrSettings::resolve(self.ssr_intensity, self.ssr_max_distance)
-        })
-    }
-
-    /// Resolve the ray-traced-reflection tunables into clamped
-    /// `RtReflectionSettings`, or `None` when `ray_traced_reflections` is off.
-    /// Reuses the SSR intensity / distance fields; the backend additionally gates
-    /// on GPU ray-tracing support. Not gated on the intensity, for the same
-    /// specular-handover reason as `ssr_settings`.
-    pub fn rt_reflection_settings(
-        &self,
-    ) -> Option<crate::gfx::rt_reflections::RtReflectionSettings> {
-        self.ray_traced_reflections.then(|| {
-            crate::gfx::rt_reflections::RtReflectionSettings::resolve(
-                self.ssr_intensity,
-                self.ssr_max_distance,
-            )
-        })
-    }
-
-    /// Resolve the SSGI tunables into clamped `SsgiSettings`, or `None` when
-    /// `indirect_lighting` is not `Ssgi`, or its intensity scales the gathered
-    /// bounce to zero, so the backend can skip the SSGI passes.
-    pub fn ssgi_settings(&self) -> Option<crate::gfx::ssgi::SsgiSettings> {
-        (self.indirect_lighting == IndirectLighting::Ssgi)
-            .then(|| {
-                crate::gfx::ssgi::SsgiSettings::resolve(
-                    self.ssgi_intensity,
-                    self.ssgi_max_distance,
-                    self.ssgi_rays,
-                    self.ssgi_steps,
-                    self.ssgi_resolution.scale_divisor(),
-                )
-            })
-            .filter(|s| s.contributes())
-    }
-
     /// Resolve the auto-exposure tunables into clamped `AutoExposureSettings`, or
     /// `None` when the toggle is off so the backend can skip the histogram passes.
     pub fn auto_exposure_settings(
@@ -842,35 +786,6 @@ mod runtime_tests {
         assert!(cfg.ssao);
         assert_eq!(cfg.ssao_radius, 0.5);
         assert_eq!(cfg.ssao_intensity, 1.0);
-        assert!(cfg.ssao_settings().is_some());
-        // No SsaoSettings once the toggle is off.
-        let off = PostProcessConfig {
-            ssao: false,
-            ..Default::default()
-        };
-        assert!(off.ssao_settings().is_none());
-    }
-
-    #[test]
-    fn an_inert_intensity_resolves_to_none_like_the_toggle_being_off() {
-        // The backends read presence, so a toggle left on with a value that
-        // cannot change a pixel has to resolve away here or the passes run for
-        // nothing. Each is the same state as its toggle being off. Only the two
-        // whose neutrality was verified pixel-for-pixel are listed; see
-        // `a_zero_intensity_reflection_still_resolves` for the exceptions.
-        let ssao = PostProcessConfig {
-            ssao: true,
-            ssao_intensity: 0.0,
-            ..Default::default()
-        };
-        assert!(ssao.ssao_settings().is_none());
-
-        let ssgi = PostProcessConfig {
-            indirect_lighting: IndirectLighting::Ssgi,
-            ssgi_intensity: 0.0,
-            ..Default::default()
-        };
-        assert!(ssgi.ssgi_settings().is_none());
     }
 
     #[test]
@@ -892,52 +807,6 @@ mod runtime_tests {
     }
 
     #[test]
-    fn a_contributing_intensity_still_resolves() {
-        let cfg = PostProcessConfig {
-            ssao: true,
-            ssao_intensity: 0.05,
-            indirect_lighting: IndirectLighting::Ssgi,
-            ssgi_intensity: 0.05,
-            ..Default::default()
-        };
-        assert!(cfg.ssao_settings().is_some());
-        assert!(cfg.ssgi_settings().is_some());
-    }
-
-    #[test]
-    fn a_zero_intensity_reflection_still_resolves() {
-        // SSR and RT are deliberately NOT intensity-gated: an active resolve
-        // owns the glossy dielectric specular the forward pass hands over, so a
-        // zero-intensity resolve still changes the image. Measured, not assumed.
-        let ssr = PostProcessConfig {
-            ssr: true,
-            ssr_intensity: 0.0,
-            ..Default::default()
-        };
-        assert!(ssr.ssr_settings().is_some());
-
-        let rt = PostProcessConfig {
-            ray_traced_reflections: true,
-            ssr_intensity: 0.0,
-            ..Default::default()
-        };
-        assert!(rt.rt_reflection_settings().is_some());
-    }
-
-    #[test]
-    fn ssao_settings_resolve_and_clamp_when_enabled() {
-        let cfg = PostProcessConfig {
-            ssao: true,
-            ssao_radius: -1.0,
-            ssao_intensity: 99.0,
-            ..Default::default()
-        };
-        let s = cfg.ssao_settings().expect("ssao on");
-        assert!(s.radius > 0.0);
-        assert_eq!(s.intensity, 4.0);
-    }
-
-    #[test]
     fn ssao_deserializes_from_jsonl_args() {
         let cfg: PostProcessConfig =
             serde_json::from_str(r#"{"ssao":true,"ssao_radius":0.6}"#).expect("parse");
@@ -953,26 +822,6 @@ mod runtime_tests {
         assert!(cfg.ssr);
         assert_eq!(cfg.ssr_intensity, 0.7);
         assert_eq!(cfg.ssr_max_distance, 40.0);
-        assert!(cfg.ssr_settings().is_some());
-        // No SsrSettings once the toggle is off.
-        let off = PostProcessConfig {
-            ssr: false,
-            ..Default::default()
-        };
-        assert!(off.ssr_settings().is_none());
-    }
-
-    #[test]
-    fn ssr_settings_resolve_and_clamp_when_enabled() {
-        let cfg = PostProcessConfig {
-            ssr: true,
-            ssr_intensity: 9.0,
-            ssr_max_distance: 1.0e6,
-            ..Default::default()
-        };
-        let s = cfg.ssr_settings().expect("ssr on");
-        assert_eq!(s.intensity, 1.0);
-        assert!(s.max_distance > 0.0 && s.max_distance.is_finite());
     }
 
     #[test]
@@ -986,30 +835,8 @@ mod runtime_tests {
     }
 
     #[test]
-    fn rt_reflections_default_on_and_resolve_to_settings() {
-        let cfg = PostProcessConfig::default();
-        assert!(cfg.ray_traced_reflections);
-        assert!(cfg.rt_reflection_settings().is_some());
-        // No RtReflectionSettings once the toggle is off.
-        let off = PostProcessConfig {
-            ray_traced_reflections: false,
-            ..Default::default()
-        };
-        assert!(off.rt_reflection_settings().is_none());
-    }
-
-    #[test]
-    fn rt_reflection_settings_reuse_ssr_tunables_when_enabled() {
-        let cfg = PostProcessConfig {
-            ray_traced_reflections: true,
-            ssr_intensity: 9.0,
-            ssr_max_distance: 1.0e6,
-            ..Default::default()
-        };
-        let s = cfg.rt_reflection_settings().expect("rt on");
-        // Reuses the SSR intensity / distance fields, clamped by the RT resolve.
-        assert_eq!(s.intensity, 1.0);
-        assert!(s.max_distance > 0.0 && s.max_distance.is_finite());
+    fn rt_reflections_default_on() {
+        assert!(PostProcessConfig::default().ray_traced_reflections);
     }
 
     #[test]
@@ -1018,13 +845,11 @@ mod runtime_tests {
             serde_json::from_str(r#"{"ray_traced_reflections":true,"ssr_intensity":0.5}"#)
                 .expect("parse");
         assert!(cfg.ray_traced_reflections);
-        assert!(cfg.rt_reflection_settings().is_some());
         // An explicit false is what turns ray tracing off; omitting the field
         // keeps the default on.
         let cfg: PostProcessConfig =
             serde_json::from_str(r#"{"ray_traced_reflections":false}"#).expect("parse");
         assert!(!cfg.ray_traced_reflections);
-        assert!(cfg.rt_reflection_settings().is_none());
     }
 
     #[test]
@@ -1059,13 +884,6 @@ mod runtime_tests {
         assert_eq!(cfg.ssgi_resolution, SsgiResolution::Half);
         assert_eq!(cfg.ssgi_rays, 8);
         assert_eq!(cfg.ssgi_steps, 12);
-        assert!(cfg.ssgi_settings().is_some());
-        // No SsgiSettings once indirect lighting is IBL-only.
-        let ibl = PostProcessConfig {
-            indirect_lighting: IndirectLighting::Ibl,
-            ..Default::default()
-        };
-        assert!(ibl.ssgi_settings().is_none());
     }
 
     #[test]
@@ -1074,21 +892,6 @@ mod runtime_tests {
         assert_eq!(SsgiResolution::Half.scale_divisor(), 2);
         assert_eq!(SsgiResolution::Quarter.scale_divisor(), 4);
         assert_eq!(SsgiResolution::default(), SsgiResolution::Half);
-    }
-
-    #[test]
-    fn ssgi_resolution_and_counts_flow_into_settings() {
-        let cfg = PostProcessConfig {
-            indirect_lighting: IndirectLighting::Ssgi,
-            ssgi_resolution: SsgiResolution::Quarter,
-            ssgi_rays: 4,
-            ssgi_steps: 20,
-            ..Default::default()
-        };
-        let s = cfg.ssgi_settings().expect("ssgi on");
-        assert_eq!(s.rays, 4);
-        assert_eq!(s.steps, 20);
-        assert_eq!(s.gi_scale, 4);
     }
 
     #[test]
@@ -1149,19 +952,6 @@ mod runtime_tests {
     }
 
     #[test]
-    fn ssgi_settings_resolve_and_clamp_when_enabled() {
-        let cfg = PostProcessConfig {
-            indirect_lighting: IndirectLighting::Ssgi,
-            ssgi_intensity: 99.0,
-            ssgi_max_distance: 1.0e6,
-            ..Default::default()
-        };
-        let s = cfg.ssgi_settings().expect("ssgi on");
-        assert_eq!(s.intensity, 4.0);
-        assert!(s.max_distance > 0.0 && s.max_distance.is_finite());
-    }
-
-    #[test]
     fn ssgi_deserializes_from_jsonl_args() {
         let cfg: PostProcessConfig =
             serde_json::from_str(r#"{"indirect_lighting":"ssgi","ssgi_intensity":0.8}"#)
@@ -1175,7 +965,6 @@ mod runtime_tests {
         let cfg: PostProcessConfig =
             serde_json::from_str(r#"{"indirect_lighting":"ibl"}"#).expect("parse");
         assert_eq!(cfg.indirect_lighting, IndirectLighting::Ibl);
-        assert!(cfg.ssgi_settings().is_none());
     }
 
     #[test]

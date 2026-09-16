@@ -5,11 +5,11 @@
 use ash::vk;
 use concinnity_core::components;
 use concinnity_core::gfx::auto_exposure;
-use concinnity_core::gfx::profile;
 use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::render_types::*;
 use concinnity_core::input::keymap::KeyMap;
 use concinnity_core::input::snapshot::InputSnapshot;
+use concinnity_core::profile;
 use concinnity_core::render::backend;
 use concinnity_core::render::backend::FrameParams;
 use concinnity_core::render::backend_init;
@@ -18,6 +18,7 @@ use concinnity_core::render::error;
 use concinnity_core::render::hdr_output;
 use concinnity_core::render::lights;
 use concinnity_core::render::particles;
+use concinnity_core::render::pass_timing;
 use concinnity_core::render::reflection_probe;
 use concinnity_core::render::render_graph;
 use concinnity_core::render::scene_flow;
@@ -1705,12 +1706,12 @@ impl VkContext {
             // One [value, availability] pair per query slot (TYPE_64 +
             // WITH_AVAILABILITY -> two u64 per query; ash uses the element size as
             // the stride and the slice length as the query count).
-            let mut results = vec![[0u64; 2]; super::pass_timing::SLOTS_PER_FRAME];
+            let mut results = vec![[0u64; 2]; pass_timing::SLOTS_PER_FRAME];
             // SAFETY: a property query on a live handle; it only reads.
             let res = unsafe {
                 device.get_query_pool_results(
                     pool,
-                    super::pass_timing::frame_block_base(frame),
+                    pass_timing::frame_block_base(frame),
                     &mut results,
                     vk::QueryResultFlags::TYPE_64 | vk::QueryResultFlags::WITH_AVAILABILITY,
                 )

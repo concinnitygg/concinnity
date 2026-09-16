@@ -45,7 +45,7 @@ use concinnity_core::ecs::{
 };
 use concinnity_core::gfx::chunk_coord;
 use concinnity_core::gfx::mesh_payload;
-use concinnity_core::gfx::profile::FrameProfile;
+use concinnity_core::profile::FrameProfile;
 use concinnity_core::render::backend;
 use concinnity_core::render::backend::{GpuProfile, GpuTier, GpuVendor};
 use concinnity_core::render::backend_init::SwapchainConfig;

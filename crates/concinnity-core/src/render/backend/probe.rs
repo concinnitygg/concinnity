@@ -7,7 +7,7 @@
 //! three backends so they agree on the same GPU, and unit-testable without
 //! one.
 
-use crate::gfx::profile::RenderStats;
+use crate::profile::RenderStats;
 use crate::render::error::{RenderError, RenderResult};
 use alloc::string::String;
 use alloc::vec::Vec;

@@ -285,7 +285,7 @@ pub struct ViewOverrides {
 }
 
 /// One pickable entity in the [PickIndex]: its asset id and current world-space
-/// AABB. Ray-tested by the editor with `gfx::pick::ray_aabb`.
+/// AABB. Ray-tested by the editor with `math::pick::ray_aabb`.
 #[derive(Debug, Clone, Copy)]
 pub struct PickEntry {
     /// The pickable entity's asset id.

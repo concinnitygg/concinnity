@@ -24,7 +24,7 @@ pub(crate) mod extraction;
 pub(crate) mod transforms;
 
 use concinnity_core::ecs::{Arena, ComponentStorage, FrameContext, PipelineContext, Resources};
-use concinnity_core::gfx::profile::FrameProfile;
+use concinnity_core::profile::FrameProfile;
 use concinnity_host::store::blob::BlobData;
 use std::time::Instant;
 

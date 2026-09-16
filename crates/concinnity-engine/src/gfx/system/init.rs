@@ -546,11 +546,11 @@ impl GraphicsSystem {
         // to the backend ctor and the live `settings.post_process` here.
         post_process.fxaa = settings.post_config.aa_mode.fxaa_flag();
         settings.post_process.fxaa = post_process.fxaa;
-        let ssao_settings = settings.post_config.ssao_settings();
-        let ssr_settings = settings.post_config.ssr_settings();
-        let rt_reflection_settings = settings.post_config.rt_reflection_settings();
+        let ssao_settings = SsaoSettings::from_config(&settings.post_config);
+        let ssr_settings = SsrSettings::from_config(&settings.post_config);
+        let rt_reflection_settings = RtReflectionSettings::from_config(&settings.post_config);
         let reflection_blur_scale = settings.post_config.reflection_blur_divisor();
-        let ssgi_settings = settings.post_config.ssgi_settings();
+        let ssgi_settings = SsgiSettings::from_config(&settings.post_config);
         // The authored `exposure_ev` becomes an additive bias on the adapted EV
         // when auto-exposure is on; otherwise the static path bakes it into
         // `post_process.exposure` (resolve()) and the bias here is unused.

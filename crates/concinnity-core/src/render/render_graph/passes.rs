@@ -31,7 +31,7 @@ macro_rules! pass_ids {
         pub const PASS_NAMES: [&str; PASS_COUNT] = [$($name,)*];
 
         /// Number of distinct passes the engine times. The per-pass timing array
-        /// in [`crate::gfx::profile::RenderStats`] is sized to at least this many slots.
+        /// in [`crate::profile::RenderStats`] is sized to at least this many slots.
         pub const PASS_COUNT: usize = [$(PassId::$variant,)*].len();
 
         impl PassId {

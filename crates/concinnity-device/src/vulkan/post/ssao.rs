@@ -11,8 +11,8 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types::SsaoParams;
-use concinnity_core::gfx::ssao;
 use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::post::ssao;
 
 use super::super::allocator::DeviceAllocator;
 use super::super::context::VkContext;

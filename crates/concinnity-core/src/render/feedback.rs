@@ -3,8 +3,8 @@
 //! produced, and the consumed snapshot returned for buffer reuse. The
 //! counterpart of `RenderSnapshot` on the pipelined driver's return channel.
 
-use crate::gfx::profile::RenderStats;
 use crate::input::snapshot::InputPacket;
+use crate::profile::RenderStats;
 use crate::render::ops::ReplayOutcome;
 use crate::render::snapshot::RenderSnapshot;
 

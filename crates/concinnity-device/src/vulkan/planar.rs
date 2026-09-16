@@ -658,7 +658,7 @@ impl PlanarReflectionSet {
         // cull never samples the main camera's pyramid. Only when Hi-Z runs (the
         // cull pipeline layout statically references set 1 then). Shared across planes.
         let (hiz_set, hiz_ubo) = if let Some((hiz_layout, hiz_view, hiz_sampler)) = cull.hiz {
-            use super::hiz::CullHizParams;
+            use concinnity_core::render::uniforms::vulkan::CullHizParams;
             let params = CullHizParams {
                 prev_view_proj: [[0.0; 4]; 4],
                 hiz_size: [1.0, 1.0],

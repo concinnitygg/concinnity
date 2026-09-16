@@ -163,8 +163,8 @@ mod tests {
     };
     use crate::error::CnError;
     use crate::gfx::mesh_payload::serialize_heightfield_trailer;
-    use crate::gfx::profile::FrameProfile;
     use crate::physics::{SimConfig, Simulation};
+    use crate::profile::FrameProfile;
     use alloc::boxed::Box;
     use alloc::vec;
 

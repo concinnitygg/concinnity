@@ -6,13 +6,13 @@
 use concinnity_core::components::{GlassPanel, SdfVolume, WaterSurface};
 use concinnity_core::gfx::auto_exposure;
 use concinnity_core::gfx::render_types::{DrawObject, LightUniforms, NUM_SHADOW_CASCADES};
-use concinnity_core::gfx::ssao::SsaoSettings;
 use concinnity_core::render::backend_init::{PostSettings, WorldFx};
 use concinnity_core::render::decal::{self, DecalRecord};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::lights;
 use concinnity_core::render::particles::{self, ParticleEmitterRecord};
 use concinnity_core::render::planar_reflection::{self, PlanarAssignment};
+use concinnity_core::render::post::ssao::SsaoSettings;
 use concinnity_core::render::volumetric_fog::FogSettings;
 use windows::Win32::Graphics::Direct3D12::*;
 

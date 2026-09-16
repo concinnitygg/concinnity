@@ -22,7 +22,7 @@ use super::context::*;
 use super::encode::ComputeEncode;
 use super::pipeline::{ns_str, shader_library};
 use super::scoped_encoder::ScopedEncoder;
-use super::uniforms::*;
+use concinnity_core::render::uniforms::metal::*;
 
 // All GPU-driven main pass + cull state grouped into one feature unit: the
 // main and world-shader pipelines the indirect draws execute under, the

@@ -13,6 +13,11 @@
 //! resource, layout and bind stays per backend. Here the resources and the
 //! binds cross the seam too, which is what lets a pass's state machine and its
 //! target lifecycle live in this crate.
+//!
+//! Each effect also owns its settings resolve: `from_config` turns the authored
+//! [`PostProcessConfig`](crate::components::PostProcessConfig) fields into
+//! clamped settings, or `None` when the effect is off, and the settings build
+//! the per-frame uniform once the camera is known.
 
 /// The backend seam: pipelines, persistent targets, and one fullscreen draw.
 pub mod device;
@@ -21,9 +26,15 @@ pub mod device;
 /// through, as a pure state machine.
 pub mod history;
 
+/// Hardware ray-traced reflection settings, resolved from the authored config.
+pub mod rt_reflections;
+
 /// Which single-source program a post pass runs, and the binding count it
 /// declares.
 pub mod program;
+
+/// Screen-space ambient occlusion settings, resolved from the authored config.
+pub mod ssao;
 
 /// Screen-space global illumination: the gather and composite, written once.
 pub mod ssgi;
