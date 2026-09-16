@@ -123,17 +123,21 @@ pub(crate) fn compile_environment_map_payload(
             other => return Err(format!("unknown EnvironmentMap generator '{}'", other)),
         }
     };
+    // A build-scoped pool, so a build never sizes the process-wide one before
+    // the App configures it.
+    let pool = jobs::JobPool::new(jobs::default_threads());
     Ok(bake_payload(
         &hdr,
         prefilter_face,
         irradiance_face,
         prefilter_samples,
         params.prefilter_clamp,
+        &jobs::PoolRows(&pool),
     ))
 }
 
 // Convolve an equirectangular source into the serialized IBL payload (header +
-// irradiance + prefilter mips): the core bake, fanned out over the job pool.
+// irradiance + prefilter mips): the core bake, fanned out over `rows`.
 // The single bake both the build pass and the hot-reload decode run, so a
 // preview can never diverge from the built asset.
 fn bake_payload(
@@ -142,6 +146,7 @@ fn bake_payload(
     irradiance_face: u32,
     prefilter_samples: u32,
     prefilter_clamp: f32,
+    rows: &jobs::PoolRows<'_>,
 ) -> Vec<u8> {
     concinnity_core::bake::environment_map::source::bake_payload(
         hdr,
@@ -149,7 +154,7 @@ fn bake_payload(
         irradiance_face,
         prefilter_samples,
         prefilter_clamp,
-        &jobs::PoolRows,
+        rows,
     )
 }
 
@@ -177,6 +182,7 @@ pub fn decode_source(
         irradiance_face,
         prefilter_samples,
         prefilter_clamp,
+        &jobs::PoolRows(jobs::pool()),
     ))
 }
 

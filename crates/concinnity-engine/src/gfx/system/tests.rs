@@ -333,6 +333,32 @@ fn init_graphics_under_flags(world: &mut TestWorld, hooks: TestHooks) -> Graphic
     gs
 }
 
+// A first launch (no persisted preset, no launch flag) seeds `Auto` and saves it
+// into the world's own state tree.
+#[test]
+fn a_first_launch_persists_the_auto_preset_into_the_state_tree() {
+    let dir = concinnity_testing::TempTree::new();
+    let tree = concinnity_host::store::paths::StateTree::at(dir.path());
+    let (_state, hooks) = recording_hooks();
+    assert!(hooks.settings.graphics.quality_preset.is_none());
+    let mut world = scene_builder().build();
+    let mut gs = GraphicsSystem::new(Some(&tree));
+    gs.test_hooks = Some(hooks);
+    {
+        let _flags = concinnity_testing::exclusive();
+        let mut ctx = world.ctx();
+        crate::ecs::decompose::run(&mut ctx);
+        gs.run_init(&mut ctx);
+    }
+    assert!(!gs.failed);
+    assert_eq!(
+        crate::config::Settings::load(Some(&tree))
+            .graphics
+            .quality_preset,
+        Some(crate::gfx::quality_preset::QualityPreset::Auto)
+    );
+}
+
 // Whether the world's parked backend slot currently holds a backend.
 fn backend_parked(world: &TestWorld) -> bool {
     world
@@ -3404,9 +3430,10 @@ fn volumetric_fog_resolves_into_the_backend_init() {
         lock(&state).init.as_ref().unwrap().fog,
         "the fog pass is on"
     );
-    // The bookkeeping the world.jsonl reload pass dedupes against is seeded from
-    // whatever was passed into the backend constructor.
-    assert!(gs.last_fog_settings.is_some());
+    // The fog a world reload dedupes against is parked beside the backend,
+    // seeded from whatever was passed into the backend constructor.
+    let pushed = world.resources.get::<super::parked::PushedFogSettings>();
+    assert!(pushed.is_some_and(|fog| fog.0.is_some()));
 }
 
 // A `VolumetricFog` with `enabled = false` yields no fog pass at all, the same
@@ -3427,7 +3454,8 @@ fn disabled_volumetric_fog_skips_the_fog_pass() {
 
     assert!(!gs.failed);
     assert!(!lock(&state).init.as_ref().unwrap().fog);
-    assert!(gs.last_fog_settings.is_none());
+    let pushed = world.resources.get::<super::parked::PushedFogSettings>();
+    assert!(pushed.is_some_and(|fog| fog.0.is_none()));
 }
 
 // A world's declared ReflectionProbes are handed to the backend as placements,
@@ -4407,12 +4435,12 @@ fn a_spawn_naming_a_skinned_template_takes_the_instance_pool_path() {
     );
 }
 
-// The hot-reload seams concinnity-dev drives through. The library never
-// calls them, so they are exercised here: the source catalogs are captured
-// only under `cn debug` (this world is a plain build, so there are none), and the
-// apply parts hand out a disjoint mutable screen of the backend + bookkeeping.
+// The hot-reload seams concinnity-dev drives through. The library never reads
+// them, so they are exercised here: init parks the pushed fog beside the backend,
+// while the source catalogs and the texture-name map are captured only under
+// `cn debug` (this world is a plain build, so neither is parked).
 #[test]
-fn hot_reload_seams_hand_out_the_backend_and_the_captured_sources() {
+fn hot_reload_seams_park_the_fog_beside_the_backend() {
     use concinnity_core::components::VolumetricFog;
 
     let (state, hooks) = recording_hooks();
@@ -4422,27 +4450,35 @@ fn hot_reload_seams_hand_out_the_backend_and_the_captured_sources() {
         ..Default::default()
     });
     let mut world = b.build();
-    let mut gs = init_graphics(&mut world, hooks);
+    let gs = init_graphics(&mut world, hooks);
+    assert!(!gs.failed);
 
     assert!(
-        gs.take_hot_reload_sources().is_none(),
+        !world
+            .resources
+            .contains::<super::hot_reload_sources::HotReloadSources>(),
         "a plain build captures no source catalog"
     );
-
-    let mut backend = crate::ecs::ActiveRenderBackend::take(&mut world.resources).unwrap();
-    let parts = gs.hot_reload_apply_parts(backend.as_mut());
+    let (backend, fog, slots) = world.resources.get_disjoint_mut::<
+        crate::ecs::ActiveRenderBackend,
+        super::parked::PushedFogSettings,
+        super::parked::TextureNameSlots,
+    >();
     assert!(
-        parts.last_fog_settings.is_some(),
+        fog.is_some_and(|fog| fog.0.is_some()),
         "the reload pass dedupes against the fog init pushed to the backend"
     );
     assert!(
-        parts.world_reload.is_none(),
+        slots.is_none(),
         "the texture-name map is captured only under cn debug"
     );
-    parts.backend.wait_idle();
+    backend
+        .and_then(|slot| slot.0.as_deref_mut())
+        .expect("init parks the backend")
+        .wait_idle();
     assert!(
         lock(&state).saw(&Call::WaitIdle),
-        "the parts reach the backend"
+        "the parked backend is the one init built"
     );
 }
 

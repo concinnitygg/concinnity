@@ -29,7 +29,7 @@ use concinnity_core::render::backend;
 use concinnity_core::render::decal;
 use concinnity_core::render::particles;
 use concinnity_engine::controller::camera::Camera3DSystem;
-use concinnity_engine::gfx::system::WorldReloadState;
+use concinnity_engine::gfx::system::parked::TextureNameSlots;
 use concinnity_host::thread::asset_id;
 use std::sync::Mutex;
 
@@ -366,19 +366,19 @@ pub(crate) fn drain() -> Vec<RuntimeCommand> {
 
 // Process one runtime-spawn command (drained from the debug command queue)
 // against the live backend. Resolves texture-name strings via the init-time
-// interner snapshot + `world_reload.texture_name_to_slot` before building
+// interner snapshot + the parked `TextureNameSlots` before building
 // the backend record, and sends the result back via the command's reply
 // channel. Reply-channel send failures are silently dropped: the connection thread
 // may have already given up waiting (e.g. its client disconnected), and
 // that is not a renderer error.
 pub(crate) fn dispatch_runtime_spawn(
     cmd: BackendCommand,
-    world_reload: Option<&WorldReloadState>,
+    texture_slots: Option<&TextureNameSlots>,
     backend: &mut dyn backend::RenderBackend,
 ) {
     match cmd {
         BackendCommand::DecalAdd { args, reply } => {
-            let result = resolve_texture_slot(args.texture.as_deref(), world_reload)
+            let result = resolve_texture_slot(args.texture.as_deref(), texture_slots)
                 .and_then(|slot| {
                     let model =
                         decal::decal_model_matrix(args.position, args.rotation_deg, args.size);
@@ -398,7 +398,7 @@ pub(crate) fn dispatch_runtime_spawn(
             let _ = reply.send(backend.remove_decal(id).map_err(|e| e.to_string()));
         }
         BackendCommand::EmitterAdd { args, reply } => {
-            let result = resolve_texture_slot(args.texture.as_deref(), world_reload)
+            let result = resolve_texture_slot(args.texture.as_deref(), texture_slots)
                 .map(|slot| {
                     // Mirror the clamp / normalize rules used by
                     // `build_particle_records` so a tool-call-spawned emitter and
@@ -627,24 +627,24 @@ pub(crate) fn apply_camera_move_step(motion: &CameraMotion, world: &mut World) -
 // texture authored on the spawn request) maps to slot 0 (the renderer's
 // white fallback) so the tint / color gradient still stamps. An unknown
 // name returns `Err`; the MCP client gets a clear error rather than a
-// silent fallback. Texture-name resolution leans on the init-time
-// `world_reload.texture_name_to_slot` snapshot, so it only succeeds under
+// silent fallback. Texture-name resolution leans on the init-parked
+// `TextureNameSlots` snapshot, so it only succeeds under
 // `cn debug` worlds: that matches the current runtime-spawn use case
 // (debug tool calls, headless tests).
 fn resolve_texture_slot(
     texture: Option<&str>,
-    world_reload: Option<&WorldReloadState>,
+    texture_slots: Option<&TextureNameSlots>,
 ) -> Result<usize, String> {
     let Some(name) = texture else {
         return Ok(0);
     };
     let id = asset_id::lookup(name)
         .ok_or_else(|| format!("texture '{}' not found in interner", name))?;
-    let reload = world_reload.ok_or_else(|| {
-        "texture-name resolution requires cn debug (world_reload missing)".to_string()
+    let slots = texture_slots.ok_or_else(|| {
+        "texture-name resolution requires cn debug (texture-name slots not captured)".to_string()
     })?;
-    reload
-        .texture_name_to_slot
+    slots
+        .0
         .get(&id)
         .copied()
         .ok_or_else(|| format!("texture '{}' is not in the live texture pool", name))
@@ -1186,28 +1186,19 @@ mod tests {
         let err = resolve_texture_slot(Some("ghost"), None).unwrap_err();
         assert!(err.contains("not found in interner"), "got: {err}");
 
-        // Interned name but no world_reload (not `cn debug`): unavailable.
+        // Interned name but no parked map (not `cn debug`): unavailable.
         asset_id::intern_all(&["grid"]);
         let err = resolve_texture_slot(Some("grid"), None).unwrap_err();
-        assert!(err.contains("world_reload missing"), "got: {err}");
+        assert!(err.contains("slots not captured"), "got: {err}");
 
-        // Interned name, reload present, but the name is not in the pool map.
-        let empty = WorldReloadState {
-            texture_name_to_slot: std::collections::HashMap::new(),
-        };
+        // Interned name, map parked, but the name is not in the pool.
+        let empty = TextureNameSlots::default();
         let err = resolve_texture_slot(Some("grid"), Some(&empty)).unwrap_err();
         assert!(err.contains("not in the live texture pool"), "got: {err}");
 
         // Interned name present in the pool map -> its resolved slot.
-        let mut map = std::collections::HashMap::new();
-        map.insert(AssetId(0), 5usize);
-        let reload = WorldReloadState {
-            texture_name_to_slot: map,
-        };
-        assert_eq!(
-            resolve_texture_slot(Some("grid"), Some(&reload)).unwrap(),
-            5
-        );
+        let slots = TextureNameSlots([(AssetId(0), 5usize)].into());
+        assert_eq!(resolve_texture_slot(Some("grid"), Some(&slots)).unwrap(), 5);
     }
 
     fn controlled_camera() -> Camera3D {

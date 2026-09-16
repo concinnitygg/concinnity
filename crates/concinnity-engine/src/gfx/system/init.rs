@@ -1106,7 +1106,7 @@ impl GraphicsSystem {
         let mut texture_locators = Vec::with_capacity(texture_table.len());
         let mut asset_source_map = super::hot_reload_sources::TextureSourceMap::new();
         // Name -> pool slot, built only under `cn debug` for the runtime
-        // spawn-by-name path (`WorldReloadState`).
+        // spawn-by-name path (`TextureNameSlots`).
         let mut texture_name_to_slot: std::collections::HashMap<AssetId, usize> =
             std::collections::HashMap::new();
         for (slot, entry) in texture_table.0.iter().enumerate() {
@@ -2302,10 +2302,6 @@ impl GraphicsSystem {
         };
         let fog_enabled = fog_settings.is_some();
         settings.fog_built = fog_enabled;
-        // Seed the hot-reload dedupe state. Subsequent reload_volumetric_fog
-        // calls compare resolved JSONL settings against this and only push
-        // (and log) on a real change.
-        self.last_fog_settings = fog_settings;
 
         // The DirectX / Vulkan debug layers: the CLI `--validation` flag if the
         // launch passed one, otherwise the build profile. Metal is unaffected
@@ -2572,7 +2568,7 @@ impl GraphicsSystem {
         // world.jsonl). The constructor spawns a `notify` watcher over the
         // parent directories of every captured source path; `step` polls the
         // shared atomic at frame start.
-        if capture_sources
+        let (hot_reload_sources, texture_name_slots) = if capture_sources
             && (!asset_source_map.is_empty()
                 || color_lut_source.is_some()
                 || environment_map_source.is_some()
@@ -2596,7 +2592,7 @@ impl GraphicsSystem {
                 shader_stage_source_map.len(),
                 world_jsonl_path
             );
-            self.pending_hot_reload_sources = Some(super::hot_reload_sources::HotReloadSources {
+            let sources = super::hot_reload_sources::HotReloadSources {
                 map: asset_source_map,
                 color_lut: color_lut_source,
                 environment_map: environment_map_source,
@@ -2605,15 +2601,13 @@ impl GraphicsSystem {
                 procedural_meshes: procedural_mesh_source_map,
                 shader_stages: shader_stage_source_map,
                 world_jsonl_path,
-            });
-            // The texture-name -> slot map for runtime decal / emitter spawn
-            // (`cn debug`), which resolves a Texture asset name to its live pool
-            // slot. Captured only when hot-reload is on, so a `cn run` skips the
-            // clone cost.
-            self.world_reload = Some(super::WorldReloadState {
-                texture_name_to_slot: texture_name_to_slot.clone(),
-            });
-        }
+            };
+            // Captured only when hot-reload is on, so a `cn run` never holds it.
+            let slots = super::parked::TextureNameSlots(texture_name_to_slot);
+            (Some(sources), Some(slots))
+        } else {
+            (None, None)
+        };
 
         // Upload skinned geometry to the backend and publish one SkeletonPose
         // per skinned mesh for AnimationSystem to drive. The poses are published
@@ -2856,6 +2850,16 @@ impl GraphicsSystem {
         // slot, where each per-step user (this system's frame encode,
         // InputSystem's poll) takes and returns it.
         ctx.insert_resource(crate::ecs::ActiveRenderBackend(self.backend.take()));
+        // Beside it, the init-captured state tooling edits the running world
+        // through: the fog a reload dedupes against, and under hot-reload
+        // capture the texture-name map and the source catalogs.
+        ctx.insert_resource(super::parked::PushedFogSettings(fog_settings));
+        if let Some(slots) = texture_name_slots {
+            ctx.insert_resource(slots);
+        }
+        if let Some(sources) = hot_reload_sources {
+            ctx.insert_resource(sources);
+        }
 
         let start = Instant::now();
         self.start_time = Some(start);

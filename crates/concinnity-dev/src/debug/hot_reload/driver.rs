@@ -9,9 +9,7 @@ use concinnity_core::animation::skeleton;
 use concinnity_core::components::SkeletonPose;
 use concinnity_core::components::StoryReload;
 use concinnity_core::ecs::World;
-use concinnity_engine::animation::AnimationSystem;
 use concinnity_engine::gfx::system;
-use concinnity_engine::gfx::system::GraphicsSystem;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
@@ -20,7 +18,7 @@ use crate::debug_hook::DebugHook;
 
 pub(crate) struct HotReloadDriver {
     // Reload catalog + filesystem watcher + in-flight decode handles. Armed
-    // from the GraphicsSystem's init-captured sources on the first tick that
+    // from the sources graphics init parked, on the first tick that
     // finds them, and re-armed whenever a fresh capture appears (the editor's
     // live preview rebuild re-runs init), so the catalog never goes stale
     // against the current backend slots.
@@ -61,31 +59,25 @@ impl HotReloadDriver {
     }
 
     // Run the reload passes once for this frame and apply their ECS
-    // side-effects. A world with no GraphicsSystem (or no captured sources)
+    // side-effects. A world with no parked backend (or no captured sources)
     // is a cheap no-op.
     pub(crate) fn drive(&mut self, world: &mut World) {
-        let mut effects = None;
-        // The backend lives in the world's parked slot (disjoint from the
-        // system list), so both are borrowed at once for the apply passes.
-        let (systems, mut backend) = concinnity_engine::ecs::systems_and_render_backend(world);
-        for system in systems {
-            if let Some(gs) = system.downcast_mut::<GraphicsSystem>() {
-                // Arm (or re-arm after a world rebuild) from the init-captured
-                // sources; must precede the apply-parts borrow of `gs`.
-                if let Some(sources) = gs.take_hot_reload_sources() {
-                    self.arm(sources);
-                }
-                if let (Some(state), Some(backend)) = (self.state.as_mut(), backend.take()) {
-                    let mut apply = gs.hot_reload_apply_parts(backend);
-                    effects = Some(run_frame(state, &mut apply, self.notifier.as_ref()));
-                }
-            } else if let Some(anim) = system.downcast_mut::<AnimationSystem>() {
-                super::animation::reload_clips_if_pending(anim);
-            }
+        // Arm (or re-arm after a world rebuild) from the init-parked sources.
+        if let Some(sources) = concinnity_engine::ecs::take_hot_reload_sources(world) {
+            self.arm(sources);
         }
-        if let Some(effects) = effects {
-            apply_effects(world, effects);
+        if let Some(anim) = concinnity_engine::ecs::animation_system_mut(world) {
+            super::animation::reload_clips_if_pending(anim);
         }
+        let Some(state) = self.state.as_mut() else {
+            return;
+        };
+        let handoff = concinnity_engine::ecs::render_handoff(world);
+        let (Some(backend), Some(fog)) = (handoff.backend, handoff.fog) else {
+            return;
+        };
+        let effects = run_frame(state, backend, fog, self.notifier.as_ref());
+        apply_effects(world, effects);
     }
 }
 

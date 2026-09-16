@@ -51,8 +51,9 @@ pub use registry::SYSTEMS;
 // What stays client-side is the content only a renderer-bearing runtime has:
 // the resources below, and the queries over them in `world_queries`.
 pub use world_queries::{
-    gpu_profile, memory_budget, memory_drift, renders, state_tree, streaming_pressure,
-    streaming_stats, systems_and_render_backend, take_render_backend, thread_budget,
+    RenderHandoff, animation_system_mut, gpu_profile, memory_budget, memory_drift, render_handoff,
+    renders, state_tree, streaming_pressure, streaming_stats, take_hot_reload_sources,
+    take_render_backend, thread_budget,
 };
 
 /// A render backend transplanted out of a previous world, carried into a freshly

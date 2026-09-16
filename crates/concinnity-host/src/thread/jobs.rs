@@ -24,7 +24,7 @@ impl JobPool {
     // (`available_parallelism() - 1`) when unconfigured. The App sizes it from
     // its `ThreadBudget` before the first `pool()` use.
     fn build() -> JobPool {
-        Self::with_threads(
+        Self::new(
             CONFIGURED_THREADS
                 .get()
                 .copied()
@@ -32,8 +32,9 @@ impl JobPool {
         )
     }
 
-    // Build a pool with an explicit worker count (floored at one).
-    fn with_threads(threads: usize) -> JobPool {
+    /// Build a pool with an explicit worker count (floored at one), for work
+    /// that must not size the process-wide pool before the App configures it.
+    pub fn new(threads: usize) -> JobPool {
         let threads = threads.max(1);
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
@@ -83,18 +84,18 @@ impl JobPool {
     }
 }
 
-/// Spreads a bake's independent rows across the process-wide job pool.
+/// Spreads a bake's independent rows across the given job pool.
 ///
 /// The environment-map convolutions decompose into rows that share nothing --
 /// each reads only the immutable source and writes only its own texels -- so
 /// fanning them out buys wall clock without changing a byte. Handed to
 /// `concinnity_core::bake` wherever a build has a pool behind it; a caller
 /// without one uses `Serial` instead.
-pub struct PoolRows;
+pub struct PoolRows<'a>(pub &'a JobPool);
 
-impl concinnity_core::bake::environment_map::RowScheduler for PoolRows {
+impl concinnity_core::bake::environment_map::RowScheduler for PoolRows<'_> {
     fn run<T: Send>(&self, items: &mut [T], compute: &(dyn Fn(&mut T) + Send + Sync)) {
-        pool().parallel_for(items, compute);
+        self.0.parallel_for(items, compute);
     }
 }
 
@@ -130,7 +131,7 @@ pub fn pool() -> &'static JobPool {
 /// concurrency.
 pub fn serial_pool() -> &'static JobPool {
     static POOL: OnceLock<JobPool> = OnceLock::new();
-    POOL.get_or_init(|| JobPool::with_threads(1))
+    POOL.get_or_init(|| JobPool::new(1))
 }
 
 #[cfg(test)]
@@ -143,13 +144,23 @@ mod tests {
     }
 
     // An explicit worker count is honored (floored at one). Tested via
-    // `with_threads` directly: the process-wide `pool()` is a `OnceLock` built
+    // `new` directly: the process-wide `pool()` is a `OnceLock` built
     // once, so its size cannot be asserted deterministically alongside the
     // other tests that also touch it.
     #[test]
-    fn with_threads_sets_the_worker_count() {
-        assert_eq!(JobPool::with_threads(3).thread_count(), 3);
-        assert_eq!(JobPool::with_threads(0).thread_count(), 1);
+    fn new_sets_the_worker_count() {
+        assert_eq!(JobPool::new(3).thread_count(), 3);
+        assert_eq!(JobPool::new(0).thread_count(), 1);
+    }
+
+    #[test]
+    fn pool_rows_visit_every_row_exactly_once() {
+        use concinnity_core::bake::environment_map::RowScheduler;
+
+        let pool = JobPool::new(2);
+        let mut rows = vec![0u32; 257];
+        PoolRows(&pool).run(&mut rows, &|visits| *visits += 1);
+        assert!(rows.iter().all(|&visits| visits == 1));
     }
 
     // The auto default always leaves at least one worker.

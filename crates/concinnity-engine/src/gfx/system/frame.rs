@@ -132,7 +132,7 @@ impl GraphicsSystem {
         apply_frame_outcome(
             ctx,
             self.frame_count,
-            outcome.memory_pressure || outcome.replay.memory_pressure,
+            outcome.replay.memory_pressure,
             outcome.replay.failures,
             outcome.render_stats,
         );

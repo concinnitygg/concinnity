@@ -116,9 +116,8 @@ fn render_half(
             Err(SnapshotWaitEnd::Closed) => return RenderHalfOutcome::stopped(submitted),
         };
 
-        let mut outcome = submit(&mut policy, &mut snapshot, backend);
+        let outcome = submit(&mut policy, &mut snapshot, backend);
         submitted += 1;
-        outcome.replay.memory_pressure |= outcome.memory_pressure;
         let stop = outcome.result != StepResult::Continue;
         let feedback = FrameFeedback {
             input: InputPacket::sample(backend),

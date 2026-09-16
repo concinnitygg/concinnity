@@ -7,8 +7,9 @@ use concinnity_core::animation::skeleton;
 use concinnity_core::components::SkeletonJoint;
 use concinnity_core::components::Story;
 use concinnity_core::gfx::mesh_payload;
-use concinnity_engine::gfx::system::HotReloadApplyParts;
+use concinnity_core::render::backend::RenderBackend;
 use concinnity_engine::gfx::system::hot_reload_sources::*;
+use concinnity_engine::gfx::system::parked::PushedFogSettings;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -303,15 +304,16 @@ pub(crate) struct FrameHotReloadEffects {
 
 // Run every asset / shader / world.jsonl reload pass for one frame and return
 // the ECS side-effects. `state` is the debug-owned reload catalog +
-// in-flight handles; `apply` is the per-frame backend + Prop-tracking handle
-// from [`GraphicsSystem::hot_reload_apply_parts`](concinnity_engine::gfx::system::GraphicsSystem).
+// in-flight handles; `backend` and `fog` are the world's parked backend and the
+// fog it last pushed (see `concinnity_engine::ecs::render_handoff`).
 // This is the per-frame entry point the `DebugHook::tick` drive calls; it
 // holds the logic that previously sat at the top of `GraphicsSystem::run_step`,
 // minus the ECS mutation: the caller applies that from the returned
 // `FrameHotReloadEffects` once the system borrow is released.
 pub(crate) fn run_frame(
     state: &mut AssetHotReloadState,
-    apply: &mut HotReloadApplyParts,
+    backend: &mut dyn RenderBackend,
+    fog: &mut PushedFogSettings,
     notify: Option<&crate::editor::notify::Notifier>,
 ) -> FrameHotReloadEffects {
     use crate::editor::notify::Action;
@@ -323,8 +325,8 @@ pub(crate) fn run_frame(
     // Asset-payload poll. Pick up any completed off-thread work first so a
     // fresh `reload_assets` below finds the in-flight slots empty. Cheap when
     // nothing is in flight (a Mutex lock + `None` check).
-    poll_pending_envmap(state, apply.backend);
-    poll_pending_assets(state, apply.backend);
+    poll_pending_envmap(state, backend);
+    poll_pending_assets(state, backend);
     // Skeleton-shape changes queued by `poll_pending_assets` are applied to the
     // ECS-owned `SkeletonPose` components by the caller.
     effects.skeleton_updates = state.drain_pending_skeleton_updates();
@@ -339,7 +341,7 @@ pub(crate) fn run_frame(
     // replacement into a temporary first and only swaps on success, so a typo
     // in one shader leaves the live pipelines untouched.
     if super::pending::take_pending_shader_stages() {
-        let ss_result = reload_shader_stages(&state.shader_stages, apply.backend);
+        let ss_result = reload_shader_stages(&state.shader_stages, backend);
         if ss_result.recompiled > 0 || ss_result.failed > 0 {
             tracing::info!(
                 "Shader hot-reload: recompiled={} failed={} pipelines_rebuilt={}",
@@ -391,8 +393,7 @@ pub(crate) fn run_frame(
     if super::pending::take_pending_world() {
         let path = state.world_jsonl_path.clone();
         if let Some(path) = path {
-            let pm_result =
-                reload_procedural_meshes(&path, &mut state.procedural_meshes, apply.backend);
+            let pm_result = reload_procedural_meshes(&path, &mut state.procedural_meshes, backend);
             if pm_result.regenerated > 0 || pm_result.failed > 0 {
                 tracing::info!(
                     "ProceduralMesh hot-reload: regenerated={} unchanged={} failed={}",
@@ -411,11 +412,11 @@ pub(crate) fn run_frame(
                     }
                 }
             }
-            let fog_result = reload_volumetric_fog(&path, apply.last_fog_settings, apply.backend);
+            let fog_result = reload_volumetric_fog(&path, &mut fog.0, backend);
             if fog_result.updated {
                 tracing::info!(
                     "VolumetricFog hot-reload: applied ({})",
-                    match apply.last_fog_settings {
+                    match fog.0 {
                         Some(s) => format!(
                             "density={:.3} falloff={:.2} dist={:.0} g={:.2}",
                             s.density, s.height_falloff, s.max_distance, s.phase_g,

@@ -26,7 +26,7 @@ use concinnity_core::render::post::rt_reflections::RtReflectionSettings;
 use concinnity_core::render::post::ssao::SsaoSettings;
 use concinnity_core::render::post::ssgi::settings::SsgiSettings;
 use concinnity_core::render::post::ssr::settings::SsrSettings;
-use concinnity_core::render::{backend, overlay_maps, scene_flow, snapshot, text, volumetric_fog};
+use concinnity_core::render::{backend, overlay_maps, scene_flow, snapshot, text};
 use concinnity_core::transform::propagation;
 use concinnity_host::store::paths::StateTree;
 use std::time::Instant;
@@ -137,23 +137,6 @@ pub struct GraphicsSystem {
     // Which scene exclusively owns each deferred bucket, so scene residency
     // can claim it as a member.
     deferred_shader_scenes: Vec<(u32, AssetId)>,
-    // Source catalogs captured at init for asset hot-reload, handed off to
-    // concinnity-dev's reload machinery (which owns the watcher + the
-    // live `AssetHotReloadState`). `Some` only under `cn debug` with at least
-    // one file-backed asset / world.jsonl; taken once by the debug drive via
-    // `take_hot_reload_sources`. `cn run` never captures these; production
-    // reads asset payloads from the compiled blob and never re-touches disk.
-    pending_hot_reload_sources: Option<hot_reload_sources::HotReloadSources>,
-    // Texture-name map captured at init for runtime decal / emitter spawn to
-    // resolve an authored Texture name to its live pool slot. `Some` only under
-    // `cn debug`; read-only after init.
-    world_reload: Option<WorldReloadState>,
-    // Last `VolumetricFog` settings pushed to the backend, used by the
-    // world.jsonl reload pass to dedupe: if the resolved value matches what's
-    // already live, the reload skips the trait call and the log entry. Tracks
-    // both `None` (no fog / disabled) and `Some(settings)`. Initialized by
-    // `run_init` to whatever was passed into the backend constructor.
-    last_fog_settings: Option<volumetric_fog::FogSettings>,
     // Per-element clip bands (reference space) captured at init from the world's
     // ScrollPanels: each scroll-content element id maps to its panel's content
     // band, so the draw path scissors it and off-band rows do not bleed over the
@@ -223,40 +206,6 @@ pub(crate) struct SliderViz {
     pub(crate) value_id: AssetId,
 }
 
-/// Init-time asset-resolution tables consulted by the world.jsonl hot-reload
-/// pass when applying adds and non-transform edits. Captured at init and
-/// never mutated afterwards: the reload path cannot introduce new
-/// Materials / Textures / Meshes / Models on the fly (those need a process
-/// restart), but every authored Prop that points at an asset already in the
-/// init world resolves through these maps without re-running build.
-/// Built by init, read only by concinnity-dev's world.jsonl reload pass,
-/// so its fields read as dead under `cargo check --lib`.
-pub struct WorldReloadState {
-    /// Texture asset name -> live pool slot, so runtime decal / emitter spawn
-    /// (`cn debug`) can resolve an authored Texture name to its slot.
-    pub texture_name_to_slot: std::collections::HashMap<AssetId, usize>,
-}
-
-/// Disjoint mutable screen of the `GraphicsSystem` fields the hot-reload passes
-/// edit in one tick: the active backend, the texture-name map for runtime
-/// decal / emitter spawn, and the fog bookkeeping the world.jsonl reload pass
-/// dedupes against. Returned by [`GraphicsSystem::hot_reload_apply_parts`] so the
-/// concinnity-dev `DebugHook::tick` drive can apply the reload passes from outside
-/// the per-system step without the library depending on it. The reload
-/// catalog and in-flight state live on the debug side
-/// (`concinnity_dev::debug::hot_reload`), built from
-/// [`HotReloadSources`](crate::gfx::system::hot_reload_sources::HotReloadSources).
-/// The library never constructs this; the fields are read from the debug
-/// drive alone.
-pub struct HotReloadApplyParts<'a> {
-    /// The live render backend.
-    pub backend: &'a mut dyn RenderBackend,
-    /// The in-flight world reload, when one is running.
-    pub world_reload: &'a Option<WorldReloadState>,
-    /// The fog settings last pushed, so a reload can detect a change.
-    pub last_fog_settings: &'a mut Option<volumetric_fog::FogSettings>,
-}
-
 impl std::fmt::Debug for GraphicsSystem {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GraphicsSystem")
@@ -298,9 +247,6 @@ impl GraphicsSystem {
             chunk_stream: None,
             shader_warmup: None,
             deferred_shader_scenes: Vec::new(),
-            pending_hot_reload_sources: None,
-            world_reload: None,
-            last_fog_settings: None,
             clip_rects: overlay_maps::ClipRects::new(),
             // All-capable until the backend reports otherwise at init.
             caps: backend::DeviceCapabilities::ALL,
@@ -344,13 +290,8 @@ impl GraphicsSystem {
         crate::device::probe_gpu_profile()
     }
 
-    // Seed and persist the first-launch `Auto` quality preset. Skipped under
-    // the test injection seam so tests never write the settings file.
+    // Seed and persist the first-launch `Auto` quality preset.
     fn seed_first_launch_preset(&self) {
-        #[cfg(test)]
-        if self.test_hooks.is_some() {
-            return;
-        }
         let mut s = crate::config::Settings::load(self.state.as_ref());
         s.graphics.quality_preset = Some(crate::gfx::quality_preset::QualityPreset::Auto);
         if let Err(e) = s.save(self.state.as_ref()) {
@@ -367,42 +308,6 @@ impl System for GraphicsSystem {
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
         self.run_step(ctx)
     }
-}
-
-impl GraphicsSystem {
-    /// Disjoint mutable screen of the backend + hot-reload bookkeeping the
-    /// dev tooling crate's `DebugHook::tick` reload drive applies changes through. The
-    /// caller supplies the backend (borrowed from the world's parked slot via
-    /// `World::systems_and_render_backend`) since this system yields it after
-    /// init. The library never calls this (the asset hot-reload drive lives in
-    /// the dev tooling crate), so it reads as dead code under
-    /// `cargo check --lib`.
-    pub fn hot_reload_apply_parts<'a>(
-        &'a mut self,
-        backend: &'a mut dyn RenderBackend,
-    ) -> HotReloadApplyParts<'a> {
-        HotReloadApplyParts {
-            backend,
-            world_reload: &self.world_reload,
-            last_fog_settings: &mut self.last_fog_settings,
-        }
-    }
-
-    /// Take the init-captured hot-reload source catalogs, leaving `None`
-    /// behind. The `cn debug` drive calls this once on its first tick to build
-    /// the filesystem watcher + `AssetHotReloadState`. `None` under `cn run`,
-    /// or when no file-backed asset / world.jsonl was declared.
-    pub fn take_hot_reload_sources(&mut self) -> Option<hot_reload_sources::HotReloadSources> {
-        self.pending_hot_reload_sources.take()
-    }
-
-    // Stand up the albedo-texture streaming subsystem when a StreamingConfig
-    // was declared. Every streamable slot is evicted to a placeholder now; the
-    // streamer brings them back resident over the next frames, nearest first.
-    //
-    // The payload source depends on where the world came from: a disk-backed
-    // `cn run` world re-reads each payload from its blob file (no RAM copy), an
-    // in-memory `cn debug` world keeps the payloads RAM-resident.
 }
 
 // Quality-toggle plumbing shared by init (value-label sync + initial overlay)
@@ -538,6 +443,7 @@ pub mod hot_reload_sources;
 mod init;
 mod lines;
 mod model_push;
+pub mod parked;
 pub(crate) mod scene;
 mod sky_follow;
 mod stream_sources;

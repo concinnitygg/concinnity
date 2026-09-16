@@ -63,6 +63,34 @@ impl Resources {
         self.get_mut::<T>().map(core::mem::take)
     }
 
+    /// Mutably borrow three distinct resource types at once, each `None` when
+    /// absent.
+    ///
+    /// # Panics
+    ///
+    /// When any two of `A`, `B` and `C` are the same type.
+    pub fn get_disjoint_mut<A: Any, B: Any, C: Any>(
+        &mut self,
+    ) -> (Option<&mut A>, Option<&mut B>, Option<&mut C>) {
+        let (a, b, c) = (TypeId::of::<A>(), TypeId::of::<B>(), TypeId::of::<C>());
+        assert!(
+            a != b && a != c && b != c,
+            "a disjoint resource borrow names one type twice"
+        );
+        let (mut ra, mut rb, mut rc) = (None, None, None);
+        for (id, slot) in self.map.iter_mut() {
+            let value = slot.as_mut() as &mut dyn Any;
+            if *id == a {
+                ra = value.downcast_mut::<A>();
+            } else if *id == b {
+                rb = value.downcast_mut::<B>();
+            } else if *id == c {
+                rc = value.downcast_mut::<C>();
+            }
+        }
+        (ra, rb, rc)
+    }
+
     /// Whether a resource of type `T` is present.
     pub fn contains<T: Any>(&self) -> bool {
         self.map.contains_key(&TypeId::of::<T>())
@@ -126,6 +154,26 @@ mod tests {
         let after = resources.get::<FrameTime>().unwrap() as *const FrameTime;
         assert_eq!(before, after, "take must leave the box parked");
         assert_eq!(resources.get::<FrameTime>(), Some(&FrameTime(0.0)));
+    }
+
+    #[test]
+    fn disjoint_borrow_hands_out_each_present_type() {
+        let mut resources = Resources::new();
+        resources.insert(FrameTime(1.0));
+        resources.insert(7u32);
+        let (time, count, missing) = resources.get_disjoint_mut::<FrameTime, u32, i64>();
+        time.unwrap().0 = 2.0;
+        *count.unwrap() += 1;
+        assert!(missing.is_none());
+        assert_eq!(resources.get::<FrameTime>(), Some(&FrameTime(2.0)));
+        assert_eq!(resources.get::<u32>(), Some(&8));
+    }
+
+    #[test]
+    #[should_panic(expected = "names one type twice")]
+    fn disjoint_borrow_rejects_a_repeated_type() {
+        let mut resources = Resources::new();
+        let _ = resources.get_disjoint_mut::<u32, i64, u32>();
     }
 
     #[test]

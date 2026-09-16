@@ -363,14 +363,15 @@ impl StreamingState {
     // its draws stay skipped, but the owning scene finishes loading instead of
     // holding its loading screen open forever on work that will never succeed.
     fn drive_shader_warmup(&mut self, ops: &mut RenderOps) {
-        let Some((bucket, want_resident)) =
-            self.shader_warmup.as_ref().and_then(|w| w.next_pending())
-        else {
+        let Some(warmup) = self.shader_warmup.as_mut() else {
+            return;
+        };
+        let Some((bucket, want_resident)) = warmup.next_pending() else {
             return;
         };
         let resident = if want_resident {
-            match self.shader_warmup.as_ref().map(|w| w.load(bucket)) {
-                Some(Ok(programs)) => {
+            match warmup.load(bucket) {
+                Ok(programs) => {
                     // The payload is in hand; the recorded install is what
                     // ends the deferral. Pipeline creation is device work, so
                     // it runs (and is timed) at replay beside the draw.
@@ -396,12 +397,11 @@ impl StreamingState {
                         }
                     });
                 }
-                Some(Err(e)) => tracing::error!(
+                Err(e) => tracing::error!(
                     "StreamingSystem: shader bucket {} payload unreadable: {}",
                     bucket,
                     e
                 ),
-                None => {}
             }
             true
         } else {
@@ -414,9 +414,7 @@ impl StreamingState {
             });
             false
         };
-        if let Some(w) = self.shader_warmup.as_mut() {
-            w.note_resident(bucket, resident);
-        }
+        warmup.note_resident(bucket, resident);
         if let Some(residency) = self.scene_residency.as_mut() {
             residency.note_resident((CHANNEL_SHADER, bucket), resident);
         }

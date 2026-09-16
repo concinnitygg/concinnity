@@ -3,8 +3,8 @@
 //! the on-disk source path plus the GPU slot / draw indices it owns. These are
 //! plain data: the filesystem watcher, off-thread decode, and reload passes
 //! that consume them live in the dev tooling crate (`concinnity_dev::debug::hot_reload`),
-//! out of the library. `init` fills these maps and hands them off as a
-//! `HotReloadSources` bundle through `GraphicsSystem::take_hot_reload_sources`.
+//! out of the library. `init` fills these maps and parks them as one
+//! `HotReloadSources` world resource, which the dev drive takes once.
 
 use concinnity_core::components::ProceduralMesh;
 use concinnity_core::components::ShaderStage;
@@ -341,10 +341,10 @@ impl TextureSourceMap {
     }
 }
 
-/// Bundle of every captured source catalog, handed from `GraphicsSystem`
-/// init to concinnity-dev's hot-reload drive, which builds the
-/// filesystem watcher + `AssetHotReloadState` from it. Empty / `None` under
-/// `cn run`, which never captures sources.
+/// Bundle of every captured source catalog, parked as a world resource by
+/// `GraphicsSystem` init and taken once by concinnity-dev's hot-reload drive,
+/// which builds the filesystem watcher + `AssetHotReloadState` from it. Never
+/// parked under `cn run`, which captures no sources.
 #[derive(Default)]
 pub struct HotReloadSources {
     /// Reloadable textures.

@@ -136,7 +136,8 @@ pub fn mesh(mesh: &Mesh) -> Result<MeshPayload, crate::Error> {
 /// engine's job pool; without it they run on the calling thread.
 #[cfg(feature = "std")]
 pub fn environment_map(map: &EnvironmentMap) -> Result<EnvironmentMapPayload, crate::Error> {
-    concinnity_core::bake::payload::environment_map(map, &concinnity_host::thread::jobs::PoolRows)
+    use concinnity_host::thread::jobs;
+    concinnity_core::bake::payload::environment_map(map, &jobs::PoolRows(jobs::pool()))
         .map(EnvironmentMapPayload)
         .map_err(crate::Error::Bake)
 }

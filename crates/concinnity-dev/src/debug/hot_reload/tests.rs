@@ -2204,10 +2204,9 @@ fn clear_pending_flags() {
     super::pending::take_pending_stories();
 }
 
-// Drive one `run_frame` over a fresh RecordingBackend with an empty
-// WorldReloadState and fog bookkeeping, returning the effects, the backend (so
-// callers can assert which dispatches fired), and the fog bookkeeping the
-// world.jsonl pass may have updated.
+// Drive one `run_frame` over a fresh RecordingBackend with no fog pushed,
+// returning the effects, the backend (so callers can assert which dispatches
+// fired), and the fog the world.jsonl pass may have updated.
 fn drive_run_frame(
     state: &mut AssetHotReloadState,
 ) -> (
@@ -2216,17 +2215,9 @@ fn drive_run_frame(
     Option<volumetric_fog::FogSettings>,
 ) {
     let mut backend = RecordingBackend::default();
-    let world_reload: Option<system::WorldReloadState> = None;
-    let mut last_fog: Option<volumetric_fog::FogSettings> = None;
-    let effects = {
-        let mut apply = system::HotReloadApplyParts {
-            backend: &mut backend,
-            world_reload: &world_reload,
-            last_fog_settings: &mut last_fog,
-        };
-        run_frame(state, &mut apply, None)
-    };
-    (effects, backend, last_fog)
+    let mut fog = system::parked::PushedFogSettings(None);
+    let effects = run_frame(state, &mut backend, &mut fog, None);
+    (effects, backend, fog.0)
 }
 
 #[test]

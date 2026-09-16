@@ -1938,12 +1938,8 @@ mod tests {
     }
 
     fn with_anim<R>(world: &mut World, f: impl FnOnce(&mut animation::AnimationSystem) -> R) -> R {
-        for system in world.systems_mut() {
-            if let Some(anim) = system.downcast_mut::<animation::AnimationSystem>() {
-                return f(anim);
-            }
-        }
-        panic!("AnimationSystem not constructed");
+        f(concinnity_engine::ecs::animation_system_mut(world)
+            .expect("AnimationSystem not constructed"))
     }
 
     // Same retry rationale as `drive_runtime_handler`: a stalled test host

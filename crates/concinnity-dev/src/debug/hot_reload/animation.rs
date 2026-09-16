@@ -135,7 +135,6 @@ mod tests {
     use concinnity_core::components::Animation;
     use concinnity_core::ecs::SkinnedMeshHandle;
     use concinnity_core::ecs::World;
-    use concinnity_engine::animation;
     use concinnity_host::thread::asset_id::intern;
 
     // Minimal in-memory GLB fixture: a one-triangle skinned mesh with a
@@ -243,12 +242,8 @@ mod tests {
     }
 
     fn with_anim<R>(world: &mut World, f: impl FnOnce(&mut AnimationSystem) -> R) -> R {
-        for system in world.systems_mut() {
-            if let Some(anim) = system.downcast_mut::<animation::AnimationSystem>() {
-                return f(anim);
-            }
-        }
-        panic!("AnimationSystem not constructed");
+        f(concinnity_engine::ecs::animation_system_mut(world)
+            .expect("AnimationSystem not constructed"))
     }
 
     #[test]

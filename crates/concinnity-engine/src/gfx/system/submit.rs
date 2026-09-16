@@ -19,11 +19,8 @@ pub(crate) struct SubmitOutcome {
     // The backend's stats for a drawn (or skipped) frame; `None` when the
     // step stopped before reaching the draw.
     pub(crate) render_stats: Option<RenderStats>,
-    // A device-memory failure occurred; the caller records it where the
-    // streaming valve can observe it.
-    pub(crate) memory_pressure: bool,
-    // What the snapshot's op replay produced (failures to roll back,
-    // memory pressure from an upload).
+    // What the snapshot's op replay produced (failures to roll back), plus
+    // memory pressure from an upload or the draw.
     pub replay: ReplayOutcome,
     // The stop was a device loss: the queue can never signal, so no caller
     // may wait_idle on the way out.
@@ -35,7 +32,6 @@ impl SubmitOutcome {
         Self {
             result: StepResult::Stop,
             render_stats: None,
-            memory_pressure: false,
             replay: ReplayOutcome::default(),
             device_lost: false,
         }
@@ -50,7 +46,7 @@ pub(crate) fn submit(
     // Replay the tick's recorded backend effects first, in record order:
     // spawn slot ops, settings appliers, and streaming uploads all landed
     // before the draw when they ran in-place, and still do here.
-    let replay = snap.ops.replay(backend);
+    let mut replay = snap.ops.replay(backend);
 
     backend.set_ui_cursor_hidden(snap.ui.cursor_hidden);
     if let Some(on) = snap.ui.menu_mode {
@@ -106,7 +102,6 @@ pub(crate) fn submit(
     // are in InputState before InputSystem's take_input() (scheduled right
     // after this system) snapshots and clears it.
     backend.update_view(snap.frame.view);
-    let mut memory_pressure = false;
     match backend.draw_frame(FrameParams {
         elapsed: snap.frame.elapsed,
         fov_y_radians: snap.frame.fov_y_radians,
@@ -122,13 +117,12 @@ pub(crate) fn submit(
     }) {
         Ok(()) => policy.frame_succeeded(),
         Err(e) => {
-            memory_pressure = matches!(e, error::RenderError::OutOfDeviceMemory(_));
+            replay.memory_pressure |= matches!(e, error::RenderError::OutOfDeviceMemory(_));
             match policy.on_frame_error(&e) {
                 FrameAction::SkipFrame => {}
                 FrameAction::Shutdown => {
                     backend.wait_idle();
                     return SubmitOutcome {
-                        memory_pressure,
                         replay,
                         ..SubmitOutcome::stop()
                     };
@@ -140,7 +134,6 @@ pub(crate) fn submit(
                     tracing::error!("GraphicsSystem: device lost, stopping: {}", e);
                     crate::crash::report_device_lost(&e.to_string());
                     return SubmitOutcome {
-                        memory_pressure,
                         replay,
                         device_lost: true,
                         ..SubmitOutcome::stop()
@@ -153,7 +146,6 @@ pub(crate) fn submit(
     SubmitOutcome {
         result: StepResult::Continue,
         render_stats: Some(backend.render_stats()),
-        memory_pressure,
         replay,
         device_lost: false,
     }
@@ -176,6 +168,28 @@ mod tests {
             .into_iter()
             .filter(|c| matches!(c, Call::UpdateDirectionalLights(_)))
             .collect()
+    }
+
+    fn draw_failing_with(e: error::RenderError) -> SubmitOutcome {
+        let (state, mut backend) = recording_backend();
+        state.lock().unwrap().fail_draw = Some(e);
+        submit(
+            &mut FramePolicy::default(),
+            &mut RenderSnapshot::default(),
+            &mut backend,
+        )
+    }
+
+    #[test]
+    fn a_draw_out_of_device_memory_raises_memory_pressure() {
+        let outcome = draw_failing_with(error::RenderError::OutOfDeviceMemory("draw".into()));
+        assert!(outcome.replay.memory_pressure);
+    }
+
+    #[test]
+    fn a_draw_failing_for_another_reason_raises_no_memory_pressure() {
+        let outcome = draw_failing_with(error::RenderError::Other("draw".into()));
+        assert!(!outcome.replay.memory_pressure);
     }
 
     #[test]

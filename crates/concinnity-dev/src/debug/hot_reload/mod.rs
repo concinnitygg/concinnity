@@ -4,8 +4,8 @@
 //! per frame from a `DebugHook::tick` (see `driver::HotReloadDriver`). The
 //! passive source catalogs these consume are captured at
 //! `GraphicsSystem::init` and live in the library
-//! (`concinnity_engine::gfx::system::hot_reload_sources`); the per-frame backend +
-//! Prop-tracking handle comes from `GraphicsSystem::hot_reload_apply_parts`.
+//! (`concinnity_engine::gfx::system::hot_reload_sources`); the per-frame backend
+//! and pushed fog come from `concinnity_engine::ecs::render_handoff`.
 //!
 //! Split by responsibility:
 //!   driver     `HotReloadDriver`, the per-frame drive + ECS effect apply

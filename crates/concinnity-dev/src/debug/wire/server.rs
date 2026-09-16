@@ -9,9 +9,7 @@
 
 use concinnity_core::components::Camera3D;
 use concinnity_core::ecs::World;
-use concinnity_engine::animation::AnimationSystem;
 use concinnity_engine::ecs::ActiveRenderBackend;
-use concinnity_engine::gfx::system::GraphicsSystem;
 use concinnity_engine::shutdown::ShutdownToken;
 use concinnity_host::thread::asset_id;
 use std::io::BufReader;
@@ -84,34 +82,24 @@ impl DebugServer {
     // passes live on `self.reload`, driven separately by `tick`.
     fn drive_runtime_commands(&mut self, world: &mut World) {
         // World commands mutate the ECS or this server's motion slot, so they
-        // cannot be applied inside the systems borrow below. Collect them here
+        // cannot be applied inside the backend borrow below. Collect them here
         // and apply them once that borrow ends.
         let mut deferred: Vec<runtime_spawn::WorldCommand> = Vec::new();
-        // The backend lives in the world's parked slot (disjoint from the
-        // system list), so both are borrowed at once for the apply passes.
-        let (systems, mut backend) = concinnity_engine::ecs::systems_and_render_backend(world);
-        for system in systems {
-            if let Some(gs) = system.downcast_mut::<GraphicsSystem>() {
-                if let Some(backend) = backend.take() {
-                    let apply = gs.hot_reload_apply_parts(backend);
-                    // Backend commands are independent of the hot-reload
-                    // state, available in any `cn debug` world.
-                    for cmd in runtime_spawn::drain() {
-                        match cmd {
-                            runtime_spawn::RuntimeCommand::Backend(cmd) => {
-                                runtime_spawn::dispatch_runtime_spawn(
-                                    cmd,
-                                    apply.world_reload.as_ref(),
-                                    apply.backend,
-                                );
-                            }
-                            runtime_spawn::RuntimeCommand::World(cmd) => deferred.push(cmd),
-                        }
+        let handoff = concinnity_engine::ecs::render_handoff(world);
+        if let Some(backend) = handoff.backend {
+            // Backend commands are independent of the hot-reload state,
+            // available in any `cn debug` world.
+            for cmd in runtime_spawn::drain() {
+                match cmd {
+                    runtime_spawn::RuntimeCommand::Backend(cmd) => {
+                        runtime_spawn::dispatch_runtime_spawn(cmd, handoff.texture_slots, backend);
                     }
+                    runtime_spawn::RuntimeCommand::World(cmd) => deferred.push(cmd),
                 }
-            } else if let Some(anim) = system.downcast_mut::<AnimationSystem>() {
-                anim.apply_runtime_commands();
             }
+        }
+        if let Some(anim) = concinnity_engine::ecs::animation_system_mut(world) {
+            anim.apply_runtime_commands();
         }
 
         // tick() runs before the world step, so the Camera3DSystem step this
