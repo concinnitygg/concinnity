@@ -3,7 +3,7 @@
 //! Windows window (vulkan/win32_window.rs).
 
 use concinnity_core::components::WindowMode;
-use concinnity_core::render::input;
+use concinnity_core::input::snapshot::{InputSnapshot, wheel_notches_to_scroll_delta};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     ClientToScreen, GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
@@ -588,7 +588,7 @@ unsafe extern "system" fn wnd_proc(
                 if !state.cursor_captured {
                     let raw = (wparam.0 >> 16) as i16 as f32;
                     let notches = raw / WHEEL_DELTA as f32;
-                    state.scroll_delta += input::wheel_notches_to_scroll_delta(notches);
+                    state.scroll_delta += wheel_notches_to_scroll_delta(notches);
                 }
                 LRESULT(0)
             }
@@ -684,7 +684,7 @@ pub(crate) fn create_window(
     height: u32,
     title_bar: bool,
 ) -> Result<(HWND, Box<WindowState>), String> {
-    concinnity_core::window_policy::assert_windows_allowed("the Win32 window");
+    concinnity_core::window::policy::assert_windows_allowed("the Win32 window");
 
     // Reuse a window parked by a prior backend's drop (editor live-swap) rather
     // than popping a new one, so a world reload keeps the same OS window.
@@ -812,7 +812,7 @@ pub(crate) fn frame_tick(
 // backends' `take_input`. The mouse delta, pending click, and scroll are
 // one-shot (reset here); the held-button flag persists until WM_LBUTTONUP and
 // the keyboard one-shots are reset inside `KeyState::take`.
-pub(crate) fn take_input_snapshot(state: &mut WindowState) -> input::InputSnapshot {
+pub(crate) fn take_input_snapshot(state: &mut WindowState) -> InputSnapshot {
     let dx = state.mouse_dx;
     let dy = state.mouse_dy;
     let mx = state.mouse_x;

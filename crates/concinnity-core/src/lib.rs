@@ -70,18 +70,20 @@ pub mod ecs;
 pub mod error;
 pub mod geometry;
 pub mod gfx;
+pub mod input;
 pub mod math;
 pub mod memory;
 pub mod physics;
 pub mod platform;
 pub mod render;
 pub mod resource;
+pub mod settings;
 pub mod sky;
 pub mod spawn;
 #[cfg(test)]
 mod test_support;
 pub mod transform;
-pub mod window_policy;
+pub mod window;
 
 // The headless driver over a world and the trait any loop that runs one
 // implements, named at the crate root because they are the counterpart to

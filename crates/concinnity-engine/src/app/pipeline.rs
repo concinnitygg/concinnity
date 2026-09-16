@@ -13,9 +13,9 @@
 //! snapshot for buffer reuse.
 
 use concinnity_core::ecs::StepResult;
+use concinnity_core::input::snapshot::InputPacket;
 use concinnity_core::render::backend::RenderBackend;
 use concinnity_core::render::feedback::FrameFeedback;
-use concinnity_core::render::input::InputPacket;
 use concinnity_core::render::snapshot::RenderSnapshot;
 use std::sync::mpsc::{Receiver, Sender};
 

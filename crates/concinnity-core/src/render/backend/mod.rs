@@ -51,8 +51,8 @@ pub use tuning::{QualitySettings, RenderTuning};
 pub use window::WindowControl;
 
 use crate::gfx::render_types::{LineVertex, TextDrawCall};
+use crate::input::snapshot::InputSnapshot;
 use crate::render::error::RenderResult;
-use crate::render::input::InputSnapshot;
 use crate::render::scene_flow::SceneControl;
 
 /// Per-frame inputs for [`RenderBackend::draw_frame`]. `world_hidden` is set when
@@ -249,8 +249,8 @@ mod tests {
     use crate::components::ShaderPrograms;
     use crate::gfx::profile::RenderStats;
     use crate::gfx::render_types::{MaterialUniforms, PostProcessTunables};
+    use crate::input::keymap::KeyMap;
     use crate::render::backend_init::BackendInit;
-    use crate::render::keymap::KeyMap;
     use alloc::vec;
 
     const IDENTITY: [[f32; 4]; 4] = [
@@ -322,7 +322,7 @@ mod tests {
         backend.set_vsync(true);
         backend.set_window_mode(crate::components::WindowMode::Fullscreen);
         backend.set_window_size(1280, 720);
-        backend.set_display_mode(crate::render::display_mode::DisplayMode {
+        backend.set_display_mode(crate::window::display_mode::DisplayMode {
             width: 1920,
             height: 1080,
             refresh_hz: 60,

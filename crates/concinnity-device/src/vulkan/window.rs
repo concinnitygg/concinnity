@@ -11,12 +11,11 @@
 //! deltas directly via CursorPos events, so no manual warping is needed.
 
 use concinnity_core::components::{InputKey, WindowMode};
-use concinnity_core::render::display_mode;
-use concinnity_core::render::display_mode::DisplayMode;
+use concinnity_core::input::keymap::KeyMap;
+use concinnity_core::input::snapshot::{InputSnapshot, wheel_notches_to_scroll_delta};
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::input;
-use concinnity_core::render::input::InputSnapshot;
-use concinnity_core::render::keymap::KeyMap;
+use concinnity_core::window::display_mode;
+use concinnity_core::window::display_mode::DisplayMode;
 
 // Owns the GLFW library handle, the window, and the event receiver.
 //
@@ -204,7 +203,7 @@ impl GlfwWindow {
         resizable: bool,
         title_bar: bool,
     ) -> RenderResult<Self> {
-        concinnity_core::window_policy::assert_windows_allowed("the GLFW window");
+        concinnity_core::window::policy::assert_windows_allowed("the GLFW window");
 
         // No error callback: glfw-rs transmutes the code into an Error enum
         // that stops at GLFW 3.3, so a 3.4 code (PlatformUnavailable on a
@@ -672,7 +671,7 @@ impl GlfwWindow {
                     // cursor is free. GLFW yoffset is in notches, positive when
                     // rotated away from the user; convert to a scroll_delta
                     // increment (matching the Metal sign convention).
-                    self.input.scroll_delta += input::wheel_notches_to_scroll_delta(yoffset as f32);
+                    self.input.scroll_delta += wheel_notches_to_scroll_delta(yoffset as f32);
                 }
                 _ => {}
             }

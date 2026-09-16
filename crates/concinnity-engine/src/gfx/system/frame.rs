@@ -13,7 +13,7 @@ use concinnity_core::ecs::{
 };
 use concinnity_core::gfx::frustum;
 use concinnity_core::gfx::profile;
-use concinnity_core::render::input;
+use concinnity_core::input::snapshot::InputPacket;
 use concinnity_core::render::overlay_maps;
 use concinnity_core::render::scene_flow;
 use concinnity_core::render::snapshot::{FrameScalars, RenderSnapshot, SceneOpRecorder};
@@ -33,7 +33,7 @@ const HIDDEN_MODEL: [[f32; 4]; 4] = [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, 0.0, 0.
 
 // Deposit a sampled input packet for InputSystem (scheduled right after
 // GraphicsSystem), merging onto an unconsumed one so no edge is lost.
-fn deposit_input(ctx: &mut PipelineContext, packet: input::InputPacket) {
+fn deposit_input(ctx: &mut PipelineContext, packet: InputPacket) {
     match ctx.resource_mut::<crate::ecs::InputMailbox>() {
         Some(mailbox) => mailbox.deposit(packet),
         None => {
@@ -158,7 +158,7 @@ impl GraphicsSystem {
         // sampling keeps the freshness it had when InputSystem polled the
         // backend itself.
         if result == StepResult::Continue {
-            deposit_input(ctx, input::InputPacket::sample(backend.as_mut()));
+            deposit_input(ctx, InputPacket::sample(backend.as_mut()));
         }
 
         crate::ecs::ActiveRenderBackend::put(ctx.resources, backend);
@@ -975,7 +975,7 @@ mod tests {
         let consumer = std::thread::spawn(move || {
             for stop in [false, true] {
                 let snapshot = snapshot_rx.recv().expect("a snapshot arrives");
-                let mut input = input::InputPacket::default();
+                let mut input = InputPacket::default();
                 input.raw.jump = true;
                 let render_stats = profile::RenderStats {
                     draw_calls: 7,

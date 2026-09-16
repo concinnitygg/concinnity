@@ -19,10 +19,9 @@ use concinnity_core::components::{
     GamepadAction, GraphicsConfig, IndirectLighting, PostProcessConfig,
 };
 use concinnity_core::ecs::{Entity, PipelineContext, StepResult, System};
+use concinnity_core::input::keymap;
 use concinnity_core::render::backend::RenderBackend;
-use concinnity_core::render::{
-    backend, keymap, overlay_maps, scene_flow, snapshot, text, volumetric_fog,
-};
+use concinnity_core::render::{backend, overlay_maps, scene_flow, snapshot, text, volumetric_fog};
 use concinnity_core::transform::propagation;
 use concinnity_host::store::paths::StateTree;
 use concinnity_host::thread::asset_id::AssetId;

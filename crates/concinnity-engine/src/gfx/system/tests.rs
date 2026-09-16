@@ -2458,7 +2458,7 @@ fn auto_preset_shadow_ceiling_tracks_the_detected_tier() {
 #[test]
 fn persisted_display_and_system_overrides_reach_the_backend() {
     use concinnity_core::components::{UpscaleQuality, UpscalerBackend, WindowMode};
-    use concinnity_core::render::display_mode::DisplayMode;
+    use concinnity_core::window::display_mode::DisplayMode;
 
     let mut settings = crate::config::Settings::default();
     settings.graphics.quality_preset = Some(QualityPreset::Custom);
@@ -2834,7 +2834,7 @@ fn every_owned_slider_key_recovers_a_live_value() {
 #[test]
 fn rebind_rows_show_their_bound_keys_at_init() {
     use concinnity_core::components::InputKey;
-    use concinnity_core::render::keymap::{Bindable, KeyMap};
+    use concinnity_core::input::keymap::{Bindable, KeyMap};
 
     let mut settings = crate::config::Settings::default();
     settings.controls.keymap = Some(KeyMap {

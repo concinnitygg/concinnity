@@ -43,5 +43,5 @@ pub use temp::{TempTree, utf8, write_into};
 /// lifts it afterwards. Call this directly from a test binary that should never
 /// open a window at all.
 pub fn forbid_windows() {
-    concinnity_core::window_policy::forbid_windows();
+    concinnity_core::window::policy::forbid_windows();
 }

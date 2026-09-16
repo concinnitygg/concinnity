@@ -6,10 +6,10 @@
 use concinnity_core::bake::texture::TextureImage;
 use concinnity_core::gfx::mesh_payload;
 use concinnity_core::gfx::render_types;
+use concinnity_core::input::snapshot::InputSnapshot;
 use concinnity_core::render::backend;
 use concinnity_core::render::draw_slot;
 use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::input;
 use concinnity_core::render::scene_flow;
 
 pub(crate) struct StubBackend;
@@ -24,8 +24,8 @@ impl backend::RenderBackend for StubBackend {
         false
     }
     fn capture_cursor(&mut self) {}
-    fn take_input(&mut self) -> input::InputSnapshot {
-        input::InputSnapshot::default()
+    fn take_input(&mut self) -> InputSnapshot {
+        InputSnapshot::default()
     }
     fn wait_idle(&self) {}
     fn draw_frame(&mut self, _params: backend::FrameParams<'_>) -> RenderResult<()> {

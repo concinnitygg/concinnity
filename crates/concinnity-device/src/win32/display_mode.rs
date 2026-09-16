@@ -9,7 +9,7 @@
 //! Outside fullscreen the choice is only remembered. Mirrors
 //! `metal/display_mode.rs`.
 
-use concinnity_core::render::display_mode::{DisplayMode, best_native_index};
+use concinnity_core::window::display_mode::{DisplayMode, best_native_index};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Gdi::{
     CDS_FULLSCREEN, ChangeDisplaySettingsExW, DEVMODEW, DISP_CHANGE_SUCCESSFUL,

@@ -6,7 +6,7 @@ pub(crate) mod system;
 pub(crate) mod action;
 
 // The engine-side registry of user-facing settings a cycle row can change. The
-// ordered option labels live in `concinnity_core::gfx::settings` (shared with
+// ordered option labels live in `concinnity_core::settings` (shared with
 // the build pipeline, which reads a key's label count to pick a stepper vs a
 // dropdown); this module re-exports `options` + `is_quality_toggle` from there
 // and holds the client-only half: how a chosen option index maps to the applied
@@ -27,7 +27,7 @@ use crate::config::{GraphicsSettings, Settings};
 // (labels + classification) lives in core so the cook and the client agree on
 // every setting's option count, and is re-exported here alongside the
 // client-only half below.
-pub(crate) use concinnity_core::gfx::settings::{QUALITY_TOGGLE_KEYS, is_quality_toggle, options};
+pub(crate) use concinnity_core::settings::{QUALITY_TOGGLE_KEYS, is_quality_toggle, options};
 
 // Whether setting `key` can be changed on a device with the given capabilities.
 // A capability-gated setting (e.g. `ray_traced_reflections`, which needs
@@ -856,7 +856,7 @@ mod tests {
 
     #[test]
     fn rebind_keys_are_a_distinct_category() {
-        use concinnity_core::render::keymap::Bindable;
+        use concinnity_core::input::keymap::Bindable;
         // A rebind key is neither a cycle row nor a slider, so the three setting
         // categories never collide on one key.
         for b in Bindable::ALL {
@@ -959,9 +959,7 @@ mod tests {
         // resolution is a dynamic dropdown: options are enumerated from the
         // display at runtime, so the static registry has none for it.
         assert!(options("resolution").is_none());
-        assert!(concinnity_core::gfx::settings::is_dynamic_dropdown(
-            "resolution"
-        ));
+        assert!(concinnity_core::settings::is_dynamic_dropdown("resolution"));
         assert_eq!(options("master_volume").unwrap().len(), 5);
         // mouse_sensitivity is a slider, not a cycle row.
         assert!(options("mouse_sensitivity").is_none());

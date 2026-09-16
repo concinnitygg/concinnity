@@ -4,7 +4,7 @@
 //! size, and the cursor state the UI drives. Every method here is about the
 //! surface and its input, never about the scene drawn on it.
 
-use crate::render::keymap::KeyMap;
+use crate::input::keymap::KeyMap;
 use alloc::vec::Vec;
 
 /// The presentation surface and its input: vsync, window mode and size, the
@@ -100,14 +100,14 @@ pub trait WindowControl {
     /// backend renders to supports, unshaped (the caller dedups + sorts).
     /// Default empty: a backend that cannot enumerate (or has no window) makes
     /// the Resolution row fall back to the static preset list.
-    fn display_modes(&self) -> Vec<crate::render::display_mode::DisplayMode> {
+    fn display_modes(&self) -> Vec<crate::window::display_mode::DisplayMode> {
         Vec::new()
     }
 
     /// The mode the display is currently running, if the backend can read it.
     /// Shown by the Resolution row when the user has never chosen a mode (the
     /// display keeps its desktop mode until one is chosen). Default `None`.
-    fn current_display_mode(&self) -> Option<crate::render::display_mode::DisplayMode> {
+    fn current_display_mode(&self) -> Option<crate::window::display_mode::DisplayMode> {
         None
     }
 
@@ -116,7 +116,7 @@ pub trait WindowControl {
     /// restores the display's original mode when the window leaves fullscreen
     /// or shuts down; outside fullscreen the choice is only remembered. Default
     /// no-op: a backend without mode switching leaves the display alone.
-    fn set_display_mode(&mut self, mode: crate::render::display_mode::DisplayMode) {
+    fn set_display_mode(&mut self, mode: crate::window::display_mode::DisplayMode) {
         let _ = mode;
     }
 

@@ -27,7 +27,6 @@ pub mod projection;
 pub mod raster;
 pub mod render_types;
 pub mod rt_reflections;
-pub mod settings;
 pub mod ssao;
 pub mod ssgi;
 pub mod ssr;

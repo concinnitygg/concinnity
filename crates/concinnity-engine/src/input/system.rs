@@ -20,7 +20,7 @@ use concinnity_core::ecs::{
     Access, CursorState, EventCursor, FlyCam, MenuActive, PipelineContext, ScreenStack, StepResult,
     System,
 };
-use concinnity_core::render::input::InputSnapshot;
+use concinnity_core::input::snapshot::InputSnapshot;
 use std::time::Instant;
 
 use crate::ecs::InputMailbox;
@@ -254,7 +254,7 @@ mod tests {
     use super::*;
     use crate::input::gamepad::{PadAxis, PadEvent};
     use concinnity_core::components::GamepadAction;
-    use concinnity_core::render::input;
+    use concinnity_core::input::snapshot::InputPacket;
 
     fn pad_snapshot(events: &[PadEvent]) -> PadSnapshot {
         let mut state = PadState::default();
@@ -281,9 +281,9 @@ mod tests {
         use std::sync::{Arc, Mutex};
         let state = Arc::new(Mutex::new(crate::gfx::mock_backend::MockState::default()));
         let mut backend = crate::gfx::mock_backend::MockBackend::transplant(state.clone(), None);
-        assert_eq!(input::InputPacket::sample(&mut backend).top_inset, 0.0);
+        assert_eq!(InputPacket::sample(&mut backend).top_inset, 0.0);
         state.lock().unwrap().top_inset = 28.0;
-        assert_eq!(input::InputPacket::sample(&mut backend).top_inset, 28.0);
+        assert_eq!(InputPacket::sample(&mut backend).top_inset, 28.0);
     }
 
     #[test]

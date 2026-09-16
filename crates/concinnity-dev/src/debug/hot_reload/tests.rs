@@ -10,10 +10,10 @@ use concinnity_core::ecs::EventCursor;
 use concinnity_core::ecs::World;
 use concinnity_core::gfx::mesh_payload;
 use concinnity_core::gfx::render_types;
+use concinnity_core::input::snapshot::InputSnapshot;
 use concinnity_core::render::backend;
 use concinnity_core::render::draw_slot;
 use concinnity_core::render::error;
-use concinnity_core::render::input;
 use concinnity_core::render::scene_flow;
 use concinnity_core::render::volumetric_fog;
 use concinnity_engine::gfx::system;
@@ -761,8 +761,8 @@ impl backend::RenderBackend for RecordingBackend {
         false
     }
     fn capture_cursor(&mut self) {}
-    fn take_input(&mut self) -> input::InputSnapshot {
-        input::InputSnapshot::default()
+    fn take_input(&mut self) -> InputSnapshot {
+        InputSnapshot::default()
     }
     fn wait_idle(&self) {}
     fn draw_frame(&mut self, _: backend::FrameParams<'_>) -> error::RenderResult<()> {

@@ -14,20 +14,20 @@ use concinnity_core::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::render_types::{DrawObject, MaterialUniforms, SkinnedDrawObject};
 use concinnity_core::gfx::view_modes;
+use concinnity_core::input::keymap;
+use concinnity_core::input::snapshot::InputSnapshot;
 use concinnity_core::render::backend;
 use concinnity_core::render::backend::{
     BackendProbe, ChunkMesh, DeviceCapabilities, DrawStreaming, FrameParams, GpuProfile, LiveEdit,
     RenderBackend, RenderTuning, SceneEffects, SkinnedDraws, WindowControl,
 };
 use concinnity_core::render::backend_init::{BackendInit, ShadowParams, SwapchainConfig};
-use concinnity_core::render::display_mode;
 use concinnity_core::render::draw_slot;
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::input::InputSnapshot;
-use concinnity_core::render::keymap;
 use concinnity_core::render::reflection_probe;
 use concinnity_core::render::scene_flow::SceneControl;
 use concinnity_core::render::volumetric_fog;
+use concinnity_core::window::display_mode;
 use std::sync::{Arc, Mutex};
 
 // Everything a test injects into GraphicsSystem before init: the settings

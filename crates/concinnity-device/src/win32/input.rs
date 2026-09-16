@@ -4,8 +4,8 @@
 // GraphicsSystem each tick.
 
 use concinnity_core::components::InputKey;
-use concinnity_core::render::input::InputSnapshot;
-use concinnity_core::render::keymap::KeyMap;
+use concinnity_core::input::keymap::KeyMap;
+use concinnity_core::input::snapshot::InputSnapshot;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 
 // One frame's accumulated mouse input, owned by `WindowState` and handed to

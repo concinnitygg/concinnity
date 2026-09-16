@@ -5,7 +5,7 @@ use concinnity_core::components::{
     ControlsCommand, GamepadAction, GamepadButton, InputKey, SettingCommand,
 };
 use concinnity_core::ecs::PipelineContext;
-use concinnity_core::render::keymap;
+use concinnity_core::input::keymap;
 use concinnity_core::render::ops::RenderOps;
 
 use super::SettingsState;

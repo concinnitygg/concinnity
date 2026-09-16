@@ -13,10 +13,10 @@
 
 use ash::vk;
 use concinnity_core::components::WindowMode;
-use concinnity_core::render::display_mode::DisplayMode;
+use concinnity_core::input::keymap::KeyMap;
+use concinnity_core::input::snapshot::InputSnapshot;
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::input::InputSnapshot;
-use concinnity_core::render::keymap::KeyMap;
+use concinnity_core::window::display_mode::DisplayMode;
 use objc2::MainThreadOnly;
 use objc2::rc::Retained;
 use objc2_app_kit::{NSApplication, NSView};

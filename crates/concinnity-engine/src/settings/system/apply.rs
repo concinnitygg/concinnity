@@ -8,8 +8,8 @@ use concinnity_core::components::{
 };
 use concinnity_core::ecs::FrameRateCap;
 use concinnity_core::ecs::PipelineContext;
-use concinnity_core::render::display_mode;
 use concinnity_core::render::ops::RenderOps;
+use concinnity_core::window::display_mode;
 
 use super::SettingsState;
 use super::rows::{set_label_content, set_rows_grayed, set_sprite_x};

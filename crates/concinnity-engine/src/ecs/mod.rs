@@ -40,9 +40,9 @@ use concinnity_core::ecs::MeshBoundsRecord;
 use concinnity_core::ecs::Resources;
 use concinnity_core::ecs::SceneGroup;
 use concinnity_core::render::backend;
-use concinnity_core::render::display_mode;
 use concinnity_core::render::scene_flow;
 use concinnity_core::render::scene_residency;
+use concinnity_core::window::display_mode;
 use concinnity_host::thread::asset_id;
 // The `SYSTEMS` table is written client-side, since its gates name the client's
 // own system types (see `registry`); a gate builds one `BuiltSystem` per
@@ -69,11 +69,11 @@ pub struct PendingBackend(pub Box<dyn backend::RenderBackend>);
 // same tick. The pipelined driver deposits it from the render half's feedback
 // instead; a missed consume merges into the next deposit so no edge is lost.
 #[derive(Default)]
-pub(crate) struct InputMailbox(pub Option<concinnity_core::render::input::InputPacket>);
+pub(crate) struct InputMailbox(pub Option<concinnity_core::input::snapshot::InputPacket>);
 
 impl InputMailbox {
     // Deposit a fresh packet, merging onto an unconsumed one.
-    pub(crate) fn deposit(&mut self, packet: concinnity_core::render::input::InputPacket) {
+    pub(crate) fn deposit(&mut self, packet: concinnity_core::input::snapshot::InputPacket) {
         match &mut self.0 {
             Some(pending) => pending.merge_from(packet),
             None => self.0 = Some(packet),

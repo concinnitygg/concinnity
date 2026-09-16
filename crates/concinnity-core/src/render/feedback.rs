@@ -4,7 +4,7 @@
 //! counterpart of `RenderSnapshot` on the pipelined driver's return channel.
 
 use crate::gfx::profile::RenderStats;
-use crate::render::input::InputPacket;
+use crate::input::snapshot::InputPacket;
 use crate::render::ops::ReplayOutcome;
 use crate::render::snapshot::RenderSnapshot;
 

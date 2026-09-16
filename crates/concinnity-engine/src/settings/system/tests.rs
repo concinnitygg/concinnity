@@ -19,10 +19,10 @@ use concinnity_core::ecs::{
 };
 use concinnity_core::gfx::profile::FrameProfile;
 use concinnity_core::gfx::render_types;
+use concinnity_core::input::keymap::{Bindable, KeyMap};
 use concinnity_core::render::backend::{GpuProfile, GpuVendor};
-use concinnity_core::render::display_mode::DisplayMode;
-use concinnity_core::render::keymap::{Bindable, KeyMap};
 use concinnity_core::render::ops;
+use concinnity_core::window::display_mode::DisplayMode;
 use concinnity_host::store::blob::BlobData;
 use concinnity_host::thread::asset_id::AssetId;
 use std::sync::{Arc, Mutex};

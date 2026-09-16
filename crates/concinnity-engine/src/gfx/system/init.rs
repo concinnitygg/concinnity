@@ -49,8 +49,7 @@ use concinnity_core::geometry::payload_joints_to_defs;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::{mesh_payload, mesh_seed, render_types};
 use concinnity_core::render::{
-    backend, backend_init, decal, display_mode, lights, particles, reflection_probe, text,
-    volumetric_fog,
+    backend, backend_init, decal, lights, particles, reflection_probe, text, volumetric_fog,
 };
 use concinnity_core::resource::AudioClipTable;
 use concinnity_core::resource::ColorLutTable;
@@ -60,6 +59,7 @@ use concinnity_core::resource::MaterialTable;
 use concinnity_core::resource::SkinnedMeshTable;
 use concinnity_core::resource::TextureTable;
 use concinnity_core::transform::propagation;
+use concinnity_core::window::display_mode;
 use concinnity_host::store::blob::blob_path;
 use concinnity_host::store::blob::payload_section_start;
 use concinnity_host::thread::asset_id;

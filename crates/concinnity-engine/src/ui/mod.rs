@@ -1138,21 +1138,20 @@ impl UiInputSystem {
         req: OpenRequest,
         ctx: &mut PipelineContext,
     ) -> Option<OpenDropdownState> {
-        let options: Vec<String> =
-            if concinnity_core::gfx::settings::is_dynamic_dropdown(&req.setting) {
-                // Today the only dynamic dropdown is `resolution`, whose modes
-                // GraphicsSystem publishes at init.
-                let modes = ctx.resource::<crate::ecs::DisplayModes>()?;
-                if modes.0.is_empty() {
-                    return None;
-                }
-                modes.0.iter().map(|m| m.label()).collect()
-            } else {
-                settings::options(&req.setting)?
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect()
-            };
+        let options: Vec<String> = if concinnity_core::settings::is_dynamic_dropdown(&req.setting) {
+            // Today the only dynamic dropdown is `resolution`, whose modes
+            // GraphicsSystem publishes at init.
+            let modes = ctx.resource::<crate::ecs::DisplayModes>()?;
+            if modes.0.is_empty() {
+                return None;
+            }
+            modes.0.iter().map(|m| m.label()).collect()
+        } else {
+            settings::options(&req.setting)?
+                .iter()
+                .map(|s| s.to_string())
+                .collect()
+        };
         // The value label's font (for the list text) and current content (to
         // mark the selected option).
         let (font, current) = req
@@ -1904,7 +1903,7 @@ mod tests {
     use concinnity_core::components::TextAlign;
     use concinnity_core::components::{HitRegion, ScrollGroup, ScrollRow, TextLabel};
     use concinnity_core::ecs::World;
-    use concinnity_core::render::display_mode;
+    use concinnity_core::window::display_mode;
 
     fn make_frame_input(mx: f32, my: f32, clicked: bool) -> FrameInput {
         FrameInput {

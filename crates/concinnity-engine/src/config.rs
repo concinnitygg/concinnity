@@ -20,7 +20,7 @@ use concinnity_core::components::SsgiResolution;
 use concinnity_core::components::UpscaleQuality;
 use concinnity_core::components::UpscalerBackend;
 use concinnity_core::components::WindowMode;
-use concinnity_core::render::keymap;
+use concinnity_core::input::keymap;
 use concinnity_host::store::paths::StateTree;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
