@@ -57,6 +57,7 @@ use concinnity_core::gfx::render_types::{
     DrawObject, InstancedCluster, RtGeomEntry, SkinnedDrawObject,
 };
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::fullscreen::align_up;
 use concinnity_core::render::rt_geom::{
     cluster_geom_entry, geom_entry, models_dirty, skinned_geom_entry,
 };
@@ -122,16 +123,6 @@ fn tlas_instance(
         acceleration_structure_reference: vk::AccelerationStructureReferenceKHR {
             device_handle: blas_address,
         },
-    }
-}
-
-// Round `value` up to a multiple of `align` (a power of two). Used for the
-// scratch buffer's `minAccelerationStructureScratchOffsetAlignment`.
-fn align_up(value: u64, align: u64) -> u64 {
-    if align <= 1 {
-        value
-    } else {
-        (value + align - 1) & !(align - 1)
     }
 }
 
@@ -1001,7 +992,8 @@ pub(super) fn build_skin_pipeline(
     device: &VkDevice,
     hot_reload: bool,
 ) -> RenderResult<SkinPipeline> {
-    let spv = super::slang_builtins::RT_SKIN.compile(&super::builtins::Ctx::plain(hot_reload))?;
+    let spv =
+        super::slang_builtins::RT_SKIN.compile(&super::slang_builtins::Ctx::plain(hot_reload))?;
     let module = spv_module(device, &spv)?;
 
     // Five storage buffers: src verts (0), joint palette (1), deformed output
@@ -3270,16 +3262,6 @@ mod tests {
     }
 
     #[test]
-    fn align_up_rounds_to_power_of_two() {
-        assert_eq!(align_up(0, 256), 0);
-        assert_eq!(align_up(1, 256), 256);
-        assert_eq!(align_up(256, 256), 256);
-        assert_eq!(align_up(257, 256), 512);
-        // align <= 1 is identity.
-        assert_eq!(align_up(123, 1), 123);
-    }
-
-    #[test]
     fn rt_skin_kernel_compiles() {
         if !concinnity_slang::shader_tests_enabled() {
             return;
@@ -3288,7 +3270,7 @@ mod tests {
         // the `SkinParams` block are checked against the Rust mirrors in
         // `shader_layout`, on all three targets rather than this one.
         let spv = crate::vulkan::slang_builtins::RT_SKIN
-            .compile(&crate::vulkan::builtins::Ctx::plain(false))
+            .compile(&crate::vulkan::slang_builtins::Ctx::plain(false))
             .expect("rt skin kernel compiles");
         assert!(super::super::pipeline::is_spirv(&spv));
     }

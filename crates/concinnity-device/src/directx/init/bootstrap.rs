@@ -89,11 +89,11 @@ pub(super) fn setup(
     let factory: IDXGIFactory4 = if validation {
         // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
         // new COM object lands in a binding that owns it.
-        unsafe { CreateDXGIFactory2(DXGI_CREATE_FACTORY_DEBUG) }
-            // SAFETY: the create descriptor and every pointer it borrows are live for the call, and
-            // the new COM object lands in a binding that owns it.
-            .or_else(|_| unsafe { CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0)) })
-            .map_err(|e| map_hresult(e.code(), "CreateDXGIFactory2"))?
+        unsafe {
+            CreateDXGIFactory2(DXGI_CREATE_FACTORY_DEBUG)
+                .or_else(|_| CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0)))
+        }
+        .map_err(|e| map_hresult(e.code(), "CreateDXGIFactory2"))?
     } else {
         // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
         // new COM object lands in a binding that owns it.

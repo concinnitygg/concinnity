@@ -29,6 +29,7 @@ use concinnity_core::gfx::lod;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::RtParams;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::fullscreen::align_up;
 use concinnity_core::render::lights;
 use concinnity_core::render::post::rt_reflections::RtParamsInputs;
 pub(in crate::vulkan) use concinnity_core::render::uniforms::TransparentView;
@@ -422,13 +423,6 @@ pub(in crate::vulkan) struct TransparentResources {
     glass_mesh: Option<GlassMeshProducer>,
 
     rt: Option<TransparentRt>,
-}
-
-// Round `size` up to a multiple of `align` (a power of two, from the device's
-// `minUniformBufferOffsetAlignment`). Pure; unit tested.
-fn align_up(size: u64, align: u64) -> u64 {
-    let align = align.max(1);
-    size.div_ceil(align) * align
 }
 
 use concinnity_core::render::transparent::ordered_visible;

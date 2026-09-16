@@ -27,8 +27,8 @@ use objc2_metal::{
 use super::context::{MtlContext, bytes_of_slice};
 use super::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
 use super::encode::RenderEncode;
+use super::frame_rings::TransientRing;
 use super::scoped_encoder::ScopedEncoder;
-use super::transient::TransientRing;
 
 // How much of a line still shows where scene geometry is in front of it. A
 // faint trace keeps the axes readable inside a dense scene without letting

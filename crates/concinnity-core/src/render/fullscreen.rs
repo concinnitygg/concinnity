@@ -65,8 +65,16 @@ pub fn clip_rect_to_scissor(
     Some((x0 as i32, y0 as i32, (x1 - x0) as u32, (y1 - y0) as u32))
 }
 
-/// Round `offset` up to the next multiple of `align` (a power of two).
+/// Round `offset` up to the next multiple of `align` (a power of two). An
+/// `align` of 0 or 1 returns `offset` unchanged.
 pub fn align_up(offset: u64, align: u64) -> u64 {
+    if align <= 1 {
+        return offset;
+    }
+    debug_assert!(
+        align.is_power_of_two(),
+        "align_up: {align} is not a power of two"
+    );
     (offset + align - 1) & !(align - 1)
 }
 
@@ -392,7 +400,12 @@ mod tests {
         assert_eq!(align_up(1, 16), 16);
         assert_eq!(align_up(16, 16), 16);
         assert_eq!(align_up(17, 16), 32);
+        assert_eq!(align_up(0, 256), 0);
+        assert_eq!(align_up(1, 256), 256);
+        assert_eq!(align_up(256, 256), 256);
         assert_eq!(align_up(257, 256), 512);
+        assert_eq!(align_up(123, 1), 123);
+        assert_eq!(align_up(123, 0), 123);
     }
 
     #[test]

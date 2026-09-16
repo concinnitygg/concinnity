@@ -191,7 +191,7 @@ pub(super) struct ProbeState {
     // buffers may still be reading those buffers/textures, so they are parked
     // here and freed once the frames-in-flight fence guarantees the bake has
     // retired.
-    pub retire_pool: super::transient::RetirePool<super::probe::RetiredBake>,
+    pub retire_pool: super::frame_rings::RetirePool<super::probe::RetiredBake>,
     // This frame's `ProbeCubes` argument buffer, written by
     // `build_probe_cube_args` and bound by every pass that samples the cubes.
     // `None` before the first frame builds one.
@@ -275,25 +275,25 @@ pub(super) struct SpotShadowState {
 // and returned after, so the per-frame `collect` reuses one heap allocation.
 pub(super) struct FrameRings {
     // Ring of per-frame `GpuObjectData` buffers. Written by `build_object_buffer`.
-    pub object: super::transient::TransientRing,
+    pub object: super::frame_rings::TransientRing,
     // Ring of per-frame `GpuDrawArgs` buffers for the GPU-cull pass. Written by
     // `build_draw_args_buffer`.
-    pub draw_args: super::transient::TransientRing,
+    pub draw_args: super::frame_rings::TransientRing,
     // Ring of per-frame model-history buffers for the GPU-driven G-buffer /
     // velocity pre-pass: one column-major `float4x4` per cull record, indexed
     // identically to the object buffer. Filled on the GPU by
     // `encode_model_history`; frame `R` reads the slot frame `R - 1` wrote.
-    pub model_history: super::transient::TransientRing,
+    pub model_history: super::frame_rings::TransientRing,
     // Ring of per-frame `BindlessTextures` argument buffers. The argument
     // encoder fills the slot in place each frame; see
     // `build_bindless_texture_args`.
-    pub bindless_tex: super::transient::TransientRing,
+    pub bindless_tex: super::frame_rings::TransientRing,
     // Ring of per-frame `ProbeCubes` argument buffers, written by
     // `build_probe_cube_args`.
-    pub probe_cube: super::transient::TransientRing,
+    pub probe_cube: super::frame_rings::TransientRing,
     // Ring of per-skinned-object joint-palette buffers, one inner buffer per
     // object. Written by `build_joint_buffers`.
-    pub joint: super::transient::JointRing,
+    pub joint: super::frame_rings::JointRing,
     pub object_scratch: Vec<render_types::GpuObjectData>,
     pub draw_args_scratch: Vec<render_types::GpuDrawArgs>,
 }

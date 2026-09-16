@@ -121,9 +121,9 @@ fn compile(
     hot_reload: bool,
     probe_count: usize,
 ) -> RenderResult<(Vec<u8>, Vec<u8>)> {
-    let ctx = crate::vulkan::builtins::Ctx {
+    let ctx = crate::vulkan::slang_builtins::Ctx {
         probe_count,
-        ..crate::vulkan::builtins::Ctx::plain(hot_reload)
+        ..crate::vulkan::slang_builtins::Ctx::plain(hot_reload)
     };
     let frag = match program {
         PostProgram::TaaResolve => &slang_builtins::TAA_FRAG,

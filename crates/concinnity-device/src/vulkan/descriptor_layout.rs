@@ -13,6 +13,7 @@
 //! layouts still declared inline in `init.rs`.
 
 use ash::vk;
+use concinnity_core::gfx::render_types::FALLBACK_TEXTURE_COUNT;
 use concinnity_core::render::uniforms::MAX_PROBES;
 
 // One descriptor binding: (binding index, descriptor type, shader stages).
@@ -193,6 +194,15 @@ pub(in crate::vulkan) fn probe_cube_array_count(
     }
     let headroom = max_per_stage_samplers.saturating_sub(fixed_fragment_samplers());
     headroom.clamp(1, MAX_PROBES as u32)
+}
+
+// Slots a world with `texture_count` table entries needs: one image per slot (a
+// single fallback when the table is empty) plus the reserved fallbacks,
+// flat-normal and white. The pool's descriptor count, and the only length it
+// has: the shaders declare the array unsized and read whatever the set layout
+// was built with, so this never reaches the source text.
+pub(in crate::vulkan) fn world_pool_size(texture_count: usize) -> usize {
+    texture_count.max(1) + FALLBACK_TEXTURE_COUNT
 }
 
 // Per-stage sampler cost global set 0 contributes to a plain pipeline-layout
@@ -550,5 +560,30 @@ mod tests {
             ]
         );
         assert_eq!(shadow_global_set(), [(0, T::UNIFORM_BUFFER, S::VERTEX)]);
+    }
+
+    #[test]
+    fn pool_size_counts_fallbacks() {
+        // One slot per table entry (an empty table still pads to one) plus the
+        // two reserved fallbacks, flat-normal then white.
+        assert_eq!(world_pool_size(0), 3);
+        assert_eq!(world_pool_size(1), 3);
+        assert_eq!(world_pool_size(7), 9);
+    }
+
+    // The uploaded image vectors reproduce the world-sized pool exactly: init
+    // pads an empty texture table to one image and always uploads the reserved
+    // fallbacks alongside it. A raw texture count is never a valid pool length,
+    // so a compile handed one silently drops the last slots.
+    #[test]
+    fn world_pool_size_matches_the_uploaded_image_counts() {
+        for texture_count in [0usize, 1, 7, 64] {
+            let gpu_textures = texture_count.max(1);
+            assert_eq!(
+                world_pool_size(texture_count),
+                gpu_textures + FALLBACK_TEXTURE_COUNT
+            );
+            assert!(world_pool_size(texture_count) > texture_count);
+        }
     }
 }

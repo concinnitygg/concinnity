@@ -464,10 +464,8 @@ impl DxContext {
         );
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
-        unsafe { cmd.ResourceBarrier(&[to_rt]) };
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
         unsafe {
+            cmd.ResourceBarrier(&[to_rt]);
             cmd.OMSetRenderTargets(1, Some(&ssao.ao_raw_rtv), false, None);
             cmd.SetPipelineState(&ssao.kernel_pso);
             cmd.SetGraphicsRootSignature(&ssao.kernel_root_sig);

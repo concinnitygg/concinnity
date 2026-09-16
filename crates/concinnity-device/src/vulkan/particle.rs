@@ -59,7 +59,7 @@ type ParticleShaderSpirv = (Vec<u8>, Vec<u8>, Vec<u8>);
 pub(in crate::vulkan) fn compile_particle_shaders(
     hot_reload: bool,
 ) -> RenderResult<ParticleShaderSpirv> {
-    let ctx = super::builtins::Ctx::plain(hot_reload);
+    let ctx = super::slang_builtins::Ctx::plain(hot_reload);
     let cs = super::slang_builtins::PARTICLE_SIMULATE.compile(&ctx)?;
     let vs = super::slang_builtins::PARTICLE_VERT.compile(&ctx)?;
     let fs = super::slang_builtins::PARTICLE_FRAG.compile(&ctx)?;

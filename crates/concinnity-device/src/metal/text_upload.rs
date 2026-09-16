@@ -12,7 +12,7 @@
 //! allocation. The frames-in-flight fence guarantees frame `R - depth` retired
 //! before frame `R` reuses slot `R % depth`, so overwriting a slot never races
 //! an in-flight GPU read -- the same argument as `TransientRing` in
-//! `metal/transient.rs`.
+//! `metal/frame_rings.rs`.
 //!
 //! Mirrors `directx/upload_ring.rs` and `vulkan/upload_ring.rs`. Metal writes the
 //! frame's geometry up front rather than appending during the encode because the
@@ -28,7 +28,7 @@ use objc2_metal::{MTLBuffer, MTLDevice, MTLResourceOptions};
 
 use super::context::write_buffer_region;
 use super::error::allocation_failed;
-use super::transient::grow_to;
+use super::frame_rings::grow_to;
 
 // Sub-range alignment. 256 bytes satisfies the strictest offset rule a Metal
 // buffer binding can face, and costs a HUD's worth of labels a few kilobytes.

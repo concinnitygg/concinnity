@@ -420,9 +420,9 @@ fn write_view_set(
 }
 
 fn compile_line_shaders(hot_reload: bool, msaa: bool) -> RenderResult<(Vec<u8>, Vec<u8>)> {
-    let ctx = super::builtins::Ctx {
+    let ctx = super::slang_builtins::Ctx {
         msaa,
-        ..super::builtins::Ctx::plain(hot_reload)
+        ..super::slang_builtins::Ctx::plain(hot_reload)
     };
     let vert = super::slang_builtins::LINE_VERT.compile(&ctx)?;
     let frag = super::slang_builtins::LINE_FRAG.compile(&ctx)?;

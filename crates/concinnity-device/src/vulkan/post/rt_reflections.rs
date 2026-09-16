@@ -57,11 +57,11 @@ pub(in crate::vulkan) fn compile_rt_shaders(
     pool_size: usize,
     probe_cube_count: u32,
 ) -> RenderResult<RtShaders> {
-    use super::super::{builtins, slang_builtins};
+    use super::super::slang_builtins;
     // The probe array length comes from the global set layout's binding-8
     // descriptor count; the pool declaration needs at least one slot even where
     // the textured variant is skipped.
-    let ctx = builtins::Ctx {
+    let ctx = slang_builtins::Ctx {
         hot_reload,
         msaa: false,
         probe_count: probe_cube_count as usize,
@@ -671,9 +671,6 @@ impl RtReflectionsResources {
     //
     // `gbuffer_views` / `roughness_views` carry the unified G-buffer pre-pass's
     // per-frame normal+depth / roughness views; resolve set `i` binds slot `i`.
-    // A single-entry slice is shared across frames (the legacy SSR pre-pass
-    // G-buffer). RT reuses the same byte-identical G-buffer the separate SSR
-    // pre-pass produced, so the trace maths is unchanged.
     pub(in crate::vulkan) fn wire_static(&self, device: &VkDevice, inputs: RtStaticInputs) {
         let RtStaticInputs {
             vertex_buffer,
@@ -689,20 +686,24 @@ impl RtReflectionsResources {
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             .image_view(prefilter_view)
             .sampler(cube_sampler);
+        let frames = self.resolve_sets.len();
+        debug_assert_eq!(hdr_resolve_views.len(), frames);
+        debug_assert_eq!(gbuffer_views.len(), frames);
+        debug_assert_eq!(roughness_views.len(), frames);
         for (i, &set) in self.resolve_sets.iter().enumerate() {
             let gb_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(gbuffer_views[i % gbuffer_views.len().max(1)])
+                .image_view(gbuffer_views[i])
                 .sampler(self.sampler.handle());
             let rough_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(roughness_views[i % roughness_views.len().max(1)])
+                .image_view(roughness_views[i])
                 .sampler(self.sampler.handle());
             let ubo_info = vk::DescriptorBufferInfo::default()
                 .buffer(self.params_buffers[i].buffer())
                 .offset(0)
                 .range(std::mem::size_of::<RtParams>() as vk::DeviceSize);
-            let scene_view = hdr_resolve_views[i % hdr_resolve_views.len().max(1)];
+            let scene_view = hdr_resolve_views[i];
             let scene_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image_view(scene_view)

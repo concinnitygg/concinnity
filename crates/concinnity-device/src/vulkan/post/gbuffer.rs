@@ -368,7 +368,7 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
     scene: GbufferBindlessScene,
     hot_reload: bool,
 ) -> RenderResult<GbufferBindless> {
-    use super::super::builtins;
+    use super::super::slang_builtins;
 
     let GbufferDeviceCtx { alloc, device } = ctx;
     let GbufferBindlessDescriptors {
@@ -381,7 +381,7 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
         draw_args_buffers,
     } = records;
 
-    let compile_ctx = builtins::Ctx::plain(hot_reload);
+    let compile_ctx = slang_builtins::Ctx::plain(hot_reload);
     let vs = super::super::slang_builtins::GBUFFER_BINDLESS_VERT.compile(&compile_ctx)?;
     let fs = super::super::slang_builtins::GBUFFER_BINDLESS_FRAG.compile(&compile_ctx)?;
 
@@ -522,7 +522,7 @@ fn build_model_history(
 ) -> RenderResult<ModelHistoryPipeline> {
     let GbufferDeviceCtx { alloc, device } = ctx;
     let ModelHistoryScene { n_cull, frames } = scene;
-    let compile_ctx = super::super::builtins::Ctx::plain(hot_reload);
+    let compile_ctx = super::super::slang_builtins::Ctx::plain(hot_reload);
     let cs = super::super::slang_builtins::MODEL_HISTORY.compile(&compile_ctx)?;
 
     let set_layout = create_descriptor_set_layout(
@@ -1257,7 +1257,7 @@ mod tests {
         if !concinnity_slang::shader_tests_enabled() {
             return;
         }
-        let ctx = super::super::super::builtins::Ctx::plain(false);
+        let ctx = super::super::super::slang_builtins::Ctx::plain(false);
         super::super::super::slang_builtins::GBUFFER_BINDLESS_VERT
             .compile(&ctx)
             .expect("gbuffer bindless vertex compiles");

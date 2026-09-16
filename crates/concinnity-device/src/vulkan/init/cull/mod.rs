@@ -76,7 +76,7 @@ pub(super) fn plan_cull(
     // part of any source text and cannot make a program miss its precompiled
     // artifact.
     let bindless_pool_size = if bindless_active {
-        crate::vulkan::builtins::world_pool_size(textures.len())
+        crate::vulkan::descriptor_layout::world_pool_size(textures.len())
     } else {
         0
     };

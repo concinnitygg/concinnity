@@ -101,8 +101,8 @@ pub(in crate::vulkan) struct SsaoShaders {
 // pipeline build. Called from `SsaoResources::new` at init and by the Vulkan
 // shader hot-reload path.
 pub(in crate::vulkan) fn compile_ssao_shaders(hot_reload: bool) -> RenderResult<SsaoShaders> {
-    use super::super::{builtins, slang_builtins};
-    let ctx = builtins::Ctx::plain(hot_reload);
+    use super::super::slang_builtins;
+    let ctx = slang_builtins::Ctx::plain(hot_reload);
     Ok(SsaoShaders {
         fullscreen_vs: slang_builtins::FULLSCREEN_VERT.compile(&ctx)?,
         kernel_fs: slang_builtins::SSAO_KERNEL.compile(&ctx)?,

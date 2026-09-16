@@ -542,9 +542,9 @@ fn write_view_set(
 fn compile_decal_shaders(hot_reload: bool, msaa: bool) -> RenderResult<(Vec<u8>, Vec<u8>)> {
     // The vert source doesn't branch on USE_MSAA but it costs nothing to
     // define it there too.
-    let ctx = super::builtins::Ctx {
+    let ctx = super::slang_builtins::Ctx {
         msaa,
-        ..super::builtins::Ctx::plain(hot_reload)
+        ..super::slang_builtins::Ctx::plain(hot_reload)
     };
     let vert = super::slang_builtins::DECAL_VERT.compile(&ctx)?;
     let frag = super::slang_builtins::DECAL_FRAG.compile(&ctx)?;

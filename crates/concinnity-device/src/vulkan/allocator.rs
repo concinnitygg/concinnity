@@ -406,13 +406,14 @@ impl DeviceAllocator {
         device: &Device,
         frames_in_flight: usize,
     ) -> Self {
-        let memory_props =
-            // SAFETY: a property query on a live handle; it only reads.
-            unsafe { instance.get_physical_device_memory_properties(physical_device) };
-        // SAFETY: a property query on a live handle; it only reads.
-        let max_allocations = unsafe { instance.get_physical_device_properties(physical_device) }
-            .limits
-            .max_memory_allocation_count;
+        // SAFETY: property queries on a live handle; they only read.
+        let (memory_props, device_props) = unsafe {
+            (
+                instance.get_physical_device_memory_properties(physical_device),
+                instance.get_physical_device_properties(physical_device),
+            )
+        };
+        let max_allocations = device_props.limits.max_memory_allocation_count;
         Self {
             device: device.clone(),
             inner: Rc::new(RefCell::new(Inner {

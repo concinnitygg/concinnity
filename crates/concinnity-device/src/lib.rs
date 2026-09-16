@@ -21,6 +21,8 @@ pub(crate) mod forward;
 pub(crate) mod gpu_wait;
 #[cfg(backend_metal)]
 pub mod metal;
+#[cfg(any(backend_metal, backend_dx, backend_vk))]
+pub(crate) mod png_encode;
 #[cfg(backend_vk)]
 pub(crate) mod vulkan;
 // Native Win32 window/input/display-mode layer shared by the HWND-rendering

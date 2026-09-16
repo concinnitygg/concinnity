@@ -22,6 +22,7 @@ use concinnity_core::render::hdr_output::{HdrEncoding, HdrOutputMode};
 
 use super::context::VkContext;
 use super::texture::one_shot_submit;
+use crate::png_encode::encode_png;
 
 impl VkContext {
     // Capture the last presented frame to a PNG at `path`. Returns the path on
@@ -211,22 +212,6 @@ fn classify(format: vk::Format, encoding: Option<HdrEncoding>) -> PixelLayout {
         }
         _ => PixelLayout::Rgba8,
     }
-}
-
-// Write RGBA8 pixel data to a PNG file.
-fn encode_png(path: &str, width: u32, height: u32, rgba: &[u8]) -> RenderResult<()> {
-    let file = std::fs::File::create(path)
-        .map_err(|e| RenderError::Other(format!("screenshot: create {path}: {e}")))?;
-    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    let mut writer = encoder
-        .write_header()
-        .map_err(|e| RenderError::Other(format!("screenshot: png header: {e}")))?;
-    writer
-        .write_image_data(rgba)
-        .map_err(|e| RenderError::Other(format!("screenshot: png data: {e}")))?;
-    Ok(())
 }
 
 #[cfg(test)]

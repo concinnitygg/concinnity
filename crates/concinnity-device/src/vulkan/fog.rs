@@ -742,9 +742,9 @@ fn create_volume_sampler(device: &VkDevice) -> RenderResult<OwnedSampler> {
 }
 
 fn compile_fog_shaders(hot_reload: bool, msaa: bool) -> RenderResult<(Vec<u8>, Vec<u8>)> {
-    let ctx = super::builtins::Ctx {
+    let ctx = super::slang_builtins::Ctx {
         msaa,
-        ..super::builtins::Ctx::plain(hot_reload)
+        ..super::slang_builtins::Ctx::plain(hot_reload)
     };
     let vert = super::slang_builtins::FULLSCREEN_VERT.compile(&ctx)?;
     let frag = super::slang_builtins::FOG_FRAG.compile(&ctx)?;
@@ -754,7 +754,7 @@ fn compile_fog_shaders(hot_reload: bool, msaa: bool) -> RenderResult<(Vec<u8>, V
 // Compile the froxel-volume compute kernel. MSAA-independent (the kernel does
 // not read the scene depth attachment).
 fn compile_fog_froxel_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    super::slang_builtins::FOG_FROXEL.compile(&super::builtins::Ctx::plain(hot_reload))
+    super::slang_builtins::FOG_FROXEL.compile(&super::slang_builtins::Ctx::plain(hot_reload))
 }
 
 // Rebuild the fog graphics pipeline against the existing render pass +

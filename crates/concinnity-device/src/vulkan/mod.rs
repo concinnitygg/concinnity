@@ -6,7 +6,6 @@ mod allocator;
 mod auto_exposure;
 mod backend;
 mod barrier_translate;
-pub(crate) mod builtins;
 mod context;
 mod cull;
 mod cull_readback;

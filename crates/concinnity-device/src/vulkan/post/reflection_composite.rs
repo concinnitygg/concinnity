@@ -95,8 +95,8 @@ pub(in crate::vulkan) struct ReflectionCompositeShaders {
 pub(in crate::vulkan) fn compile_reflection_composite_shaders(
     hot_reload: bool,
 ) -> RenderResult<ReflectionCompositeShaders> {
-    use super::super::{builtins, slang_builtins};
-    let ctx = builtins::Ctx::plain(hot_reload);
+    use super::super::slang_builtins;
+    let ctx = slang_builtins::Ctx::plain(hot_reload);
     Ok(ReflectionCompositeShaders {
         vs: slang_builtins::FULLSCREEN_VERT.compile(&ctx)?,
         blur_fs: slang_builtins::REFLECTION_BLUR.compile(&ctx)?,
@@ -450,8 +450,7 @@ impl ReflectionCompositeResources {
     // Wire the per-frame static bindings: blur set binding 1 = roughness; composite
     // set bindings 1..4 = scene / normal+depth / roughness / blur. Binding 0 (the
     // reflection target) is left at a valid placeholder and re-pointed per encode.
-    // Single-entry G-buffer slices are shared across frames (the legacy pre-pass
-    // produced one view); per-frame slices index by frame.
+    // Every view slice holds one view per frame in flight.
     fn wire_sets(&self, device: &VkDevice, inputs: &CompositeInputs) {
         let hdr_resolve_views = inputs.hdr_resolve_views.as_slice();
         let normal_depth_views = inputs.normal_depth_views.as_slice();
@@ -472,18 +471,21 @@ impl ReflectionCompositeResources {
             // every set and resource it names belongs to this device.
             unsafe { device.update_descriptor_sets(std::slice::from_ref(&w), &[]) };
         };
-        let pick = |views: &[vk::ImageView], i: usize| views[i % views.len().max(1)];
+        let frames = self.blur_sets.len();
+        debug_assert_eq!(hdr_resolve_views.len(), frames);
+        debug_assert_eq!(normal_depth_views.len(), frames);
+        debug_assert_eq!(roughness_views.len(), frames);
         let blur_info = img(self.blur.view);
-        for i in 0..self.blur_sets.len() {
-            let rough = img(pick(roughness_views, i));
-            let placeholder = img(pick(hdr_resolve_views, i));
+        for i in 0..frames {
+            let rough = img(roughness_views[i]);
+            let placeholder = img(hdr_resolve_views[i]);
             // Blur set: 0 = reflection placeholder, 1 = roughness.
             write(self.blur_sets[i], 0, &placeholder);
             write(self.blur_sets[i], 1, &rough);
             // Composite set: 0 = reflection placeholder, 1 = scene, 2 = normal+depth,
             // 3 = roughness, 4 = blur.
-            let scene = img(pick(hdr_resolve_views, i));
-            let nd = img(pick(normal_depth_views, i));
+            let scene = img(hdr_resolve_views[i]);
+            let nd = img(normal_depth_views[i]);
             write(self.composite_sets[i], 0, &placeholder);
             write(self.composite_sets[i], 1, &scene);
             write(self.composite_sets[i], 2, &nd);

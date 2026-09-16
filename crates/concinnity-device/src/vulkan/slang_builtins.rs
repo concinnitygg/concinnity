@@ -7,7 +7,27 @@ use concinnity_core::render::error::{RenderError, RenderResult};
 pub(super) use concinnity_core::render::slang_programs::vk::*;
 use concinnity_slang as slang;
 
-use super::builtins::Ctx;
+// Inputs a call site supplies to assemble a program's source.
+pub(crate) struct Ctx {
+    pub hot_reload: bool,
+    pub msaa: bool,
+    // Reflection-probe cube-array length for `{MAX_PROBES}` programs; ignored by
+    // the rest. Callers pass the descriptor count the global set layout was
+    // built with (`descriptor_layout::probe_cube_array_count`), so the
+    // `{MAX_PROBES}` define and the layout binding always agree.
+    pub probe_count: usize,
+}
+
+impl Ctx {
+    // For programs whose assembly needs no MSAA state or probe count.
+    pub(crate) fn plain(hot_reload: bool) -> Self {
+        Self {
+            hot_reload,
+            msaa: false,
+            probe_count: 0,
+        }
+    }
+}
 
 // What a declaration can do once a compiler and a cache are in reach. A trait
 // rather than an inherent impl because `SlangProgram` is defined in
@@ -103,6 +123,44 @@ pub(super) fn compile_uncached(program: &SlangProgram, source: &str) -> RenderRe
     };
     let work = crate::shader::compiler_work::dir().map_err(RenderError::Other)?;
     slang::compile(&job, work.path()).map_err(RenderError::ShaderCompile)
+}
+
+// Compile every declared program into `bundle`, reusing local cache artifacts
+// where present.
+//
+// The probe cube-array length is a property of the device the bundle eventually
+// runs on rather than of the world, so it is baked at the ceiling every desktop
+// driver affords. A device that reports less headroom than that declares fewer
+// and compiles these at first launch.
+pub(crate) fn precompile(
+    bundle: &mut concinnity_host::store::cache::Segment,
+    report: &mut crate::shader::precompile::Report,
+) {
+    // A program whose source reads the main pass's sample count gets both
+    // variants: which one a device runs is a property of its MSAA mode, not of
+    // the bundle.
+    for program in ALL {
+        let msaa_variants: &[bool] = if program.msaa {
+            &[false, true]
+        } else {
+            &[false]
+        };
+        for &msaa in msaa_variants {
+            let ctx = Ctx {
+                hot_reload: false,
+                msaa,
+                probe_count: concinnity_core::render::uniforms::MAX_PROBES,
+            };
+            let source = program.source(&ctx);
+            let key = program.cache_key(&source);
+            report.record(
+                program.label,
+                crate::shader::cache::ensure_in(bundle, &key, || {
+                    compile_uncached(program, &source)
+                }),
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -230,5 +288,27 @@ mod tests {
                 "MAX_LIGHTS_PER_CLUSTER = {MAX_LIGHTS_PER_CLUSTER}u"
             ))
         );
+    }
+
+    // The pool length reaches the descriptor layout and nothing else. A program
+    // assembled for two different worlds is one text, which is what lets the
+    // build script compile it ahead of any world.
+    #[test]
+    fn the_pool_length_never_reaches_the_source() {
+        let probes = concinnity_core::render::uniforms::MAX_PROBES;
+        for program in ALL {
+            let source = program.source(&ctx(probes));
+            // The capacities are prepended as `#define` lines ahead of the file
+            // body, which mentions POOL_SIZE in the Metal branch it never takes.
+            let injected: Vec<&str> = source
+                .lines()
+                .take_while(|l| l.starts_with("#define "))
+                .collect();
+            assert!(
+                !injected.iter().any(|l| l.contains("POOL_SIZE")),
+                "{}: pool length injected as {injected:?}",
+                program.label
+            );
+        }
     }
 }

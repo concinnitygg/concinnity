@@ -203,7 +203,7 @@ fn build_hiz_pipelines(
     // the depth resource is a `Texture2DMS` when multisampled, a `Texture2D`
     // otherwise (a sampled image either way; the kernel reads texels by
     // coordinate, so no sampler is bound).
-    let ctx = super::builtins::Ctx::plain(hot_reload);
+    let ctx = super::slang_builtins::Ctx::plain(hot_reload);
     let phase1_spv = if sample_count > 1 {
         super::slang_builtins::HIZ_SPD_MSAA.compile(&ctx)?
     } else {

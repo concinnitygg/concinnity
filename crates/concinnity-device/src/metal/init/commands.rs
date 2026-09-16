@@ -8,8 +8,8 @@ use concinnity_core::profile::RenderStats;
 
 use super::InitGpu;
 use crate::metal::context::{Diagnostics, FrameRings};
+use crate::metal::frame_rings::{JointRing, TransientRing};
 use crate::metal::pass_timing::PassTimingResources;
-use crate::metal::transient::{JointRing, TransientRing};
 
 // The bindless buffers an async reflection-probe bake reads across frames
 // (object, draw-args, and the skinned joint palettes) get one EXTRA ring

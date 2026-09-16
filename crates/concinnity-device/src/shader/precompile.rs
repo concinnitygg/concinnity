@@ -1,7 +1,7 @@
 //! Export-time compilation of the engine's built-in shaders. The DirectX and
 //! Vulkan backends declare their compile set as static data (each backend's
-//! builtins.rs); this module iterates those declarations and makes sure every
-//! enumerable variant's artifact is in the runtime cache segment a bundle
+//! slang_builtins.rs); this module iterates those declarations and makes sure
+//! every enumerable variant's artifact is in the runtime cache segment a bundle
 //! ships. Compilation is pure CPU (slangc needs no GPU device), so
 //! this runs inside `cn export` with no window, no adapter, and no child
 //! process. Renderer init compiles through the same declarations and the same
@@ -71,7 +71,7 @@ pub fn precompile_builtin_shaders(state_dir: &Path) -> Report {
     #[cfg(backend_dx)]
     crate::directx::slang_builtins::precompile(&mut bundle, &mut report);
     #[cfg(backend_vk)]
-    crate::vulkan::builtins::precompile(&mut bundle, &mut report);
+    crate::vulkan::slang_builtins::precompile(&mut bundle, &mut report);
     bundle.write_to(&path, CACHE_BUDGET_BYTES);
     // `ensure_in` also keeps a copy in this machine's own cache segment, so
     // repeated exports stay warm. That copy is memory until a checkpoint.

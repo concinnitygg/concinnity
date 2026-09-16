@@ -15,8 +15,8 @@ use super::{Features, InitGpu};
 use crate::metal::bindless_args::{ResidencySet, SlotGates};
 use crate::metal::context::{InstancedState, ProbeState};
 use crate::metal::cull::{CullState, metal_instance_records};
+use crate::metal::frame_rings::RetirePool;
 use crate::metal::probe_prefilter::ProbePrefilterPipelines;
-use crate::metal::transient::RetirePool;
 
 mod bindless;
 mod compute;

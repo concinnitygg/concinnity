@@ -14,7 +14,7 @@
 //! old. A single shared buffer instead yields whichever frame the GPU happened to
 //! have finished, which varies with how far ahead the CPU is running and makes
 //! the adaptation jitter. Mirrors `vulkan/auto_exposure.rs` and
-//! `directx/auto_exposure.rs`, on the argument `metal/transient.rs` already
+//! `directx/auto_exposure.rs`, on the argument `metal/frame_rings.rs` already
 //! makes for the transient rings.
 #![deny(unsafe_op_in_unsafe_fn)]
 

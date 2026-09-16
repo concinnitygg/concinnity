@@ -491,10 +491,10 @@ impl DxContext {
         );
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
-        unsafe { cmd.ResourceBarrier(&[color_to_src, resolve_to_dst]) };
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe { cmd.ResolveSubresource(hdr_resolve, 0, &self.targets.hdr.color, 0, HDR_FORMAT) };
+        unsafe {
+            cmd.ResourceBarrier(&[color_to_src, resolve_to_dst]);
+            cmd.ResolveSubresource(hdr_resolve, 0, &self.targets.hdr.color, 0, HDR_FORMAT);
+        }
         let resolve_to_rt = transition_barrier(
             self.hdr_scene_target(),
             D3D12_RESOURCE_STATE_RESOLVE_DEST,

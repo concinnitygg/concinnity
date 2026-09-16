@@ -68,8 +68,8 @@ use concinnity_core::render::uniforms::SkinParams;
 use super::context::write_buffer_slice;
 use super::encode::ComputeEncode;
 use super::error::{allocation_failed, completed_command_buffer};
+use super::frame_rings::RetirePool;
 use super::rt_ring::{BlasUpdate, RtFrameRing, SkinnedBlasSet, SkinnedShape, TlasKey};
-use super::transient::RetirePool;
 
 // Byte stride of a `Vertex` in the shared vertex buffer (pos + normal + tangent
 // + color + uv = 14 floats). The RT kernel reads positions at this stride; the

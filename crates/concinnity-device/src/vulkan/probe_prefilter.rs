@@ -95,7 +95,7 @@ impl ProbePrefilterPipelines {
         let mip_pipeline_layout = create_pipeline_layout(device, mip_set_layout.handle(), push)?;
         let ggx_pipeline_layout = create_pipeline_layout(device, ggx_set_layout.handle(), push)?;
 
-        let ctx = super::builtins::Ctx::plain(hot_reload);
+        let ctx = super::slang_builtins::Ctx::plain(hot_reload);
         let mip0 = create_compute_pipeline(
             device,
             mip_pipeline_layout.handle(),

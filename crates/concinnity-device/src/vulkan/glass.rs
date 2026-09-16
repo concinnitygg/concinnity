@@ -44,14 +44,14 @@ fn glass_params_from(panel: &GlassPanel, planar: f32) -> GlassParams {
 
 // Compile the glass vertex + fragment shaders, injecting the MSAA define so the
 // depth sampler type matches the main-depth resource's sample count. The
-// fragment's shared reflection-probe sampling is substituted by the builtins
-// assembly. Mirrors compile_ssr_shaders.
+// fragment's shared reflection-probe sampling is substituted by the
+// slang_builtins assembly. Mirrors compile_ssr_shaders.
 fn compile_glass_shaders(
     hot_reload: bool,
     msaa: bool,
     probe_cube_count: u32,
 ) -> RenderResult<(Vec<u8>, Vec<u8>)> {
-    let ctx = super::builtins::Ctx {
+    let ctx = super::slang_builtins::Ctx {
         hot_reload,
         msaa,
         probe_count: probe_cube_count as usize,
@@ -81,7 +81,7 @@ fn compile_glass_rt_shaders(
     pool_size: usize,
     probe_cube_count: u32,
 ) -> RenderResult<GlassRtShaders> {
-    let ctx = super::builtins::Ctx {
+    let ctx = super::slang_builtins::Ctx {
         hot_reload,
         msaa,
         probe_count: probe_cube_count as usize,
@@ -238,7 +238,7 @@ fn compile_glass_mesh_shaders(
     pool_size: usize,
     probe_cube_count: u32,
 ) -> RenderResult<GlassRtShaders> {
-    let ctx = super::builtins::Ctx {
+    let ctx = super::slang_builtins::Ctx {
         hot_reload,
         msaa,
         probe_count: probe_cube_count as usize,

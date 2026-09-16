@@ -20,16 +20,13 @@
 //! region a still-in-flight command buffer references is never overwritten;
 //! at init it passes 0, since nothing has been drawn yet.
 
+use concinnity_core::render::fullscreen::align_up;
+
 // A contiguous free byte range `[offset, offset + size)`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Block {
     offset: u64,
     size: u64,
-}
-
-// Round `value` up to the next multiple of `align`, which must be non-zero.
-fn align_up(value: u64, align: u64) -> u64 {
-    value.div_ceil(align) * align
 }
 
 // A freed region awaiting reclaim once its `retire_frame` has passed.

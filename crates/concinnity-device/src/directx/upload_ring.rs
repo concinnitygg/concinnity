@@ -13,10 +13,9 @@
 //! reading a slot's buffer before the CPU overwrites or grows it.
 
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::fullscreen::align_up;
 use std::cell::RefCell;
 use windows::Win32::Graphics::Direct3D12::*;
-// Sub-range offset rounding, shared with the other backends' text uploads.
-pub(in crate::directx) use concinnity_core::render::fullscreen::align_up;
 
 use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
 use crate::directx::com;

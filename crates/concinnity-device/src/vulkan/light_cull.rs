@@ -145,8 +145,8 @@ pub(in crate::vulkan) fn build_light_cull(
         .create_pipeline_layout(&layout_info)
         .map_err(|e| super::error::map_vk_result(e, "light cull pipeline layout"))?;
 
-    let spirv =
-        super::slang_builtins::LIGHT_CULL.compile(&super::builtins::Ctx::plain(hot_reload))?;
+    let spirv = super::slang_builtins::LIGHT_CULL
+        .compile(&super::slang_builtins::Ctx::plain(hot_reload))?;
     let module = spv_module(device, &spirv)?;
     let stage = vk::PipelineShaderStageCreateInfo::default()
         .stage(vk::ShaderStageFlags::COMPUTE)

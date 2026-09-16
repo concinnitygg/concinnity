@@ -82,7 +82,7 @@ fn compile_water_shaders(
     msaa: bool,
     probe_cube_count: u32,
 ) -> RenderResult<(Vec<u8>, Vec<u8>)> {
-    let ctx = super::builtins::Ctx {
+    let ctx = super::slang_builtins::Ctx {
         hot_reload,
         msaa,
         probe_count: probe_cube_count as usize,
@@ -114,7 +114,7 @@ fn compile_water_rt_shaders(
 ) -> RenderResult<WaterRtShaders> {
     // The pool declaration needs at least one slot even when the bindless pool
     // is absent (the textured variant is then skipped).
-    let ctx = super::builtins::Ctx {
+    let ctx = super::slang_builtins::Ctx {
         hot_reload,
         msaa,
         probe_count: probe_cube_count as usize,

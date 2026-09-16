@@ -1257,10 +1257,10 @@ impl DxContext {
         );
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
-        unsafe { cmd.ResourceBarrier(&[scene_to_copy, copy_to_dst]) };
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe { cmd.CopyResource(&transparent.scene_copy, scene_res) };
+        unsafe {
+            cmd.ResourceBarrier(&[scene_to_copy, copy_to_dst]);
+            cmd.CopyResource(&transparent.scene_copy, scene_res);
+        }
         let scene_to_rt = transition_barrier(
             self.post_scene_target(),
             D3D12_RESOURCE_STATE_COPY_SOURCE,

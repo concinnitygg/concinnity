@@ -7,7 +7,7 @@ use concinnity_core::render::backend_init;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::shadow_bias;
 
-use super::builtins;
+use super::slang_builtins;
 use crate::vulkan::owned::{OwnedPipeline, VkDevice};
 use crate::vulkan::slang_builtins::SlangCompile;
 
@@ -28,7 +28,7 @@ pub(super) fn compile_bindless_shaders(
     hot_reload: bool,
     probe_cube_count: u32,
 ) -> RenderResult<(Vec<u8>, Vec<u8>)> {
-    let ctx = builtins::Ctx {
+    let ctx = slang_builtins::Ctx {
         hot_reload,
         msaa: false,
         probe_count: probe_cube_count as usize,
@@ -61,7 +61,7 @@ pub(super) const CULL_PUSH_CONSTANT_BYTES: u32 = 120;
 
 // Compile the Compute cull compute kernel to SPIR-V.
 pub(super) fn compile_cull_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    super::slang_builtins::CULL.compile(&builtins::Ctx::plain(hot_reload))
+    super::slang_builtins::CULL.compile(&slang_builtins::Ctx::plain(hot_reload))
 }
 
 // Compile the phase-2 (two-pass occlusion) variant of the cull kernel. Same
@@ -69,7 +69,7 @@ pub(super) fn compile_cull_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
 // re-test of phase 1's Hi-Z-occluded objects against the rebuilt pyramid.
 // Mirrors the `#define` split the Hi-Z init kernel uses.
 pub(super) fn compile_cull_shader_phase2(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    super::slang_builtins::CULL_PHASE2.compile(&builtins::Ctx::plain(hot_reload))
+    super::slang_builtins::CULL_PHASE2.compile(&slang_builtins::Ctx::plain(hot_reload))
 }
 
 // Compile the GPU-driven shadow cull kernel: the same cull source with a
@@ -77,12 +77,12 @@ pub(super) fn compile_cull_shader_phase2(hot_reload: bool) -> RenderResult<Vec<u
 // bindings and tests each cascade's light frustum only. Paired with the lean
 // 3-SSBO shadow cull set layout.
 pub(super) fn compile_shadow_cull_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    super::slang_builtins::CULL_SHADOW.compile(&builtins::Ctx::plain(hot_reload))
+    super::slang_builtins::CULL_SHADOW.compile(&slang_builtins::Ctx::plain(hot_reload))
 }
 
 // Compile the GPU-driven shadow pass's depth-only bindless vertex shader.
 pub(super) fn compile_shadow_bindless_vs(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    super::slang_builtins::SHADOW_BINDLESS_VERT.compile(&builtins::Ctx::plain(hot_reload))
+    super::slang_builtins::SHADOW_BINDLESS_VERT.compile(&slang_builtins::Ctx::plain(hot_reload))
 }
 
 // Create the GPU-cull compute pipeline. `layout` must include the cull
@@ -219,25 +219,26 @@ pub(super) fn world_entry(
 // The depth-only skinned shadow vertex, the engine's own: skinned main-pass
 // draws ride the GPU-driven pass through the skin fold.
 pub(super) fn compile_skinned_shadow_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    super::slang_builtins::SKINNED_SHADOW_VERT.compile(&builtins::Ctx::plain(hot_reload))
+    super::slang_builtins::SKINNED_SHADOW_VERT.compile(&slang_builtins::Ctx::plain(hot_reload))
 }
 
 // The shadow vertex shader is engine-internal. Whether the shadow pass runs at
 // all is gated by `effective_shadow_size` at the call site, not here.
 pub(super) fn resolve_shadow_shader(hot_reload: bool) -> RenderResult<Option<Vec<u8>>> {
-    let spv = super::slang_builtins::SHADOW_VERT.compile(&builtins::Ctx::plain(hot_reload))?;
+    let spv =
+        super::slang_builtins::SHADOW_VERT.compile(&slang_builtins::Ctx::plain(hot_reload))?;
     Ok(Some(spv))
 }
 
 pub(super) fn compile_text_shaders(hot_reload: bool) -> RenderResult<(Vec<u8>, Vec<u8>)> {
-    let ctx = builtins::Ctx::plain(hot_reload);
+    let ctx = slang_builtins::Ctx::plain(hot_reload);
     let vert = super::slang_builtins::TEXT_VERT.compile(&ctx)?;
     let frag = super::slang_builtins::TEXT_FRAG.compile(&ctx)?;
     Ok((vert, frag))
 }
 
 pub(super) fn compile_composite_shaders(hot_reload: bool) -> RenderResult<(Vec<u8>, Vec<u8>)> {
-    let ctx = builtins::Ctx::plain(hot_reload);
+    let ctx = slang_builtins::Ctx::plain(hot_reload);
     let vert = super::slang_builtins::FULLSCREEN_VERT.compile(&ctx)?;
     let frag = super::slang_builtins::COMPOSITE_FRAG.compile(&ctx)?;
     Ok((vert, frag))
@@ -874,9 +875,9 @@ pub(super) fn create_composite_pipeline(
 #[cfg(test)]
 mod tests {
     use super::{
-        SlangCompile, builtins, compile_bindless_shaders, compile_cull_shader,
-        compile_cull_shader_phase2, compile_shadow_bindless_vs, compile_shadow_cull_shader,
-        compile_skinned_shadow_shader, is_spirv, spirv_words, world_entry,
+        SlangCompile, compile_bindless_shaders, compile_cull_shader, compile_cull_shader_phase2,
+        compile_shadow_bindless_vs, compile_shadow_cull_shader, compile_skinned_shadow_shader,
+        is_spirv, slang_builtins, spirv_words, world_entry,
     };
 
     // Whole words become native-endian u32s, matching the raw reinterpretation
@@ -954,11 +955,12 @@ mod tests {
         // The probe count rides the assembled source as a `#define` line, which
         // is what the shader cache keys. The pool takes none: the array is
         // declared unsized.
-        let frag_src = crate::vulkan::slang_builtins::MAIN_BINDLESS_FRAG.source(&builtins::Ctx {
-            hot_reload: false,
-            msaa: false,
-            probe_count: 4,
-        });
+        let frag_src =
+            crate::vulkan::slang_builtins::MAIN_BINDLESS_FRAG.source(&slang_builtins::Ctx {
+                hot_reload: false,
+                msaa: false,
+                probe_count: 4,
+            });
         let injected: Vec<&str> = frag_src
             .lines()
             .take_while(|l| l.starts_with("#define "))

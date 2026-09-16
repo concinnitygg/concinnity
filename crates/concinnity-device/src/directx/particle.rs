@@ -519,10 +519,10 @@ fn zero_default_buffer(
     );
     // SAFETY: the command list is in the recording state, and every resource, descriptor and slice
     // these commands name is live for the call.
-    unsafe { list.ResourceBarrier(&[to_copy_dest]) };
-    // SAFETY: the command list is in the recording state, and every resource, descriptor and slice
-    // these commands name is live for the call.
-    unsafe { list.CopyBufferRegion(target, 0, &*upload, 0, bytes) };
+    unsafe {
+        list.ResourceBarrier(&[to_copy_dest]);
+        list.CopyBufferRegion(target, 0, &*upload, 0, bytes);
+    }
     let back_to_uav = transition_barrier(
         target,
         D3D12_RESOURCE_STATE_COPY_DEST,

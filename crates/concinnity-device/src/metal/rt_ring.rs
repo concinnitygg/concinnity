@@ -5,7 +5,7 @@
 //! The skinned update used to allocate all of those fresh every frame and park
 //! the outgoing set in the `RetirePool`. That is correct but it is device-
 //! allocator traffic at frame rate. Because the skinned update runs on EVERY
-//! frame, its outputs fit the ring rule the upload buffers in `transient.rs`
+//! frame, its outputs fit the ring rule the upload buffers in `frame_rings.rs`
 //! already follow: frame `R` writes slot `R % depth` and is the only frame that
 //! binds it, and the frames-in-flight fence guarantees the previous writer of
 //! that slot (frame `R - depth`) has retired on the GPU. So a slot's storage can
@@ -32,7 +32,7 @@ use objc2_metal::{
 use concinnity_core::render::error::RenderResult;
 
 use super::error::allocation_failed;
-use super::transient::grow_to;
+use super::frame_rings::grow_to;
 
 type Buffer = Retained<ProtocolObject<dyn MTLBuffer>>;
 type Structure = Retained<ProtocolObject<dyn MTLAccelerationStructure>>;

@@ -30,7 +30,7 @@ use concinnity_core::render::uniforms::vulkan::AUTO_EXPOSURE_PUSH_BYTES;
 pub(in crate::vulkan) fn compile_auto_exposure_shaders(
     hot_reload: bool,
 ) -> RenderResult<(Vec<u8>, Vec<u8>)> {
-    let ctx = super::builtins::Ctx::plain(hot_reload);
+    let ctx = super::slang_builtins::Ctx::plain(hot_reload);
     let build_cs = super::slang_builtins::AUTO_EXPOSURE_BUILD.compile(&ctx)?;
     let average_cs = super::slang_builtins::AUTO_EXPOSURE_AVERAGE.compile(&ctx)?;
     Ok((build_cs, average_cs))
