@@ -100,11 +100,9 @@ impl UploadRing {
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         )?;
         if buffer.mapped_ptr().is_null() {
-            return Err(
-                concinnity_core::render::error::RenderError::OutOfDeviceMemory(
-                    "text upload buffer is not host-mapped".to_string(),
-                ),
-            );
+            return Err(concinnity_core::render::error::RenderError::Other(
+                "text upload buffer is not host-mapped".to_string(),
+            ));
         }
         // Replacing `buffer` retires the old one through the allocator, which
         // withholds its range until every in-flight frame has passed.

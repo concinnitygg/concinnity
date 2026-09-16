@@ -240,13 +240,11 @@ impl VkContext {
             )));
         }
         if self.skinned.vertex_buffer.is_null() || self.skinned.index_buffer.is_null() {
-            return Err(
-                concinnity_core::render::error::RenderError::OutOfDeviceMemory(
-                    "update_skinned_mesh_geometry: no skinned vertex/index buffer (was \
+            return Err(concinnity_core::render::error::RenderError::Other(
+                "update_skinned_mesh_geometry: no skinned vertex/index buffer (was \
                  upload_skinned called?)"
-                        .to_string(),
-                ),
-            );
+                    .to_string(),
+            ));
         }
         let v_byte_off =
             (vertex_base as usize).saturating_mul(std::mem::size_of::<SkinnedVertex>());

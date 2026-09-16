@@ -23,6 +23,7 @@ use objc2_metal::{
 
 use crate::metal::bindless_args::ResidencySet;
 use crate::metal::encode::RenderEncode;
+use crate::metal::error::allocation_failed;
 use crate::metal::pass_timing::PassTimingResources;
 use crate::metal::post::fullscreen::{
     FullscreenBlend, FullscreenPass, PassTimer, build_slang_fullscreen_pipeline,
@@ -152,7 +153,7 @@ impl PostPassDevice for MtlPostDevice<'_> {
         let desc = texture_descriptor_for(&spec);
         self.device
             .newTextureWithDescriptor(&desc)
-            .ok_or_else(|| RenderError::Other(format!("failed to create the {label} post target")))
+            .ok_or_else(|| allocation_failed(format_args!("the {label} post target")))
     }
 
     fn target_ref<'a>(&self, target: &'a Self::Target) -> Self::TextureRef<'a> {
