@@ -7,6 +7,7 @@
 //! what is unique to it.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::render::error::{RenderError, RenderResult};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -60,7 +61,7 @@ pub(crate) fn build_fullscreen_pipeline_split(
     stages: FullscreenStages,
     format: MTLPixelFormat,
     blend: FullscreenBlend,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     let FullscreenStages {
         vertex_library,
         vertex_name,
@@ -69,10 +70,10 @@ pub(crate) fn build_fullscreen_pipeline_split(
     } = stages;
     let vert_fn = vertex_library
         .newFunctionWithName(&ns_str(vertex_name))
-        .ok_or_else(|| format!("{} not found", vertex_name))?;
+        .ok_or_else(|| RenderError::ShaderCompile(format!("{vertex_name} not found")))?;
     let frag_fn = fragment_library
         .newFunctionWithName(&ns_str(fragment_name))
-        .ok_or_else(|| format!("{} not found", fragment_name))?;
+        .ok_or_else(|| RenderError::ShaderCompile(format!("{fragment_name} not found")))?;
 
     let desc = MTLRenderPipelineDescriptor::new();
     desc.setVertexFunction(Some(&vert_fn));
@@ -104,7 +105,7 @@ pub(crate) fn build_fullscreen_pipeline_split(
 
     device
         .newRenderPipelineStateWithDescriptor_error(&desc)
-        .map_err(|e| format!("failed to create {} pipeline: {:?}", fragment_name, e))
+        .map_err(|e| RenderError::ShaderCompile(format!("{fragment_name} pipeline: {e:?}")))
 }
 
 // Build a fullscreen-triangle pipeline whose fragment comes from a
@@ -118,7 +119,7 @@ pub(in crate::metal) fn build_slang_fullscreen_pipeline(
     format: MTLPixelFormat,
     blend: FullscreenBlend,
     hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     let vert = FULLSCREEN_VERT.library(device, hot_reload)?;
     let frag = fragment.library(device, hot_reload)?;
     build_fullscreen_pipeline_split(
@@ -192,7 +193,7 @@ pub(in crate::metal) fn encode_fullscreen_pass(
     timing: Option<&crate::metal::pass_timing::PassTimingResources>,
     pass: FullscreenPass,
     bind: impl FnOnce(&ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>),
-) -> Result<(), String> {
+) -> RenderResult<()> {
     let FullscreenPass {
         target,
         load,
@@ -219,7 +220,7 @@ pub(in crate::metal) fn encode_fullscreen_pass(
     }
     let enc = cmd_buf
         .renderCommandEncoderWithDescriptor(&desc)
-        .ok_or_else(|| format!("failed to get {} encoder", label))?;
+        .ok_or_else(|| RenderError::Other(format!("failed to get {label} encoder")))?;
     enc.set_pipeline(pipeline);
     bind(&enc);
     // SAFETY: the fullscreen triangle's three vertices are generated from `[[vertex_id]]` in
@@ -238,7 +239,7 @@ impl MtlContext {
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         pass: FullscreenPass,
         bind: impl FnOnce(&ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>),
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         encode_fullscreen_pass(cmd_buf, self.diagnostics.pass_timing.as_ref(), pass, bind)
     }
 }

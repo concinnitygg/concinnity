@@ -13,7 +13,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::render_types::LineVertex;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
@@ -114,7 +114,7 @@ impl MtlContext {
         &self,
         cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
         vp: [[f32; 4]; 4],
-    ) -> Result<u32, String> {
+    ) -> RenderResult<u32> {
         let (Some(pipeline), Some((vbuf, vertex_count))) =
             (self.lines.pipeline.as_ref(), self.lines.frame.as_ref())
         else {
@@ -141,7 +141,7 @@ impl MtlContext {
         let enc = ScopedEncoder::new(
             cmd_buf
                 .renderCommandEncoderWithDescriptor(&pass_desc)
-                .ok_or("failed to get line render encoder")?,
+                .ok_or_else(|| RenderError::Other("failed to get line render encoder".into()))?,
             ns_string!("lines"),
         );
         enc.set_pipeline(pipeline);
@@ -169,7 +169,7 @@ impl MtlContext {
 fn build_line_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     // Each entry compiles to its own metallib, so the two stages come from
     // separate libraries and pair by semantic.
     let vert_fn = super::slang_builtins::entry_function(
@@ -232,5 +232,5 @@ fn build_line_pipeline(
 
     device
         .newRenderPipelineStateWithDescriptor_error(&desc)
-        .map_err(|e| format!("failed to create line pipeline state: {:?}", e))
+        .map_err(|e| RenderError::ShaderCompile(format!("line pipeline state: {e:?}")))
 }

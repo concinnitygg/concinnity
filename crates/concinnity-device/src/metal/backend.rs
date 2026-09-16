@@ -154,7 +154,7 @@ impl DrawStreaming for MtlContext {
         let programs = shader.programs.ok_or_else(|| {
             RenderError::ShaderCompile("shader bucket carries no programs".into())
         })?;
-        MtlContext::install_world_shader(self, bucket, programs).map_err(RenderError::ShaderCompile)
+        MtlContext::install_world_shader(self, bucket, programs)
     }
 
     fn setup_chunk_streaming(

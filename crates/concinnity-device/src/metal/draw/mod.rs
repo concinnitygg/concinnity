@@ -766,8 +766,10 @@ impl MtlContext {
         // it; put back after execution. A mismatch (or a cold cache) rebuilds.
         let graph = match self.draw.graph_cache.take() {
             Some((cached_inputs, cached_graph)) if cached_inputs == graph_inputs => cached_graph,
+            // A graph the core refuses to build is a topology mistake, not a
+            // device failure.
             _ => render_graph::build_frame_graph(&graph_inputs)
-                .map_err(|e| format!("frame graph: {}", e))?,
+                .map_err(|e| error::RenderError::Other(format!("frame graph: {e}")))?,
         };
         // This frame's skinned deformed-vertex buffer (skinned fold), cloned into
         // a local so `params` owns a handle rather than borrowing `self.skinned`

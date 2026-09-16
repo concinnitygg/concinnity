@@ -14,6 +14,7 @@
 // `assert_slang_metal_abi` locks the emitted slot assignment.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_slang as slang;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -564,13 +565,13 @@ impl SlangLib {
         &self,
         device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
         hot_reload: bool,
-    ) -> Result<Retained<ProtocolObject<dyn MTLLibrary>>, String> {
+    ) -> RenderResult<Retained<ProtocolObject<dyn MTLLibrary>>> {
         let source = self.source(hot_reload);
         if let Some((digest, bytes)) = super::metallib::embedded_metallib(self.name)
             && digest == concinnity_core::render::slang_source::source_digest(&source)
         {
             return load_library(device, bytes)
-                .map_err(|e| format!("{}: failed to load precompiled metallib: {e}", self.name));
+                .map_err(|e| e.context(format_args!("{}: precompiled metallib", self.name)));
         }
         let entry = self.entries.join("+");
         let key = crate::shader::cache::Key {
@@ -587,12 +588,11 @@ impl SlangLib {
                 entries: self.entries,
                 target: slang::SlangTarget::Metallib,
             };
-            let work = crate::shader::compiler_work::dir()?;
-            slang::compile(&job, work.path())
+            let work = crate::shader::compiler_work::dir().map_err(RenderError::Other)?;
+            slang::compile(&job, work.path()).map_err(RenderError::ShaderCompile)
         })
-        .map_err(|e| format!("{}: {e}", self.name))?;
-        load_library(device, &bytes)
-            .map_err(|e| format!("{}: metallib load failed: {e}", self.name))
+        .map_err(|e| e.context(self.name))?;
+        load_library(device, &bytes).map_err(|e| e.context(self.name))
     }
 }
 
@@ -603,12 +603,12 @@ pub(super) fn entry_function(
     device: &ProtocolObject<dyn MTLDevice>,
     lib: &SlangLib,
     hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn MTLFunction>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLFunction>>> {
     let library = lib.library(device, hot_reload)?;
     let entry = lib.entries[0];
     library
         .newFunctionWithName(&ns_str(entry))
-        .ok_or_else(|| format!("{entry} not found in {}", lib.name))
+        .ok_or_else(|| RenderError::ShaderCompile(format!("{entry} not found in {}", lib.name)))
 }
 
 #[cfg(test)]

@@ -20,6 +20,7 @@
 
 use concinnity_core::gfx::auto_exposure;
 use concinnity_core::gfx::auto_exposure::{AutoExposureSettings, AutoExposureState};
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::uniforms::*;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -137,7 +138,7 @@ impl MtlContext {
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         slot: usize,
-    ) -> Result<u32, String> {
+    ) -> RenderResult<u32> {
         let (Some(pipelines), Some(histogram), Some(output)) = (
             self.auto_exposure.pipelines.as_ref(),
             self.auto_exposure.histogram.as_ref(),
@@ -162,7 +163,9 @@ impl MtlContext {
         let enc = ScopedEncoder::new(
             cmd_buf
                 .computeCommandEncoderWithDescriptor(&ae_desc)
-                .ok_or("failed to get auto-exposure compute encoder")?,
+                .ok_or_else(|| {
+                    RenderError::Other("failed to get auto-exposure compute encoder".into())
+                })?,
             ns_string!("auto-exposure"),
         );
 
@@ -224,20 +227,26 @@ pub(super) struct AutoExposurePipelines {
 pub(super) fn build_auto_exposure_pipelines(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
-) -> Result<AutoExposurePipelines, String> {
+) -> RenderResult<AutoExposurePipelines> {
     let build_lib = super::slang_builtins::AUTO_EXPOSURE_BUILD.library(device, hot_reload)?;
     let average_lib = super::slang_builtins::AUTO_EXPOSURE_AVERAGE.library(device, hot_reload)?;
     let build_fn = build_lib
         .newFunctionWithName(&ns_str("histogram_build"))
-        .ok_or("histogram_build not found in auto_exposure library")?;
+        .ok_or_else(|| {
+            RenderError::ShaderCompile("histogram_build not found in auto_exposure library".into())
+        })?;
     let average_fn = average_lib
         .newFunctionWithName(&ns_str("histogram_average"))
-        .ok_or("histogram_average not found in auto_exposure library")?;
+        .ok_or_else(|| {
+            RenderError::ShaderCompile(
+                "histogram_average not found in auto_exposure library".into(),
+            )
+        })?;
     let build = device
         .newComputePipelineStateWithFunction_error(&build_fn)
-        .map_err(|e| format!("failed to create histogram_build pipeline: {:?}", e))?;
+        .map_err(|e| RenderError::ShaderCompile(format!("histogram_build pipeline: {e:?}")))?;
     let average = device
         .newComputePipelineStateWithFunction_error(&average_fn)
-        .map_err(|e| format!("failed to create histogram_average pipeline: {:?}", e))?;
+        .map_err(|e| RenderError::ShaderCompile(format!("histogram_average pipeline: {e:?}")))?;
     Ok(AutoExposurePipelines { build, average })
 }

@@ -4,7 +4,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use crate::metal::error::allocation_failed;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::error::RenderResult;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -49,7 +49,7 @@ pub(crate) struct BloomPipelines {
 pub(crate) fn build_bloom_pipelines(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
-) -> Result<BloomPipelines, String> {
+) -> RenderResult<BloomPipelines> {
     let build = |lib: &SlangLib, blend: FullscreenBlend| {
         build_slang_fullscreen_pipeline(device, lib, BLOOM_FORMAT, blend, hot_reload)
     };
@@ -171,44 +171,40 @@ impl fullscreen::BloomEncoder for BloomChain<'_> {
         } else {
             PassTimer::First(crate::metal::pass_timing::PassId::Bloom)
         };
-        self.ctx
-            .fullscreen_pass(
-                cmd,
-                FullscreenPass {
-                    target: self.ctx.targets.bloom.mips[0].as_ref(),
-                    load: MTLLoadAction::DontCare,
-                    timer,
-                    pipeline: &self.pipelines.prefilter,
-                    label: "bloom prefilter",
-                },
-                |enc| {
-                    enc.set_fragment_texture(self.scene_color, 0);
-                    enc.set_fragment_sampler(&self.ctx.composite.sampler, 0);
-                    enc.set_fragment_value(&self.ctx.post_process, 0);
-                },
-            )
-            .map_err(RenderError::Other)
+        self.ctx.fullscreen_pass(
+            cmd,
+            FullscreenPass {
+                target: self.ctx.targets.bloom.mips[0].as_ref(),
+                load: MTLLoadAction::DontCare,
+                timer,
+                pipeline: &self.pipelines.prefilter,
+                label: "bloom prefilter",
+            },
+            |enc| {
+                enc.set_fragment_texture(self.scene_color, 0);
+                enc.set_fragment_sampler(&self.ctx.composite.sampler, 0);
+                enc.set_fragment_value(&self.ctx.post_process, 0);
+            },
+        )
     }
 
     // Downsample: mips[dst - 1] -> mips[dst].
     fn bloom_downsample(&self, cmd: &Self::Rec, _args: &(), dst: usize) -> RenderResult<()> {
         let mips = &self.ctx.targets.bloom.mips;
-        self.ctx
-            .fullscreen_pass(
-                cmd,
-                FullscreenPass {
-                    target: mips[dst].as_ref(),
-                    load: MTLLoadAction::DontCare,
-                    timer: PassTimer::None,
-                    pipeline: &self.pipelines.downsample,
-                    label: "bloom downsample",
-                },
-                |enc| {
-                    enc.set_fragment_texture(mips[dst - 1].as_ref(), 0);
-                    enc.set_fragment_sampler(&self.ctx.composite.sampler, 0);
-                },
-            )
-            .map_err(RenderError::Other)
+        self.ctx.fullscreen_pass(
+            cmd,
+            FullscreenPass {
+                target: mips[dst].as_ref(),
+                load: MTLLoadAction::DontCare,
+                timer: PassTimer::None,
+                pipeline: &self.pipelines.downsample,
+                label: "bloom downsample",
+            },
+            |enc| {
+                enc.set_fragment_texture(mips[dst - 1].as_ref(), 0);
+                enc.set_fragment_sampler(&self.ctx.composite.sampler, 0);
+            },
+        )
     }
 
     // Upsample: mips[dst + 1] -> mips[dst], additively blended onto the
@@ -221,22 +217,20 @@ impl fullscreen::BloomEncoder for BloomChain<'_> {
         } else {
             PassTimer::None
         };
-        self.ctx
-            .fullscreen_pass(
-                cmd,
-                FullscreenPass {
-                    target: mips[dst].as_ref(),
-                    load: MTLLoadAction::Load,
-                    timer,
-                    pipeline: &self.pipelines.upsample,
-                    label: "bloom upsample",
-                },
-                |enc| {
-                    enc.set_fragment_texture(mips[dst + 1].as_ref(), 0);
-                    enc.set_fragment_sampler(&self.ctx.composite.sampler, 0);
-                },
-            )
-            .map_err(RenderError::Other)
+        self.ctx.fullscreen_pass(
+            cmd,
+            FullscreenPass {
+                target: mips[dst].as_ref(),
+                load: MTLLoadAction::Load,
+                timer,
+                pipeline: &self.pipelines.upsample,
+                label: "bloom upsample",
+            },
+            |enc| {
+                enc.set_fragment_texture(mips[dst + 1].as_ref(), 0);
+                enc.set_fragment_sampler(&self.ctx.composite.sampler, 0);
+            },
+        )
     }
 }
 

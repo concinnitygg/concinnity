@@ -10,7 +10,7 @@
 use crate::metal::error::allocation_failed;
 use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::ssao::SsaoSettings;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -54,7 +54,7 @@ pub(crate) fn build_ssao_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     fragment: &SlangLib,
     hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     build_slang_fullscreen_pipeline(
         device,
         fragment,
@@ -119,7 +119,7 @@ impl MtlContext {
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         ssao_params: &render_types::SsaoParams,
-    ) -> Result<u32, String> {
+    ) -> RenderResult<u32> {
         let (targets, kernel_ps, blur_ps, gbuffer) = match (
             &self.ssao.targets,
             &self.ssao.kernel_pipeline,
@@ -141,7 +141,7 @@ impl MtlContext {
             .targets
             .transient_pool
             .texture_for("ao_output")
-            .ok_or("ao_output missing from transient pool")?;
+            .ok_or_else(|| RenderError::Other("ao_output missing from transient pool".into()))?;
 
         // Kernel: GTAO horizon search over the G-buffer -> raw occlusion.
         self.fullscreen_pass(

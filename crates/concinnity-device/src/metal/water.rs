@@ -32,6 +32,7 @@
 use concinnity_core::components::{MAX_WATER_WAVES, WaterSurface, WaterWave};
 use concinnity_core::geometry::water_grid::build_water_grid;
 use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::transparent;
 use concinnity_core::render::uniforms::{
     TransparentView, WATER_MAX_WAVES, WaterParams, WaterWaveGpu,
@@ -41,6 +42,7 @@ use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLDevice, MTLRenderPipelineState, MTLResourceOptions};
 
 use super::context::MtlContext;
+use super::error::allocation_failed;
 use super::glass::build_transparent_pipeline_stages;
 use super::slang_builtins;
 use super::transparent::{TransparentDraw, bytes_of};
@@ -67,9 +69,12 @@ pub(in crate::metal) struct WaterSurfaceRecord {
 pub(in crate::metal) fn build_water_surface_record(
     device: &ProtocolObject<dyn MTLDevice>,
     surface: &WaterSurface,
-) -> Result<WaterSurfaceRecord, String> {
+) -> RenderResult<WaterSurfaceRecord> {
+    // A grid the core geometry refuses (too many vertices for a u16 index) is a
+    // world-authoring limit, not a device failure.
     let (verts, idxs) =
-        build_water_grid(surface.extent[0], surface.extent[1], surface.subdivisions)?;
+        build_water_grid(surface.extent[0], surface.extent[1], surface.subdivisions)
+            .map_err(RenderError::Other)?;
 
     // Flatten into the standard Vertex layout. Tangent + color are filled
     // with placeholders since the water shader rebuilds the normal frame
@@ -90,20 +95,22 @@ pub(in crate::metal) fn build_water_surface_record(
     // SAFETY: the pointer and length describe the live `packed` allocation, and Metal copies those
     // bytes into the new buffer before the call returns.
     let vb = unsafe {
-        let ptr = std::ptr::NonNull::new(packed.as_ptr() as *mut _)
-            .ok_or("water vertex buffer: source pointer is null")?;
+        let ptr = std::ptr::NonNull::new(packed.as_ptr() as *mut _).ok_or_else(|| {
+            RenderError::Other("water vertex buffer: source pointer is null".into())
+        })?;
         device
             .newBufferWithBytes_length_options(ptr, vb_bytes, MTLResourceOptions::StorageModeShared)
-            .ok_or("failed to allocate water vertex buffer")?
+            .ok_or_else(|| allocation_failed("the water vertex buffer"))?
     };
     // SAFETY: the pointer and length describe the live `idxs` allocation, and Metal copies those
     // bytes into the new buffer before the call returns.
     let ib = unsafe {
-        let ptr = std::ptr::NonNull::new(idxs.as_ptr() as *mut _)
-            .ok_or("water index buffer: source pointer is null")?;
+        let ptr = std::ptr::NonNull::new(idxs.as_ptr() as *mut _).ok_or_else(|| {
+            RenderError::Other("water index buffer: source pointer is null".into())
+        })?;
         device
             .newBufferWithBytes_length_options(ptr, ib_bytes, MTLResourceOptions::StorageModeShared)
-            .ok_or("failed to allocate water index buffer")?
+            .ok_or_else(|| allocation_failed("the water index buffer"))?
     };
 
     Ok(WaterSurfaceRecord {
@@ -267,7 +274,7 @@ impl MtlContext {
 pub(super) fn build_water_pipeline(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     build_water_pipeline_slang(device, hot_reload, &slang_builtins::WATER_FRAG)
 }
 
@@ -281,7 +288,7 @@ pub(super) fn build_water_pipeline(
 pub(super) fn build_water_pipeline_rt(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     build_water_pipeline_slang(device, hot_reload, &slang_builtins::WATER_FRAG_RT)
 }
 
@@ -292,7 +299,7 @@ pub(super) fn build_water_pipeline_rt(
 pub(super) fn build_water_pipeline_rt_textured(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     build_water_pipeline_slang(device, hot_reload, &slang_builtins::WATER_FRAG_RT_TEXTURED)
 }
 
@@ -303,7 +310,7 @@ fn build_water_pipeline_slang(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
     fragment: &slang_builtins::SlangLib,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     let vert_fn = slang_builtins::entry_function(device, &slang_builtins::WATER_VERT, hot_reload)?;
     let frag_fn = slang_builtins::entry_function(device, fragment, hot_reload)?;
     build_transparent_pipeline_stages(device, &vert_fn, &frag_fn)

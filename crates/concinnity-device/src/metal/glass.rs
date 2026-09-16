@@ -10,6 +10,7 @@
 use concinnity_core::components::GlassPanel;
 use concinnity_core::geometry::glass_quad::build_glass_quad;
 use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::transparent;
 use concinnity_core::render::uniforms::{GlassMeshParams, GlassParams, TransparentView};
 use objc2::rc::Retained;
@@ -21,6 +22,7 @@ use objc2_metal::{
 
 use super::context::MtlContext;
 use super::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
+use super::error::allocation_failed;
 use super::slang_builtins;
 use super::transparent::{TransparentDraw, bytes_of};
 
@@ -69,7 +71,7 @@ fn glass_params_from(panel: &GlassPanel) -> GlassParams {
 pub(in crate::metal) fn build_glass_panel_record(
     device: &ProtocolObject<dyn MTLDevice>,
     panel: &GlassPanel,
-) -> Result<GlassPanelRecord, String> {
+) -> RenderResult<GlassPanelRecord> {
     let (verts, idxs) = build_glass_quad(panel.center, panel.normal, panel.half_size);
 
     // Flatten into the standard Vertex layout. Tangent is a placeholder (the
@@ -91,20 +93,22 @@ pub(in crate::metal) fn build_glass_panel_record(
     // SAFETY: the pointer and length describe the live `packed` allocation, and Metal copies those
     // bytes into the new buffer before the call returns.
     let vb = unsafe {
-        let ptr = std::ptr::NonNull::new(packed.as_ptr() as *mut _)
-            .ok_or("glass vertex buffer: source pointer is null")?;
+        let ptr = std::ptr::NonNull::new(packed.as_ptr() as *mut _).ok_or_else(|| {
+            RenderError::Other("glass vertex buffer: source pointer is null".into())
+        })?;
         device
             .newBufferWithBytes_length_options(ptr, vb_bytes, MTLResourceOptions::StorageModeShared)
-            .ok_or("failed to allocate glass vertex buffer")?
+            .ok_or_else(|| allocation_failed("the glass vertex buffer"))?
     };
     // SAFETY: the pointer and length describe the live `idxs` allocation, and Metal copies those
     // bytes into the new buffer before the call returns.
     let ib = unsafe {
-        let ptr = std::ptr::NonNull::new(idxs.as_ptr() as *mut _)
-            .ok_or("glass index buffer: source pointer is null")?;
+        let ptr = std::ptr::NonNull::new(idxs.as_ptr() as *mut _).ok_or_else(|| {
+            RenderError::Other("glass index buffer: source pointer is null".into())
+        })?;
         device
             .newBufferWithBytes_length_options(ptr, ib_bytes, MTLResourceOptions::StorageModeShared)
-            .ok_or("failed to allocate glass index buffer")?
+            .ok_or_else(|| allocation_failed("the glass index buffer"))?
     };
 
     Ok(GlassPanelRecord {
@@ -125,7 +129,7 @@ pub(in crate::metal) fn build_glass_panel_record(
 pub(super) fn build_glass_pipeline(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     build_glass_pipeline_slang(device, hot_reload, &slang_builtins::GLASS_FRAG)
 }
 
@@ -137,7 +141,7 @@ pub(super) fn build_glass_pipeline(
 pub(super) fn build_glass_pipeline_rt(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     build_glass_pipeline_slang(device, hot_reload, &slang_builtins::GLASS_FRAG_RT)
 }
 
@@ -149,7 +153,7 @@ pub(super) fn build_glass_pipeline_rt(
 pub(super) fn build_glass_mesh_pipeline_rt(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     build_glass_mesh_pipeline_slang(device, hot_reload, &slang_builtins::GLASS_MESH_FRAG_RT)
 }
 
@@ -158,7 +162,7 @@ pub(super) fn build_glass_mesh_pipeline_rt(
 pub(super) fn build_glass_mesh_pipeline_rt_textured(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     build_glass_mesh_pipeline_slang(
         device,
         hot_reload,
@@ -173,7 +177,7 @@ pub(super) fn build_glass_mesh_pipeline_rt_textured(
 pub(super) fn build_glass_pipeline_rt_textured(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     build_glass_pipeline_slang(device, hot_reload, &slang_builtins::GLASS_FRAG_RT_TEXTURED)
 }
 
@@ -184,7 +188,7 @@ fn build_glass_pipeline_slang(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
     fragment: &slang_builtins::SlangLib,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     let vert_fn = slang_builtins::entry_function(device, &slang_builtins::GLASS_VERT, hot_reload)?;
     let frag_fn = slang_builtins::entry_function(device, fragment, hot_reload)?;
     build_transparent_pipeline_stages(device, &vert_fn, &frag_fn)
@@ -197,7 +201,7 @@ fn build_glass_mesh_pipeline_slang(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
     fragment: &slang_builtins::SlangLib,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     let vert_fn =
         slang_builtins::entry_function(device, &slang_builtins::GLASS_MESH_VERT, hot_reload)?;
     let frag_fn = slang_builtins::entry_function(device, fragment, hot_reload)?;
@@ -212,7 +216,7 @@ pub(in crate::metal) fn build_transparent_pipeline_stages(
     device: &ProtocolObject<dyn MTLDevice>,
     vert_fn: &ProtocolObject<dyn objc2_metal::MTLFunction>,
     frag_fn: &ProtocolObject<dyn objc2_metal::MTLFunction>,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     let vert_desc = vertex_descriptor(
         &[
             VertexAttr {
@@ -272,7 +276,7 @@ pub(in crate::metal) fn build_transparent_pipeline_stages(
 
     device
         .newRenderPipelineStateWithDescriptor_error(&desc)
-        .map_err(|e| format!("failed to create transparent pipeline state: {:?}", e))
+        .map_err(|e| RenderError::ShaderCompile(format!("transparent pipeline state: {e:?}")))
 }
 
 impl MtlContext {

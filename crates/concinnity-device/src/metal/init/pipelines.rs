@@ -9,6 +9,7 @@
 use concinnity_core::components::ShaderPrograms;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::render::backend_init;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -19,6 +20,7 @@ use objc2_metal::{
 
 use crate::metal::context::{BINDLESS_SAMPLER_ARG_BUFFER_INDEX, BINDLESS_TEXTURE_ARG_BUFFER_INDEX};
 use crate::metal::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
+use crate::metal::error::allocation_failed;
 use crate::metal::pipeline::{ns_str, world_library};
 
 // The argument encoders of the bindless main pass's engine blocks.
@@ -83,7 +85,7 @@ pub(crate) fn build_main_pipeline(
     world: Option<&ShaderPrograms>,
     hot_reload: bool,
     sample_count: u32,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     // Both pairs come from the single-source bindless program: the engine's
     // own, or the world's compile of the same file with its hooks spliced in.
     // The static pass is always GPU-driven now.
@@ -91,29 +93,45 @@ pub(crate) fn build_main_pipeline(
         None => {
             let vert_library = super::super::slang_builtins::MAIN_BINDLESS_VERT
                 .library(device, hot_reload)
-                .map_err(|e| format!("failed to load engine vertex library: {e}"))?;
+                .map_err(|e| e.context("engine vertex library"))?;
             let frag_library = super::super::slang_builtins::MAIN_BINDLESS_FRAG
                 .library(device, hot_reload)
-                .map_err(|e| format!("failed to load engine fragment library: {e}"))?;
+                .map_err(|e| e.context("engine fragment library"))?;
             let vert_fn = vert_library
                 .newFunctionWithName(&ns_str("vertex_main_bindless"))
-                .ok_or("vertex_main_bindless not found in engine library")?;
+                .ok_or_else(|| {
+                    RenderError::ShaderCompile(
+                        "vertex_main_bindless not found in engine library".into(),
+                    )
+                })?;
             let frag_fn = frag_library
                 .newFunctionWithName(&ns_str("fragment_main_bindless"))
-                .ok_or("fragment_main_bindless not found in engine library")?;
+                .ok_or_else(|| {
+                    RenderError::ShaderCompile(
+                        "fragment_main_bindless not found in engine library".into(),
+                    )
+                })?;
             (vert_fn, frag_fn)
         }
         Some(programs) => {
             // One library holds the pair: the cook groups the bindless
             // entries into one MSL translation unit on this host.
             let library = world_library(device, hot_reload, programs, "fragment_main_bindless")
-                .map_err(|e| format!("failed to load the world's main library: {e}"))?;
+                .map_err(|e| e.context("the world's main library"))?;
             let vert_fn = library
                 .newFunctionWithName(&ns_str("vertex_main_bindless"))
-                .ok_or("vertex_main_bindless not found in the world's main library")?;
+                .ok_or_else(|| {
+                    RenderError::ShaderCompile(
+                        "vertex_main_bindless not found in the world's main library".into(),
+                    )
+                })?;
             let frag_fn = library
                 .newFunctionWithName(&ns_str("fragment_main_bindless"))
-                .ok_or("fragment_main_bindless not found in the world's main library")?;
+                .ok_or_else(|| {
+                    RenderError::ShaderCompile(
+                        "fragment_main_bindless not found in the world's main library".into(),
+                    )
+                })?;
             (vert_fn, frag_fn)
         }
     };
@@ -138,7 +156,7 @@ pub(crate) fn build_main_pipeline(
 
     device
         .newRenderPipelineStateWithDescriptor_error(&pipeline_desc)
-        .map_err(|e| format!("failed to create pipeline state: {:?}", e))
+        .map_err(|e| RenderError::ShaderCompile(format!("main pipeline state: {e:?}")))
 }
 
 // The argument encoders for the `BindlessTextures` buffer at buffer(7) and the
@@ -149,7 +167,7 @@ pub(crate) fn build_main_pipeline(
 pub(crate) fn build_bindless_arg_encoders(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
-) -> Result<BindlessArgEncoders, String> {
+) -> RenderResult<BindlessArgEncoders> {
     let encoder_frag_fn = super::super::slang_builtins::entry_function(
         device,
         &super::super::slang_builtins::MAIN_BINDLESS_FRAG,
@@ -177,12 +195,12 @@ pub(crate) fn build_bindless_sampler_args(
     tex_sampler: &ProtocolObject<dyn objc2_metal::MTLSamplerState>,
     shadow_sampler: &ProtocolObject<dyn objc2_metal::MTLSamplerState>,
     cube_sampler: &ProtocolObject<dyn objc2_metal::MTLSamplerState>,
-) -> Result<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>> {
     use objc2_metal::MTLResourceOptions;
     let len = encoder.encodedLength().max(16);
     let buf = device
         .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
-        .ok_or("failed to allocate sampler argument buffer")?;
+        .ok_or_else(|| allocation_failed("the sampler argument buffer"))?;
     // SAFETY: `buf` was sized to the encoder's `encodedLength()`, and the
     // indices 0..2 are the EngineSamplers member ids in declaration order.
     unsafe {
@@ -213,7 +231,7 @@ pub(crate) fn build_world_pipeline_table(
     extra_shaders: &[backend_init::WorldShader<'_>],
     hot_reload: bool,
     sample_count: u32,
-) -> Result<WorldPipelineTable, String> {
+) -> RenderResult<WorldPipelineTable> {
     let mut table = Vec::with_capacity(extra_shaders.len());
     for (i, shader) in extra_shaders.iter().enumerate() {
         // A bucket whose Shader a non-start scene owns has no payload yet; the
@@ -242,15 +260,23 @@ pub(crate) fn build_bucket_pipeline(
     programs: &ShaderPrograms,
     hot_reload: bool,
     sample_count: u32,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     let library = world_library(device, hot_reload, programs, "fragment_main_bindless")
-        .map_err(|e| format!("shader bucket {bucket}: {e}"))?;
+        .map_err(|e| e.context(format_args!("shader bucket {bucket}")))?;
     let vert_fn = library
         .newFunctionWithName(&ns_str("vertex_main_bindless"))
-        .ok_or_else(|| format!("shader bucket {bucket}: vertex_main_bindless not found"))?;
+        .ok_or_else(|| {
+            RenderError::ShaderCompile(format!(
+                "shader bucket {bucket}: vertex_main_bindless not found"
+            ))
+        })?;
     let frag_fn = library
         .newFunctionWithName(&ns_str("fragment_main_bindless"))
-        .ok_or_else(|| format!("shader bucket {bucket}: fragment_main_bindless not found"))?;
+        .ok_or_else(|| {
+            RenderError::ShaderCompile(format!(
+                "shader bucket {bucket}: fragment_main_bindless not found"
+            ))
+        })?;
 
     let desc = MTLRenderPipelineDescriptor::new();
     desc.setVertexDescriptor(Some(vert_desc));
@@ -269,7 +295,9 @@ pub(crate) fn build_bucket_pipeline(
 
     device
         .newRenderPipelineStateWithDescriptor_error(&desc)
-        .map_err(|e| format!("shader bucket {bucket}: failed to create pipeline: {e:?}"))
+        .map_err(|e| {
+            RenderError::ShaderCompile(format!("shader bucket {bucket}: pipeline state: {e:?}"))
+        })
 }
 
 // Shadow pipeline: depth-only, no fragment function, no MSAA. Compiled from the
@@ -280,7 +308,7 @@ pub(crate) fn build_shadow_pipeline(
     device: &ProtocolObject<dyn MTLDevice>,
     vert_desc: &MTLVertexDescriptor,
     hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     let shadow_fn = super::super::slang_builtins::entry_function(
         device,
         &super::super::slang_builtins::SHADOW_VERT,
@@ -293,7 +321,7 @@ pub(crate) fn build_shadow_pipeline(
     shadow_pipeline_desc.setDepthAttachmentPixelFormat(MTLPixelFormat::Depth32Float);
     device
         .newRenderPipelineStateWithDescriptor_error(&shadow_pipeline_desc)
-        .map_err(|e| format!("failed to create shadow pipeline state: {:?}", e))
+        .map_err(|e| RenderError::ShaderCompile(format!("shadow pipeline state: {e:?}")))
 }
 
 // GPU-driven cascaded-shadow render pipeline: depth-only, no
@@ -308,7 +336,7 @@ pub(crate) fn build_shadow_bindless_pipeline(
     device: &ProtocolObject<dyn MTLDevice>,
     vert_desc: &MTLVertexDescriptor,
     hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     let shadow_fn = super::super::slang_builtins::entry_function(
         device,
         &super::super::slang_builtins::SHADOW_VERT_BINDLESS,
@@ -322,20 +350,20 @@ pub(crate) fn build_shadow_bindless_pipeline(
     shadow_pipeline_desc.setSupportIndirectCommandBuffers(true);
     device
         .newRenderPipelineStateWithDescriptor_error(&shadow_pipeline_desc)
-        .map_err(|e| format!("failed to create shadow bindless pipeline state: {:?}", e))
+        .map_err(|e| RenderError::ShaderCompile(format!("shadow bindless pipeline state: {e:?}")))
 }
 
 // Depth-stencil state: less-than test, writes enabled (shared for main and
 // shadow pass).
 pub(crate) fn make_depth_state(
     device: &ProtocolObject<dyn MTLDevice>,
-) -> Result<Retained<ProtocolObject<dyn MTLDepthStencilState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLDepthStencilState>>> {
     let depth_desc = MTLDepthStencilDescriptor::new();
     depth_desc.setDepthCompareFunction(MTLCompareFunction::Less);
     depth_desc.setDepthWriteEnabled(true);
     device
         .newDepthStencilStateWithDescriptor(&depth_desc)
-        .ok_or_else(|| "failed to create depth stencil state".to_string())
+        .ok_or_else(|| RenderError::Other("failed to create depth stencil state".into()))
 }
 
 // Read-only depth-stencil state: less-or-equal test, no write. Translucent
@@ -344,11 +372,11 @@ pub(crate) fn make_depth_state(
 // required: Metal's validation layer asserts on `setDepthStencilState(nil)`.
 pub(crate) fn make_depth_state_read_only(
     device: &ProtocolObject<dyn MTLDevice>,
-) -> Result<Retained<ProtocolObject<dyn MTLDepthStencilState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLDepthStencilState>>> {
     let depth_desc = MTLDepthStencilDescriptor::new();
     depth_desc.setDepthCompareFunction(MTLCompareFunction::LessEqual);
     depth_desc.setDepthWriteEnabled(false);
     device
         .newDepthStencilStateWithDescriptor(&depth_desc)
-        .ok_or_else(|| "failed to create read-only depth stencil state".to_string())
+        .ok_or_else(|| RenderError::Other("failed to create read-only depth stencil state".into()))
 }

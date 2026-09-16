@@ -19,6 +19,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::frustum::Frustum;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::particles::{ParticleEmitterRecord, ParticleSpawnState};
 use concinnity_core::render::uniforms::ParticleView;
 use objc2::rc::Retained;
@@ -38,6 +39,7 @@ use concinnity_core::render::uniforms::GpuParticle;
 
 use super::context::MtlContext;
 use super::encode::{ComputeEncode, RenderEncode};
+use super::error::allocation_failed;
 use super::pipeline::ns_str;
 use super::scoped_encoder::ScopedEncoder;
 
@@ -208,7 +210,7 @@ impl MtlContext {
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         frame: &ParticleFrame,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let Some(pipelines) = self.particle.pipelines.as_ref() else {
             return Ok(());
         };
@@ -224,7 +226,9 @@ impl MtlContext {
         let enc = ScopedEncoder::new(
             cmd_buf
                 .computeCommandEncoderWithDescriptor(&sim_desc)
-                .ok_or("failed to get particle compute encoder")?,
+                .ok_or_else(|| {
+                    RenderError::Other("failed to get particle compute encoder".into())
+                })?,
             ns_string!("particles: simulate"),
         );
         enc.set_pipeline(&pipelines.simulate);
@@ -275,7 +279,7 @@ impl MtlContext {
         frame: &ParticleFrame,
         vp: [[f32; 4]; 4],
         frustum: &Frustum,
-    ) -> Result<u32, String> {
+    ) -> RenderResult<u32> {
         let Some(pipelines) = self.particle.pipelines.as_ref() else {
             return Ok(0);
         };
@@ -336,7 +340,9 @@ impl MtlContext {
         let enc = ScopedEncoder::new(
             cmd_buf
                 .renderCommandEncoderWithDescriptor(&pass_desc)
-                .ok_or("failed to get particle render encoder")?,
+                .ok_or_else(|| {
+                    RenderError::Other("failed to get particle render encoder".into())
+                })?,
             ns_string!("particles: draw"),
         );
         enc.set_pipeline(&pipelines.render);
@@ -388,17 +394,17 @@ impl MtlContext {
 pub(super) fn build_particle_pipelines(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
-) -> Result<ParticlePipelines, String> {
+) -> RenderResult<ParticlePipelines> {
     // Compute kernel, from `particle_simulate.slang`. The render pair below
     // splices the same `{PARTICLE_TYPES}` fragment, so both halves stride one
     // declaration of the pool record and the per-emitter uniform.
     let sim_lib = super::slang_builtins::PARTICLE_SIMULATE.library(device, hot_reload)?;
     let sim_fn = sim_lib
         .newFunctionWithName(&ns_str("particle_simulate"))
-        .ok_or("particle_simulate not found")?;
+        .ok_or_else(|| RenderError::ShaderCompile("particle_simulate not found".into()))?;
     let simulate = device
         .newComputePipelineStateWithFunction_error(&sim_fn)
-        .map_err(|e| format!("failed to create particle_simulate pipeline: {:?}", e))?;
+        .map_err(|e| RenderError::ShaderCompile(format!("particle_simulate pipeline: {e:?}")))?;
 
     // Render pipeline. No vertex descriptor: the vertex shader reads from the
     // particle pool storage buffer directly via `[[vertex_id]]` + `[[instance_id]]`.
@@ -431,7 +437,7 @@ pub(super) fn build_particle_pipelines(
     }
     let render = device
         .newRenderPipelineStateWithDescriptor_error(&desc)
-        .map_err(|e| format!("failed to create particle render pipeline: {:?}", e))?;
+        .map_err(|e| RenderError::ShaderCompile(format!("particle render pipeline: {e:?}")))?;
 
     // Sampler: linear-clamp, same envelope the decal pass uses.
     let sampler = {
@@ -442,7 +448,7 @@ pub(super) fn build_particle_pipelines(
         sdesc.setTAddressMode(MTLSamplerAddressMode::ClampToEdge);
         device
             .newSamplerStateWithDescriptor(&sdesc)
-            .ok_or("failed to create particle sampler state")?
+            .ok_or_else(|| RenderError::Other("failed to create particle sampler state".into()))?
     };
 
     Ok(ParticlePipelines {
@@ -460,12 +466,12 @@ pub(super) fn build_emitter_gpu_state(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     record: &ParticleEmitterRecord,
     frames_in_flight: usize,
-) -> Result<ParticleEmitterGpuState, String> {
+) -> RenderResult<ParticleEmitterGpuState> {
     let slots = record.max_particles as usize;
     let pool_bytes = slots * std::mem::size_of::<GpuParticle>();
     let pool = device
         .newBufferWithLength_options(pool_bytes, MTLResourceOptions::StorageModeShared)
-        .ok_or("failed to allocate particle pool buffer")?;
+        .ok_or_else(|| allocation_failed("the particle pool buffer"))?;
     // Zero-init: every slot starts dead (`lifetime = 0`).
     // SAFETY: `pool` was just allocated with `pool_bytes` bytes of shared storage, so `contents()`
     // is a live CPU mapping of exactly that many bytes.
@@ -477,7 +483,7 @@ pub(super) fn build_emitter_gpu_state(
     let counter_bytes = spawn_counter_bytes(frames_in_flight);
     let spawn_counter = device
         .newBufferWithLength_options(counter_bytes, MTLResourceOptions::StorageModeShared)
-        .ok_or("failed to allocate particle spawn counter")?;
+        .ok_or_else(|| allocation_failed("the particle spawn counter"))?;
     // Zero every slot: a frame that skips its dispatch leaves its slot at
     // whatever the last dispatch decremented it to.
     // SAFETY: `spawn_counter` was just allocated with `counter_bytes` bytes of shared storage, so

@@ -12,6 +12,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::render_types;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
@@ -46,7 +47,7 @@ pub(crate) fn build_rt_reflection_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     fragment: &SlangLib,
     hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     build_slang_fullscreen_pipeline(
         device,
         fragment,
@@ -71,7 +72,7 @@ impl MtlContext {
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         rt_params: &render_types::RtParams,
         bindless_tex_args: Option<&Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
-    ) -> Result<u32, String> {
+    ) -> RenderResult<u32> {
         let (targets, accel, gb_normal_depth, gb_roughness) = match (
             &self.ssr.targets,
             &self.rt.accel,
@@ -120,7 +121,7 @@ impl MtlContext {
         let enc = ScopedEncoder::new(
             cmd_buf
                 .renderCommandEncoderWithDescriptor(&desc)
-                .ok_or("failed to get RT reflections encoder")?,
+                .ok_or_else(|| RenderError::Other("failed to get RT reflections encoder".into()))?,
             ns_string!("rt reflections"),
         );
         enc.set_pipeline(pipeline);

@@ -6,6 +6,7 @@
 //! `cull.rs` files so each effect is a single unit.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::render::error::{RenderError, RenderResult};
 use dispatch2::DispatchData;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -82,18 +83,18 @@ pub(super) fn shader_library(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
     name: &str,
-) -> Result<Retained<ProtocolObject<dyn objc2_metal::MTLLibrary>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn objc2_metal::MTLLibrary>>> {
     let msl = shader_source(hot_reload, name);
     if let Some((digest, bytes)) = crate::metal::metallib::embedded_metallib(name)
         && digest == concinnity_core::render::slang_source::source_digest(&msl)
     {
         return load_library(device, bytes)
-            .map_err(|e| format!("{name}: failed to load precompiled metallib: {e}"));
+            .map_err(|e| e.context(format_args!("{name}: precompiled metallib")));
     }
     let options = objc2_metal::MTLCompileOptions::new();
     device
         .newLibraryWithSource_options_error(&ns_str(msl.as_ref()), Some(&options))
-        .map_err(|e| format!("{name}: shader compile error: {e:?}"))
+        .map_err(|e| RenderError::ShaderCompile(format!("{name}: shader compile error: {e:?}")))
 }
 
 // The world Shader's library holding `entry`: the cook's MSL text, or a
@@ -104,15 +105,19 @@ pub(super) fn world_library(
     hot_reload: bool,
     programs: &concinnity_core::components::ShaderPrograms,
     entry: &str,
-) -> Result<Retained<ProtocolObject<dyn objc2_metal::MTLLibrary>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn objc2_metal::MTLLibrary>>> {
     let req = crate::shader::surface_source::Request {
         platform: concinnity_core::platform::Platform::Metal,
         probe_count: concinnity_core::render::uniforms::MAX_PROBES,
         hot_reload,
     };
-    let msl = crate::shader::surface_source::artifact(programs, entry, &req)?;
-    let msl = std::str::from_utf8(&msl)
-        .map_err(|e| format!("world shader {entry}: artifact is not MSL text: {e}"))?;
+    let msl = crate::shader::surface_source::artifact(programs, entry, &req)
+        .map_err(RenderError::ShaderCompile)?;
+    let msl = std::str::from_utf8(&msl).map_err(|e| {
+        RenderError::ShaderCompile(format!(
+            "world shader {entry}: artifact is not MSL text: {e}"
+        ))
+    })?;
     super::msl_cache::compiled_library(device, msl, &format!("world shader {entry}"))
 }
 
@@ -120,11 +125,11 @@ pub(super) fn world_library(
 pub(super) fn load_library(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     bytes: &[u8],
-) -> Result<Retained<ProtocolObject<dyn objc2_metal::MTLLibrary>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn objc2_metal::MTLLibrary>>> {
     let data = DispatchData::from_bytes(bytes);
     device
         .newLibraryWithData_error(&data)
-        .map_err(|e| format!("{:?}", e))
+        .map_err(|e| RenderError::ShaderCompile(format!("{e:?}")))
 }
 
 // Build the text overlay render pipeline from the single-source `text.slang`
@@ -133,7 +138,7 @@ pub(super) fn build_text_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     swap_pixel_format: MTLPixelFormat,
     hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     use objc2_metal::{MTLBlendFactor, MTLVertexFormat, MTLVertexStepFunction};
 
     // Each entry compiles to its own metallib, so the two stages come from
@@ -208,7 +213,7 @@ pub(super) fn build_text_pipeline(
 
     device
         .newRenderPipelineStateWithDescriptor_error(&pipeline_desc)
-        .map_err(|e| format!("failed to create text pipeline state: {:?}", e))
+        .map_err(|e| RenderError::ShaderCompile(format!("text pipeline state: {e:?}")))
 }
 
 // Build the post-process pipeline: a fullscreen triangle that samples the
@@ -221,7 +226,7 @@ pub(super) fn build_post_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     swap_pixel_format: MTLPixelFormat,
     hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     // Single color attachment matches the swapchain format chosen by
     // `configure_mtk_view` (`BGRA8Unorm` for SDR, `RGBA16Float` for HDR EDR).
     build_slang_fullscreen_pipeline(

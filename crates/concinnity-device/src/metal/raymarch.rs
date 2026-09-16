@@ -29,6 +29,7 @@ use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::LightUniforms;
 use concinnity_core::platform::Platform;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::slang_programs::raymarch::{self, Family};
 use concinnity_slang::SlangTarget;
 use objc2::rc::Retained;
@@ -52,6 +53,7 @@ pub(in crate::metal) use concinnity_core::render::uniforms::{
 use super::context::MtlContext;
 use super::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
 use super::encode::RenderEncode;
+use super::error::allocation_failed;
 use super::pipeline::ns_str;
 use super::scoped_encoder::ScopedEncoder;
 
@@ -142,7 +144,7 @@ fn family_library(
     family: Family,
     hot_reload: bool,
     asset_label: &str,
-) -> Result<Retained<ProtocolObject<dyn MTLLibrary>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLLibrary>>> {
     let entries: Vec<&str> = raymarch::ALL
         .iter()
         .filter(|p| p.family == family)
@@ -158,11 +160,15 @@ fn family_library(
             hot_reload,
             label: asset_label,
         },
-    )?;
-    let text = std::str::from_utf8(&msl)
-        .map_err(|e| format!("SdfVolume '{asset_label}': compiled field is not MSL text: {e}"))?;
+    )
+    .map_err(RenderError::ShaderCompile)?;
+    let text = std::str::from_utf8(&msl).map_err(|e| {
+        RenderError::ShaderCompile(format!(
+            "SdfVolume '{asset_label}': compiled field is not MSL text: {e}"
+        ))
+    })?;
     super::msl_cache::compiled_library(device, text, asset_label)
-        .map_err(|e| format!("raymarch shader compile error for SdfVolume '{asset_label}': {e}"))
+        .map_err(|e| e.context(format_args!("SdfVolume '{asset_label}'")))
 }
 
 // One entry point out of a family's library, named so a missing one points at
@@ -171,9 +177,11 @@ fn entry_function(
     library: &ProtocolObject<dyn MTLLibrary>,
     entry: &str,
     asset_label: &str,
-) -> Result<Retained<ProtocolObject<dyn objc2_metal::MTLFunction>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn objc2_metal::MTLFunction>>> {
     library.newFunctionWithName(&ns_str(entry)).ok_or_else(|| {
-        format!("{entry} entry not found in compiled library for SdfVolume '{asset_label}'")
+        RenderError::ShaderCompile(format!(
+            "{entry} entry not found in compiled library for SdfVolume '{asset_label}'"
+        ))
     })
 }
 
@@ -190,7 +198,7 @@ pub(in crate::metal) fn build_raymarch_pipeline(
     programs: &SdfPrograms,
     hot_reload: bool,
     asset_label: &str,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     let library = family_library(device, programs, Family::Surface, hot_reload, asset_label)?;
     let vert_fn = entry_function(&library, "raymarch_vertex", asset_label)?;
     let frag_fn = entry_function(&library, "raymarch_fragment", asset_label)?;
@@ -236,10 +244,9 @@ pub(in crate::metal) fn build_raymarch_pipeline(
     device
         .newRenderPipelineStateWithDescriptor_error(&desc)
         .map_err(|e| {
-            format!(
-                "failed to create raymarch pipeline state for SdfVolume '{}': {:?}",
-                asset_label, e
-            )
+            RenderError::ShaderCompile(format!(
+                "raymarch pipeline state for SdfVolume '{asset_label}': {e:?}"
+            ))
         })
 }
 
@@ -254,7 +261,7 @@ pub(in crate::metal) fn build_raymarch_shadow_pipeline(
     programs: &SdfPrograms,
     hot_reload: bool,
     asset_label: &str,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     let library = family_library(device, programs, Family::Shadow, hot_reload, asset_label)?;
     let vert_fn = entry_function(&library, "raymarch_shadow_vertex", asset_label)?;
     let frag_fn = entry_function(&library, "raymarch_shadow_fragment", asset_label)?;
@@ -286,10 +293,9 @@ pub(in crate::metal) fn build_raymarch_shadow_pipeline(
     device
         .newRenderPipelineStateWithDescriptor_error(&desc)
         .map_err(|e| {
-            format!(
-                "failed to create raymarch shadow pipeline state for SdfVolume '{}': {:?}",
-                asset_label, e
-            )
+            RenderError::ShaderCompile(format!(
+                "raymarch shadow pipeline state for SdfVolume '{asset_label}': {e:?}"
+            ))
         })
 }
 
@@ -301,7 +307,7 @@ pub(in crate::metal) fn build_raymarch_volumetric_pipeline(
     programs: &SdfPrograms,
     hot_reload: bool,
     asset_label: &str,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     let library = family_library(
         device,
         programs,
@@ -354,10 +360,9 @@ pub(in crate::metal) fn build_raymarch_volumetric_pipeline(
     device
         .newRenderPipelineStateWithDescriptor_error(&desc)
         .map_err(|e| {
-            format!(
-                "failed to create raymarch volumetric pipeline state for SdfVolume '{}': {:?}",
-                asset_label, e
-            )
+            RenderError::ShaderCompile(format!(
+                "raymarch volumetric pipeline state for SdfVolume '{asset_label}': {e:?}"
+            ))
         })
 }
 
@@ -369,8 +374,10 @@ pub(in crate::metal) fn build_raymarch_volume_record(
     payload: &[u8],
     hot_reload: bool,
     asset_label: &str,
-) -> Result<RaymarchVolumeRecord, String> {
-    let programs = crate::shader::raymarch_source::decode(payload, asset_label)?;
+) -> RenderResult<RaymarchVolumeRecord> {
+    // A payload that does not decode is a cook/asset failure, not a compile.
+    let programs =
+        crate::shader::raymarch_source::decode(payload, asset_label).map_err(RenderError::Other)?;
     // A medium is integrated rather than surfaced, so it builds the blended
     // pipeline and nothing else: its field defines `sampleVolume` and no
     // `map`, which the surface entries would fail to link against.
@@ -430,7 +437,7 @@ type RaymarchCubeBuffers = (
 
 pub(in crate::metal) fn build_raymarch_cube_buffers(
     device: &ProtocolObject<dyn MTLDevice>,
-) -> Result<RaymarchCubeBuffers, String> {
+) -> RenderResult<RaymarchCubeBuffers> {
     // `extent` in SdfVolume is the AABB half-widths: the box spans
     // `center ± extent`. The vertex shader computes `pos * extent +
     // center`, so the proxy corners must be at `±1.0` for the scaled
@@ -472,18 +479,18 @@ pub(in crate::metal) fn build_raymarch_cube_buffers(
     // the new buffer before the call returns.
     let vb = unsafe {
         let ptr = std::ptr::NonNull::new(corners.as_ptr() as *mut _)
-            .ok_or("raymarch cube vertex pointer null")?;
+            .ok_or_else(|| RenderError::Other("raymarch cube vertex pointer null".into()))?;
         device
             .newBufferWithBytes_length_options(ptr, vb_bytes, MTLResourceOptions::StorageModeShared)
-            .ok_or("failed to allocate raymarch cube vertex buffer")?
+            .ok_or_else(|| allocation_failed("the raymarch cube vertex buffer"))?
     };
     // SAFETY: as above -- `ptr`/`ib_bytes` describe the live `indices` array.
     let ib = unsafe {
         let ptr = std::ptr::NonNull::new(indices.as_ptr() as *mut _)
-            .ok_or("raymarch cube index pointer null")?;
+            .ok_or_else(|| RenderError::Other("raymarch cube index pointer null".into()))?;
         device
             .newBufferWithBytes_length_options(ptr, ib_bytes, MTLResourceOptions::StorageModeShared)
-            .ok_or("failed to allocate raymarch cube index buffer")?
+            .ok_or_else(|| allocation_failed("the raymarch cube index buffer"))?
     };
     Ok((vb, ib))
 }
@@ -510,7 +517,7 @@ impl MtlContext {
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         view: &RaymarchView,
         frustum: &Frustum,
-    ) -> Result<u32, String> {
+    ) -> RenderResult<u32> {
         if self.raymarch.volumes.is_empty() {
             return Ok(0);
         }
@@ -531,12 +538,12 @@ impl MtlContext {
             .raymarch
             .cube_vertex_buffer
             .as_ref()
-            .ok_or("raymarch cube vertex buffer missing")?;
+            .ok_or_else(|| RenderError::Other("raymarch cube vertex buffer missing".into()))?;
         let ibuf = self
             .raymarch
             .cube_index_buffer
             .as_ref()
-            .ok_or("raymarch cube index buffer missing")?;
+            .ok_or_else(|| RenderError::Other("raymarch cube index buffer missing".into()))?;
         let depth_sampler = self.composite.sampler.as_ref();
 
         let lights_gpu: RaymarchLightsGpu = self.light_uniforms;
@@ -565,9 +572,9 @@ impl MtlContext {
         // clips against the rasterized surface, and the pass writes the depth
         // target it would otherwise sample.
         {
-            let blit = cmd_buf
-                .blitCommandEncoder()
-                .ok_or("failed to get raymarch scene-copy blit encoder")?;
+            let blit = cmd_buf.blitCommandEncoder().ok_or_else(|| {
+                RenderError::Other("failed to get raymarch scene-copy blit encoder".into())
+            })?;
             blit.pushDebugGroup(&NSString::from_str("raymarch_scene_copy"));
             // SAFETY: each pair is `targets.hdr`-owned and created with the same format and
             // dimensions, which is what a whole-texture blit copy requires.
@@ -616,7 +623,9 @@ impl MtlContext {
         let enc = ScopedEncoder::new(
             cmd_buf
                 .renderCommandEncoderWithDescriptor(&pass_desc)
-                .ok_or("failed to get raymarch render encoder")?,
+                .ok_or_else(|| {
+                    RenderError::Other("failed to get raymarch render encoder".into())
+                })?,
             ns_string!("raymarch"),
         );
         // Front-face cull so each pixel inside the box receives exactly
@@ -743,21 +752,17 @@ impl MtlContext {
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         view: &RaymarchView,
-    ) -> Result<u32, String> {
+    ) -> RenderResult<u32> {
         use concinnity_core::gfx::render_types::NUM_SHADOW_CASCADES;
         if !self.any_raymarch_shadow_casters() {
             return Ok(0);
         }
-        let vbuf = self
-            .raymarch
-            .cube_vertex_buffer
-            .as_ref()
-            .ok_or("raymarch shadow: cube vertex buffer missing")?;
-        let ibuf = self
-            .raymarch
-            .cube_index_buffer
-            .as_ref()
-            .ok_or("raymarch shadow: cube index buffer missing")?;
+        let vbuf = self.raymarch.cube_vertex_buffer.as_ref().ok_or_else(|| {
+            RenderError::Other("raymarch shadow: cube vertex buffer missing".into())
+        })?;
+        let ibuf = self.raymarch.cube_index_buffer.as_ref().ok_or_else(|| {
+            RenderError::Other("raymarch shadow: cube index buffer missing".into())
+        })?;
         let lights_gpu: RaymarchLightsGpu = self.light_uniforms;
         let shadow_uniforms = self.shadow.uniforms;
 
@@ -788,7 +793,9 @@ impl MtlContext {
             let enc = ScopedEncoder::new(
                 cmd_buf
                     .renderCommandEncoderWithDescriptor(&pass_desc)
-                    .ok_or("failed to get raymarch shadow render encoder")?,
+                    .ok_or_else(|| {
+                        RenderError::Other("failed to get raymarch shadow render encoder".into())
+                    })?,
                 ns_string!("raymarch shadow"),
             );
             // Front-face cull → exactly one fragment per texel inside the box's

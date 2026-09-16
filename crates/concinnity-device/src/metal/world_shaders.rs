@@ -6,6 +6,7 @@
 // those scenes pin and unpin, so the pipeline build lands behind the loading
 // screen rather than on the frame that first draws the material.
 
+use concinnity_core::render::error::{RenderError, RenderResult};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLRenderPipelineState;
@@ -21,7 +22,7 @@ impl MtlContext {
         &mut self,
         bucket: u32,
         programs: &concinnity_core::components::ShaderPrograms,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let slot = self.world_pipeline_slot(bucket)?;
         let vert_desc = make_vertex_descriptor();
         let pso = build_bucket_pipeline(
@@ -67,15 +68,17 @@ impl MtlContext {
             .as_ref()
     }
 
-    fn world_pipeline_slot(&self, bucket: u32) -> Result<usize, String> {
-        let slot = (bucket as usize)
-            .checked_sub(1)
-            .ok_or_else(|| "shader bucket 0 is the world default program".to_string())?;
+    // A bucket outside the world's table is a scene-authoring mistake, not a
+    // device failure, so it stays `Other` whatever the pipeline build would say.
+    fn world_pipeline_slot(&self, bucket: u32) -> RenderResult<usize> {
+        let slot = (bucket as usize).checked_sub(1).ok_or_else(|| {
+            RenderError::Other("shader bucket 0 is the world default program".into())
+        })?;
         if slot >= self.cull.world_pipelines.len() {
-            return Err(format!(
+            return Err(RenderError::Other(format!(
                 "shader bucket {bucket} is past the world's {} shader pipeline(s)",
                 self.cull.world_pipelines.len()
-            ));
+            )));
         }
         Ok(slot)
     }

@@ -12,6 +12,7 @@
 
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::render::decal::DecalSet;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::uniforms::DecalView;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -61,7 +62,7 @@ impl MtlContext {
         // depth-reconstruction passes; see `GraphFrameParams::inv_vp`.
         inv_vp: [[f32; 4]; 4],
         frustum: &Frustum,
-    ) -> Result<u32, String> {
+    ) -> RenderResult<u32> {
         let pipeline = match &self.decal.pipeline {
             Some(p) => p,
             None => return Ok(0),
@@ -77,13 +78,17 @@ impl MtlContext {
             .decal
             .cube_vertex_buffer
             .as_ref()
-            .ok_or("decal cube vertex buffer missing")?;
+            .ok_or_else(|| RenderError::Other("decal cube vertex buffer missing".into()))?;
         let ibuf = self
             .decal
             .cube_index_buffer
             .as_ref()
-            .ok_or("decal cube index buffer missing")?;
-        let sampler = self.decal.sampler.as_ref().ok_or("decal sampler missing")?;
+            .ok_or_else(|| RenderError::Other("decal cube index buffer missing".into()))?;
+        let sampler = self
+            .decal
+            .sampler
+            .as_ref()
+            .ok_or_else(|| RenderError::Other("decal sampler missing".into()))?;
 
         let viewport = [
             self.targets.hdr.width as f32,
@@ -112,7 +117,7 @@ impl MtlContext {
         let enc = ScopedEncoder::new(
             cmd_buf
                 .renderCommandEncoderWithDescriptor(&pass_desc)
-                .ok_or("failed to get decal render encoder")?,
+                .ok_or_else(|| RenderError::Other("failed to get decal render encoder".into()))?,
             ns_string!("decals"),
         );
         enc.set_pipeline(pipeline);
@@ -172,7 +177,7 @@ impl MtlContext {
 pub(super) fn build_decal_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     // Each entry compiles to its own metallib, so the two stages come from
     // separate libraries and pair by semantic.
     let vert_fn = super::slang_builtins::entry_function(
@@ -225,5 +230,5 @@ pub(super) fn build_decal_pipeline(
 
     device
         .newRenderPipelineStateWithDescriptor_error(&desc)
-        .map_err(|e| format!("failed to create decal pipeline state: {:?}", e))
+        .map_err(|e| RenderError::ShaderCompile(format!("decal pipeline state: {e:?}")))
 }

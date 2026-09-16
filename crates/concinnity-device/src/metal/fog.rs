@@ -13,6 +13,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::render_types::{FogFroxelParams, FogParams};
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
 use concinnity_core::render::volumetric_fog::FogSettings;
 use objc2::rc::Retained;
@@ -28,6 +29,7 @@ use objc2_metal::{
 use super::context::MtlContext;
 use super::descriptors::TextureDesc;
 use super::encode::{ComputeEncode, RenderEncode};
+use super::error::allocation_failed;
 use super::pipeline::ns_str;
 use super::post::fullscreen::{
     FullscreenBlend, build_slang_fullscreen_pipeline, set_fragment_sampler_range,
@@ -81,7 +83,7 @@ impl MtlContext {
         cmd_buf: &objc2::runtime::ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         params: &FogParams,
         froxel_params: &FogFroxelParams,
-    ) -> Result<u32, String> {
+    ) -> RenderResult<u32> {
         let pipeline = match &self.fog.pipeline {
             Some(p) => p,
             None => return Ok(0),
@@ -107,7 +109,7 @@ impl MtlContext {
         let enc = ScopedEncoder::new(
             cmd_buf
                 .renderCommandEncoderWithDescriptor(&pass_desc)
-                .ok_or("failed to get fog render encoder")?,
+                .ok_or_else(|| RenderError::Other("failed to get fog render encoder".into()))?,
             ns_string!("volumetric fog"),
         );
         enc.set_pipeline(pipeline);
@@ -145,7 +147,7 @@ impl MtlContext {
         cmd_buf: &objc2::runtime::ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         params: &FogParams,
         froxel_params: &FogFroxelParams,
-    ) -> Result<u32, String> {
+    ) -> RenderResult<u32> {
         let pipeline = match &self.fog.froxel_pipeline {
             Some(p) => p,
             None => return Ok(0),
@@ -163,7 +165,9 @@ impl MtlContext {
         let enc = ScopedEncoder::new(
             cmd_buf_dyn
                 .computeCommandEncoderWithDescriptor(&desc)
-                .ok_or("failed to get fog froxel compute encoder")?,
+                .ok_or_else(|| {
+                    RenderError::Other("failed to get fog froxel compute encoder".into())
+                })?,
             ns_string!("fog froxel volume"),
         );
         enc.set_pipeline(pipeline);
@@ -208,7 +212,7 @@ impl MtlContext {
 pub(super) fn build_fog_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     // `(scattered, 1 - T)` over `scene` -> `scene * T + scattered`.
     build_slang_fullscreen_pipeline(
         device,
@@ -225,14 +229,14 @@ pub(super) fn build_fog_pipeline(
 pub(super) fn build_fog_froxel_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn MTLComputePipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLComputePipelineState>>> {
     let library = FOG_FROXEL.library(device, hot_reload)?;
     let func = library
         .newFunctionWithName(&ns_str("fog_froxel_kernel"))
-        .ok_or("fog_froxel_kernel not found")?;
+        .ok_or_else(|| RenderError::ShaderCompile("fog_froxel_kernel not found".into()))?;
     device
         .newComputePipelineStateWithFunction_error(&func)
-        .map_err(|e| format!("failed to create fog froxel pipeline: {:?}", e))
+        .map_err(|e| RenderError::ShaderCompile(format!("fog froxel pipeline: {e:?}")))
 }
 
 // Allocate the 3D `RGBA16Float` volume the froxel kernel writes and the
@@ -240,7 +244,7 @@ pub(super) fn build_fog_froxel_pipeline(
 // [`concinnity_core::render::render_graph::FOG_FROXEL_X`] / `Y` / `Z`.
 pub(super) fn build_fog_froxel_volume(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
-) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLTexture>>> {
     let desc = TextureDesc {
         kind: MTLTextureType::Type3D,
         format: MTLPixelFormat::RGBA16Float,
@@ -253,5 +257,5 @@ pub(super) fn build_fog_froxel_volume(
     .build();
     device
         .newTextureWithDescriptor(&desc)
-        .ok_or_else(|| "failed to allocate fog froxel volume texture".to_string())
+        .ok_or_else(|| allocation_failed("the fog froxel volume texture"))
 }

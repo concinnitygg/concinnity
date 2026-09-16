@@ -15,6 +15,7 @@
 // of Xcode itself changing -- and a metallib from a superseded one loads
 // perfectly well, which is exactly what makes replaying it invisible.
 
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_host::scratch::Scratch;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -28,7 +29,7 @@ pub(super) fn compiled_library(
     device: &ProtocolObject<dyn MTLDevice>,
     source: &str,
     label: &str,
-) -> Result<Retained<ProtocolObject<dyn MTLLibrary>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLLibrary>>> {
     // No toolchain is both the reason a compile would fail and the reason its
     // output could not be keyed, so the cache is not consulted at all rather
     // than looked up under a key that names no release.
@@ -64,14 +65,14 @@ pub(super) fn compiled_library(
 fn source_library(
     device: &ProtocolObject<dyn MTLDevice>,
     source: &str,
-) -> Result<Retained<ProtocolObject<dyn MTLLibrary>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLLibrary>>> {
     let options = objc2_metal::MTLCompileOptions::new();
     device
         .newLibraryWithSource_options_error(
             &objc2_foundation::NSString::from_str(source),
             Some(&options),
         )
-        .map_err(|e| format!("{e:?}"))
+        .map_err(|e| RenderError::ShaderCompile(format!("{e:?}")))
 }
 
 // The Metal toolchain's release, as the cache's `compiler` field, or `None`
@@ -110,13 +111,13 @@ fn toolchain_id_from(version_output: &str) -> Option<String> {
 // Compile `source` to metallib bytes with `xcrun metal` / `xcrun metallib`,
 // the same two-step pipeline the build script runs for the built-in shaders.
 // Each scratch file removes itself, so a failed step leaves nothing behind.
-fn compile_to_metallib(source: &str, label: &str) -> Result<Vec<u8>, String> {
+fn compile_to_metallib(source: &str, label: &str) -> RenderResult<Vec<u8>> {
     let msl = Scratch::file("msl.metal");
     let air = Scratch::file("msl.air");
     let metallib = Scratch::file("msl.metallib");
 
     std::fs::write(msl.path(), source)
-        .map_err(|e| format!("write {}: {e}", msl.path().display()))?;
+        .map_err(|e| RenderError::Other(format!("write {}: {e}", msl.path().display())))?;
     run_step(
         Command::new("xcrun")
             .args(["--sdk", "macosx", "metal", "-c"])
@@ -135,19 +136,20 @@ fn compile_to_metallib(source: &str, label: &str) -> Result<Vec<u8>, String> {
         label,
         "xcrun metallib",
     )?;
-    std::fs::read(metallib.path()).map_err(|e| format!("read compiled metallib: {e}"))
+    std::fs::read(metallib.path())
+        .map_err(|e| RenderError::Other(format!("read compiled metallib: {e}")))
 }
 
-fn run_step(cmd: &mut Command, label: &str, what: &str) -> Result<(), String> {
-    let output = cmd
-        .output()
-        .map_err(|e| format!("{what} failed to launch for {label}: {e}"))?;
+fn run_step(cmd: &mut Command, label: &str, what: &str) -> RenderResult<()> {
+    let output = cmd.output().map_err(|e| {
+        RenderError::ShaderCompile(format!("{what} failed to launch for {label}: {e}"))
+    })?;
     if !output.status.success() {
-        return Err(format!(
+        return Err(RenderError::ShaderCompile(format!(
             "{what} failed for {label}:\n{}\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
-        ));
+        )));
     }
     Ok(())
 }

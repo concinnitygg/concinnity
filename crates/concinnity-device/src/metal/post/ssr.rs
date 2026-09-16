@@ -62,7 +62,7 @@ pub(crate) struct SsrState {
 pub(crate) fn build_reflection_composite_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     build_slang_fullscreen_pipeline(
         device,
         &REFLECTION_COMPOSITE,
@@ -78,7 +78,7 @@ pub(crate) fn build_reflection_composite_pipeline(
 pub(crate) fn build_reflection_blur_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
-) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     build_slang_fullscreen_pipeline(
         device,
         &REFLECTION_BLUR,
@@ -195,7 +195,7 @@ impl MtlContext {
     pub(in crate::metal) fn encode_reflection_composite(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
-    ) -> Result<(), String> {
+    ) -> RenderResult<()> {
         let (targets, composite_ps, blur_ps, gb_normal_depth, gb_roughness) = match (
             &self.ssr.targets,
             &self.ssr.composite_pipeline,
