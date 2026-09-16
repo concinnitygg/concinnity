@@ -270,13 +270,7 @@ impl DxContext {
     // from `draw_frame` after the frame-slot fence wait; cheap once the queue drains.
     // Drives the pure `next_bake_action` transition table over two pipelined slots.
     // Non-fatal: a failure abandons the remaining bakes, keeping what baked.
-    pub(super) fn bake_pending_probes(
-        &mut self,
-        elapsed: f32,
-        near: f32,
-        far: f32,
-    ) -> RenderResult<()> {
-        let _ = elapsed;
+    pub(super) fn bake_pending_probes(&mut self, near: f32, far: f32) -> RenderResult<()> {
         if !self.probe.bake_queue.pending()
             && self.probe.rendering.is_none()
             && self.probe.prefiltering.is_none()

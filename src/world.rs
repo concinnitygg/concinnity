@@ -1,7 +1,7 @@
 //! The world an application is assembled from.
 
 use concinnity_core::components::Material;
-use concinnity_core::ecs::{BakedMesh, RuntimeComponent};
+use concinnity_core::ecs::RuntimeComponent;
 
 use crate::bake::{EnvironmentMapPayload, FontPayload, MeshPayload};
 use crate::system::{ComponentSlot, Entity, Phase, System};
@@ -152,16 +152,16 @@ impl World {
         self.inner.add_system(phase, name, system);
     }
 
-    /// Add a mesh with its baked geometry payload, returning the handle a
+    /// Add a baked mesh payload, returning the handle a
     /// [`Prop`](crate::components::Prop) references it by.
     ///
-    /// The mesh is a [`ProceduralMesh`](crate::components::ProceduralMesh)
-    /// with the payload [`bake::procedural_mesh`](crate::bake::procedural_mesh)
-    /// generated for it, or a raw [`bake::Mesh`](crate::bake::Mesh) with the
-    /// payload [`bake::mesh`](crate::bake::mesh) packed from its vertices.
+    /// The payload is what [`bake::procedural_mesh`](crate::bake::procedural_mesh)
+    /// generated from a [`ProceduralMesh`](crate::components::ProceduralMesh),
+    /// which the world also keeps, or what [`bake::mesh`](crate::bake::mesh)
+    /// packed from a raw [`bake::Mesh`](crate::bake::Mesh)'s vertices.
     /// Handles count up in the order meshes are added.
-    pub fn add_mesh<M: BakedMesh>(&mut self, mesh: M, payload: MeshPayload) -> MeshHandle {
-        self.inner.add_mesh(mesh, payload.into_bytes())
+    pub fn add_mesh(&mut self, payload: MeshPayload) -> MeshHandle {
+        self.inner.add_mesh(payload)
     }
 
     /// Add a material, returning the handle a

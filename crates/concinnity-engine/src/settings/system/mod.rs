@@ -335,14 +335,16 @@ impl SettingsState {
         let mut scene_ops: Vec<snapshot::SceneOp> = Vec::new();
         for cmd in scene_cmds {
             let mut recorder = snapshot::SceneOpRecorder(&mut scene_ops);
-            scene_flow::jump_to_scene(
+            if let Err(rejection) = scene_flow::jump_to_scene(
                 &mut slot.flow,
                 &scratch.visibility,
                 elapsed,
                 cmd.scene,
                 cmd.transition,
                 &mut recorder,
-            );
+            ) {
+                tracing::warn!("scene jump to {} rejected: {rejection:?}", cmd.scene.0);
+            }
         }
         if !scene_ops.is_empty() {
             ops.record(move |backend| {

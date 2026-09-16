@@ -101,7 +101,6 @@ pub(super) fn create_logical_device(
     pd: vk::PhysicalDevice,
     graphics_family: u32,
     present_family: u32,
-    validation: bool,
     upscaler_sdk: &UpscaleSdk,
 ) -> RenderResult<LogicalDevice> {
     let priority = [1.0f32];
@@ -326,10 +325,6 @@ pub(super) fn create_logical_device(
     }
 
     let ext_names: Vec<*const std::os::raw::c_char> = enabled.iter().map(|c| c.as_ptr()).collect();
-
-    // Device-level validation layers are inferred from the instance in modern Vulkan;
-    // VkDeviceCreateInfo::ppEnabledLayerNames is deprecated and ignored.
-    let _ = validation;
 
     // `shader_sampled_image_array_dynamic_indexing` lets the bindless static
     // pass index its `sampler2D tex_pool[N]` array by a dynamically-uniform

@@ -164,14 +164,7 @@ pub(crate) fn cursor_over(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> bool {
 // Resolve a click against the open panel at origin `o`, size `s`. `None` means
 // the click missed the panel. Title-bar presses never reach this: the hook
 // intercepts them first to start a drag (and to catch the "X").
-pub(crate) fn hit_test(
-    view: &TemplateView,
-    mx: f32,
-    my: f32,
-    o: [f32; 2],
-    s: [f32; 2],
-) -> Option<TemplateAction> {
-    let _ = view;
+pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> Option<TemplateAction> {
     let w = s[0];
     if !point_in(mx, my, widget::outer_rect(o, s)) {
         return None;
@@ -412,33 +405,31 @@ mod tests {
 
     #[test]
     fn apply_and_close_hit_test() {
-        let rs = rows();
-        let v = view(&rs);
+        let s = size(rows().len());
         let o = test_origin();
-        let s = size(rs.len());
         let a = apply_rect(o, TPL_W);
         let x = close_rect(o, TPL_W);
         assert_eq!(
-            hit_test(&v, a[0] + 5.0, a[1] + 5.0, o, s),
+            hit_test(a[0] + 5.0, a[1] + 5.0, o, s),
             Some(TemplateAction::Apply)
         );
         assert_eq!(
-            hit_test(&v, x[0] + 5.0, x[1] + 5.0, o, s),
+            hit_test(x[0] + 5.0, x[1] + 5.0, o, s),
             Some(TemplateAction::Close)
         );
         // A title-bar click off the X is consumed (the hook grabs drags first).
         let t = widget::title_rect(o, TPL_W);
         assert_eq!(
-            hit_test(&v, t[0] + 5.0, t[1] + 5.0, o, s),
+            hit_test(t[0] + 5.0, t[1] + 5.0, o, s),
             Some(TemplateAction::Consume)
         );
         // A body click is consumed; a miss falls through.
         let row = list_row_rect(o, TPL_W, 1);
         assert_eq!(
-            hit_test(&v, row[0] + 5.0, row[1] + 5.0, o, s),
+            hit_test(row[0] + 5.0, row[1] + 5.0, o, s),
             Some(TemplateAction::Consume)
         );
-        assert_eq!(hit_test(&v, 5.0, 5.0, o, s), None);
+        assert_eq!(hit_test(5.0, 5.0, o, s), None);
     }
 
     // Placing lays out the title, description, Apply caption, and the grouped

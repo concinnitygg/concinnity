@@ -250,7 +250,6 @@ pub(super) fn acquire_hardware(
         physical_device,
         graphics_family,
         present_family,
-        validation,
         &upscale_sdk,
     )?;
     // Hand the raw device to the owning wrapper straight away: from

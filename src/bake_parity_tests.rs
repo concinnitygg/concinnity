@@ -79,8 +79,8 @@ fn raw_world() -> World {
     let ibl = bake::environment_map(&sky()).expect("the sky bakes");
     world.add_environment_map(ibl);
     let mesh = cube_mesh();
-    let payload = bake::procedural_mesh(&mesh).expect("the box bakes");
-    let mesh = world.add_mesh(mesh, payload);
+    let payload = bake::procedural_mesh(mesh).expect("the box bakes");
+    let mesh = world.add_mesh(payload);
     let material = world.add_material(cube_material());
     world.add_component(Prop {
         mesh: Some(mesh),

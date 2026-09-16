@@ -250,7 +250,7 @@ impl EditorHook {
                 if vars.is_none() {
                     return;
                 }
-                self.write_variables(idx, args, world);
+                self.write_variables(idx, args);
             }
             None => {
                 let asset = self.unique_name("world_vars");
@@ -258,7 +258,7 @@ impl EditorHook {
                     "name": asset, "type": "Variables", "args": {"vars": [decl]},
                 }));
                 self.mark_changed();
-                self.after_variables_change(world);
+                self.after_variables_change();
             }
         }
         self.variables_row = self
@@ -292,7 +292,7 @@ impl EditorHook {
             return;
         };
         map.insert("value".to_string(), value);
-        self.write_variables(idx, args, world);
+        self.write_variables(idx, args);
         self.seed_variables_fields(world);
     }
 
@@ -308,7 +308,7 @@ impl EditorHook {
             return;
         }
         vars.remove(at);
-        self.write_variables(idx, args, world);
+        self.write_variables(idx, args);
         // The removed row is gone; whatever slid into its place is not what was
         // selected, so the selection is dropped rather than retargeted.
         self.variables_row = None;
@@ -357,7 +357,7 @@ impl EditorHook {
             return;
         };
         map.insert("name".to_string(), Value::String(typed.clone()));
-        self.write_variables(idx, args, world);
+        self.write_variables(idx, args);
         self.variables_row = self
             .variables_data()
             .rows
@@ -389,7 +389,7 @@ impl EditorHook {
             return;
         };
         map.insert("value".to_string(), value);
-        self.write_variables(idx, args, world);
+        self.write_variables(idx, args);
         self.seed_variables_fields(world);
     }
 
@@ -402,22 +402,21 @@ impl EditorHook {
         Some((self.variables_entry()?, at))
     }
 
-    fn write_variables(&mut self, idx: usize, args: Value, world: &mut World) {
+    fn write_variables(&mut self, idx: usize, args: Value) {
         let Some(entry) = self.entries[idx].as_object_mut() else {
             return;
         };
         entry.insert("args".to_string(), args);
         self.mark_changed();
-        self.after_variables_change(world);
+        self.after_variables_change();
     }
 
     // A variable's type or starting value changes what the behaviors reading it
     // type-check against, so the Behavior panel's verdict is re-taken too.
-    fn after_variables_change(&mut self, world: &mut World) {
+    fn after_variables_change(&mut self) {
         let prev_fault = self.behavior_fault_message();
         self.refresh_behavior_status();
         self.notify_behavior_fault(prev_fault);
-        let _ = world;
     }
 
     fn seed_variables_fields(&mut self, world: &mut World) {

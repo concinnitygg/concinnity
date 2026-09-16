@@ -149,8 +149,18 @@ pub fn tick_transitions<B: SceneControl + ?Sized>(
     }
 }
 
-/// Imperatively jump to a named scene. Ignored with a warning if the target
-/// scene is not declared, or no scenes exist.
+/// Why [`jump_to_scene`] refused a jump.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SceneJumpRejected {
+    /// The world declares no scenes.
+    NoFlow,
+    /// The target scene is not declared in the world.
+    UnknownScene,
+}
+
+/// Imperatively jump to a named scene. Jumping to the active scene is a no-op;
+/// a jump with no scenes declared or to an undeclared scene returns the
+/// rejection and changes nothing.
 pub fn jump_to_scene<B: SceneControl + ?Sized>(
     flow_opt: &mut Option<SceneFlow>,
     visibility: &SceneVisibility,
@@ -158,20 +168,15 @@ pub fn jump_to_scene<B: SceneControl + ?Sized>(
     target_scene: AssetId,
     transition: SceneTransition,
     backend: &mut B,
-) {
-    let flow = match flow_opt {
-        Some(f) => f,
-        None => {
-            return;
-        }
-    };
+) -> Result<(), SceneJumpRejected> {
+    let flow = flow_opt.as_mut().ok_or(SceneJumpRejected::NoFlow)?;
 
     if !flow.scenes.contains(&target_scene) {
-        return;
+        return Err(SceneJumpRejected::UnknownScene);
     }
 
     if target_scene == flow.current {
-        return;
+        return Ok(());
     }
 
     match transition {
@@ -187,6 +192,7 @@ pub fn jump_to_scene<B: SceneControl + ?Sized>(
             set_scene_visibility(visibility, target_scene, backend);
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -365,7 +371,7 @@ mod tests {
     fn jump_to_scene_no_flow_is_no_op() {
         let mut opt: Option<SceneFlow> = None;
         let mut backend = TestBackend::default();
-        jump_to_scene(
+        let result = jump_to_scene(
             &mut opt,
             &SceneVisibility::default(),
             0.0,
@@ -373,6 +379,7 @@ mod tests {
             SceneTransition::Cut,
             &mut backend,
         );
+        assert_eq!(result, Err(SceneJumpRejected::NoFlow));
         assert!(backend.visibility.is_empty());
     }
 
@@ -380,7 +387,7 @@ mod tests {
     fn jump_to_unknown_scene_is_no_op() {
         let mut opt = Some(make_flow(&[AssetId(0), AssetId(1)]));
         let mut backend = TestBackend::default();
-        jump_to_scene(
+        let result = jump_to_scene(
             &mut opt,
             &SceneVisibility::default(),
             0.0,
@@ -388,6 +395,7 @@ mod tests {
             SceneTransition::Cut,
             &mut backend,
         );
+        assert_eq!(result, Err(SceneJumpRejected::UnknownScene));
         assert_eq!(opt.as_ref().unwrap().current, AssetId(0));
         assert!(backend.visibility.is_empty());
     }
@@ -396,7 +404,7 @@ mod tests {
     fn jump_to_scene_same_scene_is_no_op() {
         let mut opt = Some(make_flow(&[AssetId(0), AssetId(1)]));
         let mut backend = TestBackend::default();
-        jump_to_scene(
+        let result = jump_to_scene(
             &mut opt,
             &SceneVisibility::default(),
             0.0,
@@ -404,6 +412,7 @@ mod tests {
             SceneTransition::Cut,
             &mut backend,
         );
+        assert_eq!(result, Ok(()));
         assert_eq!(opt.as_ref().unwrap().current, AssetId(0));
         assert!(backend.visibility.is_empty());
     }
@@ -413,7 +422,7 @@ mod tests {
         let visibility = vis(&[(&[0], Some(AssetId(0))), (&[1], Some(AssetId(1)))]);
         let mut opt = Some(make_flow(&[AssetId(0), AssetId(1)]));
         let mut backend = TestBackend::default();
-        jump_to_scene(
+        let result = jump_to_scene(
             &mut opt,
             &visibility,
             1.0,
@@ -421,6 +430,7 @@ mod tests {
             SceneTransition::Cut,
             &mut backend,
         );
+        assert_eq!(result, Ok(()));
         assert_eq!(opt.as_ref().unwrap().current, AssetId(1));
         assert!(matches!(opt.as_ref().unwrap().fade, FadePhase::None));
         assert!(backend.visibility.contains(&(1, true)));
@@ -430,7 +440,7 @@ mod tests {
     fn jump_to_scene_fade_black_starts_to_black_phase() {
         let mut opt = Some(make_flow(&[AssetId(0), AssetId(1)]));
         let mut backend = TestBackend::default();
-        jump_to_scene(
+        let result = jump_to_scene(
             &mut opt,
             &SceneVisibility::default(),
             5.0,
@@ -438,6 +448,7 @@ mod tests {
             SceneTransition::FadeBlack,
             &mut backend,
         );
+        assert_eq!(result, Ok(()));
         // current not changed yet; scene switches mid-fade
         assert_eq!(opt.as_ref().unwrap().current, AssetId(0));
         assert!(matches!(

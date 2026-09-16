@@ -25,8 +25,8 @@
 //!         generator: "box".into(),
 //!         ..Default::default()
 //!     };
-//!     let payload = bake::procedural_mesh(&mesh).expect("the box bakes");
-//!     let mesh = world.add_mesh(mesh, payload);
+//!     let payload = bake::procedural_mesh(mesh).expect("the box bakes");
+//!     let mesh = world.add_mesh(payload);
 //!     let stone = world.add_material(bake::Material::default());
 //!
 //!     world.add_component(Prop {
@@ -63,6 +63,9 @@ pub use concinnity_core::components::cook::{
     Camera3D, CameraTrack, EnvironmentMap, Font, Material, Mesh, VertexData,
 };
 
+/// Baked geometry, for [`World::add_mesh`](crate::World::add_mesh).
+pub use concinnity_core::bake::payload::MeshPayload;
+
 use concinnity_core::components::{self, ProceduralMesh};
 
 // A payload only a bake in this module constructs, so what a data-entry method
@@ -95,11 +98,6 @@ macro_rules! payload {
 }
 
 payload! {
-    /// Baked geometry, for [`World::add_mesh`](crate::World::add_mesh).
-    MeshPayload
-}
-
-payload! {
     /// Baked image-based lighting, for
     /// [`World::add_environment_map`](crate::World::add_environment_map).
     EnvironmentMapPayload
@@ -112,10 +110,8 @@ payload! {
 
 /// Bake a [`ProceduralMesh`]'s generator into its geometry payload, for
 /// [`World::add_mesh`](crate::World::add_mesh).
-pub fn procedural_mesh(mesh: &ProceduralMesh) -> Result<MeshPayload, crate::Error> {
-    concinnity_core::bake::payload::procedural_mesh(mesh)
-        .map(MeshPayload)
-        .map_err(crate::Error::Bake)
+pub fn procedural_mesh(mesh: ProceduralMesh) -> Result<MeshPayload, crate::Error> {
+    concinnity_core::bake::payload::procedural_mesh(mesh).map_err(crate::Error::Bake)
 }
 
 /// Bake a raw [`Mesh`]'s vertices and indices into its geometry payload, for
@@ -123,9 +119,7 @@ pub fn procedural_mesh(mesh: &ProceduralMesh) -> Result<MeshPayload, crate::Erro
 /// derived from the triangles; a `source` naming a model file needs the cook
 /// module's importer.
 pub fn mesh(mesh: &Mesh) -> Result<MeshPayload, crate::Error> {
-    concinnity_core::bake::payload::mesh(mesh)
-        .map(MeshPayload)
-        .map_err(crate::Error::Bake)
+    concinnity_core::bake::payload::mesh(mesh).map_err(crate::Error::Bake)
 }
 
 /// Convolve an [`EnvironmentMap`]'s generator into its image-based-lighting
@@ -193,10 +187,10 @@ mod tests {
             half_extents: Some([0.7, 0.7, 0.7]),
             ..Default::default()
         };
-        let payload = procedural_mesh(&mesh).expect("the box bakes");
+        let payload = procedural_mesh(mesh).expect("the box bakes");
 
         let mut world = crate::World::new();
-        let mesh = world.add_mesh(mesh, payload);
+        let mesh = world.add_mesh(payload);
         let stone = world.add_material(Material {
             roughness: 0.2,
             ..Default::default()
@@ -209,6 +203,30 @@ mod tests {
 
         assert_eq!((mesh.index(), stone.index()), (0, 0));
         crate::test_support::assert_starts_headless(crate::App::from_world(world));
+    }
+
+    // The generator a mesh was baked from stays in the world beside its payload.
+    #[test]
+    fn a_baked_sphere_leaves_its_procedural_mesh_in_the_world() {
+        let sphere = ProceduralMesh {
+            generator: "sphere".into(),
+            radius: Some(0.5),
+            ..Default::default()
+        };
+        let payload = procedural_mesh(sphere.clone()).expect("the sphere bakes");
+
+        let mut world = crate::World::new();
+        world.add_mesh(payload);
+
+        let meshes: alloc::vec::Vec<_> = world.inner().query::<ProceduralMesh>().collect();
+        assert_eq!(meshes.len(), 1);
+        assert_eq!(
+            meshes[0],
+            &ProceduralMesh {
+                asset_id: meshes[0].asset_id,
+                ..sphere
+            }
+        );
     }
 
     // Raw geometry takes the same path as a generator's: bake, hand over, run.
@@ -231,7 +249,7 @@ mod tests {
         let payload = mesh(&triangle).expect("the triangle bakes");
 
         let mut world = crate::World::new();
-        let handle = world.add_mesh(triangle, payload);
+        let handle = world.add_mesh(payload);
         world.add_component(components::Prop {
             mesh: Some(handle),
             ..Default::default()
@@ -272,7 +290,7 @@ mod tests {
     // What cannot be computed is refused with directions, not a wrong payload.
     #[test]
     fn a_file_backed_value_is_refused_toward_the_cook() {
-        let err = procedural_mesh(&ProceduralMesh {
+        let err = procedural_mesh(ProceduralMesh {
             generator: "heightfield".into(),
             ..Default::default()
         })

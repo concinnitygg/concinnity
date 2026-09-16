@@ -875,6 +875,52 @@ fn first_declared_scene_applies_start_visibility() {
     assert_eq!(s.visibility.get(&1), Some(&true));
 }
 
+#[test]
+fn jump_to_undeclared_scene_warns_and_changes_nothing() {
+    #[derive(Clone, Default)]
+    struct Captured(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Captured {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let (state, hooks) = recording_hooks();
+    let mut world = scene_builder().build();
+    world.ctx().push(Scene {
+        asset_id: AssetId(20),
+        camera_shot: None,
+    });
+    let mut gs = init_graphics(&mut world, hooks);
+    assert!(!gs.failed);
+    lock(&state).visibility.clear();
+
+    world.ctx().events_mut::<SceneCommand>().send(SceneCommand {
+        scene: AssetId(99),
+        transition: concinnity_core::components::SceneTransition::Cut,
+    });
+    let captured = Captured::default();
+    let writer = captured.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::WARN)
+        .with_writer(move || writer.clone())
+        .finish();
+    let result = tracing::subscriber::with_default(subscriber, || step(&mut gs, &mut world));
+
+    assert_eq!(result, StepResult::Continue);
+    let log = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
+    assert!(
+        log.contains("scene jump to 99 rejected: UnknownScene"),
+        "{log}"
+    );
+    assert!(lock(&state).visibility.is_empty());
+}
+
 // Each frame's extract adopts the overlay draw list wholesale and hands the
 // spent one back through `OverlayRecycle`, which the next overlay build
 // consumes -- the loop that keeps the overlay's buffers recycling.

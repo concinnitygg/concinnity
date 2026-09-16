@@ -1608,7 +1608,7 @@ impl DxContext {
         // fence wait (so any in-flight capture resources are safe to recycle) and
         // before the frame's passes record. Non-fatal: a failure is logged and the
         // frame proceeds with whatever probes have baked.
-        if let Err(e) = self.bake_pending_probes(elapsed, near, far) {
+        if let Err(e) = self.bake_pending_probes(near, far) {
             tracing::warn!("reflection probe bake step failed: {e}");
         }
 

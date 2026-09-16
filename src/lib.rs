@@ -142,10 +142,8 @@ pub use concinnity_core::error::CnError;
 pub use concinnity_core::{component_mask, declare_components};
 
 // The dense per-kind handles the world's data-entry methods return and a
-// component's reference fields hold, and the bound on what `add_mesh` takes.
-pub use concinnity_core::ecs::{
-    BakedMesh, EnvironmentMapHandle, FontHandle, MaterialHandle, MeshHandle,
-};
+// component's reference fields hold.
+pub use concinnity_core::ecs::{EnvironmentMapHandle, FontHandle, MaterialHandle, MeshHandle};
 
 // The identity a component names another by (a `Prop`'s `parent`, a `Model`'s
 // meshes). A world built here assigns these itself: an authoring build interns

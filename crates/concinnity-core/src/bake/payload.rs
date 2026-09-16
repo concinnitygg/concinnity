@@ -40,8 +40,38 @@ const EXTRUDE_CORNER_RADIUS: f32 = 0.0;
 const EXTRUDE_CORNER_SEGMENTS: u32 = 8;
 const WATER_SUBDIVISIONS: u32 = 64;
 
-/// Bake a `ProceduralMesh`'s geometry into its blob payload.
-pub fn procedural_mesh(mesh: &ProceduralMesh) -> Result<Vec<u8>, String> {
+/// Baked mesh geometry, for [`World::add_mesh`](crate::ecs::World::add_mesh).
+///
+/// A payload from [`procedural_mesh`] carries the generator it was baked from,
+/// which the world keeps as the record of what was generated; one from
+/// [`mesh`] is nothing but its geometry.
+#[derive(Clone, PartialEq)]
+pub struct MeshPayload {
+    bytes: Vec<u8>,
+    procedural: Option<ProceduralMesh>,
+}
+
+impl MeshPayload {
+    /// The baked bytes.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub(crate) fn into_parts(self) -> (Vec<u8>, Option<ProceduralMesh>) {
+        (self.bytes, self.procedural)
+    }
+}
+
+impl core::fmt::Debug for MeshPayload {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("MeshPayload")
+            .field("len", &self.bytes.len())
+            .finish()
+    }
+}
+
+/// Bake a `ProceduralMesh`'s geometry into its payload.
+pub fn procedural_mesh(mesh: ProceduralMesh) -> Result<MeshPayload, String> {
     let (vertices, indices): (Vec<Vert>, Vec<u16>) = match mesh.generator.as_str() {
         "room" => build_room_geometry(mesh.half_width, mesh.half_depth, 0.0, mesh.ceiling_height),
         "box" => build_box(mesh.half_extents.unwrap_or(BOX_HALF_EXTENTS)),
@@ -92,12 +122,16 @@ pub fn procedural_mesh(mesh: &ProceduralMesh) -> Result<Vec<u8>, String> {
         "" => return Err("a ProceduralMesh needs a `generator`".to_string()),
         other => return Err(alloc::format!("unknown mesh generator '{other}'")),
     };
-    finish_mesh_payload(vertices, indices, mesh.lod_levels, &mesh.lod_distances)
+    let bytes = finish_mesh_payload(vertices, indices, mesh.lod_levels, &mesh.lod_distances)?;
+    Ok(MeshPayload {
+        bytes,
+        procedural: Some(mesh),
+    })
 }
 
-/// Bake a raw `Mesh`'s vertices and indices into its blob payload. Normals
-/// and tangents are derived here; a `source` naming a file needs an importer.
-pub fn mesh(mesh: &Mesh) -> Result<Vec<u8>, String> {
+/// Bake a raw `Mesh`'s vertices and indices into its payload. Normals and
+/// tangents are derived here; a `source` naming a file needs an importer.
+pub fn mesh(mesh: &Mesh) -> Result<MeshPayload, String> {
     if !mesh.source.is_empty() {
         return Err(
             "a Mesh with a `source` reads a model file; compile it with the cook module"
@@ -114,12 +148,16 @@ pub fn mesh(mesh: &Mesh) -> Result<Vec<u8>, String> {
         ));
     }
     let vertices = vertices_from_data(&mesh.vertices, &mesh.indices)?;
-    finish_mesh_payload(
+    let bytes = finish_mesh_payload(
         vertices,
         mesh.indices.clone(),
         mesh.lod_levels,
         &mesh.lod_distances,
-    )
+    )?;
+    Ok(MeshPayload {
+        bytes,
+        procedural: None,
+    })
 }
 
 /// Bake an `EnvironmentMap`'s IBL cubemaps into its blob payload, spreading
@@ -200,10 +238,11 @@ mod tests {
             mesh("water_grid"),
             extrude,
         ] {
-            let payload = procedural_mesh(&m).unwrap_or_else(|e| panic!("{}: {e}", m.generator));
-            let read = mesh_payload::deserialize(&payload)
-                .unwrap_or_else(|e| panic!("{}: {e}", m.generator));
-            assert!(!read.0.is_empty(), "{} has vertices", m.generator);
+            let generator = m.generator.clone();
+            let payload = procedural_mesh(m).unwrap_or_else(|e| panic!("{generator}: {e}"));
+            let read = mesh_payload::deserialize(payload.as_bytes())
+                .unwrap_or_else(|e| panic!("{generator}: {e}"));
+            assert!(!read.0.is_empty(), "{generator} has vertices");
         }
     }
 
@@ -212,10 +251,10 @@ mod tests {
     // way.
     #[test]
     fn an_unset_optional_argument_falls_back_to_the_authored_default() {
-        let payload = procedural_mesh(&mesh("box")).expect("a box bakes");
+        let payload = procedural_mesh(mesh("box")).expect("a box bakes");
         let (vertices, indices) = build_box(BOX_HALF_EXTENTS);
         let expected = finish_mesh_payload(vertices, indices, 1, &[]).expect("the same box packs");
-        assert_eq!(payload, expected);
+        assert_eq!(payload.as_bytes(), expected);
     }
 
     #[test]
@@ -226,7 +265,7 @@ mod tests {
             (mesh("nonesuch"), "unknown mesh generator"),
             (mesh("extrude"), "needs a `profile`"),
         ] {
-            let err = procedural_mesh(&m).expect_err("not bakeable");
+            let err = procedural_mesh(m).expect_err("not bakeable");
             assert!(err.contains(needle), "{err}");
         }
     }
@@ -251,7 +290,8 @@ mod tests {
     #[test]
     fn raw_geometry_bakes_with_derived_normals() {
         let payload = super::mesh(&triangle()).expect("a triangle bakes");
-        let (verts, indices) = mesh_payload::deserialize(&payload).expect("the payload reads back");
+        let (verts, indices) =
+            mesh_payload::deserialize(payload.as_bytes()).expect("the payload reads back");
         assert_eq!(indices, alloc::vec![0, 1, 2]);
         assert!(verts.iter().all(|v| (v.normal[2] - 1.0).abs() < 1e-5));
     }

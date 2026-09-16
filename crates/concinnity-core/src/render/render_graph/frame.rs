@@ -732,7 +732,7 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         // a clean RAW edge so FogFroxel runs before Fog in the toposort.
         // All three backends implement the froxel path; the Fog render
         // pass trilinear-samples the volume by (screen_uv, view_z).
-        let froxel_v0 = b.import_texture("fog_froxel_volume", froxel_volume_desc(inputs));
+        let froxel_v0 = b.import_texture("fog_froxel_volume", froxel_volume_desc());
         let mut froxel = b.add_pass(PassId::FogFroxel, PassKind::Compute);
         // Each slab does a cascade tap, so the kernel is a second reader of the
         // shadow map alongside Main. Declaring it puts the compute stage into the
@@ -880,7 +880,7 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
     };
 
     let bloom_top_v1 = if inputs.bloom_enabled {
-        let bloom_top = b.create_texture("bloom_top", bloom_top_desc(inputs));
+        let bloom_top = b.create_texture("bloom_top", bloom_top_desc());
         Some(
             b.add_pass(PassId::Bloom, PassKind::Render)
                 .read_texture(scene_color_cur)
@@ -922,11 +922,10 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
     b.compile()
 }
 
-fn froxel_volume_desc(inputs: &FrameGraphInputs) -> TextureDesc {
+fn froxel_volume_desc() -> TextureDesc {
     // The volumetric-fog froxel volume: a 3D texture the fog kernel writes and
     // the fog pass samples. Its Z extent also rides in `FogFroxelParams.
     // froxel_dims` so shaders can map indices to volume UVs.
-    let _ = inputs;
     TextureDesc::volume_3d(
         TextureSize::Absolute(FOG_FROXEL_X),
         TextureSize::Absolute(FOG_FROXEL_Y),
@@ -1119,7 +1118,7 @@ fn velocity_desc(inputs: &FrameGraphInputs) -> TextureDesc {
     )
 }
 
-fn bloom_top_desc(inputs: &FrameGraphInputs) -> TextureDesc {
+fn bloom_top_desc() -> TextureDesc {
     // bloom_top is `bloom_targets.mips[0]`, the bloom chain's half-resolution
     // top octave; the prefilter pass writes into it and the upsample chain
     // accumulates back into it for Composite to sample.
@@ -1128,7 +1127,6 @@ fn bloom_top_desc(inputs: &FrameGraphInputs) -> TextureDesc {
     // builds its bloom chain from the output extent, so under temporal
     // upscaling (where render resolution is smaller) an `hdr_width >> 1` desc
     // names a texture no backend creates.
-    let _ = inputs;
     TextureDesc::texture_2d(
         TextureSize::DrawableScaled(0.5),
         TextureSize::DrawableScaled(0.5),

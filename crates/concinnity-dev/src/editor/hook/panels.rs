@@ -542,12 +542,11 @@ impl Panel for TemplatesPanel {
     fn press(
         &self,
         hook: &mut EditorHook,
-        world: &mut World,
+        _world: &mut World,
         mx: f32,
         my: f32,
         o: [f32; 2],
     ) -> bool {
-        let _ = world;
         let s = hook.effective_size(PanelKey::Templates);
         match template::hit_test(mx, my, o, s) {
             Some(TemplatesAction::Pick(i)) => {
@@ -613,22 +612,16 @@ impl Panel for TemplateDetailPanel {
     fn press(
         &self,
         hook: &mut EditorHook,
-        world: &mut World,
+        _world: &mut World,
         mx: f32,
         my: f32,
         o: [f32; 2],
     ) -> bool {
-        let _ = world;
-        let Some(i) = hook.open_template else {
+        if hook.open_template.is_none() {
             return false;
-        };
+        }
         let s = hook.effective_size(PanelKey::TemplateDetail);
-        let action = {
-            let data = hook.template_detail_data(i);
-            let view = hook.make_template_view(&data, [mx, my]);
-            template_panel::hit_test(&view, mx, my, o, s)
-        };
-        match action {
+        match template_panel::hit_test(mx, my, o, s) {
             Some(a) => {
                 hook.apply_template_detail(a);
                 true

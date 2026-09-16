@@ -130,44 +130,37 @@ fn walk(
     Ok(())
 }
 
+// The Prop args a prefab entry carries under the same key.
+const DIRECT_PROP_KEYS: [&str; 8] = [
+    "model",
+    "mesh",
+    "material",
+    "texture",
+    "parent",
+    "interactable",
+    "pickup",
+    "collider",
+];
+
 // How the instance arg rooted at `root` maps onto a prefab entry of the
 // generated asset's type. Errors name the reason apply is unavailable.
 pub(crate) fn map_field(asset_type: &str, root: &str) -> Result<FieldMap, String> {
+    let uncarried = || format!("'{root}' is not carried by the prefab entry");
     let ty = asset_type.to_lowercase().replace('_', "");
     match (ty.as_str(), root) {
         ("prop" | "pointlight", "position") => Ok(FieldMap::Position),
         ("prop", "rotation_deg") => Ok(FieldMap::Rotation),
         ("prop", "scale") => Ok(FieldMap::Scale),
-        (
-            "prop",
-            "model" | "mesh" | "material" | "texture" | "parent" | "interactable" | "pickup"
-            | "collider",
-        ) => Ok(FieldMap::Direct(direct_key(root))),
+        ("prop", _) => DIRECT_PROP_KEYS
+            .into_iter()
+            .find(|key| *key == root)
+            .map(FieldMap::Direct)
+            .ok_or_else(uncarried),
         ("pointlight", "color") => Ok(FieldMap::Direct("light_color")),
         ("pointlight", "intensity") => Ok(FieldMap::Direct("light_intensity")),
         ("pointlight", "range") => Ok(FieldMap::Direct("light_range")),
-        _ => Err(format!("'{root}' is not carried by the prefab entry")),
+        _ => Err(uncarried()),
     }
-}
-
-// The &'static str for a same-named direct key (map_field's match arms pin the
-// full set, so this cannot miss).
-fn direct_key(root: &str) -> &'static str {
-    for key in [
-        "model",
-        "mesh",
-        "material",
-        "texture",
-        "parent",
-        "interactable",
-        "pickup",
-        "collider",
-    ] {
-        if key == root {
-            return key;
-        }
-    }
-    unreachable!("unmapped direct key '{root}'")
 }
 
 // Write one instance value into a prefab entry: a direct field lands at the
@@ -538,6 +531,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(light["light_intensity"], json!(4.0));
+
+        for key in DIRECT_PROP_KEYS {
+            assert_eq!(map_field("Prop", key), Ok(FieldMap::Direct(key)));
+        }
     }
 
     #[test]
