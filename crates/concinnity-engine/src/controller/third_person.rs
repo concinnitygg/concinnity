@@ -13,10 +13,9 @@ use concinnity_core::components::{
     ControlsCommand, FollowDrive, FrameInput,
 };
 use concinnity_core::ecs::{
-    Access, EventCursor, PipelineContext, SkinnedMeshHandle, StepResult, System,
+    Access, EventCursor, FrameTime, PipelineContext, SkinnedMeshHandle, StepResult, System,
 };
 use concinnity_core::gfx::camera;
-use std::time::Instant;
 
 // Seconds for the smoothed travel speed to close half the gap to its target.
 const SPEED_HALF_LIFE: f32 = 0.12;
@@ -64,7 +63,6 @@ pub(crate) struct ThirdPersonSystem {
     // Orbit pivot, refreshed from the rig each step; keeps the camera stable
     // if the rig ever disappears.
     pivot: [f32; 3],
-    last_step: Option<Instant>,
     controls_cursor: EventCursor,
 }
 
@@ -88,7 +86,6 @@ impl ThirdPersonSystem {
             speed_param_index: None,
             speed: 0.0,
             pivot: [0.0; 3],
-            last_step: None,
             controls_cursor: EventCursor::default(),
         }
     }
@@ -104,12 +101,10 @@ impl System for ThirdPersonSystem {
                 AnimationParams,
                 CameraProbe,
             ])
-            .reads_resources(crate::resource_mask![ControlsCommand])
+            .reads_resources(crate::resource_mask![ControlsCommand, FrameTime])
     }
 
     fn init(&mut self, ctx: &mut PipelineContext) {
-        self.last_step = Some(Instant::now());
-
         super::look_controls::apply_persisted(
             ctx,
             super::look_controls::Look {
@@ -185,12 +180,12 @@ impl System for ThirdPersonSystem {
             None => return StepResult::Continue,
         };
 
-        let now = Instant::now();
-        let dt = self
-            .last_step
-            .map(|t| now.duration_since(t).as_secs_f32().min(0.1))
-            .unwrap_or(0.0);
-        self.last_step = Some(now);
+        let dt = ctx
+            .resource::<FrameTime>()
+            .copied()
+            .unwrap_or_default()
+            .dt
+            .clamp(0.0, 0.1);
 
         // Orbit angles from the mouse. The camera component keeps the
         // authoritative yaw/pitch; read it, advance, write back at the end.
@@ -362,7 +357,6 @@ mod tests {
     use concinnity_core::ecs::World;
     use concinnity_core::transform;
     use concinnity_host::thread::asset_id::intern;
-    use std::time::Duration;
 
     #[test]
     fn heading_matches_the_camera_forward_convention() {
@@ -443,9 +437,12 @@ mod tests {
 
     fn step_held(world: &mut World, input: FrameInput, steps: usize) {
         world.add_component(input);
+        world.insert_resource(FrameTime {
+            dt: 0.005,
+            elapsed: 0.0,
+        });
         for _ in 0..steps {
             world.step();
-            std::thread::sleep(Duration::from_millis(5));
         }
     }
 
@@ -504,10 +501,8 @@ mod tests {
     fn strafe_turns_heading_and_root_motion_drive_stays_passive() {
         let (mut world, _) = follow_world(FollowDrive::RootMotion, 0.0);
         world.start(SYSTEMS).unwrap();
-        // The turn budget is turn_speed x accumulated wall-clock dt, so give
-        // the quarter turn several times the steps it needs: with tight 5 ms
-        // sleeps 4 steps sat right at the pi/2 boundary and failed on fast
-        // runners (the arrival assert below is exact).
+        // The turn budget is turn_speed x accumulated dt, so give the quarter
+        // turn several times the steps it needs (the arrival assert is exact).
         step_held(
             &mut world,
             FrameInput {

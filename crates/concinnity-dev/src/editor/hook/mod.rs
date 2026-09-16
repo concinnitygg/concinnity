@@ -333,7 +333,8 @@ pub(crate) struct EditorHook {
     // pose that world's own camera held before the cycle took it -- put back
     // the moment the screen hands the session a world.
     cinematic: Option<worlds::cinematic::Cinematic>,
-    cinematic_clock: Option<std::time::Instant>,
+    // Whether the running cycle has taken its first frame.
+    cinematic_ticking: bool,
     cinematic_restore: Option<framing::CameraPose>,
     // The command palette (`hook/edit/palette.rs`): shown state, a one-frame
     // focus blur after the Ctrl+K open, the query mirrored off its field once
@@ -427,10 +428,8 @@ pub(crate) struct EditorHook {
     // Whether a drag-out placement orients the drop to the struck surface's
     // face normal (Preview panel row). Session state, off by default.
     align_to_surface: bool,
-    // The edit-mode fly camera (`hook/fly.rs`): on/off and the frame clock
-    // its integration steps against.
+    // The edit-mode fly camera (`hook/fly.rs`).
     fly: bool,
-    fly_clock: Option<std::time::Instant>,
     // An in-flight framing / bookmark camera glide (`hook/drive/glide.rs`).
     glide: Option<drive::glide::CameraGlide>,
     // Saved camera poses (`hook/bookmarks.rs`), loaded from the per-project
@@ -746,7 +745,7 @@ impl EditorHook {
             start_preview: None,
             start_drawn: 0,
             cinematic: None,
-            cinematic_clock: None,
+            cinematic_ticking: false,
             cinematic_restore: None,
             palette_open: false,
             palette_blur: false,
@@ -788,7 +787,6 @@ impl EditorHook {
             snap: snap::SnapSettings::default(),
             align_to_surface: false,
             fly: false,
-            fly_clock: None,
             glide: None,
             bookmarks,
             positions: [None; PANEL_COUNT],
@@ -942,7 +940,6 @@ impl DebugHook for EditorHook {
             if input.escape {
                 self.sim.pause();
                 self.fly = false;
-                self.fly_clock = None;
                 self.glide = None;
                 self.orbit = None;
                 self.create_menu = None;

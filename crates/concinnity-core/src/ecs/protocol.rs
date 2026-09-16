@@ -62,6 +62,30 @@ impl Default for SimTiming {
     }
 }
 
+/// Real time for the current frame, published by the App-level clock next to
+/// [`SimTiming`]. `dt` is the seconds since the previous frame, still measured
+/// while a menu pauses the world, and `elapsed` is the monotonic seconds since
+/// the App started. Presentation systems (animation, cameras, HUDs, fades)
+/// accumulate their own clocks from `dt`. Absent (a directly-stepped world with
+/// no App), the default is one fixed tick of `dt` and an `elapsed` that stays
+/// at zero, which makes bare `World::step` loops deterministic.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FrameTime {
+    /// Seconds since the previous frame.
+    pub dt: f32,
+    /// Seconds since the App started.
+    pub elapsed: f32,
+}
+
+impl Default for FrameTime {
+    fn default() -> Self {
+        Self {
+            dt: SimTiming::TICK_DT,
+            elapsed: 0.0,
+        }
+    }
+}
+
 /// The live frame-rate cap in FPS (0 = unlimited), published by GraphicsSystem
 /// (from GraphicsConfig at init, refreshed by the settings row's live change)
 /// and read by the App-level frame pacer before each world step. Independent of

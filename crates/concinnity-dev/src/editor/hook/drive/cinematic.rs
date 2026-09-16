@@ -12,8 +12,8 @@
 //! reach the world file or the session store.
 
 use concinnity_core::components::Camera3D;
-use concinnity_core::ecs::PickIndex;
 use concinnity_core::ecs::World;
+use concinnity_core::ecs::{FrameTime, PickIndex};
 
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::camera_pose;
@@ -53,7 +53,7 @@ impl EditorHook {
             // gives it back rather than leaving a shot standing on it.
             return self.stop_cinematic(world);
         };
-        let dt = self.cinematic_dt();
+        let dt = self.cinematic_dt(world);
         let pose = {
             let cine = self.cinematic.get_or_insert_with(Cinematic::new);
             cine.advance(dt);
@@ -96,7 +96,7 @@ impl EditorHook {
     // the pose held for it no longer describes anything.
     pub(in crate::editor::hook) fn reset_cinematic(&mut self) {
         self.cinematic = None;
-        self.cinematic_clock = None;
+        self.cinematic_ticking = false;
         self.cinematic_restore = None;
     }
 
@@ -105,7 +105,7 @@ impl EditorHook {
     // before the rebuild runs, in case the rebuild fails and it stays.
     pub(in crate::editor::hook) fn restart_cinematic(&mut self) {
         self.cinematic = None;
-        self.cinematic_clock = None;
+        self.cinematic_ticking = false;
     }
 
     // What the shots frame this frame, or `None` when the preview gets no
@@ -133,13 +133,14 @@ impl EditorHook {
 
     // This frame's dt for the shot clock. The first frame of a cycle takes no
     // time, so the cycle always opens on its own first moment.
-    fn cinematic_dt(&mut self) -> f32 {
-        let now = std::time::Instant::now();
-        let dt = self
-            .cinematic_clock
-            .map(|last| now.duration_since(last).as_secs_f32())
-            .unwrap_or(0.0);
-        self.cinematic_clock = Some(now);
-        dt
+    fn cinematic_dt(&mut self, world: &World) -> f32 {
+        if !std::mem::replace(&mut self.cinematic_ticking, true) {
+            return 0.0;
+        }
+        world
+            .resource::<FrameTime>()
+            .copied()
+            .unwrap_or_default()
+            .dt
     }
 }

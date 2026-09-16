@@ -7,6 +7,7 @@
 //! and what hands control back.
 
 use concinnity_core::components::{Camera3D, FrameInput, InputKey, Transform};
+use concinnity_core::ecs::FrameTime;
 use concinnity_core::ecs::PickEntry;
 use concinnity_core::ecs::PickIndex;
 use concinnity_core::ecs::World;
@@ -56,11 +57,13 @@ fn camera(world: &World) -> &Camera3D {
     world.query::<Camera3D>().next().expect("camera")
 }
 
-// Run an armed glide to its end without waiting out its quarter second: rewind
-// the start instant past the duration, then take the step that retires it.
+// Run an armed glide to its end in one frame longer than its quarter second.
 fn finish_glide(h: &mut EditorHook, world: &mut World) {
-    let glide = h.glide.as_mut().expect("a glide is armed");
-    glide.start -= std::time::Duration::from_secs(1);
+    assert!(h.glide.is_some(), "a glide is armed");
+    world.insert_resource(FrameTime {
+        dt: 1.0,
+        elapsed: 0.0,
+    });
     h.drive_glide(
         &FrameInput {
             viewport: VP,
@@ -256,9 +259,6 @@ fn steering_during_a_glide_hands_the_camera_back() {
 
         h.drive_glide(&steer, &mut world);
         assert!(h.glide.is_none(), "{steer:?} did not end the glide");
-        // The fly clock is dropped with it, so a fly re-entry cannot integrate
-        // the glide's wall time as one step.
-        assert!(h.fly_clock.is_none());
     }
 }
 
@@ -368,4 +368,25 @@ fn selection_bounds_fall_back_to_a_billboards_transform() {
     );
     assert!(mn[1] < 5.0 && mx[1] > 5.0);
     assert!(mn[2] < 6.0 && mx[2] > 6.0);
+}
+
+// The fly drive integrates the frame's real dt, which keeps running while the
+// world it flies through is frozen.
+#[test]
+fn the_fly_drive_steps_by_the_frame_dt() {
+    let (mut world, _) = camera_world([0.0, 0.0, 10.0]);
+    let mut h = hook();
+    h.fly = true;
+    world.insert_resource(FrameTime {
+        dt: 0.05,
+        elapsed: 0.0,
+    });
+    let input = FrameInput {
+        forward: true,
+        ..Default::default()
+    };
+    let (expected, _, _) = super::super::fly::fly_step([0.0, 0.0, 10.0], 0.0, 0.0, &input, 0.05);
+    h.drive_fly(&input, &mut world);
+    assert_eq!(camera(&world).position, expected);
+    assert!(camera(&world).position[2] < 10.0, "W flies down -Z");
 }

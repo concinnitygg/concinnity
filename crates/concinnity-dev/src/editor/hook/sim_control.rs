@@ -35,7 +35,6 @@ impl EditorHook {
         self.sim.toggle_play();
         if self.sim.playing() {
             self.fly = false;
-            self.fly_clock = None;
         }
     }
 

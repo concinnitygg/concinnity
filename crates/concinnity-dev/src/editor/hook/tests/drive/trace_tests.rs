@@ -3,8 +3,8 @@
 //! its node, the state a stop clears, and the Ctrl+click that toggles a card's
 //! breakpoint.
 
-use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_core::ecs::{FrameTime, World};
 use concinnity_host::thread::asset_id;
 
 use crate::editor::behavior::graph::CardKind;
@@ -79,6 +79,35 @@ fn trace_events_become_pulses_and_live_values() {
         "{:?}",
         vdata.rows
     );
+}
+
+// A pulse fades by frame time rather than wall time: frames short of the pulse
+// window keep it, and the frame that crosses it drops it.
+#[test]
+fn pulses_decay_by_frame_time() {
+    asset_id::reset_interner();
+    let id = asset_id::intern("b");
+    let mut h = playing_hook(vec![behavior(
+        "b",
+        serde_json::json!({
+            "on": "start", "do": [{"save": {}}],
+        }),
+    )]);
+    h.behavior_open = true;
+    let mut world = traced_world(id, false);
+    h.drive_trace(&mut world);
+    assert_eq!(h.behavior_pulses[0].age, 0.0, "a fresh firing");
+
+    let half = crate::editor::behavior::pulse::PULSE_SECS * 0.5;
+    world.insert_resource(FrameTime {
+        dt: half,
+        elapsed: 0.0,
+    });
+    h.drive_trace(&mut world);
+    assert_eq!(h.behavior_pulses.len(), 1, "half the window keeps it");
+    assert!((h.behavior_pulses[0].age - half).abs() < 1e-6);
+    h.drive_trace(&mut world);
+    assert!(h.behavior_pulses.is_empty(), "the full window drops it");
 }
 
 #[test]

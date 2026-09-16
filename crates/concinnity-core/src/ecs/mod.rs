@@ -106,10 +106,10 @@ pub use frame::{FrameContext, FrameVec};
 // they live here where the physics / audio subsystem crates can reach them.
 pub use protocol::{
     CursorShape, CursorState, DesiredCursor, DropdownView, ExecutionTrace, FlyCam, FrameRateCap,
-    GpuMemoryPressure, HiddenAssets, HudLayers, HudPrefs, MenuActive, MenuOverride, OpenDropdown,
-    OverlayImage, OverlayImages, PickEntry, PickIndex, ScheduleMode, ScreenStack, SimTiming,
-    TraceEvent, TracePath, TracePaths, TraceRequest, TraceStep, TraceVal, TransientSaves,
-    ViewOverrides, WorldLines, WorldPhysicsBudget,
+    FrameTime, GpuMemoryPressure, HiddenAssets, HudLayers, HudPrefs, MenuActive, MenuOverride,
+    OpenDropdown, OverlayImage, OverlayImages, PickEntry, PickIndex, ScheduleMode, ScreenStack,
+    SimTiming, TraceEvent, TracePath, TracePaths, TraceRequest, TraceStep, TraceVal,
+    TransientSaves, ViewOverrides, WorldLines, WorldPhysicsBudget,
 };
 
 // The runtime behavior trait every engine system implements + its per-step

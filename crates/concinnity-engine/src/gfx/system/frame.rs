@@ -9,8 +9,8 @@ use concinnity_core::components::{
 };
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{
-    FlyCam, HiddenAssets, MenuOverride, PickEntry, PickIndex, PipelineContext, StepResult,
-    ViewOverrides,
+    FlyCam, FrameTime, HiddenAssets, MenuOverride, PickEntry, PickIndex, PipelineContext,
+    StepResult, ViewOverrides,
 };
 use concinnity_core::gfx::frustum;
 use concinnity_core::input::snapshot::InputPacket;
@@ -235,12 +235,11 @@ impl GraphicsSystem {
         }
 
         // The FPS-cap pacer runs at the App level before the world steps (see
-        // `app::pacing`), so `elapsed` here already reflects the capped
+        // `app::pacing`), so the frame time here already reflects the capped
         // interval.
-        let elapsed = self
-            .start_time
-            .map(|t| t.elapsed().as_secs_f32())
-            .unwrap_or(0.0);
+        let frame_time = ctx.resource::<FrameTime>().copied().unwrap_or_default();
+        self.render_secs += frame_time.dt.max(0.0);
+        let elapsed = self.render_secs;
 
         // read projection from Camera3D; the screen + camera position for the
         // draw come from StreamingSystem's `CameraRelativeView` (published just
@@ -444,8 +443,8 @@ impl GraphicsSystem {
         // effects for submission. An idle fade is a no-op in
         // `tick_transitions`, so the visibility pairs are rebuilt only while a
         // transition is actually running. The flow is the shared
-        // `ActiveSceneFlow` resource SettingsSystem also jumps; its `epoch` is
-        // the shared clock for the fade timing.
+        // `ActiveSceneFlow` resource SettingsSystem also jumps, whose clock
+        // times the fades for both.
         let fading = ctx
             .resource::<crate::ecs::ActiveSceneFlow>()
             .and_then(|f| f.flow.as_ref())
@@ -453,7 +452,7 @@ impl GraphicsSystem {
         if fading {
             super::scene::refresh_visibility_snapshot(ctx, &mut self.scene_visibility);
             if let Some(slot) = ctx.resources.get_mut::<crate::ecs::ActiveSceneFlow>() {
-                let flow_elapsed = slot.epoch.elapsed().as_secs_f32();
+                let flow_elapsed = slot.elapsed(frame_time.elapsed);
                 let mut recorder = SceneOpRecorder(&mut snap.scene_ops);
                 scene_flow::tick_transitions(
                     &mut slot.flow,
@@ -857,17 +856,16 @@ mod tests {
         let mut world = ExtractWorld::new();
         {
             let mut ctx = world.ctx();
-            ctx.insert_resource(crate::ecs::ActiveSceneFlow {
-                flow: Some(scene_flow::SceneFlow {
+            ctx.insert_resource(crate::ecs::ActiveSceneFlow::new(Some(
+                scene_flow::SceneFlow {
                     scenes: vec![AssetId(1), AssetId(2)],
                     current: AssetId(1),
                     fade: scene_flow::FadePhase::ToBlack {
                         started_at: 0.0,
                         next: AssetId(2),
                     },
-                }),
-                epoch: std::time::Instant::now(),
-            });
+                },
+            )));
         }
         let mut gs = GraphicsSystem::new(None);
         let snap = extract_once(&mut gs, &mut world);

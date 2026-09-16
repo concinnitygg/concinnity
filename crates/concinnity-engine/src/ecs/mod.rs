@@ -24,6 +24,8 @@
 //! about. `headless_drift_tests` is what holds them to that.
 
 pub(crate) mod access_ids;
+#[cfg(test)]
+mod active_scene_flow_tests;
 pub(crate) mod by_asset_id;
 #[cfg(test)]
 mod consumed_columns_tests;
@@ -190,12 +192,25 @@ impl ActiveRenderBackend {
 // applies imperative scene jumps from `SceneCommand`) and GraphicsSystem
 // (which ticks the timed advance + fades and submits the visibility changes).
 // Published by GraphicsSystem's init when the world declares `Scene` assets;
-// `flow` is `None` when it declared none, so both systems no-op. `epoch` is the
-// shared clock both derive their `elapsed` from, set to GraphicsSystem's own
-// `start_time` so fade timing matches the render clock.
+// `flow` is `None` when it declared none, so both systems no-op. Both read the
+// flow's clock through `elapsed`, so fade timing is shared.
 pub(crate) struct ActiveSceneFlow {
     pub flow: Option<scene_flow::SceneFlow>,
-    pub(crate) epoch: std::time::Instant,
+    // `FrameTime::elapsed` at the flow's first read.
+    epoch: Option<f32>,
+}
+
+impl ActiveSceneFlow {
+    pub(crate) fn new(flow: Option<scene_flow::SceneFlow>) -> Self {
+        Self { flow, epoch: None }
+    }
+
+    // Seconds on the flow's clock at App time `now` (`FrameTime::elapsed`).
+    // The first read anchors the clock at zero, so a world started partway
+    // through an App's life times its fades from its own first frame.
+    pub(crate) fn elapsed(&mut self, now: f32) -> f32 {
+        (now - *self.epoch.get_or_insert(now)).max(0.0)
+    }
 }
 
 /// The blob's baked per-scene exclusive content groups, published at blob load

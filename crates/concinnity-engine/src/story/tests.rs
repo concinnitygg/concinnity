@@ -1454,18 +1454,6 @@ fn point_saves(world: &mut World, dir: &std::path::Path) {
     }
 }
 
-// Backdate the story clock so the next step sees `secs` of elapsed time,
-// driving the timed reader-assist paths (typewriter / auto / skip) without a
-// real sleep. `last_step` is a private field, reachable from this in-crate
-// test module.
-fn backdate_clock(world: &mut World, secs: f32) {
-    for system in world.systems_mut() {
-        if let Some(s) = system.downcast_mut::<StorySystem>() {
-            s.last_step = Some(Instant::now() - std::time::Duration::from_secs_f32(secs));
-        }
-    }
-}
-
 // A story world whose stage carries two option slots (the shared scaffold has
 // one), so an unoccupied slot is observable when a menu has fewer choices.
 fn two_option_world(story: Story) -> World {
@@ -1534,12 +1522,19 @@ fn typewriter_reveals_the_page_over_time() {
     story.text_speed = 100.0;
     let mut world = story_world(story);
     world.start(SYSTEMS).unwrap();
+    world.insert_resource(FrameTime {
+        dt: 0.0,
+        elapsed: 0.0,
+    });
     world.step();
-    // First step's dt is zero, so nothing has revealed yet.
+    // No time has passed, so nothing has revealed yet.
     assert_eq!(label_content(&world, "s_stage_text"), "");
 
     // Half a second at 100 cps budgets far more than the page's length.
-    backdate_clock(&mut world, 0.5);
+    world.insert_resource(FrameTime {
+        dt: 0.5,
+        elapsed: 0.0,
+    });
     world.step();
     assert_eq!(label_content(&world, "s_stage_text"), "First page.");
 }
@@ -1597,7 +1592,10 @@ fn skip_mode_turns_pages_at_its_cadence() {
         .events_mut::<StoryCommand>()
         .send(StoryCommand::ToggleSkip);
     // A full second exceeds the skip page cadence.
-    backdate_clock(&mut world, 1.0);
+    world.insert_resource(FrameTime {
+        dt: 1.0,
+        elapsed: 0.0,
+    });
     world.step();
     assert_eq!(label_content(&world, "s_stage_text"), "Second page.");
 }
@@ -1613,7 +1611,10 @@ fn auto_mode_turns_a_read_page_after_the_delay() {
         .events_mut::<StoryCommand>()
         .send(StoryCommand::ToggleAuto);
     // Ten seconds far exceeds the base pause plus per-character reading time.
-    backdate_clock(&mut world, 10.0);
+    world.insert_resource(FrameTime {
+        dt: 10.0,
+        elapsed: 0.0,
+    });
     world.step();
     assert_eq!(label_content(&world, "s_stage_text"), "Second page.");
 }
@@ -1824,7 +1825,10 @@ fn skip_snaps_a_freshly_entered_page_to_full() {
 
     // The skip cadence turns to page 2, which render_page snaps on arrival
     // despite the slow speed.
-    backdate_clock(&mut world, 1.0);
+    world.insert_resource(FrameTime {
+        dt: 1.0,
+        elapsed: 0.0,
+    });
     world.step();
     assert_eq!(label_content(&world, "s_stage_text"), "Second page.");
 }

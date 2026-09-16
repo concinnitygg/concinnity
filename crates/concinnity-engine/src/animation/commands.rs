@@ -14,16 +14,13 @@ use super::runtime_queue::{AnimCommand, GraphStateReport};
 use super::{AnimationSystem, TargetMode};
 
 impl AnimationSystem {
-    /// Drain pending runtime commands against the system's own clock. Uses the
-    /// same `start` / elapsed bookkeeping `step` uses, so the dev tooling crate's
-    /// debug drive can apply commands from outside the per-system
-    /// step. The library never calls this; `step` runs after the hook on the
-    /// same frame, so the `start` anchor set here is shared.
+    /// Drain pending runtime commands against the system's own clip clock, so
+    /// the dev tooling crate's debug drive can apply commands from outside the
+    /// per-system step. The library never calls this; `step` runs after the
+    /// hook on the same frame and advances that clock from where a command
+    /// anchored its transition.
     pub fn apply_runtime_commands(&mut self) {
-        let now = std::time::Instant::now();
-        let start = *self.start.get_or_insert(now);
-        let t = (now - start).as_secs_f32();
-        self.drain_runtime_commands(t);
+        self.drain_runtime_commands(self.clip_secs);
     }
 
     // Drain pending runtime commands and apply them. Commands run in queue
@@ -515,11 +512,10 @@ mod tests {
         assert!(rx.try_recv().unwrap().is_err());
     }
 
-    // The hook drive anchors the system's clock on its first call and answers
-    // whatever is queued, so an MCP client blocked on a reply is never starved by
-    // a paused world.
+    // The hook drive answers whatever is queued, so an MCP client blocked on a
+    // reply is never starved by a paused world.
     #[test]
-    fn apply_runtime_commands_anchors_the_clock_and_answers() {
+    fn apply_runtime_commands_answers_the_queue() {
         let _guard = queue_guard();
         let mut sys = graph_system(0.0);
         sys.name_index = name_index();
@@ -530,7 +526,28 @@ mod tests {
         });
         sys.apply_runtime_commands();
         assert_eq!(rx.try_recv().unwrap().unwrap().state, "idle");
-        assert!(sys.start.is_some(), "the drive shares `step`'s origin");
+    }
+
+    // A crossfade applied by the hook drive starts at the clip clock `step`
+    // has reached, so it ramps from the current moment rather than from zero.
+    #[test]
+    fn apply_runtime_commands_anchors_at_the_clip_clock() {
+        let _guard = queue_guard();
+        let mut sys = flat_system(2);
+        sys.name_index = name_index();
+        sys.clip_secs = 7.5;
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        crate::animation::runtime_queue::enqueue(AnimCommand::Crossfade {
+            req: CrossfadeRequest {
+                target: NAME,
+                weights: vec![0.0, 1.0],
+                duration_secs: 1.0,
+            },
+            reply: tx,
+        });
+        sys.apply_runtime_commands();
+        assert_eq!(rx.try_recv().unwrap(), Ok(()));
+        assert_eq!(transition(&mut sys).unwrap().start_secs, 7.5);
     }
 
     // An empty queue is a no-op the drive can call every frame.

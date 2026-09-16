@@ -31,13 +31,12 @@ use concinnity_core::components::RootMotionEvent;
 use concinnity_core::components::SkeletonPose;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{
-    Access, MenuActive, PipelineContext, SkinnedMeshHandle, StepResult, System,
+    Access, FrameTime, MenuActive, PipelineContext, SkinnedMeshHandle, StepResult, System,
 };
 use concinnity_host::thread::jobs;
 use flat::{ClipEntry, FlatState, Transition};
 use graph::GraphTarget;
 use std::collections::{BTreeMap, HashMap};
-use std::time::Instant;
 
 // Per-`SkinnedMesh` bucket: the clips targeting it plus the mode that drives
 // them. Clip storage is mode-independent so hot-reload can swap a clip in
@@ -106,15 +105,9 @@ pub struct AnimationSystem {
     // Interned-name -> handle index snapshotted at init, so the animation
     // debug tool calls (which address a mesh by name) can find the bucket.
     name_index: crate::gfx::skinned_mesh_map::SkinnedMeshNameIndex,
-    // Wall-clock origin, captured on the first step.
-    start: Option<Instant>,
-    // Clip time `t` of the previous step, for the graph clocks' delta time.
-    last_step_secs: Option<f32>,
-    // When a menu opened (and froze playback), if currently paused. On resume
-    // the origin `start` is shifted forward by the paused span so clip time `t`
-    // is continuous across the pause: the animation freezes on its current pose
-    // and resumes from it, with no jump.
-    pause_anchor: Option<Instant>,
+    // Clip time `t` in seconds: the frame time of every unpaused step, so
+    // playback freezes on its pose behind a menu and resumes from it.
+    clip_secs: f32,
     // One entry per file-backed Animation, captured at init under
     // `cn debug`. Empty when hot-reload is off or every clip is inline.
     reload_entries: Vec<AnimationReloadEntry>,
@@ -147,9 +140,7 @@ impl AnimationSystem {
         Self {
             targets: BTreeMap::new(),
             name_index: Default::default(),
-            start: None,
-            last_step_secs: None,
-            pause_anchor: None,
+            clip_secs: 0.0,
             reload_entries: Vec::new(),
             ik_frames: std::collections::HashMap::new(),
             ik_feet_scratch: Vec::new(),
@@ -195,15 +186,6 @@ impl AnimationSystem {
     }
 }
 
-// The animation origin to use on the frame a pause ends. Shifting the original
-// origin forward by the paused span (now - anchor) holds clip time
-// `t = now - origin` exactly where it was when the pause began, so playback
-// resumes from the frozen pose with no jump. Split out so the continuity
-// property is unit-testable without a live system.
-fn resumed_origin(start: Instant, anchor: Instant, now: Instant) -> Instant {
-    start + now.saturating_duration_since(anchor)
-}
-
 impl System for AnimationSystem {
     fn access(&self) -> Access {
         Access::new()
@@ -213,7 +195,7 @@ impl System for AnimationSystem {
                 AnimationParams,
                 GroundProbes,
             ])
-            .reads_resources(crate::resource_mask![MenuActive])
+            .reads_resources(crate::resource_mask![MenuActive, FrameTime])
             .writes_resources(crate::resource_mask![RootMotionEvent])
     }
 
@@ -302,8 +284,7 @@ impl System for AnimationSystem {
                 flat.transition = Some(Transition {
                     source_weights: source,
                     target_weights: target,
-                    // Start the ramp on the first step (negative until then,
-                    // overwritten in `step`).
+                    // The ramp starts with the clip clock.
                     start_secs: 0.0,
                     duration_secs: max_fade,
                 });
@@ -324,45 +305,22 @@ impl System for AnimationSystem {
         // from the binary's `DebugHook::tick` via `reload_clips_if_pending`,
         // not here. `cn run` has no debug hook, so this step is reload-free.
 
-        let now = Instant::now();
-
         // Freeze while a menu is open: skip all sampling so animation stops
-        // consuming CPU/GPU behind the menu, recording when the pause began.
+        // consuming CPU/GPU behind the menu, and let none of the paused frames'
+        // time reach the clip clock, so resuming continues from the frozen pose.
         // The flag is published by OverlaySystem, which runs first this tick.
         let paused = ctx.resource::<MenuActive>().is_some_and(|m| m.0);
         if paused {
-            self.pause_anchor.get_or_insert(now);
             return StepResult::Continue;
         }
-        // Resuming: advance the origin by the paused span so clip time `t` stays
-        // continuous -- the animation resumes from the exact pose it froze on,
-        // with no jump. (A pause before the first step has no origin yet, so it
-        // just defers the capture below.)
-        if let Some(anchor) = self.pause_anchor.take()
-            && let Some(start) = self.start.as_mut()
-        {
-            *start = resumed_origin(*start, anchor, now);
-        }
-
-        let start = *self.start.get_or_insert(now);
-        let t = (now - start).as_secs_f32();
-        // Graph clocks advance by delta time; the origin shift above keeps
-        // `t` continuous across a pause, so the first post-pause delta stays
-        // one frame long.
-        let dt = t - self.last_step_secs.replace(t).unwrap_or(t);
-
-        // First-frame fix-up: the startup transition built in `init` has
-        // `start_secs == 0.0`. We don't know the wall-clock origin until the
-        // first step, so re-anchor any in-flight transition that hasn't yet
-        // started elapsing.
-        for state in self.targets.values_mut() {
-            if let TargetMode::Flat(flat) = &mut state.mode
-                && let Some(tr) = flat.transition.as_mut()
-                && tr.start_secs == 0.0
-            {
-                tr.start_secs = t;
-            }
-        }
+        let dt = ctx
+            .resource::<FrameTime>()
+            .copied()
+            .unwrap_or_default()
+            .dt
+            .max(0.0);
+        self.clip_secs += dt;
+        let t = self.clip_secs;
 
         // Runtime commands (the `anim-crossfade` / `anim-param` / `anim-state`
         // debug tool calls) are drained from the editor's `DebugHook::tick` via

@@ -22,10 +22,11 @@ use concinnity_core::components::{
     DespawnRequest, EntityTarget, ReparentRequest, SpawnRequest, VisibilityRequest,
 };
 use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::ecs::{Entity, EventCursor, MenuActive, PipelineContext, StepResult, System};
+use concinnity_core::ecs::{
+    Entity, EventCursor, FrameTime, MenuActive, PipelineContext, StepResult, System,
+};
 use concinnity_core::render::ops::RenderOps;
 use concinnity_core::transform::propagation;
-use std::time::Instant;
 
 use crate::ecs::ActiveRenderQueues;
 use crate::gfx::render_slots::RenderSlots;
@@ -107,10 +108,6 @@ pub(crate) struct SpawnSystem {
     // Cursor into the Events<VisibilityRequest> queue (runtime show/hide:
     // Behavior show/hide nodes).
     visibility_cmd_cursor: EventCursor,
-    // Clock base and the cumulative elapsed seconds at the previous step, so
-    // each step derives the per-frame dt for the Lifetime / Spawner ticks.
-    start_time: Option<Instant>,
-    prev_elapsed: f32,
 }
 
 impl SpawnSystem {
@@ -136,15 +133,14 @@ impl System for SpawnSystem {
 
 impl SpawnSystem {
     fn drain(&mut self, ctx: &mut PipelineContext, ops: &mut RenderOps, slots: &mut RenderSlots) {
-        let elapsed = self
-            .start_time
-            .get_or_insert_with(Instant::now)
-            .elapsed()
-            .as_secs_f32();
         // Per-frame delta for the time-based ticks. Clamped to non-negative so
         // a clock reset never rushes an expiry.
-        let dt = (elapsed - self.prev_elapsed).max(0.0);
-        self.prev_elapsed = elapsed;
+        let dt = ctx
+            .resource::<FrameTime>()
+            .copied()
+            .unwrap_or_default()
+            .dt
+            .max(0.0);
         // Copied out of the context so the event drains below can hold scratch
         // while the cascades they feed take `ctx` mutably.
         let frame = ctx.frame;

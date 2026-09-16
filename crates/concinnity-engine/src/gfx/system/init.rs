@@ -64,7 +64,6 @@ use concinnity_core::window::display_mode;
 use concinnity_host::store::blob::blob_path;
 use concinnity_host::store::blob::payload_section_start;
 use concinnity_host::thread::asset_id;
-use std::time::Instant;
 
 use super::draw_geometry::{draw_object_position, gather_auto_seed_triangles};
 use super::*;
@@ -2861,15 +2860,9 @@ impl GraphicsSystem {
             ctx.insert_resource(sources);
         }
 
-        let start = Instant::now();
-        self.start_time = Some(start);
         // Hand the scene flow to the shared slot SettingsSystem jumps and this
-        // system ticks. `epoch` shares this system's start clock so a jump's
-        // fade timing matches the render clock.
-        ctx.insert_resource(crate::ecs::ActiveSceneFlow {
-            flow: self.scene_flow.take(),
-            epoch: start,
-        });
+        // system ticks.
+        ctx.insert_resource(crate::ecs::ActiveSceneFlow::new(self.scene_flow.take()));
         tracing::info!(
             "GraphicsSystem: ready ({}x{} \"{}\", {} frames in flight, {} draw objects, {} instanced clusters ({} instances total), {} decals, {} particle emitter(s), fog={})",
             settings.window_args.width,

@@ -4,8 +4,8 @@
 //! the selection's world bounds and steps the interpolation.
 
 use concinnity_core::components::{Camera3D, FrameInput, Transform};
-use concinnity_core::ecs::PickIndex;
 use concinnity_core::ecs::World;
+use concinnity_core::ecs::{FrameTime, PickIndex};
 use concinnity_host::thread::asset_id;
 
 use crate::editor::hook::EditorHook;
@@ -14,12 +14,12 @@ use crate::editor::viewport::framing::{self, CameraPose};
 
 const GLIDE_SECS: f32 = 0.25;
 
-// An in-flight camera glide: the fixed endpoints and the wall clock the
-// normalized parameter is derived from.
+// An in-flight camera glide: the fixed endpoints and the seconds of frame
+// time the normalized parameter is derived from.
 pub(in crate::editor::hook) struct CameraGlide {
     pub(super) from: CameraPose,
     pub(super) to: CameraPose,
-    pub(in crate::editor::hook) start: std::time::Instant,
+    pub(super) secs: f32,
 }
 
 impl EditorHook {
@@ -73,7 +73,7 @@ impl EditorHook {
         self.glide = Some(CameraGlide {
             from,
             to,
-            start: std::time::Instant::now(),
+            secs: 0.0,
         });
     }
 
@@ -81,9 +81,9 @@ impl EditorHook {
     // does. Any deliberate navigation input (only live while flying) hands
     // control back immediately.
     pub(in crate::editor::hook) fn drive_glide(&mut self, input: &FrameInput, world: &mut World) {
-        let Some(glide) = &self.glide else {
+        if self.glide.is_none() {
             return;
-        };
+        }
         let steered = input.forward
             || input.backward
             || input.left
@@ -94,7 +94,17 @@ impl EditorHook {
             self.end_glide();
             return;
         }
-        let t = glide.start.elapsed().as_secs_f32() / GLIDE_SECS;
+        let dt = world
+            .resource::<FrameTime>()
+            .copied()
+            .unwrap_or_default()
+            .dt
+            .max(0.0);
+        let Some(glide) = &mut self.glide else {
+            return;
+        };
+        glide.secs += dt;
+        let t = glide.secs / GLIDE_SECS;
         let pose = framing::lerp_pose(&glide.from, &glide.to, framing::ease(t));
         camera_pose::write(world, &pose);
         if t >= 1.0 {
@@ -104,7 +114,5 @@ impl EditorHook {
 
     pub(super) fn end_glide(&mut self) {
         self.glide = None;
-        // A fly re-entry must not integrate the glide's wall time as one step.
-        self.fly_clock = None;
     }
 }

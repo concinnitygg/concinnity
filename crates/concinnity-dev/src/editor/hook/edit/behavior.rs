@@ -143,7 +143,7 @@ impl EditorHook {
         let mut pulse_cards = Vec::new();
         let mut pulse_rows = Vec::new();
         for p in &self.behavior_pulses {
-            let alpha = pulse::alpha(p.at.elapsed().as_secs_f32());
+            let alpha = pulse::alpha(p.age);
             if alpha <= 0.0 {
                 continue;
             }

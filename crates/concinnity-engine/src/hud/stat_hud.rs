@@ -10,8 +10,9 @@
 use concinnity_core::components::StatHud;
 use concinnity_core::components::TextLabel;
 use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::ecs::{Access, HudPrefs, PipelineContext, StepResult, System};
-use std::time::Instant;
+use concinnity_core::ecs::{Access, FrameTime, HudPrefs, PipelineContext, StepResult, System};
+
+use super::rate_window::RateWindow;
 
 // How often the chip text is rebuilt, in seconds. The frame rate is averaged
 // over this window so the number is readable rather than flickering.
@@ -132,10 +133,8 @@ pub(crate) struct StatHudSystem {
     ram_label: Option<AssetId>,
     ev_label: Option<AssetId>,
     edr_label: Option<AssetId>,
-    // Start of the current averaging window.
-    last_emit: Instant,
-    // Frames counted since `last_emit`.
-    frames: u32,
+    // The frame-rate averaging window, which also paces the emit.
+    window: RateWindow,
     // Most recent blocked-on-GPU sample for one frame, microseconds.
     gpu_wait_us: u32,
     // Most recent GPU-memory sample, bytes.
@@ -162,8 +161,7 @@ impl StatHudSystem {
             ram_label: config.ram_label,
             ev_label: config.ev_label,
             edr_label: config.edr_label,
-            last_emit: Instant::now(),
-            frames: 0,
+            window: RateWindow::default(),
             gpu_wait_us: 0,
             vram_bytes: 0,
             ram_bytes: None,
@@ -184,6 +182,7 @@ impl System for StatHudSystem {
             .writes_components(crate::component_mask![TextLabel])
             .reads_resources(crate::resource_mask![
                 HudPrefs,
+                FrameTime,
                 crate::app::budget::MemoryBudget,
             ])
     }
@@ -197,15 +196,13 @@ impl System for StatHudSystem {
             .resource::<HudPrefs>()
             .map_or((true, true), |p| (p.show_fps, p.show_vram));
 
-        self.frames += 1;
         self.gpu_wait_us = ctx.profile.render.gpu_wait_us;
         self.vram_bytes = ctx.profile.render.vram_bytes;
         self.ev = ctx.profile.render.auto_exposure_ev;
         self.max_edr = ctx.profile.render.max_edr;
 
-        let now = Instant::now();
-        let elapsed = now.duration_since(self.last_emit).as_secs_f32();
-        if elapsed >= EMIT_INTERVAL_SECS {
+        let dt = ctx.resource::<FrameTime>().copied().unwrap_or_default().dt;
+        if let Some((frames, elapsed)) = self.window.tick(dt, EMIT_INTERVAL_SECS) {
             // Host resident-set size + memory budget, sampled here (on the
             // throttled tick) so the syscall runs at most every EMIT_INTERVAL_SECS
             // rather than every frame. The budget resource is absent in the
@@ -220,7 +217,7 @@ impl System for StatHudSystem {
                 ctx,
                 self.fps_label,
                 if show_fps {
-                    fps_text(self.frames, elapsed)
+                    fps_text(frames, elapsed)
                 } else {
                     String::new()
                 },
@@ -246,8 +243,6 @@ impl System for StatHudSystem {
             Self::write_chip(ctx, self.ram_label, ram_text(self.ram_bytes, budget_mib));
             Self::write_chip(ctx, self.ev_label, ev_text(self.ev));
             Self::write_chip(ctx, self.edr_label, edr_text(self.max_edr));
-            self.frames = 0;
-            self.last_emit = now;
         }
         StepResult::Continue
     }
@@ -397,17 +392,6 @@ mod tests {
         world
     }
 
-    // Backdate the emit window so the next step crosses EMIT_INTERVAL_SECS
-    // without a real sleep (the field is injectable in-file).
-    fn force_emit_due(world: &mut World) {
-        use std::time::Duration;
-        for system in world.systems_mut() {
-            if let Some(s) = system.downcast_mut::<StatHudSystem>() {
-                s.last_emit = Instant::now() - Duration::from_secs(1);
-            }
-        }
-    }
-
     fn chip(world: &World, id: u32) -> String {
         world
             .query::<TextLabel>()
@@ -422,10 +406,31 @@ mod tests {
     fn emit_window_writes_fps_and_vram_chips() {
         let mut world = hud_world();
         world.start(SYSTEMS).unwrap();
-        force_emit_due(&mut world);
+        world.insert_resource(FrameTime {
+            dt: 1.0,
+            elapsed: 0.0,
+        });
         world.step();
         assert!(chip(&world, 1).starts_with("FPS "), "{}", chip(&world, 1));
         assert_eq!(chip(&world, 2), "VRAM 0 MB");
+    }
+
+    // Frames shorter than the window leave the chips alone until their
+    // accumulated time reaches it, and the FPS chip averages over that span.
+    #[test]
+    fn emit_waits_for_the_window_and_averages_its_frames() {
+        let mut world = hud_world();
+        world.start(SYSTEMS).unwrap();
+        world.insert_resource(FrameTime {
+            dt: 0.125,
+            elapsed: 0.0,
+        });
+        for _ in 0..3 {
+            world.step();
+        }
+        assert_eq!(chip(&world, 1), "", "no emit before the window closes");
+        world.step();
+        assert_eq!(chip(&world, 1), "FPS 8");
     }
 
     // The RAM chip is always-on (not gated by HudPrefs): on a platform that
@@ -441,7 +446,10 @@ mod tests {
         // MiB from the same value rather than assuming it equals total RAM.
         let budget = MemoryBudget::compute(Some(16 * 1024 * 1024 * 1024), 0);
         world.insert_resource(budget);
-        force_emit_due(&mut world);
+        world.insert_resource(FrameTime {
+            dt: 1.0,
+            elapsed: 0.0,
+        });
         world.step();
         // RSS is available on macOS / Linux / Windows; other targets report
         // `None`, blanking the chip (so the assertion is platform-gated).
@@ -471,7 +479,10 @@ mod tests {
             show_fps: false,
             show_vram: false,
         });
-        force_emit_due(&mut world);
+        world.insert_resource(FrameTime {
+            dt: 1.0,
+            elapsed: 0.0,
+        });
         world.step();
         assert_eq!(chip(&world, 1), "", "fps chip hidden");
         assert_eq!(chip(&world, 2), "", "vram chip hidden");
@@ -493,7 +504,10 @@ mod tests {
     fn emit_window_writes_the_gpu_wait_chip() {
         let mut world = hud_world();
         world.start(SYSTEMS).unwrap();
-        force_emit_due(&mut world);
+        world.insert_resource(FrameTime {
+            dt: 1.0,
+            elapsed: 0.0,
+        });
         world.step();
         assert_eq!(chip(&world, 4), "GPU WAIT 0 us");
     }

@@ -1,7 +1,7 @@
 //! Execution pulses: while the world simulates, nodes the behavior system
 //! reports as executed light their chart card / outline row with a warm blend
 //! that fades over a fixed window, so a single-frame firing stays visible.
-//! The decay is pure math over an age; the hook owns the clock.
+//! The decay is pure math over an age the hook accumulates from frame time.
 
 use super::path::Path;
 
@@ -18,7 +18,8 @@ const PULSE_TINT: [f32; 3] = [0.95, 0.72, 0.30];
 pub(crate) struct NodePulse {
     pub node: u32,
     pub path: Path,
-    pub at: std::time::Instant,
+    // Seconds since the node last fired.
+    pub age: f32,
 }
 
 // The pulse strength for a firing `age` seconds old: full at zero, gone at

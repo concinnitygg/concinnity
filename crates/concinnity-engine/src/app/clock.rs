@@ -3,9 +3,10 @@
 //! whole fixed ticks, and the remainder becomes the interpolation alpha the
 //! simulation systems blend render transforms with. While a menu holds the
 //! world paused the clock emits zero ticks and stops accumulating, so resuming
-//! costs nothing -- no catch-up burst by construction.
+//! costs nothing -- no catch-up burst by construction. The same wall delta is
+//! published unpaused as the frame's `FrameTime`.
 
-use concinnity_core::ecs::SimTiming;
+use concinnity_core::ecs::{FrameTime, SimTiming};
 use std::sync::OnceLock;
 use std::time::Instant;
 
@@ -28,13 +29,16 @@ const MAX_TICKS_PER_FRAME: u32 = 5;
 pub(crate) struct SimClock {
     last: Option<Instant>,
     accumulator: f32,
+    // Seconds since the first frame, kept wide so a long session stays precise.
+    elapsed: f64,
 }
 
 impl SimClock {
-    // The tick budget for a frame starting at `now`. `paused` holds the clock:
-    // no time accumulates and no ticks are emitted, but the remainder (and so
-    // the alpha) is kept, so the frozen frame keeps rendering the same blend.
-    pub(crate) fn advance(&mut self, now: Instant, paused: bool) -> SimTiming {
+    // The tick budget and real frame time for a frame starting at `now`.
+    // `paused` holds the tick clock: no time accumulates and no ticks are
+    // emitted, but the remainder (and so the alpha) is kept, so the frozen frame
+    // keeps rendering the same blend. The frame time runs regardless.
+    pub(crate) fn advance(&mut self, now: Instant, paused: bool) -> (SimTiming, FrameTime) {
         let elapsed = self
             .last
             .map(|t| now.duration_since(t).as_secs_f32())
@@ -43,12 +47,22 @@ impl SimClock {
         self.advance_by(elapsed, paused)
     }
 
-    // The accumulator math, split from the wall clock so it is testable with
+    // The clock math, split from the wall clock so it is testable with
     // injected durations.
-    fn advance_by(&mut self, elapsed: f32, paused: bool) -> SimTiming {
+    fn advance_by(&mut self, elapsed: f32, paused: bool) -> (SimTiming, FrameTime) {
+        let dt = elapsed.max(0.0);
+        self.elapsed += f64::from(dt);
+        let frame = FrameTime {
+            dt,
+            elapsed: self.elapsed as f32,
+        };
+        (self.ticks(dt, paused), frame)
+    }
+
+    fn ticks(&mut self, dt: f32, paused: bool) -> SimTiming {
         let tick_dt = SimTiming::TICK_DT;
         if !paused {
-            self.accumulator += elapsed.max(0.0);
+            self.accumulator += dt;
         }
         let cap = MAX_TICKS_PER_FRAME as f32 * tick_dt;
         self.accumulator = self.accumulator.min(cap);
@@ -83,12 +97,12 @@ mod tests {
     #[test]
     fn accumulates_whole_ticks_and_keeps_the_remainder() {
         let mut clock = SimClock::default();
-        let t = clock.advance_by(DT * 2.5, false);
+        let t = clock.advance_by(DT * 2.5, false).0;
         assert_eq!(t.ticks, 2);
         assert!((t.alpha - 0.5).abs() < 1.0e-4, "alpha = {}", t.alpha);
 
         // The half-tick remainder carries into the next frame.
-        let t = clock.advance_by(DT * 0.6, false);
+        let t = clock.advance_by(DT * 0.6, false).0;
         assert_eq!(t.ticks, 1);
         assert!((t.alpha - 0.1).abs() < 1.0e-3, "alpha = {}", t.alpha);
     }
@@ -96,19 +110,19 @@ mod tests {
     #[test]
     fn short_frames_emit_zero_ticks_with_growing_alpha() {
         let mut clock = SimClock::default();
-        let a = clock.advance_by(DT * 0.4, false);
+        let a = clock.advance_by(DT * 0.4, false).0;
         assert_eq!(a.ticks, 0);
-        let b = clock.advance_by(DT * 0.4, false);
+        let b = clock.advance_by(DT * 0.4, false).0;
         assert_eq!(b.ticks, 0);
         assert!(b.alpha > a.alpha, "alpha advances between un-ticked frames");
-        let c = clock.advance_by(DT * 0.4, false);
+        let c = clock.advance_by(DT * 0.4, false).0;
         assert_eq!(c.ticks, 1, "the third short frame crosses a tick");
     }
 
     #[test]
     fn a_hitch_is_clamped_to_the_tick_cap() {
         let mut clock = SimClock::default();
-        let t = clock.advance_by(2.0, false);
+        let t = clock.advance_by(2.0, false).0;
         assert_eq!(t.ticks, MAX_TICKS_PER_FRAME);
         assert!(t.alpha < 1.0e-4, "the overflow past the cap is dropped");
     }
@@ -117,21 +131,65 @@ mod tests {
     fn pause_emits_no_ticks_and_holds_the_accumulator() {
         let mut clock = SimClock::default();
         clock.advance_by(DT * 0.5, false);
-        let frozen = clock.advance_by(DT * 20.0, true);
+        let frozen = clock.advance_by(DT * 20.0, true).0;
         assert_eq!(frozen.ticks, 0);
         assert!(
             (frozen.alpha - 0.5).abs() < 1.0e-4,
             "the paused blend holds at the pre-pause remainder"
         );
         // Resuming costs one normal frame, not the paused span.
-        let resumed = clock.advance_by(DT, false);
+        let resumed = clock.advance_by(DT, false).0;
         assert_eq!(resumed.ticks, 1);
+    }
+
+    #[test]
+    fn frame_time_is_the_real_delta_and_accumulates_elapsed() {
+        let mut clock = SimClock::default();
+        let (_, a) = clock.advance_by(0.25, false);
+        assert_eq!(
+            a,
+            FrameTime {
+                dt: 0.25,
+                elapsed: 0.25
+            }
+        );
+        let (_, b) = clock.advance_by(0.5, false);
+        assert_eq!(
+            b,
+            FrameTime {
+                dt: 0.5,
+                elapsed: 0.75
+            }
+        );
+    }
+
+    #[test]
+    fn frame_time_keeps_running_while_paused() {
+        let mut clock = SimClock::default();
+        clock.advance_by(DT, false);
+        let (timing, frame) = clock.advance_by(2.0, true);
+        assert_eq!(timing.ticks, 0);
+        assert_eq!(frame.dt, 2.0, "dt is real time even while paused");
+        assert!((frame.elapsed - (DT + 2.0)).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn a_negative_delta_publishes_no_time() {
+        let mut clock = SimClock::default();
+        let (_, frame) = clock.advance_by(-1.0, false);
+        assert_eq!(
+            frame,
+            FrameTime {
+                dt: 0.0,
+                elapsed: 0.0
+            }
+        );
     }
 
     #[test]
     fn first_frame_has_no_elapsed_time() {
         let mut clock = SimClock::default();
-        let t = clock.advance(Instant::now(), false);
+        let (t, _) = clock.advance(Instant::now(), false);
         assert_eq!(t.ticks, 0);
     }
 }

@@ -17,11 +17,10 @@ use concinnity_core::components::{
     ControlsCommand, FrameInput, GamepadButton, GamepadMap, NavDirection,
 };
 use concinnity_core::ecs::{
-    Access, CursorState, EventCursor, FlyCam, MenuActive, PipelineContext, ScreenStack, StepResult,
-    System,
+    Access, CursorState, EventCursor, FlyCam, FrameTime, MenuActive, PipelineContext, ScreenStack,
+    StepResult, System,
 };
 use concinnity_core::input::snapshot::InputSnapshot;
-use std::time::Instant;
 
 use crate::ecs::InputMailbox;
 use crate::input::gamepad::{GamepadSource, PadSnapshot, PadState};
@@ -31,6 +30,11 @@ use crate::input::nav::NavRepeat;
 // counts as a long hold.
 const NAV_DT_MAX: f32 = 0.25;
 
+// The nav auto-repeat's share of this frame's time.
+fn nav_dt(frame: FrameTime) -> f32 {
+    frame.dt.clamp(0.0, NAV_DT_MAX)
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct InputSystem {
     gamepad: GamepadSource,
@@ -39,8 +43,6 @@ pub(crate) struct InputSystem {
     deadzone: f32,
     // Auto-repeat state for the d-pad / stick navigation pulse.
     nav: NavRepeat,
-    // Previous step's timestamp, for the nav repeat dt.
-    last_step: Option<Instant>,
     // Cursor into the Events<ControlsCommand> queue (live settings changes).
     controls_cursor: EventCursor,
 }
@@ -130,6 +132,7 @@ impl System for InputSystem {
                 ScreenStack,
                 FlyCam,
                 ControlsCommand,
+                FrameTime,
             ])
             .writes_resources(crate::resource_mask![
                 crate::ecs::InputMailbox,
@@ -199,13 +202,8 @@ impl System for InputSystem {
         let pad = self.pad.snapshot(self.deadzone);
 
         // Shape the held d-pad + stick state into this frame's navigation
-        // pulse (auto-repeat needs a dt; a first frame or a hitch clamps).
-        let now = Instant::now();
-        let dt = self
-            .last_step
-            .map(|t| (now - t).as_secs_f32().min(NAV_DT_MAX))
-            .unwrap_or(0.0);
-        self.last_step = Some(now);
+        // pulse (auto-repeat needs a dt; a hitch clamps).
+        let dt = nav_dt(ctx.resource::<FrameTime>().copied().unwrap_or_default());
         let dpad_held = [
             pad.held(GamepadButton::DpadUp),
             pad.held(GamepadButton::DpadDown),
@@ -271,6 +269,15 @@ mod tests {
             button,
             pressed: true,
         }
+    }
+
+    // A hitch counts as at most NAV_DT_MAX of hold, and a negative frame as none.
+    #[test]
+    fn nav_dt_clamps_the_frame_time() {
+        let frame = |dt| FrameTime { dt, elapsed: 0.0 };
+        assert_eq!(nav_dt(frame(0.1)), 0.1);
+        assert_eq!(nav_dt(frame(3.0)), NAV_DT_MAX);
+        assert_eq!(nav_dt(frame(-1.0)), 0.0);
     }
 
     // The window-metrics seam: a sampled packet carries whatever chrome the

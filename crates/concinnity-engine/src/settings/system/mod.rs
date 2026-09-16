@@ -323,10 +323,15 @@ impl SettingsState {
         // so a local snapshot is fine here).
         let mut scratch = crate::gfx::system::scene::SceneVisibilityScratch::default();
         crate::gfx::system::scene::refresh_visibility_snapshot(ctx, &mut scratch);
+        let now = ctx
+            .resource::<concinnity_core::ecs::FrameTime>()
+            .copied()
+            .unwrap_or_default()
+            .elapsed;
         let Some(slot) = ctx.resources.get_mut::<crate::ecs::ActiveSceneFlow>() else {
             return;
         };
-        let elapsed = slot.epoch.elapsed().as_secs_f32();
+        let elapsed = slot.elapsed(now);
         let mut scene_ops: Vec<snapshot::SceneOp> = Vec::new();
         for cmd in scene_cmds {
             let mut recorder = snapshot::SceneOpRecorder(&mut scene_ops);

@@ -28,8 +28,8 @@ use concinnity_core::components::SettingCommand;
 use concinnity_core::components::StoryCommand;
 use concinnity_core::components::StoryReload;
 use concinnity_core::ecs::{
-    Access, ComponentId, CursorState, DesiredCursor, EventStore, FlyCam, HudLayers, HudPrefs,
-    MenuActive, MenuOverride, OpenDropdown, ScheduleMode, ScreenStack, SimTiming,
+    Access, ComponentId, CursorState, DesiredCursor, EventStore, FlyCam, FrameTime, HudLayers,
+    HudPrefs, MenuActive, MenuOverride, OpenDropdown, ScheduleMode, ScreenStack, SimTiming,
 };
 use std::any::TypeId;
 use std::sync::OnceLock;
@@ -78,6 +78,7 @@ define_access_ids! {
         FrameInput,
         MenuActive,
         SimTiming,
+        FrameTime,
         MenuOverride,
         DesiredCursor,
         HudLayers,

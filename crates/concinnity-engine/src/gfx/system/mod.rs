@@ -29,7 +29,6 @@ use concinnity_core::render::post::ssr::settings::SsrSettings;
 use concinnity_core::render::{backend, overlay_maps, scene_flow, snapshot, text};
 use concinnity_core::transform::propagation;
 use concinnity_host::store::paths::StateTree;
-use std::time::Instant;
 
 const IDENTITY4: [[f32; 4]; 4] = crate::gfx::draw_list::IDENTITY4;
 
@@ -78,7 +77,8 @@ pub struct GraphicsSystem {
     clear_color: [f32; 4],
     max_frames: Option<u64>,
     failed: bool,
-    start_time: Option<Instant>,
+    // Seconds of frame time this system has rendered, the shaders' clock.
+    render_secs: f32,
     frame_count: u64,
     // Per-class recovery for failed frames; see `frame_policy`.
     frame_policy: frame_policy::FramePolicy,
@@ -228,7 +228,7 @@ impl GraphicsSystem {
             clear_color: gfx.clear_color,
             max_frames: gfx.max_frames,
             failed: false,
-            start_time: None,
+            render_secs: 0.0,
             frame_count: 0,
             frame_policy: frame_policy::FramePolicy::default(),
             menu_mode: false,

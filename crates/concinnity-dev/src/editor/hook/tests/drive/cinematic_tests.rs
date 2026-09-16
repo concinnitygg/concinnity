@@ -7,6 +7,7 @@
 use concinnity_core::components::{
     Camera3D, CameraController, FollowController, Sprite, TextLabel,
 };
+use concinnity_core::ecs::FrameTime;
 use concinnity_core::ecs::PickEntry;
 use concinnity_core::ecs::PickIndex;
 use concinnity_core::ecs::World;
@@ -104,10 +105,7 @@ fn fade(world: &World) -> Sprite {
 
 // Run one frame of the drive, with `dt` seconds behind it.
 fn frame(h: &mut EditorHook, world: &mut World, dt: f32) {
-    if h.cinematic_clock.is_some() {
-        h.cinematic_clock =
-            Some(std::time::Instant::now() - std::time::Duration::from_secs_f32(dt));
-    }
+    world.insert_resource(FrameTime { dt, elapsed: 0.0 });
     h.drive_cinematic(world);
     h.drive_cinematic_draw(world, VP, true);
     h.drive_loading_draw(world, true);
@@ -137,6 +135,24 @@ fn a_previewed_world_is_taken_by_the_attract_camera() {
     }
     assert_eq!(fade(&world).tint[3], 0.0, "the shot is up");
     assert_ne!(pose(&world), opened, "and the camera is moving");
+}
+
+// The first frame of a cycle takes no time however long that frame was, so a
+// restarted cycle opens on its own first moment rather than partway through.
+#[test]
+fn a_cycle_opens_on_its_first_moment_whatever_the_frame_dt() {
+    let mut h = start_hook();
+    let mut world = preview_world(None, true);
+    frame(&mut h, &mut world, 5.0);
+    let opened = pose(&world);
+    assert!(fade(&world).tint[3] > 0.9, "the cycle opens on black");
+
+    frame(&mut h, &mut world, 5.0);
+    assert_ne!(pose(&world), opened, "later frames advance the shot");
+
+    h.restart_cinematic();
+    frame(&mut h, &mut world, 5.0);
+    assert!(fade(&world).tint[3] > 0.9, "a restart opens on black again");
 }
 
 // The pose is a presentation and nothing more: it never reaches the entries the

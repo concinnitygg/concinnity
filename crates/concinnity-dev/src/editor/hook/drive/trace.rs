@@ -8,7 +8,9 @@
 //! request, so the running world records nothing.
 
 use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::ecs::{ExecutionTrace, TraceEvent, TracePaths, TraceRequest, World};
+use concinnity_core::ecs::{
+    ExecutionTrace, FrameTime, TraceEvent, TracePaths, TraceRequest, World,
+};
 
 use crate::editor::behavior::path::Path;
 use crate::editor::behavior::pulse::{self, NodePulse};
@@ -102,13 +104,17 @@ impl EditorHook {
     }
 
     fn ingest_trace(&mut self, world: &mut World) {
+        let dt = world
+            .resource::<FrameTime>()
+            .copied()
+            .unwrap_or_default()
+            .dt;
+        self.age_pulses(dt);
         let Some(t) = world.resource::<ExecutionTrace>() else {
-            self.prune_pulses();
             return;
         };
         if t.frame == self.trace_seen {
             // A paused world republishes nothing; the pulses just decay.
-            self.prune_pulses();
             return;
         }
         let frame = t.frame;
@@ -120,7 +126,6 @@ impl EditorHook {
 
         let open_id = trace::id_of(&self.open_behavior_name());
         let open_paths = self.open_behavior_paths(world);
-        let now = std::time::Instant::now();
         for event in &events {
             if Some(event.behavior) != open_id {
                 continue;
@@ -133,15 +138,14 @@ impl EditorHook {
                 .iter_mut()
                 .find(|p| p.node == event.node)
             {
-                Some(p) => p.at = now,
+                Some(p) => p.age = 0.0,
                 None => self.behavior_pulses.push(NodePulse {
                     node: event.node,
                     path: path.clone(),
-                    at: now,
+                    age: 0.0,
                 }),
             }
         }
-        self.prune_pulses();
 
         self.live_vars = vars
             .into_iter()
@@ -186,9 +190,12 @@ impl EditorHook {
         }
     }
 
-    fn prune_pulses(&mut self) {
-        self.behavior_pulses
-            .retain(|p| p.at.elapsed().as_secs_f32() < pulse::PULSE_SECS);
+    // Age every pulse by this frame's `dt`, dropping the ones that have faded.
+    fn age_pulses(&mut self, dt: f32) {
+        self.behavior_pulses.retain_mut(|p| {
+            p.age += dt.max(0.0);
+            p.age < pulse::PULSE_SECS
+        });
     }
 
     // The Ctrl+click toggle on a chart card. Held by name + path, so it

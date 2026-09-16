@@ -20,11 +20,11 @@ use concinnity_core::components::{
 };
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{
-    Access, AudioClipHandle, EventCursor, PipelineContext, StepResult, System, TransientSaves,
+    Access, AudioClipHandle, EventCursor, FrameTime, PipelineContext, StepResult, System,
+    TransientSaves,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 mod graph;
 mod input;
@@ -242,8 +242,7 @@ pub(crate) struct StorySystem {
     // filter gated options out); button i picks menu[i].
     menu: Vec<usize>,
     typewriter: Typewriter,
-    last_step: Option<Instant>,
-    // Wall-clock seconds since construction, driving the marker pulse.
+    // Seconds of frame time accumulated since construction, driving the marker pulse.
     elapsed: f32,
     // Reader-assist modes: auto turns fully revealed pages after a reading
     // pause; skip reveals instantly and turns pages rapidly until a menu.
@@ -303,7 +302,6 @@ impl StorySystem {
             save_dir: tree.map(|tree| tree.saves_dir()),
             menu: Vec::new(),
             typewriter: Typewriter::default(),
-            last_step: None,
             elapsed: 0.0,
             auto: false,
             skip: false,
@@ -331,6 +329,7 @@ impl System for StorySystem {
                 StoryReload,
                 ScreenShown,
                 StoryCommand,
+                FrameTime,
             ])
             .writes_resources(crate::resource_mask![PlayCue, ScreenCommand])
     }
@@ -380,12 +379,12 @@ impl System for StorySystem {
     }
 
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
-        let now = Instant::now();
-        let dt = self
-            .last_step
-            .map(|t| (now - t).as_secs_f32())
-            .unwrap_or(0.0);
-        self.last_step = Some(now);
+        let dt = ctx
+            .resource::<FrameTime>()
+            .copied()
+            .unwrap_or_default()
+            .dt
+            .max(0.0);
         self.elapsed += dt;
 
         // Freshly re-compiled graphs from the editor's source hot-reload

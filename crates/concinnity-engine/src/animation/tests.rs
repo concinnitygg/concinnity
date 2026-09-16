@@ -4,35 +4,19 @@ use concinnity_core::components::{
     RootMotionEvent, SkeletonPose,
 };
 use concinnity_core::ecs::EventCursor;
+use concinnity_core::ecs::FrameTime;
 use concinnity_core::ecs::MenuActive;
 use concinnity_core::ecs::SkinnedMeshHandle;
 use concinnity_core::ecs::World;
 use concinnity_core::transform;
 use concinnity_host::thread::asset_id;
 use concinnity_host::thread::asset_id::intern;
-use std::time::{Duration, Instant};
 
-use super::resumed_origin;
 use crate::ecs::SYSTEMS;
 
-// Resuming after a pause must leave clip time `t = now - origin` exactly
-// where it was when the pause began, so playback continues from the frozen
-// pose with no jump, no matter how long the menu was open.
-#[test]
-fn resumed_origin_freezes_clip_time_across_pause() {
-    let start = Instant::now();
-    // Paused at t = 5s, menu held open for 30s of real time.
-    let anchor = start + Duration::from_secs(5);
-    let now = anchor + Duration::from_secs(30);
-
-    let t_at_pause = (anchor - start).as_secs_f32();
-    let new_origin = resumed_origin(start, anchor, now);
-    let t_on_resume = (now - new_origin).as_secs_f32();
-
-    assert!(
-        (t_on_resume - t_at_pause).abs() < 1e-6,
-        "clip time jumped across the pause: {t_at_pause} -> {t_on_resume}"
-    );
+// A frame of `dt` seconds for the steps that follow.
+fn frame_dt(dt: f32) -> FrameTime {
+    FrameTime { dt, elapsed: 0.0 }
 }
 
 // An `Animation` in the world implies the internal AnimationSystem: it is
@@ -298,8 +282,8 @@ fn root_motion_clip_publishes_displacement_events() {
     world.add_component(a);
     world.start(SYSTEMS).unwrap();
 
+    world.insert_resource(frame_dt(0.005));
     world.step();
-    std::thread::sleep(Duration::from_millis(5));
     world.step();
 
     let events = world
@@ -347,8 +331,9 @@ fn root_motion_events_emit_in_handle_order() {
     world.start(SYSTEMS).unwrap();
 
     // The first step has no time delta; the second emits one event per target.
+    world.insert_resource(frame_dt(0.0));
     world.step();
-    std::thread::sleep(Duration::from_millis(5));
+    world.insert_resource(frame_dt(0.005));
     world.step();
 
     let events = world
@@ -436,9 +421,9 @@ fn ik_pins_the_foot_to_a_raised_ledge() {
 
     // Ray out -> physics answer -> solve; a few extra steps let the capsule
     // settle onto the floor.
+    world.insert_resource(frame_dt(0.005));
     for _ in 0..8 {
         world.step();
-        std::thread::sleep(Duration::from_millis(5));
     }
 
     let pose = world.query::<SkeletonPose>().next().expect("pose survives");
@@ -486,9 +471,9 @@ fn rig_capsule_follows_root_motion() {
     world.add_component(CharacterRig::new(target, 0, transform::IDENTITY, 0.5, 0.3));
     world.start(SYSTEMS).unwrap();
 
+    world.insert_resource(frame_dt(0.005));
     for _ in 0..4 {
         world.step();
-        std::thread::sleep(Duration::from_millis(5));
     }
 
     let rig = world.query::<CharacterRig>().next().expect("rig survives");
@@ -530,6 +515,54 @@ fn graph_freezes_while_menu_open() {
     world.step();
     let report = with_anim(&mut world, |anim| anim.graph_report(hero()).unwrap());
     assert_eq!(report.state, "run", "resumed step sees the parameter");
+}
+
+// A paused step takes none of its frame time: however long the menu frame
+// was, resuming continues the clip from the pose it froze on.
+#[test]
+fn a_paused_frame_does_not_advance_clip_time() {
+    let target = SkinnedMeshHandle(intern("pause_skip").0);
+    let slide = || {
+        let mut a: Animation = serde_json::from_value(serde_json::json!({
+            "target": "pause_skip",
+            "duration": 20.0,
+            "looping": true,
+            "tracks": [{"joint": 0, "keyframes": [
+                {"time": 0.0, "translation": [0.0, 0.0, 0.0]},
+                {"time": 20.0, "translation": [20.0, 0.0, 0.0]}
+            ]}],
+        }))
+        .unwrap();
+        a.asset_id = intern("pause_skip_slide");
+        a
+    };
+    let root_x =
+        |world: &World| world.query::<SkeletonPose>().next().unwrap().joint_matrices[0][3][0];
+
+    let mut world = World::new();
+    world.add_component(slide());
+    world.add_component(single_joint_pose(target));
+    world.start(SYSTEMS).unwrap();
+    world.insert_resource(frame_dt(0.25));
+    world.step();
+    let before = root_x(&world);
+    assert!((before - 0.25).abs() < 1e-4, "the clip plays: {before}");
+
+    world.insert_resource(MenuActive(true));
+    world.insert_resource(frame_dt(10.0));
+    world.step();
+    assert_eq!(root_x(&world), before, "the paused frame leaves the pose");
+    let clip_secs = with_anim(&mut world, |anim| anim.clip_secs);
+    assert_eq!(clip_secs, 0.25, "and the clip clock");
+
+    world.insert_resource(MenuActive(false));
+    world.insert_resource(frame_dt(0.25));
+    world.step();
+    let after = root_x(&world);
+    assert!(
+        (after - 0.5).abs() < 1e-4,
+        "resumed without a jump: {after}"
+    );
 }
 
 // A bare runtime clip of a given length, no tracks or root motion. Enough to

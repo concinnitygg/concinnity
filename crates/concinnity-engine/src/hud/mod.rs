@@ -6,4 +6,5 @@
 pub(crate) mod debug_hud;
 pub(crate) mod fps_counter;
 pub(crate) mod loading_overlay;
+mod rate_window;
 pub(crate) mod stat_hud;

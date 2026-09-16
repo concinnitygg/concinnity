@@ -106,66 +106,66 @@ mod tests {
     use super::*;
 
     #[derive(Debug, PartialEq, Default)]
-    struct FrameTime(f32);
+    struct Seconds(f32);
 
     #[test]
     fn insert_get_and_remove_by_type() {
         let mut resources = Resources::new();
-        assert!(!resources.contains::<FrameTime>());
-        assert_eq!(resources.insert(FrameTime(0.016)), None);
-        assert!(resources.contains::<FrameTime>());
-        assert_eq!(resources.get::<FrameTime>(), Some(&FrameTime(0.016)));
-        assert_eq!(resources.remove::<FrameTime>(), Some(FrameTime(0.016)));
-        assert!(!resources.contains::<FrameTime>());
+        assert!(!resources.contains::<Seconds>());
+        assert_eq!(resources.insert(Seconds(0.016)), None);
+        assert!(resources.contains::<Seconds>());
+        assert_eq!(resources.get::<Seconds>(), Some(&Seconds(0.016)));
+        assert_eq!(resources.remove::<Seconds>(), Some(Seconds(0.016)));
+        assert!(!resources.contains::<Seconds>());
     }
 
     #[test]
     fn insert_returns_previous_value() {
         let mut resources = Resources::new();
-        resources.insert(FrameTime(1.0));
-        assert_eq!(resources.insert(FrameTime(2.0)), Some(FrameTime(1.0)));
+        resources.insert(Seconds(1.0));
+        assert_eq!(resources.insert(Seconds(2.0)), Some(Seconds(1.0)));
     }
 
     #[test]
     fn get_mut_edits_in_place() {
         let mut resources = Resources::new();
-        resources.insert(FrameTime(1.0));
-        resources.get_mut::<FrameTime>().unwrap().0 = 5.0;
-        assert_eq!(resources.get::<FrameTime>(), Some(&FrameTime(5.0)));
+        resources.insert(Seconds(1.0));
+        resources.get_mut::<Seconds>().unwrap().0 = 5.0;
+        assert_eq!(resources.get::<Seconds>(), Some(&Seconds(5.0)));
     }
 
     #[test]
     fn insert_replaces_in_place_without_reboxing() {
         let mut resources = Resources::new();
-        resources.insert(FrameTime(1.0));
-        let before = resources.get::<FrameTime>().unwrap() as *const FrameTime;
-        assert_eq!(resources.insert(FrameTime(2.0)), Some(FrameTime(1.0)));
-        let after = resources.get::<FrameTime>().unwrap() as *const FrameTime;
+        resources.insert(Seconds(1.0));
+        let before = resources.get::<Seconds>().unwrap() as *const Seconds;
+        assert_eq!(resources.insert(Seconds(2.0)), Some(Seconds(1.0)));
+        let after = resources.get::<Seconds>().unwrap() as *const Seconds;
         assert_eq!(before, after, "republish must reuse the existing box");
     }
 
     #[test]
     fn take_leaves_a_default_parked_in_the_slot() {
         let mut resources = Resources::new();
-        assert_eq!(resources.take::<FrameTime>(), None);
-        resources.insert(FrameTime(3.0));
-        let before = resources.get::<FrameTime>().unwrap() as *const FrameTime;
-        assert_eq!(resources.take::<FrameTime>(), Some(FrameTime(3.0)));
-        let after = resources.get::<FrameTime>().unwrap() as *const FrameTime;
+        assert_eq!(resources.take::<Seconds>(), None);
+        resources.insert(Seconds(3.0));
+        let before = resources.get::<Seconds>().unwrap() as *const Seconds;
+        assert_eq!(resources.take::<Seconds>(), Some(Seconds(3.0)));
+        let after = resources.get::<Seconds>().unwrap() as *const Seconds;
         assert_eq!(before, after, "take must leave the box parked");
-        assert_eq!(resources.get::<FrameTime>(), Some(&FrameTime(0.0)));
+        assert_eq!(resources.get::<Seconds>(), Some(&Seconds(0.0)));
     }
 
     #[test]
     fn disjoint_borrow_hands_out_each_present_type() {
         let mut resources = Resources::new();
-        resources.insert(FrameTime(1.0));
+        resources.insert(Seconds(1.0));
         resources.insert(7u32);
-        let (time, count, missing) = resources.get_disjoint_mut::<FrameTime, u32, i64>();
+        let (time, count, missing) = resources.get_disjoint_mut::<Seconds, u32, i64>();
         time.unwrap().0 = 2.0;
         *count.unwrap() += 1;
         assert!(missing.is_none());
-        assert_eq!(resources.get::<FrameTime>(), Some(&FrameTime(2.0)));
+        assert_eq!(resources.get::<Seconds>(), Some(&Seconds(2.0)));
         assert_eq!(resources.get::<u32>(), Some(&8));
     }
 
@@ -179,9 +179,9 @@ mod tests {
     #[test]
     fn distinct_types_are_independent() {
         let mut resources = Resources::new();
-        resources.insert(FrameTime(1.0));
+        resources.insert(Seconds(1.0));
         resources.insert(7u32);
-        assert_eq!(resources.get::<FrameTime>(), Some(&FrameTime(1.0)));
+        assert_eq!(resources.get::<Seconds>(), Some(&Seconds(1.0)));
         assert_eq!(resources.get::<u32>(), Some(&7));
     }
 }

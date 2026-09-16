@@ -11,9 +11,8 @@ use concinnity_core::components::DebugHud;
 use concinnity_core::components::FrameInput;
 use concinnity_core::components::TextLabel;
 use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::ecs::{Access, PipelineContext, StepResult, System};
+use concinnity_core::ecs::{Access, FrameTime, PipelineContext, StepResult, System};
 use concinnity_core::profile::PassTiming;
-use std::time::Instant;
 
 // How often the process resident-set-size syscall is resampled while the HUD
 // is open, matching the stat HUD's own sampling cadence.
@@ -153,7 +152,8 @@ pub(crate) struct DebugHudSystem {
     camera_pose: Option<([f32; 3], f32, f32)>,
     // Most recent process resident-set size, resampled at RSS_INTERVAL_SECS.
     rss: Option<u64>,
-    last_rss_sample: Option<Instant>,
+    // Seconds of frame time since the last RSS sample; `None` resamples now.
+    rss_age: Option<f32>,
 }
 
 impl DebugHudSystem {
@@ -169,7 +169,7 @@ impl DebugHudSystem {
             mouse_pos: (0.0, 0.0),
             camera_pose: None,
             rss: None,
-            last_rss_sample: None,
+            rss_age: None,
         }
     }
 
@@ -186,6 +186,7 @@ impl System for DebugHudSystem {
             .writes_components(crate::component_mask![TextLabel])
             .reads_resources(crate::resource_mask![
                 FrameInput,
+                FrameTime,
                 crate::app::budget::ThreadBudget,
                 crate::app::budget::MemoryBudget,
             ])
@@ -211,6 +212,7 @@ impl System for DebugHudSystem {
             Self::write_chip(ctx, self.mouse_label, String::new());
             Self::write_chip(ctx, self.camera_label, String::new());
             Self::write_chip(ctx, self.sys_label, String::new());
+            self.rss_age = None;
             return StepResult::Continue;
         }
 
@@ -238,13 +240,9 @@ impl System for DebugHudSystem {
         let budget_mib = ctx
             .resource::<crate::app::budget::MemoryBudget>()
             .map(|b| b.budget_mib());
-        let now = Instant::now();
-        if self
-            .last_rss_sample
-            .is_none_or(|t| now.duration_since(t).as_secs_f32() >= RSS_INTERVAL_SECS)
-        {
+        let dt = ctx.resource::<FrameTime>().copied().unwrap_or_default().dt;
+        if rss_due(&mut self.rss_age, dt) {
             self.rss = crate::app::sysmem::process_resident_bytes();
-            self.last_rss_sample = Some(now);
         }
         let rss = self.rss;
         // Whole-frame allocation count from the frame loop's dev-build
@@ -267,11 +265,32 @@ impl System for DebugHudSystem {
     }
 }
 
+// Advance the RSS sample age by `dt`, returning whether a sample is due (and
+// restarting the age when it is). A `None` age is always due.
+fn rss_due(age: &mut Option<f32>, dt: f32) -> bool {
+    let next = age.map_or(RSS_INTERVAL_SECS, |a| a + dt.max(0.0));
+    let due = next >= RSS_INTERVAL_SECS;
+    *age = Some(if due { 0.0 } else { next });
+    due
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ecs::SYSTEMS;
     use concinnity_core::ecs::World;
+
+    // The first read samples, frames short of the interval wait, and the frame
+    // that reaches it samples again.
+    #[test]
+    fn rss_resamples_on_its_frame_time_interval() {
+        let mut age = None;
+        assert!(rss_due(&mut age, 0.0));
+        assert!(!rss_due(&mut age, RSS_INTERVAL_SECS * 0.5));
+        assert!(!rss_due(&mut age, RSS_INTERVAL_SECS * 0.25));
+        assert!(rss_due(&mut age, RSS_INTERVAL_SECS * 0.25));
+        assert_eq!(age, Some(0.0));
+    }
 
     #[test]
     fn passes_text_blanks_on_all_zero_slots() {

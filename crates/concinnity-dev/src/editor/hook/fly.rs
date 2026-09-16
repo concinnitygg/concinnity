@@ -8,7 +8,7 @@
 
 use concinnity_core::components::Camera3D;
 use concinnity_core::components::FrameInput;
-use concinnity_core::ecs::World;
+use concinnity_core::ecs::{FrameTime, World};
 
 use super::EditorHook;
 
@@ -74,14 +74,12 @@ pub(super) fn fly_step(
 
 impl EditorHook {
     // Flip the fly camera. Entering pauses a running world (the two capture
-    // states are exclusive); exiting drops the frame clock so re-entry starts
-    // fresh.
+    // states are exclusive).
     pub(super) fn toggle_fly(&mut self) {
         self.fly = !self.fly;
         if self.fly {
             self.sim.pause();
         }
-        self.fly_clock = None;
     }
 
     // Per-frame fly drive: integrate Camera3D from the live input. The world
@@ -92,12 +90,12 @@ impl EditorHook {
         if !self.fly {
             return;
         }
-        let now = std::time::Instant::now();
-        let dt = self
-            .fly_clock
-            .map(|last| now.duration_since(last).as_secs_f32())
-            .unwrap_or(0.0);
-        self.fly_clock = Some(now);
+        // Real frame time, which keeps running while the world is frozen.
+        let dt = world
+            .resource::<FrameTime>()
+            .copied()
+            .unwrap_or_default()
+            .dt;
         let Some(cam) = world.query_mut::<Camera3D>().next() else {
             return;
         };

@@ -20,8 +20,8 @@ use concinnity_core::components::TextInput;
 use concinnity_core::components::TextLabel;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{
-    Access, CursorState, DesiredCursor, HudLayers, MenuActive, MenuOverride, OpenDropdown,
-    PipelineContext, ScreenStack, StepResult, System,
+    Access, CursorState, DesiredCursor, FrameTime, HudLayers, MenuActive, MenuOverride,
+    OpenDropdown, PipelineContext, ScreenStack, StepResult, System,
 };
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::call_buffer;
@@ -29,7 +29,6 @@ use concinnity_core::render::cursor;
 use concinnity_core::render::overlay_maps;
 use concinnity_core::render::sprite as gfx_sprite;
 use concinnity_core::render::text;
-use std::time::Instant;
 
 mod hud_layout;
 mod widgets;
@@ -82,8 +81,8 @@ pub(crate) struct OverlayRecycle(pub Vec<render_types::TextDrawCall>);
 
 #[derive(Debug, Default)]
 pub(crate) struct OverlaySystem {
-    // Base for the caret-blink clock, set on the first step.
-    start_time: Option<Instant>,
+    // Seconds of frame time since the first built frame, the caret-blink clock.
+    elapsed: f32,
     // Scratch for the per-element draw-layer merge, reused across frames.
     layers: overlay_maps::OverlayLayers,
     // Scratch for the LayoutContainer label reflow, reused across frames.
@@ -115,6 +114,7 @@ impl System for OverlaySystem {
                 OpenDropdown,
                 DesiredCursor,
                 MenuOverride,
+                FrameTime,
             ])
             .writes_resources(crate::resource_mask![
                 crate::gfx::overlay::OverlayAssets,
@@ -130,12 +130,13 @@ impl System for OverlaySystem {
         let Some(assets) = ctx.take_resource::<OverlayAssets>() else {
             return StepResult::Continue;
         };
-        let elapsed = self
-            .start_time
-            .get_or_insert_with(Instant::now)
-            .elapsed()
-            .as_secs_f32();
-        let mut frame = self.build_frame(ctx, &assets, elapsed);
+        self.elapsed += ctx
+            .resource::<FrameTime>()
+            .copied()
+            .unwrap_or_default()
+            .dt
+            .max(0.0);
+        let mut frame = self.build_frame(ctx, &assets, self.elapsed);
         ctx.insert_resource(assets);
 
         // An external per-frame driver (the `cn editor` HUD) can force the
@@ -919,6 +920,28 @@ mod tests {
         assert_eq!(visible, dark + 1, "the caret is the one call that drops");
         // The period wraps, so the next cycle's first half draws it again.
         assert_eq!(w.build(1.06).calls.len(), visible);
+    }
+
+    // The step's blink clock accumulates frame time: a frame into the dark half
+    // of the period drops the caret, and the next frame into the second period
+    // draws it again.
+    #[test]
+    fn the_step_blinks_the_caret_by_frame_time() {
+        let mut w = TestWorld::new();
+        w.push(TextInput {
+            focused: true,
+            ..text_input(AssetId(4))
+        });
+        w.resources.insert(assets());
+        let mut sys = OverlaySystem::new();
+        let mut step = |w: &mut TestWorld, dt: f32| {
+            w.resources.insert(FrameTime { dt, elapsed: 0.0 });
+            sys.step(&mut w.ctx());
+            w.resources.get::<OverlayFrame>().unwrap().calls.len()
+        };
+        let visible = step(&mut w, 0.0);
+        assert_eq!(step(&mut w, 0.6), visible - 1, "the dark half");
+        assert_eq!(step(&mut w, 0.5), visible, "the next period");
     }
 
     // A hidden field builds nothing at all.

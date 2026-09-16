@@ -7,9 +7,10 @@
 use concinnity_core::components::{
     Camera3D, CameraController, ControlsCommand, FrameInput, InteractEvent, Interactable, Transform,
 };
-use concinnity_core::ecs::{Access, Entity, EventCursor, PipelineContext, StepResult, System};
+use concinnity_core::ecs::{
+    Access, Entity, EventCursor, FrameTime, PipelineContext, StepResult, System,
+};
 use concinnity_core::gfx::camera;
-use std::time::Instant;
 
 // Reach distance for interacting with a Prop, in world units.
 const INTERACT_REACH: f32 = 3.0;
@@ -31,7 +32,6 @@ pub struct Camera3DSystem {
     player_radius: f32,
     bounds_min: [f32; 3],
     bounds_max: [f32; 3],
-    last_step: Option<Instant>,
     // smoothed horizontal velocity; lerped toward the target each tick so
     // WASD movement accelerates and decelerates instead of snapping
     velocity: [f32; 3],
@@ -54,7 +54,6 @@ impl Camera3DSystem {
             player_radius: c.player_radius,
             bounds_min: c.bounds_min,
             bounds_max: c.bounds_max,
-            last_step: None,
             velocity: [0.0; 3],
             interactable_entities: Vec::new(),
             controls_cursor: EventCursor::default(),
@@ -78,13 +77,12 @@ impl System for Camera3DSystem {
             .reads_resources(crate::resource_mask![
                 concinnity_core::ecs::EntityByName,
                 ControlsCommand,
+                FrameTime,
             ])
             .writes_resources(crate::resource_mask![InteractEvent])
     }
 
     fn init(&mut self, ctx: &mut PipelineContext) {
-        self.last_step = Some(Instant::now());
-
         super::look_controls::apply_persisted(
             ctx,
             super::look_controls::Look {
@@ -131,12 +129,12 @@ impl System for Camera3DSystem {
             None => return StepResult::Continue,
         };
 
-        let now = Instant::now();
-        let dt = self
-            .last_step
-            .map(|t| now.duration_since(t).as_secs_f32().min(0.1))
-            .unwrap_or(0.0);
-        self.last_step = Some(now);
+        let dt = ctx
+            .resource::<FrameTime>()
+            .copied()
+            .unwrap_or_default()
+            .dt
+            .clamp(0.0, 0.1);
 
         // update every Camera3D in the world (normally exactly one)
         for camera in ctx.query_mut::<Camera3D>() {
