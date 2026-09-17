@@ -1,29 +1,34 @@
-//! Resolving the world a player run reads.
+//! Classifying a path into the world source it names.
 
 use std::path::{Path, PathBuf};
 
-// Where a resolved world lives, owning its path so it outlives the borrow the
-// engine takes. A directory holds blob 0 and any overflow siblings; a file is
-// a single self-contained blob.
+use crate::app::run::BlobSource;
+
+/// Where a resolved world lives, owning its path so it outlives the borrow
+/// [`BlobSource`] takes. A directory holds blob 0 and any overflow siblings; a
+/// file is a single self-contained blob.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum ResolvedBlob {
+pub enum ResolvedBlob {
+    /// A directory holding blob 0 plus any overflow blobs beside it.
     Directory(PathBuf),
+    /// A single self-contained blob file.
     File(PathBuf),
 }
 
 impl ResolvedBlob {
-    pub(crate) fn as_source(&self) -> concinnity_engine::BlobSource<'_> {
+    /// The borrowed form the runtime loads from.
+    pub fn as_source(&self) -> BlobSource<'_> {
         match self {
-            ResolvedBlob::Directory(dir) => concinnity_engine::BlobSource::Directory(dir),
-            ResolvedBlob::File(file) => concinnity_engine::BlobSource::File(file),
+            ResolvedBlob::Directory(dir) => BlobSource::Directory(dir),
+            ResolvedBlob::File(file) => BlobSource::File(file),
         }
     }
 }
 
-// Classify `path` as a world: a directory holds blob 0, a file is blob 0
-// itself. `None` when nothing is there, which is the same answer for a missing
-// `data` entry and a mistyped argument.
-pub(crate) fn blob_source(path: &Path) -> Option<ResolvedBlob> {
+/// Classify `path` as a world: a directory holds blob 0, a file is blob 0
+/// itself. `None` when nothing is there, which is the same answer for a missing
+/// `data` entry and a mistyped argument.
+pub fn blob_source(path: &Path) -> Option<ResolvedBlob> {
     if path.is_dir() {
         return Some(ResolvedBlob::Directory(path.to_path_buf()));
     }
@@ -63,11 +68,11 @@ mod tests {
         // blob 0 itself.
         assert_eq!(
             ResolvedBlob::Directory(dir.clone()).as_source(),
-            concinnity_engine::BlobSource::Directory(&dir)
+            BlobSource::Directory(&dir)
         );
         assert_eq!(
             ResolvedBlob::File(single.clone()).as_source(),
-            concinnity_engine::BlobSource::File(&single)
+            BlobSource::File(&single)
         );
     }
 

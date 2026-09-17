@@ -12,11 +12,13 @@
 //! named `data` holding blob `0` and its overflow siblings. A single positional
 //! argument overrides both with a blob file or a directory of blobs; it moves
 //! only what is read, never where the app writes.
+//!
+//! One file, owning what a process owns -- the tracking allocator, the backend
+//! stamp `cn export` reads back, and the per-user base the writable state falls
+//! back to. Resolving the layout and loading the world live in concinnity-host
+//! and concinnity-engine.
 
 use std::path::{Path, PathBuf};
-
-mod blob;
-mod state;
 
 concinnity_core::install_global_allocator!();
 
@@ -52,7 +54,7 @@ fn main() -> std::io::Result<()> {
 
     let exe = std::env::current_exe()?;
     let exe_dir = exe.parent().unwrap_or_else(|| Path::new("."));
-    let tree = state::tree_for_exe(&exe, exe_dir);
+    let tree = concinnity_engine::paths::tree_for_exe(&exe, exe_dir, per_user_base().as_deref());
 
     // Before anything else can fault: a report written from here on lands
     // beside the app rather than nowhere.
@@ -65,7 +67,7 @@ fn main() -> std::io::Result<()> {
     let requested = std::env::args_os()
         .nth(1)
         .map_or_else(|| tree.data_dir(), PathBuf::from);
-    let blob = blob::blob_source(&requested).ok_or_else(|| {
+    let blob = concinnity_engine::blob_source(&requested).ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::NotFound,
             format!("no world data at {}", requested.display()),
@@ -75,8 +77,51 @@ fn main() -> std::io::Result<()> {
     concinnity_engine::run_from(&tree, blob.as_source())
 }
 
+// The platform base for per-user application state, from the environment the
+// process was launched with. `None` when it cannot be resolved, in which case
+// the writable state stays beside the data.
+#[cfg(windows)]
+fn per_user_base() -> Option<PathBuf> {
+    // %LOCALAPPDATA% (e.g. C:\Users\<user>\AppData\Local), falling back to the
+    // roaming %APPDATA% if the local one is somehow unset.
+    non_empty_env("LOCALAPPDATA")
+        .or_else(|| non_empty_env("APPDATA"))
+        .map(PathBuf::from)
+}
+
+#[cfg(target_os = "macos")]
+fn per_user_base() -> Option<PathBuf> {
+    non_empty_env("HOME").map(|h| PathBuf::from(h).join("Library").join("Application Support"))
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn per_user_base() -> Option<PathBuf> {
+    // The XDG base-directory spec: $XDG_DATA_HOME, else ~/.local/share.
+    non_empty_env("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| non_empty_env("HOME").map(|h| PathBuf::from(h).join(".local").join("share")))
+}
+
+// An environment variable's value when set and non-empty. Keeps the base
+// resolvers from returning a base rooted at "" (which would place per-user
+// state at the filesystem root).
+#[cfg(any(windows, unix))]
+fn non_empty_env(key: &str) -> Option<std::ffi::OsString> {
+    std::env::var_os(key).filter(|v| !v.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    // The host always has a resolvable base (HOME / LOCALAPPDATA), so a
+    // read-only install on it always has somewhere to redirect its writes.
+    #[test]
+    fn the_per_user_base_resolves_to_an_absolute_directory() {
+        let base = per_user_base().expect("a per-user base on the test host");
+        assert!(base.is_absolute(), "{}", base.display());
+    }
+
     // The shipped player counts its own heap. Nothing forces the declaration
     // at the top of this file to exist, so this is what catches its removal:
     // without it the player would run correctly while reporting no memory at

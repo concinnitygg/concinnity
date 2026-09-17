@@ -15,6 +15,8 @@ pub mod mem_drift;
 pub(crate) mod pacing;
 // Pipelined frame driver: sim thread + render half + the channel pair.
 pub(crate) mod pipeline;
+/// Classifying a path into the world source a run loads from.
+pub mod resolved_blob;
 pub mod run;
 pub mod runloop;
 /// The `Runtime` value a host constructs, starts, and steps.

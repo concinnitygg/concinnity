@@ -170,8 +170,8 @@ fn export_portable(
 
 // A macOS `.app` bundle: Contents/MacOS/<exe>, Contents/Info.plist, and
 // Contents/Resources/{<icon>.icns, data/}. The runtime resolves its state root
-// to Contents/Resources (see concinnity-run's state_dir_for_exe). Optionally
-// zipped and/or wrapped in a `.dmg`.
+// to Contents/Resources (see `concinnity_host::store::paths::tree_for_exe`).
+// Optionally zipped and/or wrapped in a `.dmg`.
 fn export_macos(
     meta: &AppMeta,
     runtime: &Path,

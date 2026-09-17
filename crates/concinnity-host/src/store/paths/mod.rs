@@ -19,10 +19,14 @@
 //! build produces, the state a run writes, and the caches either regenerates.
 //! [`StateTree`] documents when each splits away.
 //!
-//! Resolution touches no files: these functions compute paths. Reading the tree
-//! is `super::source` (finding a source asset) and `super::blob` (the compiled
-//! blob).
+//! Resolving a tree's paths touches no files: those functions compute paths.
+//! Building one from an installed executable ([`tree_for_exe`]) is the
+//! exception, since which layout an install has is a question about the disk.
+//! Reading the tree is `super::source` (finding a source asset) and
+//! `super::blob` (the compiled blob).
 
+mod install;
 mod tree;
 
+pub use install::tree_for_exe;
 pub use tree::StateTree;

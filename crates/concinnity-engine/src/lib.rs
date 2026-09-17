@@ -23,9 +23,10 @@ mod bench;
 pub(crate) use ecs::access_ids::{component_mask, resource_mask};
 
 pub mod app;
-// Flat entry point for a shipped player: run a compiled world from a state dir.
-// The runtime bin calls `concinnity_engine::run_from` rather than reaching
-// through the `app::run` module path.
+// Flat entry point for a shipped player: classify the path a world sits at and
+// run it. The runtime bin calls `concinnity_engine::run_from` rather than
+// reaching through the `app::run` module path.
+pub use app::resolved_blob::{ResolvedBlob, blob_source};
 pub use app::run::{BlobSource, run_from};
 // The surface a host embeds: construct a Runtime, populate its world, and
 // drive it with `Runtime::run` / `Runtime::run_with`. Exported flat so the

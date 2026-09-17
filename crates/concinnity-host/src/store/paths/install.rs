@@ -1,20 +1,30 @@
-//! Where a player run reads its world from and writes its state to.
+//! Resolving a state tree from the location of an installed executable.
+//!
+//! Three install layouts share one rule: a portable folder keeps everything in
+//! one directory beside the executable, a macOS `.app` bundle keeps the content
+//! in `Contents/Resources`, and a read-only install such as Program Files keeps
+//! the content where it is but moves the runtime-writable state to a per-user
+//! directory.
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-use concinnity_engine::StateTree;
+use super::StateTree;
 
-// The state tree this player runs against: the content beside the executable,
-// with the runtime-writable state (`saves/`, `settings`, `crashes/`) redirected
-// to a per-user directory when the content dir cannot be written -- a read-only
-// install such as Program Files. In the portable case (content dir writable)
-// both stay beside the data, preserving the single-folder layout. The world's
-// own `AppConfig.home`, applied once the blob is read, overrides either.
-pub(crate) fn tree_for_exe(exe: &Path, exe_dir: &Path) -> StateTree {
+/// The state tree an installed executable runs against: the content beside the
+/// executable, with the runtime-writable state (`saves/`, `settings`,
+/// `crashes/`) redirected under `per_user_base` when the content directory
+/// cannot be written. When the content directory is writable both stay beside
+/// the data, preserving the single-folder layout.
+///
+/// `per_user_base` is the platform's base for per-user application state,
+/// resolved by the caller; the app name is appended to it here. A `None` base
+/// leaves the writable state beside the content. A world's own
+/// `AppConfig.home`, applied once its blob is read, overrides either.
+pub fn tree_for_exe(exe: &Path, exe_dir: &Path, per_user_base: Option<&Path>) -> StateTree {
     let content = state_dir_for_exe(exe_dir);
     let writable = (!dir_is_writable(&content))
-        .then(|| per_user_state_dir(&app_name_from_exe(exe)))
+        .then(|| per_user_base.map(|base| per_user_dir(base, exe)))
         .flatten();
     match writable {
         Some(dir) => StateTree::at(content).with_writable(dir),
@@ -27,7 +37,7 @@ pub(crate) fn tree_for_exe(exe: &Path, exe_dir: &Path) -> StateTree {
 // directory. Inside a macOS `.app` the executable sits at `Contents/MacOS/<exe>`
 // and the data lives in `Contents/Resources/`; everywhere else the data sits
 // directly beside the executable.
-pub(crate) fn state_dir_for_exe(exe_dir: &Path) -> PathBuf {
+fn state_dir_for_exe(exe_dir: &Path) -> PathBuf {
     let in_app_bundle = exe_dir.file_name() == Some(OsStr::new("MacOS"))
         && exe_dir.parent().and_then(Path::file_name) == Some(OsStr::new("Contents"));
     match exe_dir.parent() {
@@ -36,9 +46,14 @@ pub(crate) fn state_dir_for_exe(exe_dir: &Path) -> PathBuf {
     }
 }
 
+// The per-user writable directory: the platform base keyed by the app name.
+fn per_user_dir(base: &Path, exe: &Path) -> PathBuf {
+    base.join(app_name_from_exe(exe))
+}
+
 // The application name used to key the per-user writable directory: the
 // executable's file stem (the export slug), falling back to a generic name.
-pub(crate) fn app_name_from_exe(exe: &Path) -> String {
+fn app_name_from_exe(exe: &Path) -> String {
     exe.file_stem()
         .and_then(OsStr::to_str)
         .map(str::trim)
@@ -50,7 +65,7 @@ pub(crate) fn app_name_from_exe(exe: &Path) -> String {
 // Whether `dir` accepts new files. Probes by creating (and removing) a uniquely
 // named file; a read-only install (Program Files) fails here. A missing dir is
 // treated as writable -- the runtime creates `saves/` under it on first save.
-pub(crate) fn dir_is_writable(dir: &Path) -> bool {
+fn dir_is_writable(dir: &Path) -> bool {
     if !dir.exists() {
         return true;
     }
@@ -62,45 +77,6 @@ pub(crate) fn dir_is_writable(dir: &Path) -> bool {
         }
         Err(_) => false,
     }
-}
-
-// A per-user, always-writable directory for `saves/` + `settings`, keyed by the
-// app name. `None` only when the platform's base directory cannot be resolved
-// from the environment, in which case the caller leaves writable state beside
-// the data.
-pub(crate) fn per_user_state_dir(app: &str) -> Option<PathBuf> {
-    per_user_base().map(|base| base.join(app))
-}
-
-// The platform base for per-user application state.
-#[cfg(windows)]
-fn per_user_base() -> Option<PathBuf> {
-    // %LOCALAPPDATA% (e.g. C:\Users\<user>\AppData\Local), falling back to the
-    // roaming %APPDATA% if the local one is somehow unset.
-    non_empty_env("LOCALAPPDATA")
-        .or_else(|| non_empty_env("APPDATA"))
-        .map(PathBuf::from)
-}
-
-#[cfg(target_os = "macos")]
-fn per_user_base() -> Option<PathBuf> {
-    non_empty_env("HOME").map(|h| PathBuf::from(h).join("Library").join("Application Support"))
-}
-
-#[cfg(all(unix, not(target_os = "macos")))]
-fn per_user_base() -> Option<PathBuf> {
-    // The XDG base-directory spec: $XDG_DATA_HOME, else ~/.local/share.
-    non_empty_env("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .or_else(|| non_empty_env("HOME").map(|h| PathBuf::from(h).join(".local").join("share")))
-}
-
-// An environment variable's value when set and non-empty. Keeps the base
-// resolvers from returning a base rooted at "" (which would place per-user
-// state at the filesystem root).
-#[cfg(any(windows, unix))]
-fn non_empty_env(key: &str) -> Option<std::ffi::OsString> {
-    std::env::var_os(key).filter(|v| !v.is_empty())
 }
 
 #[cfg(test)]
@@ -140,13 +116,20 @@ mod tests {
         assert_eq!(app_name_from_exe(Path::new("/")), "concinnity");
     }
 
+    #[test]
+    fn a_per_user_dir_is_the_base_joined_with_the_app_name() {
+        let dir = per_user_dir(Path::new("/base"), Path::new("/apps/MyGame"));
+        assert_eq!(dir, Path::new("/base/MyGame"));
+    }
+
     // A writable content dir keeps the single-folder layout: everything the
-    // player reads and writes stays beside the executable.
+    // application reads and writes stays beside the executable.
     #[test]
     fn a_writable_install_keeps_one_folder() {
         let tmp = concinnity_testing::TempTree::new();
         let exe = tmp.path().join("MyGame");
-        let tree = tree_for_exe(&exe, tmp.path());
+        let base = Path::new("/per-user");
+        let tree = tree_for_exe(&exe, tmp.path(), Some(base));
 
         assert_eq!(tree.content_root(), tmp.path());
         assert_eq!(tree.writable_root(), tmp.path());
@@ -167,14 +150,5 @@ mod tests {
         let tmp = concinnity_testing::TempTree::new();
         let missing = tmp.path().join("not-created-yet");
         assert!(dir_is_writable(&missing));
-    }
-
-    #[test]
-    fn per_user_dir_appends_the_app_name_under_a_base() {
-        // The host always has a resolvable base (HOME / LOCALAPPDATA), so the
-        // per-user dir is Some and ends with the app name.
-        let dir = per_user_state_dir("MyGame").expect("a per-user base on the test host");
-        assert_eq!(dir.file_name().and_then(OsStr::to_str), Some("MyGame"));
-        assert!(dir.is_absolute());
     }
 }
