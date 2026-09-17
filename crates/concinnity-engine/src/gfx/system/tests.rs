@@ -3408,6 +3408,52 @@ fn a_malformed_texture_payload_fails_init() {
     assert!(lock(&state).init.is_none(), "backend never constructed");
 }
 
+// A deferred slot enters the pool as a 1x1 placeholder. Disk-backed, it keeps no
+// payload bytes (the streamer re-reads the blob file); RAM-backed, every slot's
+// bytes are kept for the streamer to re-decode.
+#[test]
+fn a_deferred_texture_slot_decodes_to_a_placeholder() {
+    use std::collections::HashSet;
+
+    let mut b = scene_builder();
+    b.push_resource(
+        concinnity_core::ecs::ResourceKind::Texture,
+        &texture_payload(4, 4),
+    );
+    let locators: Vec<PayloadLocator> = b
+        .texture_records
+        .iter()
+        .filter_map(|r| r.payload.clone())
+        .collect();
+    let mut world = b.build();
+    let deferred = HashSet::from([1]);
+
+    let disk = super::texture_payloads::decode_texture_payloads(
+        &mut world.ctx(),
+        &locators,
+        &deferred,
+        true,
+    )
+    .expect("decodes");
+    assert_eq!(disk.images.len(), 2);
+    assert_eq!((disk.images[0].width(), disk.images[0].height()), (2, 2));
+    assert_eq!((disk.images[1].width(), disk.images[1].height()), (1, 1));
+    assert!(disk.payloads.is_empty());
+
+    let ram = super::texture_payloads::decode_texture_payloads(
+        &mut world.ctx(),
+        &locators,
+        &deferred,
+        false,
+    )
+    .expect("decodes");
+    assert_eq!((ram.images[1].width(), ram.images[1].height()), (1, 1));
+    assert_eq!(
+        ram.payloads,
+        vec![texture_payload(2, 2), texture_payload(4, 4)]
+    );
+}
+
 // The EnvironmentMap and ColorLut payloads are read from their resource tables
 // before the shared blob is released and handed to the backend. Both are
 // singletons: the runtime uses handle 0 and logs any extras.
@@ -3628,6 +3674,45 @@ fn one_shot_world_fx_are_resolved_and_drained_at_init() {
     assert_eq!(ctx.query::<WaterSurface>().count(), 0);
     assert_eq!(ctx.query::<GlassPanel>().count(), 0);
     assert_eq!(ctx.query::<SdfVolume>().count(), 0);
+}
+
+// An SDF volume with no compiled payload, or one whose payload cannot be read, is
+// skipped; a readable one keeps its bytes and its asset name as the label.
+#[test]
+fn sdf_volumes_without_a_readable_payload_are_skipped() {
+    use concinnity_core::components::SdfVolume;
+    use concinnity_host::thread::asset_id;
+
+    let mut b = WorldBuilder::new();
+    let named = asset_id::intern("glass_orb");
+    let frag = b.payload(b"sdf-fragment-bytes");
+    b.push(SdfVolume {
+        asset_id: named,
+        locator: Some(frag),
+        ..Default::default()
+    });
+    b.push(SdfVolume {
+        asset_id: AssetId(841),
+        locator: None,
+        ..Default::default()
+    });
+    b.push(SdfVolume {
+        asset_id: AssetId(842),
+        locator: Some(PayloadLocator {
+            blob_index: 7,
+            offset: 0,
+            len: 4,
+        }),
+        ..Default::default()
+    });
+    let mut world = b.build();
+
+    let volumes = super::world_fx::drain_sdf_volumes(&mut world.ctx());
+    assert_eq!(volumes.len(), 1);
+    assert_eq!(volumes[0].volume.asset_id, named);
+    assert_eq!(volumes[0].fragment_source, b"sdf-fragment-bytes");
+    assert_eq!(volumes[0].label, "glass_orb");
+    assert_eq!(world.ctx().query::<SdfVolume>().count(), 0, "drained");
 }
 
 // A backend factory that cannot build (no device, an unsupported surface) leaves

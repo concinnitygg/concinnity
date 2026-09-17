@@ -4,8 +4,9 @@
 //! never rebuilds them.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::components::{GlassPanel, SdfVolume, WaterSurface};
+use concinnity_core::components::{GlassPanel, WaterSurface};
 use concinnity_core::gfx::render_types::DrawObject;
+use concinnity_core::render::backend_init::SdfVolumeSource;
 use concinnity_core::render::decal::{DecalRecord, DecalSet};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::particles::ParticleEmitterRecord;
@@ -399,14 +400,19 @@ pub(super) fn build_planar_reflection(
 // both stay None / empty and the raymarch executor short-circuits.
 pub(super) fn build_raymarch(
     gpu: &InitGpu<'_>,
-    sdf_volumes: &[(SdfVolume, Vec<u8>, String)],
+    sdf_volumes: &[SdfVolumeSource],
 ) -> RenderResult<RaymarchState> {
     let device = &*gpu.hw.device;
     let (volumes, cube_vertex_buffer, cube_index_buffer) = if sdf_volumes.is_empty() {
         (Vec::new(), None, None)
     } else {
         let mut records = Vec::with_capacity(sdf_volumes.len());
-        for (volume, payload, label) in sdf_volumes {
+        for SdfVolumeSource {
+            volume,
+            fragment_source: payload,
+            label,
+        } in sdf_volumes
+        {
             records.push(raymarch::build_raymarch_volume_record(
                 device,
                 volume,

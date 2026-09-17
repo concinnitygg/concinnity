@@ -3,10 +3,10 @@
 //! unified G-buffer, and the decal, fog, particle, auto-exposure, raymarch,
 //! planar reflection and transparent resources.
 
-use concinnity_core::components::{GlassPanel, SdfVolume, WaterSurface};
+use concinnity_core::components::{GlassPanel, WaterSurface};
 use concinnity_core::gfx::auto_exposure;
 use concinnity_core::gfx::render_types::{DrawObject, LightUniforms, NUM_SHADOW_CASCADES};
-use concinnity_core::render::backend_init::{PostSettings, WorldFx};
+use concinnity_core::render::backend_init::{PostSettings, SdfVolumeSource, WorldFx};
 use concinnity_core::render::decal::{self, DecalRecord};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::lights;
@@ -498,7 +498,7 @@ pub(super) fn build_raymarch(
     targets: &DxTargets,
     shadow: &ShadowState,
     scene: &DxSceneAssets,
-    sdf_volumes: &[(SdfVolume, Vec<u8>, String)],
+    sdf_volumes: &[SdfVolumeSource],
 ) -> RenderResult<Option<RaymarchResources>> {
     let hw = gpu.hw;
     let raymarch_srv_base_slot = descriptors.layout.raymarch_srv_base_slot;

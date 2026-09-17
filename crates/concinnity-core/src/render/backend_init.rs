@@ -167,9 +167,18 @@ pub struct WorldFx {
     pub water_surfaces: Vec<WaterSurface>,
     /// Refractive glass panels declared by the world.
     pub glass_panels: Vec<GlassPanel>,
-    /// Raymarched SDF volumes as (volume, compiled fragment source bytes,
-    /// asset label for error messages).
-    pub sdf_volumes: Vec<(SdfVolume, Vec<u8>, String)>,
+    /// Raymarched SDF volumes, each paired with its compiled payload.
+    pub sdf_volumes: Vec<SdfVolumeSource>,
+}
+
+/// One raymarched SDF volume with the payload its pipelines build from.
+pub struct SdfVolumeSource {
+    /// The volume as authored.
+    pub volume: SdfVolume,
+    /// The compiled distance-field payload read from the blob.
+    pub fragment_source: Vec<u8>,
+    /// The volume's asset name, for error messages and pipeline labels.
+    pub label: String,
 }
 
 /// A native view the host application owns (an `NSView` on macOS, a `UIView`

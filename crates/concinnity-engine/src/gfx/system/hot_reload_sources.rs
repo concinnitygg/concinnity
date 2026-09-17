@@ -8,8 +8,14 @@
 
 use concinnity_core::components::ProceduralMesh;
 use concinnity_core::components::ShaderStage;
-use std::collections::BTreeSet;
+use concinnity_core::ecs::PipelineContext;
+use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_host::thread::asset_id;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
+
+use super::parked::TextureNameSlots;
+use crate::gfx::draw_list::MeshSourceMeta;
 
 // Every unique parent directory across `paths`. The watcher subscribes to
 // these; a bare-filename source (no parent) is skipped and only reachable via
@@ -365,6 +371,103 @@ pub struct HotReloadSources {
     pub world_jsonl_path: Option<String>,
 }
 
+impl HotReloadSources {
+    /// Whether nothing reloadable was captured, so no watcher is worth starting.
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+            && self.color_lut.is_none()
+            && self.environment_map.is_none()
+            && self.meshes.is_empty()
+            && self.skinned_meshes.is_empty()
+            && self.procedural_meshes.is_empty()
+            && self.shader_stages.is_empty()
+            && self.world_jsonl_path.is_none()
+    }
+}
+
+// Snapshot each ProceduralMesh, with its interned name, before the mesh load
+// drains them. A world.jsonl reload diffs a freshly parsed entry against this
+// and regenerates the mesh when they differ, logging it by name.
+pub(super) fn procedural_mesh_snapshot(
+    ctx: &PipelineContext,
+) -> HashMap<AssetId, (String, ProceduralMesh)> {
+    ctx.query::<ProceduralMesh>()
+        .filter_map(|pm| Some((pm.asset_id, (asset_id::name_of(pm.asset_id)?, pm.clone()))))
+        .collect()
+}
+
+// Cross-reference the file-backed mesh sources captured at drain time with the
+// draw slots the draw list built. A mesh with no draws has nothing to reload
+// into, so it is omitted.
+pub(super) fn mesh_source_map(
+    sources: &HashMap<usize, MeshSourceMeta>,
+    mesh_handle_to_draws: &HashMap<usize, Vec<usize>>,
+) -> MeshSourceMap {
+    let entries = sources
+        .iter()
+        .filter_map(|(handle, meta)| {
+            let draws = mesh_handle_to_draws.get(handle).filter(|d| !d.is_empty())?;
+            Some(MeshSourceEntry {
+                source: meta.source.clone(),
+                primitive_index: meta.primitive_index,
+                lod_levels: meta.lod_levels,
+                lod_distances: meta.lod_distances.clone(),
+                draw_indices: draws.clone(),
+            })
+        })
+        .collect();
+    MeshSourceMap { entries }
+}
+
+// The same cross-reference for procedural meshes, whose "source" is the args
+// snapshot taken before the drain. A mesh no prop draws is omitted.
+pub(super) fn procedural_mesh_source_map(
+    snapshot: &HashMap<AssetId, (String, ProceduralMesh)>,
+    component_handles: &HashMap<AssetId, usize>,
+    mesh_handle_to_draws: &HashMap<usize, Vec<usize>>,
+) -> ProceduralMeshSourceMap {
+    let entries = snapshot
+        .iter()
+        .filter_map(|(asset_id, (name, args))| {
+            let handle = component_handles.get(asset_id)?;
+            let draws = mesh_handle_to_draws.get(handle).filter(|d| !d.is_empty())?;
+            Some(ProceduralMeshSourceEntry {
+                name: name.clone(),
+                args: args.clone(),
+                draw_indices: draws.clone(),
+            })
+        })
+        .collect();
+    ProceduralMeshSourceMap { entries }
+}
+
+// Keep the captured sources, and the texture-name map beside them, only when
+// something is reloadable. The dev drive's watcher subscribes to the parent
+// directory of every captured source path.
+pub(super) fn capture_hot_reload_sources(
+    sources: HotReloadSources,
+    texture_name_to_slot: HashMap<AssetId, usize>,
+) -> (Option<HotReloadSources>, Option<TextureNameSlots>) {
+    if sources.is_empty() {
+        return (None, None);
+    }
+    tracing::info!(
+        "asset hot-reload: captured {} file-backed texture source(s), {} \
+         ColorLut source(s), {} EnvironmentMap source(s), {} Mesh \
+         source(s), {} SkinnedMesh source(s), {} ProceduralMesh source(s), \
+         {} shader stage source(s), and world.jsonl path = {:?}",
+        sources.map.len(),
+        usize::from(sources.color_lut.is_some()),
+        usize::from(sources.environment_map.is_some()),
+        sources.meshes.len(),
+        sources.skinned_meshes.len(),
+        sources.procedural_meshes.len(),
+        sources.shader_stages.len(),
+        sources.world_jsonl_path
+    );
+    (Some(sources), Some(TextureNameSlots(texture_name_to_slot)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -547,5 +650,106 @@ mod tests {
         assert!(sources.color_lut.is_none());
         assert!(sources.environment_map.is_none());
         assert!(sources.world_jsonl_path.is_none());
+        assert!(sources.is_empty());
+    }
+
+    // Any one captured catalog is enough to make the bundle worth parking.
+    #[test]
+    fn bundle_with_any_single_capture_is_not_empty() {
+        let populated: [fn(&mut HotReloadSources); 8] = [
+            |s| s.map.push_texture("assets/wall.png".to_string(), 0, 0),
+            |s| {
+                s.color_lut = Some(ColorLutSource {
+                    resolved_path: "assets/grade.cube".to_string(),
+                })
+            },
+            |s| {
+                s.environment_map = Some(EnvironmentMapSource {
+                    resolved_path: "assets/sky.hdr".to_string(),
+                    prefilter_face_size: 64,
+                    irradiance_face_size: 16,
+                    prefilter_samples: 32,
+                    prefilter_clamp: 10.0,
+                })
+            },
+            |s| s.meshes.entries.push(mesh_entry("assets/prop.glb")),
+            |s| {
+                s.skinned_meshes
+                    .entries
+                    .push(skinned_entry("assets/fox.glb"))
+            },
+            |s| {
+                s.procedural_meshes.entries.push(ProceduralMeshSourceEntry {
+                    name: "ground".to_string(),
+                    args: Default::default(),
+                    draw_indices: vec![0],
+                })
+            },
+            |s| {
+                s.shader_stages.entries.push(ShaderStageSourceEntry {
+                    stage: ShaderStage::Fragment,
+                    resolved_path: "shaders/scene.slang".to_string(),
+                })
+            },
+            |s| s.world_jsonl_path = Some("world.jsonl".to_string()),
+        ];
+        for (i, populate) in populated.iter().enumerate() {
+            let mut sources = HotReloadSources::default();
+            populate(&mut sources);
+            assert!(!sources.is_empty(), "field {i} alone is a capture");
+        }
+    }
+
+    // An empty bundle parks nothing, not even the texture-name map.
+    #[test]
+    fn capturing_nothing_parks_nothing() {
+        let names = HashMap::from([(AssetId(7), 0)]);
+        let (sources, slots) = capture_hot_reload_sources(HotReloadSources::default(), names);
+        assert!(sources.is_none());
+        assert!(slots.is_none());
+    }
+
+    fn meta(source: &str) -> MeshSourceMeta {
+        MeshSourceMeta {
+            source: source.to_string(),
+            primitive_index: 1,
+            lod_levels: 2,
+            lod_distances: vec![10.0],
+        }
+    }
+
+    // A mesh handle with no draw entry, or an empty one, has nowhere to reload into.
+    #[test]
+    fn mesh_source_map_omits_handles_without_draws() {
+        let sources = HashMap::from([
+            (0, meta("assets/drawn.glb")),
+            (1, meta("assets/unreferenced.glb")),
+            (2, meta("assets/emptied.glb")),
+        ]);
+        let draws = HashMap::from([(0, vec![3, 4]), (2, Vec::new())]);
+        let map = mesh_source_map(&sources, &draws);
+        assert_eq!(map.len(), 1);
+        let entry = &map.entries[0];
+        assert_eq!(entry.source, "assets/drawn.glb");
+        assert_eq!(entry.draw_indices, vec![3, 4]);
+        assert_eq!((entry.primitive_index, entry.lod_levels), (1, 2));
+    }
+
+    // A procedural mesh with no handle, no draw entry, or an empty one is omitted.
+    #[test]
+    fn procedural_mesh_source_map_omits_meshes_without_draws() {
+        let args = ProceduralMesh::default;
+        let snapshot = HashMap::from([
+            (AssetId(1), ("drawn".to_string(), args())),
+            (AssetId(2), ("no_handle".to_string(), args())),
+            (AssetId(3), ("unreferenced".to_string(), args())),
+            (AssetId(4), ("emptied".to_string(), args())),
+        ]);
+        let handles = HashMap::from([(AssetId(1), 0), (AssetId(3), 1), (AssetId(4), 2)]);
+        let draws = HashMap::from([(0, vec![5]), (2, Vec::new())]);
+        let map = procedural_mesh_source_map(&snapshot, &handles, &draws);
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.entries[0].name, "drawn");
+        assert_eq!(map.entries[0].draw_indices, vec![5]);
     }
 }

@@ -41,6 +41,7 @@ use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::render_types::LightUniforms;
 use concinnity_core::platform::Platform;
+use concinnity_core::render::backend_init::SdfVolumeSource;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::slang_programs::raymarch::{self, Family};
 use concinnity_slang::SlangTarget;
@@ -928,16 +929,14 @@ pub(in crate::directx) struct RaymarchDescriptorHandles {
 }
 
 impl RaymarchResources {
-    // Build every raymarch resource and the per-volume records. `sdf_volumes`
-    // is the drained-and-payload-paired list from `gfx::system::init`.
-    // Returns `Ok(None)` when `sdf_volumes` is empty so the engine omits
-    // the pass.
+    // Build every raymarch resource and the per-volume records. Returns
+    // `Ok(None)` when `sdf_volumes` is empty so the engine omits the pass.
     pub(in crate::directx) fn try_new(
         ctx: RaymarchDeviceContext,
         target: RaymarchTargetConfig,
         bindings: RaymarchSharedBindings,
         handles: RaymarchDescriptorHandles,
-        sdf_volumes: &[(SdfVolume, Vec<u8>, String)],
+        sdf_volumes: &[SdfVolumeSource],
         hot_reload: bool,
     ) -> RenderResult<Option<Self>> {
         let RaymarchDeviceContext { alloc, info_queue } = ctx;
@@ -961,8 +960,7 @@ impl RaymarchResources {
             sampler_base_gpu,
             sampler_descriptor_size,
         } = handles;
-        let active: Vec<&(SdfVolume, Vec<u8>, String)> = sdf_volumes.iter().collect();
-        if active.is_empty() {
+        if sdf_volumes.is_empty() {
             return Ok(None);
         }
 
@@ -1005,8 +1003,13 @@ impl RaymarchResources {
 
         // Build per-volume records. Any failure here aborts init: a compile
         // error in an active volume is a developer-time bug.
-        let mut volumes: Vec<RaymarchVolumeRecord> = Vec::with_capacity(active.len());
-        for (vol, payload, label) in &active {
+        let mut volumes: Vec<RaymarchVolumeRecord> = Vec::with_capacity(sdf_volumes.len());
+        for SdfVolumeSource {
+            volume: vol,
+            fragment_source: payload,
+            label,
+        } in sdf_volumes
+        {
             let programs = crate::shader::raymarch_source::decode(payload, label)
                 .map_err(RenderError::Other)?;
             let pso = dump_on_err(

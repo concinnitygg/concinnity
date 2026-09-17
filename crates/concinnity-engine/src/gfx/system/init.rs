@@ -1,19 +1,10 @@
 // GraphicsSystem one-time setup: backend creation, draw-list build, and the
 // shader / texture / streaming wiring performed on the first tick.
 
-use concinnity_core::animation::skeleton;
 use concinnity_core::bake::font;
 use concinnity_core::bake::texture;
-use concinnity_core::components::CharacterCapsule;
-use concinnity_core::components::CharacterRig;
 use concinnity_core::components::DebugHud;
-use concinnity_core::components::GlobalTransform;
-use concinnity_core::components::InstancedProp;
 use concinnity_core::components::KeyBinding;
-use concinnity_core::components::ProceduralMesh;
-use concinnity_core::components::PropInstance;
-use concinnity_core::components::ReflectionProbe;
-use concinnity_core::components::RenderHandle;
 use concinnity_core::components::ShaderPrograms;
 use concinnity_core::components::SkeletonJoint;
 use concinnity_core::components::SkinnedMesh;
@@ -28,49 +19,45 @@ use concinnity_core::components::WindowMode;
 use concinnity_core::components::build_skeleton_from_joint_defs;
 use concinnity_core::components::hdr_sample_count;
 use concinnity_core::components::{
-    BlockType, Camera3D, Decal, DirectionalLight, GlassPanel, GraphicsConfig, HitRegion, Material,
-    Model, ParticleEmitter, PointLight, PostProcessConfig, RectAreaLight, SdfVolume, Shader,
-    ShaderStage, SpotLight, StreamingConfig, VolumetricFog, VoxelWorld, WaterSurface, Window,
+    BlockType, Camera3D, GraphicsConfig, HitRegion, Material, Model, PostProcessConfig, Shader,
+    ShaderStage, StreamingConfig, VoxelWorld, Window,
 };
-use concinnity_core::ecs::Entity;
 use concinnity_core::ecs::FontHandle;
 use concinnity_core::ecs::FrameRateCap;
 use concinnity_core::ecs::MaterialHandle;
 use concinnity_core::ecs::MenuOverride;
 use concinnity_core::ecs::OverlayImages;
 use concinnity_core::ecs::PayloadLocator;
-use concinnity_core::ecs::PickIndex;
 use concinnity_core::ecs::PipelineContext;
 use concinnity_core::ecs::SkinnedMeshHandle;
 use concinnity_core::ecs::TextureHandle;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::geometry::payload_joints_to_defs;
 use concinnity_core::gfx::{mesh_payload, render_types};
-use concinnity_core::render::{
-    backend, backend_init, decal, lights, particles, reflection_probe, text, volumetric_fog,
-};
+use concinnity_core::render::{backend, backend_init, text};
 use concinnity_core::resource::ColorLutTable;
 use concinnity_core::resource::EnvironmentMapTable;
 use concinnity_core::resource::FontTable;
 use concinnity_core::resource::MaterialTable;
 use concinnity_core::resource::SkinnedMeshTable;
 use concinnity_core::resource::TextureTable;
-use concinnity_core::transform::propagation;
 use concinnity_core::window::display_mode;
 use concinnity_host::store::blob::blob_path;
 use concinnity_host::store::blob::payload_section_start;
-use concinnity_host::thread::asset_id;
 
+use super::backend_handoff::RuntimeHandoff;
 use super::blob_release::{blobs_to_release, retained_blobs};
-use super::draw_geometry::gather_auto_seed_triangles;
-use super::mesh_seed_compaction::{
-    MeshSeedCompaction, compact_streamed_geometry, plan_mesh_seed_bytes,
-    strip_streamed_lod_alternates,
+use super::draw_geometry::{auto_seed_probe_placements, declared_probe_placements};
+use super::hot_reload_sources::{
+    HotReloadSources, capture_hot_reload_sources, mesh_source_map, procedural_mesh_snapshot,
+    procedural_mesh_source_map,
 };
-use super::mesh_stream_inputs::{
-    MeshStreamData, deferred_draws, draw_to_handle, mesh_stream_data, texture_stream_centers,
-};
-use super::stream_sources::{deferred_mesh_payloads, disk_mesh_payload};
+use super::prop_draws::PropDrawInputs;
+use super::scene_lights::gather_lights;
+use super::skinned_templates::{SkinnedSkeletonEntry, SkinnedUpload};
+use super::stream_plan::{StreamGeometry, StreamingSetup, plan_stream_geometry};
+use super::texture_payloads::{TexturePayloads, decode_texture_payloads};
+use super::world_fx::drain_world_fx;
 use super::*;
 use crate::gfx::draw_list;
 use crate::gfx::material_entry::MaterialEntry;
@@ -101,23 +88,6 @@ struct SkinnedGeometry {
     joint_defs: Vec<SkeletonJoint>,
     morphs: mesh_payload::PayloadMorphs,
     lod_alternates: Vec<(f32, Vec<u16>)>,
-}
-
-// One skinned mesh's skeleton bookkeeping, driving the SkeletonPose +
-// CharacterRig publish after the geometry upload. `template_index` is recorded
-// explicitly rather than inferred from position because pre-reserved instance
-// copies interleave the draw-object list (template, copies, template, ...).
-struct SkinnedSkeletonEntry {
-    handle: SkinnedMeshHandle,
-    name_id: AssetId,
-    template_index: usize,
-    skeleton: skeleton::Skeleton,
-    morph_names: Vec<String>,
-    model: [[f32; 4]; 4],
-    capsule: Option<CharacterCapsule>,
-    // The authored placement and local bounds, for the editor's pick index.
-    transform: Transform,
-    local_bounds: ([f32; 3], [f32; 3]),
 }
 
 // Assembled skinned-mesh GPU inputs from `assemble_skinned_meshes`: the shared
@@ -1244,12 +1214,18 @@ impl GraphicsSystem {
         })
     }
 
-    // Publish the Resolution row's mode list (backend-enumerated, else the static
-    // preset fallback), apply a persisted display-mode choice to the backend, and
-    // seed the frame-rate-cap resource + the Resolution row's dynamic value label.
-    // Runs after the backend is built.
+    // Apply the persisted window mode, publish the Resolution row's mode list
+    // (backend-enumerated, else the static preset fallback), apply a persisted
+    // display-mode choice to the backend, and seed the frame-rate-cap resource +
+    // the Resolution row's dynamic value label. Runs after the backend is built.
     fn finalize_display_modes(&mut self, ctx: &mut PipelineContext, settings: &mut SettingsState) {
         if let Some(backend) = self.backend.as_deref_mut() {
+            // The window is always created as a standard titled window, so a
+            // persisted or authored Borderless / Fullscreen mode is applied here.
+            // No-op in embedded mode (the backend owns no window there).
+            if settings.window_args.mode != WindowMode::Windowed {
+                backend.set_window_mode(settings.window_args.mode);
+            }
             let raw = backend.display_modes();
             settings.display_modes = if raw.is_empty() {
                 display_mode::fallback_modes()
@@ -1645,24 +1621,14 @@ impl GraphicsSystem {
         // payload source so streamed bytes need not stay RAM-resident.
         let blob_disk_backed = ctx.blob.disk_backed();
 
-        // Snapshot each ProceduralMesh before `load_mesh_geometry` drains
-        // them, so the world.jsonl hot-reload pass can diff a freshly parsed
-        // on-disk entry against the init state and re-run the generator when
-        // they differ. A `None` here (hot-reload off) keeps the captured set
-        // empty so the reload pass has nothing to inspect on `cn run`. Names
-        // come from the interner so the reload log can read "regenerated
-        // 'box_mesh'" instead of an opaque id.
-        let proc_mesh_args_snapshot: std::collections::HashMap<AssetId, (String, ProceduralMesh)> =
-            if crate::app::dev_flags::enabled() {
-                ctx.query::<ProceduralMesh>()
-                    .filter_map(|pm| {
-                        let name = asset_id::name_of(pm.asset_id)?;
-                        Some((pm.asset_id, (name, pm.clone())))
-                    })
-                    .collect()
-            } else {
-                std::collections::HashMap::new()
-            };
+        // `capture_sources` (cn debug) gathers the file-backed source maps the
+        // hot-reload watcher consumes.
+        let capture_sources = crate::app::dev_flags::enabled();
+        let proc_mesh_args_snapshot = if capture_sources {
+            procedural_mesh_snapshot(ctx)
+        } else {
+            std::collections::HashMap::new()
+        };
 
         // Mesh sources owned by a scene other than the start scene skip their
         // payload decode: draw records use the blob's baked bounds, and the
@@ -1693,13 +1659,9 @@ impl GraphicsSystem {
             source_map: shader_stage_source_map,
             shaders: decoded_shaders,
         } = self.decode_shaders(ctx, streaming_config.is_some())?;
-        // The world default program (ShaderHandle 0): skinned upload and the
-        // DX / Vulkan single-pipeline paths consume these directly.
 
         // Read the shared texture pool + the material table into the maps the
-        // draw list resolves against. `capture_sources` (cn debug) also gathers
-        // the file-backed source maps the hot-reload watcher consumes.
-        let capture_sources = crate::app::dev_flags::enabled();
+        // draw list resolves against.
         let TextureTableDecode {
             locators: texture_locators,
             source_map: asset_source_map,
@@ -1714,69 +1676,22 @@ impl GraphicsSystem {
         let SkinnedMeshAssembly {
             vertices: skinned_vertices,
             indices: skinned_indices,
-            draw_objects: mut skinned_draw_objects,
+            draw_objects: skinned_draw_objects,
             skeletons: skinned_skeletons,
             pool_reservations: skinned_pool_reservations,
-            morphs: mut skinned_morphs,
+            morphs: skinned_morphs,
             source_map: skinned_mesh_source_map,
         } = self.assemble_skinned_meshes(&skinned_geometry, &material_map, capture_sources)?;
 
-        let mut texture_data: Vec<texture::TextureImage> = Vec::new();
-        // Raw compiled texture payloads, kept past blob release so the
-        // asset-streaming subsystem can re-decode them off the main thread.
-        // Left empty when the blobs are disk-backed: the streamer then re-reads
-        // each payload from its blob file instead of holding a RAM copy.
-        let mut texture_payloads: Vec<Vec<u8>> = Vec::new();
-        // Slots owned by a scene other than the start scene enter the pool as
-        // 1x1 placeholders instead of decoding: they are blocked from
-        // streaming until their scene pins, at which point the streamer
-        // decodes them off the main thread.
         let deferred_slots = super::streaming::deferred_texture_slots(
             ctx,
             streaming_config.is_some(),
             texture_locators.len(),
         );
-        for (slot, locator) in texture_locators.iter().enumerate() {
-            if deferred_slots.contains(&slot) {
-                texture_data.push(texture::TextureImage::rgba8(1, 1, vec![0, 0, 0, 255]));
-                if !blob_disk_backed {
-                    match ctx.read_payload(locator) {
-                        Ok(b) => texture_payloads.push(b.to_vec()),
-                        Err(e) => {
-                            tracing::error!(
-                                "GraphicsSystem: failed to read texture payload: {:?}",
-                                e
-                            );
-                            return None;
-                        }
-                    }
-                }
-                continue;
-            }
-            let tex_bytes = match ctx.read_payload(locator) {
-                Ok(b) => b.to_vec(),
-                Err(e) => {
-                    tracing::error!("GraphicsSystem: failed to read texture payload: {:?}", e);
-                    return None;
-                }
-            };
-            match texture::deserialize(&tex_bytes) {
-                Ok(t) => texture_data.push(t),
-                Err(e) => {
-                    tracing::error!("GraphicsSystem: malformed texture payload: {}", e);
-                    return None;
-                }
-            }
-            if !blob_disk_backed {
-                texture_payloads.push(tex_bytes);
-            }
-        }
-        if !deferred_slots.is_empty() {
-            tracing::info!(
-                "GraphicsSystem: deferred {} scene-owned texture payload(s) past init",
-                deferred_slots.len()
-            );
-        }
+        let TexturePayloads {
+            images: texture_data,
+            payloads: texture_payloads,
+        } = decode_texture_payloads(ctx, &texture_locators, &deferred_slots, blob_disk_backed)?;
 
         // Read the sole EnvironmentMap + ColorLut payloads, then build the shared
         // text/sprite atlas pool.
@@ -1788,24 +1703,7 @@ impl GraphicsSystem {
             font_blob_indices,
         } = self.decode_text_atlases(ctx, &texture_locators)?;
 
-        // Indirect-ambient multiplier from PostProcessConfig, folded into the
-        // shared LightUniforms so every backend's main pass scales its IBL /
-        // flat-fallback ambient by it. 1.0 (the default) is a no-op.
-        let ambient_intensity = world_ambient_intensity;
-        // Lights are read, not drained: the GPU-side light data stays static
-        // (built once here), but the components keep their entities so editor
-        // tooling can address the authored lights by name.
-        let dir_lights: Vec<DirectionalLight> = ctx.query::<DirectionalLight>().cloned().collect();
-        let pt_lights: Vec<PointLight> = ctx.query::<PointLight>().cloned().collect();
-        let spot_lights: Vec<SpotLight> = ctx.query::<SpotLight>().cloned().collect();
-        let rect_lights: Vec<RectAreaLight> = ctx.query::<RectAreaLight>().cloned().collect();
-        let light_data = lights::build_light_data(&pt_lights, &spot_lights, &rect_lights);
-        let light_uniforms = lights::build_light_uniforms(
-            dir_lights,
-            pt_lights,
-            &light_data.lights,
-            ambient_intensity,
-        );
+        let (light_data, light_uniforms) = gather_lights(ctx, world_ambient_intensity);
 
         let consumed = shader_locators
             .iter()
@@ -1818,311 +1716,55 @@ impl GraphicsSystem {
             ctx.release_blob(idx);
         }
 
-        // InstancedProp components are drained because every instance becomes a
-        // baked DrawObject; there is no per-frame update path yet. Drain before
-        // taking Prop references because drain shifts the underlying Vec.
-        let instanced_props = ctx.drain::<InstancedProp>();
-
-        // Entities to render, in Prop-column order, so each gets a RenderHandle +
-        // GlobalTransform attached below. Enumerated through the PropInstance
-        // marker the decomposition leaves on each prop, in Prop order; the Prop
-        // column itself was drained by the decomposition pass at load. The
-        // Transform column is not the enumeration: a SkyRotation pivot carries
-        // one without being anything to draw.
-        let prop_entities: Vec<Entity> = ctx
-            .query_with_entity::<PropInstance>()
-            .map(|(entity, _)| entity)
-            .collect();
-
-        // Build the draw-list inputs from each entity's per-instance components:
-        // renderer fields from MeshRenderer/ModelRenderer, world matrices from
-        // Transform/Parent. `items` / `world_mats` are column-aligned with
-        // `prop_entities`.
-        let resolved = propagation::resolve_world_matrices(ctx);
-        let entity_name: std::collections::HashMap<Entity, AssetId> = ctx
-            .resource::<concinnity_core::ecs::EntityByName>()
-            .map(|n| n.0.iter().map(|(&id, &e)| (e, id)).collect())
-            .unwrap_or_default();
-        let mut items = Vec::with_capacity(prop_entities.len());
-        let mut world_mats = Vec::with_capacity(prop_entities.len());
-        for &entity in &prop_entities {
-            let asset_id = entity_name.get(&entity).copied().unwrap_or_default();
-            items.push(draw_list::decomposed_renderable_item(ctx, entity, asset_id));
-            world_mats.push(
-                resolved
-                    .get(&entity)
-                    .copied()
-                    .unwrap_or(draw_list::IDENTITY4),
-            );
-        }
-
-        // The props that draw the sky, so the frame step can keep them centered
-        // on the camera. Column-aligned with `items` by construction.
-        self.sky_props = prop_entities
-            .iter()
-            .zip(&items)
-            .filter(|(_, item)| {
-                item.mesh
-                    .is_some_and(|mesh| always_resident_meshes.contains(&mesh.index()))
-            })
-            .map(|(&entity, _)| entity)
-            .collect();
-
+        // A geometry-less world (e.g. text-only) is valid: the backend is
+        // initialized with empty geometry buffers and only the text path runs.
         let draw_list::DrawListData {
             vertices: mut all_vertices,
             indices: mut all_indices,
             mut draw_objects,
             mut instanced_clusters,
-            prop_draw_indices,
             mesh_handle_to_draws,
-            prop_local_bounds,
-        } = draw_list::build_draw_list(draw_list::DrawListInputs {
-            items: &items,
-            instanced_props: &instanced_props,
-            world_mats: &world_mats,
-            model_map: &model_map,
-            mesh_geometry: &mesh_geometry,
-            room_geometry: &room_geometry,
-            texture_count,
-            material_map: &material_map,
-            always_resident_meshes: &always_resident_meshes,
-        })?;
+            ..
+        } = self.assemble_prop_draws(
+            ctx,
+            PropDrawInputs {
+                model_map: &model_map,
+                mesh_geometry: &mesh_geometry,
+                room_geometry: &room_geometry,
+                texture_count,
+                material_map: &material_map,
+                always_resident_meshes: &always_resident_meshes,
+            },
+        )?;
 
-        // Give each prop entity a RenderHandle (its GPU draw slots) and a
-        // GlobalTransform (its init world matrix), so the per-frame push reads
-        // these. prop_entities is column-aligned with prop_draw_indices and
-        // world_mats; prop_draw_indices is consumed here and then dropped.
-        // When a PickIndex resource is present (the editor injects one before
-        // start; a shipped runtime never does), also capture each prop's pick
-        // candidate so the frame step can refresh the index from the live
-        // transforms.
-        self.pick_candidates.clear();
-        let want_pick = ctx.resource::<PickIndex>().is_some();
-        for (i, &entity) in prop_entities.iter().enumerate() {
-            let draws: concinnity_core::memory::InlineVec<u32> = prop_draw_indices[i]
-                .iter()
-                .map(|&slot| slot as u32)
-                .collect();
-            ctx.insert(entity, RenderHandle { draws });
-            ctx.insert(entity, GlobalTransform(world_mats[i]));
-            if want_pick {
-                let (local_min, local_max) = prop_local_bounds[i];
-                self.pick_candidates.push(super::PickCandidate {
-                    asset_id: items[i].asset_id,
-                    entity,
-                    local_min,
-                    local_max,
-                });
-            }
-        }
-
-        // Asset hot-reload mesh map: cross-reference the file-backed source
-        // metadata captured at drain time with the per-Mesh draw indices
-        // build_draw_list just produced. A Mesh without any draws (referenced
-        // by nothing) carries no entry; the watcher would still fire on the
-        // .glb change but the reload helper has nothing to push to.
-        let mut mesh_source_map = super::hot_reload_sources::MeshSourceMap::new();
-        if capture_sources {
-            for (handle, meta) in &mesh_sources {
-                if let Some(draws) = mesh_handle_to_draws.get(handle) {
-                    if draws.is_empty() {
-                        continue;
-                    }
-                    mesh_source_map
-                        .entries
-                        .push(super::hot_reload_sources::MeshSourceEntry {
-                            source: meta.source.clone(),
-                            primitive_index: meta.primitive_index,
-                            lod_levels: meta.lod_levels,
-                            lod_distances: meta.lod_distances.clone(),
-                            draw_indices: draws.clone(),
-                        });
-                }
-            }
-        }
-
-        // Procedural-mesh hot-reload map: same cross-reference, but the
-        // "source" is the JSONL `args` object captured pre-drain rather than
-        // a file path. A procedural mesh that no Prop references carries no
-        // draws and is omitted; a JSONL save changing its args would be
-        // observable only through a future system that introspects the args
-        // map directly, which we deliberately do not maintain.
-        let mut procedural_mesh_source_map =
-            super::hot_reload_sources::ProceduralMeshSourceMap::new();
-        if capture_sources {
-            for (asset_id, (name, args)) in &proc_mesh_args_snapshot {
-                let Some(handle) = component_mesh_handles.get(asset_id) else {
-                    continue;
-                };
-                if let Some(draws) = mesh_handle_to_draws.get(handle) {
-                    if draws.is_empty() {
-                        continue;
-                    }
-                    procedural_mesh_source_map.entries.push(
-                        super::hot_reload_sources::ProceduralMeshSourceEntry {
-                            name: name.clone(),
-                            args: args.clone(),
-                            draw_indices: draws.clone(),
-                        },
-                    );
-                }
-            }
-        }
-
-        // A geometry-less world (e.g. text-only) is valid: the backend is
-        // initialized with empty geometry buffers and only the text path runs.
-
-        // Per-texture-slot draw positions for the streaming scorer, captured
-        // before `draw_objects` moves into the backend.
-        let texture_centers = texture_stream_centers(&draw_objects, texture_data.len());
-
-        // Per-streamed-mesh data, also captured before `draw_objects` moves
-        // into the backend.
-        let MeshStreamData {
-            draw_indices: mesh_stream_draw_indices,
-            centers: mesh_centers,
-            payloads: mesh_payloads,
-        } = mesh_stream_data(
-            &draw_objects,
-            &all_vertices,
-            &all_indices,
-            &deferred_draws(&deferred_mesh_seeds, &mesh_handle_to_draws),
-        );
-        let draw_to_handle = draw_to_handle(&mesh_handle_to_draws);
-
-        // Shrink the seed VRAM when the residency cap is below the streamed set,
-        // before the backend build sizes its buffers from these.
-        if streaming_config.is_some() && !mesh_payloads.is_empty() {
-            strip_streamed_lod_alternates(&mut draw_objects, &mesh_stream_draw_indices);
-        }
-        let mesh_seed_region = match streaming_config.as_ref() {
-            Some(cfg) if !mesh_payloads.is_empty() => plan_mesh_seed_bytes(
-                &mesh_payloads,
-                &mesh_stream_draw_indices,
-                &draw_to_handle,
-                &deferred_mesh_sources.counts,
-                cfg.mesh_cap(),
-                !deferred_mesh_seeds.is_empty(),
-            )
-            .map(|seed| {
-                compact_streamed_geometry(
-                    MeshSeedCompaction {
-                        vertices: &mut all_vertices,
-                        indices: &mut all_indices,
-                        draw_objects: &mut draw_objects,
-                        instanced_clusters: &mut instanced_clusters,
-                        stream_draw_indices: &mesh_stream_draw_indices,
-                    },
-                    seed,
-                    cfg.mesh_cap(),
-                )
-            }),
-            _ => None,
-        };
+        let stream_plan = plan_stream_geometry(StreamGeometry {
+            vertices: &mut all_vertices,
+            indices: &mut all_indices,
+            draw_objects: &mut draw_objects,
+            instanced_clusters: &mut instanced_clusters,
+            mesh_handle_to_draws: &mesh_handle_to_draws,
+            deferred_mesh_seeds: &deferred_mesh_seeds,
+            deferred_mesh_counts: &deferred_mesh_sources.counts,
+            texture_count: texture_data.len(),
+            config: streaming_config.as_ref(),
+        });
 
         let draw_object_count = draw_objects.len();
         let cluster_count = instanced_clusters.len();
         let total_instances: usize = instanced_clusters.iter().map(|c| c.instances.len()).sum();
 
-        // Build projected-decal records from the world's `Decal` components.
-        // Resolved here (rather than per-frame) because the decal set is built
-        // at init and never grows: each record carries the resolved texture
-        // slot and pre-inverted model matrix the fragment shader needs. The
-        // Decal components are drained because the runtime keeps no per-frame
-        // update path for them.
-        let decal_records = {
-            let decals: Vec<Decal> = ctx.drain::<Decal>();
-            let refs: Vec<&Decal> = decals.iter().collect();
-            decal::build_decal_records(&refs, texture_count)
-        };
-        let decal_count = decal_records.len();
-
-        // Build particle-emitter records from the world's `ParticleEmitter`
-        // components. Same drain-at-init pattern as decals: each record carries
-        // the clamped emitter tunables and the resolved texture slot. The
-        // backend allocates one persistent GPU pool per record at init.
-        let particle_records = {
-            let emitters: Vec<ParticleEmitter> = ctx.drain::<ParticleEmitter>();
-            let refs: Vec<&ParticleEmitter> = emitters.iter().collect();
-            particles::build_particle_records(&refs, texture_count)
-        };
-        let particle_count = particle_records.len();
-
-        // Drain transparent water surfaces. Every backend builds a tessellated
-        // grid + per-surface uniforms per record at init and draws them in the
-        // shared transparent pass, alongside the glass panes below
-        // (`metal/water.rs`, `directx/water.rs`, `vulkan/water.rs`).
-        let water_surfaces: Vec<WaterSurface> = ctx.drain::<WaterSurface>();
-
-        // Drain translucent glass panels. Every backend builds a world-space
-        // quad + per-panel uniforms per record at init and draws them in the
-        // shared transparent pass (`metal/glass.rs`, `directx/glass.rs`,
-        // `vulkan/glass.rs`).
-        let glass_panels: Vec<GlassPanel> = ctx.drain::<GlassPanel>();
-
-        // Drain raymarched SDF volumes and pull the compiled-payload
-        // fragment-shader source bytes for each. Each backend wraps the bytes
-        // with the engine-shipped helpers + template and compiles a per-volume
-        // pipeline at init. Volumes whose payload read fails are dropped with a
-        // logged warning rather than failing the whole world build.
-        let sdf_volumes: Vec<(SdfVolume, Vec<u8>, String)> = {
-            let raw: Vec<SdfVolume> = ctx.drain::<SdfVolume>();
-            let mut out = Vec::with_capacity(raw.len());
-            for v in raw {
-                let asset_id = v.asset_id;
-                let label = asset_id::name_of(asset_id)
-                    .unwrap_or_else(|| format!("sdf_volume_{}", asset_id.0));
-                let locator = match v.locator.as_ref() {
-                    Some(l) => l.clone(),
-                    None => {
-                        tracing::warn!(
-                            "SdfVolume '{}': no payload locator (fragment shader \
-                             never compiled); skipping",
-                            label
-                        );
-                        continue;
-                    }
-                };
-                match ctx.read_payload(&locator) {
-                    Ok(bytes) => {
-                        let owned = bytes.to_vec();
-                        out.push((v, owned, label));
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            "SdfVolume '{}': failed to read fragment shader \
-                             payload: {:?}; skipping",
-                            label,
-                            e
-                        );
-                    }
-                }
-            }
-            out
-        };
-
-        // Resolve the world's `VolumetricFog`. The first declared instance
-        // wins; later ones are silently dropped (one homogeneous medium is
-        // all the fog pass models). `None` means the renderer skips the
-        // fog pass, which `resolve_asset` also returns for a disabled asset
-        // or one whose density cannot affect the frame.
-        let fog_settings = {
-            let fogs: Vec<VolumetricFog> = ctx.drain::<VolumetricFog>();
-            fogs.into_iter()
-                .find(|f| f.enabled)
-                .and_then(|f| volumetric_fog::resolve_asset(&f))
-        };
-        let fog_enabled = fog_settings.is_some();
-        settings.fog_built = fog_enabled;
+        let fx = drain_world_fx(ctx, texture_count);
+        let decal_count = fx.decals.len();
+        let particle_count = fx.particles.len();
+        let fog_settings = fx.fog;
+        settings.fog_built = fog_settings.is_some();
 
         // The DirectX / Vulkan debug layers: the CLI `--validation` flag if the
         // launch passed one, otherwise the build profile. Metal is unaffected
         // here: its layer is enabled by the CLI re-execing with `MTL_DEBUG_LAYER`.
         let validation = crate::app::dev_flags::resolve_validation();
-        // Shader hot-reload is opted in by `cn debug` (sets the static flag
-        // in `crate::app::dev_flags` before world build). Production `cn run`
-        // leaves it off; the backend then never spawns the filesystem watcher
-        // and shader sources stay strictly include_str!-baked.
+        // Shader hot-reload is opted in by `cn debug`. Production `cn run` leaves
+        // it off, so the backend never spawns the filesystem watcher.
         let hot_reload = crate::app::dev_flags::enabled();
         // Frame capture: always available under the dev loop, and armed for a
         // launch that asked for an exit screenshot.
@@ -2133,70 +1775,27 @@ impl GraphicsSystem {
         let embedded_surface = ctx
             .resource::<concinnity_core::render::backend_init::EmbeddedSurface>()
             .copied();
-        // Worst-case resident chunk count for the streaming VoxelWorld (0 for a
-        // non-voxel world). Threaded into the backend so its GPU-cull buffers
-        // reserve a chunk record region at init; resident chunks fold into the
-        // indirect path each frame. The VoxelWorld is consumed later by
-        // `setup_voxel_world_streaming`, so borrow it here.
-        let n_chunk_max = voxel_world
-            .as_ref()
-            .map_or(0, crate::gfx::system::streaming::chunk_reserve_count);
 
-        // Reflection-probe auto-seed. Computed here, before `draw_objects` moves into
-        // the backend: when the world declares no `ReflectionProbe`, surface-voxelize
-        // the static geometry so a watertight single-mesh interior is detected (object
-        // AABBs alone would read it as a solid block). The triangle gather is
-        // budget-gated, and an over-budget import falls back to coarse AABB occupancy
-        // rather than to no seed at all. `None` -> the backend's own AABB auto-seed.
-        //
-        // The bounds the grid tiles union the reflectors with the geometry, because a
-        // water surface / glass pane is not a draw object: a pool wider than every mesh
-        // would otherwise sit outside the grid entirely and inherit whatever
-        // `probe_set_specular`'s no-coverage fallback picked. Occupancy stays
-        // geometry-only -- it answers "is this capture point inside a wall", which a
-        // plane does not make true.
-        let auto_seed_geometry_probes = if ctx.query::<ReflectionProbe>().next().is_some() {
-            None
-        } else {
-            let occupancy: Vec<([f32; 3], [f32; 3])> = draw_objects
-                .iter()
-                .map(|o| (o.bb_min, o.bb_max))
-                .filter(|(mn, mx)| mn.iter().chain(mx).all(|c| c.is_finite()))
-                .collect();
-            let reflectors = water_surfaces
-                .iter()
-                .map(|w| {
-                    reflection_probe::reflector_bounds(w.center, [w.extent[0], 0.0, w.extent[1]])
-                })
-                .chain(glass_panels.iter().map(|g| {
-                    // A pane is an oriented quad; its longest half-side bounds it on
-                    // every axis whatever its normal.
-                    let r = g.half_size[0].max(g.half_size[1]);
-                    reflection_probe::reflector_bounds(g.center, [r, r, r])
-                }));
-            let tris = gather_auto_seed_triangles(&draw_objects, &all_vertices, &all_indices)
-                .unwrap_or_default();
-            reflection_probe::fold_world_bounds(occupancy.iter().copied().chain(reflectors)).map(
-                |(mn, mx)| {
-                    reflection_probe::auto_seed_probes_with_geometry(mn, mx, &occupancy, &tris)
-                },
+        // Declared probes win; otherwise the geometry-aware auto-seed; otherwise an
+        // empty list, which lets the backend run its own coarse-AABB auto-seed.
+        let mut probe_placements = declared_probe_placements(ctx);
+        if probe_placements.is_empty() {
+            probe_placements = auto_seed_probe_placements(
+                &draw_objects,
+                &all_vertices,
+                &all_indices,
+                &fx.water_surfaces,
+                &fx.glass_panels,
             )
-        };
-
-        // Planar reflection plane budget: there is no world-authored value, so the
-        // engine capacity is the baseline, scaled down under the quality preset /
-        // GPU tier ceiling. A lower tier renders fewer full render-res mirror passes
-        // (VRAM + GPU savings); reflectors past the budget take the probe cube.
-        // Restart-required like anisotropy above -- the mirror targets are allocated
-        // once at backend init below.
-        let planar_reflection_planes = quality_ceiling.planar_reflection_planes as usize;
+            .unwrap_or_default();
+        }
 
         // Assemble the backend construction inputs, derive the world's render
         // requirements from them (a world with no 3D content drops every
         // scene-scoped feature before any backend resource is sized), and
         // hand the result to the compile-time-selected backend.
         use concinnity_core::render::backend_init::{
-            BackendInit, MediaPayloads, SceneData, ShadowParams, WorldFx, WorldShader,
+            BackendInit, MediaPayloads, SceneData, ShadowParams, WorldShader,
         };
         let mut backend_init = BackendInit {
             window: &settings.window_args,
@@ -2212,12 +1811,14 @@ impl GraphicsSystem {
                 indices: &all_indices,
                 draw_objects,
                 instanced_clusters,
-                // Skinned draw-object count, to size the backend's GPU-cull
-                // buffers for the merged total at init. The skinned geometry is
-                // uploaded later by `upload_skinned` (which consumes
-                // `skinned_draw_objects`).
+                // Sizes the GPU-cull buffers for the merged total; the skinned
+                // geometry itself is uploaded after the build.
                 n_skinned: skinned_draw_objects.len(),
-                n_chunk_max,
+                // Worst-case resident chunk count, so the GPU-cull buffers
+                // reserve a chunk record region (0 for a non-voxel world).
+                n_chunk_max: voxel_world
+                    .as_ref()
+                    .map_or(0, super::streaming::chunk_reserve_count),
             },
             // One entry per world Shader, indexed by ShaderHandle value;
             // entry 0 is the world default program.
@@ -2245,73 +1846,15 @@ impl GraphicsSystem {
                 cascades: settings.shadow_cascades,
             },
             anisotropy: settings.anisotropy,
-            planar_planes: planar_reflection_planes,
+            // Restart-required: the mirror targets are allocated once at backend
+            // init, so the quality ceiling scales the engine capacity here.
+            planar_planes: quality_ceiling.planar_reflection_planes as usize,
             post,
-            fx: WorldFx {
-                decals: decal_records,
-                particles: particle_records,
-                fog: fog_settings,
-                water_surfaces,
-                glass_panels,
-                sdf_volumes,
-            },
+            fx,
             requirements: Default::default(),
         };
         backend_init.resolve_requirements();
-        // Live editor swap: the rebuilt world may carry a render backend
-        // transplanted out of the pre-edit world (a `PendingBackend` resource,
-        // published by the `cn editor` live SAVE). Reuse it instead of building a
-        // new one -- so the edit applies without recreating the OS window or
-        // re-initializing the GPU device -- but only when the backend can hot-swap
-        // AND the swapchain-level config (pixel format / frames-in-flight / EDR)
-        // is unchanged. An incapable backend (DirectX / Vulkan, whose default
-        // `hot_swap_config` is `None`) or a swapchain change routes to a full
-        // rebuild instead: the transplanted backend is idled + dropped and a new
-        // window is created (a rare one-frame flash). Deciding via `hot_swap_config`
-        // up front leaves `backend_init` intact for that rebuild path.
-        let reuse_backend = match ctx
-            .resources
-            .remove::<crate::ecs::PendingBackend>()
-            .map(|p| p.0)
-        {
-            Some(backend) if backend.hot_swap_config() == Some(backend_init.swapchain_config()) => {
-                Some(backend)
-            }
-            Some(backend) => {
-                backend.wait_idle();
-                None
-            }
-            None => None,
-        };
-        // Tests inject a mock backend factory through `test_hooks`; production
-        // always routes to the compile-time-selected real backend.
-        let built = match reuse_backend {
-            Some(mut backend) => backend.reload_world(backend_init).map(|()| {
-                tracing::info!(
-                    "GraphicsSystem: reused live backend (world reloaded in place, window kept)"
-                );
-                backend
-            }),
-            None => {
-                #[cfg(test)]
-                {
-                    match self.test_hooks.as_mut() {
-                        Some(hooks) => (hooks.backend_factory)(backend_init),
-                        // A test builds no real device: one that forgets its
-                        // hooks fails its own assertions instead of opening a
-                        // window.
-                        None => Err(concinnity_core::render::error::RenderError::Other(
-                            "no test backend factory".into(),
-                        )),
-                    }
-                }
-                #[cfg(not(test))]
-                {
-                    crate::device::init_backend(backend_init)
-                }
-            }
-        };
-        match built {
+        match self.build_backend(ctx, backend_init) {
             Ok(backend) => self.backend = Some(backend),
             Err(e) => {
                 tracing::error!("GraphicsSystem: backend build failed: {e}");
@@ -2319,288 +1862,76 @@ impl GraphicsSystem {
             }
         }
 
-        // Apply a persisted or authored non-windowed window mode at startup. The
-        // window is always created as a standard titled window, so a Borderless
-        // or Fullscreen choice (set in the settings menu and persisted across
-        // launches) has to be applied here; otherwise the app would always start
-        // windowed regardless of the saved mode. No-op for Windowed and in
-        // embedded mode (the backend owns no window there).
-        if settings.window_args.mode != WindowMode::Windowed
-            && let Some(backend) = self.backend.as_deref_mut()
-        {
-            backend.set_window_mode(settings.window_args.mode);
-        }
-
-        // Publish the Resolution row's mode list + frame-rate cap now the backend
-        // can enumerate the display's modes.
         self.finalize_display_modes(ctx, &mut settings);
 
-        // Reflection probes: hand the backend the declared `ReflectionProbe`
-        // placements (Metal bakes a cube per probe; an empty list auto-seeds from
-        // the scene bounds). Pushed once here, after construction; DX/VK no-op.
-        // Read, not drained, for the same reason as the lights above: the
-        // placements are static once pushed, but the components keep their
-        // entities so editor tooling can address the authored probes by name.
+        // Metal bakes a cube per placement; DirectX and Vulkan no-op.
         if let Some(backend) = self.backend.as_deref_mut() {
-            let declared: Vec<reflection_probe::ProbePlacement> = ctx
-                .query::<ReflectionProbe>()
-                .map(|p| {
-                    reflection_probe::ProbePlacement::from_center_extents(
-                        p.position,
-                        p.half_extents,
-                    )
-                })
-                .collect();
-            // Declared probes win; otherwise the geometry-aware auto-seed (when the scene
-            // was small enough to gather); otherwise an empty list, which lets the backend
-            // run its own coarse-AABB auto-seed (the unchanged path for heavy imports).
-            let placements = if !declared.is_empty() {
-                declared
-            } else {
-                auto_seed_geometry_probes.unwrap_or_default()
-            };
-            backend.set_reflection_probes(&placements);
+            backend.set_reflection_probes(&probe_placements);
         }
 
-        // World.jsonl path for the Prop transform reload pass. The dev host
-        // (`cn debug` / `cn editor`) resolves the world path -- world.jsonl
-        // discovery is authoring I/O in `concinnity-cook`, which the runtime does
-        // not link -- and hands it in via `dev_flags`. Embedded preview / MCP-
-        // driven runs leave it None and the file watcher has no `.jsonl` to
-        // subscribe to.
-        let world_jsonl_path: Option<String> = if capture_sources {
-            crate::app::dev_flags::world_jsonl_path()
-        } else {
-            None
-        };
-
-        // Asset hot-reload state. Built only when `cn debug` opted in
-        // (`capture_sources`) and the world declared at least one file-backed
-        // asset (texture, ColorLut, EnvironmentMap, Mesh, SkinnedMesh, or
-        // world.jsonl). The constructor spawns a `notify` watcher over the
-        // parent directories of every captured source path; `step` polls the
-        // shared atomic at frame start.
-        let (hot_reload_sources, texture_name_slots) = if capture_sources
-            && (!asset_source_map.is_empty()
-                || color_lut_source.is_some()
-                || environment_map_source.is_some()
-                || !mesh_source_map.is_empty()
-                || !skinned_mesh_source_map.is_empty()
-                || !procedural_mesh_source_map.is_empty()
-                || !shader_stage_source_map.is_empty()
-                || world_jsonl_path.is_some())
-        {
-            tracing::info!(
-                "asset hot-reload: captured {} file-backed texture source(s), {} \
-                 ColorLut source(s), {} EnvironmentMap source(s), {} Mesh \
-                 source(s), {} SkinnedMesh source(s), {} ProceduralMesh source(s), \
-                 {} shader stage source(s), and world.jsonl path = {:?}",
-                asset_source_map.len(),
-                color_lut_source.as_ref().map(|_| 1).unwrap_or(0),
-                environment_map_source.as_ref().map(|_| 1).unwrap_or(0),
-                mesh_source_map.len(),
-                skinned_mesh_source_map.len(),
-                procedural_mesh_source_map.len(),
-                shader_stage_source_map.len(),
-                world_jsonl_path
-            );
-            let sources = super::hot_reload_sources::HotReloadSources {
-                map: asset_source_map,
-                color_lut: color_lut_source,
-                environment_map: environment_map_source,
-                meshes: mesh_source_map,
-                skinned_meshes: skinned_mesh_source_map,
-                procedural_meshes: procedural_mesh_source_map,
-                shader_stages: shader_stage_source_map,
-                world_jsonl_path,
-            };
-            // Captured only when hot-reload is on, so a `cn run` never holds it.
-            let slots = super::parked::TextureNameSlots(texture_name_to_slot);
-            (Some(sources), Some(slots))
+        // The dev host resolves the world.jsonl path (discovery is authoring I/O
+        // in `concinnity-cook`, which the runtime does not link); embedded preview
+        // and MCP-driven runs leave it None.
+        let (hot_reload_sources, texture_name_slots) = if capture_sources {
+            capture_hot_reload_sources(
+                HotReloadSources {
+                    map: asset_source_map,
+                    color_lut: color_lut_source,
+                    environment_map: environment_map_source,
+                    meshes: mesh_source_map(&mesh_sources, &mesh_handle_to_draws),
+                    skinned_meshes: skinned_mesh_source_map,
+                    procedural_meshes: procedural_mesh_source_map(
+                        &proc_mesh_args_snapshot,
+                        &component_mesh_handles,
+                        &mesh_handle_to_draws,
+                    ),
+                    shader_stages: shader_stage_source_map,
+                    world_jsonl_path: crate::app::dev_flags::world_jsonl_path(),
+                },
+                texture_name_to_slot,
+            )
         } else {
             (None, None)
         };
 
-        // Upload skinned geometry to the backend and publish one SkeletonPose
-        // per skinned mesh for AnimationSystem to drive. The poses are published
-        // regardless of backend so the system graph is identical.
-        if !skinned_skeletons.is_empty() {
-            if let Some(backend) = self.backend.as_deref_mut() {
-                if let Err(e) = backend.upload_skinned(
-                    &skinned_vertices,
-                    &skinned_indices,
-                    std::mem::take(&mut skinned_draw_objects),
-                ) {
-                    tracing::error!("GraphicsSystem: skinned geometry upload failed: {}", e);
-                    return None;
-                }
-                if skinned_morphs.iter().any(|m| m.is_some())
-                    && let Err(e) =
-                        backend.upload_skinned_morphs(std::mem::take(&mut skinned_morphs))
-                {
-                    tracing::error!("GraphicsSystem: morph target upload failed: {}", e);
-                    return None;
-                }
-                // The hidden copies reserved above seed the engine-side
-                // skinned instance pool (`RenderSlots`), published below.
-            }
-            let skinned_count = skinned_skeletons.len();
-            let shapes = super::character_shape::collect(ctx);
-            let want_pick = ctx.resource::<PickIndex>().is_some();
-            for SkinnedSkeletonEntry {
-                handle,
-                name_id,
-                template_index,
-                skeleton,
-                morph_names,
-                model,
-                capsule,
-                transform,
-                local_bounds,
-            } in skinned_skeletons
-            {
-                let layers = shapes
-                    .get(&handle)
-                    .map(|shape| super::character_shape::resolve(shape, &skeleton, &morph_names));
-                let capsule = capsule.map(|c| match &layers {
-                    Some(l) => {
-                        super::character_shape::proportioned_capsule(&c, &skeleton, &l.proportions)
-                    }
-                    None => (c.half_height, c.radius),
-                });
-                let entity = ctx.components.spawn();
-                ctx.insert(
-                    entity,
-                    super::character_shape::seed_pose(handle, template_index, skeleton, layers),
-                );
-                // Under the editor the template is pickable and movable like a
-                // prop: its Transform drives the per-frame skinned model push
-                // and its bounds join the pick index.
-                if want_pick {
-                    ctx.insert(entity, transform);
-                    ctx.insert(entity, GlobalTransform(model));
-                    self.pick_candidates.push(super::PickCandidate {
-                        asset_id: name_id,
-                        entity,
-                        local_min: local_bounds.0,
-                        local_max: local_bounds.1,
-                    });
-                }
-                // Register the template under its mesh name so a runtime
-                // SpawnRequest can resolve it to this entity, the same way the
-                // static spawn path resolves a named placement. The spawn then
-                // clones this template's skeleton + pose into a pooled slot.
-                if let Some(by_name) = ctx.resource_mut::<concinnity_core::ecs::EntityByName>() {
-                    by_name.0.insert(name_id, entity);
-                }
-                // A mesh with a capsule gets a character rig: PhysicsSystem
-                // (init runs later this tick) creates the kinematic capsule
-                // from it, and the render transform follows it each frame.
-                if let Some((half_height, radius)) = capsule {
-                    ctx.push(CharacterRig::new(
-                        handle,
-                        template_index,
-                        model,
-                        half_height.max(0.05),
-                        radius.max(0.05),
-                    ));
-                }
-            }
-            tracing::info!("GraphicsSystem: {} skinned mesh(es) ready", skinned_count);
+        let skinned_upload = SkinnedUpload {
+            vertices: skinned_vertices,
+            indices: skinned_indices,
+            draw_objects: skinned_draw_objects,
+            morphs: skinned_morphs,
+        };
+        if let Err(e) = self.install_skinned_templates(ctx, skinned_upload, skinned_skeletons) {
+            tracing::error!("GraphicsSystem: skinned upload failed: {e}");
+            return None;
         }
 
-        self.setup_texture_streaming(
-            streaming_config.clone(),
+        self.setup_streaming(StreamingSetup {
+            config: streaming_config,
+            plan: stream_plan,
             texture_payloads,
-            &texture_locators,
-            blob_disk_backed,
-            texture_centers,
-        );
-        // Per-stream-id payload refs for the deferred meshes, so the worker
-        // can decode them from the blob payload when their scene pins.
-        let deferred_stream_payloads = deferred_mesh_payloads(
-            &deferred_mesh_seeds,
-            &draw_to_handle,
-            &mesh_stream_draw_indices,
-            disk_mesh_payload,
-        );
-        if !deferred_stream_payloads.is_empty() {
-            tracing::info!(
-                "GraphicsSystem: deferred {} scene-owned mesh payload(s) past init",
-                deferred_stream_payloads.len()
-            );
-        }
-        self.setup_mesh_streaming(
-            streaming_config,
-            super::streaming::MeshStreamSetup {
-                payloads: mesh_payloads,
-                centers: mesh_centers,
-                draw_indices: mesh_stream_draw_indices,
-                disk_backed: blob_disk_backed,
-                seed_region: mesh_seed_region,
-                deferred_payloads: deferred_stream_payloads,
-            },
-        );
-        self.setup_voxel_world_streaming(voxel_world, &block_types, &material_map);
+            texture_locators: &texture_locators,
+            disk_backed: blob_disk_backed,
+            deferred_mesh_seeds: &deferred_mesh_seeds,
+            voxel_world,
+            block_types: &block_types,
+            material_map: &material_map,
+        });
 
         self.finalize_backend_config(ctx, &settings);
 
         self.setup_scene_flow(ctx);
 
-        // Hand the overlay build inputs assembled above (font atlases, sprite
-        // slots, HUD chip ids, clip bands) to OverlaySystem, which shapes the
-        // draw list from them each frame before this system submits it.
-        // Seed the frame extraction's viewport from the live backend;
-        // FrameInput refreshes it once InputSystem starts publishing.
-        self.viewport = self
-            .backend
-            .as_ref()
-            .map(|b| b.logical_size())
-            .unwrap_or((0.0, 0.0));
-        ctx.insert_resource(crate::gfx::overlay::OverlayAssets {
-            fonts: std::mem::take(&mut self.loaded_fonts),
-            sprite_texture_slots: std::mem::take(&mut self.sprite_texture_slots),
-            debug_hud_chips: std::mem::take(&mut self.debug_hud_chips),
-            stat_hud_chips: std::mem::take(&mut self.stat_hud_chips),
-            clip_rects: std::mem::take(&mut self.clip_rects),
-            initial_viewport: self.viewport,
-        });
-
-        self.publish_streaming_state(ctx, settings.frames_in_flight);
-
-        // The recording surfaces the render-block systems take each tick: the
-        // op queue backend effects accumulate into, and the slot-allocation
-        // authority (draw-slot free list seeded with the build-time draw
-        // count; skinned instance pool seeded with the pre-reserved copies).
-        ctx.insert_resource(crate::ecs::ActiveRenderQueues(Some(
-            crate::ecs::RenderQueues {
-                ops: Default::default(),
-                slots: crate::gfx::render_slots::RenderSlots::new(
-                    draw_object_count,
-                    self.caps.reuses_build_slots,
-                    &skinned_pool_reservations,
-                ),
+        self.park_runtime_state(
+            ctx,
+            RuntimeHandoff {
+                draw_object_count,
+                frames_in_flight: settings.frames_in_flight,
+                skinned_pool_reservations: &skinned_pool_reservations,
+                fog: fog_settings,
+                texture_name_slots,
+                hot_reload_sources,
             },
-        )));
-
-        // Init-time wiring is done: park the backend in the world's shared
-        // slot, where each per-step user (this system's frame encode,
-        // InputSystem's poll) takes and returns it.
-        ctx.insert_resource(crate::ecs::ActiveRenderBackend(self.backend.take()));
-        // Beside it, the init-captured state tooling edits the running world
-        // through: the fog a reload dedupes against, and under hot-reload
-        // capture the texture-name map and the source catalogs.
-        ctx.insert_resource(super::parked::PushedFogSettings(fog_settings));
-        if let Some(slots) = texture_name_slots {
-            ctx.insert_resource(slots);
-        }
-        if let Some(sources) = hot_reload_sources {
-            ctx.insert_resource(sources);
-        }
-
-        // Hand the scene flow to the shared slot SettingsSystem jumps and this
-        // system ticks.
-        ctx.insert_resource(crate::ecs::ActiveSceneFlow::new(self.scene_flow.take()));
+        );
         tracing::info!(
             "GraphicsSystem: ready ({}x{} \"{}\", {} frames in flight, {} draw objects, {} instanced clusters ({} instances total), {} decals, {} particle emitter(s), fog={})",
             settings.window_args.width,
@@ -2612,7 +1943,7 @@ impl GraphicsSystem {
             total_instances,
             decal_count,
             particle_count,
-            if fog_enabled { "on" } else { "off" },
+            if fog_settings.is_some() { "on" } else { "off" },
         );
         ctx.insert_resource(SettingsSlot(Some(settings)));
         Some(())

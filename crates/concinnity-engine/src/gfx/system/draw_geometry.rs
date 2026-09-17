@@ -1,8 +1,11 @@
-// Draw-object world positions and the world-triangle gather for reflection-probe
-// auto-seed.
+// Draw-object world positions and reflection-probe placement: the declared
+// probes, or an auto-seed over the world's triangles.
 
+use concinnity_core::components::{GlassPanel, ReflectionProbe, WaterSurface};
+use concinnity_core::ecs::PipelineContext;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types;
+use concinnity_core::render::reflection_probe::{self, ProbePlacement};
 
 // World-space position used to score a draw object for texture streaming:
 // the AABB center when bounds are finite, otherwise the model-matrix
@@ -83,6 +86,50 @@ pub(super) fn gather_auto_seed_triangles(
         }
     }
     (!tris.is_empty()).then_some(tris)
+}
+
+// The world's declared reflection probes. Read, not drained, so editor tooling
+// can address the authored probes by name.
+pub(super) fn declared_probe_placements(ctx: &PipelineContext) -> Vec<ProbePlacement> {
+    ctx.query::<ReflectionProbe>()
+        .map(|p| ProbePlacement::from_center_extents(p.position, p.half_extents))
+        .collect()
+}
+
+// Geometry-aware probe auto-seed for a world that declares no ReflectionProbe:
+// surface-voxelizing the static geometry detects a watertight single-mesh
+// interior, which object AABBs alone would read as a solid block. An
+// over-budget import falls back to coarse AABB occupancy rather than no seed.
+//
+// The grid bounds union the reflectors with the geometry, because a water
+// surface or glass pane is not a draw object: a pool wider than every mesh
+// would otherwise sit outside the grid. Occupancy stays geometry-only, since
+// it answers "is this capture point inside a wall", which a plane does not make
+// true. `None` when nothing is bounded, leaving the backend's own AABB seed.
+pub(super) fn auto_seed_probe_placements(
+    draw_objects: &[render_types::DrawObject],
+    vertices: &[Vertex],
+    indices: &[u32],
+    water_surfaces: &[WaterSurface],
+    glass_panels: &[GlassPanel],
+) -> Option<Vec<ProbePlacement>> {
+    let occupancy: Vec<([f32; 3], [f32; 3])> = draw_objects
+        .iter()
+        .map(|o| (o.bb_min, o.bb_max))
+        .filter(|(mn, mx)| mn.iter().chain(mx).all(|c| c.is_finite()))
+        .collect();
+    let reflectors = water_surfaces
+        .iter()
+        .map(|w| reflection_probe::reflector_bounds(w.center, [w.extent[0], 0.0, w.extent[1]]))
+        .chain(glass_panels.iter().map(|g| {
+            // A pane is an oriented quad; its longest half-side bounds it on
+            // every axis whatever its normal.
+            let r = g.half_size[0].max(g.half_size[1]);
+            reflection_probe::reflector_bounds(g.center, [r, r, r])
+        }));
+    let tris = gather_auto_seed_triangles(draw_objects, vertices, indices).unwrap_or_default();
+    reflection_probe::fold_world_bounds(occupancy.iter().copied().chain(reflectors))
+        .map(|(mn, mx)| reflection_probe::auto_seed_probes_with_geometry(mn, mx, &occupancy, &tris))
 }
 
 #[cfg(test)]
@@ -213,5 +260,37 @@ mod tests {
         let verts = vec![vert([0.0; 3]), vert([1.0, 0.0, 0.0]), vert([0.0, 0.0, 1.0])];
         // Index 9 is out of range for a 3-vertex buffer.
         assert!(gather_auto_seed_triangles(&objs, &verts, &[0, 1, 9]).is_none());
+    }
+
+    // A world with no bounded geometry and no reflectors leaves the seed to the backend.
+    #[test]
+    fn auto_seed_probe_placements_none_without_geometry_or_reflectors() {
+        let unbounded = vec![draw(IDENTITY, [f32::NAN; 3], [f32::NAN; 3], 0, 0, 0)];
+        assert!(auto_seed_probe_placements(&[], &[], &[], &[], &[]).is_none());
+        assert!(auto_seed_probe_placements(&unbounded, &[], &[], &[], &[]).is_none());
+    }
+
+    // A water surface past every mesh stretches the grid to cover it.
+    #[test]
+    fn auto_seed_probe_placements_widen_the_grid_to_a_reflector() {
+        let objs = vec![draw(IDENTITY, [-1.0; 3], [1.0; 3], 0, 3, 0)];
+        let verts = vec![vert([0.0; 3]), vert([1.0, 0.0, 0.0]), vert([0.0, 0.0, 1.0])];
+        let idx = [0u32, 1, 2];
+        let reach = |placements: Vec<ProbePlacement>| {
+            placements
+                .iter()
+                .map(|p| p.box_max[0])
+                .fold(f32::NEG_INFINITY, f32::max)
+        };
+        let alone = auto_seed_probe_placements(&objs, &verts, &idx, &[], &[]).expect("geometry");
+        let pool = WaterSurface {
+            center: [50.0, 0.0, 0.0],
+            extent: [5.0, 5.0],
+            ..Default::default()
+        };
+        let widened = auto_seed_probe_placements(&objs, &verts, &idx, &[pool], &[])
+            .expect("geometry and a reflector");
+        assert!(reach(alone) <= 1.0);
+        assert!(reach(widened) >= 55.0);
     }
 }

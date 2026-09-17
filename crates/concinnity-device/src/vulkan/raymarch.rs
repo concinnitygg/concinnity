@@ -28,6 +28,7 @@ use concinnity_core::components::sdf_programs::SdfPrograms;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::{LightUniforms, ShadowUniforms};
 use concinnity_core::platform::Platform;
+use concinnity_core::render::backend_init::SdfVolumeSource;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::slang_programs::raymarch::{self, Family};
 use concinnity_core::transform::mat4_inverse;
@@ -955,14 +956,13 @@ pub(in crate::vulkan) struct RaymarchSharedBindings<'a> {
 }
 
 impl RaymarchResources {
-    // Build every raymarch resource + the per-volume records. `sdf_volumes` is
-    // the drained-and-payload-paired list from `gfx::system::init`. Returns
+    // Build every raymarch resource + the per-volume records. Returns
     // `Ok(None)` when `sdf_volumes` is empty so the engine omits the pass.
     pub(in crate::vulkan) fn try_new(
         ctx: RaymarchDeviceContext,
         target: RaymarchTargetConfig,
         bindings: RaymarchSharedBindings,
-        sdf_volumes: &[(SdfVolume, Vec<u8>, String)],
+        sdf_volumes: &[SdfVolumeSource],
         hot_reload: bool,
     ) -> RenderResult<Option<Self>> {
         let RaymarchDeviceContext {
@@ -988,8 +988,7 @@ impl RaymarchResources {
             shadow_ubos,
             shadow_render_pass,
         } = bindings;
-        let active: Vec<&(SdfVolume, Vec<u8>, String)> = sdf_volumes.iter().collect();
-        if active.is_empty() {
+        if sdf_volumes.is_empty() {
             return Ok(None);
         }
 
@@ -1036,8 +1035,9 @@ impl RaymarchResources {
             )?);
         }
 
-        let has_shadow = active.iter().any(|(v, _, _)| v.cast_shadows);
-        let descriptor_pool = create_descriptor_pool(device, frames, active.len(), has_shadow)?;
+        let has_shadow = sdf_volumes.iter().any(|s| s.volume.cast_shadows);
+        let descriptor_pool =
+            create_descriptor_pool(device, frames, sdf_volumes.len(), has_shadow)?;
         let view_layouts: Vec<_> = (0..frames).map(|_| view_set_layout.handle()).collect();
         let view_sets = alloc_sets(device, descriptor_pool.handle(), &view_layouts)?;
         for (i, &set) in view_sets.iter().enumerate() {
@@ -1107,8 +1107,13 @@ impl RaymarchResources {
 
         // Build per-volume records. A compile error in an active volume is a
         // developer-time bug, so it aborts init.
-        let mut volumes: Vec<RaymarchVolumeRecord> = Vec::with_capacity(active.len());
-        for (vol, payload, label) in &active {
+        let mut volumes: Vec<RaymarchVolumeRecord> = Vec::with_capacity(sdf_volumes.len());
+        for SdfVolumeSource {
+            volume: vol,
+            fragment_source: payload,
+            label,
+        } in sdf_volumes
+        {
             let programs = crate::shader::raymarch_source::decode(payload, label)
                 .map_err(RenderError::Other)?;
             // A medium authors `sampleVolume` and renders alpha-blended without a
