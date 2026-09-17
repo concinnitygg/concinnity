@@ -97,20 +97,8 @@
 
 use std::path::Path;
 
-use concinnity_cook::build_only::LoadedWorld;
-use concinnity_cook::pipeline::PipelineResult;
-use concinnity_cook::{build_compiled, prepare_world};
-use concinnity_core::ecs::ComponentAsset;
-use concinnity_host::store::blob::BlobData;
-
-use concinnity_cook::authoring::registry::{asset_line, set_reference};
-
 pub use concinnity_cook::authoring::registry::Authored;
 
-// The authoring-only half of the asset vocabulary, globbed from the schema
-// crate's own partition: the build-only assets the cook expands, the resources
-// it compiles into the blob, and the five authored forms that diverge from the
-// component they bake into.
 // The authoring vocabulary, from the two crates that own its halves: the
 // compiled resources and the five diverging args schemas from the runtime
 // crate, the build-only assets from the authoring one.
@@ -126,25 +114,15 @@ use crate::{World, error};
 
 /// A world under construction: typed authored assets, compiled together into
 /// a runnable [`World`] or a blob file.
-#[derive(Default)]
-pub struct WorldBuilder {
-    // Finished world lines, serialized as each asset is added.
-    lines: Vec<String>,
-    // The search root a bare `source` filename resolves under, when the
-    // embedder named one.
-    assets_dir: Option<std::path::PathBuf>,
-    // Name and type per line, so the declaration order can be inspected
-    // without re-reading the lines.
-    declared: Vec<(String, &'static str)>,
-    // The first declaration failure, held as the kind and message a
-    // [`crate::Error::Build`] is rebuilt from at the compile, so the call
-    // chain stays borrow-friendly.
-    error: Option<(std::io::ErrorKind, String)>,
-}
+pub struct WorldBuilder(concinnity_cook::WorldBuilder);
 
 /// Start an empty world.
 pub fn world() -> WorldBuilder {
-    WorldBuilder::default()
+    // Shaders are cooked for the backend the runtime linked in beside this
+    // module consumes, so a world compiled in memory runs in the same process.
+    WorldBuilder(concinnity_cook::world(
+        concinnity_engine::platform::current(),
+    ))
 }
 
 impl WorldBuilder {
@@ -152,28 +130,19 @@ impl WorldBuilder {
     /// them under a state tree's `assets/`. Without one only a path that stands
     /// on its own resolves, since nothing here guesses a root.
     pub fn assets_in(&mut self, dir: impl Into<std::path::PathBuf>) -> &mut Self {
-        self.assets_dir = Some(dir.into());
+        self.0.assets_in(dir);
         self
     }
 
     /// The asset search root this build resolves against, if one was named.
     pub fn assets_dir(&self) -> Option<&Path> {
-        self.assets_dir.as_deref()
+        self.0.assets_dir()
     }
 
     /// Declare `value` under `name`. The asset type comes from the value's
     /// own [`Authored`] impl, so it cannot disagree with the fields.
     pub fn add<T: Authored>(&mut self, name: impl Into<String>, value: T) -> &mut Self {
-        let name = name.into();
-        match asset_line(&name, &value) {
-            Ok(line) => {
-                self.lines.push(line);
-                self.declared.push((name, T::TYPE));
-            }
-            Err(e) => {
-                self.error.get_or_insert((e.kind(), e.to_string()));
-            }
-        }
+        self.0.add(name, value);
         self
     }
 
@@ -181,7 +150,7 @@ impl WorldBuilder {
     /// order. Declaration order is load-bearing for scenes: the first `Scene`
     /// is the one active at world start.
     pub fn declared(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.declared.iter().map(|(n, t)| (n.as_str(), *t))
+        self.0.declared()
     }
 
     /// Point a reference field of the asset just added at `target`, by name.
@@ -205,50 +174,16 @@ impl WorldBuilder {
     ///     .reference("target", "hero");
     /// ```
     pub fn reference(&mut self, field: &str, target: impl Into<String>) -> &mut Self {
-        let Some(line) = self.lines.pop() else {
-            self.error.get_or_insert((
-                std::io::ErrorKind::InvalidInput,
-                format!("reference(\"{field}\") before any asset was added"),
-            ));
-            return self;
-        };
-        match set_reference(&line, field, &target.into()) {
-            Ok(patched) => self.lines.push(patched),
-            Err(e) => {
-                self.error.get_or_insert((e.kind(), e.to_string()));
-            }
-        }
+        self.0.reference(field, target);
         self
     }
 
     /// Compile every declared asset into a runnable [`World`].
     pub fn compile(&self) -> Result<World, crate::Error> {
-        let mut result = self.build()?;
-
-        let payload_sections: Vec<Option<Vec<u8>>> = std::mem::take(&mut result.payloads)
-            .into_iter()
-            .map(Some)
-            .collect();
-        let mut world = concinnity_engine::blob::world_from(BlobData::new(payload_sections));
-
-        for def in &result.defs {
-            let mut component =
-                ComponentAsset::from_baked(def).map_err(|e| crate::Error::Runtime(e.into()))?;
-            if let Some(locator) = &def.payload {
-                component.inject_locator(locator.clone());
-            }
-            world.add(component);
-        }
-
-        // Load the compiled resource stream into the per-kind tables the
-        // systems read by handle. Kinds that have left the component registry
-        // (textures, audio clips, fonts, color LUTs, environment maps) live
-        // here, not in `defs`, so without this the renderer sees an empty
-        // texture pool and every material's albedo handle resolves out of
-        // range. Same call the runtime makes when it loads a blob file.
-        concinnity_engine::resource::install_resource_tables(&mut world, &mut result.resources);
-
-        Ok(World::from_inner(world))
+        self.0
+            .compile()
+            .map(World::from_inner)
+            .map_err(error::from_cook)
     }
 
     /// Compile every declared asset and write it to the blob file at `path`.
@@ -256,59 +191,29 @@ impl WorldBuilder {
     /// a world written to `data/0` may also write `data/1`, `data/2`, ...
     /// [`App::from_blob`](crate::App::from_blob) reads that layout back.
     pub fn write_blob(&self, path: impl AsRef<Path>) -> Result<(), crate::Error> {
-        let result = self.build()?;
-        concinnity_cook::pipeline::write_blobs_to(&result, path.as_ref())
-            .map_err(error::from_io)?;
-        Ok(())
-    }
-
-    // Validate, expand and compile the declarations. The shared front half of
-    // `compile` and `write_blob`: both need every payload built, and differ
-    // only in where the result lands.
-    fn build(&self) -> Result<PipelineResult, crate::Error> {
-        if let Some((kind, message)) = &self.error {
-            return Err(crate::Error::Build {
-                kind: *kind,
-                message: message.clone(),
-            });
-        }
-
-        // Bare `source` filenames resolve under the root the embedder named
-        // (`assets_in`). Without one there is no tree to search, so only paths
-        // that stand on their own resolve.
-        let assets_dir = self.assets_dir.clone();
-        // Shaders are cooked for the backend the runtime linked in beside this
-        // module consumes, so a world compiled in memory runs in the same
-        // process.
-        let platform = concinnity_engine::platform::current();
-        let loaded: LoadedWorld = prepare_world(&self.lines.concat(), assets_dir.as_deref())
-            .map_err(crate::Error::Validation)?;
-        build_compiled(loaded.assets, assets_dir.as_deref(), None, platform).map_err(error::from_io)
+        self.0.write_blob(path).map_err(error::from_cook)
     }
 }
 
+// The wrapper is the published surface, so what it is checked for is that a
+// build reaches the facade's own types: a `crate::World` out of a compile, and
+// each of the failures mapped onto the variant of `crate::Error` that carries
+// it.
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{Camera3D, DirectionalLight};
+    use concinnity_core::components::DirectionalLight;
 
-    // The typed path: authored structs instead of string-keyed specs, across
-    // all three shapes (args override, pass-through component, resource).
     #[test]
-    fn typed_builder_compiles_a_world() {
-        use concinnity_core::components::DirectionalLight;
-
+    fn a_compiled_world_is_the_facade_world() {
         let world = world()
             .add(
                 "sun",
                 DirectionalLight {
-                    color: [1.0, 0.96, 0.86],
-                    direction: [-0.35, 0.85, 0.35],
                     intensity: 2.2,
+                    ..Default::default()
                 },
             )
-            // `Room` here is this module's authored form, not the component of
-            // the same name the query below reads back.
             .add(
                 "room",
                 Room {
@@ -325,18 +230,23 @@ mod tests {
             .next()
             .expect("the sun compiled into a component");
         assert_eq!(sun.intensity, 2.2);
-        // Room is `compiled`: the cook generated its geometry into the blob.
-        let room = world
-            .inner()
-            .query::<concinnity_core::components::Room>()
-            .next()
-            .expect("the room compiled into a component");
-        assert_eq!(room.half_width, 8.0, "size is halved by the bake");
-        assert!(room.locator.is_some(), "generated geometry is in the blob");
+    }
+
+    // The declarations are readable through the wrapper without paying for a
+    // compile, and in the order they were made.
+    #[test]
+    fn declared_reports_names_and_types_in_order() {
+        let mut spec = world();
+        spec.assets_in("project/assets")
+            .add("menu", concinnity_core::components::Scene::default())
+            .add("sun", DirectionalLight::default());
+        assert_eq!(spec.assets_dir(), Some(Path::new("project/assets")));
+        let declared: Vec<_> = spec.declared().collect();
+        assert_eq!(declared, [("menu", "Scene"), ("sun", "DirectionalLight")]);
     }
 
     #[test]
-    fn compile_reports_validation_errors() {
+    fn a_rejected_world_is_a_validation_error() {
         let mut spec = world();
         // A slider on nothing: the shape names a target that was never
         // declared, which validation rejects.
@@ -355,71 +265,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn an_empty_world_yields_the_injected_defaults() {
-        // An empty authored world still compiles: the pipeline injects the
-        // engine defaults (DebugHud et al), so the world is valid but carries
-        // no authored scene.
-        let world = world().compile().expect("an empty world compiles");
-        assert!(world.inner().query::<Camera3D>().next().is_none());
-    }
-
-    // A reference field holds a resolved handle, so the typed value cannot
-    // name what it points at; the builder names it and the compile resolves
-    // it exactly as it resolves an authored reference.
-    #[test]
-    fn a_named_reference_resolves_to_its_handle() {
-        use concinnity_core::components::{Material, ProceduralMesh, Prop};
-
-        let world = world()
-            .add(
-                "floor_mat",
-                Material {
-                    roughness: 0.8,
-                    ..Default::default()
-                },
-            )
-            .add(
-                "floor_mesh",
-                ProceduralMesh {
-                    generator: "plane".into(),
-                    half_width: 4.0,
-                    half_depth: 4.0,
-                    ..Default::default()
-                },
-            )
-            .add("floor", Prop::default())
-            .reference("mesh", "floor_mesh")
-            .reference("material", "floor_mat")
-            .compile()
-            .expect("a named reference compiles");
-
-        let prop = world
-            .inner()
-            .query::<Prop>()
-            .next()
-            .expect("the prop compiled into a component");
-        // The handle types are not part of the public surface (a reference
-        // is only ever named), so compare the resolved indices.
-        assert_eq!(prop.mesh.map(|h| h.index()), Some(0));
-        assert_eq!(prop.material.map(|h| h.index()), Some(0));
-    }
-
-    // `declared` reports names and types in declaration order, which is what
-    // lets a caller check scene ordering before paying for a compile.
-    #[test]
-    fn declared_reports_names_and_types_in_order() {
-        let mut spec = world();
-        spec.add("menu", concinnity_core::components::Scene::default())
-            .add("sun", DirectionalLight::default());
-        let declared: Vec<_> = spec.declared().collect();
-        assert_eq!(declared, [("menu", "Scene"), ("sun", "DirectionalLight")]);
-    }
-
     // Naming a reference with nothing to attach it to is the caller's
     // mistake, surfaced at compile rather than silently dropped.
     #[test]
-    fn a_reference_before_any_asset_is_a_compile_error() {
+    fn a_reference_before_any_asset_is_a_build_error() {
         let err = world()
             .reference("target", "hero")
             .compile()
@@ -437,33 +286,18 @@ mod tests {
         assert!(err.to_string().contains("before any asset"), "{err}");
     }
 
-    // The ahead-of-time path: the same declarations land in a blob file whose
-    // name the caller chose, and that file is a world the runtime can read.
+    // The ahead-of-time path goes through the wrapper too, and lands at the
+    // path the caller named.
     #[test]
-    fn write_blob_writes_a_readable_world_at_the_named_path() {
-        use concinnity_core::ecs::ComponentSlot;
-
+    fn write_blob_writes_a_world_at_the_named_path() {
         let tree = concinnity_testing::TempTree::new();
         let primary = tree.join("data/0");
 
         world()
-            .add(
-                "sun",
-                DirectionalLight {
-                    intensity: 3.5,
-                    ..Default::default()
-                },
-            )
+            .add("sun", DirectionalLight::default())
             .write_blob(&primary)
             .expect("the world is written");
 
-        let (meta, _) = concinnity_host::store::blob::read_cnb(&primary.to_string_lossy())
-            .expect("the written blob parses");
-        assert!(
-            meta.defs
-                .iter()
-                .any(|d| d.discriminant == DirectionalLight::DISCRIMINANT),
-            "the sun is in the def table"
-        );
+        assert!(primary.exists(), "the blob was written");
     }
 }

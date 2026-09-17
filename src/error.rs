@@ -128,13 +128,22 @@ pub(crate) fn from_startup(error: concinnity_engine::StartupError) -> Error {
     }
 }
 
-// A free function for the same reason as `from_startup`: a public
-// `From<io::Error>` would let any io failure pass as a build failure.
+// The cook classifies a build failure at the seam it happened; the facade
+// carries that classification onto the variant of its own type that holds it.
+// A free function for the same reason as `from_startup`: a `From` impl would
+// put the cook's type on this crate's public surface.
 #[cfg(feature = "cook")]
-pub(crate) fn from_io(error: std::io::Error) -> Error {
-    Error::Build {
-        kind: error.kind(),
-        message: error.to_string(),
+pub(crate) fn from_cook(error: concinnity_cook::WorldBuildError) -> Error {
+    use alloc::string::ToString;
+    use concinnity_cook::WorldBuildError as W;
+    match error {
+        W::Validation(messages) => Error::Validation(messages),
+        W::Build { kind, message } => Error::Build { kind, message },
+        W::Asset(cause) => Error::Runtime(cause.into()),
+        other => Error::Build {
+            kind: std::io::ErrorKind::Other,
+            message: other.to_string(),
+        },
     }
 }
 
@@ -326,14 +335,14 @@ mod tests {
             assert_eq!(io.kind(), ErrorKind::InvalidData);
         }
 
-        // A build failure keeps the kind the io step reported.
+        // A build failure keeps the kind the failing step reported.
         #[cfg(feature = "cook")]
         #[test]
-        fn an_io_failure_becomes_a_build_error_of_the_same_kind() {
-            let error = super::super::from_io(std::io::Error::new(
-                ErrorKind::PermissionDenied,
-                "data/0 is read-only",
-            ));
+        fn a_cook_build_failure_becomes_a_build_error_of_the_same_kind() {
+            let error = super::super::from_cook(concinnity_cook::WorldBuildError::Build {
+                kind: ErrorKind::PermissionDenied,
+                message: "data/0 is read-only".into(),
+            });
             assert!(
                 matches!(
                     &error,
@@ -346,6 +355,33 @@ mod tests {
             );
             let io: std::io::Error = error.into();
             assert_eq!(io.kind(), ErrorKind::PermissionDenied);
+        }
+
+        // The cook's three failure modes each land on the variant that holds
+        // them, so nothing flattens into a message on the way out.
+        #[cfg(feature = "cook")]
+        #[test]
+        fn every_cook_failure_maps_onto_the_variant_that_carries_it() {
+            use concinnity_cook::WorldBuildError as W;
+
+            let validation = super::super::from_cook(W::Validation(vec!["orphan".into()]));
+            let Error::Validation(messages) = &validation else {
+                panic!("expected a validation failure, got {validation:?}");
+            };
+            assert_eq!(messages.len(), 1);
+            assert!(messages[0].contains("orphan"), "{messages:?}");
+
+            let asset =
+                super::super::from_cook(W::Asset(AssetError::UnknownComponent { discriminant: 9 }));
+            assert!(
+                matches!(
+                    asset,
+                    Error::Runtime(WorldError::Asset(AssetError::UnknownComponent {
+                        discriminant: 9
+                    }))
+                ),
+                "{asset:?}"
+            );
         }
     }
 }

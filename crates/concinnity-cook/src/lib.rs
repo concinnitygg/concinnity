@@ -65,6 +65,7 @@ mod file_stamp;
 pub mod import;
 pub mod pipeline;
 pub mod resource_handles;
+pub mod world_builder;
 
 // Public build API: the entry points the CLI, the editor FFI, and the infra
 // server call. The runtime-side decode API stays in concinnity-core.
@@ -74,3 +75,4 @@ pub use pipeline::{
     build_loaded, build_pipeline_from_str, validate_asset, validate_world_jsonl,
     write_build_outputs,
 };
+pub use world_builder::{WorldBuildError, WorldBuilder, world};
