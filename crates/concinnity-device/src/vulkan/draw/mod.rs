@@ -8,16 +8,15 @@ mod composite;
 mod main;
 mod shadow;
 pub(in crate::vulkan) mod spot_shadow;
+mod stages;
 
 use ash::vk;
-use concinnity_core::components;
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::jitter;
 use concinnity_core::gfx::lod;
 use concinnity_core::gfx::projection::perspective_rh;
 use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::render_types::{LightUniforms, LineVertex, ShadowUniforms, TextDrawCall};
-use concinnity_core::render::csm;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::lights;
 use concinnity_core::render::model_history::HistoryMode;
@@ -342,55 +341,7 @@ impl VkContext {
 
         let start_cmd = self.record_frame_start(frame_idx)?;
 
-        // Recompute cascade VPs + splits from the current camera + light, and
-        // push the result to the shadow UBO so both passes see the same data.
-        let cascade_aspect = if extent.height == 0 {
-            1.0
-        } else {
-            extent.width as f32 / extent.height as f32
-        };
-        if self.shadow.pipeline.is_some() {
-            let fresh = csm::compute_shadow_uniforms(csm::ShadowUniformInputs {
-                view: self.view.matrix,
-                cam_pos,
-                fov_y_rad: fov_y_radians,
-                aspect: cascade_aspect,
-                near,
-                shadow_distance: (self.shadow.distance as f32).min(far),
-                light_dir_to_source: self.shadow.light_dir,
-                shadow_map_size: self.shadow.map_size,
-                active_cascades: self.shadow.cascades,
-            });
-            // Advance the cascade schedule and refresh only this frame's
-            // cascades' light VPs; skipped cascades keep the VP + depth their
-            // slice was last rendered with, so the Main pass samples each cascade
-            // consistently. Splits depend only on the camera range (not which
-            // cascades render), so always refresh. encode_shadow_pass
-            // re-rasterizes only the masked slices.
-            let update = self.shadow.update;
-            let mask = self
-                .shadow
-                .scheduler
-                .next_mask(update, self.shadow.cascades);
-            self.shadow.render_mask = mask;
-            self.shadow.uniforms.cascade_splits = fresh.cascade_splits;
-            self.shadow.uniforms.active_cascades = fresh.active_cascades;
-            for i in 0..render_types::NUM_SHADOW_CASCADES {
-                if mask & (1u32 << i) != 0 {
-                    self.shadow.uniforms.light_vps[i] = fresh.light_vps[i];
-                }
-            }
-            upload_shadow_uniforms(&self.shadow.ubos[frame_idx], &self.shadow.uniforms);
-        }
-
-        // Spot shadow refresh schedule. Prime-then-round-robin over the slices,
-        // so N shadowed spots cost one extra depth render per frame rather than
-        // N. No uniform refresh: the projections are static and were baked at
-        // init. A no-op (mask stays 0) when the world has no shadowed spot.
-        self.spot_shadow.advance(matches!(
-            self.shadow.update,
-            components::ShadowUpdate::EveryFrame
-        ));
+        self.update_shadow_schedule(extent, cam_pos, fov_y_radians, near, far, frame_idx);
 
         // Push this frame's skinning matrices into the per-frame joint buffers
         // before the skinned shadow + main passes read them. No-op when no
@@ -400,17 +351,10 @@ impl VkContext {
         // skin fold reads. No-op when no SkinnedMesh carries morph targets.
         self.upload_morph_weights(frame_idx);
 
-        // Auto-exposure: step the EMA from a previous frame's GPU
-        // measurement before any pipeline reads `post_process.exposure`.
-        // The fence wait at the top of `draw_frame` already gated the
-        // GPU work that wrote this slot's readback, so the value is
-        // committed. No-op when auto-exposure is disabled.
-        self.update_auto_exposure(elapsed, frame_idx);
-
         // Line resources: built on the first frame that publishes lines (and
         // this slot's vertex buffer grown to fit them), so the graph gate below
         // can see them live this same frame and a world that never draws a line
-        // never compiles them. Safe here: the frame fence at the top of
+        // never compiles them. Safe here: the `wait_frame_slot` fence in
         // `draw_frame` retired everything that read this slot last trip.
         self.ensure_line_pipeline(frame_idx, lines);
 
@@ -582,53 +526,9 @@ impl VkContext {
         // matching inputs skips the rebuild.
         self.draw.graph_cache = Some((seed_inputs, graph));
 
-        // The Hi-Z reduction that feeds next frame's cull is the graph's terminal
-        // `HizFinal` pass, so it has already been recorded above; `hiz_valid` only
-        // tracks whether a pyramid at the current resolution now exists.
+        self.advance_temporal_state(cur_vp);
 
-        // The cascade slices rest sampled (SHADER_READ_ONLY_OPTIMAL) between
-        // frames; next frame's Shadow producer barrier (graph-driven) performs
-        // the SHADER_READ_ONLY -> DEPTH_STENCIL_ATTACHMENT reset over every
-        // cascade layer, so no inline end-of-frame restore is needed here.
-
-        // Advance the TAA jitter sequence and the accumulation ring that
-        // validates next frame's history. The motion-vector temporal state lives
-        // on the unified G-buffer (advanced below); TAA only consumes its
-        // velocity view.
-        if let Some(taa) = &mut self.taa {
-            taa.taa_frame = taa.taa_frame.wrapping_add(1);
-            // Step the accumulation ring in lockstep: what this frame wrote is
-            // next frame's history.
-            taa.pass.advance();
-        }
-
-        // Advance the unified G-buffer's velocity-channel temporal state in
-        // lockstep with TAA's: this frame's un-jittered VP becomes next frame's
-        // `prev_vp`. The per-object half of the same history was snapshotted on
-        // the GPU by the pre-pass's own dispatch. Owned by `GbufferResources` so
-        // the motion vector works for any consumer (TAA or FSR), exactly
-        // mirroring the TAA advance above.
-        if let Some(gb) = &mut self.gbuffer {
-            gb.prev_view_proj = cur_vp;
-        }
-
-        // Advance Hi-Z temporal state: this frame's un-jittered VP becomes next
-        // frame's occlusion-test projection, and the pyramid the graph's
-        // `HizFinal` pass just wrote is now valid for next frame's cull (kept
-        // independent of TAA, which may be off while Hi-Z is on).
-        if self.cull.hiz.is_some() {
-            self.cull.hiz_prev_view_proj = cur_vp;
-            self.cull.hiz_valid = true;
-        }
-
-        // Drain the parallel-safe draw-call accumulator (bumped by every pass
-        // encoder, including those fanned onto rayon workers) into this frame's
-        // `frame_stats` for the profiler overlay. All recording is done by here.
-        let mut stats = self.frame_stats.get();
-        stats.draw_calls = self
-            .draw_calls_accum
-            .load(std::sync::atomic::Ordering::Relaxed);
-        self.frame_stats.set(stats);
+        self.finish_frame_stats();
 
         // End-of-frame timestamp for the profiler overlay. Pairs with the
         // TOP_OF_PIPE write near the top of the function (the block's first pair).
@@ -663,8 +563,8 @@ impl VkContext {
         let device = self.hw.device.clone();
         let device = &device;
         // Profiler-overlay timestamp pair. The pool slot for this frame is
-        // reset (the matching `get_query_pool_results` already ran at the top
-        // of `draw_frame`, after the fence wait that gated the previous trip's
+        // reset (the matching `get_query_pool_results` already ran in
+        // `read_gpu_timings`, after the fence wait that gated the previous trip's
         // writes), then the start tick is recorded as the first cmd-buffer
         // op. The matching end tick is written just before
         // `end_command_buffer` returns control. Mirrors the DirectX
@@ -742,10 +642,8 @@ impl VkContext {
     ) -> FrameGraphInputs {
         //  Per-frame seed inputs for the shared backend-agnostic frame
         //  builder ([gfx/render_graph/frame.rs](../../gfx/render_graph/frame.rs)).
-        //  Decals landed 2026-05-24; Fog followed; AutoExposure landed
-        //  2026-05-25; Particles landed 2026-05-25. The flags track
-        //  whether each pipeline is built: the encoders skip cheaply
-        //  when there is nothing live to draw.
+        //  The flags track whether each pipeline is built: the encoders skip
+        //  cheaply when there is nothing live to draw.
         let seed_inputs = FrameGraphInputs {
             shadow_enabled: self.shadow.pipeline.is_some(),
             shadow_map_size: self.shadow.map_size,

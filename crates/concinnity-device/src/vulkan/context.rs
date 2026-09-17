@@ -18,7 +18,6 @@ use concinnity_core::render::error;
 use concinnity_core::render::hdr_output;
 use concinnity_core::render::lights;
 use concinnity_core::render::particles;
-use concinnity_core::render::pass_timing;
 use concinnity_core::render::reflection_probe;
 use concinnity_core::render::render_graph;
 use concinnity_core::render::scene_flow;
@@ -1572,26 +1571,7 @@ impl VkContext {
         self.view.show = show;
         self.view.far = far;
         self.view.sky_rot = sky_rot;
-        // Vulkan polygon mode is pipeline state, so the wireframe view needs its
-        // own main-pass pipelines; built here on the first wireframe frame.
-        self.ensure_wireframe_pipelines();
-        // Shader hot-reload: if either the filesystem watcher or the debug
-        // `reload-shaders` command set the flag, rebuild every built-in
-        // pipeline from disk-resident source before this frame's passes
-        // start using them. The flag is cleared regardless of outcome so a
-        // failed rebuild (typo in a shader edit) doesn't loop, and the
-        // previous pipelines stay live so the session keeps rendering.
-        // Wait for the GPU to drain first so swapping pipelines out from
-        // under in-flight command buffers is safe. Mirrors the DirectX
-        // path at the top of its `draw_frame`.
-        if self.shader_reload_requested() {
-            self.clear_shader_reload_flag();
-            self.wait_idle();
-            match self.reload_shaders() {
-                Ok(()) => tracing::info!("hot-reload: shader pipelines rebuilt"),
-                Err(e) => tracing::error!("hot-reload: shader rebuild failed: {}", e),
-            }
-        }
+        self.apply_pending_rebuilds();
 
         // Minimized window: the client area is 0x0. Vulkan rejects every
         // zero-extent operation (swapchain, render area, viewport, image copy),
@@ -1604,194 +1584,19 @@ impl VkContext {
         }
 
         let frame = self.current_frame;
+        let mut gpu_wait = self.wait_frame_slot(frame)?;
+        self.service_background_work(elapsed, frame);
+        let timings = self.read_gpu_timings(frame);
+        self.begin_frame_stats(&gpu_wait, timings);
+        let Some(image_index) = self.acquire_frame(frame, &mut gpu_wait)? else {
+            return Ok(());
+        };
+
         // Cheap-cloneable handle (ash::Device is Arc-like). Holding a local
         // copy avoids tying the rest of the function to `&self.hw.device` while
         // record_frame takes `&mut self`.
         let device = self.hw.device.clone();
         let device = &device;
-
-        // Wait for this frame's slot to finish. Measured, with the swapchain
-        // acquire below, into the frame's `gpu_wait_us`: both block the CPU on
-        // the GPU inside `draw_frame`, which the engine times its graphics
-        // system around.
-        let mut gpu_wait = crate::gpu_wait::GpuWait::none();
-        gpu_wait
-            .measure(|| {
-                // SAFETY: the fence belongs to this frame slot and was created from this device; the
-                // slice borrows it for the call.
-                unsafe {
-                    device.wait_for_fences(
-                        std::slice::from_ref(&self.frame_sync.in_flight[frame]),
-                        true,
-                        u64::MAX,
-                    )
-                }
-            })
-            .map_err(|e| super::error::map_vk_result(e, "wait fences"))?;
-
-        // Streamed texture swaps: re-point this frame slot's bindless pool
-        // copy at the swapped-in views (legal now -- the fence wait above
-        // retired every command buffer that binds this slot's set), and free
-        // the old images / upload transients this slot parked on its previous
-        // trip (this slot's fence signaling also covers the older frames that
-        // last sampled them, and every pool copy has been re-pointed since).
-        self.apply_streamed_texture_rewrites(frame);
-
-        // Reclaim this frame slot's shared post-pass descriptor sets. Here for
-        // the same reason as the two ticks below: the fence wait above is what
-        // makes reclaiming the previous pass's sets legal.
-        self.post.arena.begin_frame(&self.hw.device, frame);
-
-        // Tick the device allocator: destroy retired handles, reclaim retired
-        // ranges, release empty blocks. Here because the fence wait above is
-        // what guarantees a range freed `retire_depth` ticks ago is no longer
-        // referenced.
-        self.hw.alloc.begin_frame();
-        // Same tick for the owned pipeline / layout / render-pass handles a
-        // rebuild displaced, on the same reasoning.
-        self.hw.device.begin_frame();
-
-        // Periodic footprint readout, for measuring the pool under streaming
-        // churn at scale. Inert unless debug logging is enabled.
-        if self.stream.frame.is_multiple_of(1024) && tracing::enabled!(tracing::Level::DEBUG) {
-            tracing::debug!("device allocator: {}", self.hw.alloc.stats());
-        }
-
-        // Advance the staggered reflection-probe bake one step. Runs here -- after
-        // this frame's slot fence wait, before `record_frame` -- so any cube it
-        // installs (a binding-8 rewrite + `probe.set.count` bump) is picked up by this
-        // frame's `record_frame` ProbeSet upload + rendering. Non-fatal.
-        if let Err(e) = self.bake_pending_probes() {
-            tracing::warn!("reflection probe bake step failed: {e}");
-        }
-
-        // Reset this frame's render stats. `record_frame` accumulates
-        // `draw_calls` through `inc_draw_calls` (interior-mutability since
-        // the encoders run through `&self`); the rest is filled here from
-        // `&mut self` state.
-        let counts = crate::object_counts::object_counts(
-            self.draw.objects.len(),
-            self.instanced.clusters.iter().map(|c| c.instances.len()),
-            self.skinned.slots.draw_objects.iter().map(|o| o.visible),
-        );
-        // GPU timing for the most-recently completed block on this frame slot:
-        // the whole-frame pair plus one (start, end) pair per render pass. The
-        // fence wait above guarantees the previous trip's writes have retired, so
-        // the available query results are committed. The block is read with
-        // `WITH_AVAILABILITY` so a pass that did not run this trip (its slots were
-        // reset but never written) reads back unavailable -> 0, without stalling
-        // the host (no `WAIT`). Zero before a slot has been visited a second time.
-        let empty_pass_times = [("", 0u32); profile::MAX_PASS_TIMINGS];
-        let (gpu_frame_us, pass_times_us) = if let Some(pool) = self.hw.timestamp_query_pool {
-            // One [value, availability] pair per query slot (TYPE_64 +
-            // WITH_AVAILABILITY -> two u64 per query; ash uses the element size as
-            // the stride and the slice length as the query count).
-            let mut results = vec![[0u64; 2]; pass_timing::SLOTS_PER_FRAME];
-            // SAFETY: a property query on a live handle; it only reads.
-            let res = unsafe {
-                device.get_query_pool_results(
-                    pool,
-                    pass_timing::frame_block_base(frame),
-                    &mut results,
-                    vk::QueryResultFlags::TYPE_64 | vk::QueryResultFlags::WITH_AVAILABILITY,
-                )
-            };
-            // WITH_AVAILABILITY fills the buffer + per-query availability bits and
-            // returns SUCCESS; tolerate NOT_READY defensively (the buffer is still
-            // written, and the availability bits gate every read).
-            if matches!(res, Ok(()) | Err(vk::Result::NOT_READY)) {
-                let period = self.hw.timestamp_period_ns;
-                let pair_micros = |start_slot: usize, end_slot: usize| -> u32 {
-                    let [s_val, s_avail] = results[start_slot];
-                    let [e_val, e_avail] = results[end_slot];
-                    if s_avail != 0 && e_avail != 0 && e_val > s_val && period > 0.0 {
-                        let nanos = (e_val - s_val) as f64 * period as f64;
-                        ((nanos / 1000.0) as u64).min(u32::MAX as u64) as u32
-                    } else {
-                        0
-                    }
-                };
-                pass_timing::decode_frame_block(pair_micros)
-            } else {
-                (0, empty_pass_times)
-            }
-        } else {
-            (0, empty_pass_times)
-        };
-        let vram_bytes = self.query_vram_bytes();
-        let transient_pool_bytes = self.targets.transient_pool.allocated_bytes();
-        // Reset the parallel-safe draw-call accumulator for this frame; the
-        // encoders fetch_add into it during recording and `record_frame`
-        // drains it back into `frame_stats.draw_calls` once recording is done.
-        self.draw_calls_accum
-            .store(0, std::sync::atomic::Ordering::Relaxed);
-        self.frame_stats.set(profile::RenderStats {
-            draw_calls: 0,
-            objects: counts.objects,
-            skinned_visible: counts.skinned_visible,
-            gpu_frame_us,
-            // The fence wait alone so far; the acquire below adds to it.
-            gpu_wait_us: gpu_wait.micros(),
-            vram_bytes,
-            transient_pool_bytes,
-            pass_times_us,
-            // Adapted auto-exposure EV for the StatHud `EV` chip. `Some` only
-            // when the world opted into auto-exposure (the EMA state is then
-            // live); the static-exposure path leaves it `None` so the chip
-            // stays blank. The value is the EV the most recent
-            // `update_auto_exposure` EMA step settled on (the multiplier the
-            // post stack pushes is `2^ev`). Mirrors `DxContext` / `MtlContext`.
-            auto_exposure_ev: self.auto_exposure.state.as_ref().map(|s| s.current_ev),
-            // EDR headroom for the StatHud `EDR x.X` chip, taken from the
-            // `HdrOutputMode` resolved at init. `Some` only on the HDR path
-            // (Vulkan has no portable max-EDR query, so the value is the
-            // synthesized placeholder set in `init`); `None` on SDR blanks the
-            // chip. Mirrors `DxContext` / `MtlContext::render_stats`.
-            max_edr: match self.hw.hdr_mode {
-                hdr_output::HdrOutputMode::Hdr { max_edr, .. } => Some(max_edr),
-                hdr_output::HdrOutputMode::Sdr => None,
-            },
-            ..profile::RenderStats::default()
-        });
-
-        // Acquire swapchain image. Blocks when the presentation engine holds
-        // every image, so it is the display-paced half of the frame's GPU wait.
-        let acquire = gpu_wait.measure(|| {
-            // SAFETY: `self.swapchain.handle` is the live swapchain and `image_available[frame]` is
-            // an unsignaled semaphore from this device's own pool for this frame slot.
-            unsafe {
-                self.swapchain.loader.acquire_next_image(
-                    self.swapchain.handle,
-                    u64::MAX,
-                    self.frame_sync.image_available[frame],
-                    vk::Fence::null(),
-                )
-            }
-        });
-        // Fold the acquire into the reading published above, which the stats
-        // snapshot had already captured with the fence wait alone.
-        let mut waited = self.frame_stats.get();
-        waited.gpu_wait_us = gpu_wait.micros();
-        self.frame_stats.set(waited);
-        let image_index = match acquire {
-            Ok((idx, suboptimal)) => {
-                if suboptimal {
-                    self.rebuild_swapchain()?;
-                    return Ok(());
-                }
-                idx
-            }
-            Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
-                self.rebuild_swapchain()?;
-                return Ok(());
-            }
-            Err(e) => return Err(super::error::map_vk_result(e, "acquire swapchain image")),
-        };
-
-        // SAFETY: the fence belongs to this frame slot and was just waited on, so it is signaled
-        // and not in use by a pending submission.
-        unsafe { device.reset_fences(std::slice::from_ref(&self.frame_sync.in_flight[frame])) }
-            .map_err(|e| super::error::map_vk_result(e, "reset fences"))?;
 
         // Record the frame. `record_frame` records the leading timestamp into
         // the `start` buffer, fans each non-composite pass onto its own
@@ -1840,56 +1645,7 @@ impl VkContext {
         // timestamp) submits last, after every per-pass buffer.
         submit_bufs.push(cmd);
 
-        // Submit the whole batch in one call: submission order = GPU order on
-        // the single graphics queue. The render-finished semaphore is indexed
-        // by swapchain image (not frame slot) so present never reuses one still
-        // in flight.
-        let wait_sems = [self.frame_sync.image_available[frame]];
-        let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
-        let signal_sems = [self.frame_sync.render_finished[image_index as usize]];
-        let submit_info = vk::SubmitInfo::default()
-            .wait_semaphores(&wait_sems)
-            .wait_dst_stage_mask(&wait_stages)
-            .command_buffers(&submit_bufs)
-            .signal_semaphores(&signal_sems);
-        // SAFETY: every command buffer in `submit_bufs` was ended and belongs to this frame slot,
-        // the semaphores and fence were created from this device, and `submit_info` borrows all of
-        // them for the call.
-        unsafe {
-            device
-                .queue_submit(
-                    self.hw.graphics_queue,
-                    std::slice::from_ref(&submit_info),
-                    self.frame_sync.in_flight[frame],
-                )
-                .map_err(|e| super::error::map_vk_result(e, "queue submit"))?;
-        }
-
-        // Present.
-        let swapchains = [self.swapchain.handle];
-        let image_indices = [image_index];
-        let present_info = vk::PresentInfoKHR::default()
-            .wait_semaphores(&signal_sems)
-            .swapchains(&swapchains)
-            .image_indices(&image_indices);
-        // SAFETY: `present_info` borrows the swapchain, image index, and wait semaphore for the
-        // call; the semaphore is signaled by the submission above.
-        let present_result = unsafe {
-            self.swapchain
-                .loader
-                .queue_present(self.hw.present_queue, &present_info)
-        };
-        if present_result == Err(vk::Result::ERROR_OUT_OF_DATE_KHR) || present_result == Ok(true) {
-            self.rebuild_swapchain()?;
-        } else {
-            present_result.map_err(|e| super::error::map_vk_result(e, "present"))?;
-            // Record which swapchain image now holds a complete, presented frame
-            // so the `screenshot` debug command can read it back.
-            self.swapchain.last_present_index = Some(image_index);
-        }
-
-        self.current_frame = (self.current_frame + 1) % self.frames_in_flight;
-        Ok(())
+        self.submit_and_present(frame, image_index, &submit_bufs)
     }
 
     pub(crate) fn update_view(&mut self, matrix: [[f32; 4]; 4]) {
