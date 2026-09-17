@@ -435,6 +435,7 @@ pub(crate) fn derive_quality_settings(cfg: &PostProcessConfig) -> backend::Quali
     }
 }
 
+mod blob_release;
 pub(crate) mod character_shape;
 mod draw_geometry;
 mod frame;
@@ -442,6 +443,8 @@ pub(crate) mod frame_policy;
 pub mod hot_reload_sources;
 mod init;
 mod lines;
+mod mesh_seed_compaction;
+mod mesh_stream_inputs;
 mod model_push;
 pub mod parked;
 pub(crate) mod scene;

@@ -1,10 +1,16 @@
-// Streamed texture payload sources and the voxel block palette conversion.
+// Streamed texture and deferred mesh payload sources, and the voxel block
+// palette conversion.
+
+use std::collections::HashMap;
 
 use concinnity_core::components::BlockType;
 use concinnity_core::ecs::PayloadLocator;
 use concinnity_core::geometry::ChunkBlockType;
 use concinnity_host::store::blob::blob_path;
 use concinnity_host::store::blob::payload_section_start;
+
+use crate::gfx::draw_list::DeferredMeshSeed;
+use crate::gfx::streaming::mesh::DeferredMeshPayload;
 
 // Resolve a `BlockType` asset into the chunk mesher's palette entry. Per-face
 // UV overrides fall back to the uv_min/uv_max rectangle, mirroring the
@@ -62,6 +68,59 @@ pub(super) fn build_texture_payload_source(
     ))
 }
 
+// Per-stream-id payload refs for the streamed draws built from a deferred mesh.
+// A RAM-backed seed carries its bytes; otherwise `resolve_disk` turns the locator
+// into a blob file range, and a stream it cannot resolve is left out.
+pub(super) fn deferred_mesh_payloads(
+    seeds: &HashMap<usize, DeferredMeshSeed>,
+    draw_to_handle: &HashMap<usize, usize>,
+    stream_draw_indices: &[usize],
+    resolve_disk: impl Fn(&PayloadLocator) -> Option<DeferredMeshPayload>,
+) -> HashMap<usize, DeferredMeshPayload> {
+    let mut payloads = HashMap::new();
+    for (stream_id, draw_idx) in stream_draw_indices.iter().enumerate() {
+        let Some(seed) = draw_to_handle.get(draw_idx).and_then(|h| seeds.get(h)) else {
+            continue;
+        };
+        let payload = match &seed.bytes {
+            Some(bytes) => DeferredMeshPayload::Bytes(bytes.clone()),
+            None => match resolve_disk(&seed.locator) {
+                Some(payload) => payload,
+                None => continue,
+            },
+        };
+        payloads.insert(stream_id, payload);
+    }
+    payloads
+}
+
+// A deferred mesh payload's absolute byte range in its blob file, or None
+// (logged) when the blob has no layout or its header cannot be read.
+pub(super) fn disk_mesh_payload(locator: &PayloadLocator) -> Option<DeferredMeshPayload> {
+    let Some(path) = blob_path(locator.blob_index) else {
+        tracing::warn!(
+            "GraphicsSystem: deferred mesh blob {} has no layout to read from",
+            locator.blob_index
+        );
+        return None;
+    };
+    match payload_section_start(&path) {
+        Ok(start) => Some(DeferredMeshPayload::Disk {
+            path,
+            offset: start + locator.offset,
+            len: locator.len,
+        }),
+        Err(e) => {
+            tracing::warn!(
+                "GraphicsSystem: deferred mesh blob {} unreadable: {:?}",
+                locator.blob_index,
+                e
+            );
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,5 +175,56 @@ mod tests {
         assert_eq!(decoded.image.mips[0].data, vec![0x11, 0x22, 0x33, 0xFF]);
         // Out-of-range item id surfaces an error rather than panicking.
         assert!(src.fetch(1).is_err());
+    }
+
+    fn seed(blob_index: u32, bytes: Option<Vec<u8>>) -> DeferredMeshSeed {
+        DeferredMeshSeed {
+            locator: PayloadLocator {
+                blob_index,
+                offset: 16,
+                len: 32,
+            },
+            bytes,
+        }
+    }
+
+    // Resolves blob 1 to a fixed file range and fails every other blob.
+    fn fake_disk(locator: &PayloadLocator) -> Option<DeferredMeshPayload> {
+        (locator.blob_index == 1).then(|| DeferredMeshPayload::Disk {
+            path: "blob1".to_string(),
+            offset: 100 + locator.offset,
+            len: locator.len,
+        })
+    }
+
+    #[test]
+    fn deferred_mesh_payloads_key_each_deferred_draw_by_its_stream_id() {
+        // Handle 4 is disk-backed (two draws), handle 5 is RAM-backed, handle 6
+        // is not deferred.
+        let seeds = HashMap::from([(4, seed(1, None)), (5, seed(1, Some(vec![7, 8])))]);
+        let draw_to_handle = HashMap::from([(10, 6), (11, 4), (12, 5), (13, 4)]);
+        let payloads =
+            deferred_mesh_payloads(&seeds, &draw_to_handle, &[10, 11, 12, 13], fake_disk);
+        assert_eq!(payloads.len(), 3);
+        assert!(
+            !payloads.contains_key(&0),
+            "a draw of a non-deferred mesh has no payload"
+        );
+        for stream_id in [1, 3] {
+            assert!(matches!(
+                &payloads[&stream_id],
+                DeferredMeshPayload::Disk { path, offset: 116, len: 32 } if path == "blob1"
+            ));
+        }
+        assert!(matches!(&payloads[&2], DeferredMeshPayload::Bytes(b) if b == &[7, 8]));
+    }
+
+    #[test]
+    fn deferred_mesh_payloads_skip_an_unresolvable_blob() {
+        let seeds = HashMap::from([(4, seed(2, None)), (5, seed(1, None))]);
+        let draw_to_handle = HashMap::from([(0, 4), (1, 5)]);
+        let payloads = deferred_mesh_payloads(&seeds, &draw_to_handle, &[0, 1], fake_disk);
+        assert_eq!(payloads.len(), 1);
+        assert!(payloads.contains_key(&1));
     }
 }

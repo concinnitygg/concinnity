@@ -366,6 +366,46 @@ impl GraphicsSystem {
         self.texture_streamer = Some(streamer);
     }
 
+    // Hand the streaming pools built at init to StreamingSystem: it drives them
+    // each frame (against the parked backend) and publishes the camera-relative
+    // view GraphicsSystem draws with. `frame_count` starts at 0 in lockstep with
+    // this system's own frame clock (both tick once per world step), so eviction
+    // retire-frames match the draw's frame. Each pool's derived byte budget is
+    // captured as the back-off valve's baseline before the streamers move, so
+    // stage 2 can reduce it and the release can restore it exactly.
+    pub(super) fn publish_streaming_state(
+        &mut self,
+        ctx: &mut PipelineContext,
+        frames_in_flight: usize,
+    ) {
+        let texture_baseline_budget = self.texture_streamer.as_ref().and_then(|s| s.byte_budget());
+        let mesh_baseline_budget = self.mesh_streamer.as_ref().and_then(|s| s.byte_budget());
+        let chunk_baseline_budget = self
+            .chunk_stream
+            .as_ref()
+            .and_then(|cs| cs.streamer.byte_budget());
+        let scene_residency = self.build_scene_residency(ctx);
+        ctx.insert_resource(crate::gfx::streaming::system::StreamingState {
+            texture_streamer: self.texture_streamer.take(),
+            mesh_streamer: self.mesh_streamer.take(),
+            mesh_stream_draw_indices: std::mem::take(&mut self.mesh_stream_draw_indices),
+            chunk_stream: self.chunk_stream.take(),
+            shader_warmup: self.shader_warmup.take(),
+            scene_residency,
+            frame_count: 0,
+            frames_in_flight,
+            texture_baseline_budget,
+            mesh_baseline_budget,
+            chunk_baseline_budget,
+            pressure_stage: crate::gfx::streaming::system::pressure::StreamPressureStage::None,
+            pressure_factor: 1.0,
+            last_sampled_rss: None,
+            drift: Default::default(),
+            last_drift_verdict: None,
+            heartbeats: Default::default(),
+        });
+    }
+
     // Stand up the mesh-geometry streaming subsystem when a StreamingConfig
     // was declared. Every streamed draw's geometry region is zeroed now (via
     // evict_mesh); the streamer brings them back resident over the next

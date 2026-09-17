@@ -27,8 +27,6 @@ use concinnity_core::components::Transform;
 use concinnity_core::components::WindowMode;
 use concinnity_core::components::build_skeleton_from_joint_defs;
 use concinnity_core::components::hdr_sample_count;
-use concinnity_core::components::procedural_mesh;
-use concinnity_core::components::sdf_volume;
 use concinnity_core::components::{
     BlockType, Camera3D, Decal, DirectionalLight, GlassPanel, GraphicsConfig, HitRegion, Material,
     Model, ParticleEmitter, PointLight, PostProcessConfig, RectAreaLight, SdfVolume, Shader,
@@ -47,12 +45,10 @@ use concinnity_core::ecs::SkinnedMeshHandle;
 use concinnity_core::ecs::TextureHandle;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::geometry::payload_joints_to_defs;
-use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::gfx::{mesh_payload, mesh_seed, render_types};
+use concinnity_core::gfx::{mesh_payload, render_types};
 use concinnity_core::render::{
     backend, backend_init, decal, lights, particles, reflection_probe, text, volumetric_fog,
 };
-use concinnity_core::resource::AudioClipTable;
 use concinnity_core::resource::ColorLutTable;
 use concinnity_core::resource::EnvironmentMapTable;
 use concinnity_core::resource::FontTable;
@@ -65,7 +61,16 @@ use concinnity_host::store::blob::blob_path;
 use concinnity_host::store::blob::payload_section_start;
 use concinnity_host::thread::asset_id;
 
-use super::draw_geometry::{draw_object_position, gather_auto_seed_triangles};
+use super::blob_release::{blobs_to_release, retained_blobs};
+use super::draw_geometry::gather_auto_seed_triangles;
+use super::mesh_seed_compaction::{
+    MeshSeedCompaction, compact_streamed_geometry, plan_mesh_seed_bytes,
+    strip_streamed_lod_alternates,
+};
+use super::mesh_stream_inputs::{
+    MeshStreamData, deferred_draws, draw_to_handle, mesh_stream_data, texture_stream_centers,
+};
+use super::stream_sources::{deferred_mesh_payloads, disk_mesh_payload};
 use super::*;
 use crate::gfx::draw_list;
 use crate::gfx::material_entry::MaterialEntry;
@@ -202,96 +207,6 @@ struct TextAtlases {
 fn font_less_text(ctx: &PipelineContext) -> bool {
     ctx.query::<TextLabel>().any(|l| l.font.is_none())
         || ctx.query::<TextInput>().any(|t| t.font.is_none())
-}
-
-// Per-streamed-mesh data from `mesh_stream_data`: the draw-object index of each
-// streamed mesh, its scoring center, and its decoded per-mesh geometry copy.
-// The three vecs are column-aligned.
-struct MeshStreamData {
-    draw_indices: Vec<usize>,
-    centers: Vec<Vec<[f32; 3]>>,
-    payloads: Vec<crate::gfx::streaming::mesh::DecodedMesh>,
-}
-
-// Per-texture-slot draw positions for the streaming scorer, which ranks each
-// texture by the camera's distance to the nearest draw that samples it. Albedo
-// and normal maps share one pool, so a draw contributes its position to both the
-// slot it samples as albedo and the one it samples as a normal map
-// (`NO_NORMAL_MAP_SLOT` = no normal map, scored by neither). `texture_count`
-// sizes the outer vec so every pool slot has an entry.
-fn texture_stream_centers(
-    draw_objects: &[render_types::DrawObject],
-    texture_count: usize,
-) -> Vec<Vec<[f32; 3]>> {
-    let mut centers = vec![Vec::new(); texture_count];
-    for obj in draw_objects {
-        let pos = draw_object_position(obj);
-        if let Some(slot) = centers.get_mut(obj.texture_slot) {
-            slot.push(pos);
-        }
-        if obj.normal_map_slot != render_types::NO_NORMAL_MAP_SLOT
-            && let Some(slot) = centers.get_mut(obj.normal_map_slot)
-        {
-            slot.push(pos);
-        }
-    }
-    centers
-}
-
-// Per-streamed-mesh data captured before `draw_objects` moves into the backend.
-// Only static, frustum-cullable draws stream; skybox, rooms, and dynamic props
-// (sentinel AABB) stay resident so structural geometry never pops in. Each
-// payload copies the draw's region of the shared vertex/index buffers, scored by
-// its AABB center; indices are stored mesh-relative and narrowed to u16 (each
-// per-mesh region fits in u16 by the build-time splitter). Draws whose
-// build-time offsets fall out of range are skipped defensively.
-fn mesh_stream_data(
-    draw_objects: &[render_types::DrawObject],
-    all_vertices: &[Vertex],
-    all_indices: &[u32],
-    deferred_draws: &std::collections::HashSet<usize>,
-) -> MeshStreamData {
-    let mut draw_indices: Vec<usize> = Vec::new();
-    let mut centers: Vec<Vec<[f32; 3]>> = Vec::new();
-    let mut payloads: Vec<crate::gfx::streaming::mesh::DecodedMesh> = Vec::new();
-    for (draw_idx, obj) in draw_objects.iter().enumerate() {
-        if !obj.cullable() {
-            continue;
-        }
-        // A deferred draw appended no geometry (its record carries baked
-        // counts over an empty region): stream it with an empty payload copy;
-        // the deferred source decodes the blob payload instead.
-        if deferred_draws.contains(&draw_idx) {
-            draw_indices.push(draw_idx);
-            centers.push(vec![draw_object_position(obj)]);
-            payloads.push(crate::gfx::streaming::mesh::DecodedMesh {
-                vertices: Vec::new(),
-                indices: Vec::new(),
-            });
-            continue;
-        }
-        let vstart = obj.vertex_offset / std::mem::size_of::<Vertex>();
-        let vend = vstart + obj.vertex_count;
-        let iend = obj.index_offset + obj.index_count;
-        if vend > all_vertices.len() || iend > all_indices.len() {
-            continue;
-        }
-        draw_indices.push(draw_idx);
-        centers.push(vec![draw_object_position(obj)]);
-        let vbase = vstart as u32;
-        payloads.push(crate::gfx::streaming::mesh::DecodedMesh {
-            vertices: all_vertices[vstart..vend].to_vec(),
-            indices: all_indices[obj.index_offset..iend]
-                .iter()
-                .map(|&i| (i - vbase) as u16)
-                .collect(),
-        });
-    }
-    MeshStreamData {
-        draw_indices,
-        centers,
-        payloads,
-    }
 }
 
 impl GraphicsSystem {
@@ -1892,40 +1807,15 @@ impl GraphicsSystem {
             ambient_intensity,
         );
 
-        // AudioSystem inits after GraphicsSystem and reads audio-clip payloads
-        // from the `AudioClipTable`, so any blob a clip lives in must survive this
-        // release sweep.
-        let audio_blobs = ctx
-            .resource::<AudioClipTable>()
-            .map(|table| table.blob_indices())
-            .unwrap_or_default();
-        // SdfVolume payloads are drained later in this same init pass (see
-        // the `sdf_volumes` block below), so the release sweep here must
-        // also leave their blobs resident. Without this gate, any world
-        // whose SDF shader bytes happen to land alone in a blob shows
-        // "failed to read fragment shader payload: FileIo; skipping" at
-        // runtime and the SDF surface never draws.
-        let sdf_blobs = sdf_volume::sdf_volume_blob_indices(ctx);
-        // PhysicsSystem inits after GraphicsSystem and reads the baked
-        // heightfield collider grid from a heightfield ProceduralMesh's
-        // payload, so those blobs must also survive this sweep.
-        let terrain_blobs = procedural_mesh::heightfield_blob_indices(ctx);
-        let mut released = std::collections::HashSet::new();
-        for idx in shader_locators
+        let consumed = shader_locators
             .iter()
             .map(|l| l.blob_index)
             .chain(texture_locators.iter().map(|l| l.blob_index))
             .chain(room_blob_indices)
             .chain(font_blob_indices)
-            .chain(skinned_blob_indices)
-        {
-            if !audio_blobs.contains(&idx)
-                && !sdf_blobs.contains(&idx)
-                && !terrain_blobs.contains(&idx)
-                && released.insert(idx)
-            {
-                ctx.release_blob(idx);
-            }
+            .chain(skinned_blob_indices);
+        for idx in blobs_to_release(consumed, &retained_blobs(ctx)) {
+            ctx.release_blob(idx);
         }
 
         // InstancedProp components are drained because every instance becomes a
@@ -1979,10 +1869,10 @@ impl GraphicsSystem {
             .collect();
 
         let draw_list::DrawListData {
-            vertices: all_vertices,
-            indices: all_indices,
+            vertices: mut all_vertices,
+            indices: mut all_indices,
             mut draw_objects,
-            instanced_clusters,
+            mut instanced_clusters,
             prop_draw_indices,
             mesh_handle_to_draws,
             prop_local_bounds,
@@ -2092,118 +1982,41 @@ impl GraphicsSystem {
             draw_indices: mesh_stream_draw_indices,
             centers: mesh_centers,
             payloads: mesh_payloads,
-        } = {
-            let deferred_draws: std::collections::HashSet<usize> = deferred_mesh_seeds
-                .keys()
-                .filter_map(|h| mesh_handle_to_draws.get(h))
-                .flatten()
-                .copied()
-                .collect();
-            mesh_stream_data(&draw_objects, &all_vertices, &all_indices, &deferred_draws)
-        };
+        } = mesh_stream_data(
+            &draw_objects,
+            &all_vertices,
+            &all_indices,
+            &deferred_draws(&deferred_mesh_seeds, &mesh_handle_to_draws),
+        );
+        let draw_to_handle = draw_to_handle(&mesh_handle_to_draws);
 
-        // Mesh streaming and LOD alternates don't yet cooperate: upload_mesh
-        // writes only LOD0 to its newly-allocated region, but obj.lod_alternates
-        // still carries the build-time offsets for LOD1..N. Once another stream
-        // upload reuses those byte ranges, active_lod() returns offsets that
-        // point at unrelated geometry and the draw renders garbage / nothing
-        // (the obelisks vanish past their first LOD switch_distance). Until
-        // upload_mesh learns to stream every LOD, strip the alternates from
-        // every streamable draw so active_lod() always returns LOD0.
+        // Shrink the seed VRAM when the residency cap is below the streamed set,
+        // before the backend build sizes its buffers from these.
         if streaming_config.is_some() && !mesh_payloads.is_empty() {
-            for &draw_idx in &mesh_stream_draw_indices {
-                if let Some(obj) = draw_objects.get_mut(draw_idx) {
-                    obj.lod_alternates.clear();
-                }
-            }
+            strip_streamed_lod_alternates(&mut draw_objects, &mesh_stream_draw_indices);
         }
-
-        // Shrinkable seed VRAM (Metal + DirectX + Vulkan). By default
-        // `build_draw_list` bakes every streamed mesh into the shared
-        // vertex/index buffers, sizing them for the whole streamed set, so
-        // streaming reuses space but never shrinks GPU memory. When the residency
-        // cap is smaller than the streamed set, compact the resident geometry and
-        // reserve a smaller seed headroom -- sized to the cap-many largest meshes
-        // -- for the streamed meshes, which are placed into it on upload
-        // (tolerating a transient alloc miss while freed regions await their
-        // retire frame). Done before `init_backend` so the GPU buffers are born
-        // small and the RT acceleration structure (built over resident draws
-        // inside init) sees the final offsets.
-        let mut all_vertices = all_vertices;
-        let mut all_indices = all_indices;
-        let mut instanced_clusters = instanced_clusters;
-        let mesh_seed_region: Option<mesh_seed::MeshSeedRegion> = match streaming_config.as_ref() {
-            Some(cfg) if !mesh_payloads.is_empty() => {
-                // A deferred mesh's payload copy is empty (its decode
-                // was skipped), so its seed contribution comes from
-                // the baked counts instead.
-                let draw_to_handle: std::collections::HashMap<usize, usize> = mesh_handle_to_draws
-                    .iter()
-                    .flat_map(|(h, draws)| draws.iter().map(move |&d| (d, *h)))
-                    .collect();
-                let sizes: Vec<(u64, u64)> = mesh_payloads
-                    .iter()
-                    .zip(&mesh_stream_draw_indices)
-                    .map(|(m, draw_idx)| {
-                        if !m.vertices.is_empty() {
-                            return (
-                                (m.vertices.len() * std::mem::size_of::<Vertex>()) as u64,
-                                (m.indices.len() * std::mem::size_of::<u32>()) as u64,
-                            );
-                        }
-                        draw_to_handle
-                            .get(draw_idx)
-                            .and_then(|h| deferred_mesh_sources.counts.get(&(*h as u32)))
-                            .map(|&(vc, ic)| {
-                                (
-                                    vc as u64 * std::mem::size_of::<Vertex>() as u64,
-                                    ic as u64 * std::mem::size_of::<u32>() as u64,
-                                )
-                            })
-                            .unwrap_or((0, 0))
-                    })
-                    .collect();
-                // Deferred meshes have no baked region for the
-                // full-set evict path to free; force the compaction
-                // path with a whole-set headroom when the cap alone
-                // would not shrink.
-                let planned = mesh_seed::plan_seed_bytes(&sizes, cfg.mesh_cap()).or_else(|| {
-                    (!deferred_mesh_seeds.is_empty()).then(|| {
-                        (
-                            sizes.iter().map(|s| s.0).sum(),
-                            sizes.iter().map(|s| s.1).sum(),
-                        )
-                    })
-                });
-                match planned {
-                    Some((seed_vtx, seed_idx)) => {
-                        let mut streamed = vec![false; draw_objects.len()];
-                        for &idx in &mesh_stream_draw_indices {
-                            if let Some(s) = streamed.get_mut(idx) {
-                                *s = true;
-                            }
-                        }
-                        let region = mesh_seed::compact_for_streaming(
-                            &mut all_vertices,
-                            &mut all_indices,
-                            &mut draw_objects,
-                            &mut instanced_clusters,
-                            &streamed,
-                            seed_vtx,
-                            seed_idx,
-                        );
-                        tracing::info!(
-                            "GraphicsSystem: shrinkable seed VRAM -- {} streamed mesh(es), cap {}, seed headroom {} KiB vtx + {} KiB idx",
-                            mesh_stream_draw_indices.len(),
-                            cfg.mesh_cap(),
-                            seed_vtx / 1024,
-                            seed_idx / 1024,
-                        );
-                        Some(region)
-                    }
-                    None => None,
-                }
-            }
+        let mesh_seed_region = match streaming_config.as_ref() {
+            Some(cfg) if !mesh_payloads.is_empty() => plan_mesh_seed_bytes(
+                &mesh_payloads,
+                &mesh_stream_draw_indices,
+                &draw_to_handle,
+                &deferred_mesh_sources.counts,
+                cfg.mesh_cap(),
+                !deferred_mesh_seeds.is_empty(),
+            )
+            .map(|seed| {
+                compact_streamed_geometry(
+                    MeshSeedCompaction {
+                        vertices: &mut all_vertices,
+                        indices: &mut all_indices,
+                        draw_objects: &mut draw_objects,
+                        instanced_clusters: &mut instanced_clusters,
+                        stream_draw_indices: &mesh_stream_draw_indices,
+                    },
+                    seed,
+                    cfg.mesh_cap(),
+                )
+            }),
             _ => None,
         };
 
@@ -2705,60 +2518,18 @@ impl GraphicsSystem {
         );
         // Per-stream-id payload refs for the deferred meshes, so the worker
         // can decode them from the blob payload when their scene pins.
-        let deferred_stream_payloads: std::collections::HashMap<
-            usize,
-            crate::gfx::streaming::mesh::DeferredMeshPayload,
-        > = if deferred_mesh_seeds.is_empty() {
-            Default::default()
-        } else {
-            use crate::gfx::streaming::mesh::DeferredMeshPayload;
-            let draw_to_handle: std::collections::HashMap<usize, usize> = mesh_handle_to_draws
-                .iter()
-                .flat_map(|(h, draws)| draws.iter().map(move |&d| (d, *h)))
-                .collect();
-            let mut map = std::collections::HashMap::new();
-            for (stream_id, draw_idx) in mesh_stream_draw_indices.iter().enumerate() {
-                let Some(seed) = draw_to_handle
-                    .get(draw_idx)
-                    .and_then(|h| deferred_mesh_seeds.get(h))
-                else {
-                    continue;
-                };
-                let payload = match &seed.bytes {
-                    Some(bytes) => DeferredMeshPayload::Bytes(bytes.clone()),
-                    None => {
-                        let Some(path) = blob_path(seed.locator.blob_index) else {
-                            tracing::warn!(
-                                "GraphicsSystem: deferred mesh blob {} has no layout to read from",
-                                seed.locator.blob_index
-                            );
-                            continue;
-                        };
-                        match payload_section_start(&path) {
-                            Ok(start) => DeferredMeshPayload::Disk {
-                                path,
-                                offset: start + seed.locator.offset,
-                                len: seed.locator.len,
-                            },
-                            Err(e) => {
-                                tracing::warn!(
-                                    "GraphicsSystem: deferred mesh blob {} unreadable: {:?}",
-                                    seed.locator.blob_index,
-                                    e
-                                );
-                                continue;
-                            }
-                        }
-                    }
-                };
-                map.insert(stream_id, payload);
-            }
+        let deferred_stream_payloads = deferred_mesh_payloads(
+            &deferred_mesh_seeds,
+            &draw_to_handle,
+            &mesh_stream_draw_indices,
+            disk_mesh_payload,
+        );
+        if !deferred_stream_payloads.is_empty() {
             tracing::info!(
                 "GraphicsSystem: deferred {} scene-owned mesh payload(s) past init",
-                map.len()
+                deferred_stream_payloads.len()
             );
-            map
-        };
+        }
         self.setup_mesh_streaming(
             streaming_config,
             super::streaming::MeshStreamSetup {
@@ -2795,40 +2566,7 @@ impl GraphicsSystem {
             initial_viewport: self.viewport,
         });
 
-        // Hand the streaming pools built above to StreamingSystem: it drives
-        // them each frame (against the parked backend) and publishes the
-        // camera-relative view GraphicsSystem draws with. `frame_count` starts
-        // at 0 in lockstep with this system's own frame clock (both tick once
-        // per world step), so eviction retire-frames match the draw's frame.
-        // Capture each pool's derived byte budget as the back-off valve's
-        // baseline before the streamers move into the parked state, so stage 2
-        // can reduce it and the release can restore it exactly.
-        let texture_baseline_budget = self.texture_streamer.as_ref().and_then(|s| s.byte_budget());
-        let mesh_baseline_budget = self.mesh_streamer.as_ref().and_then(|s| s.byte_budget());
-        let chunk_baseline_budget = self
-            .chunk_stream
-            .as_ref()
-            .and_then(|cs| cs.streamer.byte_budget());
-        let scene_residency = self.build_scene_residency(ctx);
-        ctx.insert_resource(crate::gfx::streaming::system::StreamingState {
-            texture_streamer: self.texture_streamer.take(),
-            mesh_streamer: self.mesh_streamer.take(),
-            mesh_stream_draw_indices: std::mem::take(&mut self.mesh_stream_draw_indices),
-            chunk_stream: self.chunk_stream.take(),
-            shader_warmup: self.shader_warmup.take(),
-            scene_residency,
-            frame_count: 0,
-            frames_in_flight: settings.frames_in_flight,
-            texture_baseline_budget,
-            mesh_baseline_budget,
-            chunk_baseline_budget,
-            pressure_stage: crate::gfx::streaming::system::pressure::StreamPressureStage::None,
-            pressure_factor: 1.0,
-            last_sampled_rss: None,
-            drift: Default::default(),
-            last_drift_verdict: None,
-            heartbeats: Default::default(),
-        });
+        self.publish_streaming_state(ctx, settings.frames_in_flight);
 
         // The recording surfaces the render-block systems take each tick: the
         // op queue backend effects accumulate into, and the slot-allocation
@@ -2928,115 +2666,5 @@ fn set_setting_row_label(ctx: &mut PipelineContext, key: &str, text: &str) {
                 break;
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use concinnity_core::gfx::render_types::{DrawObject, MaterialUniforms, NO_NORMAL_MAP_SLOT};
-
-    // A draw over `[vertex_offset (bytes), +vertex_count]` / `[index_offset,
-    // +index_count]` sampling `texture_slot` (+ `normal_map_slot`). A non-cullable
-    // draw carries the NaN sentinel AABB, matching the skybox / dynamic path.
-    fn draw(
-        vertex_offset: usize,
-        vertex_count: usize,
-        index_offset: usize,
-        index_count: usize,
-        texture_slot: usize,
-        normal_map_slot: usize,
-        cullable: bool,
-    ) -> DrawObject {
-        let (bb_min, bb_max) = if cullable {
-            ([0.0; 3], [1.0; 3])
-        } else {
-            ([f32::NAN; 3], [f32::NAN; 3])
-        };
-        DrawObject {
-            vertex_offset,
-            vertex_count,
-            index_offset,
-            index_count,
-            base_vertex: 0,
-            geometry_generation: 0,
-            shader_bucket: 0,
-            model: [
-                [1.0, 0.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0, 0.0],
-                [0.0, 0.0, 1.0, 0.0],
-                [0.0, 0.0, 0.0, 1.0],
-            ],
-            texture_slot,
-            normal_map_slot,
-            material: MaterialUniforms::DEFAULT,
-            visible: true,
-            resident: true,
-            bb_min,
-            bb_max,
-            cull_distance: 0.0,
-            lod_alternates: Vec::new(),
-        }
-    }
-
-    fn vert(x: f32) -> Vertex {
-        Vertex {
-            pos: [x, 0.0, 0.0],
-            normal: [0.0, 1.0, 0.0],
-            tangent: [1.0, 0.0, 0.0],
-            color: [1.0, 1.0, 1.0],
-            uv: [0.0, 0.0],
-        }
-    }
-
-    #[test]
-    fn texture_stream_centers_scores_albedo_and_normal_slots() {
-        // One draw sampling slot 0 as albedo and slot 2 as its normal map.
-        let objs = vec![draw(0, 1, 0, 1, 0, 2, true)];
-        let centers = texture_stream_centers(&objs, 4);
-        assert_eq!(centers.len(), 4);
-        assert_eq!(centers[0].len(), 1);
-        assert_eq!(centers[2].len(), 1);
-        assert!(centers[1].is_empty());
-        assert!(centers[3].is_empty());
-    }
-
-    #[test]
-    fn texture_stream_centers_skips_absent_normal_map() {
-        let objs = vec![draw(0, 1, 0, 1, 1, NO_NORMAL_MAP_SLOT, true)];
-        let centers = texture_stream_centers(&objs, 2);
-        assert_eq!(centers[1].len(), 1);
-        assert!(centers[0].is_empty());
-    }
-
-    #[test]
-    fn mesh_stream_data_includes_cullable_and_narrows_indices_to_u16() {
-        let verts: Vec<Vertex> = (0..4).map(|i| vert(i as f32)).collect();
-        // Global indices into a mesh whose vertex region starts at vertex 2.
-        let indices: Vec<u32> = vec![2, 3, 2];
-        // vertex_offset is a BYTE offset; vertex 2 => 2 * size_of::<Vertex>().
-        let vbyte = 2 * std::mem::size_of::<Vertex>();
-        let objs = vec![draw(vbyte, 2, 0, 3, 0, NO_NORMAL_MAP_SLOT, true)];
-        let data = mesh_stream_data(&objs, &verts, &indices, &Default::default());
-        assert_eq!(data.draw_indices, vec![0]);
-        assert_eq!(data.payloads.len(), 1);
-        assert_eq!(data.payloads[0].vertices.len(), 2);
-        // Global indices 2,3,2 rebased mesh-relative (minus vbase 2): 0,1,0.
-        assert_eq!(data.payloads[0].indices, vec![0u16, 1, 0]);
-    }
-
-    #[test]
-    fn mesh_stream_data_skips_non_cullable_and_out_of_range() {
-        let verts: Vec<Vertex> = (0..2).map(|i| vert(i as f32)).collect();
-        let indices: Vec<u32> = vec![0, 1];
-        let objs = vec![
-            // Non-cullable (NaN AABB): skybox / dynamic, stays resident.
-            draw(0, 2, 0, 2, 0, NO_NORMAL_MAP_SLOT, false),
-            // Cullable but vertex_count overruns the 2-vertex buffer: skipped.
-            draw(0, 5, 0, 2, 0, NO_NORMAL_MAP_SLOT, true),
-        ];
-        let data = mesh_stream_data(&objs, &verts, &indices, &Default::default());
-        assert!(data.draw_indices.is_empty());
-        assert!(data.payloads.is_empty());
     }
 }
