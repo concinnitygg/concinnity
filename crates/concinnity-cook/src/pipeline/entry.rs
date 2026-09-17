@@ -17,7 +17,6 @@ use super::lock_provenance::lock_provenance;
 use super::pack::{PackContext, compile_and_pack_payloads, probe_mesh_payload_cache};
 use super::partition::{Partitioned, partition_components};
 use super::result::PipelineResult;
-use super::scene_refs::resolve_scene_refs;
 use crate::authoring::world::WorldJsonlAsset;
 
 /// Build the world at `json_path` for `platform` into `tree` and write its
@@ -226,12 +225,10 @@ pub fn build_compiled_with_progress(
             })
     })?;
 
-    // Intern every asset name to a dense AssetId in declaration order, then
-    // resolve the scene-by-naming-convention references.
+    // Intern every asset name to a dense AssetId in declaration order.
     asset_id::reset_interner();
     let names: Vec<&str> = assets.iter().map(|a| a.name.as_str()).collect();
     asset_id::intern_all(&names);
-    resolve_scene_refs(&mut assets);
 
     // Assign each resource its dense per-kind handle in declaration order and
     // install the map so resource references resolve during the reserialize pass
@@ -340,8 +337,9 @@ mod tests {
     use crate::authoring::registry::RegisteredType;
     use crate::pipeline::fixtures::{wja, write_fixture};
     use crate::pipeline::result::{MeshSourceInfo, TextureSourceInfo};
-    use concinnity_core::components::Material;
-    use concinnity_core::components::Prop;
+    use concinnity_core::components::{
+        HitRegion, KeyBinding, Material, Prop, ScreenCommand, Sprite, TextLabel, UiAction,
+    };
     use concinnity_core::ecs::MeshHandle;
     use concinnity_core::ecs::asset_id::AssetId;
 
@@ -353,7 +351,7 @@ mod tests {
             "\n",
             r#"{"name":"day","type":"Scene","args":{}}"#,
             "\n",
-            r#"{"name":"day_crate","type":"Prop","args":{"mesh":"box"}}"#,
+            r#"{"name":"day_crate","type":"Prop","args":{"mesh":"box","scene":"day"}}"#,
             "\n",
         );
         let result =
@@ -369,7 +367,7 @@ mod tests {
         let baked: Prop = postcard::from_bytes(&prop.args_bytes).unwrap();
         // The `mesh` reference resolved to box's handle (0).
         assert_eq!(baked.mesh, Some(MeshHandle(0)));
-        // The `day_` name prefix resolved to Scene `day`'s id (1).
+        // The `scene` reference resolved to Scene `day`'s id (1).
         assert_eq!(baked.scene, Some(AssetId(1)));
     }
 
@@ -803,6 +801,131 @@ mod tests {
         assert!(
             result.defs[1].payload.is_none(),
             "a png File produces no blob payload"
+        );
+    }
+    // `screen:toggle:<name>` action targets resolve to interned ids while the
+    // args deserialize.
+    #[test]
+    fn build_pipeline_resolves_screen_action_refs() {
+        let world = concat!(
+            r#"{"name":"pause_menu","type":"Screen","args":{}}"#,
+            "\n",
+            r#"{"name":"btn","type":"HitRegion","args":{"x":0,"y":0,"width":10,"height":10,"action":"screen:toggle:pause_menu"}}"#,
+            "\n",
+            r#"{"name":"esc","type":"KeyBinding","args":{"key":"Escape","action":"screen:toggle:pause_menu"}}"#,
+            "\n",
+        );
+        let result = build_pipeline_from_str(world, None, None, Platform::Metal).expect("build");
+        // pause_menu interned id = 0 (first declared name).
+        let btn = result
+            .defs
+            .iter()
+            .find(|d| d.name == Some(AssetId(1)))
+            .expect("HitRegion def");
+        let toggle = Some(UiAction::Screen(ScreenCommand::Toggle(AssetId(0))));
+        let baked: HitRegion = postcard::from_bytes(&btn.args_bytes).unwrap();
+        assert_eq!(baked.action, toggle);
+
+        let esc = result
+            .defs
+            .iter()
+            .find(|d| d.name == Some(AssetId(2)))
+            .expect("KeyBinding def");
+        let baked: KeyBinding = postcard::from_bytes(&esc.args_bytes).unwrap();
+        assert_eq!(baked.action, toggle);
+    }
+
+    // An overlay element joins a Screen through its own `screen` arg, which
+    // bakes to that screen's interned id.
+    #[test]
+    fn build_pipeline_resolves_the_screen_an_overlay_element_names() {
+        let world = concat!(
+            r#"{"name":"pause_menu","type":"Screen","args":{}}"#,
+            "\n",
+            r#"{"name":"dim","type":"Sprite","args":{"x":0,"y":0,"width":10,"height":10,"screen":"pause_menu"}}"#,
+            "\n",
+            r#"{"name":"title","type":"TextLabel","args":{"font":"f","content":"x","x":0,"y":0,"screen":"pause_menu"}}"#,
+            "\n",
+            r#"{"name":"btn","type":"HitRegion","args":{"x":0,"y":0,"width":10,"height":10,"action":"screen:hide","screen":"pause_menu"}}"#,
+            "\n",
+            r#"{"name":"f","type":"Font","args":{"size_px":16}}"#,
+            "\n",
+        );
+        let result = build_pipeline_from_str(world, None, None, Platform::Metal).expect("build");
+        let def = |id: u32| {
+            result
+                .defs
+                .iter()
+                .find(|d| d.name == Some(AssetId(id)))
+                .unwrap_or_else(|| panic!("a def for id {id}"))
+        };
+        let screen = Some(AssetId(0));
+        assert_eq!(
+            postcard::from_bytes::<Sprite>(&def(1).args_bytes)
+                .unwrap()
+                .screen,
+            screen
+        );
+        assert_eq!(
+            postcard::from_bytes::<TextLabel>(&def(2).args_bytes)
+                .unwrap()
+                .screen,
+            screen
+        );
+        assert_eq!(
+            postcard::from_bytes::<HitRegion>(&def(3).args_bytes)
+                .unwrap()
+                .screen,
+            screen
+        );
+    }
+
+    // An overlay element that names no screen stays screen-less; nothing in the
+    // build infers one from how it is named.
+    #[test]
+    fn an_unscoped_overlay_element_belongs_to_no_screen() {
+        let world = concat!(
+            r#"{"name":"pause_menu","type":"Screen","args":{}}"#,
+            "\n",
+            r#"{"name":"pause_menu_dim","type":"Sprite","args":{"x":0,"y":0,"width":10,"height":10}}"#,
+            "\n",
+        );
+        let result = build_pipeline_from_str(world, None, None, Platform::Metal).expect("build");
+        let dim = result
+            .defs
+            .iter()
+            .find(|d| d.name == Some(AssetId(1)))
+            .expect("Sprite def");
+        assert_eq!(
+            postcard::from_bytes::<Sprite>(&dim.args_bytes)
+                .unwrap()
+                .screen,
+            None
+        );
+    }
+
+    // The same for a Prop: a `<scene>_` name prefix is just a name.
+    #[test]
+    fn an_unscoped_prop_belongs_to_no_scene() {
+        let world = concat!(
+            r#"{"name":"box","type":"ProceduralMesh","args":{"generator":"box","half_extents":[1,1,1]}}"#,
+            "\n",
+            r#"{"name":"day","type":"Scene","args":{}}"#,
+            "\n",
+            r#"{"name":"day_crate","type":"Prop","args":{"mesh":"box"}}"#,
+            "\n",
+        );
+        let result = build_pipeline_from_str(world, None, None, Platform::Metal).expect("build");
+        let prop = result
+            .defs
+            .iter()
+            .find(|d| d.name == Some(AssetId(2)))
+            .expect("Prop def");
+        assert_eq!(
+            postcard::from_bytes::<Prop>(&prop.args_bytes)
+                .unwrap()
+                .scene,
+            None
         );
     }
 }

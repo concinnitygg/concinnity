@@ -26,10 +26,10 @@ vocabulary!(ScreenInput {
 /// A named full-screen layer of UI drawn over the world: a pause menu, a
 /// settings page, a console, a score overlay.
 ///
-/// UI elements ([Sprite](#sprite), [TextLabel](#textlabel),
-/// [TextInput](#textinput), [HitRegion](#hitregion)) belong to a screen by
-/// name prefix `<screen_name>_*`, mirroring the [Scene](#scene) →
-/// [Prop](#prop) convention. Active screens form a stack; each is shown /
+/// A UI element ([Sprite](#sprite), [TextLabel](#textlabel),
+/// [TextInput](#textinput), [HitRegion](#hitregion)) belongs to a screen by
+/// naming it in the element's `screen`, mirroring the [Scene](#scene) →
+/// [Prop](#prop) relationship. Active screens form a stack; each is shown /
 /// hidden via [HitRegion](#hitregion) or [KeyBinding](#keybinding) actions:
 /// - `screen:show:<name>` replaces the top of the stack (menu navigation)
 /// - `screen:push:<name>` opens on top of what is already showing

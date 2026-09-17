@@ -5,10 +5,10 @@
 A named full-screen layer of UI drawn over the world: a pause menu, a
 settings page, a console, a score overlay.
 
-UI elements ([Sprite](Sprite.md), [TextLabel](TextLabel.md),
-[TextInput](TextInput.md), [HitRegion](HitRegion.md)) belong to a screen by
-name prefix `<screen_name>_*`, mirroring the [Scene](Scene.md) →
-[Prop](Prop.md) convention. Active screens form a stack; each is shown /
+A UI element ([Sprite](Sprite.md), [TextLabel](TextLabel.md),
+[TextInput](TextInput.md), [HitRegion](HitRegion.md)) belongs to a screen by
+naming it in the element's `screen`, mirroring the [Scene](Scene.md) →
+[Prop](Prop.md) relationship. Active screens form a stack; each is shown /
 hidden via [HitRegion](HitRegion.md) or [KeyBinding](KeyBinding.md) actions:
 - `screen:show:<name>` replaces the top of the stack (menu navigation)
 - `screen:push:<name>` opens on top of what is already showing

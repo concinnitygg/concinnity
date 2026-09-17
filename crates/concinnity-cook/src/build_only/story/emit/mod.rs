@@ -9,6 +9,7 @@ use self::stage::emit_stage;
 use self::title::emit_title_screen;
 use self::widgets::font;
 use super::model::{ImageDims, Story};
+use crate::build_only::membership::scope_to_screen;
 
 pub(super) mod choices;
 mod ending;
@@ -23,6 +24,12 @@ mod widgets;
 
 #[cfg(test)]
 mod tests;
+
+// One screen's generated elements, each naming the screen it belongs to.
+fn scoped(mut group: Vec<serde_json::Value>, screen: &str) -> Vec<serde_json::Value> {
+    scope_to_screen(&mut group, screen);
+    group
+}
 
 const TITLE_FONT_PX: u32 = 56;
 const MENU_FONT_PX: u32 = 28;
@@ -58,14 +65,22 @@ pub(crate) fn emit_story(
         font(&names.font_dialog, DIALOG_FONT_PX),
     ];
     // The title backdrop claims its texture name before the graph's images.
-    out.extend(emit_title_screen(&names, story, &mut media));
+    let title_screen_name = names.title.as_ref().map(|t| t.screen.clone());
+    out.extend(scoped(
+        emit_title_screen(&names, story, &mut media),
+        title_screen_name.as_deref().unwrap_or(""),
+    ));
     let nodes = compile_nodes(story, &mut media, image_dims)?;
     out.push(story_entry(&names, story, nodes, text_speed));
-    out.extend(emit_stage(&names));
-    out.extend(emit_quick_row(&names));
-    out.extend(emit_choice_furniture(&names));
-    out.extend(emit_overlay(&names));
-    out.extend(emit_ending_screen(&names));
+    for group in [
+        emit_stage(&names),
+        emit_quick_row(&names),
+        emit_choice_furniture(&names),
+        emit_overlay(&names),
+    ] {
+        out.extend(scoped(group, &names.stage.screen));
+    }
+    out.extend(scoped(emit_ending_screen(&names), &names.ending.screen));
     out.extend(media.entries());
 
     check_screen_names(&names)?;

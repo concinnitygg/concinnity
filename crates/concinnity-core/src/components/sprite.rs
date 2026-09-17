@@ -55,9 +55,8 @@ pub struct Sprite {
     pub follow_cursor: bool,
     /// When false the sprite is skipped each frame.
     pub visible: bool,
-    /// [Screen](#screen) this sprite belongs to. Resolved automatically from
-    /// the naming convention (`<screen>_*`); you don't set this directly.
-    /// `None` means the sprite is always visible (e.g. a scene background).
+    /// [Screen](#screen) this sprite belongs to. `None` means the sprite is
+    /// always visible (e.g. a scene background).
     #[serde(default, deserialize_with = "de_opt_asset_ref")]
     pub screen: Option<AssetId>,
     /// How a screen-owned sprite maps from the reference canvas to the window

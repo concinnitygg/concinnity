@@ -16,6 +16,7 @@ pub(crate) mod companion_specs;
 pub(crate) mod light_rig;
 pub(crate) mod main_menu;
 pub(crate) mod material_palette;
+pub(crate) mod membership;
 pub(crate) mod menu_defaults;
 pub(crate) mod option_select;
 pub(crate) mod panel;

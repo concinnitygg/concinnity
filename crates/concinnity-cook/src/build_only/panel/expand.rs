@@ -1,11 +1,12 @@
 // Build-time expansion: Panel -> a background Sprite + (when a title is set) a
-// heading TextLabel inset from the top-left. The generated names follow the
-// `<screen>_*` scoping rule documented on `crate::build_only::panel::schema`.
+// heading TextLabel inset from the top-left. Both children join the panel's
+// `screen`.
 
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::registry::build_only::Panel;
 use crate::authoring::spec::{asset, spec_to_value};
 use crate::build_only::expand::{asset_name, registered_type, schema_args};
+use crate::build_only::membership::scope_to_screen;
 use crate::build_only::ui_spec::label_value;
 
 // Replace every Panel asset with the concrete UI assets it expands to.
@@ -57,6 +58,7 @@ fn expand_one(name: &str, p: &Panel) -> Vec<serde_json::Value> {
             p.title_scale,
         ));
     }
+    scope_to_screen(&mut out, &p.screen);
     out
 }
 
@@ -83,7 +85,8 @@ mod tests {
         let mut assets = vec![serde_json::json!({
             "name": "pause_card",
             "type": "Panel",
-            "args": { "title": "Paused", "x": 440.0, "y": 220.0, "width": 400.0, "height": 280.0 }
+            "args": { "screen": "pause", "title": "Paused", "x": 440.0, "y": 220.0,
+                      "width": 400.0, "height": 280.0 }
         })];
         expand_panels(&mut assets).unwrap();
 
@@ -97,11 +100,29 @@ mod tests {
         assert_eq!(bg["type"], "Sprite");
         assert_eq!(bg["args"]["x"], 440.0);
         assert_eq!(bg["args"]["width"], 400.0);
+        assert_eq!(bg["args"]["screen"], "pause");
 
         let title = by_name(&assets, "pause_card_title");
         assert_eq!(title["type"], "TextLabel");
         assert_eq!(title["args"]["content"], "Paused");
         assert_eq!(title["args"]["centered"], false);
+        assert_eq!(title["args"]["screen"], "pause");
+    }
+
+    // A panel that names no screen leaves its children screen-less, drawn with
+    // the HUD.
+    #[test]
+    fn a_screenless_panel_leaves_its_children_unbound() {
+        let mut assets = vec![serde_json::json!({
+            "name": "card", "type": "Panel", "args": { "title": "Stats" }
+        })];
+        expand_panels(&mut assets).unwrap();
+        assert!(by_name(&assets, "card_bg")["args"].get("screen").is_none());
+        assert!(
+            by_name(&assets, "card_title")["args"]
+                .get("screen")
+                .is_none()
+        );
     }
 
     #[test]

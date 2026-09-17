@@ -1071,3 +1071,63 @@ fn full_profile_still_emits_controls_and_quality() {
         "OptionSelect"
     );
 }
+
+// Every generated overlay element names the screen it belongs to, and the
+// rows that expand later carry the tab screen through to their own children.
+#[test]
+fn generated_elements_name_their_screen() {
+    let mut assets = vec![serde_json::json!({
+        "name": "m", "type": "MainMenu",
+        "args": {"title": "Menu", "items": [{"label": "Settings", "action": "settings"}]}
+    })];
+    expand_main_menus(&mut assets).unwrap();
+
+    let screen_of = |name: &str| {
+        by_name(&assets, name)["args"]
+            .get("screen")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+    };
+    for name in ["m_dim", "m_title", "m_label_0", "m_btn_0"] {
+        assert_eq!(screen_of(name).as_deref(), Some("m"), "{name}");
+    }
+    assert_eq!(
+        screen_of("m_settings_video_dim").as_deref(),
+        Some("m_settings_video")
+    );
+    assert_eq!(
+        screen_of("m_settings_video_scroll").as_deref(),
+        Some("m_settings_video"),
+        "the scroll panel joins its tab"
+    );
+
+    // The Screen assets and the menu's own Font stay unscoped.
+    for name in ["m", "m_settings_video", "m_font"] {
+        assert_eq!(screen_of(name), None, "{name}");
+    }
+}
+
+// A settings row is a Slider / OptionSelect that expands after this pass, so it
+// carries the tab screen in its own args for its children to inherit.
+#[test]
+fn settings_rows_carry_their_tab_screen() {
+    let mut assets = vec![serde_json::json!({
+        "name": "m", "type": "MainMenu",
+        "args": {"items": [{"label": "Settings", "action": "settings"}]}
+    })];
+    expand_main_menus(&mut assets).unwrap();
+
+    let rows: Vec<&serde_json::Value> = assets
+        .iter()
+        .filter(|v| matches!(v["type"].as_str(), Some("Slider" | "OptionSelect")))
+        .collect();
+    assert!(!rows.is_empty(), "the video tab emits rows");
+    for row in rows {
+        let screen = row["args"]["screen"].as_str().unwrap_or("");
+        assert!(
+            screen.starts_with("m_settings_"),
+            "{} names {screen:?}",
+            asset_name(row)
+        );
+    }
+}

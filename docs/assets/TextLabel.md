@@ -30,4 +30,4 @@ useful for HUD chips.
 - `wrap_width`: A float. Width in the label's own pixels that text wraps within. `0` (the default) never wraps, so the text runs as far as it needs to. Any greater value breaks the content into lines at word boundaries, using the real font metrics, splitting a word only when it cannot fit a line on its own. Authored newlines are kept as breaks either way. Ignored when `centered` is set, since a centered label is sized to the viewport rather than to a container.
 - `max_lines`: An integer. Most lines the label draws. `0` (the default) draws every line. When the text needs more than this, the last drawn line ends in an ellipsis, so text bounded by `wrap_width` is bounded in both directions and can never spill out of the box that holds it.
 - `visible`: A boolean. When false, the label is hidden. Defaults to `true`.
-- `screen`: A string. [Screen](Screen.md) this label belongs to. Resolved automatically from the naming convention (`<screen>_*`); you don't set this directly. `None` means the label is always visible. Optional.
+- `screen`: A string. [Screen](Screen.md) this label belongs to. `None` means the label is always visible. Optional.

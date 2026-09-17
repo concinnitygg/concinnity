@@ -37,9 +37,8 @@ impl SceneTransition {
 
 /// A named group of world content.
 ///
-/// [Prop](#prop)s belong to a Scene by naming convention: props whose `name`
-/// begins with `<scene_name>_` are associated with that Scene. Props not
-/// prefixed by any scene name are visible in every scene.
+/// A [Prop](#prop) belongs to a Scene by naming it in the prop's `scene`. A
+/// prop that names no scene is visible in every scene.
 ///
 /// The first declared Scene is active at world start. Scene changes are driven
 /// by actions: a UI `scene:<name>` action ([HitRegion](#hitregion) /

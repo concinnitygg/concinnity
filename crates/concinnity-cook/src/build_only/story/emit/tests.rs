@@ -35,3 +35,35 @@ fn every_scaffold_name_resolves_to_an_emitted_entry() {
         }
     }
 }
+
+// Every emitted overlay element names the screen it plays on: the title screen,
+// the stage (including the overlay and choice furniture), or the ending.
+#[test]
+fn every_overlay_element_names_its_screen() {
+    let src = "---\ntitle: T\n---\n\n# a\n\nhi\n\n- [x](#a)\n- [y](#a)\n";
+    let story = parse_story(src).unwrap();
+    let entries = emit_story("s", &story, true, 45.0, &dims).unwrap();
+
+    let screens: Vec<&str> = entries
+        .iter()
+        .filter(|e| e["type"] == "Screen")
+        .filter_map(|e| e["name"].as_str())
+        .collect();
+    assert_eq!(screens.len(), 3, "title, stage and ending: {screens:?}");
+
+    for entry in &entries {
+        let overlay = matches!(
+            entry["type"].as_str(),
+            Some("Sprite" | "TextLabel" | "TextInput" | "HitRegion" | "ScrollPanel")
+        );
+        if !overlay {
+            continue;
+        }
+        let screen = entry["args"]["screen"].as_str().unwrap_or_default();
+        assert!(
+            screens.contains(&screen),
+            "{} names screen {screen:?}, which the story does not emit",
+            entry["name"]
+        );
+    }
+}

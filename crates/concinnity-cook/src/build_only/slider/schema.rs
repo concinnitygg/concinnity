@@ -32,6 +32,9 @@
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Slider {
+    /// [Screen](#screen) the generated elements belong to. Empty leaves them
+    /// screen-less, which draws them with the HUD rather than with a screen.
+    pub screen: String,
     /// Engine setting this row controls (e.g. `"exposure"`). Must be a setting
     /// the runtime recognizes as a slider; an unknown key renders but does
     /// nothing on drag.
@@ -68,6 +71,7 @@ pub struct Slider {
 impl Default for Slider {
     fn default() -> Self {
         Self {
+            screen: String::new(),
             setting: String::new(),
             label: String::new(),
             x: 0.0,

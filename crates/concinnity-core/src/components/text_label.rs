@@ -107,9 +107,8 @@ pub struct TextLabel {
     pub max_lines: u32,
     /// When false, the label is hidden.
     pub visible: bool,
-    /// [Screen](#screen) this label belongs to. Resolved automatically from
-    /// the naming convention (`<screen>_*`); you don't set this directly.
-    /// `None` means the label is always visible.
+    /// [Screen](#screen) this label belongs to. `None` means the label is
+    /// always visible.
     #[serde(default, deserialize_with = "de_opt_asset_ref")]
     pub screen: Option<AssetId>,
 }

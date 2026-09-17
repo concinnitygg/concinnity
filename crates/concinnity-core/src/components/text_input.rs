@@ -16,8 +16,8 @@ use alloc::string::String;
 /// Backspace / Delete keys. Read `content` back to use what the player typed;
 /// set it to pre-fill the field.
 ///
-/// Like other overlay elements it belongs to a [Screen](#screen) resolved from the
-/// naming convention (`<screen>_*`), or is always shown when it has none.
+/// Like other overlay elements it belongs to the [Screen](#screen) its
+/// `screen` names, or is always shown when it names none.
 ///
 /// ```rust
 /// # use concinnity_core::components::TextInput;
@@ -76,9 +76,8 @@ pub struct TextInput {
     /// How a screen-owned field maps from the reference canvas to the window when
     /// their aspect ratios differ (matches [Sprite](#sprite)'s `fit`).
     pub fit: SpriteFit,
-    /// [Screen](#screen) this field belongs to. Resolved automatically from
-    /// the naming convention (`<screen>_*`); you don't set this directly.
-    /// `None` means the field is always visible.
+    /// [Screen](#screen) this field belongs to. `None` means the field is
+    /// always visible.
     #[serde(default, deserialize_with = "de_opt_asset_ref")]
     pub screen: Option<AssetId>,
     /// Runtime keyboard-focus flag, set by the engine while this is the active

@@ -10,13 +10,12 @@ rounded background [Sprite](Sprite.md) and, when `title` is set, a
 overlay elements over it to frame a group (a settings card, a dialog body).
 
 Like the other build-time UI shorthands, generated names are prefixed with
-this asset's `name` (`<name>_bg`, `<name>_title`), so a panel named with a
-screen prefix (`pause_card`) puts its children in that [Screen](Screen.md)
-(`pause`) via the `<screen>_*` rule and they never clash with hand-authored
-assets.
+this asset's `name` (`<name>_bg`, `<name>_title`) so they never clash with
+hand-authored assets, and `screen` puts them all in that [Screen](Screen.md).
 
 ## Parameters
 
+- `screen`: A string. [Screen](Screen.md) the generated elements belong to. Empty leaves them screen-less, which draws them with the HUD rather than with a screen.
 - `x`: A float. Left edge of the panel in window pixels. Defaults to `0.0`.
 - `y`: A float. Top edge of the panel in window pixels. Defaults to `0.0`.
 - `width`: A float. Panel width in window pixels. Defaults to `400.0`.

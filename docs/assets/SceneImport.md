@@ -18,6 +18,9 @@ Supported `source` formats: `.fbx` and `.glb`.
 clash with hand-authored assets. Because they only appear in the lock file
 and blob, you never reference them by hand.
 
+**Scene:** set `scene` to the [Scene](Scene.md) the imported props belong to.
+Left empty they belong to no scene, which makes them visible in every one.
+
 **Camera:** the import frames a [Camera3D](Camera3D.md) to the scene's bounds
 so a freshly imported scene is immediately viewable. It is suppressed when
 the world already declares a `Camera3D` (yours wins) or when `emit_camera`
@@ -26,6 +29,7 @@ is set to `false`.
 ## Parameters
 
 - `source`: A string. Path to the scene file, relative to the project root. `.fbx` or `.glb`.
+- `scene`: A string. [Scene](Scene.md) the generated [Prop](Prop.md)s belong to. Empty leaves them unbound, which makes them visible in every scene.
 - `texture_max_size`: An integer. Ceiling on the longest edge of each imported texture, in pixels. Large source maps (2K-4K) are box-filtered down so the compiled scene, which stores uncompressed pixels, stays within a sane memory budget. `0` keeps each texture at its source resolution. Defaults to `512`.
 - `emissive_map_strength`: A float. Emissive factor applied to a material that carries an emissive map. Scene files often ship a zero emissive factor that would cancel the map, so a textured emissive gets this punchy factor instead. Defaults to `3.0`.
 - `emit_camera`: A boolean. Whether to emit a [Camera3D](Camera3D.md) framed to the scene's bounds. Suppressed automatically when the world already declares a `Camera3D`. Defaults to `true`.

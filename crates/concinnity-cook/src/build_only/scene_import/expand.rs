@@ -11,6 +11,7 @@ use std::path::Path;
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::registry::build_only::SceneImport;
 use crate::build_only::expand::{ExpandReport, asset_name, registered_type, schema_args};
+use crate::build_only::membership::scope_to_scene;
 use crate::import::scene::{ImportOptions, entries_from_scene, sanitize_name};
 
 // The kind an expansion's entries carry in the build segment, which is what
@@ -87,8 +88,11 @@ pub(crate) fn expand_scene_imports(
             emit_camera: import.emit_camera && !world_has_camera && !camera_emitted,
         };
 
-        let entries = expand_one(&import.source, &opts, assets_dir)
+        // Stamped outside `expand_one`: the generated entries are cached by
+        // source contents + options, which do not include the scene.
+        let mut entries = expand_one(&import.source, &opts, assets_dir)
             .map_err(|e| format!("SceneImport '{}': {}", import_name, e))?;
+        scope_to_scene(&mut entries, &import.scene);
 
         for entry in entries {
             if !resolve_entry(&entry, &authored, &mut taken, &import_name, report)? {

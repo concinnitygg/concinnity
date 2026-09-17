@@ -18,6 +18,7 @@ use crate::authoring::registry::RegisteredType;
 use crate::authoring::registry::build_only::OptionSelect;
 use crate::authoring::spec::{asset, spec_to_value};
 use crate::build_only::expand::{asset_name, registered_type, schema_args};
+use crate::build_only::membership::scope_to_screen;
 use crate::build_only::row_setting::row_setting;
 use crate::build_only::ui_spec::{font_sizes, label_value};
 use asset::ui_action;
@@ -81,7 +82,9 @@ pub(crate) fn expand_option_selects(assets: &mut Vec<serde_json::Value>) -> Resu
             *font_px_by_name.get(&select.font).unwrap_or(&default_px)
         };
 
-        result.extend(expand_one(&name, &select, setting, font_px));
+        let mut children = expand_one(&name, &select, setting, font_px);
+        scope_to_screen(&mut children, &select.screen);
+        result.extend(children);
     }
 
     *assets = result;
@@ -489,5 +492,40 @@ mod tests {
                     .collect();
             assert_eq!(listed, emitted, "element_names drifted for '{setting}'");
         }
+    }
+    // Every generated element joins the OptionSelect's screen; one that names
+    // none leaves them screen-less.
+    #[test]
+    fn generated_elements_join_the_selects_screen() {
+        let row = |args: serde_json::Value| {
+            let mut assets = vec![serde_json::json!({
+                "name": "opt", "type": "OptionSelect", "args": args
+            })];
+            expand_option_selects(&mut assets).unwrap();
+            assets
+        };
+
+        let assets = row(serde_json::json!({"setting": "vsync", "screen": "video"}));
+        let scoped: Vec<&serde_json::Value> = assets
+            .iter()
+            .filter(|v| asset_name(v).starts_with("opt_"))
+            .collect();
+        assert!(!scoped.is_empty(), "the select expands to elements");
+        for element in scoped {
+            assert_eq!(
+                element["args"]["screen"],
+                "video",
+                "{}",
+                asset_name(element)
+            );
+        }
+
+        let assets = row(serde_json::json!({"setting": "vsync"}));
+        assert!(
+            assets
+                .iter()
+                .filter(|v| asset_name(v).starts_with("opt_"))
+                .all(|v| v["args"].get("screen").is_none())
+        );
     }
 }

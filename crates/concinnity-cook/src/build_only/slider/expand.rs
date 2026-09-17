@@ -4,9 +4,8 @@
 //
 // The handle and value label show a placeholder position here; the runtime
 // corrects them to the live value on the first frame and while dragging. Names
-// are prefixed with the Slider's own name so generated elements stay scoped to
-// its Screen via the build pipeline's `<screen>_*` rule and never collide with
-// hand-authored assets.
+// are prefixed with the Slider's own name so generated elements never collide
+// with hand-authored assets, and every element joins the Slider's `screen`.
 
 use concinnity_core::settings::{SettingKey, SettingKind};
 
@@ -14,6 +13,7 @@ use crate::authoring::registry::RegisteredType;
 use crate::authoring::registry::build_only::Slider;
 use crate::authoring::spec::{asset, spec_to_value};
 use crate::build_only::expand::{asset_name, registered_type, schema_args};
+use crate::build_only::membership::scope_to_screen;
 use crate::build_only::row_setting::row_setting;
 use crate::build_only::ui_spec::{font_sizes, label_value, sprite};
 use asset::ui_action;
@@ -68,7 +68,9 @@ pub(crate) fn expand_sliders(assets: &mut Vec<serde_json::Value>) -> Result<(), 
             *font_px_by_name.get(&slider.font).unwrap_or(&default_px)
         };
 
-        result.extend(expand_one(&name, &slider, setting, font_px));
+        let mut children = expand_one(&name, &slider, setting, font_px);
+        scope_to_screen(&mut children, &slider.screen);
+        result.extend(children);
     }
 
     *assets = result;
@@ -297,5 +299,33 @@ mod tests {
             .collect();
         let listed: std::collections::HashSet<String> = element_names("sld").into_iter().collect();
         assert_eq!(listed, emitted, "element_names drifted from the expansion");
+    }
+    // Every generated element joins the Slider's screen; a Slider that names
+    // none leaves them screen-less.
+    #[test]
+    fn generated_elements_join_the_sliders_screen() {
+        let row = |args: serde_json::Value| {
+            let mut assets = vec![serde_json::json!({
+                "name": "sld", "type": "Slider", "args": args
+            })];
+            expand_sliders(&mut assets).unwrap();
+            assets
+        };
+
+        let assets = row(serde_json::json!({"setting": "exposure", "screen": "video"}));
+        for suffix in ["label", "value", "track", "handle", "drag"] {
+            assert_eq!(
+                by_name(&assets, &format!("sld_{suffix}"))["args"]["screen"],
+                "video",
+                "sld_{suffix}"
+            );
+        }
+
+        let assets = row(serde_json::json!({"setting": "exposure"}));
+        assert!(
+            by_name(&assets, "sld_label")["args"]
+                .get("screen")
+                .is_none()
+        );
     }
 }

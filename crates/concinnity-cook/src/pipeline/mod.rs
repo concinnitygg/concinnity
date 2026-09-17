@@ -7,8 +7,7 @@
 //! - Sorts: components first, then systems in declared order
 //!
 //! The submodules follow that order: `desugar` rewrites source-backed assets
-//! into inline data, `scene_refs` bakes the naming-convention references,
-//! `partition` splits components from resources, `hot_reload_sources` records
+//! into inline data, `partition` splits components from resources, `hot_reload_sources` records
 //! each texture and mesh handle's file, `pack` compiles and packs the payloads
 //! through `dispatch`, `lock_provenance` records each resource for the lock
 //! file, and `entry` is the sequence the public entry points drive. `validate` is the compile-free half,
@@ -22,7 +21,6 @@ mod lock_provenance;
 mod pack;
 mod partition;
 mod result;
-mod scene_refs;
 mod validate;
 
 #[cfg(test)]

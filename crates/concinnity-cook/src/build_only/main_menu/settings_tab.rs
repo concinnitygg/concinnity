@@ -1,6 +1,7 @@
 // The generated settings sub-screen: a tab bar, a scrollable band of rows, and
 // a Back button, emitted as one Screen per tab.
 
+use super::super::membership::scope_to_screen;
 use super::super::ui_spec::{centered_label, label_value, sprite};
 use super::rows::{
     BodyRow, SettingsRow, option_select_row, settings_body_rows, settings_tabs, slider_row,
@@ -432,6 +433,7 @@ pub(super) fn emit_settings_tab(
         out.push(cursor_sprite(&format!("{}_cursor", screen), style));
     }
 
+    scope_to_screen(&mut out, &screen);
     out
 }
 

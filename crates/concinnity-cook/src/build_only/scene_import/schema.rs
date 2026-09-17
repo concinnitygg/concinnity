@@ -16,6 +16,9 @@
 /// clash with hand-authored assets. Because they only appear in the lock file
 /// and blob, you never reference them by hand.
 ///
+/// **Scene:** set `scene` to the [Scene](#scene) the imported props belong to.
+/// Left empty they belong to no scene, which makes them visible in every one.
+///
 /// **Camera:** the import frames a [Camera3D](#camera3d) to the scene's bounds
 /// so a freshly imported scene is immediately viewable. It is suppressed when
 /// the world already declares a `Camera3D` (yours wins) or when `emit_camera`
@@ -34,6 +37,9 @@
 pub struct SceneImport {
     /// Path to the scene file, relative to the project root. `.fbx` or `.glb`.
     pub source: String,
+    /// [Scene](#scene) the generated [Prop](#prop)s belong to. Empty leaves
+    /// them unbound, which makes them visible in every scene.
+    pub scene: String,
     /// Ceiling on the longest edge of each imported texture, in pixels. Large
     /// source maps (2K-4K) are box-filtered down so the compiled scene, which
     /// stores uncompressed pixels, stays within a sane memory budget. `0` keeps
@@ -52,6 +58,7 @@ impl Default for SceneImport {
     fn default() -> Self {
         Self {
             source: String::new(),
+            scene: String::new(),
             texture_max_size: 512,
             emissive_map_strength: 3.0,
             emit_camera: true,

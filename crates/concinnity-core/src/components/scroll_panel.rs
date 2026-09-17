@@ -22,9 +22,8 @@ use alloc::vec::Vec;
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct ScrollPanel {
-    /// [Screen](#screen) this panel belongs to. Resolved automatically from
-    /// the `<screen>_*` naming convention; you don't set this directly. The
-    /// panel is only live while its screen is active.
+    /// [Screen](#screen) this panel belongs to. The panel is only live while
+    /// its screen is active.
     #[serde(deserialize_with = "de_opt_asset_ref")]
     pub screen: Option<AssetId>,
     /// Left edge of the content band in reference pixels.

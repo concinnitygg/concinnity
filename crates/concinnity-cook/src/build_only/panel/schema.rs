@@ -8,14 +8,13 @@
 /// overlay elements over it to frame a group (a settings card, a dialog body).
 ///
 /// Like the other build-time UI shorthands, generated names are prefixed with
-/// this asset's `name` (`<name>_bg`, `<name>_title`), so a panel named with a
-/// screen prefix (`pause_card`) puts its children in that [Screen](#screen)
-/// (`pause`) via the `<screen>_*` rule and they never clash with hand-authored
-/// assets.
+/// this asset's `name` (`<name>_bg`, `<name>_title`) so they never clash with
+/// hand-authored assets, and `screen` puts them all in that [Screen](#screen).
 ///
 /// ```rust
 /// # use concinnity_cook::authoring::registry::build_only::Panel;
 /// Panel {
+///     screen: "pause".into(),
 ///     title: "Paused".into(),
 ///     x: 440.0,
 ///     y: 220.0,
@@ -27,6 +26,9 @@
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Panel {
+    /// [Screen](#screen) the generated elements belong to. Empty leaves them
+    /// screen-less, which draws them with the HUD rather than with a screen.
+    pub screen: String,
     /// Left edge of the panel in window pixels.
     pub x: f32,
     /// Top edge of the panel in window pixels.
@@ -55,6 +57,7 @@ pub struct Panel {
 impl Default for Panel {
     fn default() -> Self {
         Self {
+            screen: String::new(),
             x: 0.0,
             y: 0.0,
             width: 400.0,
@@ -83,6 +86,7 @@ mod tests {
         assert_eq!(p.title_scale, 1.0);
         assert!(p.title.is_empty());
         assert!(p.title_font.is_empty());
+        assert!(p.screen.is_empty());
         // Near-opaque rather than fully so, so the world reads faintly behind it.
         assert_eq!(p.color[3], 0.96);
     }
@@ -90,16 +94,18 @@ mod tests {
     #[test]
     fn an_authored_panel_parses_and_round_trips_through_postcard() {
         let p: Panel = serde_json::from_str(
-            r#"{"x":20,"y":30,"width":520,"height":360,"color":[0,0,0,1],
+            r#"{"screen":"outliner","x":20,"y":30,"width":520,"height":360,"color":[0,0,0,1],
                 "corner_radius":0,"title":"Outliner","title_font":"body",
                 "title_color":[1,1,1],"title_scale":1.2,"padding":8}"#,
         )
         .unwrap();
         assert_eq!(p.title, "Outliner");
+        assert_eq!(p.screen, "outliner");
         assert_eq!(p.corner_radius, 0.0);
 
         let bytes = postcard::to_allocvec(&p).unwrap();
         let back: Panel = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.screen, "outliner");
         assert_eq!((back.x, back.y), (20.0, 30.0));
         assert_eq!((back.width, back.height), (520.0, 360.0));
         assert_eq!(back.color, [0.0, 0.0, 0.0, 1.0]);

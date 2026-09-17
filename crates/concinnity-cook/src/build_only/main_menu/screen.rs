@@ -1,6 +1,7 @@
 // The menu's own Screen: the backdrop, the heading, and one label + HitRegion
 // per item, laid out as a single column.
 
+use super::super::membership::scope_to_screen;
 use super::super::ui_spec::{centered_label, sprite};
 use super::{TOP_MARGIN_FRAC, cursor_sprite};
 use crate::authoring::registry::build_only::MainMenu;
@@ -109,5 +110,6 @@ pub(super) fn emit_menu_screen(
         out.push(cursor_sprite(&format!("{}_cursor", screen), style));
     }
 
+    scope_to_screen(&mut out, screen);
     out
 }

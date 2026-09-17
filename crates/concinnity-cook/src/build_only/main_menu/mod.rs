@@ -2,10 +2,11 @@
 // HitRegion per item + an optional Escape KeyBinding + an optional in-engine
 // cursor Sprite, plus a generated settings sub-screen when an item asks for one.
 //
-// Everything is prefixed with the menu's own name so the build pipeline's
-// `<screen>_*` rule scopes each generated UI element to the menu's Screen. The menu
-// shows/hides at runtime purely as a Screen visibility flip; this pass adds no
-// runtime behavior, only the assets the existing UI systems already drive.
+// Everything is prefixed with the menu's own name so a generated element never
+// collides with a hand-authored asset, and each element names the Screen it
+// belongs to. The menu shows/hides at runtime purely as a Screen visibility
+// flip; this pass adds no runtime behavior, only the assets the existing UI
+// systems already drive.
 
 mod rows;
 pub(crate) mod schema;

@@ -55,9 +55,7 @@ pub struct HitRegion {
     /// expands; you don't set this directly.
     #[serde(default, deserialize_with = "de_opt_asset_ref")]
     pub drag_handle: Option<AssetId>,
-    /// [Screen](#screen) this region belongs to. Resolved automatically from the
-    /// naming convention (a region named `<screen>_*` belongs to screen
-    /// `<screen>`); you don't set this directly. While a screen is active,
+    /// [Screen](#screen) this region belongs to. While a screen is active,
     /// only the top capturing screen's regions fire; with no screen active,
     /// only screen-less regions fire.
     #[serde(default, deserialize_with = "de_opt_asset_ref")]

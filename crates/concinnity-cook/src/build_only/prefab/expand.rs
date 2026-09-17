@@ -8,6 +8,7 @@ use std::path::Path;
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::registry::build_only::{Prefab, PrefabEntry, PrefabKind};
 use crate::build_only::expand::{ExpandReport, asset_name, registered_type, schema_args};
+use crate::build_only::membership::scope_to_scene;
 use crate::build_only::preset::load_preset_obj;
 
 // The Prop instance a prefab is expanded under: the name its generated assets
@@ -84,8 +85,15 @@ pub(crate) fn expand_prefabs(
             }
         };
 
+        // The instance's own scene carries to every prop it expands into.
+        let inst_scene = args
+            .get("scene")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
         let mut call_stack: Vec<String> = vec![prefab_ref.to_string()];
-        let expanded = expand_prefab_entries(
+        let mut expanded = expand_prefab_entries(
             &Instance {
                 name: &instance_name,
                 position: inst_pos,
@@ -97,6 +105,7 @@ pub(crate) fn expand_prefabs(
             &mut call_stack,
             assets_dir,
         )?;
+        scope_to_scene(&mut expanded, &inst_scene);
         for entry in expanded {
             if resolve_generated(
                 &entry,
@@ -390,6 +399,42 @@ mod tests {
                 .iter()
                 .any(|v| registered_type(v) == Some(RegisteredType::Prefab))
         );
+    }
+
+    // The instance's scene carries to every prop it expands into, nested
+    // prefabs included, and an entry that names its own scene keeps it.
+    #[test]
+    fn the_instance_scene_carries_to_its_props() {
+        let mut assets = vec![
+            serde_json::json!({"name":"box_mesh","type":"ProceduralMesh","args":{}}),
+            serde_json::json!({"name":"leaf","type":"Prefab","args":{"props":[
+                {"name":"cup","kind":"prop","mesh":"box_mesh"}
+            ]}}),
+            serde_json::json!({"name":"table_set","type":"Prefab","args":{"props":[
+                {"name":"table","kind":"prop","mesh":"box_mesh"},
+                {"name":"set","kind":"prefab","prefab":"leaf"}
+            ]}}),
+            serde_json::json!({"name":"inst","type":"Prop","args":{"prefab":"table_set","scene":"level"}}),
+            serde_json::json!({"name":"free","type":"Prop","args":{"prefab":"leaf"}}),
+        ];
+        expand(&mut assets).unwrap();
+        let scene_of = |name: &str| {
+            assets
+                .iter()
+                .find(|v| v["name"] == name)
+                .unwrap_or_else(|| panic!("no asset named {name}"))["args"]
+                .get("scene")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        };
+        assert_eq!(scene_of("inst_table").as_deref(), Some("level"));
+        assert_eq!(
+            scene_of("inst_set_cup").as_deref(),
+            Some("level"),
+            "a nested prefab's props join the instance's scene too"
+        );
+        // An instance that names no scene leaves its props unbound.
+        assert_eq!(scene_of("free_cup"), None);
     }
 
     #[test]

@@ -19,7 +19,7 @@ other UI (see the overlay scaling notes on [MainMenu](MainMenu.md)).
 
 ## Parameters
 
-- `screen`: A string. [Screen](Screen.md) this panel belongs to. Resolved automatically from the `<screen>_*` naming convention; you don't set this directly. The panel is only live while its screen is active. Optional.
+- `screen`: A string. [Screen](Screen.md) this panel belongs to. The panel is only live while its screen is active. Optional.
 - `x`: A float. Left edge of the content band in reference pixels.
 - `y`: A float. Top edge of the content band in reference pixels.
 - `width`: A float. Width of the content band in reference pixels.

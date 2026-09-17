@@ -38,21 +38,14 @@ fn names_of_type(assets: &[WorldJsonlAsset], asset_type: RegisteredType) -> Hash
         .collect()
 }
 
-// The screen an element belongs to: its explicit `screen` field first, else
-// the longest `<screen>_` name prefix. Mirrors the build's membership
-// resolution (`resolve_scene_refs`), which runs after these checks.
+// The screen an element belongs to: the `screen` it names, if it names one
+// this world declares.
 fn owning_screen<'a>(
     element: &'a WorldJsonlAsset,
     screens: &'a HashSet<&'a str>,
 ) -> Option<&'a str> {
-    if let Some(explicit) = str_arg(element, "screen") {
-        return Some(explicit);
-    }
-    screens
-        .iter()
-        .filter(|sn| element.name.starts_with(&format!("{sn}_")))
-        .max_by_key(|sn| sn.len())
-        .copied()
+    let named = str_arg(element, "screen")?;
+    screens.get(named).copied()
 }
 
 // Run every world-shape rule, collecting all violations.
@@ -318,11 +311,10 @@ mod tests {
             serde_json::json!({"focus": "menu_search"}),
         ));
         assets.push(asset("menu", RegisteredType::Screen, serde_json::json!({})));
-        // Owned by `menu` via the name prefix.
         assets.push(asset(
             "menu_search",
             RegisteredType::TextInput,
-            serde_json::json!({}),
+            serde_json::json!({"screen": "menu"}),
         ));
         let errs = errors_for(&assets);
         assert_eq!(errs.len(), 1, "{errs:?}");
@@ -341,7 +333,7 @@ mod tests {
         assets.push(asset(
             "menu_search",
             RegisteredType::TextInput,
-            serde_json::json!({}),
+            serde_json::json!({"screen": "menu"}),
         ));
         // A global (unowned) input may be focused from any screen.
         assets.push(asset(
@@ -357,8 +349,10 @@ mod tests {
         assert!(errors_for(&assets).is_empty());
     }
 
+    // Ownership comes from the `screen` field alone: a name that reads like it
+    // belongs to another screen owns nothing.
     #[test]
-    fn explicit_screen_field_overrides_the_prefix_for_ownership() {
+    fn a_name_that_reads_like_another_screens_does_not_own_an_input() {
         let mut assets = render_stack();
         assets.push(asset("menu", RegisteredType::Screen, serde_json::json!({})));
         assets.push(asset(
@@ -366,12 +360,25 @@ mod tests {
             RegisteredType::Screen,
             serde_json::json!({"focus": "menu_search"}),
         ));
-        // Named under `menu_` but explicitly owned by `pause`: the explicit
-        // field wins, exactly as the build's membership resolution decides.
         assets.push(asset(
             "menu_search",
             RegisteredType::TextInput,
             serde_json::json!({"screen": "pause"}),
+        ));
+        assert!(errors_for(&assets).is_empty());
+
+        // The same input with no `screen` is global, so any screen may focus it.
+        let mut assets = render_stack();
+        assets.push(asset("menu", RegisteredType::Screen, serde_json::json!({})));
+        assets.push(asset(
+            "pause",
+            RegisteredType::Screen,
+            serde_json::json!({"focus": "menu_search"}),
+        ));
+        assets.push(asset(
+            "menu_search",
+            RegisteredType::TextInput,
+            serde_json::json!({}),
         ));
         assert!(errors_for(&assets).is_empty());
     }

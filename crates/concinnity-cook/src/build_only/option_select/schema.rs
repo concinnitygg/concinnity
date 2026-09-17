@@ -27,6 +27,9 @@
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct OptionSelect {
+    /// [Screen](#screen) the generated elements belong to. Empty leaves them
+    /// screen-less, which draws them with the HUD rather than with a screen.
+    pub screen: String,
     /// Engine setting this row controls (e.g. `"vsync"`). Must be a setting the
     /// runtime recognizes; an unknown key renders but does nothing on click.
     pub setting: String,
@@ -65,6 +68,7 @@ pub struct OptionSelect {
 impl Default for OptionSelect {
     fn default() -> Self {
         Self {
+            screen: String::new(),
             setting: String::new(),
             label: String::new(),
             x: 0.0,
