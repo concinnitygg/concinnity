@@ -39,7 +39,7 @@ pub(super) fn inject(ctx: &mut PipelineContext, minter: &mut Minter) -> Result<(
     let screen = match overlay.screen {
         Some(screen) => screen,
         None => {
-            let id = minter.id();
+            let id = minter.id()?;
             ctx.push(Screen {
                 asset_id: id,
                 fade_in_secs: 0.15,
@@ -62,7 +62,7 @@ pub(super) fn inject(ctx: &mut PipelineContext, minter: &mut Minter) -> Result<(
                 fit: crate::components::SpriteFit::Cover,
                 ..Default::default()
             },
-        ));
+        )?);
     }
     if overlay.track.is_none() {
         overlay.track = Some(sprite(
@@ -78,7 +78,7 @@ pub(super) fn inject(ctx: &mut PipelineContext, minter: &mut Minter) -> Result<(
                 corner_radius: BAR_CORNER,
                 ..Default::default()
             },
-        ));
+        )?);
     }
     if overlay.fill.is_none() {
         // Zero-width and hidden until the overlay drives it.
@@ -96,11 +96,11 @@ pub(super) fn inject(ctx: &mut PipelineContext, minter: &mut Minter) -> Result<(
                 visible: false,
                 ..Default::default()
             },
-        ));
+        )?);
     }
     if overlay.label.is_none() {
         let font = minter.hud_font(ctx)?;
-        let id = minter.id();
+        let id = minter.id()?;
         ctx.push(TextLabel {
             asset_id: id,
             font: Some(font),
@@ -135,12 +135,12 @@ fn sprite(
     minter: &mut Minter,
     screen: AssetId,
     sprite: Sprite,
-) -> AssetId {
-    let id = minter.id();
+) -> Result<AssetId, CnError> {
+    let id = minter.id()?;
     ctx.push(Sprite {
         asset_id: id,
         screen: Some(screen),
         ..sprite
     });
-    id
+    Ok(id)
 }

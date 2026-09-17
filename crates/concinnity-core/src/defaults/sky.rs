@@ -37,7 +37,7 @@ pub(super) fn inject(ctx: &mut PipelineContext, minter: &mut Minter) -> Result<(
         .map_or(CAMERA_FAR_DEFAULT, |c| c.far);
     let size = (far * SKY_FAR_FRACTION).min(SKY_SIZE_MAX);
 
-    let mesh_id = minter.id();
+    let mesh_id = minter.id()?;
     let (vertices, indices) = geometry::build_skybox(size);
     let payload = bake::mesh::finish_mesh_payload(vertices, indices, 1, &[])
         .map_err(|_| CnError::InvalidArgument)?;
@@ -60,7 +60,7 @@ pub(super) fn inject(ctx: &mut PipelineContext, minter: &mut Minter) -> Result<(
     );
 
     ctx.push(Prop {
-        asset_id: minter.id(),
+        asset_id: minter.id()?,
         mesh: Some(mesh),
         material: Some(material),
         position: [0.0, 0.0, 0.0],

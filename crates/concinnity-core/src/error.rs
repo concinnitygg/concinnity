@@ -32,6 +32,12 @@ pub enum CnError {
     /// Project state was read by a caller that was handed no state tree. See
     /// `concinnity_host::store::paths::StateTree`.
     NoStateRoot,
+
+    #[error("Minted asset ids exhausted")]
+    /// A running world minted more assets than
+    /// [`AssetId::MINTED_CAPACITY`](crate::ecs::asset_id::AssetId::MINTED_CAPACITY)
+    /// reserves.
+    AssetIdsExhausted,
 }
 
 // Baking a component into its blob record serializes it with postcard.
@@ -64,6 +70,10 @@ mod tests {
         assert_eq!(
             CnError::NoStateRoot.to_string(),
             "No state directory installed"
+        );
+        assert_eq!(
+            CnError::AssetIdsExhausted.to_string(),
+            "Minted asset ids exhausted"
         );
     }
 

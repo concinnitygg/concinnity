@@ -14,6 +14,7 @@ use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::ecs::resolver::resolve_name;
+use crate::error::CnError;
 
 /// A dense integer handle for one asset, assigned at build time in world
 /// declaration order. Equality and hashing are integer ops.
@@ -21,13 +22,16 @@ use crate::ecs::resolver::resolve_name;
 pub struct AssetId(pub u32);
 
 impl AssetId {
+    /// How many ids the minted range holds, and so the most one world can mint.
+    pub const MINTED_CAPACITY: u32 = 1 << 24;
+
     /// First id in the range a running world mints from.
     ///
     /// A build interns names from zero in declaration order, so reserving the
     /// top of the space lets a load-time pass name what it injects without
     /// consulting an interner the shipped runtime does not carry. A world would
     /// have to declare four billion assets to reach it.
-    pub const MINTED_BASE: u32 = u32::MAX - 0xFFFF;
+    pub const MINTED_BASE: u32 = u32::MAX - Self::MINTED_CAPACITY + 1;
 
     /// Whether this id was minted by a running world rather than interned from
     /// a declared name.
@@ -48,10 +52,17 @@ pub struct MintedIds {
 
 impl MintedIds {
     /// The next unused minted id.
-    pub fn next_id(&mut self) -> AssetId {
+    ///
+    /// Errors with [`CnError::AssetIdsExhausted`] once the world has minted
+    /// [`AssetId::MINTED_CAPACITY`] of them: the range ends at [`u32::MAX`], so
+    /// a counter past it would name a declared asset instead.
+    pub fn next_id(&mut self) -> Result<AssetId, CnError> {
+        if self.next >= AssetId::MINTED_CAPACITY {
+            return Err(CnError::AssetIdsExhausted);
+        }
         let id = AssetId(AssetId::MINTED_BASE + self.next);
         self.next += 1;
-        id
+        Ok(id)
     }
 }
 
@@ -251,6 +262,36 @@ mod tests {
     #[test]
     fn default_is_zero() {
         assert_eq!(AssetId::default(), AssetId(0));
+    }
+
+    #[test]
+    fn minting_counts_up_from_the_reserved_base() {
+        let mut ids = MintedIds::default();
+        assert_eq!(ids.next_id(), Ok(AssetId(AssetId::MINTED_BASE)));
+        assert_eq!(ids.next_id(), Ok(AssetId(AssetId::MINTED_BASE + 1)));
+        assert!(AssetId(AssetId::MINTED_BASE).is_minted());
+        assert!(!AssetId(AssetId::MINTED_BASE - 1).is_minted());
+    }
+
+    #[test]
+    fn the_range_ends_at_the_top_of_the_id_space() {
+        // The last reserved slot mints the highest id there is, so a counter
+        // past it would have to wrap into the interned range.
+        let mut ids = MintedIds {
+            next: AssetId::MINTED_CAPACITY - 1,
+        };
+        let last = ids.next_id().expect("the last reserved id");
+        assert_eq!(last, AssetId(u32::MAX));
+        assert!(last.is_minted());
+    }
+
+    #[test]
+    fn minting_past_the_range_is_refused_every_time() {
+        let mut ids = MintedIds {
+            next: AssetId::MINTED_CAPACITY,
+        };
+        assert_eq!(ids.next_id(), Err(CnError::AssetIdsExhausted));
+        assert_eq!(ids.next_id(), Err(CnError::AssetIdsExhausted));
     }
 
     #[test]

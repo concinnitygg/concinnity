@@ -107,7 +107,7 @@ impl Minter {
     }
 
     // The next name for an injected component.
-    fn id(&mut self) -> AssetId {
+    fn id(&mut self) -> Result<AssetId, CnError> {
         self.ids.next_id()
     }
 

@@ -73,7 +73,7 @@ where
     if !unset.is_empty() {
         let font = minter.hud_font(ctx)?;
         for i in unset {
-            let id = minter.id();
+            let id = minter.id()?;
             *slots[i](&mut hud) = Some(id);
             ctx.push(chip(id, font));
         }

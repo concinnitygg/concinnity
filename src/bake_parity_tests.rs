@@ -80,7 +80,7 @@ fn raw_world() -> World {
     world.add_environment_map(ibl);
     let mesh = cube_mesh();
     let payload = bake::procedural_mesh(mesh).expect("the box bakes");
-    let mesh = world.add_mesh(payload);
+    let mesh = world.add_mesh(payload).expect("the first mint");
     let material = world.add_material(cube_material());
     world.add_component(Prop {
         mesh: Some(mesh),

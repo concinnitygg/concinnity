@@ -26,7 +26,7 @@
 //!         ..Default::default()
 //!     };
 //!     let payload = bake::procedural_mesh(mesh).expect("the box bakes");
-//!     let mesh = world.add_mesh(payload);
+//!     let mesh = world.add_mesh(payload).expect("the world has ids to mint");
 //!     let stone = world.add_material(bake::Material::default());
 //!
 //!     world.add_component(Prop {
@@ -190,7 +190,7 @@ mod tests {
         let payload = procedural_mesh(mesh).expect("the box bakes");
 
         let mut world = crate::World::new();
-        let mesh = world.add_mesh(payload);
+        let mesh = world.add_mesh(payload).expect("the first mint");
         let stone = world.add_material(Material {
             roughness: 0.2,
             ..Default::default()
@@ -216,7 +216,7 @@ mod tests {
         let payload = procedural_mesh(sphere.clone()).expect("the sphere bakes");
 
         let mut world = crate::World::new();
-        world.add_mesh(payload);
+        world.add_mesh(payload).expect("the first mint");
 
         let meshes: alloc::vec::Vec<_> = world.inner().query::<ProceduralMesh>().collect();
         assert_eq!(meshes.len(), 1);
@@ -249,7 +249,7 @@ mod tests {
         let payload = mesh(&triangle).expect("the triangle bakes");
 
         let mut world = crate::World::new();
-        let handle = world.add_mesh(payload);
+        let handle = world.add_mesh(payload).expect("the first mint");
         world.add_component(components::Prop {
             mesh: Some(handle),
             ..Default::default()

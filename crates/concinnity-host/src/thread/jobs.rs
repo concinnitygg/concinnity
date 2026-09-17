@@ -8,7 +8,7 @@
 //!
 //! The pool wraps a dedicated `rayon::ThreadPool` rather than rayon's global
 //! pool so the worker count and thread names are controlled. It is process-wide
-//! and lazily built on first use via `pool()`.
+//! and built once, by whichever of `configure` and `pool()` is reached first.
 
 use std::sync::OnceLock;
 
@@ -20,18 +20,6 @@ pub struct JobPool {
 }
 
 impl JobPool {
-    // Build the pool at the worker count `configure` set, or the auto default
-    // (`available_parallelism() - 1`) when unconfigured. The App sizes it from
-    // its `ThreadBudget` before the first `pool()` use.
-    fn build() -> JobPool {
-        Self::new(
-            CONFIGURED_THREADS
-                .get()
-                .copied()
-                .unwrap_or_else(default_threads),
-        )
-    }
-
     /// Build a pool with an explicit worker count (floored at one), for work
     /// that must not size the process-wide pool before the App configures it.
     pub fn new(threads: usize) -> JobPool {
@@ -99,8 +87,9 @@ impl concinnity_core::bake::environment_map::RowScheduler for PoolRows<'_> {
     }
 }
 
-// Worker count set by `configure`, consulted by `JobPool::build` on first use.
-static CONFIGURED_THREADS: OnceLock<usize> = OnceLock::new();
+// The process-wide pool, built by whichever of `configure` and `pool` gets
+// there first.
+static POOL: OnceLock<JobPool> = OnceLock::new();
 
 /// Worker count when nothing configures the pool: one per logical core, less
 /// one for the main thread, floored at one.
@@ -110,19 +99,30 @@ pub fn default_threads() -> usize {
         .unwrap_or(1)
 }
 
-/// Set the process-wide job pool's worker count, returning whether the value
-/// was recorded. The App calls this from its `ThreadBudget` at start, before
-/// any system uses the pool. It takes effect only if called before the first
-/// `pool()` access (the pool is built once); a later call is refused and
-/// reported as `false`, and a value below one is clamped.
+/// Build the process-wide job pool at `threads` workers, returning whether
+/// this call sized it. The App calls this from its `ThreadBudget` at start,
+/// before any system uses the pool. The pool is built once, so a call that
+/// finds it already there sizes nothing and is reported as `false`; a value
+/// below one is clamped.
 pub fn configure(threads: usize) -> bool {
-    CONFIGURED_THREADS.set(threads.max(1)).is_ok()
+    size_pool(&POOL, threads)
 }
 
-/// The process-wide job pool, built on first access.
+// Sizing a pool cell, shared with the test so both outcomes are reachable
+// without depending on what else in the process has touched `POOL`.
+fn size_pool(cell: &OnceLock<JobPool>, threads: usize) -> bool {
+    // A cheap refusal before paying for the worker threads a full `set` would
+    // build and then drop.
+    if cell.get().is_some() {
+        return false;
+    }
+    cell.set(JobPool::new(threads.max(1))).is_ok()
+}
+
+/// The process-wide job pool, built at the auto default worker count if
+/// `configure` has not already sized it.
 pub fn pool() -> &'static JobPool {
-    static POOL: OnceLock<JobPool> = OnceLock::new();
-    POOL.get_or_init(JobPool::build)
+    POOL.get_or_init(|| JobPool::new(default_threads()))
 }
 
 /// A single-worker pool: the same execution shape as `pool()` with the jobs
@@ -130,8 +130,8 @@ pub fn pool() -> &'static JobPool {
 /// determinism oracle exercises the identical code path minus the
 /// concurrency.
 pub fn serial_pool() -> &'static JobPool {
-    static POOL: OnceLock<JobPool> = OnceLock::new();
-    POOL.get_or_init(|| JobPool::new(1))
+    static SERIAL: OnceLock<JobPool> = OnceLock::new();
+    SERIAL.get_or_init(|| JobPool::new(1))
 }
 
 #[cfg(test)]
@@ -141,6 +141,27 @@ mod tests {
     #[test]
     fn pool_is_a_singleton() {
         assert!(std::ptr::eq(pool(), pool()));
+    }
+
+    #[test]
+    fn sizing_a_pool_reports_whether_it_built_one() {
+        let cell = OnceLock::new();
+        assert!(size_pool(&cell, 3));
+        assert_eq!(cell.get().expect("the sized pool").thread_count(), 3);
+
+        // The pool is built once, so a later call sizes nothing and says so
+        // rather than recording a count nobody reads.
+        assert!(!size_pool(&cell, 7));
+        assert_eq!(cell.get().expect("the sized pool").thread_count(), 3);
+    }
+
+    #[test]
+    fn configure_is_refused_once_the_pool_exists() {
+        // Order-independent: reaching `pool()` is what closes configuration,
+        // whichever test in this process got there first.
+        let workers = pool().thread_count();
+        assert!(!configure(workers + 1));
+        assert_eq!(pool().thread_count(), workers);
     }
 
     // An explicit worker count is honored (floored at one). Tested via

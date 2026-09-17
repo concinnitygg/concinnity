@@ -114,7 +114,7 @@ impl Default for World {
 
 // The next minted id, drawn from the world's shared counter so ids handed out
 // before start and by the completion pass never collide.
-fn mint_id(ctx: &mut PipelineContext) -> AssetId {
+fn mint_id(ctx: &mut PipelineContext) -> Result<AssetId, CnError> {
     if ctx.resource::<MintedIds>().is_none() {
         ctx.insert_resource(MintedIds::default());
     }
@@ -178,16 +178,21 @@ impl World {
     /// call order, after any the build assigned. A payload baked from a
     /// [`ProceduralMesh`](crate::components::ProceduralMesh) also adds that
     /// mesh, carrying the minted id, as the record of what was generated.
-    pub fn add_mesh(&mut self, payload: crate::bake::payload::MeshPayload) -> MeshHandle {
+    ///
+    /// Errors once the world has minted [`AssetId::MINTED_CAPACITY`] names.
+    pub fn add_mesh(
+        &mut self,
+        payload: crate::bake::payload::MeshPayload,
+    ) -> Result<MeshHandle, CnError> {
         let (bytes, procedural) = payload.into_parts();
         let mut ctx = self.context();
-        let id = mint_id(&mut ctx);
+        let id = mint_id(&mut ctx)?;
         let handle = crate::resource::append_mesh(&mut ctx, id, bytes);
         if let Some(mut mesh) = procedural {
             mesh.asset_id = id;
             ctx.push(mesh);
         }
-        handle
+        Ok(handle)
     }
 
     /// Add a material and return the handle a
@@ -710,7 +715,7 @@ mod tests {
         let bytes = payload.as_bytes().to_vec();
 
         let mut world = World::new();
-        let handle = world.add_mesh(payload);
+        let handle = world.add_mesh(payload).expect("the first mint");
 
         let payloads = world
             .resource::<crate::resource::RuntimeMeshPayloads>()
@@ -746,7 +751,7 @@ mod tests {
         let payload = crate::bake::payload::mesh(&triangle).expect("a triangle bakes");
 
         let mut world = World::new();
-        let handle = world.add_mesh(payload);
+        let handle = world.add_mesh(payload).expect("the first mint");
 
         assert_eq!(handle.index(), 0);
         assert_eq!(

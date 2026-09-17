@@ -177,7 +177,7 @@ fn cube_world() -> Result<World, concinnity::Error> {
         rings: Some(24),
         ..Default::default()
     };
-    let sun_mesh = world.add_mesh(bake::procedural_mesh(sun)?);
+    let sun_mesh = world.add_mesh(bake::procedural_mesh(sun)?)?;
     let sun_material = world.add_material(bake::Material {
         roughness: 1.0,
         metallic: 0.0,
@@ -249,7 +249,7 @@ fn cube_world() -> Result<World, concinnity::Error> {
         half_extents: Some([CUBE_HALF_EXTENT; 3]),
         ..Default::default()
     };
-    let body_mesh = world.add_mesh(bake::procedural_mesh(body)?);
+    let body_mesh = world.add_mesh(bake::procedural_mesh(body)?)?;
     // Near-black, but glossy enough that the sun shows as a broad sheen on
     // whichever face turns toward it.
     let body_material = world.add_material(bake::Material {
@@ -261,7 +261,7 @@ fn cube_world() -> Result<World, concinnity::Error> {
     place_on_cube(&mut world, CUBE_LAYERS[0], body_mesh, body_material);
 
     let mark = logo::mark_on_box(CUBE_HALF_EXTENT, MARK_SPAN, SURFACE_LIFT);
-    let mark_mesh = world.add_mesh(bake::mesh(&mark)?);
+    let mark_mesh = world.add_mesh(bake::mesh(&mark)?)?;
     let mark_material = world.add_material(bake::Material {
         roughness: 0.55,
         metallic: 0.0,
@@ -272,7 +272,7 @@ fn cube_world() -> Result<World, concinnity::Error> {
     place_on_cube(&mut world, CUBE_LAYERS[1], mark_mesh, mark_material);
 
     let frame = logo::edge_frame(CUBE_HALF_EXTENT, EDGE_WIDTH, SURFACE_LIFT);
-    let frame_mesh = world.add_mesh(bake::mesh(&frame)?);
+    let frame_mesh = world.add_mesh(bake::mesh(&frame)?)?;
     let frame_material = world.add_material(bake::Material {
         roughness: 0.6,
         metallic: 0.0,

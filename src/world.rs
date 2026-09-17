@@ -6,7 +6,7 @@ use concinnity_core::ecs::RuntimeComponent;
 use crate::bake::{EnvironmentMapPayload, FontPayload, MeshPayload};
 use crate::system::{ComponentSlot, Entity, Phase, System};
 
-use crate::{EnvironmentMapHandle, FontHandle, MaterialHandle, MeshHandle};
+use crate::{CnError, EnvironmentMapHandle, FontHandle, MaterialHandle, MeshHandle};
 
 // One world on both tiers: it carries the components and the systems built over
 // them, and needs no operating system to do either. What differs is what a tier
@@ -160,7 +160,11 @@ impl World {
     /// which the world also keeps, or what [`bake::mesh`](crate::bake::mesh)
     /// packed from a raw [`bake::Mesh`](crate::bake::Mesh)'s vertices.
     /// Handles count up in the order meshes are added.
-    pub fn add_mesh(&mut self, payload: MeshPayload) -> MeshHandle {
+    ///
+    /// Errors once the world has minted
+    /// [`AssetId::MINTED_CAPACITY`](crate::AssetId::MINTED_CAPACITY)
+    /// names.
+    pub fn add_mesh(&mut self, payload: MeshPayload) -> Result<MeshHandle, CnError> {
         self.inner.add_mesh(payload)
     }
 
