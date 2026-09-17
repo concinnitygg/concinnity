@@ -32,6 +32,7 @@ concinnity-core = { workspace = true }
 concinnity-host = { workspace = true }
 
 ciborium = { workspace = true }
+clap = { version = "4", features = ["derive"] }
 notify = { workspace = true, features = ["macos_fsevent"] }
 png = { workspace = true }
 rayon = { workspace = true }

@@ -1,25 +1,11 @@
-// The `concinnity` binary's argv face: the clap command tree, the value enums
-// that mirror engine types so no library carries a clap dependency, and the
-// macOS validation re-exec that has to happen before any thread starts.
-//
-// Parsing only. What each command does lives in concinnity-dev; `dispatch`
-// is the one file that joins the two.
-use concinnity_core::render::rt_geom::RtDynamicMode;
-use concinnity_dev::export::BundleFormat;
+// The command tree itself: every subcommand `concinnity` accepts and the
+// arguments it takes. Parsing only -- what each command does lives behind
+// `dispatch`.
 use concinnity_engine::app::run::LaunchRequest;
-use concinnity_engine::gfx::quality_preset::QualityPreset;
 
-use clap::{Parser, Subcommand};
+use super::value_enums::{BundleFormatArg, QualityPresetArg, RtDynamicArg};
 
-const BANNER: &str = r#"
-   ______                                
-  / ____/___  ____  ___________  ____  __________  __
- / /   / __ \/ __ \/ ___/ / __ \/ __ \/ /_  __/ / / /
-/ /___/ /_/ / / / / /__/ / / / / / / / / / / / /_/ /
-\____/\____/_/ /_/\___/_/_/ /_/_/ /_/_/ /_/  \__, /
-                                            /____/"#;
-
-#[derive(Subcommand, Debug)]
+#[derive(clap::Subcommand, Debug)]
 pub(crate) enum Commands {
     /// Create a new app in the current directory
     #[command(name = "init")]
@@ -119,44 +105,6 @@ pub(crate) enum Commands {
     Version,
 }
 
-#[derive(Parser, Debug)]
-#[command(name = "concinnity")]
-#[command(about = BANNER, long_about = None)]
-// clap renders its own flag as "{name} {version}", which is the pair
-// `command::version_line` prints, so `cn version` and `cn --version` render
-// the same line off one source. The auto-generated flag is off only so the
-// short can carry `-v` alongside clap's conventional `-V`.
-#[command(version = concinnity_dev::command::version_details(), disable_version_flag = true)]
-pub(crate) struct Cli {
-    #[command(subcommand)]
-    pub(crate) command: Option<Commands>,
-
-    /// Print the version
-    #[arg(short = 'V', short_alias = 'v', long, action = clap::ArgAction::Version)]
-    pub(crate) version: (),
-}
-
-// What a bare `concinnity` runs. Launching the binary with no argv at all --
-// a double click, where there is no terminal to type a subcommand into --
-// opens the editor on the world discovered from `worlds/`.
-const DEFAULT_COMMAND: Commands = Commands::Editor(EditorArgs {
-    file: None,
-    debug_port: None,
-    validation: None,
-    render: RenderArgs {
-        quality_preset: None,
-        rt_dynamic: None,
-        rt_skinned_geometry: None,
-    },
-});
-
-impl Cli {
-    /// The command this run performs: the one argv named, or [`DEFAULT_COMMAND`].
-    pub(crate) fn resolved_command(&self) -> &Commands {
-        self.command.as_ref().unwrap_or(&DEFAULT_COMMAND)
-    }
-}
-
 // The argv face of the launch-time render knobs on the engine's `LaunchRequest`.
 // Each is a diagnostic: omitting it leaves the shipping behavior, and none is
 // persisted, so a probe run can force one without writing settings. Flattened
@@ -197,73 +145,11 @@ impl RenderArgs {
     }
 }
 
-// The argv face of the engine's `QualityPreset`: the value-enum derive lives
-// here so concinnity-engine carries no clap dependency.
-#[derive(Clone, Copy, Debug, clap::ValueEnum)]
-pub(crate) enum QualityPresetArg {
-    Auto,
-    Low,
-    Medium,
-    High,
-    Ultra,
-    Custom,
-}
-
-impl From<QualityPresetArg> for QualityPreset {
-    fn from(p: QualityPresetArg) -> Self {
-        match p {
-            QualityPresetArg::Auto => QualityPreset::Auto,
-            QualityPresetArg::Low => QualityPreset::Low,
-            QualityPresetArg::Medium => QualityPreset::Medium,
-            QualityPresetArg::High => QualityPreset::High,
-            QualityPresetArg::Ultra => QualityPreset::Ultra,
-            QualityPresetArg::Custom => QualityPreset::Custom,
-        }
-    }
-}
-
-// The argv face of the export `BundleFormat`: concinnity-dev carries no clap
-// dependency either.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
-pub(crate) enum BundleFormatArg {
-    Zip,
-    Dir,
-}
-
-impl From<BundleFormatArg> for BundleFormat {
-    fn from(f: BundleFormatArg) -> Self {
-        match f {
-            BundleFormatArg::Zip => BundleFormat::Zip,
-            BundleFormatArg::Dir => BundleFormat::Dir,
-        }
-    }
-}
-
-// The argv face of the render layer's `RtDynamicMode`, for the same reason.
-#[derive(Clone, Copy, Debug, clap::ValueEnum)]
-pub(crate) enum RtDynamicArg {
-    Off,
-    Auto,
-    Rebuild,
-    Tlas,
-}
-
-impl From<RtDynamicArg> for RtDynamicMode {
-    fn from(m: RtDynamicArg) -> Self {
-        match m {
-            RtDynamicArg::Off => RtDynamicMode::Off,
-            RtDynamicArg::Auto => RtDynamicMode::Auto,
-            RtDynamicArg::Rebuild => RtDynamicMode::Rebuild,
-            RtDynamicArg::Tlas => RtDynamicMode::Tlas,
-        }
-    }
-}
-
 #[derive(Debug, clap::Args)]
 pub(crate) struct DebugArgs {
     /// Path to a world JSONL file (default: discover from worlds/)
     #[arg(short = 'f', long)]
-    pub file: Option<String>,
+    pub(crate) file: Option<String>,
 
     /// Port for the localhost runtime debug server
     #[arg(long, default_value_t = 8777)]
@@ -289,7 +175,7 @@ pub(crate) struct McpArgs {
 pub(crate) struct EditorArgs {
     /// Path to a world JSONL file (default: discover from worlds/)
     #[arg(short = 'f', long)]
-    pub file: Option<String>,
+    pub(crate) file: Option<String>,
 
     /// Start the localhost debug server on this port alongside the editor
     // Absent leaves the editor without a command channel; present makes an
@@ -331,7 +217,7 @@ pub(crate) struct RunArgs {
 
     /// Capture the last presented frame to this PNG when the run stops
     #[arg(long)]
-    pub screenshot: Option<String>,
+    pub(crate) screenshot: Option<String>,
 
     /// Stop after this many frames (overrides GraphicsConfig.max_frames)
     #[arg(long)]
@@ -344,12 +230,12 @@ pub(crate) struct RunArgs {
 #[derive(Debug, clap::Args)]
 pub(crate) struct AddArgs {
     /// Path to an asset file or type name
-    pub target: String,
+    pub(crate) target: String,
 
     /// Override the asset name written into the world
     // If omitted, the name is derived from the filename (including extension).
     #[arg(short, long)]
-    pub name: Option<String>,
+    pub(crate) name: Option<String>,
 
     /// Named scaffold preset used when bootstrapping a new world
     // Currently only "minimal-3d-world" (a camera, sun, room, and sky on top of
@@ -361,74 +247,74 @@ pub(crate) struct AddArgs {
 #[derive(Debug, clap::Args)]
 pub(crate) struct RmArgs {
     /// The `name` field of the asset to remove
-    pub name: String,
+    pub(crate) name: String,
 }
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct TestArgs {
     /// Path to a world JSONL file (default: discover from worlds/)
     #[arg(short = 'f', long)]
-    pub file: Option<String>,
+    pub(crate) file: Option<String>,
 }
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct ListArgs {
     /// Path to a world JSONL file (default: discover from worlds/)
     #[arg(short = 'f', long)]
-    pub file: Option<String>,
+    pub(crate) file: Option<String>,
 
     /// List the expanded world the build produces
     // build-time macros are expanded and injected defaults included,
     // each row tagged with its provenance (authored / injected / expanded).
     #[arg(long)]
-    pub expanded: bool,
+    pub(crate) expanded: bool,
 
     /// List the systems this world runs, in order, each with the condition
     // that includes it. Builds the world and reports `World::system_manifest()`
     // -- the same gates the runtime runs at start -- so it cannot drift.
     #[arg(long)]
-    pub systems: bool,
+    pub(crate) systems: bool,
 }
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct ExplainArgs {
     /// The `name` field of the asset to print
-    pub name: String,
+    pub(crate) name: String,
 
     /// Path to a world JSONL file (default: discover from worlds/)
     #[arg(short = 'f', long)]
-    pub file: Option<String>,
+    pub(crate) file: Option<String>,
 }
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct DocsArgs {
     /// Engine repository root to read sources from and write pages into
     #[arg(long, default_value = ".")]
-    pub root: Option<String>,
+    pub(crate) root: Option<String>,
 }
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct NewArgs {
     /// Directory to create the project in
-    pub path: String,
+    pub(crate) path: String,
 }
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct BuildArgs {
     /// Path to a world JSONL file (default: discover from worlds/)
     #[arg(short = 'f', long)]
-    pub file: Option<String>,
+    pub(crate) file: Option<String>,
 }
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct ExportArgs {
     /// Path to a world JSONL file (default: discover from worlds/)
     #[arg(short = 'f', long)]
-    pub file: Option<String>,
+    pub(crate) file: Option<String>,
 
     /// Override the application name
     #[arg(short = 'n', long)]
-    pub name: Option<String>,
+    pub(crate) name: Option<String>,
 
     /// Override the application version
     #[arg(long)]
@@ -436,11 +322,11 @@ pub(crate) struct ExportArgs {
 
     /// EntityTarget platform
     #[arg(long)]
-    pub platform: Option<String>,
+    pub(crate) platform: Option<String>,
 
     /// Output directory for the exported app
     #[arg(long, default_value = "dist")]
-    pub out: String,
+    pub(crate) out: String,
 
     /// Output format
     #[arg(long, value_enum, default_value = "zip")]
@@ -451,76 +337,17 @@ pub(crate) struct ExportArgs {
     pub(crate) dmg: bool,
 }
 
-// When a render command requests graphics validation on macOS, relaunch the
-// process with Metal's API-validation layer (`MTL_DEBUG_LAYER`) set in the
-// environment, then return into the replacement image. Metal reads that
-// variable during early framework initialization, so it cannot be toggled from
-// a process that has already touched Metal -- and `std::env::set_var` is
-// unsound once worker threads exist (the frameworks call `getenv` off-thread).
-// Re-exec sidesteps both: the child starts with the variable present from PID
-// birth. DirectX / Vulkan take the request through `LaunchRequest` and need no
-// relaunch, so this is a macOS-only concern.
-//
-// The heavier `MTL_SHADER_VALIDATION` is deliberately left off: it is far more
-// expensive and its memory footprint climbs over a long run, so it stays an
-// explicit manual opt-in rather than riding a flag that defaults on in debug
-// builds.
-#[cfg(target_os = "macos")]
-pub(crate) fn reexec_with_metal_validation(cli: &Cli) {
-    use std::os::unix::process::CommandExt;
-
-    // Only the rendering commands create a Metal context; every other
-    // subcommand starts no renderer, so it needs no validation re-exec.
-    let requested = match cli.resolved_command() {
-        Commands::Run(args) => args.validation,
-        Commands::Debug(args) => args.validation,
-        Commands::Editor(args) => args.validation,
-        _ => return,
-    };
-    if !requested.unwrap_or(cfg!(debug_assertions)) {
-        return;
-    }
-    // The relaunched child inherits the variable, so the guard is
-    // self-terminating: it stops the second pass from re-execing again.
-    if std::env::var_os("MTL_DEBUG_LAYER").is_some() {
-        return;
-    }
-    let exe = match std::env::current_exe() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("validation: cannot locate current executable to re-exec: {e}");
-            return;
-        }
-    };
-    // `exec` replaces this image in place (no lingering parent process) and only
-    // returns on failure. On failure we fall through and run without Metal
-    // validation rather than aborting the user's session.
-    let err = std::process::Command::new(exe)
-        .args(std::env::args_os().skip(1))
-        .env("MTL_DEBUG_LAYER", "1")
-        .exec();
-    eprintln!("validation: failed to re-exec with Metal validation enabled: {err}");
-}
-
-#[cfg(not(target_os = "macos"))]
-pub(crate) fn reexec_with_metal_validation(_cli: &Cli) {}
-
-// Argument-parsing tests. `main` itself (the engine-launching dispatch and the
-// Metal re-exec) is exercised by the `tests/cli.rs` integration tests, which
-// run the built binary; these cover the clap surface -- the command tree, the
-// per-subcommand defaults, and the value-enum parsing -- without a process.
+// Argument-parsing tests. The engine-launching dispatch and the Metal re-exec
+// are exercised by the `tests/cli.rs` integration tests, which run the built
+// binary; these cover the clap surface -- the command tree, the per-subcommand
+// defaults, and the value-enum parsing -- without a process.
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::{CommandFactory, Parser};
-
-    // Walks the whole command tree and asserts clap's own invariants (no
-    // conflicting args, valid defaults, unique names). A cheap guard against
-    // an ill-formed derive that would only surface at runtime otherwise.
-    #[test]
-    fn cli_config_is_valid() {
-        Cli::command().debug_assert();
-    }
+    use crate::cli::Cli;
+    use clap::Parser;
+    use concinnity_core::render::rt_geom::RtDynamicMode;
+    use concinnity_engine::gfx::quality_preset::QualityPreset;
 
     // Every world-launching command carries the render flags, and each one
     // defaults to absent (which the engine resolves to today's behavior).
@@ -605,33 +432,6 @@ mod tests {
         }
     }
 
-    // The value enums are the argv face of the engine types, so a variant added
-    // to one and not the other has to fail here rather than at a launch.
-    #[test]
-    fn the_render_value_enums_map_onto_the_engine_types() {
-        use clap::ValueEnum;
-
-        let presets: Vec<QualityPreset> = QualityPresetArg::value_variants()
-            .iter()
-            .map(|&a| a.into())
-            .collect();
-        assert_eq!(presets, QualityPreset::ALL.to_vec());
-
-        let modes: Vec<RtDynamicMode> = RtDynamicArg::value_variants()
-            .iter()
-            .map(|&a| a.into())
-            .collect();
-        assert_eq!(
-            modes,
-            vec![
-                RtDynamicMode::Off,
-                RtDynamicMode::Auto,
-                RtDynamicMode::Rebuild,
-                RtDynamicMode::Tlas,
-            ]
-        );
-    }
-
     #[test]
     fn debug_starts_the_server_on_the_named_world() {
         let cli = Cli::try_parse_from(["concinnity", "debug", "-f", "world.jsonl"]).unwrap();
@@ -693,30 +493,6 @@ mod tests {
         };
         assert_eq!(a.target, "Logger");
         assert_eq!(a.name.as_deref(), Some("log"));
-    }
-
-    // A bare invocation is the double-click case: no terminal, no subcommand,
-    // and the useful thing to do is open a window.
-    #[test]
-    fn a_bare_invocation_runs_the_editor() {
-        let cli = Cli::try_parse_from(["concinnity"]).unwrap();
-        assert!(cli.command.is_none());
-        let Commands::Editor(a) = cli.resolved_command() else {
-            panic!("expected the editor by default");
-        };
-        assert!(a.file.is_none());
-        assert!(a.debug_port.is_none());
-        assert!(a.validation.is_none());
-        assert!(a.render.quality_preset.is_none());
-        assert!(a.render.rt_dynamic.is_none());
-        assert!(a.render.rt_skinned_geometry.is_none());
-    }
-
-    // The default is `editor` itself, not a look-alike: an unknown subcommand
-    // still fails rather than silently falling back to it.
-    #[test]
-    fn an_unknown_subcommand_is_still_an_error() {
-        assert!(Cli::try_parse_from(["concinnity", "edtior"]).is_err());
     }
 
     #[test]
@@ -919,25 +695,5 @@ mod tests {
         };
         assert_eq!(a.debug_port, 9100);
         assert_eq!(a.validation, Some(true));
-    }
-
-    // Only the paths that decline to re-exec are driven: the guard returns for a
-    // command that starts no renderer, and for a render command with validation
-    // explicitly off. Requesting validation would `exec` and replace the test
-    // process, so no case here leaves `validation` unset or true.
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn metal_validation_reexec_declines_when_not_requested() {
-        for args in [
-            ["concinnity", "run", "--validation", "false"],
-            ["concinnity", "editor", "--validation", "false"],
-            ["concinnity", "debug", "--validation", "false"],
-        ] {
-            reexec_with_metal_validation(&Cli::try_parse_from(args).unwrap());
-        }
-        // An authoring subcommand stands up no renderer, so it returns at the
-        // match rather than reaching the request check.
-        reexec_with_metal_validation(&Cli::try_parse_from(["concinnity", "list"]).unwrap());
-        reexec_with_metal_validation(&Cli::try_parse_from(["concinnity", "mcp"]).unwrap());
     }
 }

@@ -1,14 +1,9 @@
 //! concinnity: the dev CLI binary, built by the `editor` feature.
 //!
-//! Three files: [`cli`] is the clap command tree, [`dispatch`] turns a parsed
-//! command into a call, and this one owns what a process owns -- the tracking
-//! allocator, where the project keeps its state, and the crash hooks. Every
-//! command's actual work lives in concinnity-dev.
+//! One file, owning what a process owns -- the tracking allocator, where the
+//! project keeps its state, and the crash hooks. The command line it reads and
+//! every command's actual work live in concinnity-dev.
 
-mod cli;
-mod dispatch;
-
-use clap::Parser;
 use std::path::{Path, PathBuf};
 
 // A global allocator belongs to a final artifact, not to a library every
@@ -23,10 +18,9 @@ concinnity_core::install_global_allocator!();
 const STATE_DIR: &str = ".concinnity";
 
 fn main() -> std::io::Result<()> {
-    let parsed = cli::Cli::parse();
-
-    // Must run before any thread spawns or the Metal framework initializes.
-    cli::reexec_with_metal_validation(&parsed);
+    // Parses argv, and on macOS may replace this process image to bring up
+    // Metal validation, so nothing above it may spawn a thread.
+    let invocation = concinnity_dev::cli::Invocation::from_args();
 
     // Where this run reads and writes. Resolved before the crash hooks, so a
     // report written from here on lands in the project rather than nowhere,
@@ -35,7 +29,7 @@ fn main() -> std::io::Result<()> {
     concinnity_engine::crash::install(Some(&tree.crashes_dir()));
     concinnity_dev::project::open(tree.clone());
 
-    dispatch::dispatch(&parsed, &tree)
+    invocation.dispatch(&tree)
 }
 
 // The tree rooted at the directory the command was run from: `assets/` and

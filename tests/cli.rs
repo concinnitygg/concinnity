@@ -4,10 +4,11 @@
 //! (`build` / `add` / `rm` / `list` / `explain` / `test` / `docs` / `export` /
 //! `init` / `new`). They exercise `fn main()` and the command dispatch (which the
 //! in-crate unit tests cannot, since those never run the binary), plus the
-//! world-discovery wrappers in `cli/`, whose fallbacks read process-global path
-//! anchors that a unit test in the shared test binary could not redirect without
-//! racing its neighbours. Under `cargo llvm-cov` the profile data the spawned
-//! binary writes on exit is merged, so this coverage counts.
+//! world-discovery fallbacks each command reaches for when no `-f` is given,
+//! which read process-global path anchors that a unit test in the shared test
+//! binary could not redirect without racing its neighbours. Under
+//! `cargo llvm-cov` the profile data the spawned binary writes on exit is
+//! merged, so this coverage counts.
 //!
 //! Only the non-engine paths are driven here; `cn run`, a bare `cn debug`, and
 //! an argv-less run (which is `cn editor`) stand up a renderer + window and are

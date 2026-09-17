@@ -99,7 +99,7 @@ targets = ["x86_64-apple-darwin", "x86_64-pc-windows-msvc"]
 default = ["std", "native", "player"]
 std = ["dep:concinnity-engine", "dep:concinnity-host", "dep:concinnity-toolchain"]
 player = ["std"]
-editor = ["player", "cook", "dep:concinnity-dev", "dep:clap"]
+editor = ["player", "cook", "dep:concinnity-dev"]
 cook = ["std", "dep:concinnity-cook"]
 native = ["std", "concinnity-engine/native", "concinnity-dev?/native"]
 metal = ["std", "concinnity-engine/metal", "concinnity-dev?/metal"]
@@ -112,7 +112,6 @@ concinnity-engine = { workspace = true, optional = true }
 concinnity-host = { workspace = true, optional = true }
 concinnity-cook = { workspace = true, optional = true }
 concinnity-dev = { workspace = true, optional = true }
-clap = { version = "4", features = ["derive"], optional = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

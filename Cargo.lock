@@ -384,7 +384,6 @@ dependencies = [
 name = "concinnity"
 version = "0.19.51"
 dependencies = [
- "clap",
  "concinnity-cook",
  "concinnity-core",
  "concinnity-dev",
@@ -450,6 +449,7 @@ name = "concinnity-dev"
 version = "0.19.51"
 dependencies = [
  "ciborium",
+ "clap",
  "concinnity-cook",
  "concinnity-core",
  "concinnity-engine",

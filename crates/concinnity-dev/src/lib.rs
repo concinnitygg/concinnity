@@ -1,13 +1,13 @@
 //! concinnity-dev: the dev tooling library.
 //!
-//! Everything the `concinnity` binary does, minus the argv it does it from:
-//! the world authoring / in-memory build code, the implementations behind each
-//! subcommand, the asset-reference generator, bundle packaging, the in-engine
-//! editor HUD, the localhost debug server, and the interpreted (`cn debug`) run
-//! loop.
+//! Everything the `concinnity` binary is, apart from the process it runs in:
+//! the command line it parses, the world authoring / in-memory build code, the
+//! implementations behind each subcommand, the asset-reference generator,
+//! bundle packaging, the in-engine editor HUD, the localhost debug server, and
+//! the interpreted (`cn debug`) run loop.
 //!
-//! The binary is the clap command tree and nothing else; everything it dispatches
-//! into is here.
+//! The binary declares the global allocator, resolves the project's state tree,
+//! installs the crash hooks, and hands the rest to [`cli::Invocation`].
 
 /// The shader platform `cn` cooks worlds for: the backend the runtime linked
 /// into this same binary consumes, so a world built here plays here.
@@ -26,6 +26,9 @@ mod editor;
 mod mcp;
 mod run;
 
+/// The `cn` command line: the arguments a run was given, and the command they
+/// name.
+pub mod cli;
 /// The implementations behind each `cn` subcommand, and the only place in this
 /// crate that writes to stdout.
 pub mod command;
