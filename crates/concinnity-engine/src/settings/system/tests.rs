@@ -527,6 +527,37 @@ fn a_fraction_on_a_non_slider_is_ignored() {
     assert!(f.saved.lock().unwrap().is_empty());
 }
 
+// Every row with static options applies a Next and persists it, so no setting
+// misses its handler or its table row.
+#[test]
+fn every_option_row_applies_and_persists() {
+    for key in SettingKey::ALL {
+        if settings::options(key).is_none() {
+            continue;
+        }
+        let mut f = Fixture::new();
+        f.next(key);
+        f.state.settings_writer = None;
+        assert!(!f.saved.lock().unwrap().is_empty(), "{key:?} persisted");
+    }
+}
+
+// A stepper op on a slider or rebind row, and a rebind op on a slider, are
+// ignored.
+#[test]
+fn an_op_outside_its_row_kind_is_ignored() {
+    let mut f = Fixture::new();
+    f.apply(vec![
+        cycle(SettingKey::Exposure, SettingOp::SetIndex(1)),
+        cycle(SettingKey::KeyRebind(Bindable::Jump), SettingOp::Next),
+        cycle(SettingKey::Fov, SettingOp::Rebind(InputKey::Q)),
+    ]);
+
+    assert!(f.calls.lock().unwrap().calls.is_empty());
+    assert!(f.saved.lock().unwrap().is_empty());
+    assert_eq!(f.state.keymap, KeyMap::default());
+}
+
 // Every table-driven Off/On row flips its state field and persisted override on
 // Next, and back on Prev.
 #[test]

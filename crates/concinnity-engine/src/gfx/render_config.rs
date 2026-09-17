@@ -10,8 +10,8 @@ use concinnity_core::gfx::render_types::PostProcessTunables;
 
 use crate::config::GraphicsSettings;
 use crate::gfx::quality_preset::{QualityCeiling, clamp_shadow_update};
-use crate::gfx::system::{clamp_quality_cycle, set_quality_toggle};
-use crate::settings::{SLIDERS, SettingKey, SliderTarget};
+use crate::settings::quality_rows::{QUALITY_CYCLES, QUALITY_TOGGLES};
+use crate::settings::{SLIDERS, SliderTarget};
 
 /// Shadow map resolution. Restart-required: the cascade array is sized once at
 /// backend init.
@@ -120,34 +120,13 @@ pub(crate) fn overlay_quality_scalars(cfg: &mut PostProcessConfig, user: &Graphi
 /// declared a `PostProcessConfig` -- the schema defaults it falls back to are a
 /// real authored look, not a placeholder.
 pub(crate) fn overlay_quality_overrides(cfg: &mut PostProcessConfig, user: &GraphicsSettings) {
-    for (key, value) in [
-        (SettingKey::Ssao, user.ssao),
-        (SettingKey::Ssr, user.ssr),
-        (
-            SettingKey::RayTracedReflections,
-            user.ray_traced_reflections,
-        ),
-        (SettingKey::Ssgi, user.ssgi),
-        (SettingKey::AutoExposure, user.auto_exposure),
-    ] {
-        if let Some(v) = value {
-            set_quality_toggle(cfg, key, v);
+    for row in &QUALITY_TOGGLES {
+        if let Some(on) = *(row.persisted.get)(user) {
+            (row.set)(cfg, on);
         }
     }
-    if let Some(v) = user.aa_mode {
-        cfg.aa_mode = v;
-    }
-    if let Some(v) = user.ssgi_resolution {
-        cfg.ssgi_resolution = v;
-    }
-    if let Some(v) = user.ssgi_rays {
-        cfg.ssgi_rays = v;
-    }
-    if let Some(v) = user.ssgi_steps {
-        cfg.ssgi_steps = v;
-    }
-    if let Some(v) = user.reflection_blur_resolution {
-        cfg.reflection_blur_resolution = v;
+    for row in &QUALITY_CYCLES {
+        (row.overlay)(cfg, user);
     }
     overlay_quality_scalars(cfg, user);
 }
@@ -161,35 +140,15 @@ pub(crate) fn clamp_quality_under_ceiling(
     user: &GraphicsSettings,
     ceiling: &QualityCeiling,
 ) {
-    for (key, overridden, allowed) in [
-        (SettingKey::Ssao, user.ssao.is_some(), ceiling.ssao),
-        (SettingKey::Ssr, user.ssr.is_some(), ceiling.ssr),
-        (
-            SettingKey::RayTracedReflections,
-            user.ray_traced_reflections.is_some(),
-            ceiling.ray_traced_reflections,
-        ),
-        (SettingKey::Ssgi, user.ssgi.is_some(), ceiling.ssgi),
-        (
-            SettingKey::AutoExposure,
-            user.auto_exposure.is_some(),
-            ceiling.auto_exposure,
-        ),
-    ] {
-        if !overridden && !allowed {
-            set_quality_toggle(cfg, key, false);
+    for row in &QUALITY_TOGGLES {
+        if (row.persisted.get)(user).is_none() && !(row.allowed)(ceiling) {
+            (row.set)(cfg, false);
         }
     }
-    for key in crate::settings::QUALITY_CYCLE_KEYS {
-        let overridden = match key {
-            SettingKey::AaMode => user.aa_mode.is_some(),
-            SettingKey::SsgiResolution => user.ssgi_resolution.is_some(),
-            SettingKey::SsgiRays => user.ssgi_rays.is_some(),
-            SettingKey::SsgiSteps => user.ssgi_steps.is_some(),
-            SettingKey::ReflectionBlurResolution => user.reflection_blur_resolution.is_some(),
-            _ => false,
-        };
-        clamp_quality_cycle(cfg, key, ceiling, overridden);
+    for row in &QUALITY_CYCLES {
+        if !(row.overridden)(user) {
+            (row.clamp)(cfg, ceiling);
+        }
     }
 }
 

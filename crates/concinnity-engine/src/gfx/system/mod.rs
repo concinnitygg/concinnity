@@ -15,9 +15,7 @@
 //!   stream_sources.rs  streamed texture payload sources + voxel palette entries
 //!   draw_geometry.rs   draw-object positions + auto-seed triangle gathering
 
-use concinnity_core::components::{
-    GamepadAction, GraphicsConfig, IndirectLighting, PostProcessConfig,
-};
+use concinnity_core::components::{GamepadAction, GraphicsConfig, PostProcessConfig};
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{Entity, PipelineContext, StepResult, System};
 use concinnity_core::input::keymap;
@@ -308,115 +306,6 @@ impl System for GraphicsSystem {
 
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
         self.run_step(ctx)
-    }
-}
-
-// Quality-toggle plumbing shared by init (value-label sync + initial overlay)
-// and the per-frame drain. Centralizing the key -> `PostProcessConfig` field
-// mapping here keeps the three call sites (read state, flip state, derive the
-// backend settings) from drifting apart.
-
-// The current on/off state of quality toggle `key` in `cfg`, or `None` for a
-// key that is not a quality toggle.
-pub(crate) fn quality_toggle_on(cfg: &PostProcessConfig, key: SettingKey) -> Option<bool> {
-    match key {
-        SettingKey::Ssao => Some(cfg.ssao),
-        SettingKey::Ssr => Some(cfg.ssr),
-        SettingKey::RayTracedReflections => Some(cfg.ray_traced_reflections),
-        SettingKey::Ssgi => Some(cfg.indirect_lighting == IndirectLighting::Ssgi),
-        SettingKey::AutoExposure => Some(cfg.auto_exposure),
-        _ => None,
-    }
-}
-
-// Flip quality toggle `key` to `on` in `cfg`. Unknown keys are ignored.
-pub(crate) fn set_quality_toggle(cfg: &mut PostProcessConfig, key: SettingKey, on: bool) {
-    match key {
-        SettingKey::Ssao => cfg.ssao = on,
-        SettingKey::Ssr => cfg.ssr = on,
-        SettingKey::RayTracedReflections => cfg.ray_traced_reflections = on,
-        SettingKey::Ssgi => {
-            cfg.indirect_lighting = if on {
-                IndirectLighting::Ssgi
-            } else {
-                IndirectLighting::Ibl
-            }
-        }
-        SettingKey::AutoExposure => cfg.auto_exposure = on,
-        _ => {}
-    }
-}
-
-// Whether `key` is one of the cycle (dropdown) quality knobs governed by the
-// preset ceiling like the boolean toggles (a manual change flips the preset to
-// Custom). The set lives in `settings::QUALITY_CYCLE_KEYS`.
-pub(crate) fn is_quality_cycle(key: SettingKey) -> bool {
-    crate::settings::QUALITY_CYCLE_KEYS.contains(&key)
-}
-
-// The current menu option index of cycle quality knob `key` in `cfg`, or `None`
-// for a key that is not a cycle quality knob.
-pub(crate) fn quality_cycle_index(cfg: &PostProcessConfig, key: SettingKey) -> Option<usize> {
-    use crate::settings;
-    match key {
-        SettingKey::AaMode => Some(settings::aa_mode_index(cfg.aa_mode)),
-        SettingKey::SsgiResolution => Some(settings::ssgi_resolution_index(cfg.ssgi_resolution)),
-        SettingKey::SsgiRays => Some(settings::ssgi_rays_index(cfg.ssgi_rays)),
-        SettingKey::SsgiSteps => Some(settings::ssgi_steps_index(cfg.ssgi_steps)),
-        SettingKey::ReflectionBlurResolution => Some(settings::reflection_blur_index(
-            cfg.reflection_blur_resolution,
-        )),
-        _ => None,
-    }
-}
-
-// Set cycle quality knob `key` in `cfg` from a menu option index. Unknown keys
-// are ignored.
-pub(crate) fn set_quality_cycle(cfg: &mut PostProcessConfig, key: SettingKey, index: usize) {
-    use crate::settings;
-    match key {
-        SettingKey::AaMode => cfg.aa_mode = settings::aa_mode_at(index),
-        SettingKey::SsgiResolution => cfg.ssgi_resolution = settings::ssgi_resolution_at(index),
-        SettingKey::SsgiRays => cfg.ssgi_rays = settings::ssgi_rays_at(index),
-        SettingKey::SsgiSteps => cfg.ssgi_steps = settings::ssgi_steps_at(index),
-        SettingKey::ReflectionBlurResolution => {
-            cfg.reflection_blur_resolution = settings::reflection_blur_at(index)
-        }
-        _ => {}
-    }
-}
-
-// Clamp cycle quality knob `key` in `cfg` DOWN under the ceiling (coarser
-// resolution / smaller count; never raises), a no-op when the user explicitly
-// overrode it. Shared by the init clamp and the live preset re-derive so both
-// produce the same result.
-pub(crate) fn clamp_quality_cycle(
-    cfg: &mut PostProcessConfig,
-    key: SettingKey,
-    ceiling: &crate::gfx::quality_preset::QualityCeiling,
-    overridden: bool,
-) {
-    if overridden {
-        return;
-    }
-    use crate::gfx::quality_preset::{
-        clamp_aa_mode, coarser_reflection_blur, coarser_ssgi_resolution,
-    };
-    match key {
-        SettingKey::AaMode => cfg.aa_mode = clamp_aa_mode(cfg.aa_mode, ceiling.aa_mode),
-        SettingKey::SsgiResolution => {
-            cfg.ssgi_resolution =
-                coarser_ssgi_resolution(cfg.ssgi_resolution, ceiling.ssgi_resolution)
-        }
-        SettingKey::SsgiRays => cfg.ssgi_rays = cfg.ssgi_rays.min(ceiling.ssgi_rays),
-        SettingKey::SsgiSteps => cfg.ssgi_steps = cfg.ssgi_steps.min(ceiling.ssgi_steps),
-        SettingKey::ReflectionBlurResolution => {
-            cfg.reflection_blur_resolution = coarser_reflection_blur(
-                cfg.reflection_blur_resolution,
-                ceiling.reflection_blur_resolution,
-            )
-        }
-        _ => {}
     }
 }
 

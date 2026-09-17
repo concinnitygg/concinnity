@@ -16,7 +16,8 @@ use super::rows::{set_label_content, set_rows_grayed, set_sprite_x};
 use crate::config::{GraphicsSettings, Settings};
 use crate::gfx::system as gsys;
 use crate::settings;
-use crate::settings::{SettingKey, SliderTarget};
+use crate::settings::quality_rows::{quality_cycle, quality_toggle};
+use crate::settings::{SettingKey, SliderSetting, SliderTarget};
 
 // A cycle row's option labels.
 pub(super) type RowOptions = &'static [&'static str];
@@ -72,6 +73,33 @@ pub(super) static BOOL_ROWS: [BoolRow; 8] = [
         persisted: |g| &mut g.hdr_pq,
     },
 ];
+
+// The display rows: the frame-rate cap and window mode apply live, the render
+// scale and upscaler at restart.
+#[derive(Clone, Copy)]
+pub(super) enum DisplayRow {
+    FpsCap,
+    WindowMode,
+    RenderScale,
+    UpscaleBackend,
+}
+
+// The shadow rows and the anisotropy row, all governed by the quality preset.
+#[derive(Clone, Copy)]
+pub(super) enum ShadowRow {
+    MapSize,
+    Anisotropy,
+    Update,
+    Distance,
+    Cascades,
+}
+
+// The restart-required system rows.
+#[derive(Clone, Copy)]
+pub(super) enum SystemRow {
+    FramesInFlight,
+    TextureQuality,
+}
 
 impl SettingsState {
     pub(super) fn apply_setting_commands(
@@ -160,56 +188,115 @@ impl SettingsState {
         cfg: &mut Settings,
         cmd: &SettingCommand,
     ) -> bool {
-        match cmd.op {
-            SettingOp::Rebind(key) => return self.apply_key_rebind(ctx, ops, cfg, cmd, key),
-            SettingOp::RebindButton(button) => {
-                return self.apply_pad_rebind(ctx, cfg, cmd, button);
+        use SettingKey as K;
+        let op = cmd.op;
+        let stepper = matches!(
+            op,
+            SettingOp::Next | SettingOp::Prev | SettingOp::SetIndex(_)
+        );
+        let opts = settings::options(cmd.setting).unwrap_or_default();
+        let text = match cmd.setting {
+            K::KeyRebind(action) => {
+                return match op {
+                    SettingOp::Rebind(key) => self.apply_key_rebind(ctx, ops, cfg, action, key),
+                    _ => misrouted(cmd),
+                };
             }
-            SettingOp::SetFraction(frac) => return self.apply_slider(ctx, ops, cfg, cmd, frac),
-            SettingOp::Next | SettingOp::Prev | SettingOp::SetIndex(_) => {}
-        }
-        if cmd.setting == SettingKey::GraphicsQuality {
-            return self.apply_quality_preset(ctx, ops, cfg, cmd);
-        }
-        if cmd.setting == SettingKey::Resolution {
-            return self.apply_resolution(ctx, ops, cfg, cmd);
-        }
-        let Some(opts) = settings::options(cmd.setting) else {
-            tracing::warn!("SettingsSystem: unknown setting {:?}", cmd.setting);
-            return false;
+            K::PadRebind(action) => {
+                return match op {
+                    SettingOp::RebindButton(button) => {
+                        self.apply_pad_rebind(ctx, cfg, action, button)
+                    }
+                    _ => misrouted(cmd),
+                };
+            }
+            K::Exposure
+            | K::BloomIntensity
+            | K::BloomThreshold
+            | K::BloomKnee
+            | K::Vignette
+            | K::LutStrength
+            | K::AmbientIntensity
+            | K::SsaoRadius
+            | K::SsaoIntensity
+            | K::SsrIntensity
+            | K::SsrMaxDistance
+            | K::SsgiIntensity
+            | K::SsgiMaxDistance
+            | K::AutoExposureMinEv
+            | K::AutoExposureMaxEv
+            | K::AutoExposureSpeed
+            | K::MouseSensitivity
+            | K::GamepadLookSensitivity
+            | K::GamepadDeadzone
+            | K::Fov => {
+                return match op {
+                    SettingOp::SetFraction(frac) => settings::slider(cmd.setting)
+                        .is_some_and(|slider| self.apply_slider(ctx, ops, cfg, cmd, slider, frac)),
+                    _ => misrouted(cmd),
+                };
+            }
+            _ if !stepper => return misrouted(cmd),
+            K::GraphicsQuality => return self.apply_quality_preset(ctx, ops, cfg, cmd),
+            K::Resolution => return self.apply_resolution(ctx, ops, cfg, cmd),
+            key @ (K::Vsync
+            | K::PerfStats
+            | K::ShowFps
+            | K::ShowVram
+            | K::OcclusionTwoPass
+            | K::TemporalUpscaling
+            | K::HdrDisplay
+            | K::HdrPq) => {
+                bool_row(key).map(|row| self.apply_bool_row(ctx, ops, cfg, row, opts, op))
+            }
+            K::MasterVolume => Some(apply_volume(ctx, cfg, AudioTarget::Master, opts, op)),
+            K::MusicVolume => Some(apply_volume(ctx, cfg, AudioTarget::Music, opts, op)),
+            K::SfxVolume => Some(apply_volume(ctx, cfg, AudioTarget::Sfx, opts, op)),
+            K::VoiceVolume => Some(apply_volume(ctx, cfg, AudioTarget::Voice, opts, op)),
+            K::FpsCap => Some(self.apply_display_row(ctx, ops, cfg, DisplayRow::FpsCap, opts, op)),
+            K::WindowMode => {
+                Some(self.apply_display_row(ctx, ops, cfg, DisplayRow::WindowMode, opts, op))
+            }
+            K::RenderScale => {
+                Some(self.apply_display_row(ctx, ops, cfg, DisplayRow::RenderScale, opts, op))
+            }
+            K::UpscaleBackend => {
+                Some(self.apply_display_row(ctx, ops, cfg, DisplayRow::UpscaleBackend, opts, op))
+            }
+            key @ (K::Ssao | K::Ssr | K::RayTracedReflections | K::Ssgi | K::AutoExposure) => {
+                quality_toggle(key)
+                    .map(|row| self.apply_quality_toggle(ctx, ops, cfg, row, opts, op))
+            }
+            key @ (K::AaMode
+            | K::SsgiResolution
+            | K::SsgiRays
+            | K::SsgiSteps
+            | K::ReflectionBlurResolution) => {
+                quality_cycle(key).map(|row| self.apply_quality_cycle(ctx, ops, cfg, row, opts, op))
+            }
+            K::ShadowMapSize => {
+                Some(self.apply_shadow_row(ctx, ops, cfg, ShadowRow::MapSize, opts, op))
+            }
+            K::Anisotropy => {
+                Some(self.apply_shadow_row(ctx, ops, cfg, ShadowRow::Anisotropy, opts, op))
+            }
+            K::ShadowUpdate => {
+                Some(self.apply_shadow_row(ctx, ops, cfg, ShadowRow::Update, opts, op))
+            }
+            K::ShadowDistance => {
+                Some(self.apply_shadow_row(ctx, ops, cfg, ShadowRow::Distance, opts, op))
+            }
+            K::ShadowCascades => {
+                Some(self.apply_shadow_row(ctx, ops, cfg, ShadowRow::Cascades, opts, op))
+            }
+            K::FramesInFlight => {
+                Some(self.apply_system_row(cfg, SystemRow::FramesInFlight, opts, op))
+            }
+            K::TextureQuality => {
+                Some(self.apply_system_row(cfg, SystemRow::TextureQuality, opts, op))
+            }
         };
-        let new_text = match BOOL_ROWS.iter().find(|row| row.key == cmd.setting) {
-            Some(row) => Some(self.apply_bool_row(ctx, ops, cfg, row, opts, cmd.op)),
-            None => match cmd.setting {
-                SettingKey::MasterVolume
-                | SettingKey::MusicVolume
-                | SettingKey::SfxVolume
-                | SettingKey::VoiceVolume => apply_volume(ctx, cfg, cmd, opts),
-                SettingKey::FpsCap
-                | SettingKey::WindowMode
-                | SettingKey::RenderScale
-                | SettingKey::UpscaleBackend => self.apply_display_row(ctx, ops, cfg, cmd, opts),
-                key if key.is_quality_toggle() => {
-                    Some(self.apply_quality_toggle(ctx, ops, cfg, cmd, opts))
-                }
-                key if gsys::is_quality_cycle(key) => {
-                    Some(self.apply_quality_cycle(ctx, ops, cfg, cmd, opts))
-                }
-                SettingKey::ShadowMapSize
-                | SettingKey::Anisotropy
-                | SettingKey::ShadowUpdate
-                | SettingKey::ShadowDistance
-                | SettingKey::ShadowCascades => self.apply_shadow_row(ctx, ops, cfg, cmd, opts),
-                SettingKey::FramesInFlight | SettingKey::TextureQuality => {
-                    self.apply_system_row(cfg, cmd, opts)
-                }
-                other => {
-                    tracing::warn!("SettingsSystem: unknown setting {other:?}");
-                    None
-                }
-            },
-        };
-        let Some(text) = new_text else {
+        let Some(text) = text else {
             return false;
         };
         if let Some(label_id) = cmd.value_label {
@@ -226,12 +313,9 @@ impl SettingsState {
         ops: &mut RenderOps,
         cfg: &mut Settings,
         cmd: &SettingCommand,
+        slider: &SliderSetting,
         frac: f32,
     ) -> bool {
-        let Some(slider) = settings::slider(cmd.setting) else {
-            tracing::warn!("SettingsSystem: unknown slider {:?}", cmd.setting);
-            return false;
-        };
         let value = slider.value_at(frac);
         let stored = (slider.apply)(value);
         match &slider.target {
@@ -328,58 +412,55 @@ impl SettingsState {
         ctx: &mut PipelineContext,
         ops: &mut RenderOps,
         cfg: &mut Settings,
-        cmd: &SettingCommand,
+        row: ShadowRow,
         opts: RowOptions,
-    ) -> Option<&'static str> {
-        let next = match cmd.setting {
-            SettingKey::ShadowMapSize => {
+        op: SettingOp,
+    ) -> &'static str {
+        let next = match row {
+            ShadowRow::MapSize => {
                 let cur = settings::shadow_resolution_index(self.shadow_map_size);
-                let next = settings::cycle(cur, opts.len(), cmd.op);
+                let next = settings::cycle(cur, opts.len(), op);
                 self.shadow_map_size = settings::shadow_resolution_at(next);
                 cfg.graphics.shadow_map_size = Some(self.shadow_map_size);
                 next
             }
-            SettingKey::Anisotropy => {
+            ShadowRow::Anisotropy => {
                 let cur = settings::anisotropy_index(self.anisotropy);
-                let next = settings::cycle(cur, opts.len(), cmd.op);
+                let next = settings::cycle(cur, opts.len(), op);
                 self.anisotropy = settings::anisotropy_at(next);
                 cfg.graphics.anisotropy = Some(self.anisotropy);
                 next
             }
-            SettingKey::ShadowUpdate => {
+            ShadowRow::Update => {
                 let cur = settings::shadow_update_index(self.shadow_update);
-                let next = settings::cycle(cur, opts.len(), cmd.op);
+                let next = settings::cycle(cur, opts.len(), op);
                 self.shadow_update = settings::shadow_update_at(next);
                 let update = self.shadow_update;
                 ops.record(move |backend| backend.set_shadow_update(update));
                 cfg.graphics.shadow_update = Some(self.shadow_update);
                 next
             }
-            SettingKey::ShadowDistance => {
+            ShadowRow::Distance => {
                 let cur = settings::shadow_distance_index(self.shadow_distance);
-                let next = settings::cycle(cur, opts.len(), cmd.op);
+                let next = settings::cycle(cur, opts.len(), op);
                 self.shadow_distance = settings::shadow_distance_at(next);
                 let distance = self.shadow_distance;
                 ops.record(move |backend| backend.set_shadow_distance(distance));
                 cfg.graphics.shadow_distance = Some(self.shadow_distance);
                 next
             }
-            SettingKey::ShadowCascades => {
+            ShadowRow::Cascades => {
                 let cur = settings::shadow_cascades_index(self.shadow_cascades);
-                let next = settings::cycle(cur, opts.len(), cmd.op);
+                let next = settings::cycle(cur, opts.len(), op);
                 self.shadow_cascades = settings::shadow_cascades_at(next);
                 let count = self.shadow_cascades;
                 ops.record(move |backend| backend.set_shadow_cascades(count));
                 cfg.graphics.shadow_cascades = Some(self.shadow_cascades);
                 next
             }
-            other => {
-                tracing::warn!("SettingsSystem: unknown shadow setting {other:?}");
-                return None;
-            }
         };
         self.opt_out_of_preset(ctx, cfg);
-        Some(opts[next])
+        opts[next]
     }
 
     // The frame-rate cap and window mode apply live; render scale and the
@@ -390,13 +471,14 @@ impl SettingsState {
         ctx: &mut PipelineContext,
         ops: &mut RenderOps,
         cfg: &mut Settings,
-        cmd: &SettingCommand,
+        row: DisplayRow,
         opts: RowOptions,
-    ) -> Option<&'static str> {
-        let next = match cmd.setting {
-            SettingKey::FpsCap => {
+        op: SettingOp,
+    ) -> &'static str {
+        let next = match row {
+            DisplayRow::FpsCap => {
                 let cur = settings::fps_cap_index(self.fps_cap);
-                let next = settings::cycle(cur, opts.len(), cmd.op);
+                let next = settings::cycle(cur, opts.len(), op);
                 self.fps_cap = settings::fps_cap_at(next);
                 // No backend call: the App-level pacer reads the republished cap
                 // before the next step, and the change re-bases its deadline.
@@ -404,9 +486,9 @@ impl SettingsState {
                 cfg.graphics.fps_cap = Some(self.fps_cap);
                 next
             }
-            SettingKey::WindowMode => {
+            DisplayRow::WindowMode => {
                 let cur = settings::window_mode_index(self.window_args.mode);
-                let next = settings::cycle(cur, opts.len(), cmd.op);
+                let next = settings::cycle(cur, opts.len(), op);
                 let mode = settings::window_mode_at(next);
                 self.window_args.mode = mode;
                 ops.record(move |backend| backend.set_window_mode(mode));
@@ -425,36 +507,32 @@ impl SettingsState {
                 cfg.graphics.window_mode = Some(mode);
                 next
             }
-            SettingKey::RenderScale => {
+            DisplayRow::RenderScale => {
                 let cur = settings::render_scale_index(self.render_scale);
-                let next = settings::cycle(cur, opts.len(), cmd.op);
+                let next = settings::cycle(cur, opts.len(), op);
                 self.render_scale = settings::render_scale_at(next);
                 cfg.graphics.render_scale = Some(self.render_scale);
                 self.opt_out_of_preset(ctx, cfg);
                 next
             }
-            SettingKey::UpscaleBackend => {
+            DisplayRow::UpscaleBackend => {
                 // Skip upscalers this GPU vendor does not offer (DLSS NVIDIA-only,
                 // XeSS Intel-only); Auto and FSR3 are always available, so the
                 // loop terminates.
                 let cur = settings::upscale_backend_index(self.upscale_backend);
-                let mut next = settings::cycle(cur, opts.len(), cmd.op);
+                let mut next = settings::cycle(cur, opts.len(), op);
                 while !settings::upscale_backend_available(
                     settings::upscale_backend_at(next),
                     self.gpu_profile.vendor,
                 ) {
-                    next = settings::cycle(next, opts.len(), cmd.op);
+                    next = settings::cycle(next, opts.len(), op);
                 }
                 self.upscale_backend = settings::upscale_backend_at(next);
                 cfg.graphics.upscale_backend = Some(self.upscale_backend);
                 next
             }
-            other => {
-                tracing::warn!("SettingsSystem: unknown display setting {other:?}");
-                return None;
-            }
         };
-        Some(opts[next])
+        opts[next]
     }
 
     // Restart-required (the ring buffers, cull pipeline, and streaming pool are
@@ -462,22 +540,23 @@ impl SettingsState {
     fn apply_system_row(
         &mut self,
         cfg: &mut Settings,
-        cmd: &SettingCommand,
+        row: SystemRow,
         opts: RowOptions,
-    ) -> Option<&'static str> {
-        let next = match cmd.setting {
-            SettingKey::FramesInFlight => {
+        op: SettingOp,
+    ) -> &'static str {
+        let next = match row {
+            SystemRow::FramesInFlight => {
                 let cur = settings::frames_in_flight_index(self.frames_in_flight as u32);
-                let next = settings::cycle(cur, opts.len(), cmd.op);
+                let next = settings::cycle(cur, opts.len(), op);
                 self.frames_in_flight = settings::frames_in_flight_at(next) as usize;
                 cfg.graphics.frames_in_flight = Some(self.frames_in_flight as u32);
                 next
             }
             // One row drives both the streaming pool cap and the per-frame upload
             // budget.
-            SettingKey::TextureQuality => {
+            SystemRow::TextureQuality => {
                 let cur = settings::texture_quality_index(self.texture_cap);
-                let next = settings::cycle(cur, opts.len(), cmd.op);
+                let next = settings::cycle(cur, opts.len(), op);
                 let (cap, budget) = settings::texture_quality_at(next);
                 self.texture_cap = cap;
                 self.texture_budget = budget;
@@ -485,12 +564,8 @@ impl SettingsState {
                 cfg.graphics.texture_budget = Some(budget);
                 next
             }
-            other => {
-                tracing::warn!("SettingsSystem: unknown system setting {other:?}");
-                return None;
-            }
         };
-        Some(opts[next])
+        opts[next]
     }
 }
 
@@ -500,24 +575,36 @@ impl SettingsState {
 fn apply_volume(
     ctx: &mut PipelineContext,
     cfg: &mut Settings,
-    cmd: &SettingCommand,
+    target: AudioTarget,
     opts: RowOptions,
-) -> Option<&'static str> {
-    let (stored, target) = match cmd.setting {
-        SettingKey::MasterVolume => (&mut cfg.audio.master_volume, AudioTarget::Master),
-        SettingKey::MusicVolume => (&mut cfg.audio.music_volume, AudioTarget::Music),
-        SettingKey::SfxVolume => (&mut cfg.audio.sfx_volume, AudioTarget::Sfx),
-        SettingKey::VoiceVolume => (&mut cfg.audio.voice_volume, AudioTarget::Voice),
-        other => {
-            tracing::warn!("SettingsSystem: unknown volume setting {other:?}");
-            return None;
-        }
+    op: SettingOp,
+) -> &'static str {
+    let stored = match target {
+        AudioTarget::Master => &mut cfg.audio.master_volume,
+        AudioTarget::Music => &mut cfg.audio.music_volume,
+        AudioTarget::Sfx => &mut cfg.audio.sfx_volume,
+        AudioTarget::Voice => &mut cfg.audio.voice_volume,
     };
     let cur = settings::volume_index(stored.unwrap_or(settings::DEFAULT_VOLUME));
-    let next = settings::cycle(cur, opts.len(), cmd.op);
+    let next = settings::cycle(cur, opts.len(), op);
     let gain = settings::volume_at(next);
     *stored = Some(gain);
     ctx.events_mut::<AudioCommand>()
         .send(AudioCommand { target, gain });
-    Some(opts[next])
+    opts[next]
+}
+
+// The one warning for a command whose op does not fit its setting's row kind.
+fn misrouted(cmd: &SettingCommand) -> bool {
+    tracing::warn!(
+        "SettingsSystem: {:?} cannot apply {:?}",
+        cmd.setting,
+        cmd.op
+    );
+    false
+}
+
+// The Off/On row for `key`, or `None` if it is not a bool row.
+pub(super) fn bool_row(key: SettingKey) -> Option<&'static BoolRow> {
+    BOOL_ROWS.iter().find(|row| row.key == key)
 }

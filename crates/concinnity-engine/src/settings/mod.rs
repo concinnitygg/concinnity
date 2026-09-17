@@ -4,6 +4,7 @@
 pub(crate) mod system;
 
 pub(crate) mod action;
+pub(crate) mod quality_rows;
 
 // The engine-side registry of user-facing settings a cycle row can change. The
 // ordered option labels live in `concinnity_core::settings` (shared with
@@ -67,19 +68,6 @@ const FRAME_BUFFERING_COUNTS: [u32; 3] = [1, 2, 3];
 // high-resolution textures stay resident) and the per-frame upload budget.
 const TEXTURE_QUALITY_CAPS: [u32; 4] = [48, 96, 192, 384];
 const TEXTURE_QUALITY_BUDGETS: [u32; 4] = [2, 4, 8, 12];
-
-// The cycle (dropdown) quality knobs governed by the preset ceiling like the
-// boolean `SettingKey::QUALITY_TOGGLES`. Each rides the feature's live-reinit rebuild
-// (`apply_quality_settings`) -- the sub-tunable travels in its settings payload,
-// so no new backend method is needed. `GraphicsSystem` maps each key to the
-// `PostProcessConfig` field it cycles.
-pub(crate) const QUALITY_CYCLE_KEYS: [SettingKey; 5] = [
-    SettingKey::AaMode,
-    SettingKey::SsgiResolution,
-    SettingKey::SsgiRays,
-    SettingKey::SsgiSteps,
-    SettingKey::ReflectionBlurResolution,
-];
 
 // Volume gains shared by the master and per-bus rows, one per option index
 // (the labels live in core). Indices map to a linear gain via `volume_at` /
@@ -1094,7 +1082,7 @@ mod tests {
             options(SettingKey::ReflectionBlurResolution).map(|o| o.len()),
             Some(3)
         );
-        assert!(QUALITY_CYCLE_KEYS.contains(&SettingKey::ReflectionBlurResolution));
+        assert!(quality_rows::quality_cycle(SettingKey::ReflectionBlurResolution).is_some());
     }
 
     #[test]
@@ -1110,7 +1098,7 @@ mod tests {
             assert!(slider(key).is_none(), "{key:?} should not be a slider");
             assert!(!key.is_quality_toggle(), "{key:?} is not a quality toggle");
             assert!(
-                !QUALITY_CYCLE_KEYS.contains(&key),
+                quality_rows::quality_cycle(key).is_none(),
                 "{key:?} is not a quality cycle knob"
             );
         }
@@ -1343,11 +1331,19 @@ mod tests {
 
     // Every slider key is listed once, resolves to its own entry, spans a
     // non-empty range its fraction mapping round-trips, and is not a cycle row.
+    // Every slider-kind setting has an entry.
     #[test]
     fn sliders_have_unique_keys_and_valid_ranges() {
+        use concinnity_core::settings::SettingKind;
+        for key in SettingKey::ALL {
+            let entries = SLIDERS.iter().filter(|s| s.key == key).count();
+            let expected = usize::from(key.kind() == SettingKind::Slider);
+            assert_eq!(entries, expected, "{key:?} SLIDERS entries");
+        }
         let mut seen = std::collections::HashSet::new();
         for s in &SLIDERS {
             assert!(seen.insert(s.key), "{:?} is listed twice", s.key);
+            assert_eq!(s.key.kind(), SettingKind::Slider, "{:?}", s.key);
             assert!(std::ptr::eq(slider(s.key).unwrap(), s), "{:?}", s.key);
             assert!(s.range.0 < s.range.1, "{:?} range must be non-empty", s.key);
             assert!(
@@ -1508,7 +1504,7 @@ mod tests {
         assert_eq!(quality_params.len(), 9);
         for key in quality_params {
             assert!(
-                !QUALITY_CYCLE_KEYS.contains(&key),
+                quality_rows::quality_cycle(key).is_none(),
                 "{key:?} should not be preset-governed"
             );
         }

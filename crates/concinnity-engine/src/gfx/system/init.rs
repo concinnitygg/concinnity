@@ -63,6 +63,7 @@ use super::*;
 use crate::app::run::LaunchRequest;
 use crate::gfx::draw_list;
 use crate::gfx::material_entry::MaterialEntry;
+use crate::settings::quality_rows::{quality_cycle, quality_toggle};
 use crate::settings::system::{SettingsSlot, SettingsState};
 
 // The resolved render config `init_render_settings` returns beside the live
@@ -603,15 +604,10 @@ impl GraphicsSystem {
                 Some(crate::settings::texture_quality_index(settings.texture_cap))
             }
             // mouse_sensitivity is a slider now, synced by `init_sliders`.
-            // Quality toggles: index 0 = Off, 1 = On, matching OFF_ON_OPTIONS.
-            key if key.is_quality_toggle() => {
-                super::quality_toggle_on(&settings.post_config, key).map(|on| on as usize)
-            }
-            // SSGI gather sub-quality dropdowns.
-            key if super::is_quality_cycle(key) => {
-                super::quality_cycle_index(&settings.post_config, key)
-            }
-            _ => None,
+            // Quality toggles (index 0 = Off, 1 = On) and quality cycle knobs.
+            key => quality_toggle(key)
+                .map(|row| (row.get)(&settings.post_config) as usize)
+                .or_else(|| quality_cycle(key).map(|row| (row.index)(&settings.post_config))),
         });
         // The master "Graphics Quality" row carries the resolved tier under Auto
         // (e.g. "Auto (High)"), which the static option table cannot express, so

@@ -1,10 +1,10 @@
 // The Controls-tab rebind rows: bind an action to a captured key or gamepad
 // button, swapping with whatever action held it, and relabel both rows.
 
-use concinnity_core::components::{ControlsCommand, GamepadButton, InputKey, SettingCommand};
+use concinnity_core::components::{ControlsCommand, GamepadAction, GamepadButton, InputKey};
 use concinnity_core::ecs::PipelineContext;
+use concinnity_core::input::keymap::Bindable;
 use concinnity_core::render::ops::RenderOps;
-use concinnity_core::settings::SettingKey;
 
 use super::SettingsState;
 use super::rows::set_label_content;
@@ -19,13 +19,9 @@ impl SettingsState {
         ctx: &mut PipelineContext,
         ops: &mut RenderOps,
         cfg: &mut Settings,
-        cmd: &SettingCommand,
+        action: Bindable,
         key: InputKey,
     ) -> bool {
-        let SettingKey::KeyRebind(action) = cmd.setting else {
-            tracing::warn!("SettingsSystem: {:?} is not a key rebind", cmd.setting);
-            return false;
-        };
         let victim = self.keymap.action_for_key(key).filter(|&a| a != action);
         self.keymap.rebind(action, key);
         let keymap = self.keymap;
@@ -45,13 +41,9 @@ impl SettingsState {
         &mut self,
         ctx: &mut PipelineContext,
         cfg: &mut Settings,
-        cmd: &SettingCommand,
+        action: GamepadAction,
         button: GamepadButton,
     ) -> bool {
-        let SettingKey::PadRebind(action) = cmd.setting else {
-            tracing::warn!("SettingsSystem: {:?} is not a gamepad rebind", cmd.setting);
-            return false;
-        };
         let victim = self
             .gamepad_map
             .action_for_button(button)

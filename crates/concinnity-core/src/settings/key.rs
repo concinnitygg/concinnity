@@ -220,15 +220,8 @@ impl SettingKey {
     }
 
     /// Whether this is one of the [`QUALITY_TOGGLES`](Self::QUALITY_TOGGLES).
-    pub const fn is_quality_toggle(self) -> bool {
-        matches!(
-            self,
-            SettingKey::Ssao
-                | SettingKey::Ssr
-                | SettingKey::RayTracedReflections
-                | SettingKey::Ssgi
-                | SettingKey::AutoExposure
-        )
+    pub fn is_quality_toggle(self) -> bool {
+        Self::QUALITY_TOGGLES.contains(&self)
     }
 }
 
@@ -285,17 +278,6 @@ mod tests {
         }
         for action in GamepadAction::ALL {
             assert!(SettingKey::ALL.contains(&SettingKey::PadRebind(action)));
-        }
-    }
-
-    #[test]
-    fn quality_toggles_match_the_predicate() {
-        for key in SettingKey::ALL {
-            assert_eq!(
-                key.is_quality_toggle(),
-                SettingKey::QUALITY_TOGGLES.contains(&key),
-                "{key:?}"
-            );
         }
     }
 

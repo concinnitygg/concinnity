@@ -2,7 +2,7 @@
 // feature toggles, and the cycle quality knobs. A per-row change opts the preset
 // out to Custom.
 
-use concinnity_core::components::SettingCommand;
+use concinnity_core::components::{SettingCommand, SettingOp};
 use concinnity_core::ecs::PipelineContext;
 use concinnity_core::render::backend::QualitySettings;
 use concinnity_core::render::error::RenderError;
@@ -16,6 +16,7 @@ use crate::gfx::quality_preset;
 use crate::gfx::system as gsys;
 use crate::settings;
 use crate::settings::SettingKey;
+use crate::settings::quality_rows::{QUALITY_CYCLES, QUALITY_TOGGLES, QualityCycle, QualityToggle};
 
 impl SettingsState {
     // A preset is a performance ceiling over the world's authored look (it never
@@ -41,22 +42,13 @@ impl SettingsState {
         // new ceiling (force off where disallowed; never turn on), then clamp
         // every cycle knob (the overrides are cleared).
         self.post_config = self.authored_post_config.clone();
-        for (key, allowed) in [
-            (SettingKey::Ssao, ceiling.ssao),
-            (SettingKey::Ssr, ceiling.ssr),
-            (
-                SettingKey::RayTracedReflections,
-                ceiling.ray_traced_reflections,
-            ),
-            (SettingKey::Ssgi, ceiling.ssgi),
-            (SettingKey::AutoExposure, ceiling.auto_exposure),
-        ] {
-            if !allowed {
-                gsys::set_quality_toggle(&mut self.post_config, key, false);
+        for row in &QUALITY_TOGGLES {
+            if !(row.allowed)(&ceiling) {
+                (row.set)(&mut self.post_config, false);
             }
         }
-        for key in settings::QUALITY_CYCLE_KEYS {
-            gsys::clamp_quality_cycle(&mut self.post_config, key, &ceiling, false);
+        for row in &QUALITY_CYCLES {
+            (row.clamp)(&mut self.post_config, &ceiling);
         }
         // The composite FXAA flag rides PostProcessParams, so refresh it from the
         // re-derived AA mode before the push below.
@@ -93,16 +85,12 @@ impl SettingsState {
         // launch re-resolves them from the world and ceiling exactly as this live
         // re-derive did.
         cfg.graphics.quality_preset = Some(preset);
-        cfg.graphics.aa_mode = None;
-        cfg.graphics.ssao = None;
-        cfg.graphics.ssr = None;
-        cfg.graphics.ray_traced_reflections = None;
-        cfg.graphics.ssgi = None;
-        cfg.graphics.auto_exposure = None;
-        cfg.graphics.ssgi_resolution = None;
-        cfg.graphics.ssgi_rays = None;
-        cfg.graphics.ssgi_steps = None;
-        cfg.graphics.reflection_blur_resolution = None;
+        for row in &QUALITY_TOGGLES {
+            *(row.persisted.get_mut)(&mut cfg.graphics) = None;
+        }
+        for row in &QUALITY_CYCLES {
+            (row.clear)(&mut cfg.graphics);
+        }
         cfg.graphics.shadow_map_size = None;
         cfg.graphics.shadow_update = None;
         cfg.graphics.shadow_distance = None;
@@ -123,19 +111,17 @@ impl SettingsState {
     // value-label ids; the menu's HitRegions are drained after init, so they
     // cannot be re-queried here.
     fn relabel_preset_dependents(&self, ctx: &mut PipelineContext) {
-        for key in SettingKey::QUALITY_TOGGLES {
-            let on = gsys::quality_toggle_on(&self.post_config, key).unwrap_or(false);
-            self.relabel_option(ctx, key, on as usize);
+        for row in &QUALITY_TOGGLES {
+            let on = (row.get)(&self.post_config);
+            self.relabel_option(ctx, row.key, on as usize);
         }
         self.relabel_option(
             ctx,
             SettingKey::RenderScale,
             settings::render_scale_index(self.render_scale),
         );
-        for key in settings::QUALITY_CYCLE_KEYS {
-            if let Some(idx) = gsys::quality_cycle_index(&self.post_config, key) {
-                self.relabel_option(ctx, key, idx);
-            }
+        for row in &QUALITY_CYCLES {
+            self.relabel_option(ctx, row.key, (row.index)(&self.post_config));
         }
         for (key, idx) in [
             (
@@ -178,22 +164,15 @@ impl SettingsState {
         ctx: &mut PipelineContext,
         ops: &mut RenderOps,
         cfg: &mut Settings,
-        cmd: &SettingCommand,
+        row: &QualityToggle,
         opts: RowOptions,
+        op: SettingOp,
     ) -> &'static str {
-        let key = cmd.setting;
-        let cur = gsys::quality_toggle_on(&self.post_config, key).unwrap_or(false);
-        let next = settings::cycle(cur as usize, opts.len(), cmd.op);
+        let cur = (row.get)(&self.post_config);
+        let next = settings::cycle(cur as usize, opts.len(), op);
         let on = next == 1;
-        gsys::set_quality_toggle(&mut self.post_config, key, on);
-        match key {
-            SettingKey::Ssao => cfg.graphics.ssao = Some(on),
-            SettingKey::Ssr => cfg.graphics.ssr = Some(on),
-            SettingKey::RayTracedReflections => cfg.graphics.ray_traced_reflections = Some(on),
-            SettingKey::Ssgi => cfg.graphics.ssgi = Some(on),
-            SettingKey::AutoExposure => cfg.graphics.auto_exposure = Some(on),
-            other => tracing::warn!("SettingsSystem: no persisted field for {other:?}"),
-        }
+        (row.set)(&mut self.post_config, on);
+        *(row.persisted.get_mut)(&mut cfg.graphics) = Some(on);
         self.opt_out_of_preset(ctx, cfg);
         let quality = gsys::derive_quality_settings(&self.post_config);
         record_quality_apply(ops, quality);
@@ -201,7 +180,7 @@ impl SettingsState {
         // it runs, so its copy freezes at the last adapted value once toggled
         // off. Re-push the static params (the authored / slider EV) so exposure
         // reverts; on a toggle-on the AE loop overwrites it next frame.
-        if key == SettingKey::AutoExposure {
+        if row.key == SettingKey::AutoExposure {
             let params = self.post_process;
             ops.record(move |backend| backend.update_post_process(params));
         }
@@ -216,30 +195,20 @@ impl SettingsState {
         ctx: &mut PipelineContext,
         ops: &mut RenderOps,
         cfg: &mut Settings,
-        cmd: &SettingCommand,
+        row: &QualityCycle,
         opts: RowOptions,
+        op: SettingOp,
     ) -> &'static str {
-        let key = cmd.setting;
-        let cur = gsys::quality_cycle_index(&self.post_config, key).unwrap_or(0);
-        let next = settings::cycle(cur, opts.len(), cmd.op);
-        gsys::set_quality_cycle(&mut self.post_config, key, next);
-        let post = &self.post_config;
-        match key {
-            SettingKey::AaMode => cfg.graphics.aa_mode = Some(post.aa_mode),
-            SettingKey::SsgiResolution => cfg.graphics.ssgi_resolution = Some(post.ssgi_resolution),
-            SettingKey::SsgiRays => cfg.graphics.ssgi_rays = Some(post.ssgi_rays),
-            SettingKey::SsgiSteps => cfg.graphics.ssgi_steps = Some(post.ssgi_steps),
-            SettingKey::ReflectionBlurResolution => {
-                cfg.graphics.reflection_blur_resolution = Some(post.reflection_blur_resolution)
-            }
-            other => tracing::warn!("SettingsSystem: no persisted field for {other:?}"),
-        }
+        let cur = (row.index)(&self.post_config);
+        let next = settings::cycle(cur, opts.len(), op);
+        (row.set)(&mut self.post_config, next);
+        (row.persist)(&self.post_config, &mut cfg.graphics);
         self.opt_out_of_preset(ctx, cfg);
         let quality = gsys::derive_quality_settings(&self.post_config);
         record_quality_apply(ops, quality);
         // The AA mode also drives the composite FXAA flag, which rides
         // PostProcessParams rather than the rebuild above.
-        if key == SettingKey::AaMode {
+        if row.key == SettingKey::AaMode {
             self.post_process.fxaa = self.post_config.aa_mode.fxaa_flag();
             let params = self.post_process;
             ops.record(move |backend| backend.update_post_process(params));
