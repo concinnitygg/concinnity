@@ -15,6 +15,7 @@ use crate::config::Settings;
 use crate::gfx::quality_preset;
 use crate::gfx::system as gsys;
 use crate::settings;
+use crate::settings::SettingKey;
 
 impl SettingsState {
     // A preset is a performance ceiling over the world's authored look (it never
@@ -29,7 +30,7 @@ impl SettingsState {
         cfg: &mut Settings,
         cmd: &SettingCommand,
     ) -> bool {
-        let opts = settings::options("graphics_quality").unwrap_or(&[]);
+        let opts = settings::options(SettingKey::GraphicsQuality).unwrap_or(&[]);
         let cur = quality_preset::preset_index(self.quality_preset);
         let next = settings::cycle(cur, opts.len(), cmd.op);
         let preset = quality_preset::preset_at(next);
@@ -41,11 +42,14 @@ impl SettingsState {
         // every cycle knob (the overrides are cleared).
         self.post_config = self.authored_post_config.clone();
         for (key, allowed) in [
-            ("ssao", ceiling.ssao),
-            ("ssr", ceiling.ssr),
-            ("ray_traced_reflections", ceiling.ray_traced_reflections),
-            ("ssgi", ceiling.ssgi),
-            ("auto_exposure", ceiling.auto_exposure),
+            (SettingKey::Ssao, ceiling.ssao),
+            (SettingKey::Ssr, ceiling.ssr),
+            (
+                SettingKey::RayTracedReflections,
+                ceiling.ray_traced_reflections,
+            ),
+            (SettingKey::Ssgi, ceiling.ssgi),
+            (SettingKey::AutoExposure, ceiling.auto_exposure),
         ] {
             if !allowed {
                 gsys::set_quality_toggle(&mut self.post_config, key, false);
@@ -119,13 +123,13 @@ impl SettingsState {
     // value-label ids; the menu's HitRegions are drained after init, so they
     // cannot be re-queried here.
     fn relabel_preset_dependents(&self, ctx: &mut PipelineContext) {
-        for key in settings::QUALITY_TOGGLE_KEYS {
+        for key in SettingKey::QUALITY_TOGGLES {
             let on = gsys::quality_toggle_on(&self.post_config, key).unwrap_or(false);
             self.relabel_option(ctx, key, on as usize);
         }
         self.relabel_option(
             ctx,
-            "render_scale",
+            SettingKey::RenderScale,
             settings::render_scale_index(self.render_scale),
         );
         for key in settings::QUALITY_CYCLE_KEYS {
@@ -135,29 +139,32 @@ impl SettingsState {
         }
         for (key, idx) in [
             (
-                "shadow_map_size",
+                SettingKey::ShadowMapSize,
                 settings::shadow_resolution_index(self.shadow_map_size),
             ),
             (
-                "shadow_update",
+                SettingKey::ShadowUpdate,
                 settings::shadow_update_index(self.shadow_update),
             ),
             (
-                "shadow_distance",
+                SettingKey::ShadowDistance,
                 settings::shadow_distance_index(self.shadow_distance),
             ),
             (
-                "shadow_cascades",
+                SettingKey::ShadowCascades,
                 settings::shadow_cascades_index(self.shadow_cascades),
             ),
-            ("anisotropy", settings::anisotropy_index(self.anisotropy)),
+            (
+                SettingKey::Anisotropy,
+                settings::anisotropy_index(self.anisotropy),
+            ),
         ] {
             self.relabel_option(ctx, key, idx);
         }
     }
 
     // Set a captured cycle row's value label to its option at `index`.
-    fn relabel_option(&self, ctx: &mut PipelineContext, key: &str, index: usize) {
+    fn relabel_option(&self, ctx: &mut PipelineContext, key: SettingKey, index: usize) {
         if let Some(text) = settings::options(key).and_then(|o| o.get(index).copied()) {
             set_cached_row_label(&self.cycle_value_labels, ctx, key, text);
         }
@@ -174,18 +181,18 @@ impl SettingsState {
         cmd: &SettingCommand,
         opts: RowOptions,
     ) -> &'static str {
-        let key = cmd.setting.as_str();
+        let key = cmd.setting;
         let cur = gsys::quality_toggle_on(&self.post_config, key).unwrap_or(false);
         let next = settings::cycle(cur as usize, opts.len(), cmd.op);
         let on = next == 1;
         gsys::set_quality_toggle(&mut self.post_config, key, on);
         match key {
-            "ssao" => cfg.graphics.ssao = Some(on),
-            "ssr" => cfg.graphics.ssr = Some(on),
-            "ray_traced_reflections" => cfg.graphics.ray_traced_reflections = Some(on),
-            "ssgi" => cfg.graphics.ssgi = Some(on),
-            "auto_exposure" => cfg.graphics.auto_exposure = Some(on),
-            other => tracing::warn!("SettingsSystem: no persisted field for '{other}'"),
+            SettingKey::Ssao => cfg.graphics.ssao = Some(on),
+            SettingKey::Ssr => cfg.graphics.ssr = Some(on),
+            SettingKey::RayTracedReflections => cfg.graphics.ray_traced_reflections = Some(on),
+            SettingKey::Ssgi => cfg.graphics.ssgi = Some(on),
+            SettingKey::AutoExposure => cfg.graphics.auto_exposure = Some(on),
+            other => tracing::warn!("SettingsSystem: no persisted field for {other:?}"),
         }
         self.opt_out_of_preset(ctx, cfg);
         let quality = gsys::derive_quality_settings(&self.post_config);
@@ -194,7 +201,7 @@ impl SettingsState {
         // it runs, so its copy freezes at the last adapted value once toggled
         // off. Re-push the static params (the authored / slider EV) so exposure
         // reverts; on a toggle-on the AE loop overwrites it next frame.
-        if key == "auto_exposure" {
+        if key == SettingKey::AutoExposure {
             let params = self.post_process;
             ops.record(move |backend| backend.update_post_process(params));
         }
@@ -212,27 +219,27 @@ impl SettingsState {
         cmd: &SettingCommand,
         opts: RowOptions,
     ) -> &'static str {
-        let key = cmd.setting.as_str();
+        let key = cmd.setting;
         let cur = gsys::quality_cycle_index(&self.post_config, key).unwrap_or(0);
         let next = settings::cycle(cur, opts.len(), cmd.op);
         gsys::set_quality_cycle(&mut self.post_config, key, next);
         let post = &self.post_config;
         match key {
-            "aa_mode" => cfg.graphics.aa_mode = Some(post.aa_mode),
-            "ssgi_resolution" => cfg.graphics.ssgi_resolution = Some(post.ssgi_resolution),
-            "ssgi_rays" => cfg.graphics.ssgi_rays = Some(post.ssgi_rays),
-            "ssgi_steps" => cfg.graphics.ssgi_steps = Some(post.ssgi_steps),
-            "reflection_blur_resolution" => {
+            SettingKey::AaMode => cfg.graphics.aa_mode = Some(post.aa_mode),
+            SettingKey::SsgiResolution => cfg.graphics.ssgi_resolution = Some(post.ssgi_resolution),
+            SettingKey::SsgiRays => cfg.graphics.ssgi_rays = Some(post.ssgi_rays),
+            SettingKey::SsgiSteps => cfg.graphics.ssgi_steps = Some(post.ssgi_steps),
+            SettingKey::ReflectionBlurResolution => {
                 cfg.graphics.reflection_blur_resolution = Some(post.reflection_blur_resolution)
             }
-            other => tracing::warn!("SettingsSystem: no persisted field for '{other}'"),
+            other => tracing::warn!("SettingsSystem: no persisted field for {other:?}"),
         }
         self.opt_out_of_preset(ctx, cfg);
         let quality = gsys::derive_quality_settings(&self.post_config);
         record_quality_apply(ops, quality);
         // The AA mode also drives the composite FXAA flag, which rides
         // PostProcessParams rather than the rebuild above.
-        if key == "aa_mode" {
+        if key == SettingKey::AaMode {
             self.post_process.fxaa = self.post_config.aa_mode.fxaa_flag();
             let params = self.post_process;
             ops.record(move |backend| backend.update_post_process(params));
@@ -248,7 +255,7 @@ impl SettingsState {
         set_cached_row_label(
             &self.cycle_value_labels,
             ctx,
-            "graphics_quality",
+            SettingKey::GraphicsQuality,
             self.quality_preset.name(),
         );
     }

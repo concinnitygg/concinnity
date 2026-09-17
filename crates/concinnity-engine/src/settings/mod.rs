@@ -8,11 +8,11 @@ pub(crate) mod action;
 // The engine-side registry of user-facing settings a cycle row can change. The
 // ordered option labels live in `concinnity_core::settings` (shared with
 // the build pipeline, which reads a key's label count to pick a stepper vs a
-// dropdown); this module re-exports `options` + `is_quality_toggle` from there
+// dropdown); this module re-exports `options` + `SettingKey` from there
 // and holds the client-only half: how a chosen option index maps to the applied
 // value (the `*_at` / `*_index` pairs), the `SLIDERS` table, and the cycle
 // math. How a chosen option is applied (which backend call, which persisted
-// field) lives in SettingsSystem's drain, keyed by the same string.
+// field) lives in SettingsSystem's drain, keyed by the same `SettingKey`.
 
 use concinnity_core::components::{
     AaMode, ControlsCommand, PostProcessConfig, ReflectionBlurResolution, SettingOp, ShadowUpdate,
@@ -27,7 +27,7 @@ use crate::config::{GraphicsSettings, Settings};
 // (labels + classification) lives in core so the cook and the client agree on
 // every setting's option count, and is re-exported here alongside the
 // client-only half below.
-pub(crate) use concinnity_core::settings::{QUALITY_TOGGLE_KEYS, is_quality_toggle, options};
+pub(crate) use concinnity_core::settings::{SettingKey, options};
 
 // Whether setting `key` can be changed on a device with the given capabilities.
 // A capability-gated setting (e.g. `ray_traced_reflections`, which needs
@@ -35,12 +35,12 @@ pub(crate) use concinnity_core::settings::{QUALITY_TOGGLE_KEYS, is_quality_toggl
 // every other setting is always available. The settings menu grays out and
 // disables an unavailable row. This is the one place to gate a future
 // capability-dependent toggle.
-pub(crate) fn setting_available(key: &str, caps: &backend::DeviceCapabilities) -> bool {
+pub(crate) fn setting_available(key: SettingKey, caps: &backend::DeviceCapabilities) -> bool {
     match key {
-        "ray_traced_reflections" => caps.ray_tracing,
+        SettingKey::RayTracedReflections => caps.ray_tracing,
         // The upscaler selector (FSR3 / DLSS / XeSS) grays out on a device whose
         // upscaler is fixed, rather than offering a dead selection.
-        "upscale_backend" => caps.selectable_upscaler,
+        SettingKey::UpscaleBackend => caps.selectable_upscaler,
         _ => true,
     }
 }
@@ -69,16 +69,16 @@ const TEXTURE_QUALITY_CAPS: [u32; 4] = [48, 96, 192, 384];
 const TEXTURE_QUALITY_BUDGETS: [u32; 4] = [2, 4, 8, 12];
 
 // The cycle (dropdown) quality knobs governed by the preset ceiling like the
-// boolean QUALITY_TOGGLE_KEYS. Each rides the feature's live-reinit rebuild
+// boolean `SettingKey::QUALITY_TOGGLES`. Each rides the feature's live-reinit rebuild
 // (`apply_quality_settings`) -- the sub-tunable travels in its settings payload,
 // so no new backend method is needed. `GraphicsSystem` maps each key to the
 // `PostProcessConfig` field it cycles.
-pub(crate) const QUALITY_CYCLE_KEYS: [&str; 5] = [
-    "aa_mode",
-    "ssgi_resolution",
-    "ssgi_rays",
-    "ssgi_steps",
-    "reflection_blur_resolution",
+pub(crate) const QUALITY_CYCLE_KEYS: [SettingKey; 5] = [
+    SettingKey::AaMode,
+    SettingKey::SsgiResolution,
+    SettingKey::SsgiRays,
+    SettingKey::SsgiSteps,
+    SettingKey::ReflectionBlurResolution,
 ];
 
 // Volume gains shared by the master and per-bus rows, one per option index
@@ -444,7 +444,7 @@ pub(crate) enum SliderTarget {
 }
 
 pub(crate) struct SliderSetting {
-    pub(crate) key: &'static str,
+    pub(crate) key: SettingKey,
     // The (min, max) user-facing value range.
     pub(crate) range: (f32, f32),
     // User-facing value to applied value, clamped to the engine's domain. Shared
@@ -513,7 +513,7 @@ impl SliderSetting {
 }
 
 // The slider entry for `key`, or `None` if the key is not a slider setting.
-pub(crate) fn slider(key: &str) -> Option<&'static SliderSetting> {
+pub(crate) fn slider(key: SettingKey) -> Option<&'static SliderSetting> {
     SLIDERS.iter().find(|s| s.key == key)
 }
 
@@ -553,7 +553,7 @@ fn hundred_scale_from(stored: f32, min: f32, max: f32) -> f32 {
 pub(crate) static SLIDERS: [SliderSetting; 20] = [
     // Authored in EV (centered on neutral), applied as the multiplier 2^ev.
     SliderSetting {
-        key: "exposure",
+        key: SettingKey::Exposure,
         range: (-3.0, 3.0),
         apply: |v| v.clamp(-16.0, 16.0).exp2(),
         // Guard log2(0); the slider range keeps the multiplier well above this.
@@ -565,7 +565,7 @@ pub(crate) static SLIDERS: [SliderSetting; 20] = [
         },
     },
     SliderSetting {
-        key: "bloom_intensity",
+        key: SettingKey::BloomIntensity,
         range: (0.0, 2.0),
         apply: |v| v.max(0.0),
         recover: identity,
@@ -576,7 +576,7 @@ pub(crate) static SLIDERS: [SliderSetting; 20] = [
         },
     },
     SliderSetting {
-        key: "bloom_threshold",
+        key: SettingKey::BloomThreshold,
         range: (0.0, 4.0),
         apply: |v| v.max(0.0),
         recover: identity,
@@ -587,7 +587,7 @@ pub(crate) static SLIDERS: [SliderSetting; 20] = [
         },
     },
     SliderSetting {
-        key: "vignette",
+        key: SettingKey::Vignette,
         range: (0.0, 1.0),
         apply: |v| v.clamp(0.0, 1.0),
         recover: identity,
@@ -598,7 +598,7 @@ pub(crate) static SLIDERS: [SliderSetting; 20] = [
         },
     },
     SliderSetting {
-        key: "lut_strength",
+        key: SettingKey::LutStrength,
         range: (0.0, 1.0),
         apply: |v| v.clamp(0.0, 1.0),
         recover: identity,
@@ -609,7 +609,7 @@ pub(crate) static SLIDERS: [SliderSetting; 20] = [
         },
     },
     SliderSetting {
-        key: "ambient_intensity",
+        key: SettingKey::AmbientIntensity,
         range: (0.0, 4.0),
         apply: |v| v.clamp(0.0, 16.0),
         recover: identity,
@@ -621,7 +621,7 @@ pub(crate) static SLIDERS: [SliderSetting; 20] = [
     // Soft-knee width below the bloom threshold, lower-bounded like the other
     // bloom params.
     SliderSetting {
-        key: "bloom_knee",
+        key: SettingKey::BloomKnee,
         range: (0.0, 1.0),
         apply: |v| v.max(0.0),
         recover: identity,
@@ -632,7 +632,7 @@ pub(crate) static SLIDERS: [SliderSetting; 20] = [
         },
     },
     SliderSetting {
-        key: "ssao_radius",
+        key: SettingKey::SsaoRadius,
         range: (0.05, 2.0),
         apply: |v| v.max(1.0e-3),
         recover: identity,
@@ -643,7 +643,7 @@ pub(crate) static SLIDERS: [SliderSetting; 20] = [
         },
     },
     SliderSetting {
-        key: "ssao_intensity",
+        key: SettingKey::SsaoIntensity,
         range: (0.0, 4.0),
         apply: |v| v.clamp(0.0, 4.0),
         recover: identity,
@@ -654,7 +654,7 @@ pub(crate) static SLIDERS: [SliderSetting; 20] = [
         },
     },
     SliderSetting {
-        key: "ssr_intensity",
+        key: SettingKey::SsrIntensity,
         range: (0.0, 1.0),
         apply: |v| v.clamp(0.0, 1.0),
         recover: identity,
@@ -665,7 +665,7 @@ pub(crate) static SLIDERS: [SliderSetting; 20] = [
         },
     },
     SliderSetting {
-        key: "ssr_max_distance",
+        key: SettingKey::SsrMaxDistance,
         range: (1.0, 200.0),
         apply: |v| v.clamp(1.0, 200.0),
         recover: identity,
@@ -676,7 +676,7 @@ pub(crate) static SLIDERS: [SliderSetting; 20] = [
         },
     },
     SliderSetting {
-        key: "ssgi_intensity",
+        key: SettingKey::SsgiIntensity,
         range: (0.0, 4.0),
         apply: |v| v.clamp(0.0, 4.0),
         recover: identity,
@@ -687,7 +687,7 @@ pub(crate) static SLIDERS: [SliderSetting; 20] = [
         },
     },
     SliderSetting {
-        key: "ssgi_max_distance",
+        key: SettingKey::SsgiMaxDistance,
         range: (0.5, 40.0),
         apply: |v| v.clamp(0.5, 100.0),
         recover: identity,
@@ -700,7 +700,7 @@ pub(crate) static SLIDERS: [SliderSetting; 20] = [
     // The resolve also orders the EV bounds (min <= max) when the config is
     // resolved.
     SliderSetting {
-        key: "auto_exposure_min_ev",
+        key: SettingKey::AutoExposureMinEv,
         range: (-16.0, 16.0),
         apply: |v| v.clamp(-16.0, 16.0),
         recover: identity,
@@ -711,7 +711,7 @@ pub(crate) static SLIDERS: [SliderSetting; 20] = [
         },
     },
     SliderSetting {
-        key: "auto_exposure_max_ev",
+        key: SettingKey::AutoExposureMaxEv,
         range: (-16.0, 16.0),
         apply: |v| v.clamp(-16.0, 16.0),
         recover: identity,
@@ -722,7 +722,7 @@ pub(crate) static SLIDERS: [SliderSetting; 20] = [
         },
     },
     SliderSetting {
-        key: "auto_exposure_speed",
+        key: SettingKey::AutoExposureSpeed,
         range: (0.1, 6.0),
         apply: |v| v.clamp(1.0e-3, 20.0),
         recover: identity,
@@ -733,7 +733,7 @@ pub(crate) static SLIDERS: [SliderSetting; 20] = [
         },
     },
     SliderSetting {
-        key: "mouse_sensitivity",
+        key: SettingKey::MouseSensitivity,
         range: (1.0, 100.0),
         apply: |v| hundred_scale_to(v, MOUSE_SENS_MIN, MOUSE_SENS_MAX),
         recover: |stored| hundred_scale_from(stored, MOUSE_SENS_MIN, MOUSE_SENS_MAX),
@@ -748,7 +748,7 @@ pub(crate) static SLIDERS: [SliderSetting; 20] = [
         },
     },
     SliderSetting {
-        key: "gamepad_look_sensitivity",
+        key: SettingKey::GamepadLookSensitivity,
         range: (1.0, 100.0),
         apply: |v| hundred_scale_to(v, GAMEPAD_LOOK_MIN, GAMEPAD_LOOK_MAX),
         recover: |stored| hundred_scale_from(stored, GAMEPAD_LOOK_MIN, GAMEPAD_LOOK_MAX),
@@ -765,7 +765,7 @@ pub(crate) static SLIDERS: [SliderSetting; 20] = [
     // Shown as a percentage of stick deflection, stored as the fraction the
     // radial deadzone consumes.
     SliderSetting {
-        key: "gamepad_deadzone",
+        key: SettingKey::GamepadDeadzone,
         range: (0.0, 40.0),
         apply: |v| v.clamp(0.0, 40.0) / 100.0,
         recover: |stored| stored * 100.0,
@@ -782,7 +782,7 @@ pub(crate) static SLIDERS: [SliderSetting; 20] = [
     // A vertical FOV in degrees applied to every Camera3D, so apply only clamps.
     // Persisted in the graphics store alongside the look sliders.
     SliderSetting {
-        key: "fov",
+        key: SettingKey::Fov,
         range: (50.0, 100.0),
         apply: |v| v.clamp(50.0, 100.0),
         recover: identity,
@@ -804,27 +804,26 @@ mod tests {
 
     #[test]
     fn vsync_options_are_off_then_on() {
-        assert_eq!(options("vsync"), Some(&["Off", "On"][..]));
+        assert_eq!(options(SettingKey::Vsync), Some(&["Off", "On"][..]));
     }
 
     #[test]
     fn stats_hud_toggles_are_off_then_on() {
         // The "Display performance stats" master and its per-readout sub-toggles
         // are plain Off/On cycle rows (index 0 = Off, 1 = On, like vsync).
-        for key in ["perf_stats", "show_fps", "show_vram"] {
-            assert_eq!(options(key), Some(&["Off", "On"][..]), "{key}");
+        for key in [
+            SettingKey::PerfStats,
+            SettingKey::ShowFps,
+            SettingKey::ShowVram,
+        ] {
+            assert_eq!(options(key), Some(&["Off", "On"][..]), "{key:?}");
             // Both are available regardless of GPU capability (not gated).
             let caps = backend::DeviceCapabilities {
                 ray_tracing: false,
                 ..backend::DeviceCapabilities::ALL
             };
-            assert!(setting_available(key, &caps), "{key}");
+            assert!(setting_available(key, &caps), "{key:?}");
         }
-    }
-
-    #[test]
-    fn unknown_key_has_no_options() {
-        assert!(options("does_not_exist").is_none());
     }
 
     #[test]
@@ -833,7 +832,7 @@ mod tests {
         // The master row's labels (in core's registry) must line up 1:1 with the
         // preset cycle order, so an index from `preset_index` selects the right
         // label and vice versa.
-        let labels = options("graphics_quality").expect("graphics_quality options");
+        let labels = options(SettingKey::GraphicsQuality).expect("graphics_quality options");
         assert_eq!(labels.len(), QualityPreset::ALL.len());
         for (i, p) in QualityPreset::ALL.iter().enumerate() {
             assert_eq!(labels[i], p.name(), "label {i}");
@@ -842,16 +841,18 @@ mod tests {
 
     #[test]
     fn quality_toggles_are_off_then_on_and_classified() {
-        for key in QUALITY_TOGGLE_KEYS {
-            assert!(is_quality_toggle(key), "{key} should classify as a toggle");
-            assert_eq!(options(key), Some(&["Off", "On"][..]), "{key} options");
+        for key in SettingKey::QUALITY_TOGGLES {
+            assert!(
+                key.is_quality_toggle(),
+                "{key:?} should classify as a toggle"
+            );
+            assert_eq!(options(key), Some(&["Off", "On"][..]), "{key:?} options");
             // A quality toggle is a cycle row, never a slider.
-            assert!(slider(key).is_none(), "{key} should not be a slider");
+            assert!(slider(key).is_none(), "{key:?} should not be a slider");
         }
         // Non-toggle keys are not misclassified.
-        assert!(!is_quality_toggle("vsync"));
-        assert!(!is_quality_toggle("exposure"));
-        assert!(!is_quality_toggle("nope"));
+        assert!(!SettingKey::Vsync.is_quality_toggle());
+        assert!(!SettingKey::Exposure.is_quality_toggle());
     }
 
     #[test]
@@ -860,9 +861,9 @@ mod tests {
         // A rebind key is neither a cycle row nor a slider, so the three setting
         // categories never collide on one key.
         for b in Bindable::ALL {
-            let key = b.setting_key();
-            assert!(options(key).is_none(), "{key} should not be a cycle row");
-            assert!(slider(key).is_none(), "{key} should not be a slider");
+            let key = SettingKey::KeyRebind(b);
+            assert!(options(key).is_none(), "{key:?} should not be a cycle row");
+            assert!(slider(key).is_none(), "{key:?} should not be a slider");
         }
     }
 
@@ -878,18 +879,31 @@ mod tests {
             ..DeviceCapabilities::ALL
         };
         // RT reflections follow the device's ray-tracing capability.
-        assert!(setting_available("ray_traced_reflections", &capable));
-        assert!(!setting_available("ray_traced_reflections", &incapable));
+        assert!(setting_available(
+            SettingKey::RayTracedReflections,
+            &capable
+        ));
+        assert!(!setting_available(
+            SettingKey::RayTracedReflections,
+            &incapable
+        ));
         // Every other setting is always available, regardless of capability.
-        for key in ["vsync", "aa_mode", "ssao", "ssr", "ssgi", "auto_exposure"] {
+        for key in [
+            SettingKey::Vsync,
+            SettingKey::AaMode,
+            SettingKey::Ssao,
+            SettingKey::Ssr,
+            SettingKey::Ssgi,
+            SettingKey::AutoExposure,
+        ] {
             assert!(
                 setting_available(key, &incapable),
-                "{key} should be available"
+                "{key:?} should be available"
             );
         }
         // The default reports every capability present.
         assert!(setting_available(
-            "ray_traced_reflections",
+            SettingKey::RayTracedReflections,
             &DeviceCapabilities::default()
         ));
     }
@@ -905,14 +919,17 @@ mod tests {
             assert_eq!(aa_mode_index(mode), i);
             assert_eq!(aa_mode_at(i), mode);
         }
-        assert_eq!(options("aa_mode").unwrap().len(), 3);
+        assert_eq!(options(SettingKey::AaMode).unwrap().len(), 3);
         // An out-of-range index falls back to the FXAA default.
         assert_eq!(aa_mode_at(9), AaMode::Fxaa);
     }
 
     #[test]
     fn fps_cap_round_trips_and_snaps() {
-        assert_eq!(options("fps_cap").unwrap().len(), FPS_CAP_VALUES.len());
+        assert_eq!(
+            options(SettingKey::FpsCap).unwrap().len(),
+            FPS_CAP_VALUES.len()
+        );
         for (i, &cap) in FPS_CAP_VALUES.iter().enumerate() {
             assert_eq!(fps_cap_index(cap), i);
             assert_eq!(fps_cap_at(i), cap);
@@ -954,16 +971,18 @@ mod tests {
 
     #[test]
     fn known_settings_have_options() {
-        assert_eq!(options("window_mode").unwrap().len(), 3);
-        assert_eq!(options("render_scale").unwrap().len(), 4);
+        assert_eq!(options(SettingKey::WindowMode).unwrap().len(), 3);
+        assert_eq!(options(SettingKey::RenderScale).unwrap().len(), 4);
         // resolution is a dynamic dropdown: options are enumerated from the
         // display at runtime, so the static registry has none for it.
-        assert!(options("resolution").is_none());
-        assert!(concinnity_core::settings::is_dynamic_dropdown("resolution"));
-        assert_eq!(options("master_volume").unwrap().len(), 5);
+        assert!(options(SettingKey::Resolution).is_none());
+        assert!(concinnity_core::settings::is_dynamic_dropdown(
+            SettingKey::Resolution
+        ));
+        assert_eq!(options(SettingKey::MasterVolume).unwrap().len(), 5);
         // mouse_sensitivity is a slider, not a cycle row.
-        assert!(options("mouse_sensitivity").is_none());
-        assert!(slider("mouse_sensitivity").is_some());
+        assert!(options(SettingKey::MouseSensitivity).is_none());
+        assert!(slider(SettingKey::MouseSensitivity).is_some());
     }
 
     #[test]
@@ -979,9 +998,9 @@ mod tests {
 
     #[test]
     fn mouse_sensitivity_is_a_slider_1_to_100() {
-        let s = slider("mouse_sensitivity").expect("a slider");
+        let s = slider(SettingKey::MouseSensitivity).expect("a slider");
         assert_eq!(s.range, (1.0, 100.0));
-        assert!(options("mouse_sensitivity").is_none());
+        assert!(options(SettingKey::MouseSensitivity).is_none());
         // The 1..100 UI value maps linearly to radians/pixel and back.
         for &ui in &[1.0_f32, 25.0, 50.0, 100.0] {
             let stored = (s.apply)(ui);
@@ -1003,9 +1022,9 @@ mod tests {
 
     #[test]
     fn fov_is_a_degrees_slider() {
-        let s = slider("fov").expect("a slider");
+        let s = slider(SettingKey::Fov).expect("a slider");
         assert_eq!(s.range, (50.0, 100.0));
-        assert!(options("fov").is_none());
+        assert!(options(SettingKey::Fov).is_none());
         // The slider value IS the degrees: apply only clamps, recover is identity.
         for &deg in &[50.0_f32, 75.0, 100.0] {
             let stored = (s.apply)(deg);
@@ -1051,9 +1070,13 @@ mod tests {
         assert_eq!(ssgi_rays_index(20), 2); // 20 -> 16
         assert_eq!(ssgi_steps_index(40), 3); // 40 -> 48
         // The three SSGI sub-quality keys are cycle rows, not sliders.
-        for key in ["ssgi_resolution", "ssgi_rays", "ssgi_steps"] {
-            assert!(options(key).is_some(), "{key} should be a cycle row");
-            assert!(slider(key).is_none(), "{key} should not be a slider");
+        for key in [
+            SettingKey::SsgiResolution,
+            SettingKey::SsgiRays,
+            SettingKey::SsgiSteps,
+        ] {
+            assert!(options(key).is_some(), "{key:?} should be a cycle row");
+            assert!(slider(key).is_none(), "{key:?} should not be a slider");
         }
     }
 
@@ -1068,23 +1091,27 @@ mod tests {
         }
         // It is registered as a cycle row + a governed cycle quality knob.
         assert_eq!(
-            options("reflection_blur_resolution").map(|o| o.len()),
+            options(SettingKey::ReflectionBlurResolution).map(|o| o.len()),
             Some(3)
         );
-        assert!(QUALITY_CYCLE_KEYS.contains(&"reflection_blur_resolution"));
+        assert!(QUALITY_CYCLE_KEYS.contains(&SettingKey::ReflectionBlurResolution));
     }
 
     #[test]
     fn display_toggles_are_off_on_cycle_rows() {
         // The display-output / upscaling preferences are Off/On cycle rows, and
         // are NOT quality knobs (independent of the preset ceiling).
-        for key in ["temporal_upscaling", "hdr_display", "hdr_pq"] {
-            assert_eq!(options(key), Some(&["Off", "On"][..]), "{key} options");
-            assert!(slider(key).is_none(), "{key} should not be a slider");
-            assert!(!is_quality_toggle(key), "{key} is not a quality toggle");
+        for key in [
+            SettingKey::TemporalUpscaling,
+            SettingKey::HdrDisplay,
+            SettingKey::HdrPq,
+        ] {
+            assert_eq!(options(key), Some(&["Off", "On"][..]), "{key:?} options");
+            assert!(slider(key).is_none(), "{key:?} should not be a slider");
+            assert!(!key.is_quality_toggle(), "{key:?} is not a quality toggle");
             assert!(
                 !QUALITY_CYCLE_KEYS.contains(&key),
-                "{key} is not a quality cycle knob"
+                "{key:?} is not a quality cycle knob"
             );
         }
     }
@@ -1103,8 +1130,8 @@ mod tests {
         assert_eq!(shadow_resolution_index(1500), 1); // 1500 -> 1024
         assert_eq!(shadow_resolution_index(8192), 3); // 8192 -> 4096
         // It is a cycle row, not a slider.
-        assert!(options("shadow_map_size").is_some());
-        assert!(slider("shadow_map_size").is_none());
+        assert!(options(SettingKey::ShadowMapSize).is_some());
+        assert!(slider(SettingKey::ShadowMapSize).is_none());
     }
 
     #[test]
@@ -1121,8 +1148,8 @@ mod tests {
         assert_eq!(anisotropy_index(3), 1); // 3 -> 2x
         assert_eq!(anisotropy_index(32), 4); // 32 -> 16x
         // It is a cycle row, not a slider.
-        assert!(options("anisotropy").is_some());
-        assert!(slider("anisotropy").is_none());
+        assert!(options(SettingKey::Anisotropy).is_some());
+        assert!(slider(SettingKey::Anisotropy).is_none());
     }
 
     #[test]
@@ -1139,8 +1166,8 @@ mod tests {
         assert_eq!(shadow_distance_index(50), 0); // 50 -> 40
         assert_eq!(shadow_distance_index(1000), 3); // 1000 -> 320
         // It is a cycle row, not a slider.
-        assert!(options("shadow_distance").is_some());
-        assert!(slider("shadow_distance").is_none());
+        assert!(options(SettingKey::ShadowDistance).is_some());
+        assert!(slider(SettingKey::ShadowDistance).is_none());
     }
 
     #[test]
@@ -1154,8 +1181,8 @@ mod tests {
         assert_eq!(shadow_cascades_at(9), 4);
         // An authored count off the levels snaps to the nearest.
         assert_eq!(shadow_cascades_index(1), 0); // 1 -> 2
-        assert!(options("shadow_cascades").is_some());
-        assert!(slider("shadow_cascades").is_none());
+        assert!(options(SettingKey::ShadowCascades).is_some());
+        assert!(slider(SettingKey::ShadowCascades).is_none());
     }
 
     #[test]
@@ -1165,7 +1192,7 @@ mod tests {
         }
         // EveryFrame leads the cycle (best / most expensive first).
         assert_eq!(shadow_update_at(0), ShadowUpdate::EveryFrame);
-        assert_eq!(options("shadow_update").map(|o| o.len()), Some(2));
+        assert_eq!(options(SettingKey::ShadowUpdate).map(|o| o.len()), Some(2));
     }
 
     #[test]
@@ -1176,7 +1203,7 @@ mod tests {
         assert_eq!(frames_in_flight_at(0), 1);
         // An out-of-range depth snaps to the nearest level.
         assert_eq!(frames_in_flight_index(4), 2); // 4 -> 3
-        assert!(options("frames_in_flight").is_some());
+        assert!(options(SettingKey::FramesInFlight).is_some());
     }
 
     #[test]
@@ -1194,9 +1221,12 @@ mod tests {
         assert_eq!(texture_quality_index(96), 1);
         assert_eq!(texture_quality_index(300), 3); // 300 -> 384 (Ultra)
         // occlusion_two_pass is an Off/On row, not a slider or preset knob.
-        assert_eq!(options("occlusion_two_pass"), Some(&["Off", "On"][..]));
-        assert!(slider("occlusion_two_pass").is_none());
-        assert!(!is_quality_toggle("occlusion_two_pass"));
+        assert_eq!(
+            options(SettingKey::OcclusionTwoPass),
+            Some(&["Off", "On"][..])
+        );
+        assert!(slider(SettingKey::OcclusionTwoPass).is_none());
+        assert!(!SettingKey::OcclusionTwoPass.is_quality_toggle());
     }
 
     #[test]
@@ -1215,7 +1245,7 @@ mod tests {
     fn upscale_backend_round_trips_and_vendor_gates() {
         // Every variant round-trips through its index, and the option table lines
         // up with the four variants.
-        assert_eq!(options("upscale_backend").unwrap().len(), 4);
+        assert_eq!(options(SettingKey::UpscaleBackend).unwrap().len(), 4);
         for b in [
             UpscalerBackend::Auto,
             UpscalerBackend::Fsr3,
@@ -1225,8 +1255,8 @@ mod tests {
             assert_eq!(upscale_backend_at(upscale_backend_index(b)), b);
         }
         // It is a cycle row, not a slider.
-        assert!(options("upscale_backend").is_some());
-        assert!(slider("upscale_backend").is_none());
+        assert!(options(SettingKey::UpscaleBackend).is_some());
+        assert!(slider(SettingKey::UpscaleBackend).is_none());
         // Auto / FSR3 are offered on every vendor; DLSS is NVIDIA-only and XeSS
         // is Intel-only, so the menu cycle skips them elsewhere. Auto / FSR3 stay
         // available even on an Unknown (Other) GPU, so the skip loop always
@@ -1260,11 +1290,11 @@ mod tests {
         // The whole row is capability-gated: a device that offers a choice of
         // upscaler keeps it, one with a fixed upscaler grays it out.
         assert!(setting_available(
-            "upscale_backend",
+            SettingKey::UpscaleBackend,
             &backend::DeviceCapabilities::ALL
         ));
         assert!(!setting_available(
-            "upscale_backend",
+            SettingKey::UpscaleBackend,
             &backend::DeviceCapabilities {
                 selectable_upscaler: false,
                 ..backend::DeviceCapabilities::ALL
@@ -1275,15 +1305,14 @@ mod tests {
     #[test]
     fn exposure_is_a_slider_not_a_cycle() {
         // A slider key has a table entry and no cycle option list, and vice versa.
-        assert!(slider("exposure").is_some());
-        assert!(options("exposure").is_none());
-        assert!(slider("vsync").is_none());
-        assert!(slider("nope").is_none());
+        assert!(slider(SettingKey::Exposure).is_some());
+        assert!(options(SettingKey::Exposure).is_none());
+        assert!(slider(SettingKey::Vsync).is_none());
     }
 
     #[test]
     fn slider_value_and_fraction_round_trip() {
-        let exposure = slider("exposure").unwrap();
+        let exposure = slider(SettingKey::Exposure).unwrap();
         assert_eq!(exposure.value_at(0.0), -3.0);
         assert_eq!(exposure.value_at(1.0), 3.0);
         assert_eq!(exposure.value_at(0.5), 0.0);
@@ -1296,7 +1325,7 @@ mod tests {
 
     #[test]
     fn slider_fraction_clamps_out_of_range() {
-        let exposure = slider("exposure").unwrap();
+        let exposure = slider(SettingKey::Exposure).unwrap();
         // A value past either end pins the handle to that end.
         assert_eq!(exposure.fraction(-100.0), 0.0);
         assert_eq!(exposure.fraction(100.0), 1.0);
@@ -1306,7 +1335,7 @@ mod tests {
 
     #[test]
     fn exposure_value_is_formatted_in_stops() {
-        let format = slider("exposure").unwrap().format;
+        let format = slider(SettingKey::Exposure).unwrap().format;
         assert_eq!(format(0.0), "+0.0 EV");
         assert_eq!(format(1.5), "+1.5 EV");
         assert_eq!(format(-2.0), "-2.0 EV");
@@ -1318,19 +1347,19 @@ mod tests {
     fn sliders_have_unique_keys_and_valid_ranges() {
         let mut seen = std::collections::HashSet::new();
         for s in &SLIDERS {
-            assert!(seen.insert(s.key), "{} is listed twice", s.key);
-            assert!(std::ptr::eq(slider(s.key).unwrap(), s), "{}", s.key);
-            assert!(s.range.0 < s.range.1, "{} range must be non-empty", s.key);
+            assert!(seen.insert(s.key), "{:?} is listed twice", s.key);
+            assert!(std::ptr::eq(slider(s.key).unwrap(), s), "{:?}", s.key);
+            assert!(s.range.0 < s.range.1, "{:?} range must be non-empty", s.key);
             assert!(
                 options(s.key).is_none(),
-                "{} should not be a cycle row",
+                "{:?} should not be a cycle row",
                 s.key
             );
             assert_eq!(s.value_at(0.0), s.range.0);
             assert_eq!(s.value_at(1.0), s.range.1);
             for &f in &[0.0_f32, 0.25, 0.5, 0.75, 1.0] {
                 let back = s.fraction(s.value_at(f));
-                assert!((back - f).abs() < 1.0e-5, "{}: f={f} -> {back}", s.key);
+                assert!((back - f).abs() < 1.0e-5, "{:?}: f={f} -> {back}", s.key);
             }
         }
     }
@@ -1345,7 +1374,7 @@ mod tests {
                 let recovered = (s.recover)((s.apply)(v));
                 assert!(
                     (recovered - v).abs() < 1.0e-3,
-                    "{}: v={v} recovered={recovered}",
+                    "{:?}: v={v} recovered={recovered}",
                     s.key
                 );
             }
@@ -1392,12 +1421,12 @@ mod tests {
                 SliderTarget::Controls { persisted, .. } => (None, *(persisted.get)(&cfg)),
             };
             if let Some(v) = live {
-                assert_eq!(v, marker(i), "{} shares its live field", s.key);
+                assert_eq!(v, marker(i), "{:?} shares its live field", s.key);
             }
             assert_eq!(
                 persisted,
                 Some(marker(i)),
-                "{} shares its persisted field",
+                "{:?} shares its persisted field",
                 s.key
             );
         }
@@ -1408,14 +1437,16 @@ mod tests {
     #[test]
     fn persist_keeps_ui_values_for_render_sliders_and_applied_values_for_controls() {
         let mut cfg = Settings::default();
-        slider("exposure").unwrap().persist(&mut cfg, 2.0);
+        slider(SettingKey::Exposure).unwrap().persist(&mut cfg, 2.0);
         assert_eq!(cfg.graphics.exposure_ev, Some(2.0));
-        slider("ambient_intensity").unwrap().persist(&mut cfg, 1.5);
+        slider(SettingKey::AmbientIntensity)
+            .unwrap()
+            .persist(&mut cfg, 1.5);
         assert_eq!(cfg.graphics.ambient_intensity, Some(1.5));
-        let mouse = slider("mouse_sensitivity").unwrap();
+        let mouse = slider(SettingKey::MouseSensitivity).unwrap();
         mouse.persist(&mut cfg, 100.0);
         assert_eq!(cfg.controls.mouse_sensitivity, Some((mouse.apply)(100.0)));
-        let fov = slider("fov").unwrap();
+        let fov = slider(SettingKey::Fov).unwrap();
         fov.persist(&mut cfg, 200.0);
         assert_eq!(cfg.graphics.fov, Some(100.0));
     }
@@ -1429,47 +1460,47 @@ mod tests {
         let post_config = PostProcessConfig::default();
         let mut cfg = Settings::default();
         cfg.controls.gamepad_deadzone = Some(0.25);
-        let read = |key: &str| {
+        let read = |key: SettingKey| {
             slider(key)
                 .unwrap()
                 .current_value(&post_process, &post_config, 1.5, &cfg)
         };
-        assert!((read("exposure") - 2.0).abs() < 1.0e-5);
-        assert_eq!(read("ambient_intensity"), 1.5);
-        assert_eq!(read("ssao_radius"), post_config.ssao_radius);
-        assert_eq!(read("gamepad_deadzone"), 25.0);
-        assert_eq!(read("fov"), DEFAULT_FOV);
+        assert!((read(SettingKey::Exposure) - 2.0).abs() < 1.0e-5);
+        assert_eq!(read(SettingKey::AmbientIntensity), 1.5);
+        assert_eq!(read(SettingKey::SsaoRadius), post_config.ssao_radius);
+        assert_eq!(read(SettingKey::GamepadDeadzone), 25.0);
+        assert_eq!(read(SettingKey::Fov), DEFAULT_FOV);
     }
 
     #[test]
     fn slider_apply_clamps_match_resolve() {
-        let apply = |key: &str, v: f32| (slider(key).unwrap().apply)(v);
+        let apply = |key: SettingKey, v: f32| (slider(key).unwrap().apply)(v);
         // Out-of-range inputs (e.g. a hand-edited settings.bin) clamp to the
         // engine's domain, matching PostProcessConfig::resolve.
-        assert_eq!(apply("bloom_intensity", -5.0), 0.0);
-        assert_eq!(apply("vignette", 2.0), 1.0);
-        assert_eq!(apply("lut_strength", -1.0), 0.0);
-        assert_eq!(apply("ambient_intensity", 100.0), 16.0);
+        assert_eq!(apply(SettingKey::BloomIntensity, -5.0), 0.0);
+        assert_eq!(apply(SettingKey::Vignette, 2.0), 1.0);
+        assert_eq!(apply(SettingKey::LutStrength, -1.0), 0.0);
+        assert_eq!(apply(SettingKey::AmbientIntensity, 100.0), 16.0);
         // Exposure stores the linear multiplier 2^ev (clamped EV).
-        assert_eq!(apply("exposure", 2.0), 4.0);
-        assert!(((slider("exposure").unwrap().recover)(4.0) - 2.0).abs() < 1.0e-5);
+        assert_eq!(apply(SettingKey::Exposure, 2.0), 4.0);
+        assert!(((slider(SettingKey::Exposure).unwrap().recover)(4.0) - 2.0).abs() < 1.0e-5);
         // Per-feature sub-quality sliders clamp to their `*Settings::resolve`
         // domains; bloom_knee is lower-bounded like the other bloom params.
-        assert_eq!(apply("bloom_knee", -1.0), 0.0);
-        assert_eq!(apply("ssao_intensity", 100.0), 4.0);
-        assert_eq!(apply("ssr_intensity", 9.0), 1.0);
-        assert_eq!(apply("ssr_max_distance", 1.0e6), 200.0);
-        assert_eq!(apply("ssgi_intensity", 99.0), 4.0);
-        assert_eq!(apply("ssgi_max_distance", 1.0e6), 100.0);
-        assert_eq!(apply("auto_exposure_min_ev", -100.0), -16.0);
-        assert_eq!(apply("auto_exposure_max_ev", 100.0), 16.0);
-        assert_eq!(apply("auto_exposure_speed", 100.0), 20.0);
+        assert_eq!(apply(SettingKey::BloomKnee, -1.0), 0.0);
+        assert_eq!(apply(SettingKey::SsaoIntensity, 100.0), 4.0);
+        assert_eq!(apply(SettingKey::SsrIntensity, 9.0), 1.0);
+        assert_eq!(apply(SettingKey::SsrMaxDistance, 1.0e6), 200.0);
+        assert_eq!(apply(SettingKey::SsgiIntensity, 99.0), 4.0);
+        assert_eq!(apply(SettingKey::SsgiMaxDistance, 1.0e6), 100.0);
+        assert_eq!(apply(SettingKey::AutoExposureMinEv, -100.0), -16.0);
+        assert_eq!(apply(SettingKey::AutoExposureMaxEv, 100.0), 16.0);
+        assert_eq!(apply(SettingKey::AutoExposureSpeed, 100.0), 20.0);
     }
 
     #[test]
     fn quality_param_sliders_are_independent_sliders() {
         // The sub-quality sliders are look tuning, not preset-governed knobs.
-        let quality_params: Vec<&str> = SLIDERS
+        let quality_params: Vec<SettingKey> = SLIDERS
             .iter()
             .filter(|s| matches!(s.target, SliderTarget::PostConfig { .. }))
             .map(|s| s.key)
@@ -1478,24 +1509,24 @@ mod tests {
         for key in quality_params {
             assert!(
                 !QUALITY_CYCLE_KEYS.contains(&key),
-                "{key} should not be preset-governed"
+                "{key:?} should not be preset-governed"
             );
         }
         // bloom_knee is a PostProcessParams field, not a quality param.
         assert!(matches!(
-            slider("bloom_knee").unwrap().target,
+            slider(SettingKey::BloomKnee).unwrap().target,
             SliderTarget::PostProcess { .. }
         ));
     }
 
     #[test]
     fn strength_sliders_format_as_percent() {
-        let format = |key: &str, v: f32| (slider(key).unwrap().format)(v);
-        assert_eq!(format("vignette", 0.0), "0%");
-        assert_eq!(format("vignette", 0.5), "50%");
-        assert_eq!(format("lut_strength", 1.0), "100%");
+        let format = |key: SettingKey, v: f32| (slider(key).unwrap().format)(v);
+        assert_eq!(format(SettingKey::Vignette, 0.0), "0%");
+        assert_eq!(format(SettingKey::Vignette, 0.5), "50%");
+        assert_eq!(format(SettingKey::LutStrength, 1.0), "100%");
         // Bloom / ambient use the plain two-decimal format.
-        assert_eq!(format("bloom_intensity", 0.6), "0.60");
-        assert_eq!(format("ambient_intensity", 1.25), "1.25");
+        assert_eq!(format(SettingKey::BloomIntensity, 0.6), "0.60");
+        assert_eq!(format(SettingKey::AmbientIntensity, 1.25), "1.25");
     }
 }

@@ -30,7 +30,7 @@ impl UiInputSystem {
         if !input.left_button_down {
             if let Some(i) = self.dragging.take()
                 && self.regions[i].screen == active_screen
-                && let Some(key) = self.regions[i].slider_key.clone()
+                && let Some(key) = self.regions[i].slider_key
             {
                 let r = &self.regions[i].region;
                 ctx.events_mut::<SettingCommand>().send(SettingCommand {
@@ -46,7 +46,7 @@ impl UiInputSystem {
             if entry.screen != active_screen {
                 continue;
             }
-            let Some(key) = entry.slider_key.as_ref() else {
+            let Some(key) = entry.slider_key else {
                 continue;
             };
             let rect = region_rect(&entry.region);
@@ -55,7 +55,7 @@ impl UiInputSystem {
             }
             if self.dragging == Some(i) {
                 ctx.events_mut::<SettingCommand>().send(SettingCommand {
-                    setting: key.clone(),
+                    setting: key,
                     op: SettingOp::SetFraction(track_fraction(qx, rect)),
                     value_label: entry.region.label,
                     persist: false,

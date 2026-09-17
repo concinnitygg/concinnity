@@ -34,6 +34,7 @@ use crate::gfx::mock_backend::{Call, MockBackend, MockState, recording_backend};
 use crate::gfx::quality_preset::QualityPreset;
 use crate::gfx::system::{RebindViz, SliderViz};
 use crate::settings;
+use crate::settings::SettingKey;
 
 // The value label ids the fixture wires up, so a test can assert a row relabeled
 // without standing up a whole menu.
@@ -125,8 +126,8 @@ impl Fixture {
         });
 
         let cycle_value_labels = [
-            ("graphics_quality".to_string(), QUALITY_LABEL),
-            ("render_scale".to_string(), VALUE_LABEL),
+            (SettingKey::GraphicsQuality, QUALITY_LABEL),
+            (SettingKey::RenderScale, VALUE_LABEL),
         ]
         .into_iter()
         .collect();
@@ -155,7 +156,7 @@ impl Fixture {
                 },
             ],
             sliders: vec![SliderViz {
-                key: "exposure".to_string(),
+                key: SettingKey::Exposure,
                 track_x: 100.0,
                 track_w: 200.0,
                 handle_w: 20.0,
@@ -241,7 +242,7 @@ impl Fixture {
     }
 
     // Cycle a row forward once, routing the value label back to the row.
-    fn next(&mut self, setting: &str) {
+    fn next(&mut self, setting: SettingKey) {
         self.apply(vec![cycle(setting, SettingOp::Next)]);
     }
 
@@ -286,9 +287,9 @@ impl Fixture {
 }
 
 // A cycle-row command carrying the fixture's value label.
-fn cycle(setting: &str, op: SettingOp) -> SettingCommand {
+fn cycle(setting: SettingKey, op: SettingOp) -> SettingCommand {
     SettingCommand {
-        setting: setting.to_string(),
+        setting,
         op,
         value_label: Some(VALUE_LABEL),
         persist: true,
@@ -297,9 +298,9 @@ fn cycle(setting: &str, op: SettingOp) -> SettingCommand {
 
 // A slider command at `frac` of the track; `persist` marks the drag-release
 // frame.
-fn drag(setting: &str, frac: f32, persist: bool) -> SettingCommand {
+fn drag(setting: SettingKey, frac: f32, persist: bool) -> SettingCommand {
     SettingCommand {
-        setting: setting.to_string(),
+        setting,
         op: SettingOp::SetFraction(frac),
         value_label: Some(VALUE_LABEL),
         persist,
@@ -311,7 +312,7 @@ fn drag(setting: &str, frac: f32, persist: bool) -> SettingCommand {
 #[test]
 fn vsync_cycles_live_and_persists() {
     let mut f = Fixture::new();
-    f.next("vsync");
+    f.next(SettingKey::Vsync);
 
     assert!(f.state.vsync, "the row cycled Off -> On");
     assert!(f.saw(&Call::SetVsync(true)), "applied live");
@@ -323,7 +324,7 @@ fn vsync_cycles_live_and_persists() {
 #[test]
 fn cycling_prev_wraps_the_option_list() {
     let mut f = Fixture::new();
-    f.apply(vec![cycle("vsync", SettingOp::Prev)]);
+    f.apply(vec![cycle(SettingKey::Vsync, SettingOp::Prev)]);
     assert!(f.state.vsync, "Off wraps back to the last option");
 }
 
@@ -331,21 +332,11 @@ fn cycling_prev_wraps_the_option_list() {
 #[test]
 fn set_index_jumps_to_the_chosen_option() {
     let mut f = Fixture::new();
-    f.apply(vec![cycle("shadow_cascades", SettingOp::SetIndex(2))]);
+    f.apply(vec![cycle(
+        SettingKey::ShadowCascades,
+        SettingOp::SetIndex(2),
+    )]);
     assert_eq!(f.state.shadow_cascades, settings::shadow_cascades_at(2));
-}
-
-// An unknown setting key is ignored: nothing is applied, nothing is persisted.
-#[test]
-fn unknown_setting_is_ignored() {
-    let mut f = Fixture::new();
-    f.next("not_a_setting");
-
-    assert!(f.calls.lock().unwrap().calls.is_empty(), "nothing applied");
-    assert!(
-        f.saved.lock().unwrap().is_empty(),
-        "an unknown key never persists"
-    );
 }
 
 // A rebind binds the action to the captured key, pushes the map to the backend,
@@ -358,7 +349,7 @@ fn rebind_swaps_the_victim_and_relabels_both_rows() {
     let backward_key = f.state.keymap.get(Bindable::Backward);
 
     f.apply(vec![SettingCommand {
-        setting: Bindable::Forward.setting_key().to_string(),
+        setting: SettingKey::KeyRebind(Bindable::Forward),
         op: SettingOp::Rebind(backward_key),
         value_label: None,
         persist: true,
@@ -386,7 +377,7 @@ fn rebind_to_a_free_key_has_no_victim() {
         "Q is unbound in the default map"
     );
     f.apply(vec![SettingCommand {
-        setting: Bindable::Forward.setting_key().to_string(),
+        setting: SettingKey::KeyRebind(Bindable::Forward),
         op: SettingOp::Rebind(InputKey::Q),
         value_label: None,
         persist: true,
@@ -397,12 +388,12 @@ fn rebind_to_a_free_key_has_no_victim() {
     assert_eq!(f.label(VICTIM_LABEL), "victim", "no victim was relabeled");
 }
 
-// A rebind naming an action that does not exist is ignored.
+// A key rebind on a setting that is not a key rebind row is ignored.
 #[test]
-fn rebind_of_an_unknown_action_is_ignored() {
+fn rebind_of_a_non_rebind_setting_is_ignored() {
     let mut f = Fixture::new();
     f.apply(vec![SettingCommand {
-        setting: "not_an_action".to_string(),
+        setting: SettingKey::Vsync,
         op: SettingOp::Rebind(InputKey::Q),
         value_label: None,
         persist: true,
@@ -417,7 +408,7 @@ fn rebind_of_an_unknown_action_is_ignored() {
 #[test]
 fn slider_applies_live_and_persists_only_on_release() {
     let mut f = Fixture::new();
-    f.apply(vec![drag("exposure", 1.0, false)]);
+    f.apply(vec![drag(SettingKey::Exposure, 1.0, false)]);
 
     let mid_drag = f.state.post_process.exposure;
     assert!(f.saw(&Call::UpdatePostProcess), "applied live mid-drag");
@@ -426,7 +417,7 @@ fn slider_applies_live_and_persists_only_on_release() {
         "an in-progress drag never writes"
     );
 
-    f.apply(vec![drag("exposure", 1.0, true)]);
+    f.apply(vec![drag(SettingKey::Exposure, 1.0, true)]);
     assert_eq!(
         f.state.post_process.exposure, mid_drag,
         "same value applied"
@@ -443,10 +434,10 @@ fn slider_applies_live_and_persists_only_on_release() {
 fn exposure_slider_persists_ev_and_applies_the_multiplier() {
     let mut f = Fixture::new();
     // Fraction 1.0 is the top of the EV range.
-    f.apply(vec![drag("exposure", 1.0, true)]);
+    f.apply(vec![drag(SettingKey::Exposure, 1.0, true)]);
 
     let ev = f.persisted().graphics.exposure_ev.expect("persisted");
-    let exposure = settings::slider("exposure").expect("exposure is a slider");
+    let exposure = settings::slider(SettingKey::Exposure).expect("exposure is a slider");
     assert_eq!(
         f.state.post_process.exposure,
         (exposure.apply)(ev),
@@ -459,7 +450,7 @@ fn exposure_slider_persists_ev_and_applies_the_multiplier() {
 #[test]
 fn slider_moves_the_handle_along_its_track() {
     let mut f = Fixture::new();
-    f.apply(vec![drag("exposure", 0.5, false)]);
+    f.apply(vec![drag(SettingKey::Exposure, 0.5, false)]);
 
     let handle_x = f
         .world
@@ -476,7 +467,7 @@ fn slider_moves_the_handle_along_its_track() {
 #[test]
 fn slider_clamps_an_out_of_range_fraction() {
     let mut f = Fixture::new();
-    f.apply(vec![drag("exposure", 2.0, false)]);
+    f.apply(vec![drag(SettingKey::Exposure, 2.0, false)]);
 
     let handle_x = f
         .world
@@ -503,17 +494,17 @@ fn slider_steps_by_next_and_prev() {
             .expect("handle present")
     };
     // Place the handle mid-track (fraction 0.5 = x 190 on the 180px travel).
-    f.apply(vec![drag("exposure", 0.5, true)]);
+    f.apply(vec![drag(SettingKey::Exposure, 0.5, true)]);
     assert_eq!(handle_x(&mut f), 190.0);
 
-    f.apply(vec![cycle("exposure", SettingOp::Next)]);
+    f.apply(vec![cycle(SettingKey::Exposure, SettingOp::Next)]);
     assert!(
         (handle_x(&mut f) - 199.0).abs() < 1.0e-3,
         "Next steps +5% of the travel"
     );
     assert!(f.persisted().graphics.exposure_ev.is_some());
 
-    f.apply(vec![cycle("exposure", SettingOp::Prev)]);
+    f.apply(vec![cycle(SettingKey::Exposure, SettingOp::Prev)]);
     assert!(
         (handle_x(&mut f) - 190.0).abs() < 1.0e-3,
         "Prev steps back down"
@@ -521,16 +512,16 @@ fn slider_steps_by_next_and_prev() {
 
     // Stepping far past the bottom clamps at the track's left end.
     for _ in 0..25 {
-        f.apply(vec![cycle("exposure", SettingOp::Prev)]);
+        f.apply(vec![cycle(SettingKey::Exposure, SettingOp::Prev)]);
     }
     assert_eq!(handle_x(&mut f), 100.0);
 }
 
-// An unknown slider key is ignored.
+// A fraction sent to a setting that is not a slider is ignored.
 #[test]
-fn unknown_slider_is_ignored() {
+fn a_fraction_on_a_non_slider_is_ignored() {
     let mut f = Fixture::new();
-    f.apply(vec![drag("not_a_slider", 0.5, true)]);
+    f.apply(vec![drag(SettingKey::Vsync, 0.5, true)]);
 
     assert!(f.calls.lock().unwrap().calls.is_empty());
     assert!(f.saved.lock().unwrap().is_empty());
@@ -549,16 +540,16 @@ fn bool_rows_flip_state_and_persisted_value_both_ways() {
         };
 
         f.next(row.key);
-        assert_eq!(*(row.state)(&mut f.state), !before, "{} Next", row.key);
-        assert_eq!(cached(&mut f), Some(!before), "{} Next persists", row.key);
+        assert_eq!(*(row.state)(&mut f.state), !before, "{:?} Next", row.key);
+        assert_eq!(cached(&mut f), Some(!before), "{:?} Next persists", row.key);
 
         f.apply(vec![cycle(row.key, SettingOp::Prev)]);
-        assert_eq!(*(row.state)(&mut f.state), before, "{} Prev", row.key);
-        assert_eq!(cached(&mut f), Some(before), "{} Prev persists", row.key);
+        assert_eq!(*(row.state)(&mut f.state), before, "{:?} Prev", row.key);
+        assert_eq!(cached(&mut f), Some(before), "{:?} Prev persists", row.key);
         assert_eq!(
             *(row.persisted)(&mut f.persisted().graphics),
             Some(before),
-            "{} reaches the writer",
+            "{:?} reaches the writer",
             row.key
         );
     }
@@ -569,7 +560,7 @@ fn bool_rows_flip_state_and_persisted_value_both_ways() {
 #[test]
 fn quality_param_slider_updates_quality_params() {
     let mut f = Fixture::new();
-    f.apply(vec![drag("ssao_radius", 0.5, true)]);
+    f.apply(vec![drag(SettingKey::SsaoRadius, 0.5, true)]);
 
     assert!(f.saw(&Call::UpdateQualityParams));
     assert!(
@@ -584,7 +575,7 @@ fn quality_param_slider_updates_quality_params() {
 #[test]
 fn ambient_slider_takes_the_dedicated_setter() {
     let mut f = Fixture::new();
-    f.apply(vec![drag("ambient_intensity", 0.25, true)]);
+    f.apply(vec![drag(SettingKey::AmbientIntensity, 0.25, true)]);
 
     let applied = f.state.ambient_intensity;
     assert!(f.saw(&Call::SetAmbientIntensity(applied)));
@@ -597,7 +588,7 @@ fn ambient_slider_takes_the_dedicated_setter() {
 #[test]
 fn mouse_sensitivity_slider_sends_a_controls_command() {
     let mut f = Fixture::new();
-    f.apply(vec![drag("mouse_sensitivity", 1.0, true)]);
+    f.apply(vec![drag(SettingKey::MouseSensitivity, 1.0, true)]);
 
     let sent: Vec<ControlsCommand> = f
         .world
@@ -625,7 +616,7 @@ fn mouse_sensitivity_slider_sends_a_controls_command() {
 #[test]
 fn fov_slider_sends_a_controls_command() {
     let mut f = Fixture::new();
-    f.apply(vec![drag("fov", 0.0, true)]);
+    f.apply(vec![drag(SettingKey::Fov, 0.0, true)]);
 
     let sent: Vec<ControlsCommand> = f
         .world
@@ -650,7 +641,7 @@ fn pad_rebind_swaps_the_victim_and_relabels_both_rows() {
     let sprint_button = f.state.gamepad_map.get(GamepadAction::Sprint);
 
     f.apply(vec![SettingCommand {
-        setting: GamepadAction::Jump.setting_key().to_string(),
+        setting: SettingKey::PadRebind(GamepadAction::Jump),
         op: SettingOp::RebindButton(sprint_button),
         value_label: None,
         persist: true,
@@ -682,7 +673,7 @@ fn pad_rebind_swaps_the_victim_and_relabels_both_rows() {
 fn pad_rebind_of_a_non_gamepad_action_is_ignored() {
     let mut f = Fixture::new();
     f.apply(vec![SettingCommand {
-        setting: Bindable::Forward.setting_key().to_string(),
+        setting: SettingKey::KeyRebind(Bindable::Forward),
         op: SettingOp::RebindButton(GamepadButton::North),
         value_label: None,
         persist: true,
@@ -699,8 +690,8 @@ fn pad_rebind_of_a_non_gamepad_action_is_ignored() {
 fn gamepad_sliders_send_controls_commands_and_persist_applied_values() {
     let mut f = Fixture::new();
     f.apply(vec![
-        drag("gamepad_look_sensitivity", 1.0, true),
-        drag("gamepad_deadzone", 0.5, true),
+        drag(SettingKey::GamepadLookSensitivity, 1.0, true),
+        drag(SettingKey::GamepadDeadzone, 0.5, true),
     ]);
 
     let sent = f.sent_controls();
@@ -729,7 +720,7 @@ fn gamepad_sliders_send_controls_commands_and_persist_applied_values() {
 #[test]
 fn fps_cap_publishes_the_frame_rate_cap_resource() {
     let mut f = Fixture::new();
-    f.next("fps_cap");
+    f.next(SettingKey::FpsCap);
 
     let published = f
         .world
@@ -747,8 +738,8 @@ fn fps_cap_publishes_the_frame_rate_cap_resource() {
 fn volume_rows_send_targeted_audio_commands() {
     use concinnity_core::components::AudioTarget;
     let mut f = Fixture::new();
-    f.next("master_volume");
-    f.next("voice_volume");
+    f.next(SettingKey::MasterVolume);
+    f.next(SettingKey::VoiceVolume);
 
     let sent: Vec<AudioCommand> = f
         .world
@@ -768,7 +759,7 @@ fn volume_rows_send_targeted_audio_commands() {
 #[test]
 fn perf_stats_master_grays_and_restores_the_sub_rows() {
     let mut f = Fixture::new();
-    f.next("perf_stats");
+    f.next(SettingKey::PerfStats);
 
     assert!(!f.state.perf_stats, "cycled On -> Off");
     assert_eq!(
@@ -776,7 +767,7 @@ fn perf_stats_master_grays_and_restores_the_sub_rows() {
         super::rows::DISABLED_ROW_COLOR
     );
 
-    f.next("perf_stats");
+    f.next(SettingKey::PerfStats);
     assert!(f.state.perf_stats);
     assert_eq!(
         f.label_color(SUB_ROW_LABEL),
@@ -796,7 +787,7 @@ fn window_mode_grays_resolution_and_restores_the_windowed_size() {
     f.state.window_args.height = 600;
 
     // Fullscreen -> Windowed (the option order wraps Fullscreen back to index 0).
-    f.apply(vec![cycle("window_mode", SettingOp::Next)]);
+    f.apply(vec![cycle(SettingKey::WindowMode, SettingOp::Next)]);
     assert_eq!(f.state.window_args.mode, WindowMode::Windowed);
     assert!(f.saw(&Call::SetWindowMode(WindowMode::Windowed)));
     assert!(
@@ -815,7 +806,7 @@ fn window_mode_grays_resolution_and_restores_the_windowed_size() {
 fn entering_fullscreen_restores_the_resolution_row() {
     let mut f = Fixture::new();
     f.apply(vec![cycle(
-        "window_mode",
+        SettingKey::WindowMode,
         SettingOp::SetIndex(settings::window_mode_index(WindowMode::Fullscreen)),
     )]);
 
@@ -852,7 +843,7 @@ fn resolution_cycles_the_enumerated_display_modes() {
     f.state.display_modes = modes.to_vec();
     f.state.current_mode = Some(modes[0]);
 
-    f.next("resolution");
+    f.next(SettingKey::Resolution);
 
     assert_eq!(f.state.resolution, Some(modes[1]));
     assert!(f.saw(&Call::SetDisplayMode(modes[1])));
@@ -868,7 +859,7 @@ fn resolution_cycles_the_enumerated_display_modes() {
 #[test]
 fn resolution_without_enumerated_modes_is_inert() {
     let mut f = Fixture::new();
-    f.next("resolution");
+    f.next(SettingKey::Resolution);
 
     assert!(f.state.resolution.is_none());
     assert!(f.calls.lock().unwrap().calls.is_empty());
@@ -880,7 +871,7 @@ fn resolution_without_enumerated_modes_is_inert() {
 fn quality_toggle_flips_the_master_preset_to_custom() {
     let mut f = Fixture::with_profile(GpuProfile::UNKNOWN);
     f.state.quality_preset = QualityPreset::High;
-    f.next("ssao");
+    f.next(SettingKey::Ssao);
 
     assert!(f.saw(&Call::ApplyQualitySettings));
     assert_eq!(f.state.quality_preset, QualityPreset::Custom);
@@ -895,7 +886,7 @@ fn quality_toggle_flips_the_master_preset_to_custom() {
 #[test]
 fn auto_exposure_toggle_repushes_the_post_process_params() {
     let mut f = Fixture::new();
-    f.next("auto_exposure");
+    f.next(SettingKey::AutoExposure);
 
     assert!(f.saw(&Call::ApplyQualitySettings));
     assert!(f.saw(&Call::UpdatePostProcess), "exposure reverts");
@@ -906,7 +897,7 @@ fn auto_exposure_toggle_repushes_the_post_process_params() {
 #[test]
 fn quality_cycle_knob_rebuilds_and_flips_to_custom() {
     let mut f = Fixture::new();
-    f.next("ssgi_rays");
+    f.next(SettingKey::SsgiRays);
 
     assert!(f.saw(&Call::ApplyQualitySettings));
     assert_eq!(f.state.quality_preset, QualityPreset::Custom);
@@ -956,7 +947,7 @@ fn quality_rebuild_out_of_memory_raises_memory_pressure() {
 fn aa_mode_cycle_refreshes_the_composite_fxaa_flag() {
     let mut f = Fixture::new();
     f.apply(vec![cycle(
-        "aa_mode",
+        SettingKey::AaMode,
         SettingOp::SetIndex(settings::aa_mode_index(AaMode::Fxaa)),
     )]);
 
@@ -965,7 +956,7 @@ fn aa_mode_cycle_refreshes_the_composite_fxaa_flag() {
     assert!(f.saw(&Call::UpdatePostProcess));
 
     f.apply(vec![cycle(
-        "aa_mode",
+        SettingKey::AaMode,
         SettingOp::SetIndex(settings::aa_mode_index(AaMode::Off)),
     )]);
     assert_eq!(f.state.post_process.fxaa, 0.0);
@@ -977,14 +968,14 @@ fn aa_mode_cycle_refreshes_the_composite_fxaa_flag() {
 fn live_shadow_knobs_push_to_the_backend() {
     let mut f = Fixture::new();
 
-    f.next("shadow_update");
+    f.next(SettingKey::ShadowUpdate);
     assert!(f.saw(&Call::SetShadowUpdate));
     assert_eq!(f.state.shadow_update, settings::shadow_update_at(1));
 
-    f.next("shadow_distance");
+    f.next(SettingKey::ShadowDistance);
     assert!(f.saw(&Call::SetShadowDistance(f.state.shadow_distance)));
 
-    f.next("shadow_cascades");
+    f.next(SettingKey::ShadowCascades);
     assert!(f.saw(&Call::SetShadowCascades(f.state.shadow_cascades)));
 
     assert_eq!(f.state.quality_preset, QualityPreset::Custom);
@@ -1000,16 +991,16 @@ fn live_shadow_knobs_push_to_the_backend() {
 fn restart_required_rows_persist_without_a_backend_call() {
     let mut f = Fixture::new();
     for key in [
-        "render_scale",
-        "shadow_map_size",
-        "anisotropy",
-        "temporal_upscaling",
-        "hdr_display",
-        "hdr_pq",
-        "frames_in_flight",
-        "occlusion_two_pass",
-        "texture_quality",
-        "upscale_backend",
+        SettingKey::RenderScale,
+        SettingKey::ShadowMapSize,
+        SettingKey::Anisotropy,
+        SettingKey::TemporalUpscaling,
+        SettingKey::HdrDisplay,
+        SettingKey::HdrPq,
+        SettingKey::FramesInFlight,
+        SettingKey::OcclusionTwoPass,
+        SettingKey::TextureQuality,
+        SettingKey::UpscaleBackend,
     ] {
         f.next(key);
     }
@@ -1037,7 +1028,7 @@ fn restart_required_rows_persist_without_a_backend_call() {
 fn render_scale_flips_the_master_preset_to_custom() {
     let mut f = Fixture::new();
     f.state.quality_preset = QualityPreset::High;
-    f.next("render_scale");
+    f.next(SettingKey::RenderScale);
 
     assert_eq!(f.state.quality_preset, QualityPreset::Custom);
     assert_eq!(f.label(QUALITY_LABEL), QualityPreset::Custom.name());
@@ -1051,8 +1042,8 @@ fn upscale_backend_cycle_skips_unavailable_vendors() {
     assert_eq!(f.state.gpu_profile.vendor, GpuVendor::Other);
 
     // Cycling the whole list only ever lands on the always-available options.
-    for _ in 0..settings::options("upscale_backend").unwrap().len() * 2 {
-        f.next("upscale_backend");
+    for _ in 0..settings::options(SettingKey::UpscaleBackend).unwrap().len() * 2 {
+        f.next(SettingKey::UpscaleBackend);
         assert!(
             settings::upscale_backend_available(f.state.upscale_backend, GpuVendor::Other),
             "landed on an unavailable upscaler: {:?}",
@@ -1069,8 +1060,8 @@ fn upscale_backend_cycle_reaches_dlss_on_nvidia() {
     let mut f = Fixture::with_profile(profile);
 
     let mut seen = false;
-    for _ in 0..settings::options("upscale_backend").unwrap().len() {
-        f.next("upscale_backend");
+    for _ in 0..settings::options(SettingKey::UpscaleBackend).unwrap().len() {
+        f.next(SettingKey::UpscaleBackend);
         seen |= f.state.upscale_backend == UpscalerBackend::Dlss;
     }
     assert!(seen, "DLSS is reachable on an NVIDIA device");
@@ -1090,10 +1081,10 @@ fn graphics_quality_preset_clears_overrides_and_re_derives_the_rows() {
     f.state.post_config.ssao = false;
     f.state
         .cycle_value_labels
-        .insert("ssao".to_string(), TOGGLE_LABEL);
+        .insert(SettingKey::Ssao, TOGGLE_LABEL);
 
     f.apply(vec![SettingCommand {
-        setting: "graphics_quality".to_string(),
+        setting: SettingKey::GraphicsQuality,
         op: SettingOp::SetIndex(crate::gfx::quality_preset::preset_index(
             QualityPreset::Ultra,
         )),
@@ -1139,7 +1130,7 @@ fn low_preset_clamps_the_authored_features_off() {
     f.state.post_config = f.state.authored_post_config.clone();
 
     f.apply(vec![SettingCommand {
-        setting: "graphics_quality".to_string(),
+        setting: SettingKey::GraphicsQuality,
         op: SettingOp::SetIndex(crate::gfx::quality_preset::preset_index(QualityPreset::Low)),
         value_label: Some(QUALITY_LABEL),
         persist: true,
@@ -1162,8 +1153,8 @@ fn low_preset_clamps_the_authored_features_off() {
 fn a_batch_persists_once_and_carries_the_cache_forward() {
     let mut f = Fixture::new();
     f.apply(vec![
-        cycle("vsync", SettingOp::Next),
-        cycle("occlusion_two_pass", SettingOp::Next),
+        cycle(SettingKey::Vsync, SettingOp::Next),
+        cycle(SettingKey::OcclusionTwoPass, SettingOp::Next),
     ]);
 
     let cached = f.state.settings_cache.clone().expect("cache retained");
@@ -1171,7 +1162,7 @@ fn a_batch_persists_once_and_carries_the_cache_forward() {
     assert_eq!(cached.graphics.occlusion_two_pass, Some(true));
 
     // A second batch starts from the cache, so the first batch's values survive.
-    f.next("show_vram");
+    f.next(SettingKey::ShowVram);
     let cfg = f.persisted();
     assert_eq!(
         cfg.graphics.vsync,
@@ -1238,9 +1229,9 @@ fn disabled_rows_publish_alongside_the_gray_out() {
         .resource::<crate::ecs::DisabledSettingRows>()
         .map(|r| r.0.clone())
         .unwrap();
-    assert!(rows.contains("show_fps"));
-    assert!(rows.contains("show_vram"));
-    assert!(rows.contains("resolution"));
+    assert!(rows.contains(&SettingKey::ShowFps));
+    assert!(rows.contains(&SettingKey::ShowVram));
+    assert!(rows.contains(&SettingKey::Resolution));
 }
 
 // With no parked state (graphics init never succeeded) the step is a no-op and
@@ -1286,7 +1277,7 @@ fn step_drains_into_the_op_queue_and_reparks() {
     {
         let mut ctx = f.world.ctx();
         ctx.events_mut::<SettingCommand>()
-            .send(cycle("vsync", SettingOp::Next));
+            .send(cycle(SettingKey::Vsync, SettingOp::Next));
     }
     f.world
         .resources

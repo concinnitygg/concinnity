@@ -1,7 +1,6 @@
-use alloc::string::String;
-
 use crate::components::InputKey;
 use crate::ecs::asset_id::AssetId;
+use crate::settings::SettingKey;
 
 /// What a "setting:*" action does to its value: cycle one step (for a stepper
 /// row), jump to an absolute option index (for a dropdown pick), set an absolute
@@ -38,8 +37,8 @@ pub enum SettingOp {
 /// World authors never declare this type directly.
 #[derive(Debug, Clone)]
 pub struct SettingCommand {
-    /// Engine setting key (e.g. "vsync").
-    pub setting: String,
+    /// The setting to change.
+    pub setting: SettingKey,
     /// How to change the value.
     pub op: SettingOp,
     /// The value TextLabel to update with the new value, when known.
@@ -48,31 +47,4 @@ pub struct SettingCommand {
     /// discrete change and always persists; a slider drag persists only on
     /// release (the in-progress frames apply live but skip the disk write).
     pub persist: bool,
-}
-
-impl Default for SettingCommand {
-    fn default() -> Self {
-        Self {
-            setting: String::new(),
-            op: SettingOp::Next,
-            value_label: None,
-            persist: true,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // A command with nothing stated names no setting and writes through to the
-    // store: a cycle is one discrete change, and only a slider drag opts out.
-    #[test]
-    fn a_default_command_persists_and_advances() {
-        let command = SettingCommand::default();
-        assert!(command.setting.is_empty());
-        assert!(matches!(command.op, SettingOp::Next));
-        assert_eq!(command.value_label, None);
-        assert!(command.persist);
-    }
 }

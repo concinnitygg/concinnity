@@ -37,6 +37,7 @@ use concinnity_core::render::backend;
 use concinnity_core::render::ops::RenderOps;
 use concinnity_core::render::scene_flow;
 use concinnity_core::render::snapshot;
+use concinnity_core::settings::SettingKey;
 use concinnity_core::window::display_mode;
 
 mod apply;
@@ -64,7 +65,7 @@ pub(crate) struct SettingsState {
     pub(crate) sliders: Vec<crate::gfx::system::SliderViz>,
     // Cycle rows' setting key -> value-label id, captured at init, so a change
     // can relabel a row other than the one clicked.
-    pub(crate) cycle_value_labels: std::collections::HashMap<String, AssetId>,
+    pub(crate) cycle_value_labels: std::collections::HashMap<SettingKey, AssetId>,
     // Live post-process parameters (bloom / exposure / vignette / LUT blend),
     // the source of truth for slider settings.
     pub(crate) post_process: render_types::PostProcessTunables,
@@ -369,7 +370,7 @@ impl SettingsState {
     fn publish_hud_state(&mut self, ctx: &mut PipelineContext) {
         // Both resources are pure functions of a few settings fields and persist
         // in the resource map once inserted, so republish only when the inputs
-        // change -- steady-state frames skip the HashSet + String allocations the
+        // change -- steady-state frames skip the HashSet allocation the
         // disabled-rows set would otherwise churn every frame.
         let prefs = HudPrefs {
             show_fps: self.perf_stats && self.show_fps,
@@ -386,16 +387,12 @@ impl SettingsState {
         let is_fullscreen = self.window_args.mode == WindowMode::Fullscreen;
         let inputs = (self.perf_stats, is_fullscreen);
         if self.published_disabled_inputs != Some(inputs) {
-            let mut disabled_rows: std::collections::HashSet<String> = if self.perf_stats {
-                std::collections::HashSet::new()
-            } else {
-                ["show_fps", "show_vram"]
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect()
-            };
+            let mut disabled_rows = std::collections::HashSet::new();
+            if !self.perf_stats {
+                disabled_rows.extend([SettingKey::ShowFps, SettingKey::ShowVram]);
+            }
             if !is_fullscreen {
-                disabled_rows.insert("resolution".to_string());
+                disabled_rows.insert(SettingKey::Resolution);
             }
             ctx.insert_resource(crate::ecs::DisabledSettingRows(disabled_rows));
             self.published_disabled_inputs = Some(inputs);

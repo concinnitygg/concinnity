@@ -3,6 +3,7 @@
 use concinnity_core::components::{FrameInput, SettingCommand, SettingOp, TextLabel};
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{PipelineContext, StepResult};
+use concinnity_core::settings::SettingKey;
 
 use super::UiInputSystem;
 
@@ -15,8 +16,8 @@ const PAD_REBIND_PROMPT: &str = "Press a button...";
 // it; Escape cancels and restores the row's previous value text.
 #[derive(Debug)]
 pub(super) struct Capture {
-    // The rebind setting key, e.g. `"key_forward"`.
-    setting_key: String,
+    // The rebind setting.
+    setting_key: SettingKey,
     // The value `TextLabel` showing the bound key (set to a prompt while
     // capturing; GraphicsSystem rewrites it after the bind).
     value_label: Option<AssetId>,
@@ -24,9 +25,9 @@ pub(super) struct Capture {
     prev_text: String,
 }
 
-// Whether a rebind setting binds a gamepad button (`pad_*`) rather than a key.
-fn captures_button(setting_key: &str) -> bool {
-    setting_key.starts_with("pad_")
+// Whether a rebind setting binds a gamepad button rather than a key.
+fn captures_button(setting_key: SettingKey) -> bool {
+    matches!(setting_key, SettingKey::PadRebind(_))
 }
 
 impl UiInputSystem {
@@ -42,7 +43,7 @@ impl UiInputSystem {
         let Some(cap) = self.capturing.as_ref() else {
             return StepResult::Continue;
         };
-        let op = if captures_button(&cap.setting_key) {
+        let op = if captures_button(cap.setting_key) {
             input.captured_button.map(SettingOp::RebindButton)
         } else {
             input.captured_key.map(SettingOp::Rebind)
@@ -69,7 +70,7 @@ impl UiInputSystem {
     // kind the row captures.
     pub(super) fn begin_capture(
         &mut self,
-        setting_key: String,
+        setting_key: SettingKey,
         value_label: Option<AssetId>,
         ctx: &mut PipelineContext,
     ) {
@@ -81,7 +82,7 @@ impl UiInputSystem {
             })
             .unwrap_or_default();
         if let Some(id) = value_label {
-            let prompt = if captures_button(&setting_key) {
+            let prompt = if captures_button(setting_key) {
                 PAD_REBIND_PROMPT
             } else {
                 REBIND_PROMPT
@@ -107,11 +108,14 @@ impl UiInputSystem {
 
 #[cfg(test)]
 mod tests {
+    use concinnity_core::components::GamepadAction;
+    use concinnity_core::input::keymap::Bindable;
+
     use super::*;
 
     #[test]
     fn pad_settings_capture_a_button() {
-        assert!(captures_button("pad_jump"));
-        assert!(!captures_button("key_forward"));
+        assert!(captures_button(SettingKey::PadRebind(GamepadAction::Jump)));
+        assert!(!captures_button(SettingKey::KeyRebind(Bindable::Forward)));
     }
 }

@@ -94,7 +94,7 @@ mod tests {
         // reached the dispatcher.
         let result = call(
             "quality-set",
-            json!({ "setting": "shadows", "op": "sideways" }),
+            json!({ "setting": "ssao", "op": "sideways" }),
         );
         assert_eq!(result["isError"], json!(true));
         assert!(

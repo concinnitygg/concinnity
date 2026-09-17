@@ -12,6 +12,7 @@
 //! A drift test below scrapes the dispatcher's own match arms, so a new verb
 //! without a catalog entry (or an entry without a verb) fails to build green.
 
+use concinnity_core::settings::SettingKey;
 use serde_json::{Value, json};
 
 /// Whether a command reads the world snapshot or mutates the running world.
@@ -149,6 +150,9 @@ pub(crate) fn verb_list() -> String {
         .collect::<Vec<_>>()
         .join(", ")
 }
+
+/// The `setting` values `quality-set` accepts.
+pub(crate) const QUALITY_TOGGLE_NAMES: [&str; 5] = SettingKey::names(SettingKey::QUALITY_TOGGLES);
 
 const COMMANDS: &[Command] = &[
     Command {
@@ -455,13 +459,13 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "quality-set",
-        description: "Cycle one quality graphics setting live, the way the settings menu does.",
+        description: "Flip one quality feature toggle live, the way the settings menu does.",
         access: Access::Mutating,
         params: &[
             required(
                 "setting",
-                Kind::Choice(&["taa", "ssao", "ssr", "ssgi", "auto_exposure"]),
-                "Setting key.",
+                Kind::Choice(&QUALITY_TOGGLE_NAMES),
+                "Quality toggle key.",
             ),
             optional(
                 "op",

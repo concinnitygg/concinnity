@@ -5,30 +5,17 @@
 //! options) or a click-to-open dropdown (more than two). Keeping the labels here
 //! (not duplicated per crate) means the two never drift on a setting's option
 //! count. How a chosen option is applied stays in the client, keyed by the same
-//! string.
+//! [`SettingKey`].
+
+mod key;
+
+pub use key::{SettingKey, SettingKind};
 
 // Ordered option labels for `vsync`: index 0 is off, index 1 is on.
 pub(crate) const VSYNC_OPTIONS: [&str; 2] = ["Off", "On"];
 /// Shared Off/On labels for the boolean quality toggles. Index 0 is off, 1 on,
 /// so `bool as usize` indexes directly.
 pub const OFF_ON_OPTIONS: [&str; 2] = ["Off", "On"];
-
-/// The quality-feature toggle keys (Video "Quality" group). Each gates a render
-/// pass whose GPU resources are built at init, so a change rebuilds those
-/// resources (live on Metal; persisted + applied at the next launch elsewhere).
-/// The client maps each key to the `PostProcessConfig` field it flips.
-pub const QUALITY_TOGGLE_KEYS: [&str; 5] = [
-    "ssao",
-    "ssr",
-    "ray_traced_reflections",
-    "ssgi",
-    "auto_exposure",
-];
-
-/// Whether `key` is one of the boolean quality toggles.
-pub fn is_quality_toggle(key: &str) -> bool {
-    QUALITY_TOGGLE_KEYS.contains(&key)
-}
 
 /// Window mode options, in cycle order.
 pub const WINDOW_MODE_OPTIONS: [&str; 3] = ["Windowed", "Borderless", "Fullscreen"];
@@ -85,51 +72,70 @@ pub const GRAPHICS_QUALITY_OPTIONS: [&str; 6] =
 // order. The client maps each to a linear gain.
 pub(crate) const VOLUME_OPTIONS: [&str; 5] = ["Off", "25%", "50%", "75%", "100%"];
 
-// Settings whose option list is enumerated from the hardware at runtime, so
-// this static registry cannot hold their labels. Each still renders as a
-// click-to-open dropdown row; the client seeds the floating list from the
-// enumerated values. `resolution` lists the display modes (width x height at
-// refresh rate) the current display supports.
-pub(crate) const DYNAMIC_DROPDOWN_KEYS: [&str; 1] = ["resolution"];
-
 /// Whether `key`'s options are enumerated at runtime (a dropdown row with no
-/// static label table; `options` returns `None` for it).
-pub fn is_dynamic_dropdown(key: &str) -> bool {
-    DYNAMIC_DROPDOWN_KEYS.contains(&key)
+/// static label table; `options` returns `None` for it). `resolution` lists the
+/// display modes the current display supports.
+pub fn is_dynamic_dropdown(key: SettingKey) -> bool {
+    key == SettingKey::Resolution
 }
 
-/// The option labels for a known setting key, or `None` if the key is unknown
-/// (a slider or rebind key, or a typo). A key with more than two labels renders
-/// as a dropdown; two labels render as a `<`/`>` stepper.
-pub fn options(key: &str) -> Option<&'static [&'static str]> {
+/// The option labels for a cycle setting, or `None` for a slider, a rebind, or
+/// the runtime-enumerated resolution. A key with more than two labels renders as
+/// a dropdown; two labels render as a `<`/`>` stepper.
+pub fn options(key: SettingKey) -> Option<&'static [&'static str]> {
+    use SettingKey as K;
     match key {
-        "graphics_quality" => Some(&GRAPHICS_QUALITY_OPTIONS),
-        "vsync" => Some(&VSYNC_OPTIONS),
-        "window_mode" => Some(&WINDOW_MODE_OPTIONS),
-        "render_scale" => Some(&RENDER_SCALE_OPTIONS),
-        "upscale_backend" => Some(&UPSCALE_BACKEND_OPTIONS),
-        "fps_cap" => Some(&FPS_CAP_OPTIONS),
-        "master_volume" | "music_volume" | "sfx_volume" | "voice_volume" => Some(&VOLUME_OPTIONS),
-        "aa_mode" => Some(&AA_MODE_OPTIONS),
-        "ssgi_resolution" => Some(&SSGI_RESOLUTION_OPTIONS),
-        "ssgi_rays" => Some(&SSGI_RAYS_OPTIONS),
-        "ssgi_steps" => Some(&SSGI_STEPS_OPTIONS),
-        "reflection_blur_resolution" => Some(&REFLECTION_BLUR_OPTIONS),
-        "shadow_map_size" => Some(&SHADOW_RESOLUTION_OPTIONS),
-        "shadow_update" => Some(&SHADOW_UPDATE_OPTIONS),
-        "shadow_distance" => Some(&SHADOW_DISTANCE_OPTIONS),
-        "shadow_cascades" => Some(&SHADOW_CASCADES_OPTIONS),
-        "anisotropy" => Some(&ANISOTROPY_OPTIONS),
-        "frames_in_flight" => Some(&FRAME_BUFFERING_OPTIONS),
-        "texture_quality" => Some(&TEXTURE_QUALITY_OPTIONS),
+        K::GraphicsQuality => Some(&GRAPHICS_QUALITY_OPTIONS),
+        K::Vsync => Some(&VSYNC_OPTIONS),
+        K::WindowMode => Some(&WINDOW_MODE_OPTIONS),
+        K::RenderScale => Some(&RENDER_SCALE_OPTIONS),
+        K::UpscaleBackend => Some(&UPSCALE_BACKEND_OPTIONS),
+        K::FpsCap => Some(&FPS_CAP_OPTIONS),
+        K::MasterVolume | K::MusicVolume | K::SfxVolume | K::VoiceVolume => Some(&VOLUME_OPTIONS),
+        K::AaMode => Some(&AA_MODE_OPTIONS),
+        K::SsgiResolution => Some(&SSGI_RESOLUTION_OPTIONS),
+        K::SsgiRays => Some(&SSGI_RAYS_OPTIONS),
+        K::SsgiSteps => Some(&SSGI_STEPS_OPTIONS),
+        K::ReflectionBlurResolution => Some(&REFLECTION_BLUR_OPTIONS),
+        K::ShadowMapSize => Some(&SHADOW_RESOLUTION_OPTIONS),
+        K::ShadowUpdate => Some(&SHADOW_UPDATE_OPTIONS),
+        K::ShadowDistance => Some(&SHADOW_DISTANCE_OPTIONS),
+        K::ShadowCascades => Some(&SHADOW_CASCADES_OPTIONS),
+        K::Anisotropy => Some(&ANISOTROPY_OPTIONS),
+        K::FramesInFlight => Some(&FRAME_BUFFERING_OPTIONS),
+        K::TextureQuality => Some(&TEXTURE_QUALITY_OPTIONS),
         // Display-output / upscaling preference + occlusion toggles (Off/On).
-        "temporal_upscaling" | "hdr_display" | "hdr_pq" | "occlusion_two_pass" => {
+        K::TemporalUpscaling | K::HdrDisplay | K::HdrPq | K::OcclusionTwoPass => {
             Some(&OFF_ON_OPTIONS)
         }
         // Stats-HUD display toggles: a master and one per readout (Off/On).
-        "perf_stats" | "show_fps" | "show_vram" => Some(&OFF_ON_OPTIONS),
-        key if is_quality_toggle(key) => Some(&OFF_ON_OPTIONS),
-        _ => None,
+        K::PerfStats | K::ShowFps | K::ShowVram => Some(&OFF_ON_OPTIONS),
+        K::Ssao | K::Ssr | K::RayTracedReflections | K::Ssgi | K::AutoExposure => {
+            Some(&OFF_ON_OPTIONS)
+        }
+        K::Resolution
+        | K::Exposure
+        | K::BloomIntensity
+        | K::BloomThreshold
+        | K::BloomKnee
+        | K::Vignette
+        | K::LutStrength
+        | K::AmbientIntensity
+        | K::SsaoRadius
+        | K::SsaoIntensity
+        | K::SsrIntensity
+        | K::SsrMaxDistance
+        | K::SsgiIntensity
+        | K::SsgiMaxDistance
+        | K::AutoExposureMinEv
+        | K::AutoExposureMaxEv
+        | K::AutoExposureSpeed
+        | K::MouseSensitivity
+        | K::GamepadLookSensitivity
+        | K::GamepadDeadzone
+        | K::Fov
+        | K::KeyRebind(_)
+        | K::PadRebind(_) => None,
     }
 }
 
@@ -139,51 +145,54 @@ mod tests {
 
     #[test]
     fn resolution_is_a_dynamic_dropdown_with_no_static_options() {
-        // The resolution list is enumerated from the display at runtime, so the
-        // static registry knows the key only as a dynamic dropdown.
-        assert!(is_dynamic_dropdown("resolution"));
-        assert!(options("resolution").is_none());
-        // Statically-registered keys are not misclassified as dynamic.
-        assert!(!is_dynamic_dropdown("window_mode"));
-        assert!(!is_dynamic_dropdown("nope"));
+        assert!(is_dynamic_dropdown(SettingKey::Resolution));
+        assert!(options(SettingKey::Resolution).is_none());
+        assert!(!is_dynamic_dropdown(SettingKey::WindowMode));
     }
 
     #[test]
     fn quality_toggles_are_off_then_on() {
-        for key in QUALITY_TOGGLE_KEYS {
-            assert!(is_quality_toggle(key), "{key} should classify as a toggle");
-            assert_eq!(options(key), Some(&["Off", "On"][..]), "{key} options");
+        for key in SettingKey::QUALITY_TOGGLES {
+            assert_eq!(options(key), Some(&["Off", "On"][..]), "{key:?} options");
         }
-        assert!(!is_quality_toggle("vsync"));
-        assert!(!is_quality_toggle("nope"));
     }
 
+    // Every cycle row but the runtime-enumerated resolution has static labels,
+    // and no slider or rebind does.
     #[test]
-    fn unknown_key_has_no_options() {
-        assert!(options("does_not_exist").is_none());
+    fn only_cycle_keys_have_options() {
+        for key in SettingKey::ALL {
+            let expected = key.kind() == SettingKind::Cycle && !is_dynamic_dropdown(key);
+            assert_eq!(options(key).is_some(), expected, "{key:?}");
+        }
     }
 
     #[test]
     fn multi_option_settings_are_dropdowns_and_toggles_are_steppers() {
         // A setting with more than two options is a dropdown; exactly two is a
         // stepper. The cook keys its row expansion off this length.
+        use SettingKey as K;
         for key in [
-            "graphics_quality",
-            "window_mode",
-            "render_scale",
-            "fps_cap",
-            "master_volume",
-            "aa_mode",
-            "shadow_map_size",
-            "anisotropy",
+            K::GraphicsQuality,
+            K::WindowMode,
+            K::RenderScale,
+            K::FpsCap,
+            K::MasterVolume,
+            K::AaMode,
+            K::ShadowMapSize,
+            K::Anisotropy,
         ] {
             assert!(
                 options(key).unwrap().len() > 2,
-                "{key} should be a dropdown"
+                "{key:?} should be a dropdown"
             );
         }
-        for key in ["vsync", "shadow_update", "temporal_upscaling", "ssao"] {
-            assert_eq!(options(key).unwrap().len(), 2, "{key} should be a stepper");
+        for key in [K::Vsync, K::ShadowUpdate, K::TemporalUpscaling, K::Ssao] {
+            assert_eq!(
+                options(key).unwrap().len(),
+                2,
+                "{key:?} should be a stepper"
+            );
         }
     }
 }

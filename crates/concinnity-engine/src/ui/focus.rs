@@ -5,7 +5,7 @@
 
 use concinnity_core::components::NavDirection;
 
-use crate::settings::action;
+use crate::settings::{SettingKey, action};
 
 // Weight of the perpendicular offset in the directional score, so a target
 // straight ahead beats a nearer one far off to the side (tabs above a row
@@ -30,7 +30,7 @@ pub(crate) struct Candidate {
 pub(crate) struct Target {
     pub(crate) index: usize,
     pub(crate) rect: [f32; 4],
-    pub(crate) setting: Option<String>,
+    pub(crate) setting: Option<SettingKey>,
 }
 
 // The current focus: the focused region's index plus its last known rect. The
@@ -61,21 +61,21 @@ pub(crate) fn targets(candidates: &[Candidate]) -> Vec<Target> {
                 return Some(Target {
                     index: c.index,
                     rect: c.rect,
-                    setting: Some(key.to_string()),
+                    setting: Some(key),
                 });
             }
             if let Some(key) = action::key_with_verb(&c.action, "open") {
                 return Some(Target {
                     index: c.index,
                     rect: c.rect,
-                    setting: Some(key.to_string()),
+                    setting: Some(key),
                 });
             }
             if let Some(key) = action::key_with_verb(&c.action, "drag") {
                 return Some(Target {
                     index: c.index,
                     rect: c.rect,
-                    setting: Some(key.to_string()),
+                    setting: Some(key),
                 });
             }
             (!c.action.is_empty()).then_some(Target {
@@ -224,9 +224,9 @@ mod tests {
         ]);
         let by_index: Vec<usize> = t.iter().map(|t| t.index).collect();
         assert_eq!(by_index, vec![1, 2, 3, 4, 5, 6], "prev + empty drop");
-        assert_eq!(t[0].setting.as_deref(), Some("vsync"));
-        assert_eq!(t[1].setting.as_deref(), Some("exposure"));
-        assert_eq!(t[2].setting.as_deref(), Some("window_mode"));
+        assert_eq!(t[0].setting, Some(SettingKey::Vsync));
+        assert_eq!(t[1].setting, Some(SettingKey::Exposure));
+        assert_eq!(t[2].setting, Some(SettingKey::WindowMode));
         assert!(t[3].setting.is_none(), "a rebind row is not a value row");
     }
 

@@ -27,6 +27,7 @@ use concinnity_core::render::post::ssao::SsaoSettings;
 use concinnity_core::render::post::ssgi::settings::SsgiSettings;
 use concinnity_core::render::post::ssr::settings::SsrSettings;
 use concinnity_core::render::{backend, overlay_maps, scene_flow, snapshot, text};
+use concinnity_core::settings::SettingKey;
 use concinnity_core::transform::propagation;
 use concinnity_host::store::paths::StateTree;
 
@@ -198,7 +199,7 @@ pub(crate) struct PadRebindViz {
 // `setting:<key>:drag` HitRegion (track `x`/`width`, `label`, `drag_handle`) and
 // the handle Sprite's width, then handed to SettingsState for the slider drain.
 pub(crate) struct SliderViz {
-    pub(crate) key: String,
+    pub(crate) key: SettingKey,
     pub(crate) track_x: f32,
     pub(crate) track_w: f32,
     pub(crate) handle_w: f32,
@@ -317,31 +318,31 @@ impl System for GraphicsSystem {
 
 // The current on/off state of quality toggle `key` in `cfg`, or `None` for a
 // key that is not a quality toggle.
-pub(crate) fn quality_toggle_on(cfg: &PostProcessConfig, key: &str) -> Option<bool> {
+pub(crate) fn quality_toggle_on(cfg: &PostProcessConfig, key: SettingKey) -> Option<bool> {
     match key {
-        "ssao" => Some(cfg.ssao),
-        "ssr" => Some(cfg.ssr),
-        "ray_traced_reflections" => Some(cfg.ray_traced_reflections),
-        "ssgi" => Some(cfg.indirect_lighting == IndirectLighting::Ssgi),
-        "auto_exposure" => Some(cfg.auto_exposure),
+        SettingKey::Ssao => Some(cfg.ssao),
+        SettingKey::Ssr => Some(cfg.ssr),
+        SettingKey::RayTracedReflections => Some(cfg.ray_traced_reflections),
+        SettingKey::Ssgi => Some(cfg.indirect_lighting == IndirectLighting::Ssgi),
+        SettingKey::AutoExposure => Some(cfg.auto_exposure),
         _ => None,
     }
 }
 
 // Flip quality toggle `key` to `on` in `cfg`. Unknown keys are ignored.
-pub(crate) fn set_quality_toggle(cfg: &mut PostProcessConfig, key: &str, on: bool) {
+pub(crate) fn set_quality_toggle(cfg: &mut PostProcessConfig, key: SettingKey, on: bool) {
     match key {
-        "ssao" => cfg.ssao = on,
-        "ssr" => cfg.ssr = on,
-        "ray_traced_reflections" => cfg.ray_traced_reflections = on,
-        "ssgi" => {
+        SettingKey::Ssao => cfg.ssao = on,
+        SettingKey::Ssr => cfg.ssr = on,
+        SettingKey::RayTracedReflections => cfg.ray_traced_reflections = on,
+        SettingKey::Ssgi => {
             cfg.indirect_lighting = if on {
                 IndirectLighting::Ssgi
             } else {
                 IndirectLighting::Ibl
             }
         }
-        "auto_exposure" => cfg.auto_exposure = on,
+        SettingKey::AutoExposure => cfg.auto_exposure = on,
         _ => {}
     }
 }
@@ -349,20 +350,20 @@ pub(crate) fn set_quality_toggle(cfg: &mut PostProcessConfig, key: &str, on: boo
 // Whether `key` is one of the cycle (dropdown) quality knobs governed by the
 // preset ceiling like the boolean toggles (a manual change flips the preset to
 // Custom). The set lives in `settings::QUALITY_CYCLE_KEYS`.
-pub(crate) fn is_quality_cycle(key: &str) -> bool {
+pub(crate) fn is_quality_cycle(key: SettingKey) -> bool {
     crate::settings::QUALITY_CYCLE_KEYS.contains(&key)
 }
 
 // The current menu option index of cycle quality knob `key` in `cfg`, or `None`
 // for a key that is not a cycle quality knob.
-pub(crate) fn quality_cycle_index(cfg: &PostProcessConfig, key: &str) -> Option<usize> {
+pub(crate) fn quality_cycle_index(cfg: &PostProcessConfig, key: SettingKey) -> Option<usize> {
     use crate::settings;
     match key {
-        "aa_mode" => Some(settings::aa_mode_index(cfg.aa_mode)),
-        "ssgi_resolution" => Some(settings::ssgi_resolution_index(cfg.ssgi_resolution)),
-        "ssgi_rays" => Some(settings::ssgi_rays_index(cfg.ssgi_rays)),
-        "ssgi_steps" => Some(settings::ssgi_steps_index(cfg.ssgi_steps)),
-        "reflection_blur_resolution" => Some(settings::reflection_blur_index(
+        SettingKey::AaMode => Some(settings::aa_mode_index(cfg.aa_mode)),
+        SettingKey::SsgiResolution => Some(settings::ssgi_resolution_index(cfg.ssgi_resolution)),
+        SettingKey::SsgiRays => Some(settings::ssgi_rays_index(cfg.ssgi_rays)),
+        SettingKey::SsgiSteps => Some(settings::ssgi_steps_index(cfg.ssgi_steps)),
+        SettingKey::ReflectionBlurResolution => Some(settings::reflection_blur_index(
             cfg.reflection_blur_resolution,
         )),
         _ => None,
@@ -371,14 +372,14 @@ pub(crate) fn quality_cycle_index(cfg: &PostProcessConfig, key: &str) -> Option<
 
 // Set cycle quality knob `key` in `cfg` from a menu option index. Unknown keys
 // are ignored.
-pub(crate) fn set_quality_cycle(cfg: &mut PostProcessConfig, key: &str, index: usize) {
+pub(crate) fn set_quality_cycle(cfg: &mut PostProcessConfig, key: SettingKey, index: usize) {
     use crate::settings;
     match key {
-        "aa_mode" => cfg.aa_mode = settings::aa_mode_at(index),
-        "ssgi_resolution" => cfg.ssgi_resolution = settings::ssgi_resolution_at(index),
-        "ssgi_rays" => cfg.ssgi_rays = settings::ssgi_rays_at(index),
-        "ssgi_steps" => cfg.ssgi_steps = settings::ssgi_steps_at(index),
-        "reflection_blur_resolution" => {
+        SettingKey::AaMode => cfg.aa_mode = settings::aa_mode_at(index),
+        SettingKey::SsgiResolution => cfg.ssgi_resolution = settings::ssgi_resolution_at(index),
+        SettingKey::SsgiRays => cfg.ssgi_rays = settings::ssgi_rays_at(index),
+        SettingKey::SsgiSteps => cfg.ssgi_steps = settings::ssgi_steps_at(index),
+        SettingKey::ReflectionBlurResolution => {
             cfg.reflection_blur_resolution = settings::reflection_blur_at(index)
         }
         _ => {}
@@ -391,7 +392,7 @@ pub(crate) fn set_quality_cycle(cfg: &mut PostProcessConfig, key: &str, index: u
 // produce the same result.
 pub(crate) fn clamp_quality_cycle(
     cfg: &mut PostProcessConfig,
-    key: &str,
+    key: SettingKey,
     ceiling: &crate::gfx::quality_preset::QualityCeiling,
     overridden: bool,
 ) {
@@ -402,14 +403,14 @@ pub(crate) fn clamp_quality_cycle(
         clamp_aa_mode, coarser_reflection_blur, coarser_ssgi_resolution,
     };
     match key {
-        "aa_mode" => cfg.aa_mode = clamp_aa_mode(cfg.aa_mode, ceiling.aa_mode),
-        "ssgi_resolution" => {
+        SettingKey::AaMode => cfg.aa_mode = clamp_aa_mode(cfg.aa_mode, ceiling.aa_mode),
+        SettingKey::SsgiResolution => {
             cfg.ssgi_resolution =
                 coarser_ssgi_resolution(cfg.ssgi_resolution, ceiling.ssgi_resolution)
         }
-        "ssgi_rays" => cfg.ssgi_rays = cfg.ssgi_rays.min(ceiling.ssgi_rays),
-        "ssgi_steps" => cfg.ssgi_steps = cfg.ssgi_steps.min(ceiling.ssgi_steps),
-        "reflection_blur_resolution" => {
+        SettingKey::SsgiRays => cfg.ssgi_rays = cfg.ssgi_rays.min(ceiling.ssgi_rays),
+        SettingKey::SsgiSteps => cfg.ssgi_steps = cfg.ssgi_steps.min(ceiling.ssgi_steps),
+        SettingKey::ReflectionBlurResolution => {
             cfg.reflection_blur_resolution = coarser_reflection_blur(
                 cfg.reflection_blur_resolution,
                 ceiling.reflection_blur_resolution,

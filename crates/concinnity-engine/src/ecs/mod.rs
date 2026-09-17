@@ -236,7 +236,9 @@ pub(crate) struct SceneResidencyStatus {
 // the init-time capability gating (which marks `HitRegion.disabled` before the
 // regions are drained); this drives the same effect after they are drained.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct DisabledSettingRows(pub std::collections::HashSet<String>);
+pub(crate) struct DisabledSettingRows(
+    pub std::collections::HashSet<concinnity_core::settings::SettingKey>,
+);
 
 // The display modes offered by the "Resolution" settings row, published once by
 // GraphicsSystem at init (enumerated from the backend's display, or the static

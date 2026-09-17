@@ -60,6 +60,7 @@ use concinnity_core::resource::MaterialTable;
 use concinnity_core::resource::MeshTable;
 use concinnity_core::resource::SkinnedMeshTable;
 use concinnity_core::resource::TextureTable;
+use concinnity_core::settings::SettingKey;
 use concinnity_core::transform::propagation;
 use concinnity_host::store::blob::BlobData;
 use std::sync::{Arc, Mutex};
@@ -1999,34 +2000,42 @@ fn quality_toggle_and_cycle_helpers_round_trip() {
 
     let mut cfg = PostProcessConfig::default();
     for key in [
-        "ssao",
-        "ssr",
-        "ray_traced_reflections",
-        "ssgi",
-        "auto_exposure",
+        SettingKey::Ssao,
+        SettingKey::Ssr,
+        SettingKey::RayTracedReflections,
+        SettingKey::Ssgi,
+        SettingKey::AutoExposure,
     ] {
         super::set_quality_toggle(&mut cfg, key, true);
-        assert_eq!(super::quality_toggle_on(&cfg, key), Some(true), "{key} on");
+        assert_eq!(
+            super::quality_toggle_on(&cfg, key),
+            Some(true),
+            "{key:?} on"
+        );
         super::set_quality_toggle(&mut cfg, key, false);
         assert_eq!(
             super::quality_toggle_on(&cfg, key),
             Some(false),
-            "{key} off"
+            "{key:?} off"
         );
     }
-    assert_eq!(super::quality_toggle_on(&cfg, "not_a_toggle"), None);
-    // An unknown key is ignored rather than panicking.
-    super::set_quality_toggle(&mut cfg, "not_a_toggle", true);
+    // A key that is not a toggle has no state and is ignored.
+    assert_eq!(super::quality_toggle_on(&cfg, SettingKey::Vsync), None);
+    super::set_quality_toggle(&mut cfg, SettingKey::Vsync, true);
 
     for key in QUALITY_CYCLE_KEYS {
         assert!(super::is_quality_cycle(key));
         let index = super::quality_cycle_index(&cfg, key).expect("a cycle key has an index");
         super::set_quality_cycle(&mut cfg, key, index);
-        assert_eq!(super::quality_cycle_index(&cfg, key), Some(index), "{key}");
+        assert_eq!(
+            super::quality_cycle_index(&cfg, key),
+            Some(index),
+            "{key:?}"
+        );
     }
-    assert!(!super::is_quality_cycle("ssao"));
-    assert_eq!(super::quality_cycle_index(&cfg, "ssao"), None);
-    super::set_quality_cycle(&mut cfg, "not_a_cycle", 0);
+    assert!(!super::is_quality_cycle(SettingKey::Ssao));
+    assert_eq!(super::quality_cycle_index(&cfg, SettingKey::Ssao), None);
+    super::set_quality_cycle(&mut cfg, SettingKey::Vsync, 0);
 
     // A ceiling clamps each cycle knob DOWN, and never raises one.
     cfg.aa_mode = AaMode::Taa;
@@ -2057,12 +2066,12 @@ fn quality_toggle_and_cycle_helpers_round_trip() {
         ssgi_rays: 32,
         ..Default::default()
     };
-    super::clamp_quality_cycle(&mut kept, "ssgi_rays", &ceiling, true);
+    super::clamp_quality_cycle(&mut kept, SettingKey::SsgiRays, &ceiling, true);
     assert_eq!(
         kept.ssgi_rays, 32,
         "an explicit override survives the ceiling"
     );
-    super::clamp_quality_cycle(&mut kept, "not_a_cycle", &ceiling, false);
+    super::clamp_quality_cycle(&mut kept, SettingKey::Vsync, &ceiling, false);
 }
 
 // The scene world plus a caller-shaped PostProcessConfig. The persisted-override
@@ -2748,10 +2757,13 @@ fn settings_rows_show_their_live_values_at_init() {
     // the HitRegions are drained right after init.
     let live = settings_state(&world);
     assert_eq!(
-        live.cycle_value_labels.get("ssgi_rays"),
+        live.cycle_value_labels.get(&SettingKey::SsgiRays),
         Some(&AssetId(120))
     );
-    assert_eq!(live.cycle_value_labels.get("vsync"), Some(&AssetId(100)));
+    assert_eq!(
+        live.cycle_value_labels.get(&SettingKey::Vsync),
+        Some(&AssetId(100))
+    );
 }
 
 // Each slider row's handle position and value label are synced to the live value
@@ -2824,10 +2836,14 @@ fn slider_rows_sync_their_handle_and_label_to_the_live_value() {
 
     // The captured rows are handed to SettingsSystem for the live drag drain.
     let live = settings_state(&world);
-    let keys: Vec<&str> = live.sliders.iter().map(|s| s.key.as_str()).collect();
-    assert!(keys.contains(&"exposure"));
-    assert!(keys.contains(&"vignette"));
-    let exposure = live.sliders.iter().find(|s| s.key == "exposure").unwrap();
+    let keys: Vec<SettingKey> = live.sliders.iter().map(|s| s.key).collect();
+    assert!(keys.contains(&SettingKey::Exposure));
+    assert!(keys.contains(&SettingKey::Vignette));
+    let exposure = live
+        .sliders
+        .iter()
+        .find(|s| s.key == SettingKey::Exposure)
+        .unwrap();
     assert_eq!(
         (exposure.track_x, exposure.track_w, exposure.handle_w),
         (0.0, 100.0, 10.0)

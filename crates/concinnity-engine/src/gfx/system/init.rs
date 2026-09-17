@@ -41,6 +41,7 @@ use concinnity_core::resource::FontTable;
 use concinnity_core::resource::MaterialTable;
 use concinnity_core::resource::SkinnedMeshTable;
 use concinnity_core::resource::TextureTable;
+use concinnity_core::settings::SettingKey;
 use concinnity_core::window::display_mode;
 use concinnity_host::store::blob::blob_path;
 use concinnity_host::store::blob::payload_section_start;
@@ -554,50 +555,56 @@ impl GraphicsSystem {
         // the SettingsSystem drain.
         settings.gamepad_map = user_settings.controls.gamepad_map.unwrap_or_default();
         sync_setting_value_labels(ctx, |key| match key {
-            "vsync" => Some(settings.vsync as usize),
-            "fps_cap" => Some(crate::settings::fps_cap_index(settings.fps_cap)),
-            "window_mode" => Some(crate::settings::window_mode_index(
+            SettingKey::Vsync => Some(settings.vsync as usize),
+            SettingKey::FpsCap => Some(crate::settings::fps_cap_index(settings.fps_cap)),
+            SettingKey::WindowMode => Some(crate::settings::window_mode_index(
                 settings.window_args.mode,
             )),
-            // "resolution" is a dynamic dropdown; its label is set from the
+            // Resolution is a dynamic dropdown; its label is set from the
             // enumerated mode list after the backend is built.
-            "render_scale" => Some(crate::settings::render_scale_index(settings.render_scale)),
-            "upscale_backend" => Some(crate::settings::upscale_backend_index(
+            SettingKey::RenderScale => {
+                Some(crate::settings::render_scale_index(settings.render_scale))
+            }
+            SettingKey::UpscaleBackend => Some(crate::settings::upscale_backend_index(
                 settings.upscale_backend,
             )),
-            "master_volume" => Some(crate::settings::volume_index(master_volume)),
-            "music_volume" => Some(crate::settings::volume_index(music_volume)),
-            "sfx_volume" => Some(crate::settings::volume_index(sfx_volume)),
-            "voice_volume" => Some(crate::settings::volume_index(voice_volume)),
+            SettingKey::MasterVolume => Some(crate::settings::volume_index(master_volume)),
+            SettingKey::MusicVolume => Some(crate::settings::volume_index(music_volume)),
+            SettingKey::SfxVolume => Some(crate::settings::volume_index(sfx_volume)),
+            SettingKey::VoiceVolume => Some(crate::settings::volume_index(voice_volume)),
             // Display-output / upscaling toggles (Off/On).
-            "temporal_upscaling" => Some(settings.temporal_upscaling as usize),
-            "hdr_display" => Some(settings.hdr_display as usize),
-            "hdr_pq" => Some(settings.hdr_pq as usize),
+            SettingKey::TemporalUpscaling => Some(settings.temporal_upscaling as usize),
+            SettingKey::HdrDisplay => Some(settings.hdr_display as usize),
+            SettingKey::HdrPq => Some(settings.hdr_pq as usize),
             // Stats-HUD display toggles (Off/On).
-            "perf_stats" => Some(settings.perf_stats as usize),
-            "show_fps" => Some(settings.show_fps as usize),
-            "show_vram" => Some(settings.show_vram as usize),
+            SettingKey::PerfStats => Some(settings.perf_stats as usize),
+            SettingKey::ShowFps => Some(settings.show_fps as usize),
+            SettingKey::ShowVram => Some(settings.show_vram as usize),
             // Shadow quality knobs (resolution restart-required, cadence live).
-            "shadow_map_size" => Some(crate::settings::shadow_resolution_index(
+            SettingKey::ShadowMapSize => Some(crate::settings::shadow_resolution_index(
                 settings.shadow_map_size,
             )),
-            "shadow_update" => Some(crate::settings::shadow_update_index(settings.shadow_update)),
-            "shadow_distance" => Some(crate::settings::shadow_distance_index(
+            SettingKey::ShadowUpdate => {
+                Some(crate::settings::shadow_update_index(settings.shadow_update))
+            }
+            SettingKey::ShadowDistance => Some(crate::settings::shadow_distance_index(
                 settings.shadow_distance,
             )),
-            "shadow_cascades" => Some(crate::settings::shadow_cascades_index(
+            SettingKey::ShadowCascades => Some(crate::settings::shadow_cascades_index(
                 settings.shadow_cascades,
             )),
-            "anisotropy" => Some(crate::settings::anisotropy_index(settings.anisotropy)),
+            SettingKey::Anisotropy => Some(crate::settings::anisotropy_index(settings.anisotropy)),
             // System / streaming restart rows.
-            "frames_in_flight" => Some(crate::settings::frames_in_flight_index(
+            SettingKey::FramesInFlight => Some(crate::settings::frames_in_flight_index(
                 settings.frames_in_flight as u32,
             )),
-            "occlusion_two_pass" => Some(settings.occlusion_two_pass as usize),
-            "texture_quality" => Some(crate::settings::texture_quality_index(settings.texture_cap)),
+            SettingKey::OcclusionTwoPass => Some(settings.occlusion_two_pass as usize),
+            SettingKey::TextureQuality => {
+                Some(crate::settings::texture_quality_index(settings.texture_cap))
+            }
             // mouse_sensitivity is a slider now, synced by `init_sliders`.
             // Quality toggles: index 0 = Off, 1 = On, matching OFF_ON_OPTIONS.
-            key if crate::settings::is_quality_toggle(key) => {
+            key if key.is_quality_toggle() => {
                 super::quality_toggle_on(&settings.post_config, key).map(|on| on as usize)
             }
             // SSGI gather sub-quality dropdowns.
@@ -611,7 +618,7 @@ impl GraphicsSystem {
         // it is set directly after the generic sync above writes the bare name.
         let preset_label =
             crate::gfx::quality_preset::preset_label(active_preset, &settings.gpu_profile);
-        set_setting_row_label(ctx, "graphics_quality", &preset_label);
+        set_setting_row_label(ctx, SettingKey::GraphicsQuality, &preset_label);
         // Capture the slider rows and sync each handle + value label to its live
         // value (e.g. the persisted/authored exposure). Like the cycle-row sync
         // above, this runs before UiInputSystem drains the HitRegions.
@@ -1246,7 +1253,7 @@ impl GraphicsSystem {
         ctx.insert_resource(FrameRateCap(settings.fps_cap));
         let idx = display_mode::index_of(&settings.display_modes, settings.effective_resolution());
         if let Some(m) = settings.display_modes.get(idx) {
-            set_setting_row_label(ctx, "resolution", &m.label());
+            set_setting_row_label(ctx, SettingKey::Resolution, &m.label());
         }
     }
 
@@ -1951,19 +1958,16 @@ impl GraphicsSystem {
 // system drains the HitRegions.
 fn sync_setting_value_labels(
     ctx: &mut PipelineContext,
-    current_index: impl Fn(&str) -> Option<usize>,
+    current_index: impl Fn(SettingKey) -> Option<usize>,
 ) {
-    // (setting key, value-label id) for each settings row.
-    let rows: Vec<(String, AssetId)> = ctx
+    // (setting, value-label id) for each settings row.
+    let rows: Vec<(SettingKey, AssetId)> = ctx
         .query::<HitRegion>()
-        .filter_map(|r| {
-            let key = crate::settings::action::key(&r.action)?;
-            Some((key.to_string(), r.label?))
-        })
+        .filter_map(|r| Some((crate::settings::action::key(&r.action)?, r.label?)))
         .collect();
 
     for (key, label_id) in rows {
-        let (Some(opts), Some(idx)) = (crate::settings::options(&key), current_index(&key)) else {
+        let (Some(opts), Some(idx)) = (crate::settings::options(key), current_index(key)) else {
             continue;
         };
         if let Some(text) = opts.get(idx).copied() {
@@ -1980,7 +1984,7 @@ fn sync_setting_value_labels(
 // Set the value label of the settings row bound to `key` to `text` directly,
 // for a label that is not one of the row's static `options` (the master preset
 // row's "Auto (High)", or the live "Custom" flip when a quality row changes).
-fn set_setting_row_label(ctx: &mut PipelineContext, key: &str, text: &str) {
+fn set_setting_row_label(ctx: &mut PipelineContext, key: SettingKey, text: &str) {
     let label_id = ctx.query::<HitRegion>().find_map(|r| {
         let row_key = crate::settings::action::key(&r.action)?;
         (row_key == key).then_some(r.label).flatten()

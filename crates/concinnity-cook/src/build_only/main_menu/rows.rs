@@ -1,7 +1,11 @@
-// Which rows a settings tab shows, and how one row is emitted. The tables name
-// the setting keys and labels; the runtime
-// (`concinnity_engine::settings`) knows each key's options and how to
-// apply it.
+// Which rows a settings tab shows, and how one row is emitted. The tables pair
+// each `SettingKey` with its label; core's `SettingKey` owns the key vocabulary
+// and the runtime (`concinnity_engine::settings`) knows each key's options and
+// how to apply it.
+
+use concinnity_core::components::GamepadAction;
+use concinnity_core::input::keymap::Bindable;
+use concinnity_core::settings::SettingKey;
 
 use crate::authoring::registry::build_only::{MainMenu, SettingsProfile};
 
@@ -24,136 +28,136 @@ pub(super) fn settings_tabs(profile: SettingsProfile) -> &'static [(&'static str
     }
 }
 
-// Setting rows per tab, top to bottom: (setting key, display label). The runtime
-// (`concinnity_engine::settings`) knows each key's options and how to apply
+// Setting rows per tab, top to bottom: (setting, display label). The runtime
+// (`concinnity_engine::settings`) knows each setting's options and how to apply
 // it; this only chooses which rows appear.
-const VIDEO_ROWS: [(&str, &str); 7] = [
-    ("vsync", "Vsync"),
-    ("fps_cap", "Frame Rate"),
-    ("window_mode", "Window Mode"),
-    ("resolution", "Resolution"),
+const VIDEO_ROWS: [(SettingKey, &str); 7] = [
+    (SettingKey::Vsync, "Vsync"),
+    (SettingKey::FpsCap, "Frame Rate"),
+    (SettingKey::WindowMode, "Window Mode"),
+    (SettingKey::Resolution, "Resolution"),
     // Stats-HUD display: the master toggle leads, then the per-readout toggles.
     // The master grays the two sub-rows out (rather than hiding them) when off.
-    ("perf_stats", "Display Performance Stats"),
-    ("show_fps", "Show Framerate"),
-    ("show_vram", "Show VRAM Usage"),
+    (SettingKey::PerfStats, "Display Performance Stats"),
+    (SettingKey::ShowFps, "Show Framerate"),
+    (SettingKey::ShowVram, "Show VRAM Usage"),
 ];
 // Video rows under the Minimal profile: window and output basics only, for a
 // world that renders no 3D scene (nothing to configure quality for). No
 // graphics-quality preset, no performance-stats toggles, no Quality / Advanced
 // groups.
-const VIDEO_MINIMAL_ROWS: [(&str, &str); 4] = [
-    ("window_mode", "Window Mode"),
-    ("resolution", "Resolution"),
-    ("vsync", "Vsync"),
-    ("fps_cap", "Frame Rate"),
+const VIDEO_MINIMAL_ROWS: [(SettingKey, &str); 4] = [
+    (SettingKey::WindowMode, "Window Mode"),
+    (SettingKey::Resolution, "Resolution"),
+    (SettingKey::Vsync, "Vsync"),
+    (SettingKey::FpsCap, "Frame Rate"),
 ];
 // Rows tucked under the Video "Advanced" collapsible group (collapsed by
 // default), so the top of the Video tab stays uncrowded. More live
 // post-process sliders join these later. Cycle rows then slider rows.
-const VIDEO_ADVANCED_ROWS: [(&str, &str); 8] = [
-    ("render_scale", "Render Scale"),
+const VIDEO_ADVANCED_ROWS: [(SettingKey, &str); 8] = [
+    (SettingKey::RenderScale, "Render Scale"),
     // Upscaler backend (Auto/FSR3/DLSS/XeSS). Restart-required, independent of the
     // quality preset; DirectX / Vulkan only (Metal uses MetalFX, so the row is
     // inert there). Sits next to render scale since it only matters with temporal
     // upscaling on.
-    ("upscale_backend", "Upscaler"),
+    (SettingKey::UpscaleBackend, "Upscaler"),
     // Display-output / upscaling preferences (Off/On + render-scale cycle).
     // Restart-required and independent of the quality preset.
-    ("temporal_upscaling", "Temporal Upscaling"),
-    ("hdr_display", "HDR Display"),
-    ("hdr_pq", "HDR10 (PQ)"),
+    (SettingKey::TemporalUpscaling, "Temporal Upscaling"),
+    (SettingKey::HdrDisplay, "HDR Display"),
+    (SettingKey::HdrPq, "HDR10 (PQ)"),
     // System / streaming restart preferences. Buffering depth, two-pass occlusion
     // culling, and texture-streaming quality (pool size + upload budget together).
-    ("frames_in_flight", "Frame Buffering"),
-    ("occlusion_two_pass", "Occlusion Culling"),
-    ("texture_quality", "Texture Quality"),
+    (SettingKey::FramesInFlight, "Frame Buffering"),
+    (SettingKey::OcclusionTwoPass, "Occlusion Culling"),
+    (SettingKey::TextureQuality, "Texture Quality"),
 ];
-// Live post-process sliders in the Advanced group. Each key's value range,
+// Live post-process sliders in the Advanced group. Each slider's value range,
 // display format, and apply path live in the client (`concinnity_engine::settings` +
 // graphics system); a row here only chooses which sliders appear. All but
-// `ambient_intensity` are pure `PostProcessParams` fields applied via
-// `update_post_process`; `ambient_intensity` rides a dedicated backend setter
+// `AmbientIntensity` are pure `PostProcessParams` fields applied via
+// `update_post_process`; `AmbientIntensity` rides a dedicated backend setter
 // (Metal live; see the client graphics system).
-const VIDEO_ADVANCED_SLIDERS: [(&str, &str); 8] = [
-    ("exposure", "Exposure"),
-    ("bloom_intensity", "Bloom"),
-    ("bloom_threshold", "Bloom Threshold"),
-    ("bloom_knee", "Bloom Knee"),
-    ("vignette", "Vignette"),
-    ("lut_strength", "Color Grade"),
-    ("ambient_intensity", "Ambient"),
+const VIDEO_ADVANCED_SLIDERS: [(SettingKey, &str); 8] = [
+    (SettingKey::Exposure, "Exposure"),
+    (SettingKey::BloomIntensity, "Bloom"),
+    (SettingKey::BloomThreshold, "Bloom Threshold"),
+    (SettingKey::BloomKnee, "Bloom Knee"),
+    (SettingKey::Vignette, "Vignette"),
+    (SettingKey::LutStrength, "Color Grade"),
+    (SettingKey::AmbientIntensity, "Ambient"),
     // Camera vertical field of view (degrees). Live, independent of the preset.
-    ("fov", "Field of View"),
+    (SettingKey::Fov, "Field of View"),
 ];
 // Quality toggles in the Video "Quality" collapsible group (collapsed by
 // default): the heavier render features. Each is an Off/On cycle row. The
-// client (`concinnity_engine::settings` + its system) knows each key's options and
+// client (`concinnity_engine::settings` + its system) knows each setting's options and
 // applies it live by rebuilding the affected render resources; on backends
 // without a live path the choice persists and applies at the next launch.
-const VIDEO_QUALITY_ROWS: [(&str, &str); 15] = [
-    ("aa_mode", "Anti-Aliasing"),
-    ("ssao", "Ambient Occlusion"),
-    ("ssr", "Screen-Space Reflections"),
-    ("ray_traced_reflections", "Ray-Traced Reflections"),
+const VIDEO_QUALITY_ROWS: [(SettingKey, &str); 15] = [
+    (SettingKey::AaMode, "Anti-Aliasing"),
+    (SettingKey::Ssao, "Ambient Occlusion"),
+    (SettingKey::Ssr, "Screen-Space Reflections"),
+    (SettingKey::RayTracedReflections, "Ray-Traced Reflections"),
     // Reflection blur resolution dropdown, grouped under the reflection toggles
     // it governs (SSR + ray-traced).
-    ("reflection_blur_resolution", "Reflection Blur"),
-    ("ssgi", "Global Illumination"),
+    (SettingKey::ReflectionBlurResolution, "Reflection Blur"),
+    (SettingKey::Ssgi, "Global Illumination"),
     // SSGI gather sub-quality (multi-option dropdowns), grouped under the GI
     // toggle. The runtime knows each key's options and applies them live.
-    ("ssgi_resolution", "GI Resolution"),
-    ("ssgi_rays", "GI Rays"),
-    ("ssgi_steps", "GI Steps"),
+    (SettingKey::SsgiResolution, "GI Resolution"),
+    (SettingKey::SsgiRays, "GI Rays"),
+    (SettingKey::SsgiSteps, "GI Steps"),
     // Shadow quality: cascade map resolution (restart-required) + re-render
     // cadence (live) + distance (live) + cascade count (live). Preset-governed
     // like the toggles above.
-    ("shadow_map_size", "Shadow Resolution"),
-    ("shadow_update", "Shadow Update"),
-    ("shadow_distance", "Shadow Distance"),
-    ("shadow_cascades", "Shadow Cascades"),
-    ("auto_exposure", "Auto Exposure"),
+    (SettingKey::ShadowMapSize, "Shadow Resolution"),
+    (SettingKey::ShadowUpdate, "Shadow Update"),
+    (SettingKey::ShadowDistance, "Shadow Distance"),
+    (SettingKey::ShadowCascades, "Shadow Cascades"),
+    (SettingKey::AutoExposure, "Auto Exposure"),
     // Anisotropic texture filtering (restart-required). Preset-governed like the
     // toggles above.
-    ("anisotropy", "Anisotropic Filtering"),
+    (SettingKey::Anisotropy, "Anisotropic Filtering"),
 ];
 // Per-feature sub-quality sliders in the Video "Quality" group, tuning the
 // features the toggles / dropdowns above enable. Applied live on Metal by
 // mutating the backend's stored *Settings (no pass rebuild); look-tuning knobs,
 // independent of the master quality preset.
-const VIDEO_QUALITY_SLIDERS: [(&str, &str); 9] = [
-    ("ssao_radius", "AO Radius"),
-    ("ssao_intensity", "AO Intensity"),
-    ("ssr_intensity", "Reflection Intensity"),
-    ("ssr_max_distance", "Reflection Distance"),
-    ("ssgi_intensity", "GI Intensity"),
-    ("ssgi_max_distance", "GI Distance"),
-    ("auto_exposure_min_ev", "Auto Exposure Min"),
-    ("auto_exposure_max_ev", "Auto Exposure Max"),
-    ("auto_exposure_speed", "Auto Exposure Speed"),
+const VIDEO_QUALITY_SLIDERS: [(SettingKey, &str); 9] = [
+    (SettingKey::SsaoRadius, "AO Radius"),
+    (SettingKey::SsaoIntensity, "AO Intensity"),
+    (SettingKey::SsrIntensity, "Reflection Intensity"),
+    (SettingKey::SsrMaxDistance, "Reflection Distance"),
+    (SettingKey::SsgiIntensity, "GI Intensity"),
+    (SettingKey::SsgiMaxDistance, "GI Distance"),
+    (SettingKey::AutoExposureMinEv, "Auto Exposure Min"),
+    (SettingKey::AutoExposureMaxEv, "Auto Exposure Max"),
+    (SettingKey::AutoExposureSpeed, "Auto Exposure Speed"),
 ];
-const AUDIO_ROWS: [(&str, &str); 4] = [
-    ("master_volume", "Master Volume"),
-    ("music_volume", "Music Volume"),
-    ("sfx_volume", "SFX Volume"),
-    ("voice_volume", "Voice Volume"),
+const AUDIO_ROWS: [(SettingKey, &str); 4] = [
+    (SettingKey::MasterVolume, "Master Volume"),
+    (SettingKey::MusicVolume, "Music Volume"),
+    (SettingKey::SfxVolume, "SFX Volume"),
+    (SettingKey::VoiceVolume, "Voice Volume"),
 ];
-// Controls-tab sliders, top to bottom: (setting key, display label). Mouse
+// Controls-tab sliders, top to bottom: (setting, display label). Mouse
 // sensitivity is a continuous slider (the client maps the 1..100 track to a
 // radians-per-pixel value) applied live by the camera controller.
-const CONTROLS_SLIDERS: [(&str, &str); 1] = [("mouse_sensitivity", "Sensitivity")];
+const CONTROLS_SLIDERS: [(SettingKey, &str); 1] = [(SettingKey::MouseSensitivity, "Sensitivity")];
 // Rebindable gameplay actions shown under the Controls tab: (display label,
-// setting key). Each emits a clickable row that captures a new key; the client
+// setting). Each emits a clickable row that captures a new key; the client
 // (`concinnity_core::input::keymap` + the graphics system) owns the live key map and applies a
-// rebind without a restart. The setting keys match `Bindable::setting_key`.
-const CONTROLS_REBINDS: [(&str, &str); 7] = [
-    ("Move Forward", "key_forward"),
-    ("Move Back", "key_backward"),
-    ("Move Left", "key_left"),
-    ("Move Right", "key_right"),
-    ("Sprint", "key_sprint"),
-    ("Jump", "key_jump"),
-    ("Interact", "key_interact"),
+// rebind without a restart.
+const CONTROLS_REBINDS: [(&str, SettingKey); 7] = [
+    ("Move Forward", SettingKey::KeyRebind(Bindable::Forward)),
+    ("Move Back", SettingKey::KeyRebind(Bindable::Backward)),
+    ("Move Left", SettingKey::KeyRebind(Bindable::Left)),
+    ("Move Right", SettingKey::KeyRebind(Bindable::Right)),
+    ("Sprint", SettingKey::KeyRebind(Bindable::Sprint)),
+    ("Jump", SettingKey::KeyRebind(Bindable::Jump)),
+    ("Interact", SettingKey::KeyRebind(Bindable::Interact)),
 ];
 // Read-only key reference shown under the Controls tab: (action, key). Pause
 // (Escape) carries cursor-release / menu semantics that are fixed per-backend,
@@ -162,33 +166,32 @@ const CONTROLS_KEYS: [(&str, &str); 1] = [("Pause", "Esc")];
 // Gamepad sliders in the Controls "Gamepad" group: look-stick sensitivity
 // (1..100 mapped to a radians-per-second rate) and the radial stick deadzone
 // (shown as a percentage of deflection). Both applied live via ControlsCommand.
-const CONTROLS_PAD_SLIDERS: [(&str, &str); 2] = [
-    ("gamepad_look_sensitivity", "Stick Sensitivity"),
-    ("gamepad_deadzone", "Stick Deadzone"),
+const CONTROLS_PAD_SLIDERS: [(SettingKey, &str); 2] = [
+    (SettingKey::GamepadLookSensitivity, "Stick Sensitivity"),
+    (SettingKey::GamepadDeadzone, "Stick Deadzone"),
 ];
-// Rebindable gamepad actions in the same group: (display label, setting key).
-// Each emits a clickable row that captures a button press; the setting keys
-// match `GamepadAction::setting_key`. Movement and look ride the sticks (with
-// the d-pad as a digital fallback) and pause rides Start, so only the
-// button-driven actions are rebindable.
-const CONTROLS_PAD_REBINDS: [(&str, &str); 3] = [
-    ("Sprint", "pad_sprint"),
-    ("Jump", "pad_jump"),
-    ("Interact", "pad_interact"),
+// Rebindable gamepad actions in the same group: (display label, setting).
+// Each emits a clickable row that captures a button press. Movement and look
+// ride the sticks (with the d-pad as a digital fallback) and pause rides Start,
+// so only the button-driven actions are rebindable.
+const CONTROLS_PAD_REBINDS: [(&str, SettingKey); 3] = [
+    ("Sprint", SettingKey::PadRebind(GamepadAction::Sprint)),
+    ("Jump", SettingKey::PadRebind(GamepadAction::Jump)),
+    ("Interact", SettingKey::PadRebind(GamepadAction::Interact)),
 ];
 
 // One row of a settings tab's scrollable body.
 #[derive(Clone, Copy)]
 pub(super) enum BodyRow {
-    // An OptionSelect cycle row: (setting key, label, group index or -1).
-    Option(&'static str, &'static str, i32),
-    // A Slider row: (setting key, label, group index or -1).
-    Slider(&'static str, &'static str, i32),
+    // An OptionSelect cycle row: (setting, label, group index or -1).
+    Option(SettingKey, &'static str, i32),
+    // A Slider row: (setting, label, group index or -1).
+    Slider(SettingKey, &'static str, i32),
     // A read-only key-reference row: (action label, key text, index, group).
     Key(&'static str, &'static str, usize, i32),
-    // A key-rebind row: (action label, setting key, index, group). Like a Key
+    // A key-rebind row: (action label, setting, index, group). Like a Key
     // row but with a HitRegion that captures a new binding on click.
-    Rebind(&'static str, &'static str, usize, i32),
+    Rebind(&'static str, SettingKey, usize, i32),
     // A collapsible-group header: (group index, title). Always shown.
     GroupHeader(usize, &'static str),
 }
@@ -272,8 +275,11 @@ pub(super) fn settings_body_rows(
             // The master "Graphics Quality" preset leads the tab (ungrouped, so it
             // is always visible); the runtime cycles Auto/Low/Medium/High/Ultra/
             // Custom and re-derives the toggles + render scale under its ceiling.
-            let mut rows: Vec<BodyRow> =
-                vec![BodyRow::Option("graphics_quality", "Graphics Quality", -1)];
+            let mut rows: Vec<BodyRow> = vec![BodyRow::Option(
+                SettingKey::GraphicsQuality,
+                "Graphics Quality",
+                -1,
+            )];
             rows.extend(VIDEO_ROWS.iter().map(|&(s, l)| BodyRow::Option(s, l, -1)));
             rows.push(BodyRow::GroupHeader(0, "Quality"));
             for &(s, l) in &VIDEO_QUALITY_ROWS {
@@ -316,7 +322,7 @@ pub(super) fn settings_body_rows(
 // row builders, which take the same inputs.
 pub(super) struct SettingsRow<'a> {
     pub(super) name: &'a str,
-    pub(super) setting: &'a str,
+    pub(super) setting: SettingKey,
     pub(super) label: &'a str,
     pub(super) font: &'a str,
     pub(super) x: f32,
@@ -343,7 +349,7 @@ pub(super) fn option_select_row(row: &SettingsRow) -> serde_json::Value {
         "name": name,
         "type": "OptionSelect",
         "args": {
-            "setting": setting,
+            "setting": setting.as_str(),
             "label": label,
             "x": x,
             "y": y,
@@ -380,7 +386,7 @@ pub(super) fn slider_row(row: &SettingsRow) -> serde_json::Value {
         "name": name,
         "type": "Slider",
         "args": {
-            "setting": setting,
+            "setting": setting.as_str(),
             "label": label,
             "x": x,
             "y": y,

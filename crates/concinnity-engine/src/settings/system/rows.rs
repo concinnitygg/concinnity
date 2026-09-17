@@ -3,18 +3,15 @@
 // disabled rows, and the captures GraphicsSystem's init runs on the
 // SettingsState it resolves.
 
-use concinnity_core::components::{
-    GamepadAction, HitRegion, ScrollPanel, Sprite, TextLabel, WindowMode,
-};
+use concinnity_core::components::{HitRegion, ScrollPanel, Sprite, TextLabel, WindowMode};
 use concinnity_core::ecs::PipelineContext;
 use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::input::keymap;
 use concinnity_core::window::display_mode;
 
 use super::SettingsState;
 use crate::gfx::system::{PadRebindViz, RebindViz, SliderViz};
 use crate::settings;
-use crate::settings::action;
+use crate::settings::{SettingKey, action};
 
 // Muted gray applied to the labels of a capability-disabled settings row, so it
 // reads as unavailable next to the live rows.
@@ -67,7 +64,7 @@ pub(crate) fn set_rows_grayed(
 // Runs at init while the HitRegions / ScrollPanels are still present.
 pub(crate) fn capture_row_labels(
     ctx: &mut PipelineContext,
-    keys: &[&str],
+    keys: &[SettingKey],
 ) -> Vec<(AssetId, [f32; 3])> {
     // Collect the rows' value-label ids (every region of a row -- steppers'
     // prev/next or a dropdown's open -- references its value label).
@@ -107,12 +104,12 @@ pub(crate) fn set_label_content(ctx: &mut PipelineContext, id: AssetId, text: &s
 // row). The menu's HitRegions are drained after init, so the row -> label map
 // is captured once rather than re-queried here.
 pub(crate) fn set_cached_row_label(
-    labels: &std::collections::HashMap<String, AssetId>,
+    labels: &std::collections::HashMap<SettingKey, AssetId>,
     ctx: &mut PipelineContext,
-    key: &str,
+    key: SettingKey,
     text: &str,
 ) {
-    if let Some(&id) = labels.get(key) {
+    if let Some(&id) = labels.get(&key) {
         set_label_content(ctx, id, text);
     }
 }
@@ -148,7 +145,7 @@ impl SettingsState {
             };
             let handle_w = sprite_w.get(&handle_id).copied().unwrap_or(0.0);
             sliders.push(SliderViz {
-                key: key.to_string(),
+                key,
                 track_x: r.x,
                 track_w: r.width,
                 handle_w,
@@ -157,7 +154,7 @@ impl SettingsState {
             });
         }
         for s in &sliders {
-            let Some(slider) = settings::slider(&s.key) else {
+            let Some(slider) = settings::slider(s.key) else {
                 continue;
             };
             let value = slider.current_value(
@@ -185,12 +182,10 @@ impl SettingsState {
             else {
                 continue;
             };
-            // A `key_*` setting is a keyboard rebind row; a `pad_*` setting is
-            // a gamepad rebind row.
-            if let Some(action) = keymap::Bindable::from_setting_key(key) {
-                rows.push(RebindViz { action, value_id });
-            } else if let Some(action) = GamepadAction::from_setting_key(key) {
-                pad_rows.push(PadRebindViz { action, value_id });
+            match key {
+                SettingKey::KeyRebind(action) => rows.push(RebindViz { action, value_id }),
+                SettingKey::PadRebind(action) => pad_rows.push(PadRebindViz { action, value_id }),
+                _ => {}
             }
         }
         for row in &rows {
@@ -213,7 +208,7 @@ impl SettingsState {
         let mut labels = std::collections::HashMap::new();
         for r in ctx.query::<HitRegion>() {
             if let (Some(key), Some(value_id)) = (action::cycle_key(&r.action), r.label) {
-                labels.insert(key.to_string(), value_id);
+                labels.insert(key, value_id);
             }
         }
         self.cycle_value_labels = labels;
@@ -224,7 +219,8 @@ impl SettingsState {
     // runtime and restore them, and apply the initial gray from the resolved
     // toggle. Runs once at init while the HitRegions / ScrollPanels are present.
     pub(crate) fn capture_perf_sub_rows(&mut self, ctx: &mut PipelineContext) {
-        self.perf_sub_row_labels = capture_row_labels(ctx, &["show_fps", "show_vram"]);
+        self.perf_sub_row_labels =
+            capture_row_labels(ctx, &[SettingKey::ShowFps, SettingKey::ShowVram]);
         set_rows_grayed(ctx, &self.perf_sub_row_labels, !self.perf_stats);
     }
 
@@ -233,7 +229,7 @@ impl SettingsState {
     // come from the window itself, borderless covers the display), so it is
     // grayed + inert in the other modes. Same init window as the perf rows.
     pub(crate) fn capture_resolution_row(&mut self, ctx: &mut PipelineContext) {
-        self.resolution_row_labels = capture_row_labels(ctx, &["resolution"]);
+        self.resolution_row_labels = capture_row_labels(ctx, &[SettingKey::Resolution]);
         set_rows_grayed(
             ctx,
             &self.resolution_row_labels,
@@ -439,10 +435,10 @@ mod tests {
         for id in [1, 2, 3, 4, 5, 20] {
             world.push(label(id, [id as f32 / 100.0; 3]));
         }
-        world.push(region("setting:shadows:next", Some(3)));
-        world.push(region("setting:other:next", Some(20)));
+        world.push(region("setting:shadow_map_size:next", Some(3)));
+        world.push(region("setting:vsync:next", Some(20)));
         world.push(region("quit", Some(1)));
-        world.push(region("setting:shadows:prev", None));
+        world.push(region("setting:shadow_map_size:prev", None));
         world.push(ScrollPanel {
             rows: vec![
                 ScrollRow {
@@ -458,7 +454,7 @@ mod tests {
         });
         let mut ctx = world.ctx();
 
-        let captured = capture_row_labels(&mut ctx, &["shadows"]);
+        let captured = capture_row_labels(&mut ctx, &[SettingKey::ShadowMapSize]);
         let expected: Vec<(AssetId, [f32; 3])> = [1, 2, 3, 4, 5]
             .into_iter()
             .map(|id| (AssetId(id), [id as f32 / 100.0; 3]))
@@ -472,10 +468,10 @@ mod tests {
     fn capture_row_labels_without_a_matching_key_captures_nothing() {
         let mut world = TestWorld::new();
         world.push(label(1, [1.0; 3]));
-        world.push(region("setting:shadows:next", Some(1)));
+        world.push(region("setting:shadow_map_size:next", Some(1)));
         let mut ctx = world.ctx();
 
-        assert!(capture_row_labels(&mut ctx, &["resolution"]).is_empty());
+        assert!(capture_row_labels(&mut ctx, &[SettingKey::Resolution]).is_empty());
     }
 
     // A perf sub-row captured while the stats master is off starts grayed, and
@@ -536,7 +532,10 @@ mod tests {
 
         state.init_cycle_value_labels(&mut ctx);
         assert_eq!(state.cycle_value_labels.len(), 1);
-        assert_eq!(state.cycle_value_labels.get("vsync"), Some(&AssetId(1)));
+        assert_eq!(
+            state.cycle_value_labels.get(&SettingKey::Vsync),
+            Some(&AssetId(1))
+        );
     }
 
     // The Resolution row reads the user's choice first, then the display's own

@@ -8,7 +8,10 @@
 // its Screen via the build pipeline's `<screen>_*` rule and never collide with
 // hand-authored assets.
 
+use concinnity_core::settings::{SettingKey, SettingKind};
+
 use super::expand::{asset_name, type_norm};
+use super::row_setting::row_setting;
 use super::ui_spec::{font_sizes, label_value, sprite};
 use crate::authoring::registry::build_only::Slider;
 use crate::authoring::spec::{asset, spec_to_value};
@@ -55,6 +58,7 @@ pub(crate) fn expand_sliders(assets: &mut Vec<serde_json::Value>) -> Result<(), 
             .unwrap_or_else(|| serde_json::json!({}));
         let slider: Slider = serde_json::from_value(args)
             .map_err(|e| format!("Slider '{}': invalid args: {}", name, e))?;
+        let setting = row_setting("Slider", &name, &slider.setting, SettingKind::Slider)?;
 
         let default_px = slider.font_px;
         let font_px = if slider.font.is_empty() {
@@ -63,7 +67,7 @@ pub(crate) fn expand_sliders(assets: &mut Vec<serde_json::Value>) -> Result<(), 
             *font_px_by_name.get(&slider.font).unwrap_or(&default_px)
         };
 
-        result.extend(expand_one(&name, &slider, font_px));
+        result.extend(expand_one(&name, &slider, setting, font_px));
     }
 
     *assets = result;
@@ -83,7 +87,7 @@ pub(crate) fn element_names(base: &str) -> Vec<String> {
     ]
 }
 
-fn expand_one(name: &str, s: &Slider, font_px: f32) -> Vec<serde_json::Value> {
+fn expand_one(name: &str, s: &Slider, setting: SettingKey, font_px: f32) -> Vec<serde_json::Value> {
     let glyph_w = font_px * AVG_ADVANCE_RATIO * s.text_scale;
     let line_h = font_px * s.text_scale;
     let text_y = s.y + (s.height - line_h) / 2.0;
@@ -153,7 +157,7 @@ fn expand_one(name: &str, s: &Slider, font_px: f32) -> Vec<serde_json::Value> {
             &asset::hit_region(
                 format!("{}_drag", name),
                 [track_x, s.y, track_w, s.height],
-                format!("setting:{}:drag", s.setting),
+                format!("setting:{}:drag", setting.as_str()),
             )
             .set("label", value_name)
             .set("drag_handle", handle_name),
@@ -223,6 +227,24 @@ mod tests {
         assert!(expand_sliders(&mut assets).is_err());
     }
 
+    // A Slider with no setting, an unknown one, or a cycle row's is a build error
+    // naming the asset rather than a dead row.
+    #[test]
+    fn a_blank_unknown_or_cycle_setting_is_an_error() {
+        for (setting, expected) in [
+            ("", "missing `setting`"),
+            ("bloom", "unknown setting 'bloom'"),
+            ("vsync", "'vsync' is a Cycle setting"),
+        ] {
+            let mut assets = vec![serde_json::json!({
+                "name": "sld", "type": "Slider", "args": {"setting": setting}
+            })];
+            let err = expand_sliders(&mut assets).unwrap_err();
+            assert!(err.contains("Slider 'sld'"), "{err}");
+            assert!(err.contains(expected), "{err}");
+        }
+    }
+
     #[test]
     fn invalid_args_name_the_slider() {
         let mut assets = vec![serde_json::json!({
@@ -233,10 +255,13 @@ mod tests {
         assert!(err.contains("invalid args"), "{err}");
     }
 
-    // A Slider with no args at all is the fully defaulted row, not an error.
+    // A Slider naming only its setting takes every other field from the type
+    // defaults.
     #[test]
     fn slider_without_args_uses_type_defaults() {
-        let mut assets = vec![serde_json::json!({"name":"sld","type":"Slider"})];
+        let mut assets = vec![serde_json::json!({
+            "name": "sld", "type": "Slider", "args": {"setting": "exposure"}
+        })];
         expand_sliders(&mut assets).unwrap();
         let defaults = Slider::default();
         assert_eq!(by_name(&assets, "sld_label")["args"]["x"], defaults.x);

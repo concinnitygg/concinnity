@@ -43,7 +43,7 @@ impl Bindable {
 
     /// The settings key string used in `setting:<key>:rebind` actions and the
     /// engine settings registry.
-    pub fn setting_key(self) -> &'static str {
+    pub const fn setting_key(self) -> &'static str {
         match self {
             Bindable::Forward => "key_forward",
             Bindable::Backward => "key_backward",
@@ -53,11 +53,6 @@ impl Bindable {
             Bindable::Jump => "key_jump",
             Bindable::Interact => "key_interact",
         }
-    }
-
-    /// The action for a settings key string, or `None` if it is not a rebind key.
-    pub fn from_setting_key(key: &str) -> Option<Bindable> {
-        Bindable::ALL.into_iter().find(|b| b.setting_key() == key)
     }
 }
 
@@ -196,15 +191,6 @@ mod tests {
         assert_eq!(m.sprint, InputKey::Shift);
         assert_eq!(m.jump, InputKey::Space);
         assert_eq!(m.interact, InputKey::E);
-    }
-
-    #[test]
-    fn setting_key_round_trips() {
-        for b in Bindable::ALL {
-            assert_eq!(Bindable::from_setting_key(b.setting_key()), Some(b));
-        }
-        assert_eq!(Bindable::from_setting_key("vsync"), None);
-        assert_eq!(Bindable::from_setting_key("key_nope"), None);
     }
 
     #[test]

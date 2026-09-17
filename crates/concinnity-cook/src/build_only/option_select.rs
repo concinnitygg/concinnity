@@ -12,16 +12,18 @@
 // so generated elements stay scoped to its Screen via the build pipeline's
 // `<screen>_*` rule and never collide with hand-authored assets.
 
+use concinnity_core::settings::{SettingKey, SettingKind};
+
 use super::expand::{asset_name, type_norm};
+use super::row_setting::row_setting;
 use super::ui_spec::{font_sizes, label_value};
 use crate::authoring::registry::build_only::OptionSelect;
 use crate::authoring::spec::{asset, spec_to_value};
 
 // Whether a setting row expands to a dropdown (more than two options, or a
 // runtime-enumerated option list like `resolution`) rather than a `<`/`>`
-// stepper. An unknown key (no registered options) falls back to the stepper
-// form.
-fn is_dropdown(setting: &str) -> bool {
+// stepper.
+fn is_dropdown(setting: SettingKey) -> bool {
     concinnity_core::settings::options(setting).is_some_and(|o| o.len() > 2)
         || concinnity_core::settings::is_dynamic_dropdown(setting)
 }
@@ -68,6 +70,7 @@ pub(crate) fn expand_option_selects(assets: &mut Vec<serde_json::Value>) -> Resu
             .unwrap_or_else(|| serde_json::json!({}));
         let select: OptionSelect = serde_json::from_value(args)
             .map_err(|e| format!("OptionSelect '{}': invalid args: {}", name, e))?;
+        let setting = row_setting("OptionSelect", &name, &select.setting, SettingKind::Cycle)?;
 
         let default_px = select.font_px;
         let font_px = if select.font.is_empty() {
@@ -76,7 +79,7 @@ pub(crate) fn expand_option_selects(assets: &mut Vec<serde_json::Value>) -> Resu
             *font_px_by_name.get(&select.font).unwrap_or(&default_px)
         };
 
-        result.extend(expand_one(&name, &select, font_px));
+        result.extend(expand_one(&name, &select, setting, font_px));
     }
 
     *assets = result;
@@ -89,7 +92,7 @@ pub(crate) fn expand_option_selects(assets: &mut Vec<serde_json::Value>) -> Resu
 // The child set depends on the row form (dropdown vs stepper), so it takes the
 // setting key too. Locked to the expansion output by
 // `element_names_match_expansion`.
-pub(crate) fn element_names(base: &str, setting: &str) -> Vec<String> {
+pub(crate) fn element_names(base: &str, setting: SettingKey) -> Vec<String> {
     if is_dropdown(setting) {
         vec![
             format!("{base}_label"),
@@ -106,7 +109,12 @@ pub(crate) fn element_names(base: &str, setting: &str) -> Vec<String> {
     }
 }
 
-fn expand_one(name: &str, s: &OptionSelect, font_px: f32) -> Vec<serde_json::Value> {
+fn expand_one(
+    name: &str,
+    s: &OptionSelect,
+    setting: SettingKey,
+    font_px: f32,
+) -> Vec<serde_json::Value> {
     let line_h = font_px * s.text_scale;
     let text_y = s.y + (s.height - line_h) / 2.0;
     let value_name = format!("{}_value", name);
@@ -119,7 +127,7 @@ fn expand_one(name: &str, s: &OptionSelect, font_px: f32) -> Vec<serde_json::Val
     // current value left-aligned in the control column, and a downward chevron
     // at the far right, all under one region that opens the floating list. The
     // chevron is an ASCII `v` (the built-in font atlas is ASCII-only).
-    if is_dropdown(&s.setting) {
+    if is_dropdown(setting) {
         return vec![
             // Name (left).
             label_value(
@@ -162,7 +170,7 @@ fn expand_one(name: &str, s: &OptionSelect, font_px: f32) -> Vec<serde_json::Val
                 },
                 &value_name,
                 s,
-                &format!("setting:{}:open", s.setting),
+                &format!("setting:{}:open", setting.as_str()),
             ),
         ];
     }
@@ -230,7 +238,7 @@ fn expand_one(name: &str, s: &OptionSelect, font_px: f32) -> Vec<serde_json::Val
             },
             &value_name,
             s,
-            &format!("setting:{}:prev", s.setting),
+            &format!("setting:{}:prev", setting.as_str()),
         ),
         // Next click region (value + `>`).
         region(
@@ -243,7 +251,7 @@ fn expand_one(name: &str, s: &OptionSelect, font_px: f32) -> Vec<serde_json::Val
             },
             &value_name,
             s,
-            &format!("setting:{}:next", s.setting),
+            &format!("setting:{}:next", setting.as_str()),
         ),
     ]
 }
@@ -348,6 +356,24 @@ mod tests {
         assert!(expand_option_selects(&mut assets).is_err());
     }
 
+    // A row with no setting, an unknown one, or a slider's is a build error
+    // naming the asset rather than a dead row.
+    #[test]
+    fn a_blank_unknown_or_slider_setting_is_an_error() {
+        for (setting, expected) in [
+            ("", "missing `setting`"),
+            ("taa", "unknown setting 'taa'"),
+            ("exposure", "'exposure' is a Slider setting"),
+        ] {
+            let mut assets = vec![serde_json::json!({
+                "name": "opt", "type": "OptionSelect", "args": {"setting": setting}
+            })];
+            let err = expand_option_selects(&mut assets).unwrap_err();
+            assert!(err.contains("OptionSelect 'opt'"), "{err}");
+            assert!(err.contains(expected), "{err}");
+        }
+    }
+
     #[test]
     fn invalid_args_name_the_select() {
         let mut assets = vec![serde_json::json!({
@@ -358,10 +384,13 @@ mod tests {
         assert!(err.contains("invalid args"), "{err}");
     }
 
-    // A row with no args at all is the fully defaulted row, not an error.
+    // A row naming only its setting takes every other field from the type
+    // defaults.
     #[test]
     fn select_without_args_uses_type_defaults() {
-        let mut assets = vec![serde_json::json!({"name":"opt","type":"OptionSelect"})];
+        let mut assets = vec![serde_json::json!({
+            "name": "opt", "type": "OptionSelect", "args": {"setting": "vsync"}
+        })];
         expand_option_selects(&mut assets).unwrap();
         let defaults = OptionSelect::default();
         assert_eq!(by_name(&assets, "opt_label")["args"]["x"], defaults.x);
@@ -444,7 +473,9 @@ mod tests {
                 .map(asset_name)
                 .collect();
             let listed: std::collections::HashSet<String> =
-                element_names("opt", setting).into_iter().collect();
+                element_names("opt", SettingKey::parse(setting).unwrap())
+                    .into_iter()
+                    .collect();
             assert_eq!(listed, emitted, "element_names drifted for '{setting}'");
         }
     }

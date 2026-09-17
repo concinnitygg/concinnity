@@ -25,9 +25,11 @@ use concinnity_core::components::StoryCommand;
 use concinnity_core::components::Transform;
 use concinnity_core::ecs::World;
 use concinnity_core::gfx::camera;
+use concinnity_core::input::keymap::Bindable;
 use concinnity_core::render::backend;
 use concinnity_core::render::decal;
 use concinnity_core::render::particles;
+use concinnity_core::settings::SettingKey;
 use concinnity_engine::controller::camera::Camera3DSystem;
 use concinnity_engine::gfx::system::parked::TextureNameSlots;
 use concinnity_host::thread::asset_id;
@@ -283,13 +285,13 @@ pub(crate) enum WorldCommand {
     },
     // Step a Quality-group graphics setting through the settings menu's command.
     QualitySet {
-        setting: String,
+        setting: SettingKey,
         op: SettingOp,
         reply: std::sync::mpsc::SyncSender<Result<(), String>>,
     },
-    // Bind a movement action (`key_forward`, ...) to a key.
+    // Bind a movement action to a key.
     Rebind {
-        setting: String,
+        action: Bindable,
         key: InputKey,
         reply: std::sync::mpsc::SyncSender<Result<(), String>>,
     },
@@ -488,12 +490,8 @@ pub(crate) fn dispatch_world_command(
             send_setting(world, setting, op);
             let _ = reply.send(Ok(()));
         }
-        WorldCommand::Rebind {
-            setting,
-            key,
-            reply,
-        } => {
-            send_setting(world, setting, SettingOp::Rebind(key));
+        WorldCommand::Rebind { action, key, reply } => {
+            send_setting(world, SettingKey::KeyRebind(action), SettingOp::Rebind(key));
             let _ = reply.send(Ok(()));
         }
         WorldCommand::Despawn { name, reply } => {
@@ -550,7 +548,7 @@ pub(crate) fn dispatch_world_command(
 
 // Send the `SettingCommand` the settings menu emits. `GraphicsSystem` applies it
 // live on its next step and refreshes the value label itself.
-fn send_setting(world: &mut World, setting: String, op: SettingOp) {
+fn send_setting(world: &mut World, setting: SettingKey, op: SettingOp) {
     world.events_mut::<SettingCommand>().send(SettingCommand {
         setting,
         op,
@@ -1254,7 +1252,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         dispatch_world_command(
             WorldCommand::QualitySet {
-                setting: "ssao".to_string(),
+                setting: SettingKey::Ssao,
                 op: SettingOp::Next,
                 reply: tx,
             },
@@ -1269,7 +1267,7 @@ mod tests {
         let mut cursor = EventCursor::default();
         let seen: Vec<_> = events.read(&mut cursor).collect();
         assert_eq!(seen.len(), 1);
-        assert_eq!(seen[0].setting, "ssao");
+        assert_eq!(seen[0].setting, SettingKey::Ssao);
         assert_eq!(seen[0].op, SettingOp::Next);
         assert!(seen[0].persist);
         assert!(seen[0].value_label.is_none());
@@ -1281,7 +1279,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         dispatch_world_command(
             WorldCommand::Rebind {
-                setting: "key_forward".to_string(),
+                action: Bindable::Forward,
                 key: InputKey::Space,
                 reply: tx,
             },
@@ -1296,7 +1294,7 @@ mod tests {
         let mut cursor = EventCursor::default();
         let seen: Vec<_> = events.read(&mut cursor).collect();
         assert_eq!(seen.len(), 1);
-        assert_eq!(seen[0].setting, "key_forward");
+        assert_eq!(seen[0].setting, SettingKey::KeyRebind(Bindable::Forward));
         assert_eq!(seen[0].op, SettingOp::Rebind(InputKey::Space));
     }
 

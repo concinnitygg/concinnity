@@ -11,7 +11,7 @@ use concinnity_core::gfx::render_types::PostProcessTunables;
 use crate::config::GraphicsSettings;
 use crate::gfx::quality_preset::{QualityCeiling, clamp_shadow_update};
 use crate::gfx::system::{clamp_quality_cycle, set_quality_toggle};
-use crate::settings::{SLIDERS, SliderTarget};
+use crate::settings::{SLIDERS, SettingKey, SliderTarget};
 
 /// Shadow map resolution. Restart-required: the cascade array is sized once at
 /// backend init.
@@ -121,11 +121,14 @@ pub(crate) fn overlay_quality_scalars(cfg: &mut PostProcessConfig, user: &Graphi
 /// real authored look, not a placeholder.
 pub(crate) fn overlay_quality_overrides(cfg: &mut PostProcessConfig, user: &GraphicsSettings) {
     for (key, value) in [
-        ("ssao", user.ssao),
-        ("ssr", user.ssr),
-        ("ray_traced_reflections", user.ray_traced_reflections),
-        ("ssgi", user.ssgi),
-        ("auto_exposure", user.auto_exposure),
+        (SettingKey::Ssao, user.ssao),
+        (SettingKey::Ssr, user.ssr),
+        (
+            SettingKey::RayTracedReflections,
+            user.ray_traced_reflections,
+        ),
+        (SettingKey::Ssgi, user.ssgi),
+        (SettingKey::AutoExposure, user.auto_exposure),
     ] {
         if let Some(v) = value {
             set_quality_toggle(cfg, key, v);
@@ -159,16 +162,16 @@ pub(crate) fn clamp_quality_under_ceiling(
     ceiling: &QualityCeiling,
 ) {
     for (key, overridden, allowed) in [
-        ("ssao", user.ssao.is_some(), ceiling.ssao),
-        ("ssr", user.ssr.is_some(), ceiling.ssr),
+        (SettingKey::Ssao, user.ssao.is_some(), ceiling.ssao),
+        (SettingKey::Ssr, user.ssr.is_some(), ceiling.ssr),
         (
-            "ray_traced_reflections",
+            SettingKey::RayTracedReflections,
             user.ray_traced_reflections.is_some(),
             ceiling.ray_traced_reflections,
         ),
-        ("ssgi", user.ssgi.is_some(), ceiling.ssgi),
+        (SettingKey::Ssgi, user.ssgi.is_some(), ceiling.ssgi),
         (
-            "auto_exposure",
+            SettingKey::AutoExposure,
             user.auto_exposure.is_some(),
             ceiling.auto_exposure,
         ),
@@ -179,11 +182,11 @@ pub(crate) fn clamp_quality_under_ceiling(
     }
     for key in crate::settings::QUALITY_CYCLE_KEYS {
         let overridden = match key {
-            "aa_mode" => user.aa_mode.is_some(),
-            "ssgi_resolution" => user.ssgi_resolution.is_some(),
-            "ssgi_rays" => user.ssgi_rays.is_some(),
-            "ssgi_steps" => user.ssgi_steps.is_some(),
-            "reflection_blur_resolution" => user.reflection_blur_resolution.is_some(),
+            SettingKey::AaMode => user.aa_mode.is_some(),
+            SettingKey::SsgiResolution => user.ssgi_resolution.is_some(),
+            SettingKey::SsgiRays => user.ssgi_rays.is_some(),
+            SettingKey::SsgiSteps => user.ssgi_steps.is_some(),
+            SettingKey::ReflectionBlurResolution => user.reflection_blur_resolution.is_some(),
             _ => false,
         };
         clamp_quality_cycle(cfg, key, ceiling, overridden);

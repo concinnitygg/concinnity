@@ -25,20 +25,12 @@ impl GamepadAction {
     /// The settings key string used in `setting:<key>:rebind` actions and the
     /// engine settings registry. The `pad_` prefix distinguishes a button
     /// capture row from a `key_*` keyboard capture row.
-    pub fn setting_key(self) -> &'static str {
+    pub const fn setting_key(self) -> &'static str {
         match self {
             GamepadAction::Sprint => "pad_sprint",
             GamepadAction::Jump => "pad_jump",
             GamepadAction::Interact => "pad_interact",
         }
-    }
-
-    /// The action for a settings key string, or `None` if it is not a gamepad
-    /// rebind key.
-    pub fn from_setting_key(key: &str) -> Option<GamepadAction> {
-        GamepadAction::ALL
-            .into_iter()
-            .find(|a| a.setting_key() == key)
     }
 }
 
@@ -132,15 +124,6 @@ fn def_interact() -> GamepadButton {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn setting_key_round_trips() {
-        for a in GamepadAction::ALL {
-            assert_eq!(GamepadAction::from_setting_key(a.setting_key()), Some(a));
-        }
-        assert_eq!(GamepadAction::from_setting_key("key_jump"), None);
-        assert_eq!(GamepadAction::from_setting_key("pad_nope"), None);
-    }
 
     #[test]
     fn get_set_cover_every_action_arm() {

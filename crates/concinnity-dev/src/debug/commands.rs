@@ -15,6 +15,8 @@ use concinnity_core::components::InputKey;
 use concinnity_core::components::SettingOp;
 use concinnity_core::components::StoryCommand;
 use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_core::input::keymap::Bindable;
+use concinnity_core::settings::SettingKey;
 use concinnity_engine::animation::runtime_queue;
 const SPAWN_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
@@ -487,9 +489,9 @@ pub(super) fn handle_camera_set(text: &str) -> String {
     )
 }
 
-// Toggle a Quality-group graphics setting. `setting` is the engine key
-// (taa / ssao / ssr / ssgi / auto_exposure); `op` cycles it (next | prev,
-// both flip a binary toggle). Defaults match the decal / camera request shape.
+// Flip a quality feature toggle. `setting` is one of the toggle keys (ssao / ssr
+// / ray_traced_reflections / ssgi / auto_exposure); `op` cycles it (next | prev,
+// both flip the toggle). Defaults match the decal / camera request shape.
 #[derive(serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct QualitySetRequest {
@@ -528,12 +530,20 @@ pub(super) fn handle_quality_set(text: &str) -> String {
             ));
         }
     };
+    let Some(setting) = SettingKey::parse(&req.setting).filter(|key| key.is_quality_toggle())
+    else {
+        return error_reply(&format!(
+            "quality-set: '{}' is not a quality toggle (use {})",
+            req.setting,
+            super::catalog::QUALITY_TOGGLE_NAMES.join(" | ")
+        ));
+    };
     run_with_reply(
         "quality-set",
         SPAWN_REPLY_TIMEOUT,
         |reply| {
             super::runtime_spawn::enqueue(super::runtime_spawn::WorldCommand::QualitySet {
-                setting: req.setting,
+                setting,
                 op,
                 reply,
             });
@@ -565,6 +575,13 @@ pub(super) fn handle_rebind(text: &str) -> String {
     if req.setting.is_empty() {
         return error_reply("rebind: missing 'setting' (e.g. key_forward)");
     }
+    let Some(SettingKey::KeyRebind(action)) = SettingKey::parse(&req.setting) else {
+        return error_reply(&format!(
+            "rebind: '{}' is not a key rebind (use {})",
+            req.setting,
+            Bindable::ALL.map(Bindable::setting_key).join(" | ")
+        ));
+    };
     // The canonical `InputKey` serializes to its variant name, so a JSON string
     // deserializes straight to it (W, Space, Shift, Num1, Up, ...).
     let key: InputKey = match serde_json::from_value(serde_json::Value::String(req.key.clone())) {
@@ -581,7 +598,7 @@ pub(super) fn handle_rebind(text: &str) -> String {
         SPAWN_REPLY_TIMEOUT,
         |reply| {
             super::runtime_spawn::enqueue(super::runtime_spawn::WorldCommand::Rebind {
-                setting: req.setting,
+                action,
                 key,
                 reply,
             });
@@ -1195,9 +1212,22 @@ mod tests {
     #[test]
     fn quality_set_rejects_an_unknown_op() {
         assert_err_reply(
-            &handle_quality_set(r#"{"setting":"taa","op":"sideways"}"#),
+            &handle_quality_set(r#"{"setting":"ssao","op":"sideways"}"#),
             "unknown op 'sideways'",
         );
+    }
+
+    // Only the five feature toggles are reachable: an AA mode or a display
+    // setting is refused before anything is queued, so it is never persisted.
+    #[test]
+    fn quality_set_rejects_a_key_outside_the_toggles() {
+        let _guard = test_support::lock();
+        let _ = runtime_spawn::drain();
+        for key in ["taa", "aa_mode", "vsync"] {
+            let body = format!(r#"{{"setting":"{key}"}}"#);
+            assert_err_reply(&handle_quality_set(&body), "is not a quality toggle");
+        }
+        assert!(runtime_spawn::drain().is_empty());
     }
 
     #[test]
@@ -1216,6 +1246,18 @@ mod tests {
             &handle_rebind(r#"{"setting":"key_forward","key":"NotAKey"}"#),
             "unknown key 'NotAKey'",
         );
+    }
+
+    // A gamepad rebind or an unknown action is refused: the verb binds keys only.
+    #[test]
+    fn rebind_rejects_an_unknown_setting() {
+        let _guard = test_support::lock();
+        let _ = runtime_spawn::drain();
+        for key in ["pad_jump", "key_nope"] {
+            let body = format!(r#"{{"setting":"{key}","key":"W"}}"#);
+            assert_err_reply(&handle_rebind(&body), "is not a key rebind");
+        }
+        assert!(runtime_spawn::drain().is_empty());
     }
 
     #[test]
@@ -1443,7 +1485,7 @@ mod tests {
             ("camera-stop", Box::new(handle_camera_stop)),
             (
                 "quality-set",
-                Box::new(|| handle_quality_set(r#"{"setting":"taa"}"#)),
+                Box::new(|| handle_quality_set(r#"{"setting":"ssao"}"#)),
             ),
             (
                 "rebind",
@@ -1497,7 +1539,7 @@ mod tests {
             ("camera-stop", std::thread::spawn(handle_camera_stop)),
             (
                 "quality-set",
-                std::thread::spawn(|| handle_quality_set(r#"{"setting":"taa"}"#)),
+                std::thread::spawn(|| handle_quality_set(r#"{"setting":"ssao"}"#)),
             ),
             (
                 "rebind",
@@ -1678,10 +1720,10 @@ mod tests {
     fn quality_set_maps_ops_and_reports_queued() {
         let _guard = test_support::lock();
         let reply = drive_runtime_handler(
-            || handle_quality_set(r#"{"setting":"taa","op":"prev"}"#),
+            || handle_quality_set(r#"{"setting":"ssao","op":"prev"}"#),
             |cmd| match cmd {
                 RuntimeCommand::World(WorldCommand::QualitySet { setting, op, reply }) => {
-                    assert_eq!(setting, "taa");
+                    assert_eq!(setting, SettingKey::Ssao);
                     assert_eq!(op, SettingOp::Prev);
                     let _ = reply.send(Ok(()));
                     None
@@ -1712,12 +1754,8 @@ mod tests {
         let reply = drive_runtime_handler(
             || handle_rebind(r#"{"setting":"key_forward","key":"Space"}"#),
             |cmd| match cmd {
-                RuntimeCommand::World(WorldCommand::Rebind {
-                    setting,
-                    key,
-                    reply,
-                }) => {
-                    assert_eq!(setting, "key_forward");
+                RuntimeCommand::World(WorldCommand::Rebind { action, key, reply }) => {
+                    assert_eq!(action, Bindable::Forward);
                     assert_eq!(key, InputKey::Space);
                     let _ = reply.send(Ok(()));
                     None

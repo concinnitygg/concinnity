@@ -21,6 +21,7 @@ pub(crate) mod option_select;
 pub(crate) mod panel;
 pub(crate) mod prefab;
 pub(crate) mod room;
+pub(crate) mod row_setting;
 pub(crate) mod scene_import;
 pub(crate) mod slider;
 pub(crate) mod story;

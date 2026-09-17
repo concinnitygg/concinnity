@@ -8,6 +8,7 @@ use concinnity_core::components::{FrameInput, SpriteFit, TextLabel};
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{FrameVec, PipelineContext, StepResult};
 use concinnity_core::gfx::overlay::OverlayTransform;
+use concinnity_core::settings::SettingKey;
 
 use super::intent::UiIntent;
 use super::{
@@ -70,7 +71,7 @@ pub(super) struct RegionOutcome {
     // A group header was clicked: flip that group on the active panel.
     pub(super) toggle_group: Option<usize>,
     // A rebind row was clicked: capture for this setting key and value label.
-    pub(super) start_capture: Option<(String, Option<AssetId>)>,
+    pub(super) start_capture: Option<(SettingKey, Option<AssetId>)>,
     // A dropdown row was clicked: open its floating list.
     pub(super) start_open: Option<OpenRequest>,
     // A fired action ended the step (e.g. Quit); nothing else applies.
@@ -119,9 +120,9 @@ fn follow_sync(
 }
 
 // Whether a region's setting row is in the runtime-disabled set.
-pub(super) fn setting_row_disabled(disabled_rows: &HashSet<String>, action: &str) -> bool {
+pub(super) fn setting_row_disabled(disabled_rows: &HashSet<SettingKey>, action: &str) -> bool {
     !disabled_rows.is_empty()
-        && crate::settings::action::key(action).is_some_and(|key| disabled_rows.contains(key))
+        && crate::settings::action::key(action).is_some_and(|key| disabled_rows.contains(&key))
 }
 
 // A region's `(hovered, fire)`. While the focus cursor is set it owns the hover
@@ -265,11 +266,11 @@ impl UiInputSystem {
             if let Some(gid) = entry.group_toggle {
                 outcome.toggle_group = Some(gid);
             } else if let Some(key) = crate::settings::action::key_with_verb(&r.action, "rebind") {
-                outcome.start_capture = Some((key.to_string(), r.label));
+                outcome.start_capture = Some((key, r.label));
             } else if let Some(key) = crate::settings::action::key_with_verb(&r.action, "open") {
                 // Snapshot the control rect and the row's un-hovered value style.
                 outcome.start_open = Some(OpenRequest {
-                    setting: key.to_string(),
+                    setting: key,
                     value_label: r.label,
                     anchor: region_rect(r),
                     screen: entry.screen,
@@ -364,7 +365,7 @@ mod tests {
 
     #[test]
     fn setting_row_disabled_matches_the_setting_key() {
-        let rows = HashSet::from(["show_fps".to_string()]);
+        let rows = HashSet::from([SettingKey::ShowFps]);
         assert!(setting_row_disabled(&rows, "setting:show_fps:next"));
         assert!(!setting_row_disabled(&rows, "setting:vsync:next"));
         assert!(!setting_row_disabled(&rows, "quit"));

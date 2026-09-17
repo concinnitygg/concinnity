@@ -38,6 +38,7 @@ use scroll_layout::RowSpec;
 use std::collections::HashMap;
 
 use crate::settings;
+use concinnity_core::settings::SettingKey;
 
 // How many reference-space pixels one unit of scroll-wheel delta moves a panel.
 const WHEEL_SCROLL_SPEED: f32 = 2.0;
@@ -60,7 +61,7 @@ struct RegionEntry {
     // For a slider drag region (action `setting:<key>:drag`), the setting key.
     // `None` for an ordinary click region. A slider region is driven by the
     // drag pass, not the click-to-fire path.
-    slider_key: Option<String>,
+    slider_key: Option<SettingKey>,
     // The scroll panel + row this region belongs to, if it sits in a panel's
     // content band (resolved by position at init). Such a region reflows with
     // its row each frame and only fires while its row is shown and inside the
@@ -175,8 +176,8 @@ struct LayoutScratch {
 // style fields mirror the row's value label so the list text matches it.
 #[derive(Debug)]
 struct OpenDropdownState {
-    // The setting the list picks a value for (e.g. `"window_mode"`).
-    setting: String,
+    // The setting the list picks a value for.
+    setting: SettingKey,
     // The row's value label, forwarded on the pick so GraphicsSystem refreshes
     // it.
     value_label: Option<AssetId>,
@@ -220,7 +221,7 @@ impl OpenDropdownState {
 // text needs the ctx the loop borrows). The style is the row's un-hovered value
 // style, snapshotted from the region entry at click time.
 struct OpenRequest {
-    setting: String,
+    setting: SettingKey,
     value_label: Option<AssetId>,
     anchor: [f32; 4],
     screen: Option<AssetId>,
@@ -266,7 +267,7 @@ pub(crate) struct UiInputSystem {
     // Cached copy of the engine's `DisabledSettingRows`, refreshed only when the
     // published resource changes so the hit-test loop reads an owned set without
     // cloning the resource every frame (SettingsSystem republishes rarely).
-    disabled_rows_cache: std::collections::HashSet<String>,
+    disabled_rows_cache: std::collections::HashSet<SettingKey>,
     // The gamepad/keyboard focus cursor, or `None` while the mouse drives the
     // menu. While set, it styles + fires in place of hover, and any cursor
     // movement dismisses it.
@@ -368,8 +369,7 @@ impl System for UiInputSystem {
                     .unwrap_or((None, None)),
             };
             let screen = region.screen;
-            let slider_key =
-                crate::settings::action::key_with_verb(&region.action, "drag").map(str::to_string);
+            let slider_key = crate::settings::action::key_with_verb(&region.action, "drag");
             let group_toggle = group_toggle_from_action(&region.action);
             let region_base_y = region.y;
             // A follow-label region captures the y offset to its label now, so
@@ -674,7 +674,7 @@ impl UiInputSystem {
         // when nothing is highlighted yet), then closes.
         if confirm {
             let pick = state.hovered.unwrap_or(state.selected);
-            let setting = state.setting.clone();
+            let setting = state.setting;
             let value_label = state.value_label;
             self.open_dropdown = None;
             ctx.events_mut::<SettingCommand>().send(SettingCommand {
@@ -689,7 +689,7 @@ impl UiInputSystem {
             match state.hovered {
                 // Pick the hovered option: send the absolute index, then close.
                 Some(i) => {
-                    let setting = state.setting.clone();
+                    let setting = state.setting;
                     let value_label = state.value_label;
                     self.open_dropdown = None;
                     ctx.events_mut::<SettingCommand>().send(SettingCommand {
@@ -715,7 +715,7 @@ impl UiInputSystem {
         req: OpenRequest,
         ctx: &mut PipelineContext,
     ) -> Option<OpenDropdownState> {
-        let options: Vec<String> = if concinnity_core::settings::is_dynamic_dropdown(&req.setting) {
+        let options: Vec<String> = if concinnity_core::settings::is_dynamic_dropdown(req.setting) {
             // Today the only dynamic dropdown is `resolution`, whose modes
             // GraphicsSystem publishes at init.
             let modes = ctx.resource::<crate::ecs::DisplayModes>()?;
@@ -724,7 +724,7 @@ impl UiInputSystem {
             }
             modes.0.iter().map(|m| m.label()).collect()
         } else {
-            settings::options(&req.setting)?
+            settings::options(req.setting)?
                 .iter()
                 .map(|s| s.to_string())
                 .collect()
@@ -871,7 +871,7 @@ impl UiInputSystem {
         if matches!(dir, NavDirection::Left | NavDirection::Right)
             && let Some(f) = self.focus.as_ref()
             && let Some(t) = targets.iter().find(|t| t.index == f.index)
-            && let Some(key) = t.setting.clone()
+            && let Some(key) = t.setting
         {
             let op = match dir {
                 NavDirection::Left => SettingOp::Prev,
@@ -1473,7 +1473,7 @@ fn fire_action(
                     SettingOp::Next
                 };
                 ctx.events_mut::<SettingCommand>().send(SettingCommand {
-                    setting: key.to_string(),
+                    setting: key,
                     op,
                     value_label: label,
                     // A cycle is one discrete change: always persisted.
@@ -1502,11 +1502,13 @@ mod tests {
     use super::capture::REBIND_PROMPT;
     use super::*;
     use crate::ecs::SYSTEMS;
+    use concinnity_core::components::GamepadAction;
     use concinnity_core::components::GamepadButton;
     use concinnity_core::components::InputKey;
     use concinnity_core::components::TextAlign;
     use concinnity_core::components::{HitRegion, ScrollGroup, ScrollRow, TextLabel};
     use concinnity_core::ecs::World;
+    use concinnity_core::input::keymap::Bindable;
     use concinnity_core::window::display_mode;
 
     fn make_frame_input(mx: f32, my: f32, clicked: bool) -> FrameInput {
@@ -1793,7 +1795,7 @@ mod tests {
         world.step();
         let cmds = produced_setting_commands(&world);
         assert_eq!(cmds.len(), 1);
-        assert_eq!(cmds[0].setting, "window_mode");
+        assert_eq!(cmds[0].setting, SettingKey::WindowMode);
         assert!(matches!(cmds[0].op, SettingOp::SetIndex(1)));
         assert!(!dropdown_is_open(&world), "picking closes the list");
     }
@@ -1895,7 +1897,7 @@ mod tests {
         world.step();
         let cmds = produced_setting_commands(&world);
         assert_eq!(cmds.len(), 1);
-        assert_eq!(cmds[0].setting, "resolution");
+        assert_eq!(cmds[0].setting, SettingKey::Resolution);
         assert!(matches!(cmds[0].op, SettingOp::SetIndex(i) if i == center + 2));
         assert!(!dropdown_is_open(&world));
     }
@@ -2452,7 +2454,7 @@ mod tests {
             .into_iter()
             .next()
             .unwrap();
-        assert_eq!(cmd.setting, "vsync");
+        assert_eq!(cmd.setting, SettingKey::Vsync);
         assert_eq!(cmd.op, SettingOp::Next);
         assert_eq!(cmd.value_label, Some(value_label));
 
@@ -2530,7 +2532,7 @@ mod tests {
         // Master off: the show_fps row is in the runtime-disabled set, so a click
         // over it fires nothing.
         world.insert_resource(crate::ecs::DisabledSettingRows(
-            ["show_fps".to_string()].into_iter().collect(),
+            [SettingKey::ShowFps].into_iter().collect(),
         ));
         world.add_component(make_frame_input(50.0, 50.0, true));
         world.step();
@@ -2575,7 +2577,7 @@ mod tests {
             .into_iter()
             .last()
             .unwrap();
-        assert_eq!(cmd.setting, "exposure");
+        assert_eq!(cmd.setting, SettingKey::Exposure);
         assert!(matches!(cmd.op, SettingOp::SetFraction(f) if (f - 0.25).abs() < 1.0e-5));
         assert_eq!(cmd.value_label, Some(value_label));
         assert!(
@@ -2791,7 +2793,10 @@ mod tests {
             ..Default::default()
         });
         world.add_component(panel_label(61, 0.0, screen, "Row0"));
-        for (i, y) in [0.0, 40.0, 80.0].into_iter().enumerate() {
+        for (key, y) in ["vsync", "window_mode", "fps_cap"]
+            .into_iter()
+            .zip([0.0, 40.0, 80.0])
+        {
             world.add_component(HitRegion {
                 x: 0.0,
                 y,
@@ -2800,7 +2805,7 @@ mod tests {
                 label: None,
                 hover_color: None,
                 hover_scale: None,
-                action: format!("setting:row{i}:next"),
+                action: format!("setting:{key}:next"),
                 drag_handle: None,
                 screen: Some(screen),
                 disabled: false,
@@ -2994,7 +2999,7 @@ mod tests {
             .into_iter()
             .next()
             .unwrap();
-        assert_eq!(cmd.setting, "key_forward");
+        assert_eq!(cmd.setting, SettingKey::KeyRebind(Bindable::Forward));
         assert_eq!(cmd.value_label, Some(value));
         assert!(matches!(cmd.op, SettingOp::Rebind(InputKey::Q)));
         assert!(cmd.persist);
@@ -3770,7 +3775,7 @@ mod tests {
             world.step();
             let cmds = produced_setting_commands(&world);
             let cmd = cmds.last().unwrap();
-            assert_eq!(cmd.setting, "vsync");
+            assert_eq!(cmd.setting, SettingKey::Vsync);
             assert_eq!(
                 matches!(cmd.op, SettingOp::Prev),
                 expect_prev,
@@ -3801,7 +3806,7 @@ mod tests {
         world.step();
         let cmds = produced_setting_commands(&world);
         let cmd = cmds.last().unwrap();
-        assert_eq!(cmd.setting, "exposure");
+        assert_eq!(cmd.setting, SettingKey::Exposure);
         assert!(matches!(cmd.op, SettingOp::Next));
     }
 
@@ -3941,7 +3946,7 @@ mod tests {
         world.step();
         let cmds = produced_setting_commands(&world);
         assert_eq!(cmds.len(), 1);
-        assert_eq!(cmds[0].setting, "pad_jump");
+        assert_eq!(cmds[0].setting, SettingKey::PadRebind(GamepadAction::Jump));
         assert!(matches!(
             cmds[0].op,
             SettingOp::RebindButton(GamepadButton::East)

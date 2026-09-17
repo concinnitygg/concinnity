@@ -210,7 +210,7 @@ pub(super) fn emit_settings_tab(
         ));
         let (mut elements, group): (Vec<String>, i32) = match *row {
             BodyRow::Option(setting, label, group) => {
-                let name = format!("{}_opt_{}", screen, setting);
+                let name = format!("{}_opt_{}", screen, setting.as_str());
                 out.push(option_select_row(&SettingsRow {
                     name: &name,
                     setting,
@@ -228,7 +228,7 @@ pub(super) fn emit_settings_tab(
                 )
             }
             BodyRow::Slider(setting, label, group) => {
-                let name = format!("{}_sld_{}", screen, setting);
+                let name = format!("{}_sld_{}", screen, setting.as_str());
                 out.push(slider_row(&SettingsRow {
                     name: &name,
                     setting,
@@ -297,7 +297,7 @@ pub(super) fn emit_settings_tab(
                     &asset::hit_region(
                         format!("{}_rebind_btn_{}", screen, idx),
                         [control_x, base_y, ctrl_w, style.button_height],
-                        format!("setting:{}:rebind", setting),
+                        format!("setting:{}:rebind", setting.as_str()),
                     )
                     .set("label", val.clone())
                     .set("hover_color", style.hover_color)
