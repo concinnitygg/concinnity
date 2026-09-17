@@ -12,7 +12,7 @@
 //! built for (host-only for now; see the --platform check).
 
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_cook::authoring::world::WorldJsonlAsset;
+use concinnity_cook::authoring::world::{WorldJsonlAsset, parse_world_jsonl, resolve_includes};
 use concinnity_cook::build_only::prepare_world;
 use concinnity_cook::paths::StateTree;
 use concinnity_host::scratch;
@@ -99,12 +99,13 @@ pub fn export(options: &ExportOptions) -> io::Result<()> {
     let world_path = resolve_world_path(world.as_deref())?;
     crate::authoring::build_world_file(&world_path)?;
 
-    // Read the app metadata from the expanded world. The build above already
-    // validated it, so this cannot fail on validation; map any error plainly.
     let content = fs::read_to_string(&world_path)?;
-    let loaded = prepare_world(&content, crate::project::assets_dir().as_deref())
-        .map_err(|errs| io::Error::new(io::ErrorKind::InvalidData, errs.join("\n")))?;
-    let meta = read_app_meta(name, version, &loaded.assets);
+    let meta = world_app_meta(
+        &content,
+        crate::project::assets_dir().as_deref(),
+        name,
+        version,
+    )?;
 
     let out_dir = Path::new(out);
     fs::create_dir_all(out_dir)?;
@@ -526,14 +527,40 @@ fn make_executable(_path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+// Read the app metadata a world file declares. The build already validated the
+// world, so an error here is mapped plainly rather than reported per asset.
+fn world_app_meta(
+    content: &str,
+    assets_dir: Option<&Path>,
+    cli_name: Option<&str>,
+    cli_version: Option<&str>,
+) -> io::Result<AppMeta> {
+    let invalid = |msg: String| io::Error::new(io::ErrorKind::InvalidData, msg);
+    let loaded = prepare_world(content, assets_dir).map_err(|errs| invalid(errs.join("\n")))?;
+    let authored =
+        resolve_includes(parse_world_jsonl(content).map_err(|e| invalid(e.to_string()))?)?
+            .iter()
+            .map(WorldJsonlAsset::from_value)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(invalid)?;
+    Ok(read_app_meta(
+        cli_name,
+        cli_version,
+        &loaded.assets,
+        &authored,
+    ))
+}
+
 // Read the app metadata from the expanded world, applying the `--name` /
 // `--version` overrides and deriving anything the AppConfig asset left unset.
+// `authored` is the world before expansion, which still holds its MainMenus.
 fn read_app_meta(
     cli_name: Option<&str>,
     cli_version: Option<&str>,
     assets: &[WorldJsonlAsset],
+    authored: &[WorldJsonlAsset],
 ) -> AppMeta {
-    let display_name = resolve_display_name(cli_name, assets);
+    let display_name = resolve_display_name(cli_name, assets, authored);
     let identifier = string_arg(assets, RegisteredType::AppConfig, "id")
         .unwrap_or_else(|| derive_identifier(&display_name));
     let version = cli_version
@@ -552,15 +579,19 @@ fn read_app_meta(
 }
 
 // The app name, by precedence: an explicit `--name`, then the AppConfig
-// asset's name, then a MainMenu title, then the engine default.
-fn resolve_display_name(cli_name: Option<&str>, assets: &[WorldJsonlAsset]) -> String {
+// asset's name, then an authored MainMenu's title, then the engine default.
+fn resolve_display_name(
+    cli_name: Option<&str>,
+    assets: &[WorldJsonlAsset],
+    authored: &[WorldJsonlAsset],
+) -> String {
     if let Some(n) = cli_name.map(str::trim).filter(|s| !s.is_empty()) {
         return n.to_string();
     }
     if let Some(n) = string_arg(assets, RegisteredType::AppConfig, "name") {
         return n;
     }
-    if let Some(n) = string_arg(assets, RegisteredType::MainMenu, "title") {
+    if let Some(n) = string_arg(authored, RegisteredType::MainMenu, "title") {
         return n;
     }
     "Concinnity".to_string()
@@ -972,19 +1003,42 @@ mod tests {
         );
 
         assert_eq!(
-            resolve_display_name(Some("CLI Name"), &[app.clone(), menu.clone()]),
+            resolve_display_name(
+                Some("CLI Name"),
+                std::slice::from_ref(&app),
+                std::slice::from_ref(&menu)
+            ),
             "CLI Name"
         );
         assert_eq!(
-            resolve_display_name(None, &[app.clone(), menu.clone()]),
+            resolve_display_name(
+                None,
+                std::slice::from_ref(&app),
+                std::slice::from_ref(&menu)
+            ),
             "App Name"
         );
         assert_eq!(
-            resolve_display_name(None, std::slice::from_ref(&menu)),
+            resolve_display_name(None, &[], std::slice::from_ref(&menu)),
             "Menu Title"
         );
-        assert_eq!(resolve_display_name(None, &[]), "Concinnity");
-        assert_eq!(resolve_display_name(Some("  "), &[app]), "App Name");
+        assert_eq!(resolve_display_name(None, &[], &[]), "Concinnity");
+        assert_eq!(resolve_display_name(Some("  "), &[app], &[]), "App Name");
+    }
+
+    #[test]
+    fn menu_title_names_an_app_after_the_menu_expands() {
+        let world = r#"{"name":"pause","type":"MainMenu","args":{"title":"Menu Title"}}"#;
+        let meta = world_app_meta(world, None, None, None).unwrap();
+        assert_eq!(meta.display_name, "Menu Title");
+        assert_eq!(meta.identifier, "gg.concinnity.menu-title");
+
+        let world = format!(
+            "{world}\n{}",
+            r#"{"name":"app","type":"AppConfig","args":{"name":"App Name"}}"#
+        );
+        let meta = world_app_meta(&world, None, None, None).unwrap();
+        assert_eq!(meta.display_name, "App Name");
     }
 
     #[test]
@@ -1011,7 +1065,7 @@ mod tests {
     #[test]
     fn app_meta_derives_id_and_version_defaults() {
         // No AppConfig: name falls to default, id derived, version defaulted.
-        let meta = read_app_meta(Some("My Cool App"), None, &[]);
+        let meta = read_app_meta(Some("My Cool App"), None, &[], &[]);
         assert_eq!(meta.display_name, "My Cool App");
         assert_eq!(meta.identifier, "gg.concinnity.my-cool-app");
         assert_eq!(meta.version, "0.1.0");
@@ -1025,7 +1079,7 @@ mod tests {
                 "name": "Named", "id": "gg.studio.thing", "version": "2.3.4", "icon": "art/i.png"
             }),
         );
-        let meta = read_app_meta(None, None, std::slice::from_ref(&app));
+        let meta = read_app_meta(None, None, std::slice::from_ref(&app), &[]);
         assert_eq!(meta.display_name, "Named");
         assert_eq!(meta.identifier, "gg.studio.thing");
         assert_eq!(meta.version, "2.3.4");
@@ -1042,18 +1096,18 @@ mod tests {
 
         // --version overrides the AppConfig version.
         assert_eq!(
-            read_app_meta(None, Some("9.9.9"), std::slice::from_ref(&app)).version,
+            read_app_meta(None, Some("9.9.9"), std::slice::from_ref(&app), &[]).version,
             "9.9.9"
         );
         // A blank --version is ignored, falling back to the AppConfig version.
         assert_eq!(
-            read_app_meta(None, Some("  "), std::slice::from_ref(&app)).version,
+            read_app_meta(None, Some("  "), std::slice::from_ref(&app), &[]).version,
             "2.3.4"
         );
         // --version with no AppConfig still wins over the default.
-        assert_eq!(read_app_meta(None, Some("3.0"), &[]).version, "3.0");
+        assert_eq!(read_app_meta(None, Some("3.0"), &[], &[]).version, "3.0");
         // No override, no AppConfig: the default.
-        assert_eq!(read_app_meta(None, None, &[]).version, "0.1.0");
+        assert_eq!(read_app_meta(None, None, &[], &[]).version, "0.1.0");
     }
 
     #[test]
