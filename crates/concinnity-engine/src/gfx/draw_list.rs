@@ -417,7 +417,7 @@ fn read_payload(
     match ctx.read_payload(locator) {
         Ok(bytes) => Some(bytes.to_vec()),
         Err(e) => {
-            tracing::error!("GraphicsSystem: failed to read {label} payload: {e:?}");
+            tracing::error!("GraphicsSystem: failed to read {label} payload: {e}");
             None
         }
     }
@@ -532,7 +532,7 @@ pub(crate) fn load_room_geometry(
             Ok(b) => b.to_vec(),
             Err(e) => {
                 tracing::error!(
-                    "GraphicsSystem: failed to read Room {} payload: {:?}",
+                    "GraphicsSystem: failed to read Room {} payload: {}",
                     room.asset_id,
                     e
                 );

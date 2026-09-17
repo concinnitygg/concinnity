@@ -422,6 +422,7 @@ dependencies = [
  "serde_path_to_error",
  "sha2",
  "tempfile",
+ "thiserror 2.0.18",
  "time",
  "tracing",
 ]
@@ -527,6 +528,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
  "windows",
@@ -543,6 +545,7 @@ dependencies = [
  "concinnity-testing",
  "concinnity-toolchain",
  "tempfile",
+ "thiserror 2.0.18",
  "tracing",
 ]
 
@@ -555,6 +558,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror 2.0.18",
  "tracing",
 ]
 

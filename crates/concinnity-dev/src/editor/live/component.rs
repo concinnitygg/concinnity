@@ -12,6 +12,7 @@
 //! runs neither, so an edit that moves one declines and only the values between
 //! them apply live.
 
+use concinnity_cook::authoring::AuthoringError;
 use concinnity_cook::authoring::refs::referenced_names;
 use concinnity_cook::authoring::registry::{self, RegisteredType};
 use concinnity_cook::authoring::world::WorldJsonlAsset;
@@ -74,7 +75,7 @@ pub(super) fn bake(
     ct: RegisteredType,
     id: AssetId,
     args: &Map<String, Value>,
-) -> Result<ComponentAsset, concinnity_core::error::CnError> {
+) -> Result<ComponentAsset, Box<dyn std::error::Error + Send + Sync>> {
     let value = Value::Object(args.clone());
     let args_bytes = match registry::bake_divergent(ct, &value)? {
         Some(bytes) => bytes,
@@ -84,11 +85,11 @@ pub(super) fn bake(
         name: Some(id),
         discriminant: ct
             .discriminant()
-            .ok_or(concinnity_core::error::CnError::AssetInvalidType)?,
+            .ok_or(AuthoringError::NotAComponent { asset: ct.as_str() })?,
         args_bytes,
         payload: None,
     };
-    ComponentAsset::from_baked(&def)
+    Ok(ComponentAsset::from_baked(&def)?)
 }
 
 #[cfg(test)]

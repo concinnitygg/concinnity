@@ -18,6 +18,10 @@
 //! `crate::check`, alongside the compile-backed checks that need this crate's
 //! compilers.
 
+mod error;
+
+pub use error::AuthoringError;
+
 pub mod refs;
 pub mod registry;
 pub(crate) mod resource_type;

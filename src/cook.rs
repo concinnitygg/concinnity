@@ -136,9 +136,10 @@ pub struct WorldBuilder {
     // Name and type per line, so the declaration order can be inspected
     // without re-reading the lines.
     declared: Vec<(String, &'static str)>,
-    // The first serialization failure, held until the compile so the call
+    // The first declaration failure, held as the kind and message a
+    // [`crate::Error::Build`] is rebuilt from at the compile, so the call
     // chain stays borrow-friendly.
-    error: Option<crate::Error>,
+    error: Option<(std::io::ErrorKind, String)>,
 }
 
 /// Start an empty world.
@@ -170,7 +171,7 @@ impl WorldBuilder {
                 self.declared.push((name, T::TYPE));
             }
             Err(e) => {
-                self.error.get_or_insert(error::from_io(e));
+                self.error.get_or_insert((e.kind(), e.to_string()));
             }
         }
         self
@@ -205,16 +206,16 @@ impl WorldBuilder {
     /// ```
     pub fn reference(&mut self, field: &str, target: impl Into<String>) -> &mut Self {
         let Some(line) = self.lines.pop() else {
-            self.error.get_or_insert(crate::Error::Build {
-                kind: std::io::ErrorKind::InvalidInput,
-                message: format!("reference(\"{field}\") before any asset was added"),
-            });
+            self.error.get_or_insert((
+                std::io::ErrorKind::InvalidInput,
+                format!("reference(\"{field}\") before any asset was added"),
+            ));
             return self;
         };
         match set_reference(&line, field, &target.into()) {
             Ok(patched) => self.lines.push(patched),
             Err(e) => {
-                self.error.get_or_insert(error::from_io(e));
+                self.error.get_or_insert((e.kind(), e.to_string()));
             }
         }
         self
@@ -231,7 +232,8 @@ impl WorldBuilder {
         let mut world = concinnity_engine::blob::world_from(BlobData::new(payload_sections));
 
         for def in &result.defs {
-            let mut component = ComponentAsset::from_baked(def).map_err(crate::Error::Runtime)?;
+            let mut component =
+                ComponentAsset::from_baked(def).map_err(|e| crate::Error::Runtime(e.into()))?;
             if let Some(locator) = &def.payload {
                 component.inject_locator(locator.clone());
             }
@@ -264,8 +266,11 @@ impl WorldBuilder {
     // `compile` and `write_blob`: both need every payload built, and differ
     // only in where the result lands.
     fn build(&self) -> Result<PipelineResult, crate::Error> {
-        if let Some(e) = &self.error {
-            return Err(e.clone());
+        if let Some((kind, message)) = &self.error {
+            return Err(crate::Error::Build {
+                kind: *kind,
+                message: message.clone(),
+            });
         }
 
         // Bare `source` filenames resolve under the root the embedder named

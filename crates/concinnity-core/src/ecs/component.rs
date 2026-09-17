@@ -8,7 +8,7 @@
 
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{ComponentAsset, PayloadLocator};
-use crate::error::CnError;
+use crate::error::AssetError;
 
 /// A component a world can hold after the cook: every type an authored world
 /// declares that survives into a blob, plus every type only the runtime mints.
@@ -67,8 +67,8 @@ pub trait Component: Sized + Send + core::fmt::Debug + 'static {
     /// serialized runtime component (cook already ran the asset -> component
     /// translation). The default rejects: runtime-only components are never
     /// stored in a blob, so only loadable types provide an implementation.
-    fn from_baked(_bytes: &[u8]) -> Result<Self, CnError> {
-        Err(CnError::AssetInvalidType)
+    fn from_baked(_bytes: &[u8]) -> Result<Self, AssetError> {
+        Err(AssetError::NotStored { asset: Self::NAME })
     }
 
     /// Called after construction to inject the payload locator from the blob def.
@@ -80,6 +80,18 @@ pub trait Component: Sized + Send + core::fmt::Debug + 'static {
     /// def. Only meaningful for components that look themselves up by id at
     /// runtime. The default implementation does nothing.
     fn inject_name(&mut self, _id: AssetId) {}
+}
+
+/// Decode a component from its baked blob record, naming the component in the
+/// failure. What every stored type's [`Component::from_baked`] is.
+pub fn decode_baked<'a, C>(bytes: &'a [u8]) -> Result<C, AssetError>
+where
+    C: Component + serde::Deserialize<'a>,
+{
+    crate::blob::decode_exact(bytes).map_err(|source| AssetError::Decode {
+        asset: C::NAME,
+        source,
+    })
 }
 
 #[cfg(test)]

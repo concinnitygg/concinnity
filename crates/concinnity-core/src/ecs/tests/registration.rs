@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 
 use crate::components::TextLabel;
 use crate::ecs::{Phase, PipelineContext, StepResult, System, SystemEntry, SystemTable, World};
-use crate::error::CnError;
+use crate::error::WorldError;
 
 // A system that does nothing; the tests read placement off the built set's
 // names, not off anything it writes.
@@ -185,7 +185,10 @@ fn registered_systems_are_listed_in_run_order() {
 fn a_name_a_table_entry_uses_is_refused() {
     let mut world = seeded();
     world.add_system(Phase::Late, "TableLate", Inert);
-    assert_eq!(world.start(&TABLE), Err(CnError::InvalidArgument));
+    assert!(matches!(
+        world.start(&TABLE),
+        Err(WorldError::DuplicateSystemName("TableLate"))
+    ));
 }
 
 // Two registrations under one name are equally unaddressable.
@@ -194,7 +197,10 @@ fn a_repeated_registration_name_is_refused() {
     let mut world = seeded();
     world.add_system(Phase::Late, "Mine", Inert);
     world.add_system(Phase::Early, "Mine", Inert);
-    assert_eq!(world.start(&TABLE), Err(CnError::InvalidArgument));
+    assert!(matches!(
+        world.start(&TABLE),
+        Err(WorldError::DuplicateSystemName("Mine"))
+    ));
 }
 
 // Registrations are read once, by `start`: a world already running does not

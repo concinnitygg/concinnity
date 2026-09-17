@@ -131,9 +131,14 @@ pub use app::App;
 pub use error::Error;
 pub use world::World;
 
-// The status a failed call reports, carried by [`Error`] and returned by the
-// world's own systems.
-pub use concinnity_core::error::CnError;
+// Why a world could not be built, started, or added to: what the world's own
+// calls return, and what [`Error`] carries.
+pub use concinnity_core::error::{AssetError, PayloadError, WorldError};
+
+// Why a world's compiled data could not be loaded, carried by
+// [`Error::UnreadableData`].
+#[cfg(feature = "std")]
+pub use concinnity_engine::WorldLoadError;
 
 // The two macros an application writes against, exported at the crate root
 // because `#[macro_export]` puts them there: the component mask a system's
@@ -207,7 +212,7 @@ mod tests {
     #[test]
     fn a_world_without_graphics_starts_headless() {
         let mut app = super::App::from_world(starter_world());
-        assert_eq!(app.inner_mut().start(), Ok(()));
+        app.inner_mut().start().expect("the world starts");
     }
 
     // Without `std` the same app runs to completion in process: the headless
@@ -218,7 +223,7 @@ mod tests {
     #[test]
     fn a_headless_app_runs_the_world_it_was_given() {
         let app = super::App::from_world(starter_world());
-        assert_eq!(app.run(), Ok(()));
+        app.run().expect("the run ends");
     }
 
     fn starter_world() -> World {

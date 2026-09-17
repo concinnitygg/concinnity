@@ -5,7 +5,7 @@ use alloc::boxed::Box;
 
 use crate::app::App;
 use crate::ecs::World;
-use crate::error::CnError;
+use crate::error::WorldError;
 
 /// A loop that runs a [`World`].
 ///
@@ -25,10 +25,10 @@ use crate::error::CnError;
 /// wants the world back instead of run.
 pub trait Driver {
     /// Build the world's systems and run their `init`.
-    fn start(&mut self) -> Result<(), CnError>;
+    fn start(&mut self) -> Result<(), WorldError>;
 
     /// Run the world until it ends.
-    fn run(self: Box<Self>) -> Result<(), CnError>;
+    fn run(self: Box<Self>) -> Result<(), WorldError>;
 
     /// Take the world back instead of running it.
     fn into_world(self: Box<Self>) -> World;
@@ -39,11 +39,11 @@ pub trait Driver {
 }
 
 impl Driver for App {
-    fn start(&mut self) -> Result<(), CnError> {
+    fn start(&mut self) -> Result<(), WorldError> {
         App::start(self)
     }
 
-    fn run(mut self: Box<Self>) -> Result<(), CnError> {
+    fn run(mut self: Box<Self>) -> Result<(), WorldError> {
         App::run(&mut self).map(|_| ())
     }
 

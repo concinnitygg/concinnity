@@ -1,14 +1,14 @@
 //! Classification of a fatal startup failure into the two things it needs to
 //! produce: a line for the log, and a sentence for the person looking at the
-//! window. `CnError` is the FFI-facing status enum and carries no context, so
-//! the classification happens here where the paths involved are still known.
+//! window. The classification happens here, where the paths involved are still
+//! known, and carries the load failure itself as its cause.
 
-use concinnity_core::error::CnError;
+use crate::blob::WorldLoadError;
 use std::fmt;
 use std::path::PathBuf;
 
 /// Why the runtime could not reach a playable state.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum StartupError {
     /// No compiled world data where the runtime expected it. The usual causes
     /// are a build that never ran and an installation missing its data folder.
@@ -22,7 +22,7 @@ pub enum StartupError {
         /// The primary blob file that was read.
         blob: PathBuf,
         /// What the read reported.
-        cause: CnError,
+        cause: WorldLoadError,
     },
     /// The world was packaged as one self-contained blob file, but it needs
     /// overflow payload blobs, which only the directory layout can hold. Their
@@ -43,7 +43,7 @@ impl StartupError {
     /// is present but unusable, since only the first is the user's to fix.
     /// `blob` is the primary blob's path, passed in rather than resolved here
     /// so the classification stays a pure function of its inputs.
-    pub fn from_blob_failure(blob: PathBuf, cause: CnError) -> Self {
+    pub fn from_blob_failure(blob: PathBuf, cause: WorldLoadError) -> Self {
         if blob.exists() {
             StartupError::UnreadableData { blob, cause }
         } else {
@@ -109,16 +109,36 @@ impl fmt::Display for StartupError {
     }
 }
 
+/// The load failure stays reachable underneath the classification, so a caller
+/// walking the chain reaches the file and the format verdict below it.
+impl std::error::Error for StartupError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            StartupError::UnreadableData { cause, .. } => Some(cause),
+            StartupError::MissingData { .. }
+            | StartupError::OverflowUnsupported { .. }
+            | StartupError::NoStateRoot => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::error::AssetError;
+
+    // A load failure to classify. Which one it is does not matter here; that
+    // it survives into the log line does.
+    fn cause() -> WorldLoadError {
+        WorldLoadError::Asset(AssetError::UnknownComponent { discriminant: 9 })
+    }
 
     #[test]
     fn a_missing_blob_classifies_as_missing() {
         let dir = tempfile::tempdir().expect("tempdir");
         let blob = dir.path().join("data").join("0");
 
-        let err = StartupError::from_blob_failure(blob, CnError::FileIo);
+        let err = StartupError::from_blob_failure(blob, cause());
         assert!(matches!(err, StartupError::MissingData { .. }));
         assert!(err.user_message().contains("Failed to find"));
         assert!(err.to_string().contains("concinnity build"));
@@ -131,11 +151,13 @@ mod tests {
         let blob = dir.path().join("data").join("0");
         std::fs::write(&blob, b"garbage").expect("write blob");
 
-        let err = StartupError::from_blob_failure(blob, CnError::FileIo);
+        let err = StartupError::from_blob_failure(blob, cause());
         assert!(matches!(err, StartupError::UnreadableData { .. }));
         assert!(err.user_message().contains("Failed to read"));
-        // The status the user message deliberately omits stays in the log line.
-        assert!(err.to_string().contains(&CnError::FileIo.to_string()));
+        // The cause the user message deliberately omits stays in the log line,
+        // and stays reachable as a source.
+        assert!(err.to_string().contains(&cause().to_string()));
+        assert!(std::error::Error::source(&err).is_some());
     }
 
     // Both messages name the path, which is the part the reader can act on.
@@ -147,7 +169,7 @@ mod tests {
             },
             StartupError::UnreadableData {
                 blob: PathBuf::from("/somewhere/data/0"),
-                cause: CnError::FileIo,
+                cause: cause(),
             },
             StartupError::OverflowUnsupported {
                 blob: PathBuf::from("/somewhere/data/0"),

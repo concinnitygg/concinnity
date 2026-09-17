@@ -195,8 +195,8 @@ impl Room {
 impl Component for Room {
     const NAME: &'static str = "Room";
 
-    fn from_baked(bytes: &[u8]) -> Result<Self, crate::error::CnError> {
-        Ok(crate::blob::decode_exact(bytes)?)
+    fn from_baked(bytes: &[u8]) -> Result<Self, crate::error::AssetError> {
+        crate::ecs::decode_baked(bytes)
     }
 
     fn inject_locator(&mut self, locator: PayloadLocator) {

@@ -33,6 +33,7 @@ pub use app::run::{BlobSource, run_from};
 pub use app::run::{PipelineMode, RunOptions, init_logging};
 pub use app::startup_error::StartupError;
 pub use app::state::App;
+pub use blob::WorldLoadError;
 // The state tree a host builds and hands down: where the blobs are read from
 // and where saves, settings, crash reports and caches are written. Exported
 // beside `run_from` so the runtime bin's entire entry API lives on this crate.

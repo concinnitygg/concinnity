@@ -116,7 +116,7 @@ fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
         let mut component = ComponentAsset::from_baked(def).map_err(|e| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("Asset construction failed: {:?}", e),
+                format!("Asset construction failed: {e}"),
             )
         })?;
         if let Some(locator) = &def.payload {

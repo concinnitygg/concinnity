@@ -14,7 +14,14 @@ use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::ecs::resolver::resolve_name;
-use crate::error::CnError;
+
+/// A world has minted every asset id its reserved range holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "this world has minted all {} asset ids it reserves",
+    AssetId::MINTED_CAPACITY
+)]
+pub struct AssetIdsExhausted;
 
 /// A dense integer handle for one asset, assigned at build time in world
 /// declaration order. Equality and hashing are integer ops.
@@ -53,12 +60,12 @@ pub struct MintedIds {
 impl MintedIds {
     /// The next unused minted id.
     ///
-    /// Errors with [`CnError::AssetIdsExhausted`] once the world has minted
-    /// [`AssetId::MINTED_CAPACITY`] of them: the range ends at [`u32::MAX`], so
-    /// a counter past it would name a declared asset instead.
-    pub fn next_id(&mut self) -> Result<AssetId, CnError> {
+    /// Errors once the world has minted [`AssetId::MINTED_CAPACITY`] of them:
+    /// the range ends at [`u32::MAX`], so a counter past it would name a
+    /// declared asset instead.
+    pub fn next_id(&mut self) -> Result<AssetId, AssetIdsExhausted> {
         if self.next >= AssetId::MINTED_CAPACITY {
-            return Err(CnError::AssetIdsExhausted);
+            return Err(AssetIdsExhausted);
         }
         let id = AssetId(AssetId::MINTED_BASE + self.next);
         self.next += 1;
@@ -290,8 +297,8 @@ mod tests {
         let mut ids = MintedIds {
             next: AssetId::MINTED_CAPACITY,
         };
-        assert_eq!(ids.next_id(), Err(CnError::AssetIdsExhausted));
-        assert_eq!(ids.next_id(), Err(CnError::AssetIdsExhausted));
+        assert_eq!(ids.next_id(), Err(AssetIdsExhausted));
+        assert_eq!(ids.next_id(), Err(AssetIdsExhausted));
     }
 
     #[test]

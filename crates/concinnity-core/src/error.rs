@@ -1,88 +1,214 @@
-//! The engine's flat error code, shared by every crate that reports a
-//! recoverable failure across an API or FFI seam.
+//! The engine's runtime error types.
+//!
+//! Three seams fail at runtime and each names what it can fail with:
+//! [`AssetError`] when a baked blob record does not reconstruct its asset,
+//! [`PayloadError`] when compiled payload bytes cannot be read, and
+//! [`WorldError`] when a world cannot be built, started, or added to. The
+//! first two fold into the third, so a caller that only drives a world handles
+//! one type and still reaches the cause through
+//! [`source`](core::error::Error::source).
+//!
+//! A C host gets a flat code instead, built from these at the FFI boundary;
+//! see `concinnity-ffi`.
 
+use alloc::boxed::Box;
+use alloc::string::String;
 use thiserror::Error;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+use crate::blob::FrameError;
+use crate::ecs::asset_id::AssetIdsExhausted;
+
+/// Why a baked blob record could not be turned back into its asset.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[non_exhaustive]
-/// The engine's flat error code, carried as the `Err` half across the API and
-/// FFI seams.
-pub enum CnError {
-    #[error("Invalid asset type")]
-    /// The asset type name is not in the registry.
-    AssetInvalidType,
+pub enum AssetError {
+    /// The record's discriminant names no component type this build registers,
+    /// which means the blob was written by a different version of the engine.
+    #[error("no component type has discriminant {discriminant}")]
+    UnknownComponent {
+        /// The discriminant the record carried.
+        discriminant: u8,
+    },
 
-    /// Generic
-    #[error("Invalid state")]
-    InvalidState,
-    #[error("Invalid argument")]
-    /// An argument was outside its accepted range.
-    InvalidArgument,
+    /// A resource record's kind tag names no resource kind this build has, for
+    /// the same reason.
+    #[error("no resource kind has tag {tag}")]
+    UnknownResourceKind {
+        /// The tag the record carried.
+        tag: u8,
+    },
 
-    #[error("File I/O error")]
-    /// A file could not be read or written.
-    FileIo,
+    /// A record was found for a component that is never stored in a blob, so
+    /// it has no baked form to read.
+    #[error("{asset} is a runtime-only component and has no baked form")]
+    NotStored {
+        /// The component the record claimed to be.
+        asset: &'static str,
+    },
 
-    #[error("Invalid world data")]
-    /// World data was read but is corrupt, truncated, or was built by a
-    /// different version of the engine.
-    InvalidData,
-
-    #[error("No state directory installed")]
-    /// Project state was read by a caller that was handed no state tree. See
-    /// `concinnity_host::store::paths::StateTree`.
-    NoStateRoot,
-
-    #[error("Minted asset ids exhausted")]
-    /// A running world minted more assets than
-    /// [`AssetId::MINTED_CAPACITY`](crate::ecs::asset_id::AssetId::MINTED_CAPACITY)
-    /// reserves.
-    AssetIdsExhausted,
+    /// The record's bytes did not decode as the component they were written
+    /// for.
+    #[error("decoding the baked {asset} failed")]
+    Decode {
+        /// The component being decoded.
+        asset: &'static str,
+        /// What the decode reported.
+        #[source]
+        source: FrameError,
+    },
 }
 
-// Baking a component into its blob record serializes it with postcard.
-impl From<postcard::Error> for CnError {
-    fn from(_: postcard::Error) -> Self {
-        CnError::InvalidArgument
-    }
+/// Why compiled payload bytes could not be read.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum PayloadError {
+    /// The world has no compiled payloads at all, so no locator resolves.
+    #[error("this world has no compiled payloads")]
+    NoPayloads,
+
+    /// The locator addresses a blob outside the set the world was loaded from.
+    #[error("blob {index} is not one of this world's {count}")]
+    NoSuchBlob {
+        /// The blob the locator named.
+        index: u32,
+        /// How many blobs the world has.
+        count: u32,
+    },
+
+    /// The blob's payload section was released, which is deliberate: a
+    /// released section is one every system that needed it already read.
+    #[error("blob {index}'s payload section has been released")]
+    Released {
+        /// The blob whose section is gone.
+        index: u32,
+    },
+
+    /// The locator's range does not fit the blob's payload section.
+    #[error("payload [{offset}, +{len}) does not fit blob {index}'s {section_len}-byte section")]
+    OutOfBounds {
+        /// The blob the locator named.
+        index: u32,
+        /// The locator's offset within that blob's payload section.
+        offset: u64,
+        /// The locator's length.
+        len: u64,
+        /// How long the section actually is.
+        section_len: usize,
+    },
+
+    /// Loading the blob's payload section on first access failed. Boxed
+    /// because the store is a trait a `no_std` client implements too, so the
+    /// concrete cause belongs to whichever implementation reads the bytes.
+    #[error("loading blob {index}'s payload section failed")]
+    Load {
+        /// The blob that would not load.
+        index: u32,
+        /// What the load reported.
+        #[source]
+        source: Box<dyn core::error::Error + Send + Sync>,
+    },
 }
 
-// Reading one back reads a length-delimited frame; a record that does not
-// decode is corrupt world data.
-impl From<crate::blob::FrameError> for CnError {
-    fn from(_: crate::blob::FrameError) -> Self {
-        CnError::InvalidData
-    }
+/// Why a world could not be built, started, or added to.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum WorldError {
+    /// Two systems claim one name, which both the ordering edges and the
+    /// schedule's lookups key on.
+    #[error("a system named `{0}` is already in the schedule")]
+    DuplicateSystemName(&'static str),
+
+    /// The loop was started twice. A second start would re-run every system's
+    /// `init` over a world already running.
+    #[error("this world has already started")]
+    AlreadyStarted,
+
+    /// A world declares at most one `EngineDefaults`: which of several applied
+    /// would be arbitrary.
+    #[error("a world declares at most one EngineDefaults, but this one declares {count}")]
+    RepeatedEngineDefaults {
+        /// How many were declared.
+        count: usize,
+    },
+
+    /// Baking something the engine injects into the world failed.
+    #[error("baking the engine's {what} failed: {message}")]
+    Bake {
+        /// What was being baked.
+        what: &'static str,
+        /// What the bake reported.
+        message: String,
+    },
+
+    /// The world has named every asset it can.
+    #[error(transparent)]
+    AssetIds(#[from] AssetIdsExhausted),
+
+    /// A baked record did not reconstruct.
+    #[error(transparent)]
+    Asset(#[from] AssetError),
+
+    /// A compiled payload did not read.
+    #[error(transparent)]
+    Payload(#[from] PayloadError),
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::string::{String, ToString};
+    use alloc::string::ToString;
+    use core::error::Error as _;
 
+    // The cause is what the flat enum used to drop, so every wrapper has to
+    // still reach it.
     #[test]
-    fn display_messages_are_stable() {
-        assert_eq!(CnError::AssetInvalidType.to_string(), "Invalid asset type");
-        assert_eq!(CnError::InvalidState.to_string(), "Invalid state");
-        assert_eq!(CnError::InvalidArgument.to_string(), "Invalid argument");
-        assert_eq!(CnError::FileIo.to_string(), "File I/O error");
-        assert_eq!(CnError::InvalidData.to_string(), "Invalid world data");
-        assert_eq!(
-            CnError::NoStateRoot.to_string(),
-            "No state directory installed"
-        );
-        assert_eq!(
-            CnError::AssetIdsExhausted.to_string(),
-            "Minted asset ids exhausted"
-        );
+    fn a_decode_failure_keeps_the_frame_error_as_its_source() {
+        let source = crate::blob::decode_exact::<String>(&[0xff]).unwrap_err();
+        let error = AssetError::Decode {
+            asset: "Prop",
+            source: source.clone(),
+        };
+
+        assert!(error.to_string().contains("Prop"), "{error}");
+        let cause = error.source().expect("the frame error is the source");
+        assert_eq!(cause.to_string(), source.to_string());
     }
 
+    // A world failure wraps the asset failure transparently: the wrapper adds
+    // no link of its own, so the message is the inner one and the chain
+    // reaches the frame error in a single hop.
     #[test]
-    fn frame_errors_map_to_invalid_data() {
-        let bad = crate::blob::decode_exact::<String>(&[0xff]).unwrap_err();
-        assert_eq!(CnError::from(bad), CnError::InvalidData);
+    fn a_world_failure_chains_through_to_the_decode_cause() {
+        let source = crate::blob::decode_exact::<u8>(&[1, 2]).unwrap_err();
+        let error = WorldError::from(AssetError::Decode {
+            asset: "Prop",
+            source,
+        });
 
-        let trailing = crate::blob::decode_exact::<u8>(&[1, 2]).unwrap_err();
-        assert_eq!(CnError::from(trailing), CnError::InvalidData);
+        assert!(error.to_string().contains("Prop"), "{error}");
+        let frame = error.source().expect("the frame error");
+        assert!(frame.to_string().contains("trailing"), "{frame}");
+    }
+
+    // The payload store is a trait a no_std client implements, so its load
+    // failure carries whatever that implementation reports.
+    #[test]
+    fn a_payload_load_failure_keeps_the_cause_the_store_reported() {
+        let error = PayloadError::Load {
+            index: 3,
+            source: Box::new(AssetError::UnknownComponent { discriminant: 9 }),
+        };
+
+        assert!(error.to_string().contains('3'), "{error}");
+        let cause = error.source().expect("the boxed cause");
+        assert!(cause.to_string().contains('9'), "{cause}");
+    }
+
+    // Minting is its own narrow seam, and the world failure it folds into
+    // reports it verbatim.
+    #[test]
+    fn an_exhausted_minter_reads_the_same_either_way() {
+        let error = WorldError::from(AssetIdsExhausted);
+        assert_eq!(error.to_string(), AssetIdsExhausted.to_string());
     }
 }

@@ -275,8 +275,8 @@ impl crate::ecs::Component for CameraTrack {
         self.asset_id = id;
     }
 
-    fn from_baked(bytes: &[u8]) -> Result<Self, crate::error::CnError> {
-        Ok(crate::blob::decode_exact(bytes)?)
+    fn from_baked(bytes: &[u8]) -> Result<Self, crate::error::AssetError> {
+        crate::ecs::decode_baked(bytes)
     }
 }
 

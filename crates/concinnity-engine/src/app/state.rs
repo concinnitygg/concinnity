@@ -2,7 +2,7 @@
 
 use concinnity_core::components::AppConfig;
 use concinnity_core::ecs::{Clock, MenuActive, StepResult, World};
-use concinnity_core::error::CnError;
+use concinnity_core::error::WorldError;
 use concinnity_host::store::paths::StateTree;
 use concinnity_host::thread::jobs::configure;
 use concinnity_host::thread::jobs::pool;
@@ -202,10 +202,9 @@ impl App {
 
     /// Build the world's systems and run their `init`. Must run once, before
     /// the first step.
-    pub fn start(&mut self) -> Result<(), CnError> {
+    pub fn start(&mut self) -> Result<(), WorldError> {
         if self.status != AppStatus::Created {
-            tracing::error!("App must be in Created state to start");
-            return Err(CnError::InvalidState);
+            return Err(WorldError::AlreadyStarted);
         }
         self.install_home();
         self.publish_state_tree();
@@ -357,13 +356,13 @@ impl App {
     }
 
     /// Run this app on the runtime loop with default options, consuming it.
-    pub fn run(self) -> Result<(), CnError> {
+    pub fn run(self) -> Result<(), WorldError> {
         self.run_with(crate::app::run::RunOptions::default())
     }
 
     // Run this app on the runtime loop, consuming it. Drives frames until the
     // window closes, a system stops the world, or CTRL+C is received.
-    pub(crate) fn run_with(self, options: crate::app::run::RunOptions) -> Result<(), CnError> {
+    pub(crate) fn run_with(self, options: crate::app::run::RunOptions) -> Result<(), WorldError> {
         crate::app::run::start_runtime(self, options)
     }
 }
@@ -443,8 +442,8 @@ mod tests {
     #[test]
     fn start_twice_is_rejected() {
         let mut app = App::default();
-        assert_eq!(app.start(), Ok(()));
-        assert_eq!(app.start(), Err(CnError::InvalidState));
+        app.start().expect("a Created app starts");
+        assert!(matches!(app.start(), Err(WorldError::AlreadyStarted)));
     }
 
     // load_world swaps in a new world and resets to Created, so a started app
@@ -467,7 +466,7 @@ mod tests {
             app.world().query::<AppConfig>().next().is_some(),
             "the loaded world replaced the empty one"
         );
-        assert_eq!(app.start(), Ok(()), "the reset status permits a restart");
+        app.start().expect("the reset status permits a restart");
         // The restart budgeted against the new world's limits, not the old one's.
         let memory = crate::ecs::memory_budget(app.world()).expect("memory budget published");
         assert_eq!(memory.budget_bytes, 256 * 1024 * 1024);
@@ -504,7 +503,7 @@ mod tests {
 
         let mut app = App::from_world(world);
         assert!(app.world().query::<AppConfig>().next().is_some());
-        assert_eq!(app.start(), Ok(()), "an adopted world starts");
+        app.start().expect("an adopted world starts");
     }
 
     // `home` picks where the running app writes. An absolute path is taken
@@ -592,7 +591,7 @@ mod tests {
 
         let mut app = App::new();
         assert_eq!(app.primary_blob(), None);
-        assert_eq!(app.load_blob(), Err(StartupError::NoStateRoot));
+        assert!(matches!(app.load_blob(), Err(StartupError::NoStateRoot)));
         app.start().unwrap();
         assert!(app.world().resource::<StateTree>().is_none());
         assert!(
@@ -608,9 +607,10 @@ mod tests {
         let mut app = App::new().in_tree(StateTree::at(tmp.path()));
         let primary = app.primary_blob().expect("a tree names a primary blob");
 
-        assert_eq!(
-            app.load_blob(),
-            Err(StartupError::MissingData { blob: primary })
+        let error = app.load_blob().expect_err("there is no blob to load");
+        assert!(
+            matches!(&error, StartupError::MissingData { blob } if *blob == primary),
+            "{error:?}"
         );
     }
 

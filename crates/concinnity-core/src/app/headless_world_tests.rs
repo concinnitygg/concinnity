@@ -76,7 +76,10 @@ fn a_behavior_world_starts_with_just_the_behavior_system() {
 fn a_behavior_fires_every_tick_of_a_headless_run() {
     let (world, prop) = drifting_world();
     let mut app = App::with_systems(world, HEADLESS_SYSTEMS);
-    assert_eq!(app.run_for(5), Ok(StepResult::Continue));
+    assert_eq!(
+        app.run_for(5).expect("the run succeeds"),
+        StepResult::Continue
+    );
 
     assert_eq!(drift(&app, prop), 5.0, "one unit per tick, five ticks");
     assert!(
@@ -134,7 +137,10 @@ fn a_behavior_world_settles_into_an_allocation_free_tick() {
     let (world, prop) = drifting_world();
     let mut app = App::with_systems(world, HEADLESS_SYSTEMS);
     let ticks = WARMUP_TICKS + QUIET_WINDOW_TICKS + 8;
-    assert_eq!(app.run_for(ticks), Ok(StepResult::Continue));
+    assert_eq!(
+        app.run_for(ticks).expect("the run succeeds"),
+        StepResult::Continue
+    );
     assert_eq!(drift(&app, prop), ticks as f32);
     assert!(armed(), "the test binary installs the tracking allocator");
 }
@@ -200,7 +206,10 @@ fn a_simulating_world_settles_and_runs_an_allocation_free_tick() {
     let (world, drifter, balls) = simulating_world();
     let mut app = App::with_systems(world, HEADLESS_SYSTEMS);
     let ticks = WARMUP_TICKS + QUIET_WINDOW_TICKS + 8;
-    assert_eq!(app.run_for(ticks), Ok(StepResult::Continue));
+    assert_eq!(
+        app.run_for(ticks).expect("the run succeeds"),
+        StepResult::Continue
+    );
 
     assert!(armed(), "the test binary installs the tracking allocator");
     assert_eq!(
@@ -219,7 +228,10 @@ fn a_simulating_world_settles_and_runs_an_allocation_free_tick() {
     // And it is still settled: another window's worth of ticks leaves the
     // bodies where they are, which is the state the invariant was judged over.
     let before: Vec<f32> = balls.iter().map(|&b| height(&app, b)).collect();
-    assert_eq!(app.run_for(QUIET_WINDOW_TICKS), Ok(StepResult::Continue));
+    assert_eq!(
+        app.run_for(QUIET_WINDOW_TICKS).expect("the run succeeds"),
+        StepResult::Continue
+    );
     for (&ball, y) in balls.iter().zip(before) {
         assert!(
             (height(&app, ball) - y).abs() < 1.0e-4,

@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 #[cfg(feature = "std")]
 use std::path::PathBuf;
 
-use concinnity_core::error::CnError;
+use concinnity_core::error::WorldError;
 
 /// The facade's failure type: why a value could not be baked, a world could not
 /// be compiled or loaded, or an app could not run it.
@@ -14,7 +14,7 @@ use concinnity_core::error::CnError;
 /// The variants naming a file exist only where there is a filesystem to name
 /// one in, so a `no_std` build reports [`Bake`](Error::Bake) and
 /// [`Runtime`](Error::Runtime) alone.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
     /// No compiled world data where the app expected it. The usual causes are
@@ -34,7 +34,8 @@ pub enum Error {
         /// The primary blob file that was read.
         blob: PathBuf,
         /// What the read reported.
-        cause: CnError,
+        #[source]
+        cause: concinnity_engine::WorldLoadError,
     },
 
     /// The world was packaged as one self-contained blob file, but it needs
@@ -75,7 +76,7 @@ pub enum Error {
 
     /// The world refused to start, or a system stopped it with a failure.
     #[error(transparent)]
-    Runtime(#[from] CnError),
+    Runtime(#[from] WorldError),
 }
 
 #[cfg(feature = "std")]
@@ -85,9 +86,14 @@ impl Error {
     fn io_kind(&self) -> std::io::ErrorKind {
         match self {
             Error::MissingData { .. } | Error::NoStateRoot => std::io::ErrorKind::NotFound,
-            Error::UnreadableData { .. }
-            | Error::OverflowUnsupported { .. }
-            | Error::Runtime(CnError::InvalidData) => std::io::ErrorKind::InvalidData,
+            Error::UnreadableData { .. } | Error::OverflowUnsupported { .. } => {
+                std::io::ErrorKind::InvalidData
+            }
+            // A world that could not read its own data is the runtime half of
+            // the same failure the load variants above report.
+            Error::Runtime(WorldError::Asset(_) | WorldError::Payload(_)) => {
+                std::io::ErrorKind::InvalidData
+            }
             Error::Bake(_) => std::io::ErrorKind::InvalidInput,
             #[cfg(feature = "cook")]
             Error::Validation(_) => std::io::ErrorKind::InvalidData,
@@ -136,15 +142,15 @@ pub(crate) fn from_io(error: std::io::Error) -> Error {
 mod tests {
     use super::Error;
     use alloc::string::ToString;
-    use concinnity_core::error::CnError;
+    use concinnity_core::error::WorldError;
 
     // The one variant every tier reports, so the signature ports whether or
     // not there is an operating system underneath it.
     #[test]
-    fn a_runtime_failure_carries_the_status_it_was_built_from() {
-        let error = Error::from(CnError::InvalidState);
-        assert_eq!(error, Error::Runtime(CnError::InvalidState));
-        assert_eq!(error.to_string(), CnError::InvalidState.to_string());
+    fn a_runtime_failure_carries_the_failure_it_was_built_from() {
+        let error = Error::from(WorldError::AlreadyStarted);
+        assert!(matches!(error, Error::Runtime(WorldError::AlreadyStarted)));
+        assert_eq!(error.to_string(), WorldError::AlreadyStarted.to_string());
     }
 
     // A bake failure is its message, since that message is the direction to
@@ -155,10 +161,21 @@ mod tests {
         assert_eq!(error.to_string(), "compile it with the cook module");
     }
 
+    // A load failure to build errors from. Which one it is does not matter to
+    // these tests; that it is a typed cause rather than a message does.
+    #[cfg(feature = "std")]
+    fn load_failure() -> concinnity_engine::WorldLoadError {
+        concinnity_engine::WorldLoadError::Asset(
+            concinnity_core::error::AssetError::UnknownComponent { discriminant: 9 },
+        )
+    }
+
     #[cfg(feature = "std")]
     mod std_tier {
         use super::super::Error;
-        use concinnity_core::error::CnError;
+        use super::load_failure;
+        use concinnity_core::error::{AssetError, WorldError};
+        use core::error::Error as _;
         use std::io::ErrorKind;
         use std::path::PathBuf;
 
@@ -174,7 +191,7 @@ mod tests {
                 Error::MissingData { blob: blob() },
                 Error::UnreadableData {
                     blob: blob(),
-                    cause: CnError::FileIo,
+                    cause: load_failure(),
                 },
                 Error::OverflowUnsupported {
                     blob: blob(),
@@ -190,12 +207,13 @@ mod tests {
         fn an_unreadable_blob_reports_what_the_read_said() {
             let error = Error::UnreadableData {
                 blob: blob(),
-                cause: CnError::FileIo,
+                cause: load_failure(),
             };
             assert!(
-                error.to_string().contains(&CnError::FileIo.to_string()),
+                error.to_string().contains(&load_failure().to_string()),
                 "{error}"
             );
+            assert!(error.source().is_some(), "the cause stays reachable");
         }
 
         // A single-file world that spans more blobs says how many, since that
@@ -220,7 +238,7 @@ mod tests {
                 (
                     Error::UnreadableData {
                         blob: blob(),
-                        cause: CnError::FileIo,
+                        cause: load_failure(),
                     },
                     ErrorKind::InvalidData,
                 ),
@@ -231,8 +249,13 @@ mod tests {
                     },
                     ErrorKind::InvalidData,
                 ),
-                (Error::Runtime(CnError::InvalidData), ErrorKind::InvalidData),
-                (Error::Runtime(CnError::InvalidState), ErrorKind::Other),
+                (
+                    Error::Runtime(WorldError::Asset(AssetError::UnknownComponent {
+                        discriminant: 9,
+                    })),
+                    ErrorKind::InvalidData,
+                ),
+                (Error::Runtime(WorldError::AlreadyStarted), ErrorKind::Other),
                 (Error::Bake("unbakeable".into()), ErrorKind::InvalidInput),
             ];
 
@@ -259,11 +282,11 @@ mod tests {
                 (
                     S::UnreadableData {
                         blob: blob(),
-                        cause: CnError::FileIo,
+                        cause: load_failure(),
                     },
                     Error::UnreadableData {
                         blob: blob(),
-                        cause: CnError::FileIo,
+                        cause: load_failure(),
                     },
                 ),
                 (
@@ -279,8 +302,15 @@ mod tests {
                 (S::NoStateRoot, Error::NoStateRoot),
             ];
 
+            // The errors carry an `io::Error` underneath, which has no
+            // equality, so the pairs are matched on variant and message.
             for (startup, expected) in cases {
-                assert_eq!(super::super::from_startup(startup), expected);
+                let mapped = super::super::from_startup(startup);
+                assert_eq!(
+                    core::mem::discriminant(&mapped),
+                    core::mem::discriminant(&expected)
+                );
+                assert_eq!(mapped.to_string(), expected.to_string());
             }
         }
 
@@ -304,12 +334,15 @@ mod tests {
                 ErrorKind::PermissionDenied,
                 "data/0 is read-only",
             ));
-            assert_eq!(
-                error,
-                Error::Build {
-                    kind: ErrorKind::PermissionDenied,
-                    message: "data/0 is read-only".into(),
-                }
+            assert!(
+                matches!(
+                    &error,
+                    Error::Build {
+                        kind: ErrorKind::PermissionDenied,
+                        message
+                    } if message == "data/0 is read-only"
+                ),
+                "{error:?}"
             );
             let io: std::io::Error = error.into();
             assert_eq!(io.kind(), ErrorKind::PermissionDenied);

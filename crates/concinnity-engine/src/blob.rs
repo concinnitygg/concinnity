@@ -5,11 +5,23 @@
 use concinnity_core::ecs::ComponentAsset;
 use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::error::CnError;
-use concinnity_host::store::blob::BlobData;
+use concinnity_core::error::AssetError;
 use concinnity_host::store::blob::BlobMeta;
 use concinnity_host::store::blob::ResourceRecord;
 use concinnity_host::store::blob::WorldManifest;
+use concinnity_host::store::blob::{BlobData, BlobLoadError};
+
+/// Why a world could not be loaded from its blob files.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum WorldLoadError {
+    /// A blob file could not be read.
+    #[error(transparent)]
+    Blob(#[from] BlobLoadError),
+    /// A record in the blob did not reconstruct its component.
+    #[error(transparent)]
+    Asset(#[from] AssetError),
+}
 
 /// A world that reads its compiled payloads from `blob`. The world names the
 /// payload store only through its access seam, so this is where the blob file
@@ -49,11 +61,11 @@ pub(crate) struct LoadedBlob {
 
 // `load` against a primary blob file named directly, rather than the
 // state root's `data/` layout. Overflow blobs are its siblings by index.
-pub(crate) fn load_at(primary: &std::path::Path) -> Result<LoadedBlob, CnError> {
+pub(crate) fn load_at(primary: &std::path::Path) -> Result<LoadedBlob, WorldLoadError> {
     resolve(concinnity_host::store::blob::load_raw_at(primary)?)
 }
 
-fn resolve((meta, blob_data): (BlobMeta, BlobData)) -> Result<LoadedBlob, CnError> {
+fn resolve((meta, blob_data): (BlobMeta, BlobData)) -> Result<LoadedBlob, WorldLoadError> {
     let components = meta
         .defs
         .iter()
@@ -66,7 +78,7 @@ fn resolve((meta, blob_data): (BlobMeta, BlobData)) -> Result<LoadedBlob, CnErro
             }
             Ok((def.name, component))
         })
-        .collect::<Result<Vec<_>, CnError>>()?;
+        .collect::<Result<Vec<_>, AssetError>>()?;
 
     Ok(LoadedBlob {
         components,

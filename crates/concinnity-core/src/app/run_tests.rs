@@ -14,7 +14,7 @@ use crate::components::Transform;
 use crate::ecs::{
     Phase, PipelineContext, SimTiming, StepResult, System, SystemEntry, SystemTable, World,
 };
-use crate::error::CnError;
+use crate::error::WorldError;
 
 // The step count the halting world stops at.
 const STOP_AT: f32 = 3.0;
@@ -100,7 +100,10 @@ fn count(app: &App) -> f32 {
 #[test]
 fn a_bounded_run_steps_the_ticks_it_was_asked_for() {
     let mut app = App::with_systems(counting_world(), &TICKING);
-    assert_eq!(app.run_for(5), Ok(StepResult::Continue));
+    assert_eq!(
+        app.run_for(5).expect("the run succeeds"),
+        StepResult::Continue
+    );
     assert_eq!(app.ticks(), 5);
     assert_eq!(count(&app), 5.0);
 }
@@ -137,7 +140,7 @@ fn a_tick_publishes_the_fixed_virtual_timing() {
 #[test]
 fn a_system_stopping_the_world_ends_the_run() {
     let mut app = App::with_systems(counting_world(), &HALTING);
-    assert_eq!(app.run(), Ok(StepResult::Stop));
+    assert_eq!(app.run().expect("the run succeeds"), StepResult::Stop);
     assert_eq!(app.ticks(), STOP_AT as u64);
 }
 
@@ -145,7 +148,10 @@ fn a_system_stopping_the_world_ends_the_run() {
 #[test]
 fn a_bounded_run_honors_a_stop_before_its_count() {
     let mut app = App::with_systems(counting_world(), &HALTING);
-    assert_eq!(app.run_for(100), Ok(StepResult::Stop));
+    assert_eq!(
+        app.run_for(100).expect("the run succeeds"),
+        StepResult::Stop
+    );
     assert_eq!(app.ticks(), STOP_AT as u64);
 }
 
@@ -154,7 +160,7 @@ fn a_bounded_run_honors_a_stop_before_its_count() {
 #[test]
 fn a_world_with_no_systems_is_done_on_its_first_tick() {
     let mut app = App::from_world(counting_world());
-    assert_eq!(app.run(), Ok(StepResult::Done));
+    assert_eq!(app.run().expect("the run succeeds"), StepResult::Done);
     assert_eq!(app.ticks(), 1);
     assert_eq!(count(&app), 0.0, "no system ran over the world");
 }
@@ -164,12 +170,18 @@ fn a_world_with_no_systems_is_done_on_its_first_tick() {
 #[test]
 fn a_run_starts_the_world_and_tolerates_one_already_started() {
     let mut app = App::with_systems(counting_world(), &TICKING);
-    assert_eq!(app.start(), Ok(()));
-    assert_eq!(app.run_for(2), Ok(StepResult::Continue));
+    app.start().expect("the world starts");
+    assert_eq!(
+        app.run_for(2).expect("the run succeeds"),
+        StepResult::Continue
+    );
     assert_eq!(app.ticks(), 2);
 
     let mut unstarted = App::with_systems(counting_world(), &TICKING);
-    assert_eq!(unstarted.run_for(2), Ok(StepResult::Continue));
+    assert_eq!(
+        unstarted.run_for(2).expect("the run succeeds"),
+        StepResult::Continue
+    );
     assert_eq!(count(&unstarted), 2.0);
 }
 
@@ -178,8 +190,8 @@ fn a_run_starts_the_world_and_tolerates_one_already_started() {
 #[test]
 fn starting_twice_is_refused() {
     let mut app = App::with_systems(counting_world(), &TICKING);
-    assert_eq!(app.start(), Ok(()));
-    assert_eq!(app.start(), Err(CnError::InvalidState));
+    assert!(app.start().is_ok());
+    assert!(matches!(app.start(), Err(WorldError::AlreadyStarted)));
 }
 
 // The long run the invariant exists for: past the warmup and a full window
@@ -193,7 +205,10 @@ fn the_allocation_invariant_arms_and_holds_across_a_long_run() {
 
     let mut app = App::with_systems(counting_world(), &TICKING);
     let ticks = WARMUP_TICKS + QUIET_WINDOW_TICKS + 8;
-    assert_eq!(app.run_for(ticks), Ok(StepResult::Continue));
+    assert_eq!(
+        app.run_for(ticks).expect("the run succeeds"),
+        StepResult::Continue
+    );
     assert_eq!(app.ticks(), ticks);
     assert!(armed(), "the test binary installs the tracking allocator");
 }

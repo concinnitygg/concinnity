@@ -44,6 +44,7 @@ mint = "0.5"
 postcard = { workspace = true, features = ["use-std"] }
 ctrlc = "3.5.2"
 serde = { workspace = true, features = ["derive", "std"] }
+thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 

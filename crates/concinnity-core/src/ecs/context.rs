@@ -21,7 +21,7 @@ use crate::ecs::{
 // unconditionally fails to resolve in a release build.
 #[cfg(debug_assertions)]
 use crate::ecs::access_check;
-use crate::error::CnError;
+use crate::error::PayloadError;
 use crate::profile::FrameProfile;
 
 // Debug-only touch reporters for the accessors below, so each accessor carries
@@ -313,7 +313,7 @@ impl<'a> PipelineContext<'a> {
     /// Takes `&mut self` because an overflow blob is read from disk lazily on
     /// first access. Returns an error if the blob was released, the locator is
     /// out of range, or the on-demand load fails.
-    pub fn read_payload(&mut self, locator: &PayloadLocator) -> Result<&[u8], CnError> {
+    pub fn read_payload(&mut self, locator: &PayloadLocator) -> Result<&[u8], PayloadError> {
         #[cfg(debug_assertions)]
         access_check::touch(access_check::Touch::Blob { op: "read_payload" });
         self.blob.read(locator)
@@ -342,8 +342,8 @@ mod tests {
     struct EmptyStore;
 
     impl PayloadStore for EmptyStore {
-        fn read(&mut self, _locator: &PayloadLocator) -> Result<&[u8], CnError> {
-            Err(CnError::FileIo)
+        fn read(&mut self, _locator: &PayloadLocator) -> Result<&[u8], PayloadError> {
+            Err(PayloadError::NoPayloads)
         }
         fn release(&mut self, _blob_index: u32) {}
         fn disk_backed(&self) -> bool {
@@ -442,7 +442,7 @@ mod tests {
         bad.discriminant = 255;
         assert_eq!(
             ComponentAsset::from_baked(&bad).unwrap_err(),
-            CnError::AssetInvalidType
+            crate::error::AssetError::UnknownComponent { discriminant: 255 }
         );
     }
 
@@ -515,7 +515,10 @@ mod tests {
             len: 4,
         };
         // read_payload forwards the store's error verbatim.
-        assert_eq!(ctx.read_payload(&loc).unwrap_err(), CnError::FileIo);
+        assert!(matches!(
+            ctx.read_payload(&loc),
+            Err(PayloadError::NoPayloads)
+        ));
         // release_blob forwards without panicking.
         ctx.release_blob(0);
     }

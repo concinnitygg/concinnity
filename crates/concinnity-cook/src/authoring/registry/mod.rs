@@ -15,6 +15,7 @@
 
 pub mod build_only;
 
+use crate::authoring::AuthoringError;
 pub use build_only::BuildOnlyAsset;
 use concinnity_core::components::AppConfig;
 use concinnity_core::components::Camera3D;
@@ -25,7 +26,6 @@ use concinnity_core::components::Spawner;
 use concinnity_core::ecs::ComponentTag;
 use concinnity_core::ecs::ResourceKind;
 pub use concinnity_core::ecs::{AssetOrigin, AssetPayload};
-use concinnity_core::error::CnError;
 use concinnity_host::thread::asset_id;
 
 /// Static authoring metadata for an asset type: how it is declared, whether it
@@ -390,7 +390,10 @@ macro_rules! define_registered_type {
             /// type the args ARE the component; a divergent type (`args:`
             /// metadata) routes through its `bake` translation in
             /// `bake_divergent`.
-            pub fn reserialize_args(self, args: &serde_json::Value) -> Result<Vec<u8>, CnError> {
+            pub fn reserialize_args(
+                self,
+                args: &serde_json::Value,
+            ) -> Result<Vec<u8>, AuthoringError> {
                 // Deserializing the args interns any name-string cross-reference,
                 // which needs the name resolver installed. The build pipeline
                 // resets the interner before it gets here; installing it again is
@@ -403,10 +406,16 @@ macro_rules! define_registered_type {
                             let typed = serde_json::from_value::<__meta_args_ty!($ty; $($meta)*)>(
                                 args.clone(),
                             )
-                            .map_err(json_args_err)?;
-                            Ok(postcard::to_allocvec(
-                                &__meta_validate!(typed; $($meta)*),
-                            )?)
+                            .map_err(|source| AuthoringError::Args {
+                                asset: stringify!($variant),
+                                source,
+                            })?;
+                            postcard::to_allocvec(&__meta_validate!(typed; $($meta)*)).map_err(
+                                |source| AuthoringError::Encode {
+                                    asset: stringify!($variant),
+                                    source,
+                                },
+                            )
                         }
                     ),+
                 }
@@ -419,17 +428,21 @@ macro_rules! define_registered_type {
             pub fn normalized_args(
                 self,
                 args: &serde_json::Value,
-            ) -> Result<serde_json::Value, CnError> {
+            ) -> Result<serde_json::Value, AuthoringError> {
                 asset_id::ensure_name_resolver();
                 match self {
                     $(
                         Self::$variant => {
+                            let args_err = |source| AuthoringError::Args {
+                                asset: stringify!($variant),
+                                source,
+                            };
                             let typed = serde_json::from_value::<__meta_args_ty!($ty; $($meta)*)>(
                                 args.clone(),
                             )
-                            .map_err(json_args_err)?;
+                            .map_err(args_err)?;
                             serde_json::to_value(&__meta_validate!(typed; $($meta)*))
-                                .map_err(json_args_err)
+                                .map_err(args_err)
                         }
                     ),+
                 }
@@ -669,14 +682,6 @@ mod authored_tests {
     }
 }
 
-// JSON args that fail the typed schema are an authoring error. Core dropped
-// its `From<serde_json::Error>` conversion along with runtime JSON parsing,
-// so the build side maps the error here.
-fn json_args_err(e: serde_json::Error) -> CnError {
-    tracing::error!("JSON args error: {}", e);
-    CnError::InvalidArgument
-}
-
 /// Bake the runtime component for the asset types whose baked form diverges
 /// from their authored args (the entries with `args:` metadata): run the type's
 /// `bake` translation at build time and serialize the component itself, which
@@ -685,14 +690,18 @@ fn json_args_err(e: serde_json::Error) -> CnError {
 pub fn bake_divergent(
     ct: RegisteredType,
     args: &serde_json::Value,
-) -> Result<Option<Vec<u8>>, CnError> {
+) -> Result<Option<Vec<u8>>, AuthoringError> {
     // Deserializing the args interns name-string cross-references, exactly as
     // `reserialize_args` does.
     asset_id::ensure_name_resolver();
     macro_rules! bake {
         ($ty:ty, $args_ty:ty) => {{
-            let typed = serde_json::from_value::<$args_ty>(args.clone()).map_err(json_args_err)?;
-            Ok(Some(postcard::to_allocvec(&<$ty>::bake(typed))?))
+            let asset = ct.as_str();
+            let typed = serde_json::from_value::<$args_ty>(args.clone())
+                .map_err(|source| AuthoringError::Args { asset, source })?;
+            postcard::to_allocvec(&<$ty>::bake(typed))
+                .map(Some)
+                .map_err(|source| AuthoringError::Encode { asset, source })
         }};
     }
     match ct {
@@ -882,11 +891,20 @@ mod tests {
             .unwrap();
         let back: ProceduralMesh = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(back.source.as_deref(), Some("a.glb"));
-        assert_eq!(
-            ty.reserialize_args(&serde_json::json!({ "source": 42 }))
-                .unwrap_err(),
-            CnError::InvalidArgument
+        let error = ty
+            .reserialize_args(&serde_json::json!({ "source": 42 }))
+            .unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                AuthoringError::Args {
+                    asset: "ProceduralMesh",
+                    ..
+                }
+            ),
+            "{error:?}"
         );
+        assert!(error.to_string().contains("expected a string"), "{error}");
     }
 
     #[test]
@@ -897,11 +915,13 @@ mod tests {
             .unwrap();
         assert_eq!(back["generator"], "box");
         assert!(back.get("half_width").is_some(), "defaults fill in");
-        assert_eq!(
-            ty.normalized_args(&serde_json::json!({ "generator": 42 }))
-                .unwrap_err(),
-            CnError::InvalidArgument
-        );
+        assert!(matches!(
+            ty.normalized_args(&serde_json::json!({ "generator": 42 })),
+            Err(AuthoringError::Args {
+                asset: "ProceduralMesh",
+                ..
+            })
+        ));
     }
 
     // Convention guard for the asset-reference contract: a user-declarable

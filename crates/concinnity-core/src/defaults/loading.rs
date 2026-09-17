@@ -9,7 +9,7 @@ use alloc::string::ToString;
 use crate::components::{LoadingOverlay, Scene, Screen, Sprite, StreamingConfig, TextLabel};
 use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
-use crate::error::CnError;
+use crate::error::WorldError;
 
 use super::Minter;
 
@@ -23,7 +23,7 @@ const BAR_WIDTH: f32 = 480.0;
 const BAR_HEIGHT: f32 = 8.0;
 const BAR_CORNER: f32 = 4.0;
 
-pub(super) fn inject(ctx: &mut PipelineContext, minter: &mut Minter) -> Result<(), CnError> {
+pub(super) fn inject(ctx: &mut PipelineContext, minter: &mut Minter) -> Result<(), WorldError> {
     let declared = ctx.query::<LoadingOverlay>().next().is_some();
     if !declared && !streams_scenes(ctx) {
         return Ok(());
@@ -135,7 +135,7 @@ fn sprite(
     minter: &mut Minter,
     screen: AssetId,
     sprite: Sprite,
-) -> Result<AssetId, CnError> {
+) -> Result<AssetId, WorldError> {
     let id = minter.id()?;
     ctx.push(Sprite {
         asset_id: id,

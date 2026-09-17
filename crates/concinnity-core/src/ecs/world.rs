@@ -15,6 +15,7 @@ use crate::memory::{Arena, MemTag};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
+use crate::ecs::asset_id::AssetIdsExhausted;
 use crate::ecs::asset_id::{AssetId, MintedIds};
 use crate::ecs::user_system::{self, UserSystem};
 use crate::ecs::waves::{self, ExecSchedule};
@@ -24,7 +25,7 @@ use crate::ecs::{
     NoPayloads, PayloadStore, Phase, PipelineContext, Resources, RuntimeComponent, StepResult,
     System, SystemEntry, SystemTable,
 };
-use crate::error::CnError;
+use crate::error::WorldError;
 use crate::profile::FrameProfile;
 
 // The per-frame scratch reserve. An engine constant rather than an authored
@@ -114,7 +115,7 @@ impl Default for World {
 
 // The next minted id, drawn from the world's shared counter so ids handed out
 // before start and by the completion pass never collide.
-fn mint_id(ctx: &mut PipelineContext) -> Result<AssetId, CnError> {
+fn mint_id(ctx: &mut PipelineContext) -> Result<AssetId, AssetIdsExhausted> {
     if ctx.resource::<MintedIds>().is_none() {
         ctx.insert_resource(MintedIds::default());
     }
@@ -183,7 +184,7 @@ impl World {
     pub fn add_mesh(
         &mut self,
         payload: crate::bake::payload::MeshPayload,
-    ) -> Result<MeshHandle, CnError> {
+    ) -> Result<MeshHandle, WorldError> {
         let (bytes, procedural) = payload.into_parts();
         let mut ctx = self.context();
         let id = mint_id(&mut ctx)?;
@@ -469,7 +470,8 @@ impl World {
     /// `name` is what the profile, the log and the schedule address the system
     /// by. It must not repeat a table entry's name or an earlier registration's,
     /// since both the ordering edges and the schedule's lookups key on it;
-    /// [`start`](World::start) returns `CnError::InvalidArgument` on a repeat.
+    /// [`start`](World::start) returns
+    /// [`DuplicateSystemName`](WorldError::DuplicateSystemName) on a repeat.
     ///
     /// Registrations are read once, by `start`. Adding one to a world that has
     /// already started does nothing.
@@ -512,7 +514,7 @@ impl World {
 
     /// Build the systems `table` gates in for this world's content and run
     /// their `init`.
-    pub fn start(&mut self, table: &SystemTable) -> Result<(), CnError> {
+    pub fn start(&mut self, table: &SystemTable) -> Result<(), WorldError> {
         // The host's completion pass, before the gates read the world: an
         // injected component brings its own system into the schedule. Guarded
         // by the same once-per-world flag as the build below, so a second
@@ -521,8 +523,8 @@ impl World {
         if !self.systems_built {
             let registered: Vec<&'static str> = self.registered.iter().map(|s| s.name).collect();
             let table_names: Vec<&'static str> = table.entries.iter().map(|e| e.name).collect();
-            if user_system::colliding_name(&registered, &table_names).is_some() {
-                return Err(CnError::InvalidArgument);
+            if let Some(name) = user_system::colliding_name(&registered, &table_names) {
+                return Err(WorldError::DuplicateSystemName(name));
             }
             if let Some(complete) = table.complete_world {
                 let mut ctx = self.context();

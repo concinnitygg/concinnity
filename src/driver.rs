@@ -57,7 +57,10 @@ mod tests {
             ..Default::default()
         });
 
-        assert_eq!(App::from_world(world).into_headless().run(), Ok(()));
+        App::from_world(world)
+            .into_headless()
+            .run()
+            .expect("the run ends");
     }
 
     // A world authored to be seen runs headless too: the GraphicsConfig that
@@ -67,7 +70,10 @@ mod tests {
         let mut world = World::new();
         world.add_component(GraphicsConfig::default());
 
-        assert_eq!(App::from_world(world).into_headless().run(), Ok(()));
+        App::from_world(world)
+            .into_headless()
+            .run()
+            .expect("the run ends");
     }
 
     // With no backend feature there is no renderer to drive, so the loop a
@@ -86,6 +92,6 @@ mod tests {
         let mut world = World::new();
         world.add_component(GraphicsConfig::default());
 
-        assert_eq!(App::from_world(world).run(), Ok(()));
+        App::from_world(world).run().expect("the run ends");
     }
 }

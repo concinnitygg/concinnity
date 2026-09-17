@@ -1771,16 +1771,36 @@ expectation with the invariant named.
 
 ### 14.2 Error vocabularies
 
-**`BlobError`** — why a blob image did not parse or encode. `TooShort`,
-`BadMagic`, `SchemaMismatch`, `TruncatedMeta`, `Decode`, `Encode`. The format
-crate does no logging: it never knows which file the bytes came from, so the
-caller that opened the file owns the diagnostic and maps each variant to a
-message naming the path.
+Every fallible seam returns a type whose variants are what that seam can fail
+with, and a wrapper keeps its cause under `#[source]` rather than flattening
+it. A C host is the one place that gets a flat code, built at the boundary.
 
-**`CnError`** — the coarse status enum at the runtime's outer boundary.
-`Success`, `AssetInvalidType`, `InvalidState`, `InvalidArgument`, `FileIo`.
-Deliberately context-free; classification into something actionable happens
-where the paths involved are still known.
+**`BlobError`** — why a blob image did not parse or encode. `TooShort`,
+`BadMagic`, `ValidityMismatch`, `TruncatedMeta`, `Decode`, `TrailingMeta`,
+`Encode`. The format crate does no I/O and never knows which file the bytes
+came from, so the caller that opened the file wraps it in `BlobLoadError`,
+which adds the path and holds the `io::Error` of a read that failed outright.
+
+**`AssetError`** — why a baked blob record did not reconstruct its asset.
+`UnknownComponent`, `UnknownResourceKind`, `NotStored`, `Decode` (which names
+the component and keeps the `FrameError` under it).
+
+**`PayloadError`** — why compiled payload bytes did not read. `NoPayloads`,
+`NoSuchBlob`, `Released`, `OutOfBounds`, `Load`. The store is a trait a `no_std`
+client implements too, so `Load` boxes the implementation's own cause.
+
+**`WorldError`** — why a world could not be built, started, or added to.
+`DuplicateSystemName`, `AlreadyStarted`, `RepeatedEngineDefaults`, `Bake`, plus
+the three above folded in. What `World::start`, `App::run` and `Driver` return.
+
+**`AuthoringError`** (concinnity-cook) — why an authored asset did not resolve
+into a blob record. `UnknownType`, `NotAuthorable`, `NotAComponent`, `Args`,
+`Encode`. `Args` carries serde_json's own report of what it found and what
+the schema expected.
+
+**`CnError`** (concinnity-ffi) — the flat code a C host reads, `Ok` first so
+zero is success. Built from the structured error at the boundary, where the
+full cause chain goes to the log.
 
 **`RenderError`** — the typed vocabulary of the backend boundary. Backends map
 their native failure codes (`VkResult`, `HRESULT`, command buffer status) into

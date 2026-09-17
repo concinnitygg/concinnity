@@ -5,7 +5,7 @@
 // which that module is deliberately free of.
 
 use concinnity_core::ecs::PayloadLocator;
-use concinnity_core::error::CnError;
+use concinnity_core::error::PayloadError;
 
 // State of one blob file's payload section.
 //
@@ -94,51 +94,42 @@ impl BlobData {
     /// An `Unloaded` overflow blob is read from its file on first access and
     /// becomes `Loaded`. Errors if the locator is out of range, the blob was
     /// released, or the on-demand load fails.
-    pub fn read(&mut self, locator: &PayloadLocator) -> Result<&[u8], CnError> {
-        let idx = locator.blob_index as usize;
-        let slot = self.slots.get_mut(idx).ok_or_else(|| {
-            tracing::error!("BlobData: blob {} is out of range", locator.blob_index);
-            CnError::InvalidData
-        })?;
+    pub fn read(&mut self, locator: &PayloadLocator) -> Result<&[u8], PayloadError> {
+        let index = locator.blob_index;
+        let count = self.slots.len() as u32;
+        let idx = index as usize;
+        let slot = self
+            .slots
+            .get_mut(idx)
+            .ok_or(PayloadError::NoSuchBlob { index, count })?;
         if let BlobSlot::Unloaded(path) = slot {
-            tracing::debug!(
-                "BlobData: lazily loading overflow blob {}",
-                locator.blob_index
-            );
-            let bytes = super::read_payload_section(&path.clone())?;
+            tracing::debug!("BlobData: lazily loading overflow blob {}", index);
+            let bytes = super::read_payload_section(&path.clone()).map_err(|source| {
+                PayloadError::Load {
+                    index,
+                    source: Box::new(source),
+                }
+            })?;
             *slot = BlobSlot::Loaded(bytes);
         }
 
-        let section = match &self.slots[idx] {
-            BlobSlot::Loaded(bytes) => bytes,
-            BlobSlot::Released => {
-                tracing::error!("BlobData: blob {} has been released", locator.blob_index);
-                return Err(CnError::InvalidState);
-            }
-            // Unreachable: an Unloaded slot was loaded just above.
-            BlobSlot::Unloaded(_) => return Err(CnError::InvalidState),
+        // An `Unloaded` slot was loaded just above, so anything but `Loaded`
+        // here is a section a system released after consuming it.
+        let BlobSlot::Loaded(section) = &self.slots[idx] else {
+            return Err(PayloadError::Released { index });
         };
 
+        let out_of_bounds = || PayloadError::OutOfBounds {
+            index,
+            offset: locator.offset,
+            len: locator.len,
+            section_len: section.len(),
+        };
         let start = locator.offset as usize;
-        let end = start.checked_add(locator.len as usize).ok_or_else(|| {
-            tracing::error!(
-                "BlobData: payload slice offset {} + len {} overflows in blob {}",
-                start,
-                locator.len,
-                locator.blob_index
-            );
-            CnError::InvalidData
-        })?;
-        section.get(start..end).ok_or_else(|| {
-            tracing::error!(
-                "BlobData: payload slice [{}, {}) out of bounds in blob {} (len={})",
-                start,
-                end,
-                locator.blob_index,
-                section.len()
-            );
-            CnError::InvalidData
-        })
+        let end = start
+            .checked_add(locator.len as usize)
+            .ok_or_else(out_of_bounds)?;
+        section.get(start..end).ok_or_else(out_of_bounds)
     }
 
     /// release a blob's in-memory payload once all systems that need it have
@@ -189,7 +180,7 @@ impl BlobData {
 // The runtime `PayloadStore` a `PipelineContext` hands to systems. A thin
 // adapter over the inherent API so the pure ECS mechanism names no blob type.
 impl concinnity_core::ecs::PayloadStore for BlobData {
-    fn read(&mut self, locator: &PayloadLocator) -> Result<&[u8], CnError> {
+    fn read(&mut self, locator: &PayloadLocator) -> Result<&[u8], PayloadError> {
         BlobData::read(self, locator)
     }
 
@@ -254,14 +245,25 @@ mod tests {
     #[test]
     fn read_errors_when_a_deferred_overflow_blob_is_missing() {
         let mut bd = BlobData::from_blob_files(Vec::new(), vec!["/nonexistent/cn/1".into()]);
-        assert_eq!(bd.read(&locator(1, 0, 1)), Err(CnError::FileIo));
+        let error = bd.read(&locator(1, 0, 1)).unwrap_err();
+        assert!(
+            matches!(error, PayloadError::Load { index: 1, .. }),
+            "{error:?}"
+        );
+        assert!(
+            std::error::Error::source(&error).is_some(),
+            "the failed read stays reachable"
+        );
     }
 
     #[test]
     fn read_errors_on_released_blob() {
         // a `None` section is treated as already released
         let mut bd = BlobData::new(vec![None]);
-        assert_eq!(bd.read(&locator(0, 0, 1)), Err(CnError::InvalidState));
+        assert!(matches!(
+            bd.read(&locator(0, 0, 1)),
+            Err(PayloadError::Released { index: 0 })
+        ));
     }
 
     #[test]
@@ -270,7 +272,10 @@ mod tests {
         assert_eq!(bd.read(&locator(0, 0, 2)).expect("read ok"), b"ab");
         bd.release(0);
         assert!(!bd.is_loaded(0));
-        assert_eq!(bd.read(&locator(0, 0, 2)), Err(CnError::InvalidState));
+        assert!(matches!(
+            bd.read(&locator(0, 0, 2)),
+            Err(PayloadError::Released { index: 0 })
+        ));
     }
 
     #[test]
@@ -284,7 +289,10 @@ mod tests {
         assert_eq!(freed, 4, "blob 0's four bytes were freed");
         assert!(!bd.is_loaded(0));
         // The freed section now errors on read rather than reloading.
-        assert_eq!(bd.read(&locator(0, 0, 1)), Err(CnError::InvalidState));
+        assert!(matches!(
+            bd.read(&locator(0, 0, 1)),
+            Err(PayloadError::Released { index: 0 })
+        ));
         // A second sweep frees nothing (idempotent).
         assert_eq!(bd.release_all_resident(), 0);
     }
@@ -292,13 +300,28 @@ mod tests {
     #[test]
     fn read_errors_on_out_of_range_blob() {
         let mut bd = BlobData::empty();
-        assert_eq!(bd.read(&locator(3, 0, 1)), Err(CnError::InvalidData));
+        assert!(matches!(
+            bd.read(&locator(3, 0, 1)),
+            Err(PayloadError::NoSuchBlob { index: 3, count: 0 })
+        ));
     }
 
     #[test]
     fn read_errors_when_the_locator_runs_past_the_section() {
         let mut bd = BlobData::new(vec![Some(b"abcd".to_vec())]);
-        assert_eq!(bd.read(&locator(0, 2, 99)), Err(CnError::InvalidData));
-        assert_eq!(bd.read(&locator(0, u64::MAX, 1)), Err(CnError::InvalidData));
+        for loc in [locator(0, 2, 99), locator(0, u64::MAX, 1)] {
+            let error = bd.read(&loc).unwrap_err();
+            assert!(
+                matches!(
+                    error,
+                    PayloadError::OutOfBounds {
+                        index: 0,
+                        section_len: 4,
+                        ..
+                    }
+                ),
+                "{error:?}"
+            );
+        }
     }
 }

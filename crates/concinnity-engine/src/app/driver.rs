@@ -3,16 +3,16 @@
 
 use concinnity_core::Driver;
 use concinnity_core::ecs::World;
-use concinnity_core::error::CnError;
+use concinnity_core::error::WorldError;
 
 use crate::app::state::App;
 
 impl Driver for App {
-    fn start(&mut self) -> Result<(), CnError> {
+    fn start(&mut self) -> Result<(), WorldError> {
         App::start(self)
     }
 
-    fn run(self: Box<Self>) -> Result<(), CnError> {
+    fn run(self: Box<Self>) -> Result<(), WorldError> {
         (*self).run()
     }
 
@@ -36,8 +36,8 @@ mod tests {
     #[test]
     fn a_driver_starts_the_world_it_holds() {
         let mut driver: Box<dyn Driver> = Box::new(App::new());
-        assert_eq!(driver.start(), Ok(()));
-        assert_eq!(driver.start(), Err(CnError::InvalidState));
+        assert!(driver.start().is_ok());
+        assert!(matches!(driver.start(), Err(WorldError::AlreadyStarted)));
     }
 
     // The other way out: the world comes back as it was handed over, so a

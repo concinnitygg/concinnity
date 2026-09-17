@@ -2,8 +2,8 @@
 //!
 //! This module is the single place where "type name + JSON args → BlobAssetDef"
 //! is implemented.
+use crate::authoring::AuthoringError;
 use concinnity_core::ecs::{AssetOrigin, BlobAssetDef};
-use concinnity_core::error::CnError;
 
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::registry::Registration;
@@ -33,15 +33,17 @@ pub struct AssetRequest {
 /// pipeline (entry, pack, and validate) calls this first, then runs its
 /// compilation pass over the resulting defs; concinnity-dev's asset-adding path
 /// (`cn add` and its FFI entry) calls it to validate each entry before writing it.
-pub fn create_asset_def(req: &AssetRequest) -> Result<BlobAssetDef, CnError> {
+pub fn create_asset_def(req: &AssetRequest) -> Result<BlobAssetDef, AuthoringError> {
     if let Some(ct) = RegisteredType::parse(&req.asset_type) {
         let reg = ct.registration();
         if reg.origin != AssetOrigin::External {
-            return Err(CnError::InvalidArgument);
+            return Err(AuthoringError::NotAuthorable { asset: ct.as_str() });
         }
         // A resource asset is External too, but compiles into the resource
         // stream rather than a component record, so it has no tag to carry.
-        let discriminant = ct.discriminant().ok_or(CnError::InvalidArgument)?;
+        let discriminant = ct
+            .discriminant()
+            .ok_or(AuthoringError::NotAComponent { asset: ct.as_str() })?;
         let args = resolve_args(&reg, &req.args);
         // Every record is baked. For a pass-through type the baked component is
         // its reserialized args (the component IS its args); a divergent type
@@ -58,8 +60,7 @@ pub fn create_asset_def(req: &AssetRequest) -> Result<BlobAssetDef, CnError> {
         });
     }
 
-    tracing::error!("asset_api: unknown asset type '{}'", req.asset_type);
-    Err(CnError::AssetInvalidType)
+    Err(AuthoringError::UnknownType(req.asset_type.clone()))
 }
 
 // Resolve the args to use for construction.
@@ -166,9 +167,10 @@ mod tests {
             asset_type: "NotARealAsset".to_string(),
             args: None,
         };
-        assert_eq!(
-            create_asset_def(&req).unwrap_err(),
-            CnError::AssetInvalidType
+        let error = create_asset_def(&req).unwrap_err();
+        assert!(
+            matches!(&error, AuthoringError::UnknownType(name) if name == "NotARealAsset"),
+            "{error:?}"
         );
     }
 
@@ -179,10 +181,10 @@ mod tests {
             asset_type: "Transform".to_string(),
             args: None,
         };
-        assert_eq!(
+        assert!(matches!(
             create_asset_def(&req).unwrap_err(),
-            CnError::InvalidArgument
-        );
+            AuthoringError::NotAuthorable { asset: "Transform" }
+        ));
     }
 
     #[test]
@@ -241,10 +243,19 @@ mod tests {
             asset_type: "ProceduralMesh".to_string(),
             args: Some(serde_json::json!({ "generator": 42 })),
         };
-        assert_eq!(
-            create_asset_def(&req).unwrap_err(),
-            CnError::InvalidArgument
+        let error = create_asset_def(&req).unwrap_err();
+        // The schema's own report is what tells the author which field it was.
+        assert!(
+            matches!(
+                &error,
+                AuthoringError::Args {
+                    asset: "ProceduralMesh",
+                    ..
+                }
+            ),
+            "{error:?}"
         );
+        assert!(error.to_string().contains("invalid type"), "{error}");
     }
 
     // Every addable type is authorable, and only the authorable ones are

@@ -144,13 +144,13 @@ fn deferred_shader_source(
     if !blob_disk_backed {
         let bytes = ctx
             .read_payload(locator)
-            .map_err(|e| format!("{e:?}"))?
+            .map_err(|e| e.to_string())?
             .to_vec();
         return Ok(ShaderPayloadSource::Bytes(bytes));
     }
     let path = blob_path(locator.blob_index)
         .ok_or_else(|| format!("blob {}: no blob layout installed", locator.blob_index))?;
-    let start = payload_section_start(&path).map_err(|e| format!("{e:?}"))?;
+    let start = payload_section_start(&path).map_err(|e| e.to_string())?;
     Ok(ShaderPayloadSource::Disk {
         path,
         offset: start + locator.offset,
@@ -739,7 +739,7 @@ impl GraphicsSystem {
                 Ok(b) => b.to_vec(),
                 Err(e) => {
                     tracing::error!(
-                        "GraphicsSystem: failed to read SkinnedMesh handle {} payload: {:?}",
+                        "GraphicsSystem: failed to read SkinnedMesh handle {} payload: {}",
                         handle.index(),
                         e
                     );
@@ -1171,7 +1171,7 @@ impl GraphicsSystem {
                     }
                 },
                 Err(e) => {
-                    tracing::error!("GraphicsSystem: failed to read shader payload: {:?}", e);
+                    tracing::error!("GraphicsSystem: failed to read shader payload: {}", e);
                     return None;
                 }
             };
@@ -1350,7 +1350,7 @@ impl GraphicsSystem {
                     Ok(b) => env_map_bytes = Some(b.to_vec()),
                     Err(e) => {
                         tracing::error!(
-                            "GraphicsSystem: failed to read EnvironmentMap payload: {:?}",
+                            "GraphicsSystem: failed to read EnvironmentMap payload: {}",
                             e
                         );
                         return None;
@@ -1405,7 +1405,7 @@ impl GraphicsSystem {
             match ctx.read_payload(&locator) {
                 Ok(b) => color_lut_bytes = Some(b.to_vec()),
                 Err(e) => {
-                    tracing::error!("GraphicsSystem: failed to read ColorLut payload: {:?}", e);
+                    tracing::error!("GraphicsSystem: failed to read ColorLut payload: {}", e);
                     return None;
                 }
             }
@@ -1449,7 +1449,7 @@ impl GraphicsSystem {
                     Ok(b) => b.to_vec(),
                     Err(e) => {
                         tracing::error!(
-                            "GraphicsSystem: failed to read Font handle {} payload: {:?}",
+                            "GraphicsSystem: failed to read Font handle {} payload: {}",
                             slot,
                             e
                         );

@@ -6,7 +6,7 @@ use alloc::boxed::Box;
 use crate::app::{App, Driver};
 use crate::components::Transform;
 use crate::ecs::{Phase, PipelineContext, StepResult, System, SystemEntry, SystemTable, World};
-use crate::error::CnError;
+use crate::error::WorldError;
 
 // The step count the halting world stops at.
 const STOP_AT: f32 = 3.0;
@@ -35,8 +35,8 @@ fn counter(world: &World) -> Option<Box<dyn System>> {
 
 // A completion pass that refuses the world, which is what a start failure looks
 // like from outside the loop.
-fn refuse(_: &mut PipelineContext) -> Result<(), CnError> {
-    Err(CnError::InvalidState)
+fn refuse(_: &mut PipelineContext) -> Result<(), WorldError> {
+    Err(WorldError::RepeatedEngineDefaults { count: 2 })
 }
 
 const ENTRIES: &[SystemEntry] = &[SystemEntry {
@@ -79,22 +79,25 @@ fn driver(table: &'static SystemTable) -> Box<dyn Driver> {
 #[test]
 fn a_driver_starts_the_world_it_holds() {
     let mut driver = driver(&COUNTING);
-    assert_eq!(driver.start(), Ok(()));
-    assert_eq!(driver.start(), Err(CnError::InvalidState));
+    assert!(driver.start().is_ok());
+    assert!(matches!(driver.start(), Err(WorldError::AlreadyStarted)));
 }
 
 // An unbounded run through the trait reports that it ran, not which of the
 // readings ended it.
 #[test]
 fn a_driver_runs_the_world_to_its_end() {
-    assert_eq!(driver(&COUNTING).run(), Ok(()));
+    assert!(driver(&COUNTING).run().is_ok());
 }
 
 // A run starts the world for the caller, so a world that cannot be started
 // fails the run rather than stepping a half-built world.
 #[test]
 fn a_run_reports_a_refused_start() {
-    assert_eq!(driver(&REFUSING).run(), Err(CnError::InvalidState));
+    assert!(matches!(
+        driver(&REFUSING).run(),
+        Err(WorldError::RepeatedEngineDefaults { count: 2 })
+    ));
 }
 
 // The other way out: the world comes back as it was handed over, so a caller

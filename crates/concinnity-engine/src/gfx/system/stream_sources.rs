@@ -52,7 +52,7 @@ pub(super) fn build_texture_payload_source(
             Some(&s) => s,
             None => {
                 let s = payload_section_start(&path)
-                    .map_err(|e| format!("blob {}: {:?}", loc.blob_index, e))?;
+                    .map_err(|e| format!("blob {}: {}", loc.blob_index, e))?;
                 section_starts.insert(loc.blob_index, s);
                 s
             }
@@ -112,7 +112,7 @@ pub(super) fn disk_mesh_payload(locator: &PayloadLocator) -> Option<DeferredMesh
         }),
         Err(e) => {
             tracing::warn!(
-                "GraphicsSystem: deferred mesh blob {} unreadable: {:?}",
+                "GraphicsSystem: deferred mesh blob {} unreadable: {}",
                 locator.blob_index,
                 e
             );

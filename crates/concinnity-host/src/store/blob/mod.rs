@@ -10,10 +10,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 pub use concinnity_core::blob::{BLOB_MAGIC, HEADER_SIZE, WorldManifest};
-use concinnity_core::blob::{BlobError, parse_cnb, parse_payload_section_start, payload_section};
-use concinnity_core::error::CnError;
+use concinnity_core::blob::{parse_cnb, parse_payload_section_start, payload_section};
 
 mod data;
+mod error;
+
+pub use error::BlobLoadError;
 
 pub use concinnity_core::SCHEMA_VERSION;
 pub use concinnity_core::ecs::{BlobAssetDef, BlobMeta, ResourceRecord};
@@ -72,9 +74,10 @@ fn resolve_blob_path(primary: Option<&Path>, index: u32) -> Option<String> {
 
 /// Read and deserialize a blob's metadata section (component defs + resource
 /// records). Returns (meta, payload_start_offset).
-pub fn read_cnb(path: &str) -> Result<(BlobMeta, usize), CnError> {
+pub fn read_cnb(path: &str) -> Result<(BlobMeta, usize), BlobLoadError> {
     let data = read_file(path)?;
-    parse_cnb::<BlobMeta>(SCHEMA_VERSION, &data).map_err(|e| report(path, e))
+    parse_cnb::<BlobMeta>(SCHEMA_VERSION, &data)
+        .map_err(|source| BlobLoadError::format(path, source))
 }
 
 /// Byte offset within a blob file at which its payload section begins. Reads
@@ -82,56 +85,23 @@ pub fn read_cnb(path: &str) -> Result<(BlobMeta, usize), CnError> {
 /// `PayloadLocator` offset into an absolute file offset.
 /// Used only by the Metal-driven disk-backed streaming source for now
 /// (Vulkan/DirectX streaming catch-up is a follow-up).
-pub fn payload_section_start(path: &str) -> Result<u64, CnError> {
-    let mut file = fs::File::open(path).map_err(|e| {
-        tracing::error!("Failed to open {}: {}", path, e);
-        CnError::FileIo
-    })?;
+pub fn payload_section_start(path: &str) -> Result<u64, BlobLoadError> {
+    let mut file = fs::File::open(path).map_err(|source| BlobLoadError::io(path, source))?;
     let mut header = [0u8; HEADER_SIZE];
-    file.read_exact(&mut header).map_err(|e| {
-        tracing::error!("Failed to read header of {}: {}", path, e);
-        CnError::FileIo
-    })?;
-    parse_payload_section_start::<BlobMeta>(&header).map_err(|e| report(path, e))
+    file.read_exact(&mut header)
+        .map_err(|source| BlobLoadError::io(path, source))?;
+    parse_payload_section_start::<BlobMeta>(&header)
+        .map_err(|source| BlobLoadError::format(path, source))
 }
 
 // Read just the payload section of a blob file into memory.
-fn read_payload_section(path: &str) -> Result<Vec<u8>, CnError> {
+fn read_payload_section(path: &str) -> Result<Vec<u8>, BlobLoadError> {
     let data = read_file(path)?;
     Ok(payload_section(&data).to_vec())
 }
 
-fn read_file(path: &str) -> Result<Vec<u8>, CnError> {
-    fs::read(path).map_err(|e| {
-        tracing::error!("Failed to read {}: {}", path, e);
-        CnError::FileIo
-    })
-}
-
-// Log a format failure against the file it came from. The format crate has no
-// path to name, so the diagnostic belongs here. The file was read, so none of
-// these is an I/O failure.
-fn report(path: &str, e: BlobError) -> CnError {
-    match e {
-        BlobError::TooShort => tracing::error!("{}: file too short", path),
-        BlobError::BadMagic => tracing::error!("{}: bad magic", path),
-        BlobError::ValidityMismatch(_) => tracing::error!(
-            "{}: world data was built by a different version of the engine",
-            path
-        ),
-        BlobError::TruncatedMeta => tracing::error!("{}: truncated metadata section", path),
-        BlobError::Decode => tracing::error!("{}: failed to deserialize metadata", path),
-        BlobError::TrailingMeta(n) => tracing::error!(
-            "{}: metadata left {} unread bytes; world data was built by a different version of the engine",
-            path,
-            n
-        ),
-        BlobError::Encode => {
-            tracing::error!("{}: failed to serialize metadata", path);
-            return CnError::InvalidArgument;
-        }
-    }
-    CnError::InvalidData
+fn read_file(path: &str) -> Result<Vec<u8>, BlobLoadError> {
+    fs::read(path).map_err(|source| BlobLoadError::io(path, source))
 }
 
 /// Load the blob file at `primary` and the payload store around it, anchoring
@@ -145,7 +115,7 @@ fn report(path: &str, e: BlobError) -> CnError {
 /// each from disk the first time a locator needs it. Defs are not resolved into
 /// runtime `Asset`s: that resolution depends on the client runtime registry, so
 /// it lives in the client `blob::load` shim.
-pub fn load_raw_at(primary: &Path) -> Result<(BlobMeta, BlobData), CnError> {
+pub fn load_raw_at(primary: &Path) -> Result<(BlobMeta, BlobData), BlobLoadError> {
     anchor(primary);
     load_raw_from(blob_path)
 }
@@ -154,8 +124,8 @@ pub fn load_raw_at(primary: &Path) -> Result<(BlobMeta, BlobData), CnError> {
 // exercised without the process-global data-dir anchor.
 fn load_raw_from(
     blob_path: impl Fn(u32) -> Option<String>,
-) -> Result<(BlobMeta, BlobData), CnError> {
-    let (meta, _payload_start) = read_cnb(&blob_path(0).ok_or(CnError::NoStateRoot)?)?;
+) -> Result<(BlobMeta, BlobData), BlobLoadError> {
+    let (meta, _payload_start) = read_cnb(&blob_path(0).ok_or(BlobLoadError::NoStateRoot)?)?;
 
     // Cook derives the manifest from the very streams it summarizes, so a
     // mismatch means a corrupt or hand-edited blob.
@@ -165,10 +135,10 @@ fn load_raw_from(
         "blob manifest does not match its record streams"
     );
 
-    let blob0_payload = read_payload_section(&blob_path(0).ok_or(CnError::NoStateRoot)?)?;
+    let blob0_payload = read_payload_section(&blob_path(0).ok_or(BlobLoadError::NoStateRoot)?)?;
     tracing::debug!("Loaded blob 0 payload ({} bytes)", blob0_payload.len());
     let overflow_paths = (1..=meta.manifest.max_blob_index)
-        .map(|i| blob_path(i).ok_or(CnError::NoStateRoot))
+        .map(|i| blob_path(i).ok_or(BlobLoadError::NoStateRoot))
         .collect::<Result<Vec<_>, _>>()?;
 
     let blob_data = BlobData::from_blob_files(blob0_payload, overflow_paths);
@@ -178,7 +148,7 @@ fn load_raw_from(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::blob::encode_cnb;
+    use concinnity_core::blob::{BlobError, encode_cnb};
 
     #[test]
     fn an_anchored_primary_owns_blob_zero_and_its_siblings() {
@@ -226,37 +196,42 @@ mod tests {
         assert_eq!(resolve_blob_path(None, 3), None);
     }
 
-    // A file that was read but cannot be used is not a disk failure, so a
-    // version mismatch must not read as one.
+    // A file that was read but cannot be used is not a disk failure, and the
+    // reader is the only place that knows which file the bytes came from, so
+    // the failure has to name both the path and what the format rejected.
     #[test]
-    fn format_failures_report_invalid_data() {
-        for e in [
-            BlobError::TooShort,
-            BlobError::BadMagic,
-            BlobError::ValidityMismatch(99),
-            BlobError::TruncatedMeta,
-            BlobError::Decode,
-            BlobError::TrailingMeta(4),
-        ] {
-            assert_eq!(report("x.cnb", e), CnError::InvalidData, "{e:?}");
-        }
-        assert_eq!(report("x.cnb", BlobError::Encode), CnError::InvalidArgument);
-    }
-
-    #[test]
-    fn read_cnb_reports_invalid_data_for_a_foreign_file() {
+    fn a_format_failure_names_the_file_and_keeps_its_cause() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("0").to_string_lossy().into_owned();
         std::fs::write(&path, vec![0xabu8; HEADER_SIZE * 2]).unwrap();
-        assert_eq!(read_cnb(&path).unwrap_err(), CnError::InvalidData);
+
+        let error = read_cnb(&path).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                BlobLoadError::Format {
+                    source: BlobError::BadMagic,
+                    ..
+                }
+            ),
+            "{error:?}"
+        );
+        assert!(error.to_string().contains(&path), "{error}");
+        assert!(
+            std::error::Error::source(&error).is_some(),
+            "the format error stays reachable"
+        );
     }
 
+    // The other half of the split the flat code could not express: a file that
+    // was never read at all.
     #[test]
-    fn read_cnb_errors_on_a_missing_file() {
-        assert_eq!(
-            read_cnb("/nonexistent/cn/blob/path.cnb"),
-            Err(CnError::FileIo)
-        );
+    fn a_missing_file_reports_the_io_failure_that_found_it() {
+        let error = read_cnb("/nonexistent/cn/blob/path.cnb").unwrap_err();
+        let BlobLoadError::Io { source, .. } = &error else {
+            panic!("expected an io failure, got {error:?}");
+        };
+        assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
     }
 
     #[test]
@@ -283,7 +258,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("bad").to_string_lossy().into_owned();
         std::fs::write(&path, vec![0u8; HEADER_SIZE]).unwrap();
-        assert_eq!(payload_section_start(&path), Err(CnError::InvalidData));
+        assert!(matches!(
+            payload_section_start(&path),
+            Err(BlobLoadError::Format {
+                source: BlobError::BadMagic,
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -349,6 +330,9 @@ mod tests {
     // it has to name itself rather than folding onto a file-not-found.
     #[test]
     fn load_raw_without_a_layout_reports_no_state_root() {
-        assert_eq!(load_raw_from(|_| None).err(), Some(CnError::NoStateRoot));
+        assert!(matches!(
+            load_raw_from(|_| None),
+            Err(BlobLoadError::NoStateRoot)
+        ));
     }
 }

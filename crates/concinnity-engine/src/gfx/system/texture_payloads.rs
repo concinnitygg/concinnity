@@ -33,7 +33,7 @@ pub(super) fn decode_texture_payloads(
             match ctx.read_payload(locator) {
                 Ok(b) => Some(b.to_vec()),
                 Err(e) => {
-                    tracing::error!("GraphicsSystem: failed to read texture payload: {:?}", e);
+                    tracing::error!("GraphicsSystem: failed to read texture payload: {}", e);
                     return None;
                 }
             }

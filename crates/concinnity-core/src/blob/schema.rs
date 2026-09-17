@@ -6,7 +6,7 @@
 
 use crate::ecs::PayloadLocator;
 use crate::ecs::asset_id::AssetId;
-use crate::error::CnError;
+use crate::error::AssetError;
 use alloc::vec::Vec;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -61,9 +61,9 @@ impl From<ResourceKind> for u8 {
 }
 
 impl TryFrom<u8> for ResourceKind {
-    type Error = CnError;
+    type Error = AssetError;
 
-    fn try_from(tag: u8) -> Result<Self, CnError> {
+    fn try_from(tag: u8) -> Result<Self, AssetError> {
         Ok(match tag {
             0 => Self::Mesh,
             1 => Self::Texture,
@@ -74,7 +74,7 @@ impl TryFrom<u8> for ResourceKind {
             6 => Self::EnvironmentMap,
             7 => Self::ColorLut,
             8 => Self::SkinnedMesh,
-            _ => return Err(CnError::InvalidData),
+            _ => return Err(AssetError::UnknownResourceKind { tag }),
         })
     }
 }
@@ -392,7 +392,7 @@ mod tests {
         assert!(postcard::from_bytes::<ResourceRecord>(&bytes).is_err());
         assert!(matches!(
             ResourceKind::try_from(9),
-            Err(CnError::InvalidData)
+            Err(AssetError::UnknownResourceKind { tag: 9 })
         ));
     }
 }

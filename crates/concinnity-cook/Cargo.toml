@@ -26,6 +26,7 @@ bytemuck = { workspace = true }
 serde = { workspace = true, features = ["derive", "std"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
 serde_path_to_error = "0.1"
+thiserror = { workspace = true }
 tracing = { workspace = true }
 postcard = { workspace = true, features = ["use-std"] }
 fbxcel = { workspace = true, features = ["tree"] }

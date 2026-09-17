@@ -14,7 +14,7 @@
 
 use concinnity_core::components::GraphicsConfig;
 use concinnity_core::ecs::ScheduleMode;
-use concinnity_core::error::CnError;
+use concinnity_core::error::WorldError;
 use concinnity_core::render::rt_geom::RtDynamicMode;
 use concinnity_host::store::paths::StateTree;
 use std::path::Path;
@@ -159,7 +159,7 @@ pub fn run(tree: &StateTree, options: RunOptions) -> std::io::Result<()> {
 }
 
 // A refused start, in the form a process exit status is built from.
-fn start_failure(e: CnError) -> std::io::Error {
+fn start_failure(e: WorldError) -> std::io::Error {
     std::io::Error::other(format!("failed to start app: {e}"))
 }
 
@@ -244,7 +244,7 @@ pub fn run_from(tree: &StateTree, blob: BlobSource<'_>) -> std::io::Result<()> {
 // single-threaded world loop) -- until the window closes, a system stops the
 // world, or CTRL+C is received. External callers reach this through
 // `App::run` / `App::run_with`.
-pub(crate) fn start_runtime(mut app: App, options: RunOptions) -> Result<(), CnError> {
+pub(crate) fn start_runtime(mut app: App, options: RunOptions) -> Result<(), WorldError> {
     // A host that installed its own subscriber keeps it (`try_init` no-ops),
     // so an embedded app gets logs without wiring any up itself.
     init_logging();
@@ -434,19 +434,16 @@ mod tests {
     fn a_single_file_source_refuses_a_world_that_overflows() {
         let file = Path::new("/apps/MyGame/data");
 
-        assert_eq!(BlobSource::File(file).check_span(0), None);
-        assert_eq!(
+        assert!(BlobSource::File(file).check_span(0).is_none());
+        assert!(matches!(
             BlobSource::File(file).check_span(2),
-            Some(StartupError::OverflowUnsupported {
-                blob: file.to_path_buf(),
-                needed: 2,
-            })
-        );
+            Some(StartupError::OverflowUnsupported { blob, needed: 2 }) if blob == file
+        ));
 
         // The directory form carries any span, which is why export picks it.
         let dir = Path::new("/apps/MyGame/data");
-        assert_eq!(BlobSource::Directory(dir).check_span(0), None);
-        assert_eq!(BlobSource::Directory(dir).check_span(7), None);
+        assert!(BlobSource::Directory(dir).check_span(0).is_none());
+        assert!(BlobSource::Directory(dir).check_span(7).is_none());
     }
 
     // A tree with no build behind it is a missing-data failure in either
@@ -460,19 +457,19 @@ mod tests {
         let mut app = App::new().in_tree(tree.clone());
         let error = load_world(&mut app, BlobSource::Directory(&data_dir))
             .expect_err("an empty tree has no world");
-        assert_eq!(
-            error,
-            StartupError::MissingData {
-                blob: data_dir.join("0")
-            }
+        assert!(
+            matches!(&error, StartupError::MissingData { blob } if *blob == data_dir.join("0")),
+            "{error:?}"
         );
         assert_eq!(error.io_kind(), std::io::ErrorKind::NotFound);
 
         let file = tmp.join("missing.blob");
         let mut app = App::new().in_tree(tree);
-        assert_eq!(
-            load_world(&mut app, BlobSource::File(&file)),
-            Err(StartupError::MissingData { blob: file })
+        let error = load_world(&mut app, BlobSource::File(&file))
+            .expect_err("a named blob that is not there has no world");
+        assert!(
+            matches!(&error, StartupError::MissingData { blob } if *blob == file),
+            "{error:?}"
         );
     }
 
@@ -484,9 +481,11 @@ mod tests {
         let mut app = App::new();
         app.start().expect("the first start succeeds");
 
-        assert_eq!(
-            app.run_with(RunOptions::default()),
-            Err(CnError::InvalidState),
+        assert!(
+            matches!(
+                app.run_with(RunOptions::default()),
+                Err(WorldError::AlreadyStarted)
+            ),
             "a second start is refused"
         );
     }

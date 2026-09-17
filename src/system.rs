@@ -163,7 +163,10 @@ mod tests {
             },
         );
 
-        assert_eq!(App::from_world(world).into_headless().run(), Ok(()));
+        App::from_world(world)
+            .into_headless()
+            .run()
+            .expect("the run ends");
         assert_eq!(steps.load(Ordering::Relaxed), 3);
     }
 
@@ -227,7 +230,7 @@ mod tests {
                 moved: Arc::clone(&moved),
             },
         );
-        assert_eq!(app.run(), Ok(()));
+        app.run().expect("the run ends");
         assert_eq!(
             moved.load(Ordering::Relaxed),
             3,
@@ -250,7 +253,7 @@ mod tests {
             },
         );
 
-        assert_eq!(app.run(), Ok(()));
+        app.run().expect("the run ends");
         assert_eq!(steps.load(Ordering::Relaxed), 2);
     }
 }

@@ -7,7 +7,7 @@ use alloc::vec::Vec;
 
 use crate::bake;
 use crate::ecs::{FontHandle, PipelineContext};
-use crate::error::CnError;
+use crate::error::WorldError;
 use crate::resource::append_font;
 
 /// Pixel size the injected HUD face is rasterized at. Chips draw it minified,
@@ -32,7 +32,7 @@ static PAYLOAD: spin::Once<Vec<u8>> = spin::Once::new();
 // The compiled atlas for the bundled face, computed on the first call. A
 // failure is not stored: it can only mean the bundled face itself is broken,
 // and the caller decides what to do about that.
-fn payload() -> Result<&'static [u8], CnError> {
+fn payload() -> Result<&'static [u8], WorldError> {
     PAYLOAD
         .try_call_once(|| {
             bake::font::compile(
@@ -40,7 +40,10 @@ fn payload() -> Result<&'static [u8], CnError> {
                 HUD_FONT_SIZE_PX,
                 bake::font::BUILTIN_FONT_FILE,
             )
-            .map_err(|_| CnError::InvalidArgument)
+            .map_err(|message| WorldError::Bake {
+                what: "HUD font atlas",
+                message,
+            })
         })
         .map(Vec::as_slice)
 }
@@ -50,7 +53,7 @@ fn payload() -> Result<&'static [u8], CnError> {
 ///
 /// A host that draws HUD text of its own before the world starts (the editor's
 /// panels) reaches it here, so one atlas serves both.
-pub fn hud_font(ctx: &mut PipelineContext) -> Result<FontHandle, CnError> {
+pub fn hud_font(ctx: &mut PipelineContext) -> Result<FontHandle, WorldError> {
     if let Some(HudFont(handle)) = ctx.resource::<HudFont>().copied() {
         return Ok(handle);
     }

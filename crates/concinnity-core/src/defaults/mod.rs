@@ -29,9 +29,10 @@ mod physics;
 mod sky;
 
 use crate::components::{EngineDefaults, GraphicsConfig};
+use crate::ecs::asset_id::AssetIdsExhausted;
 use crate::ecs::asset_id::{AssetId, MintedIds};
 use crate::ecs::{FontHandle, PipelineContext};
-use crate::error::CnError;
+use crate::error::WorldError;
 
 pub use font::{HUD_FONT_SIZE_PX, HudFont, hud_font};
 
@@ -39,7 +40,7 @@ pub use font::{HUD_FONT_SIZE_PX, HudFont, hud_font};
 ///
 /// Errors when the world declares more than one `EngineDefaults` (which one
 /// applies would be arbitrary), or when baking an injected payload fails.
-pub fn run(ctx: &mut PipelineContext) -> Result<(), CnError> {
+pub fn run(ctx: &mut PipelineContext) -> Result<(), WorldError> {
     let toggles = take_toggles(ctx)?;
     let mut minter = Minter::resume(ctx);
     let result = inject_defaults(ctx, &toggles, &mut minter);
@@ -51,7 +52,7 @@ fn inject_defaults(
     ctx: &mut PipelineContext,
     toggles: &EngineDefaults,
     minter: &mut Minter,
-) -> Result<(), CnError> {
+) -> Result<(), WorldError> {
     if toggles.physics_config {
         physics::inject(ctx);
     }
@@ -78,10 +79,12 @@ fn inject_defaults(
 // Drain the world's EngineDefaults column into the one set of toggles that
 // applies. The type is a build directive rather than something a system reads,
 // so it holds nothing past this pass.
-fn take_toggles(ctx: &mut PipelineContext) -> Result<EngineDefaults, CnError> {
+fn take_toggles(ctx: &mut PipelineContext) -> Result<EngineDefaults, WorldError> {
     let mut declared = ctx.drain::<EngineDefaults>();
     if declared.len() > 1 {
-        return Err(CnError::InvalidState);
+        return Err(WorldError::RepeatedEngineDefaults {
+            count: declared.len(),
+        });
     }
     Ok(declared.pop().unwrap_or_default())
 }
@@ -107,14 +110,14 @@ impl Minter {
     }
 
     // The next name for an injected component.
-    fn id(&mut self) -> Result<AssetId, CnError> {
+    fn id(&mut self) -> Result<AssetId, AssetIdsExhausted> {
         self.ids.next_id()
     }
 
     // The font every injected chip and label draws with. Baked into the world
     // on first use and shared from there, so the chips of both HUDs and the
     // loading label land on one atlas.
-    fn hud_font(&mut self, ctx: &mut PipelineContext) -> Result<FontHandle, CnError> {
+    fn hud_font(&mut self, ctx: &mut PipelineContext) -> Result<FontHandle, WorldError> {
         font::hud_font(ctx)
     }
 }

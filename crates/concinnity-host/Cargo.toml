@@ -20,6 +20,7 @@ include = [
 concinnity-core = { workspace = true }
 
 rayon = { workspace = true }
+thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]

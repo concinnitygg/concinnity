@@ -45,7 +45,7 @@ pub(super) fn build_heightfield_collider(
         .ok_or("heightfield ProceduralMesh has no compiled payload")?;
     let bytes = ctx
         .read_payload(locator)
-        .map_err(|e| format!("read terrain payload: {e:?}"))?;
+        .map_err(|e| format!("read terrain payload: {e}"))?;
     let grid = crate::gfx::mesh_payload::deserialize_heightfield(bytes)?
         .ok_or("terrain mesh payload has no baked heightfield collider")?;
     if grid.rows < 2 || grid.cols < 2 {
@@ -161,7 +161,7 @@ mod tests {
     use crate::ecs::{
         Arena, ComponentStorage, FrameContext, NoPayloads, PayloadLocator, PayloadStore, Resources,
     };
-    use crate::error::CnError;
+    use crate::error::PayloadError;
     use crate::gfx::mesh_payload::serialize_heightfield_trailer;
     use crate::physics::{SimConfig, Simulation};
     use crate::profile::FrameProfile;
@@ -215,7 +215,7 @@ mod tests {
     struct OnePayload(Vec<u8>);
 
     impl PayloadStore for OnePayload {
-        fn read(&mut self, _locator: &PayloadLocator) -> Result<&[u8], CnError> {
+        fn read(&mut self, _locator: &PayloadLocator) -> Result<&[u8], PayloadError> {
             Ok(&self.0)
         }
 

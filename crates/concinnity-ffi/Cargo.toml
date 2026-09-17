@@ -34,6 +34,7 @@ vulkan = ["concinnity-engine/vulkan"]
 concinnity-core = { workspace = true }
 concinnity-engine = { workspace = true }
 concinnity-host = { workspace = true }
+thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]

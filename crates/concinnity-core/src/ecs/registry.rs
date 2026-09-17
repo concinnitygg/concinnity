@@ -45,7 +45,7 @@
 
 use crate::define_components;
 use crate::ecs::{BlobAssetDef, Component, PayloadLocator};
-use crate::error::CnError;
+use crate::error::AssetError;
 
 /// The one component list. `$cb` is a macro that receives the `Variant => Type`
 /// entries and expands to whatever registry it builds from them. Type paths are
@@ -286,8 +286,8 @@ macro_rules! cn_impl_components {
         impl $crate::ecs::Component for $ty {
             const NAME: &'static str = stringify!($variant);
             $($body)*
-            fn from_baked(bytes: &[u8]) -> Result<Self, $crate::error::CnError> {
-                Ok($crate::blob::decode_exact(bytes)?)
+            fn from_baked(bytes: &[u8]) -> Result<Self, $crate::error::AssetError> {
+                $crate::ecs::decode_baked(bytes)
             }
         }
     };
@@ -308,7 +308,7 @@ mod tests {
     use crate::ecs::{
         ComponentAsset, ComponentStorage, ComponentTag, PayloadLocator, ResourceKind,
     };
-    use crate::error::CnError;
+    use crate::error::AssetError;
     use alloc::vec::Vec;
 
     // Both halves of the shared list, so the tests below drive the generated
@@ -484,7 +484,9 @@ mod tests {
     fn a_record_no_tag_claims_is_rejected() {
         assert_eq!(
             ComponentAsset::from_baked(&baked(u8::MAX, Vec::new(), None)).err(),
-            Some(CnError::AssetInvalidType)
+            Some(AssetError::UnknownComponent {
+                discriminant: u8::MAX
+            })
         );
     }
 

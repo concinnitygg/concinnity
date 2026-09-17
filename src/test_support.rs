@@ -13,5 +13,5 @@
 pub(crate) fn assert_starts_headless(app: crate::App) {
     concinnity_testing::forbid_windows();
     let mut app = app.into_headless();
-    assert_eq!(app.inner_mut().start(), Ok(()));
+    app.inner_mut().start().expect("the world starts");
 }
