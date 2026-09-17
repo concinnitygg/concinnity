@@ -5,10 +5,10 @@
 
 use std::path::Path;
 
-use super::expand::{ExpandReport, asset_name, registered_type, schema_args};
-use super::preset::load_preset_obj;
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::registry::build_only::{Prefab, PrefabEntry, PrefabKind};
+use crate::build_only::expand::{ExpandReport, asset_name, registered_type, schema_args};
+use crate::build_only::preset::load_preset_obj;
 
 // The Prop instance a prefab is expanded under: the name its generated assets
 // are prefixed with, and the placement its entries are composed onto. Nested
@@ -112,7 +112,7 @@ pub(crate) fn expand_prefabs(
     }
 
     for (name, template_args) in &merges {
-        super::shadow::merge_into_authored(&mut result, name, template_args);
+        crate::build_only::shadow::merge_into_authored(&mut result, name, template_args);
     }
     *asset_values = result;
     Ok(())

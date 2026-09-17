@@ -8,6 +8,7 @@
 // runtime behavior, only the assets the existing UI systems already drive.
 
 mod rows;
+pub(crate) mod schema;
 mod screen;
 mod settings_tab;
 

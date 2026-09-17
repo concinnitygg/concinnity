@@ -1,10 +1,10 @@
 // Assembles the asset reference: one documented entry per authorable asset,
 // plus the reference types their fields reach.
 //
-// The asset schema is read from two source trees: the assets a world can hold
-// or the cook compiles, in concinnity-core, and the build-only ones the cook
-// expands away, in concinnity-cook. Both are read here and joined into one
-// index.
+// The asset schema is read from two places: the tree of assets a world can
+// hold or the cook compiles, in concinnity-core, and the schema module of each
+// build-only asset the cook expands away, in concinnity-cook. Both are read
+// here and joined into one index.
 //
 // For each asset (and each nested value type) the entry contains:
 //
@@ -31,7 +31,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::render::{
     EnumValue, FieldEntry, FieldType, render_parameters, render_values, rewrite_doc_links, slug,
@@ -51,50 +51,144 @@ pub(super) struct AssetDoc {
     pub(super) is_reference_type: bool,
 }
 
-// The schema source trees, relative to a checkout of the engine. The stored
-// and resource vocabulary sits with its runtime half in core; the build-only
-// assets, which never reach a running world, sit with their registry group in
-// concinnity-cook.
-const BUILD_ONLY_SCHEMA: &str = "crates/concinnity-cook/src/authoring/schema";
+// The stored and resource vocabulary, relative to a checkout of the engine. It
+// sits with its runtime half in core.
 const RUNTIME_SCHEMA: &str = "crates/concinnity-core/src/components";
+
+// The schema module of each build-only asset, relative to a checkout of the
+// engine. Each sits beside its expansion in concinnity-cook, whose other
+// modules define private types that must not reach the index, so only these
+// files are read. Listed rather than derived from the type name, since a module
+// may hold more than one schema or be named for its expansion.
+const BUILD_ONLY_SCHEMA_MODULES: &[(&str, &str)] = &[
+    (
+        "CameraShot",
+        "crates/concinnity-cook/src/build_only/camera_shot/schema.rs",
+    ),
+    (
+        "CharacterModel",
+        "crates/concinnity-cook/src/build_only/character_model/schema.rs",
+    ),
+    (
+        "CharacterSchema",
+        "crates/concinnity-cook/src/build_only/character_model/character_schema.rs",
+    ),
+    (
+        "LightRig",
+        "crates/concinnity-cook/src/build_only/light_rig/schema.rs",
+    ),
+    (
+        "MainMenu",
+        "crates/concinnity-cook/src/build_only/main_menu/schema.rs",
+    ),
+    (
+        "MaterialPalette",
+        "crates/concinnity-cook/src/build_only/material_palette/schema.rs",
+    ),
+    (
+        "OptionSelect",
+        "crates/concinnity-cook/src/build_only/option_select/schema.rs",
+    ),
+    (
+        "Panel",
+        "crates/concinnity-cook/src/build_only/panel/schema.rs",
+    ),
+    (
+        "Prefab",
+        "crates/concinnity-cook/src/build_only/prefab/schema.rs",
+    ),
+    (
+        "SceneImport",
+        "crates/concinnity-cook/src/build_only/scene_import/schema.rs",
+    ),
+    (
+        "Slider",
+        "crates/concinnity-cook/src/build_only/slider/schema.rs",
+    ),
+    (
+        "StoryImport",
+        "crates/concinnity-cook/src/build_only/story/schema.rs",
+    ),
+];
 
 /// Every documented type, assets first, each group sorted by name.
 ///
 /// `engine_root` is a checkout of the engine whose asset sources the prose is
 /// read from.
 pub(super) fn build(engine_root: &Path) -> io::Result<Vec<AssetDoc>> {
-    let authored_src = engine_root.join(BUILD_ONLY_SCHEMA);
+    let components = collect_registry_components();
     let runtime_src = engine_root.join(RUNTIME_SCHEMA);
-    for dir in [&authored_src, &runtime_src] {
-        if !dir.is_dir() {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                format!(
-                    "{} not found: `cn docs` reads the asset prose out of the engine's \
-                     sources, so it runs from a checkout of the engine",
-                    dir.display()
-                ),
-            ));
-        }
+    let build_only_src = build_only_schema_modules(&components, BUILD_ONLY_SCHEMA_MODULES)?
+        .into_iter()
+        .map(|module| engine_root.join(module))
+        .collect::<Vec<_>>();
+    if !runtime_src.is_dir() {
+        return Err(not_a_checkout(&runtime_src));
+    }
+    if let Some(missing) = build_only_src.iter().find(|file| !file.is_file()) {
+        return Err(not_a_checkout(missing));
     }
 
-    build_from(&[authored_src, runtime_src], &collect_registry_components())
+    build_from(&[runtime_src], &build_only_src, &components)
 }
 
-/// [`build`] against explicit source trees and an explicit component list.
+fn not_a_checkout(path: &Path) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::NotFound,
+        format!(
+            "{} not found: `cn docs` reads the asset prose out of the engine's \
+             sources, so it runs from a checkout of the engine",
+            path.display()
+        ),
+    )
+}
+
+// The schema module of every BuildOnly-origin component, in component order,
+// looked up by name in `table`. A build-only asset the table does not list is
+// an error rather than a page with no prose.
+fn build_only_schema_modules<'t>(
+    components: &[ComponentMeta],
+    table: &[(&str, &'t str)],
+) -> io::Result<Vec<&'t str>> {
+    components
+        .iter()
+        .filter(|c| c.origin == "BuildOnly")
+        .map(|c| {
+            table
+                .iter()
+                .find(|(name, _)| *name == c.name)
+                .map(|(_, module)| *module)
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "build-only asset {} has no schema module to document",
+                            c.name
+                        ),
+                    )
+                })
+        })
+        .collect()
+}
+
+/// [`build`] against explicit sources and an explicit component list.
 ///
-/// `build` finds the trees in a checkout and reads the components from the
-/// authoring registry. Splitting that out is what lets a test drive the whole
-/// pipeline over a vocabulary it wrote itself, rather than over whichever
-/// assets the engine happens to declare.
+/// `runtime_trees` are walked for every `.rs` file; `build_only_modules` are
+/// read exactly, since their neighbors are expansions. `build` finds both in a
+/// checkout and reads the components from the authoring registry. Splitting
+/// that out is what lets a test drive the whole pipeline over a vocabulary it
+/// wrote itself, rather than over whichever assets the engine happens to
+/// declare.
 pub(super) fn build_from(
-    sources: &[std::path::PathBuf],
+    runtime_trees: &[PathBuf],
+    build_only_modules: &[PathBuf],
     components: &[ComponentMeta],
 ) -> io::Result<Vec<AssetDoc>> {
     let mut types = Vec::new();
-    for dir in sources {
+    for dir in runtime_trees {
         types.extend(schema::extract(std::slice::from_ref(dir), &[])?);
     }
+    types.extend(schema::extract_files(build_only_modules)?);
 
     let reference = assemble_from(&types, components);
     let mut out = Vec::with_capacity(reference.assets.len() + reference.ref_types.len());
@@ -491,4 +585,34 @@ fn strip_table_lines(doc: &str) -> String {
         prev_blank = is_blank;
     }
     out.trim_end().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Every build-only asset the registry declares has exactly one row, and no
+    // row names an asset the registry no longer has.
+    #[test]
+    fn the_table_covers_the_registry_build_only_group() {
+        let components = collect_registry_components();
+        let modules = build_only_schema_modules(&components, BUILD_ONLY_SCHEMA_MODULES)
+            .expect("every build-only asset has a schema module");
+        assert_eq!(modules.len(), BUILD_ONLY_SCHEMA_MODULES.len());
+    }
+
+    #[test]
+    fn a_build_only_asset_without_a_row_is_an_error() {
+        let components = [
+            ComponentMeta::pass_through("Listed", "BuildOnly"),
+            ComponentMeta::pass_through("Unlisted", "BuildOnly"),
+            ComponentMeta::pass_through("Stored", "External"),
+        ];
+        let table = [("Listed", "listed/schema.rs")];
+        let err = build_only_schema_modules(&components, &table).expect_err("Unlisted has no row");
+        assert!(err.to_string().contains("Unlisted"), "{err}");
+
+        let modules = build_only_schema_modules(&components[..1], &table).expect("listed");
+        assert_eq!(modules, ["listed/schema.rs"]);
+    }
 }

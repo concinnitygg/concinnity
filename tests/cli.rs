@@ -468,15 +468,35 @@ fn add_without_a_discoverable_world_falls_back_to_world_jsonl() {
 // `cn docs` reads the asset prose out of the engine's own sources, so it needs
 // no world but does need a checkout. The sources are copied into the temp root
 // rather than pointing `--root` at the repository, so the run cannot write to
-// the working tree.
+// the working tree. The build-only schema modules are the files the docs
+// generator's table names; a missing one fails the run.
 #[test]
 fn docs_writes_the_asset_reference_pages() {
     let project = Project::empty();
-    for tree in [
-        "crates/concinnity-cook/src/authoring/schema",
-        "crates/concinnity-core/src/components",
+    let components = "crates/concinnity-core/src/components";
+    copy_dir(
+        &repo_root().join(components),
+        &project.path().join(components),
+    );
+    for module in [
+        "camera_shot/schema.rs",
+        "character_model/schema.rs",
+        "character_model/character_schema.rs",
+        "light_rig/schema.rs",
+        "main_menu/schema.rs",
+        "material_palette/schema.rs",
+        "option_select/schema.rs",
+        "panel/schema.rs",
+        "prefab/schema.rs",
+        "scene_import/schema.rs",
+        "slider/schema.rs",
+        "story/schema.rs",
     ] {
-        copy_dir(&repo_root().join(tree), &project.path().join(tree));
+        let file = format!("crates/concinnity-cook/src/build_only/{module}");
+        let dest = project.path().join(&file);
+        std::fs::create_dir_all(dest.parent().expect("nested path"))
+            .expect("create the module dir");
+        std::fs::copy(repo_root().join(&file), dest).expect("copy the schema module");
     }
 
     let root = project.path().to_string_lossy().into_owned();

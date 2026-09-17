@@ -8,9 +8,9 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use super::expand::{ExpandReport, asset_name, registered_type, schema_args};
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::registry::build_only::SceneImport;
+use crate::build_only::expand::{ExpandReport, asset_name, registered_type, schema_args};
 use crate::import::scene::{ImportOptions, entries_from_scene, sanitize_name};
 
 // The kind an expansion's entries carry in the build segment, which is what
@@ -105,7 +105,7 @@ pub(crate) fn expand_scene_imports(
     }
 
     for (name, template_args) in &merges {
-        super::shadow::merge_into_authored(&mut result, name, template_args);
+        crate::build_only::shadow::merge_into_authored(&mut result, name, template_args);
     }
     *assets = result;
     Ok(())

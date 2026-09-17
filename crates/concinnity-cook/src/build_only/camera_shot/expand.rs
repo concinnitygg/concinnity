@@ -2,10 +2,10 @@
 
 use std::path::Path;
 
-use super::expand::{asset_name, registered_type, schema_args};
-use super::preset::load_preset_obj;
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::registry::build_only::CameraShot;
+use crate::build_only::expand::{asset_name, registered_type, schema_args};
+use crate::build_only::preset::load_preset_obj;
 
 pub(crate) fn expand_camera_shots(
     asset_values: &mut Vec<serde_json::Value>,

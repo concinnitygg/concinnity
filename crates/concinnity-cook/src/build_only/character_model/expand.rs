@@ -5,10 +5,10 @@
 // import pass turns into geometry. Naming the mesh after the model is what lets a
 // CharacterShape or Animation target either.
 
-use super::expand::{asset_name, registered_type};
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::registry::build_only::CharacterModel;
 use crate::authoring::world::WorldJsonlAsset;
+use crate::build_only::expand::{asset_name, registered_type};
 use crate::compile::character::import::CharacterModelArg;
 
 // The fields a CharacterModel shares with the SkinnedMesh it becomes.

@@ -225,7 +225,7 @@ pub(super) fn emit_settings_tab(
                     style,
                 }));
                 (
-                    super::super::option_select::element_names(&name, setting),
+                    super::super::option_select::expand::element_names(&name, setting),
                     group,
                 )
             }
@@ -242,7 +242,7 @@ pub(super) fn emit_settings_tab(
                     scale: row_scale,
                     style,
                 }));
-                (super::super::slider::element_names(&name), group)
+                (super::super::slider::expand::element_names(&name), group)
             }
             BodyRow::Key(action_label, key, idx, group) => {
                 let name = format!("{}_keyname_{}", screen, idx);

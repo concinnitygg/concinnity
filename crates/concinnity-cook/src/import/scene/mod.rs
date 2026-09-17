@@ -5,7 +5,7 @@
 //! in `pipeline::desugar` and texture pixels by `compile_texture_payload`, so the
 //! generated entries carry no inline vertex or pixel data. The expansion is
 //! driven from a `SceneImport` asset by
-//! `crate::build_only::scene_import::expand_scene_imports`.
+//! `crate::build_only::scene_import::expand::expand_scene_imports`.
 //!
 //! Two container formats are supported, dispatched by `source` extension:
 //!   - `.fbx` via `crate::import::fbx`

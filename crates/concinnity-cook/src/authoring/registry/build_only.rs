@@ -9,23 +9,24 @@
 //! authoring registry composes this group with core's two.
 //!
 //! Being in the group is the origin, which is why the entries carry no origin
-//! flag; the schemas themselves are `crate::authoring::schema`.
+//! flag. Each schema sits beside its expansion in a per-asset module under
+//! `crate::build_only`, and this list is the public path to all of them.
 
-pub use crate::authoring::schema::camera_shot::CameraShot;
-pub use crate::authoring::schema::character_model::CharacterModel;
-pub use crate::authoring::schema::character_schema::{
+pub use crate::build_only::camera_shot::schema::CameraShot;
+pub use crate::build_only::character_model::character_schema::{
     CharacterSchema, KeyPolarity, PanelSection, ProportionGroup, SchemaJoint, SchemaKey,
     SchemaRegion, ShapePreset, SynthParams, SynthesizedTarget,
 };
-pub use crate::authoring::schema::light_rig::LightRig;
-pub use crate::authoring::schema::main_menu::{MainMenu, MainMenuItem, SettingsProfile};
-pub use crate::authoring::schema::material_palette::{MaterialPalette, PaletteEntry};
-pub use crate::authoring::schema::option_select::OptionSelect;
-pub use crate::authoring::schema::panel::Panel;
-pub use crate::authoring::schema::prefab::{Prefab, PrefabEntry, PrefabKind};
-pub use crate::authoring::schema::scene_import::SceneImport;
-pub use crate::authoring::schema::slider::Slider;
-pub use crate::authoring::schema::story_import::StoryImport;
+pub use crate::build_only::character_model::schema::CharacterModel;
+pub use crate::build_only::light_rig::schema::LightRig;
+pub use crate::build_only::main_menu::schema::{MainMenu, MainMenuItem, SettingsProfile};
+pub use crate::build_only::material_palette::schema::{MaterialPalette, PaletteEntry};
+pub use crate::build_only::option_select::schema::OptionSelect;
+pub use crate::build_only::panel::schema::Panel;
+pub use crate::build_only::prefab::schema::{Prefab, PrefabEntry, PrefabKind};
+pub use crate::build_only::scene_import::schema::SceneImport;
+pub use crate::build_only::slider::schema::Slider;
+pub use crate::build_only::story::schema::StoryImport;
 
 /// An asset the cook consumes and never hands to the runtime.
 ///

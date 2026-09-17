@@ -181,22 +181,54 @@ mod tests {
         }
     "#;
 
-    // The reference over `SOURCES`, and the tree it was read from. The tree is
-    // returned so it outlives the borrow-free `Vec` the caller works with.
+    // A build-only asset's schema module, read on its own.
+    const GIZMO_SCHEMA: &str = r#"
+        /// A gizmo the build expands into widgets.
+        pub struct Gizmo {
+            /// How many widgets it becomes.
+            pub count: u32,
+        }
+        impl Default for Gizmo {
+            fn default() -> Self {
+                Self { count: 1 }
+            }
+        }
+    "#;
+
+    // The expansion beside it, whose private working type shares a stored
+    // asset's name.
+    const GIZMO_EXPAND: &str = r#"
+        /// Expansion scratch that is not the stored widget.
+        pub struct Widget {
+            /// Scratch state.
+            pub scratch: u32,
+        }
+    "#;
+
+    // The reference over `SOURCES` and the Gizmo module, and the tree it was
+    // read from. The tree is returned so it outlives the borrow-free `Vec` the
+    // caller works with.
     fn synthetic_reference() -> (concinnity_testing::TempTree, Vec<AssetDoc>) {
         let tree = concinnity_testing::TempTree::new();
         tree.write("schema/vocabulary.rs", SOURCES);
         // A non-Rust neighbor the walk must skip.
         tree.write("schema/notes.md", "not rust");
+        tree.write("build_only/gizmo/schema.rs", GIZMO_SCHEMA);
+        tree.write("build_only/gizmo/expand.rs", GIZMO_EXPAND);
 
         let components = [
             reference::ComponentMeta::pass_through("Widget", "External"),
             reference::ComponentMeta::pass_through("Gadget", "External"),
+            reference::ComponentMeta::pass_through("Gizmo", "BuildOnly"),
             // Never declared in a world, so it must get no page.
             reference::ComponentMeta::pass_through("Internal", "RuntimeOnly"),
         ];
-        let docs = reference::build_from(&[tree.join("schema")], &components)
-            .expect("the synthetic sources parse");
+        let docs = reference::build_from(
+            &[tree.join("schema")],
+            &[tree.join("build_only/gizmo/schema.rs")],
+            &components,
+        )
+        .expect("the synthetic sources parse");
         (tree, docs)
     }
 
@@ -269,7 +301,7 @@ mod tests {
     #[test]
     fn every_type_resolved_documentation() {
         let (_tree, docs) = synthetic_reference();
-        assert_eq!(docs.len(), 3, "two assets and the type they embed");
+        assert_eq!(docs.len(), 4, "three assets and the type they embed");
 
         for d in &docs {
             assert!(!d.summary.is_empty(), "{} has no summary", d.type_name);
@@ -292,6 +324,31 @@ mod tests {
             widget.full_doc
         );
         assert!(widget.full_doc.contains("cube"), "{:?}", widget.full_doc);
+    }
+
+    // A build-only asset is documented from its schema module alone: the
+    // expansion beside it adds no page, and its same-named working type does
+    // not replace the stored asset's prose.
+    #[test]
+    fn a_build_only_expansion_contributes_nothing() {
+        let (_tree, docs) = synthetic_reference();
+
+        let gizmo = describe(&docs, "Gizmo").expect("Gizmo should be documented");
+        assert_eq!(gizmo.summary, "A gizmo the build expands into widgets.");
+        assert!(!gizmo.is_reference_type);
+
+        assert_eq!(
+            docs.iter().filter(|d| d.type_name == "Widget").count(),
+            1,
+            "the expansion's Widget gets no page of its own"
+        );
+        let widget = describe(&docs, "Widget").expect("Widget");
+        assert_eq!(widget.summary, "A widget in the world.");
+        assert!(
+            !widget.full_doc.contains("scratch"),
+            "{:?}",
+            widget.full_doc
+        );
     }
 
     #[test]

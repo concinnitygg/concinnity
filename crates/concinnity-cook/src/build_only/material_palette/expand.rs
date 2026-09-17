@@ -2,10 +2,10 @@
 
 use std::path::Path;
 
-use super::expand::{asset_name, registered_type, schema_args};
-use super::preset::load_preset_obj;
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::registry::build_only::{MaterialPalette, PaletteEntry};
+use crate::build_only::expand::{asset_name, registered_type, schema_args};
+use crate::build_only::preset::load_preset_obj;
 
 pub(crate) fn expand_material_palettes(
     asset_values: &mut Vec<serde_json::Value>,

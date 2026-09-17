@@ -1,12 +1,12 @@
 // Build-time expansion: Panel -> a background Sprite + (when a title is set) a
 // heading TextLabel inset from the top-left. The generated names follow the
-// `<screen>_*` scoping rule documented on `crate::authoring::schema::panel`.
+// `<screen>_*` scoping rule documented on `crate::build_only::panel::schema`.
 
-use super::expand::{asset_name, registered_type, schema_args};
-use super::ui_spec::label_value;
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::registry::build_only::Panel;
 use crate::authoring::spec::{asset, spec_to_value};
+use crate::build_only::expand::{asset_name, registered_type, schema_args};
+use crate::build_only::ui_spec::label_value;
 
 // Replace every Panel asset with the concrete UI assets it expands to.
 pub(crate) fn expand_panels(assets: &mut Vec<serde_json::Value>) -> Result<(), String> {

@@ -14,12 +14,12 @@
 
 use concinnity_core::settings::{SettingKey, SettingKind};
 
-use super::expand::{asset_name, registered_type, schema_args};
-use super::row_setting::row_setting;
-use super::ui_spec::{font_sizes, label_value};
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::registry::build_only::OptionSelect;
 use crate::authoring::spec::{asset, spec_to_value};
+use crate::build_only::expand::{asset_name, registered_type, schema_args};
+use crate::build_only::row_setting::row_setting;
+use crate::build_only::ui_spec::{font_sizes, label_value};
 use asset::ui_action;
 use concinnity_core::components::SettingVerb;
 

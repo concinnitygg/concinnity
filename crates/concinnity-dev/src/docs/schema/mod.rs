@@ -27,3 +27,9 @@ use std::path::PathBuf;
 pub(crate) fn extract(roots: &[PathBuf], exclude: &[PathBuf]) -> io::Result<Vec<DocType>> {
     parse::types(roots, exclude)
 }
+
+/// The same extraction over exactly `files`, with no directory walk, sorted by
+/// name.
+pub(crate) fn extract_files(files: &[PathBuf]) -> io::Result<Vec<DocType>> {
+    parse::files(files)
+}

@@ -19,6 +19,7 @@ mod image;
 mod model;
 mod parse;
 mod parser;
+pub(crate) mod schema;
 mod script;
 
 #[cfg(test)]

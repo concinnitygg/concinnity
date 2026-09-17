@@ -1,5 +1,6 @@
 // Source walking and item collection: every named-field struct and every
-// string-valued enum declared at the top level of a `.rs` file under the roots.
+// string-valued enum declared at the top level of a `.rs` file under the roots,
+// or of exactly the files a caller names.
 
 use std::collections::HashMap;
 use std::io;
@@ -10,17 +11,20 @@ use super::defaults::{self, UNKNOWN};
 use super::model::{DocField, DocFieldType, DocShape, DocType, DocValue};
 
 pub(super) fn types(roots: &[PathBuf], exclude: &[PathBuf]) -> io::Result<Vec<DocType>> {
-    let mut out = Vec::new();
+    let mut paths = Vec::new();
     for root in roots {
-        let mut paths = Vec::new();
-        collect(root, &mut paths)?;
-        paths.sort();
-        for path in paths {
-            if exclude.iter().any(|e| e == &path) {
-                continue;
-            }
-            file_types(&path, &mut out)?;
-        }
+        let mut under_root = Vec::new();
+        collect(root, &mut under_root)?;
+        under_root.sort();
+        paths.extend(under_root.into_iter().filter(|p| !exclude.contains(p)));
+    }
+    files(&paths)
+}
+
+pub(super) fn files(paths: &[PathBuf]) -> io::Result<Vec<DocType>> {
+    let mut out = Vec::new();
+    for path in paths {
+        file_types(path, &mut out)?;
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(out)
@@ -365,6 +369,19 @@ mod tests {
         let out = types(&[dir.path().to_path_buf()], &[skipped]).expect("extract");
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].name, "Kept");
+    }
+
+    // Only the named files are read: a Rust neighbor in the same directory
+    // contributes nothing.
+    #[test]
+    fn a_file_list_parses_exactly_those_files() {
+        let tree = concinnity_testing::TempTree::new();
+        tree.write("a/schema.rs", "pub struct Zeta { pub a: u32 }");
+        tree.write("a/expand.rs", "pub struct Stray { pub a: u32 }");
+        tree.write("b/schema.rs", "pub enum Alpha { One, Two }");
+        let out = files(&[tree.join("a/schema.rs"), tree.join("b/schema.rs")]).expect("extract");
+        let names: Vec<&str> = out.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, ["Alpha", "Zeta"]);
     }
 
     #[test]
