@@ -89,37 +89,21 @@ impl MtlContext {
 
         // Reset this frame's render stats; the draw counters below accumulate
         // into `diagnostics.frame_stats`, and `render_stats()` reports them (plus the GPU
-        // frame time) to the profiler overlay. `objects` is the total scene
-        // size: static draw objects, every instanced-cluster instance, and
-        // skinned meshes.
-        self.diagnostics.frame_stats = profile::RenderStats::default();
-        let instanced_total: usize = self
-            .instanced
-            .clusters
-            .iter()
-            .map(|c| c.instances.len())
-            .sum();
-        self.diagnostics.frame_stats.objects =
-            (self.draw.objects.len() + instanced_total + self.skinned.slots.draw_objects.len())
-                as u32;
-        // Live skinned count: authored meshes plus runtime-spawned instances,
-        // excluding the hidden pre-reserved pool slots. `objects` above counts
-        // the whole pool and so stays flat across skinned spawn/despawn; this
-        // tracks the visible count, so a spawn bumps it and a despawn drops it.
-        self.diagnostics.frame_stats.skinned_visible = self
-            .skinned
-            .slots
-            .draw_objects
-            .iter()
-            .filter(|o| o.visible)
-            .count() as u32;
-        // skinned_pool_free is filled in by the engine, which owns the
-        // instance pool.
-        // Current GPU memory footprint. On Apple Silicon's unified memory this
-        // is the Metal device's allocation within system RAM.
-        self.diagnostics.frame_stats.vram_bytes = self.hw.device.currentAllocatedSize() as u64;
-        self.diagnostics.frame_stats.transient_pool_bytes =
-            self.targets.transient_pool.heap_bytes();
+        // frame time) to the profiler overlay.
+        let counts = crate::object_counts::object_counts(
+            self.draw.objects.len(),
+            self.instanced.clusters.iter().map(|c| c.instances.len()),
+            self.skinned.slots.draw_objects.iter().map(|o| o.visible),
+        );
+        self.diagnostics.frame_stats = profile::RenderStats {
+            objects: counts.objects,
+            skinned_visible: counts.skinned_visible,
+            // On Apple Silicon's unified memory this is the Metal device's
+            // allocation within system RAM.
+            vram_bytes: self.hw.device.currentAllocatedSize() as u64,
+            transient_pool_bytes: self.targets.transient_pool.heap_bytes(),
+            ..profile::RenderStats::default()
+        };
 
         // Rotate the per-frame sample-buffer slot if per-pass GPU timing is
         // available. Every `diagnostics.pass_timing.attach_*` call this frame writes

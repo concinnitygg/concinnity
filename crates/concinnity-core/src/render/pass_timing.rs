@@ -10,9 +10,11 @@
 //!
 //! This is index arithmetic with no device type in it, so it lives here rather
 //! than in a backend and its layout tests run on every platform's CI. The
-//! DirectX and Vulkan backends re-export it under their own `pass_timing`.
+//! DirectX and Vulkan backends decode their readback through
+//! [`decode_frame_block`].
 
-use crate::render::render_graph::{PASS_COUNT, PassId};
+use crate::profile::{MAX_PASS_TIMINGS, PassTiming};
+use crate::render::render_graph::{PASS_COUNT, PASS_NAMES, PassId};
 
 /// Per-frame block: `[whole_frame_start, whole_frame_end, pass0_start,
 /// pass0_end, ..., pass(PASS_COUNT-1)_end]`.
@@ -42,6 +44,21 @@ pub const fn whole_frame_pair(frame: usize) -> (u32, u32) {
 pub const fn pass_pair(frame: usize, pass: PassId) -> (u32, u32) {
     let base = frame_block_base(frame) + 2 + 2 * (pass as u32);
     (base, base + 1)
+}
+
+/// Decode one frame's block into the whole-frame micros and a per-pass table in
+/// [`PassId`] order. `pair_micros(start_slot, end_slot)` is the backend's reading
+/// of one pair, with slots relative to the block; unused table entries keep the
+/// `("", 0)` sentinel.
+pub fn decode_frame_block(
+    pair_micros: impl Fn(usize, usize) -> u32,
+) -> (u32, [PassTiming; MAX_PASS_TIMINGS]) {
+    let frame_us = pair_micros(0, 1);
+    let mut passes = [("", 0u32); MAX_PASS_TIMINGS];
+    for (i, name) in PASS_NAMES.iter().take(MAX_PASS_TIMINGS).enumerate() {
+        passes[i] = (*name, pair_micros(2 + 2 * i, 3 + 2 * i));
+    }
+    (frame_us, passes)
 }
 
 #[cfg(test)]
@@ -81,5 +98,17 @@ mod tests {
         }
         // The block is exactly the whole-frame pair plus one pair per pass.
         assert_eq!(seen.len(), SLOTS_PER_FRAME);
+    }
+
+    #[test]
+    fn decode_frame_block_pairs_every_name_with_its_slots() {
+        // Encodes both slots into the reading so a swapped or shifted pair shows.
+        let (frame_us, passes) = decode_frame_block(|s, e| (s * 1000 + e) as u32);
+        assert_eq!(frame_us, 1);
+        for pass in PassId::ALL {
+            let (s, e) = pass_pair(0, pass);
+            assert_eq!(passes[pass as usize], (pass.name(), s * 1000 + e));
+        }
+        assert!(passes[PASS_COUNT..].iter().all(|&t| t == ("", 0)));
     }
 }

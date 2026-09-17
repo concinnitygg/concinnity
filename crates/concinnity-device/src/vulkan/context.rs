@@ -1667,31 +1667,13 @@ impl VkContext {
 
         // Reset this frame's render stats. `record_frame` accumulates
         // `draw_calls` through `inc_draw_calls` (interior-mutability since
-        // the encoders run through `&self`); `objects`, `gpu_frame_us`,
-        // and `vram_bytes` are filled here from `&mut self` state. Mirrors
-        // the DirectX `frame_stats` reset at the top of `draw_frame`.
-        let instanced_total: usize = self
-            .instanced
-            .clusters
-            .iter()
-            .map(|c| c.instances.len())
-            .sum();
-        let objects = (self.draw.objects.len()
-            + instanced_total
-            + self.skinned.slots.draw_objects.len()) as u32;
-        // Live skinned count: authored meshes plus runtime-spawned instances,
-        // excluding the hidden pre-reserved pool slots. `objects` above counts the
-        // whole pool and so stays flat across skinned spawn/despawn; this tracks
-        // the visible count, so a spawn bumps it and a despawn drops it.
-        let skinned_visible = self
-            .skinned
-            .slots
-            .draw_objects
-            .iter()
-            .filter(|o| o.visible)
-            .count() as u32;
-        // Filled in by the engine, which owns the skinned instance pool.
-        let skinned_pool_free = 0u32;
+        // the encoders run through `&self`); the rest is filled here from
+        // `&mut self` state.
+        let counts = crate::object_counts::object_counts(
+            self.draw.objects.len(),
+            self.instanced.clusters.iter().map(|c| c.instances.len()),
+            self.skinned.slots.draw_objects.iter().map(|o| o.visible),
+        );
         // GPU timing for the most-recently completed block on this frame slot:
         // the whole-frame pair plus one (start, end) pair per render pass. The
         // fence wait above guarantees the previous trip's writes have retired, so
@@ -1729,15 +1711,7 @@ impl VkContext {
                         0
                     }
                 };
-                let frame_us = pair_micros(0, 1);
-                let mut times = empty_pass_times;
-                for (i, name) in render_graph::PASS_NAMES.iter().enumerate() {
-                    if i >= profile::MAX_PASS_TIMINGS {
-                        break;
-                    }
-                    times[i] = (*name, pair_micros(2 + 2 * i, 3 + 2 * i));
-                }
-                (frame_us, times)
+                pass_timing::decode_frame_block(pair_micros)
             } else {
                 (0, empty_pass_times)
             }
@@ -1753,9 +1727,8 @@ impl VkContext {
             .store(0, std::sync::atomic::Ordering::Relaxed);
         self.frame_stats.set(profile::RenderStats {
             draw_calls: 0,
-            objects,
-            skinned_visible,
-            skinned_pool_free,
+            objects: counts.objects,
+            skinned_visible: counts.skinned_visible,
             gpu_frame_us,
             // The fence wait alone so far; the acquire below adds to it.
             gpu_wait_us: gpu_wait.micros(),
@@ -1778,6 +1751,7 @@ impl VkContext {
                 hdr_output::HdrOutputMode::Hdr { max_edr, .. } => Some(max_edr),
                 hdr_output::HdrOutputMode::Sdr => None,
             },
+            ..profile::RenderStats::default()
         });
 
         // Acquire swapchain image. Blocks when the presentation engine holds

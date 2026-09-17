@@ -1621,135 +1621,55 @@ impl DxContext {
 
         // Reset this frame's render stats. `record_frame` accumulates
         // `draw_calls` through `inc_draw_calls` (an interior-mutability path
-        // because the encoders run through `&self`); `objects` and
-        // `vram_bytes` are filled here from `&mut self` state. Mirrors the
-        // Metal `diagnostics.frame_stats` reset at the top of `draw_frame`.
-        let instanced_total: usize = self
-            .instanced
-            .clusters
-            .iter()
-            .map(|c| c.instances.len())
-            .sum();
-        let objects = (self.draw.objects.len()
-            + instanced_total
-            + self.skinned.slots.draw_objects.len()) as u32;
-        // Live skinned count: authored meshes plus runtime-spawned instances,
-        // excluding the hidden pre-reserved pool slots. `objects` above counts the
-        // whole pool and so stays flat across skinned spawn/despawn; this tracks
-        // the visible count, so a spawn bumps it and a despawn drops it.
-        let skinned_visible = self
-            .skinned
-            .slots
-            .draw_objects
-            .iter()
-            .filter(|o| o.visible)
-            .count() as u32;
-        // Filled in by the engine, which owns the skinned instance pool.
-        let skinned_pool_free = 0u32;
-        // Current GPU memory residency, in bytes. `Local` is the dedicated VRAM
-        // budget on a discrete GPU and the local-process system-memory budget on
-        // an integrated GPU; either way, `CurrentUsage` is what the HUD's
-        // "VRAM N MB" chip reports. Zero when the adapter does not expose the
-        // v3 interface (pre-WDDM 2.0).
-        let vram_bytes = self
-            .hw
-            .adapter
-            .as_ref()
-            .and_then(|a| {
-                let mut info =
-                    windows::Win32::Graphics::Dxgi::DXGI_QUERY_VIDEO_MEMORY_INFO::default();
-                // SAFETY: a query on a live COM object; the descriptor it reads and the out-
-                // parameters it fills are live locals that outlive the call.
-                unsafe {
-                    a.QueryVideoMemoryInfo(
-                        0,
-                        windows::Win32::Graphics::Dxgi::DXGI_MEMORY_SEGMENT_GROUP_LOCAL,
-                        &mut info,
-                    )
-                }
-                .ok()
-                .map(|_| info.CurrentUsage)
-            })
-            .unwrap_or(0);
-        // Pull the most recently completed GPU time for this slot. The fence
+        // because the encoders run through `&self`); the rest is filled here
+        // from `&mut self` state.
+        let counts = crate::object_counts::object_counts(
+            self.draw.objects.len(),
+            self.instanced.clusters.iter().map(|c| c.instances.len()),
+            self.skinned.slots.draw_objects.iter().map(|o| o.visible),
+        );
+        // Pull the most recently completed GPU times for this slot. The fence
         // wait at the top of this `draw_frame` already ensured the GPU work
         // that wrote this slot's readback bytes has retired, so the
-        // persistently-mapped pointer reflects a fully committed pair (`FRAMES`
-        // frames stale by construction: the same slot's writes from the
-        // previous trip through the ring). Zero before the slot has been
-        // visited a second time (the readback buffer starts zero-initialized).
-        //
-        // The frame's block in the readback buffer is laid out as
-        // [whole_frame_start, whole_frame_end, then PASS_COUNT (start, end)
-        // pairs]; see `concinnity_core::render::pass_timing`. The whole-frame
-        // pair sits at the front of each frame's block.
-        let timestamps_live =
-            !self.timestamps.readback_ptr.is_null() && self.timestamps.frequency > 0;
-        let ticks_to_micros = |ticks: u64| -> u32 {
-            (ticks.saturating_mul(1_000_000) / self.timestamps.frequency).min(u32::MAX as u64)
-                as u32
-        };
-        let block_base = if timestamps_live {
-            // SAFETY: `timestamp_readback_ptr` is the persistently-mapped
-            // base of a READBACK buffer sized for FRAMES blocks of
-            // SLOTS_PER_FRAME u64s each (see build_timestamp_resources).
-            // The fence wait above ensures this block's writes have
-            // retired.
-            unsafe {
-                self.timestamps
-                    .readback_ptr
-                    .add(frame * pass_timing::SLOTS_PER_FRAME)
-            }
-        } else {
-            std::ptr::null()
-        };
-        let gpu_frame_us = if timestamps_live {
-            // SAFETY: `block_base` is non-null here (`timestamps_live`), and points at the frame's
-            // block in a READBACK buffer sized for `SLOTS_PER_FRAME` u64s per frame, whose first
-            // pair is the whole-frame timestamps. The fence wait above retired the writes.
-            unsafe {
-                let ts_start = block_base.read();
-                let ts_end = block_base.add(1).read();
-                if ts_end > ts_start {
-                    ticks_to_micros(ts_end - ts_start)
-                } else {
-                    0
-                }
-            }
-        } else {
-            0
-        };
-        let mut pass_times_us = [("", 0u32); profile::MAX_PASS_TIMINGS];
-        if timestamps_live {
-            // Walk the PASS_COUNT pairs that follow the whole-frame pair
-            // and surface (pass-name, micros) tuples for the StatHud chip.
-            // Inactive passes (not seeded into the graph this frame) keep
-            // the frame-start timestamp in both their start and end slots
-            // (see the pre-init loop in `record_frame`) so `ts_end > ts_start`
-            // evaluates false and they report 0 µs; the shared
-            // `passes_text` filter naturally hides them from the chip.
-            for (i, name) in render_graph::PASS_NAMES.iter().enumerate() {
-                if i >= profile::MAX_PASS_TIMINGS {
-                    break;
-                }
-                // Slot 2 + 2*i = start, slot 3 + 2*i = end (skip the
-                // whole-frame pair at the front of the block).
-                let off = 2 + 2 * i;
-                // SAFETY: `off` stays below `SLOTS_PER_FRAME` (the loop breaks at
-                // `MAX_PASS_TIMINGS`), so both reads stay inside this frame's block of the READBACK
-                // buffer, whose writes the fence wait above retired.
-                let ts_start = unsafe { block_base.add(off).read() };
-                // SAFETY: `off + 1` is the end slot of the same pair, still inside this frame's
-                // block.
-                let ts_end = unsafe { block_base.add(off + 1).read() };
-                let micros = if ts_end > ts_start {
-                    ticks_to_micros(ts_end - ts_start)
-                } else {
-                    0
+        // persistently-mapped pointer reflects fully committed pairs (`FRAMES`
+        // frames stale by construction). Zero before the slot has been visited
+        // a second time (the readback buffer starts zero-initialized). Inactive
+        // passes keep the frame-start timestamp in both slots (see the pre-init
+        // loop in `record_frame`), so they read 0 us.
+        let (gpu_frame_us, pass_times_us) =
+            if !self.timestamps.readback_ptr.is_null() && self.timestamps.frequency > 0 {
+                // SAFETY: `readback_ptr` is the persistently-mapped base of a READBACK buffer
+                // sized for FRAMES blocks of SLOTS_PER_FRAME u64s each (see
+                // build_timestamp_resources). The fence wait above ensures this block's writes
+                // have retired.
+                let block_base = unsafe {
+                    self.timestamps
+                        .readback_ptr
+                        .add(frame * pass_timing::SLOTS_PER_FRAME)
                 };
-                pass_times_us[i] = (*name, micros);
-            }
-        }
+                let frequency = self.timestamps.frequency;
+                let ticks_to_micros = |ticks: u64| -> u32 {
+                    (ticks.saturating_mul(1_000_000) / frequency).min(u32::MAX as u64) as u32
+                };
+                pass_timing::decode_frame_block(|start_slot, end_slot| {
+                    // SAFETY: `decode_frame_block` only passes slots below `SLOTS_PER_FRAME`, so
+                    // both reads stay inside this frame's block of the READBACK buffer, whose
+                    // writes the fence wait above retired.
+                    let (ts_start, ts_end) = unsafe {
+                        (
+                            block_base.add(start_slot).read(),
+                            block_base.add(end_slot).read(),
+                        )
+                    };
+                    if ts_end > ts_start {
+                        ticks_to_micros(ts_end - ts_start)
+                    } else {
+                        0
+                    }
+                })
+            } else {
+                (0, [("", 0); profile::MAX_PASS_TIMINGS])
+            };
 
         // Reset the parallel-encoder draw-call accumulator so this frame's
         // encoders bump from zero. Drained back into `diagnostics.frame_stats.draw_calls`
@@ -1760,13 +1680,12 @@ impl DxContext {
             .store(0, std::sync::atomic::Ordering::Relaxed);
         self.diagnostics.frame_stats.set(profile::RenderStats {
             draw_calls: 0,
-            objects,
-            skinned_visible,
-            skinned_pool_free,
+            objects: counts.objects,
+            skinned_visible: counts.skinned_visible,
             gpu_frame_us,
             // The fence wait alone so far; `Present` below adds to it.
             gpu_wait_us: gpu_wait.micros(),
-            vram_bytes,
+            vram_bytes: self.query_vram_bytes(),
             transient_pool_bytes: self.targets.transient_pool.allocated_bytes(),
             pass_times_us,
             // EMA-adapted exposure value, surfaced to the StatHud `EV ±X.XX`
@@ -1777,6 +1696,7 @@ impl DxContext {
             // Captured from the resolved `HdrOutputMode` at init. `None` on
             // the SDR path (chip blanks). Mirrors `MtlContext::render_stats`.
             max_edr: self.hw.max_edr(),
+            ..profile::RenderStats::default()
         });
 
         // Flush any D3D12 validation messages from the previous frame.
@@ -2154,6 +2074,28 @@ impl DxContext {
     // stale" reading).
     pub(crate) fn render_stats(&self) -> profile::RenderStats {
         self.diagnostics.frame_stats.get()
+    }
+
+    // Current GPU memory residency in bytes. `Local` is the dedicated VRAM
+    // budget on a discrete GPU and the local-process system-memory budget on
+    // an integrated GPU; either way, `CurrentUsage` is what the HUD's
+    // "VRAM N MB" chip reports. Zero when the adapter does not expose the
+    // v3 interface (pre-WDDM 2.0).
+    pub(super) fn query_vram_bytes(&self) -> u64 {
+        let Some(adapter) = self.hw.adapter.as_ref() else {
+            return 0;
+        };
+        let mut info = windows::Win32::Graphics::Dxgi::DXGI_QUERY_VIDEO_MEMORY_INFO::default();
+        // SAFETY: a query on a live COM object; the descriptor it reads and the out-
+        // parameters it fills are live locals that outlive the call.
+        unsafe {
+            adapter.QueryVideoMemoryInfo(
+                0,
+                windows::Win32::Graphics::Dxgi::DXGI_MEMORY_SEGMENT_GROUP_LOCAL,
+                &mut info,
+            )
+        }
+        .map_or(0, |_| info.CurrentUsage)
     }
 
     // Shared atomic clone of the shader-reload flag, or `None` when the

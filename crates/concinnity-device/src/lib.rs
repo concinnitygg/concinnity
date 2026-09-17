@@ -21,6 +21,10 @@ pub(crate) mod forward;
 pub(crate) mod gpu_wait;
 #[cfg(backend_metal)]
 pub mod metal;
+// The `objects` / `skinned_visible` render stats, shared so they mean the same
+// thing on every backend.
+#[cfg(any(backend_metal, backend_dx, backend_vk))]
+pub(crate) mod object_counts;
 #[cfg(any(backend_metal, backend_dx, backend_vk))]
 pub(crate) mod png_encode;
 #[cfg(backend_vk)]
