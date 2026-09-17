@@ -21,6 +21,21 @@ use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::{create_uav_buffer, transition_barrier, uav_barrier};
 
+// Auto-exposure (EV adaptation) state. `resources` is `Some` only when the
+// world's `PostProcessConfig` opts in; it holds the histogram + average compute
+// PSOs, the histogram UAV, the output UAV, and the per-frame readback buffers.
+// `state` carries the EMA target; `settings` carries the clamped tunables;
+// `bias_ev` is the authored EV bias added to the target; `last_elapsed` is the
+// previous frame's elapsed time used to derive `dt` for the EMA. Mirrors the
+// Metal pattern.
+pub(in crate::directx) struct AutoExposureState {
+    pub resources: Option<AutoExposureResources>,
+    pub settings: Option<auto_exposure::AutoExposureSettings>,
+    pub state: Option<auto_exposure::AutoExposureState>,
+    pub bias_ev: f32,
+    pub last_elapsed: f32,
+}
+
 // Compile the auto-exposure `build` + `average` compute kernels. Used at
 // init and by shader hot-reload to rebuild the two compute PSOs.
 pub(in crate::directx) fn compile_auto_exposure_shaders(

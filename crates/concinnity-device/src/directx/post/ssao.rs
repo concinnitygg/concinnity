@@ -16,6 +16,7 @@ use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
+use crate::directx::allocator::PooledTexture;
 use crate::directx::context::{DxContext, dump_on_err};
 use crate::directx::pipeline::{create_blended_composite_pso, serialize_desc_and_create};
 use crate::directx::slang_builtins;
@@ -23,6 +24,22 @@ use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::{
     create_rt_target, transition_barrier, write_format_rtv, write_format_srv,
 };
+
+// SSAO (GTAO). `resources` is `Some` only when `PostProcessConfig.ssao` is set;
+// otherwise the pre-pass / kernel / blur are skipped and the main pass samples
+// the 1x1 `white` fallback (always present, so the main-pass root signature's AO
+// SRV slot always points at a valid descriptor) through `white_srv_gpu` for a
+// pass-through ambient term. SSAO always runs its own depth + normal pre-pass on
+// DirectX even when SSR is on (no shared-G-buffer shortcut here).
+pub(in crate::directx) struct SsaoState {
+    pub resources: Option<SsaoResources>,
+    #[expect(
+        dead_code,
+        reason = "held to keep the fallback texture resident; the pass binds white_srv_gpu"
+    )]
+    pub white: PooledTexture,
+    pub white_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+}
 
 // Single-channel occlusion target format. 1.0 = unoccluded; the main pass
 // multiplies the ambient term by this value. Both the GTAO kernel and the

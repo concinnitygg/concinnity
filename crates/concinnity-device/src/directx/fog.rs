@@ -35,6 +35,19 @@ use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::HDR_FORMAT;
 
+// Volumetric fog. All fields `None`/default until the world declares a
+// `VolumetricFog`; the fog pass is skipped while `resources` is `None`. The
+// settings are cached so the per-frame encoder can build its `FogParams`
+// without re-resolving the asset. `sun_dir` / `sun_color` mirror the first
+// directional light, cached on the CPU so the encoder never reads back the
+// light CBV; `update_directional_lights` re-derives both.
+pub(in crate::directx) struct FogState {
+    pub resources: Option<FogResources>,
+    pub settings: Option<volumetric_fog::FogSettings>,
+    pub sun_dir: [f32; 3],
+    pub sun_color: [f32; 3],
+}
+
 // Compile the fog vertex + fragment shaders; the MSAA define keeps the
 // fragment shader's depth SRV declaration in sync with the resource's
 // sample count. Used by [`FogResources::new`] at init and by shader hot-

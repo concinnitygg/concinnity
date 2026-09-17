@@ -3,7 +3,6 @@
 // drive all three backends identically.
 
 use concinnity_core::components;
-use concinnity_core::gfx::auto_exposure;
 use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::render_types::*;
 use concinnity_core::input::keymap::KeyMap;
@@ -12,23 +11,16 @@ use concinnity_core::profile;
 use concinnity_core::render::backend;
 use concinnity_core::render::backend::FrameParams;
 use concinnity_core::render::backend_init;
-use concinnity_core::render::csm;
-use concinnity_core::render::decal;
 use concinnity_core::render::error;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::hdr_output;
 use concinnity_core::render::lights;
-use concinnity_core::render::particles;
 use concinnity_core::render::pass_timing;
 use concinnity_core::render::planar_reflection;
 use concinnity_core::render::reflection_probe;
 use concinnity_core::render::render_graph;
 use concinnity_core::render::scene_flow;
-use concinnity_core::render::shadow_schedule;
-use concinnity_core::render::skinned_slots;
 use concinnity_core::render::slot_rewrites;
-use concinnity_core::render::spot_shadow;
-use concinnity_core::render::volumetric_fog;
 use concinnity_core::window::display_mode;
 use std::cell::RefCell;
 use std::sync::OnceLock;
@@ -36,20 +28,27 @@ use windows::Win32::Foundation::CloseHandle;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::*;
 use windows::Win32::System::Threading::{GetCurrentThreadId, WaitForSingleObject};
-use windows::core::Interface;
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledTexture};
-use super::auto_exposure::AutoExposureResources;
-use super::com;
+use super::auto_exposure::AutoExposureState;
+use super::cull::CullState;
 use super::decal::*;
+use super::draw::main::InstanceBucketLayout;
+use super::draw::shadow::ShadowState;
+use super::draw::spot_shadow::SpotShadowState;
 use super::fog::*;
-use super::particle::{ParticleEmitterGpuState, ParticleResources};
+use super::hot_reload::HotReloadState;
+use super::particle::ParticleState;
+use super::post::bloom::BloomState;
 use super::post::gbuffer::GbufferResources;
 use super::post::ssao::*;
 use super::post::ssr::*;
 use super::post::taa::*;
+use super::post::upscale::UpscaleState;
+use super::resources::geometry::MeshStreamState;
+use super::resources::skinning::SkinnedState;
+use super::resources::streaming::ChunkStreamState;
 use super::texture::*;
-use crate::directx::error::map_hresult;
 use crate::win32::window;
 use crate::win32::window::{WindowState, frame_tick, take_input_snapshot};
 
@@ -68,22 +67,6 @@ pub(super) const MAX_SKINNED_OBJECTS: usize = 64;
 
 pub(super) fn align256(n: u64) -> u64 {
     (n + CB_ALIGN - 1) & !(CB_ALIGN - 1)
-}
-
-// One LOD bucket of an instanced cluster for the current frame. Filled by
-// `build_instance_upload` once at the top of every frame; consumed by the spot
-// shadow pass, which pushes each transform as a root constant.
-#[derive(Clone, Debug)]
-pub(super) struct InstanceBucketLayout {
-    // LOD slice's index-buffer offset (in u32 indices). Drives the
-    // `StartIndexLocation` arg of `DrawIndexedInstanced`.
-    pub index_offset: usize,
-    // LOD slice's index count.
-    pub index_count: usize,
-    // Bucket-ordered model matrices, sourced from `InstancedCluster::lod_buckets(cam_pos)`.
-    // Cached here so the spot shadow pass's per-instance iteration can read the
-    // same data without re-bucketing.
-    pub instances: Vec<[[f32; 4]; 4]>,
 }
 
 // Build the timestamp-query heap + readback buffer for the per-frame GPU
@@ -168,275 +151,6 @@ pub(super) struct TimestampState {
     pub frequency: u64,
 }
 
-// Bloom mip chain + pipelines. `mips[0]` is half-res; each subsequent mip
-// halves again. The prefilter + downsample + upsample passes accumulate a soft
-// glow into `mips[0]`, which the composite samples. Skipped entirely when
-// `post_process.bloom_intensity` is 0.
-pub(super) struct BloomState {
-    pub mips: Vec<ID3D12Resource>,
-    pub mip_rtvs: Vec<D3D12_CPU_DESCRIPTOR_HANDLE>,
-    pub mip_srv_gpus: Vec<D3D12_GPU_DESCRIPTOR_HANDLE>,
-    pub mip_extents: Vec<(u32, u32)>,
-    pub root_sig: ID3D12RootSignature,
-    pub pso_prefilter: ID3D12PipelineState,
-    pub pso_downsample: ID3D12PipelineState,
-    pub pso_upsample: ID3D12PipelineState,
-}
-
-// Skinned (skeletally animated) mesh rendering. All `None` / empty until
-// `upload_skinned` runs; with no `SkinnedMesh` in the world every skinned pass
-// is skipped. The skinned main pass reuses the instanced root signature (its
-// root SRV at t3 carries the per-object joint matrices); the shadow pass uses a
-// dedicated skinned shadow root signature.
-pub(super) struct SkinnedState {
-    pub shadow_pso: Option<ID3D12PipelineState>,
-    pub shadow_root_sig: Option<ID3D12RootSignature>,
-    // Shared skinned vertex/index buffers. Kept alive for the GPU; referenced
-    // through `vertex_buffer_view` / `index_buffer_view`.
-    pub vertex_buffer: Option<PooledBuffer>,
-    pub index_buffer: Option<PooledBuffer>,
-    pub vertex_buffer_view: D3D12_VERTEX_BUFFER_VIEW,
-    pub index_buffer_view: D3D12_INDEX_BUFFER_VIEW,
-    // Per-slot draw objects, joint palettes, and morph weights: the CPU-side
-    // records this backend shares with Metal and Vulkan.
-    pub slots: skinned_slots::SkinnedSlots,
-    // Per-frame, per-object joint-matrix upload buffers, indexed
-    // [frame_idx][skinned_idx]. Each holds MAX_JOINTS float4x4 matrices,
-    // persistently mapped; rewritten each frame from `slots.joint_matrices`.
-    pub joint_buffers: Vec<Vec<PooledBuffer>>,
-    pub joint_ptrs: Vec<Vec<*mut u8>>,
-    // GPU-driven main-pass skinning. `skin_pipeline` is the `rt_skin` compute
-    // kernel reused to deform the bind-pose verts into a per-frame buffer for the
-    // bindless main pass (independent of RT, which keeps its own skin dispatch);
-    // built in `upload_skinned`. `deformed_buffers` is one UAV-writable buffer per
-    // frame-in-flight holding this frame's posed 56-byte `Vertex`s (global skinned
-    // indexing, so the draw uses `base_vertex = 0`); rests in
-    // VERTEX_AND_CONSTANT_BUFFER, flipped to UNORDERED_ACCESS for the skin
-    // dispatch each frame. `deformed_vbvs` is the parallel vertex-buffer view the
-    // main pass's 2nd `ExecuteIndirect` binds. All empty / `None` until
-    // `upload_skinned` runs.
-    pub skin_pipeline: Option<super::raytrace::SkinPipeline>,
-    pub deformed_buffers: Vec<ID3D12Resource>,
-    pub deformed_vbvs: Vec<D3D12_VERTEX_BUFFER_VIEW>,
-    // Morph targets, parallel to `slots.draw_objects`. `morph_delta_buffers[i]`
-    // is the per-mesh packed sparse morph buffer
-    // (`PayloadMorphs::packed_words`; instance copies share the
-    // template's resource) or `None` for a mesh without morph targets;
-    // `morph_target_counts[i]` is its target count (0 = none). The per-frame
-    // `morph_weight_buffers` ([frame_idx][skinned_idx], one f32 per target,
-    // persistently mapped) are filled from `slots.morph_weights` by
-    // `upload_morph_weights`, and are empty when no skinned object carries
-    // morphs.
-    pub morph_delta_buffers: Vec<Option<PooledBuffer>>,
-    pub morph_target_counts: Vec<u32>,
-    pub morph_weight_buffers: Vec<Vec<PooledBuffer>>,
-    pub morph_weight_ptrs: Vec<Vec<*mut u8>>,
-    // `false` until the deformed-vertex ring has been posed at least one full
-    // frame; `true` once a prior frame's `encode_skin` has filled the slot the
-    // next frame reads as its velocity history. While false the GPU-driven
-    // G-buffer velocity binds the current deformed buffer as the previous one
-    // (prev_pos == cur_pos), so an unposed ring slot never feeds a garbage
-    // skinned motion vector on the first frame (or after a runtime ring rebuild).
-    // Matches Metal's `deformed_primed` gate. Reset by `upload_skinned`. Atomic, not `Cell`: the G-buffer pass
-    // encodes on a `jobs::pool()` rayon worker thread (the parallel per-pass
-    // encoder shares `&self` across workers), so any interior mutation reachable
-    // from `encode_pass_into` must be atomic, like `draw_calls_accum`.
-    pub deformed_primed: std::sync::atomic::AtomicBool,
-}
-
-impl SkinnedState {
-    pub(super) fn new() -> Self {
-        Self {
-            shadow_pso: None,
-            shadow_root_sig: None,
-            vertex_buffer: None,
-            index_buffer: None,
-            vertex_buffer_view: D3D12_VERTEX_BUFFER_VIEW::default(),
-            index_buffer_view: D3D12_INDEX_BUFFER_VIEW::default(),
-            slots: skinned_slots::SkinnedSlots::new(),
-            joint_buffers: Vec::new(),
-            joint_ptrs: Vec::new(),
-            skin_pipeline: None,
-            deformed_primed: std::sync::atomic::AtomicBool::new(false),
-            deformed_buffers: Vec::new(),
-            deformed_vbvs: Vec::new(),
-            morph_delta_buffers: Vec::new(),
-            morph_target_counts: Vec::new(),
-            morph_weight_buffers: Vec::new(),
-            morph_weight_ptrs: Vec::new(),
-        }
-    }
-}
-
-// GPU-driven cull + main pass. A compute kernel frustum/distance-tests every
-// record and writes one `ExecuteIndirect` command per object; the main pass
-// issues each bucket's region with one `ExecuteIndirect`. All `Some`/non-empty
-// only when the world has anything to drive.
-pub(super) struct CullState {
-    // The main pass's root signature and bucket 0's PSO: the world default
-    // Shader's pair where the world declares one, the engine's pair otherwise.
-    pub main_bindless_root_sig: Option<ID3D12RootSignature>,
-    pub main_bindless_pso: Option<ID3D12PipelineState>,
-    // Material-referenced world shader pipelines, indexed by `shader_bucket - 1`
-    // (bucket 0 is `main_bindless_pso`). Each renders its bucket's slice of the
-    // GPU-culled command buffer through the bindless root signature. `None`
-    // marks a bucket whose Shader is not resident yet: its scene has not pinned,
-    // so the pass skips those draws (see `world_shaders.rs`).
-    pub world_pipelines: Vec<Option<ID3D12PipelineState>>,
-    // Commands reserved per shader-bucket region in the indirect buffers, fixed
-    // at init to the record capacity the buffers were sized for. Bucket `b`'s
-    // region starts at command `b * bucket_stride`.
-    pub bucket_stride: usize,
-    // The engine's compiled bindless main-pass stages, retained so a shader
-    // bucket warmed mid-session can build its pipeline without recompiling the
-    // HLSL. See [`super::init::pipelines::BindlessMainShaders`].
-    pub bindless_main_shaders: super::init::pipelines::BindlessMainShaders,
-    // Per-frame `StructuredBuffer<GpuObjectData>` upload buffers, one per
-    // frame-in-flight, persistently mapped. Rebuilt each frame.
-    pub object_buffer_resources: Vec<PooledBuffer>,
-    pub object_buffer_ptrs: Vec<*mut u8>,
-    // Flat-pool SRV region bases, one per frame in flight, bound to bindless
-    // root param [5] as the texture pool for the frame being recorded. The
-    // copies exist so a streamed texture swap rewrites the copy whose frame
-    // just fence-waited instead of draining the device (see
-    // `apply_streamed_texture_rewrites`).
-    pub bindless_pool_gpu: Vec<D3D12_GPU_DESCRIPTOR_HANDLE>,
-    // Cull compute pipeline; `cull_pso_phase2` is the two-pass-occlusion PSO
-    // (same root signature as `cull_pso`).
-    pub cull_root_sig: Option<ID3D12RootSignature>,
-    pub cull_pso: Option<ID3D12PipelineState>,
-    pub cull_pso_phase2: Option<ID3D12PipelineState>,
-    pub cull_command_signature: Option<ID3D12CommandSignature>,
-    // Per-frame `StructuredBuffer<GpuDrawArgs>` upload buffers (indexed-draw
-    // args + per-frame cull-decision bits the kernel reads).
-    pub draw_args_buffer_resources: Vec<PooledBuffer>,
-    pub draw_args_buffer_ptrs: Vec<*mut u8>,
-    // Per-frame indirect-command buffers the cull kernel writes (UAV) and the
-    // main pass consumes (`ExecuteIndirect`). Resting `INDIRECT_ARGUMENT`.
-    pub indirect_cmd_buffers: Vec<ID3D12Resource>,
-    // Per-frame per-object cull-status buffers (one u32 each): phase-1 writes,
-    // phase-2 reads. Resting `UNORDERED_ACCESS`.
-    pub cull_status_buffers: Vec<ID3D12Resource>,
-    // Per-frame second indirect-command buffers for two-pass occlusion.
-    pub indirect_cmd_buffers_2: Vec<ID3D12Resource>,
-    // GPU-driven shadow pass. A depth-only bindless pipeline whose VS
-    // reads `model` from `GpuObjectData[object_id]` (root SRV) and projects
-    // through `light_vps[cascade_idx]`; `shadow_bindless_cmd_sig` is the shared
-    // cull command signature rebuilt against its root sig. `shadow_indirect_buffers`
-    // is one buffer per frame-in-flight sized `NUM_SHADOW_CASCADES * cull_count()`
-    // commands -- cascade `c`'s region is `[c*cull_count, (c+1)*cull_count)`,
-    // written by binding the cull output UAV at a per-cascade GPU-address offset.
-    // `shadow_cull_status_buffers` is a per-frame scratch the shadow cull writes
-    // but never reads (kept separate from `cull_status_buffers`, which the
-    // phase-2 main cull consumes AFTER the shadow pass). All `Some`/non-empty
-    // only when the bindless cull path is active AND shadows are enabled.
-    pub shadow_bindless_root_sig: Option<ID3D12RootSignature>,
-    pub shadow_bindless_pso: Option<ID3D12PipelineState>,
-    pub shadow_bindless_cmd_sig: Option<ID3D12CommandSignature>,
-    // Frustum-only shadow cull kernel (`main_shadow`), shares the cull root sig.
-    pub cull_pso_shadow: Option<ID3D12PipelineState>,
-    pub shadow_indirect_buffers: Vec<ID3D12Resource>,
-    pub shadow_cull_status_buffers: Vec<ID3D12Resource>,
-    // GPU-driven G-buffer pre-pass. A 3-MRT bindless pipeline whose VS
-    // reads `model` + `roughness` from `GpuObjectData[object_id]` (root SRV) and
-    // the previous-frame model from the model-history ring below;
-    // `gbuffer_bindless_cmd_sig`
-    // is the shared cull command signature rebuilt against its root sig. The pass
-    // reuses the main pass's `indirect_cmd_buffers` (camera frustum, no extra cull
-    // dispatch). All `Some`/non-empty only when the bindless cull path is active
-    // AND the G-buffer is enabled.
-    pub gbuffer_bindless_root_sig: Option<ID3D12RootSignature>,
-    pub gbuffer_bindless_pso: Option<ID3D12PipelineState>,
-    pub gbuffer_bindless_cmd_sig: Option<ID3D12CommandSignature>,
-    // Per-frame model-history buffers (one column-major `float4x4` per cull
-    // record), device-local: only the snapshot kernel writes them and only the
-    // pre-pass reads them, so the host never touches their bytes. Frame `R`
-    // reads the slot frame `R - 1` filled.
-    pub prev_model_buffers: Vec<ID3D12Resource>,
-    // The snapshot kernel that fills them from the object buffer, and the
-    // rebuild's request that it fill every slot before one is read. An atomic
-    // rather than a borrow of the tracker: passes encode on worker threads.
-    pub model_history_root_sig: Option<ID3D12RootSignature>,
-    pub model_history_pso: Option<ID3D12PipelineState>,
-    pub model_history_prime: std::sync::atomic::AtomicBool,
-    // `PostProcessConfig.occlusion_two_pass`, as requested by the world.
-    pub occlusion_two_pass: bool,
-    // Hi-Z (depth-mip pyramid) used by the cull kernel for occlusion culling.
-    // Built each frame after `execute_graph`; consumed by the *next* frame's
-    // cull dispatch through `prev_view_proj`.
-    pub hiz: Option<super::hiz::HiZResources>,
-    // Snapshot of the previous frame's un-jittered view-projection matrix the
-    // next frame's cull kernel reprojects AABBs through.
-    pub prev_view_proj: std::cell::Cell<[[f32; 4]; 4]>,
-    // `false` on the first frame and after a resize; while false the cull
-    // kernel skips the Hi-Z test.
-    pub hiz_valid: std::cell::Cell<bool>,
-}
-
-// Shader hot-reload state. `enabled` is true only under `cn debug`: it routes
-// every built-in HLSL source resolve through `pipeline::shader_source`'s
-// disk-first path and gates the `directx/shaders/` filesystem watcher (false
-// under `cn run`, where the `include_str!`-baked HLSL is the only source).
-// `reload_pending` is the atomic flag set by the `notify` watcher or the debug
-// `reload-shaders` command, polled at the top of `draw_frame` to trigger a PSO
-// rebuild; `Some` only when `enabled`, and the debug server reads its `Arc`
-// clone via `GraphicsSystem`. `watcher` is the live `notify` handle held purely
-// for lifetime (dropping it stops the watcher); `Some` only when `enabled`.
-pub(super) struct HotReloadState {
-    pub enabled: bool,
-    pub reload_pending: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-    #[expect(
-        dead_code,
-        reason = "held so the watcher thread stays alive; dropping it stops the watcher"
-    )]
-    pub watcher: Option<crate::directx::hot_reload::WatcherHandle>,
-}
-
-impl HotReloadState {
-    // Watcher creation is best-effort: a missing source dir or a notify error
-    // logs a warning and disables only the watcher half -- the debug command
-    // still works on the same flag.
-    pub(super) fn spawn(enabled: bool) -> Self {
-        let (reload_pending, watcher) = if enabled {
-            let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let watcher = crate::directx::hot_reload::spawn(std::sync::Arc::clone(&flag));
-            (Some(flag), watcher)
-        } else {
-            (None, None)
-        };
-        Self {
-            enabled,
-            reload_pending,
-            watcher,
-        }
-    }
-}
-
-// Byte-range sub-allocators for the streamed-mesh regions of the shared
-// vertex/index buffers. Empty until mesh streaming is active; seeded at init by
-// one of two paths: the shrinkable-seed path hands them the single compacted
-// headroom block via `seed_mesh_streaming`, while the full-set path frees each
-// streamed draw's build-time region via `evict_mesh`. From then on `upload_mesh`
-// / `evict_mesh` allocate and free byte ranges so a streamed mesh lands wherever
-// there is room.
-#[derive(Default)]
-pub(super) struct MeshStreamState {
-    pub vtx_alloc: crate::suballoc::range_alloc::RangeAllocator,
-    pub idx_alloc: crate::suballoc::range_alloc::RangeAllocator,
-}
-
-// Byte-range sub-allocators for the headroom region appended to the shared
-// vertex/index buffers by `setup_chunk_streaming` for streamed `VoxelWorld`
-// chunks, disjoint from the build-time geometry and the mesh-streaming
-// allocators. `draw.objects` slots vacated by removed chunks are recycled
-// through the shared `DrawSlotAllocator` (`draw_slots`), so the draw list does
-// not grow without bound as the camera roams an infinite world.
-#[derive(Default)]
-pub(super) struct ChunkStreamState {
-    pub vtx_alloc: crate::suballoc::range_alloc::RangeAllocator,
-    pub idx_alloc: crate::suballoc::range_alloc::RangeAllocator,
-}
-
 // Off-screen HDR scene target. The main + instanced passes render linear-light
 // HDR into `color`; the composite pass tonemaps it down onto the swapchain
 // backbuffer. With MSAA on (`msaa_samples > 1`), `color` is the multisampled
@@ -452,174 +166,6 @@ pub(super) struct HdrState {
     pub resolve_rtv: Option<D3D12_CPU_DESCRIPTOR_HANDLE>,
     pub srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
     pub msaa_samples: u32,
-}
-
-// SSAO (GTAO). `resources` is `Some` only when `PostProcessConfig.ssao` is set;
-// otherwise the pre-pass / kernel / blur are skipped and the main pass samples
-// the 1x1 `white` fallback (always present, so the main-pass root signature's AO
-// SRV slot always points at a valid descriptor) through `white_srv_gpu` for a
-// pass-through ambient term. SSAO always runs its own depth + normal pre-pass on
-// DirectX even when SSR is on (no shared-G-buffer shortcut here).
-pub(super) struct SsaoState {
-    pub resources: Option<SsaoResources>,
-    #[expect(
-        dead_code,
-        reason = "held to keep the fallback texture resident; the pass binds white_srv_gpu"
-    )]
-    pub white: PooledTexture,
-    pub white_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-}
-
-// GPU-compute particle system. `resources` (compute + render PSOs + per-frame
-// uniform rings + spawn-budget upload ring) is built lazily either at init (when
-// the world declared >= 1 emitter) or on the first runtime `add_emitter`; it
-// stays `None` when no emitter has ever existed. `records` and `emitter_state`
-// are parallel `Vec<Option<...>>`s walked in lockstep by the per-frame dispatch,
-// skipping `None` pairs; `free_slots` recycles vacated slots. `srv_base_slot` is
-// the SRV-heap slot where emitter `i`'s albedo SRV lives (written by
-// `add_emitter`). `last_elapsed` is the previous frame's `elapsed` (the diff is
-// the frame `dt`); `frame_index` is mixed into the compute kernel's per-thread
-// RNG seed. Both are interior-mutable because `record_frame` is `&self` and they
-// are only touched on the render thread.
-pub(super) struct ParticleState {
-    pub resources: Option<ParticleResources>,
-    pub records: Vec<Option<particles::ParticleEmitterRecord>>,
-    pub emitter_state: Vec<Option<ParticleEmitterGpuState>>,
-    pub free_slots: Vec<usize>,
-    pub srv_base_slot: usize,
-    pub last_elapsed: std::cell::Cell<f32>,
-    pub frame_index: std::cell::Cell<u32>,
-}
-
-// Projected decals. `state` (pipeline + unit-cube buffers + per-frame uniform
-// rings) is always built so runtime `add_decal` works from a world that started
-// empty; the encoder skips the pass when no slot is live or every live decal
-// culls. `set` is the shared slot table, indexing the per-decal albedo SRVs and
-// the per-frame params ring by decal id.
-pub(super) struct DecalState {
-    pub state: Option<DecalResources>,
-    pub set: decal::DecalSet,
-}
-
-// Temporal upscaling (AMD FidelityFX FSR3 / DLSS / XeSS). `backend` is `Some`
-// only when the world's `PostProcessConfig.temporal_upscaling` is on AND the
-// backend DLL loaded + its context created successfully. The dispatch passes
-// `render_size == upscale_size == (extent.render_width, extent.render_height)`, so it runs as
-// a temporal-AA replacement rather than an actual upscaler. `requested` is the
-// backend the world asked for (FSR3 / DLSS / XeSS / auto), kept so a window
-// resize rebuilds the same one. `jitter` is the current frame's sub-pixel
-// projection offset (each axis roughly `[-0.5, 0.5]`); `prev_elapsed` is the
-// previous frame's elapsed time feeding FSR's `frameTimeDelta`.
-pub(super) struct UpscaleState {
-    pub backend: Option<Box<dyn super::post::upscale::UpscaleBackend>>,
-    pub requested: components::UpscalerBackend,
-    pub jitter: std::cell::Cell<[f32; 2]>,
-    pub prev_elapsed: std::cell::Cell<f32>,
-}
-
-// Auto-exposure (EV adaptation) state. `resources` is `Some` only when the
-// world's `PostProcessConfig` opts in; it holds the histogram + average compute
-// PSOs, the histogram UAV, the output UAV, and the per-frame readback buffers.
-// `state` carries the EMA target; `settings` carries the clamped tunables;
-// `bias_ev` is the authored EV bias added to the target; `last_elapsed` is the
-// previous frame's elapsed time used to derive `dt` for the EMA. Mirrors the
-// Metal pattern.
-pub(super) struct AutoExposureState {
-    pub resources: Option<AutoExposureResources>,
-    pub settings: Option<auto_exposure::AutoExposureSettings>,
-    pub state: Option<auto_exposure::AutoExposureState>,
-    pub bias_ev: f32,
-    pub last_elapsed: f32,
-}
-
-// Shadow map resources. `resource` / `dsvs` are `None` / empty when the shadow
-// pass is disabled (a 1x1 array fallback SRV is still bound at `srv_gpu`).
-// `dsvs` is one DSV per cascade slice. `light_dir` is the world-space unit
-// vector pointing toward the first directional light, captured at init from
-// `light_uniforms` and used by per-frame CSM updates.
-pub(super) struct ShadowState {
-    pub resource: Option<GpuResource<ID3D12Resource>>,
-    pub dsvs: Vec<D3D12_CPU_DESCRIPTOR_HANDLE>,
-    pub map_size: u32,
-    pub srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-    pub light_dir: [f32; 3],
-    // Cascade re-render policy from GraphicsConfig.shadow_update. Hybrid
-    // refreshes the near cascade every frame and the far cascades round-robin.
-    pub update: components::ShadowUpdate,
-    // Shadow distance in world units (GraphicsConfig.shadow_distance), read by the
-    // per-frame cascade-split computation and capped at the camera far plane.
-    pub distance: u32,
-    // Active shadow cascade count, 1..=4 (GraphicsConfig.shadow_cascades). The
-    // per-frame split + schedule read it; only the first `cascades` of the four
-    // slots are rendered + sampled. Stored at init (applies at the next launch).
-    pub cascades: u32,
-    // Round-robin clock + primed-set for the cascade schedule; advanced once per
-    // frame in record_frame.
-    pub scheduler: shadow_schedule::ShadowCascadeScheduler,
-    // Cascades re-rendered this frame (bit `i` = cascade `i`). Set in
-    // record_frame and read by encode_shadow_pass so the two agree on which
-    // slices to refresh and which to leave intact.
-    pub render_mask: u32,
-    // Carried CSM uniforms: skipped cascades keep the VP their slice was last
-    // rendered with, so the Main pass samples each slice consistently. Splits
-    // refresh every frame; per-cascade light VPs only when the mask includes
-    // that cascade. Uploaded to the per-frame shadow UBO each frame.
-    pub uniforms: ShadowUniforms,
-    // Depth-only cascade pipeline, `None` when shadows are disabled; the shadow
-    // passes key off `pso.is_some()`.
-    pub root_sig: Option<ID3D12RootSignature>,
-    pub pso: Option<ID3D12PipelineState>,
-}
-
-// Spot shadow map resources: one depth array slice per shadow-casting spot
-// light, plus the `SpotShadowData` buffer holding each slice's light-space
-// projection. Local lights are static, so the slice assignment and every matrix
-// are decided once at init and only the depth contents refresh. A world with no
-// shadowed spot still gets a 1x1 fallback array and a one-element buffer, so
-// the main pass's descriptors are always valid.
-pub(super) struct SpotShadowState {
-    pub resource: Option<GpuResource<ID3D12Resource>>,
-    // One DSV per shadowed spot; empty when the world has none.
-    pub dsvs: Vec<D3D12_CPU_DESCRIPTOR_HANDLE>,
-    pub srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-    // `SpotShadowData` per slice, uploaded once at init.
-    pub buffer: PooledBuffer,
-    // One `ShadowUniforms` per slice, carrying that spot's matrix in
-    // `light_vps[0]` so the shared shadow vertex shader can render a spot slice
-    // without a second pipeline or a second uniform layout. Written once at
-    // init: the projections are fixed for the world's lifetime, so unlike the
-    // cascade UBO this needs no per-frame copy.
-    pub ubo: PooledBuffer,
-    // 256-byte-aligned distance between consecutive slices in `ubo`.
-    pub ubo_stride: u64,
-    pub slice_size: u32,
-    // Round-robin clock + primed set, advanced once per frame in record_frame.
-    pub scheduler: spot_shadow::SpotShadowScheduler,
-    // Slices re-rendered this frame (bit `i` = slice `i`). Set in record_frame
-    // and read by encode_spot_shadow_pass.
-    pub render_mask: u32,
-}
-
-impl SpotShadowState {
-    // Slices actually handed out; the array, the DSV list, and the data buffer
-    // all carry exactly this many entries.
-    pub(crate) fn count(&self) -> u32 {
-        self.dsvs.len() as u32
-    }
-
-    // Advance the round-robin clock and record which slices re-render this
-    // frame. A no-op (mask stays 0) when the world has no shadowed spot.
-    pub(crate) fn advance(&mut self, every_frame: bool) {
-        let count = self.dsvs.len();
-        self.render_mask = self.scheduler.next_mask(every_frame, count);
-    }
-
-    // GPU address of slice `slice`'s baked `ShadowUniforms`.
-    pub(crate) fn slice_ubo_gva(&self, slice: u32) -> u64 {
-        debug_assert!(slice < self.count());
-        let base = com::gpu_va(&self.ubo);
-        base + slice as u64 * self.ubo_stride
-    }
 }
 
 // Rectangular area lights: the per-scene `AreaLightData` table indexed by
@@ -641,19 +187,6 @@ pub(super) struct AreaLightState {
     pub ltc_magnitude: GpuResource,
     // Base of the 2-descriptor LTC table (matrix, then magnitude).
     pub ltc_table_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-}
-
-// Volumetric fog. All fields `None`/default until the world declares a
-// `VolumetricFog`; the fog pass is skipped while `resources` is `None`. The
-// settings are cached so the per-frame encoder can build its `FogParams`
-// without re-resolving the asset. `sun_dir` / `sun_color` mirror the first
-// directional light, cached on the CPU so the encoder never reads back the
-// light CBV; `update_directional_lights` re-derives both.
-pub(super) struct FogState {
-    pub resources: Option<FogResources>,
-    pub settings: Option<volumetric_fog::FogSettings>,
-    pub sun_dir: [f32; 3],
-    pub sun_color: [f32; 3],
 }
 
 // The main-pass constant buffers, grouped off the flat `DxContext`. Mirrors
@@ -1530,174 +1063,14 @@ impl DxContext {
         self.view.show = show;
         self.view.far = far;
         self.view.sky_rot = sky_rot;
-        // D3D12 fill mode is pipeline state, so the wireframe view needs its own
-        // main-pass PSOs; built here on the first wireframe frame so the `&self`
-        // pass encoders can just read them.
-        self.ensure_wireframe_pipelines();
-        // Shader hot-reload: if either the filesystem watcher or the debug
-        // `reload-shaders` command set the flag, rebuild every built-in PSO
-        // from disk-resident source before the frame's passes start using
-        // them. The flag is cleared regardless of outcome so a failed rebuild
-        // (typo in a shader edit) doesn't loop, and the previous pipelines
-        // stay live so the session keeps rendering. Wait for the GPU to
-        // drain first so swapping PSOs out from under in-flight command
-        // lists is safe.
-        if self.shader_reload_requested() {
-            self.clear_shader_reload_flag();
-            self.wait_idle();
-            match self.reload_shaders() {
-                Ok(()) => tracing::info!("hot-reload: shader pipelines rebuilt"),
-                Err(e) => tracing::error!("hot-reload: shader rebuild failed: {}", e),
-            }
-        }
-
-        // Window resize: rebuild the swapchain back-buffers, the HDR / depth
-        // scene targets, the bloom mip chain, and the TAA / SSAO / SSR
-        // resource sets at the new size. A no-op when the size hasn't
-        // changed; skips the rebuild (and the frame) when the window is
-        // minimized so we never present 0×0. Failures are logged but not
-        // fatal; the client keeps trying on subsequent frames.
-        if let Err(e) = self.maybe_handle_resize() {
-            tracing::error!("D3D12 resize failed: {e}");
-        }
+        self.apply_pending_rebuilds();
 
         let frame = self.current_frame;
 
-        // Wait for this frame slot's previous work to finish before reusing it.
-        // Measured, with the `Present` below, into the frame's `gpu_wait_us`:
-        // both block the CPU on the GPU inside `draw_frame`, which the engine
-        // times its graphics system around.
-        let mut gpu_wait = crate::gpu_wait::GpuWait::none();
-        // SAFETY: the fence and the event were created from this device and are live for the call.
-        let completed = unsafe { self.frame_sync.fence.GetCompletedValue() };
-        if self.frame_sync.fence_values[frame] > completed {
-            // SAFETY: the fence and the event were created from this device and are live for the
-            // call.
-            unsafe {
-                self.frame_sync.fence.SetEventOnCompletion(
-                    self.frame_sync.fence_values[frame],
-                    self.frame_sync.fence_event,
-                )
-            }
-            .map_err(|e| super::error::map_hresult(e.code(), "SetEventOnCompletion"))?;
-            gpu_wait.measure(|| {
-                // SAFETY: the event handle was created in `DxContext::new` and lives as long as
-                // the context, and the wait borrows nothing else.
-                unsafe { WaitForSingleObject(self.frame_sync.fence_event, u32::MAX) }
-            });
-        }
-
-        // Streamed texture swaps: re-point this frame's flat-pool SRV copy at
-        // the swapped-in resources (legal now -- the fence wait above retired
-        // every list that binds this copy), and release the old resources /
-        // upload transients whose covering fence has signaled.
-        self.apply_streamed_texture_rewrites(frame);
-
-        // Tick the placement pool: the same fence wait retired every list that
-        // could still reference a range freed `FRAMES + 1` ticks ago, so those
-        // bytes become placeable again here.
-        self.hw.alloc.begin_frame();
-
-        // Periodic footprint readout, for measuring the pool under streaming
-        // churn at scale. Inert unless debug logging is enabled.
-        if self.stream.frame.is_multiple_of(1024) && tracing::enabled!(tracing::Level::DEBUG) {
-            tracing::debug!("device allocator: {}", self.hw.alloc.stats());
-        }
-
-        // Advance the staggered reflection-probe bake. Called after the frame-slot
-        // fence wait (so any in-flight capture resources are safe to recycle) and
-        // before the frame's passes record. Non-fatal: a failure is logged and the
-        // frame proceeds with whatever probes have baked.
-        if let Err(e) = self.bake_pending_probes(near, far) {
-            tracing::warn!("reflection probe bake step failed: {e}");
-        }
-
-        // Auto-exposure EMA step. The fence wait above ensured the GPU work
-        // that wrote this slot's readback buffer has completed, so the read
-        // is race-free. Must happen *before* the bloom prefilter / composite
-        // consume `self.post_process.exposure`. No-op when auto-exposure is
-        // disabled.
-        self.update_auto_exposure(elapsed, frame);
-
-        // Reset this frame's render stats. `record_frame` accumulates
-        // `draw_calls` through `inc_draw_calls` (an interior-mutability path
-        // because the encoders run through `&self`); the rest is filled here
-        // from `&mut self` state.
-        let counts = crate::object_counts::object_counts(
-            self.draw.objects.len(),
-            self.instanced.clusters.iter().map(|c| c.instances.len()),
-            self.skinned.slots.draw_objects.iter().map(|o| o.visible),
-        );
-        // Pull the most recently completed GPU times for this slot. The fence
-        // wait at the top of this `draw_frame` already ensured the GPU work
-        // that wrote this slot's readback bytes has retired, so the
-        // persistently-mapped pointer reflects fully committed pairs (`FRAMES`
-        // frames stale by construction). Zero before the slot has been visited
-        // a second time (the readback buffer starts zero-initialized). Inactive
-        // passes keep the frame-start timestamp in both slots (see the pre-init
-        // loop in `record_frame`), so they read 0 us.
-        let (gpu_frame_us, pass_times_us) =
-            if !self.timestamps.readback_ptr.is_null() && self.timestamps.frequency > 0 {
-                // SAFETY: `readback_ptr` is the persistently-mapped base of a READBACK buffer
-                // sized for FRAMES blocks of SLOTS_PER_FRAME u64s each (see
-                // build_timestamp_resources). The fence wait above ensures this block's writes
-                // have retired.
-                let block_base = unsafe {
-                    self.timestamps
-                        .readback_ptr
-                        .add(frame * pass_timing::SLOTS_PER_FRAME)
-                };
-                let frequency = self.timestamps.frequency;
-                let ticks_to_micros = |ticks: u64| -> u32 {
-                    (ticks.saturating_mul(1_000_000) / frequency).min(u32::MAX as u64) as u32
-                };
-                pass_timing::decode_frame_block(|start_slot, end_slot| {
-                    // SAFETY: `decode_frame_block` only passes slots below `SLOTS_PER_FRAME`, so
-                    // both reads stay inside this frame's block of the READBACK buffer, whose
-                    // writes the fence wait above retired.
-                    let (ts_start, ts_end) = unsafe {
-                        (
-                            block_base.add(start_slot).read(),
-                            block_base.add(end_slot).read(),
-                        )
-                    };
-                    if ts_end > ts_start {
-                        ticks_to_micros(ts_end - ts_start)
-                    } else {
-                        0
-                    }
-                })
-            } else {
-                (0, [("", 0); profile::MAX_PASS_TIMINGS])
-            };
-
-        // Reset the parallel-encoder draw-call accumulator so this frame's
-        // encoders bump from zero. Drained back into `diagnostics.frame_stats.draw_calls`
-        // after `record_frame` returns (the actual encoding fan-out happens
-        // inside it).
-        self.diagnostics
-            .draw_calls_accum
-            .store(0, std::sync::atomic::Ordering::Relaxed);
-        self.diagnostics.frame_stats.set(profile::RenderStats {
-            draw_calls: 0,
-            objects: counts.objects,
-            skinned_visible: counts.skinned_visible,
-            gpu_frame_us,
-            // The fence wait alone so far; `Present` below adds to it.
-            gpu_wait_us: gpu_wait.micros(),
-            vram_bytes: self.query_vram_bytes(),
-            transient_pool_bytes: self.targets.transient_pool.allocated_bytes(),
-            pass_times_us,
-            // EMA-adapted exposure value, surfaced to the StatHud `EV ±X.XX`
-            // chip. `None` when the world stayed on the authored static
-            // exposure; the chip blanks itself in that case. Mirrors
-            // `MtlContext::render_stats`.
-            auto_exposure_ev: self.auto_exposure.state.as_ref().map(|s| s.current_ev),
-            // Captured from the resolved `HdrOutputMode` at init. `None` on
-            // the SDR path (chip blanks). Mirrors `MtlContext::render_stats`.
-            max_edr: self.hw.max_edr(),
-            ..profile::RenderStats::default()
-        });
+        let gpu_wait = self.wait_frame_slot(frame)?;
+        self.service_background_work(elapsed, near, far, frame);
+        let timings = self.read_gpu_timings(frame);
+        self.begin_frame_stats(&gpu_wait, timings);
 
         // Flush any D3D12 validation messages from the previous frame.
         self.flush_validation();
@@ -1714,78 +1087,19 @@ impl DxContext {
         //
         // ExecuteCommandLists is called once with the whole topological
         // sequence so the GPU sees them in submission order.
-
-        // 1. Reset + record the START cmd list (timestamp pre-init only),
-        //    then close it immediately. The fence wait at the top of the
-        //    function gated this slot's previous submission, so it's
-        //    safe to reset.
-        // SAFETY: the fence for this frame slot was already waited on, so no submission still
-        // references what is being reset.
-        unsafe { self.commands.command_allocators[frame].Reset() }
-            .map_err(|e| super::error::map_hresult(e.code(), "start allocator reset"))?;
-        // Owned clone (COM refcount bump) so the per-frame RT acceleration-
-        // structure update below can take `&mut self` without holding a borrow
-        // of `self.commands.command_lists`.
-        let start_cmd = self.commands.command_lists[frame].clone();
-        // SAFETY: the fence for this frame slot was already waited on, so no submission still
-        // references what is being reset.
-        unsafe { start_cmd.Reset(&self.commands.command_allocators[frame], None) }
-            .map_err(|e| super::error::map_hresult(e.code(), "start cmd reset"))?;
-
-        // Timestamp the start of this frame's GPU work + pre-initialize
-        // every per-pass slot in this frame's block. The end-of-frame
-        // `ResolveQueryData` covers the whole block, and the D3D12 debug
-        // layer flags any slot in the resolved range that never had
-        // `EndQuery` called on it; without the pre-init the graph
-        // would spam those errors for every feature the world opted out
-        // of. The executor's per-pass start/end calls overwrite the
-        // slots of active passes with real timestamps; inactive slots
-        // keep this frame-start timestamp for both start and end, so
-        // `ts_end > ts_start` evaluates false on readback and they
-        // cleanly report 0 µs.
-        if let Some(heap) = self.timestamps.query_heap.as_ref() {
-            let (start_slot, _) = pass_timing::whole_frame_pair(frame);
-            let block_base = (frame * pass_timing::SLOTS_PER_FRAME) as u32;
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            unsafe {
-                start_cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, start_slot);
-                // Pre-init each per-pass (start, end) pair as **end then
-                // start** so inactive passes wind up with `ts_start >
-                // ts_end` and the readback's `ts_end > ts_start` check
-                // returns false (clean 0 µs reading).
-                let pass_count = pass_timing::SLOTS_PER_FRAME / 2 - 1;
-                for pass_idx in 0..pass_count as u32 {
-                    let pair_start = block_base + 2 + 2 * pass_idx;
-                    let pair_end = pair_start + 1;
-                    start_cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, pair_end);
-                    start_cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, pair_start);
-                }
-            }
-        }
-
-        // Per-frame hardware-RT acceleration-structure update: when a
-        // participating prop moved, rebuild the TLAS + geometry table onto the
-        // start cmd list (submitted before every per-pass trace on the serial
-        // DIRECT queue, so the rebuild is ordered before this frame's reflection
-        // trace reads it). A no-op when RT reflections are off or the BVH is
-        // static this frame.
-        self.rt_dynamic_update(&start_cmd, frame);
-
-        // SAFETY: the command list is live and in the recording state, which is what `Close`
-        // requires.
-        unsafe { start_cmd.Close() }
-            .map_err(|e| super::error::map_hresult(e.code(), "start cmd close"))?;
+        let start_cmd = self.record_frame_start(frame)?;
 
         // Line resources: built on the first frame that publishes lines, so
         // the graph gate inside `record_frame` can see them live this same
         // frame and a world that never draws a line never compiles them.
         self.ensure_line_pipeline(!lines.is_empty());
 
+        self.update_shadow_schedule(cam_pos, fov_y_radians, near, far);
+
         // 2. Open the END cmd list (Composite + final timestamp +
         //    ResolveQueryData + per-frame restore barriers). The
         //    executor's main-thread Composite arm encodes onto this
-        //    cmd list; this function appends the final timestamp +
+        //    cmd list; `close_end_list` appends the final timestamp +
         //    resolve after `record_frame` returns.
         // SAFETY: the fence for this frame slot was already waited on, so no submission still
         // references what is being reset.
@@ -1805,51 +1119,6 @@ impl DxContext {
         let back_buffer_rtv = D3D12_CPU_DESCRIPTOR_HANDLE {
             ptr: rtv_base.ptr + back_idx * self.swapchain.rtv_descriptor_size,
         };
-
-        // Cascaded-shadow update policy. Advance the round-robin schedule, then
-        // refresh only this frame's cascades' light VPs (splits always refresh).
-        // Skipped cascades keep the VP + depth their slice was last rendered
-        // with, so the Main pass samples each cascade consistently. record_frame
-        // uploads the merged `self.shadow.uniforms` to this frame's shadow UBO,
-        // and encode_shadow_pass re-rasterizes only the masked slices. Mirrors
-        // Metal; no-op (mask stays 0, uniforms stay empty) when shadows are off.
-        if !self.shadow.dsvs.is_empty() {
-            let aspect = self.targets.extent.render_width.max(1) as f32
-                / self.targets.extent.render_height.max(1) as f32;
-            let fresh = csm::compute_shadow_uniforms(csm::ShadowUniformInputs {
-                view: self.view.matrix,
-                cam_pos,
-                fov_y_rad: fov_y_radians,
-                aspect,
-                near,
-                shadow_distance: (self.shadow.distance as f32).min(far),
-                light_dir_to_source: self.shadow.light_dir,
-                shadow_map_size: self.shadow.map_size,
-                active_cascades: self.shadow.cascades,
-            });
-            let update = self.shadow.update;
-            let mask = self
-                .shadow
-                .scheduler
-                .next_mask(update, self.shadow.cascades);
-            self.shadow.render_mask = mask;
-            self.shadow.uniforms.cascade_splits = fresh.cascade_splits;
-            self.shadow.uniforms.active_cascades = fresh.active_cascades;
-            for i in 0..render_types::NUM_SHADOW_CASCADES {
-                if mask & (1u32 << i) != 0 {
-                    self.shadow.uniforms.light_vps[i] = fresh.light_vps[i];
-                }
-            }
-        }
-
-        // Spot shadow refresh schedule. Prime-then-round-robin over the slices,
-        // so N shadowed spots cost one extra depth render per frame rather than
-        // N. No uniform refresh: the projections are static and were baked at
-        // init. A no-op (mask stays 0) when the world has no shadowed spot.
-        self.spot_shadow.advance(matches!(
-            self.shadow.update,
-            components::ShadowUpdate::EveryFrame
-        ));
 
         // 3. record_frame fans non-composite passes onto rayon workers
         //    (each records into its own cmd list from the per-pass pool)
@@ -1889,137 +1158,13 @@ impl DxContext {
             taa.pass.advance();
         }
 
-        // Drain the parallel-encoder draw-call accumulator into this
-        // frame's `diagnostics.frame_stats.draw_calls`. The accumulator was reset
-        // to 0 above and bumped by each `inc_draw_calls` call site
-        // (potentially from worker threads) during `record_frame`.
-        let mut s = self.diagnostics.frame_stats.get();
-        s.draw_calls = self
-            .diagnostics
-            .draw_calls_accum
-            .load(std::sync::atomic::Ordering::Relaxed);
-        self.diagnostics.frame_stats.set(s);
-
-        // 4. Timestamp the end of GPU work and resolve this frame's
-        //    entire block (whole-frame pair + every per-pass pair the
-        //    workers wrote) into the matching slice of the readback
-        //    buffer. Resolves are cmd-list ops so they precede `Close`.
-        if let (Some(heap), Some(readback)) = (
-            self.timestamps.query_heap.as_ref(),
-            self.timestamps.readback.as_ref(),
-        ) {
-            let (_, end_slot) = pass_timing::whole_frame_pair(frame);
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            unsafe {
-                end_cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, end_slot);
-                end_cmd.ResolveQueryData(
-                    heap,
-                    D3D12_QUERY_TYPE_TIMESTAMP,
-                    pass_timing::frame_block_base(frame),
-                    pass_timing::SLOTS_PER_FRAME as u32,
-                    &**readback,
-                    pass_timing::frame_readback_byte_offset(frame),
-                );
-            }
-        }
-
-        // SAFETY: the command list is live and in the recording state, which is what `Close`
-        // requires.
-        unsafe { end_cmd.Close() }
-            .map_err(|e| super::error::map_hresult(e.code(), "end cmd close"))?;
-
-        // 5. Submit everything in topological order: [start, per-pass...,
-        //    end]. Single ExecuteCommandLists call → the GPU executes
-        //    them in submission order; the queue is serial on a single
-        //    DIRECT command queue, so this guarantees pass ordering.
-        let mut submission: Vec<Option<ID3D12CommandList>> =
-            Vec::with_capacity(2 + pass_cmd_lists.len());
-        let start_handle: ID3D12CommandList = start_cmd
-            .cast()
-            .map_err(|e| map_hresult(e.code(), "start cmd cast"))?;
-        submission.push(Some(start_handle));
-        for cl in &pass_cmd_lists {
-            let h: ID3D12CommandList = cl
-                .cast()
-                .map_err(|e| map_hresult(e.code(), "per-pass cmd cast"))?;
-            submission.push(Some(h));
-        }
-        let end_handle: ID3D12CommandList = end_cmd
-            .cast()
-            .map_err(|e| map_hresult(e.code(), "end cmd cast"))?;
-        submission.push(Some(end_handle));
-        // SAFETY: every command list in the submission is live and closed, and the slice outlives
-        // the call.
-        unsafe { self.hw.command_queue.ExecuteCommandLists(&submission) };
-
-        // Present. Sync interval 1 locks to the display refresh (vsync); 0 runs
-        // uncapped. The tearing present flag is required (and only valid) at
-        // sync interval 0 on a swapchain created with ALLOW_TEARING, so gate it
-        // on the current interval too -- `set_vsync` flips the interval at
-        // runtime, and ALLOW_TEARING with interval >= 1 is an invalid Present.
-        let present_flags =
-            if self.swapchain.present_sync_interval == 0 && self.swapchain.allow_tearing {
-                DXGI_PRESENT_ALLOW_TEARING
-            } else {
-                DXGI_PRESENT(0)
-            };
-        // At sync interval 1 this blocks on the display refresh once the
-        // present queue is full, so it is the display-paced half of the frame's
-        // GPU wait.
-        let present_result = gpu_wait.measure(|| {
-            // SAFETY: the swapchain is live, and `Present` takes no borrowed state beyond the
-            // interval and flags.
-            unsafe {
-                self.swapchain
-                    .handle
-                    .Present(self.swapchain.present_sync_interval, present_flags)
-            }
-        });
-        // Fold the present into the reading published above, which the stats
-        // snapshot had already captured with the fence wait alone.
-        {
-            let mut waited = self.diagnostics.frame_stats.get();
-            waited.gpu_wait_us = gpu_wait.micros();
-            self.diagnostics.frame_stats.set(waited);
-        }
-        if let Err(e) = present_result.ok() {
-            self.flush_validation();
-            // SAFETY: a property query on a live COM object; it only reads.
-            let reason = unsafe { self.hw.device.GetDeviceRemovedReason() };
-            return Err(super::error::classify_present_failure(
-                e.code(),
-                reason
-                    .err()
-                    .map(|r| r.code())
-                    .unwrap_or(windows::core::HRESULT(0)),
-            ));
-        }
-        // Record the buffer just shown so a headless `screenshot` captures the
-        // on-screen image (the next `GetCurrentBackBufferIndex` already advanced
-        // past it).
-        self.swapchain.last_present_index = Some(back_idx);
-
-        // Advance fence. The signaled value must be globally unique across
-        // slots so each slot's wait-before-reuse only observes completion of
-        // its own prior submission.
-        let next_val = self.frame_sync.next_fence_value.get();
-        self.frame_sync.next_fence_value.set(next_val + 1);
-        self.frame_sync.fence_values[frame] = next_val;
-        // SAFETY: the fence and the event were created from this device and are live for the call.
-        unsafe {
-            self.hw
-                .command_queue
-                .Signal(&self.frame_sync.fence, next_val)
-        }
-        .map_err(|e| super::error::map_hresult(e.code(), "Signal"))?;
-
-        self.current_frame = (self.current_frame + 1) % FRAMES;
-        Ok(())
+        self.finish_frame_stats();
+        self.close_end_list(frame)?;
+        self.submit_and_present(start_cmd, &pass_cmd_lists, back_idx, frame, gpu_wait)
     }
 
     // Drain any queued D3D12 validation messages and emit them via tracing.
-    fn flush_validation(&self) {
+    pub(super) fn flush_validation(&self) {
         if let Some(ref iq) = self.hw.info_queue {
             drain_info_queue(iq);
         }

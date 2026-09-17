@@ -9,6 +9,7 @@ use concinnity_core::gfx::render_types::*;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::rt_geom;
 use concinnity_core::render::shadow_bias;
+use concinnity_core::render::skinned_slots;
 use concinnity_core::transform::IDENTITY;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -21,6 +22,91 @@ use super::super::pipeline::{serialize_and_create_root_sig, skinned_input_layout
 use super::super::slang_builtins;
 use super::super::texture::*;
 use crate::directx::slang_builtins::SlangCompile;
+
+// Skinned (skeletally animated) mesh rendering. All `None` / empty until
+// `upload_skinned` runs; with no `SkinnedMesh` in the world every skinned pass
+// is skipped. The skinned main pass reuses the instanced root signature (its
+// root SRV at t3 carries the per-object joint matrices); the shadow pass uses a
+// dedicated skinned shadow root signature.
+pub(in crate::directx) struct SkinnedState {
+    pub shadow_pso: Option<ID3D12PipelineState>,
+    pub shadow_root_sig: Option<ID3D12RootSignature>,
+    // Shared skinned vertex/index buffers. Kept alive for the GPU; referenced
+    // through `vertex_buffer_view` / `index_buffer_view`.
+    pub vertex_buffer: Option<PooledBuffer>,
+    pub index_buffer: Option<PooledBuffer>,
+    pub vertex_buffer_view: D3D12_VERTEX_BUFFER_VIEW,
+    pub index_buffer_view: D3D12_INDEX_BUFFER_VIEW,
+    // Per-slot draw objects, joint palettes, and morph weights: the CPU-side
+    // records this backend shares with Metal and Vulkan.
+    pub slots: skinned_slots::SkinnedSlots,
+    // Per-frame, per-object joint-matrix upload buffers, indexed
+    // [frame_idx][skinned_idx]. Each holds MAX_JOINTS float4x4 matrices,
+    // persistently mapped; rewritten each frame from `slots.joint_matrices`.
+    pub joint_buffers: Vec<Vec<PooledBuffer>>,
+    pub joint_ptrs: Vec<Vec<*mut u8>>,
+    // GPU-driven main-pass skinning. `skin_pipeline` is the `rt_skin` compute
+    // kernel reused to deform the bind-pose verts into a per-frame buffer for the
+    // bindless main pass (independent of RT, which keeps its own skin dispatch);
+    // built in `upload_skinned`. `deformed_buffers` is one UAV-writable buffer per
+    // frame-in-flight holding this frame's posed 56-byte `Vertex`s (global skinned
+    // indexing, so the draw uses `base_vertex = 0`); rests in
+    // VERTEX_AND_CONSTANT_BUFFER, flipped to UNORDERED_ACCESS for the skin
+    // dispatch each frame. `deformed_vbvs` is the parallel vertex-buffer view the
+    // main pass's 2nd `ExecuteIndirect` binds. All empty / `None` until
+    // `upload_skinned` runs.
+    pub skin_pipeline: Option<crate::directx::raytrace::SkinPipeline>,
+    pub deformed_buffers: Vec<ID3D12Resource>,
+    pub deformed_vbvs: Vec<D3D12_VERTEX_BUFFER_VIEW>,
+    // Morph targets, parallel to `slots.draw_objects`. `morph_delta_buffers[i]`
+    // is the per-mesh packed sparse morph buffer
+    // (`PayloadMorphs::packed_words`; instance copies share the
+    // template's resource) or `None` for a mesh without morph targets;
+    // `morph_target_counts[i]` is its target count (0 = none). The per-frame
+    // `morph_weight_buffers` ([frame_idx][skinned_idx], one f32 per target,
+    // persistently mapped) are filled from `slots.morph_weights` by
+    // `upload_morph_weights`, and are empty when no skinned object carries
+    // morphs.
+    pub morph_delta_buffers: Vec<Option<PooledBuffer>>,
+    pub morph_target_counts: Vec<u32>,
+    pub morph_weight_buffers: Vec<Vec<PooledBuffer>>,
+    pub morph_weight_ptrs: Vec<Vec<*mut u8>>,
+    // `false` until the deformed-vertex ring has been posed at least one full
+    // frame; `true` once a prior frame's `encode_skin` has filled the slot the
+    // next frame reads as its velocity history. While false the GPU-driven
+    // G-buffer velocity binds the current deformed buffer as the previous one
+    // (prev_pos == cur_pos), so an unposed ring slot never feeds a garbage
+    // skinned motion vector on the first frame (or after a runtime ring rebuild).
+    // Matches Metal's `deformed_primed` gate. Reset by `upload_skinned`. Atomic, not `Cell`: the G-buffer pass
+    // encodes on a `jobs::pool()` rayon worker thread (the parallel per-pass
+    // encoder shares `&self` across workers), so any interior mutation reachable
+    // from `encode_pass_into` must be atomic, like `draw_calls_accum`.
+    pub deformed_primed: std::sync::atomic::AtomicBool,
+}
+
+impl SkinnedState {
+    pub(in crate::directx) fn new() -> Self {
+        Self {
+            shadow_pso: None,
+            shadow_root_sig: None,
+            vertex_buffer: None,
+            index_buffer: None,
+            vertex_buffer_view: D3D12_VERTEX_BUFFER_VIEW::default(),
+            index_buffer_view: D3D12_INDEX_BUFFER_VIEW::default(),
+            slots: skinned_slots::SkinnedSlots::new(),
+            joint_buffers: Vec::new(),
+            joint_ptrs: Vec::new(),
+            skin_pipeline: None,
+            deformed_primed: std::sync::atomic::AtomicBool::new(false),
+            deformed_buffers: Vec::new(),
+            deformed_vbvs: Vec::new(),
+            morph_delta_buffers: Vec::new(),
+            morph_target_counts: Vec::new(),
+            morph_weight_buffers: Vec::new(),
+            morph_weight_ptrs: Vec::new(),
+        }
+    }
+}
 // Skinned shadow pipeline builders
 //
 // These mirror the shadow PSO builder in init/pipelines.rs but use the skinned

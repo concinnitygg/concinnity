@@ -22,12 +22,118 @@ use concinnity_core::render::model_history::HistoryMode;
 use concinnity_core::render::uniforms::directx::CullParams;
 use windows::Win32::Graphics::Direct3D12::*;
 
+use crate::directx::allocator::PooledBuffer;
 use crate::directx::com;
 use crate::directx::context::DxContext;
 use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::slang_builtins::{self, SlangCompile as _};
 use crate::directx::texture::transition_barrier;
+
+// GPU-driven cull + main pass. A compute kernel frustum/distance-tests every
+// record and writes one `ExecuteIndirect` command per object; the main pass
+// issues each bucket's region with one `ExecuteIndirect`. All `Some`/non-empty
+// only when the world has anything to drive.
+pub(in crate::directx) struct CullState {
+    // The main pass's root signature and bucket 0's PSO: the world default
+    // Shader's pair where the world declares one, the engine's pair otherwise.
+    pub main_bindless_root_sig: Option<ID3D12RootSignature>,
+    pub main_bindless_pso: Option<ID3D12PipelineState>,
+    // Material-referenced world shader pipelines, indexed by `shader_bucket - 1`
+    // (bucket 0 is `main_bindless_pso`). Each renders its bucket's slice of the
+    // GPU-culled command buffer through the bindless root signature. `None`
+    // marks a bucket whose Shader is not resident yet: its scene has not pinned,
+    // so the pass skips those draws (see `world_shaders.rs`).
+    pub world_pipelines: Vec<Option<ID3D12PipelineState>>,
+    // Commands reserved per shader-bucket region in the indirect buffers, fixed
+    // at init to the record capacity the buffers were sized for. Bucket `b`'s
+    // region starts at command `b * bucket_stride`.
+    pub bucket_stride: usize,
+    // The engine's compiled bindless main-pass stages, retained so a shader
+    // bucket warmed mid-session can build its pipeline without recompiling the
+    // HLSL. See [`super::init::pipelines::BindlessMainShaders`].
+    pub bindless_main_shaders: super::init::pipelines::BindlessMainShaders,
+    // Per-frame `StructuredBuffer<GpuObjectData>` upload buffers, one per
+    // frame-in-flight, persistently mapped. Rebuilt each frame.
+    pub object_buffer_resources: Vec<PooledBuffer>,
+    pub object_buffer_ptrs: Vec<*mut u8>,
+    // Flat-pool SRV region bases, one per frame in flight, bound to bindless
+    // root param [5] as the texture pool for the frame being recorded. The
+    // copies exist so a streamed texture swap rewrites the copy whose frame
+    // just fence-waited instead of draining the device (see
+    // `apply_streamed_texture_rewrites`).
+    pub bindless_pool_gpu: Vec<D3D12_GPU_DESCRIPTOR_HANDLE>,
+    // Cull compute pipeline; `cull_pso_phase2` is the two-pass-occlusion PSO
+    // (same root signature as `cull_pso`).
+    pub cull_root_sig: Option<ID3D12RootSignature>,
+    pub cull_pso: Option<ID3D12PipelineState>,
+    pub cull_pso_phase2: Option<ID3D12PipelineState>,
+    pub cull_command_signature: Option<ID3D12CommandSignature>,
+    // Per-frame `StructuredBuffer<GpuDrawArgs>` upload buffers (indexed-draw
+    // args + per-frame cull-decision bits the kernel reads).
+    pub draw_args_buffer_resources: Vec<PooledBuffer>,
+    pub draw_args_buffer_ptrs: Vec<*mut u8>,
+    // Per-frame indirect-command buffers the cull kernel writes (UAV) and the
+    // main pass consumes (`ExecuteIndirect`). Resting `INDIRECT_ARGUMENT`.
+    pub indirect_cmd_buffers: Vec<ID3D12Resource>,
+    // Per-frame per-object cull-status buffers (one u32 each): phase-1 writes,
+    // phase-2 reads. Resting `UNORDERED_ACCESS`.
+    pub cull_status_buffers: Vec<ID3D12Resource>,
+    // Per-frame second indirect-command buffers for two-pass occlusion.
+    pub indirect_cmd_buffers_2: Vec<ID3D12Resource>,
+    // GPU-driven shadow pass. A depth-only bindless pipeline whose VS
+    // reads `model` from `GpuObjectData[object_id]` (root SRV) and projects
+    // through `light_vps[cascade_idx]`; `shadow_bindless_cmd_sig` is the shared
+    // cull command signature rebuilt against its root sig. `shadow_indirect_buffers`
+    // is one buffer per frame-in-flight sized `NUM_SHADOW_CASCADES * cull_count()`
+    // commands -- cascade `c`'s region is `[c*cull_count, (c+1)*cull_count)`,
+    // written by binding the cull output UAV at a per-cascade GPU-address offset.
+    // `shadow_cull_status_buffers` is a per-frame scratch the shadow cull writes
+    // but never reads (kept separate from `cull_status_buffers`, which the
+    // phase-2 main cull consumes AFTER the shadow pass). All `Some`/non-empty
+    // only when the bindless cull path is active AND shadows are enabled.
+    pub shadow_bindless_root_sig: Option<ID3D12RootSignature>,
+    pub shadow_bindless_pso: Option<ID3D12PipelineState>,
+    pub shadow_bindless_cmd_sig: Option<ID3D12CommandSignature>,
+    // Frustum-only shadow cull kernel (`main_shadow`), shares the cull root sig.
+    pub cull_pso_shadow: Option<ID3D12PipelineState>,
+    pub shadow_indirect_buffers: Vec<ID3D12Resource>,
+    pub shadow_cull_status_buffers: Vec<ID3D12Resource>,
+    // GPU-driven G-buffer pre-pass. A 3-MRT bindless pipeline whose VS
+    // reads `model` + `roughness` from `GpuObjectData[object_id]` (root SRV) and
+    // the previous-frame model from the model-history ring below;
+    // `gbuffer_bindless_cmd_sig`
+    // is the shared cull command signature rebuilt against its root sig. The pass
+    // reuses the main pass's `indirect_cmd_buffers` (camera frustum, no extra cull
+    // dispatch). All `Some`/non-empty only when the bindless cull path is active
+    // AND the G-buffer is enabled.
+    pub gbuffer_bindless_root_sig: Option<ID3D12RootSignature>,
+    pub gbuffer_bindless_pso: Option<ID3D12PipelineState>,
+    pub gbuffer_bindless_cmd_sig: Option<ID3D12CommandSignature>,
+    // Per-frame model-history buffers (one column-major `float4x4` per cull
+    // record), device-local: only the snapshot kernel writes them and only the
+    // pre-pass reads them, so the host never touches their bytes. Frame `R`
+    // reads the slot frame `R - 1` filled.
+    pub prev_model_buffers: Vec<ID3D12Resource>,
+    // The snapshot kernel that fills them from the object buffer, and the
+    // rebuild's request that it fill every slot before one is read. An atomic
+    // rather than a borrow of the tracker: passes encode on worker threads.
+    pub model_history_root_sig: Option<ID3D12RootSignature>,
+    pub model_history_pso: Option<ID3D12PipelineState>,
+    pub model_history_prime: std::sync::atomic::AtomicBool,
+    // `PostProcessConfig.occlusion_two_pass`, as requested by the world.
+    pub occlusion_two_pass: bool,
+    // Hi-Z (depth-mip pyramid) used by the cull kernel for occlusion culling.
+    // Built each frame after `execute_graph`; consumed by the *next* frame's
+    // cull dispatch through `prev_view_proj`.
+    pub hiz: Option<super::hiz::HiZResources>,
+    // Snapshot of the previous frame's un-jittered view-projection matrix the
+    // next frame's cull kernel reprojects AABBs through.
+    pub prev_view_proj: std::cell::Cell<[[f32; 4]; 4]>,
+    // `false` on the first frame and after a resize; while false the cull
+    // kernel skips the Hi-Z test.
+    pub hiz_valid: std::cell::Cell<bool>,
+}
 
 // DWORD count of the cull kernel's `CullParams` cbuffer: `float4 planes[6]`
 // (24) + `float3 cam_pos` + `uint object_count` (4) + `float4x4

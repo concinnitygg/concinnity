@@ -18,19 +18,24 @@ use windows::Win32::Graphics::Direct3D12::*;
 
 use super::heap_layout::{DSV_GBUFFER_DEPTH_SLOT, RtvHeapLayout};
 use super::{Features, InitGpu, heaps};
+use crate::directx::auto_exposure::AutoExposureState;
 use crate::directx::context::{
-    AutoExposureState, DecalState, DxDescriptors, DxSceneAssets, DxTargets, FRAMES, FogState,
-    ParticleState, ShadowState, SsaoState, SwapchainState, UpscaleState, dump_on_err,
+    DxDescriptors, DxSceneAssets, DxTargets, FRAMES, SwapchainState, dump_on_err,
 };
+use crate::directx::decal::DecalState;
+use crate::directx::draw::shadow::ShadowState;
+use crate::directx::fog::FogState;
+use crate::directx::particle::ParticleState;
 use crate::directx::planar::PlanarReflectionSet;
 use crate::directx::post::descriptors::PostDescriptors;
 use crate::directx::post::gbuffer::{GbufferResources, GbufferSlots};
 use crate::directx::post::post_device::DxPostDevice;
 use crate::directx::post::reflection_composite::ReflectionCompositeSlots;
-use crate::directx::post::ssao::{SsaoDescriptorHandles, SsaoDeviceCtx, SsaoResources};
+use crate::directx::post::ssao::{SsaoDescriptorHandles, SsaoDeviceCtx, SsaoResources, SsaoState};
 use crate::directx::post::ssgi::SsgiResources;
 use crate::directx::post::ssr::SsrResources;
 use crate::directx::post::taa::TaaResources;
+use crate::directx::post::upscale::UpscaleState;
 use crate::directx::quality::QualitySlotHandles;
 use crate::directx::raymarch::RaymarchResources;
 use crate::directx::texture::{create_fallback_white_resource, write_texture_srv};

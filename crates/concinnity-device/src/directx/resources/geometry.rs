@@ -11,6 +11,19 @@ use super::super::context::*;
 use super::super::texture::{one_shot_submit, transition_barrier};
 use crate::directx::error::map_hresult;
 
+// Byte-range sub-allocators for the streamed-mesh regions of the shared
+// vertex/index buffers. Empty until mesh streaming is active; seeded at init by
+// one of two paths: the shrinkable-seed path hands them the single compacted
+// headroom block via `seed_mesh_streaming`, while the full-set path frees each
+// streamed draw's build-time region via `evict_mesh`. From then on `upload_mesh`
+// / `evict_mesh` allocate and free byte ranges so a streamed mesh lands wherever
+// there is room.
+#[derive(Default)]
+pub(in crate::directx) struct MeshStreamState {
+    pub vtx_alloc: crate::suballoc::range_alloc::RangeAllocator,
+    pub idx_alloc: crate::suballoc::range_alloc::RangeAllocator,
+}
+
 impl DxContext {
     // Copy `data` into a sub-region of a DEFAULT-heap geometry buffer.
     //

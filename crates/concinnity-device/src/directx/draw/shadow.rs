@@ -14,13 +14,55 @@
 //! covered. Spot slices keep the per-object caster encoders below: the indirect
 //! buffer is laid out per cascade and has no slots for them.
 
+use concinnity_core::components;
 use concinnity_core::gfx::lod;
-use concinnity_core::gfx::render_types::NUM_SHADOW_CASCADES;
+use concinnity_core::gfx::render_types::{NUM_SHADOW_CASCADES, ShadowUniforms};
+use concinnity_core::render::shadow_schedule;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::com;
 use crate::directx::context::DxContext;
+use crate::directx::texture::GpuResource;
+
+// Shadow map resources. `resource` / `dsvs` are `None` / empty when the shadow
+// pass is disabled (a 1x1 array fallback SRV is still bound at `srv_gpu`).
+// `dsvs` is one DSV per cascade slice. `light_dir` is the world-space unit
+// vector pointing toward the first directional light, captured at init from
+// `light_uniforms` and used by per-frame CSM updates.
+pub(in crate::directx) struct ShadowState {
+    pub resource: Option<GpuResource<ID3D12Resource>>,
+    pub dsvs: Vec<D3D12_CPU_DESCRIPTOR_HANDLE>,
+    pub map_size: u32,
+    pub srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub light_dir: [f32; 3],
+    // Cascade re-render policy from GraphicsConfig.shadow_update. Hybrid
+    // refreshes the near cascade every frame and the far cascades round-robin.
+    pub update: components::ShadowUpdate,
+    // Shadow distance in world units (GraphicsConfig.shadow_distance), read by the
+    // per-frame cascade-split computation and capped at the camera far plane.
+    pub distance: u32,
+    // Active shadow cascade count, 1..=4 (GraphicsConfig.shadow_cascades). The
+    // per-frame split + schedule read it; only the first `cascades` of the four
+    // slots are rendered + sampled. Stored at init (applies at the next launch).
+    pub cascades: u32,
+    // Round-robin clock + primed-set for the cascade schedule; advanced once per
+    // frame in record_frame.
+    pub scheduler: shadow_schedule::ShadowCascadeScheduler,
+    // Cascades re-rendered this frame (bit `i` = cascade `i`). Set in
+    // record_frame and read by encode_shadow_pass so the two agree on which
+    // slices to refresh and which to leave intact.
+    pub render_mask: u32,
+    // Carried CSM uniforms: skipped cascades keep the VP their slice was last
+    // rendered with, so the Main pass samples each slice consistently. Splits
+    // refresh every frame; per-cascade light VPs only when the mask includes
+    // that cascade. Uploaded to the per-frame shadow UBO each frame.
+    pub uniforms: ShadowUniforms,
+    // Depth-only cascade pipeline, `None` when shadows are disabled; the shadow
+    // passes key off `pso.is_some()`.
+    pub root_sig: Option<ID3D12RootSignature>,
+    pub pso: Option<ID3D12PipelineState>,
+}
 
 // Root constants for the spot caster draws (80 bytes = 20 DWORDs): model matrix
 // + cascade_idx + padding. cascade_idx selects which `ShadowUniforms.light_vps[i]`

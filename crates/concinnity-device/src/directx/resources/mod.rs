@@ -14,8 +14,8 @@
 //! Each file is a single `impl DxContext` block; nothing is re-exported here --
 //! callers reach the methods directly through `DxContext`.
 
-mod geometry;
+pub(in crate::directx) mod geometry;
 pub(in crate::directx) mod geometry_rebuild;
-mod skinning;
-mod streaming;
+pub(in crate::directx) mod skinning;
+pub(in crate::directx) mod streaming;
 mod textures;

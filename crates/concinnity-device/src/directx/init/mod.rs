@@ -26,7 +26,9 @@ use concinnity_core::render::error::{RenderError, RenderResult};
 
 use self::heap_layout::{RtvHeapLayout, SrvHeapParams};
 use super::context::*;
+use super::hot_reload::HotReloadState;
 use super::post::bloom::bloom_mip_count;
+use super::resources::skinning::SkinnedState;
 
 mod adapter;
 mod bloom;

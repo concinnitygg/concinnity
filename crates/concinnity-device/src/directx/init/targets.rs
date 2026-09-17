@@ -8,8 +8,9 @@ use windows::Win32::Graphics::Direct3D12::*;
 use super::heap_layout::{DSV_MAIN_DEPTH_SLOT, RtvHeapLayout};
 use super::{Features, InitGpu, heaps};
 use crate::directx::context::{
-    DepthState, DxDescriptors, DxTargets, Extents, HdrState, SwapchainState, UpscaleState,
+    DepthState, DxDescriptors, DxTargets, Extents, HdrState, SwapchainState,
 };
+use crate::directx::post::upscale::UpscaleState;
 use crate::directx::texture::{
     HDR_FORMAT, create_hdr_color_target, create_hdr_resolve_target, create_main_depth_texture,
     write_hdr_srv,

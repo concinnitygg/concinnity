@@ -22,6 +22,45 @@ use windows::Win32::Graphics::Direct3D12::ID3D12PipelineState;
 use super::context::DxContext;
 use super::init::pipelines::{BucketPipelineTargets, build_bucket_pipeline};
 
+// Shader hot-reload state. `enabled` is true only under `cn debug`: it routes
+// every built-in HLSL source resolve through `pipeline::shader_source`'s
+// disk-first path and gates the `directx/shaders/` filesystem watcher (false
+// under `cn run`, where the `include_str!`-baked HLSL is the only source).
+// `reload_pending` is the atomic flag set by the `notify` watcher or the debug
+// `reload-shaders` command, polled at the top of `draw_frame` to trigger a PSO
+// rebuild; `Some` only when `enabled`, and the debug server reads its `Arc`
+// clone via `GraphicsSystem`. `watcher` is the live `notify` handle held purely
+// for lifetime (dropping it stops the watcher); `Some` only when `enabled`.
+pub(in crate::directx) struct HotReloadState {
+    pub enabled: bool,
+    pub reload_pending: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    #[expect(
+        dead_code,
+        reason = "held so the watcher thread stays alive; dropping it stops the watcher"
+    )]
+    pub watcher: Option<crate::directx::hot_reload::WatcherHandle>,
+}
+
+impl HotReloadState {
+    // Watcher creation is best-effort: a missing source dir or a notify error
+    // logs a warning and disables only the watcher half -- the debug command
+    // still works on the same flag.
+    pub(super) fn spawn(enabled: bool) -> Self {
+        let (reload_pending, watcher) = if enabled {
+            let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let watcher = crate::directx::hot_reload::spawn(std::sync::Arc::clone(&flag));
+            (Some(flag), watcher)
+        } else {
+            (None, None)
+        };
+        Self {
+            enabled,
+            reload_pending,
+            watcher,
+        }
+    }
+}
+
 // Rebuild a feature's PSO(s) into a temporary only when the feature is live,
 // propagating any compile/create error out of the enclosing `reload_shaders`.
 // `$cond` is the liveness check (`self.x.is_some()`); `$build` is the build

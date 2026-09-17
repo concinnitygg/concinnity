@@ -13,6 +13,18 @@ use super::super::com;
 use super::super::context::*;
 use super::super::texture::*;
 
+// Byte-range sub-allocators for the headroom region appended to the shared
+// vertex/index buffers by `setup_chunk_streaming` for streamed `VoxelWorld`
+// chunks, disjoint from the build-time geometry and the mesh-streaming
+// allocators. `draw.objects` slots vacated by removed chunks are recycled
+// through the shared `DrawSlotAllocator` (`draw_slots`), so the draw list does
+// not grow without bound as the camera roams an infinite world.
+#[derive(Default)]
+pub(in crate::directx) struct ChunkStreamState {
+    pub vtx_alloc: crate::suballoc::range_alloc::RangeAllocator,
+    pub idx_alloc: crate::suballoc::range_alloc::RangeAllocator,
+}
+
 impl DxContext {
     // Grow the shared vertex/index buffers by a headroom region for streamed
     // `VoxelWorld` chunks and seed the chunk sub-allocators with it. The chunk

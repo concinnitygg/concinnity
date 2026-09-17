@@ -37,6 +37,27 @@ use crate::directx::texture::{
     HDR_FORMAT, create_uav_buffer, transition_barrier, write_texture_srv,
 };
 
+// GPU-compute particle system. `resources` (compute + render PSOs + per-frame
+// uniform rings + spawn-budget upload ring) is built lazily either at init (when
+// the world declared >= 1 emitter) or on the first runtime `add_emitter`; it
+// stays `None` when no emitter has ever existed. `records` and `emitter_state`
+// are parallel `Vec<Option<...>>`s walked in lockstep by the per-frame dispatch,
+// skipping `None` pairs; `free_slots` recycles vacated slots. `srv_base_slot` is
+// the SRV-heap slot where emitter `i`'s albedo SRV lives (written by
+// `add_emitter`). `last_elapsed` is the previous frame's `elapsed` (the diff is
+// the frame `dt`); `frame_index` is mixed into the compute kernel's per-thread
+// RNG seed. Both are interior-mutable because `record_frame` is `&self` and they
+// are only touched on the render thread.
+pub(in crate::directx) struct ParticleState {
+    pub resources: Option<ParticleResources>,
+    pub records: Vec<Option<ParticleEmitterRecord>>,
+    pub emitter_state: Vec<Option<ParticleEmitterGpuState>>,
+    pub free_slots: Vec<usize>,
+    pub srv_base_slot: usize,
+    pub last_elapsed: std::cell::Cell<f32>,
+    pub frame_index: std::cell::Cell<u32>,
+}
+
 // Cap on the number of simultaneously-live particle emitters. The SRV heap
 // reserves a fixed block of `MAX_EMITTERS` per-emitter albedo SRV slots at
 // init, so runtime `add_emitter` past this many returns an error. Matches

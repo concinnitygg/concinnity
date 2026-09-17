@@ -20,6 +20,22 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::directx::error::map_hresult;
 
+// Temporal upscaling (AMD FidelityFX FSR3 / DLSS / XeSS). `backend` is `Some`
+// only when the world's `PostProcessConfig.temporal_upscaling` is on AND the
+// backend DLL loaded + its context created successfully. The dispatch passes
+// `render_size == upscale_size == (extent.render_width, extent.render_height)`, so it runs as
+// a temporal-AA replacement rather than an actual upscaler. `requested` is the
+// backend the world asked for (FSR3 / DLSS / XeSS / auto), kept so a window
+// resize rebuilds the same one. `jitter` is the current frame's sub-pixel
+// projection offset (each axis roughly `[-0.5, 0.5]`); `prev_elapsed` is the
+// previous frame's elapsed time feeding FSR's `frameTimeDelta`.
+pub(in crate::directx) struct UpscaleState {
+    pub backend: Option<Box<dyn UpscaleBackend>>,
+    pub requested: UpscalerBackend,
+    pub jitter: std::cell::Cell<[f32; 2]>,
+    pub prev_elapsed: std::cell::Cell<f32>,
+}
+
 #[cfg(ngx_sdk_bundled)]
 mod dlss;
 mod fsr;

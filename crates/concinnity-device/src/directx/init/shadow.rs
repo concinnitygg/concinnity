@@ -13,9 +13,9 @@ use windows::Win32::Graphics::Direct3D12::*;
 use super::heap_layout::{DSV_SHADOW_BASE_SLOT, DSV_SPOT_SHADOW_BASE_SLOT};
 use super::pipelines::{create_shadow_pso, create_shadow_root_signature};
 use super::{InitGpu, heaps};
-use crate::directx::context::{
-    DxDescriptors, DxTargets, ShadowState, SpotShadowState, align256, dump_on_err,
-};
+use crate::directx::context::{DxDescriptors, DxTargets, align256, dump_on_err};
+use crate::directx::draw::shadow::ShadowState;
+use crate::directx::draw::spot_shadow::SpotShadowState;
 use crate::directx::draw::upload_static_records;
 use crate::directx::error::map_hresult;
 use crate::directx::slang_builtins::{self, SlangCompile};

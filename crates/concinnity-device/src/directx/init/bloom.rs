@@ -6,10 +6,10 @@ use windows::Win32::Graphics::Direct3D12::*;
 
 use super::InitGpu;
 use super::heap_layout::RtvHeapLayout;
-use crate::directx::context::{BloomState, DxDescriptors, DxTargets, SwapchainState, dump_on_err};
+use crate::directx::context::{DxDescriptors, DxTargets, SwapchainState, dump_on_err};
 use crate::directx::post::bloom::{
-    compile_bloom_shaders, create_bloom_mips, create_bloom_pso, create_bloom_root_signature,
-    write_color_rtv,
+    BloomState, compile_bloom_shaders, create_bloom_mips, create_bloom_pso,
+    create_bloom_root_signature, write_color_rtv,
 };
 use crate::directx::texture::{HDR_FORMAT, write_hdr_srv};
 

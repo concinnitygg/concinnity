@@ -21,6 +21,21 @@ use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::{HDR_FORMAT, transition_barrier};
 
+// Bloom mip chain + pipelines. `mips[0]` is half-res; each subsequent mip
+// halves again. The prefilter + downsample + upsample passes accumulate a soft
+// glow into `mips[0]`, which the composite samples. Skipped entirely when
+// `post_process.bloom_intensity` is 0.
+pub(in crate::directx) struct BloomState {
+    pub mips: Vec<ID3D12Resource>,
+    pub mip_rtvs: Vec<D3D12_CPU_DESCRIPTOR_HANDLE>,
+    pub mip_srv_gpus: Vec<D3D12_GPU_DESCRIPTOR_HANDLE>,
+    pub mip_extents: Vec<(u32, u32)>,
+    pub root_sig: ID3D12RootSignature,
+    pub pso_prefilter: ID3D12PipelineState,
+    pub pso_downsample: ID3D12PipelineState,
+    pub pso_upsample: ID3D12PipelineState,
+}
+
 // Shader compilation
 
 // Compiled bloom-chain shader bytecode. All three passes share the

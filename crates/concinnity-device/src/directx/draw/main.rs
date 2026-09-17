@@ -13,6 +13,22 @@ use crate::directx::context::DxContext;
 use crate::directx::graph_exec::{FrameGpuBuffers, MainPassExtent};
 use crate::directx::texture::{HDR_FORMAT, transition_barrier};
 
+// One LOD bucket of an instanced cluster for the current frame. Filled by
+// `build_instance_upload` once at the top of every frame; consumed by the spot
+// shadow pass, which pushes each transform as a root constant.
+#[derive(Clone, Debug)]
+pub(in crate::directx) struct InstanceBucketLayout {
+    // LOD slice's index-buffer offset (in u32 indices). Drives the
+    // `StartIndexLocation` arg of `DrawIndexedInstanced`.
+    pub index_offset: usize,
+    // LOD slice's index count.
+    pub index_count: usize,
+    // Bucket-ordered model matrices, sourced from `InstancedCluster::lod_buckets(cam_pos)`.
+    // Cached here so the spot shadow pass's per-instance iteration can read the
+    // same data without re-bucketing.
+    pub instances: Vec<[[f32; 4]; 4]>,
+}
+
 impl DxContext {
     // Bind the per-scene local-light side tables on whichever root signature is
     // current: the spot shadow projections + depth array, and the area-light
@@ -164,7 +180,7 @@ impl DxContext {
             let row = &mut layouts[cluster_idx];
             row.reserve(buckets.len());
             for bucket in buckets {
-                row.push(crate::directx::context::InstanceBucketLayout {
+                row.push(InstanceBucketLayout {
                     index_offset: bucket.index_offset,
                     index_count: bucket.index_count,
                     instances: bucket.instances,

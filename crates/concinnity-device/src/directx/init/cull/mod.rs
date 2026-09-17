@@ -8,7 +8,8 @@ use concinnity_core::render::error::RenderResult;
 use concinnity_core::transform::IDENTITY;
 
 use super::InitGpu;
-use crate::directx::context::{CullState, DxDescriptors, DxTargets, FRAMES};
+use crate::directx::context::{DxDescriptors, DxTargets, FRAMES};
+use crate::directx::cull::CullState;
 use crate::directx::probe_prefilter::ProbePrefilterPipelines;
 use bindless::BindlessPass;
 use compute::ComputeCull;

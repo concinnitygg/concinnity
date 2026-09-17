@@ -10,7 +10,7 @@
 //! the scene. Mirrors src/metal/decal.rs.
 
 use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::render::decal::DecalRecord;
+use concinnity_core::render::decal::{DecalRecord, DecalSet};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::transform::mat4_inverse;
 use windows::Win32::Foundation::RECT;
@@ -25,6 +25,16 @@ use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::{HDR_FORMAT, upload_buffer, write_texture_srv};
+
+// Projected decals. `state` (pipeline + unit-cube buffers + per-frame uniform
+// rings) is always built so runtime `add_decal` works from a world that started
+// empty; the encoder skips the pass when no slot is live or every live decal
+// culls. `set` is the shared slot table, indexing the per-decal albedo SRVs and
+// the per-frame params ring by decal id.
+pub(in crate::directx) struct DecalState {
+    pub state: Option<DecalResources>,
+    pub set: DecalSet,
+}
 
 // Compile the decal vertex + fragment shaders; the MSAA variant keeps the
 // fragment shader's depth SRV declaration in sync with the resource's
