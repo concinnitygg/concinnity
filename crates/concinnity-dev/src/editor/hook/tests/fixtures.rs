@@ -4,6 +4,7 @@
 //! asserts anything -- each companion brings in what it needs.
 
 use crate::editor::modal;
+use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::write_world_jsonl;
 use concinnity_core::components::Camera3D;
 use concinnity_core::components::FrameInput;
@@ -115,7 +116,9 @@ pub(in crate::editor::hook) fn seed_tree(h: &mut EditorHook, extra: Vec<TreeGrou
             .iter()
             .map(|e| asset_tree::TreeAsset {
                 name: entry_name(e).unwrap_or_default().to_string(),
-                asset_type: entry_type(e).unwrap_or_default().to_string(),
+                asset_type: entry_type(e)
+                    .and_then(RegisteredType::parse)
+                    .expect("a registered entry type"),
                 badge: asset_tree::Badge::Authored,
                 promote: None,
             })
@@ -128,17 +131,20 @@ pub(in crate::editor::hook) fn seed_tree(h: &mut EditorHook, extra: Vec<TreeGrou
 
 // One generated group, as a scene import's or injection pass's output would
 // appear: every asset promotable from the entry the expansion produced.
-pub(in crate::editor::hook) fn generated_group(label: &str, assets: &[(&str, &str)]) -> TreeGroup {
+pub(in crate::editor::hook) fn generated_group(
+    label: &str,
+    assets: &[(&str, RegisteredType)],
+) -> TreeGroup {
     TreeGroup {
         label: label.to_string(),
         assets: assets
             .iter()
             .map(|(name, ty)| asset_tree::TreeAsset {
                 name: name.to_string(),
-                asset_type: ty.to_string(),
+                asset_type: *ty,
                 badge: asset_tree::Badge::Imported,
                 promote: Some(serde_json::json!({
-                    "name": name, "type": ty, "args": {},
+                    "name": name, "type": ty.as_str(), "args": {},
                 })),
             })
             .collect(),

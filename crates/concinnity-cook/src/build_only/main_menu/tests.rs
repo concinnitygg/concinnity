@@ -168,7 +168,7 @@ fn invalid_args_name_the_menu() {
     })];
     let err = expand_main_menus(&mut assets).unwrap_err();
     assert!(err.contains("MainMenu 'm'"), "{err}");
-    assert!(err.contains("invalid args"), "{err}");
+    assert!(err.contains("invalid args: `button_width`"), "{err}");
 }
 
 // A non-centered menu is a column anchored at the menu's own x/y instead of

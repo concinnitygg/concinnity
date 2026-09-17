@@ -2,9 +2,11 @@
 //! lists, the filter over them, and what a cell click selects. Carrying a cell
 //! out into the world is `tests/drag/content_tests.rs`.
 
+use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_core::components::TextInput;
 use concinnity_core::ecs::World;
 
+use crate::editor::hook::edit::content::VISUAL_TYPES;
 use crate::editor::hook::tests::fixtures::{entry, hook};
 
 use crate::editor::panels::content_panel;
@@ -48,7 +50,7 @@ fn content_grid_lists_filters_and_selects_visual_assets() {
     }
     let (cells, total) = h.content_cells(&world);
     assert_eq!((cells.len(), total), (1, 1));
-    assert_eq!(cells[0].asset_type, "Material");
+    assert_eq!(cells[0].asset_type, RegisteredType::Material);
     h.content_type = 0;
 
     // The search field ranks name matches.
@@ -69,4 +71,18 @@ fn content_grid_lists_filters_and_selects_visual_assets() {
     assert_eq!(h.selection.active(), Some("brick_tex"));
     let (cells, _) = h.content_cells(&world);
     assert!(cells[0].selected, "the grid highlights the selection");
+}
+
+// The type chip cycles through "All" and then every visual type, each captioned
+// with its registered name.
+#[test]
+fn every_visual_type_captions_to_its_own_name() {
+    let mut h = hook(vec![]);
+    assert_eq!(h.content_type_caption(), "All");
+    for ty in VISUAL_TYPES {
+        h.cycle_content_type();
+        assert_eq!(h.content_type_caption(), ty.as_str());
+    }
+    h.cycle_content_type();
+    assert_eq!(h.content_type_caption(), "All");
 }

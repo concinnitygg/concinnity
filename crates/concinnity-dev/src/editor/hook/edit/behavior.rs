@@ -205,10 +205,10 @@ impl EditorHook {
     // Every entry's name and type, so the overview can tell an asset a behavior
     // reaches from a name the world never declares. Mapping the entry shape is
     // the hook's job; the map itself only ever sees names and types.
-    fn declared_assets(&self) -> Vec<(&str, &str)> {
+    fn declared_assets(&self) -> Vec<(&str, RegisteredType)> {
         self.entries
             .iter()
-            .filter_map(|e| Some((entry_name(e)?, entry_type(e)?)))
+            .filter_map(|e| Some((entry_name(e)?, RegisteredType::parse(entry_type(e)?)?)))
             .collect()
     }
 

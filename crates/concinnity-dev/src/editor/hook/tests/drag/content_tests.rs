@@ -3,11 +3,13 @@
 //! the struck face, the still press that places nothing, and the material drag
 //! that assigns to the prop under the cursor instead.
 
+use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_core::components::Transform;
 use concinnity_host::thread::asset_id;
 
 use crate::debug_hook::DebugHook;
 
+use crate::editor::hook::drag::content::{drag_has_effect, placement_args};
 use crate::editor::hook::tests::fixtures::{click_at, drag_input, hook, pick_world, set_input};
 use crate::editor::hook::{entry_name, entry_type};
 
@@ -212,7 +214,11 @@ fn material_drag_assigns_to_the_prop_under_the_cursor() {
         }),
     ]);
     h.content_open = true;
-    h.arm_content_drag("wood".to_string(), "Material".to_string(), [1000.0, 300.0]);
+    h.arm_content_drag(
+        "wood".to_string(),
+        RegisteredType::Material,
+        [1000.0, 300.0],
+    );
 
     set_input(&mut world, drag_input([640.0, 360.0], true));
     h.tick(&mut world);
@@ -226,4 +232,31 @@ fn material_drag_assigns_to_the_prop_under_the_cursor() {
     assert!(h.dirty);
     h.undo(&mut world);
     assert!(h.entries[1]["args"].get("material").is_none());
+}
+
+// Only the four placing types create an entry on release, each under its own
+// field; every other registered type browses (or, for Material, assigns).
+#[test]
+fn only_the_placing_types_produce_placement_args() {
+    for &ty in RegisteredType::all() {
+        let field = match ty {
+            RegisteredType::Mesh | RegisteredType::ProceduralMesh => Some("mesh"),
+            RegisteredType::Model => Some("model"),
+            RegisteredType::Prefab => Some("prefab"),
+            _ => None,
+        };
+        let expected = field.map(|f| serde_json::json!({ f: "rock", "position": [1.0, 2.0, 3.0] }));
+        assert_eq!(
+            placement_args(ty, "rock", [1.0, 2.0, 3.0]),
+            expected,
+            "{}",
+            ty.as_str()
+        );
+        assert_eq!(
+            drag_has_effect(ty),
+            field.is_some() || ty == RegisteredType::Material,
+            "{}",
+            ty.as_str()
+        );
+    }
 }

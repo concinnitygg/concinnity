@@ -1,6 +1,7 @@
 //! EditorHook: the add / edit form lifecycle -- open, refresh from the working
 //! args, capture the live controls, and validate / commit on confirm.
 
+use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_core::ecs::World;
 
 use super::{
@@ -177,8 +178,11 @@ impl EditorHook {
     // current value regardless, but could not offer its siblings).
     fn ref_targets(&self, ty: &str) -> Vec<String> {
         let mut names = names_of_type(&self.entries, ty);
+        let Some(target) = RegisteredType::parse(ty) else {
+            return names;
+        };
         for asset in self.tree_groups.iter().flat_map(|g| &g.assets) {
-            if asset.asset_type == ty && !names.iter().any(|n| n == &asset.name) {
+            if asset.asset_type == target && !names.iter().any(|n| n == &asset.name) {
                 names.push(asset.name.clone());
             }
         }

@@ -10,7 +10,7 @@
 
 use concinnity_core::settings::{SettingKey, SettingKind};
 
-use super::expand::{asset_name, registered_type};
+use super::expand::{asset_name, registered_type, schema_args};
 use super::row_setting::row_setting;
 use super::ui_spec::{font_sizes, label_value, sprite};
 use crate::authoring::registry::RegisteredType;
@@ -58,12 +58,7 @@ pub(crate) fn expand_sliders(assets: &mut Vec<serde_json::Value>) -> Result<(), 
         if name.is_empty() {
             return Err("Slider: missing `name`".to_string());
         }
-        let args = value
-            .get("args")
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!({}));
-        let slider: Slider = serde_json::from_value(args)
-            .map_err(|e| format!("Slider '{}': invalid args: {}", name, e))?;
+        let slider: Slider = schema_args(RegisteredType::Slider, &name, value.get("args"))?;
         let setting = row_setting("Slider", &name, &slider.setting, SettingKind::Slider)?;
 
         let default_px = slider.font_px;
@@ -262,7 +257,7 @@ mod tests {
         })];
         let err = expand_sliders(&mut assets).unwrap_err();
         assert!(err.contains("Slider 'sld'"), "{err}");
-        assert!(err.contains("invalid args"), "{err}");
+        assert!(err.contains("invalid args: `width`"), "{err}");
     }
 
     // A Slider naming only its setting takes every other field from the type

@@ -396,6 +396,32 @@ fn expands_from_file_and_replaces_the_import() {
     );
 }
 
+// A field of the wrong shape fails the build naming the import and the field,
+// before the source is read, where it used to fall back to a default.
+#[test]
+fn malformed_import_fields_name_the_import_and_the_field() {
+    for (args, field) in [
+        (serde_json::json!({"source": ["tale.md"]}), "`source`"),
+        (
+            serde_json::json!({"source": "tale.md", "title_screen": 1}),
+            "`title_screen`",
+        ),
+        (
+            serde_json::json!({"source": "tale.md", "text_speed": "fast"}),
+            "`text_speed`",
+        ),
+    ] {
+        let mut assets =
+            vec![serde_json::json!({"name": "tale", "type": "StoryImport", "args": args})];
+        let err = expand_stories(&mut assets).unwrap_err();
+        assert!(
+            err.starts_with("StoryImport 'tale': invalid args: "),
+            "{err}"
+        );
+        assert!(err.contains(field), "{err}");
+    }
+}
+
 #[test]
 fn generated_name_collision_is_an_error() {
     let dir = tempfile::tempdir().unwrap();

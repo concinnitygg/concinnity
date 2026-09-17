@@ -4,6 +4,7 @@
 //! back into the authored Prefab definition (apply-to-template), or both in
 //! bulk -- each as a single undo step.
 
+use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_core::ecs::World;
 
 use crate::editor::hook::{EditorHook, FormTemplate, entry_name, entry_type, short_status};
@@ -391,10 +392,11 @@ impl EditorHook {
         let ty = self
             .form
             .selected_type
-            .clone()
+            .as_deref()
             .ok_or("no form type".to_string())?;
+        let ty = RegisteredType::parse(ty).ok_or_else(|| format!("unknown type '{ty}'"))?;
         let root = covered.split('.').next().unwrap_or(covered);
-        let map = prefab_map::map_field(&ty, root)?;
+        let map = prefab_map::map_field(ty, root)?;
         let slot = prefab_map::resolve(&self.entries, &t.generated_by, &t.name)?;
         Ok((slot, map))
     }
@@ -444,5 +446,5 @@ impl EditorHook {
 }
 
 fn is_prefab(e: &serde_json::Value) -> bool {
-    entry_type(e).is_some_and(|t| t.to_lowercase().replace('_', "") == "prefab")
+    entry_type(e).and_then(RegisteredType::parse) == Some(RegisteredType::Prefab)
 }

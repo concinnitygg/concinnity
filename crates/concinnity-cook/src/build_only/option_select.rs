@@ -14,7 +14,7 @@
 
 use concinnity_core::settings::{SettingKey, SettingKind};
 
-use super::expand::{asset_name, registered_type};
+use super::expand::{asset_name, registered_type, schema_args};
 use super::row_setting::row_setting;
 use super::ui_spec::{font_sizes, label_value};
 use crate::authoring::registry::RegisteredType;
@@ -70,12 +70,8 @@ pub(crate) fn expand_option_selects(assets: &mut Vec<serde_json::Value>) -> Resu
         if name.is_empty() {
             return Err("OptionSelect: missing `name`".to_string());
         }
-        let args = value
-            .get("args")
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!({}));
-        let select: OptionSelect = serde_json::from_value(args)
-            .map_err(|e| format!("OptionSelect '{}': invalid args: {}", name, e))?;
+        let select: OptionSelect =
+            schema_args(RegisteredType::OptionSelect, &name, value.get("args"))?;
         let setting = row_setting("OptionSelect", &name, &select.setting, SettingKind::Cycle)?;
 
         let default_px = select.font_px;
@@ -391,7 +387,7 @@ mod tests {
         })];
         let err = expand_option_selects(&mut assets).unwrap_err();
         assert!(err.contains("OptionSelect 'opt'"), "{err}");
-        assert!(err.contains("invalid args"), "{err}");
+        assert!(err.contains("invalid args: `width`"), "{err}");
     }
 
     // A row naming only its setting takes every other field from the type

@@ -10,6 +10,8 @@
 // One Prefab with a single prop entry, one instance of it, and the patch line
 // `patch` pinning fields on that instance's generated asset.
 
+use concinnity_cook::authoring::registry::RegisteredType;
+
 use crate::editor::hook::FormTarget;
 use crate::editor::panels::asset_tree;
 use crate::editor::panels::asset_tree::TreeGroup;
@@ -618,7 +620,7 @@ fn an_unconditional_expansion_selects_but_does_not_edit() {
             label: asset_tree::UNATTRIBUTED.to_string(),
             assets: vec![asset_tree::TreeAsset {
                 name: "menu_tab_0".to_string(),
-                asset_type: "TextLabel".to_string(),
+                asset_type: RegisteredType::TextLabel,
                 badge: asset_tree::Badge::Imported,
                 promote: None,
             }],

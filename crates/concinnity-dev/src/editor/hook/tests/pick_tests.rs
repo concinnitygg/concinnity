@@ -3,6 +3,7 @@
 //! selection draws, and the rows the session's hide and lock flags make
 //! unpickable.
 
+use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_core::components::FrameInput;
 use concinnity_core::components::Sprite;
 use concinnity_core::ecs::World;
@@ -311,7 +312,7 @@ fn viewport_pick_reveals_the_tree_row() {
         assets: (0..30)
             .map(|i| asset_tree::TreeAsset {
                 name: format!("a{i:02}"),
-                asset_type: "Sprite".to_string(),
+                asset_type: RegisteredType::Sprite,
                 badge: asset_tree::Badge::Authored,
                 promote: None,
             })

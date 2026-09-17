@@ -22,6 +22,7 @@
 //!
 //! The result is an ordinary `Chart`, so the chart view draws it unchanged.
 
+use concinnity_cook::authoring::registry::RegisteredType;
 use serde_json::Value;
 
 use super::graph::{Card, CardKind, Chart, Wire};
@@ -76,11 +77,11 @@ enum Ref {
 
 impl Ref {
     // The type the world has to declare the name as, or `None` when any does.
-    fn asset_type(self) -> Option<&'static str> {
+    fn asset_type(self) -> Option<RegisteredType> {
         match self {
-            Ref::Volume => Some("TriggerVolume"),
-            Ref::Scene => Some("Scene"),
-            Ref::Screen => Some("Screen"),
+            Ref::Volume => Some(RegisteredType::TriggerVolume),
+            Ref::Scene => Some(RegisteredType::Scene),
+            Ref::Screen => Some(RegisteredType::Screen),
             Ref::Entity => None,
         }
     }
@@ -101,7 +102,7 @@ impl Ref {
 // asset a behavior reaches from a name nothing answers to. Built in passes,
 // because a wire can only be drawn once both ends have a card: every behavior,
 // then what fires each of them, then what their bodies do.
-pub(crate) fn map(behaviors: &[(String, Value)], world: &[(&str, &str)]) -> Chart {
+pub(crate) fn map(behaviors: &[(String, Value)], world: &[(&str, RegisteredType)]) -> Chart {
     let mut build = Build {
         world,
         shared: shared_entities(behaviors),
@@ -190,7 +191,7 @@ struct Build<'a> {
     assets: Vec<(String, usize)>,
     // Every entry's name and type, and the entities more than one behavior
     // reaches.
-    world: &'a [(&'a str, &'a str)],
+    world: &'a [(&'a str, RegisteredType)],
     shared: Vec<String>,
 }
 
@@ -318,7 +319,7 @@ impl Build<'_> {
             .map(|(_, ty)| *ty)
             .filter(|ty| want.asset_type().is_none_or(|wanted| wanted == *ty));
         let card = self.push(match declared {
-            Some(ty) => card(name, ty.to_string(), CardKind::Asset),
+            Some(ty) => card(name, ty.as_str().to_string(), CardKind::Asset),
             None => card(name, format!("missing {}", want.noun()), CardKind::Missing),
         });
         self.assets.push((name.to_string(), card));
@@ -332,7 +333,7 @@ impl Build<'_> {
         let declared = self
             .world
             .iter()
-            .find(|(_, ty)| *ty == "Story" || *ty == "StoryImport")
+            .find(|(_, ty)| matches!(ty, RegisteredType::Story | RegisteredType::StoryImport))
             .map(|(name, _)| *name);
         let name = declared.unwrap_or("story");
         if let Some(at) = self.find(&self.assets, name) {
@@ -764,7 +765,7 @@ mod tests {
                 ("arrive", json!({"on": {"enter": "door_zone"}, "do": []})),
                 ("leave", json!({"on": {"exit": "door_zone"}, "do": []})),
             ]),
-            &[("door_zone", "TriggerVolume")],
+            &[("door_zone", RegisteredType::TriggerVolume)],
         );
         assert_eq!(
             titles(&chart),
@@ -804,7 +805,10 @@ mod tests {
                     ]}),
                 ),
             ]),
-            &[("hub", "Scene"), ("pause", "Screen")],
+            &[
+                ("hub", RegisteredType::Scene),
+                ("pause", RegisteredType::Screen),
+            ],
         );
         assert_eq!(wire(&chart, "finish", "hub").label.as_deref(), Some(JUMPS));
         assert_eq!(wire(&chart, "quit", "hub").label.as_deref(), Some(JUMPS));
@@ -827,7 +831,7 @@ mod tests {
                 json!({"on": "tick", "do": [{"story": "continue"}]}),
             ),
         ]);
-        let chart = map(&driving, &[("tale", "StoryImport")]);
+        let chart = map(&driving, &[("tale", RegisteredType::StoryImport)]);
         assert_eq!(chart.cards[card(&chart, "tale")].detail, "story");
         assert_eq!(wire(&chart, "open", "tale").label.as_deref(), Some(PLAYS));
         assert_eq!(wire(&chart, "resume", "tale").label.as_deref(), Some(PLAYS));
@@ -845,7 +849,10 @@ mod tests {
                 "escape",
                 json!({"on": {"enter": "porch"}, "do": [{"scene": {"scene": "hubb"}}]}),
             )]),
-            &[("hub", "Scene"), ("porch", "Prop")],
+            &[
+                ("hub", RegisteredType::Scene),
+                ("porch", RegisteredType::Prop),
+            ],
         );
         for (name, detail) in [("hubb", "missing scene"), ("porch", "missing volume")] {
             let at = &chart.cards[card(&chart, name)];
@@ -864,7 +871,10 @@ mod tests {
             "shut",
             json!({"on": "start", "do": [{"hide": {"target": {"named": "door"}}}]}),
         );
-        let alone = map(&behaviors(std::slice::from_ref(&shut)), &[("door", "Prop")]);
+        let alone = map(
+            &behaviors(std::slice::from_ref(&shut)),
+            &[("door", RegisteredType::Prop)],
+        );
         assert!(!titles(&alone).contains(&"door"), "{:?}", titles(&alone));
 
         let both = map(
@@ -879,7 +889,7 @@ mod tests {
                     ]}),
                 ),
             ]),
-            &[("door", "Prop")],
+            &[("door", RegisteredType::Prop)],
         );
         assert_eq!(both.cards[card(&both, "door")].detail, "Prop");
         assert_eq!(wire(&both, "shut", "door").label.as_deref(), Some(HIDES));
@@ -900,7 +910,7 @@ mod tests {
                 "toggle",
                 json!({"on": {"interact": "lamp"}, "do": [{"hide": {"target": {"named": "lamp"}}}]}),
             )]),
-            &[("lamp", "Prop")],
+            &[("lamp", RegisteredType::Prop)],
         );
         assert_eq!(
             wire(&chart, "lamp", "toggle").label.as_deref(),

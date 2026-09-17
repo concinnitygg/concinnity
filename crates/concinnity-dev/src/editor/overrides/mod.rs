@@ -7,6 +7,7 @@
 
 pub(crate) mod prefab_map;
 
+use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::build_only::LoadedWorld;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
@@ -244,7 +245,7 @@ pub(crate) fn instance_count(entries: &[Value], def: &str) -> usize {
     loop {
         let mut grew = false;
         for e in entries {
-            if type_norm(e) != "prefab" {
+            if entry_type(e) != Some(RegisteredType::Prefab) {
                 continue;
             }
             let name = entry_name(e);
@@ -262,7 +263,7 @@ pub(crate) fn instance_count(entries: &[Value], def: &str) -> usize {
     }
     entries
         .iter()
-        .filter(|e| type_norm(e) == "prop")
+        .filter(|e| entry_type(e) == Some(RegisteredType::Prop))
         .filter(|e| {
             e.get("args")
                 .and_then(|a| a.get("prefab"))
@@ -288,12 +289,10 @@ fn prefab_refs(def: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn type_norm(v: &Value) -> String {
+fn entry_type(v: &Value) -> Option<RegisteredType> {
     v.get("type")
-        .and_then(|t| t.as_str())
-        .unwrap_or("")
-        .to_lowercase()
-        .replace('_', "")
+        .and_then(Value::as_str)
+        .and_then(RegisteredType::parse)
 }
 
 fn entry_name(v: &Value) -> String {

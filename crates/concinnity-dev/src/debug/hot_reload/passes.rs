@@ -3,6 +3,7 @@
 //! and apply changes through the backend. Each returns a small tally the drive
 //! logs.
 
+use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_core::components::ProceduralMesh;
 use concinnity_core::components::Story;
 use concinnity_core::components::VolumetricFog;
@@ -71,8 +72,7 @@ pub(super) fn reload_volumetric_fog(
     // `None`, which disables the pass.
     let mut resolved: Option<volumetric_fog::FogSettings> = None;
     for entry in &entries {
-        let asset_type = entry.get("type").and_then(|v| v.as_str()).unwrap_or("");
-        if asset_type != "VolumetricFog" {
+        if entry_type(entry) != Some(RegisteredType::VolumetricFog) {
             continue;
         }
         let args = entry
@@ -178,8 +178,7 @@ pub(super) fn reload_procedural_meshes(
         (ProceduralMesh, serde_json::Value),
     > = std::collections::HashMap::new();
     for entry in &entries {
-        let asset_type = entry.get("type").and_then(|v| v.as_str()).unwrap_or("");
-        if asset_type != "ProceduralMesh" {
+        if entry_type(entry) != Some(RegisteredType::ProceduralMesh) {
             continue;
         }
         let Some(name) = entry.get("name").and_then(|v| v.as_str()) else {
@@ -544,4 +543,11 @@ pub(super) fn reload_shader_stages(
         }
     }
     result
+}
+
+fn entry_type(entry: &serde_json::Value) -> Option<RegisteredType> {
+    entry
+        .get("type")
+        .and_then(|v| v.as_str())
+        .and_then(RegisteredType::parse)
 }

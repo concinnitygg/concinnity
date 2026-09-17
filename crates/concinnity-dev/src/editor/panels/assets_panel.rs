@@ -473,7 +473,10 @@ impl PanelView<'_> {
                 ..
             }) if n == name && matches!(badge, Badge::Authored | Badge::Overridden) => Some((
                 slot,
-                matches!(asset_type.as_str(), "SkinnedMesh" | "CharacterModel"),
+                matches!(
+                    asset_type,
+                    RegisteredType::SkinnedMesh | RegisteredType::CharacterModel
+                ),
             )),
             _ => None,
         })
@@ -682,7 +685,7 @@ fn layout_tree(world: &mut World, view: &PanelView, o: [f32; 2], s: [f32; 2]) {
             } => {
                 let asset = AssetRow {
                     name,
-                    asset_type,
+                    asset_type: asset_type.as_str(),
                     badge,
                     hovered,
                 };
@@ -1207,7 +1210,7 @@ mod tests {
             group,
             index,
             name: name.to_string(),
-            asset_type: "Material".to_string(),
+            asset_type: RegisteredType::Material,
             badge: Badge::Imported,
         }
     }
@@ -1666,7 +1669,7 @@ mod tests {
             group: 0,
             index: 2,
             name: "body".to_string(),
-            asset_type: "SkinnedMesh".to_string(),
+            asset_type: RegisteredType::SkinnedMesh,
             badge: Badge::Authored,
         });
         let o = test_origin();
@@ -1949,7 +1952,6 @@ mod tests {
     fn add_types_are_the_curated_blank_useful_addable_set() {
         let _guard = crate::test_support::lock();
         crate::test_support::isolate_state_dir();
-        use concinnity_cook::authoring::registry::RegisteredType;
         // Types that cook blank but are deliberately NOT offered, each for a reason
         // above. Keeping this explicit means the assertion below flags anything new.
         const EXCLUDED: &[&str] = &[

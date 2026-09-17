@@ -11,6 +11,7 @@
 //! single compiled binary, a bundle targets exactly the platform this `cn` was
 //! built for (host-only for now; see the --platform check).
 
+use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::WorldJsonlAsset;
 use concinnity_cook::build_only::prepare_world;
 use concinnity_cook::paths::StateTree;
@@ -533,15 +534,15 @@ fn read_app_meta(
     assets: &[WorldJsonlAsset],
 ) -> AppMeta {
     let display_name = resolve_display_name(cli_name, assets);
-    let identifier =
-        string_arg(assets, "appconfig", "id").unwrap_or_else(|| derive_identifier(&display_name));
+    let identifier = string_arg(assets, RegisteredType::AppConfig, "id")
+        .unwrap_or_else(|| derive_identifier(&display_name));
     let version = cli_version
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
-        .or_else(|| string_arg(assets, "appconfig", "version"))
+        .or_else(|| string_arg(assets, RegisteredType::AppConfig, "version"))
         .unwrap_or_else(|| "0.1.0".to_string());
-    let icon = string_arg(assets, "appconfig", "icon").map(PathBuf::from);
+    let icon = string_arg(assets, RegisteredType::AppConfig, "icon").map(PathBuf::from);
     AppMeta {
         display_name,
         identifier,
@@ -556,10 +557,10 @@ fn resolve_display_name(cli_name: Option<&str>, assets: &[WorldJsonlAsset]) -> S
     if let Some(n) = cli_name.map(str::trim).filter(|s| !s.is_empty()) {
         return n.to_string();
     }
-    if let Some(n) = string_arg(assets, "appconfig", "name") {
+    if let Some(n) = string_arg(assets, RegisteredType::AppConfig, "name") {
         return n;
     }
-    if let Some(n) = string_arg(assets, "mainmenu", "title") {
+    if let Some(n) = string_arg(assets, RegisteredType::MainMenu, "title") {
         return n;
     }
     "Concinnity".to_string()
@@ -590,21 +591,16 @@ fn derive_identifier(name: &str) -> String {
     }
 }
 
-// The first non-empty string value of `key` on the first asset whose normalized
-// type matches `type_norm`.
-fn string_arg(assets: &[WorldJsonlAsset], type_norm: &str, key: &str) -> Option<String> {
+// The first non-empty string value of `key` on the first asset of `asset_type`.
+fn string_arg(assets: &[WorldJsonlAsset], asset_type: RegisteredType, key: &str) -> Option<String> {
     assets
         .iter()
-        .find(|a| normalize_type(a.asset_type.as_str()) == type_norm)
+        .find(|a| a.asset_type == asset_type)
         .and_then(|a| a.args.get(key))
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
-}
-
-fn normalize_type(t: &str) -> String {
-    t.to_lowercase().replace('_', "")
 }
 
 // A filesystem-safe slug for the bundle folder, executable, and archive name.
@@ -933,7 +929,6 @@ fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_cook::authoring::registry::RegisteredType;
 
     fn asset(name: &str, asset_type: RegisteredType, args: serde_json::Value) -> WorldJsonlAsset {
         WorldJsonlAsset {

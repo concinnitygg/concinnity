@@ -11,6 +11,7 @@
 //! search filter. The panel draws the rows; the hook owns when to re-cook and
 //! the per-session hide / lock sets.
 
+use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::build_only::LoadedWorld;
 
 // The group holding the world.jsonl lines themselves.
@@ -38,7 +39,7 @@ pub(crate) enum Badge {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct TreeAsset {
     pub name: String,
-    pub asset_type: String,
+    pub asset_type: RegisteredType,
     pub badge: Badge,
     // The world.jsonl entry that editing this asset would append, promoting it
     // to an authored line that overrides what the build generates. `None` for a
@@ -78,7 +79,7 @@ pub(crate) fn groups_from(loaded: &LoadedWorld) -> Vec<TreeGroup> {
         };
         let entry = TreeAsset {
             name: asset.name.clone(),
-            asset_type: asset.asset_type.as_str().to_string(),
+            asset_type: asset.asset_type,
             badge,
             promote: prov.is_overridable().then(|| promote_entry(loaded, asset)),
         };
@@ -159,7 +160,7 @@ pub(crate) enum TreeRow {
         group: usize,
         index: usize,
         name: String,
-        asset_type: String,
+        asset_type: RegisteredType,
         // Colors the row's type caption, and marks an authored line: only one
         // of those has a world.jsonl entry the row menu can delete.
         badge: Badge,
@@ -180,7 +181,7 @@ pub(crate) fn rows(groups: &[TreeGroup], open: &[usize], filter: &str) -> Vec<Tr
             .assets
             .iter()
             .enumerate()
-            .filter(|(_, a)| filter_matches(filter, &a.name, &a.asset_type))
+            .filter(|(_, a)| filter_matches(filter, &a.name, a.asset_type.as_str()))
             .collect();
         if filtering && listed.is_empty() {
             continue;
@@ -200,7 +201,7 @@ pub(crate) fn rows(groups: &[TreeGroup], open: &[usize], filter: &str) -> Vec<Tr
                 group: gi,
                 index: ai,
                 name: a.name.clone(),
-                asset_type: a.asset_type.clone(),
+                asset_type: a.asset_type,
                 badge: a.badge,
             });
         }
@@ -211,7 +212,6 @@ pub(crate) fn rows(groups: &[TreeGroup], open: &[usize], filter: &str) -> Vec<Tr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_cook::authoring::registry::RegisteredType;
     use concinnity_cook::authoring::world::WorldJsonlAsset;
     use concinnity_cook::build_only::{GeneratedAsset, InjectedAsset, ShadowedAsset};
 

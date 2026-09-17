@@ -7,8 +7,9 @@
 
 use std::collections::HashSet;
 
-use super::expand::{asset_name, registered_type};
+use super::expand::{asset_name, registered_type, schema_args};
 use crate::authoring::registry::RegisteredType;
+use crate::authoring::registry::build_only::StoryImport;
 use crate::import::scene::sanitize_name;
 
 mod emit;
@@ -62,26 +63,14 @@ pub(crate) fn expand_stories(assets: &mut Vec<serde_json::Value>) -> Result<(), 
         }
 
         let import_name = asset_name(&value);
-        let args = value
-            .get("args")
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!({}));
-        let source = args
-            .get("source")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+        let StoryImport {
+            source,
+            title_screen,
+            text_speed,
+        } = schema_args(RegisteredType::StoryImport, &import_name, value.get("args"))?;
         if source.is_empty() {
             return Err(format!("StoryImport '{}': missing `source`", import_name));
         }
-        let title_screen = args
-            .get("title_screen")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
-        let text_speed = args
-            .get("text_speed")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(45.0) as f32;
 
         let content = std::fs::read_to_string(&source).map_err(|e| {
             format!(

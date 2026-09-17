@@ -8,8 +8,9 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use super::expand::{ExpandReport, asset_name, registered_type};
+use super::expand::{ExpandReport, asset_name, registered_type, schema_args};
 use crate::authoring::registry::RegisteredType;
+use crate::authoring::registry::build_only::SceneImport;
 use crate::import::scene::{ImportOptions, entries_from_scene, sanitize_name};
 
 // The kind an expansion's entries carry in the build segment, which is what
@@ -73,37 +74,20 @@ pub(crate) fn expand_scene_imports(
         }
 
         let import_name = asset_name(&value);
-        let args = value
-            .get("args")
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!({}));
-        let source = args
-            .get("source")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        if source.is_empty() {
+        let import: SceneImport =
+            schema_args(RegisteredType::SceneImport, &import_name, value.get("args"))?;
+        if import.source.is_empty() {
             return Err(format!("SceneImport '{}': missing `source`", import_name));
         }
 
-        let want_camera = args
-            .get("emit_camera")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
         let opts = ImportOptions {
             name_prefix: sanitize_name(&import_name),
-            texture_max_size: args
-                .get("texture_max_size")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(512) as u32,
-            emissive_map_strength: args
-                .get("emissive_map_strength")
-                .and_then(|v| v.as_f64())
-                .unwrap_or(3.0) as f32,
-            emit_camera: want_camera && !world_has_camera && !camera_emitted,
+            texture_max_size: import.texture_max_size,
+            emissive_map_strength: import.emissive_map_strength,
+            emit_camera: import.emit_camera && !world_has_camera && !camera_emitted,
         };
 
-        let entries = expand_one(&source, &opts, assets_dir)
+        let entries = expand_one(&import.source, &opts, assets_dir)
             .map_err(|e| format!("SceneImport '{}': {}", import_name, e))?;
 
         for entry in entries {
@@ -241,6 +225,37 @@ mod tests {
             err.contains("SceneImport 'scene': missing `source`"),
             "{err}"
         );
+    }
+
+    // A field of the wrong shape fails the build naming the import and the
+    // field, where it used to fall back to a default.
+    #[test]
+    fn malformed_fields_name_the_import_and_the_field() {
+        for (args, field) in [
+            (serde_json::json!({"source": 4}), "`source`"),
+            (
+                serde_json::json!({"source": "a.glb", "texture_max_size": -1}),
+                "`texture_max_size`",
+            ),
+            (
+                serde_json::json!({"source": "a.glb", "emit_camera": "no"}),
+                "`emit_camera`",
+            ),
+            (
+                serde_json::json!({"source": "a.glb", "emissive_map_strength": [3]}),
+                "`emissive_map_strength`",
+            ),
+        ] {
+            let mut assets =
+                vec![serde_json::json!({"name": "scene", "type": "SceneImport", "args": args})];
+            let mut report = ExpandReport::default();
+            let err = expand_scene_imports(&mut assets, &mut report, None).unwrap_err();
+            assert!(
+                err.starts_with("SceneImport 'scene': invalid args: "),
+                "{err}"
+            );
+            assert!(err.contains(field), "{err}");
+        }
     }
 
     #[test]

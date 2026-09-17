@@ -4,6 +4,7 @@
 //! query; cells bind baked thumbnails through `editor/thumbs.rs` and fall back
 //! to typed icon chips.
 
+use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_core::ecs::World;
 
 use crate::editor::filter;
@@ -13,14 +14,14 @@ use crate::editor::thumbs;
 use crate::editor::widget;
 
 // The asset types the grid shows, the type-chip cycle order. "All" leads.
-pub(super) const VISUAL_TYPES: [&str; 7] = [
-    "EnvironmentMap",
-    "Material",
-    "Mesh",
-    "Model",
-    "Prefab",
-    "ProceduralMesh",
-    "Texture",
+pub(in crate::editor::hook) const VISUAL_TYPES: [RegisteredType; 7] = [
+    RegisteredType::EnvironmentMap,
+    RegisteredType::Material,
+    RegisteredType::Mesh,
+    RegisteredType::Model,
+    RegisteredType::Prefab,
+    RegisteredType::ProceduralMesh,
+    RegisteredType::Texture,
 ];
 
 impl EditorHook {
@@ -28,7 +29,7 @@ impl EditorHook {
     pub(in crate::editor::hook) fn content_type_caption(&self) -> &'static str {
         match self.content_type {
             0 => "All",
-            i => VISUAL_TYPES[(i - 1).min(VISUAL_TYPES.len() - 1)],
+            i => VISUAL_TYPES[(i - 1).min(VISUAL_TYPES.len() - 1)].as_str(),
         }
     }
 
@@ -39,19 +40,19 @@ impl EditorHook {
 
     // Every visual asset under the current type filter and search query, best
     // match first: `(name, type)` pairs over the cooked tree.
-    pub(super) fn content_items(&self, world: &World) -> Vec<(String, String)> {
-        let mut items: Vec<(String, String)> = self
+    pub(super) fn content_items(&self, world: &World) -> Vec<(String, RegisteredType)> {
+        let mut items: Vec<(String, RegisteredType)> = self
             .tree_groups
             .iter()
             .flat_map(|g| g.assets.iter())
-            .filter(|a| VISUAL_TYPES.contains(&a.asset_type.as_str()))
+            .filter(|a| VISUAL_TYPES.contains(&a.asset_type))
             .filter(|a| match self.content_type {
                 0 => true,
                 i => a.asset_type == VISUAL_TYPES[i - 1],
             })
-            .map(|a| (a.name.clone(), a.asset_type.clone()))
+            .map(|a| (a.name.clone(), a.asset_type))
             .collect();
-        items.sort();
+        items.sort_by(|a, b| (&a.0, a.1.as_str()).cmp(&(&b.0, b.1.as_str())));
         items.dedup();
         let query = widget::field_text(world, content_panel::SEARCH_INPUT);
         if query.trim().is_empty() {
@@ -79,7 +80,7 @@ impl EditorHook {
                 thumb: thumbs.get(name),
                 selected: self.selection.contains(name),
                 name: name.clone(),
-                asset_type: ty.clone(),
+                asset_type: *ty,
             })
             .collect();
         (cells, items.len())
@@ -118,7 +119,7 @@ impl EditorHook {
                     } else {
                         self.selection.replace(name.clone());
                         // A plain press may also become a drag-out placement.
-                        self.arm_content_drag(name.clone(), ty.clone(), at);
+                        self.arm_content_drag(name.clone(), *ty, at);
                     }
                 }
             }

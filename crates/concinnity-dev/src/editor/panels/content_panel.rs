@@ -5,6 +5,7 @@
 //! chip cycles the kind filter. Pure geometry + draw here; the item assembly
 //! and click handling live in `hook/edit/content.rs`.
 
+use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
@@ -142,7 +143,7 @@ pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2], shown: usize) -> Option<Co
 // One grid cell to draw.
 pub(crate) struct CellView {
     pub name: String,
-    pub asset_type: String,
+    pub asset_type: RegisteredType,
     pub thumb: Option<Thumb>,
     pub selected: bool,
 }
@@ -245,8 +246,8 @@ fn place_cell(world: &mut World, slot: usize, cell: &CellView, o: [f32; 2], mous
             // The typed icon chip: the billboard glyph + hue for the type.
             widget::set_sprite_visible(world, cell_thumb(slot), false);
             if let Some(l) = widget::label_mut(world, cell_glyph(slot)) {
-                let tint = billboards::tint(&cell.asset_type);
-                l.content = billboards::glyph(&cell.asset_type);
+                let tint = billboards::tint(cell.asset_type.as_str());
+                l.content = billboards::glyph(cell.asset_type.as_str());
                 l.color = [tint[0], tint[1], tint[2]];
                 l.x = area[0] + area[2] * 0.5;
                 l.y = area[1] + (area[3] - widget::LINE_H) * 0.5;

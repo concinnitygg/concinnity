@@ -503,7 +503,7 @@ fn scroll_moves_each_regions_offset() {
     // A tree longer than the row window, so its scroll can advance.
     let mut h = hook(
         (0..20)
-            .map(|i| entry(&format!("log{i}"), "Logger"))
+            .map(|i| entry(&format!("log{i}"), "TextLabel"))
             .collect(),
     );
     seed_tree(&mut h, Vec::new());

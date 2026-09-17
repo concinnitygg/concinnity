@@ -1,6 +1,7 @@
 //! Tests for the confirmation dialog: the open / press / close flow, the
 //! screen-modal press and wheel lockout, and its place in the draw layers.
 
+use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_core::components::{FrameInput, Sprite, TextLabel};
 use concinnity_core::ecs::World;
 
@@ -124,7 +125,7 @@ fn an_open_dialog_swallows_the_wheel() {
         assets: (0..40)
             .map(|i| asset_tree::TreeAsset {
                 name: format!("a{i}"),
-                asset_type: "Prop".to_string(),
+                asset_type: RegisteredType::Prop,
                 badge: asset_tree::Badge::Authored,
                 promote: None,
             })

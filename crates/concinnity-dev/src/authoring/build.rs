@@ -1,5 +1,6 @@
 //! Shared in-memory build orchestration
 
+use concinnity_cook::authoring::registry::RegisteredType;
 pub(crate) use concinnity_cook::build_compiled;
 use concinnity_cook::build_only::LoadedWorld;
 use concinnity_core::ecs::{ComponentAsset, World};
@@ -31,12 +32,6 @@ pub(crate) fn prepare(content: &str) -> std::io::Result<LoadedWorld> {
     Ok(loaded)
 }
 
-// Normalized asset-type match (lowercase, underscores stripped), matching the
-// convention used across the cook world passes.
-fn type_is(asset: &concinnity_cook::authoring::world::WorldJsonlAsset, norm_type: &str) -> bool {
-    asset.asset_type.as_str().to_lowercase().replace('_', "") == norm_type
-}
-
 // The first declared ColorLut's authored `source` path (non-empty), or `None`.
 // Dev-only; feeds the hot-reload watcher.
 fn scan_color_lut_source(
@@ -44,7 +39,7 @@ fn scan_color_lut_source(
 ) -> Option<String> {
     assets
         .iter()
-        .find(|a| type_is(a, "colorlut"))
+        .find(|a| a.asset_type == RegisteredType::ColorLut)
         .and_then(|a| a.args.get("source").and_then(|v| v.as_str()))
         .filter(|s| !s.is_empty())
         .map(str::to_string)
@@ -56,7 +51,9 @@ fn scan_color_lut_source(
 fn scan_environment_map_source(
     assets: &[concinnity_cook::authoring::world::WorldJsonlAsset],
 ) -> Option<EnvironmentMapSourceInfo> {
-    let a = assets.iter().find(|a| type_is(a, "environmentmap"))?;
+    let a = assets
+        .iter()
+        .find(|a| a.asset_type == RegisteredType::EnvironmentMap)?;
     let generator = a
         .args
         .get("generator")

@@ -2,6 +2,7 @@
 //! entry that produced them, including the inverse of the instance-transform
 //! composition the expansion applies. Pure: the hook owns the entry mutations.
 
+use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_core::math::vec3::add;
 use serde_json::Value;
 
@@ -49,7 +50,7 @@ pub(crate) fn resolve(
 ) -> Result<TemplateSlot, String> {
     let instance = entries
         .iter()
-        .find(|e| entry_name(e) == generated_by && type_norm(e) == "prop")
+        .find(|e| entry_name(e) == generated_by && entry_type(e) == Some(RegisteredType::Prop))
         .ok_or_else(|| format!("no Prop instance named '{generated_by}'"))?;
     let args = instance.get("args").cloned().unwrap_or(Value::Null);
     let prefab_ref = args
@@ -88,7 +89,7 @@ fn walk(
 ) -> Result<(), String> {
     let def_index = entries
         .iter()
-        .position(|e| entry_name(e) == def_name && type_norm(e) == "prefab")
+        .position(|e| entry_name(e) == def_name && entry_type(e) == Some(RegisteredType::Prefab))
         .ok_or_else(|| {
             format!(
                 "prefab '{def_name}' is a disk preset; materialize it as an authored Prefab first"
@@ -144,21 +145,20 @@ const DIRECT_PROP_KEYS: [&str; 8] = [
 
 // How the instance arg rooted at `root` maps onto a prefab entry of the
 // generated asset's type. Errors name the reason apply is unavailable.
-pub(crate) fn map_field(asset_type: &str, root: &str) -> Result<FieldMap, String> {
+pub(crate) fn map_field(asset_type: RegisteredType, root: &str) -> Result<FieldMap, String> {
     let uncarried = || format!("'{root}' is not carried by the prefab entry");
-    let ty = asset_type.to_lowercase().replace('_', "");
-    match (ty.as_str(), root) {
-        ("prop" | "pointlight", "position") => Ok(FieldMap::Position),
-        ("prop", "rotation_deg") => Ok(FieldMap::Rotation),
-        ("prop", "scale") => Ok(FieldMap::Scale),
-        ("prop", _) => DIRECT_PROP_KEYS
+    match (asset_type, root) {
+        (RegisteredType::Prop | RegisteredType::PointLight, "position") => Ok(FieldMap::Position),
+        (RegisteredType::Prop, "rotation_deg") => Ok(FieldMap::Rotation),
+        (RegisteredType::Prop, "scale") => Ok(FieldMap::Scale),
+        (RegisteredType::Prop, _) => DIRECT_PROP_KEYS
             .into_iter()
             .find(|key| *key == root)
             .map(FieldMap::Direct)
             .ok_or_else(uncarried),
-        ("pointlight", "color") => Ok(FieldMap::Direct("light_color")),
-        ("pointlight", "intensity") => Ok(FieldMap::Direct("light_intensity")),
-        ("pointlight", "range") => Ok(FieldMap::Direct("light_range")),
+        (RegisteredType::PointLight, "color") => Ok(FieldMap::Direct("light_color")),
+        (RegisteredType::PointLight, "intensity") => Ok(FieldMap::Direct("light_intensity")),
+        (RegisteredType::PointLight, "range") => Ok(FieldMap::Direct("light_range")),
         _ => Err(uncarried()),
     }
 }
@@ -329,12 +329,10 @@ fn set_at_path(v: &mut Value, path: &str, value: Value) {
     }
 }
 
-fn type_norm(v: &Value) -> String {
+fn entry_type(v: &Value) -> Option<RegisteredType> {
     v.get("type")
-        .and_then(|t| t.as_str())
-        .unwrap_or("")
-        .to_lowercase()
-        .replace('_', "")
+        .and_then(Value::as_str)
+        .and_then(RegisteredType::parse)
 }
 
 fn entry_name(v: &Value) -> &str {
@@ -513,7 +511,7 @@ mod tests {
         write_field(
             &mut entry,
             &slot,
-            map_field("Prop", "collider").unwrap(),
+            map_field(RegisteredType::Prop, "collider").unwrap(),
             "collider.shape",
             &json!("sphere"),
         )
@@ -525,7 +523,7 @@ mod tests {
         write_field(
             &mut light,
             &slot,
-            map_field("PointLight", "intensity").unwrap(),
+            map_field(RegisteredType::PointLight, "intensity").unwrap(),
             "intensity",
             &json!(4.0),
         )
@@ -533,13 +531,45 @@ mod tests {
         assert_eq!(light["light_intensity"], json!(4.0));
 
         for key in DIRECT_PROP_KEYS {
-            assert_eq!(map_field("Prop", key), Ok(FieldMap::Direct(key)));
+            assert_eq!(
+                map_field(RegisteredType::Prop, key),
+                Ok(FieldMap::Direct(key))
+            );
         }
     }
 
     #[test]
     fn map_field_rejects_uncarried_args() {
-        assert!(map_field("Prop", "visible").is_err());
-        assert!(map_field("Sprite", "tint").is_err());
+        assert!(map_field(RegisteredType::Prop, "visible").is_err());
+        assert!(map_field(RegisteredType::PointLight, "rotation_deg").is_err());
+        assert!(map_field(RegisteredType::Sprite, "tint").is_err());
+    }
+
+    #[test]
+    fn map_field_maps_transforms_per_type() {
+        let prop = RegisteredType::Prop;
+        let light = RegisteredType::PointLight;
+        assert_eq!(map_field(prop, "position"), Ok(FieldMap::Position));
+        assert_eq!(map_field(prop, "rotation_deg"), Ok(FieldMap::Rotation));
+        assert_eq!(map_field(prop, "scale"), Ok(FieldMap::Scale));
+        assert_eq!(map_field(light, "position"), Ok(FieldMap::Position));
+        assert_eq!(
+            map_field(light, "color"),
+            Ok(FieldMap::Direct("light_color"))
+        );
+        assert_eq!(
+            map_field(light, "range"),
+            Ok(FieldMap::Direct("light_range"))
+        );
+    }
+
+    #[test]
+    fn map_field_carries_nothing_for_a_type_without_a_prefab_entry() {
+        for &ty in RegisteredType::all() {
+            if matches!(ty, RegisteredType::Prop | RegisteredType::PointLight) {
+                continue;
+            }
+            assert!(map_field(ty, "position").is_err(), "{}", ty.as_str());
+        }
     }
 }

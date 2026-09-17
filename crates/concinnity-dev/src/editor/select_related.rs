@@ -44,6 +44,7 @@ pub(crate) fn names_of_type(entries: &[serde_json::Value], ty: &str) -> Vec<Stri
 mod tests {
     use super::super::panels::asset_tree::{Badge, TreeAsset};
     use super::*;
+    use concinnity_cook::authoring::registry::RegisteredType;
 
     fn group(label: &str, names: &[&str]) -> TreeGroup {
         TreeGroup {
@@ -52,7 +53,7 @@ mod tests {
                 .iter()
                 .map(|n| TreeAsset {
                     name: n.to_string(),
-                    asset_type: "Prop".to_string(),
+                    asset_type: RegisteredType::Prop,
                     badge: Badge::Authored,
                     promote: None,
                 })

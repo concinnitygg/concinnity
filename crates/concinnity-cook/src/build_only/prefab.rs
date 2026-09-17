@@ -5,9 +5,10 @@
 
 use std::path::Path;
 
-use super::expand::{ExpandReport, asset_name, registered_type};
+use super::expand::{ExpandReport, asset_name, registered_type, schema_args};
 use super::preset::load_preset_obj;
 use crate::authoring::registry::RegisteredType;
+use crate::authoring::registry::build_only::{Prefab, PrefabEntry, PrefabKind};
 
 // The Prop instance a prefab is expanded under: the name its generated assets
 // are prefixed with, and the placement its entries are composed onto. Nested
@@ -26,7 +27,7 @@ pub(crate) fn expand_prefabs(
     assets_dir: Option<&Path>,
 ) -> Result<(), String> {
     // Collect all Prefab definitions.
-    let mut prefab_defs: std::collections::HashMap<String, serde_json::Value> =
+    let mut prefab_defs: std::collections::HashMap<String, Prefab> =
         std::collections::HashMap::new();
     let mut non_prefab: Vec<serde_json::Value> = Vec::new();
 
@@ -34,7 +35,8 @@ pub(crate) fn expand_prefabs(
         if registered_type(&value) == Some(RegisteredType::Prefab) {
             let name = asset_name(&value);
             if !name.is_empty() {
-                prefab_defs.insert(name, value);
+                let def = schema_args(RegisteredType::Prefab, &name, value.get("args"))?;
+                prefab_defs.insert(name, def);
             }
         } else {
             non_prefab.push(value);
@@ -72,17 +74,14 @@ pub(crate) fn expand_prefabs(
         let inst_rot = f32_arr3(&args, "rotation_deg", [0.0, 0.0, 0.0]);
         let inst_scale = f32_arr3(&args, "scale", [1.0, 1.0, 1.0]);
 
-        let prefab_def = if let Some(def) = prefab_defs.get(prefab_ref) {
-            def.clone()
-        } else {
-            let loaded = load_preset_obj(prefab_ref, "prefabs", assets_dir);
-            if loaded.is_null() {
+        let prefab_def = match lookup_prefab(prefab_ref, &prefab_defs, assets_dir)? {
+            Some(def) => def,
+            None => {
                 return Err(format!(
                     "Prop '{}': prefab '{}' not found, declare a Prefab asset with that name",
                     instance_name, prefab_ref
                 ));
             }
-            loaded
         };
 
         let mut call_stack: Vec<String> = vec![prefab_ref.to_string()];
@@ -165,34 +164,45 @@ fn resolve_generated(
     Ok(true)
 }
 
+// The Prefab named `name`: an authored definition, else a preset file. `None`
+// when neither exists; a preset whose args do not parse is an error.
+fn lookup_prefab(
+    name: &str,
+    prefab_defs: &std::collections::HashMap<String, Prefab>,
+    assets_dir: Option<&Path>,
+) -> Result<Option<Prefab>, String> {
+    if let Some(def) = prefab_defs.get(name) {
+        return Ok(Some(def.clone()));
+    }
+    let loaded = load_preset_obj(name, "prefabs", assets_dir);
+    if loaded.is_null() {
+        return Ok(None);
+    }
+    schema_args(RegisteredType::Prefab, name, loaded.get("args"))
+        .map(Some)
+        .map_err(|e| format!("{e} (in preset '{name}')"))
+}
+
 fn expand_prefab_entries(
     instance: &Instance<'_>,
-    prefab_def: &serde_json::Value,
-    prefab_defs: &std::collections::HashMap<String, serde_json::Value>,
+    prefab_def: &Prefab,
+    prefab_defs: &std::collections::HashMap<String, Prefab>,
     call_stack: &mut Vec<String>,
     assets_dir: Option<&Path>,
 ) -> Result<Vec<serde_json::Value>, String> {
     let (inst_pos, inst_rot, inst_scale) =
         (instance.position, instance.rotation_deg, instance.scale);
-    let entries = prefab_def
-        .get("args")
-        .and_then(|a| a.get("props"))
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-
     let mut result: Vec<serde_json::Value> = Vec::new();
 
-    for entry in &entries {
-        let kind = entry.get("kind").and_then(|v| v.as_str()).unwrap_or("prop");
-        let entry_name = entry.get("name").and_then(|v| v.as_str()).unwrap_or("obj");
+    for entry in &prefab_def.props {
+        let entry_name = if entry.name.is_empty() {
+            "obj"
+        } else {
+            entry.name.as_str()
+        };
         let expanded_name = format!("{}_{}", instance.name, entry_name);
 
-        let local_pos = f32_arr3(entry, "position", [0.0, 0.0, 0.0]);
-        let local_rot = f32_arr3(entry, "rotation_deg", [0.0, 0.0, 0.0]);
-        let local_scale = f32_arr3(entry, "scale", [1.0, 1.0, 1.0]);
-
-        let rotated = rotate_local(local_pos, inst_rot);
+        let rotated = rotate_local(entry.position, inst_rot);
         let world_pos = [
             inst_pos[0] + inst_scale[0] * rotated[0],
             inst_pos[1] + inst_scale[1] * rotated[1],
@@ -200,66 +210,48 @@ fn expand_prefab_entries(
         ];
         // Component-wise rotation composition (accurate for common yaw-only case).
         let world_rot = [
-            inst_rot[0] + local_rot[0],
-            inst_rot[1] + local_rot[1],
-            inst_rot[2] + local_rot[2],
+            inst_rot[0] + entry.rotation_deg[0],
+            inst_rot[1] + entry.rotation_deg[1],
+            inst_rot[2] + entry.rotation_deg[2],
         ];
         let world_scale = [
-            inst_scale[0] * local_scale[0],
-            inst_scale[1] * local_scale[1],
-            inst_scale[2] * local_scale[2],
+            inst_scale[0] * entry.scale[0],
+            inst_scale[1] * entry.scale[1],
+            inst_scale[2] * entry.scale[2],
         ];
 
-        match kind {
-            "point_light" => {
-                let color = entry
-                    .get("light_color")
-                    .cloned()
-                    .unwrap_or(serde_json::json!([1.0, 1.0, 1.0]));
-                let intensity = entry
-                    .get("light_intensity")
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(8.0);
-                let range = entry
-                    .get("light_range")
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(6.0);
+        match entry.kind {
+            PrefabKind::PointLight => {
                 result.push(serde_json::json!({
                     "name": expanded_name,
                     "type": "PointLight",
                     "args": {
-                        "position": [world_pos[0], world_pos[1], world_pos[2]],
-                        "color": color,
-                        "intensity": intensity,
-                        "range": range
+                        "position": world_pos,
+                        "color": entry.light_color,
+                        "intensity": entry.light_intensity,
+                        "range": entry.light_range
                     }
                 }));
             }
-            "prefab" => {
-                let nested_ref = entry.get("prefab").and_then(|v| v.as_str()).unwrap_or("");
+            PrefabKind::Prefab => {
+                let nested_ref = entry.prefab.as_str();
                 if nested_ref.is_empty() {
                     return Err(format!(
                         "Prefab entry '{}': kind=prefab but 'prefab' field is empty",
                         expanded_name
                     ));
                 }
-                if call_stack.contains(&nested_ref.to_string()) {
+                if call_stack.iter().any(|c| c == nested_ref) {
                     return Err(format!(
                         "Prefab '{}': cycle detected (via '{}')",
                         call_stack[0], nested_ref
                     ));
                 }
-                let nested_def = if let Some(def) = prefab_defs.get(nested_ref) {
-                    def.clone()
-                } else {
-                    let loaded = load_preset_obj(nested_ref, "prefabs", assets_dir);
-                    if loaded.is_null() {
-                        return Err(format!(
-                            "Prefab entry '{}': nested prefab '{}' not found",
-                            expanded_name, nested_ref
-                        ));
-                    }
-                    loaded
+                let Some(nested_def) = lookup_prefab(nested_ref, prefab_defs, assets_dir)? else {
+                    return Err(format!(
+                        "Prefab entry '{}': nested prefab '{}' not found",
+                        expanded_name, nested_ref
+                    ));
                 };
                 call_stack.push(nested_ref.to_string());
                 let nested = expand_prefab_entries(
@@ -277,40 +269,55 @@ fn expand_prefab_entries(
                 call_stack.pop();
                 result.extend(nested);
             }
-            _ => {
-                // "prop"
-                let collider = entry.get("collider").cloned();
-                let mut prop_args = serde_json::json!({
-                    "position":    [world_pos[0], world_pos[1], world_pos[2]],
-                    "rotation_deg":[world_rot[0], world_rot[1], world_rot[2]],
-                    "scale":       [world_scale[0], world_scale[1], world_scale[2]]
-                });
-                for field in &[
-                    "model",
-                    "mesh",
-                    "material",
-                    "texture",
-                    "parent",
-                    "interactable",
-                    "pickup",
-                ] {
-                    if let Some(v) = entry.get(*field) {
-                        prop_args[field] = v.clone();
-                    }
-                }
-                if let Some(c) = collider {
-                    prop_args["collider"] = c;
-                }
+            PrefabKind::Prop => {
                 result.push(serde_json::json!({
                     "name": expanded_name,
                     "type": "Prop",
-                    "args": prop_args
+                    "args": prop_args(entry, world_pos, world_rot, world_scale)
                 }));
             }
         }
     }
 
     Ok(result)
+}
+
+// A prop entry's Prop args at its composed transform, carrying only the
+// fields the entry sets.
+fn prop_args(
+    entry: &PrefabEntry,
+    position: [f32; 3],
+    rotation_deg: [f32; 3],
+    scale: [f32; 3],
+) -> serde_json::Value {
+    let mut args = serde_json::json!({
+        "position": position,
+        "rotation_deg": rotation_deg,
+        "scale": scale
+    });
+    for (field, value) in [
+        ("model", &entry.model),
+        ("mesh", &entry.mesh),
+        ("material", &entry.material),
+        ("texture", &entry.texture),
+        ("parent", &entry.parent),
+    ] {
+        if !value.is_empty() {
+            args[field] = value.as_str().into();
+        }
+    }
+    for (field, value) in [
+        ("interactable", entry.interactable),
+        ("pickup", entry.pickup),
+    ] {
+        if value {
+            args[field] = true.into();
+        }
+    }
+    if let Some(collider) = &entry.collider {
+        args["collider"] = serde_json::to_value(collider).unwrap_or_default();
+    }
+    args
 }
 
 // Rotate a 3-D local-space offset by a YXZ Euler rotation (degrees).
@@ -506,7 +513,7 @@ mod tests {
             serde_json::json!({"name":"crate_set","type":"Prefab","args":{"props":[
                 {"name":"a","kind":"prop","model":"m","material":"mat","texture":"t",
                  "parent":"p","interactable":true,"pickup":true,
-                 "collider":{"shape":"box"}},
+                 "collider":{"shape":"cuboid","radius":0.25}},
                 {"name":"b","kind":"prop","mesh":"box"}
             ]}}),
             serde_json::json!({"name":"inst","type":"Prop","args":{"prefab":"crate_set"}}),
@@ -519,7 +526,9 @@ mod tests {
         assert_eq!(a["parent"], "p");
         assert_eq!(a["interactable"], true);
         assert_eq!(a["pickup"], true);
-        assert_eq!(a["collider"], serde_json::json!({"shape":"box"}));
+        let collider: concinnity_core::components::PropCollider =
+            serde_json::from_value(a["collider"].clone()).unwrap();
+        assert_eq!(collider.radius, 0.25);
         // A entry without a collider does not grow an empty one.
         assert!(assets[1]["args"].get("collider").is_none());
     }
@@ -646,7 +655,10 @@ mod tests {
             .find(|v| asset_name(v) == "inst_lamp")
             .unwrap();
         assert_eq!(lamp["args"]["intensity"], 2.0);
-        assert_eq!(lamp["args"]["color"], serde_json::json!([1.0, 0.9, 0.7]));
+        assert_eq!(
+            lamp["args"]["color"],
+            serde_json::json!([1.0f32, 0.9f32, 0.7f32])
+        );
         assert_eq!(lamp["args"]["range"], 5.0);
     }
 
@@ -664,5 +676,67 @@ mod tests {
         assert!(result[0].abs() < 1e-5);
         assert!(result[1].abs() < 1e-5);
         assert!((result[2] - (-1.0)).abs() < 1e-5);
+    }
+
+    // An entry with no kind is a prop, and a point light without light fields
+    // takes the point-light defaults.
+    #[test]
+    fn entries_default_their_kind_and_light_fields() {
+        let mut assets = vec![
+            serde_json::json!({"name":"set","type":"Prefab","args":{"props":[
+                {"name":"a","mesh":"box"},
+                {"name":"lamp","kind":"point_light"}
+            ]}}),
+            serde_json::json!({"name":"i","type":"Prop","args":{"prefab":"set"}}),
+        ];
+        expand(&mut assets).unwrap();
+        assert_eq!(assets[0]["type"], "Prop");
+        assert_eq!(assets[0]["args"]["mesh"], "box");
+        assert_eq!(assets[1]["type"], "PointLight");
+        let light = &assets[1]["args"];
+        assert_eq!(light["color"], serde_json::json!([1.0, 1.0, 1.0]));
+        assert_eq!(
+            (light["intensity"].as_f64(), light["range"].as_f64()),
+            (Some(8.0), Some(6.0))
+        );
+        assert_eq!(light["position"], serde_json::json!([0.0, 0.0, 0.0]));
+    }
+
+    // A prefab no instance references is consumed without expanding anything.
+    #[test]
+    fn an_unreferenced_prefab_expands_to_nothing() {
+        let mut assets = vec![
+            serde_json::json!({"name":"set","type":"Prefab","args":{"props":[
+                {"name":"a","mesh":"box"}
+            ]}}),
+        ];
+        expand(&mut assets).unwrap();
+        assert!(assets.is_empty());
+    }
+
+    // An entry field of the wrong shape, or an unknown kind, fails the build
+    // naming the prefab and the field, where it used to fall back silently.
+    #[test]
+    fn malformed_entries_name_the_prefab_and_the_field() {
+        for (props, field) in [
+            (serde_json::json!({"kind": "lamp"}), "`props[0].kind`"),
+            (
+                serde_json::json!({"position": [1.0, 2.0]}),
+                "`props[0].position`",
+            ),
+            (serde_json::json!({"mesh": 7}), "`props[0].mesh`"),
+            (
+                serde_json::json!({"kind": "point_light", "light_intensity": "bright"}),
+                "`props[0].light_intensity`",
+            ),
+        ] {
+            let mut assets = vec![
+                serde_json::json!({"name":"set","type":"Prefab","args":{"props":[props]}}),
+                serde_json::json!({"name":"i","type":"Prop","args":{"prefab":"set"}}),
+            ];
+            let err = expand(&mut assets).unwrap_err();
+            assert!(err.starts_with("Prefab 'set': invalid args: "), "{err}");
+            assert!(err.contains(field), "{err}");
+        }
     }
 }

@@ -5,6 +5,7 @@
 //! disarmed so the morph targets survive into the payload; the export-time bake
 //! then folds the same shape into the vertices on request.
 
+use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::WorldJsonlAsset;
 use concinnity_core::components::CharacterShape;
 use concinnity_core::ecs::ResourceKind;
@@ -24,7 +25,7 @@ pub(crate) fn export_world_mesh(content: &str, mesh: &str, bake: bool) -> Result
         .iter()
         .find(|a| a.name == mesh)
         .ok_or_else(|| format!("no asset named '{mesh}' in the world"))?;
-    if entry.asset_type.as_str() != "SkinnedMesh" {
+    if entry.asset_type != RegisteredType::SkinnedMesh {
         return Err(format!(
             "'{mesh}' is a {}, not a skinned mesh",
             entry.asset_type.as_str()
@@ -35,7 +36,7 @@ pub(crate) fn export_world_mesh(content: &str, mesh: &str, bake: bool) -> Result
         return Err(format!("no CharacterShape targets '{mesh}' to bake"));
     }
     for a in assets.iter_mut() {
-        if a.asset_type.as_str() == "CharacterShape"
+        if a.asset_type == RegisteredType::CharacterShape
             && a.args.get("target").and_then(|t| t.as_str()) == Some(mesh)
             && let Some(obj) = a.args.as_object_mut()
         {
@@ -66,7 +67,7 @@ fn shape_targeting(assets: &[WorldJsonlAsset], mesh: &str) -> Option<CharacterSh
     assets
         .iter()
         .find(|a| {
-            a.asset_type.as_str() == "CharacterShape"
+            a.asset_type == RegisteredType::CharacterShape
                 && a.args.get("target").and_then(|t| t.as_str()) == Some(mesh)
         })
         .map(|a| CharacterShape {

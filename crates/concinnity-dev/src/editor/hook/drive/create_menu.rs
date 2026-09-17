@@ -5,6 +5,7 @@
 //! entries + mark_changed path (one undo step) and selects it; any other press,
 //! Escape, or a history jump dismisses it.
 
+use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_core::components::FrameInput;
 use concinnity_core::ecs::World;
 
@@ -131,9 +132,11 @@ impl EditorHook {
 
     // Create a Prop instancing `prefab` at `pos` (the drag-out mapping).
     fn create_prefab_at(&mut self, prefab: &str, pos: [f32; 3]) {
-        let Some(args) =
-            drag::content::placement_args("Prefab", prefab, pos.map(drag::gizmo::round3))
-        else {
+        let Some(args) = drag::content::placement_args(
+            RegisteredType::Prefab,
+            prefab,
+            pos.map(drag::gizmo::round3),
+        ) else {
             return;
         };
         let name = self.unique_from(prefab);

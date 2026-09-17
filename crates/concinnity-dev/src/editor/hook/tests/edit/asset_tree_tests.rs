@@ -3,6 +3,7 @@
 //! what restales it, folding a group, and the select-and-edit a row click
 //! performs.
 
+use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_core::ecs::World;
 
 use crate::editor::hook::tests::fixtures::{
@@ -24,7 +25,10 @@ fn tree_rows_group_by_origin_and_narrow_by_search() {
     h.panel_open = true;
     seed_tree(
         &mut h,
-        vec![generated_group("fox", &[("fox_mat", "Material")])],
+        vec![generated_group(
+            "fox",
+            &[("fox_mat", RegisteredType::Material)],
+        )],
     );
 
     let names = |h: &EditorHook, w: &World| -> Vec<String> {

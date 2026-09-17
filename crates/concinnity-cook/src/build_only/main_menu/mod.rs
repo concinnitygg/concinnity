@@ -20,7 +20,7 @@ use screen::{MenuMetrics, emit_menu_screen};
 use settings_tab::emit_settings_tab;
 use std::collections::HashSet;
 
-use super::expand::{asset_name, registered_type};
+use super::expand::{asset_name, registered_type, schema_args};
 use super::ui_spec::font_sizes;
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::registry::build_only::MainMenu;
@@ -88,12 +88,7 @@ pub(crate) fn expand_main_menus(assets: &mut Vec<serde_json::Value>) -> Result<(
         if menu_name.is_empty() {
             return Err("MainMenu: missing `name`".to_string());
         }
-        let args = value
-            .get("args")
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!({}));
-        let menu: MainMenu = serde_json::from_value(args)
-            .map_err(|e| format!("MainMenu '{}': invalid args: {}", menu_name, e))?;
+        let menu: MainMenu = schema_args(RegisteredType::MainMenu, &menu_name, value.get("args"))?;
 
         let font_px = if menu.font.is_empty() {
             menu.font_px

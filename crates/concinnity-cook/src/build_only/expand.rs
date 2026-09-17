@@ -39,6 +39,29 @@ pub(crate) fn asset_name_str(v: &serde_json::Value) -> &str {
     v.get("name").and_then(|n| n.as_str()).unwrap_or("")
 }
 
+// Deserialize the `args` of the `ty` asset `name` into its schema struct, a
+// missing or null `args` reading as `{}`. A failure names the asset and the
+// path to the offending field.
+pub(crate) fn schema_args<T: serde::de::DeserializeOwned>(
+    ty: RegisteredType,
+    name: &str,
+    args: Option<&serde_json::Value>,
+) -> Result<T, String> {
+    let args = match args {
+        None | Some(serde_json::Value::Null) => serde_json::json!({}),
+        Some(a) => a.clone(),
+    };
+    serde_path_to_error::deserialize(args).map_err(|e| {
+        format!(
+            "{} '{}': invalid args: `{}`: {}",
+            ty.as_str(),
+            name,
+            e.path(),
+            e.inner()
+        )
+    })
+}
+
 /// One asset added to the world by an injection pass rather than authored or
 /// macro-expanded. Recorded in world-lock.json so the user can see every
 /// default and copy its entry into world.jsonl as an override.
@@ -167,12 +190,12 @@ pub(crate) fn expand_world(
     // that need no further expansion but must exist before companion
     // injection so their TextLabels pull in GraphicsConfig + Font companions.
     expand_stories(assets)?;
-    expand_camera_shots(assets, assets_dir);
+    expand_camera_shots(assets, assets_dir)?;
     // Character models become the skinned meshes they emit, under their own
     // names, so every later pass (companions, references) sees a SkinnedMesh.
     expand_character_models(assets)?;
-    expand_light_rigs(assets, assets_dir);
-    expand_material_palettes(assets, assets_dir);
+    expand_light_rigs(assets, assets_dir)?;
+    expand_material_palettes(assets, assets_dir)?;
     expand_prefabs(assets, &authored, &mut report, assets_dir)?;
     expand_room_textures(assets);
     // First companion round: materialize the GraphicsConfig render marker (and
@@ -273,6 +296,43 @@ mod tests {
     fn asset_name_missing_returns_empty() {
         let v = serde_json::json!({"type": "Logger"});
         assert_eq!(asset_name(&v), "");
+    }
+
+    #[derive(Debug, Default, serde::Deserialize)]
+    #[serde(default)]
+    struct Probe {
+        speed: f32,
+        items: Vec<ProbeItem>,
+    }
+
+    #[derive(Debug, Default, serde::Deserialize)]
+    #[serde(default)]
+    struct ProbeItem {
+        size: [f32; 3],
+    }
+
+    #[test]
+    fn schema_args_reads_missing_or_null_args_as_defaults() {
+        let ty = RegisteredType::CameraShot;
+        let p: Probe = schema_args(ty, "cam", None).unwrap();
+        assert_eq!(p.speed, 0.0);
+        let p: Probe = schema_args(ty, "cam", Some(&serde_json::Value::Null)).unwrap();
+        assert!(p.items.is_empty());
+    }
+
+    #[test]
+    fn schema_args_names_the_asset_and_the_field_path() {
+        let ty = RegisteredType::Prefab;
+        let bad = serde_json::json!({"items": [{}, {"size": [1, 2]}]});
+        let err = schema_args::<Probe>(ty, "crate", Some(&bad)).unwrap_err();
+        assert!(
+            err.starts_with("Prefab 'crate': invalid args: `items[1].size`: "),
+            "{err}"
+        );
+
+        let bad = serde_json::json!({"speed": "fast"});
+        let err = schema_args::<Probe>(ty, "crate", Some(&bad)).unwrap_err();
+        assert!(err.contains("`speed`: invalid type: string"), "{err}");
     }
 
     // Every pass's failure aborts the run and surfaces its own message, so a

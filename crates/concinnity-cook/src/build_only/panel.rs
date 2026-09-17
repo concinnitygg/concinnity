@@ -2,7 +2,7 @@
 // heading TextLabel inset from the top-left. The generated names follow the
 // `<screen>_*` scoping rule documented on `crate::authoring::schema::panel`.
 
-use super::expand::{asset_name, registered_type};
+use super::expand::{asset_name, registered_type, schema_args};
 use super::ui_spec::label_value;
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::registry::build_only::Panel;
@@ -28,12 +28,7 @@ pub(crate) fn expand_panels(assets: &mut Vec<serde_json::Value>) -> Result<(), S
         if name.is_empty() {
             return Err("Panel: missing `name`".to_string());
         }
-        let args = value
-            .get("args")
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!({}));
-        let panel: Panel = serde_json::from_value(args)
-            .map_err(|e| format!("Panel '{}': invalid args: {}", name, e))?;
+        let panel: Panel = schema_args(RegisteredType::Panel, &name, value.get("args"))?;
 
         result.extend(expand_one(&name, &panel));
     }
@@ -155,6 +150,6 @@ mod tests {
         })];
         let err = expand_panels(&mut assets).unwrap_err();
         assert!(err.contains("Panel 'card'"), "{err}");
-        assert!(err.contains("invalid args"), "{err}");
+        assert!(err.contains("invalid args: `width`"), "{err}");
     }
 }

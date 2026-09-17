@@ -3,6 +3,8 @@
 //! drive's job (`hook/edit/palette.rs`), so a provider needs no world to be
 //! exercised.
 
+use concinnity_cook::authoring::registry::RegisteredType;
+
 use super::{Category, PaletteAction, PaletteItem};
 use crate::editor::panels::asset_tree::TreeGroup;
 use crate::editor::panels::console;
@@ -29,10 +31,10 @@ pub(crate) fn asset_items(groups: &[TreeGroup]) -> Vec<PaletteItem> {
         .iter()
         .flat_map(|g| {
             g.assets.iter().map(|a| {
-                let behavior = a.asset_type == "Behavior";
+                let behavior = a.asset_type == RegisteredType::Behavior;
                 PaletteItem {
                     label: a.name.clone(),
-                    hint: format!("{} in {}", a.asset_type, g.label),
+                    hint: format!("{} in {}", a.asset_type.as_str(), g.label),
                     category: if behavior {
                         Category::Asset
                     } else {
@@ -114,13 +116,13 @@ mod tests {
             assets: vec![
                 TreeAsset {
                     name: "crate_a".to_string(),
-                    asset_type: "Sprite".to_string(),
+                    asset_type: RegisteredType::Sprite,
                     badge: Badge::Authored,
                     promote: None,
                 },
                 TreeAsset {
                     name: "greeter".to_string(),
-                    asset_type: "Behavior".to_string(),
+                    asset_type: RegisteredType::Behavior,
                     badge: Badge::Authored,
                     promote: None,
                 },

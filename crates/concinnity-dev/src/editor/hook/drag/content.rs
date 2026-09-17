@@ -7,6 +7,7 @@
 //! cursor. Escape cancels; a release back over the panel is just the click
 //! that already selected the cell.
 
+use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_core::components::{Camera3D, FrameInput, Transform};
 use concinnity_core::ecs::PickIndex;
 use concinnity_core::ecs::World;
@@ -33,7 +34,7 @@ const GHOST_HALF: [f32; 3] = [0.5, 0.5, 0.5];
 
 pub(in crate::editor::hook) struct ContentDrag {
     pub name: String,
-    pub asset_type: String,
+    pub asset_type: RegisteredType,
     anchor: [f32; 2],
     moved: bool,
     // The landing pose while the cursor is over the viewport.
@@ -67,22 +68,22 @@ pub(in crate::editor::hook) fn align_rotation(axis: usize, sign: f32) -> [f32; 3
 // does not place (Material assigns instead; the rest only browse). Shared with
 // the create menu's Prefab-instance rows.
 pub(in crate::editor::hook) fn placement_args(
-    asset_type: &str,
+    asset_type: RegisteredType,
     name: &str,
     pos: [f32; 3],
 ) -> Option<serde_json::Value> {
     let field = match asset_type {
-        "Mesh" | "ProceduralMesh" => "mesh",
-        "Model" => "model",
-        "Prefab" => "prefab",
+        RegisteredType::Mesh | RegisteredType::ProceduralMesh => "mesh",
+        RegisteredType::Model => "model",
+        RegisteredType::Prefab => "prefab",
         _ => return None,
     };
     Some(serde_json::json!({ field: name, "position": pos }))
 }
 
 // Whether dragging this type out of the browser does anything on release.
-pub(super) fn drag_has_effect(asset_type: &str) -> bool {
-    placement_args(asset_type, "", [0.0; 3]).is_some() || asset_type == "Material"
+pub(in crate::editor::hook) fn drag_has_effect(asset_type: RegisteredType) -> bool {
+    placement_args(asset_type, "", [0.0; 3]).is_some() || asset_type == RegisteredType::Material
 }
 
 impl EditorHook {
@@ -90,10 +91,10 @@ impl EditorHook {
     pub(in crate::editor::hook) fn arm_content_drag(
         &mut self,
         name: String,
-        asset_type: String,
+        asset_type: RegisteredType,
         at: [f32; 2],
     ) {
-        if !drag_has_effect(&asset_type) {
+        if !drag_has_effect(asset_type) {
             return;
         }
         self.content_drag = Some(ContentDrag {
@@ -140,12 +141,12 @@ impl EditorHook {
         let Some(pose) = drag.pose else {
             return;
         };
-        if drag.asset_type == "Material" {
+        if drag.asset_type == RegisteredType::Material {
             self.assign_material_under_cursor(world, vp, mouse, &drag.name);
             return;
         }
         let Some(mut args) = placement_args(
-            &drag.asset_type,
+            drag.asset_type,
             &drag.name,
             pose.position.map(super::gizmo::round3),
         ) else {
