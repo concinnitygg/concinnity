@@ -1,6 +1,9 @@
+use concinnity_core::components::StoryCommand;
+
 use super::names::StoryNames;
 use super::stage::DIALOG_BOX;
 use super::widgets::{hidden_label, hit_region_fit};
+use crate::authoring::spec::asset::ui_action;
 
 // The quick row: small always-clickable controls along the dialog box's
 // bottom edge (Log / Auto / Skip / Save). The story system fills each label's
@@ -8,7 +11,12 @@ use super::widgets::{hidden_label, hit_region_fit};
 // whole time and out-of-mode commands are ignored, like the choice buttons.
 pub(super) fn emit_quick_row(names: &StoryNames) -> Vec<serde_json::Value> {
     // In `QUICK_KEYS` order.
-    let actions = ["story:log", "story:auto", "story:skip", "story:save"];
+    let actions = [
+        StoryCommand::ToggleLog,
+        StoryCommand::ToggleAuto,
+        StoryCommand::ToggleSkip,
+        StoryCommand::OpenSave,
+    ];
     let quick_y = DIALOG_BOX.1 + DIALOG_BOX.3 - 38.0;
     let quick_w = 80.0;
     let quick_x0 = DIALOG_BOX.0 + DIALOG_BOX.2 - 30.0 - actions.len() as f32 * 90.0;
@@ -27,7 +35,7 @@ pub(super) fn emit_quick_row(names: &StoryNames) -> Vec<serde_json::Value> {
             &button.region,
             (x, quick_y, quick_w, 30.0),
             Some(&button.label),
-            action,
+            &ui_action::story(action),
             Some("bottom"),
         ));
     }

@@ -1,9 +1,9 @@
 // Screen-space hit-region schema.
 
 use crate::components::SpriteFit;
+use crate::components::UiAction;
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::asset_id::de_opt_asset_ref;
-use alloc::string::String;
 
 /// A responsive invisible rectangular region in screen space.
 ///
@@ -42,10 +42,14 @@ pub struct HitRegion {
     pub hover_color: Option<[f32; 3]>,
     /// Scale applied to the label while hovered. None = no change.
     pub hover_scale: Option<f32>,
-    /// Action to fire on click. Recognized forms:
-    /// `"scene:<name>"`, `"quit"`, `"screen:show:<name>"`, `"screen:hide"`,
-    /// `"screen:toggle:<name>"`.
-    pub action: String,
+    /// Action to fire on click: `"quit"`, `"scene:<name>"`,
+    /// `"screen:show:<name>"`, `"screen:push:<name>"`, `"screen:toggle:<name>"`,
+    /// `"screen:hide"`, or a `"story:<verb>"` (`start`, `continue`, `advance`,
+    /// `choose:<i>`, `slot:<i>`, `auto`, `skip`, `log`, `save`, `load`, `pause`,
+    /// `settings`, `settings_back`). Empty fires nothing. A malformed action
+    /// fails the build.
+    #[serde(with = "crate::components::ui_action::optional")]
+    pub action: Option<UiAction>,
     /// The [Sprite](#sprite) a [Slider](#slider) drag region moves along its
     /// track. `None` for ordinary regions. Set automatically when a `Slider`
     /// expands; you don't set this directly.
@@ -89,7 +93,7 @@ impl Default for HitRegion {
             label: None,
             hover_color: None,
             hover_scale: None,
-            action: String::new(),
+            action: None,
             drag_handle: None,
             screen: None,
             disabled: false,
@@ -102,6 +106,7 @@ impl Default for HitRegion {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::StoryCommand;
 
     #[test]
     fn a_blank_region_is_an_enabled_button_sized_rectangle() {
@@ -111,7 +116,7 @@ mod tests {
         assert!(!h.disabled);
         assert!(!h.follow_label);
         assert_eq!(h.fit, SpriteFit::Fit);
-        assert!(h.action.is_empty());
+        assert!(h.action.is_none());
         // Hover styling is opt-in: unset means "do not restyle on hover".
         assert_eq!(h.hover_color, None);
         assert_eq!(h.hover_scale, None);
@@ -123,14 +128,14 @@ mod tests {
     #[test]
     fn an_authored_region_parses_and_round_trips_through_postcard() {
         let h: HitRegion = crate::test_support::from_json(
-            r#"{"x":10,"y":20,"width":200,"height":48,"label":"play_label","action":"start",
+            r#"{"x":10,"y":20,"width":200,"height":48,"label":"play_label","action":"story:start",
                 "hover_color":[1,0.85,0.3],"hover_scale":1.1,"drag_handle":"grip",
                 "screen":"menu","disabled":true,"follow_label":true,"fit":"cover"}"#,
         );
         assert_eq!(h.label, Some(AssetId(10)));
         assert_eq!(h.drag_handle, Some(AssetId(4)));
         assert_eq!(h.screen, Some(AssetId(4)));
-        assert_eq!(h.action, "start");
+        assert_eq!(h.action, Some(UiAction::Story(StoryCommand::Start)));
         assert_eq!(h.hover_scale, Some(1.1));
         assert_eq!(h.fit, SpriteFit::Cover);
         assert!(h.disabled);
@@ -142,5 +147,6 @@ mod tests {
         assert_eq!((back.width, back.height), (200.0, 48.0));
         assert_eq!(back.label, Some(AssetId(10)));
         assert_eq!(back.fit, SpriteFit::Cover);
+        assert_eq!(back.action, h.action);
     }
 }

@@ -2,7 +2,7 @@ use crate::components::InputKey;
 use crate::ecs::asset_id::AssetId;
 use crate::settings::SettingKey;
 
-/// What a "setting:*" action does to its value: cycle one step (for a stepper
+/// What a settings-row change does to its value: cycle one step (for a stepper
 /// row), jump to an absolute option index (for a dropdown pick), set an absolute
 /// position in [0, 1] (for a slider row's drag), or bind a key (for a key-rebind
 /// row).
@@ -30,7 +30,9 @@ pub enum SettingOp {
     RebindButton(crate::components::GamepadButton),
 }
 
-/// Runtime-only event sent by UiInputSystem when a "setting:*" action fires.
+/// Runtime-only event sent by UiInputSystem when a settings row changes (a
+/// [`UiAction::Setting`](crate::components::UiAction) click, a slider drag, or a
+/// rebind capture).
 /// GraphicsSystem reads these each step: it applies the change to the named
 /// setting (cycling it or setting it from a fraction), updates the value_label
 /// text, and (when persist is set) writes the new value to the settings store.

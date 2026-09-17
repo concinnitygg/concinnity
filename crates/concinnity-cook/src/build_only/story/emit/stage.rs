@@ -1,7 +1,9 @@
+use concinnity_core::components::StoryCommand;
 use concinnity_core::gfx::overlay::UI_REFERENCE_SIZE;
 
 use super::names::StoryNames;
 use super::widgets::{LabelStyle, hit_region, label, rounded_sprite_fit, screen, stage_sprite};
+use crate::authoring::spec::asset::ui_action;
 
 // The fixed dialog box the stage's name plate and dialog text sit on: nearly
 // flush with the canvas bottom, tall enough for the name plate to sit inside
@@ -73,7 +75,7 @@ pub(super) fn emit_stage(names: &StoryNames) -> Vec<serde_json::Value> {
         &stage.advance,
         (0.0, 0.0, win_w, win_h),
         None,
-        "story:advance",
+        &ui_action::story(StoryCommand::Advance),
     ));
     // Space and Enter both advance the dialogue (in addition to a click). Each
     // is its own KeyBinding; the UI fires whichever key was pressed.
@@ -81,7 +83,7 @@ pub(super) fn emit_stage(names: &StoryNames) -> Vec<serde_json::Value> {
         out.push(serde_json::json!({
             "name": name,
             "type": "KeyBinding",
-            "args": { "key": key, "action": "story:advance" }
+            "args": { "key": key, "action": ui_action::story(StoryCommand::Advance) }
         }));
     }
     // The advance marker: a small rounded square at the dialog box's lower

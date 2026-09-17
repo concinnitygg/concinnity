@@ -205,4 +205,32 @@ mod tests {
         assert!(msg.contains("Asset 't1'"), "got: {msg}");
         assert!(msg.contains("Asset 't2'"), "got: {msg}");
     }
+
+    #[test]
+    fn validate_asset_rejects_a_malformed_action() {
+        let err = validate_asset(
+            "HitRegion",
+            "warp",
+            &serde_json::json!({"action": "teleport"}),
+        )
+        .expect_err("malformed action");
+        assert!(err.starts_with("Asset 'warp': "), "got: {err}");
+        validate_asset(
+            "HitRegion",
+            "go",
+            &serde_json::json!({"action": "story:start"}),
+        )
+        .expect("a well-formed action validates");
+    }
+
+    // A MainMenu item's action lands on its generated region, so that region
+    // is the asset the failure names.
+    #[test]
+    fn validate_world_jsonl_reports_a_bad_menu_item_on_its_region() {
+        let world = r#"{"name":"m","type":"MainMenu","args":{"items":[{"label":"Go","action":"story:dance"}]}}"#;
+        let msg = validate_world_jsonl(world, None)
+            .expect_err("unknown story verb")
+            .to_string();
+        assert!(msg.contains("Asset 'm_btn_0'"), "got: {msg}");
+    }
 }

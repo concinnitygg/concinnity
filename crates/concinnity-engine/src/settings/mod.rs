@@ -3,7 +3,6 @@
 // scheduled just before it.
 pub(crate) mod system;
 
-pub(crate) mod action;
 pub(crate) mod quality_rows;
 
 // The engine-side registry of user-facing settings a cycle row can change. The

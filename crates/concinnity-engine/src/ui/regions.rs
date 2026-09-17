@@ -4,7 +4,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use concinnity_core::components::{FrameInput, SpriteFit, TextLabel};
+use concinnity_core::components::{FrameInput, SettingVerb, SpriteFit, TextLabel, UiAction};
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{FrameVec, PipelineContext, StepResult};
 use concinnity_core::gfx::overlay::OverlayTransform;
@@ -120,9 +120,11 @@ fn follow_sync(
 }
 
 // Whether a region's setting row is in the runtime-disabled set.
-pub(super) fn setting_row_disabled(disabled_rows: &HashSet<SettingKey>, action: &str) -> bool {
-    !disabled_rows.is_empty()
-        && crate::settings::action::key(action).is_some_and(|key| disabled_rows.contains(&key))
+pub(super) fn setting_row_disabled(
+    disabled_rows: &HashSet<SettingKey>,
+    action: Option<&UiAction>,
+) -> bool {
+    matches!(action, Some(UiAction::Setting { key, .. }) if disabled_rows.contains(key))
 }
 
 // A region's `(hovered, fire)`. While the focus cursor is set it owns the hover
@@ -207,7 +209,10 @@ impl UiInputSystem {
                 pad_focused,
                 screen_matches: entry.screen == frame.active_screen,
                 collapsed_row: entry.scroll_row.is_some() && entry.hidden,
-                disabled: setting_row_disabled(&self.disabled_rows_cache, &entry.region.action),
+                disabled: setting_row_disabled(
+                    &self.disabled_rows_cache,
+                    entry.region.action.as_ref(),
+                ),
                 follow_inert,
             };
             if region_inert(gate) {
@@ -263,25 +268,33 @@ impl UiInputSystem {
             if fallback_fire {
                 confirm_used = true;
             }
-            if let Some(gid) = entry.group_toggle {
-                outcome.toggle_group = Some(gid);
-            } else if let Some(key) = crate::settings::action::key_with_verb(&r.action, "rebind") {
-                outcome.start_capture = Some((key, r.label));
-            } else if let Some(key) = crate::settings::action::key_with_verb(&r.action, "open") {
-                // Snapshot the control rect and the row's un-hovered value style.
-                outcome.start_open = Some(OpenRequest {
-                    setting: key,
-                    value_label: r.label,
-                    anchor: region_rect(r),
-                    screen: entry.screen,
-                    color: entry.original_color,
-                    scale: entry.original_scale,
-                });
-            } else if !r.action.is_empty()
-                && let Some(result) = fire_action(&r.action, r.label, ctx)
-            {
-                outcome.fired = Some(result);
-                return outcome;
+            match &r.action {
+                None => {}
+                Some(UiAction::GroupToggle(gid)) => outcome.toggle_group = Some(*gid),
+                Some(UiAction::Setting {
+                    key,
+                    verb: SettingVerb::Rebind,
+                }) => outcome.start_capture = Some((*key, r.label)),
+                Some(UiAction::Setting {
+                    key,
+                    verb: SettingVerb::Open,
+                }) => {
+                    // Snapshot the control rect and the row's un-hovered value style.
+                    outcome.start_open = Some(OpenRequest {
+                        setting: *key,
+                        value_label: r.label,
+                        anchor: region_rect(r),
+                        screen: entry.screen,
+                        color: entry.original_color,
+                        scale: entry.original_scale,
+                    });
+                }
+                Some(action) => {
+                    if let Some(result) = fire_action(action, r.label, ctx) {
+                        outcome.fired = Some(result);
+                        return outcome;
+                    }
+                }
             }
         }
         outcome
@@ -366,12 +379,17 @@ mod tests {
     #[test]
     fn setting_row_disabled_matches_the_setting_key() {
         let rows = HashSet::from([SettingKey::ShowFps]);
-        assert!(setting_row_disabled(&rows, "setting:show_fps:next"));
-        assert!(!setting_row_disabled(&rows, "setting:vsync:next"));
-        assert!(!setting_row_disabled(&rows, "quit"));
+        let row = |key| UiAction::Setting {
+            key,
+            verb: SettingVerb::Next,
+        };
+        assert!(setting_row_disabled(&rows, Some(&row(SettingKey::ShowFps))));
+        assert!(!setting_row_disabled(&rows, Some(&row(SettingKey::Vsync))));
+        assert!(!setting_row_disabled(&rows, Some(&UiAction::Quit)));
+        assert!(!setting_row_disabled(&rows, None));
         assert!(!setting_row_disabled(
             &HashSet::new(),
-            "setting:show_fps:next"
+            Some(&row(SettingKey::ShowFps))
         ));
     }
 

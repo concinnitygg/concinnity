@@ -8,6 +8,8 @@ use super::rows::{
 use super::{TOP_MARGIN_FRAC, cursor_sprite, opaque};
 use crate::authoring::registry::build_only::MainMenu;
 use crate::authoring::spec::{asset, spec_to_value};
+use asset::ui_action;
+use concinnity_core::components::SettingVerb;
 
 // Average glyph advance as a fraction of the font pixel size, used to estimate
 // a label's width when laying out the settings tab bar (the menu items and
@@ -166,7 +168,7 @@ pub(super) fn emit_settings_tab(
                 &asset::hit_region(
                     format!("{}_tabbtn_{}", screen, suffix),
                     [tab_x, row_y(0), *w, style.button_height],
-                    format!("screen:show:{}_settings_{}", menu_name, suffix),
+                    ui_action::screen_show(&format!("{}_settings_{}", menu_name, suffix)),
                 )
                 .set("label", label_name)
                 .set("hover_color", style.hover_color)
@@ -297,7 +299,7 @@ pub(super) fn emit_settings_tab(
                     &asset::hit_region(
                         format!("{}_rebind_btn_{}", screen, idx),
                         [control_x, base_y, ctrl_w, style.button_height],
-                        format!("setting:{}:rebind", setting.as_str()),
+                        ui_action::setting(setting, SettingVerb::Rebind),
                     )
                     .set("label", val.clone())
                     .set("hover_color", style.hover_color)
@@ -322,7 +324,7 @@ pub(super) fn emit_settings_tab(
                     &asset::hit_region(
                         format!("{}_grpbtn_{}", screen, gid),
                         [row_x, base_y, row_width, style.button_height],
-                        format!("group:toggle:{}", gid),
+                        ui_action::group_toggle(gid),
                     )
                     .set("label", header.clone())
                     .set("hover_color", style.hover_color)
@@ -397,7 +399,7 @@ pub(super) fn emit_settings_tab(
     let back_y = band_top + band_h + BACK_GAP;
     let back_label = format!("{}_label_back", screen);
     let back_action = if style.settings_back_action.is_empty() {
-        format!("screen:show:{}", menu_name)
+        ui_action::screen_show(menu_name)
     } else {
         style.settings_back_action.clone()
     };

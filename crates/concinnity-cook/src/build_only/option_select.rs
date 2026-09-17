@@ -19,6 +19,8 @@ use super::row_setting::row_setting;
 use super::ui_spec::{font_sizes, label_value};
 use crate::authoring::registry::build_only::OptionSelect;
 use crate::authoring::spec::{asset, spec_to_value};
+use asset::ui_action;
+use concinnity_core::components::SettingVerb;
 
 // Whether a setting row expands to a dropdown (more than two options, or a
 // runtime-enumerated option list like `resolution`) rather than a `<`/`>`
@@ -170,7 +172,7 @@ fn expand_one(
                 },
                 &value_name,
                 s,
-                &format!("setting:{}:open", setting.as_str()),
+                &ui_action::setting(setting, SettingVerb::Open),
             ),
         ];
     }
@@ -238,7 +240,7 @@ fn expand_one(
             },
             &value_name,
             s,
-            &format!("setting:{}:prev", setting.as_str()),
+            &ui_action::setting(setting, SettingVerb::Prev),
         ),
         // Next click region (value + `>`).
         region(
@@ -251,7 +253,7 @@ fn expand_one(
             },
             &value_name,
             s,
-            &format!("setting:{}:next", setting.as_str()),
+            &ui_action::setting(setting, SettingVerb::Next),
         ),
     ]
 }

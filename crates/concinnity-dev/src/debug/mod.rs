@@ -26,7 +26,7 @@
 //!             {"cmd":"emitter-add", ...} {"cmd":"emitter-remove","id":N}
 //!             {"cmd":"anim-crossfade","target":"hero",
 //!                "weights":[0,1,0],"duration_secs":0.5}
-//!             {"cmd":"story","action":"start|advance|choose","option":N}
+//!             {"cmd":"story","action":"<story verb>","option":N}
 //!   reply:    {"ok":true,...}  |  {"ok":false,"error":"..."}
 //!
 //! `anim-crossfade` re-weights the clip bucket for one SkinnedMesh (looked

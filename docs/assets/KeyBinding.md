@@ -2,7 +2,7 @@
 
 # KeyBinding
 
-Maps a keyboard key to an action string.
+Maps a keyboard key to an action.
 
 When the bound key is pressed, the action fires once per press (like a
 [HitRegion](HitRegion.md) click). Bindings only run while the cursor is free:
@@ -12,12 +12,13 @@ so typing cannot trigger actions; a [Screen](Screen.md)'s `toggle_key` stays
 live.
 
 The action vocabulary is the same as [HitRegion](HitRegion.md)'s:
-- `"scene:<name>"`:         jump to the named [Scene](Scene.md)
 - `"quit"`:                 stop the application
+- `"scene:<name>"`:         jump to the named [Scene](Scene.md)
 - `"screen:show:<name>"`:   show the named [Screen](Screen.md), replacing the top of the stack
 - `"screen:push:<name>"`:   open the named [Screen](Screen.md) on top of what is showing
-- `"screen:hide"`:          close the top [Screen](Screen.md)
 - `"screen:toggle:<name>"`: toggle the named [Screen](Screen.md)
+- `"screen:hide"`:          close the top [Screen](Screen.md)
+- `"story:<verb>"`:         drive the story
 
 InputKey names are case-sensitive canonical names (e.g. `"Escape"`, `"Space"`,
 `"Enter"`).
@@ -25,5 +26,5 @@ InputKey names are case-sensitive canonical names (e.g. `"Escape"`, `"Space"`,
 ## Parameters
 
 - `key`: A string. The key name to bind (e.g. `"Escape"`).
-- `action`: A string. The action to fire when the key is pressed.
+- `action`: A string. The action to fire when the key is pressed. Empty fires nothing. Optional.
 - `screen`: A string. [Screen](Screen.md) this binding is scoped to: the binding only fires while that screen is on top of the stack. Unset, the binding is global.

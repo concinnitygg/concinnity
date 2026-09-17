@@ -20,6 +20,7 @@ use concinnity_core::components::SkeletonPose;
 use concinnity_core::components::SkinnedMesh;
 use concinnity_core::components::Spawner;
 use concinnity_core::components::Transform;
+use concinnity_core::components::UiAction;
 use concinnity_core::components::compiled_programs;
 use concinnity_core::components::{
     Camera3D, DespawnRequest, GraphicsConfig, HitRegion, Material, Prop, RenderHandle,
@@ -2532,7 +2533,7 @@ fn persisted_display_and_system_overrides_reach_the_backend() {
 // the regions are still present (UiInputSystem drains them afterwards).
 fn push_settings_row(b: &mut WorldBuilder, key: &str, verb: &str, label: AssetId) {
     b.push(HitRegion {
-        action: format!("setting:{key}:{verb}"),
+        action: act(&format!("setting:{key}:{verb}")),
         label: Some(label),
         ..Default::default()
     });
@@ -2620,8 +2621,6 @@ fn settings_rows_show_their_live_values_at_init() {
         ("ssao", "next", AssetId(119)),
         ("ssgi_rays", "open", AssetId(120)),
         ("graphics_quality", "next", AssetId(121)),
-        // An unknown key has no options table, so its label is left alone.
-        ("not_a_setting", "next", AssetId(122)),
     ];
     for &(key, verb, label) in &rows {
         push_settings_row(&mut b, key, verb, label);
@@ -2651,11 +2650,6 @@ fn settings_rows_show_their_live_values_at_init() {
         "Auto (High)",
         "the master row carries the tier the Auto preset resolved to, \
          which the static option table cannot express"
-    );
-    assert_eq!(
-        label_text(&mut world, AssetId(122)),
-        "<placeholder>",
-        "an unknown setting key leaves its label untouched"
     );
     // Every non-dynamic row's label moved off the build's placeholder.
     for &(key, _, label) in &rows {
@@ -2699,12 +2693,9 @@ fn slider_rows_sync_their_handle_and_label_to_the_live_value() {
     for (key, handle, label) in [
         ("exposure", AssetId(200), AssetId(201)),
         ("vignette", AssetId(202), AssetId(203)),
-        // A drag region for a key this system does not own is captured but has no
-        // value to sync from.
-        ("not_a_slider", AssetId(204), AssetId(205)),
     ] {
         b.push(HitRegion {
-            action: format!("setting:{key}:drag"),
+            action: act(&format!("setting:{key}:drag")),
             x: 0.0,
             width: 100.0,
             drag_handle: Some(handle),
@@ -2724,7 +2715,7 @@ fn slider_rows_sync_their_handle_and_label_to_the_live_value() {
     }
     // A drag region missing its handle / label is skipped rather than panicking.
     b.push(HitRegion {
-        action: "setting:exposure:drag".to_string(),
+        action: act("setting:exposure:drag"),
         ..Default::default()
     });
     let mut world = b.build();
@@ -2745,9 +2736,6 @@ fn slider_rows_sync_their_handle_and_label_to_the_live_value() {
     // Vignette spans 0..1, so 0.5 is also mid-track.
     assert_eq!(handle_x(&mut world, AssetId(202)), 45.0);
     assert_ne!(label_text(&mut world, AssetId(203)), "<placeholder>");
-    // A key this system does not own leaves its row untouched.
-    assert_eq!(handle_x(&mut world, AssetId(204)), 0.0);
-    assert_eq!(label_text(&mut world, AssetId(205)), "<placeholder>");
 
     // The captured rows are handed to SettingsSystem for the live drag drain.
     let live = settings_state(&world);
@@ -2795,7 +2783,7 @@ fn every_owned_slider_key_recovers_a_live_value() {
         let handle = AssetId(300 + i as u32 * 2);
         let label = AssetId(301 + i as u32 * 2);
         b.push(HitRegion {
-            action: format!("setting:{key}:drag"),
+            action: act(&format!("setting:{key}:drag")),
             x: 0.0,
             width: 100.0,
             drag_handle: Some(handle),
@@ -2847,7 +2835,7 @@ fn rebind_rows_show_their_bound_keys_at_init() {
     for (i, action) in Bindable::ALL.iter().enumerate() {
         let label = AssetId(400 + i as u32);
         b.push(HitRegion {
-            action: format!("setting:{}:rebind", action.setting_key()),
+            action: act(&format!("setting:{}:rebind", action.setting_key())),
             label: Some(label),
             ..Default::default()
         });
@@ -2857,17 +2845,6 @@ fn rebind_rows_show_their_bound_keys_at_init() {
             ..Default::default()
         });
     }
-    // A rebind region whose key names no bindable action is skipped.
-    b.push(HitRegion {
-        action: "setting:key_nonsense:rebind".to_string(),
-        label: Some(AssetId(499)),
-        ..Default::default()
-    });
-    b.push(TextLabel {
-        asset_id: AssetId(499),
-        content: "<placeholder>".to_string(),
-        ..Default::default()
-    });
     let mut world = b.build();
     let gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
@@ -2884,11 +2861,6 @@ fn rebind_rows_show_their_bound_keys_at_init() {
             "row {i} never synced to its default binding"
         );
     }
-    assert_eq!(
-        label_text(&mut world, AssetId(499)),
-        "<placeholder>",
-        "an unknown rebind key leaves its row alone"
-    );
     let live = settings_state(&world);
     assert_eq!(live.rebind_rows.len(), Bindable::ALL.len());
     assert_eq!(
@@ -3008,7 +2980,15 @@ fn a_capability_gated_row_grays_out_its_whole_scroll_row() {
     let disabled: Vec<bool> = world
         .ctx()
         .query::<HitRegion>()
-        .filter(|r| r.action.starts_with("setting:upscale_backend"))
+        .filter(|r| {
+            matches!(
+                r.action,
+                Some(UiAction::Setting {
+                    key: SettingKey::UpscaleBackend,
+                    ..
+                })
+            )
+        })
         .map(|r| r.disabled)
         .collect();
     assert_eq!(disabled, vec![true]);
@@ -4793,4 +4773,9 @@ fn skinned_mesh_joins_the_pick_index_when_opted_in() {
     assert!(!gs.failed);
     assert!(gs.pick_candidates.is_empty());
     assert_eq!(world.ctx().join2::<SkeletonPose, Transform>().count(), 0);
+}
+
+// A test action from its text form, with integer targets.
+fn act(text: &str) -> Option<UiAction> {
+    Some(UiAction::parse(text, |_| None).unwrap())
 }

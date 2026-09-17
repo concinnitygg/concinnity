@@ -1,7 +1,9 @@
+use concinnity_core::components::StoryCommand;
 use concinnity_core::gfx::overlay::UI_REFERENCE_SIZE;
 
 use super::names::StoryNames;
 use super::widgets::{LabelStyle, button, label, screen};
+use crate::authoring::spec::asset::ui_action;
 use crate::build_only::ui_spec::sprite;
 
 // The ending screen, shown by the story system when the last node runs out
@@ -27,8 +29,8 @@ pub(super) fn emit_ending_screen(names: &StoryNames) -> Vec<serde_json::Value> {
         ),
     ];
     let (back_label, back_action) = match &names.title {
-        Some(title) => ("Back to title", format!("screen:show:{}", title.screen)),
-        None => ("Restart", "story:start".to_string()),
+        Some(title) => ("Back to title", ui_action::screen_show(&title.screen)),
+        None => ("Restart", ui_action::story(StoryCommand::Start)),
     };
     out.extend(button(
         &ending.back,

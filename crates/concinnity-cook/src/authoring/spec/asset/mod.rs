@@ -11,6 +11,7 @@ mod layout;
 mod scene;
 mod sprite;
 mod text;
+pub(crate) mod ui_action;
 
 pub(crate) use interaction::hit_region;
 pub(crate) use layout::screen;

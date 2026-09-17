@@ -24,6 +24,7 @@ use super::expand::{asset_name, type_norm};
 use super::ui_spec::font_sizes;
 use crate::authoring::registry::build_only::MainMenu;
 use crate::authoring::spec::{asset, spec_to_value};
+use asset::ui_action;
 
 // Top margin of a centered menu as a fraction of the reference height. The menu
 // is top-aligned (not vertically centered) so the heading and tab bar hold a
@@ -145,10 +146,10 @@ fn expand_one(
         .iter()
         .map(|item| {
             let action = match item.action.trim().to_lowercase().as_str() {
-                "return" | "close" => "screen:hide".to_string(),
+                "return" | "close" => ui_action::screen_hide(),
                 "settings" => {
                     wants_settings = true;
-                    format!("screen:show:{}_settings_video", menu_name)
+                    ui_action::screen_show(&format!("{}_settings_video", menu_name))
                 }
                 _ => item.action.clone(),
             };
@@ -174,7 +175,7 @@ fn expand_one(
         out.push(serde_json::json!({
             "name": format!("{}_toggle", menu_name),
             "type": "KeyBinding",
-            "args": { "key": menu.toggle_key, "action": format!("screen:toggle:{}", menu_name) }
+            "args": { "key": menu.toggle_key, "action": ui_action::screen_toggle(menu_name) }
         }));
     }
 

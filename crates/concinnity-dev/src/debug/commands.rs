@@ -660,21 +660,8 @@ pub(super) fn handle_story(text: &str) -> String {
         Ok(r) => r,
         Err(reply) => return reply,
     };
-    let command = match req.action.as_str() {
-        "start" => StoryCommand::Start,
-        "continue" => StoryCommand::Continue,
-        "advance" => StoryCommand::Advance,
-        "choose" => StoryCommand::Choose(req.option),
-        "auto" => StoryCommand::ToggleAuto,
-        "skip" => StoryCommand::ToggleSkip,
-        "log" => StoryCommand::ToggleLog,
-        "save" => StoryCommand::OpenSave,
-        "load" => StoryCommand::OpenLoad,
-        "slot" => StoryCommand::Slot(req.option),
-        "pause" => StoryCommand::TogglePause,
-        "settings" => StoryCommand::OpenSettings,
-        "settings_back" => StoryCommand::CloseSettings,
-        other => return error_reply(&format!("story: unknown action '{other}'")),
+    let Some(command) = StoryCommand::from_verb(&req.action, Some(req.option)) else {
+        return error_reply(&format!("story: unknown action '{}'", req.action));
     };
     run_with_reply(
         "story",

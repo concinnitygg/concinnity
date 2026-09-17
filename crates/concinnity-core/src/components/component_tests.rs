@@ -110,20 +110,24 @@ mod graphics_config {
 
 mod key_binding {
     use super::*;
+    use crate::ecs::asset_id::AssetId;
 
     #[test]
     fn deserializes_escape_to_view_toggle() {
         let json = r#"{"key":"Escape","action":"screen:toggle:pause_menu"}"#;
-        let kb: KeyBinding = serde_json::from_str(json).unwrap();
+        let kb: KeyBinding = crate::test_support::from_json(json);
         assert_eq!(kb.key, "Escape");
-        assert_eq!(kb.action, "screen:toggle:pause_menu");
+        assert_eq!(
+            kb.action,
+            Some(UiAction::Screen(ScreenCommand::Toggle(AssetId(10))))
+        );
     }
 
     #[test]
-    fn deserializes_with_defaults_to_empty_strings() {
+    fn deserializes_with_defaults_to_an_unbound_key() {
         let kb: KeyBinding = serde_json::from_str("{}").unwrap();
         assert!(kb.key.is_empty());
-        assert!(kb.action.is_empty());
+        assert!(kb.action.is_none());
     }
 }
 

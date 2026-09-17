@@ -1,11 +1,11 @@
 //! Focus model for cursor-free menu navigation: derives focusable targets from
 //! the active screen's hit regions and picks the next focus for a directional
-//! pulse. Pure geometry + action-string grouping; UiInputSystem owns the focus
+//! pulse. Pure geometry + action grouping; UiInputSystem owns the focus
 //! state and applies the resulting styling / actions to the world.
 
-use concinnity_core::components::NavDirection;
+use concinnity_core::components::{NavDirection, SettingVerb, UiAction};
 
-use crate::settings::{SettingKey, action};
+use crate::settings::SettingKey;
 
 // Weight of the perpendicular offset in the directional score, so a target
 // straight ahead beats a nearer one far off to the side (tabs above a row
@@ -18,7 +18,7 @@ const PERP_WEIGHT: f32 = 2.0;
 pub(crate) struct Candidate {
     pub(crate) index: usize,
     pub(crate) rect: [f32; 4],
-    pub(crate) action: String,
+    pub(crate) action: Option<UiAction>,
 }
 
 // One focusable control derived from the candidates. `index` is the region
@@ -44,44 +44,31 @@ pub(crate) struct FocusRef {
 }
 
 // Group the candidates into focus targets:
-//   - a stepper's `setting:<key>:next` region is the row's target (confirm
-//     cycles forward); its `:prev` twin is dropped -- Left sends the Prev op
-//     directly, so the twin region is never needed;
-//   - a dropdown `:open` region and a slider `:drag` region are value rows
+//   - a stepper's `Next` region is the row's target (confirm cycles forward);
+//     its `Prev` twin is dropped -- Left sends the Prev op directly, so the
+//     twin region is never needed;
+//   - a dropdown `Open` region and a slider `Drag` region are value rows
 //     (Left/Right adjust);
 //   - everything else with an action is a plain activate target.
 pub(crate) fn targets(candidates: &[Candidate]) -> Vec<Target> {
     candidates
         .iter()
         .filter_map(|c| {
-            if action::key_with_verb(&c.action, "prev").is_some() {
-                return None;
-            }
-            if let Some(key) = action::key_with_verb(&c.action, "next") {
-                return Some(Target {
-                    index: c.index,
-                    rect: c.rect,
-                    setting: Some(key),
-                });
-            }
-            if let Some(key) = action::key_with_verb(&c.action, "open") {
-                return Some(Target {
-                    index: c.index,
-                    rect: c.rect,
-                    setting: Some(key),
-                });
-            }
-            if let Some(key) = action::key_with_verb(&c.action, "drag") {
-                return Some(Target {
-                    index: c.index,
-                    rect: c.rect,
-                    setting: Some(key),
-                });
-            }
-            (!c.action.is_empty()).then_some(Target {
+            let setting = match c.action.as_ref()? {
+                UiAction::Setting {
+                    verb: SettingVerb::Prev,
+                    ..
+                } => return None,
+                UiAction::Setting {
+                    key,
+                    verb: SettingVerb::Next | SettingVerb::Open | SettingVerb::Drag,
+                } => Some(*key),
+                _ => None,
+            };
+            Some(Target {
                 index: c.index,
                 rect: c.rect,
-                setting: None,
+                setting,
             })
         })
         .collect()
@@ -194,11 +181,12 @@ pub(crate) fn navigate(
 mod tests {
     use super::*;
 
+    // A candidate firing `action` text; empty text is no action.
     fn cand(index: usize, x: f32, y: f32, action: &str) -> Candidate {
         Candidate {
             index,
             rect: [x, y, 200.0, 30.0],
-            action: action.to_string(),
+            action: (!action.is_empty()).then(|| UiAction::parse(action, |_| None).unwrap()),
         }
     }
 
@@ -244,9 +232,9 @@ mod tests {
     #[test]
     fn vertical_list_walks_and_wraps() {
         let t = targets(&[
-            cand(0, 0.0, 0.0, "a:1"),
-            cand(1, 0.0, 50.0, "a:2"),
-            cand(2, 0.0, 100.0, "a:3"),
+            cand(0, 0.0, 0.0, "screen:show:1"),
+            cand(1, 0.0, 50.0, "screen:show:2"),
+            cand(2, 0.0, 100.0, "screen:show:3"),
         ]);
         let f0 = focus(&t, 0);
         assert_eq!(navigate(&t, Some(&f0), NavDirection::Down), Some(1));
@@ -288,8 +276,8 @@ mod tests {
         // target far to the side.
         let t = targets(&[
             cand(0, 200.0, 0.0, "screen:show:1"),
-            cand(1, 700.0, 40.0, "side:1"),
-            cand(2, 200.0, 90.0, "row:1"),
+            cand(1, 700.0, 40.0, "screen:show:11"),
+            cand(2, 200.0, 90.0, "screen:show:12"),
         ]);
         let f0 = focus(&t, 0);
         assert_eq!(navigate(&t, Some(&f0), NavDirection::Down), Some(2));
@@ -297,7 +285,10 @@ mod tests {
 
     #[test]
     fn vanished_focus_reanchors_from_its_last_rect() {
-        let t = targets(&[cand(0, 0.0, 0.0, "a:1"), cand(2, 0.0, 100.0, "a:3")]);
+        let t = targets(&[
+            cand(0, 0.0, 0.0, "screen:show:1"),
+            cand(2, 0.0, 100.0, "screen:show:3"),
+        ]);
         // The focused region (index 9) is gone; its rect sat between the two.
         let gone = FocusRef {
             index: 9,

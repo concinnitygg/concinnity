@@ -454,14 +454,14 @@ fn add_form_writes_string_fields_for_a_new_type() {
     let (key_j, action_j) = (field_pos("key"), field_pos("action"));
     assert!(matches!(h.form.fields[key_j].kind, form::FieldKind::Str));
     set_field(&mut world, form_panel::form_input(key_j), "Space");
-    set_field(&mut world, form_panel::form_input(action_j), "jump");
+    set_field(&mut world, form_panel::form_input(action_j), "screen:hide");
     set_field(&mut world, form_panel::NAME_INPUT, "jump_key");
     h.apply_form(FormAction::Confirm, &mut world);
     assert!(!h.form_open());
     assert_eq!(h.entries.len(), 1);
     assert_eq!(h.entries[0]["type"], "KeyBinding");
     assert_eq!(h.entries[0]["args"]["key"], "Space");
-    assert_eq!(h.entries[0]["args"]["action"], "jump");
+    assert_eq!(h.entries[0]["args"]["action"], "screen:hide");
 }
 
 #[test]

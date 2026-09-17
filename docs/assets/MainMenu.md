@@ -20,8 +20,9 @@ performance-stats toggles have chips to drive.
 
 **Items.** Each item has a `label` (the text) and an `action` fired on
 click. `action` takes the same vocabulary as [HitRegion](HitRegion.md)
-(`"scene:<name>"`, `"quit"`, `"screen:show:<name>"`, `"screen:hide"`,
-`"screen:toggle:<name>"`) plus two conveniences resolved against this menu:
+(`"quit"`, `"scene:<name>"`, `"screen:show:<name>"`, `"screen:push:<name>"`,
+`"screen:toggle:<name>"`, `"screen:hide"`, `"story:<verb>"`) plus two
+conveniences resolved against this menu:
 - `"return"`: hide this menu (the same as `"screen:hide"`).
 - `"settings"`: open a generated settings sub-menu that has a Back button.
 

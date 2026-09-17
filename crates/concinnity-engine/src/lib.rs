@@ -84,8 +84,8 @@ pub(crate) mod input;
 // The rigid-body simulation driver: builds a `concinnity_core::physics::Simulation`
 // from the world's physics content and steps it on the fixed tick.
 pub(crate) mod physics;
-// The user-facing settings registry, the `setting:<key>:<verb>` action grammar,
-// and the system that applies setting changes.
+// The user-facing settings registry and the system that applies setting
+// changes.
 pub(crate) mod settings;
 // Declarative logic (Behavior components + the shared world variables
 // store), scheduled before SpawnSystem so its requests apply the same tick.

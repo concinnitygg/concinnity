@@ -1,8 +1,10 @@
+use concinnity_core::components::StoryCommand;
 use concinnity_core::gfx::overlay::UI_REFERENCE_SIZE;
 
 use super::names::StoryNames;
 use super::widgets::{hidden_label, rounded_sprite};
 use crate::authoring::spec::{asset, spec_to_value};
+use asset::ui_action;
 
 // Choice option rows: each option gets its own rounded box behind the label
 // so the menu stands apart from the dialog box's dark backdrop. The color
@@ -47,7 +49,7 @@ pub(super) fn emit_choice_furniture(names: &StoryNames) -> Vec<serde_json::Value
             &asset::hit_region(
                 row.button.region.as_str(),
                 [280.0, y, win_w - 560.0, 44.0],
-                format!("story:choose:{}", ci),
+                ui_action::story(StoryCommand::Choose(ci)),
             )
             .set("label", row.button.label.as_str())
             .set("hover_color", [1.0f32, 0.85, 0.3])

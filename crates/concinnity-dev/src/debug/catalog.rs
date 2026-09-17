@@ -12,6 +12,7 @@
 //! A drift test below scrapes the dispatcher's own match arms, so a new verb
 //! without a catalog entry (or an entry without a verb) fails to build green.
 
+use concinnity_core::components::StoryCommand;
 use concinnity_core::settings::SettingKey;
 use serde_json::{Value, json};
 
@@ -546,21 +547,7 @@ const COMMANDS: &[Command] = &[
         params: &[
             required(
                 "action",
-                Kind::Choice(&[
-                    "start",
-                    "continue",
-                    "advance",
-                    "choose",
-                    "slot",
-                    "auto",
-                    "skip",
-                    "log",
-                    "save",
-                    "load",
-                    "pause",
-                    "settings",
-                    "settings_back",
-                ]),
+                Kind::Choice(&StoryCommand::VERBS),
                 "Story control action.",
             ),
             optional(

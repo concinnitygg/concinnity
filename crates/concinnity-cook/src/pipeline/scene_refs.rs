@@ -1,8 +1,6 @@
 //! The naming-convention pass, run after the declaration-order interning and
 //! before the payload compile.
 
-use concinnity_host::thread::asset_id;
-
 use crate::authoring::world::WorldJsonlAsset;
 
 // Resolve scene + screen associations that the runtime can no longer derive
@@ -15,10 +13,6 @@ use crate::authoring::world::WorldJsonlAsset;
 //   - A UI element (Sprite, ImageOverlay, TextLabel, Text, TextInput,
 //     HitRegion, ScrollPanel) named `<screen>_*` belongs to Screen `<screen>`.
 //     The matched screen name is written into the asset's `screen` arg.
-//   - A HitRegion or KeyBinding `action` of the form `scene:<name>`,
-//     `screen:show:<name>`, `screen:push:<name>`, or `screen:toggle:<name>`
-//     has its `<name>` part rewritten to the interned id, so `UiInputSystem`
-//     can parse an integer at runtime instead of a name.
 pub(in crate::pipeline) fn resolve_scene_refs(assets: &mut [WorldJsonlAsset]) {
     let norm = |s: &str| s.to_lowercase().replace('_', "");
 
@@ -45,21 +39,6 @@ pub(in crate::pipeline) fn resolve_scene_refs(assets: &mut [WorldJsonlAsset]) {
             .cloned()
     };
 
-    // Rewrite an action string, replacing the trailing `<name>` after the
-    // given action prefix with its interned id. Returns Some(new_action) when
-    // the action used the prefix with an unresolved name; None otherwise.
-    let resolve_action = |action: &str| -> Option<String> {
-        for prefix in ["scene:", "screen:show:", "screen:push:", "screen:toggle:"] {
-            if let Some(rest) = action.strip_prefix(prefix) {
-                if !rest.is_empty() && rest.parse::<u32>().is_err() {
-                    return Some(format!("{prefix}{}", asset_id::intern(rest).0));
-                }
-                return None;
-            }
-        }
-        None
-    };
-
     for asset in assets.iter_mut() {
         let ty = norm(&asset.asset_type);
 
@@ -78,18 +57,6 @@ pub(in crate::pipeline) fn resolve_scene_refs(assets: &mut [WorldJsonlAsset]) {
         {
             m.insert(key.to_string(), serde_json::Value::String(matched));
         }
-
-        // Resolve screen:* / scene:* action targets to interned ids.
-        if matches!(ty.as_str(), "hitregion" | "keybinding") {
-            let new_action = asset
-                .args
-                .get("action")
-                .and_then(|v| v.as_str())
-                .and_then(resolve_action);
-            if let (Some(action), serde_json::Value::Object(m)) = (new_action, &mut asset.args) {
-                m.insert("action".to_string(), serde_json::Value::String(action));
-            }
-        }
     }
 }
 
@@ -97,12 +64,13 @@ pub(in crate::pipeline) fn resolve_scene_refs(assets: &mut [WorldJsonlAsset]) {
 mod tests {
     use crate::pipeline::build_pipeline_from_str;
     use crate::pipeline::fixtures::wja;
-    use concinnity_core::components::{HitRegion, KeyBinding, Sprite, TextLabel};
+    use concinnity_core::components::{
+        HitRegion, KeyBinding, ScreenCommand, Sprite, TextLabel, UiAction,
+    };
     use concinnity_core::ecs::asset_id::AssetId;
-    use concinnity_host::thread::asset_id;
 
-    // `screen:show:<name>` / `screen:toggle:<name>` action targets are
-    // rewritten to interned ids at build time, like `scene:<name>`.
+    // `screen:toggle:<name>` action targets resolve to interned ids while the
+    // args deserialize.
     #[test]
     fn build_pipeline_resolves_screen_action_refs() {
         let world = concat!(
@@ -126,8 +94,9 @@ mod tests {
             .iter()
             .find(|d| d.name == Some(AssetId(1)))
             .expect("HitRegion def");
+        let toggle = Some(UiAction::Screen(ScreenCommand::Toggle(AssetId(0))));
         let baked: HitRegion = postcard::from_bytes(&btn.args_bytes).unwrap();
-        assert_eq!(baked.action, "screen:toggle:0");
+        assert_eq!(baked.action, toggle);
 
         let esc = result
             .defs
@@ -135,7 +104,7 @@ mod tests {
             .find(|d| d.name == Some(AssetId(2)))
             .expect("KeyBinding def");
         let baked: KeyBinding = postcard::from_bytes(&esc.args_bytes).unwrap();
-        assert_eq!(baked.action, "screen:toggle:0");
+        assert_eq!(baked.action, toggle);
     }
 
     // A Sprite/TextLabel/HitRegion named `<screen>_*` has its `screen` arg
@@ -270,48 +239,5 @@ mod tests {
         assert_eq!(assets[3].args["scene"], "other");
         // No matching prefix: no `scene` arg appears.
         assert!(assets[4].args.get("scene").is_none());
-    }
-
-    #[test]
-    fn resolve_scene_refs_rewrites_action_names_to_interned_ids() {
-        asset_id::reset_interner();
-        let mut assets = vec![
-            wja(
-                "btn",
-                "HitRegion",
-                serde_json::json!({"action": "screen:show:pause"}),
-            ),
-            wja(
-                "key",
-                "KeyBinding",
-                serde_json::json!({"action": "scene:day"}),
-            ),
-        ];
-        super::resolve_scene_refs(&mut assets);
-
-        // Names intern in resolution order on this thread's fresh interner:
-        // "pause" -> 0, "day" -> 1.
-        assert_eq!(assets[0].args["action"], "screen:show:0");
-        assert_eq!(assets[1].args["action"], "scene:1");
-    }
-
-    #[test]
-    fn resolve_scene_refs_leaves_numeric_and_foreign_actions_alone() {
-        let mut assets = vec![
-            wja(
-                "a",
-                "HitRegion",
-                serde_json::json!({"action": "screen:toggle:3"}),
-            ),
-            wja("b", "HitRegion", serde_json::json!({"action": "quit"})),
-            wja("c", "KeyBinding", serde_json::json!({"action": "scene:"})),
-        ];
-        super::resolve_scene_refs(&mut assets);
-
-        // Already an id, not a recognized prefix, and an empty target: all
-        // pass through unchanged.
-        assert_eq!(assets[0].args["action"], "screen:toggle:3");
-        assert_eq!(assets[1].args["action"], "quit");
-        assert_eq!(assets[2].args["action"], "scene:");
     }
 }

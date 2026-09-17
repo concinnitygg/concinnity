@@ -11,9 +11,10 @@
 // An `EngineDefaults` entry turns either one off. It is read rather than
 // consumed: it is a stored component now, and the runtime pass drains it.
 
-use concinnity_core::components::EngineDefaults;
+use concinnity_core::components::{EngineDefaults, StoryCommand};
 
 use super::expand::{ExpandReport, asset_name, type_norm};
+use crate::authoring::spec::asset::ui_action;
 
 // Complete a world with the two defaults stated in build-only terms. Runs
 // before menu expansion, so an injected MainMenu expands like an authored one,
@@ -133,18 +134,18 @@ fn inject_story_pause_menu(
         .any(|v| type_norm(v) == "screen" && asset_name(v) == title_screen);
 
     let mut items = vec![
-        serde_json::json!({ "label": "Resume", "action": "story:pause" }),
-        serde_json::json!({ "label": "Save", "action": "story:save" }),
-        serde_json::json!({ "label": "Load", "action": "story:load" }),
-        serde_json::json!({ "label": "Settings", "action": "story:settings" }),
+        serde_json::json!({ "label": "Resume", "action": ui_action::story(StoryCommand::TogglePause) }),
+        serde_json::json!({ "label": "Save", "action": ui_action::story(StoryCommand::OpenSave) }),
+        serde_json::json!({ "label": "Load", "action": ui_action::story(StoryCommand::OpenLoad) }),
+        serde_json::json!({ "label": "Settings", "action": ui_action::story(StoryCommand::OpenSettings) }),
     ];
     if has_title {
         items.push(serde_json::json!({
             "label": "Main Menu",
-            "action": format!("screen:show:{}", title_screen),
+            "action": ui_action::screen_show(&title_screen),
         }));
     }
-    items.push(serde_json::json!({ "label": "Quit", "action": "quit" }));
+    items.push(serde_json::json!({ "label": "Quit", "action": ui_action::quit() }));
 
     // The story system drives the pause and settings navigation (Resume /
     // Settings / the settings Back), so closing returns to the stage instead of
@@ -157,7 +158,7 @@ fn inject_story_pause_menu(
         "toggle_key": "",
         "dim": [0.0, 0.0, 0.0, 0.6],
         "settings_profile": "minimal",
-        "settings_back_action": "story:settings_back",
+        "settings_back_action": ui_action::story(StoryCommand::CloseSettings),
         "items": items,
     });
     inject(assets, report, "story_pause_menu", &name, "MainMenu", args);
@@ -169,7 +170,7 @@ fn inject_story_pause_menu(
         "story_pause_menu",
         &format!("{}_key", name),
         "KeyBinding",
-        serde_json::json!({ "key": "Escape", "action": "story:pause" }),
+        serde_json::json!({ "key": "Escape", "action": ui_action::story(StoryCommand::TogglePause) }),
     );
 
     // Point the story at its pause menu and settings entry screens so the story

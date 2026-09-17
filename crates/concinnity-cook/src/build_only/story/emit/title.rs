@@ -1,8 +1,10 @@
+use concinnity_core::components::StoryCommand;
 use concinnity_core::gfx::overlay::UI_REFERENCE_SIZE;
 
 use super::media::MediaAssets;
 use super::names::StoryNames;
 use super::widgets::{LabelStyle, label, screen, textured_cover_sprite, title_button};
+use crate::authoring::spec::asset::ui_action;
 use crate::build_only::story::model::Story;
 use crate::build_only::ui_spec::sprite;
 
@@ -64,14 +66,18 @@ pub(super) fn emit_title_screen(
     // Settings only when a settings screen exists), so their hit regions
     // follow their labels. Rows follow `TITLE_BUTTON_KEYS`.
     let rows = [
-        ("Start", 400.0, "story:start"),
-        ("Continue", 452.0, "story:continue"),
-        ("Load", 504.0, "story:load"),
-        ("Settings", 556.0, "story:settings"),
-        ("Quit", 608.0, "quit"),
+        ("Start", 400.0, ui_action::story(StoryCommand::Start)),
+        ("Continue", 452.0, ui_action::story(StoryCommand::Continue)),
+        ("Load", 504.0, ui_action::story(StoryCommand::OpenLoad)),
+        (
+            "Settings",
+            556.0,
+            ui_action::story(StoryCommand::OpenSettings),
+        ),
+        ("Quit", 608.0, ui_action::quit()),
     ];
     for (button, (text, y, action)) in title.buttons.iter().zip(rows) {
-        out.extend(title_button(button, &names.font_menu, text, y, action));
+        out.extend(title_button(button, &names.font_menu, text, y, &action));
     }
     out
 }

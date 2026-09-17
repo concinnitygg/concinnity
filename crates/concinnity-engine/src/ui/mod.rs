@@ -26,6 +26,7 @@ use concinnity_core::components::TextLabel;
 use concinnity_core::components::{
     HitRegion, KeyBinding, NavDirection, Screen, ScrollPanel, SettingOp,
 };
+use concinnity_core::components::{SettingVerb, UiAction};
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{
     Access, DropdownView, EventCursor, FontHandle, OpenDropdown, PipelineContext, ScreenStack,
@@ -58,7 +59,8 @@ struct RegionEntry {
     // fire while that screen is active; regions outside any screen only fire
     // when no screen is active.
     screen: Option<AssetId>,
-    // For a slider drag region (action `setting:<key>:drag`), the setting key.
+    // For a slider drag region (a `Setting` action with the `Drag` verb), the
+    // setting key.
     // `None` for an ordinary click region. A slider region is driven by the
     // drag pass, not the click-to-fire path.
     slider_key: Option<SettingKey>,
@@ -70,10 +72,6 @@ struct RegionEntry {
     // The region's authored y, kept so the scroll reflow can set
     // `region.y = base_y + dy` from a fresh delta each frame.
     region_base_y: f32,
-    // The collapsible group index this region's click toggles (action
-    // `group:toggle:<gid>`), or `None`. A group-toggle region flips its panel's
-    // group instead of firing an action.
-    group_toggle: Option<usize>,
     // Set by the scroll reflow when this region's row is hidden (its group is
     // collapsed); a hidden region never hovers or fires.
     hidden: bool,
@@ -369,8 +367,13 @@ impl System for UiInputSystem {
                     .unwrap_or((None, None)),
             };
             let screen = region.screen;
-            let slider_key = crate::settings::action::key_with_verb(&region.action, "drag");
-            let group_toggle = group_toggle_from_action(&region.action);
+            let slider_key = match region.action {
+                Some(UiAction::Setting {
+                    key,
+                    verb: SettingVerb::Drag,
+                }) => Some(key),
+                _ => None,
+            };
             let region_base_y = region.y;
             // A follow-label region captures the y offset to its label now, so
             // the runtime layout can move the label and the region tracks it.
@@ -393,7 +396,6 @@ impl System for UiInputSystem {
                 slider_key,
                 scroll_row: None,
                 region_base_y,
-                group_toggle,
                 hidden: false,
                 follow,
                 fit,
@@ -801,7 +803,7 @@ impl UiInputSystem {
     // Whether the engine disabled this region's setting row at runtime
     // (mirrors the hit-test loop's gating).
     fn row_disabled(&self, entry: &RegionEntry) -> bool {
-        regions::setting_row_disabled(&self.disabled_rows_cache, &entry.region.action)
+        regions::setting_row_disabled(&self.disabled_rows_cache, entry.region.action.as_ref())
     }
 
     // Advance the focus cursor for one directional pulse: Left/Right on a
@@ -1090,8 +1092,10 @@ impl UiInputSystem {
         // immutably while the regions are mutated (disjoint fields).
         let panels = &self.panels;
         for entry in self.regions.iter_mut() {
-            let is_content = crate::settings::action::key(&entry.region.action).is_some()
-                || entry.group_toggle.is_some();
+            let is_content = matches!(
+                entry.region.action,
+                Some(UiAction::Setting { .. } | UiAction::GroupToggle(_))
+            );
             if !is_content {
                 continue;
             }
@@ -1302,13 +1306,6 @@ impl UiInputSystem {
     }
 }
 
-// The collapsible-group index of a group-toggle action (`group:toggle:<gid>`),
-// or `None`. A region with `Some` here flips its panel's group instead of
-// firing an action.
-fn group_toggle_from_action(action: &str) -> Option<usize> {
-    action.strip_prefix("group:toggle:")?.parse::<usize>().ok()
-}
-
 // The one-shot edges an open dropdown reacts to this frame: pick the hovered
 // option, dismiss the list, or re-hover from a cursor move.
 struct DropdownPulses {
@@ -1374,123 +1371,50 @@ fn set_label_style(
     }
 }
 
-// Parse and execute an action string. Returns Some(StepResult) when the
-// action produces an engine-level result (e.g. Quit), None otherwise. `label`
-// is the firing region's referenced TextLabel (the value display for a
-// settings row), forwarded so GraphicsSystem can update it.
+// Execute an action. Returns Some(StepResult) when the action produces an
+// engine-level result (e.g. Quit), None otherwise. `label` is the firing
+// region's referenced TextLabel (the value display for a settings row),
+// forwarded so GraphicsSystem can update it.
 fn fire_action(
-    action: &str,
+    action: &UiAction,
     label: Option<AssetId>,
     ctx: &mut PipelineContext,
 ) -> Option<StepResult> {
-    if action == "quit" {
-        return Some(StepResult::Stop);
-    }
-    if let Some(scene_ref) = action.strip_prefix("scene:") {
-        // The build rewrites `scene:<name>` to `scene:<id>` so the target is
-        // a plain integer here (see concinnity_cook::pipeline::scene_refs).
-        match scene_ref.parse::<u32>() {
-            Ok(id) => {
-                ctx.events_mut::<SceneCommand>().send(SceneCommand {
-                    scene: AssetId(id),
-                    transition: concinnity_core::components::SceneTransition::FadeBlack,
-                });
-                // Dismiss every open screen on a scene change: the user has
-                // chosen a new context, so the whole overlay stack clears.
-                ctx.events_mut::<ScreenCommand>().send(ScreenCommand::Clear);
-            }
-            Err(_) => tracing::warn!("UiInputSystem: unresolved scene action '{}'", action),
+    match action {
+        UiAction::Quit => return Some(StepResult::Stop),
+        UiAction::Scene(scene) => {
+            ctx.events_mut::<SceneCommand>().send(SceneCommand {
+                scene: *scene,
+                transition: concinnity_core::components::SceneTransition::FadeBlack,
+            });
+            // A scene change dismisses every open screen: the user has chosen a
+            // new context, so the whole overlay stack clears.
+            ctx.events_mut::<ScreenCommand>().send(ScreenCommand::Clear);
         }
-        return None;
-    }
-    if action == "screen:hide" {
-        ctx.events_mut::<ScreenCommand>().send(ScreenCommand::Hide);
-        return None;
-    }
-    if let Some(screen_ref) = action.strip_prefix("screen:show:") {
-        match screen_ref.parse::<u32>() {
-            Ok(id) => ctx
-                .events_mut::<ScreenCommand>()
-                .send(ScreenCommand::Show(AssetId(id))),
-            Err(_) => tracing::warn!("UiInputSystem: unresolved screen action '{}'", action),
-        }
-        return None;
-    }
-    if let Some(screen_ref) = action.strip_prefix("screen:toggle:") {
-        match screen_ref.parse::<u32>() {
-            Ok(id) => ctx
-                .events_mut::<ScreenCommand>()
-                .send(ScreenCommand::Toggle(AssetId(id))),
-            Err(_) => tracing::warn!("UiInputSystem: unresolved screen action '{}'", action),
-        }
-        return None;
-    }
-    if let Some(screen_ref) = action.strip_prefix("screen:push:") {
-        match screen_ref.parse::<u32>() {
-            Ok(id) => ctx
-                .events_mut::<ScreenCommand>()
-                .send(ScreenCommand::Push(AssetId(id))),
-            Err(_) => tracing::warn!("UiInputSystem: unresolved screen action '{}'", action),
-        }
-        return None;
-    }
-    // story:start | story:advance | story:choose:<i> | the quick-row and
-    // slot-overlay controls -- the story system reads the StoryCommand and
-    // moves through its compiled graph.
-    if let Some(rest) = action.strip_prefix("story:") {
-        let cmd = match rest {
-            "start" => Some(StoryCommand::Start),
-            "continue" => Some(StoryCommand::Continue),
-            "advance" => Some(StoryCommand::Advance),
-            "auto" => Some(StoryCommand::ToggleAuto),
-            "skip" => Some(StoryCommand::ToggleSkip),
-            "log" => Some(StoryCommand::ToggleLog),
-            "save" => Some(StoryCommand::OpenSave),
-            "load" => Some(StoryCommand::OpenLoad),
-            "pause" => Some(StoryCommand::TogglePause),
-            "settings" => Some(StoryCommand::OpenSettings),
-            "settings_back" => Some(StoryCommand::CloseSettings),
-            _ => match rest.split_once(':') {
-                Some(("choose", i)) => i.parse::<usize>().ok().map(StoryCommand::Choose),
-                Some(("slot", i)) => i.parse::<usize>().ok().map(StoryCommand::Slot),
-                _ => None,
+        UiAction::Screen(cmd) => ctx.events_mut::<ScreenCommand>().send(cmd.clone()),
+        UiAction::Story(cmd) => ctx.events_mut::<StoryCommand>().send(cmd.clone()),
+        UiAction::Setting {
+            key,
+            verb: verb @ (SettingVerb::Next | SettingVerb::Prev),
+        } => ctx.events_mut::<SettingCommand>().send(SettingCommand {
+            setting: *key,
+            op: if *verb == SettingVerb::Prev {
+                SettingOp::Prev
+            } else {
+                SettingOp::Next
             },
-        };
-        match cmd {
-            Some(cmd) => ctx.events_mut::<StoryCommand>().send(cmd),
-            None => tracing::warn!("UiInputSystem: malformed story action '{}'", action),
+            value_label: label,
+            // A cycle is one discrete change: always persisted.
+            persist: true,
+        }),
+        // Slider drags, rebind captures, dropdown opens, and group toggles are
+        // driven by their own passes, not the click-to-fire path.
+        UiAction::Setting {
+            verb: SettingVerb::Drag | SettingVerb::Rebind | SettingVerb::Open,
+            ..
         }
-        return None;
+        | UiAction::GroupToggle(_) => {}
     }
-    // setting:<key>:next|prev -- cycle a graphics setting. GraphicsSystem
-    // reads the SettingCommand to apply, persist, and refresh the value label.
-    if action.starts_with("setting:") {
-        match crate::settings::action::parse(action) {
-            Some((key, verb @ ("next" | "prev"))) => {
-                let op = if verb == "prev" {
-                    SettingOp::Prev
-                } else {
-                    SettingOp::Next
-                };
-                ctx.events_mut::<SettingCommand>().send(SettingCommand {
-                    setting: key,
-                    op,
-                    value_label: label,
-                    // A cycle is one discrete change: always persisted.
-                    persist: true,
-                });
-            }
-            // Slider drags, key rebinds, and dropdown opens are driven by their
-            // own passes (the drag pass, the capture flow, the dropdown pass),
-            // not the click-to-fire path, so they never reach here from a
-            // HitRegion click; recognize them so a stray binding does not log a
-            // false "malformed" warning.
-            Some((_, "drag" | "rebind" | "open")) => {}
-            _ => tracing::warn!("UiInputSystem: malformed setting action '{}'", action),
-        }
-        return None;
-    }
-    tracing::warn!("UiInputSystem: unknown action '{}'", action);
     None
 }
 
@@ -1510,6 +1434,11 @@ mod tests {
     use concinnity_core::ecs::World;
     use concinnity_core::input::keymap::Bindable;
     use concinnity_core::window::display_mode;
+
+    // A test action from its text form, with integer targets.
+    fn act(text: &str) -> Option<UiAction> {
+        Some(UiAction::parse(text, |_| None).unwrap())
+    }
 
     fn make_frame_input(mx: f32, my: f32, clicked: bool) -> FrameInput {
         FrameInput {
@@ -1601,7 +1530,7 @@ mod tests {
             label: Some(AssetId(1)),
             hover_color: Some([1.0, 0.0, 0.0]),
             hover_scale: Some(2.0),
-            action: String::new(),
+            action: None,
             drag_handle: None,
             screen: None,
             disabled: false,
@@ -1682,7 +1611,7 @@ mod tests {
             label: Some(AssetId(1)),
             hover_color: Some([1.0, 0.85, 0.3]),
             hover_scale: Some(1.0),
-            action: "screen:show:81".to_string(),
+            action: act("screen:show:81"),
             drag_handle: None,
             screen: Some(menu),
             disabled: false,
@@ -1757,7 +1686,7 @@ mod tests {
             label: Some(AssetId(1)),
             hover_color: Some([1.0, 0.85, 0.3]),
             hover_scale: Some(1.0),
-            action: "setting:window_mode:open".to_string(),
+            action: act("setting:window_mode:open"),
             drag_handle: None,
             screen: Some(screen),
             disabled: false,
@@ -1847,7 +1776,7 @@ mod tests {
             label: Some(AssetId(1)),
             hover_color: Some([1.0, 0.85, 0.3]),
             hover_scale: Some(1.0),
-            action: "setting:resolution:open".to_string(),
+            action: act("setting:resolution:open"),
             drag_handle: None,
             screen: Some(screen),
             disabled: false,
@@ -2093,7 +2022,7 @@ mod tests {
             hover_color: Some([1.0, 0.85, 0.3]),
             // Matches the label's scale, so hover must not resize it.
             hover_scale: Some(0.66),
-            action: String::new(),
+            action: None,
             drag_handle: None,
             screen: None,
             disabled: false,
@@ -2126,7 +2055,7 @@ mod tests {
             label: None,
             hover_color: None,
             hover_scale: None,
-            action: "scene:3".to_string(),
+            action: act("scene:3"),
             drag_handle: None,
             screen: None,
             disabled: false,
@@ -2156,7 +2085,7 @@ mod tests {
             label: None,
             hover_color: None,
             hover_scale: None,
-            action: "quit".to_string(),
+            action: act("quit"),
             drag_handle: None,
             screen: None,
             disabled: false,
@@ -2270,7 +2199,7 @@ mod tests {
             label: None,
             hover_color: None,
             hover_scale: None,
-            action: "scene:7".to_string(),
+            action: act("scene:7"),
             drag_handle: None,
             screen: Some(screen_id),
             disabled: false,
@@ -2327,7 +2256,7 @@ mod tests {
             label: None,
             hover_color: None,
             hover_scale: None,
-            action: "scene:7".to_string(),
+            action: act("scene:7"),
             drag_handle: None,
             screen: None,
             disabled: false,
@@ -2364,7 +2293,7 @@ mod tests {
             label: None,
             hover_color: None,
             hover_scale: None,
-            action: "screen:hide".to_string(),
+            action: act("screen:hide"),
             drag_handle: None,
             screen: None,
             disabled: false,
@@ -2389,7 +2318,7 @@ mod tests {
             label: None,
             hover_color: None,
             hover_scale: None,
-            action: "screen:show:42".to_string(),
+            action: act("screen:show:42"),
             drag_handle: None,
             screen: None,
             disabled: false,
@@ -2412,7 +2341,7 @@ mod tests {
             label: None,
             hover_color: None,
             hover_scale: None,
-            action: "screen:toggle:43".to_string(),
+            action: act("screen:toggle:43"),
             drag_handle: None,
             screen: None,
             disabled: false,
@@ -2440,7 +2369,7 @@ mod tests {
             label: Some(value_label),
             hover_color: None,
             hover_scale: None,
-            action: "setting:vsync:next".to_string(),
+            action: act("setting:vsync:next"),
             drag_handle: None,
             screen: None,
             disabled: false,
@@ -2462,7 +2391,7 @@ mod tests {
         // HitRegion is 100x40, so click within those bounds.
         let mut world = World::new();
         world.add_component(HitRegion {
-            action: "setting:vsync:prev".to_string(),
+            action: act("setting:vsync:prev"),
             ..Default::default()
         });
         world.start(SYSTEMS).unwrap();
@@ -2488,7 +2417,7 @@ mod tests {
             label: None,
             hover_color: None,
             hover_scale: None,
-            action: "setting:ray_traced_reflections:next".to_string(),
+            action: act("setting:ray_traced_reflections:next"),
             drag_handle: None,
             screen: None,
             disabled: true,
@@ -2520,7 +2449,7 @@ mod tests {
             label: None,
             hover_color: None,
             hover_scale: None,
-            action: "setting:show_fps:next".to_string(),
+            action: act("setting:show_fps:next"),
             drag_handle: None,
             screen: None,
             disabled: false,
@@ -2554,7 +2483,7 @@ mod tests {
             label: Some(value_label),
             hover_color: None,
             hover_scale: None,
-            action: "setting:exposure:drag".to_string(),
+            action: act("setting:exposure:drag"),
             drag_handle: Some(AssetId(8)),
             screen: None,
             disabled: false,
@@ -2627,7 +2556,7 @@ mod tests {
             label: Some(header),
             hover_color: None,
             hover_scale: None,
-            action: "group:toggle:0".to_string(),
+            action: act("group:toggle:0"),
             drag_handle: None,
             screen: Some(screen),
             disabled: false,
@@ -2644,7 +2573,7 @@ mod tests {
             label: None,
             hover_color: None,
             hover_scale: None,
-            action: "setting:vsync:next".to_string(),
+            action: act("setting:vsync:next"),
             drag_handle: None,
             screen: Some(screen),
             disabled: false,
@@ -2805,7 +2734,7 @@ mod tests {
                 label: None,
                 hover_color: None,
                 hover_scale: None,
-                action: format!("setting:{key}:next"),
+                action: act(&format!("setting:{key}:next")),
                 drag_handle: None,
                 screen: Some(screen),
                 disabled: false,
@@ -2958,7 +2887,7 @@ mod tests {
             label: Some(value),
             hover_color: None,
             hover_scale: None,
-            action: "setting:key_forward:rebind".to_string(),
+            action: act("setting:key_forward:rebind"),
             drag_handle: None,
             screen: None,
             disabled: false,
@@ -3095,7 +3024,7 @@ mod tests {
         });
         world.add_component(KeyBinding {
             key: "Escape".to_string(),
-            action: "screen:toggle:50".to_string(),
+            action: act("screen:toggle:50"),
             ..Default::default()
         });
         world.start(SYSTEMS).unwrap();
@@ -3128,7 +3057,7 @@ mod tests {
             let mut world = World::new();
             world.add_component(KeyBinding {
                 key: key.name().to_string(),
-                action: "story:advance".to_string(),
+                action: act("story:advance"),
                 ..Default::default()
             });
             world.start(SYSTEMS).unwrap();
@@ -3154,7 +3083,7 @@ mod tests {
         let mut world = World::new();
         world.add_component(KeyBinding {
             key: "Space".to_string(),
-            action: "story:advance".to_string(),
+            action: act("story:advance"),
             ..Default::default()
         });
         world.start(SYSTEMS).unwrap();
@@ -3210,7 +3139,7 @@ mod tests {
         }
         world.add_component(KeyBinding {
             key: "Escape".to_string(),
-            action: "screen:toggle:60".to_string(),
+            action: act("screen:toggle:60"),
             ..Default::default()
         });
         world.start(SYSTEMS).unwrap();
@@ -3356,7 +3285,7 @@ mod tests {
         });
         world.add_component(KeyBinding {
             key: "T".to_string(),
-            action: "screen:toggle:100".to_string(),
+            action: act("screen:toggle:100"),
             ..Default::default()
         });
         let mut field = TextInput {
@@ -3407,7 +3336,7 @@ mod tests {
         });
         world.add_component(KeyBinding {
             key: "Space".to_string(),
-            action: "screen:show:111".to_string(),
+            action: act("screen:show:111"),
             screen: Some(AssetId(110)),
         });
         world.start(SYSTEMS).unwrap();
@@ -3607,7 +3536,7 @@ mod tests {
                 label: Some(AssetId(id)),
                 hover_color: Some([1.0, 0.85, 0.3]),
                 hover_scale: Some(1.0),
-                action: action.to_string(),
+                action: act(action),
                 drag_handle: None,
                 screen: Some(menu),
                 disabled: false,
@@ -3730,7 +3659,7 @@ mod tests {
                 label: Some(AssetId(1)),
                 hover_color: Some([1.0, 0.85, 0.3]),
                 hover_scale: Some(1.0),
-                action: format!("setting:vsync:{suffix}"),
+                action: act(&format!("setting:vsync:{suffix}")),
                 drag_handle: None,
                 screen: Some(screen),
                 disabled: false,
@@ -3746,7 +3675,7 @@ mod tests {
             label: Some(AssetId(2)),
             hover_color: Some([1.0, 0.85, 0.3]),
             hover_scale: Some(1.0),
-            action: "setting:exposure:drag".to_string(),
+            action: act("setting:exposure:drag"),
             drag_handle: None,
             screen: Some(screen),
             disabled: false,
@@ -3885,7 +3814,7 @@ mod tests {
             label: None,
             hover_color: None,
             hover_scale: None,
-            action: "story:advance".to_string(),
+            action: act("story:advance"),
             drag_handle: None,
             screen: Some(stage),
             disabled: false,
@@ -3924,7 +3853,7 @@ mod tests {
             label: Some(AssetId(7)),
             hover_color: None,
             hover_scale: None,
-            action: "setting:pad_jump:rebind".to_string(),
+            action: act("setting:pad_jump:rebind"),
             drag_handle: None,
             screen: None,
             disabled: false,

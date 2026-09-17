@@ -5,7 +5,7 @@
 
 use concinnity_core::components::{
     Camera3D, CharacterRig, DirectionalLight, FrameInput, GlobalTransform, HitRegion, RenderHandle,
-    ScrollPanel, SkeletonPose, TextLabel, Transform,
+    ScrollPanel, SkeletonPose, TextLabel, Transform, UiAction,
 };
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{
@@ -23,7 +23,6 @@ use concinnity_core::transform::propagation;
 use super::sky_follow;
 use super::*;
 use crate::settings;
-use crate::settings::action;
 use crate::settings::system::rows::{DISABLED_ROW_COLOR, expand_dim_set};
 
 // The model matrix pushed for an editor-hidden object's draw slots: zero
@@ -577,7 +576,7 @@ impl GraphicsSystem {
         let mut gated_value_labels: std::collections::HashSet<AssetId> =
             std::collections::HashSet::new();
         for r in ctx.query_mut::<HitRegion>() {
-            let Some(key) = action::key(&r.action) else {
+            let Some(UiAction::Setting { key, .. }) = r.action else {
                 continue;
             };
             if settings::setting_available(key, &caps) {

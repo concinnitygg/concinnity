@@ -15,6 +15,8 @@ use super::row_setting::row_setting;
 use super::ui_spec::{font_sizes, label_value, sprite};
 use crate::authoring::registry::build_only::Slider;
 use crate::authoring::spec::{asset, spec_to_value};
+use asset::ui_action;
+use concinnity_core::components::SettingVerb;
 
 // Where the control group (track + value) starts, as a fraction of the row
 // width. The name occupies the left part, the control the right. Matches
@@ -157,7 +159,7 @@ fn expand_one(name: &str, s: &Slider, setting: SettingKey, font_px: f32) -> Vec<
             &asset::hit_region(
                 format!("{}_drag", name),
                 [track_x, s.y, track_w, s.height],
-                format!("setting:{}:drag", setting.as_str()),
+                ui_action::setting(setting, SettingVerb::Drag),
             )
             .set("label", value_name)
             .set("drag_handle", handle_name),

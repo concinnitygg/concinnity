@@ -15,6 +15,7 @@ use concinnity_core::components::SubMeshRef;
 use concinnity_core::components::TextInput;
 use concinnity_core::components::TextLabel;
 use concinnity_core::components::Transform;
+use concinnity_core::components::UiAction;
 use concinnity_core::components::WindowMode;
 use concinnity_core::components::build_skeleton_from_joint_defs;
 use concinnity_core::components::hdr_sample_count;
@@ -1948,7 +1949,7 @@ impl GraphicsSystem {
     }
 }
 
-// Set the value TextLabel of every `setting:<key>` HitRegion to the live value
+// Set the value TextLabel of every settings-row HitRegion to the live value
 // of that setting. `current_index` maps a setting key to the index of its
 // active option (None for an unknown key). Runs once at init, before any
 // system drains the HitRegions.
@@ -1959,7 +1960,10 @@ fn sync_setting_value_labels(
     // (setting, value-label id) for each settings row.
     let rows: Vec<(SettingKey, AssetId)> = ctx
         .query::<HitRegion>()
-        .filter_map(|r| Some((crate::settings::action::key(&r.action)?, r.label?)))
+        .filter_map(|r| match r.action {
+            Some(UiAction::Setting { key, .. }) => Some((key, r.label?)),
+            _ => None,
+        })
         .collect();
 
     for (key, label_id) in rows {
@@ -1981,9 +1985,9 @@ fn sync_setting_value_labels(
 // for a label that is not one of the row's static `options` (the master preset
 // row's "Auto (High)", or the live "Custom" flip when a quality row changes).
 fn set_setting_row_label(ctx: &mut PipelineContext, key: SettingKey, text: &str) {
-    let label_id = ctx.query::<HitRegion>().find_map(|r| {
-        let row_key = crate::settings::action::key(&r.action)?;
-        (row_key == key).then_some(r.label).flatten()
+    let label_id = ctx.query::<HitRegion>().find_map(|r| match r.action {
+        Some(UiAction::Setting { key: row_key, .. }) if row_key == key => r.label,
+        _ => None,
     });
     if let Some(id) = label_id {
         for l in ctx.query_mut::<TextLabel>() {

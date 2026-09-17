@@ -3,7 +3,9 @@
 // disabled rows, and the captures GraphicsSystem's init runs on the
 // SettingsState it resolves.
 
-use concinnity_core::components::{HitRegion, ScrollPanel, Sprite, TextLabel, WindowMode};
+use concinnity_core::components::{
+    HitRegion, ScrollPanel, SettingVerb, Sprite, TextLabel, UiAction, WindowMode,
+};
 use concinnity_core::ecs::PipelineContext;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::window::display_mode;
@@ -11,7 +13,7 @@ use concinnity_core::window::display_mode;
 use super::SettingsState;
 use crate::gfx::system::{PadRebindViz, RebindViz, SliderViz};
 use crate::settings;
-use crate::settings::{SettingKey, action};
+use crate::settings::SettingKey;
 
 // Muted gray applied to the labels of a capability-disabled settings row, so it
 // reads as unavailable next to the live rows.
@@ -70,10 +72,8 @@ pub(crate) fn capture_row_labels(
     // prev/next or a dropdown's open -- references its value label).
     let mut anchors: std::collections::HashSet<AssetId> = std::collections::HashSet::new();
     for r in ctx.query::<HitRegion>() {
-        let Some((key, _)) = action::parse(&r.action) else {
-            continue;
-        };
-        if keys.contains(&key)
+        if let Some(UiAction::Setting { key, .. }) = r.action
+            && keys.contains(&key)
             && let Some(label) = r.label
         {
             anchors.insert(label);
@@ -137,7 +137,11 @@ impl SettingsState {
             .collect();
         let mut sliders: Vec<SliderViz> = Vec::new();
         for r in ctx.query::<HitRegion>() {
-            let Some(key) = action::key_with_verb(&r.action, "drag") else {
+            let Some(UiAction::Setting {
+                key,
+                verb: SettingVerb::Drag,
+            }) = r.action
+            else {
                 continue;
             };
             let (Some(handle_id), Some(value_id)) = (r.drag_handle, r.label) else {
@@ -170,19 +174,24 @@ impl SettingsState {
         self.sliders = sliders;
     }
 
-    // Capture each key-rebind row's bookkeeping from its `setting:key_*:rebind`
-    // HitRegion, then sync each value label to the live bound key. Runs once at
+    // Capture each key-rebind row's bookkeeping from its `Rebind` HitRegion, then sync each value label to the live bound key. Runs once at
     // init (after the keymap is seeded), before UiInputSystem drains the
     // HitRegions.
     pub(crate) fn init_rebind_rows(&mut self, ctx: &mut PipelineContext) {
         let mut rows: Vec<RebindViz> = Vec::new();
         let mut pad_rows: Vec<PadRebindViz> = Vec::new();
         for r in ctx.query::<HitRegion>() {
-            let (Some(key), Some(value_id)) = (action::key_with_verb(&r.action, "rebind"), r.label)
+            let (
+                Some(UiAction::Setting {
+                    key,
+                    verb: SettingVerb::Rebind,
+                }),
+                Some(value_id),
+            ) = (&r.action, r.label)
             else {
                 continue;
             };
-            match key {
+            match *key {
                 SettingKey::KeyRebind(action) => rows.push(RebindViz { action, value_id }),
                 SettingKey::PadRebind(action) => pad_rows.push(PadRebindViz { action, value_id }),
                 _ => {}
@@ -207,8 +216,18 @@ impl SettingsState {
     pub(crate) fn init_cycle_value_labels(&mut self, ctx: &mut PipelineContext) {
         let mut labels = std::collections::HashMap::new();
         for r in ctx.query::<HitRegion>() {
-            if let (Some(key), Some(value_id)) = (action::cycle_key(&r.action), r.label) {
-                labels.insert(key, value_id);
+            // A stepper row's `Next` region and a dropdown's `Open` region
+            // both carry the value label; the stepper's `Prev` twin shares it,
+            // so skipping `Prev` maps each cycle key exactly once.
+            if let (
+                Some(UiAction::Setting {
+                    key,
+                    verb: SettingVerb::Next | SettingVerb::Open,
+                }),
+                Some(value_id),
+            ) = (&r.action, r.label)
+            {
+                labels.insert(*key, value_id);
             }
         }
         self.cycle_value_labels = labels;
@@ -339,7 +358,7 @@ mod tests {
 
     fn region(action: &str, label: Option<u32>) -> HitRegion {
         HitRegion {
-            action: action.to_string(),
+            action: Some(UiAction::parse(action, |_| None).unwrap()),
             label: label.map(AssetId),
             ..Default::default()
         }

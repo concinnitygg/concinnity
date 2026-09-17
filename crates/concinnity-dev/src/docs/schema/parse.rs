@@ -153,6 +153,8 @@ fn map_type(ty: &syn::Type) -> DocFieldType {
                 // compiled form), so they document as a string like any other
                 // cross-reference field.
                 "String" | "AssetId" => DocFieldType::Str,
+                // An action is authored as its text form.
+                "UiAction" => DocFieldType::Str,
                 "TextureHandle"
                 | "MeshHandle"
                 | "MaterialHandle"

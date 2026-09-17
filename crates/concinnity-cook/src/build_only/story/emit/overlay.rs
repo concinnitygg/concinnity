@@ -1,8 +1,10 @@
+use concinnity_core::components::StoryCommand;
 use concinnity_core::gfx::overlay::UI_REFERENCE_SIZE;
 
 use super::choices::{CHOICE_BOX_COLOR, CHOICE_BOX_RADIUS};
 use super::names::StoryNames;
 use super::widgets::{LabelStyle, hidden_label, hit_region, label, rounded_sprite};
+use crate::authoring::spec::asset::ui_action;
 use crate::build_only::ui_spec::sprite;
 
 // Slot rows the save / load overlay shows at once. The story scrolls this
@@ -69,7 +71,7 @@ pub(super) fn emit_overlay(names: &StoryNames) -> Vec<serde_json::Value> {
             &row.button.region,
             (280.0, y, win_w - 560.0, 56.0),
             Some(&row.button.label),
-            &format!("story:slot:{}", i),
+            &ui_action::story(StoryCommand::Slot(i)),
         ));
     }
     out

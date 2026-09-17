@@ -24,13 +24,13 @@ mod tests {
 
     #[test]
     fn hit_region_sets_rect_and_action() {
-        let h = hit_region("resume", [10.0, 20.0, 200.0, 48.0], "menu:resume");
+        let h = hit_region("resume", [10.0, 20.0, 200.0, 48.0], "screen:hide");
         assert_eq!(h.asset_type, "HitRegion");
         let field = |k: &str| h.fields.iter().find(|(key, _)| key == k).map(|(_, v)| v);
         assert_eq!(field("width"), Some(&ArgValue::Float(200.0)));
         assert_eq!(
             field("action"),
-            Some(&ArgValue::Str("menu:resume".to_string()))
+            Some(&ArgValue::Str("screen:hide".to_string()))
         );
     }
 }

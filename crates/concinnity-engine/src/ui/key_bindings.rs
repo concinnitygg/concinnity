@@ -1,6 +1,6 @@
 // Screen toggle keys and KeyBindings, matched against the frame's pressed key.
 
-use concinnity_core::components::{KeyBinding, ScreenCommand};
+use concinnity_core::components::{KeyBinding, ScreenCommand, UiAction};
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{PipelineContext, StepResult};
 
@@ -30,22 +30,26 @@ impl UiInputSystem {
         if toggled_key || typing || intent.enter_confirm {
             return None;
         }
-        let binding = matching_binding(&self.bindings, name, self.screens.top())?;
+        let action = matching_binding(&self.bindings, name, self.screens.top())?;
         // KeyBindings carry no label (no settings row binds a key).
-        fire_action(&binding.action, None, ctx)
+        fire_action(action, None, ctx)
     }
 }
 
-// The binding a pressed key fires: the first one for `name` with an action,
+// The action a pressed key fires: the first binding for `name` with an action,
 // skipping bindings scoped to a screen other than `top`.
 fn matching_binding<'a>(
     bindings: &'a [KeyBinding],
     name: &str,
     top: Option<AssetId>,
-) -> Option<&'a KeyBinding> {
-    bindings.iter().find(|kb| {
+) -> Option<&'a UiAction> {
+    bindings.iter().find_map(|kb| {
         let scoped_out = kb.screen.is_some() && kb.screen != top;
-        kb.key == name && !kb.action.is_empty() && !scoped_out
+        if kb.key == name && !scoped_out {
+            kb.action.as_ref()
+        } else {
+            None
+        }
     })
 }
 
@@ -53,43 +57,52 @@ fn matching_binding<'a>(
 mod tests {
     use super::*;
 
-    fn binding(key: &str, action: &str, screen: Option<u32>) -> KeyBinding {
+    // A distinguishable stand-in action per binding.
+    fn action(n: usize) -> UiAction {
+        UiAction::GroupToggle(n)
+    }
+
+    fn binding(key: &str, action: Option<UiAction>, screen: Option<u32>) -> KeyBinding {
         KeyBinding {
             key: key.to_string(),
-            action: action.to_string(),
+            action,
             screen: screen.map(AssetId),
         }
     }
 
     #[test]
     fn first_match_wins() {
-        let bindings = [binding("Space", "a", None), binding("Space", "b", None)];
-        let hit = matching_binding(&bindings, "Space", None).map(|kb| kb.action.as_str());
-        assert_eq!(hit, Some("a"));
+        let bindings = [
+            binding("Space", Some(action(1)), None),
+            binding("Space", Some(action(2)), None),
+        ];
+        assert_eq!(matching_binding(&bindings, "Space", None), Some(&action(1)));
     }
 
     #[test]
     fn other_keys_do_not_match() {
-        let bindings = [binding("Enter", "a", None)];
+        let bindings = [binding("Enter", Some(action(1)), None)];
         assert!(matching_binding(&bindings, "Space", None).is_none());
     }
 
     #[test]
     fn empty_action_is_skipped() {
-        let bindings = [binding("Space", "", None), binding("Space", "b", None)];
-        let hit = matching_binding(&bindings, "Space", None).map(|kb| kb.action.as_str());
-        assert_eq!(hit, Some("b"));
+        let bindings = [
+            binding("Space", None, None),
+            binding("Space", Some(action(2)), None),
+        ];
+        assert_eq!(matching_binding(&bindings, "Space", None), Some(&action(2)));
     }
 
     #[test]
     fn scoped_binding_matches_only_under_its_top_screen() {
         let bindings = [
-            binding("Escape", "scoped", Some(7)),
-            binding("Escape", "global", None),
+            binding("Escape", Some(action(7)), Some(7)),
+            binding("Escape", Some(action(0)), None),
         ];
-        let under = |top| matching_binding(&bindings, "Escape", top).map(|kb| kb.action.as_str());
-        assert_eq!(under(Some(AssetId(7))), Some("scoped"));
-        assert_eq!(under(Some(AssetId(8))), Some("global"));
-        assert_eq!(under(None), Some("global"));
+        let under = |top| matching_binding(&bindings, "Escape", top);
+        assert_eq!(under(Some(AssetId(7))), Some(&action(7)));
+        assert_eq!(under(Some(AssetId(8))), Some(&action(0)));
+        assert_eq!(under(None), Some(&action(0)));
     }
 }

@@ -462,7 +462,9 @@ mod tests {
         });
         world.add_component(KeyBinding {
             key: "Escape".to_string(),
-            action: "screen:toggle:50".to_string(),
+            action: Some(concinnity_core::components::UiAction::Screen(
+                ScreenCommand::Toggle(AssetId(50)),
+            )),
             ..Default::default()
         });
         world.start(SYSTEMS).unwrap();
