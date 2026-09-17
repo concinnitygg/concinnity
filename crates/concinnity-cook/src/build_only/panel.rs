@@ -2,20 +2,24 @@
 // heading TextLabel inset from the top-left. The generated names follow the
 // `<screen>_*` scoping rule documented on `crate::authoring::schema::panel`.
 
-use super::expand::{asset_name, type_norm};
+use super::expand::{asset_name, registered_type};
 use super::ui_spec::label_value;
+use crate::authoring::registry::RegisteredType;
 use crate::authoring::registry::build_only::Panel;
 use crate::authoring::spec::{asset, spec_to_value};
 
 // Replace every Panel asset with the concrete UI assets it expands to.
 pub(crate) fn expand_panels(assets: &mut Vec<serde_json::Value>) -> Result<(), String> {
-    if !assets.iter().any(|v| type_norm(v) == "panel") {
+    if !assets
+        .iter()
+        .any(|v| registered_type(v) == Some(RegisteredType::Panel))
+    {
         return Ok(());
     }
 
     let mut result: Vec<serde_json::Value> = Vec::new();
     for value in assets.drain(..) {
-        if type_norm(&value) != "panel" {
+        if registered_type(&value) != Some(RegisteredType::Panel) {
             result.push(value);
             continue;
         }
@@ -88,7 +92,11 @@ mod tests {
         })];
         expand_panels(&mut assets).unwrap();
 
-        assert!(!assets.iter().any(|v| type_norm(v) == "panel"));
+        assert!(
+            !assets
+                .iter()
+                .any(|v| registered_type(v) == Some(RegisteredType::Panel))
+        );
 
         let bg = by_name(&assets, "pause_card_bg");
         assert_eq!(bg["type"], "Sprite");

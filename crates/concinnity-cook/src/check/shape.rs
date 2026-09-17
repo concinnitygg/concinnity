@@ -19,10 +19,6 @@ use std::collections::HashSet;
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::WorldJsonlAsset;
 
-fn norm(t: &str) -> String {
-    t.to_lowercase().replace('_', "")
-}
-
 // A non-empty string arg, i.e. an explicit authored reference. Non-string and
 // empty values are left to the per-asset arg checks.
 fn str_arg<'a>(asset: &'a WorldJsonlAsset, field: &str) -> Option<&'a str> {
@@ -33,11 +29,11 @@ fn str_arg<'a>(asset: &'a WorldJsonlAsset, field: &str) -> Option<&'a str> {
         .filter(|s| !s.is_empty())
 }
 
-// Names of every asset whose normalized type matches.
-fn names_of_type<'a>(assets: &'a [WorldJsonlAsset], type_norm: &str) -> HashSet<&'a str> {
+// Names of every asset of the given type.
+fn names_of_type(assets: &[WorldJsonlAsset], asset_type: RegisteredType) -> HashSet<&str> {
     assets
         .iter()
-        .filter(|a| norm(&a.asset_type) == type_norm)
+        .filter(|a| a.asset_type == asset_type)
         .map(|a| a.name.as_str())
         .collect()
 }
@@ -75,10 +71,9 @@ pub(crate) fn check_shape(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) 
 // present), so a violation always means two declared or generated instances.
 fn check_singletons(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
     for ty in RegisteredType::all().iter().filter(|t| t.singleton()) {
-        let type_norm = norm(ty.as_str());
         let names: Vec<&str> = assets
             .iter()
-            .filter(|a| norm(&a.asset_type) == type_norm)
+            .filter(|a| a.asset_type == *ty)
             .map(|a| a.name.as_str())
             .collect();
         if names.len() > 1 {
@@ -98,7 +93,7 @@ fn check_singletons(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
 fn check_initial_screens(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
     let initial: Vec<&str> = assets
         .iter()
-        .filter(|a| norm(&a.asset_type) == "screen")
+        .filter(|a| a.asset_type == RegisteredType::Screen)
         .filter(|a| a.args.get("initial").and_then(|v| v.as_bool()) == Some(true))
         .map(|a| a.name.as_str())
         .collect();
@@ -118,14 +113,17 @@ fn check_initial_screens(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
 // resolution in the cross-reference validator; this rule only judges
 // ownership, so a dangling focus reports once.
 fn check_focus_ownership(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
-    let screens = names_of_type(assets, "screen");
-    for screen in assets.iter().filter(|a| norm(&a.asset_type) == "screen") {
+    let screens = names_of_type(assets, RegisteredType::Screen);
+    for screen in assets
+        .iter()
+        .filter(|a| a.asset_type == RegisteredType::Screen)
+    {
         let Some(focus) = str_arg(screen, "focus") else {
             continue;
         };
         let Some(input) = assets
             .iter()
-            .find(|a| norm(&a.asset_type) == "textinput" && a.name == focus)
+            .find(|a| a.asset_type == RegisteredType::TextInput && a.name == focus)
         else {
             continue;
         };
@@ -150,11 +148,13 @@ fn check_focus_ownership(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
 fn check_renderable_contract(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
     let has_graphics = assets
         .iter()
-        .any(|a| norm(&a.asset_type) == "graphicsconfig");
+        .any(|a| a.asset_type == RegisteredType::GraphicsConfig);
     if !has_graphics {
         return;
     }
-    let has_window = assets.iter().any(|a| norm(&a.asset_type) == "window");
+    let has_window = assets
+        .iter()
+        .any(|a| a.asset_type == RegisteredType::Window);
     if !has_window {
         errors.push(
             "world renders (has a GraphicsConfig) but has no Window; declare one \
@@ -168,7 +168,7 @@ fn check_renderable_contract(assets: &[WorldJsonlAsset], errors: &mut Vec<String
 // command buffer per draw pass, sized at init from a fixed bucket count. No
 // filler: the count is exactly what the world declares.
 fn check_shader_budget(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
-    let shaders = names_of_type(assets, "shader");
+    let shaders = names_of_type(assets, RegisteredType::Shader);
     let max = concinnity_core::gfx::render_types::MAX_SHADER_BUCKETS;
     if shaders.len() > max {
         let mut names: Vec<&str> = shaders.into_iter().collect();
@@ -188,24 +188,21 @@ fn check_shader_budget(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
 // it were not there. No filler: this is a pure authoring constraint.
 fn check_material_shader_consumers(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
     // (consumer type, what renders it) for the draw paths with no bucket.
-    const UNSUPPORTED: &[(&str, &str)] = &[
-        ("instancedprop", "instanced draws"),
-        ("skinnedmesh", "skinned draws"),
-        ("voxelworld", "voxel chunk draws"),
+    const UNSUPPORTED: &[(RegisteredType, &str)] = &[
+        (RegisteredType::InstancedProp, "instanced draws"),
+        (RegisteredType::SkinnedMesh, "skinned draws"),
+        (RegisteredType::VoxelWorld, "voxel chunk draws"),
     ];
     let shaded: HashSet<&str> = assets
         .iter()
-        .filter(|a| norm(&a.asset_type) == "material" && str_arg(a, "shader").is_some())
+        .filter(|a| a.asset_type == RegisteredType::Material && str_arg(a, "shader").is_some())
         .map(|a| a.name.as_str())
         .collect();
     if shaded.is_empty() {
         return;
     }
     for (consumer_type, draws) in UNSUPPORTED {
-        for consumer in assets
-            .iter()
-            .filter(|a| norm(&a.asset_type) == *consumer_type)
-        {
+        for consumer in assets.iter().filter(|a| a.asset_type == *consumer_type) {
             let Some(material) = str_arg(consumer, "material") else {
                 continue;
             };
@@ -216,7 +213,11 @@ fn check_material_shader_consumers(assets: &[WorldJsonlAsset], errors: &mut Vec<
                 "{} '{}' uses material '{}', which names a Shader, but {} always render with the \
                  world's default Shader; drop the Shader from that material or give '{}' a \
                  material without one",
-                consumer.asset_type, consumer.name, material, draws, consumer.name
+                consumer.asset_type.as_str(),
+                consumer.name,
+                material,
+                draws,
+                consumer.name
             ));
         }
     }
@@ -226,10 +227,10 @@ fn check_material_shader_consumers(assets: &[WorldJsonlAsset], errors: &mut Vec<
 mod tests {
     use super::*;
 
-    fn asset(name: &str, asset_type: &str, args: serde_json::Value) -> WorldJsonlAsset {
+    fn asset(name: &str, asset_type: RegisteredType, args: serde_json::Value) -> WorldJsonlAsset {
         WorldJsonlAsset {
             name: name.to_string(),
-            asset_type: asset_type.to_string(),
+            asset_type,
             args,
         }
     }
@@ -242,11 +243,11 @@ mod tests {
 
     fn render_stack() -> Vec<WorldJsonlAsset> {
         vec![
-            asset("gfx", "GraphicsConfig", serde_json::json!({})),
-            asset("win", "Window", serde_json::json!({})),
+            asset("gfx", RegisteredType::GraphicsConfig, serde_json::json!({})),
+            asset("win", RegisteredType::Window, serde_json::json!({})),
             asset(
                 "scene_shader",
-                "Shader",
+                RegisteredType::Shader,
                 serde_json::json!({"fragment": "x.slang"}),
             ),
         ]
@@ -255,7 +256,7 @@ mod tests {
     #[test]
     fn a_second_singleton_instance_is_an_error() {
         let mut assets = render_stack();
-        assets.push(asset("win2", "Window", serde_json::json!({})));
+        assets.push(asset("win2", RegisteredType::Window, serde_json::json!({})));
         let errs = errors_for(&assets);
         assert_eq!(errs.len(), 1, "{errs:?}");
         assert!(errs[0].contains("Window is a world singleton"));
@@ -265,8 +266,16 @@ mod tests {
     #[test]
     fn one_of_each_singleton_passes() {
         let mut assets = render_stack();
-        assets.push(asset("app", "AppConfig", serde_json::json!({})));
-        assets.push(asset("phys", "PhysicsConfig", serde_json::json!({})));
+        assets.push(asset(
+            "app",
+            RegisteredType::AppConfig,
+            serde_json::json!({}),
+        ));
+        assets.push(asset(
+            "phys",
+            RegisteredType::PhysicsConfig,
+            serde_json::json!({}),
+        ));
         assert!(errors_for(&assets).is_empty());
     }
 
@@ -275,10 +284,14 @@ mod tests {
         let mut assets = render_stack();
         assets.push(asset(
             "menu",
-            "Screen",
+            RegisteredType::Screen,
             serde_json::json!({"initial": true}),
         ));
-        assets.push(asset("hud", "Screen", serde_json::json!({"initial": true})));
+        assets.push(asset(
+            "hud",
+            RegisteredType::Screen,
+            serde_json::json!({"initial": true}),
+        ));
         let errs = errors_for(&assets);
         assert_eq!(errs.len(), 1, "{errs:?}");
         assert!(errs[0].contains("menu") && errs[0].contains("hud"));
@@ -289,10 +302,10 @@ mod tests {
         let mut assets = render_stack();
         assets.push(asset(
             "menu",
-            "Screen",
+            RegisteredType::Screen,
             serde_json::json!({"initial": true}),
         ));
-        assets.push(asset("hud", "Screen", serde_json::json!({})));
+        assets.push(asset("hud", RegisteredType::Screen, serde_json::json!({})));
         assert!(errors_for(&assets).is_empty());
     }
 
@@ -301,12 +314,16 @@ mod tests {
         let mut assets = render_stack();
         assets.push(asset(
             "pause",
-            "Screen",
+            RegisteredType::Screen,
             serde_json::json!({"focus": "menu_search"}),
         ));
-        assets.push(asset("menu", "Screen", serde_json::json!({})));
+        assets.push(asset("menu", RegisteredType::Screen, serde_json::json!({})));
         // Owned by `menu` via the name prefix.
-        assets.push(asset("menu_search", "TextInput", serde_json::json!({})));
+        assets.push(asset(
+            "menu_search",
+            RegisteredType::TextInput,
+            serde_json::json!({}),
+        ));
         let errs = errors_for(&assets);
         assert_eq!(errs.len(), 1, "{errs:?}");
         assert!(errs[0].contains("Screen 'pause'"));
@@ -318,34 +335,42 @@ mod tests {
         let mut assets = render_stack();
         assets.push(asset(
             "menu",
-            "Screen",
+            RegisteredType::Screen,
             serde_json::json!({"focus": "menu_search"}),
         ));
-        assets.push(asset("menu_search", "TextInput", serde_json::json!({})));
+        assets.push(asset(
+            "menu_search",
+            RegisteredType::TextInput,
+            serde_json::json!({}),
+        ));
         // A global (unowned) input may be focused from any screen.
         assets.push(asset(
             "pause",
-            "Screen",
+            RegisteredType::Screen,
             serde_json::json!({"focus": "console_line"}),
         ));
-        assets.push(asset("console_line", "TextInput", serde_json::json!({})));
+        assets.push(asset(
+            "console_line",
+            RegisteredType::TextInput,
+            serde_json::json!({}),
+        ));
         assert!(errors_for(&assets).is_empty());
     }
 
     #[test]
     fn explicit_screen_field_overrides_the_prefix_for_ownership() {
         let mut assets = render_stack();
-        assets.push(asset("menu", "Screen", serde_json::json!({})));
+        assets.push(asset("menu", RegisteredType::Screen, serde_json::json!({})));
         assets.push(asset(
             "pause",
-            "Screen",
+            RegisteredType::Screen,
             serde_json::json!({"focus": "menu_search"}),
         ));
         // Named under `menu_` but explicitly owned by `pause`: the explicit
         // field wins, exactly as the build's membership resolution decides.
         assets.push(asset(
             "menu_search",
-            "TextInput",
+            RegisteredType::TextInput,
             serde_json::json!({"screen": "pause"}),
         ));
         assert!(errors_for(&assets).is_empty());
@@ -359,7 +384,7 @@ mod tests {
         let mut assets = render_stack();
         assets.push(asset(
             "menu",
-            "Screen",
+            RegisteredType::Screen,
             serde_json::json!({"focus": "ghost"}),
         ));
         assert!(errors_for(&assets).is_empty());
@@ -367,7 +392,11 @@ mod tests {
 
     #[test]
     fn graphics_config_without_a_window_reports_it() {
-        let assets = vec![asset("gfx", "GraphicsConfig", serde_json::json!({}))];
+        let assets = vec![asset(
+            "gfx",
+            RegisteredType::GraphicsConfig,
+            serde_json::json!({}),
+        )];
         let errs = errors_for(&assets);
         assert!(errs.iter().any(|e| e.contains("no Window")), "{errs:?}");
     }
@@ -376,8 +405,8 @@ mod tests {
     fn graphics_config_without_a_shader_is_fine() {
         // A world that declares no Shader renders with the engine's own program.
         let assets = vec![
-            asset("gfx", "GraphicsConfig", serde_json::json!({})),
-            asset("win", "Window", serde_json::json!({})),
+            asset("gfx", RegisteredType::GraphicsConfig, serde_json::json!({})),
+            asset("win", RegisteredType::Window, serde_json::json!({})),
         ];
         assert!(errors_for(&assets).is_empty());
     }
@@ -389,12 +418,20 @@ mod tests {
 
     #[test]
     fn a_non_rendering_world_needs_no_render_stack() {
-        let assets = vec![asset("clip", "AudioClip", serde_json::json!({}))];
+        let assets = vec![asset(
+            "clip",
+            RegisteredType::AudioClip,
+            serde_json::json!({}),
+        )];
         assert!(errors_for(&assets).is_empty());
     }
 
     fn shader(name: &str) -> WorldJsonlAsset {
-        asset(name, "Shader", serde_json::json!({"fragment": "x.slang"}))
+        asset(
+            name,
+            RegisteredType::Shader,
+            serde_json::json!({"fragment": "x.slang"}),
+        )
     }
 
     #[test]
@@ -419,13 +456,13 @@ mod tests {
     fn a_shaded_material_on_an_unbucketed_consumer_is_an_error() {
         let shaded = asset(
             "hero_mat",
-            "Material",
+            RegisteredType::Material,
             serde_json::json!({"shader": "custom_shader"}),
         );
         for (consumer_type, name) in [
-            ("InstancedProp", "grass"),
-            ("SkinnedMesh", "hero"),
-            ("VoxelWorld", "terrain"),
+            (RegisteredType::InstancedProp, "grass"),
+            (RegisteredType::SkinnedMesh, "hero"),
+            (RegisteredType::VoxelWorld, "terrain"),
         ] {
             let mut assets = render_stack();
             assets.push(shader("custom_shader"));
@@ -436,7 +473,7 @@ mod tests {
                 serde_json::json!({"material": "hero_mat"}),
             ));
             let errs = errors_for(&assets);
-            assert_eq!(errs.len(), 1, "{consumer_type}: {errs:?}");
+            assert_eq!(errs.len(), 1, "{consumer_type:?}: {errs:?}");
             assert!(errs[0].contains("hero_mat"), "{errs:?}");
             assert!(errs[0].contains(name), "{errs:?}");
         }
@@ -447,24 +484,24 @@ mod tests {
         let mut assets = render_stack();
         assets.push(asset(
             "plain_mat",
-            "Material",
+            RegisteredType::Material,
             serde_json::json!({"roughness": 0.5}),
         ));
         assets.push(asset(
             "grass",
-            "InstancedProp",
+            RegisteredType::InstancedProp,
             serde_json::json!({"material": "plain_mat"}),
         ));
         // A Prop renders through the bucketed path, so a Shader is fine there.
         assets.push(shader("custom_shader"));
         assets.push(asset(
             "wall_mat",
-            "Material",
+            RegisteredType::Material,
             serde_json::json!({"shader": "custom_shader"}),
         ));
         assets.push(asset(
             "wall",
-            "Prop",
+            RegisteredType::Prop,
             serde_json::json!({"material": "wall_mat"}),
         ));
         assert!(errors_for(&assets).is_empty());

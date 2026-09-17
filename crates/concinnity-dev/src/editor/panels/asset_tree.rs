@@ -78,7 +78,7 @@ pub(crate) fn groups_from(loaded: &LoadedWorld) -> Vec<TreeGroup> {
         };
         let entry = TreeAsset {
             name: asset.name.clone(),
-            asset_type: asset.asset_type.clone(),
+            asset_type: asset.asset_type.as_str().to_string(),
             badge,
             promote: prov.is_overridable().then(|| promote_entry(loaded, asset)),
         };
@@ -127,7 +127,7 @@ fn promote_entry(
         .unwrap_or_else(|| asset.args.clone());
     serde_json::json!({
         "name": asset.name,
-        "type": asset.asset_type,
+        "type": asset.asset_type.as_str(),
         "args": args,
     })
 }
@@ -211,13 +211,14 @@ pub(crate) fn rows(groups: &[TreeGroup], open: &[usize], filter: &str) -> Vec<Tr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_cook::authoring::registry::RegisteredType;
     use concinnity_cook::authoring::world::WorldJsonlAsset;
     use concinnity_cook::build_only::{GeneratedAsset, InjectedAsset, ShadowedAsset};
 
-    fn asset(name: &str, ty: &str) -> WorldJsonlAsset {
+    fn asset(name: &str, asset_type: RegisteredType) -> WorldJsonlAsset {
         WorldJsonlAsset {
             name: name.to_string(),
-            asset_type: ty.to_string(),
+            asset_type,
             args: serde_json::json!({"k": 1}),
         }
     }
@@ -227,12 +228,12 @@ mod tests {
     fn loaded() -> LoadedWorld {
         LoadedWorld {
             assets: vec![
-                asset("cam", "Camera3D"),
-                asset("fox_mat_wood", "Material"),
-                asset("fox_mat_b", "Material"),
-                asset("fox_mat_a", "Material"),
-                asset("hud_font", "Font"),
-                asset("menu_tab_0", "TextLabel"),
+                asset("cam", RegisteredType::Camera3D),
+                asset("fox_mat_wood", RegisteredType::Material),
+                asset("fox_mat_b", RegisteredType::Material),
+                asset("fox_mat_a", RegisteredType::Material),
+                asset("hud_font", RegisteredType::Font),
+                asset("menu_tab_0", RegisteredType::TextLabel),
             ],
             injected: vec![InjectedAsset {
                 name: "hud_font".to_string(),

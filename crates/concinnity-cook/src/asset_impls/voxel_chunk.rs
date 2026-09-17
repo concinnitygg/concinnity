@@ -1,5 +1,7 @@
 use concinnity_core::components::VoxelChunk;
 
+use crate::authoring::registry::RegisteredType;
+
 impl crate::asset::BuildAsset for VoxelChunk {
     fn compile_payload(
         args: &serde_json::Value,
@@ -8,10 +10,7 @@ impl crate::asset::BuildAsset for VoxelChunk {
         let palette_lookup = |bt_name: &str| {
             ctx.all_assets
                 .iter()
-                .find(|a| {
-                    let tn = a.asset_type.to_lowercase().replace('_', "");
-                    (tn == "blocktype" || tn == "block") && a.name == bt_name
-                })
+                .find(|a| a.asset_type == RegisteredType::BlockType && a.name == bt_name)
                 .map(|a| a.args.clone())
         };
         crate::compile::geometry::compile_voxel_chunk_payload(args, palette_lookup)
@@ -25,10 +24,10 @@ mod tests {
     use crate::asset::{BuildAsset, BuildCtx};
     use crate::authoring::world::WorldJsonlAsset;
 
-    fn block_type(name: &str, asset_type: &str) -> WorldJsonlAsset {
+    fn block_type(name: &str) -> WorldJsonlAsset {
         WorldJsonlAsset {
             name: name.to_string(),
-            asset_type: asset_type.to_string(),
+            asset_type: RegisteredType::BlockType,
             args: serde_json::json!({"solid": true}),
         }
     }
@@ -39,28 +38,25 @@ mod tests {
 
     #[test]
     fn the_palette_resolves_against_sibling_block_type_assets() {
-        // The declared type is matched case- and underscore-insensitively.
-        for type_name in ["BlockType", "block_type", "block"] {
-            let assets = [block_type("stone", type_name)];
-            let ctx = BuildCtx {
-                name: "chunk",
-                platform: concinnity_core::platform::Platform::Metal,
-                assets_dir: None,
-                artifacts_dir: None,
-                all_assets: &assets,
-            };
-            let payload = VoxelChunk::compile_payload(&args(), &ctx).expect("chunk compiles");
-            let expected = crate::compile::geometry::compile_voxel_chunk_payload(&args(), |_| {
-                Some(serde_json::json!({"solid": true}))
-            })
-            .unwrap();
-            assert_eq!(payload, expected, "type '{type_name}' should resolve");
-        }
+        let assets = [block_type("stone")];
+        let ctx = BuildCtx {
+            name: "chunk",
+            platform: concinnity_core::platform::Platform::Metal,
+            assets_dir: None,
+            artifacts_dir: None,
+            all_assets: &assets,
+        };
+        let payload = VoxelChunk::compile_payload(&args(), &ctx).expect("chunk compiles");
+        let expected = crate::compile::geometry::compile_voxel_chunk_payload(&args(), |_| {
+            Some(serde_json::json!({"solid": true}))
+        })
+        .unwrap();
+        assert_eq!(payload, expected);
     }
 
     #[test]
     fn a_block_type_with_another_name_does_not_satisfy_the_palette() {
-        let assets = [block_type("dirt", "BlockType")];
+        let assets = [block_type("dirt")];
         let ctx = BuildCtx {
             name: "chunk",
             platform: concinnity_core::platform::Platform::Metal,

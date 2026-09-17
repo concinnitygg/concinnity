@@ -2,7 +2,8 @@
 // declared. When a Window carries no title of its own, the application name
 // fills it, so a running game shows its own name in the title bar.
 
-use super::expand::{ExpandReport, asset_name, type_norm};
+use super::expand::{ExpandReport, asset_name, registered_type};
+use crate::authoring::registry::RegisteredType;
 
 // Enforce the single-AppConfig rule and feed its name into any untitled
 // Window. Runs after the first companion round, so a rendering world's
@@ -16,7 +17,7 @@ pub(crate) fn apply_app_config(
     let mut app_name: Option<String> = None;
     let mut first: Option<String> = None;
     for v in assets.iter() {
-        if type_norm(v) != "appconfig" {
+        if registered_type(v) != Some(RegisteredType::AppConfig) {
             continue;
         }
         let name = asset_name(v);
@@ -45,7 +46,7 @@ pub(crate) fn apply_app_config(
     // Window arrives with empty args, so a rendering world's window picks up the
     // application name; an authored `title` is left untouched.
     for v in assets.iter_mut() {
-        if type_norm(v) != "window" {
+        if registered_type(v) != Some(RegisteredType::Window) {
             continue;
         }
         let name = asset_name(v);
@@ -93,7 +94,7 @@ mod tests {
     fn title_of(assets: &[serde_json::Value]) -> Option<String> {
         assets
             .iter()
-            .find(|v| type_norm(v) == "window")
+            .find(|v| registered_type(v) == Some(RegisteredType::Window))
             .and_then(|v| v.get("args"))
             .and_then(|a| a.get("title"))
             .and_then(|t| t.as_str())

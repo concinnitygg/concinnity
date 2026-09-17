@@ -5,8 +5,9 @@
 
 use std::path::Path;
 
-use super::expand::{ExpandReport, asset_name, type_norm};
+use super::expand::{ExpandReport, asset_name, registered_type};
 use super::preset::load_preset_obj;
+use crate::authoring::registry::RegisteredType;
 
 // The Prop instance a prefab is expanded under: the name its generated assets
 // are prefixed with, and the placement its entries are composed onto. Nested
@@ -20,7 +21,7 @@ struct Instance<'a> {
 
 pub(crate) fn expand_prefabs(
     asset_values: &mut Vec<serde_json::Value>,
-    authored: &std::collections::HashMap<String, String>,
+    authored: &std::collections::HashMap<String, RegisteredType>,
     report: &mut ExpandReport,
     assets_dir: Option<&Path>,
 ) -> Result<(), String> {
@@ -30,7 +31,7 @@ pub(crate) fn expand_prefabs(
     let mut non_prefab: Vec<serde_json::Value> = Vec::new();
 
     for value in asset_values.drain(..) {
-        if type_norm(&value) == "prefab" {
+        if registered_type(&value) == Some(RegisteredType::Prefab) {
             let name = asset_name(&value);
             if !name.is_empty() {
                 prefab_defs.insert(name, value);
@@ -51,7 +52,7 @@ pub(crate) fn expand_prefabs(
     // `result` yet, so the merges apply after the rebuild.
     let mut merges: Vec<(String, serde_json::Value)> = Vec::new();
     for value in non_prefab {
-        if type_norm(&value) != "prop" {
+        if registered_type(&value) != Some(RegisteredType::Prop) {
             result.push(value);
             continue;
         }
@@ -124,7 +125,7 @@ pub(crate) fn expand_prefabs(
 fn resolve_generated(
     entry: &serde_json::Value,
     instance_name: &str,
-    authored: &std::collections::HashMap<String, String>,
+    authored: &std::collections::HashMap<String, RegisteredType>,
     taken: &mut std::collections::HashSet<String>,
     report: &mut ExpandReport,
     merges: &mut Vec<(String, serde_json::Value)>,
@@ -136,16 +137,19 @@ fn resolve_generated(
         .unwrap_or("?")
         .to_string();
 
-    if let Some(authored_type) = authored.get(&name) {
-        if authored_type.to_lowercase().replace('_', "") != type_norm(entry) {
+    if let Some(&authored_type) = authored.get(&name) {
+        if registered_type(entry) != Some(authored_type) {
             return Err(format!(
                 "Prop '{}': generated asset '{}' ({}) collides with your {} asset of the same \
                  name; rename that asset or the instance",
-                instance_name, name, entry_type, authored_type,
+                instance_name,
+                name,
+                entry_type,
+                authored_type.as_str(),
             ));
         }
         let args = entry.get("args").cloned().unwrap_or(serde_json::json!({}));
-        report.record_shadowed(&name, authored_type, instance_name, args.clone());
+        report.record_shadowed(&name, authored_type.as_str(), instance_name, args.clone());
         merges.push((name, args));
         return Ok(false);
     }
@@ -344,27 +348,11 @@ fn f32_arr3(v: &serde_json::Value, key: &str, default: [f32; 3]) -> [f32; 3] {
 mod tests {
     use super::*;
 
-    fn type_norm_str(v: &serde_json::Value) -> String {
-        v.get("type")
-            .and_then(|t| t.as_str())
-            .unwrap_or("")
-            .to_lowercase()
-            .replace('_', "")
-    }
-
     // Mirror expand_world: snapshot the authored names before expanding.
     fn expand(assets: &mut Vec<serde_json::Value>) -> Result<ExpandReport, String> {
-        let authored: std::collections::HashMap<String, String> = assets
+        let authored: std::collections::HashMap<String, RegisteredType> = assets
             .iter()
-            .map(|v| {
-                (
-                    asset_name(v),
-                    v.get("type")
-                        .and_then(|t| t.as_str())
-                        .unwrap_or("?")
-                        .to_string(),
-                )
-            })
+            .filter_map(|v| Some((asset_name(v), registered_type(v)?)))
             .filter(|(n, _)| !n.is_empty())
             .collect();
         let mut report = ExpandReport::default();
@@ -385,12 +373,16 @@ mod tests {
         expand(&mut assets).unwrap();
         let names: Vec<&str> = assets
             .iter()
-            .filter(|v| type_norm_str(v) == "prop")
+            .filter(|v| registered_type(v) == Some(RegisteredType::Prop))
             .filter_map(|v| v["name"].as_str())
             .collect();
         assert!(names.contains(&"inst_table"));
         assert!(names.contains(&"inst_chair"));
-        assert!(!assets.iter().any(|v| type_norm_str(v) == "prefab"));
+        assert!(
+            !assets
+                .iter()
+                .any(|v| registered_type(v) == Some(RegisteredType::Prefab))
+        );
     }
 
     #[test]
@@ -407,7 +399,7 @@ mod tests {
         expand(&mut assets).unwrap();
         let props: Vec<_> = assets
             .iter()
-            .filter(|v| type_norm_str(v) == "prop")
+            .filter(|v| registered_type(v) == Some(RegisteredType::Prop))
             .collect();
         assert_eq!(props.len(), 4);
     }
@@ -424,7 +416,7 @@ mod tests {
         expand(&mut assets).unwrap();
         let lights: Vec<_> = assets
             .iter()
-            .filter(|v| type_norm_str(v) == "pointlight")
+            .filter(|v| registered_type(v) == Some(RegisteredType::PointLight))
             .collect();
         assert_eq!(lights.len(), 1);
         assert_eq!(lights[0]["name"], "inst_lamp");

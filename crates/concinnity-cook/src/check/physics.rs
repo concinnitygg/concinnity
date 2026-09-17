@@ -5,6 +5,7 @@
 
 use concinnity_core::components::PropColliderShape;
 
+use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::WorldJsonlAsset;
 
 const BUILTIN_LAYERS: [&str; 4] = ["world", "prop", "character", "trigger"];
@@ -47,10 +48,9 @@ pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), String> 
 // space; `no_collide` pairs and collider `layer` fields must name a declared
 // or built-in layer.
 pub(crate) fn check_layers(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
-    let norm = |t: &str| t.to_lowercase().replace('_', "");
     let config = assets
         .iter()
-        .find(|a| norm(&a.asset_type) == "physicsconfig");
+        .find(|a| a.asset_type == RegisteredType::PhysicsConfig);
 
     let mut known: Vec<String> = BUILTIN_LAYERS.iter().map(|s| s.to_string()).collect();
     if let Some(config) = config {
@@ -115,7 +115,10 @@ pub(crate) fn check_layers(assets: &[WorldJsonlAsset], errors: &mut Vec<String>)
         }
     }
 
-    for asset in assets.iter().filter(|a| norm(&a.asset_type) == "prop") {
+    for asset in assets
+        .iter()
+        .filter(|a| a.asset_type == RegisteredType::Prop)
+    {
         let Some(layer) = asset
             .args
             .get("collider")
@@ -168,10 +171,9 @@ pub(crate) struct ColliderSpawnSources<'a> {
 /// their population and warns about the rest, because the simulation refuses
 /// bodies past its reservation.
 pub(crate) fn collider_spawn_sources(assets: &[WorldJsonlAsset]) -> ColliderSpawnSources<'_> {
-    let norm = |t: &str| t.to_lowercase().replace('_', "");
     let collider_props: Vec<&str> = assets
         .iter()
-        .filter(|a| norm(&a.asset_type) == "prop")
+        .filter(|a| a.asset_type == RegisteredType::Prop)
         .filter(|a| a.args.get("collider").is_some_and(|c| !c.is_null()))
         .map(|a| a.name.as_str())
         .collect();
@@ -184,8 +186,8 @@ pub(crate) fn collider_spawn_sources(assets: &[WorldJsonlAsset]) -> ColliderSpaw
 
     let defaults = concinnity_core::components::cook::Spawner::default();
     for asset in assets {
-        match norm(&asset.asset_type).as_str() {
-            "spawner" if asset.args.get("template").is_some_and(is_collider_prop) => {
+        match asset.asset_type {
+            RegisteredType::Spawner if asset.args.get("template").is_some_and(is_collider_prop) => {
                 let secs = |field: &str, fallback: f32| {
                     asset
                         .args
@@ -199,7 +201,7 @@ pub(crate) fn collider_spawn_sources(assets: &[WorldJsonlAsset]) -> ColliderSpaw
                     lifetime: secs("lifetime", defaults.lifetime),
                 });
             }
-            "behavior"
+            RegisteredType::Behavior
                 if spawn_templates(&asset.args)
                     .iter()
                     .any(|t| is_collider_prop(t)) =>
@@ -241,10 +243,10 @@ fn spawn_templates(args: &serde_json::Value) -> Vec<&serde_json::Value> {
 mod tests {
     use super::*;
 
-    fn asset(name: &str, asset_type: &str, args: serde_json::Value) -> WorldJsonlAsset {
+    fn asset(name: &str, asset_type: RegisteredType, args: serde_json::Value) -> WorldJsonlAsset {
         WorldJsonlAsset {
             name: name.to_string(),
-            asset_type: asset_type.to_string(),
+            asset_type,
             args,
         }
     }
@@ -271,12 +273,12 @@ mod tests {
         let assets = [
             asset(
                 "physics",
-                "PhysicsConfig",
+                RegisteredType::PhysicsConfig,
                 serde_json::json!({"layers": ["debris"], "no_collide": [["debris", "character"]]}),
             ),
             asset(
                 "rock",
-                "Prop",
+                RegisteredType::Prop,
                 serde_json::json!({"mesh": "m", "collider": {"shape": "ball", "layer": "debris"}}),
             ),
         ];
@@ -288,12 +290,12 @@ mod tests {
         let assets = [
             asset(
                 "physics",
-                "PhysicsConfig",
+                RegisteredType::PhysicsConfig,
                 serde_json::json!({"no_collide": [["ghost", "world"]]}),
             ),
             asset(
                 "rock",
-                "Prop",
+                RegisteredType::Prop,
                 serde_json::json!({"mesh": "m", "collider": {"shape": "ball", "layer": "ghost"}}),
             ),
         ];
@@ -308,13 +310,13 @@ mod tests {
         // Built-ins resolve with no config declared; unknown names still fail.
         let ok = [asset(
             "rock",
-            "Prop",
+            RegisteredType::Prop,
             serde_json::json!({"mesh": "m", "collider": {"shape": "ball", "layer": "prop"}}),
         )];
         assert!(layer_errors(&ok).is_empty());
         let bad = [asset(
             "rock",
-            "Prop",
+            RegisteredType::Prop,
             serde_json::json!({"mesh": "m", "collider": {"shape": "ball", "layer": "ghost"}}),
         )];
         assert_eq!(layer_errors(&bad).len(), 1);
@@ -324,7 +326,7 @@ mod tests {
     fn duplicate_and_overflowing_layer_declarations_fail() {
         let dup = [asset(
             "physics",
-            "PhysicsConfig",
+            RegisteredType::PhysicsConfig,
             serde_json::json!({"layers": ["debris", "debris", "world"]}),
         )];
         let errors = layer_errors(&dup);
@@ -334,7 +336,7 @@ mod tests {
         let many: Vec<String> = (0..29).map(|i| format!("layer{i}")).collect();
         let over = [asset(
             "physics",
-            "PhysicsConfig",
+            RegisteredType::PhysicsConfig,
             serde_json::json!({"layers": many}),
         )];
         let errors = layer_errors(&over);
@@ -347,12 +349,12 @@ mod tests {
         let crate_ = [
             asset(
                 "crate",
-                "Prop",
+                RegisteredType::Prop,
                 serde_json::json!({"mesh": "m", "collider": {"shape": "ball"}}),
             ),
             asset(
                 "drop",
-                "Spawner",
+                RegisteredType::Spawner,
                 serde_json::json!({"template": "crate", "interval": 2.0, "lifetime": 4.0}),
             ),
         ];
@@ -370,8 +372,16 @@ mod tests {
         // The same spawner over a prop with no collider spawns nothing the
         // simulation has to hold.
         let bare = [
-            asset("banner", "Prop", serde_json::json!({"mesh": "m"})),
-            asset("drop", "Spawner", serde_json::json!({"template": "banner"})),
+            asset(
+                "banner",
+                RegisteredType::Prop,
+                serde_json::json!({"mesh": "m"}),
+            ),
+            asset(
+                "drop",
+                RegisteredType::Spawner,
+                serde_json::json!({"template": "banner"}),
+            ),
         ];
         assert_eq!(
             collider_spawn_sources(&bare),
@@ -386,10 +396,14 @@ mod tests {
         let assets = [
             asset(
                 "crate",
-                "Prop",
+                RegisteredType::Prop,
                 serde_json::json!({"mesh": "m", "collider": {"shape": "ball"}}),
             ),
-            asset("drop", "Spawner", serde_json::json!({"template": "crate"})),
+            asset(
+                "drop",
+                RegisteredType::Spawner,
+                serde_json::json!({"template": "crate"}),
+            ),
         ];
         let defaults = concinnity_core::components::cook::Spawner::default();
         let spawner = &collider_spawn_sources(&assets).spawners[0];
@@ -404,10 +418,14 @@ mod tests {
         let assets = [
             asset(
                 "banner",
-                "Prop",
+                RegisteredType::Prop,
                 serde_json::json!({"mesh": "m", "collider": null}),
             ),
-            asset("drop", "Spawner", serde_json::json!({"template": "banner"})),
+            asset(
+                "drop",
+                RegisteredType::Spawner,
+                serde_json::json!({"template": "banner"}),
+            ),
         ];
         assert_eq!(
             collider_spawn_sources(&assets),
@@ -420,12 +438,12 @@ mod tests {
         let assets = [
             asset(
                 "crate",
-                "Prop",
+                RegisteredType::Prop,
                 serde_json::json!({"mesh": "m", "collider": {"shape": "ball"}}),
             ),
             asset(
                 "thrower",
-                "Behavior",
+                RegisteredType::Behavior,
                 serde_json::json!({"on": "tick", "do": [
                     {"if": {"cond": "ready", "then": [{"spawn": {"template": "crate"}}]}}
                 ]}),
@@ -438,7 +456,7 @@ mod tests {
         // No spawn source at all: the world only ever holds what it declares.
         let quiet = [asset(
             "crate",
-            "Prop",
+            RegisteredType::Prop,
             serde_json::json!({"mesh": "m", "collider": {"shape": "ball"}}),
         )];
         assert_eq!(
@@ -451,7 +469,7 @@ mod tests {
     fn malformed_no_collide_and_negative_impulse_fail() {
         let assets = [asset(
             "physics",
-            "PhysicsConfig",
+            RegisteredType::PhysicsConfig,
             serde_json::json!({"no_collide": [["world"]], "contact_min_impulse": -1.0}),
         )];
         let errors = layer_errors(&assets);

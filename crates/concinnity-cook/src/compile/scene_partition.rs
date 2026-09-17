@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 
+use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::WorldJsonlAsset;
 
 // Where an asset's payload packs: the global set loaded with the world, or one
@@ -50,23 +51,19 @@ fn merge(a: Option<Owner>, b: Owner) -> Owner {
 // label is fixed -- labels never merge INTO a root, so a logic asset naming a
 // scene prop (an AnimationGraph target, a Behavior show/hide) does not drag that
 // prop's resources into the global set.
-fn is_reference_target(type_norm: &str) -> bool {
-    crate::authoring::registry::RegisteredType::all()
-        .iter()
-        .filter(|t| t.is_resource())
-        .any(|t| t.as_str().to_lowercase() == type_norm)
+fn is_reference_target(asset_type: RegisteredType) -> bool {
+    use RegisteredType::{File, Model, ProceduralMesh, Shader, VoxelChunk};
+    asset_type.is_resource()
         || matches!(
-            type_norm,
-            "proceduralmesh" | "voxelchunk" | "file" | "model" | "shader"
+            asset_type,
+            ProceduralMesh | VoxelChunk | File | Model | Shader
         )
 }
 
 pub(crate) fn partition_scenes(assets: &[WorldJsonlAsset]) -> ScenePartition {
-    let norm = |t: &str| t.to_lowercase().replace('_', "");
-
     let scenes: Vec<String> = assets
         .iter()
-        .filter(|a| norm(&a.asset_type) == "scene")
+        .filter(|a| a.asset_type == RegisteredType::Scene)
         .map(|a| a.name.clone())
         .collect();
     let scene_index: HashMap<&str, usize> = scenes
@@ -95,7 +92,7 @@ pub(crate) fn partition_scenes(assets: &[WorldJsonlAsset]) -> ScenePartition {
     // targets start unlabeled and take whatever reaches them.
     let is_target: Vec<bool> = assets
         .iter()
-        .map(|a| is_reference_target(&norm(&a.asset_type)))
+        .map(|a| is_reference_target(a.asset_type))
         .collect();
     let mut labels: Vec<Option<Owner>> = vec![None; assets.len()];
     let mut worklist: Vec<usize> = Vec::new();
@@ -103,7 +100,7 @@ pub(crate) fn partition_scenes(assets: &[WorldJsonlAsset]) -> ScenePartition {
         if is_target[i] {
             continue;
         }
-        let label = if norm(&asset.asset_type) == "prop" {
+        let label = if asset.asset_type == RegisteredType::Prop {
             asset
                 .args
                 .get("scene")
@@ -148,16 +145,47 @@ pub(crate) fn partition_scenes(assets: &[WorldJsonlAsset]) -> ScenePartition {
 mod tests {
     use super::*;
 
-    fn asset(name: &str, ty: &str, args: serde_json::Value) -> WorldJsonlAsset {
+    // Every registered type, checked against the explicit set that only exists
+    // to be referenced: the resources plus the mesh sources, Model and Shader.
+    #[test]
+    fn reference_targets_are_exactly_the_resources_and_referenced_components() {
+        use RegisteredType::*;
+        let targets = [
+            AudioClip,
+            Texture,
+            CubemapTexture,
+            EnvironmentMap,
+            ColorLut,
+            Font,
+            Material,
+            Mesh,
+            SkinnedMesh,
+            ProceduralMesh,
+            VoxelChunk,
+            File,
+            Model,
+            Shader,
+        ];
+        for &ty in RegisteredType::all() {
+            assert_eq!(
+                is_reference_target(ty),
+                targets.contains(&ty),
+                "{}",
+                ty.as_str()
+            );
+        }
+    }
+
+    fn asset(name: &str, asset_type: RegisteredType, args: serde_json::Value) -> WorldJsonlAsset {
         WorldJsonlAsset {
             name: name.to_string(),
-            asset_type: ty.to_string(),
+            asset_type,
             args,
         }
     }
 
     fn scene(name: &str) -> WorldJsonlAsset {
-        asset(name, "Scene", serde_json::json!({}))
+        asset(name, RegisteredType::Scene, serde_json::json!({}))
     }
 
     fn prop(name: &str, scene: Option<&str>, args: serde_json::Value) -> WorldJsonlAsset {
@@ -165,7 +193,7 @@ mod tests {
         if let (Some(s), serde_json::Value::Object(m)) = (scene, &mut args) {
             m.insert("scene".into(), serde_json::Value::String(s.into()));
         }
-        asset(name, "Prop", args)
+        asset(name, RegisteredType::Prop, args)
     }
 
     #[test]
@@ -179,13 +207,17 @@ mod tests {
                 Some("day"),
                 serde_json::json!({"mesh":"wall_mesh","material":"wall_mat"}),
             ),
-            asset("wall_mesh", "ProceduralMesh", serde_json::json!({})),
+            asset(
+                "wall_mesh",
+                RegisteredType::ProceduralMesh,
+                serde_json::json!({}),
+            ),
             asset(
                 "wall_mat",
-                "Material",
+                RegisteredType::Material,
                 serde_json::json!({"albedo":"wall_tex"}),
             ),
-            asset("wall_tex", "Texture", serde_json::json!({})),
+            asset("wall_tex", RegisteredType::Texture, serde_json::json!({})),
         ];
         let p = partition_scenes(&assets);
         assert_eq!(p.owner("wall_mesh"), Owner::Scene(0));
@@ -205,20 +237,24 @@ mod tests {
                 Some("day"),
                 serde_json::json!({"mesh":"wall_mesh","material":"wall_mat"}),
             ),
-            asset("wall_mesh", "ProceduralMesh", serde_json::json!({})),
+            asset(
+                "wall_mesh",
+                RegisteredType::ProceduralMesh,
+                serde_json::json!({}),
+            ),
             asset(
                 "wall_mat",
-                "Material",
+                RegisteredType::Material,
                 serde_json::json!({"shader":"wall_shader"}),
             ),
             asset(
                 "wall_shader",
-                "Shader",
+                RegisteredType::Shader,
                 serde_json::json!({"vertex":{"source":"w.metal"},"fragment":{"source":"w.metal"}}),
             ),
             asset(
                 "scene_shader",
-                "Shader",
+                RegisteredType::Shader,
                 serde_json::json!({"vertex":{"source":"s.metal"},"fragment":{"source":"s.metal"}}),
             ),
         ];
@@ -242,7 +278,11 @@ mod tests {
                 Some("night"),
                 serde_json::json!({"mesh":"shared_mesh"}),
             ),
-            asset("shared_mesh", "ProceduralMesh", serde_json::json!({})),
+            asset(
+                "shared_mesh",
+                RegisteredType::ProceduralMesh,
+                serde_json::json!({}),
+            ),
         ];
         let p = partition_scenes(&assets);
         assert_eq!(p.owner("shared_mesh"), Owner::Global);
@@ -254,7 +294,7 @@ mod tests {
             scene("day"),
             prop("day_a", Some("day"), serde_json::json!({"mesh":"m"})),
             prop("everywhere", None, serde_json::json!({"mesh":"m"})),
-            asset("m", "ProceduralMesh", serde_json::json!({})),
+            asset("m", RegisteredType::ProceduralMesh, serde_json::json!({})),
         ];
         let p = partition_scenes(&assets);
         assert_eq!(p.owner("m"), Owner::Global);
@@ -273,8 +313,12 @@ mod tests {
                 Some("night"),
                 serde_json::json!({"material":"mat"}),
             ),
-            asset("mat", "Material", serde_json::json!({"albedo":"tex"})),
-            asset("tex", "Texture", serde_json::json!({})),
+            asset(
+                "mat",
+                RegisteredType::Material,
+                serde_json::json!({"albedo":"tex"}),
+            ),
+            asset("tex", RegisteredType::Texture, serde_json::json!({})),
         ];
         let p = partition_scenes(&assets);
         assert_eq!(p.owner("mat"), Owner::Global);
@@ -285,7 +329,7 @@ mod tests {
     fn unreferenced_resource_is_global() {
         let assets = vec![
             scene("day"),
-            asset("orphan", "Texture", serde_json::json!({})),
+            asset("orphan", RegisteredType::Texture, serde_json::json!({})),
         ];
         let p = partition_scenes(&assets);
         assert_eq!(p.owner("orphan"), Owner::Global);
@@ -295,7 +339,7 @@ mod tests {
     fn no_scenes_means_everything_global() {
         let assets = vec![
             prop("a", None, serde_json::json!({"mesh":"m"})),
-            asset("m", "ProceduralMesh", serde_json::json!({})),
+            asset("m", RegisteredType::ProceduralMesh, serde_json::json!({})),
         ];
         let p = partition_scenes(&assets);
         assert_eq!(p.owner("m"), Owner::Global);
@@ -308,10 +352,10 @@ mod tests {
         let assets = vec![
             scene("day"),
             prop("day_a", Some("day"), serde_json::json!({"mesh":"m"})),
-            asset("m", "ProceduralMesh", serde_json::json!({})),
+            asset("m", RegisteredType::ProceduralMesh, serde_json::json!({})),
             asset(
                 "toggle",
-                "Behavior",
+                RegisteredType::Behavior,
                 serde_json::json!({"on":{"interact":"day_a"},"do":[{"hide":{"target":{"named":"day_a"}}}]}),
             ),
         ];
@@ -326,12 +370,16 @@ mod tests {
             prop("day_a", Some("day"), serde_json::json!({"model":"mdl"})),
             asset(
                 "mdl",
-                "Model",
+                RegisteredType::Model,
                 serde_json::json!({"meshes":[{"mesh":"m0","material":"mat0"}]}),
             ),
-            asset("m0", "Mesh", serde_json::json!({})),
-            asset("mat0", "Material", serde_json::json!({"albedo":"t0"})),
-            asset("t0", "Texture", serde_json::json!({})),
+            asset("m0", RegisteredType::Mesh, serde_json::json!({})),
+            asset(
+                "mat0",
+                RegisteredType::Material,
+                serde_json::json!({"albedo":"t0"}),
+            ),
+            asset("t0", RegisteredType::Texture, serde_json::json!({})),
         ];
         let p = partition_scenes(&assets);
         assert_eq!(p.owner("m0"), Owner::Scene(0));

@@ -11,7 +11,8 @@
 use concinnity_core::components::Font;
 use std::collections::HashMap;
 
-use super::expand::{asset_name, type_norm};
+use super::expand::{asset_name, registered_type};
+use crate::authoring::registry::RegisteredType;
 use crate::authoring::spec::{asset, spec_to_value};
 
 // A settings/menu TextLabel value with `centered` pinned false: the default-font
@@ -73,7 +74,7 @@ pub(crate) fn sprite(
 pub(crate) fn font_sizes(assets: &[serde_json::Value]) -> HashMap<String, f32> {
     let mut out = HashMap::new();
     for v in assets {
-        if type_norm(v) != "font" {
+        if registered_type(v) != Some(RegisteredType::Font) {
             continue;
         }
         let name = asset_name(v);

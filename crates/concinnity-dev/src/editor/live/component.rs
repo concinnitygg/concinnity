@@ -62,7 +62,7 @@ fn changes_references(
 fn names(ct: RegisteredType, name: &str, args: &Map<String, Value>) -> Vec<String> {
     referenced_names(&WorldJsonlAsset {
         name: name.to_string(),
-        asset_type: ct.as_str().to_string(),
+        asset_type: ct,
         args: Value::Object(args.clone()),
     })
 }

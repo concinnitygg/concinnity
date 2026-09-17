@@ -265,7 +265,11 @@ fn emits_the_compiled_graph_and_stage() {
 
     // No per-page screens or audio cues remain.
     assert!(!entries.iter().any(|e| asset_name(e).contains("_n_")));
-    assert!(!entries.iter().any(|e| type_norm(e) == "audiocue"));
+    assert!(
+        !entries
+            .iter()
+            .any(|e| registered_type(e) == Some(RegisteredType::AudioCue))
+    );
 
     // The ending returns to the title screen.
     assert_eq!(
@@ -356,7 +360,7 @@ fn menu_background_becomes_a_cover_sprite() {
     );
     let texture = bg["texture"].as_str().unwrap();
     let tex = find(&entries, texture);
-    assert_eq!(type_norm(tex), "texture");
+    assert_eq!(registered_type(tex), Some(RegisteredType::Texture));
     assert_eq!(tex["args"]["source"], "assets/menu.png");
 }
 
@@ -370,10 +374,26 @@ fn expands_from_file_and_replaces_the_import() {
         "args": {"source": path.to_str().unwrap()}
     })];
     expand_stories(&mut assets).unwrap();
-    assert!(!assets.iter().any(|v| type_norm(v) == "storyimport"));
-    assert!(assets.iter().any(|v| type_norm(v) == "screen"));
-    assert!(assets.iter().any(|v| type_norm(v) == "hitregion"));
-    assert!(assets.iter().any(|v| type_norm(v) == "font"));
+    assert!(
+        !assets
+            .iter()
+            .any(|v| registered_type(v) == Some(RegisteredType::StoryImport))
+    );
+    assert!(
+        assets
+            .iter()
+            .any(|v| registered_type(v) == Some(RegisteredType::Screen))
+    );
+    assert!(
+        assets
+            .iter()
+            .any(|v| registered_type(v) == Some(RegisteredType::HitRegion))
+    );
+    assert!(
+        assets
+            .iter()
+            .any(|v| registered_type(v) == Some(RegisteredType::Font))
+    );
 }
 
 #[test]
@@ -441,7 +461,7 @@ fn media_directives_compile_to_deduped_clip_names() {
     // deduplicated to one clip despite two pages sharing its music.
     let clips: Vec<&serde_json::Value> = entries
         .iter()
-        .filter(|e| type_norm(e) == "audioclip")
+        .filter(|e| registered_type(e) == Some(RegisteredType::AudioClip))
         .collect();
     assert_eq!(clips.len(), 3);
     assert_eq!(clips[0]["args"]["source"], "assets/theme.ogg");
@@ -482,7 +502,7 @@ fn bg_directive_parses_propagates_and_emits_textured_backdrops() {
     // Two distinct images -> two Texture entries.
     let textures: Vec<&serde_json::Value> = entries
         .iter()
-        .filter(|e| type_norm(e) == "texture")
+        .filter(|e| registered_type(e) == Some(RegisteredType::Texture))
         .collect();
     assert_eq!(textures.len(), 2);
     assert_eq!(textures[0]["args"]["source"], "assets/inn.png");
@@ -896,7 +916,7 @@ fn heading_names_cannot_collide_with_generated_screens() {
     // Exactly the three scaffolding screens exist.
     let screens: Vec<String> = entries
         .iter()
-        .filter(|e| type_norm(e) == "screen")
+        .filter(|e| registered_type(e) == Some(RegisteredType::Screen))
         .map(asset_name)
         .collect();
     assert_eq!(screens, ["s_title", "s_stage", "s_ending"]);
@@ -927,7 +947,11 @@ fn other_assets_survive_a_story_expansion() {
     ];
     expand_stories(&mut assets).unwrap();
     assert_eq!(assets[0]["name"], "win");
-    assert!(!assets.iter().any(|v| type_norm(v) == "storyimport"));
+    assert!(
+        !assets
+            .iter()
+            .any(|v| registered_type(v) == Some(RegisteredType::StoryImport))
+    );
     assert!(assets.iter().any(|v| asset_name(v) == "tale"));
 }
 

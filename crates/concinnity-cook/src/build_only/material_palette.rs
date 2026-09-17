@@ -2,8 +2,9 @@
 
 use std::path::Path;
 
-use super::expand::{asset_name, type_norm};
+use super::expand::{asset_name, registered_type};
 use super::preset::load_preset_obj;
+use crate::authoring::registry::RegisteredType;
 
 pub(crate) fn expand_material_palettes(
     asset_values: &mut Vec<serde_json::Value>,
@@ -11,7 +12,7 @@ pub(crate) fn expand_material_palettes(
 ) {
     let mut result: Vec<serde_json::Value> = Vec::new();
     for value in asset_values.drain(..) {
-        if type_norm(&value) != "materialpalette" {
+        if registered_type(&value) != Some(RegisteredType::MaterialPalette) {
             result.push(value);
             continue;
         }

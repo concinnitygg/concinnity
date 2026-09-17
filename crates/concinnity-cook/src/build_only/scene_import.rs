@@ -8,7 +8,8 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use super::expand::{ExpandReport, asset_name, type_norm};
+use super::expand::{ExpandReport, asset_name, registered_type};
+use crate::authoring::registry::RegisteredType;
 use crate::import::scene::{ImportOptions, entries_from_scene, sanitize_name};
 
 // The kind an expansion's entries carry in the build segment, which is what
@@ -28,7 +29,10 @@ pub(crate) fn expand_scene_imports(
     report: &mut ExpandReport,
     assets_dir: Option<&Path>,
 ) -> Result<(), String> {
-    if !assets.iter().any(|v| type_norm(v) == "sceneimport") {
+    if !assets
+        .iter()
+        .any(|v| registered_type(v) == Some(RegisteredType::SceneImport))
+    {
         return Ok(());
     }
 
@@ -36,19 +40,22 @@ pub(crate) fn expand_scene_imports(
     // an import frames its own camera only when the world declares none.
     // CameraShot expands to a Camera3D later, so it counts as a declared camera
     // here even though it hasn't expanded yet.
-    let world_has_camera = assets
-        .iter()
-        .any(|v| matches!(type_norm(v).as_str(), "camera3d" | "camerashot"));
+    let world_has_camera = assets.iter().any(|v| {
+        matches!(
+            registered_type(v),
+            Some(RegisteredType::Camera3D | RegisteredType::CameraShot)
+        )
+    });
     // Track whether a framed camera has already been emitted so two imports
     // don't each add a competing one.
     let mut camera_emitted = false;
 
     // The assets the world declares itself, by name, with the type each one
     // holds: a generated entry landing on one of these is the user's override.
-    let authored: HashMap<String, String> = assets
+    let authored: HashMap<String, RegisteredType> = assets
         .iter()
-        .filter(|v| type_norm(v) != "sceneimport")
-        .map(|v| (asset_name(v), type_of(v)))
+        .filter(|v| registered_type(v) != Some(RegisteredType::SceneImport))
+        .filter_map(|v| Some((asset_name(v), registered_type(v)?)))
         .filter(|(n, _)| !n.is_empty())
         .collect();
     // Names emitted by earlier imports. Two imports generating the same name is
@@ -60,7 +67,7 @@ pub(crate) fn expand_scene_imports(
     // `result` yet, so the merges apply after the rebuild.
     let mut merges: Vec<(String, serde_json::Value)> = Vec::new();
     for value in assets.drain(..) {
-        if type_norm(&value) != "sceneimport" {
+        if registered_type(&value) != Some(RegisteredType::SceneImport) {
             result.push(value);
             continue;
         }
@@ -106,7 +113,7 @@ pub(crate) fn expand_scene_imports(
                 merges.push((name, args));
                 continue;
             }
-            if type_norm(&entry) == "camera3d" {
+            if registered_type(&entry) == Some(RegisteredType::Camera3D) {
                 camera_emitted = true;
             }
             result.push(entry);
@@ -125,7 +132,7 @@ pub(crate) fn expand_scene_imports(
 // patch of the entry, which the caller merges the generated args under.
 fn resolve_entry(
     entry: &serde_json::Value,
-    authored: &HashMap<String, String>,
+    authored: &HashMap<String, RegisteredType>,
     taken: &mut HashSet<String>,
     import_name: &str,
     report: &mut ExpandReport,
@@ -139,19 +146,19 @@ fn resolve_entry(
         ));
     }
 
-    if let Some(authored_type) = authored.get(&name) {
-        if norm(authored_type) != type_norm(entry) {
+    if let Some(&authored_type) = authored.get(&name) {
+        if registered_type(entry) != Some(authored_type) {
             return Err(format!(
                 "SceneImport '{}': generated asset '{}' ({}) collides with your {} asset of \
                  the same name; rename that asset or the import",
                 import_name,
                 name,
                 type_of(entry),
-                authored_type,
+                authored_type.as_str(),
             ));
         }
         let args = entry.get("args").cloned().unwrap_or(serde_json::json!({}));
-        report.record_shadowed(&name, authored_type, import_name, args);
+        report.record_shadowed(&name, authored_type.as_str(), import_name, args);
         return Ok(false);
     }
 
@@ -161,17 +168,12 @@ fn resolve_entry(
     Ok(true)
 }
 
-// The entry's declared type as written, for listings and messages; `type_norm`
-// lowercases and strips underscores for matching.
+// The entry's declared type as written, for listings and messages.
 fn type_of(v: &serde_json::Value) -> String {
     v.get("type")
         .and_then(|t| t.as_str())
         .unwrap_or("?")
         .to_string()
-}
-
-fn norm(type_str: &str) -> String {
-    type_str.to_lowercase().replace('_', "")
 }
 
 // Generate one import's entries, served from the content-addressed cache when
@@ -291,7 +293,11 @@ mod tests {
         expand_scene_imports(&mut assets, &mut report, None).unwrap();
 
         assert_eq!(assets[0]["name"], "gfx");
-        assert!(!assets.iter().any(|v| type_norm(v) == "sceneimport"));
+        assert!(
+            !assets
+                .iter()
+                .any(|v| registered_type(v) == Some(RegisteredType::SceneImport))
+        );
         let names: Vec<String> = assets.iter().skip(1).map(asset_name).collect();
         assert!(
             names.iter().all(|n| n.starts_with("bistro_")),
@@ -317,7 +323,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let source = triangle_gltf(dir.path());
         let cameras = |assets: &[serde_json::Value]| {
-            assets.iter().filter(|v| type_norm(v) == "camera3d").count()
+            assets
+                .iter()
+                .filter(|v| registered_type(v) == Some(RegisteredType::Camera3D))
+                .count()
         };
 
         let mut alone = vec![scene_import("a", &source, serde_json::json!({}))];
@@ -378,7 +387,7 @@ mod tests {
 
         let tex = assets
             .iter()
-            .find(|v| type_norm(v) == "texture")
+            .find(|v| registered_type(v) == Some(RegisteredType::Texture))
             .expect("a Texture entry per glTF image");
         assert_eq!(asset_name(tex), "bistro_tex_0");
         assert_eq!(tex["args"]["max_size"], 128);
@@ -438,16 +447,13 @@ mod tests {
         assert_eq!(report.shadowed[0].name, "bistro_mat_default");
     }
 
-    fn authored_map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-        pairs
-            .iter()
-            .map(|(n, t)| (n.to_string(), t.to_string()))
-            .collect()
+    fn authored_map(pairs: &[(&str, RegisteredType)]) -> HashMap<String, RegisteredType> {
+        pairs.iter().map(|(n, t)| (n.to_string(), *t)).collect()
     }
 
     fn resolve(
         entry: &serde_json::Value,
-        authored: &HashMap<String, String>,
+        authored: &HashMap<String, RegisteredType>,
         report: &mut ExpandReport,
     ) -> Result<bool, String> {
         let mut taken = HashSet::new();
@@ -474,7 +480,7 @@ mod tests {
     #[test]
     fn an_authored_copy_shadows_the_generated_entry() {
         let entry = serde_json::json!({"name": "bistro_mat_wood", "type": "Material"});
-        let authored = authored_map(&[("bistro_mat_wood", "Material")]);
+        let authored = authored_map(&[("bistro_mat_wood", RegisteredType::Material)]);
         let mut report = ExpandReport::default();
         assert!(!resolve(&entry, &authored, &mut report).unwrap());
         assert!(report.generated.is_empty());
@@ -484,15 +490,21 @@ mod tests {
         assert_eq!(report.shadowed[0].generated_by, "bistro");
     }
 
-    // Shadowing matches on the normalized type, so an underscored spelling of
-    // the same type is still the user's copy rather than a conflict.
+    // Shadowing matches on the exact type: the same type is the user's copy,
+    // while an entry whose type does not parse cannot be.
     #[test]
-    fn shadowing_matches_types_through_normalization() {
+    fn shadowing_matches_the_exact_type() {
         let entry = serde_json::json!({"name": "bistro_cam", "type": "Camera3D"});
-        let authored = authored_map(&[("bistro_cam", "camera_3d")]);
+        let authored = authored_map(&[("bistro_cam", RegisteredType::Camera3D)]);
         let mut report = ExpandReport::default();
         assert!(!resolve(&entry, &authored, &mut report).unwrap());
         assert_eq!(report.shadowed.len(), 1);
+        assert_eq!(report.shadowed[0].asset_type, "Camera3D");
+
+        let inexact = serde_json::json!({"name": "bistro_cam", "type": "camera_3d"});
+        let mut report = ExpandReport::default();
+        assert!(resolve(&inexact, &authored, &mut report).is_err());
+        assert!(report.shadowed.is_empty());
     }
 
     // A same-name asset of a different type cannot be a copy of the generated
@@ -500,7 +512,7 @@ mod tests {
     #[test]
     fn a_same_name_different_type_asset_is_an_error() {
         let entry = serde_json::json!({"name": "bistro_mat_wood", "type": "Material"});
-        let authored = authored_map(&[("bistro_mat_wood", "Sprite")]);
+        let authored = authored_map(&[("bistro_mat_wood", RegisteredType::Sprite)]);
         let mut report = ExpandReport::default();
         let err = resolve(&entry, &authored, &mut report).unwrap_err();
         // Both types and the import are named so the conflict is actionable.
@@ -527,13 +539,11 @@ mod tests {
     }
 
     #[test]
-    fn type_of_reads_the_declared_type_and_norm_matches_type_norm() {
+    fn type_of_reads_the_declared_type_as_written() {
         let v = serde_json::json!({"name": "m", "type": "Material"});
         assert_eq!(type_of(&v), "Material");
-        assert_eq!(norm(&type_of(&v)), type_norm(&v));
         assert_eq!(type_of(&serde_json::json!({"name": "m"})), "?");
-        // Underscored types normalize the same on both sides.
         let c = serde_json::json!({"type": "Camera_3D"});
-        assert_eq!(norm(&type_of(&c)), type_norm(&c));
+        assert_eq!(type_of(&c), "Camera_3D");
     }
 }

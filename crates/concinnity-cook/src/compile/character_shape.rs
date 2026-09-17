@@ -5,8 +5,8 @@
 // inline in the args.
 
 use concinnity_core::components::CharacterShape;
-use concinnity_core::ecs::Component;
 
+use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::WorldJsonlAsset;
 
 // The unresolved slider and joint names of one shape, given its target mesh's
@@ -42,7 +42,7 @@ pub(crate) fn unresolved_names(
 // installed this early in the build, and the name string is all that is needed.
 pub(crate) fn warn_unresolved(assets: &[WorldJsonlAsset]) {
     for asset in assets {
-        if asset.asset_type != CharacterShape::NAME {
+        if asset.asset_type != RegisteredType::CharacterShape {
             continue;
         }
         let field = |name: &str| {

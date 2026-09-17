@@ -79,7 +79,7 @@ pub fn prepare_world(
     // check-only run never reaches.
     crate::cache::flush();
 
-    let assets: Vec<WorldJsonlAsset> = expanded.iter().map(WorldJsonlAsset::from_value).collect();
+    let assets = typed_assets(&expanded)?;
 
     crate::check::check_world(&assets)?;
 
@@ -92,9 +92,42 @@ pub fn prepare_world(
     })
 }
 
+// Type every expanded entry, reporting each one whose name or type does not
+// parse, so a generated entry with a bad type fails instead of matching nothing.
+fn typed_assets(values: &[serde_json::Value]) -> Result<Vec<WorldJsonlAsset>, Vec<String>> {
+    let mut errors = Vec::new();
+    let assets = values
+        .iter()
+        .filter_map(|v| {
+            WorldJsonlAsset::from_value(v)
+                .map_err(|e| errors.push(e))
+                .ok()
+        })
+        .collect();
+    if errors.is_empty() {
+        Ok(assets)
+    } else {
+        Err(errors)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::authoring::registry::RegisteredType;
+
+    #[test]
+    fn typed_assets_reports_every_generated_entry_with_a_bad_type() {
+        let expanded = [
+            serde_json::json!({"name": "ok", "type": "Prop", "args": {}}),
+            serde_json::json!({"name": "gen_a", "type": "pointlight", "args": {}}),
+            serde_json::json!({"name": "gen_b", "type": "Point_Light", "args": {}}),
+        ];
+        let errs = typed_assets(&expanded).err().unwrap_or_default();
+        assert_eq!(errs.len(), 2, "{errs:?}");
+        assert!(errs[0].contains("'gen_a'") && errs[0].contains("'pointlight'"));
+        assert!(errs[1].contains("'gen_b'") && errs[1].contains("'Point_Light'"));
+    }
 
     // The model-layer tests (load_world, resolve_includes, asset_name_from_path)
     // live in `crate::authoring::world` with the code; this covers cook's
@@ -110,7 +143,7 @@ mod tests {
             loaded
                 .assets
                 .iter()
-                .any(|a| a.asset_type == "GraphicsConfig")
+                .any(|a| a.asset_type == RegisteredType::GraphicsConfig)
         );
         // The authored names are captured before expansion, so the injected
         // companions are not mistaken for what the world declared.

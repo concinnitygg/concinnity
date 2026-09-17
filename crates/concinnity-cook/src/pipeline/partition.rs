@@ -34,18 +34,16 @@ pub(super) fn partition_components(
         resource_jobs: Vec::new(),
     };
     for (i, asset) in assets.iter().enumerate() {
-        if let Some((rt, kind)) =
-            RegisteredType::parse(&asset.asset_type).and_then(|t| t.resource_kind().map(|k| (t, k)))
-        {
+        if let Some(kind) = asset.asset_type.resource_kind() {
             let id = asset_id::intern(&asset.name);
             let handle = handles
                 .get(kind, id)
                 .expect("resource asset was assigned a handle");
-            out.resource_jobs.push((i, rt, handle));
+            out.resource_jobs.push((i, asset.asset_type, handle));
             continue;
         }
         let req = AssetRequest {
-            asset_type: asset.asset_type.clone(),
+            asset_type: asset.asset_type.as_str().to_string(),
             args: Some(asset.args.clone()),
         };
         let mut def = asset_api::create_asset_def(&req).map_err(|e| {
@@ -72,7 +70,7 @@ mod tests {
         let names: Vec<&str> = assets.iter().map(|a| a.name.as_str()).collect();
         asset_id::intern_all(&names);
         ResourceHandles::from_assets(assets.iter().filter_map(|a| {
-            crate::authoring::resource_type::asset_resource_kind(&a.asset_type)
+            crate::authoring::resource_type::asset_resource_kind(a.asset_type)
                 .map(|kind| (asset_id::intern(&a.name), kind))
         }))
     }
@@ -82,12 +80,24 @@ mod tests {
         let assets = vec![
             wja(
                 "tex",
-                "Texture",
+                RegisteredType::Texture,
                 serde_json::json!({"generator": "checker"}),
             ),
-            wja("crate_mesh", "ProceduralMesh", serde_json::json!({})),
-            wja("clip", "AudioClip", serde_json::json!({"source": "a.ogg"})),
-            wja("tex2", "Texture", serde_json::json!({"source": "b.png"})),
+            wja(
+                "crate_mesh",
+                RegisteredType::ProceduralMesh,
+                serde_json::json!({}),
+            ),
+            wja(
+                "clip",
+                RegisteredType::AudioClip,
+                serde_json::json!({"source": "a.ogg"}),
+            ),
+            wja(
+                "tex2",
+                RegisteredType::Texture,
+                serde_json::json!({"source": "b.png"}),
+            ),
         ];
         let handles = handles_for(&assets);
         let out = partition_components(&assets, &handles).expect("partitions");
@@ -113,9 +123,17 @@ mod tests {
     #[test]
     fn a_prop_def_records_its_source_index() {
         let assets = vec![
-            wja("clip", "AudioClip", serde_json::json!({"source": "a.ogg"})),
-            wja("box", "ProceduralMesh", serde_json::json!({})),
-            wja("crate", "Prop", serde_json::json!({"mesh": "box"})),
+            wja(
+                "clip",
+                RegisteredType::AudioClip,
+                serde_json::json!({"source": "a.ogg"}),
+            ),
+            wja("box", RegisteredType::ProceduralMesh, serde_json::json!({})),
+            wja(
+                "crate",
+                RegisteredType::Prop,
+                serde_json::json!({"mesh": "box"}),
+            ),
         ];
         let handles = handles_for(&assets);
         let out = partition_components(&assets, &handles).expect("partitions");
@@ -133,7 +151,7 @@ mod tests {
     fn bad_component_args_name_the_asset() {
         let assets = vec![wja(
             "broken_crate",
-            "Prop",
+            RegisteredType::Prop,
             serde_json::json!({"position": "not a vector"}),
         )];
         let handles = handles_for(&assets);

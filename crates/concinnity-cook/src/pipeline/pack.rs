@@ -9,7 +9,6 @@ use std::path::Path;
 
 use super::dispatch::build_asset;
 use super::entry::BuildProgress;
-use super::{MESH_TYPE, SKINNED_MESH_TYPE};
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::WorldJsonlAsset;
 use crate::blob::PayloadPacker;
@@ -68,12 +67,9 @@ pub(in crate::pipeline) fn probe_mesh_payload_cache(
 
         // Both mesh kinds are resource assets: their caches key on the
         // resource discriminant and resource source list.
-        let rt = if asset.asset_type == MESH_TYPE {
-            RegisteredType::Mesh
-        } else if asset.asset_type == SKINNED_MESH_TYPE {
-            RegisteredType::SkinnedMesh
-        } else {
-            continue;
+        let rt = match asset.asset_type {
+            RegisteredType::Mesh | RegisteredType::SkinnedMesh => asset.asset_type,
+            _ => continue,
         };
         let ctx = crate::asset::BuildCtx {
             name: asset.name.as_str(),
@@ -411,7 +407,7 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
     let mut mesh_component_names: Vec<(u32, String)> = Vec::new();
     for (idx, bytes) in &pending {
         let asset = &assets[named_src[*idx]];
-        if !crate::authoring::resource_type::is_mesh_source(&asset.asset_type, &asset.args) {
+        if !crate::authoring::resource_type::is_mesh_source(asset.asset_type, &asset.args) {
             continue;
         }
         let id = asset_id::intern(&asset.name);
@@ -530,16 +526,24 @@ mod tests {
     #[test]
     fn probe_mesh_payload_cache_probes_only_source_backed_mesh_assets() {
         let assets = vec![
-            wja("m", MESH_TYPE, serde_json::json!({"source": "x.glb"})),
-            wja("inline", MESH_TYPE, serde_json::json!({"vertices": []})),
+            wja(
+                "m",
+                RegisteredType::Mesh,
+                serde_json::json!({"source": "x.glb"}),
+            ),
+            wja(
+                "inline",
+                RegisteredType::Mesh,
+                serde_json::json!({"vertices": []}),
+            ),
             wja(
                 "s",
-                SKINNED_MESH_TYPE,
+                RegisteredType::SkinnedMesh,
                 serde_json::json!({"source": "y.glb"}),
             ),
             wja(
                 "p",
-                "ProceduralMesh",
+                RegisteredType::ProceduralMesh,
                 serde_json::json!({"generator": "box"}),
             ),
         ];
@@ -566,8 +570,16 @@ mod tests {
     #[test]
     fn probe_mesh_payload_cache_skips_a_source_backed_non_mesh_asset() {
         let assets = vec![
-            wja("tex", "Texture", serde_json::json!({"source": "wall.png"})),
-            wja("m", MESH_TYPE, serde_json::json!({"source": "x.glb"})),
+            wja(
+                "tex",
+                RegisteredType::Texture,
+                serde_json::json!({"source": "wall.png"}),
+            ),
+            wja(
+                "m",
+                RegisteredType::Mesh,
+                serde_json::json!({"source": "x.glb"}),
+            ),
         ];
         let probed = probe_mesh_payload_cache(
             &assets,
@@ -598,12 +610,12 @@ mod tests {
         let assets = vec![
             wja(
                 "shape",
-                "ProceduralMesh",
+                RegisteredType::ProceduralMesh,
                 serde_json::json!({"generator": "not_a_generator"}),
             ),
             wja(
                 "body",
-                MESH_TYPE,
+                RegisteredType::Mesh,
                 serde_json::json!({"source": "/no/such/body.glb"}),
             ),
         ];
@@ -668,21 +680,25 @@ mod tests {
     #[test]
     fn scene_owned_payloads_pack_into_their_own_blob() {
         let assets = vec![
-            wja("day", "Scene", serde_json::json!({})),
+            wja("day", RegisteredType::Scene, serde_json::json!({})),
             wja(
                 "day_prop",
-                "Prop",
+                RegisteredType::Prop,
                 serde_json::json!({"mesh":"day_mesh","scene":"day"}),
             ),
-            wja("bg_prop", "Prop", serde_json::json!({"mesh":"bg_mesh"})),
+            wja(
+                "bg_prop",
+                RegisteredType::Prop,
+                serde_json::json!({"mesh":"bg_mesh"}),
+            ),
             wja(
                 "day_mesh",
-                MESH_TYPE,
+                RegisteredType::Mesh,
                 serde_json::json!({"source": "/no/such/day.glb"}),
             ),
             wja(
                 "bg_mesh",
-                MESH_TYPE,
+                RegisteredType::Mesh,
                 serde_json::json!({"source": "/no/such/bg.glb"}),
             ),
         ];
@@ -746,7 +762,7 @@ mod tests {
     fn mesh_bounds_are_baked_for_compiled_mesh_sources() {
         let assets = vec![wja(
             "shape",
-            "ProceduralMesh",
+            RegisteredType::ProceduralMesh,
             serde_json::json!({"generator": "box"}),
         )];
         let mut named = vec![("shape".to_string(), procedural_mesh_def())];
@@ -785,12 +801,12 @@ mod tests {
         let assets = vec![
             wja(
                 "shape",
-                "ProceduralMesh",
+                RegisteredType::ProceduralMesh,
                 serde_json::json!({"generator": "box"}),
             ),
             wja(
                 "body",
-                MESH_TYPE,
+                RegisteredType::Mesh,
                 serde_json::json!({"generator": "sphere", "radius": 1.0}),
             ),
         ];
@@ -841,7 +857,7 @@ mod tests {
     // at all, and still reports one (empty) blob for the metadata to ride in.
     #[test]
     fn compile_and_pack_payloads_returns_one_empty_blob_for_a_payload_less_world() {
-        let assets = vec![wja("day", "Scene", serde_json::json!({}))];
+        let assets = vec![wja("day", RegisteredType::Scene, serde_json::json!({}))];
         let mut named = vec![(
             "day".to_string(),
             asset_api::create_asset_def(&AssetRequest {
@@ -879,7 +895,11 @@ mod tests {
     // cannot abort a build.
     #[test]
     fn compile_and_pack_payloads_skips_a_def_with_an_unknown_discriminant() {
-        let assets = vec![wja("mystery", "ProceduralMesh", serde_json::json!({}))];
+        let assets = vec![wja(
+            "mystery",
+            RegisteredType::ProceduralMesh,
+            serde_json::json!({}),
+        )];
         let mut named = vec![(
             "mystery".to_string(),
             BlobAssetDef {
@@ -921,8 +941,8 @@ mod tests {
     #[test]
     fn compile_and_pack_payloads_rolls_payloads_into_overflow_blobs() {
         let assets = vec![
-            wja("a", "ProceduralMesh", serde_json::json!({})),
-            wja("b", "ProceduralMesh", serde_json::json!({})),
+            wja("a", RegisteredType::ProceduralMesh, serde_json::json!({})),
+            wja("b", RegisteredType::ProceduralMesh, serde_json::json!({})),
         ];
         let mut named = vec![
             ("a".to_string(), procedural_mesh_def()),

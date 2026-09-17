@@ -18,16 +18,16 @@ use super::room::expand_room_textures;
 use super::scene_import::expand_scene_imports;
 use super::slider::expand_sliders;
 use super::story::expand_stories;
+use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::load_world;
 
 // Shared helpers used across expansion submodules.
 
-pub(crate) fn type_norm(v: &serde_json::Value) -> String {
+// The entry's registered type, or `None` unless its "type" is an exact name.
+pub(crate) fn registered_type(v: &serde_json::Value) -> Option<RegisteredType> {
     v.get("type")
         .and_then(|t| t.as_str())
-        .unwrap_or("")
-        .to_lowercase()
-        .replace('_', "")
+        .and_then(RegisteredType::parse)
 }
 
 pub(crate) fn asset_name(v: &serde_json::Value) -> String {
@@ -154,17 +154,9 @@ pub(crate) fn expand_world(
     // a generated entry landing on one of these names is the user's patch of
     // it, while a collision with anything added later is a conflict between
     // two expansions.
-    let authored: std::collections::HashMap<String, String> = assets
+    let authored: std::collections::HashMap<String, RegisteredType> = assets
         .iter()
-        .map(|v| {
-            (
-                asset_name(v),
-                v.get("type")
-                    .and_then(|t| t.as_str())
-                    .unwrap_or("?")
-                    .to_string(),
-            )
-        })
+        .filter_map(|v| Some((asset_name(v), registered_type(v)?)))
         .filter(|(n, _)| !n.is_empty())
         .collect();
     // Imports expand first so the assets they generate (materials, meshes,
@@ -241,21 +233,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn type_norm_lowercases_and_strips_underscores() {
+    fn registered_type_parses_an_exact_name() {
         let v = serde_json::json!({"type": "MaterialPalette"});
-        assert_eq!(type_norm(&v), "materialpalette");
-    }
-
-    #[test]
-    fn type_norm_handles_underscored_type() {
+        assert_eq!(registered_type(&v), Some(RegisteredType::MaterialPalette));
         let v = serde_json::json!({"type": "Camera3D"});
-        assert_eq!(type_norm(&v), "camera3d");
+        assert_eq!(registered_type(&v), Some(RegisteredType::Camera3D));
     }
 
     #[test]
-    fn type_norm_missing_type_returns_empty() {
-        let v = serde_json::json!({"name": "x"});
-        assert_eq!(type_norm(&v), "");
+    fn registered_type_rejects_inexact_spellings() {
+        for ty in [
+            "materialpalette",
+            "Material_Palette",
+            "camera3d",
+            "CAMERA3D",
+        ] {
+            let v = serde_json::json!({"type": ty});
+            assert_eq!(registered_type(&v), None, "{ty}");
+        }
+    }
+
+    #[test]
+    fn registered_type_missing_or_unknown_is_none() {
+        assert_eq!(registered_type(&serde_json::json!({"name": "x"})), None);
+        assert_eq!(
+            registered_type(&serde_json::json!({"type": "Logger"})),
+            None
+        );
+        assert_eq!(registered_type(&serde_json::json!({"type": 3})), None);
     }
 
     #[test]
@@ -345,13 +350,94 @@ mod tests {
         assert!(err.to_string().contains("ghost"), "{err}");
     }
 
+    // Every entry a generator emits or an injection adds must name its type
+    // exactly, because the typed world after expansion accepts nothing else.
+    // One world declares every build-only type plus a renderable asset; a
+    // second leaves the pause menu to the story injection.
+    #[test]
+    fn every_expanded_entry_names_an_exact_registered_type() {
+        use crate::authoring::registry::AssetOrigin;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut gltf = crate::import::glb::test_fixtures::static_triangle_json();
+        gltf["buffers"][0]["uri"] = "geo.bin".into();
+        std::fs::write(
+            dir.path().join("geo.bin"),
+            crate::import::glb::test_fixtures::static_triangle_bin(),
+        )
+        .unwrap();
+        let scene = dir.path().join("tri.gltf");
+        std::fs::write(&scene, serde_json::to_vec(&gltf).unwrap()).unwrap();
+        let story = dir.path().join("story.md");
+        std::fs::write(
+            &story,
+            "---\ntitle: Road\ncharacters:\n  guide: Guide\n---\n\n# start\n\n\
+             **guide:** Which way?\n\n- [Left](#end)\n- [Right](#end)\n\n# end\n\nDone.\n",
+        )
+        .unwrap();
+        let scene = scene.to_str().unwrap();
+        let story = story.to_str().unwrap();
+
+        let full = vec![
+            serde_json::json!({"name":"box_mesh","type":"ProceduralMesh","args":{"generator":"box"}}),
+            serde_json::json!({"name":"stone","type":"Material","args":{}}),
+            serde_json::json!({"name":"rig","type":"LightRig","args":{"preset":"rig_outdoor_sun_fill"}}),
+            serde_json::json!({"name":"palette","type":"MaterialPalette","args":{"entries":[{"alias":"rock"}]}}),
+            serde_json::json!({"name":"shot","type":"CameraShot","args":{"position":[0,2,6]}}),
+            serde_json::json!({"name":"crate_prefab","type":"Prefab","args":{"props":[
+                {"kind":"prop","name":"body","mesh":"box_mesh","material":"stone"},
+                {"kind":"point_light","name":"lamp","position":[0,1,0]}]}}),
+            serde_json::json!({"name":"crate_a","type":"Prop","args":{"prefab":"crate_prefab"}}),
+            serde_json::json!({"name":"imported","type":"SceneImport","args":{"source":scene}}),
+            serde_json::json!({"name":"pause","type":"MainMenu","args":{}}),
+            serde_json::json!({"name":"settings","type":"Panel","args":{"title":"Settings"}}),
+            serde_json::json!({"name":"exposure","type":"Slider","args":{"setting":"exposure","label":"Exposure"}}),
+            serde_json::json!({"name":"vsync","type":"OptionSelect","args":{"setting":"vsync","label":"Vsync"}}),
+            serde_json::json!({"name":"tale","type":"StoryImport","args":{"source":story}}),
+            serde_json::json!({"name":"sk","type":"CharacterSchema","args":{
+                "joints":[{"name":"root"}],"regions":[{"name":"all","joints":["root"]}]}}),
+            serde_json::json!({"name":"body_model","type":"CharacterModel","args":{"schema":"sk","source":"hero.glb"}}),
+            serde_json::json!({"name":"hall","type":"Room","args":{"wall_texture":"brick"}}),
+            serde_json::json!({"name":"app","type":"AppConfig","args":{"name":"Typed"}}),
+            serde_json::json!({"name":"defaults","type":"EngineDefaults","args":{}}),
+        ];
+        let story_only =
+            vec![serde_json::json!({"name":"tale","type":"StoryImport","args":{"source":story}})];
+
+        for world in [full, story_only] {
+            let mut assets = world;
+            let report = expand_world(&mut assets, None).expect("the world expands");
+            assert!(!report.injected.is_empty());
+            for v in &assets {
+                let ty = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                let parsed = RegisteredType::parse(ty)
+                    .unwrap_or_else(|| panic!("'{}' has inexact type '{ty}'", asset_name(v)));
+                // A schema stays in the world for the character bake to read.
+                assert!(
+                    parsed == RegisteredType::CharacterSchema
+                        || parsed.registration().origin != AssetOrigin::BuildOnly,
+                    "'{}' survived expansion as {ty}",
+                    asset_name(v)
+                );
+            }
+        }
+    }
+
     #[test]
     fn expand_world_from_str_injects_companions() {
         let content = r#"{"name":"gfx","type":"GraphicsConfig","args":{}}"#;
         let assets = expand_world_from_str(content, None).unwrap();
-        assert!(assets.iter().any(|v| type_norm(v) == "graphicsconfig"));
+        assert!(
+            assets
+                .iter()
+                .any(|v| registered_type(v) == Some(RegisteredType::GraphicsConfig))
+        );
         // GraphicsConfig pulls in a Window companion.
-        assert!(assets.iter().any(|v| type_norm(v) == "window"));
+        assert!(
+            assets
+                .iter()
+                .any(|v| registered_type(v) == Some(RegisteredType::Window))
+        );
     }
 
     #[test]
@@ -359,12 +445,36 @@ mod tests {
         let content = r#"{"name":"main_menu","type":"MainMenu"}"#;
         let assets = expand_world_from_str(content, None).unwrap();
         // The MainMenu is gone, replaced by its UI assets.
-        assert!(!assets.iter().any(|v| type_norm(v) == "mainmenu"));
-        assert!(assets.iter().any(|v| type_norm(v) == "screen"));
-        assert!(assets.iter().any(|v| type_norm(v) == "hitregion"));
+        assert!(
+            !assets
+                .iter()
+                .any(|v| registered_type(v) == Some(RegisteredType::MainMenu))
+        );
+        assert!(
+            assets
+                .iter()
+                .any(|v| registered_type(v) == Some(RegisteredType::Screen))
+        );
+        assert!(
+            assets
+                .iter()
+                .any(|v| registered_type(v) == Some(RegisteredType::HitRegion))
+        );
         // The generated TextLabels pull in GraphicsConfig + a Font companion.
-        assert!(assets.iter().any(|v| type_norm(v) == "textlabel"));
-        assert!(assets.iter().any(|v| type_norm(v) == "graphicsconfig"));
-        assert!(assets.iter().any(|v| type_norm(v) == "font"));
+        assert!(
+            assets
+                .iter()
+                .any(|v| registered_type(v) == Some(RegisteredType::TextLabel))
+        );
+        assert!(
+            assets
+                .iter()
+                .any(|v| registered_type(v) == Some(RegisteredType::GraphicsConfig))
+        );
+        assert!(
+            assets
+                .iter()
+                .any(|v| registered_type(v) == Some(RegisteredType::Font))
+        );
     }
 }

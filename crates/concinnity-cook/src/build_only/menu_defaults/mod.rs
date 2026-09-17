@@ -13,7 +13,8 @@
 
 use concinnity_core::components::{EngineDefaults, StoryCommand};
 
-use super::expand::{ExpandReport, asset_name, type_norm};
+use super::expand::{ExpandReport, asset_name, registered_type};
+use crate::authoring::registry::RegisteredType;
 use crate::authoring::spec::asset::ui_action;
 
 // Complete a world with the two defaults stated in build-only terms. Runs
@@ -40,7 +41,9 @@ pub(crate) fn inject_menu_defaults(
 // one entry is ambiguous and rejected here as well as by the singleton check,
 // so this pass never has to pick.
 fn declared_toggles(assets: &[serde_json::Value]) -> Result<EngineDefaults, String> {
-    let mut declared = assets.iter().filter(|v| type_norm(v) == "enginedefaults");
+    let mut declared = assets
+        .iter()
+        .filter(|v| registered_type(v) == Some(RegisteredType::EngineDefaults));
     let Some(value) = declared.next() else {
         return Ok(EngineDefaults::default());
     };
@@ -72,12 +75,16 @@ fn inject_stat_hud(
     assets: &mut Vec<serde_json::Value>,
     report: &mut ExpandReport,
 ) -> Result<(), String> {
-    let has_menu = assets.iter().any(|v| type_norm(v) == "mainmenu");
-    let has_hud = assets.iter().any(|v| type_norm(v) == "stathud");
+    let has_menu = assets
+        .iter()
+        .any(|v| registered_type(v) == Some(RegisteredType::MainMenu));
+    let has_hud = assets
+        .iter()
+        .any(|v| registered_type(v) == Some(RegisteredType::StatHud));
     if !has_menu || has_hud {
         return Ok(());
     }
-    if name_claimed(assets, report, "hud", "stat_hud", "StatHud")? {
+    if name_claimed(assets, report, "hud", "stat_hud", RegisteredType::StatHud)? {
         // Unreachable in practice: a same-name same-type asset would have
         // matched the type scan above.
         return Ok(());
@@ -104,12 +111,15 @@ fn inject_story_pause_menu(
 ) -> Result<(), String> {
     // An authored MainMenu takes over the pause role; only inject when the
     // world declares none of its own.
-    if assets.iter().any(|v| type_norm(v) == "mainmenu") {
+    if assets
+        .iter()
+        .any(|v| registered_type(v) == Some(RegisteredType::MainMenu))
+    {
         return Ok(());
     }
     let Some(prefix) = assets
         .iter()
-        .find(|v| type_norm(v) == "story")
+        .find(|v| registered_type(v) == Some(RegisteredType::Story))
         .map(asset_name)
         .filter(|n| !n.is_empty())
     else {
@@ -120,7 +130,13 @@ fn inject_story_pause_menu(
     // No MainMenu exists (checked above), so this can only flag a same-name
     // collision with an unrelated asset, which is a hard error rather than a
     // silent skip.
-    if name_claimed(assets, report, "story_pause_menu", &name, "MainMenu")? {
+    if name_claimed(
+        assets,
+        report,
+        "story_pause_menu",
+        &name,
+        RegisteredType::MainMenu,
+    )? {
         return Ok(());
     }
 
@@ -129,9 +145,9 @@ fn inject_story_pause_menu(
     // to return to, so its pause menu skips the item). Quit always exits to
     // desktop.
     let title_screen = format!("{}_title", prefix);
-    let has_title = assets
-        .iter()
-        .any(|v| type_norm(v) == "screen" && asset_name(v) == title_screen);
+    let has_title = assets.iter().any(|v| {
+        registered_type(v) == Some(RegisteredType::Screen) && asset_name(v) == title_screen
+    });
 
     let mut items = vec![
         serde_json::json!({ "label": "Resume", "action": ui_action::story(StoryCommand::TogglePause) }),
@@ -187,7 +203,7 @@ fn patch_story_scaffold(assets: &mut [serde_json::Value], story_name: &str, menu
     let pause_screen = menu_name.to_string();
     let settings_screen = format!("{}_settings_video", menu_name);
     for v in assets.iter_mut() {
-        if type_norm(v) != "story" || asset_name(v) != story_name {
+        if registered_type(v) != Some(RegisteredType::Story) || asset_name(v) != story_name {
             continue;
         }
         // Best-effort: a build-generated Story always carries an object args +
@@ -220,21 +236,26 @@ fn name_claimed(
     report: &mut ExpandReport,
     injected_by: &'static str,
     name: &str,
-    asset_type: &str,
+    asset_type: RegisteredType,
 ) -> Result<bool, String> {
     let Some(claim) = assets.iter().find(|v| asset_name(v) == name) else {
         return Ok(false);
     };
-    if type_norm(claim) != asset_type.to_lowercase().replace('_', "") {
+    if registered_type(claim) != Some(asset_type) {
         return Err(format!(
             "engine default '{}' ({}) collides with your {} asset of the same name; \
              rename that asset or disable the default with an EngineDefaults entry",
             name,
-            asset_type,
+            asset_type.as_str(),
             claim.get("type").and_then(|t| t.as_str()).unwrap_or("?"),
         ));
     }
-    report.record_shadowed(name, asset_type, injected_by, serde_json::json!({}));
+    report.record_shadowed(
+        name,
+        asset_type.as_str(),
+        injected_by,
+        serde_json::json!({}),
+    );
     Ok(true)
 }
 

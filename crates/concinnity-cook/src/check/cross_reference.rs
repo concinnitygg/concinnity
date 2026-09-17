@@ -16,12 +16,13 @@
 use std::collections::{HashMap, HashSet};
 
 use super::asset_refs::{CrossRef, CrossReferenced, RefKind};
+use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::WorldJsonlAsset;
 
-// Dispatch reference extraction by normalized asset type. Every arm delegates
+// Dispatch reference extraction by asset type. Every arm delegates
 // to a `CrossReferenced` impl in the named asset's file.
 pub(crate) fn cross_refs_for(
-    type_norm: &str,
+    asset_type: RegisteredType,
     name: &str,
     args: &serde_json::Value,
 ) -> Vec<CrossRef> {
@@ -29,27 +30,23 @@ pub(crate) fn cross_refs_for(
         AnimationGraph, Behavior, Camera3D, InstancedProp, Model, PhysicsJoint, Prop, VoxelChunk,
         VoxelWorld,
     };
-    match type_norm {
-        "animationgraph" => AnimationGraph::cross_refs(name, args),
-        "behavior" => Behavior::cross_refs(name, args),
-        "camera3d" => Camera3D::cross_refs(name, args),
-        "prop" => Prop::cross_refs(name, args),
-        "model" => Model::cross_refs(name, args),
-        "instancedprop" => InstancedProp::cross_refs(name, args),
-        "voxelchunk" => VoxelChunk::cross_refs(name, args),
-        "voxelworld" => VoxelWorld::cross_refs(name, args),
-        "physicsjoint" => PhysicsJoint::cross_refs(name, args),
+    match asset_type {
+        RegisteredType::AnimationGraph => AnimationGraph::cross_refs(name, args),
+        RegisteredType::Behavior => Behavior::cross_refs(name, args),
+        RegisteredType::Camera3D => Camera3D::cross_refs(name, args),
+        RegisteredType::Prop => Prop::cross_refs(name, args),
+        RegisteredType::Model => Model::cross_refs(name, args),
+        RegisteredType::InstancedProp => InstancedProp::cross_refs(name, args),
+        RegisteredType::VoxelChunk => VoxelChunk::cross_refs(name, args),
+        RegisteredType::VoxelWorld => VoxelWorld::cross_refs(name, args),
+        RegisteredType::PhysicsJoint => PhysicsJoint::cross_refs(name, args),
         _ => Vec::new(),
     }
 }
 
-// One registry entry's declared flat references: its normalized type name,
-// its display name, and the (field, target type) pairs.
-type DeclaredRefs = (
-    String,
-    &'static str,
-    &'static [(&'static str, &'static str)],
-);
+// One registry entry's declared flat references: its type and the
+// (field, target type) pairs.
+type DeclaredRefs = (RegisteredType, &'static [(&'static str, &'static str)]);
 
 // Resolve every flat reference the registries declare: for each asset type's
 // `refs:` metadata (component and resource registries alike), a non-empty
@@ -57,25 +54,21 @@ type DeclaredRefs = (
 // Name-sets are built once per distinct target; every target names a real
 // declarable type (guarded by `ref_fields_name_real_target_types`).
 fn validate_registry_refs(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
-    use crate::authoring::registry::RegisteredType;
-
-    let norm = |t: &str| t.to_lowercase().replace('_', "");
-
     let ref_lists: Vec<DeclaredRefs> = RegisteredType::all()
         .iter()
-        .map(|t| (t.as_str(), t.ref_fields()))
+        .map(|t| (*t, t.ref_fields()))
         .filter(|(_, refs)| !refs.is_empty())
-        .map(|(name, refs)| (norm(name), name, refs))
         .collect();
 
-    let mut scopes: HashMap<&'static str, HashSet<&str>> = HashMap::new();
-    for (_, _, refs) in &ref_lists {
+    let mut scopes: HashMap<RegisteredType, HashSet<&str>> = HashMap::new();
+    for (_, refs) in &ref_lists {
         for &(_, target) in refs.iter() {
+            let target = RegisteredType::parse(target)
+                .expect("ref_fields_name_real_target_types guards every target");
             scopes.entry(target).or_insert_with(|| {
-                let target_norm = norm(target);
                 assets
                     .iter()
-                    .filter(|a| norm(&a.asset_type) == target_norm)
+                    .filter(|a| a.asset_type == target)
                     .map(|a| a.name.as_str())
                     .collect()
             });
@@ -83,9 +76,8 @@ fn validate_registry_refs(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) 
     }
 
     for asset in assets {
-        let type_norm = norm(&asset.asset_type);
-        for (list_norm, ty_name, refs) in &ref_lists {
-            if *list_norm != type_norm {
+        for (list_type, refs) in &ref_lists {
+            if *list_type != asset.asset_type {
                 continue;
             }
             // A field may declare several targets (a Prop's `parent` is another
@@ -100,17 +92,17 @@ fn validate_registry_refs(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) 
                 else {
                     continue;
                 };
-                let targets: Vec<&str> = refs
+                let targets: Vec<RegisteredType> = refs
                     .iter()
                     .filter(|(name, _)| *name == field)
-                    .map(|(_, target)| *target)
+                    .filter_map(|(_, target)| RegisteredType::parse(target))
                     .collect();
                 if targets.iter().any(|t| scopes[t].contains(referenced)) {
                     continue;
                 }
                 errors.push(format!(
                     "{} '{}': {} '{}' not found, add {} asset with that name",
-                    ty_name,
+                    list_type.as_str(),
                     asset.name,
                     field,
                     referenced,
@@ -133,8 +125,11 @@ fn fields_of(refs: &'static [(&'static str, &'static str)]) -> Vec<&'static str>
 }
 
 // "a Prop", or "a Prop or a SkyRotation" for a field with several targets.
-fn one_of(targets: &[&str]) -> String {
-    let named: Vec<String> = targets.iter().map(|t| format!("a {t}")).collect();
+fn one_of(targets: &[RegisteredType]) -> String {
+    let named: Vec<String> = targets
+        .iter()
+        .map(|t| format!("a {}", t.as_str()))
+        .collect();
     match named.split_last() {
         Some((last, [])) => last.clone(),
         Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
@@ -159,13 +154,11 @@ struct RefScope<'a> {
 
 impl<'a> RefScope<'a> {
     fn build(assets: &'a [WorldJsonlAsset]) -> Self {
-        let norm = |t: &str| t.to_lowercase().replace('_', "");
-
-        // Names of every asset whose normalized type satisfies the predicate.
-        let by_type = |is_match: &dyn Fn(&str) -> bool| -> HashSet<&'a str> {
+        // Names of every asset of the given type.
+        let by_type = |asset_type: RegisteredType| -> HashSet<&'a str> {
             assets
                 .iter()
-                .filter(|a| is_match(&norm(&a.asset_type)))
+                .filter(|a| a.asset_type == asset_type)
                 .map(|a| a.name.as_str())
                 .collect()
         };
@@ -176,20 +169,20 @@ impl<'a> RefScope<'a> {
         // resolve to.
         let mesh_sources = assets
             .iter()
-            .filter(|a| crate::authoring::resource_type::is_mesh_source(&a.asset_type, &a.args))
+            .filter(|a| crate::authoring::resource_type::is_mesh_source(a.asset_type, &a.args))
             .map(|a| a.name.as_str())
             .collect();
 
         RefScope {
             mesh_sources,
-            materials: by_type(&|t| t == "material"),
-            scenes: by_type(&|t| t == "scene"),
-            block_types: by_type(&|t| t == "blocktype" || t == "block"),
-            skinned_meshes: by_type(&|t| t == "skinnedmesh"),
-            animations: by_type(&|t| t == "animation"),
-            audio_clips: by_type(&|t| t == "audioclip"),
-            screens: by_type(&|t| t == "screen"),
-            trigger_volumes: by_type(&|t| t == "triggervolume"),
+            materials: by_type(RegisteredType::Material),
+            scenes: by_type(RegisteredType::Scene),
+            block_types: by_type(RegisteredType::BlockType),
+            skinned_meshes: by_type(RegisteredType::SkinnedMesh),
+            animations: by_type(RegisteredType::Animation),
+            audio_clips: by_type(RegisteredType::AudioClip),
+            screens: by_type(RegisteredType::Screen),
+            trigger_volumes: by_type(RegisteredType::TriggerVolume),
             all_names: assets.iter().map(|a| a.name.as_str()).collect(),
         }
     }
@@ -219,8 +212,7 @@ pub(crate) fn validate_cross_references(assets: &[WorldJsonlAsset]) -> Result<()
     validate_registry_refs(assets, &mut errors);
 
     for asset in assets {
-        let type_norm = asset.asset_type.to_lowercase().replace('_', "");
-        for cross_ref in cross_refs_for(&type_norm, &asset.name, &asset.args) {
+        for cross_ref in cross_refs_for(asset.asset_type, &asset.name, &asset.args) {
             match cross_ref {
                 CrossRef::Resolve {
                     kind,
@@ -240,7 +232,7 @@ pub(crate) fn validate_cross_references(assets: &[WorldJsonlAsset]) -> Result<()
     // it stays in the validator rather than the per-asset trait.
     let prop_parent_map: std::collections::HashMap<&str, &str> = assets
         .iter()
-        .filter(|a| a.asset_type.to_lowercase().replace('_', "") == "prop")
+        .filter(|a| a.asset_type == RegisteredType::Prop)
         .filter_map(|a| {
             let parent = a
                 .args
@@ -284,10 +276,9 @@ pub(crate) fn validate_cross_references(assets: &[WorldJsonlAsset]) -> Result<()
 // play, since the graph decides what runs). These need the whole world, so
 // they live here rather than in the per-asset checks.
 fn check_graph_ownership(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
-    let norm = |t: &str| t.to_lowercase().replace('_', "");
     let graphs: Vec<&WorldJsonlAsset> = assets
         .iter()
-        .filter(|a| norm(&a.asset_type) == "animationgraph")
+        .filter(|a| a.asset_type == RegisteredType::AnimationGraph)
         .collect();
     if graphs.is_empty() {
         return;
@@ -296,7 +287,7 @@ fn check_graph_ownership(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
     // Animation name -> its target SkinnedMesh name.
     let clip_targets: std::collections::HashMap<&str, &str> = assets
         .iter()
-        .filter(|a| norm(&a.asset_type) == "animation")
+        .filter(|a| a.asset_type == RegisteredType::Animation)
         .map(|a| {
             let target = a.args.get("target").and_then(|v| v.as_str()).unwrap_or("");
             (a.name.as_str(), target)
@@ -365,8 +356,10 @@ fn check_graph_ownership(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
 // skips the writes instead. These need the whole world, so they live here
 // rather than in the per-asset checks.
 fn check_follow_targets(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
-    let norm = |t: &str| t.to_lowercase().replace('_', "");
-    for camera in assets.iter().filter(|a| norm(&a.asset_type) == "camera3d") {
+    for camera in assets
+        .iter()
+        .filter(|a| a.asset_type == RegisteredType::Camera3D)
+    {
         let Some(follow) = camera
             .args
             .get("controller")
@@ -381,7 +374,7 @@ fn check_follow_targets(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
         }
 
         let has_capsule = assets.iter().any(|a| {
-            norm(&a.asset_type) == "skinnedmesh"
+            a.asset_type == RegisteredType::SkinnedMesh
                 && a.name == target
                 && a.args.get("capsule").is_some_and(|c| !c.is_null())
         });
@@ -397,7 +390,7 @@ fn check_follow_targets(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
             && !param.is_empty()
         {
             let declared = assets.iter().any(|a| {
-                norm(&a.asset_type) == "animationgraph"
+                a.asset_type == RegisteredType::AnimationGraph
                     && a.args.get("target").and_then(|v| v.as_str()) == Some(target)
                     && a.args
                         .get("parameters")
@@ -423,10 +416,10 @@ fn check_follow_targets(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
 mod tests {
     use super::*;
 
-    fn asset(name: &str, asset_type: &str, args: serde_json::Value) -> WorldJsonlAsset {
+    fn asset(name: &str, asset_type: RegisteredType, args: serde_json::Value) -> WorldJsonlAsset {
         WorldJsonlAsset {
             name: name.to_string(),
-            asset_type: asset_type.to_string(),
+            asset_type,
             args,
         }
     }
@@ -442,17 +435,17 @@ mod tests {
         let assets = vec![
             asset(
                 "my_mesh",
-                "ProceduralMesh",
+                RegisteredType::ProceduralMesh,
                 serde_json::json!({"generator":"box","half_extents":[1,1,1]}),
             ),
             asset(
                 "my_tex",
-                "Texture",
+                RegisteredType::Texture,
                 serde_json::json!({"generator":"brick"}),
             ),
             asset(
                 "my_prop",
-                "Prop",
+                RegisteredType::Prop,
                 serde_json::json!({"mesh":"my_mesh","texture":"my_tex"}),
             ),
         ];
@@ -463,7 +456,7 @@ mod tests {
     fn prop_missing_mesh_fails() {
         let assets = vec![asset(
             "my_prop",
-            "Prop",
+            RegisteredType::Prop,
             serde_json::json!({"mesh":"missing_mesh"}),
         )];
         assert!(err_text(&assets).contains("missing_mesh"));
@@ -474,12 +467,12 @@ mod tests {
         let assets = vec![
             asset(
                 "my_mesh",
-                "ProceduralMesh",
+                RegisteredType::ProceduralMesh,
                 serde_json::json!({"generator":"box","half_extents":[1,1,1]}),
             ),
             asset(
                 "my_prop",
-                "Prop",
+                RegisteredType::Prop,
                 serde_json::json!({"mesh":"my_mesh","material":"no_mat"}),
             ),
         ];
@@ -491,18 +484,22 @@ mod tests {
         let assets = vec![
             asset(
                 "body",
-                "ProceduralMesh",
+                RegisteredType::ProceduralMesh,
                 serde_json::json!({"generator":"box","half_extents":[0.4,0.4,0.4]}),
             ),
-            asset("mat_wood", "Material", serde_json::json!({"roughness":0.7})),
+            asset(
+                "mat_wood",
+                RegisteredType::Material,
+                serde_json::json!({"roughness":0.7}),
+            ),
             asset(
                 "crate_model",
-                "Model",
+                RegisteredType::Model,
                 serde_json::json!({"meshes":[{"mesh":"body","material":"mat_wood"}]}),
             ),
             asset(
                 "crate_a",
-                "Prop",
+                RegisteredType::Prop,
                 serde_json::json!({"model":"crate_model"}),
             ),
         ];
@@ -513,7 +510,7 @@ mod tests {
     fn model_missing_mesh_fails() {
         let assets = vec![asset(
             "my_model",
-            "Model",
+            RegisteredType::Model,
             serde_json::json!({"meshes":[{"mesh":"ghost_mesh"}]}),
         )];
         assert!(err_text(&assets).contains("ghost_mesh"));
@@ -523,7 +520,7 @@ mod tests {
     fn prop_missing_model_fails() {
         let assets = vec![asset(
             "my_prop",
-            "Prop",
+            RegisteredType::Prop,
             serde_json::json!({"model":"ghost_model"}),
         )];
         assert!(err_text(&assets).contains("ghost_model"));
@@ -534,10 +531,14 @@ mod tests {
         let assets = vec![
             asset(
                 "room_obj",
-                "File",
+                RegisteredType::File,
                 serde_json::json!({"path":"assets/room.obj","kind":"obj"}),
             ),
-            asset("my_prop", "Prop", serde_json::json!({"mesh":"room_obj"})),
+            asset(
+                "my_prop",
+                RegisteredType::Prop,
+                serde_json::json!({"mesh":"room_obj"}),
+            ),
         ];
         assert!(validate_cross_references(&assets).is_ok());
     }
@@ -547,10 +548,14 @@ mod tests {
         let assets = vec![
             asset(
                 "wall_png",
-                "File",
+                RegisteredType::File,
                 serde_json::json!({"path":"assets/wall.png","kind":"png"}),
             ),
-            asset("my_prop", "Prop", serde_json::json!({"mesh":"wall_png"})),
+            asset(
+                "my_prop",
+                RegisteredType::Prop,
+                serde_json::json!({"mesh":"wall_png"}),
+            ),
         ];
         assert!(err_text(&assets).contains("wall_png"));
     }
@@ -560,10 +565,14 @@ mod tests {
         let assets = vec![
             asset(
                 "inline_mesh",
-                "Mesh",
+                RegisteredType::Mesh,
                 serde_json::json!({"vertices":[],"indices":[]}),
             ),
-            asset("my_prop", "Prop", serde_json::json!({"mesh":"inline_mesh"})),
+            asset(
+                "my_prop",
+                RegisteredType::Prop,
+                serde_json::json!({"mesh":"inline_mesh"}),
+            ),
         ];
         assert!(validate_cross_references(&assets).is_ok());
     }
@@ -572,7 +581,7 @@ mod tests {
     fn material_missing_albedo_fails() {
         let assets = vec![asset(
             "my_mat",
-            "Material",
+            RegisteredType::Material,
             serde_json::json!({"albedo":"no_tex"}),
         )];
         assert!(err_text(&assets).contains("no_tex"));
@@ -582,7 +591,7 @@ mod tests {
     fn material_missing_normal_map_fails() {
         let assets = vec![asset(
             "my_mat",
-            "Material",
+            RegisteredType::Material,
             serde_json::json!({"normal_map":"no_nrm"}),
         )];
         assert!(err_text(&assets).contains("no_nrm"));
@@ -593,12 +602,12 @@ mod tests {
         let assets = vec![
             asset(
                 "nrm_tex",
-                "Texture",
+                RegisteredType::Texture,
                 serde_json::json!({"generator":"solid","color":[128,128,255,255]}),
             ),
             asset(
                 "my_mat",
-                "Material",
+                RegisteredType::Material,
                 serde_json::json!({"normal_map":"nrm_tex"}),
             ),
         ];
@@ -610,10 +619,14 @@ mod tests {
         let assets = vec![
             asset(
                 "my_mesh",
-                "ProceduralMesh",
+                RegisteredType::ProceduralMesh,
                 serde_json::json!({"generator":"box","half_extents":[1,1,1]}),
             ),
-            asset("my_prop", "Prop", serde_json::json!({"mesh":"my_mesh"})),
+            asset(
+                "my_prop",
+                RegisteredType::Prop,
+                serde_json::json!({"mesh":"my_mesh"}),
+            ),
         ];
         assert!(validate_cross_references(&assets).is_ok());
     }
@@ -623,17 +636,17 @@ mod tests {
         let assets = vec![
             asset(
                 "box",
-                "ProceduralMesh",
+                RegisteredType::ProceduralMesh,
                 serde_json::json!({"generator":"box","half_extents":[1,1,1]}),
             ),
             asset(
                 "frame",
-                "Prop",
+                RegisteredType::Prop,
                 serde_json::json!({"mesh":"box","position":[0,0,0]}),
             ),
             asset(
                 "panel",
-                "Prop",
+                RegisteredType::Prop,
                 serde_json::json!({"mesh":"box","parent":"frame"}),
             ),
         ];
@@ -647,13 +660,17 @@ mod tests {
         let assets = vec![
             asset(
                 "box",
-                "ProceduralMesh",
+                RegisteredType::ProceduralMesh,
                 serde_json::json!({"generator":"box","half_extents":[1,1,1]}),
             ),
-            asset("sky", "SkyRotation", serde_json::json!({"axis":[1,0,0]})),
+            asset(
+                "sky",
+                RegisteredType::SkyRotation,
+                serde_json::json!({"axis":[1,0,0]}),
+            ),
             asset(
                 "moon",
-                "Prop",
+                RegisteredType::Prop,
                 serde_json::json!({"mesh":"box","parent":"sky"}),
             ),
         ];
@@ -666,12 +683,12 @@ mod tests {
         let assets = vec![
             asset(
                 "box",
-                "ProceduralMesh",
+                RegisteredType::ProceduralMesh,
                 serde_json::json!({"generator":"box","half_extents":[1,1,1]}),
             ),
             asset(
                 "moon",
-                "Prop",
+                RegisteredType::Prop,
                 serde_json::json!({"mesh":"box","parent":"nothing"}),
             ),
         ];
@@ -684,12 +701,12 @@ mod tests {
         let assets = vec![
             asset(
                 "box",
-                "ProceduralMesh",
+                RegisteredType::ProceduralMesh,
                 serde_json::json!({"generator":"box","half_extents":[1,1,1]}),
             ),
             asset(
                 "panel",
-                "Prop",
+                RegisteredType::Prop,
                 serde_json::json!({"mesh":"box","parent":"ghost_prop"}),
             ),
         ];
@@ -701,11 +718,19 @@ mod tests {
         let assets = vec![
             asset(
                 "box",
-                "ProceduralMesh",
+                RegisteredType::ProceduralMesh,
                 serde_json::json!({"generator":"box","half_extents":[1,1,1]}),
             ),
-            asset("a", "Prop", serde_json::json!({"mesh":"box","parent":"b"})),
-            asset("b", "Prop", serde_json::json!({"mesh":"box","parent":"a"})),
+            asset(
+                "a",
+                RegisteredType::Prop,
+                serde_json::json!({"mesh":"box","parent":"b"}),
+            ),
+            asset(
+                "b",
+                RegisteredType::Prop,
+                serde_json::json!({"mesh":"box","parent":"a"}),
+            ),
         ];
         assert!(err_text(&assets).contains("cycle"));
     }
@@ -715,18 +740,22 @@ mod tests {
         let assets = vec![
             asset(
                 "box",
-                "ProceduralMesh",
+                RegisteredType::ProceduralMesh,
                 serde_json::json!({"generator":"box","half_extents":[1,1,1]}),
             ),
-            asset("root", "Prop", serde_json::json!({"mesh":"box"})),
+            asset(
+                "root",
+                RegisteredType::Prop,
+                serde_json::json!({"mesh":"box"}),
+            ),
             asset(
                 "mid",
-                "Prop",
+                RegisteredType::Prop,
                 serde_json::json!({"mesh":"box","parent":"root"}),
             ),
             asset(
                 "leaf",
-                "Prop",
+                RegisteredType::Prop,
                 serde_json::json!({"mesh":"box","parent":"mid"}),
             ),
         ];
@@ -736,8 +765,12 @@ mod tests {
     #[test]
     fn scene_camera_shot_valid_passes() {
         let assets = vec![
-            asset("cam", "Camera3D", serde_json::json!({})),
-            asset("day", "Scene", serde_json::json!({"camera_shot":"cam"})),
+            asset("cam", RegisteredType::Camera3D, serde_json::json!({})),
+            asset(
+                "day",
+                RegisteredType::Scene,
+                serde_json::json!({"camera_shot":"cam"}),
+            ),
         ];
         assert!(validate_cross_references(&assets).is_ok());
     }
@@ -746,7 +779,7 @@ mod tests {
     fn scene_camera_shot_missing_fails() {
         let assets = vec![asset(
             "day",
-            "Scene",
+            RegisteredType::Scene,
             serde_json::json!({"camera_shot":"ghost_cam"}),
         )];
         assert!(err_text(&assets).contains("ghost_cam"));
@@ -755,18 +788,26 @@ mod tests {
     #[test]
     fn voxel_chunk_counts_as_mesh_source() {
         let assets = vec![
-            asset("air", "BlockType", serde_json::json!({"solid":false})),
-            asset("stone", "BlockType", serde_json::json!({})),
+            asset(
+                "air",
+                RegisteredType::BlockType,
+                serde_json::json!({"solid":false}),
+            ),
+            asset("stone", RegisteredType::BlockType, serde_json::json!({})),
             asset(
                 "chunk",
-                "VoxelChunk",
+                RegisteredType::VoxelChunk,
                 serde_json::json!({
                     "palette":["air","stone"],
                     "dim":[1,1,1],
                     "blocks":[1],
                 }),
             ),
-            asset("p", "Prop", serde_json::json!({"mesh":"chunk"})),
+            asset(
+                "p",
+                RegisteredType::Prop,
+                serde_json::json!({"mesh":"chunk"}),
+            ),
         ];
         assert!(validate_cross_references(&assets).is_ok());
     }
@@ -774,10 +815,14 @@ mod tests {
     #[test]
     fn voxel_chunk_unknown_block_type_fails() {
         let assets = vec![
-            asset("air", "BlockType", serde_json::json!({"solid":false})),
+            asset(
+                "air",
+                RegisteredType::BlockType,
+                serde_json::json!({"solid":false}),
+            ),
             asset(
                 "chunk",
-                "VoxelChunk",
+                RegisteredType::VoxelChunk,
                 serde_json::json!({
                     "palette":["air","ghost_block"],
                     "dim":[1,1,1],
@@ -793,22 +838,22 @@ mod tests {
         let assets = vec![
             asset(
                 "rock_mesh",
-                "ProceduralMesh",
+                RegisteredType::ProceduralMesh,
                 serde_json::json!({"generator":"sphere","radius":0.4,"rings":6,"segments":8}),
             ),
             asset(
                 "tex_rock",
-                "Texture",
+                RegisteredType::Texture,
                 serde_json::json!({"generator":"stone"}),
             ),
             asset(
                 "mat_rock",
-                "Material",
+                RegisteredType::Material,
                 serde_json::json!({"albedo":"tex_rock"}),
             ),
             asset(
                 "rocks",
-                "InstancedProp",
+                RegisteredType::InstancedProp,
                 serde_json::json!({
                     "mesh":"rock_mesh",
                     "material":"mat_rock",
@@ -826,7 +871,7 @@ mod tests {
     fn instanced_prop_missing_mesh_fails() {
         let assets = vec![asset(
             "rocks",
-            "InstancedProp",
+            RegisteredType::InstancedProp,
             serde_json::json!({"mesh":"ghost_mesh","instances":[]}),
         )];
         assert!(err_text(&assets).contains("ghost_mesh"));
@@ -836,7 +881,7 @@ mod tests {
     fn instanced_prop_empty_mesh_field_fails() {
         let assets = vec![asset(
             "rocks",
-            "InstancedProp",
+            RegisteredType::InstancedProp,
             serde_json::json!({"instances":[]}),
         )];
         assert!(err_text(&assets).contains("`mesh` field is required"));
@@ -847,12 +892,12 @@ mod tests {
         let assets = vec![
             asset(
                 "rock_mesh",
-                "ProceduralMesh",
+                RegisteredType::ProceduralMesh,
                 serde_json::json!({"generator":"box","half_extents":[0.5,0.5,0.5]}),
             ),
             asset(
                 "rocks",
-                "InstancedProp",
+                RegisteredType::InstancedProp,
                 serde_json::json!({"mesh":"rock_mesh","material":"ghost_mat","instances":[]}),
             ),
         ];
@@ -862,11 +907,15 @@ mod tests {
     #[test]
     fn instanced_prop_voxel_chunk_mesh_passes() {
         let assets = vec![
-            asset("air", "BlockType", serde_json::json!({"solid":false})),
-            asset("stone", "BlockType", serde_json::json!({})),
+            asset(
+                "air",
+                RegisteredType::BlockType,
+                serde_json::json!({"solid":false}),
+            ),
+            asset("stone", RegisteredType::BlockType, serde_json::json!({})),
             asset(
                 "chunk",
-                "VoxelChunk",
+                RegisteredType::VoxelChunk,
                 serde_json::json!({
                     "palette":["air","stone"],
                     "dim":[1,1,1],
@@ -875,7 +924,7 @@ mod tests {
             ),
             asset(
                 "rocks",
-                "InstancedProp",
+                RegisteredType::InstancedProp,
                 serde_json::json!({"mesh":"chunk","instances":[]}),
             ),
         ];
@@ -887,22 +936,22 @@ mod tests {
         let assets = vec![
             asset(
                 "box",
-                "ProceduralMesh",
+                RegisteredType::ProceduralMesh,
                 serde_json::json!({"generator":"box","half_extents":[1,1,1]}),
             ),
             asset(
                 "a",
-                "Prop",
+                RegisteredType::Prop,
                 serde_json::json!({"mesh":"box","collider":{"shape":"cuboid","half_extents":[1,1,1]}}),
             ),
             asset(
                 "b",
-                "Prop",
+                RegisteredType::Prop,
                 serde_json::json!({"mesh":"box","collider":{"shape":"cuboid","half_extents":[1,1,1]}}),
             ),
             asset(
                 "j",
-                "PhysicsJoint",
+                RegisteredType::PhysicsJoint,
                 serde_json::json!({"kind":"revolute","body_a":"a","body_b":"b"}),
             ),
         ];
@@ -914,17 +963,17 @@ mod tests {
         let assets = vec![
             asset(
                 "box",
-                "ProceduralMesh",
+                RegisteredType::ProceduralMesh,
                 serde_json::json!({"generator":"box","half_extents":[1,1,1]}),
             ),
             asset(
                 "bob",
-                "Prop",
+                RegisteredType::Prop,
                 serde_json::json!({"mesh":"box","collider":{"shape":"ball","radius":0.3}}),
             ),
             asset(
                 "pendulum",
-                "PhysicsJoint",
+                RegisteredType::PhysicsJoint,
                 serde_json::json!({"kind":"revolute","body_a":"bob","anchor_b":[0,5,0]}),
             ),
         ];
@@ -935,7 +984,7 @@ mod tests {
     fn joint_missing_body_a_fails() {
         let assets = vec![asset(
             "j",
-            "PhysicsJoint",
+            RegisteredType::PhysicsJoint,
             serde_json::json!({"kind":"fixed","body_b":"b"}),
         )];
         assert!(err_text(&assets).contains("body_a"));
@@ -946,13 +995,13 @@ mod tests {
         let assets = vec![
             asset(
                 "box",
-                "ProceduralMesh",
+                RegisteredType::ProceduralMesh,
                 serde_json::json!({"generator":"box","half_extents":[1,1,1]}),
             ),
-            asset("a", "Prop", serde_json::json!({"mesh":"box"})),
+            asset("a", RegisteredType::Prop, serde_json::json!({"mesh":"box"})),
             asset(
                 "j",
-                "PhysicsJoint",
+                RegisteredType::PhysicsJoint,
                 serde_json::json!({"kind":"fixed","body_a":"a","body_b":"ghost"}),
             ),
         ];
@@ -964,13 +1013,13 @@ mod tests {
         let assets = vec![
             asset(
                 "box",
-                "ProceduralMesh",
+                RegisteredType::ProceduralMesh,
                 serde_json::json!({"generator":"box","half_extents":[1,1,1]}),
             ),
-            asset("a", "Prop", serde_json::json!({"mesh":"box"})),
+            asset("a", RegisteredType::Prop, serde_json::json!({"mesh":"box"})),
             asset(
                 "j",
-                "PhysicsJoint",
+                RegisteredType::PhysicsJoint,
                 serde_json::json!({"kind":"frumpus","body_a":"a"}),
             ),
         ];
@@ -980,12 +1029,20 @@ mod tests {
     // A minimal skinned world: mesh + two clips + a graph referencing both.
     fn graph_world() -> Vec<WorldJsonlAsset> {
         vec![
-            asset("hero", "SkinnedMesh", serde_json::json!({})),
-            asset("idle", "Animation", serde_json::json!({"target":"hero"})),
-            asset("run", "Animation", serde_json::json!({"target":"hero"})),
+            asset("hero", RegisteredType::SkinnedMesh, serde_json::json!({})),
+            asset(
+                "idle",
+                RegisteredType::Animation,
+                serde_json::json!({"target":"hero"}),
+            ),
+            asset(
+                "run",
+                RegisteredType::Animation,
+                serde_json::json!({"target":"hero"}),
+            ),
             asset(
                 "g",
-                "AnimationGraph",
+                RegisteredType::AnimationGraph,
                 serde_json::json!({
                     "target":"hero",
                     "states":[
@@ -1021,7 +1078,7 @@ mod tests {
         let mut assets = graph_world();
         assets.push(asset(
             "wave",
-            "Animation",
+            RegisteredType::Animation,
             serde_json::json!({"target":"hero"}),
         ));
         assert!(err_text(&assets).contains("no graph state references it"));
@@ -1030,10 +1087,14 @@ mod tests {
     #[test]
     fn anim_graph_clip_targeting_other_mesh_fails() {
         let mut assets = graph_world();
-        assets.push(asset("other", "SkinnedMesh", serde_json::json!({})));
+        assets.push(asset(
+            "other",
+            RegisteredType::SkinnedMesh,
+            serde_json::json!({}),
+        ));
         assets.push(asset(
             "other_idle",
-            "Animation",
+            RegisteredType::Animation,
             serde_json::json!({"target":"other"}),
         ));
         assets[3].args["states"][1]["clip"] = serde_json::json!("other_idle");
@@ -1048,7 +1109,7 @@ mod tests {
         let mut assets = graph_world();
         assets.push(asset(
             "g2",
-            "AnimationGraph",
+            RegisteredType::AnimationGraph,
             serde_json::json!({
                 "target":"hero",
                 "states":[{"name":"idle","clip":"idle"},{"name":"run","clip":"run"}]
@@ -1081,8 +1142,12 @@ mod tests {
     #[test]
     fn clips_without_graph_stay_unowned_and_pass() {
         let assets = vec![
-            asset("hero", "SkinnedMesh", serde_json::json!({})),
-            asset("idle", "Animation", serde_json::json!({"target":"hero"})),
+            asset("hero", RegisteredType::SkinnedMesh, serde_json::json!({})),
+            asset(
+                "idle",
+                RegisteredType::Animation,
+                serde_json::json!({"target":"hero"}),
+            ),
         ];
         assert!(validate_cross_references(&assets).is_ok());
     }
@@ -1093,13 +1158,17 @@ mod tests {
         vec![
             asset(
                 "hero",
-                "SkinnedMesh",
+                RegisteredType::SkinnedMesh,
                 serde_json::json!({"capsule":{"half_height":0.5,"radius":0.3}}),
             ),
-            asset("walk", "Animation", serde_json::json!({"target":"hero"})),
+            asset(
+                "walk",
+                RegisteredType::Animation,
+                serde_json::json!({"target":"hero"}),
+            ),
             asset(
                 "g",
-                "AnimationGraph",
+                RegisteredType::AnimationGraph,
                 serde_json::json!({
                     "target":"hero",
                     "parameters":[{"name":"speed"}],
@@ -1108,7 +1177,7 @@ mod tests {
             ),
             asset(
                 "cam",
-                "Camera3D",
+                RegisteredType::Camera3D,
                 serde_json::json!({"controller":{"follow":{
                     "target":"hero","speed_parameter":"speed"
                 }}}),
@@ -1170,11 +1239,9 @@ mod tests {
     // ref (the old asset_refs/registry drift) can never reappear.
     #[test]
     fn every_registry_ref_field_is_validated() {
-        use crate::authoring::registry::RegisteredType;
-
-        let all: Vec<(&str, &[(&str, &str)])> = RegisteredType::all()
+        let all: Vec<(RegisteredType, &[(&str, &str)])> = RegisteredType::all()
             .iter()
-            .map(|t| (t.as_str(), t.ref_fields()))
+            .map(|t| (*t, t.ref_fields()))
             .filter(|(_, refs)| !refs.is_empty())
             .collect();
         assert!(!all.is_empty());
@@ -1191,7 +1258,8 @@ mod tests {
                 assert!(
                     errs.iter()
                         .any(|e| e.contains("ghost_ref") && e.contains(field)),
-                    "{ty}.{field} (-> {target}): dangling reference not reported; got {errs:?}"
+                    "{}.{field} (-> {target}): dangling reference not reported; got {errs:?}",
+                    ty.as_str()
                 );
             }
         }
@@ -1201,14 +1269,18 @@ mod tests {
     fn behavior_named_entities_resolve_at_any_nesting_depth() {
         let mesh = asset(
             "box_mesh",
-            "ProceduralMesh",
+            RegisteredType::ProceduralMesh,
             serde_json::json!({"generator":"box","half_extents":[1,1,1]}),
         );
-        let prop = asset("door", "Prop", serde_json::json!({"mesh":"box_mesh"}));
+        let prop = asset(
+            "door",
+            RegisteredType::Prop,
+            serde_json::json!({"mesh":"box_mesh"}),
+        );
         // A `named` buried inside an if/for_each body still resolves.
         let ok = asset(
             "open",
-            "Behavior",
+            RegisteredType::Behavior,
             serde_json::json!({"on":"start","do":[
                 {"if":{"cond":{"bool":true},"then":[{"hide":{"target":{"named":"door"}}}]}}
             ]}),
@@ -1217,7 +1289,7 @@ mod tests {
 
         let ghost = asset(
             "open",
-            "Behavior",
+            RegisteredType::Behavior,
             serde_json::json!({"on":"start","do":[
                 {"if":{"cond":{"bool":true},"then":[{"hide":{"target":{"named":"ghost_door"}}}]}}
             ]}),
@@ -1227,17 +1299,17 @@ mod tests {
 
     #[test]
     fn behavior_scene_node_does_not_double_report_its_inner_field() {
-        let scene = asset("level2", "Scene", serde_json::json!({}));
+        let scene = asset("level2", RegisteredType::Scene, serde_json::json!({}));
         let ok = asset(
             "advance",
-            "Behavior",
+            RegisteredType::Behavior,
             serde_json::json!({"on":"start","do":[{"scene":{"scene":"level2"}}]}),
         );
         assert!(validate_cross_references(&[scene.clone(), ok]).is_ok());
 
         let ghost = asset(
             "advance",
-            "Behavior",
+            RegisteredType::Behavior,
             serde_json::json!({"on":"start","do":[{"scene":{"scene":"ghost_level"}}]}),
         );
         let errs = err_text(&[scene, ghost]);
@@ -1250,17 +1322,17 @@ mod tests {
 
     #[test]
     fn behavior_enter_volume_resolves_against_trigger_volumes() {
-        let volume = asset("zone", "TriggerVolume", serde_json::json!({}));
+        let volume = asset("zone", RegisteredType::TriggerVolume, serde_json::json!({}));
         let ok = asset(
             "opens",
-            "Behavior",
+            RegisteredType::Behavior,
             serde_json::json!({"on":{"enter":"zone"},"do":[]}),
         );
         assert!(validate_cross_references(&[volume.clone(), ok]).is_ok());
 
         let ghost = asset(
             "opens",
-            "Behavior",
+            RegisteredType::Behavior,
             serde_json::json!({"on":{"exit":"ghost_zone"},"do":[]}),
         );
         assert!(err_text(&[volume, ghost]).contains("ghost_zone"));
@@ -1270,20 +1342,24 @@ mod tests {
     fn behavior_node_refs_are_validated() {
         let mesh = asset(
             "box_mesh",
-            "ProceduralMesh",
+            RegisteredType::ProceduralMesh,
             serde_json::json!({"generator":"box","half_extents":[1,1,1]}),
         );
-        let prop = asset("crate", "Prop", serde_json::json!({"mesh":"box_mesh"}));
+        let prop = asset(
+            "crate",
+            RegisteredType::Prop,
+            serde_json::json!({"mesh":"box_mesh"}),
+        );
         let ok = asset(
             "spawner_rule",
-            "Behavior",
+            RegisteredType::Behavior,
             serde_json::json!({"do":[{"spawn":{"template":"crate"}}]}),
         );
         assert!(validate_cross_references(&[mesh.clone(), prop.clone(), ok]).is_ok());
 
         let ghost = asset(
             "spawner_rule",
-            "Behavior",
+            RegisteredType::Behavior,
             serde_json::json!({"do":[{"despawn":{"target":{"named":"ghost_prop"}}}]}),
         );
         assert!(err_text(&[mesh, prop, ghost]).contains("ghost_prop"));
@@ -1294,7 +1370,7 @@ mod tests {
         // A prop with three independent bad references should report all three.
         let assets = vec![asset(
             "broken",
-            "Prop",
+            RegisteredType::Prop,
             serde_json::json!({"mesh":"no_mesh","material":"no_mat","scene":"no_scene"}),
         )];
         let errs = validate_cross_references(&assets).unwrap_err();

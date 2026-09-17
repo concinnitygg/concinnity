@@ -446,7 +446,7 @@ mod tests {
         let loaded = LoadedWorld {
             assets: vec![WorldJsonlAsset {
                 name: "i1_a".into(),
-                asset_type: "Prop".into(),
+                asset_type: concinnity_cook::authoring::registry::RegisteredType::Prop,
                 args: json!({"mesh": "box"}),
             }],
             injected: vec![InjectedAsset {

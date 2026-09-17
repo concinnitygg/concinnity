@@ -30,7 +30,6 @@ pub fn validate_asset(
     // to a real slot, which single-asset validation never needs).
     asset_id::reset_interner();
     crate::resource_handles::reset_resource_handles();
-    let type_norm = asset_type.to_lowercase().replace('_', "");
     let registered = RegisteredType::parse(asset_type);
 
     // Build-only types are valid in world.jsonl; they are consumed by expansion
@@ -41,8 +40,8 @@ pub fn validate_asset(
 
     // A resource asset never builds a component def; validate it as a known type
     // with a structural check instead of routing through `create_asset_def`.
-    if registered.is_some_and(|t| t.is_resource()) {
-        crate::check::check_asset(&type_norm, name, args)?;
+    if let Some(resource) = registered.filter(|t| t.is_resource()) {
+        crate::check::check_asset(resource, name, args)?;
         return Ok(());
     }
 
@@ -52,7 +51,9 @@ pub fn validate_asset(
     };
     asset_api::create_asset_def(&req).map_err(|e| format!("Asset '{}': {}", name, e))?;
 
-    crate::check::check_asset(&type_norm, name, args)?;
+    if let Some(registered) = registered {
+        crate::check::check_asset(registered, name, args)?;
+    }
 
     Ok(())
 }
@@ -71,13 +72,11 @@ pub fn validate_world_jsonl(content: &str, assets_dir: Option<&Path>) -> std::io
     for asset in &loaded.assets {
         // A resource asset does not build a component def, so skip the component
         // resolution for it.
-        if crate::authoring::registry::RegisteredType::parse(&asset.asset_type)
-            .is_some_and(|t| t.is_resource())
-        {
+        if asset.asset_type.is_resource() {
             continue;
         }
         let req = AssetRequest {
-            asset_type: asset.asset_type.clone(),
+            asset_type: asset.asset_type.as_str().to_string(),
             args: Some(asset.args.clone()),
         };
         if let Err(e) = asset_api::create_asset_def(&req) {

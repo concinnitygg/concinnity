@@ -714,18 +714,6 @@ pub fn bake_divergent(
     }
 }
 
-/// Whether an asset type's presence implies the world renders: the registry's
-/// `renders` flag, across both the component and resource registries. Matches
-/// by normalized name (case-insensitive, underscores stripped) so cook's
-/// companion pass and authoring tools classify the same way.
-pub fn type_renders(asset_type: &str) -> bool {
-    let norm: String = asset_type.chars().filter(|c| *c != '_').collect();
-    let matches = |name: &str| name.eq_ignore_ascii_case(&norm);
-    RegisteredType::all()
-        .iter()
-        .any(|t| t.renders() && matches(t.as_str()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1166,25 +1154,6 @@ mod tests {
                 ty.as_str()
             );
         }
-    }
-
-    // The two-registry render classifier: exact names, forgiving spellings,
-    // resource-registry types, and non-renderers.
-    #[test]
-    fn type_renders_spans_both_registries() {
-        assert!(type_renders("TextLabel"));
-        assert!(type_renders("text_label"));
-        assert!(type_renders("GraphicsConfig"));
-        assert!(type_renders("EnvironmentMap"));
-        // A skinned mesh is placed directly and rendered, so its presence
-        // renders even without any static Mesh/Prop in the world.
-        assert!(type_renders("SkinnedMesh"));
-        assert!(type_renders("skinned_mesh"));
-        assert!(!type_renders("Window"));
-        // A raw Mesh is inert geometry (rendered only through a Prop/Model), so
-        // unlike SkinnedMesh it does not by itself render.
-        assert!(!type_renders("Mesh"));
-        assert!(!type_renders("NotARealType"));
     }
 
     // The per-instance components an entity is composed from are RuntimeOnly:

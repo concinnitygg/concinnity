@@ -24,10 +24,10 @@ pub(crate) fn export_world_mesh(content: &str, mesh: &str, bake: bool) -> Result
         .iter()
         .find(|a| a.name == mesh)
         .ok_or_else(|| format!("no asset named '{mesh}' in the world"))?;
-    if entry.asset_type != "SkinnedMesh" {
+    if entry.asset_type.as_str() != "SkinnedMesh" {
         return Err(format!(
             "'{mesh}' is a {}, not a skinned mesh",
-            entry.asset_type
+            entry.asset_type.as_str()
         ));
     }
     let shape = shape_targeting(&assets, mesh);
@@ -35,7 +35,7 @@ pub(crate) fn export_world_mesh(content: &str, mesh: &str, bake: bool) -> Result
         return Err(format!("no CharacterShape targets '{mesh}' to bake"));
     }
     for a in assets.iter_mut() {
-        if a.asset_type == "CharacterShape"
+        if a.asset_type.as_str() == "CharacterShape"
             && a.args.get("target").and_then(|t| t.as_str()) == Some(mesh)
             && let Some(obj) = a.args.as_object_mut()
         {
@@ -66,7 +66,7 @@ fn shape_targeting(assets: &[WorldJsonlAsset], mesh: &str) -> Option<CharacterSh
     assets
         .iter()
         .find(|a| {
-            a.asset_type == "CharacterShape"
+            a.asset_type.as_str() == "CharacterShape"
                 && a.args.get("target").and_then(|t| t.as_str()) == Some(mesh)
         })
         .map(|a| CharacterShape {

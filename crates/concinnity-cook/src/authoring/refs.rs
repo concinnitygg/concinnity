@@ -14,16 +14,12 @@ use crate::check::cross_reference::cross_refs_for;
 /// Names are returned as authored; callers resolve them against the world's
 /// asset list. Unresolvable or empty references are omitted, not errors.
 pub fn referenced_names(asset: &WorldJsonlAsset) -> Vec<String> {
-    let norm = |t: &str| t.to_lowercase().replace('_', "");
-    let type_norm = norm(&asset.asset_type);
-
     let mut names = Vec::new();
 
     let flat_refs = RegisteredType::all()
         .iter()
-        .map(|t| (t.as_str(), t.ref_fields()))
-        .filter(|(ty, _)| norm(ty) == type_norm)
-        .flat_map(|(_, refs)| refs.iter());
+        .filter(|t| **t == asset.asset_type)
+        .flat_map(|t| t.ref_fields().iter());
     // A field declaring several targets is still one reference, so the name is
     // taken once per distinct field.
     let mut seen: Vec<&str> = Vec::new();
@@ -42,7 +38,7 @@ pub fn referenced_names(asset: &WorldJsonlAsset) -> Vec<String> {
         }
     }
 
-    for cross_ref in cross_refs_for(&type_norm, &asset.name, &asset.args) {
+    for cross_ref in cross_refs_for(asset.asset_type, &asset.name, &asset.args) {
         if let CrossRef::Resolve { target, .. } = cross_ref {
             names.push(target);
         }
@@ -55,10 +51,10 @@ pub fn referenced_names(asset: &WorldJsonlAsset) -> Vec<String> {
 mod tests {
     use super::*;
 
-    fn asset(name: &str, ty: &str, args: serde_json::Value) -> WorldJsonlAsset {
+    fn asset(name: &str, asset_type: RegisteredType, args: serde_json::Value) -> WorldJsonlAsset {
         WorldJsonlAsset {
             name: name.to_string(),
-            asset_type: ty.to_string(),
+            asset_type,
             args,
         }
     }
@@ -69,7 +65,7 @@ mod tests {
         // MeshSource, kept in the hand impl).
         let refs = referenced_names(&asset(
             "p",
-            "Prop",
+            RegisteredType::Prop,
             serde_json::json!({"mesh":"box","material":"mat"}),
         ));
         assert!(refs.contains(&"box".to_string()));
@@ -80,7 +76,7 @@ mod tests {
     fn material_texture_slots_come_from_the_resource_registry() {
         let refs = referenced_names(&asset(
             "m",
-            "Material",
+            RegisteredType::Material,
             serde_json::json!({"albedo":"tex_a","normal_map":"tex_n"}),
         ));
         assert_eq!(refs, vec!["tex_a".to_string(), "tex_n".to_string()]);
@@ -90,7 +86,7 @@ mod tests {
     fn model_submesh_list_is_structured() {
         let refs = referenced_names(&asset(
             "mdl",
-            "Model",
+            RegisteredType::Model,
             serde_json::json!({"meshes":[{"mesh":"m0","material":"mat0"},{"mesh":"m1"}]}),
         ));
         assert!(refs.contains(&"m0".to_string()));
@@ -100,12 +96,21 @@ mod tests {
 
     #[test]
     fn empty_and_absent_fields_are_omitted() {
-        let refs = referenced_names(&asset("p", "Prop", serde_json::json!({"model":""})));
+        let refs = referenced_names(&asset(
+            "p",
+            RegisteredType::Prop,
+            serde_json::json!({"model":""}),
+        ));
         assert!(refs.is_empty());
     }
 
     #[test]
-    fn unknown_type_has_no_refs() {
-        assert!(referenced_names(&asset("x", "NotAType", serde_json::json!({}))).is_empty());
+    fn a_type_without_references_has_no_refs() {
+        let light = asset(
+            "x",
+            RegisteredType::PointLight,
+            serde_json::json!({"model": "m"}),
+        );
+        assert!(referenced_names(&light).is_empty());
     }
 }

@@ -7,15 +7,17 @@
 // This is build-time-only authoring logic; the asset data structs live in
 // concinnity-core alongside their runtime `Component` impls.
 
+use crate::authoring::registry::RegisteredType;
+
 // A companion asset implied by the presence of another asset in the world. The
 // injection pass adds one only if no asset of the companion's `asset_type` is
-// already present (case-insensitive, underscores stripped).
+// already present.
 #[derive(Debug, Clone)]
 pub(crate) struct CompanionSpec {
     // Default name for the injected asset (e.g. "GraphicsConfig").
     pub name: &'static str,
     // The asset type to inject.
-    pub asset_type: &'static str,
+    pub asset_type: RegisteredType,
     // JSON args for the injected asset.
     pub args: serde_json::Value,
 }
@@ -25,7 +27,7 @@ pub(crate) struct CompanionSpec {
 fn graphics_config_marker() -> Vec<CompanionSpec> {
     vec![CompanionSpec {
         name: "GraphicsConfig",
-        asset_type: "GraphicsConfig",
+        asset_type: RegisteredType::GraphicsConfig,
         args: serde_json::json!({}),
     }]
 }
@@ -35,18 +37,18 @@ fn graphics_config_marker() -> Vec<CompanionSpec> {
 fn graphics_config_companions() -> Vec<CompanionSpec> {
     vec![CompanionSpec {
         name: "Window",
-        asset_type: "Window",
+        asset_type: RegisteredType::Window,
         args: serde_json::json!({}),
     }]
 }
 
-// Companion specs implied by one asset of the given normalized type.
-// GraphicsConfig declares the render stack; every other type flagged `renders`
-// in the registry implies the GraphicsConfig marker. Remaining types imply none.
-pub(crate) fn companions_for(type_norm: &str) -> Vec<CompanionSpec> {
-    if type_norm == "graphicsconfig" {
+// Companion specs implied by one asset of the given type. GraphicsConfig
+// declares the render stack; every other type flagged `renders` in the registry
+// implies the GraphicsConfig marker. Remaining types imply none.
+pub(crate) fn companions_for(asset_type: RegisteredType) -> Vec<CompanionSpec> {
+    if asset_type == RegisteredType::GraphicsConfig {
         graphics_config_companions()
-    } else if crate::authoring::registry::type_renders(type_norm) {
+    } else if asset_type.renders() {
         graphics_config_marker()
     } else {
         Vec::new()
@@ -60,32 +62,37 @@ mod tests {
     #[test]
     fn renderable_assets_imply_graphics_config() {
         for ty in [
-            "prop",
-            "sprite",
-            "textlabel",
-            "voxelworld",
-            "watersurface",
-            "instancedprop",
-            "skinnedmesh",
+            RegisteredType::Prop,
+            RegisteredType::Sprite,
+            RegisteredType::TextLabel,
+            RegisteredType::VoxelWorld,
+            RegisteredType::WaterSurface,
+            RegisteredType::InstancedProp,
+            RegisteredType::SkinnedMesh,
+            RegisteredType::EnvironmentMap,
+            RegisteredType::MainMenu,
         ] {
             let specs = companions_for(ty);
             assert!(
-                specs.iter().any(|c| c.asset_type == "GraphicsConfig"),
-                "{ty} should imply a GraphicsConfig companion"
+                specs
+                    .iter()
+                    .any(|c| c.asset_type == RegisteredType::GraphicsConfig),
+                "{} should imply a GraphicsConfig companion",
+                ty.as_str()
             );
         }
     }
 
     #[test]
-    fn unknown_type_implies_no_companions() {
-        assert!(companions_for("window").is_empty());
-        assert!(companions_for("mesh").is_empty());
+    fn a_non_rendering_type_implies_no_companions() {
+        assert!(companions_for(RegisteredType::Window).is_empty());
+        assert!(companions_for(RegisteredType::Mesh).is_empty());
     }
 
     #[test]
     fn graphics_config_injects_a_window() {
-        let specs = companions_for("graphicsconfig");
-        assert!(specs.iter().any(|c| c.asset_type == "Window"));
-        assert!(!specs.iter().any(|c| c.asset_type == "Shader"));
+        let specs = companions_for(RegisteredType::GraphicsConfig);
+        assert!(specs.iter().any(|c| c.asset_type == RegisteredType::Window));
+        assert!(!specs.iter().any(|c| c.asset_type == RegisteredType::Shader));
     }
 }

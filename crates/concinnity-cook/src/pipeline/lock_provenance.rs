@@ -78,9 +78,21 @@ mod tests {
     fn sources_ride_only_their_own_kind_and_payload_blob_follows_the_record() {
         asset_id::reset_interner();
         let assets = vec![
-            wja("tex", "Texture", serde_json::json!({"source": "t.png"})),
-            wja("mesh", "Mesh", serde_json::json!({"source": "m.glb"})),
-            wja("clip", "AudioClip", serde_json::json!({"source": "c.ogg"})),
+            wja(
+                "tex",
+                RegisteredType::Texture,
+                serde_json::json!({"source": "t.png"}),
+            ),
+            wja(
+                "mesh",
+                RegisteredType::Mesh,
+                serde_json::json!({"source": "m.glb"}),
+            ),
+            wja(
+                "clip",
+                RegisteredType::AudioClip,
+                serde_json::json!({"source": "c.ogg"}),
+            ),
         ];
         let names: Vec<&str> = assets.iter().map(|a| a.name.as_str()).collect();
         asset_id::intern_all(&names);

@@ -5,7 +5,8 @@
 // import pass turns into geometry. Naming the mesh after the model is what lets a
 // CharacterShape or Animation target either.
 
-use super::expand::{asset_name, type_norm};
+use super::expand::{asset_name, registered_type};
+use crate::authoring::registry::RegisteredType;
 use crate::authoring::registry::build_only::CharacterModel;
 use crate::authoring::world::WorldJsonlAsset;
 use crate::compile::character::import::CharacterModelArg;
@@ -27,12 +28,12 @@ pub(crate) fn expand_character_models(
 ) -> Result<(), String> {
     let schemas: Vec<WorldJsonlAsset> = asset_values
         .iter()
-        .filter(|v| type_norm(v) == "characterschema")
+        .filter(|v| registered_type(v) == Some(RegisteredType::CharacterSchema))
         .map(WorldJsonlAsset::from_value)
-        .collect();
+        .collect::<Result<_, _>>()?;
     let mut result = Vec::with_capacity(asset_values.len());
     for value in asset_values.drain(..) {
-        if type_norm(&value) != "charactermodel" {
+        if registered_type(&value) != Some(RegisteredType::CharacterModel) {
             result.push(value);
             continue;
         }

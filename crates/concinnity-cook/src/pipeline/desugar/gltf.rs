@@ -5,8 +5,8 @@
 use std::path::Path;
 
 use super::super::pack::MeshCacheEntry;
-use super::super::{MESH_TYPE, SKINNED_MESH_TYPE};
 use super::skin_index_arg;
+use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::WorldJsonlAsset;
 
 // Expand glTF-sourced SkinnedMesh assets in place: parse the referenced .glb
@@ -22,7 +22,7 @@ pub(in crate::pipeline) fn desugar_gltf_skinned_meshes(
     assets_dir: Option<&Path>,
 ) -> std::io::Result<()> {
     for asset in assets.iter_mut() {
-        if asset.asset_type != SKINNED_MESH_TYPE {
+        if asset.asset_type != RegisteredType::SkinnedMesh {
             continue;
         }
         let source = asset
@@ -154,7 +154,7 @@ pub(in crate::pipeline) fn desugar_gltf_meshes(
     let mut chunk_cache: HashMap<(String, u32), Vec<Chunk>> = HashMap::new();
 
     for asset in assets.iter_mut() {
-        if asset.asset_type != MESH_TYPE {
+        if asset.asset_type != RegisteredType::Mesh {
             continue;
         }
         let source = asset
@@ -305,8 +305,8 @@ mod tests {
         let inline_args = serde_json::json!({"vertices": [], "indices": []});
         let cached_args = serde_json::json!({"source": "/no/such/hero.glb"});
         let mut assets = vec![
-            wja("inline", SKINNED_MESH_TYPE, inline_args.clone()),
-            wja("cached", SKINNED_MESH_TYPE, cached_args.clone()),
+            wja("inline", RegisteredType::SkinnedMesh, inline_args.clone()),
+            wja("cached", RegisteredType::SkinnedMesh, cached_args.clone()),
         ];
         desugar_gltf_skinned_meshes(&mut assets, &hit_cache("cached"), None).expect("desugar");
         // No source: untouched. Cache hit: the missing .glb is never parsed
@@ -328,7 +328,7 @@ mod tests {
         );
         let mut assets = vec![wja(
             "hero",
-            SKINNED_MESH_TYPE,
+            RegisteredType::SkinnedMesh,
             serde_json::json!({"source": src}),
         )];
         desugar_gltf_skinned_meshes(&mut assets, &Default::default(), None).expect("desugar");
@@ -352,7 +352,7 @@ mod tests {
         let src = write_fixture(&dir, "hero.glb", &morphing_skinned_glb());
         let mut assets = vec![wja(
             "hero",
-            SKINNED_MESH_TYPE,
+            RegisteredType::SkinnedMesh,
             serde_json::json!({"source": src}),
         )];
         desugar_gltf_skinned_meshes(&mut assets, &Default::default(), None).expect("desugar");
@@ -367,7 +367,7 @@ mod tests {
     fn desugar_gltf_skinned_meshes_missing_source_errors() {
         let mut assets = vec![wja(
             "hero",
-            SKINNED_MESH_TYPE,
+            RegisteredType::SkinnedMesh,
             serde_json::json!({"source": "/no/such/hero.glb"}),
         )];
         let err = desugar_gltf_skinned_meshes(&mut assets, &Default::default(), None)
@@ -381,9 +381,9 @@ mod tests {
         let cached_args = serde_json::json!({"source": "/no/such/scene.glb"});
         let inline_args = serde_json::json!({"vertices": [], "indices": []});
         let mut assets = vec![
-            wja("from_fbx", MESH_TYPE, fbx_args.clone()),
-            wja("cached", MESH_TYPE, cached_args.clone()),
-            wja("inline", MESH_TYPE, inline_args.clone()),
+            wja("from_fbx", RegisteredType::Mesh, fbx_args.clone()),
+            wja("cached", RegisteredType::Mesh, cached_args.clone()),
+            wja("inline", RegisteredType::Mesh, inline_args.clone()),
         ];
         desugar_gltf_meshes(&mut assets, &hit_cache("cached"), None).expect("desugar");
         assert_eq!(
@@ -398,7 +398,7 @@ mod tests {
     fn desugar_gltf_meshes_missing_source_errors() {
         let mut assets = vec![wja(
             "crate_mesh",
-            MESH_TYPE,
+            RegisteredType::Mesh,
             serde_json::json!({"source": "/no/such/scene.glb"}),
         )];
         let err =
@@ -423,7 +423,7 @@ mod tests {
 
         let mut assets = vec![wja(
             "tri",
-            MESH_TYPE,
+            RegisteredType::Mesh,
             serde_json::json!({"source": gltf.to_str().unwrap(), "primitive_index": 0}),
         )];
         desugar_gltf_meshes(&mut assets, &Default::default(), None).expect("desugar");
@@ -454,12 +454,12 @@ mod tests {
         let mut assets = vec![
             wja(
                 "part_a",
-                MESH_TYPE,
+                RegisteredType::Mesh,
                 serde_json::json!({"source": src, "primitive_index": 0}),
             ),
             wja(
                 "part_b",
-                MESH_TYPE,
+                RegisteredType::Mesh,
                 serde_json::json!({"source": src, "primitive_index": 0}),
             ),
         ];
@@ -485,7 +485,7 @@ mod tests {
             for (k, v) in extra.as_object().unwrap() {
                 args[k] = v.clone();
             }
-            let mut assets = vec![wja("ghost", MESH_TYPE, args)];
+            let mut assets = vec![wja("ghost", RegisteredType::Mesh, args)];
             let err = desugar_gltf_meshes(&mut assets, &Default::default(), None)
                 .expect_err("primitive 7 does not exist");
             let msg = err.to_string();
@@ -507,7 +507,7 @@ mod tests {
         let chunk = |name: &str| {
             wja(
                 name,
-                MESH_TYPE,
+                RegisteredType::Mesh,
                 serde_json::json!({"source": src, "primitive_index": 0, "chunk_index": 0}),
             )
         };
@@ -531,7 +531,7 @@ mod tests {
         );
         let mut assets = vec![wja(
             "chunk0",
-            MESH_TYPE,
+            RegisteredType::Mesh,
             serde_json::json!({"source": src, "chunk_index": 0}),
         )];
         desugar_gltf_meshes(&mut assets, &Default::default(), None).expect("desugar");
@@ -539,7 +539,7 @@ mod tests {
 
         let mut past_end = vec![wja(
             "chunk9",
-            MESH_TYPE,
+            RegisteredType::Mesh,
             serde_json::json!({"source": src, "chunk_index": 9}),
         )];
         let err = desugar_gltf_meshes(&mut past_end, &Default::default(), None)
@@ -559,12 +559,12 @@ mod tests {
         let mut assets = vec![
             wja(
                 "body",
-                SKINNED_MESH_TYPE,
+                RegisteredType::SkinnedMesh,
                 serde_json::json!({"source": src, "skin_index": 0}),
             ),
             wja(
                 "hair",
-                SKINNED_MESH_TYPE,
+                RegisteredType::SkinnedMesh,
                 serde_json::json!({"source": src, "skin_index": 1}),
             ),
         ];

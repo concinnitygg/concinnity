@@ -151,7 +151,7 @@ fn list_expanded(content: &str, json_path: &str) -> std::io::Result<()> {
         .map(|a| {
             (
                 a.name.clone(),
-                a.asset_type.clone(),
+                a.asset_type.as_str().to_string(),
                 provenance(&loaded, &a.name),
             )
         })

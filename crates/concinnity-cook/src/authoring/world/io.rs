@@ -3,38 +3,43 @@
 // rewrite world.jsonl through here. The shipped runtime plays compiled blobs
 // and never touches world.jsonl, so this lives in the build crate, not core.
 
+use crate::authoring::registry::RegisteredType;
+
 /// An asset entry after $include resolution and type parsing.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct WorldJsonlAsset {
     /// The asset's declared name.
     pub name: String,
-    /// The asset's registry type name.
-    pub asset_type: String,
+    /// The asset's registered type.
+    pub asset_type: RegisteredType,
     /// The asset's authored args.
     pub args: serde_json::Value,
 }
 
 impl WorldJsonlAsset {
-    /// Build a typed entry from a raw JSON asset object. `name` and `type` are
-    /// expected to be present; a missing field degrades to an empty string
-    /// rather than failing.
-    pub fn from_value(v: &serde_json::Value) -> Self {
-        WorldJsonlAsset {
-            name: v
-                .get("name")
-                .and_then(|n| n.as_str())
-                .unwrap_or("")
-                .to_string(),
-            asset_type: v
-                .get("type")
-                .and_then(|t| t.as_str())
-                .unwrap_or("")
-                .to_string(),
+    /// Build a typed entry from a raw JSON asset object. Fails, naming the
+    /// asset, when `name` is missing or `type` is not an exact registered name.
+    pub fn from_value(v: &serde_json::Value) -> Result<Self, String> {
+        let type_str = v.get("type").and_then(|t| t.as_str());
+        let Some(name) = v.get("name").and_then(|n| n.as_str()) else {
+            return Err(format!(
+                "asset of type '{}': missing `name` field",
+                type_str.unwrap_or("")
+            ));
+        };
+        let Some(type_str) = type_str else {
+            return Err(format!("'{name}': missing `type` field"));
+        };
+        let asset_type = RegisteredType::parse(type_str)
+            .ok_or_else(|| format!("'{name}': unknown type '{type_str}'"))?;
+        Ok(WorldJsonlAsset {
+            name: name.to_string(),
+            asset_type,
             args: v
                 .get("args")
                 .cloned()
                 .unwrap_or_else(|| serde_json::Value::Object(Default::default())),
-        }
+        })
     }
 }
 
@@ -117,6 +122,56 @@ pub fn known_names(json_path: &str) -> std::io::Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn from_value_parses_an_exact_type() {
+        let asset = WorldJsonlAsset::from_value(
+            &serde_json::json!({"name": "p", "type": "Prop", "args": {"mesh": "m"}}),
+        )
+        .unwrap();
+        assert_eq!(asset.name, "p");
+        assert_eq!(asset.asset_type, RegisteredType::Prop);
+        assert_eq!(asset.args["mesh"], "m");
+    }
+
+    #[test]
+    fn from_value_defaults_missing_args_to_an_empty_object() {
+        let asset =
+            WorldJsonlAsset::from_value(&serde_json::json!({"name": "w", "type": "Window"}))
+                .unwrap();
+        assert_eq!(asset.args, serde_json::json!({}));
+    }
+
+    #[test]
+    fn from_value_rejects_a_missing_name() {
+        let err = WorldJsonlAsset::from_value(&serde_json::json!({"type": "Prop"})).unwrap_err();
+        assert!(err.contains("missing `name`"), "{err}");
+    }
+
+    #[test]
+    fn from_value_rejects_a_missing_type() {
+        let err = WorldJsonlAsset::from_value(&serde_json::json!({"name": "p"})).unwrap_err();
+        assert!(
+            err.contains("'p'") && err.contains("missing `type`"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn from_value_rejects_an_unknown_type() {
+        let err = WorldJsonlAsset::from_value(&serde_json::json!({"name": "p", "type": "Gizmo"}))
+            .unwrap_err();
+        assert!(err.contains("'p'") && err.contains("'Gizmo'"), "{err}");
+    }
+
+    #[test]
+    fn from_value_rejects_inexact_spellings() {
+        for ty in ["prop", "PROP", "color_lut", "Color_Lut", "colorlut"] {
+            let err = WorldJsonlAsset::from_value(&serde_json::json!({"name": "a", "type": ty}))
+                .unwrap_err();
+            assert!(err.contains("'a'") && err.contains(ty), "{ty}: {err}");
+        }
+    }
 
     #[test]
     fn parse_world_jsonl_empty_string_returns_empty() {

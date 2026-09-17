@@ -2,8 +2,8 @@
 //! reading the same geometry and skeleton out of a `.fbx` document.
 
 use super::super::pack::MeshCacheEntry;
-use super::super::{MESH_TYPE, SKINNED_MESH_TYPE};
 use super::skin_index_arg;
+use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::WorldJsonlAsset;
 
 // Expand FBX-sourced SkinnedMesh assets in place, mirroring the glTF pass:
@@ -14,7 +14,7 @@ pub(in crate::pipeline) fn desugar_fbx_skinned_meshes(
     mesh_cache: &std::collections::HashMap<String, MeshCacheEntry>,
 ) -> std::io::Result<()> {
     for asset in assets.iter_mut() {
-        if asset.asset_type != SKINNED_MESH_TYPE {
+        if asset.asset_type != RegisteredType::SkinnedMesh {
             continue;
         }
         let source = asset
@@ -103,7 +103,7 @@ pub(in crate::pipeline) fn desugar_fbx_meshes(
     let mut chunk_cache: HashMap<(String, u32), Vec<Chunk>> = HashMap::new();
 
     for asset in assets.iter_mut() {
-        if asset.asset_type != MESH_TYPE {
+        if asset.asset_type != RegisteredType::Mesh {
             continue;
         }
         let source = asset
@@ -247,12 +247,12 @@ mod tests {
         let mut assets = vec![
             wja(
                 "part_a",
-                MESH_TYPE,
+                RegisteredType::Mesh,
                 serde_json::json!({"source": src, "primitive_index": 0}),
             ),
             wja(
                 "part_b",
-                MESH_TYPE,
+                RegisteredType::Mesh,
                 serde_json::json!({"source": src, "primitive_index": 0, "chunk_index": 0}),
             ),
         ];
@@ -272,7 +272,7 @@ mod tests {
 
         let mut ghost = vec![wja(
             "ghost",
-            MESH_TYPE,
+            RegisteredType::Mesh,
             serde_json::json!({"source": src, "primitive_index": 7}),
         )];
         let err =
@@ -283,7 +283,7 @@ mod tests {
 
         let mut past_end = vec![wja(
             "chunk9",
-            MESH_TYPE,
+            RegisteredType::Mesh,
             serde_json::json!({"source": src, "chunk_index": 9}),
         )];
         let err = desugar_fbx_meshes(&mut past_end, &Default::default())
@@ -302,7 +302,7 @@ mod tests {
         let src = write_fixture(&dir, "hero.fbx", &skinned_triangle_fbx());
         let mut assets = vec![wja(
             "hero",
-            SKINNED_MESH_TYPE,
+            RegisteredType::SkinnedMesh,
             serde_json::json!({"source": src}),
         )];
         desugar_fbx_skinned_meshes(&mut assets, &Default::default()).expect("desugar");
@@ -328,8 +328,8 @@ mod tests {
         let glb_args = serde_json::json!({"source": "/no/such/hero.glb"});
         let cached_args = serde_json::json!({"source": "/no/such/hero.fbx"});
         let mut assets = vec![
-            wja("from_glb", SKINNED_MESH_TYPE, glb_args.clone()),
-            wja("cached", SKINNED_MESH_TYPE, cached_args.clone()),
+            wja("from_glb", RegisteredType::SkinnedMesh, glb_args.clone()),
+            wja("cached", RegisteredType::SkinnedMesh, cached_args.clone()),
         ];
         desugar_fbx_skinned_meshes(&mut assets, &hit_cache("cached")).expect("desugar");
         assert_eq!(assets[0].args, glb_args);
@@ -343,7 +343,7 @@ mod tests {
         let src = write_fixture(&dir, "static.fbx", &static_triangle_fbx());
         let mut assets = vec![wja(
             "hero",
-            SKINNED_MESH_TYPE,
+            RegisteredType::SkinnedMesh,
             serde_json::json!({"source": src}),
         )];
         let err = desugar_fbx_skinned_meshes(&mut assets, &Default::default())
@@ -357,7 +357,7 @@ mod tests {
     fn desugar_fbx_meshes_missing_source_errors() {
         let mut assets = vec![wja(
             "bistro",
-            MESH_TYPE,
+            RegisteredType::Mesh,
             serde_json::json!({"source": "/no/such/scene.fbx"}),
         )];
         let err = desugar_fbx_meshes(&mut assets, &Default::default()).expect_err("missing .fbx");
@@ -369,8 +369,8 @@ mod tests {
         let cached_args = serde_json::json!({"source": "/no/such/scene.fbx"});
         let glb_args = serde_json::json!({"source": "/no/such/scene.glb"});
         let mut assets = vec![
-            wja("cached", MESH_TYPE, cached_args.clone()),
-            wja("from_glb", MESH_TYPE, glb_args.clone()),
+            wja("cached", RegisteredType::Mesh, cached_args.clone()),
+            wja("from_glb", RegisteredType::Mesh, glb_args.clone()),
         ];
         desugar_fbx_meshes(&mut assets, &hit_cache("cached")).expect("desugar");
         assert_eq!(assets[0].args, cached_args);

@@ -12,6 +12,8 @@ use concinnity_core::components::FileKind;
 use concinnity_core::ecs::ResourceKind;
 use concinnity_core::resource::MeshBlock;
 
+use crate::authoring::registry::RegisteredType;
+
 // The mesh-source handle space is shared across every geometry-producing kind
 // (Mesh, ProceduralMesh, VoxelChunk, and mesh-kind File), so it is not assigned
 // through the type-name classifier above: File is polymorphic (only a mesh-kind
@@ -19,12 +21,6 @@ use concinnity_core::resource::MeshBlock;
 // must draw from one dense space in a fixed order. The assignment itself is
 // `concinnity_core::resource::ResourceHandles`, shared with the typed bake
 // builder; what lives here is the classifier that reads authored args.
-
-// Normalize an asset type name the same way the cross-reference checker does, so
-// both agree on what counts as a mesh source.
-fn norm_type(t: &str) -> String {
-    t.to_lowercase().replace('_', "")
-}
 
 // True when a `File`'s args name a mesh-kind file (the only File that produces
 // geometry).
@@ -40,41 +36,42 @@ fn file_is_mesh(args: &serde_json::Value) -> bool {
 /// producer. The blocks are the fixed order the runtime enumerates mesh sources
 /// in, so a handle assigned in block order equals the runtime's mesh-source
 /// index.
-pub(crate) fn mesh_source_block(asset_type: &str, args: &serde_json::Value) -> Option<MeshBlock> {
-    match norm_type(asset_type).as_str() {
-        "mesh" => Some(MeshBlock::Mesh),
-        "proceduralmesh" => Some(MeshBlock::ProceduralMesh),
-        "voxelchunk" => Some(MeshBlock::VoxelChunk),
-        "file" => file_is_mesh(args).then_some(MeshBlock::File),
+pub(crate) fn mesh_source_block(
+    asset_type: RegisteredType,
+    args: &serde_json::Value,
+) -> Option<MeshBlock> {
+    match asset_type {
+        RegisteredType::Mesh => Some(MeshBlock::Mesh),
+        RegisteredType::ProceduralMesh => Some(MeshBlock::ProceduralMesh),
+        RegisteredType::VoxelChunk => Some(MeshBlock::VoxelChunk),
+        RegisteredType::File => file_is_mesh(args).then_some(MeshBlock::File),
         _ => None,
     }
 }
 
 /// Whether an asset produces geometry addressable by a mesh handle. The single
 /// classifier the cross-reference checker and the handle assigner share.
-pub(crate) fn is_mesh_source(asset_type: &str, args: &serde_json::Value) -> bool {
+pub(crate) fn is_mesh_source(asset_type: RegisteredType, args: &serde_json::Value) -> bool {
     mesh_source_block(asset_type, args).is_some()
 }
 
-/// The resource kind a declarable asset type name maps to, or `None` for a
+/// The resource kind a declarable asset type maps to, or `None` for a
 /// non-resource type. The single classifier the build uses to assign handles
 /// over the world's assets.
-pub(crate) fn asset_resource_kind(asset_type: &str) -> Option<ResourceKind> {
-    let ty = crate::authoring::registry::RegisteredType::parse(asset_type)?;
+pub(crate) fn asset_resource_kind(asset_type: RegisteredType) -> Option<ResourceKind> {
     // Mesh draws from the shared mesh-source handle space (assigned by cook's
     // `assign_mesh_source_handles` in block order across all four geometry
     // producers), so the per-kind declaration-order classifier must not also
     // assign it.
-    if ty == crate::authoring::registry::RegisteredType::Mesh {
+    if asset_type == RegisteredType::Mesh {
         return None;
     }
-    ty.resource_kind()
+    asset_type.resource_kind()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::authoring::registry::RegisteredType;
 
     // Every resource asset is a registered type like any other; what marks it as
     // a resource is the handle space it reports, not which registry it is in.
@@ -92,14 +89,14 @@ mod tests {
         ] {
             let ty = RegisteredType::parse(name).expect("a declarable type");
             assert_eq!(ty.resource_kind(), Some(kind), "{name}");
-            assert_eq!(asset_resource_kind(name), Some(kind), "{name}");
+            assert_eq!(asset_resource_kind(ty), Some(kind), "{name}");
             assert_eq!(ty.discriminant(), None, "{name} is not stored in a column");
         }
 
         // A stored component reports no resource kind.
         let prop = RegisteredType::parse("Prop").expect("Prop is registered");
         assert_eq!(prop.resource_kind(), None);
-        assert_eq!(asset_resource_kind("Prop"), None);
+        assert_eq!(asset_resource_kind(prop), None);
         assert!(prop.discriminant().is_some());
     }
 
@@ -111,8 +108,8 @@ mod tests {
     fn mesh_is_a_resource_but_not_classified_by_name() {
         let mesh = RegisteredType::parse("Mesh").expect("Mesh is registered");
         assert_eq!(mesh.resource_kind(), Some(ResourceKind::Mesh));
-        assert_eq!(asset_resource_kind("Mesh"), None);
-        assert!(is_mesh_source("Mesh", &serde_json::json!({})));
+        assert_eq!(asset_resource_kind(mesh), None);
+        assert!(is_mesh_source(mesh, &serde_json::json!({})));
     }
 
     // Material's compiled bytes ride inline in its record; every other resource
@@ -147,24 +144,27 @@ mod tests {
     #[test]
     fn mesh_source_blocks_follow_the_fixed_order() {
         let none = serde_json::json!({});
-        assert_eq!(mesh_source_block("Mesh", &none), Some(MeshBlock::Mesh));
         assert_eq!(
-            mesh_source_block("ProceduralMesh", &none),
+            mesh_source_block(RegisteredType::Mesh, &none),
+            Some(MeshBlock::Mesh)
+        );
+        assert_eq!(
+            mesh_source_block(RegisteredType::ProceduralMesh, &none),
             Some(MeshBlock::ProceduralMesh)
         );
         assert_eq!(
-            mesh_source_block("VoxelChunk", &none),
+            mesh_source_block(RegisteredType::VoxelChunk, &none),
             Some(MeshBlock::VoxelChunk)
         );
         // Only a mesh-kind File is a geometry producer.
         assert_eq!(
-            mesh_source_block("File", &serde_json::json!({"kind": "obj"})),
+            mesh_source_block(RegisteredType::File, &serde_json::json!({"kind": "obj"})),
             Some(MeshBlock::File)
         );
         assert_eq!(
-            mesh_source_block("File", &serde_json::json!({"kind": "png"})),
+            mesh_source_block(RegisteredType::File, &serde_json::json!({"kind": "png"})),
             None
         );
-        assert_eq!(mesh_source_block("PointLight", &none), None);
+        assert_eq!(mesh_source_block(RegisteredType::PointLight, &none), None);
     }
 }

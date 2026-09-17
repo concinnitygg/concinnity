@@ -14,9 +14,10 @@
 
 use concinnity_core::settings::{SettingKey, SettingKind};
 
-use super::expand::{asset_name, type_norm};
+use super::expand::{asset_name, registered_type};
 use super::row_setting::row_setting;
 use super::ui_spec::{font_sizes, label_value};
+use crate::authoring::registry::RegisteredType;
 use crate::authoring::registry::build_only::OptionSelect;
 use crate::authoring::spec::{asset, spec_to_value};
 use asset::ui_action;
@@ -49,7 +50,10 @@ const VALUE_PLACEHOLDER: &str = "--";
 
 // Replace every OptionSelect asset with the concrete UI assets it expands to.
 pub(crate) fn expand_option_selects(assets: &mut Vec<serde_json::Value>) -> Result<(), String> {
-    if !assets.iter().any(|v| type_norm(v) == "optionselect") {
+    if !assets
+        .iter()
+        .any(|v| registered_type(v) == Some(RegisteredType::OptionSelect))
+    {
         return Ok(());
     }
 
@@ -57,7 +61,7 @@ pub(crate) fn expand_option_selects(assets: &mut Vec<serde_json::Value>) -> Resu
 
     let mut result: Vec<serde_json::Value> = Vec::new();
     for value in assets.drain(..) {
-        if type_norm(&value) != "optionselect" {
+        if registered_type(&value) != Some(RegisteredType::OptionSelect) {
             result.push(value);
             continue;
         }
@@ -313,7 +317,11 @@ mod tests {
         })];
         expand_option_selects(&mut assets).unwrap();
 
-        assert!(!assets.iter().any(|v| type_norm(v) == "optionselect"));
+        assert!(
+            !assets
+                .iter()
+                .any(|v| registered_type(v) == Some(RegisteredType::OptionSelect))
+        );
 
         let lbl = by_name(&assets, "opt_vsync_label");
         assert_eq!(lbl["type"], "TextLabel");
@@ -471,7 +479,12 @@ mod tests {
             expand_option_selects(&mut assets).unwrap();
             let emitted: std::collections::HashSet<String> = assets
                 .iter()
-                .filter(|v| matches!(type_norm(v).as_str(), "textlabel" | "sprite"))
+                .filter(|v| {
+                    matches!(
+                        registered_type(v),
+                        Some(RegisteredType::TextLabel | RegisteredType::Sprite)
+                    )
+                })
                 .map(asset_name)
                 .collect();
             let listed: std::collections::HashSet<String> =

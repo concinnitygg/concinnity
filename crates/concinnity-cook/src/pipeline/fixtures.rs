@@ -3,12 +3,12 @@
 
 pub(super) fn wja(
     name: &str,
-    ty: &str,
+    asset_type: crate::authoring::registry::RegisteredType,
     args: serde_json::Value,
 ) -> crate::authoring::world::WorldJsonlAsset {
     crate::authoring::world::WorldJsonlAsset {
         name: name.to_string(),
-        asset_type: ty.to_string(),
+        asset_type,
         args,
     }
 }

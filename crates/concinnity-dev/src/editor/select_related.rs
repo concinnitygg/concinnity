@@ -19,7 +19,7 @@ pub(crate) fn names_using(entries: &[serde_json::Value], target: &str) -> Vec<St
     entries
         .iter()
         .filter_map(|e| {
-            let asset = concinnity_cook::authoring::world::WorldJsonlAsset::from_value(e);
+            let asset = concinnity_cook::authoring::world::WorldJsonlAsset::from_value(e).ok()?;
             if asset.name.is_empty() {
                 return None;
             }

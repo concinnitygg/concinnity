@@ -324,7 +324,8 @@ fn jsonl_has_renderer_trigger(content: &str) -> bool {
             Err(_) => continue,
         };
         if let Some(t) = value.get("type").and_then(|v| v.as_str())
-            && concinnity_cook::authoring::registry::type_renders(t)
+            && concinnity_cook::authoring::registry::RegisteredType::parse(t)
+                .is_some_and(concinnity_cook::authoring::registry::RegisteredType::renders)
         {
             return true;
         }

@@ -243,7 +243,7 @@ pub(crate) fn assign_shader_handles(
 ) {
     for asset in assets
         .iter()
-        .filter(|a| a.asset_type.to_lowercase().replace('_', "") == "shader")
+        .filter(|a| a.asset_type == RegisteredType::Shader)
     {
         handles.assign_shader(asset_id::intern(&asset.name));
     }
@@ -258,7 +258,7 @@ pub(crate) fn assign_mesh_source_handles(
     assets: &[crate::authoring::world::WorldJsonlAsset],
 ) {
     handles.assign_mesh_sources(assets.iter().filter_map(|a| {
-        crate::authoring::resource_type::mesh_source_block(&a.asset_type, &a.args)
+        crate::authoring::resource_type::mesh_source_block(a.asset_type, &a.args)
             .map(|block| (asset_id::intern(&a.name), block))
     }));
 }
@@ -351,29 +351,37 @@ mod tests {
         use crate::authoring::world::WorldJsonlAsset;
         use concinnity_host::thread::asset_id;
 
-        let a = |name: &str, ty: &str, args: serde_json::Value| WorldJsonlAsset {
+        let a = |name: &str, asset_type: RegisteredType, args: serde_json::Value| WorldJsonlAsset {
             name: name.to_string(),
-            asset_type: ty.to_string(),
+            asset_type,
             args,
         };
 
         // Interleaved declaration order across every producer kind, plus a
         // non-mesh File and a non-geometry asset that must be skipped.
         let assets = vec![
-            a("m0", "Mesh", serde_json::json!({})),
+            a("m0", RegisteredType::Mesh, serde_json::json!({})),
             a(
                 "p0",
-                "ProceduralMesh",
+                RegisteredType::ProceduralMesh,
                 serde_json::json!({"generator": "box"}),
             ),
-            a("f_tex", "File", serde_json::json!({"kind": "png"})),
-            a("v0", "VoxelChunk", serde_json::json!({})),
-            a("m1", "Mesh", serde_json::json!({})),
-            a("f_mesh", "File", serde_json::json!({"kind": "obj"})),
-            a("light", "PointLight", serde_json::json!({})),
+            a(
+                "f_tex",
+                RegisteredType::File,
+                serde_json::json!({"kind": "png"}),
+            ),
+            a("v0", RegisteredType::VoxelChunk, serde_json::json!({})),
+            a("m1", RegisteredType::Mesh, serde_json::json!({})),
+            a(
+                "f_mesh",
+                RegisteredType::File,
+                serde_json::json!({"kind": "obj"}),
+            ),
+            a("light", RegisteredType::PointLight, serde_json::json!({})),
             a(
                 "p1",
-                "ProceduralMesh",
+                RegisteredType::ProceduralMesh,
                 serde_json::json!({"generator": "sphere"}),
             ),
         ];
@@ -459,16 +467,16 @@ mod tests {
         use concinnity_host::thread::asset_id;
 
         asset_id::reset_interner();
-        let world_asset = |name: &str, ty: &str| WorldJsonlAsset {
+        let world_asset = |name: &str, asset_type: RegisteredType| WorldJsonlAsset {
             name: name.to_string(),
-            asset_type: ty.to_string(),
+            asset_type,
             args: serde_json::json!({}),
         };
         let assets = vec![
-            world_asset("mat", "Material"),
-            world_asset("shader_a", "Shader"),
-            world_asset("tex", "Texture"),
-            world_asset("shader_b", "Shader"),
+            world_asset("mat", RegisteredType::Material),
+            world_asset("shader_a", RegisteredType::Shader),
+            world_asset("tex", RegisteredType::Texture),
+            world_asset("shader_b", RegisteredType::Shader),
         ];
 
         reset_resource_handles();

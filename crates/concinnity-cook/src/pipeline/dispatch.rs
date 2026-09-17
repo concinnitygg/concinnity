@@ -383,10 +383,14 @@ mod tests {
     #[test]
     fn compile_entry_voxel_chunk_resolves_palette_from_ctx() {
         let blocks = vec![
-            wja("air", "BlockType", serde_json::json!({"solid": false})),
+            wja(
+                "air",
+                RegisteredType::BlockType,
+                serde_json::json!({"solid": false}),
+            ),
             wja(
                 "stone",
-                "BlockType",
+                RegisteredType::BlockType,
                 serde_json::json!({"uv_min": [0, 0], "uv_max": [1, 1]}),
             ),
         ];

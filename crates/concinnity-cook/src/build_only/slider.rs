@@ -10,9 +10,10 @@
 
 use concinnity_core::settings::{SettingKey, SettingKind};
 
-use super::expand::{asset_name, type_norm};
+use super::expand::{asset_name, registered_type};
 use super::row_setting::row_setting;
 use super::ui_spec::{font_sizes, label_value, sprite};
+use crate::authoring::registry::RegisteredType;
 use crate::authoring::registry::build_only::Slider;
 use crate::authoring::spec::{asset, spec_to_value};
 use asset::ui_action;
@@ -37,7 +38,10 @@ const VALUE_PLACEHOLDER: &str = "--";
 
 // Replace every Slider asset with the concrete UI assets it expands to.
 pub(crate) fn expand_sliders(assets: &mut Vec<serde_json::Value>) -> Result<(), String> {
-    if !assets.iter().any(|v| type_norm(v) == "slider") {
+    if !assets
+        .iter()
+        .any(|v| registered_type(v) == Some(RegisteredType::Slider))
+    {
         return Ok(());
     }
 
@@ -45,7 +49,7 @@ pub(crate) fn expand_sliders(assets: &mut Vec<serde_json::Value>) -> Result<(), 
 
     let mut result: Vec<serde_json::Value> = Vec::new();
     for value in assets.drain(..) {
-        if type_norm(&value) != "slider" {
+        if registered_type(&value) != Some(RegisteredType::Slider) {
             result.push(value);
             continue;
         }
@@ -197,7 +201,11 @@ mod tests {
         })];
         expand_sliders(&mut assets).unwrap();
 
-        assert!(!assets.iter().any(|v| type_norm(v) == "slider"));
+        assert!(
+            !assets
+                .iter()
+                .any(|v| registered_type(v) == Some(RegisteredType::Slider))
+        );
 
         let lbl = by_name(&assets, "sld_exposure_label");
         assert_eq!(lbl["type"], "TextLabel");
@@ -284,7 +292,12 @@ mod tests {
         expand_sliders(&mut assets).unwrap();
         let emitted: std::collections::HashSet<String> = assets
             .iter()
-            .filter(|v| matches!(type_norm(v).as_str(), "textlabel" | "sprite"))
+            .filter(|v| {
+                matches!(
+                    registered_type(v),
+                    Some(RegisteredType::TextLabel | RegisteredType::Sprite)
+                )
+            })
             .map(asset_name)
             .collect();
         let listed: std::collections::HashSet<String> = element_names("sld").into_iter().collect();

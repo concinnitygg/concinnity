@@ -1,5 +1,8 @@
 // Auto-expansion of Room texture references into implicit Texture assets.
 
+use super::expand::registered_type;
+use crate::authoring::registry::RegisteredType;
+
 const GENERATORS: &[&str] = &[
     "brick", "checker", "concrete", "grass", "sky", "wood", "tile", "metal",
 ];
@@ -18,13 +21,7 @@ pub(crate) fn expand_room_textures(asset_values: &mut Vec<serde_json::Value>) {
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for value in asset_values.iter() {
-        let type_norm = value
-            .get("type")
-            .and_then(|t| t.as_str())
-            .unwrap_or("")
-            .to_lowercase()
-            .replace('_', "");
-        if type_norm != "room" {
+        if registered_type(value) != Some(RegisteredType::Room) {
             continue;
         }
         if let Some(args) = value.get("args") {

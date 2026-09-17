@@ -244,7 +244,7 @@ pub fn build_compiled_with_progress(
     // index / resource-table slot).
     crate::resource_handles::reset_resource_handles();
     let resource_assets = assets.iter().filter_map(|a| {
-        crate::authoring::resource_type::asset_resource_kind(&a.asset_type)
+        crate::authoring::resource_type::asset_resource_kind(a.asset_type)
             .map(|kind| (asset_id::intern(&a.name), kind))
     });
     let mut resource_handles =
@@ -337,7 +337,7 @@ pub fn build_compiled_with_progress(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::MESH_TYPE;
+    use crate::authoring::registry::RegisteredType;
     use crate::pipeline::fixtures::{wja, write_fixture};
     use crate::pipeline::result::{MeshSourceInfo, TextureSourceInfo};
     use concinnity_core::components::Material;
@@ -593,11 +593,15 @@ mod tests {
         );
     }
 
-    // `build_compiled` runs on an already-prepared world, so a type the
-    // component registry cannot resolve surfaces here rather than upstream.
+    // `build_compiled` runs on an already-prepared world, so a build-only type
+    // that was never expanded surfaces here rather than upstream.
     #[test]
-    fn build_compiled_names_the_asset_whose_type_will_not_resolve() {
-        let assets = vec![wja("mystery", "NotAType", serde_json::json!({}))];
+    fn build_compiled_names_the_asset_whose_type_has_no_record() {
+        let assets = vec![wja(
+            "mystery",
+            RegisteredType::LightRig,
+            serde_json::json!({}),
+        )];
         let Err(err) = build_compiled(assets, None, None, Platform::Metal) else {
             panic!("unknown type must not compile");
         };
@@ -611,7 +615,7 @@ mod tests {
     fn build_compiled_surfaces_a_payload_compile_failure() {
         let assets = vec![wja(
             "shape",
-            "ProceduralMesh",
+            RegisteredType::ProceduralMesh,
             serde_json::json!({"generator": "not_a_generator"}),
         )];
         let Err(err) = build_compiled(assets, None, None, Platform::Metal) else {
@@ -649,22 +653,22 @@ mod tests {
         let assets = vec![
             wja(
                 "proc_tex",
-                "Texture",
+                RegisteredType::Texture,
                 serde_json::json!({"generator": "checker", "resolution": 8}),
             ),
             wja(
                 "wall_tex",
-                "Texture",
+                RegisteredType::Texture,
                 serde_json::json!({"source": tga, "image_index": 3}),
             ),
             wja(
                 "inline_mesh",
-                MESH_TYPE,
+                RegisteredType::Mesh,
                 serde_json::json!({"generator": "box", "half_extents": [1, 1, 1]}),
             ),
             wja(
                 "file_mesh",
-                MESH_TYPE,
+                RegisteredType::Mesh,
                 serde_json::json!({
                     "source": glb,
                     "primitive_index": 0,
@@ -747,10 +751,10 @@ mod tests {
     #[test]
     fn build_compiled_keeps_a_data_resource_out_of_the_payload_sections() {
         let assets = vec![
-            wja("wood", "Material", serde_json::json!({})),
+            wja("wood", RegisteredType::Material, serde_json::json!({})),
             wja(
                 "shape",
-                "ProceduralMesh",
+                RegisteredType::ProceduralMesh,
                 serde_json::json!({"generator": "box"}),
             ),
         ];
@@ -779,12 +783,12 @@ mod tests {
         let assets = vec![
             wja(
                 "model",
-                "File",
+                RegisteredType::File,
                 serde_json::json!({"path": obj, "kind": "obj"}),
             ),
             wja(
                 "icon",
-                "File",
+                RegisteredType::File,
                 serde_json::json!({"path": png, "kind": "png"}),
             ),
         ];

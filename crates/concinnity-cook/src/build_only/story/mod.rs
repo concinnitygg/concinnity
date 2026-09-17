@@ -7,7 +7,8 @@
 
 use std::collections::HashSet;
 
-use super::expand::{asset_name, type_norm};
+use super::expand::{asset_name, registered_type};
+use crate::authoring::registry::RegisteredType;
 use crate::import::scene::sanitize_name;
 
 mod emit;
@@ -39,20 +40,23 @@ pub fn validate_story_source(src: &str) -> Result<(), String> {
 // asset name, so they never collide with hand-authored assets; a collision is
 // a hard error, as is any parse or graph-validation failure in the source.
 pub(crate) fn expand_stories(assets: &mut Vec<serde_json::Value>) -> Result<(), String> {
-    if !assets.iter().any(|v| type_norm(v) == "storyimport") {
+    if !assets
+        .iter()
+        .any(|v| registered_type(v) == Some(RegisteredType::StoryImport))
+    {
         return Ok(());
     }
 
     let mut taken: HashSet<String> = assets
         .iter()
-        .filter(|v| type_norm(v) != "storyimport")
+        .filter(|v| registered_type(v) != Some(RegisteredType::StoryImport))
         .map(asset_name)
         .filter(|n| !n.is_empty())
         .collect();
 
     let mut result: Vec<serde_json::Value> = Vec::new();
     for value in assets.drain(..) {
-        if type_norm(&value) != "storyimport" {
+        if registered_type(&value) != Some(RegisteredType::StoryImport) {
             result.push(value);
             continue;
         }

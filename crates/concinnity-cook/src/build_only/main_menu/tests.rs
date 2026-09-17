@@ -47,7 +47,7 @@ fn dump_settings_tab_probe_world() {
         format!("main_menu_settings_{tab}")
     };
     for v in &mut assets {
-        if type_norm(v) == "screen" {
+        if registered_type(v) == Some(RegisteredType::Screen) {
             v["args"]["initial"] = serde_json::json!(asset_name(v) == target);
         }
     }
@@ -84,7 +84,11 @@ fn bare_menu_expands_to_default_layout() {
     expand_main_menus(&mut assets).unwrap();
 
     // No MainMenu survives.
-    assert!(!assets.iter().any(|v| type_norm(v) == "mainmenu"));
+    assert!(
+        !assets
+            .iter()
+            .any(|v| registered_type(v) == Some(RegisteredType::MainMenu))
+    );
 
     // The main screen and a toggle binding exist. The screen starts closed by
     // default: the scene shows first and the toggle key opens the menu.
@@ -434,7 +438,11 @@ fn toggle_key_empty_emits_no_binding() {
         "name": "m", "type": "MainMenu", "args": { "toggle_key": "" }
     })];
     expand_main_menus(&mut assets).unwrap();
-    assert!(!assets.iter().any(|v| type_norm(v) == "keybinding"));
+    assert!(
+        !assets
+            .iter()
+            .any(|v| registered_type(v) == Some(RegisteredType::KeyBinding))
+    );
 }
 
 #[test]
@@ -855,7 +863,7 @@ fn default_menu_hover_is_color_only() {
     // hover_scale matches its label's scale, so hover does not resize it.
     let mut checked = 0;
     for v in &assets {
-        if type_norm(v) != "hitregion" {
+        if registered_type(v) != Some(RegisteredType::HitRegion) {
             continue;
         }
         let args = &v["args"];
@@ -878,7 +886,7 @@ fn default_menu_hover_is_color_only() {
     // OptionSelect rows carry an absolute hover_scale equal to their text
     // scale, so the value label also keeps its size on hover.
     for v in &assets {
-        if type_norm(v) != "optionselect" {
+        if registered_type(v) != Some(RegisteredType::OptionSelect) {
             continue;
         }
         let ts = v["args"]["text_scale"].as_f64().unwrap();

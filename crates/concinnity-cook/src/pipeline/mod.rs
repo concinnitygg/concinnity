@@ -35,12 +35,6 @@ pub use entry::{
 pub use result::{MeshSourceInfo, PipelineResult, TextureSourceInfo};
 pub use validate::{validate_asset, validate_world_jsonl};
 
-// The mesh kinds' declarable type names. Both are resource assets (no
-// `Component` impl, so no `::NAME` const); the desugar passes and the cache
-// probe match on these.
-const MESH_TYPE: &str = "Mesh";
-const SKINNED_MESH_TYPE: &str = "SkinnedMesh";
-
 // Collapse a list of validation errors into a single io::Error. The messages
 // are newline-joined so an upstream caller (e.g. the infra agentic loop) sees
 // every problem from one call.

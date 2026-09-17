@@ -11,12 +11,9 @@ use concinnity_core::blob::PhysicsBudgetRecord;
 use concinnity_core::physics::{PhysicsBudget, PhysicsCounts};
 use std::collections::HashSet;
 
+use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::WorldJsonlAsset;
 use crate::compile::spawn_population::SpawnPopulation;
-
-fn norm(asset_type: &str) -> String {
-    asset_type.to_lowercase().replace('_', "")
-}
 
 // A named asset reference arg: a non-empty string naming another asset.
 fn name_arg<'a>(asset: &'a WorldJsonlAsset, field: &str) -> Option<&'a str> {
@@ -31,9 +28,12 @@ fn name_arg<'a>(asset: &'a WorldJsonlAsset, field: &str) -> Option<&'a str> {
 // PhysicsConfig, a RigidBody, a PropBody, a TriggerVolume, or a SkinnedMesh
 // that declared a character capsule.
 fn has_physics_content(assets: &[WorldJsonlAsset]) -> bool {
-    assets.iter().any(|a| match norm(&a.asset_type).as_str() {
-        "physicsconfig" | "rigidbody" | "propbody" | "triggervolume" => true,
-        "skinnedmesh" => has_capsule(a),
+    assets.iter().any(|a| match a.asset_type {
+        RegisteredType::PhysicsConfig
+        | RegisteredType::RigidBody
+        | RegisteredType::PropBody
+        | RegisteredType::TriggerVolume => true,
+        RegisteredType::SkinnedMesh => has_capsule(a),
         _ => false,
     })
 }
@@ -47,7 +47,7 @@ fn has_capsule(asset: &WorldJsonlAsset) -> bool {
 fn collider_props(assets: &[WorldJsonlAsset]) -> HashSet<&str> {
     assets
         .iter()
-        .filter(|a| norm(&a.asset_type) == "prop")
+        .filter(|a| a.asset_type == RegisteredType::Prop)
         .filter(|a| a.args.get("collider").is_some_and(|c| !c.is_null()))
         .map(|a| a.name.as_str())
         .collect()
@@ -67,7 +67,7 @@ pub(crate) fn count(assets: &[WorldJsonlAsset]) -> Option<PhysicsCounts> {
     // makes none.
     let dynamic: HashSet<&str> = assets
         .iter()
-        .filter(|a| norm(&a.asset_type) == "propbody")
+        .filter(|a| a.asset_type == RegisteredType::PropBody)
         .filter_map(|a| name_arg(a, "prop_name"))
         .filter(|name| colliders.contains(name))
         .collect();
@@ -79,10 +79,10 @@ pub(crate) fn count(assets: &[WorldJsonlAsset]) -> Option<PhysicsCounts> {
     };
 
     for asset in assets {
-        match norm(&asset.asset_type).as_str() {
-            "triggervolume" => counts.trigger_volumes += 1,
-            "skinnedmesh" if has_capsule(asset) => counts.rig_capsules += 1,
-            "physicsjoint" => {
+        match asset.asset_type {
+            RegisteredType::TriggerVolume => counts.trigger_volumes += 1,
+            RegisteredType::SkinnedMesh if has_capsule(asset) => counts.rig_capsules += 1,
+            RegisteredType::PhysicsJoint => {
                 // The driver skips a joint whose ends do not both resolve to a
                 // body; an unwirable one costs nothing.
                 if !name_arg(asset, "body_a").is_some_and(|a| colliders.contains(a)) {
@@ -104,7 +104,9 @@ pub(crate) fn count(assets: &[WorldJsonlAsset]) -> Option<PhysicsCounts> {
 
     // Only the first declared camera can own the player capsule, and only when
     // it is not a third-person orbit around a followed character.
-    let first_camera = assets.iter().find(|a| norm(&a.asset_type) == "camera3d");
+    let first_camera = assets
+        .iter()
+        .find(|a| a.asset_type == RegisteredType::Camera3D);
     let follows = |camera: &WorldJsonlAsset| {
         camera
             .args
@@ -123,7 +125,7 @@ pub(crate) fn count(assets: &[WorldJsonlAsset]) -> Option<PhysicsCounts> {
 fn spawn_headroom(assets: &[WorldJsonlAsset]) -> u32 {
     assets
         .iter()
-        .find(|a| norm(&a.asset_type) == "physicsconfig")
+        .find(|a| a.asset_type == RegisteredType::PhysicsConfig)
         .and_then(|a| a.args.get("spawn_headroom"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0)
@@ -232,10 +234,10 @@ pub(crate) fn report_spawn_reservation(assets: &[WorldJsonlAsset]) {
 mod tests {
     use super::*;
 
-    fn asset(name: &str, asset_type: &str, args: serde_json::Value) -> WorldJsonlAsset {
+    fn asset(name: &str, asset_type: RegisteredType, args: serde_json::Value) -> WorldJsonlAsset {
         WorldJsonlAsset {
             name: name.to_string(),
-            asset_type: asset_type.to_string(),
+            asset_type,
             args,
         }
     }
@@ -246,22 +248,26 @@ mod tests {
         } else {
             serde_json::json!({"mesh": "m"})
         };
-        asset(name, "Prop", args)
+        asset(name, RegisteredType::Prop, args)
     }
 
     fn prop_body(name: &str, target: &str) -> WorldJsonlAsset {
-        asset(name, "PropBody", serde_json::json!({"prop_name": target}))
+        asset(
+            name,
+            RegisteredType::PropBody,
+            serde_json::json!({"prop_name": target}),
+        )
     }
 
     fn physics_config(args: serde_json::Value) -> WorldJsonlAsset {
-        asset("physics", "PhysicsConfig", args)
+        asset("physics", RegisteredType::PhysicsConfig, args)
     }
 
     #[test]
     fn a_world_with_no_physics_reserves_nothing() {
         let assets = [
             prop("banner", false),
-            asset("cam", "Camera3D", json_empty()),
+            asset("cam", RegisteredType::Camera3D, json_empty()),
         ];
         assert_eq!(count(&assets), None);
         assert_eq!(compute(&assets), None);
@@ -301,14 +307,14 @@ mod tests {
     #[test]
     fn trigger_volumes_and_rig_capsules_are_counted_per_asset() {
         let assets = [
-            asset("gate", "TriggerVolume", json_empty()),
-            asset("porch", "TriggerVolume", json_empty()),
+            asset("gate", RegisteredType::TriggerVolume, json_empty()),
+            asset("porch", RegisteredType::TriggerVolume, json_empty()),
             asset(
                 "hero",
-                "SkinnedMesh",
+                RegisteredType::SkinnedMesh,
                 serde_json::json!({"capsule": {"half_height": 0.9, "radius": 0.3}}),
             ),
-            asset("banner_mesh", "SkinnedMesh", json_empty()),
+            asset("banner_mesh", RegisteredType::SkinnedMesh, json_empty()),
         ];
         let counts = count(&assets).expect("trigger volumes turn physics on");
         assert_eq!(counts.trigger_volumes, 2);
@@ -324,22 +330,22 @@ mod tests {
             prop("banner", false),
             asset(
                 "hinge",
-                "PhysicsJoint",
+                RegisteredType::PhysicsJoint,
                 serde_json::json!({"body_a": "post", "body_b": "gate"}),
             ),
             asset(
                 "rope",
-                "PhysicsJoint",
+                RegisteredType::PhysicsJoint,
                 serde_json::json!({"body_a": "post", "anchor_b": [0, 4, 0]}),
             ),
             asset(
                 "loose",
-                "PhysicsJoint",
+                RegisteredType::PhysicsJoint,
                 serde_json::json!({"body_a": "post", "body_b": "banner"}),
             ),
             asset(
                 "unanchored",
-                "PhysicsJoint",
+                RegisteredType::PhysicsJoint,
                 serde_json::json!({"body_b": "gate"}),
             ),
         ];
@@ -359,15 +365,15 @@ mod tests {
         let follow = serde_json::json!({"controller": {"follow": {"target": "hero"}}});
         let assets = [
             physics_config(json_empty()),
-            asset("orbit", "Camera3D", follow),
-            asset("spectator", "Camera3D", json_empty()),
+            asset("orbit", RegisteredType::Camera3D, follow),
+            asset("spectator", RegisteredType::Camera3D, json_empty()),
         ];
         assert_eq!(count(&assets).expect("physics").player_capsules, 0);
 
         // First-person first: the capsule is built.
         let assets = [
             physics_config(json_empty()),
-            asset("spectator", "Camera3D", json_empty()),
+            asset("spectator", RegisteredType::Camera3D, json_empty()),
         ];
         assert_eq!(count(&assets).expect("physics").player_capsules, 1);
 
@@ -376,7 +382,7 @@ mod tests {
             physics_config(json_empty()),
             asset(
                 "cutscene",
-                "Camera3D",
+                RegisteredType::Camera3D,
                 serde_json::json!({"controller": null}),
             ),
         ];
@@ -395,7 +401,7 @@ mod tests {
             unreachable!("both are objects");
         };
         args_map.extend(cadence);
-        asset(name, "Spawner", args)
+        asset(name, RegisteredType::Spawner, args)
     }
 
     fn bounded_world(headroom: serde_json::Value) -> Vec<WorldJsonlAsset> {
@@ -452,7 +458,7 @@ mod tests {
             prop("crate_a", true),
             asset(
                 "drop",
-                "Spawner",
+                RegisteredType::Spawner,
                 serde_json::json!({"template": "crate_a"}),
             ),
         ];
@@ -567,7 +573,7 @@ mod tests {
         let mut with_behavior = bounded.clone();
         with_behavior.push(asset(
             "thrower",
-            "Behavior",
+            RegisteredType::Behavior,
             serde_json::json!({"on": "tick", "do": [{"spawn": {"template": "crate_a"}}]}),
         ));
         assert_eq!(
@@ -598,7 +604,7 @@ mod tests {
         let mut mixed = bounded_world(serde_json::json!(0));
         mixed.push(asset(
             "thrower",
-            "Behavior",
+            RegisteredType::Behavior,
             serde_json::json!({"on": "tick", "do": [{"spawn": {"template": "crate_a"}}]}),
         ));
         let reservation = spawn_reservation(&mixed);
@@ -652,7 +658,7 @@ mod tests {
         assert!(
             !expanded
                 .iter()
-                .any(|a| norm(&a.asset_type) == "physicsconfig"),
+                .any(|a| a.asset_type == RegisteredType::PhysicsConfig),
             "the build injects no config; the world start does"
         );
 

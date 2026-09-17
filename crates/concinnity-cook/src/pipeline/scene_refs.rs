@@ -1,6 +1,7 @@
 //! The naming-convention pass, run after the declaration-order interning and
 //! before the payload compile.
 
+use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::WorldJsonlAsset;
 
 // Resolve scene + screen associations that the runtime can no longer derive
@@ -10,21 +11,18 @@ use crate::authoring::world::WorldJsonlAsset;
 // Naming-convention relationships handled:
 //   - A Prop named `<scene>_*` belongs to Scene `<scene>`. The matched scene
 //     name is written into the prop's `scene` arg.
-//   - A UI element (Sprite, ImageOverlay, TextLabel, Text, TextInput,
-//     HitRegion, ScrollPanel) named `<screen>_*` belongs to Screen `<screen>`.
+//   - A UI element (Sprite, TextLabel, TextInput, HitRegion, ScrollPanel) named `<screen>_*` belongs to Screen `<screen>`.
 //     The matched screen name is written into the asset's `screen` arg.
 pub(in crate::pipeline) fn resolve_scene_refs(assets: &mut [WorldJsonlAsset]) {
-    let norm = |s: &str| s.to_lowercase().replace('_', "");
-
     let scene_names: Vec<String> = assets
         .iter()
-        .filter(|a| norm(&a.asset_type) == "scene")
+        .filter(|a| a.asset_type == RegisteredType::Scene)
         .map(|a| a.name.clone())
         .collect();
 
     let screen_names: Vec<String> = assets
         .iter()
-        .filter(|a| norm(&a.asset_type) == "screen")
+        .filter(|a| a.asset_type == RegisteredType::Screen)
         .map(|a| a.name.clone())
         .collect();
 
@@ -40,14 +38,15 @@ pub(in crate::pipeline) fn resolve_scene_refs(assets: &mut [WorldJsonlAsset]) {
     };
 
     for asset in assets.iter_mut() {
-        let ty = norm(&asset.asset_type);
-
         // Host binding by name prefix: a Prop takes its Scene, a UI element
         // takes its Screen. An asset that already names its host is left alone.
-        let host = match ty.as_str() {
-            "prop" => Some(("scene", &scene_names)),
-            "sprite" | "imageoverlay" | "textlabel" | "text" | "textinput" | "hitregion"
-            | "scrollpanel" => Some(("screen", &screen_names)),
+        let host = match asset.asset_type {
+            RegisteredType::Prop => Some(("scene", &scene_names)),
+            RegisteredType::Sprite
+            | RegisteredType::TextLabel
+            | RegisteredType::TextInput
+            | RegisteredType::HitRegion
+            | RegisteredType::ScrollPanel => Some(("screen", &screen_names)),
             _ => None,
         };
         if let Some((key, hosts)) = host
@@ -62,6 +61,7 @@ pub(in crate::pipeline) fn resolve_scene_refs(assets: &mut [WorldJsonlAsset]) {
 
 #[cfg(test)]
 mod tests {
+    use crate::authoring::registry::RegisteredType;
     use crate::pipeline::build_pipeline_from_str;
     use crate::pipeline::fixtures::wja;
     use concinnity_core::components::{
@@ -178,16 +178,17 @@ mod tests {
     // so a MainMenu's settings sub-screen rendered on top of the main menu.)
     #[test]
     fn resolve_scene_refs_picks_longest_screen_prefix() {
-        let mk = |name: &str, ty: &str| crate::authoring::world::WorldJsonlAsset {
-            name: name.to_string(),
-            asset_type: ty.to_string(),
-            args: serde_json::json!({}),
-        };
+        let mk =
+            |name: &str, asset_type: RegisteredType| crate::authoring::world::WorldJsonlAsset {
+                name: name.to_string(),
+                asset_type,
+                args: serde_json::json!({}),
+            };
         let mut assets = vec![
-            mk("menu", "Screen"),
-            mk("menu_settings", "Screen"),
-            mk("menu_title", "TextLabel"),
-            mk("menu_settings_title", "TextLabel"),
+            mk("menu", RegisteredType::Screen),
+            mk("menu_settings", RegisteredType::Screen),
+            mk("menu_title", RegisteredType::TextLabel),
+            mk("menu_settings_title", RegisteredType::TextLabel),
         ];
         super::resolve_scene_refs(&mut assets);
         let view_of = |n: &str| {
@@ -210,11 +211,11 @@ mod tests {
     #[test]
     fn resolve_scene_refs_keeps_an_authored_screen_arg() {
         let mut assets = vec![
-            wja("menu", "Screen", serde_json::json!({})),
-            wja("other", "Screen", serde_json::json!({})),
+            wja("menu", RegisteredType::Screen, serde_json::json!({})),
+            wja("other", RegisteredType::Screen, serde_json::json!({})),
             wja(
                 "menu_title",
-                "TextLabel",
+                RegisteredType::TextLabel,
                 serde_json::json!({"screen": "other"}),
             ),
         ];
@@ -225,11 +226,19 @@ mod tests {
     #[test]
     fn resolve_scene_refs_prop_scene_prefix_rules() {
         let mut assets = vec![
-            wja("level", "Scene", serde_json::json!({})),
-            wja("level_boss", "Scene", serde_json::json!({})),
-            wja("level_boss_door", "Prop", serde_json::json!({})),
-            wja("level_gate", "Prop", serde_json::json!({"scene": "other"})),
-            wja("solo_thing", "Prop", serde_json::json!({})),
+            wja("level", RegisteredType::Scene, serde_json::json!({})),
+            wja("level_boss", RegisteredType::Scene, serde_json::json!({})),
+            wja(
+                "level_boss_door",
+                RegisteredType::Prop,
+                serde_json::json!({}),
+            ),
+            wja(
+                "level_gate",
+                RegisteredType::Prop,
+                serde_json::json!({"scene": "other"}),
+            ),
+            wja("solo_thing", RegisteredType::Prop, serde_json::json!({})),
         ];
         super::resolve_scene_refs(&mut assets);
 

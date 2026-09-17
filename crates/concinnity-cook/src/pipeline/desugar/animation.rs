@@ -5,8 +5,8 @@ use concinnity_host::thread::asset_id;
 use serde::Deserialize;
 use std::path::Path;
 
-use super::super::SKINNED_MESH_TYPE;
 use super::skin_index_arg;
+use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::WorldJsonlAsset;
 
 // Skin selector per SkinnedMesh asset name. An Animation resolves its channels
@@ -16,7 +16,7 @@ use crate::authoring::world::WorldJsonlAsset;
 fn skin_index_by_target(assets: &[WorldJsonlAsset]) -> std::collections::HashMap<String, u32> {
     assets
         .iter()
-        .filter(|a| a.asset_type == SKINNED_MESH_TYPE)
+        .filter(|a| a.asset_type == RegisteredType::SkinnedMesh)
         .map(|a| (a.name.clone(), skin_index_arg(a)))
         .collect()
 }
@@ -33,13 +33,10 @@ pub(in crate::pipeline) fn desugar_animation_imports(
     assets: &mut [WorldJsonlAsset],
     assets_dir: Option<&Path>,
 ) -> std::io::Result<()> {
-    use concinnity_core::components::Animation;
-    use concinnity_core::ecs::Component;
-
     let skin_by_target = skin_index_by_target(assets);
 
     for asset in assets.iter_mut() {
-        if asset.asset_type != Animation::NAME {
+        if asset.asset_type != RegisteredType::Animation {
             continue;
         }
         let source = asset
@@ -197,7 +194,6 @@ pub(in crate::pipeline) fn desugar_root_motion(
     assets: &mut [WorldJsonlAsset],
 ) -> std::io::Result<()> {
     use concinnity_core::components::Animation;
-    use concinnity_core::ecs::Component;
 
     // This deserializes each flagged clip (whose `target` is a name reference),
     // so the name resolver must be installed. The full pipeline resets the
@@ -206,7 +202,7 @@ pub(in crate::pipeline) fn desugar_root_motion(
     asset_id::ensure_name_resolver();
 
     for asset in assets.iter_mut() {
-        if asset.asset_type != Animation::NAME
+        if asset.asset_type != RegisteredType::Animation
             || asset.args.get("root_motion").and_then(|v| v.as_bool()) != Some(true)
         {
             continue;
@@ -270,7 +266,7 @@ mod tests {
         });
         let mut assets = vec![crate::authoring::world::WorldJsonlAsset {
             name: "wave".to_string(),
-            asset_type: "Animation".to_string(),
+            asset_type: RegisteredType::Animation,
             args: original.clone(),
         }];
         desugar_animation_imports(&mut assets, None).expect("desugar succeeds");
@@ -301,12 +297,12 @@ mod tests {
         let mut assets = vec![
             crate::authoring::world::WorldJsonlAsset {
                 name: "walk".to_string(),
-                asset_type: "Animation".to_string(),
+                asset_type: RegisteredType::Animation,
                 args: walk,
             },
             crate::authoring::world::WorldJsonlAsset {
                 name: "plain".to_string(),
-                asset_type: "Animation".to_string(),
+                asset_type: RegisteredType::Animation,
                 args: plain.clone(),
             },
         ];
@@ -333,7 +329,7 @@ mod tests {
         let src = write_fixture(&dir, "hero.glb", &morphing_skinned_glb());
         let mut assets = vec![wja(
             "wave",
-            "Animation",
+            RegisteredType::Animation,
             serde_json::json!({"source": src, "animation_index": 0}),
         )];
         desugar_animation_imports(&mut assets, None).expect("desugar");
@@ -355,12 +351,12 @@ mod tests {
         let mut assets = vec![
             wja(
                 "hair",
-                SKINNED_MESH_TYPE,
+                RegisteredType::SkinnedMesh,
                 serde_json::json!({"source": src, "skin_index": 1}),
             ),
             wja(
                 "hair_wave",
-                "Animation",
+                RegisteredType::Animation,
                 serde_json::json!({"target": "hair", "source": src}),
             ),
         ];
@@ -381,10 +377,14 @@ mod tests {
         let assets = vec![
             wja(
                 "body",
-                SKINNED_MESH_TYPE,
+                RegisteredType::SkinnedMesh,
                 serde_json::json!({"skin_index": 2}),
             ),
-            wja("orphan", "Animation", serde_json::json!({"target": "gone"})),
+            wja(
+                "orphan",
+                RegisteredType::Animation,
+                serde_json::json!({"target": "gone"}),
+            ),
         ];
         let by_target = skin_index_by_target(&assets);
         assert_eq!(by_target.get("body"), Some(&2));
@@ -399,7 +399,7 @@ mod tests {
         let src = write_fixture(&dir, "hero.fbx", &skinned_fbx(true));
         let mut assets = vec![wja(
             "wave",
-            "Animation",
+            RegisteredType::Animation,
             serde_json::json!({"source": src, "sample_rate": 10.0}),
         )];
         desugar_animation_imports(&mut assets, None).expect("desugar");
@@ -427,7 +427,7 @@ mod tests {
         let src = write_fixture(&dir, "hero.fbx", &skinned_fbx(true));
         let mut assets = vec![wja(
             "run",
-            "Animation",
+            RegisteredType::Animation,
             serde_json::json!({"source": src, "animation_name": "sprint"}),
         )];
         let err = desugar_animation_imports(&mut assets, None).expect_err("no 'sprint' clip");
@@ -440,7 +440,7 @@ mod tests {
     fn desugar_animation_imports_missing_source_errors() {
         let mut assets = vec![wja(
             "walk",
-            "Animation",
+            RegisteredType::Animation,
             serde_json::json!({"source": "/no/such/anim.glb"}),
         )];
         let err = desugar_animation_imports(&mut assets, None).expect_err("missing .glb");
@@ -453,7 +453,7 @@ mod tests {
         // source fails before the name search; the error still names the asset.
         let mut assets = vec![wja(
             "run",
-            "Animation",
+            RegisteredType::Animation,
             serde_json::json!({"source": "/no/such/anim.glb", "animation_name": "Run"}),
         )];
         let err = desugar_animation_imports(&mut assets, None).expect_err("missing .glb");
@@ -473,7 +473,7 @@ mod tests {
         );
         let mut assets = vec![wja(
             "wave",
-            "Animation",
+            RegisteredType::Animation,
             serde_json::json!({"source": src, "animation_index": 0}),
         )];
         desugar_animation_imports(&mut assets, None).expect("desugar");
@@ -502,7 +502,7 @@ mod tests {
         );
         let mut assets = vec![wja(
             "wave",
-            "Animation",
+            RegisteredType::Animation,
             serde_json::json!({"source": src, "animation_name": "wave"}),
         )];
         desugar_animation_imports(&mut assets, None).expect("desugar");
@@ -510,7 +510,7 @@ mod tests {
 
         let mut missing = vec![wja(
             "run",
-            "Animation",
+            RegisteredType::Animation,
             serde_json::json!({"source": src, "animation_name": "sprint"}),
         )];
         let err = desugar_animation_imports(&mut missing, None)
@@ -527,7 +527,7 @@ mod tests {
     fn desugar_root_motion_rejects_malformed_args() {
         let mut assets = vec![wja(
             "walk",
-            "Animation",
+            RegisteredType::Animation,
             serde_json::json!({"root_motion": true, "duration": "long"}),
         )];
         let err = desugar_root_motion(&mut assets).expect_err("bad duration");
@@ -544,7 +544,7 @@ mod tests {
         // so the bake warns and leaves an empty curve rather than failing.
         let mut assets = vec![wja(
             "wave",
-            "Animation",
+            RegisteredType::Animation,
             serde_json::json!({
                 "root_motion": true,
                 "duration": 1.0,
@@ -579,8 +579,8 @@ mod tests {
             })
         };
         let mut assets = vec![
-            wja("jump", "Animation", clip(true)),
-            wja("walk", "Animation", clip(false)),
+            wja("jump", RegisteredType::Animation, clip(true)),
+            wja("walk", RegisteredType::Animation, clip(false)),
         ];
         desugar_root_motion(&mut assets).expect("bake succeeds");
 

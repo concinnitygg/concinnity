@@ -595,7 +595,7 @@ fn derive_identifier(name: &str) -> String {
 fn string_arg(assets: &[WorldJsonlAsset], type_norm: &str, key: &str) -> Option<String> {
     assets
         .iter()
-        .find(|a| normalize_type(&a.asset_type) == type_norm)
+        .find(|a| normalize_type(a.asset_type.as_str()) == type_norm)
         .and_then(|a| a.args.get(key))
         .and_then(|v| v.as_str())
         .map(str::trim)
@@ -933,11 +933,12 @@ fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_cook::authoring::registry::RegisteredType;
 
-    fn asset(name: &str, ty: &str, args: serde_json::Value) -> WorldJsonlAsset {
+    fn asset(name: &str, asset_type: RegisteredType, args: serde_json::Value) -> WorldJsonlAsset {
         WorldJsonlAsset {
             name: name.to_string(),
-            asset_type: ty.to_string(),
+            asset_type,
             args,
         }
     }
@@ -964,8 +965,16 @@ mod tests {
 
     #[test]
     fn name_precedence_is_cli_then_app_config_then_menu_then_default() {
-        let app = asset("app", "AppConfig", serde_json::json!({"name": "App Name"}));
-        let menu = asset("m", "MainMenu", serde_json::json!({"title": "Menu Title"}));
+        let app = asset(
+            "app",
+            RegisteredType::AppConfig,
+            serde_json::json!({"name": "App Name"}),
+        );
+        let menu = asset(
+            "m",
+            RegisteredType::MainMenu,
+            serde_json::json!({"title": "Menu Title"}),
+        );
 
         assert_eq!(
             resolve_display_name(Some("CLI Name"), &[app.clone(), menu.clone()]),
@@ -1016,7 +1025,7 @@ mod tests {
         // AppConfig supplies id / version / icon verbatim.
         let app = asset(
             "app",
-            "AppConfig",
+            RegisteredType::AppConfig,
             serde_json::json!({
                 "name": "Named", "id": "gg.studio.thing", "version": "2.3.4", "icon": "art/i.png"
             }),
@@ -1030,7 +1039,11 @@ mod tests {
 
     #[test]
     fn version_precedence_is_cli_then_application_then_default() {
-        let app = asset("app", "AppConfig", serde_json::json!({"version": "2.3.4"}));
+        let app = asset(
+            "app",
+            RegisteredType::AppConfig,
+            serde_json::json!({"version": "2.3.4"}),
+        );
 
         // --version overrides the AppConfig version.
         assert_eq!(

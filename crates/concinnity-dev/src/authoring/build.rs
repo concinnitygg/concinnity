@@ -34,7 +34,7 @@ pub(crate) fn prepare(content: &str) -> std::io::Result<LoadedWorld> {
 // Normalized asset-type match (lowercase, underscores stripped), matching the
 // convention used across the cook world passes.
 fn type_is(asset: &concinnity_cook::authoring::world::WorldJsonlAsset, norm_type: &str) -> bool {
-    asset.asset_type.to_lowercase().replace('_', "") == norm_type
+    asset.asset_type.as_str().to_lowercase().replace('_', "") == norm_type
 }
 
 // The first declared ColorLut's authored `source` path (non-empty), or `None`.
@@ -269,23 +269,18 @@ mod tests {
     }
 
     fn asset(json: serde_json::Value) -> concinnity_cook::authoring::world::WorldJsonlAsset {
-        concinnity_cook::authoring::world::WorldJsonlAsset::from_value(&json)
+        concinnity_cook::authoring::world::WorldJsonlAsset::from_value(&json).expect("typed asset")
     }
 
-    // The type match is the cook's normalized one, so `color_lut`, `ColorLut`,
-    // and `colorlut` all name the same kind.
     #[test]
-    fn the_lut_scan_takes_the_first_source_however_the_type_is_spelled() {
-        for ty in ["ColorLut", "color_lut", "colorlut", "COLOR_LUT"] {
-            let assets = [asset(
-                serde_json::json!({"name":"grade","type":ty,"args":{"source":"luts/warm.cube"}}),
-            )];
-            assert_eq!(
-                scan_color_lut_source(&assets),
-                Some("luts/warm.cube".to_string()),
-                "type {ty}"
-            );
-        }
+    fn the_lut_scan_takes_the_first_source() {
+        let assets = [asset(
+            serde_json::json!({"name":"grade","type":"ColorLut","args":{"source":"luts/warm.cube"}}),
+        )];
+        assert_eq!(
+            scan_color_lut_source(&assets),
+            Some("luts/warm.cube".to_string())
+        );
 
         // Only the first is used: the runtime binds handle 0.
         let assets = [
@@ -337,7 +332,7 @@ mod tests {
     #[test]
     fn the_environment_map_scan_carries_the_authored_bake_inputs() {
         let assets = [asset(serde_json::json!({
-            "name":"sky","type":"environment_map","args":{
+            "name":"sky","type":"EnvironmentMap","args":{
                 "source":"studio.hdr",
                 "prefilter_face_size": 256,
                 "irradiance_face_size": 16,

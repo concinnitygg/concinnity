@@ -30,55 +30,56 @@ pub(crate) mod texture;
 pub(crate) mod voxel_chunk;
 pub(crate) mod voxel_world;
 
+use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::WorldJsonlAsset;
 
 // The pure per-asset checks: JSON-shape validation that runs no compiler.
 fn check_authored_asset(
-    type_norm: &str,
+    asset_type: RegisteredType,
     name: &str,
     args: &serde_json::Value,
 ) -> Result<(), String> {
-    match type_norm {
-        "animationgraph" => animation_graph::check(name, args),
-        "behavior" => behavior::check(name, args),
-        "variables" => behavior::check_variables(name, args),
-        "shader" => shader::check(name, args),
-        "prop" => prop::check(name, args),
-        "sdfvolume" => sdf_volume::check(name, args),
-        "voxelchunk" => voxel_chunk::check(name, args),
-        "voxelworld" => voxel_world::check(name, args),
-        "instancedprop" => instanced_prop::check(name, args),
-        "triggervolume" => physics::check(name, args),
-        "audioemitter" => audio::check_emitter(name, args),
-        "audiocue" => audio::check_cue(name, args),
-        "propbody" => audio::check_prop_body(name, args),
+    match asset_type {
+        RegisteredType::AnimationGraph => animation_graph::check(name, args),
+        RegisteredType::Behavior => behavior::check(name, args),
+        RegisteredType::Variables => behavior::check_variables(name, args),
+        RegisteredType::Shader => shader::check(name, args),
+        RegisteredType::Prop => prop::check(name, args),
+        RegisteredType::SdfVolume => sdf_volume::check(name, args),
+        RegisteredType::VoxelChunk => voxel_chunk::check(name, args),
+        RegisteredType::VoxelWorld => voxel_world::check(name, args),
+        RegisteredType::InstancedProp => instanced_prop::check(name, args),
+        RegisteredType::TriggerVolume => physics::check(name, args),
+        RegisteredType::AudioEmitter => audio::check_emitter(name, args),
+        RegisteredType::AudioCue => audio::check_cue(name, args),
+        RegisteredType::PropBody => audio::check_prop_body(name, args),
         _ => Ok(()),
     }
 }
 
 // The per-asset checks that validate by running the asset's compiler.
 fn check_compiled_asset(
-    type_norm: &str,
+    asset_type: RegisteredType,
     name: &str,
     args: &serde_json::Value,
 ) -> Result<(), String> {
-    match type_norm {
-        "texture" => texture::check(name, args),
-        "cubemaptexture" => cubemap_texture::check(name, args),
-        "environmentmap" => environment_map::check(name, args),
-        "mesh" | "proceduralmesh" => mesh::check(name, args),
+    match asset_type {
+        RegisteredType::Texture => texture::check(name, args),
+        RegisteredType::CubemapTexture => cubemap_texture::check(name, args),
+        RegisteredType::EnvironmentMap => environment_map::check(name, args),
+        RegisteredType::Mesh | RegisteredType::ProceduralMesh => mesh::check(name, args),
         _ => Ok(()),
     }
 }
 
 // The full per-asset check: the pure checks plus the compile-backed ones.
 pub(crate) fn check_asset(
-    type_norm: &str,
+    asset_type: RegisteredType,
     name: &str,
     args: &serde_json::Value,
 ) -> Result<(), String> {
-    check_authored_asset(type_norm, name, args)?;
-    check_compiled_asset(type_norm, name, args)
+    check_authored_asset(asset_type, name, args)?;
+    check_compiled_asset(asset_type, name, args)
 }
 
 /// Run all semantic validation on a fully expanded world. Collects every
@@ -106,21 +107,20 @@ pub(crate) fn check_world(assets: &[WorldJsonlAsset]) -> Result<(), Vec<String>>
     // variable's declared type and a misspelled name is caught here.
     let declared_vars = assets
         .iter()
-        .find(|a| a.asset_type.to_lowercase().replace('_', "") == "variables")
+        .find(|a| a.asset_type == RegisteredType::Variables)
         .map(|a| behavior::DeclaredVars::from_args(&a.args))
         .unwrap_or_default();
 
     for asset in assets {
-        let type_norm = asset.asset_type.to_lowercase().replace('_', "");
-        let checked = if type_norm == "behavior" {
+        let checked = if asset.asset_type == RegisteredType::Behavior {
             behavior::check_with_vars(&asset.name, &asset.args, &declared_vars)
         } else {
-            check_authored_asset(&type_norm, &asset.name, &asset.args)
+            check_authored_asset(asset.asset_type, &asset.name, &asset.args)
         };
         if let Err(e) = checked {
             errors.push(e);
         }
-        if let Err(e) = check_compiled_asset(&type_norm, &asset.name, &asset.args) {
+        if let Err(e) = check_compiled_asset(asset.asset_type, &asset.name, &asset.args) {
             errors.push(e);
         }
     }
@@ -142,10 +142,10 @@ pub(crate) fn check_world(assets: &[WorldJsonlAsset]) -> Result<(), Vec<String>>
 mod tests {
     use super::*;
 
-    fn asset(name: &str, asset_type: &str, args: serde_json::Value) -> WorldJsonlAsset {
+    fn asset(name: &str, asset_type: RegisteredType, args: serde_json::Value) -> WorldJsonlAsset {
         WorldJsonlAsset {
             name: name.to_string(),
-            asset_type: asset_type.to_string(),
+            asset_type,
             args,
         }
     }
@@ -153,11 +153,11 @@ mod tests {
     #[test]
     fn graphics_config_with_full_render_stack_passes_graphics_rules() {
         let assets = vec![
-            asset("gfx", "GraphicsConfig", serde_json::json!({})),
-            asset("win", "Window", serde_json::json!({})),
+            asset("gfx", RegisteredType::GraphicsConfig, serde_json::json!({})),
+            asset("win", RegisteredType::Window, serde_json::json!({})),
             asset(
                 "scene_shader",
-                "Shader",
+                RegisteredType::Shader,
                 serde_json::json!({"fragment": "x.slang"}),
             ),
         ];
@@ -169,8 +169,12 @@ mod tests {
         // Prop with no mesh/model/prefab (per-asset error) plus a Material
         // with a missing albedo texture (cross-reference error).
         let assets = vec![
-            asset("bad_prop", "Prop", serde_json::json!({})),
-            asset("bad_mat", "Material", serde_json::json!({"albedo":"ghost"})),
+            asset("bad_prop", RegisteredType::Prop, serde_json::json!({})),
+            asset(
+                "bad_mat",
+                RegisteredType::Material,
+                serde_json::json!({"albedo":"ghost"}),
+            ),
         ];
         let errs = check_world(&assets).unwrap_err();
         assert!(errs.iter().any(|e| e.contains("bad_prop")));
@@ -183,10 +187,10 @@ mod tests {
     #[test]
     fn composed_checks_collect_pure_and_compile_backed_errors() {
         let assets = vec![
-            asset("bad_prop", "Prop", serde_json::json!({})),
+            asset("bad_prop", RegisteredType::Prop, serde_json::json!({})),
             asset(
                 "bad_tex",
-                "Texture",
+                RegisteredType::Texture,
                 serde_json::json!({"generator": "not_a_generator"}),
             ),
         ];
@@ -199,28 +203,28 @@ mod tests {
     #[test]
     fn check_asset_routes_compile_backed_types() {
         let args = serde_json::json!({"source": "studio.png"});
-        let err = check_asset("cubemaptexture", "c", &args).unwrap_err();
+        let err = check_asset(RegisteredType::CubemapTexture, "c", &args).unwrap_err();
         assert!(err.contains("Radiance .hdr"), "{err}");
 
         let args = serde_json::json!({"generator": "aurora"});
-        let err = check_asset("environmentmap", "e", &args).unwrap_err();
+        let err = check_asset(RegisteredType::EnvironmentMap, "e", &args).unwrap_err();
         assert!(err.contains("unknown EnvironmentMap generator"), "{err}");
     }
 
     #[test]
     fn check_asset_runs_both_check_sets() {
         // A pure check arm.
-        assert!(check_asset("prop", "p", &serde_json::json!({})).is_err());
+        assert!(check_asset(RegisteredType::Prop, "p", &serde_json::json!({})).is_err());
         // A compile-backed arm.
         assert!(
             check_asset(
-                "texture",
+                RegisteredType::Texture,
                 "t",
                 &serde_json::json!({"generator": "not_a_generator"})
             )
             .is_err()
         );
         // A type neither set knows is fine.
-        assert!(check_asset("window", "w", &serde_json::json!({})).is_ok());
+        assert!(check_asset(RegisteredType::Window, "w", &serde_json::json!({})).is_ok());
     }
 }

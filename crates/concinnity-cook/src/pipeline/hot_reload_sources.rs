@@ -104,7 +104,7 @@ mod tests {
         asset_id::reset_interner();
         let assets = vec![wja(
             "noise",
-            "Texture",
+            RegisteredType::Texture,
             serde_json::json!({"generator": "checker", "source": "ignored.png", "image_index": 3}),
         )];
         let (textures, meshes) = hot_reload_sources(&assets, &[(0, RegisteredType::Texture, 0)]);
@@ -123,10 +123,14 @@ mod tests {
     fn a_file_texture_fills_the_slot_at_its_handle() {
         asset_id::reset_interner();
         let assets = vec![
-            wja("clip", "AudioClip", serde_json::json!({"source": "a.ogg"})),
+            wja(
+                "clip",
+                RegisteredType::AudioClip,
+                serde_json::json!({"source": "a.ogg"}),
+            ),
             wja(
                 "atlas",
-                "Texture",
+                RegisteredType::Texture,
                 serde_json::json!({"source": "atlas.ktx2", "image_index": 2}),
             ),
         ];
@@ -147,10 +151,14 @@ mod tests {
     fn mesh_sources_default_to_one_lod_level() {
         asset_id::reset_interner();
         let assets = vec![
-            wja("plain", "Mesh", serde_json::json!({"source": "a.glb"})),
+            wja(
+                "plain",
+                RegisteredType::Mesh,
+                serde_json::json!({"source": "a.glb"}),
+            ),
             wja(
                 "lod",
-                "Mesh",
+                RegisteredType::Mesh,
                 serde_json::json!({
                     "source": "b.glb",
                     "primitive_index": 4,

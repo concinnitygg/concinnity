@@ -20,8 +20,9 @@ use screen::{MenuMetrics, emit_menu_screen};
 use settings_tab::emit_settings_tab;
 use std::collections::HashSet;
 
-use super::expand::{asset_name, type_norm};
+use super::expand::{asset_name, registered_type};
 use super::ui_spec::font_sizes;
+use crate::authoring::registry::RegisteredType;
 use crate::authoring::registry::build_only::MainMenu;
 use crate::authoring::spec::{asset, spec_to_value};
 use asset::ui_action;
@@ -54,7 +55,10 @@ fn cursor_sprite(name: &str, style: &MainMenu) -> serde_json::Value {
 // Generated names are prefixed with the menu's (unique) asset name, so they
 // never collide with hand-authored assets; a collision is a hard error.
 pub(crate) fn expand_main_menus(assets: &mut Vec<serde_json::Value>) -> Result<(), String> {
-    if !assets.iter().any(|v| type_norm(v) == "mainmenu") {
+    if !assets
+        .iter()
+        .any(|v| registered_type(v) == Some(RegisteredType::MainMenu))
+    {
         return Ok(());
     }
 
@@ -68,14 +72,14 @@ pub(crate) fn expand_main_menus(assets: &mut Vec<serde_json::Value>) -> Result<(
     // menus. A generated name landing on one of these is rejected.
     let mut taken: HashSet<String> = assets
         .iter()
-        .filter(|v| type_norm(v) != "mainmenu")
+        .filter(|v| registered_type(v) != Some(RegisteredType::MainMenu))
         .map(asset_name)
         .filter(|n| !n.is_empty())
         .collect();
 
     let mut result: Vec<serde_json::Value> = Vec::new();
     for value in assets.drain(..) {
-        if type_norm(&value) != "mainmenu" {
+        if registered_type(&value) != Some(RegisteredType::MainMenu) {
             result.push(value);
             continue;
         }

@@ -36,7 +36,7 @@ pub fn explain(name: &str, json_path: Option<&str>) -> std::io::Result<()> {
 
     let line = serde_json::json!({
         "name": asset.name,
-        "type": asset.asset_type,
+        "type": asset.asset_type.as_str(),
         "args": asset.args,
     });
 

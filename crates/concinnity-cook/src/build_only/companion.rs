@@ -1,7 +1,7 @@
 // Inject companion assets implied by the presence of other assets.
 //
 // Each renderable asset's companions are declared in `companion_specs` and
-// dispatched there by normalized type name. This module applies the resulting
+// dispatched there by type. This module applies the resulting
 // specs to a world JSONL value list.
 //
 // Injection runs to a fixed point. Each round snapshots the current world, asks
@@ -18,21 +18,8 @@
 use std::collections::HashSet;
 
 use super::companion_specs::{CompanionSpec, companions_for};
-use super::expand::ExpandReport;
-
-// Same normalization the rest of the codebase uses for type-name dedup:
-// lowercase + strip underscores. Keeps "Camera3DSystem" / "camera3d_system"
-// from being treated as different types.
-fn type_norm_str(s: &str) -> String {
-    s.to_lowercase().replace('_', "")
-}
-
-fn asset_type_norm(v: &serde_json::Value) -> String {
-    v.get("type")
-        .and_then(|t| t.as_str())
-        .map(type_norm_str)
-        .unwrap_or_default()
-}
+use super::expand::{ExpandReport, registered_type};
+use crate::authoring::registry::RegisteredType;
 
 // Record a skipped companion the world provides itself under the spec's own
 // name: that asset is the user's patch of the companion, so the spec's args
@@ -49,14 +36,14 @@ fn record_if_overridden(
     let claimed = claimed_names.contains(spec.name);
     let ours = report.injected.iter().any(|i| i.name == spec.name);
     if claimed && !ours {
-        report.record_shadowed(spec.name, spec.asset_type, "companion", spec.args.clone());
+        report.record_shadowed(
+            spec.name,
+            spec.asset_type.as_str(),
+            "companion",
+            spec.args.clone(),
+        );
         super::shadow::merge_into_authored(assets, spec.name, &spec.args);
     }
-}
-
-// Dispatch a companion lookup for one asset by its normalized type name.
-fn companions_for_type(asset_type: &str) -> Vec<CompanionSpec> {
-    companions_for(&type_norm_str(asset_type))
 }
 
 pub(crate) fn inject_companions(assets: &mut Vec<serde_json::Value>, report: &mut ExpandReport) {
@@ -65,7 +52,8 @@ pub(crate) fn inject_companions(assets: &mut Vec<serde_json::Value>, report: &mu
         // added below only enter the visible set on the next iteration, which
         // keeps multi-spec batches from shadowing each other through the
         // per-spec type-dedup.
-        let present_types: HashSet<String> = assets.iter().map(asset_type_norm).collect();
+        let present_types: HashSet<RegisteredType> =
+            assets.iter().filter_map(registered_type).collect();
         let claimed_names: HashSet<String> = assets
             .iter()
             .filter_map(|v| v.get("name").and_then(|n| n.as_str()))
@@ -75,10 +63,10 @@ pub(crate) fn inject_companions(assets: &mut Vec<serde_json::Value>, report: &mu
         // Collect every spec implied by every declared asset.
         let mut candidates: Vec<CompanionSpec> = Vec::new();
         for value in assets.iter() {
-            let Some(t) = value.get("type").and_then(|s| s.as_str()) else {
+            let Some(t) = registered_type(value) else {
                 continue;
             };
-            candidates.extend(companions_for_type(t));
+            candidates.extend(companions_for(t));
         }
 
         // Apply: skip a spec whose asset_type already exists in the
@@ -87,7 +75,7 @@ pub(crate) fn inject_companions(assets: &mut Vec<serde_json::Value>, report: &mu
         let mut seen_names: HashSet<String> = HashSet::new();
         let mut to_inject = Vec::new();
         for spec in candidates {
-            if present_types.contains(&type_norm_str(spec.asset_type)) {
+            if present_types.contains(&spec.asset_type) {
                 record_if_overridden(assets, &claimed_names, report, &spec);
                 continue;
             }
@@ -103,10 +91,10 @@ pub(crate) fn inject_companions(assets: &mut Vec<serde_json::Value>, report: &mu
         for spec in to_inject {
             assets.push(serde_json::json!({
                 "name": spec.name,
-                "type": spec.asset_type,
+                "type": spec.asset_type.as_str(),
                 "args": spec.args.clone(),
             }));
-            report.record(spec.name, spec.asset_type, spec.args, "companion");
+            report.record(spec.name, spec.asset_type.as_str(), spec.args, "companion");
         }
     }
 }
@@ -119,10 +107,6 @@ mod tests {
     fn inject(assets: &mut Vec<serde_json::Value>) {
         let mut report = ExpandReport::default();
         inject_companions(assets, &mut report);
-    }
-
-    fn type_norm(v: &serde_json::Value) -> String {
-        asset_type_norm(v)
     }
 
     // A world that declares a companion under the companion's own name is
@@ -139,7 +123,10 @@ mod tests {
         let mut report = ExpandReport::default();
         inject_companions(&mut assets, &mut report);
         assert_eq!(
-            assets.iter().filter(|v| type_norm(v) == "window").count(),
+            assets
+                .iter()
+                .filter(|v| registered_type(v) == Some(RegisteredType::Window))
+                .count(),
             1,
             "the world's own Window wins, and is not duplicated"
         );
@@ -182,7 +169,10 @@ mod tests {
         let mut report = ExpandReport::default();
         inject_companions(&mut assets, &mut report);
         assert_eq!(
-            assets.iter().filter(|v| type_norm(v) == "window").count(),
+            assets
+                .iter()
+                .filter(|v| registered_type(v) == Some(RegisteredType::Window))
+                .count(),
             1
         );
         assert!(
@@ -196,7 +186,11 @@ mod tests {
     fn no_injection_without_trigger() {
         let mut assets = vec![serde_json::json!({"name":"w","type":"Window","args":{}})];
         inject(&mut assets);
-        assert!(!assets.iter().any(|v| type_norm(v) == "graphicsconfig"));
+        assert!(
+            !assets
+                .iter()
+                .any(|v| registered_type(v) == Some(RegisteredType::GraphicsConfig))
+        );
     }
 
     #[test]
@@ -204,7 +198,11 @@ mod tests {
         let mut assets =
             vec![serde_json::json!({"name":"t","type":"TextLabel","args":{"content":"hi"}})];
         inject(&mut assets);
-        assert!(assets.iter().any(|v| type_norm(v) == "graphicsconfig"));
+        assert!(
+            assets
+                .iter()
+                .any(|v| registered_type(v) == Some(RegisteredType::GraphicsConfig))
+        );
     }
 
     #[test]
@@ -216,7 +214,7 @@ mod tests {
         inject(&mut assets);
         let gfx_count = assets
             .iter()
-            .filter(|v| type_norm(v) == "graphicsconfig")
+            .filter(|v| registered_type(v) == Some(RegisteredType::GraphicsConfig))
             .count();
         assert_eq!(gfx_count, 1);
     }
@@ -229,7 +227,11 @@ mod tests {
         let mut assets =
             vec![serde_json::json!({"name":"t","type":"TextLabel","args":{"content":"hi"}})];
         inject(&mut assets);
-        assert!(!assets.iter().any(|v| type_norm(v) == "font"));
+        assert!(
+            !assets
+                .iter()
+                .any(|v| registered_type(v) == Some(RegisteredType::Font))
+        );
     }
 
     // And the label itself comes through untouched. Writing a `font` or a
@@ -244,7 +246,10 @@ mod tests {
         });
         let mut assets = vec![authored.clone()];
         inject(&mut assets);
-        let label = assets.iter().find(|v| type_norm(v) == "textlabel").unwrap();
+        let label = assets
+            .iter()
+            .find(|v| registered_type(v) == Some(RegisteredType::TextLabel))
+            .unwrap();
         assert_eq!(label, &authored);
     }
 
@@ -255,7 +260,10 @@ mod tests {
             serde_json::json!({"name":"f","type":"Font","args":{"path":"my.ttf","size_px":20}}),
         ];
         inject(&mut assets);
-        let font_count = assets.iter().filter(|v| type_norm(v) == "font").count();
+        let font_count = assets
+            .iter()
+            .filter(|v| registered_type(v) == Some(RegisteredType::Font))
+            .count();
         assert_eq!(font_count, 1);
     }
 
@@ -267,7 +275,10 @@ mod tests {
             "args": {"content": "hi", "font": "myfont"}
         })];
         inject(&mut assets);
-        let label = assets.iter().find(|v| type_norm(v) == "textlabel").unwrap();
+        let label = assets
+            .iter()
+            .find(|v| registered_type(v) == Some(RegisteredType::TextLabel))
+            .unwrap();
         assert_eq!(label["args"]["font"].as_str().unwrap(), "myfont");
     }
 
@@ -275,7 +286,11 @@ mod tests {
     fn graphics_config_injects_window() {
         let mut assets = vec![serde_json::json!({"name":"gfx","type":"GraphicsConfig","args":{}})];
         inject(&mut assets);
-        assert!(assets.iter().any(|v| type_norm(v) == "window"));
+        assert!(
+            assets
+                .iter()
+                .any(|v| registered_type(v) == Some(RegisteredType::Window))
+        );
     }
 
     // An entry with no `type` implies no companions and must not derail the
@@ -287,7 +302,11 @@ mod tests {
             serde_json::json!({"name":"gfx","type":"GraphicsConfig","args":{}}),
         ];
         inject(&mut assets);
-        assert!(assets.iter().any(|v| type_norm(v) == "window"));
+        assert!(
+            assets
+                .iter()
+                .any(|v| registered_type(v) == Some(RegisteredType::Window))
+        );
         assert!(assets.iter().any(|v| v["name"] == "junk"));
     }
 
@@ -298,6 +317,6 @@ mod tests {
         let mut assets = vec![serde_json::json!({"name":"c","type":"Camera3D","args":{}})];
         inject(&mut assets);
         assert_eq!(assets.len(), 1);
-        assert!(type_norm(&assets[0]) == "camera3d");
+        assert_eq!(registered_type(&assets[0]), Some(RegisteredType::Camera3D));
     }
 }

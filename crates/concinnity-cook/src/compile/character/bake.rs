@@ -9,10 +9,10 @@ use concinnity_core::components::{
     CharacterCapsule, CharacterShape, MorphDelta, SkeletonJoint, SkinnedMesh,
     build_skeleton_from_joint_defs,
 };
-use concinnity_core::ecs::Component;
 use concinnity_core::math::vec3;
 use concinnity_core::transform::{self, Mat4};
 
+use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::WorldJsonlAsset;
 
 // What a bake changed, for the build log.
@@ -189,7 +189,7 @@ fn scale_capsule(capsule: &mut CharacterCapsule, scale: CapsuleScale) {
 }
 
 fn is_baking(a: &WorldJsonlAsset) -> bool {
-    a.asset_type == CharacterShape::NAME
+    a.asset_type == RegisteredType::CharacterShape
         && a.args.get("bake").and_then(|v| v.as_bool()) == Some(true)
 }
 
@@ -464,18 +464,18 @@ mod tests {
         let mut assets = vec![
             WorldJsonlAsset {
                 name: "body".into(),
-                asset_type: "SkinnedMesh".into(),
+                asset_type: RegisteredType::SkinnedMesh,
                 args,
             },
             WorldJsonlAsset {
                 name: "shape".into(),
-                asset_type: "CharacterShape".into(),
+                asset_type: RegisteredType::CharacterShape,
                 args: serde_json::json!({"target": "body", "bake": true,
                     "sliders": [{"name": "wide", "value": 1.0}]}),
             },
             WorldJsonlAsset {
                 name: "live".into(),
-                asset_type: "CharacterShape".into(),
+                asset_type: RegisteredType::CharacterShape,
                 args: serde_json::json!({"target": "body"}),
             },
         ];
@@ -488,7 +488,7 @@ mod tests {
         assert_eq!(body["skeleton"].as_array().unwrap().len(), 3);
         let mut missing = vec![WorldJsonlAsset {
             name: "shape".into(),
-            asset_type: "CharacterShape".into(),
+            asset_type: RegisteredType::CharacterShape,
             args: serde_json::json!({"target": "ghost", "bake": true}),
         }];
         let err = bake_shapes(&mut missing, |_| None).unwrap_err();
@@ -533,13 +533,13 @@ mod tests {
         let mut assets = vec![
             WorldJsonlAsset {
                 name: "body".into(),
-                asset_type: "SkinnedMesh".into(),
+                asset_type: RegisteredType::SkinnedMesh,
                 args: serde_json::json!({"source": "hero.glb",
                     "capsule": {"half_height": 1.0, "radius": 0.5}}),
             },
             WorldJsonlAsset {
                 name: "shape".into(),
-                asset_type: "CharacterShape".into(),
+                asset_type: RegisteredType::CharacterShape,
                 args: shape_args.clone(),
             },
         ];
@@ -568,12 +568,12 @@ mod tests {
         let mut assets = vec![
             WorldJsonlAsset {
                 name: "body".into(),
-                asset_type: "SkinnedMesh".into(),
+                asset_type: RegisteredType::SkinnedMesh,
                 args: serde_json::json!({"source": "hero.glb"}),
             },
             WorldJsonlAsset {
                 name: "shape".into(),
-                asset_type: "CharacterShape".into(),
+                asset_type: RegisteredType::CharacterShape,
                 args: serde_json::json!({"target": "body", "bake": true}),
             },
         ];

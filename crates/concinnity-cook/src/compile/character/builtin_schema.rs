@@ -4,6 +4,7 @@
 
 use std::sync::OnceLock;
 
+use crate::authoring::registry::RegisteredType;
 use crate::authoring::registry::build_only::CharacterSchema;
 use crate::authoring::world::WorldJsonlAsset;
 
@@ -28,7 +29,7 @@ pub(crate) fn resolve(name: &str, assets: &[WorldJsonlAsset]) -> Result<Characte
     }
     let asset = assets
         .iter()
-        .find(|a| a.name == name && a.asset_type.eq_ignore_ascii_case("CharacterSchema"))
+        .find(|a| a.name == name && a.asset_type == RegisteredType::CharacterSchema)
         .ok_or_else(|| {
             format!("schema '{name}' is not a CharacterSchema asset in this world (or {HUMANOID_SCHEMA})")
         })?;
@@ -83,7 +84,7 @@ mod tests {
     fn schemas_resolve_by_reserved_or_asset_name() {
         let assets = vec![WorldJsonlAsset {
             name: "mine".into(),
-            asset_type: "CharacterSchema".into(),
+            asset_type: RegisteredType::CharacterSchema,
             args: serde_json::json!({"joints": [{"name": "root"}]}),
         }];
         assert_eq!(resolve(HUMANOID_SCHEMA, &assets).unwrap().joints.len(), 25);

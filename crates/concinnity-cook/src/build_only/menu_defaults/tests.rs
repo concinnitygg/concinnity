@@ -4,10 +4,10 @@ fn gfx() -> serde_json::Value {
     serde_json::json!({"name":"gfx","type":"GraphicsConfig","args":{}})
 }
 
-fn names_of_type(assets: &[serde_json::Value], t: &str) -> Vec<String> {
+fn names_of_type(assets: &[serde_json::Value], t: RegisteredType) -> Vec<String> {
     assets
         .iter()
-        .filter(|v| type_norm(v) == t)
+        .filter(|v| registered_type(v) == Some(t))
         .map(asset_name)
         .collect()
 }
@@ -25,10 +25,13 @@ fn a_menu_world_gets_the_stats_strip() {
         serde_json::json!({"name":"pause","type":"MainMenu","args":{}}),
     ];
     let report = inject(&mut assets).unwrap();
-    assert_eq!(names_of_type(&assets, "stathud"), vec!["stat_hud"]);
+    assert_eq!(
+        names_of_type(&assets, RegisteredType::StatHud),
+        vec!["stat_hud"]
+    );
     // The chips and their font are minted at world start, not here.
-    assert!(names_of_type(&assets, "textlabel").is_empty());
-    assert!(names_of_type(&assets, "font").is_empty());
+    assert!(names_of_type(&assets, RegisteredType::TextLabel).is_empty());
+    assert!(names_of_type(&assets, RegisteredType::Font).is_empty());
     assert_eq!(report.injected.len(), 1);
     assert_eq!(report.injected[0].injected_by, "hud");
 }
@@ -37,7 +40,7 @@ fn a_menu_world_gets_the_stats_strip() {
 fn a_world_without_a_menu_gets_no_stats_strip() {
     let mut assets = vec![gfx()];
     inject(&mut assets).unwrap();
-    assert!(names_of_type(&assets, "stathud").is_empty());
+    assert!(names_of_type(&assets, RegisteredType::StatHud).is_empty());
 }
 
 #[test]
@@ -48,7 +51,7 @@ fn an_authored_stat_hud_is_left_alone() {
         serde_json::json!({"name":"hud","type":"StatHud","args":{"fps_label":"my_fps"}}),
     ];
     inject(&mut assets).unwrap();
-    assert_eq!(names_of_type(&assets, "stathud"), vec!["hud"]);
+    assert_eq!(names_of_type(&assets, RegisteredType::StatHud), vec!["hud"]);
 }
 
 #[test]
@@ -59,7 +62,7 @@ fn the_hud_toggle_opts_out() {
         serde_json::json!({"name":"d","type":"EngineDefaults","args":{"hud": false}}),
     ];
     inject(&mut assets).unwrap();
-    assert!(names_of_type(&assets, "stathud").is_empty());
+    assert!(names_of_type(&assets, RegisteredType::StatHud).is_empty());
 }
 
 // The directive is a stored component now: the runtime pass drains it, so the
@@ -71,7 +74,10 @@ fn the_directive_survives_the_build() {
         serde_json::json!({"name":"d","type":"EngineDefaults","args":{"sky": false}}),
     ];
     inject(&mut assets).unwrap();
-    assert_eq!(names_of_type(&assets, "enginedefaults"), vec!["d"]);
+    assert_eq!(
+        names_of_type(&assets, RegisteredType::EngineDefaults),
+        vec!["d"]
+    );
 }
 
 #[test]
@@ -102,7 +108,10 @@ fn a_directive_without_args_keeps_every_default_on() {
         serde_json::json!({"name":"d","type":"EngineDefaults"}),
     ];
     inject(&mut assets).unwrap();
-    assert_eq!(names_of_type(&assets, "stathud"), vec!["stat_hud"]);
+    assert_eq!(
+        names_of_type(&assets, RegisteredType::StatHud),
+        vec!["stat_hud"]
+    );
 }
 
 #[test]
@@ -116,7 +125,7 @@ fn a_story_world_gets_a_pause_menu() {
 
     let menu = assets
         .iter()
-        .find(|v| type_norm(v) == "mainmenu")
+        .find(|v| registered_type(v) == Some(RegisteredType::MainMenu))
         .expect("pause menu injected");
     assert_eq!(asset_name(menu), "tale_pause");
     assert_eq!(menu["args"]["settings_profile"], "minimal");
@@ -156,13 +165,19 @@ fn a_story_world_gets_a_pause_menu() {
     // Escape is a story-driven binding, not the MainMenu's own toggle.
     let key = assets
         .iter()
-        .find(|v| type_norm(v) == "keybinding" && asset_name(v) == "tale_pause_key")
+        .find(|v| {
+            registered_type(v) == Some(RegisteredType::KeyBinding)
+                && asset_name(v) == "tale_pause_key"
+        })
         .expect("Escape binding injected");
     assert_eq!(key["args"]["key"], "Escape");
     assert_eq!(key["args"]["action"], "story:pause");
 
     // The Story scaffold points at the pause + settings screens.
-    let story = assets.iter().find(|v| type_norm(v) == "story").unwrap();
+    let story = assets
+        .iter()
+        .find(|v| registered_type(v) == Some(RegisteredType::Story))
+        .unwrap();
     assert_eq!(story["args"]["scaffold"]["pause"], "tale_pause");
     assert_eq!(
         story["args"]["scaffold"]["settings"],
@@ -170,7 +185,7 @@ fn a_story_world_gets_a_pause_menu() {
     );
 
     // The trimmed menu drives no StatHud, so none is injected for a story.
-    assert!(names_of_type(&assets, "stathud").is_empty());
+    assert!(names_of_type(&assets, RegisteredType::StatHud).is_empty());
 }
 
 #[test]
@@ -182,7 +197,7 @@ fn a_story_without_a_title_screen_quits_to_desktop() {
     inject(&mut assets).unwrap();
     let menu = assets
         .iter()
-        .find(|v| type_norm(v) == "mainmenu")
+        .find(|v| registered_type(v) == Some(RegisteredType::MainMenu))
         .expect("pause menu injected");
     let items = menu["args"]["items"].as_array().unwrap();
     assert_eq!(items.last().unwrap()["action"], "quit");
@@ -202,7 +217,10 @@ fn an_authored_menu_suppresses_the_story_pause_menu() {
         serde_json::json!({"name":"my_menu","type":"MainMenu","args":{}}),
     ];
     inject(&mut assets).unwrap();
-    assert_eq!(names_of_type(&assets, "mainmenu"), vec!["my_menu"]);
+    assert_eq!(
+        names_of_type(&assets, RegisteredType::MainMenu),
+        vec!["my_menu"]
+    );
 }
 
 #[test]
@@ -216,7 +234,7 @@ fn the_story_pause_toggle_opts_out() {
         }}),
     ];
     inject(&mut assets).unwrap();
-    assert!(names_of_type(&assets, "mainmenu").is_empty());
+    assert!(names_of_type(&assets, RegisteredType::MainMenu).is_empty());
 }
 
 #[test]
@@ -230,14 +248,18 @@ fn malformed_story_args_do_not_panic_the_pause_injection() {
         serde_json::json!({"name":"tale_title","type":"Screen","args":{}}),
     ];
     inject(&mut assets).unwrap();
-    assert!(assets.iter().any(|v| type_norm(v) == "mainmenu"));
+    assert!(
+        assets
+            .iter()
+            .any(|v| registered_type(v) == Some(RegisteredType::MainMenu))
+    );
 }
 
 #[test]
 fn a_non_story_world_gets_no_pause_menu() {
     let mut assets = vec![gfx()];
     inject(&mut assets).unwrap();
-    assert!(names_of_type(&assets, "mainmenu").is_empty());
+    assert!(names_of_type(&assets, RegisteredType::MainMenu).is_empty());
 }
 
 // A default's name held by an unrelated type cannot be injected, and skipping
@@ -283,5 +305,8 @@ fn injecting_twice_yields_one_stat_hud() {
     ];
     inject(&mut assets).unwrap();
     inject(&mut assets).unwrap();
-    assert_eq!(names_of_type(&assets, "stathud"), vec!["stat_hud"]);
+    assert_eq!(
+        names_of_type(&assets, RegisteredType::StatHud),
+        vec!["stat_hud"]
+    );
 }
