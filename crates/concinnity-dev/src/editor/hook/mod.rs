@@ -67,6 +67,7 @@ use super::viewport::resize;
 use super::viewport::snap;
 use super::widget;
 use super::worlds;
+use crate::debug::hot_reload::WorldPathHandle;
 use crate::debug_hook::DebugHook;
 use edit::behavior_state::BehaviorState;
 use edit::console_state::ConsoleState;
@@ -90,6 +91,8 @@ struct Drag {
 pub(crate) struct EditorHook {
     // Path to the world.jsonl the edits are written back to.
     world_path: String,
+    // The same path, shared with the hot-reload driver that watches it.
+    world_path_handle: WorldPathHandle,
     // The authored entry list (names live here, unlike the compiled blob). Edits
     // mutate this; SAVE serializes it back to `world_path`.
     entries: Vec<serde_json::Value>,
@@ -470,6 +473,7 @@ impl EditorHook {
             })
             .unwrap_or_default();
         Self {
+            world_path_handle: WorldPathHandle::new(world_path.as_str()),
             world_path,
             history: History::default(),
             baseline: entries.clone(),
@@ -613,6 +617,11 @@ impl EditorHook {
     // server's hot-reload passes report through it).
     pub(crate) fn notifier(&self) -> notify::Notifier {
         self.notifier.clone()
+    }
+
+    // A clone of the world-path handle, for the hot-reload driver's watcher.
+    pub(crate) fn world_path_handle(&self) -> WorldPathHandle {
+        self.world_path_handle.clone()
     }
 
     // Whether any editor text control holds keyboard focus this frame: the

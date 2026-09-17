@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use super::state::{AssetHotReloadState, FrameHotReloadEffects, run_frame};
+use super::world_path::WorldPathHandle;
 use crate::debug_hook::DebugHook;
 
 pub(crate) struct HotReloadDriver {
@@ -22,11 +23,14 @@ pub(crate) struct HotReloadDriver {
     // finds them, and re-armed whenever a fresh capture appears (the editor's
     // live preview rebuild re-runs init), so the catalog never goes stale
     // against the current backend slots.
-    state: Option<AssetHotReloadState>,
+    pub(super) state: Option<AssetHotReloadState>,
     // The editor's toast queue, when driving inside an editor session: the
     // reload passes report apply results through it. `None` under a bare
     // `cn debug`, which has no toast surface.
     notifier: Option<crate::editor::notify::Notifier>,
+    // The session's world.jsonl path, read at every arm so a world switch is
+    // watched from the next rebuild on. `None` watches no world file.
+    world_path: Option<WorldPathHandle>,
 }
 
 impl HotReloadDriver {
@@ -34,6 +38,7 @@ impl HotReloadDriver {
         Self {
             state: None,
             notifier: None,
+            world_path: None,
         }
     }
 
@@ -41,6 +46,12 @@ impl HotReloadDriver {
     // as the log.
     pub(crate) fn with_notifier(mut self, notifier: crate::editor::notify::Notifier) -> Self {
         self.notifier = Some(notifier);
+        self
+    }
+
+    // Watch the world.jsonl the handle names, as of each arm.
+    pub(crate) fn with_world_path(mut self, handle: WorldPathHandle) -> Self {
+        self.world_path = Some(handle);
         self
     }
 
@@ -55,7 +66,8 @@ impl HotReloadDriver {
     // Dropping the previous state stops its watcher and abandons any
     // in-flight decode aimed at the replaced world's slots.
     pub(crate) fn arm(&mut self, sources: system::hot_reload_sources::HotReloadSources) {
-        self.state = Some(AssetHotReloadState::from_sources(sources));
+        let world_jsonl_path = self.world_path.as_ref().map(WorldPathHandle::get);
+        self.state = Some(AssetHotReloadState::from_sources(sources, world_jsonl_path));
     }
 
     // Run the reload passes once for this frame and apply their ECS

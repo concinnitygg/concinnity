@@ -1,8 +1,8 @@
 //! How a test is allowed to reach this binary's process-global state.
 //!
 //! Cargo runs a binary's tests on parallel threads, so the working directory,
-//! the dev session's open project, the engine's development flags and the
-//! window policy are shared by every test running at that moment.
+//! the dev session's open project, the pending hot-reload flags, the C ABI's
+//! open world and the window policy are shared by every test running at that moment.
 //! `concinnity-testing` puts one lock over all of it, and a test that reaches
 //! any of it holds that lock and runs alone.
 //!
@@ -27,15 +27,14 @@ const SELF: &str = "global_state_discipline.rs";
 // Every spelling of "I hold the one guard over process-global state". Taking
 // any two of these live at once on a thread is the deadlock.
 //
-// The guards a caller may import and then call bare are matched unqualified, so
-// `exclusive()` and `write_access()` count however they were reached. `lock`
+// The guard a caller may import and then call bare is matched unqualified, so
+// `exclusive()` counts however it was reached. `lock`
 // stays qualified: a bare `lock()` is also how the cook and the host take their
 // own mutexes, which are not this one.
 const GUARDS: &[&str] = &[
     "test_support::lock()",
     "GlobalState::acquire()",
     "exclusive()",
-    "write_access()",
     "Output::new()",
 ];
 
@@ -50,7 +49,6 @@ const GLOBAL_WRITES: &[&str] = &[
     "project::open(",
     "isolate_state_dir(",
     "set_current_dir(",
-    "dev_flags::set_",
     "set_pending_animations(",
     // The C ABI's host state: one open world per process, which every cn_
     // entry point reads or replaces.
@@ -175,9 +173,9 @@ fn a_test_that_writes_a_global_holds_the_exclusive_guard() {
     let mut unguarded: HashMap<String, Vec<String>> = HashMap::new();
 
     for path in rust_sources() {
-        // The guards' own definitions write these globals to implement them.
+        // The guard's own definition writes these globals to implement it.
         let as_str = path.to_string_lossy().to_string();
-        if as_str.contains("concinnity-testing") || as_str.ends_with("dev_flags.rs") {
+        if as_str.contains("concinnity-testing") {
             continue;
         }
         let text = std::fs::read_to_string(&path)
@@ -271,7 +269,7 @@ fn a_malformed_json_fixture_does_not_extend_the_body() {
 
 #[test]
 fn the_scan_sees_a_global_write_through_a_helper() {
-    let source_text = "fn make_world() {\n    dev_flags::set_enabled(true);\n}\n\n#[test]\nfn writes_a_flag_indirectly() {\n    make_world();\n}\n";
+    let source_text = "fn enter_scratch() {\n    std::env::set_current_dir(\"scratch\").unwrap();\n}\n\n#[test]\nfn moves_the_cwd_indirectly() {\n    enter_scratch();\n}\n";
     let helpers = helper_map(source_text);
     let body = &source::test_bodies(source_text)[0];
     let reachable = reach(body, &helpers);
@@ -281,20 +279,6 @@ fn the_scan_sees_a_global_write_through_a_helper() {
         "the helper's write is reachable from the test"
     );
     assert!(!mentions(&reachable, GUARDS), "and it holds no guard");
-}
-
-// Most `write_access()` call sites import it and call it bare, so a needle
-// carrying the module path would see two of nine.
-#[test]
-fn the_scan_sees_a_guard_called_without_its_module_path() {
-    let bare = "\n#[test]\nfn writes_a_flag() {\n    let _flags = write_access();\n    let _also = concinnity_testing::exclusive();\n}\n";
-    let bodies = source::test_bodies(bare);
-
-    assert_eq!(
-        guards_held_at_top_level(&bodies[0].text, GUARDS),
-        2,
-        "a bare guard call counts the same as a qualified one"
-    );
 }
 
 // The same guard twice, both unqualified. A list carrying only the qualified

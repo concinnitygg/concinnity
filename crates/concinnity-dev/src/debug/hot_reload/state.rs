@@ -218,26 +218,21 @@ impl std::fmt::Debug for AssetHotReloadState {
 
 impl AssetHotReloadState {
     // Build the state from the init-captured [`HotReloadSources`] bundle and
-    // (best-effort) spawn the `notify` watcher over every unique parent
-    // directory of the captured source paths. Watcher creation is best-effort:
+    // the host's world.jsonl path, and (best-effort) spawn the `notify` watcher
+    // over every unique parent directory of those paths. Watcher creation is best-effort:
     // a missing path or notify error logs and continues; the
     // `reload-assets` debug tool call still works on the same flag. The `cn debug`
     // drive calls this on its first tick after taking the sources off the
     // `GraphicsSystem`.
-    pub(crate) fn from_sources(sources: HotReloadSources) -> Self {
+    pub(crate) fn from_sources(
+        sources: HotReloadSources,
+        world_jsonl_path: Option<String>,
+    ) -> Self {
         let pending = Arc::new(AtomicBool::new(false));
-        let nothing_to_watch = sources.map.is_empty()
-            && sources.color_lut.is_none()
-            && sources.environment_map.is_none()
-            && sources.meshes.is_empty()
-            && sources.skinned_meshes.is_empty()
-            && sources.procedural_meshes.is_empty()
-            && sources.shader_stages.is_empty()
-            && sources.world_jsonl_path.is_none();
-        let watcher = if nothing_to_watch {
+        let watcher = if sources.is_empty() && world_jsonl_path.is_none() {
             None
         } else {
-            spawn_watcher(&sources, Arc::clone(&pending))
+            spawn_watcher(&sources, world_jsonl_path.as_deref(), Arc::clone(&pending))
         };
         let HotReloadSources {
             map,
@@ -247,7 +242,6 @@ impl AssetHotReloadState {
             skinned_meshes,
             procedural_meshes,
             shader_stages,
-            world_jsonl_path,
         } = sources;
         Self {
             map,

@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 // modify/create/remove events fire the flag, only relevant extensions count.
 pub(super) fn spawn_watcher(
     sources: &HotReloadSources,
+    world_jsonl_path: Option<&str>,
     flag: Arc<AtomicBool>,
 ) -> Option<notify::RecommendedWatcher> {
     // Procedural meshes are generated, not sourced from a file, so they have no
@@ -27,7 +28,6 @@ pub(super) fn spawn_watcher(
         skinned_meshes,
         procedural_meshes: _,
         shader_stages,
-        world_jsonl_path,
     } = sources;
     let debounce = Duration::from_millis(150);
     let last_fire = Mutex::new(Instant::now() - debounce);

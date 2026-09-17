@@ -234,7 +234,7 @@ impl EditorHook {
             Ok(path) => path.to_string_lossy().into_owned(),
             Err(e) => return self.prompt_world_name(Some(format!("Create failed: {e}"))),
         };
-        concinnity_engine::app::dev_flags::set_world_jsonl_path(Some(path.clone()));
+        self.world_path_handle.set(path.as_str());
         self.world_path = path;
         self.untitled = false;
         self.save();
@@ -304,7 +304,7 @@ impl EditorHook {
         entries: Vec<serde_json::Value>,
         adopt: Adopt,
     ) {
-        concinnity_engine::app::dev_flags::set_world_jsonl_path(Some(path.clone()));
+        self.world_path_handle.set(path.as_str());
         self.bookmarks = session_store::default_path()
             .and_then(|store| {
                 session_store::load(&store)

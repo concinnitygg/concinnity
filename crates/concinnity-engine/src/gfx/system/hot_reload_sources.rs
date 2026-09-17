@@ -367,8 +367,6 @@ pub struct HotReloadSources {
     pub procedural_meshes: ProceduralMeshSourceMap,
     /// Reloadable shader stages.
     pub shader_stages: ShaderStageSourceMap,
-    /// Path to the world's `world.jsonl`, when it was loaded from one.
-    pub world_jsonl_path: Option<String>,
 }
 
 impl HotReloadSources {
@@ -381,7 +379,6 @@ impl HotReloadSources {
             && self.skinned_meshes.is_empty()
             && self.procedural_meshes.is_empty()
             && self.shader_stages.is_empty()
-            && self.world_jsonl_path.is_none()
     }
 }
 
@@ -441,21 +438,17 @@ pub(super) fn procedural_mesh_source_map(
     ProceduralMeshSourceMap { entries }
 }
 
-// Keep the captured sources, and the texture-name map beside them, only when
-// something is reloadable. The dev drive's watcher subscribes to the parent
-// directory of every captured source path.
+// Park the captured sources and the texture-name map beside them, even when
+// empty: the dev drive's watcher still subscribes to the host's world.jsonl.
 pub(super) fn capture_hot_reload_sources(
     sources: HotReloadSources,
     texture_name_to_slot: HashMap<AssetId, usize>,
-) -> (Option<HotReloadSources>, Option<TextureNameSlots>) {
-    if sources.is_empty() {
-        return (None, None);
-    }
+) -> (HotReloadSources, TextureNameSlots) {
     tracing::info!(
         "asset hot-reload: captured {} file-backed texture source(s), {} \
          ColorLut source(s), {} EnvironmentMap source(s), {} Mesh \
          source(s), {} SkinnedMesh source(s), {} ProceduralMesh source(s), \
-         {} shader stage source(s), and world.jsonl path = {:?}",
+         and {} shader stage source(s)",
         sources.map.len(),
         usize::from(sources.color_lut.is_some()),
         usize::from(sources.environment_map.is_some()),
@@ -463,9 +456,8 @@ pub(super) fn capture_hot_reload_sources(
         sources.skinned_meshes.len(),
         sources.procedural_meshes.len(),
         sources.shader_stages.len(),
-        sources.world_jsonl_path
     );
-    (Some(sources), Some(TextureNameSlots(texture_name_to_slot)))
+    (sources, TextureNameSlots(texture_name_to_slot))
 }
 
 #[cfg(test)]
@@ -649,14 +641,13 @@ mod tests {
         assert!(sources.shader_stages.is_empty());
         assert!(sources.color_lut.is_none());
         assert!(sources.environment_map.is_none());
-        assert!(sources.world_jsonl_path.is_none());
         assert!(sources.is_empty());
     }
 
     // Any one captured catalog is enough to make the bundle worth parking.
     #[test]
     fn bundle_with_any_single_capture_is_not_empty() {
-        let populated: [fn(&mut HotReloadSources); 8] = [
+        let populated: [fn(&mut HotReloadSources); 7] = [
             |s| s.map.push_texture("assets/wall.png".to_string(), 0, 0),
             |s| {
                 s.color_lut = Some(ColorLutSource {
@@ -691,7 +682,6 @@ mod tests {
                     resolved_path: "shaders/scene.slang".to_string(),
                 })
             },
-            |s| s.world_jsonl_path = Some("world.jsonl".to_string()),
         ];
         for (i, populate) in populated.iter().enumerate() {
             let mut sources = HotReloadSources::default();
@@ -700,13 +690,13 @@ mod tests {
         }
     }
 
-    // An empty bundle parks nothing, not even the texture-name map.
+    // An empty bundle still parks an empty catalog plus the texture-name map.
     #[test]
-    fn capturing_nothing_parks_nothing() {
+    fn capturing_nothing_parks_an_empty_catalog() {
         let names = HashMap::from([(AssetId(7), 0)]);
         let (sources, slots) = capture_hot_reload_sources(HotReloadSources::default(), names);
-        assert!(sources.is_none());
-        assert!(slots.is_none());
+        assert!(sources.is_empty());
+        assert_eq!(slots.0, HashMap::from([(AssetId(7), 0)]));
     }
 
     fn meta(source: &str) -> MeshSourceMeta {

@@ -136,11 +136,6 @@ pub fn run_editor(
     // instead of a world.
     let (world_path, pick_a_world) = resolve_edit_target(json_path);
 
-    // Hand the resolved path to the engine so the hot-reload watcher
-    // subscribes to this world.jsonl. The engine no longer discovers it;
-    // world.jsonl lookup is authoring I/O in concinnity-cook.
-    concinnity_engine::app::dev_flags::set_world_jsonl_path(Some(world_path.clone()));
-
     // Parse the authored entry list up front so edits patch it directly. A
     // session opening on the start screen edits nothing until a world is picked
     // there, and it boots on nothing: the window comes up on the screen's own
@@ -180,13 +175,15 @@ pub fn run_editor(
     }
     let hook: Box<dyn DebugHook> = match debug_port {
         Some(port) => {
-            let server =
-                crate::debug::DebugServer::start(port)?.with_notifier(editor_hook.notifier());
+            let server = crate::debug::DebugServer::start(port)?
+                .with_notifier(editor_hook.notifier())
+                .with_world_path(editor_hook.world_path_handle());
             MultiHook::boxed(vec![Box::new(editor_hook), Box::new(server)])
         }
         None => {
             let reload = crate::debug::hot_reload::HotReloadDriver::new()
-                .with_notifier(editor_hook.notifier());
+                .with_notifier(editor_hook.notifier())
+                .with_world_path(editor_hook.world_path_handle());
             MultiHook::boxed(vec![Box::new(editor_hook), Box::new(reload)])
         }
     };

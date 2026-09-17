@@ -73,6 +73,12 @@ impl DebugServer {
         self.reload = self.reload.with_notifier(notifier);
         self
     }
+
+    // Watch the world.jsonl the handle names.
+    pub(crate) fn with_world_path(mut self, handle: hot_reload::WorldPathHandle) -> Self {
+        self.reload = self.reload.with_world_path(handle);
+        self
+    }
 }
 
 impl DebugServer {

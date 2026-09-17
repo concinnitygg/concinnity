@@ -428,5 +428,5 @@ it, and each fails the build on a pattern rather than on a value:
 | Test                               | What it forbids                                                                                             |
 | ---------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | `tests/headless_discipline.rs`     | A test that stands up a window, which hangs on an event loop the harness cannot end.                        |
-| `tests/global_state_discipline.rs` | Reaching process-global state (working directory, open project, development flags) without the shared lock. |
+| `tests/global_state_discipline.rs` | Reaching process-global state (working directory, open project, pending hot-reload flags) without the shared lock. |
 | `tests/file_access_discipline.rs`  | Writing to a hand-picked path under the system temporary directory instead of a per-run one.                |

@@ -15,6 +15,7 @@
 //!   passes     world.jsonl / ProceduralMesh / VolumetricFog / Shader reload
 //!   animation  file-backed Animation clip re-import into the AnimationSystem
 //!   pending    process-wide world.jsonl / Shader / story / Animation "changed" flags
+//!   world_path the session's world.jsonl path, shared with the host that switches worlds
 
 mod animation;
 mod decode;
@@ -23,6 +24,7 @@ mod passes;
 mod pending;
 mod state;
 mod watcher;
+mod world_path;
 
 #[cfg(test)]
 mod tests;
@@ -31,6 +33,7 @@ pub(crate) use driver::HotReloadDriver;
 pub(crate) use pending::{
     set_pending_animations, set_pending_shader_stages, set_pending_stories, set_pending_world,
 };
+pub(crate) use world_path::WorldPathHandle;
 // The `reload-assets` dispatch test drains the sibling reload flags the handler
 // raises so they don't leak into other tests; only that test needs them.
 #[cfg(test)]

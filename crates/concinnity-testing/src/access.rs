@@ -3,9 +3,7 @@
 //! Cargo runs a binary's tests on parallel threads, so anything process-wide is
 //! shared by every test running at that moment. A test that reaches such a
 //! state takes [`exclusive`] and runs alone against every other holder in the
-//! binary. This generalizes the discipline the engine's development flags
-//! already used, so that every crate reaches the same lock instead of each
-//! keeping its own.
+//! binary. Every crate reaches this same lock instead of each keeping its own.
 //!
 //! A mutex rather than a reader/writer lock: `RwLock` blocks a new reader while
 //! a writer is queued, so a thread taking the read guard twice waits on itself

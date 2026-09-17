@@ -6,20 +6,23 @@ use concinnity_cook::authoring::world::find_world_jsonl;
 use concinnity_engine::app::run::LaunchRequest;
 use concinnity_engine::app::state::App;
 
+use crate::debug::hot_reload::WorldPathHandle;
 use crate::debug_hook::DebugHook;
 
 /// The `cn debug` server path: start the localhost debug server on `port`,
 /// then run interpreted with it as the per-frame hook. This is the entry point
 /// the CLI binary calls; the hook assembly stays inside this crate.
 pub fn run_debug(launch: LaunchRequest, json_path: Option<&str>, port: u16) -> std::io::Result<()> {
+    concinnity_engine::app::run::init_logging();
+    let world_path = resolve_world_path(json_path)?;
     let debug_hook: Box<dyn DebugHook> = match crate::debug::DebugServer::start(port) {
-        Ok(srv) => Box::new(srv),
+        Ok(srv) => Box::new(srv.with_world_path(WorldPathHandle::new(world_path.as_str()))),
         Err(e) => {
             eprintln!("error: could not start debug server: {e}");
             return Err(e);
         }
     };
-    run_interpreted(launch, json_path, Some(debug_hook))
+    run_interpreted(launch, &world_path, Some(debug_hook))
 }
 
 // The world an interpreted run should load: the `-f` path when the caller gave
@@ -46,19 +49,9 @@ fn resolve_world_path(json_path: Option<&str>) -> std::io::Result<String> {
 // server.
 pub(crate) fn run_interpreted(
     launch: LaunchRequest,
-    json_path: Option<&str>,
+    json_path: &str,
     debug: Option<Box<dyn DebugHook>>,
 ) -> std::io::Result<()> {
-    concinnity_engine::app::run::init_logging();
-
-    let resolved = resolve_world_path(json_path)?;
-    let json_path = resolved.as_str();
-
-    // Hand the resolved world path to the engine so its hot-reload watcher can
-    // subscribe to world.jsonl. The engine no longer discovers it (that lookup
-    // is authoring I/O in concinnity-cook, which the runtime does not link).
-    concinnity_engine::app::dev_flags::set_world_jsonl_path(Some(json_path.to_string()));
-
     let mut app = crate::project::app().with_launch(launch);
     *app.world_mut() = crate::authoring::build_world_from_path(json_path).map_err(|e| {
         tracing::error!("Could not build world from {json_path}: {e}");

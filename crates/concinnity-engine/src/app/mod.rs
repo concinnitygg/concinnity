@@ -8,7 +8,6 @@
 pub mod budget;
 // Fixed-timestep accumulator advanced before each world step.
 pub(crate) mod clock;
-pub mod dev_flags;
 // The windowed loop's implementation of the core driver trait.
 mod driver;
 /// Long-session drift of process memory against the tracked heap.

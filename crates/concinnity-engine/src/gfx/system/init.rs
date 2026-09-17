@@ -1867,11 +1867,8 @@ impl GraphicsSystem {
             backend.set_reflection_probes(&probe_placements);
         }
 
-        // The dev host resolves the world.jsonl path (discovery is authoring I/O
-        // in `concinnity-cook`, which the runtime does not link); embedded preview
-        // and MCP-driven runs leave it None.
         let (hot_reload_sources, texture_name_slots) = if capture_sources {
-            capture_hot_reload_sources(
+            let (sources, slots) = capture_hot_reload_sources(
                 HotReloadSources {
                     map: asset_source_map,
                     color_lut: color_lut_source,
@@ -1884,10 +1881,10 @@ impl GraphicsSystem {
                         &mesh_handle_to_draws,
                     ),
                     shader_stages: shader_stage_source_map,
-                    world_jsonl_path: crate::app::dev_flags::world_jsonl_path(),
                 },
                 texture_name_to_slot,
-            )
+            );
+            (Some(sources), Some(slots))
         } else {
             (None, None)
         };
