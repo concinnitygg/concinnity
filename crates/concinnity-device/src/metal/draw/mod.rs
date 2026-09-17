@@ -15,28 +15,26 @@ mod composite;
 // pub(in crate::metal) so the render-graph executor, planar mirror, and probe
 // bake can name the shared main-pass param structs defined here.
 pub(in crate::metal) mod main;
+mod pass_uniforms;
 mod shadow;
 mod spot_shadow;
 mod stages;
 
-use concinnity_core::gfx::render_types;
 use concinnity_core::render::backend::FrameParams;
 use concinnity_core::render::error;
-use concinnity_core::render::lights;
-use concinnity_core::render::model_history::HistoryMode;
 use concinnity_core::render::post::device::PostExtent;
-use concinnity_core::render::post::rt_reflections::RtParamsInputs;
 use concinnity_core::render::render_graph;
-use concinnity_core::transform::mat4_inverse;
-use concinnity_core::transform::mat4_mul;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLCommandQueue as _};
 
-use self::stages::{AcquiredFrame, FrameProjection, GraphInputArgs, PresentFrame};
+use self::pass_uniforms::{PassUniformArgs, PassUniforms};
+use self::stages::{
+    AcquiredFrame, FrameProjection, GraphInputArgs, HistoryBuffers, PresentFrame, SceneBufferArgs,
+    SceneBuffers,
+};
 use super::context::MtlContext;
 use super::graph_exec::GraphFrameParams;
-use concinnity_core::render::uniforms::metal::*;
 
 impl MtlContext {
     // Pump the NSEvent queue and encode one frame to the GPU.
@@ -115,28 +113,7 @@ impl MtlContext {
 
         let aspect = self.update_shadow_schedule(cam_pos, fov_y_radians, near, far);
 
-        // Main pass prep: resize off-screen targets.
-        // Resize the HDR targets if the drawable size changed (window resize
-        // or initial layout). The drawable was just refreshed by window.view.draw().
-        let draw_size = self.window().view.drawableSize();
-        // Geometry-less worlds keep their off-screen targets pinned at 1x1
-        // (see MtlContext::new); the composite pass still uses the full drawable.
-        let (want_w, want_h) = if self.targets.geometry_less {
-            (1, 1)
-        } else {
-            (
-                draw_size.width.max(1.0) as u32,
-                draw_size.height.max(1.0) as u32,
-            )
-        };
-        self.resize_targets_if_needed(want_w, want_h)?;
-
-        // Render resolution: where the 3D scene + most post passes draw.
-        // Equals `want_w/h` (the drawable size) when no upscaler is active;
-        // otherwise it's smaller, so the upscaler reconstructs back up to
-        // drawable size.
-        let render_w = self.targets.hdr.width;
-        let render_h = self.targets.hdr.height;
+        let (render_w, render_h) = self.resize_frame_targets()?;
 
         let FrameProjection {
             proj,
@@ -145,305 +122,50 @@ impl MtlContext {
             frustum,
         } = self.frame_projection(fov_y_radians, aspect, near, far, render_w, render_h);
 
-        // The probe cube handles, for every pass that samples the set. Built
-        // ahead of the bindless prep below and outside its world-hidden gate:
-        // the transparent and post passes read the set without a static draw
-        // list of their own, and a slot left holding last frame's ring buffer
-        // would outlive the frame that wrote it.
-        self.probe.cube_args = Some(self.build_probe_cube_args(ring_slot)?);
-        // The residency sets the argument buffers' contents need. Refreshed
-        // before any pass encodes, and a no-op on a frame whose textures are
-        // unchanged, which is every frame between a stream-in or a bake.
-        self.refresh_probe_cube_residency();
-        self.refresh_bindless_residency();
+        self.refresh_argument_buffers(ring_slot)?;
 
-        // While the world is hidden behind an opaque menu, the surviving Main
-        // pass is fed an empty scene -- no bindless object / cull / texture
-        // buffers, no instanced clusters, and no acceleration-structure refresh
-        // -- so it runs as a bare clear that the opaque overlay then covers. The
-        // masked graph drops every other world pass, so none of this work would
-        // be consumed anyway.
-        // The GPU-driven G-buffer pre-pass both fills and reads the model-history
-        // ring. With no consumer of motion, or with the pre-pass not running,
-        // the ring goes stale, so the draw-args build marks every record
-        // `NO_HISTORY` and the tracker re-primes when the pre-pass returns.
-        let history_live = !world_hidden
-            && (self.taa.enabled || self.upscale.scaler.is_some())
-            && self.gbuffer.targets.is_some()
-            && self.gbuffer.bindless_pipeline.is_some();
-        let (object_buffer, cull_draw_args, bindless_tex_args) = if world_hidden {
-            (None, None, None)
-        } else {
-            // Per-frame GPU buffer prep for the bindless path.
-            // The object data + indirect-args + bindless texture argbuf are
-            // all per-frame Metal buffers the bindless Main pass + Cull
-            // compute pass consume. They must outlive the command buffer,
-            // hence the bindings kept here through to `cmd_buf.commit()`.
-            let object_buffer = if self.cull.bindless {
-                self.build_object_buffer(ring_slot)?
-            } else {
-                None
-            };
-            let cull_draw_args = if object_buffer.is_some() {
-                let draw_args = self.build_draw_args_buffer(
-                    cam_pos,
-                    ring_slot,
-                    if history_live {
-                        HistoryMode::Track
-                    } else {
-                        HistoryMode::Stale
-                    },
-                )?;
-                if draw_args.is_some() {
-                    self.ensure_icb_capacity(self.cull_count())?;
-                    // GPU-driven cascaded shadow: size the per-cascade
-                    // shadow ICB to NUM_SHADOW_CASCADES * cull_count. A no-op when
-                    // the shadow-bindless path is inactive (no shadow cull encoder).
-                    self.ensure_shadow_icb_capacity(self.cull_count())?;
-                    // Per-planar-slot mirror cull ICBs: one per distinct reflection
-                    // plane, each sized to cull_count. A no-op (clears the slots) when
-                    // the world has no planar set (RT on, or no flat reflectors).
-                    let mirror_slots = self
-                        .planar_reflection
-                        .as_ref()
-                        .map(|s| s.planes.len())
-                        .unwrap_or(0);
-                    self.ensure_mirror_icb_capacity(mirror_slots, self.cull_count())?;
-                }
-                draw_args
-            } else {
-                None
-            };
-            let bindless_tex_args = if object_buffer.is_some() {
-                self.build_bindless_texture_args(ring_slot)?
-            } else {
-                None
-            };
-            // Asynchronous reflection-probe bake, capture half: submit one cube
-            // face, or start or hand off a capture. Every face samples through
-            // this frame's texture arguments, so it never reads a texture that
-            // streaming has since replaced.
-            self.advance_probe_capture(elapsed, near, far, bindless_tex_args.as_ref());
-            // Keep the RT acceleration structure current with this frame's
-            // transforms before any pass reads `rt_accel`. The default `Auto` mode
-            // rebuilds the TLAS only when a participating prop actually moved; a
-            // fully static scene pays just a matrix compare here. Non-fatal: a
-            // transient rebuild failure keeps last frame's BVH rather than stopping
-            // the renderer.
-            self.rt_dynamic_update(
-                super::raytrace::RtFrame {
-                    id: frame_id,
-                    ring_slot,
-                },
-                &skinned_joint_bufs,
-            );
-
-            (object_buffer, cull_draw_args, bindless_tex_args)
-        };
-
-        // Per-frame pass uniforms hoisted upfront.
-        // Every pass that needs a struct of per-frame params builds its
-        // uniforms here so a single GraphFrameParams below can carry
-        // the union into `execute_graph`.
-        let ssao_params = self
-            .ssao
-            .settings
-            .map(|settings| settings.params(fov_y_radians, aspect));
-        let ssr_params = self.ssr.settings.map(|settings| {
-            let v = self.view.matrix;
-            let inv_view_rot = [
-                [v[0][0], v[1][0], v[2][0], 0.0],
-                [v[0][1], v[1][1], v[2][1], 0.0],
-                [v[0][2], v[1][2], v[2][2], 0.0],
-                [0.0, 0.0, 0.0, 1.0],
-            ];
-            let prefilter_mip_count = self.scene.env_map.prefilter_mip_count as f32;
-            settings.params(
-                fov_y_radians,
-                aspect,
-                inv_view_rot,
-                cam_pos,
-                prefilter_mip_count,
-                sky_rot,
-            )
-        });
-        let ssgi_params = self
-            .ssgi
-            .settings
-            .map(|settings| settings.params(fov_y_radians, aspect));
-        // RT-reflection params: built only when the acceleration structure is
-        // live (so they stay in lockstep with `rt_reflections_enabled`). Carries
-        // the camera-to-world transform + sun the kernel shades hits with, like
-        // SSR's params plus the world-space camera + sun.
-        let rt_reflection_params =
-            self.rt
-                .settings
-                .filter(|_| self.rt.accel.is_some())
-                .map(|settings| {
-                    let v = self.view.matrix;
-                    let inv_view_rot = [
-                        [v[0][0], v[1][0], v[2][0], 0.0],
-                        [v[0][1], v[1][1], v[2][1], 0.0],
-                        [v[0][2], v[1][2], v[2][2], 0.0],
-                        [0.0, 0.0, 0.0, 1.0],
-                    ];
-                    let prefilter_mip_count = self.scene.env_map.prefilter_mip_count as f32;
-                    let sun = &self.light_uniforms.directional[0];
-                    let sun_color = [
-                        sun.color[0] * sun.intensity,
-                        sun.color[1] * sun.intensity,
-                        sun.color[2] * sun.intensity,
-                    ];
-                    settings.params(RtParamsInputs {
-                        fov_y_radians,
-                        aspect,
-                        inv_view_rot,
-                        cam_pos,
-                        sun_dir: sun.direction,
-                        sun_color,
-                        prefilter_mip_count,
-                        sky_rot,
-                    })
-                });
-        // The live settings, dropped when the medium cannot affect the frame (a
-        // zero density integrates to a transparent black over the whole volume).
-        // One source for the two param blocks and the graph gate below, so
-        // `GraphFrameParams`'s "Some only when the Fog pass is in the graph"
-        // contract holds.
-        let fog_settings = self.fog.settings.filter(|s| s.contributes());
-        let fog_params = fog_settings.map(|fog| {
-            // Sun = the first directional light; falls back to the
-            // LightUniforms::DEFAULT direction if the world declared none.
-            let sun = &self.light_uniforms.directional[0];
-            let sun_color = [
-                sun.color[0] * sun.intensity,
-                sun.color[1] * sun.intensity,
-                sun.color[2] * sun.intensity,
-            ];
-            // Fog renders into hdr_resolve, which is render-resolution
-            // when the upscaler is on. The fog shader uses the viewport
-            // to reconstruct world position from screen UV, so it must
-            // match the actual render target's pixel grid.
-            let viewport = [render_w as f32, render_h as f32];
-            // Reconstruct the froxel volume with the UN-jittered view-projection.
-            // Fog is volumetric, so its screen-space contribution does not follow
-            // the surface motion vectors TAA reprojects by. Feeding it the jittered
-            // inv_vp shifts the whole volume sub-pixel every frame; on a large
-            // smooth low-contrast surface, where the fog is the dominant
-            // high-frequency signal, TAA cannot reconcile that per-frame shift with
-            // the jitter-free history, so the fog flickers (a moving moire). The
-            // un-jittered inv_vp keeps the volume stable frame to frame; its offset
-            // versus the jittered depth buffer is far below the coarse froxel grid.
-            let fog_inv_vp = mat4_inverse(mat4_mul(proj, self.view.matrix));
-            fog.params(fog_inv_vp, cam_pos, sun.direction, sun_color, viewport)
-        });
-        // FogFroxel volume extras: view matrix + volume dimensions + near/far
-        // so the compute kernel can place each froxel in world-space and the
-        // fragment shader can map a scene depth into the volume's Z axis.
-        let fog_froxel_params = fog_settings.map(|fog| render_types::FogFroxelParams {
-            view: self.view.matrix,
-            froxel_dims: [
-                render_graph::FOG_FROXEL_X,
-                render_graph::FOG_FROXEL_Y,
-                render_graph::FOG_FROXEL_Z,
-            ],
-            _pad_align: 0,
-            z_near: near.max(1e-3),
-            z_far: fog.max_distance,
-            _pad: [0.0; 2],
-        });
-        // Clustered light-binning params (main camera). The compute pass reads
-        // these to build each cluster's world-space AABB (un-jittered inverse VP
-        // + camera forward, matching the fog froxel convention) and the forward
-        // pass reads the grid dims / depth range / screen size to place a
-        // fragment. `use_clusters` is set only when the world has local lights
-        // (the pipeline is built iff so) and at least one is still live;
-        // otherwise the forward pass brute-forces an empty list and the LightCull
-        // graph node is omitted, so a list the skipped pass did not write is never
-        // read. Stored on self so the shared main-pass bind can push it; a local
-        // copy feeds the LightCull arm.
-        let clustered = lights::clustered_lighting_active(
-            self.light_cull.pipeline.is_some(),
-            self.light_uniforms.num_local_lights,
-        );
-        let cluster_inv_vp = mat4_inverse(mat4_mul(proj, self.view.matrix));
-        self.cluster_params = render_types::ClusterParams {
-            inv_view_proj: cluster_inv_vp,
+        let SceneBuffers {
+            object_buffer,
+            cull_draw_args,
+            bindless_tex_args,
+        } = self.build_scene_buffers(SceneBufferArgs {
+            ring_slot,
+            frame_id,
             cam_pos,
-            z_near: near.max(1e-3),
-            view_forward: [
-                -self.view.matrix[0][2],
-                -self.view.matrix[1][2],
-                -self.view.matrix[2][2],
-            ],
-            z_far: far,
-            grid_x: render_types::CLUSTER_GRID_X,
-            grid_y: render_types::CLUSTER_GRID_Y,
-            grid_z: render_types::CLUSTER_GRID_Z,
-            num_lights: self.light_uniforms.num_local_lights.max(0) as u32,
-            screen_w: render_w as f32,
-            screen_h: render_h as f32,
-            use_clusters: u32::from(clustered),
-            _pad: 0,
-        };
-        let cluster_params = self.cluster_params;
-        // Velocity (motion vectors in the G-buffer pre-pass) is needed whenever
-        // temporal reconstruction runs: that's TAA or the MetalFX upscaler.
-        let velocity_active = self.taa.enabled || self.upscale.scaler.is_some();
-        let vel_uniforms = if velocity_active {
-            Some(VelocityUniforms {
-                jittered_vp: vp,
-                cur_vp: mat4_mul(proj, self.view.matrix),
-                prev_vp: self.prev_view_proj,
-            })
-        } else {
-            None
-        };
-        // `scene_input` is the engine-owned texture the post-decoration stack
-        // treats as the pre-TAA scene: `ssr_targets.output` when a reflection
-        // path is live, else the raw `hdr_resolve`.
-        //
-        // `output` is the *composited* scene, not the reflection. Both the SSR
-        // and the RT resolve write radiance into `ssr_targets.reflection`, then
-        // call the shared `encode_reflection_composite`, which blends that over
-        // `hdr_resolve` into `output`. Worth stating precisely: the DirectX
-        // equivalent split the two apart and left its upscaler reading the
-        // radiance buffer as if it were the scene.
-        //
-        // `scene_color` is what Bloom + Composite read:
-        //   - the upscaler's output (drawable-res) when MetalFX is on,
-        //   - the TAA resolve target when TAA is on,
-        //   - otherwise just the pre-TAA scene (no temporal stage).
-        let scene_input = if self.ssr.settings.is_some() || self.rt.accel.is_some() {
-            self.ssr
-                .targets
-                .as_ref()
-                .ok_or_else(|| {
-                    error::RenderError::Other("reflections enabled but SSR targets missing".into())
-                })?
-                .output
-                .clone()
-        } else {
-            self.targets.hdr.hdr_resolve.clone()
-        };
-        let scene_color = if let Some(u) = &self.upscale.scaler {
-            u.output.clone()
-        } else if let Some(out) = self.taa.output() {
-            out.clone()
-        } else {
-            scene_input.clone()
-        };
+            elapsed,
+            near,
+            far,
+            world_hidden,
+            skinned_joint_bufs: &skinned_joint_bufs,
+        })?;
 
-        // The transparent pass runs when any translucent producer is live.
-        // Drives both the graph-input gate (whether the slot is inserted) and
-        // the `scene_pre_taa` supply below (the pass reads + writes it). With
-        // SSR off `scene_input` aliases `hdr_resolve`, which is the correct
-        // RMW target: the transparent encoder blits a scene copy first, so the
-        // self-read for refraction is safe.
-        let transparent_active = (self.water.pipeline.is_some()
-            && self.water.surfaces.iter().any(|s| s.visible))
-            || (self.glass.pipeline.is_some() && self.glass.panels.iter().any(|p| p.visible))
-            || self.mesh_glass_visible();
+        let PassUniforms {
+            ssao_params,
+            ssr_params,
+            ssgi_params,
+            rt_reflection_params,
+            fog_settings,
+            fog_params,
+            fog_froxel_params,
+            clustered,
+            cluster_params,
+            velocity_active,
+            vel_uniforms,
+            scene_input,
+            scene_color,
+            transparent_active,
+        } = self.frame_pass_uniforms(PassUniformArgs {
+            fov_y_radians,
+            aspect,
+            near,
+            far,
+            cam_pos,
+            sky_rot,
+            proj,
+            vp,
+            render_w,
+            render_h,
+        })?;
 
         // Line pipeline: built on the first frame that publishes lines,
         // so the graph gate below can see it live this same frame.
@@ -485,65 +207,12 @@ impl MtlContext {
             _ => render_graph::build_frame_graph(&graph_inputs)
                 .map_err(|e| error::RenderError::Other(format!("frame graph: {e}")))?,
         };
-        // This frame's skinned deformed-vertex buffer (skinned fold), cloned into
-        // a local so `params` owns a handle rather than borrowing `self.skinned`
-        // across the `&mut self` execute_graph call (every other GraphFrameParams
-        // buffer is likewise a local). `Some` only when the fold is active
-        // (draw.n_skinned > 0, set in upload_skinned under bindless + static geometry);
-        // the Cull pass writes it via encode_main_skin and the Main / Main2
-        // skinned ICB tail binds it.
-        let deformed_this_frame = if self.draw.n_skinned > 0 {
-            self.skinned.deformed.get(ring_slot).cloned()
-        } else {
-            None
-        };
-        // The previous frame's deformed slot (one behind in the ring), read by
-        // the GPU-driven G-buffer skinned tail for per-vertex skin motion. The
-        // priming gate (`deformed_primed`) covers the unposed first frame.
-        let deformed_prev_frame = if self.draw.n_skinned > 0 {
-            let prev_slot = (ring_slot + self.frames_in_flight - 1) % self.frames_in_flight;
-            self.skinned.deformed.get(prev_slot).cloned()
-        } else {
-            None
-        };
-        // Model-history ring slots for the GPU-driven G-buffer pass: the one the
-        // previous frame's snapshot filled, which this frame reprojects through,
-        // and the one(s) this frame's snapshot fills. Both are bound whenever the
-        // pre-pass runs, motion consumer or not -- the pass still writes the
-        // normals and depth every screen-space consumer reads. Priming writes
-        // every slot, so the first pre-pass after a rebuild reads this frame's
-        // models rather than an unwritten buffer.
-        let (prev_model_buffer, history_targets) = if object_buffer.is_some()
-            && self.gbuffer.targets.is_some()
-            && self.gbuffer.bindless_pipeline.is_some()
-        {
-            let bytes = self.cull_count() * std::mem::size_of::<[[f32; 4]; 4]>();
-            let prime = self.model_history.take_prime();
-            let read_slot = (ring_slot + self.frames_in_flight - 1) % self.frames_in_flight;
-            let mut targets = Vec::new();
-            if prime {
-                for slot in 0..self.frames_in_flight {
-                    targets.push(
-                        self.rings
-                            .model_history
-                            .slot(&self.hw.device, slot, bytes)?,
-                    );
-                }
-            } else {
-                targets.push(
-                    self.rings
-                        .model_history
-                        .slot(&self.hw.device, ring_slot, bytes)?,
-                );
-            }
-            let read = self
-                .rings
-                .model_history
-                .slot(&self.hw.device, read_slot, bytes)?;
-            (Some(read), targets)
-        } else {
-            (None, Vec::new())
-        };
+        let HistoryBuffers {
+            deformed_this_frame,
+            deformed_prev_frame,
+            prev_model_buffer,
+            history_targets,
+        } = self.build_history_buffers(ring_slot, object_buffer.is_some())?;
         // This frame's HUD text geometry, written into this slot's persistent
         // upload buffer up front so the composite pass binds sub-ranges of one
         // buffer instead of minting a pair per label mid-encode. Done here, past

@@ -9,13 +9,14 @@ use concinnity_core::gfx::view_modes::{ShowFlags, ViewMode};
 use concinnity_core::profile;
 use concinnity_core::render::csm;
 use concinnity_core::render::error;
+use concinnity_core::render::model_history::HistoryMode;
 use concinnity_core::render::render_graph::{self, FrameGraphInputs};
 use concinnity_core::render::volumetric_fog::FogSettings;
 use concinnity_core::transform::mat4_inverse;
 use concinnity_core::transform::mat4_mul;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_metal::{MTLCommandBuffer, MTLDevice as _};
+use objc2_metal::{MTLBuffer, MTLCommandBuffer, MTLDevice as _};
 use objc2_quartz_core::CAMetalDrawable;
 
 use crate::metal::context::MtlContext;
@@ -58,6 +59,34 @@ pub(super) struct PresentFrame {
     pub(super) composite_span_us: std::sync::Arc<std::sync::atomic::AtomicU32>,
     pub(super) pending_terminal: Option<u64>,
     pub(super) submission_token: SubmissionToken,
+}
+
+// The per-frame inputs the scene buffer builds read.
+pub(super) struct SceneBufferArgs<'a> {
+    pub(super) ring_slot: usize,
+    pub(super) frame_id: u64,
+    pub(super) cam_pos: [f32; 3],
+    pub(super) elapsed: f32,
+    pub(super) near: f32,
+    pub(super) far: f32,
+    pub(super) world_hidden: bool,
+    pub(super) skinned_joint_bufs: &'a [Retained<ProtocolObject<dyn MTLBuffer>>],
+}
+
+// This frame's bindless-path buffers. All three are `None` while the world is
+// hidden, and individually `None` when the path that fills them is inactive.
+pub(super) struct SceneBuffers {
+    pub(super) object_buffer: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
+    pub(super) cull_draw_args: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
+    pub(super) bindless_tex_args: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
+}
+
+// The motion-history buffers the GPU-driven G-buffer pre-pass binds.
+pub(super) struct HistoryBuffers {
+    pub(super) deformed_this_frame: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
+    pub(super) deformed_prev_frame: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
+    pub(super) prev_model_buffer: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
+    pub(super) history_targets: Vec<Retained<ProtocolObject<dyn MTLBuffer>>>,
 }
 
 impl MtlContext {
@@ -532,5 +561,231 @@ impl MtlContext {
                 taa.advance();
             }
         }
+    }
+
+    // Resizes the off-screen targets to this frame's drawable and returns the
+    // render resolution the scene and post passes draw at.
+    pub(super) fn resize_frame_targets(&mut self) -> error::RenderResult<(u32, u32)> {
+        // Main pass prep: resize off-screen targets.
+        // Resize the HDR targets if the drawable size changed (window resize
+        // or initial layout). The drawable was just refreshed by window.view.draw().
+        let draw_size = self.window().view.drawableSize();
+        // Geometry-less worlds keep their off-screen targets pinned at 1x1
+        // (see MtlContext::new); the composite pass still uses the full drawable.
+        let (want_w, want_h) = if self.targets.geometry_less {
+            (1, 1)
+        } else {
+            (
+                draw_size.width.max(1.0) as u32,
+                draw_size.height.max(1.0) as u32,
+            )
+        };
+        self.resize_targets_if_needed(want_w, want_h)?;
+
+        // Render resolution: where the 3D scene + most post passes draw.
+        // Equals `want_w/h` (the drawable size) when no upscaler is active;
+        // otherwise it's smaller, so the upscaler reconstructs back up to
+        // drawable size.
+        let render_w = self.targets.hdr.width;
+        let render_h = self.targets.hdr.height;
+        Ok((render_w, render_h))
+    }
+
+    // This frame's probe cube argument buffer, plus the residency every
+    // argument buffer's contents need.
+    pub(super) fn refresh_argument_buffers(&mut self, ring_slot: usize) -> error::RenderResult<()> {
+        // The probe cube handles, for every pass that samples the set. Built
+        // ahead of `build_scene_buffers` and outside its world-hidden gate:
+        // the transparent and post passes read the set without a static draw
+        // list of their own, and a slot left holding last frame's ring buffer
+        // would outlive the frame that wrote it.
+        self.probe.cube_args = Some(self.build_probe_cube_args(ring_slot)?);
+        // The residency sets the argument buffers' contents need. Refreshed
+        // before any pass encodes, and a no-op on a frame whose textures are
+        // unchanged, which is every frame between a stream-in or a bake.
+        self.refresh_probe_cube_residency();
+        self.refresh_bindless_residency();
+        Ok(())
+    }
+
+    // The per-frame GPU buffers the world's passes consume, plus the probe
+    // capture and acceleration-structure refresh that ride the same gate.
+    pub(super) fn build_scene_buffers(
+        &mut self,
+        args: SceneBufferArgs<'_>,
+    ) -> error::RenderResult<SceneBuffers> {
+        let SceneBufferArgs {
+            ring_slot,
+            frame_id,
+            cam_pos,
+            elapsed,
+            near,
+            far,
+            world_hidden,
+            skinned_joint_bufs,
+        } = args;
+        // While the world is hidden behind an opaque menu, the surviving Main
+        // pass is fed an empty scene -- no bindless object / cull / texture
+        // buffers, no instanced clusters, and no acceleration-structure refresh
+        // -- so it runs as a bare clear that the opaque overlay then covers. The
+        // masked graph drops every other world pass, so none of this work would
+        // be consumed anyway.
+        // The GPU-driven G-buffer pre-pass both fills and reads the model-history
+        // ring. With no consumer of motion, or with the pre-pass not running,
+        // the ring goes stale, so the draw-args build marks every record
+        // `NO_HISTORY` and the tracker re-primes when the pre-pass returns.
+        let history_live = !world_hidden
+            && (self.taa.enabled || self.upscale.scaler.is_some())
+            && self.gbuffer.targets.is_some()
+            && self.gbuffer.bindless_pipeline.is_some();
+        let (object_buffer, cull_draw_args, bindless_tex_args) = if world_hidden {
+            (None, None, None)
+        } else {
+            // Per-frame GPU buffer prep for the bindless path.
+            // The object data + indirect-args + bindless texture argbuf are
+            // all per-frame Metal buffers the bindless Main pass + Cull
+            // compute pass consume. They must outlive the command buffer,
+            // hence the bindings handed back to the caller, which holds them
+            // through to `cmd_buf.commit()`.
+            let object_buffer = if self.cull.bindless {
+                self.build_object_buffer(ring_slot)?
+            } else {
+                None
+            };
+            let cull_draw_args = if object_buffer.is_some() {
+                let draw_args = self.build_draw_args_buffer(
+                    cam_pos,
+                    ring_slot,
+                    if history_live {
+                        HistoryMode::Track
+                    } else {
+                        HistoryMode::Stale
+                    },
+                )?;
+                if draw_args.is_some() {
+                    self.ensure_icb_capacity(self.cull_count())?;
+                    // GPU-driven cascaded shadow: size the per-cascade
+                    // shadow ICB to NUM_SHADOW_CASCADES * cull_count. A no-op when
+                    // the shadow-bindless path is inactive (no shadow cull encoder).
+                    self.ensure_shadow_icb_capacity(self.cull_count())?;
+                    // Per-planar-slot mirror cull ICBs: one per distinct reflection
+                    // plane, each sized to cull_count. A no-op (clears the slots) when
+                    // the world has no planar set (RT on, or no flat reflectors).
+                    let mirror_slots = self
+                        .planar_reflection
+                        .as_ref()
+                        .map(|s| s.planes.len())
+                        .unwrap_or(0);
+                    self.ensure_mirror_icb_capacity(mirror_slots, self.cull_count())?;
+                }
+                draw_args
+            } else {
+                None
+            };
+            let bindless_tex_args = if object_buffer.is_some() {
+                self.build_bindless_texture_args(ring_slot)?
+            } else {
+                None
+            };
+            // Asynchronous reflection-probe bake, capture half: submit one cube
+            // face, or start or hand off a capture. Every face samples through
+            // this frame's texture arguments, so it never reads a texture that
+            // streaming has since replaced.
+            self.advance_probe_capture(elapsed, near, far, bindless_tex_args.as_ref());
+            // Keep the RT acceleration structure current with this frame's
+            // transforms before any pass reads `rt_accel`. The default `Auto` mode
+            // rebuilds the TLAS only when a participating prop actually moved; a
+            // fully static scene pays just a matrix compare here. Non-fatal: a
+            // transient rebuild failure keeps last frame's BVH rather than stopping
+            // the renderer.
+            self.rt_dynamic_update(
+                crate::metal::raytrace::RtFrame {
+                    id: frame_id,
+                    ring_slot,
+                },
+                skinned_joint_bufs,
+            );
+
+            (object_buffer, cull_draw_args, bindless_tex_args)
+        };
+        Ok(SceneBuffers {
+            object_buffer,
+            cull_draw_args,
+            bindless_tex_args,
+        })
+    }
+
+    // The skinned deformed-vertex and model-history ring slots the GPU-driven
+    // G-buffer pre-pass reads and writes.
+    pub(super) fn build_history_buffers(
+        &mut self,
+        ring_slot: usize,
+        object_buffer_live: bool,
+    ) -> error::RenderResult<HistoryBuffers> {
+        // This frame's skinned deformed-vertex buffer (skinned fold), cloned into
+        // a local so `params` owns a handle rather than borrowing `self.skinned`
+        // across the `&mut self` execute_graph call (every other GraphFrameParams
+        // buffer is likewise a local). `Some` only when the fold is active
+        // (draw.n_skinned > 0, set in upload_skinned under bindless + static geometry);
+        // the Cull pass writes it via encode_main_skin and the Main / Main2
+        // skinned ICB tail binds it.
+        let deformed_this_frame = if self.draw.n_skinned > 0 {
+            self.skinned.deformed.get(ring_slot).cloned()
+        } else {
+            None
+        };
+        // The previous frame's deformed slot (one behind in the ring), read by
+        // the GPU-driven G-buffer skinned tail for per-vertex skin motion. The
+        // priming gate (`deformed_primed`) covers the unposed first frame.
+        let deformed_prev_frame = if self.draw.n_skinned > 0 {
+            let prev_slot = (ring_slot + self.frames_in_flight - 1) % self.frames_in_flight;
+            self.skinned.deformed.get(prev_slot).cloned()
+        } else {
+            None
+        };
+        // Model-history ring slots for the GPU-driven G-buffer pass: the one the
+        // previous frame's snapshot filled, which this frame reprojects through,
+        // and the one(s) this frame's snapshot fills. Both are bound whenever the
+        // pre-pass runs, motion consumer or not -- the pass still writes the
+        // normals and depth every screen-space consumer reads. Priming writes
+        // every slot, so the first pre-pass after a rebuild reads this frame's
+        // models rather than an unwritten buffer.
+        let (prev_model_buffer, history_targets) = if object_buffer_live
+            && self.gbuffer.targets.is_some()
+            && self.gbuffer.bindless_pipeline.is_some()
+        {
+            let bytes = self.cull_count() * std::mem::size_of::<[[f32; 4]; 4]>();
+            let prime = self.model_history.take_prime();
+            let read_slot = (ring_slot + self.frames_in_flight - 1) % self.frames_in_flight;
+            let mut targets = Vec::new();
+            if prime {
+                for slot in 0..self.frames_in_flight {
+                    targets.push(
+                        self.rings
+                            .model_history
+                            .slot(&self.hw.device, slot, bytes)?,
+                    );
+                }
+            } else {
+                targets.push(
+                    self.rings
+                        .model_history
+                        .slot(&self.hw.device, ring_slot, bytes)?,
+                );
+            }
+            let read = self
+                .rings
+                .model_history
+                .slot(&self.hw.device, read_slot, bytes)?;
+            (Some(read), targets)
+        } else {
+            (None, Vec::new())
+        };
+        Ok(HistoryBuffers {
+            deformed_this_frame,
+            deformed_prev_frame,
+            prev_model_buffer,
+            history_targets,
+        })
     }
 }
