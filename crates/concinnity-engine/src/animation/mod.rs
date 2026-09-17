@@ -203,7 +203,9 @@ impl System for AnimationSystem {
         // Clips accumulate per target mesh; how a bucket's clips combine is
         // decided below (graph if the world declares one, weighted blend
         // otherwise).
-        let capture_sources = crate::app::dev_flags::enabled();
+        let capture_sources = ctx
+            .resource::<crate::app::run::LaunchRequest>()
+            .is_some_and(|launch| launch.dev_loop);
         // Interned-name -> handle index published by GraphicsSystem (which
         // loaded the SkinnedMesh table before this system inits), kept for the
         // animation debug tool calls. The correlation web itself is keyed by

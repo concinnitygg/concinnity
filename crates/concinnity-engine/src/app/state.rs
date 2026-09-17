@@ -7,6 +7,7 @@ use concinnity_host::store::paths::StateTree;
 use concinnity_host::thread::jobs::configure;
 use concinnity_host::thread::jobs::pool;
 
+use crate::app::run::LaunchRequest;
 use crate::app::startup_error::StartupError;
 use crate::blob;
 use crate::ecs::SYSTEMS;
@@ -35,6 +36,9 @@ pub struct App {
     // Fixed-timestep accumulator; publishes the frame's `SimTiming` and
     // `FrameTime` resources before each world step (see `app::clock`).
     clock: crate::app::clock::SimClock,
+    // What the launch asked the engine to arm; published at every `start`, so a
+    // world loaded later inherits it.
+    launch: LaunchRequest,
 }
 
 impl Default for App {
@@ -53,6 +57,7 @@ impl App {
             shutdown: ShutdownToken::new(),
             pacer: Default::default(),
             clock: Default::default(),
+            launch: LaunchRequest::default(),
         }
     }
 
@@ -63,6 +68,19 @@ impl App {
     pub fn in_tree(mut self, tree: StateTree) -> Self {
         self.state = Some(tree);
         self
+    }
+
+    /// An app that arms what `launch` asks for: a development session, forced
+    /// render settings, or frame capture. Every world this app starts sees it.
+    #[must_use]
+    pub fn with_launch(mut self, launch: LaunchRequest) -> Self {
+        self.launch = launch;
+        self
+    }
+
+    // The launch request, for the runtime entry that adds to it before start.
+    pub(crate) fn launch_mut(&mut self) -> &mut LaunchRequest {
+        &mut self.launch
     }
 
     /// The state tree this app runs against, if it has one.
@@ -196,6 +214,7 @@ impl App {
         // per-system micros read zero.
         self.world
             .insert_resource(Clock(crate::app::clock::monotonic_micros));
+        self.world.insert_resource(self.launch);
         self.world.start(SYSTEMS)?;
         self.status = AppStatus::Started;
         Ok(())
@@ -452,6 +471,24 @@ mod tests {
         // The restart budgeted against the new world's limits, not the old one's.
         let memory = crate::ecs::memory_budget(app.world()).expect("memory budget published");
         assert_eq!(memory.budget_bytes, 256 * 1024 * 1024);
+    }
+
+    // The launch request outlives a world swap: the editor's rebuild loads a new
+    // world into the same app and starts it again.
+    #[test]
+    fn the_launch_request_survives_a_world_load_and_restart() {
+        let launch = LaunchRequest {
+            dev_loop: true,
+            ..Default::default()
+        };
+        let mut app = App::new().with_launch(launch);
+        app.start().unwrap();
+        assert_eq!(app.world().resource::<LaunchRequest>(), Some(&launch));
+
+        app.load_world(World::new());
+        assert_eq!(app.world().resource::<LaunchRequest>(), None);
+        app.start().unwrap();
+        assert_eq!(app.world().resource::<LaunchRequest>(), Some(&launch));
     }
 
     // from_world hands the app a world that is already populated, in the

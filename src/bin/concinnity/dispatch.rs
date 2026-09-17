@@ -7,51 +7,38 @@ use crate::cli::{Cli, Commands};
 use concinnity_dev::command;
 use concinnity_dev::export::ExportOptions;
 use concinnity_engine::StateTree;
-use concinnity_engine::app::dev_flags;
 
 pub(crate) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
     match cli.resolved_command() {
         Commands::Init => command::init(),
         Commands::New(args) => command::new(&args.path),
         Commands::Build(args) => command::build(args.file.as_deref()),
-        Commands::Run(args) => {
-            dev_flags::set_validation(args.validation);
-            args.render.arm();
-            concinnity_engine::app::run(
-                tree,
-                concinnity_engine::app::run::RunOptions {
-                    mode: if args.serial {
-                        concinnity_engine::app::run::PipelineMode::Serial
-                    } else {
-                        concinnity_engine::app::run::PipelineMode::Pipelined
-                    },
-                    schedule: if args.serial_schedule {
-                        concinnity_core::ecs::ScheduleMode::Serial
-                    } else {
-                        concinnity_core::ecs::ScheduleMode::Parallel
-                    },
-                    screenshot: args.screenshot.clone(),
-                    max_frames: args.frames,
+        Commands::Run(args) => concinnity_engine::app::run(
+            tree,
+            concinnity_engine::app::run::RunOptions {
+                mode: if args.serial {
+                    concinnity_engine::app::run::PipelineMode::Serial
+                } else {
+                    concinnity_engine::app::run::PipelineMode::Pipelined
                 },
-            )
-        }
+                schedule: if args.serial_schedule {
+                    concinnity_core::ecs::ScheduleMode::Serial
+                } else {
+                    concinnity_core::ecs::ScheduleMode::Parallel
+                },
+                screenshot: args.screenshot.clone(),
+                max_frames: args.frames,
+                launch: args.render.launch(args.validation, false),
+            },
+        ),
         Commands::Debug(args) => {
-            dev_flags::set_enabled(true);
-            dev_flags::set_validation(args.validation);
-            args.render.arm();
-            let port = args.debug_port;
-            concinnity_dev::run_debug(args.file.as_deref(), port)
+            let launch = args.render.launch(args.validation, true);
+            concinnity_dev::run_debug(launch, args.file.as_deref(), args.debug_port)
         }
         Commands::Editor(args) => {
-            dev_flags::set_validation(args.validation);
-            args.render.arm();
-            // The editor is a dev session: arm the same dev flags the
-            // `cn debug` host sets (above) so init captures hot-reload
-            // sources and the backend takes its disk-first shader path.
-            // Asset + shader hot-reload then works in every editor session;
-            // a debug port only adds the MCP probe surface on top.
-            dev_flags::set_enabled(true);
-            concinnity_dev::run_editor(args.file.as_deref(), args.debug_port)
+            // Every editor session hot-reloads, with or without a debug port.
+            let launch = args.render.launch(args.validation, true);
+            concinnity_dev::run_editor(launch, args.file.as_deref(), args.debug_port)
         }
         Commands::Add(args) => {
             command::add(args.name.as_deref(), &args.target, args.template.as_deref())

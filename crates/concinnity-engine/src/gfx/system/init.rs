@@ -59,6 +59,7 @@ use super::stream_plan::{StreamGeometry, StreamingSetup, plan_stream_geometry};
 use super::texture_payloads::{TexturePayloads, decode_texture_payloads};
 use super::world_fx::drain_world_fx;
 use super::*;
+use crate::app::run::LaunchRequest;
 use crate::gfx::draw_list;
 use crate::gfx::material_entry::MaterialEntry;
 use crate::settings::system::{SettingsSlot, SettingsState};
@@ -187,6 +188,7 @@ impl GraphicsSystem {
     fn init_render_settings(
         &mut self,
         ctx: &mut PipelineContext,
+        launch: &LaunchRequest,
     ) -> (ResolvedRenderConfig, SettingsState) {
         let mut settings = SettingsState::new();
         // Persisted settings-menu choices override the world's authored defaults
@@ -219,12 +221,12 @@ impl GraphicsSystem {
         // default` meaning). `Auto` re-resolves from the detected tier each launch;
         // `Custom` / an unclassified GPU impose no ceiling.
         use crate::gfx::quality_preset::QualityPreset;
-        let active_preset =
-            crate::app::dev_flags::resolve_quality_preset(user_graphics.quality_preset)
-                .unwrap_or_else(|| {
-                    self.seed_first_launch_preset();
-                    QualityPreset::Auto
-                });
+        let active_preset = launch
+            .resolve_quality_preset(user_graphics.quality_preset)
+            .unwrap_or_else(|| {
+                self.seed_first_launch_preset();
+                QualityPreset::Auto
+            });
         // Hold the resolved preset as the live value the settings-menu master
         // row cycles (and that an individual quality-row change flips to Custom).
         settings.quality_preset = active_preset;
@@ -654,8 +656,8 @@ impl GraphicsSystem {
             ssr: ssr_settings,
             ssgi: ssgi_settings,
             rt_reflections: rt_reflection_settings,
-            rt_dynamic: crate::app::dev_flags::resolve_rt_dynamic(),
-            rt_skinned_geometry: crate::app::dev_flags::resolve_rt_skinned_geometry(),
+            rt_dynamic: launch.resolve_rt_dynamic(),
+            rt_skinned_geometry: launch.resolve_rt_skinned_geometry(),
             reflection_blur_scale,
             auto_exposure: auto_exposure_settings,
             auto_exposure_bias_ev,
@@ -1086,6 +1088,7 @@ impl GraphicsSystem {
         &mut self,
         ctx: &mut PipelineContext,
         streaming: bool,
+        capture_sources: bool,
     ) -> Option<DecodedShaders> {
         let world_shaders = ctx.drain::<Shader>();
         if world_shaders.is_empty() {
@@ -1190,7 +1193,7 @@ impl GraphicsSystem {
         // Material-referenced shaders past entry 0 reload via `cn build`.
         let world_default = &world_shaders[0];
         let mut shader_stage_source_map = super::hot_reload_sources::ShaderStageSourceMap::new();
-        if crate::app::dev_flags::enabled() {
+        if capture_sources {
             let assets_dir = self.assets_dir();
             for stage in [ShaderStage::Vertex, ShaderStage::Fragment] {
                 let Some(raw) = world_default.stage(stage) else {
@@ -1596,6 +1599,7 @@ impl GraphicsSystem {
     }
 
     fn try_init(&mut self, ctx: &mut PipelineContext) -> Option<()> {
+        let launch = ctx.resource::<LaunchRequest>().copied().unwrap_or_default();
         let (
             ResolvedRenderConfig {
                 post,
@@ -1604,7 +1608,7 @@ impl GraphicsSystem {
                 world_ambient_intensity,
             },
             mut settings,
-        ) = self.init_render_settings(ctx);
+        ) = self.init_render_settings(ctx, &launch);
         // Infinite-world chunk streaming. The first declared VoxelWorld wins;
         // with none declared, no chunks stream. BlockTypes are drained here so
         // the runtime can resolve the VoxelWorld palette to chunk-mesh data.
@@ -1623,7 +1627,7 @@ impl GraphicsSystem {
 
         // `capture_sources` (cn debug) gathers the file-backed source maps the
         // hot-reload watcher consumes.
-        let capture_sources = crate::app::dev_flags::enabled();
+        let capture_sources = launch.dev_loop;
         let proc_mesh_args_snapshot = if capture_sources {
             procedural_mesh_snapshot(ctx)
         } else {
@@ -1658,7 +1662,7 @@ impl GraphicsSystem {
             locators: shader_locators,
             source_map: shader_stage_source_map,
             shaders: decoded_shaders,
-        } = self.decode_shaders(ctx, streaming_config.is_some())?;
+        } = self.decode_shaders(ctx, streaming_config.is_some(), capture_sources)?;
 
         // Read the shared texture pool + the material table into the maps the
         // draw list resolves against.
@@ -1759,19 +1763,13 @@ impl GraphicsSystem {
         let fog_settings = fx.fog;
         settings.fog_built = fog_settings.is_some();
 
-        // The DirectX / Vulkan debug layers: the CLI `--validation` flag if the
-        // launch passed one, otherwise the build profile. Metal is unaffected
-        // here: its layer is enabled by the CLI re-execing with `MTL_DEBUG_LAYER`.
-        let validation = crate::app::dev_flags::resolve_validation();
-        // Shader hot-reload is opted in by `cn debug`. Production `cn run` leaves
-        // it off, so the backend never spawns the filesystem watcher.
-        let hot_reload = crate::app::dev_flags::enabled();
-        // Frame capture: always available under the dev loop, and armed for a
-        // launch that asked for an exit screenshot.
-        let capture = hot_reload
-            || ctx
-                .resource::<crate::app::run::LaunchRequest>()
-                .is_some_and(|r| r.capture);
+        // Metal is unaffected by `validation`: its layer is enabled by the CLI
+        // re-execing with `MTL_DEBUG_LAYER`.
+        let validation = launch.resolve_validation();
+        // A shipped run leaves shader hot-reload off, so the backend never spawns
+        // the filesystem watcher.
+        let hot_reload = launch.dev_loop;
+        let capture = launch.frame_capture();
         let embedded_surface = ctx
             .resource::<concinnity_core::render::backend_init::EmbeddedSurface>()
             .copied();

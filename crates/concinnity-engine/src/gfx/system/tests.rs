@@ -66,6 +66,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use super::GraphicsSystem;
+use crate::app::run::LaunchRequest;
 use crate::gfx::mock_backend::{
     Call, MockBackend, MockState, TestHooks, recording_hooks, recording_hooks_with,
 };
@@ -308,11 +309,7 @@ fn titled_scene(title: &str) -> WorldBuilder {
 // Run the same pre-init pass World::start performs (Prop decomposition),
 // then GraphicsSystem init with the injected hooks. A successful init parks
 // the built backend in the world's `ActiveRenderBackend` slot.
-//
-// Init reads the process-global launch flags, so this holds the one guard over
-// them for the whole pass rather than only across the read.
 fn init_graphics(world: &mut TestWorld, hooks: TestHooks) -> GraphicsSystem {
-    let _flags = concinnity_testing::exclusive();
     let mut gs = GraphicsSystem::new(None);
     gs.test_hooks = Some(hooks);
     let mut ctx = world.ctx();
@@ -321,19 +318,7 @@ fn init_graphics(world: &mut TestWorld, hooks: TestHooks) -> GraphicsSystem {
     gs
 }
 
-// `init_graphics` for a test that first WRITES a launch flag. The flag guard is
-// not reentrant, so the caller holds it across init rather than letting init
-// take one of its own.
-fn init_graphics_under_flags(world: &mut TestWorld, hooks: TestHooks) -> GraphicsSystem {
-    let mut gs = GraphicsSystem::new(None);
-    gs.test_hooks = Some(hooks);
-    let mut ctx = world.ctx();
-    crate::ecs::decompose::run(&mut ctx);
-    gs.run_init(&mut ctx);
-    gs
-}
-
-// A first launch (no persisted preset, no launch flag) seeds `Auto` and saves it
+// A first launch (no persisted preset, no launch request) seeds `Auto` and saves it
 // into the world's own state tree.
 #[test]
 fn a_first_launch_persists_the_auto_preset_into_the_state_tree() {
@@ -345,7 +330,6 @@ fn a_first_launch_persists_the_auto_preset_into_the_state_tree() {
     let mut gs = GraphicsSystem::new(Some(&tree));
     gs.test_hooks = Some(hooks);
     {
-        let _flags = concinnity_testing::exclusive();
         let mut ctx = world.ctx();
         crate::ecs::decompose::run(&mut ctx);
         gs.run_init(&mut ctx);
@@ -2326,22 +2310,22 @@ fn the_quality_preset_flag_reaches_the_ray_tracing_ceiling() {
     let mut settings = crate::config::Settings::default();
     settings.graphics.quality_preset = Some(QualityPreset::Auto);
 
-    let _flags = crate::app::dev_flags::write_access();
-
-    crate::app::dev_flags::set_quality_preset(None);
     let (clamped, hooks) = recording_hooks_with(settings.clone(), profile_at(GpuTier::MidDiscrete));
     let mut world = post_config_scene(authored.clone()).build();
-    init_graphics_under_flags(&mut world, hooks);
+    init_graphics(&mut world, hooks);
     assert_eq!(settings_state(&world).quality_preset, QualityPreset::Auto);
     assert!(
         !lock(&clamped).init.as_ref().unwrap().rt_reflections_on,
         "the Auto -> High ceiling clamps RT off, silently"
     );
 
-    crate::app::dev_flags::set_quality_preset(Some(QualityPreset::Ultra));
     let (forced, hooks) = recording_hooks_with(settings, profile_at(GpuTier::MidDiscrete));
     let mut world = post_config_scene(authored).build();
-    init_graphics_under_flags(&mut world, hooks);
+    world.resources.insert(LaunchRequest {
+        quality_preset: Some(QualityPreset::Ultra),
+        ..Default::default()
+    });
+    init_graphics(&mut world, hooks);
     assert_eq!(
         settings_state(&world).quality_preset,
         QualityPreset::Ultra,
@@ -2357,15 +2341,11 @@ fn the_quality_preset_flag_reaches_the_ray_tracing_ceiling() {
 // backends destructure, and an absent flag lands on the shipping value.
 #[test]
 fn the_ray_tracing_flags_reach_the_backend() {
-    use crate::app::dev_flags::RtDynamicMode;
+    use concinnity_core::render::rt_geom::RtDynamicMode;
 
-    let _flags = crate::app::dev_flags::write_access();
-
-    crate::app::dev_flags::set_rt_dynamic(None);
-    crate::app::dev_flags::set_rt_skinned_geometry(None);
     let (state, hooks) = recording_hooks();
     let mut world = scene_builder().build();
-    init_graphics_under_flags(&mut world, hooks);
+    init_graphics(&mut world, hooks);
     {
         let s = lock(&state);
         let init = s.init.as_ref().unwrap();
@@ -2373,11 +2353,14 @@ fn the_ray_tracing_flags_reach_the_backend() {
         assert!(init.rt_skinned_geometry);
     }
 
-    crate::app::dev_flags::set_rt_dynamic(Some(RtDynamicMode::Rebuild));
-    crate::app::dev_flags::set_rt_skinned_geometry(Some(false));
     let (state, hooks) = recording_hooks();
     let mut world = scene_builder().build();
-    init_graphics_under_flags(&mut world, hooks);
+    world.resources.insert(LaunchRequest {
+        rt_dynamic: Some(RtDynamicMode::Rebuild),
+        rt_skinned_geometry: Some(false),
+        ..Default::default()
+    });
+    init_graphics(&mut world, hooks);
     {
         let s = lock(&state);
         let init = s.init.as_ref().unwrap();
@@ -2397,14 +2380,28 @@ fn capture_stays_off_without_a_launch_request() {
 }
 
 // The launch's screenshot request reaches the backend through the world's
-// `LaunchRequest`, with no process-wide flag involved.
+// `LaunchRequest`.
 #[test]
 fn a_capture_launch_request_reaches_the_backend() {
     let (state, hooks) = recording_hooks();
     let mut world = scene_builder().build();
-    world
-        .resources
-        .insert(crate::app::run::LaunchRequest { capture: true });
+    world.resources.insert(LaunchRequest {
+        capture: true,
+        ..Default::default()
+    });
+    init_graphics(&mut world, hooks);
+    assert!(lock(&state).init.as_ref().unwrap().capture);
+}
+
+// A development session keeps frame capture available without a screenshot.
+#[test]
+fn a_dev_loop_launch_arms_frame_capture() {
+    let (state, hooks) = recording_hooks();
+    let mut world = scene_builder().build();
+    world.resources.insert(LaunchRequest {
+        dev_loop: true,
+        ..Default::default()
+    });
     init_graphics(&mut world, hooks);
     assert!(lock(&state).init.as_ref().unwrap().capture);
 }

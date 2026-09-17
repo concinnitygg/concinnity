@@ -136,7 +136,10 @@ pub(crate) fn stat_hud(world: &World) -> Option<crate::hud::stat_hud::StatHudSys
 // place its own profile is knowable: a debug build or a `cn debug` session
 // activates the HUD, a release `cn run` leaves it inert.
 pub(crate) fn debug_hud(world: &World) -> Option<crate::hud::debug_hud::DebugHudSystem> {
-    if !(cfg!(debug_assertions) || crate::app::dev_flags::enabled()) {
+    let dev_loop = world
+        .resource::<crate::app::run::LaunchRequest>()
+        .is_some_and(|launch| launch.dev_loop);
+    if !(cfg!(debug_assertions) || dev_loop) {
         return None;
     }
     world

@@ -259,7 +259,9 @@ pub(crate) fn load_mesh_geometry(
     // Dev-only source catalog (present under `cn debug`) so the hot-reload
     // watcher can map a mesh handle back to the file that backs it. Mesh is a
     // resource now, so there is no drained component `source` to capture.
-    let capture_sources = crate::app::dev_flags::enabled();
+    let capture_sources = ctx
+        .resource::<crate::app::run::LaunchRequest>()
+        .is_some_and(|launch| launch.dev_loop);
     let mut mesh_sources: std::collections::HashMap<usize, MeshSourceMeta> =
         std::collections::HashMap::new();
     if capture_sources && let Some(sources) = ctx.resource::<crate::resource::MeshSources>() {

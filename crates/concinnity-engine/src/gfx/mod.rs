@@ -45,7 +45,8 @@ pub mod streaming;
 // so it stays with the GraphicsSystem tests that consume it.
 #[cfg(test)]
 pub(crate) mod mock_backend;
-pub(crate) mod quality_preset;
+/// The master graphics-quality preset and the ceiling it resolves to.
+pub mod quality_preset;
 // How the world's authored render settings resolve against the user's persisted
 // settings-menu choices and the active quality preset's ceiling.
 pub(crate) mod render_config;

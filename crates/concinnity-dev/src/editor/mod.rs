@@ -99,6 +99,7 @@ use concinnity_cook::authoring::world::WORLD_JSONL;
 use concinnity_cook::authoring::world::parse_world_jsonl;
 use concinnity_cook::authoring::world::write_world_jsonl;
 use concinnity_core::ecs::World;
+use concinnity_engine::app::run::LaunchRequest;
 use concinnity_engine::app::state;
 use concinnity_engine::app::state::App;
 use concinnity_engine::shutdown::ShutdownToken;
@@ -119,7 +120,11 @@ const SEED_GRAPHICS_CONFIG: &str =
 /// Editor entry point (`cn editor`). Compiles the authored world in memory,
 /// injects the editor HUD, and runs the world loop driven by the editor hook
 /// (plus the debug server when a port is given).
-pub fn run_editor(json_path: Option<&str>, debug_port: Option<u16>) -> std::io::Result<()> {
+pub fn run_editor(
+    launch: LaunchRequest,
+    json_path: Option<&str>,
+    debug_port: Option<u16>,
+) -> std::io::Result<()> {
     // Instead of the engine's plain `init_logging`: the same stderr formatter
     // plus a layer mirroring this crate's events into the Console panel's log.
     // The sink exists first so even boot-time errors reach the panel.
@@ -156,7 +161,7 @@ pub fn run_editor(json_path: Option<&str>, debug_port: Option<u16>) -> std::io::
 
     // Bring up a renderable world by compiling those entries, seeding a render
     // marker when they alone would not render.
-    let mut app = crate::project::app();
+    let mut app = crate::project::app().with_launch(launch);
     boot_world(&mut app, &entries)?;
 
     // Inject the editor HUD elements before start (this also drops the world's

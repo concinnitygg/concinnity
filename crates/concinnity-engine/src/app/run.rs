@@ -15,6 +15,7 @@
 use concinnity_core::components::GraphicsConfig;
 use concinnity_core::ecs::ScheduleMode;
 use concinnity_core::error::CnError;
+use concinnity_core::render::rt_geom::RtDynamicMode;
 use concinnity_host::store::paths::StateTree;
 use std::path::Path;
 use tracing_subscriber::EnvFilter;
@@ -22,6 +23,7 @@ use tracing_subscriber::EnvFilter;
 use crate::app::runloop;
 use crate::app::startup_error::StartupError;
 use crate::app::state::App;
+use crate::gfx::quality_preset::QualityPreset;
 
 // Default tracing filter applied when RUST_LOG is unset: info for debug
 // builds, warn for release builds. A RUST_LOG value always takes precedence.
@@ -81,13 +83,64 @@ pub struct RunOptions {
     pub screenshot: Option<String>,
     /// Override the world's `GraphicsConfig.max_frames`, bounding the run.
     pub max_frames: Option<u64>,
+    /// What the launch asks the engine to arm (`cn run` only; [`run_from`] and
+    /// [`App::run`] keep the app's own).
+    pub launch: LaunchRequest,
 }
 
-/// What the launch asked graphics init to arm, published as a world resource.
+/// What the launch asked the engine to arm, published as a world resource by
+/// [`App::start`]. Build one with [`App::with_launch`]; an app built without one
+/// runs the shipping behavior. Each `None` defers to that setting's default.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct LaunchRequest {
+pub struct LaunchRequest {
     /// Keep the presented frame blit-readable for an exit screenshot.
-    pub(crate) capture: bool,
+    pub capture: bool,
+    /// Run as a development session: capture hot-reload sources, load shaders
+    /// disk-first, keep frame capture available, and show the debug HUD.
+    pub dev_loop: bool,
+    /// Force the DirectX / Vulkan debug layers on or off. `None` follows the
+    /// build profile. Metal's layer is set by the process environment instead.
+    pub validation: Option<bool>,
+    /// Force the master quality preset over the persisted choice, unpersisted.
+    pub quality_preset: Option<QualityPreset>,
+    /// Force how the ray-tracing acceleration structure tracks moving props.
+    /// `None` is [`RtDynamicMode::Auto`].
+    pub rt_dynamic: Option<RtDynamicMode>,
+    /// Whether skinned meshes join the ray-tracing acceleration structure.
+    /// `None` leaves them in.
+    pub rt_skinned_geometry: Option<bool>,
+}
+
+impl LaunchRequest {
+    /// Whether the graphics debug layers run: the request, else the build profile.
+    pub fn resolve_validation(&self) -> bool {
+        self.validation.unwrap_or(cfg!(debug_assertions))
+    }
+
+    /// The master quality preset: the request, else `persisted`. `None` means
+    /// neither exists, which is a first launch the caller seeds.
+    pub fn resolve_quality_preset(
+        &self,
+        persisted: Option<QualityPreset>,
+    ) -> Option<QualityPreset> {
+        self.quality_preset.or(persisted)
+    }
+
+    /// How the acceleration structure tracks moving props: the request, else `Auto`.
+    pub fn resolve_rt_dynamic(&self) -> RtDynamicMode {
+        self.rt_dynamic.unwrap_or_default()
+    }
+
+    /// Whether skinned meshes join the acceleration structure: the request, else in.
+    pub fn resolve_rt_skinned_geometry(&self) -> bool {
+        self.rt_skinned_geometry.unwrap_or(true)
+    }
+
+    /// Whether the presented frame stays readable: always in a dev session, and
+    /// for a launch that asked for an exit screenshot.
+    pub fn frame_capture(&self) -> bool {
+        self.dev_loop || self.capture
+    }
 }
 
 /// Production entry point (`cn run`). Reads the compiled binary blobs from
@@ -97,7 +150,7 @@ pub(crate) struct LaunchRequest {
 pub fn run(tree: &StateTree, options: RunOptions) -> std::io::Result<()> {
     init_logging();
 
-    let mut app = App::new().in_tree(tree.clone());
+    let mut app = App::new().in_tree(tree.clone()).with_launch(options.launch);
     let data_dir = tree.data_dir();
     if let Err(error) = load_world(&mut app, BlobSource::Directory(&data_dir)) {
         return Err(report_startup_error(error));
@@ -208,9 +261,9 @@ pub(crate) fn start_runtime(mut app: App, options: RunOptions) -> Result<(), CnE
             config.max_frames = Some(max);
         }
     }
-    app.world_mut().insert_resource(LaunchRequest {
-        capture: options.screenshot.is_some(),
-    });
+    if options.screenshot.is_some() {
+        app.launch_mut().capture = true;
+    }
     app.world_mut().insert_resource(options.schedule);
 
     #[cfg(target_os = "macos")]
@@ -273,6 +326,86 @@ mod tests {
         // The fallback string must parse as an EnvFilter, otherwise log_filter
         // would panic when RUST_LOG is unset.
         EnvFilter::new(default_log_directive());
+    }
+
+    #[test]
+    fn the_validation_request_outranks_the_build_profile() {
+        let request = |validation| LaunchRequest {
+            validation,
+            ..Default::default()
+        };
+        assert_eq!(request(None).resolve_validation(), cfg!(debug_assertions));
+        assert!(!request(Some(false)).resolve_validation());
+        assert!(request(Some(true)).resolve_validation());
+    }
+
+    #[test]
+    fn the_quality_preset_request_outranks_the_persisted_choice() {
+        let unset = LaunchRequest::default();
+        assert_eq!(unset.resolve_quality_preset(None), None);
+        assert_eq!(
+            unset.resolve_quality_preset(Some(QualityPreset::Auto)),
+            Some(QualityPreset::Auto)
+        );
+
+        let forced = LaunchRequest {
+            quality_preset: Some(QualityPreset::Ultra),
+            ..Default::default()
+        };
+        assert_eq!(
+            forced.resolve_quality_preset(Some(QualityPreset::Auto)),
+            Some(QualityPreset::Ultra)
+        );
+        assert_eq!(
+            forced.resolve_quality_preset(None),
+            Some(QualityPreset::Ultra)
+        );
+    }
+
+    #[test]
+    fn an_unset_rt_dynamic_request_is_auto() {
+        assert_eq!(
+            LaunchRequest::default().resolve_rt_dynamic(),
+            RtDynamicMode::Auto
+        );
+        for mode in [
+            RtDynamicMode::Off,
+            RtDynamicMode::Auto,
+            RtDynamicMode::Rebuild,
+            RtDynamicMode::Tlas,
+        ] {
+            let request = LaunchRequest {
+                rt_dynamic: Some(mode),
+                ..Default::default()
+            };
+            assert_eq!(request.resolve_rt_dynamic(), mode);
+        }
+    }
+
+    #[test]
+    fn skinned_rt_geometry_is_in_unless_the_request_clears_it() {
+        let request = |rt_skinned_geometry| LaunchRequest {
+            rt_skinned_geometry,
+            ..Default::default()
+        };
+        assert!(request(None).resolve_rt_skinned_geometry());
+        assert!(request(Some(true)).resolve_rt_skinned_geometry());
+        assert!(!request(Some(false)).resolve_rt_skinned_geometry());
+    }
+
+    #[test]
+    fn frame_capture_is_armed_by_a_dev_loop_or_a_capture_request() {
+        assert!(!LaunchRequest::default().frame_capture());
+        let dev_loop = LaunchRequest {
+            dev_loop: true,
+            ..Default::default()
+        };
+        assert!(dev_loop.frame_capture());
+        let capture = LaunchRequest {
+            capture: true,
+            ..Default::default()
+        };
+        assert!(capture.frame_capture());
     }
 
     // Both forms make the same file blob 0: the file itself, or `0` inside the

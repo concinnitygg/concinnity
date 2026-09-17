@@ -3,6 +3,7 @@
 //! `cn run` path (compiled-blob playback) lives in the runtime crate's `app::run`.
 
 use concinnity_cook::authoring::world::find_world_jsonl;
+use concinnity_engine::app::run::LaunchRequest;
 use concinnity_engine::app::state::App;
 
 use crate::debug_hook::DebugHook;
@@ -10,7 +11,7 @@ use crate::debug_hook::DebugHook;
 /// The `cn debug` server path: start the localhost debug server on `port`,
 /// then run interpreted with it as the per-frame hook. This is the entry point
 /// the CLI binary calls; the hook assembly stays inside this crate.
-pub fn run_debug(json_path: Option<&str>, port: u16) -> std::io::Result<()> {
+pub fn run_debug(launch: LaunchRequest, json_path: Option<&str>, port: u16) -> std::io::Result<()> {
     let debug_hook: Box<dyn DebugHook> = match crate::debug::DebugServer::start(port) {
         Ok(srv) => Box::new(srv),
         Err(e) => {
@@ -18,7 +19,7 @@ pub fn run_debug(json_path: Option<&str>, port: u16) -> std::io::Result<()> {
             return Err(e);
         }
     };
-    run_interpreted(json_path, Some(debug_hook))
+    run_interpreted(launch, json_path, Some(debug_hook))
 }
 
 // The world an interpreted run should load: the `-f` path when the caller gave
@@ -44,6 +45,7 @@ fn resolve_world_path(json_path: Option<&str>) -> std::io::Result<String> {
 // or writing any binary blob files. Always paired with the localhost debug
 // server.
 pub(crate) fn run_interpreted(
+    launch: LaunchRequest,
     json_path: Option<&str>,
     debug: Option<Box<dyn DebugHook>>,
 ) -> std::io::Result<()> {
@@ -57,7 +59,7 @@ pub(crate) fn run_interpreted(
     // is authoring I/O in concinnity-cook, which the runtime does not link).
     concinnity_engine::app::dev_flags::set_world_jsonl_path(Some(json_path.to_string()));
 
-    let mut app = crate::project::app();
+    let mut app = crate::project::app().with_launch(launch);
     *app.world_mut() = crate::authoring::build_world_from_path(json_path).map_err(|e| {
         tracing::error!("Could not build world from {json_path}: {e}");
         e

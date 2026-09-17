@@ -4,9 +4,10 @@
 //
 // Parsing only. What each command does lives in concinnity-dev; `dispatch`
 // is the one file that joins the two.
+use concinnity_core::render::rt_geom::RtDynamicMode;
 use concinnity_dev::export::BundleFormat;
-use concinnity_engine::app::dev_flags;
-use concinnity_engine::app::dev_flags::{QualityPreset, RtDynamicMode};
+use concinnity_engine::app::run::LaunchRequest;
+use concinnity_engine::gfx::quality_preset::QualityPreset;
 
 use clap::{Parser, Subcommand};
 
@@ -156,11 +157,10 @@ impl Cli {
     }
 }
 
-// The argv face of the launch-time render knobs the engine reads through
-// `dev_flags`. Each is a diagnostic: omitting it leaves the shipping behavior,
-// and none is persisted, so a probe run can force one without writing settings.
-// Flattened into every command that launches a world (`run` / `debug` /
-// `editor`); `arm` is what hands them to the engine before the world is built.
+// The argv face of the launch-time render knobs on the engine's `LaunchRequest`.
+// Each is a diagnostic: omitting it leaves the shipping behavior, and none is
+// persisted, so a probe run can force one without writing settings. Flattened
+// into every command that launches a world (`run` / `debug` / `editor`).
 #[derive(Debug, Default, clap::Args)]
 pub(crate) struct RenderArgs {
     /// Force the master graphics-quality preset for this launch, unpersisted
@@ -183,12 +183,17 @@ pub(crate) struct RenderArgs {
 }
 
 impl RenderArgs {
-    // Hand the requests to the engine. Called before the world is built, since
-    // graphics init reads them once while resolving the render settings.
-    pub(crate) fn arm(&self) {
-        dev_flags::set_quality_preset(self.quality_preset.map(Into::into));
-        dev_flags::set_rt_dynamic(self.rt_dynamic.map(Into::into));
-        dev_flags::set_rt_skinned_geometry(self.rt_skinned_geometry);
+    // The launch request these flags make, with the command's own validation
+    // flag and whether it runs a development session.
+    pub(crate) fn launch(&self, validation: Option<bool>, dev_loop: bool) -> LaunchRequest {
+        LaunchRequest {
+            capture: false,
+            dev_loop,
+            validation,
+            quality_preset: self.quality_preset.map(Into::into),
+            rt_dynamic: self.rt_dynamic.map(Into::into),
+            rt_skinned_geometry: self.rt_skinned_geometry,
+        }
     }
 }
 
@@ -453,7 +458,7 @@ pub(crate) struct ExportArgs {
 // a process that has already touched Metal -- and `std::env::set_var` is
 // unsound once worker threads exist (the frameworks call `getenv` off-thread).
 // Re-exec sidesteps both: the child starts with the variable present from PID
-// birth. DirectX / Vulkan take the request through `dev_flags` and need no
+// birth. DirectX / Vulkan take the request through `LaunchRequest` and need no
 // relaunch, so this is a macOS-only concern.
 //
 // The heavier `MTL_SHADER_VALIDATION` is deliberately left off: it is far more
@@ -537,6 +542,35 @@ mod tests {
             assert!(render.rt_dynamic.is_none(), "{argv:?}");
             assert!(render.rt_skinned_geometry.is_none(), "{argv:?}");
         }
+    }
+
+    #[test]
+    fn the_render_flags_map_onto_the_launch_request() {
+        let cli = Cli::try_parse_from([
+            "concinnity",
+            "run",
+            "--quality-preset",
+            "ultra",
+            "--rt-dynamic",
+            "rebuild",
+            "--rt-skinned-geometry",
+            "false",
+        ])
+        .unwrap();
+        let Commands::Run(args) = cli.resolved_command() else {
+            panic!("expected run");
+        };
+        assert_eq!(
+            args.render.launch(Some(true), true),
+            LaunchRequest {
+                capture: false,
+                dev_loop: true,
+                validation: Some(true),
+                quality_preset: Some(QualityPreset::Ultra),
+                rt_dynamic: Some(RtDynamicMode::Rebuild),
+                rt_skinned_geometry: Some(false),
+            }
+        );
     }
 
     #[test]

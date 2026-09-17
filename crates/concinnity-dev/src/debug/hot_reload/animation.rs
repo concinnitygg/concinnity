@@ -135,6 +135,7 @@ mod tests {
     use concinnity_core::components::Animation;
     use concinnity_core::ecs::SkinnedMeshHandle;
     use concinnity_core::ecs::World;
+    use concinnity_engine::app::run::LaunchRequest;
     use concinnity_host::thread::asset_id::intern;
 
     // Minimal in-memory GLB fixture: a one-triangle skinned mesh with a
@@ -228,16 +229,16 @@ mod tests {
         }
     }
 
-    // Build a world whose AnimationSystem captured one reload entry. Capture
-    // only happens under the process-wide dev flag, so callers must hold the
-    // shared test lock; the flag is restored before returning.
+    // Build a world whose AnimationSystem captured one reload entry, which
+    // only a dev-loop launch captures.
     fn world_with_reload_entry(source: &str, animation_name: &str) -> World {
-        concinnity_engine::app::dev_flags::set_enabled(true);
         let mut world = World::new();
         world.add_component(file_backed_animation(source, animation_name));
-        let started = world.start(concinnity_engine::ecs::SYSTEMS);
-        concinnity_engine::app::dev_flags::set_enabled(false);
-        started.unwrap();
+        world.insert_resource(LaunchRequest {
+            dev_loop: true,
+            ..Default::default()
+        });
+        world.start(concinnity_engine::ecs::SYSTEMS).unwrap();
         world
     }
 
@@ -248,7 +249,6 @@ mod tests {
 
     #[test]
     fn reload_rebuilds_a_clip_from_its_source() {
-        let _guard = test_support::lock();
         let dir = tempfile::tempdir().unwrap();
         let source = write_fixture(&dir);
         let mut world = world_with_reload_entry(&source, "wave");
@@ -268,7 +268,6 @@ mod tests {
 
     #[test]
     fn reload_with_a_missing_source_keeps_the_old_clip() {
-        let _guard = test_support::lock();
         let dir = tempfile::tempdir().unwrap();
         let source = dir
             .path()
@@ -287,7 +286,6 @@ mod tests {
 
     #[test]
     fn reload_with_an_unknown_animation_name_keeps_the_old_clip() {
-        let _guard = test_support::lock();
         let dir = tempfile::tempdir().unwrap();
         let source = write_fixture(&dir);
         let mut world = world_with_reload_entry(&source, "sprint");
