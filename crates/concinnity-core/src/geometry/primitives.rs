@@ -313,3 +313,64 @@ pub fn build_sphere(
 // back-face culling, so any per-primitive winding test is misleading. Keep
 // the index orders in this file untouched unless you have re-validated the
 // full render with the showcase world.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::math::sqrt;
+
+    // Structural invariants every generated mesh must hold.
+    fn assert_well_formed((verts, idxs): &(Vec<Vert>, Vec<u16>)) {
+        assert_eq!(idxs.len() % 3, 0, "index count is a multiple of three");
+        assert!(
+            idxs.iter().all(|&i| (i as usize) < verts.len()),
+            "every index is in range"
+        );
+        for (_, [nx, ny, nz], _, _) in verts {
+            let len = sqrt(nx * nx + ny * ny + nz * nz);
+            assert!((len - 1.0).abs() < 1e-4, "normal length {len}");
+        }
+    }
+
+    #[test]
+    fn box_has_four_vertices_and_six_indices_per_face() {
+        let mesh = build_box([1.0, 2.0, 3.0]);
+        assert_eq!(mesh.0.len(), 24);
+        assert_eq!(mesh.1.len(), 36);
+        assert_well_formed(&mesh);
+        for (_, normal, _, _) in &mesh.0 {
+            let unit_axes = normal.iter().filter(|c| c.abs() == 1.0).count();
+            let zeros = normal.iter().filter(|&&c| c == 0.0).count();
+            assert_eq!((unit_axes, zeros), (1, 2), "{normal:?} is axis-aligned");
+        }
+    }
+
+    #[test]
+    fn plane_is_one_quad() {
+        let mesh = build_plane(2.0, 3.0);
+        assert_eq!(mesh.0.len(), 4);
+        assert_eq!(mesh.1, [0, 1, 2, 2, 3, 0]);
+        assert_well_formed(&mesh);
+    }
+
+    #[test]
+    fn cylinder_clamps_segments_to_three() {
+        let clamped = build_cylinder(1.0, 2.0, 0);
+        assert_eq!(clamped, build_cylinder(1.0, 2.0, 3));
+        assert_well_formed(&clamped);
+        assert_well_formed(&build_cylinder(0.5, 4.0, 32));
+    }
+
+    #[test]
+    fn sphere_past_the_u16_limit_is_refused() {
+        // (255 + 1) * (255 + 1) + 2 = 65538 vertices.
+        assert!(build_sphere(1.0, 255, 255).is_err());
+    }
+
+    #[test]
+    fn sphere_within_the_u16_limit_is_well_formed() {
+        let mesh = build_sphere(1.0, 16, 24).expect("within the limit");
+        assert_eq!(mesh.0.len(), 17 * 25 + 2);
+        assert_well_formed(&mesh);
+    }
+}

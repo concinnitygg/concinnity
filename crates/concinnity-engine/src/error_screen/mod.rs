@@ -11,6 +11,7 @@ mod layout;
 
 use concinnity_core::components::{InputKey, Window};
 use concinnity_core::ecs::FontHandle;
+use concinnity_core::input::snapshot::InputSnapshot;
 use concinnity_core::render::backend::{FrameParams, RenderBackend};
 use concinnity_core::render::backend_init::BackendInit;
 use concinnity_core::render::overlay_maps;
@@ -116,11 +117,62 @@ fn run_loop(backend: &mut dyn RenderBackend, message: &str, fonts: &FontSet) {
 
         let input = backend.take_input();
         hovered = screen.quit_hit(input.mouse_x, input.mouse_y);
-        if input.escape || input.left_click && hovered {
+        if dismissed(&input, hovered) {
             return;
         }
-        if matches!(input.captured_key, Some(InputKey::Enter)) {
-            return;
-        }
+    }
+}
+
+// Whether this frame's input dismisses the screen: Escape, Return, or a click
+// while the cursor is over Quit.
+fn dismissed(input: &InputSnapshot, hovered: bool) -> bool {
+    input.escape
+        || (input.left_click && hovered)
+        || matches!(input.captured_key, Some(InputKey::Enter))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn escape_dismisses() {
+        let input = InputSnapshot {
+            escape: true,
+            ..Default::default()
+        };
+        assert!(dismissed(&input, false));
+    }
+
+    #[test]
+    fn a_click_over_quit_dismisses() {
+        let input = InputSnapshot {
+            left_click: true,
+            ..Default::default()
+        };
+        assert!(dismissed(&input, true));
+    }
+
+    #[test]
+    fn a_click_away_from_quit_does_not_dismiss() {
+        let input = InputSnapshot {
+            left_click: true,
+            ..Default::default()
+        };
+        assert!(!dismissed(&input, false));
+    }
+
+    #[test]
+    fn enter_dismisses() {
+        let input = InputSnapshot {
+            captured_key: Some(InputKey::Enter),
+            ..Default::default()
+        };
+        assert!(dismissed(&input, false));
+    }
+
+    #[test]
+    fn a_frame_without_a_dismissal_does_not_dismiss() {
+        assert!(!dismissed(&InputSnapshot::default(), true));
     }
 }

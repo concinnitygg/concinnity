@@ -291,3 +291,59 @@ impl SpawnSystem {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use concinnity_core::ecs::{Arena, ComponentStorage, EntityByName, FrameContext, Resources};
+    use concinnity_core::profile::FrameProfile;
+    use concinnity_host::store::blob::BlobData;
+
+    // Build an isolated PipelineContext over fresh storage, with no backend.
+    fn run<R>(body: impl FnOnce(&mut PipelineContext) -> R) -> R {
+        let mut components = ComponentStorage::default();
+        let mut blob = BlobData::empty();
+        let mut profile = FrameProfile::default();
+        let mut resources = Resources::new();
+        let scratch = Arena::with_capacity(64 * 1024);
+        let mut ctx = PipelineContext {
+            components: &mut components,
+            blob: &mut blob,
+            profile: &mut profile,
+            resources: &mut resources,
+            frame: FrameContext::new(&scratch),
+        };
+        body(&mut ctx)
+    }
+
+    #[test]
+    fn an_entity_target_resolves_to_itself_without_a_name_index() {
+        run(|ctx| {
+            let entity = ctx.components.spawn();
+            assert_eq!(
+                resolve_target(ctx, EntityTarget::Entity(entity)),
+                Some(entity)
+            );
+        });
+    }
+
+    #[test]
+    fn a_named_target_resolves_through_the_name_index() {
+        run(|ctx| {
+            let entity = ctx.components.spawn();
+            ctx.insert_resource(EntityByName([(AssetId(7), entity)].into()));
+            assert_eq!(
+                resolve_target(ctx, EntityTarget::Name(AssetId(7))),
+                Some(entity)
+            );
+            assert_eq!(resolve_target(ctx, EntityTarget::Name(AssetId(8))), None);
+        });
+    }
+
+    #[test]
+    fn a_named_target_without_a_name_index_resolves_to_nothing() {
+        run(|ctx| {
+            assert_eq!(resolve_target(ctx, EntityTarget::Name(AssetId(7))), None);
+        });
+    }
+}
