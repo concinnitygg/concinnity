@@ -13,7 +13,7 @@ use crate::world::Inner;
 // everything above holds the result behind the trait.
 #[cfg(feature = "std")]
 pub(crate) fn select(world: Inner) -> Box<dyn Driver> {
-    adopt(concinnity_engine::App::from_world(world))
+    adopt(concinnity_engine::Runtime::from_world(world))
 }
 
 #[cfg(not(feature = "std"))]
@@ -21,15 +21,15 @@ pub(crate) fn select(world: Inner) -> Box<dyn Driver> {
     headless(world)
 }
 
-// The loop an already-loaded engine app runs on. A build with no backend
+// The loop an already-loaded engine runtime runs on. A build with no backend
 // feature has no renderer for the windowed loop to drive, so the world comes
 // straight back off it onto the headless one.
 #[cfg(feature = "std")]
-pub(crate) fn adopt(app: concinnity_engine::App) -> Box<dyn Driver> {
+pub(crate) fn adopt(runtime: concinnity_engine::Runtime) -> Box<dyn Driver> {
     if concinnity_engine::HAS_RENDER_BACKEND {
-        Box::new(app)
+        Box::new(runtime)
     } else {
-        headless(app.into_world())
+        headless(runtime.into_world())
     }
 }
 

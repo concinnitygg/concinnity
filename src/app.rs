@@ -19,7 +19,7 @@ use crate::{Error, World, driver};
 /// App::from_world(World::new()).run().expect("the app runs");
 /// ```
 pub struct App {
-    inner: Box<dyn Driver>,
+    driver: Box<dyn Driver>,
 }
 
 impl core::fmt::Debug for App {
@@ -32,7 +32,7 @@ impl App {
     /// An app that runs `world`.
     pub fn from_world(world: World) -> Self {
         Self {
-            inner: driver::select(world.into_inner()),
+            driver: driver::select(world.into_inner()),
         }
     }
 
@@ -58,9 +58,9 @@ impl App {
     /// ```
     #[cfg(feature = "std")]
     pub fn from_blob(path: impl AsRef<Path>) -> Result<Self, Error> {
-        concinnity_engine::App::from_blob(path.as_ref())
-            .map(|app| Self {
-                inner: driver::adopt(app),
+        concinnity_engine::Runtime::from_blob(path.as_ref())
+            .map(|runtime| Self {
+                driver: driver::adopt(runtime),
             })
             .map_err(crate::error::from_startup)
     }
@@ -93,7 +93,7 @@ impl App {
         name: &'static str,
         system: S,
     ) -> Self {
-        self.inner.world_mut().add_system(phase, name, system);
+        self.driver.world_mut().add_system(phase, name, system);
         self
     }
 
@@ -114,7 +114,7 @@ impl App {
     /// ```
     pub fn into_headless(self) -> Self {
         Self {
-            inner: driver::headless(self.inner.into_world()),
+            driver: driver::headless(self.driver.into_world()),
         }
     }
 
@@ -124,12 +124,12 @@ impl App {
     /// A headless run has no window to close and no clock to follow: the world
     /// steps on a fixed virtual timestep, as fast as the host can step it.
     pub fn run(self) -> Result<(), Error> {
-        self.inner.run().map_err(Error::from)
+        self.driver.run().map_err(Error::from)
     }
 
     #[cfg(test)]
-    pub(crate) fn inner_mut(&mut self) -> &mut dyn Driver {
-        &mut *self.inner
+    pub(crate) fn driver_mut(&mut self) -> &mut dyn Driver {
+        &mut *self.driver
     }
 }
 

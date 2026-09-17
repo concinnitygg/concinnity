@@ -746,7 +746,7 @@ fn gamepad_sliders_send_controls_commands_and_persist_applied_values() {
     assert_eq!(cfg.controls.gamepad_deadzone, Some(dz));
 }
 
-// The frame-rate cap applies through the republished resource the App-level
+// The frame-rate cap applies through the republished resource the runtime-level
 // pacer reads, with no backend call.
 #[test]
 fn fps_cap_publishes_the_frame_rate_cap_resource() {

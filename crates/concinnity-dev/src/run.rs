@@ -4,7 +4,7 @@
 
 use concinnity_cook::authoring::world::find_world_jsonl;
 use concinnity_engine::app::run::LaunchRequest;
-use concinnity_engine::app::state::App;
+use concinnity_engine::app::runtime::Runtime;
 
 use crate::debug::hot_reload::WorldPathHandle;
 use crate::debug_hook::DebugHook;
@@ -52,27 +52,27 @@ pub(crate) fn run_interpreted(
     json_path: &str,
     debug: Option<Box<dyn DebugHook>>,
 ) -> std::io::Result<()> {
-    let mut app = crate::project::app().with_launch(launch);
-    *app.world_mut() = crate::authoring::build_world_from_path(json_path).map_err(|e| {
+    let mut runtime = crate::project::runtime().with_launch(launch);
+    *runtime.world_mut() = crate::authoring::build_world_from_path(json_path).map_err(|e| {
         tracing::error!("Could not build world from {json_path}: {e}");
         e
     })?;
 
-    start_app(app, debug)
+    start_app(runtime, debug)
 }
 
-// Shared startup and loop entry once the App's world is populated. The world
+// Shared startup and loop entry once the Runtime's world is populated. The world
 // loop itself (and the platform event-pump + window activation) is the shared
 // `concinnity_engine::app::runloop` driver; the interpreted path's only
 // addition is ticking the debug hook each frame.
 pub(crate) fn start_app(
-    mut app: App,
+    mut runtime: Runtime,
     mut debug: Option<Box<dyn DebugHook>>,
 ) -> std::io::Result<()> {
     use concinnity_engine::app::runloop;
 
-    let shutdown = app.shutdown_token();
-    runloop::install_ctrlc_handler(&app);
+    let shutdown = runtime.shutdown_token();
+    runloop::install_ctrlc_handler(&runtime);
 
     // Hand the shutdown token to the debug hook so a debug client can request
     // a clean exit (the `shutdown` debug tool call). No-op when no hook is present.
@@ -84,7 +84,7 @@ pub(crate) fn start_app(
     // so the render-loop choice doesn't depend on the config component, which
     // `start()` drains. Only the macOS path branches on it.
     #[cfg(target_os = "macos")]
-    let renders = concinnity_engine::ecs::renders(app.world());
+    let renders = concinnity_engine::ecs::renders(runtime.world());
 
     // On macOS, NSApplication is a per-process singleton. Activate it once
     // before the first NSWindow is created.
@@ -93,7 +93,7 @@ pub(crate) fn start_app(
         runloop::activate_app_macos();
     }
 
-    if let Err(e) = app.start() {
+    if let Err(e) = runtime.start() {
         // Returned rather than exiting the process, so the world's systems
         // (and the GPU resources they hold) still drop on the way out.
         tracing::error!("failed to start app: {e}");
@@ -102,18 +102,18 @@ pub(crate) fn start_app(
 
     // The interpreted path ticks its debug hook each frame before the world step.
     // After the tick (which sees only `&mut World`), the hook is given the whole
-    // App so it can apply a pending world swap (the `cn editor` live SAVE).
-    let on_tick = |app: &mut App| {
+    // Runtime so it can apply a pending world swap (the `cn editor` live SAVE).
+    let on_tick = |runtime: &mut Runtime| {
         if let Some(hook) = debug.as_deref_mut() {
-            hook.tick(app.world_mut());
-            hook.apply_world_swap(app);
+            hook.tick(runtime.world_mut());
+            hook.apply_world_swap(runtime);
         }
     };
 
     #[cfg(target_os = "macos")]
-    runloop::run_loop(&mut app, renders, on_tick);
+    runloop::run_loop(&mut runtime, renders, on_tick);
     #[cfg(not(target_os = "macos"))]
-    runloop::run_loop(&mut app, false, on_tick);
+    runloop::run_loop(&mut runtime, false, on_tick);
 
     Ok(())
 }

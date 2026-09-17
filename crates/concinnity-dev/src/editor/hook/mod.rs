@@ -38,7 +38,7 @@ use concinnity_core::ecs::{
     CursorShape, DesiredCursor, FlyCam, HiddenAssets, HudLayers, MenuOverride, ViewOverrides,
     World, WorldLines,
 };
-use concinnity_engine::app::state::App;
+use concinnity_engine::app::runtime::Runtime;
 use concinnity_engine::ecs::PendingBackend;
 
 use super::behavior;
@@ -890,12 +890,12 @@ impl DebugHook for EditorHook {
     // from the edit to the picture. Everything else recompiles and swaps a
     // fresh world under the running backend, below.
     //
-    // The recompiled world is built FIRST, in a throwaway App; only once that
+    // The recompiled world is built FIRST, in a throwaway runtime; only once that
     // succeeds is the backend transplanted out of the live world. So a rebuild
     // failure leaves the live world -- and its window -- fully intact; the next
     // edit retries. The backend is never dropped on an error path.
-    fn apply_world_swap(&mut self, app: &mut App) {
-        if !self.refresh_preview(app.world_mut()) {
+    fn apply_world_swap(&mut self, runtime: &mut Runtime) {
+        if !self.refresh_preview(runtime.world_mut()) {
             return;
         }
         // Whatever the user waits behind needs a drawn-and-presented frame
@@ -919,7 +919,7 @@ impl DebugHook for EditorHook {
         self.rebuild_preview = false;
         self.rebuild_required = false;
         let started = std::time::Instant::now();
-        self.swap_preview_world(app);
+        self.swap_preview_world(runtime);
         self.last_rebuild_secs = started.elapsed().as_secs_f32();
         if let Some(op) = self.rebuild_op.take() {
             op.finish();
@@ -1001,7 +1001,7 @@ impl EditorHook {
 
     // The rebuild + backend transplant itself (see `apply_world_swap` for the
     // timing shell around it).
-    fn swap_preview_world(&mut self, app: &mut App) {
+    fn swap_preview_world(&mut self, runtime: &mut Runtime) {
         let (world, shadows) = match self.build_preview_world() {
             Ok(built) => built,
             Err(e) => {
@@ -1018,24 +1018,24 @@ impl EditorHook {
         };
         self.world_entries = self.entries.clone();
         self.world_shadows = Some(shadows);
-        let mut staged = App::new();
+        let mut staged = Runtime::new();
         staged.load_world(world);
         // Carry the editor's typed text (an open form's name + fields, the combo
         // filter) across the fresh HUD injection so it is not blanked.
-        let fields = Self::field_snapshot(app.world());
+        let fields = Self::field_snapshot(runtime.world());
         super::inject::editor_hud(staged.world_mut());
         Self::restore_fields(staged.world_mut(), &fields);
         staged
             .world_mut()
             .insert_resource(MenuOverride(Some(!self.sim.playing())));
 
-        let Some(backend) = concinnity_engine::ecs::take_render_backend(app.world_mut()) else {
+        let Some(backend) = concinnity_engine::ecs::take_render_backend(runtime.world_mut()) else {
             return;
         };
         staged.world_mut().insert_resource(PendingBackend(backend));
         let new_world = std::mem::replace(staged.world_mut(), World::new());
-        app.load_world(new_world);
-        if let Err(e) = app.start() {
+        runtime.load_world(new_world);
+        if let Err(e) = runtime.start() {
             tracing::error!("editor: live preview start failed: {e:?}");
             self.notifier.error_with(
                 &format!("Preview start failed: {e:?}"),

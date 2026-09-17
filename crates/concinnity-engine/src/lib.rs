@@ -7,9 +7,9 @@
 //! `Box<dyn RenderBackend>` from `concinnity_device::init_backend` and never
 //! names a concrete backend. Depends on concinnity-core and concinnity-device
 //! (no concinnity-cook, no image decoders). The editor crate (concinnity-dev)
-//! drives this crate's App / renderer through the public API widened here; the
-//! modules the editor reaches
-//! into are `pub` so it can name their paths, but individual internals stay
+//! drives this crate's `Runtime` / renderer through the public API widened here;
+//! the modules the editor reaches into are `pub` so it can name their paths,
+//! but individual internals stay
 //! `pub(crate)` unless the editor specifically needs them.
 pub mod blob;
 pub mod ecs;
@@ -27,12 +27,12 @@ pub mod app;
 // The runtime bin calls `concinnity_engine::run_from` rather than reaching
 // through the `app::run` module path.
 pub use app::run::{BlobSource, run_from};
-// The application surface a host embeds: construct an App, populate its world,
-// and drive it with `App::run` / `App::run_with`. Exported flat so the
+// The surface a host embeds: construct a Runtime, populate its world, and
+// drive it with `Runtime::run` / `Runtime::run_with`. Exported flat so the
 // `concinnity` facade crate re-exports these under its own root.
 pub use app::run::{PipelineMode, RunOptions, init_logging};
+pub use app::runtime::Runtime;
 pub use app::startup_error::StartupError;
-pub use app::state::App;
 pub use blob::WorldLoadError;
 // The state tree a host builds and hands down: where the blobs are read from
 // and where saves, settings, crash reports and caches are written. Exported

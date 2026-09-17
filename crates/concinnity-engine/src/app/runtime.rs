@@ -1,4 +1,4 @@
-//! The `App` value: a world plus the loop state that drives it.
+//! The `Runtime` value: a world plus the loop state that drives it.
 
 use concinnity_core::components::AppConfig;
 use concinnity_core::ecs::{Clock, MenuActive, StepResult, World};
@@ -14,17 +14,17 @@ use crate::ecs::SYSTEMS;
 use crate::shutdown::ShutdownToken;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AppStatus {
+pub(crate) enum RuntimeStatus {
     Created,
     Started,
 }
 
 #[derive(Debug)]
-/// The application: a world plus the loop state that drives it.
-pub struct App {
-    status: AppStatus,
+/// The windowed loop: a world plus the loop state that drives it.
+pub struct Runtime {
+    status: RuntimeStatus,
     world: World,
-    // Where this app reads and writes, or `None` for an app with no tree: its
+    // Where this runtime reads and writes, or `None` for a runtime with no tree: its
     // world runs, and everything that would touch disk does nothing. Published
     // to the world at `start` so the systems are told rather than resolving
     // paths of their own.
@@ -41,17 +41,17 @@ pub struct App {
     launch: LaunchRequest,
 }
 
-impl Default for App {
+impl Default for Runtime {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl App {
-    /// An app holding an empty world.
+impl Runtime {
+    /// A runtime holding an empty world.
     pub fn new() -> Self {
         Self {
-            status: AppStatus::Created,
+            status: RuntimeStatus::Created,
             world: World::new(),
             state: None,
             shutdown: ShutdownToken::new(),
@@ -61,8 +61,8 @@ impl App {
         }
     }
 
-    /// An app that reads and writes under `tree`: its blobs, its settings, its
-    /// saves, and the caches it warms. Without one the app runs a world and
+    /// A runtime that reads and writes under `tree`: its blobs, its settings, its
+    /// saves, and the caches it warms. Without one the runtime runs a world and
     /// touches no disk.
     #[must_use]
     pub fn in_tree(mut self, tree: StateTree) -> Self {
@@ -70,8 +70,8 @@ impl App {
         self
     }
 
-    /// An app that arms what `launch` asks for: a development session, forced
-    /// render settings, or frame capture. Every world this app starts sees it.
+    /// A runtime that arms what `launch` asks for: a development session, forced
+    /// render settings, or frame capture. Every world this runtime starts sees it.
     #[must_use]
     pub fn with_launch(mut self, launch: LaunchRequest) -> Self {
         self.launch = launch;
@@ -83,45 +83,45 @@ impl App {
         &mut self.launch
     }
 
-    /// The state tree this app runs against, if it has one.
+    /// The state tree this runtime runs against, if it has one.
     pub fn state_tree(&self) -> Option<&StateTree> {
         self.state.as_ref()
     }
 
-    /// An app holding an already-built world, ready to start or run.
+    /// A runtime holding an already-built world, ready to start or run.
     pub fn from_world(world: World) -> Self {
-        let mut app = Self::new();
-        app.load_world(world);
-        app
+        let mut runtime = Self::new();
+        runtime.load_world(world);
+        runtime
     }
 
-    /// An app holding the world compiled into the blob file at `path`.
+    /// A runtime holding the world compiled into the blob file at `path`.
     /// Overflow payload blobs are its siblings named by index, so a world
     /// written to `data/0` reads `data/1`, `data/2`, ... beside it.
     ///
     /// Derives the state tree from the blob's own directory, so the settings
-    /// and saves the app writes land with the world it read rather than under
+    /// and saves the runtime writes land with the world it read rather than under
     /// the directory it was launched from. A caller with a tree of its own
-    /// builds the app with [`in_tree`](Self::in_tree) instead. The world's own
+    /// builds the runtime with [`in_tree`](Self::in_tree) instead. The world's own
     /// `AppConfig.home` overrides either at `start`.
     pub fn from_blob(path: &std::path::Path) -> Result<Self, StartupError> {
-        let mut app = Self::new();
-        app.load_blob_from(path)?;
-        app.state = state_dir_for_blob(path).map(StateTree::at);
-        Ok(app)
+        let mut runtime = Self::new();
+        runtime.load_blob_from(path)?;
+        runtime.state = state_dir_for_blob(path).map(StateTree::at);
+        Ok(runtime)
     }
 
-    /// Load assets and blob payload data from the primary blob under this app's
+    /// Load assets and blob payload data from the primary blob under this runtime's
     /// state tree, and populate the world. Replaces any previously loaded
-    /// world. `NoStateRoot` when the app has no tree to read from.
+    /// world. `NoStateRoot` when the runtime has no tree to read from.
     pub fn load_blob(&mut self) -> Result<(), StartupError> {
         let primary = self.primary_blob().ok_or(StartupError::NoStateRoot)?;
         self.load_blob_from(&primary)?;
         Ok(())
     }
 
-    /// The primary blob this app reads: blob 0 under its tree's `data/`.
-    /// `None` for an app with no tree.
+    /// The primary blob this runtime reads: blob 0 under its tree's `data/`.
+    /// `None` for a runtime with no tree.
     pub fn primary_blob(&self) -> Option<std::path::PathBuf> {
         self.state
             .as_ref()
@@ -143,7 +143,7 @@ impl App {
     }
 
     // Populate the world from an already-decoded blob, replacing whatever the
-    // app held.
+    // runtime held.
     fn install(&mut self, loaded: blob::LoadedBlob) {
         let (assets, mut resources, scene_groups, mesh_bounds, physics_budget, manifest, blob_data) = (
             loaded.components,
@@ -184,12 +184,12 @@ impl App {
         self.world = world;
     }
 
-    /// Borrow the app's world.
+    /// Borrow the runtime's world.
     pub fn world(&self) -> &World {
         &self.world
     }
 
-    /// Mutably borrow the app's world.
+    /// Mutably borrow the runtime's world.
     pub fn world_mut(&mut self) -> &mut World {
         &mut self.world
     }
@@ -203,7 +203,7 @@ impl App {
     /// Build the world's systems and run their `init`. Must run once, before
     /// the first step.
     pub fn start(&mut self) -> Result<(), WorldError> {
-        if self.status != AppStatus::Created {
+        if self.status != RuntimeStatus::Created {
             return Err(WorldError::AlreadyStarted);
         }
         self.install_home();
@@ -215,7 +215,7 @@ impl App {
             .insert_resource(Clock(crate::app::clock::monotonic_micros));
         self.world.insert_resource(self.launch);
         self.world.start(SYSTEMS)?;
-        self.status = AppStatus::Started;
+        self.status = RuntimeStatus::Started;
         Ok(())
     }
 
@@ -238,7 +238,7 @@ impl App {
         let Some(tree) = self.state.as_ref() else {
             tracing::warn!(
                 "AppConfig home '{home}' has no state tree to resolve against; \
-                 the app writes nowhere"
+                 the runtime writes nowhere"
             );
             return;
         };
@@ -256,8 +256,8 @@ impl App {
     // Hand the state tree to the world, and to the process-wide caches that
     // outlive any one call. Runs after `install_home`, so what the systems read
     // is the tree the world asked for, and before `world.start(SYSTEMS)`, which
-    // is where the systems that capture a directory are built. An app with no
-    // tree drops the anchor a previous app left, so it touches no cache either.
+    // is where the systems that capture a directory are built. A runtime with no
+    // tree drops the anchor a previous one left, so it touches no cache either.
     fn publish_state_tree(&mut self) {
         let Some(tree) = self.state.clone() else {
             concinnity_host::store::cache::clear_anchor();
@@ -326,7 +326,7 @@ impl App {
         self.world.insert_resource(memory);
     }
 
-    /// Take the app's world back, so a caller can put it on a different loop.
+    /// Take the runtime's world back, so a caller can put it on a different loop.
     pub fn into_world(self) -> World {
         self.world
     }
@@ -335,7 +335,7 @@ impl App {
     /// Used to load a new scene at runtime.
     pub fn load_world(&mut self, world: World) {
         self.world = world;
-        self.status = AppStatus::Created;
+        self.status = RuntimeStatus::Created;
     }
 
     /// Advance the world one frame, for a caller that drives its own outer
@@ -355,12 +355,12 @@ impl App {
         self.world.step()
     }
 
-    /// Run this app on the runtime loop with default options, consuming it.
+    /// Run this on the run loop with default options, consuming it.
     pub fn run(self) -> Result<(), WorldError> {
         self.run_with(crate::app::run::RunOptions::default())
     }
 
-    // Run this app on the runtime loop, consuming it. Drives frames until the
+    // Run this on the run loop, consuming it. Drives frames until the
     // window closes, a system stops the world, or CTRL+C is received.
     pub(crate) fn run_with(self, options: crate::app::run::RunOptions) -> Result<(), WorldError> {
         crate::app::run::start_runtime(self, options)
@@ -397,23 +397,23 @@ mod tests {
     use concinnity_core::components::AppConfig;
     use concinnity_core::ecs::FrameRateCap;
 
-    // Starting the app publishes the thread + memory budgets as world resources,
+    // Starting the runtime publishes the thread + memory budgets as world resources,
     // honoring an `AppConfig`'s overrides. A world with no GraphicsConfig starts
     // without building a GPU, so this exercises the budget install in isolation.
     #[test]
     fn start_publishes_budgets_honoring_app_config_limits() {
-        let mut app = App::new();
-        app.world_mut().add_component(AppConfig {
+        let mut runtime = Runtime::new();
+        runtime.world_mut().add_component(AppConfig {
             home: String::new(),
             max_memory_mb: 512,
             job_threads: 2,
         });
-        app.start().unwrap();
+        runtime.start().unwrap();
 
-        let threads = crate::ecs::thread_budget(app.world()).expect("thread budget published");
+        let threads = crate::ecs::thread_budget(runtime.world()).expect("thread budget published");
         assert_eq!(threads.job_threads, 2.min(threads.total_cores));
 
-        let memory = crate::ecs::memory_budget(app.world()).expect("memory budget published");
+        let memory = crate::ecs::memory_budget(runtime.world()).expect("memory budget published");
         assert!(memory.overridden, "the AppConfig override is recorded");
         // 512 MiB is well under 85% of any test machine's RAM, so it passes through.
         assert_eq!(memory.budget_bytes, 512 * 1024 * 1024);
@@ -423,36 +423,36 @@ mod tests {
     // from the host machine (no override).
     #[test]
     fn start_publishes_auto_budgets_without_an_app_config() {
-        let mut app = App::new();
-        app.start().unwrap();
+        let mut runtime = Runtime::new();
+        runtime.start().unwrap();
 
-        let threads = crate::ecs::thread_budget(app.world()).expect("thread budget published");
+        let threads = crate::ecs::thread_budget(runtime.world()).expect("thread budget published");
         assert_eq!(
             threads.job_threads,
             threads.total_cores.saturating_sub(1).max(1)
         );
-        let memory = crate::ecs::memory_budget(app.world()).expect("memory budget published");
+        let memory = crate::ecs::memory_budget(runtime.world()).expect("memory budget published");
         assert!(!memory.overridden);
         assert!(memory.budget_bytes > 0);
     }
 
-    // Only a Created app starts, and a default-constructed one is Created. The
+    // Only a Created runtime starts, and a default-constructed one is Created. The
     // second call is refused by the status guard rather than re-initing every
     // system on the running world.
     #[test]
     fn start_twice_is_rejected() {
-        let mut app = App::default();
-        app.start().expect("a Created app starts");
-        assert!(matches!(app.start(), Err(WorldError::AlreadyStarted)));
+        let mut runtime = Runtime::default();
+        runtime.start().expect("a Created runtime starts");
+        assert!(matches!(runtime.start(), Err(WorldError::AlreadyStarted)));
     }
 
-    // load_world swaps in a new world and resets to Created, so a started app
+    // load_world swaps in a new world and resets to Created, so a started runtime
     // can be started again on the new content (the runtime scene-load path).
     #[test]
     fn load_world_replaces_the_world_and_allows_a_restart() {
-        let mut app = App::new();
-        app.start().unwrap();
-        assert!(app.start().is_err(), "the app is Started");
+        let mut runtime = Runtime::new();
+        runtime.start().unwrap();
+        assert!(runtime.start().is_err(), "the runtime is Started");
 
         let mut world = World::new();
         world.add_component(AppConfig {
@@ -460,37 +460,37 @@ mod tests {
             max_memory_mb: 256,
             job_threads: 1,
         });
-        app.load_world(world);
+        runtime.load_world(world);
 
         assert!(
-            app.world().query::<AppConfig>().next().is_some(),
+            runtime.world().query::<AppConfig>().next().is_some(),
             "the loaded world replaced the empty one"
         );
-        app.start().expect("the reset status permits a restart");
+        runtime.start().expect("the reset status permits a restart");
         // The restart budgeted against the new world's limits, not the old one's.
-        let memory = crate::ecs::memory_budget(app.world()).expect("memory budget published");
+        let memory = crate::ecs::memory_budget(runtime.world()).expect("memory budget published");
         assert_eq!(memory.budget_bytes, 256 * 1024 * 1024);
     }
 
     // The launch request outlives a world swap: the editor's rebuild loads a new
-    // world into the same app and starts it again.
+    // world into the same runtime and starts it again.
     #[test]
     fn the_launch_request_survives_a_world_load_and_restart() {
         let launch = LaunchRequest {
             dev_loop: true,
             ..Default::default()
         };
-        let mut app = App::new().with_launch(launch);
-        app.start().unwrap();
-        assert_eq!(app.world().resource::<LaunchRequest>(), Some(&launch));
+        let mut runtime = Runtime::new().with_launch(launch);
+        runtime.start().unwrap();
+        assert_eq!(runtime.world().resource::<LaunchRequest>(), Some(&launch));
 
-        app.load_world(World::new());
-        assert_eq!(app.world().resource::<LaunchRequest>(), None);
-        app.start().unwrap();
-        assert_eq!(app.world().resource::<LaunchRequest>(), Some(&launch));
+        runtime.load_world(World::new());
+        assert_eq!(runtime.world().resource::<LaunchRequest>(), None);
+        runtime.start().unwrap();
+        assert_eq!(runtime.world().resource::<LaunchRequest>(), Some(&launch));
     }
 
-    // from_world hands the app a world that is already populated, in the
+    // from_world hands the runtime a world that is already populated, in the
     // Created state so it can be started straight away.
     #[test]
     fn from_world_adopts_the_world_ready_to_start() {
@@ -501,12 +501,12 @@ mod tests {
             job_threads: 1,
         });
 
-        let mut app = App::from_world(world);
-        assert!(app.world().query::<AppConfig>().next().is_some());
-        app.start().expect("an adopted world starts");
+        let mut runtime = Runtime::from_world(world);
+        assert!(runtime.world().query::<AppConfig>().next().is_some());
+        runtime.start().expect("an adopted world starts");
     }
 
-    // `home` picks where the running app writes. An absolute path is taken
+    // `home` picks where the running runtime writes. An absolute path is taken
     // verbatim; a relative one hangs off the content root, which is what puts a
     // portable install's state in a subfolder of its own bundle.
     #[test]
@@ -541,25 +541,25 @@ mod tests {
     }
 
     // A world's `home` splits the writable root off the tree the host built,
-    // leaving the content (and the blobs the app reads) where it was.
+    // leaving the content (and the blobs the runtime reads) where it was.
     #[test]
     fn an_app_config_home_moves_only_the_writable_root() {
-        // Starting an app with a tree anchors the process-wide runtime cache.
+        // Starting one with a tree anchors the process-wide runtime cache.
         let _guard = concinnity_testing::exclusive();
         let root = if cfg!(windows) {
             r"C:\apps\MyGame"
         } else {
             "/apps/MyGame"
         };
-        let mut app = App::new().in_tree(StateTree::at(root));
-        app.world_mut().add_component(AppConfig {
+        let mut runtime = Runtime::new().in_tree(StateTree::at(root));
+        runtime.world_mut().add_component(AppConfig {
             home: "state".to_string(),
             max_memory_mb: 0,
             job_threads: 0,
         });
-        app.start().unwrap();
+        runtime.start().unwrap();
 
-        let tree = app.state_tree().expect("the app kept its tree");
+        let tree = runtime.state_tree().expect("the runtime kept its tree");
         assert_eq!(tree.content_root(), std::path::Path::new(root));
         assert_eq!(
             tree.saves_dir(),
@@ -571,15 +571,15 @@ mod tests {
             "the world's home never moves what a build wrote"
         );
         assert_eq!(
-            app.world().resource::<StateTree>(),
+            runtime.world().resource::<StateTree>(),
             Some(tree),
-            "the systems are handed the same tree the app resolved"
+            "the systems are handed the same tree the runtime resolved"
         );
     }
 
-    // An app with no tree touches no disk, and publishes nothing for the
+    // A runtime with no tree touches no disk, and publishes nothing for the
     // systems to read: a world runs, everything it would persist does nothing,
-    // including the runtime cache a previous app anchored.
+    // including the runtime cache a previous one anchored.
     #[test]
     fn an_app_without_a_tree_publishes_none() {
         use concinnity_host::store::cache::{self, CacheAnchor, CacheEntryKind};
@@ -589,11 +589,14 @@ mod tests {
         cache::anchor(CacheAnchor::new(tmp.join("cache")));
         assert!(cache::store(CacheEntryKind::Shader, "k", b"v"));
 
-        let mut app = App::new();
-        assert_eq!(app.primary_blob(), None);
-        assert!(matches!(app.load_blob(), Err(StartupError::NoStateRoot)));
-        app.start().unwrap();
-        assert!(app.world().resource::<StateTree>().is_none());
+        let mut runtime = Runtime::new();
+        assert_eq!(runtime.primary_blob(), None);
+        assert!(matches!(
+            runtime.load_blob(),
+            Err(StartupError::NoStateRoot)
+        ));
+        runtime.start().unwrap();
+        assert!(runtime.world().resource::<StateTree>().is_none());
         assert!(
             !cache::store(CacheEntryKind::Shader, "k", b"v"),
             "the previous anchor no longer takes entries"
@@ -604,10 +607,10 @@ mod tests {
     #[test]
     fn a_tree_without_a_build_reports_its_primary_blob_missing() {
         let tmp = concinnity_testing::TempTree::new();
-        let mut app = App::new().in_tree(StateTree::at(tmp.path()));
-        let primary = app.primary_blob().expect("a tree names a primary blob");
+        let mut runtime = Runtime::new().in_tree(StateTree::at(tmp.path()));
+        let primary = runtime.primary_blob().expect("a tree names a primary blob");
 
-        let error = app.load_blob().expect_err("there is no blob to load");
+        let error = runtime.load_blob().expect_err("there is no blob to load");
         assert!(
             matches!(&error, StartupError::MissingData { blob } if *blob == primary),
             "{error:?}"
@@ -644,12 +647,12 @@ mod tests {
     // has no systems left to run.
     #[test]
     fn world_step_without_a_frame_rate_cap_runs_unpaced() {
-        let mut app = App::new();
-        app.start().unwrap();
+        let mut runtime = Runtime::new();
+        runtime.start().unwrap();
         assert!(
-            app.world().resource::<FrameRateCap>().is_none(),
+            runtime.world().resource::<FrameRateCap>().is_none(),
             "no cap is published without a GraphicsConfig"
         );
-        assert_eq!(app.world_step(), StepResult::Done);
+        assert_eq!(runtime.world_step(), StepResult::Done);
     }
 }

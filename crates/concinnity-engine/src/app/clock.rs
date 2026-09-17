@@ -1,4 +1,4 @@
-//! Fixed-timestep accumulator for the simulation. Runs at the App level, after
+//! Fixed-timestep accumulator for the simulation. Runs at the runtime level, after
 //! the frame pacer and before the world steps: wall-clock time accumulates into
 //! whole fixed ticks, and the remainder becomes the interpolation alpha the
 //! simulation systems blend render transforms with. While a menu holds the
@@ -23,7 +23,7 @@ pub(crate) fn monotonic_micros() -> u64 {
 // frame's catch-up work makes the next frame longer.
 const MAX_TICKS_PER_FRAME: u32 = 5;
 
-// Accumulates wall-clock time into fixed simulation ticks. One per `App`,
+// Accumulates wall-clock time into fixed simulation ticks. One per `Runtime`,
 // advanced once per world step.
 #[derive(Debug, Default)]
 pub(crate) struct SimClock {

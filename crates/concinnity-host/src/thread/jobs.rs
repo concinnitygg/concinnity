@@ -21,7 +21,7 @@ pub struct JobPool {
 
 impl JobPool {
     /// Build a pool with an explicit worker count (floored at one), for work
-    /// that must not size the process-wide pool before the App configures it.
+    /// that must not size the process-wide pool before the runtime configures it.
     pub fn new(threads: usize) -> JobPool {
         let threads = threads.max(1);
         let pool = rayon::ThreadPoolBuilder::new()
@@ -100,7 +100,7 @@ pub fn default_threads() -> usize {
 }
 
 /// Build the process-wide job pool at `threads` workers, returning whether
-/// this call sized it. The App calls this from its `ThreadBudget` at start,
+/// this call sized it. The runtime calls this from its `ThreadBudget` at start,
 /// before any system uses the pool. The pool is built once, so a call that
 /// finds it already there sizes nothing and is reported as `false`; a value
 /// below one is clamped.

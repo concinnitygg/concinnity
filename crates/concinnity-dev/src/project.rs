@@ -1,7 +1,7 @@
 //! The project a dev session works on.
 //!
 //! Every tier below this one takes its paths as arguments: the cook is handed
-//! the tree it builds into, the engine's `App` carries the one it runs against,
+//! the tree it builds into, the engine's `Runtime` carries the one it runs against,
 //! and the two content-addressed caches are told which files they are. What
 //! remains is that a dev session works on exactly one project for the length of
 //! a process, and that the editor's panels, the hot-reload passes, and the
@@ -39,14 +39,14 @@ pub fn tree() -> Option<StateTree> {
     opened().lock().unwrap().clone()
 }
 
-/// An app that reads and writes under the open project: its blobs, settings,
-/// saves and the caches it warms. Without a project the app still runs a world,
-/// and everything it would persist does nothing.
-pub(crate) fn app() -> concinnity_engine::App {
-    let app = concinnity_engine::App::new();
+/// A runtime that reads and writes under the open project: its blobs, settings,
+/// saves and the caches it warms. Without a project it still runs a world, and
+/// everything it would persist does nothing.
+pub(crate) fn runtime() -> concinnity_engine::Runtime {
+    let runtime = concinnity_engine::Runtime::new();
     match tree() {
-        Some(tree) => app.in_tree(tree),
-        None => app,
+        Some(tree) => runtime.in_tree(tree),
+        None => runtime,
     }
 }
 
@@ -121,7 +121,7 @@ mod tests {
         assert!(require().is_ok());
 
         // An app built for the session runs against that same tree.
-        assert_eq!(app().state_tree(), tree().as_ref());
+        assert_eq!(runtime().state_tree(), tree().as_ref());
 
         // Leave the binary's other tests the project they expect.
         crate::test_support::isolate_state_dir();

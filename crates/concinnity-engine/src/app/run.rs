@@ -21,8 +21,8 @@ use std::path::Path;
 use tracing_subscriber::EnvFilter;
 
 use crate::app::runloop;
+use crate::app::runtime::Runtime;
 use crate::app::startup_error::StartupError;
-use crate::app::state::App;
 use crate::gfx::quality_preset::QualityPreset;
 
 // Default tracing filter applied when RUST_LOG is unset: info for debug
@@ -84,12 +84,12 @@ pub struct RunOptions {
     /// Override the world's `GraphicsConfig.max_frames`, bounding the run.
     pub max_frames: Option<u64>,
     /// What the launch asks the engine to arm (`cn run` only; [`run_from`] and
-    /// [`App::run`] keep the app's own).
+    /// [`Runtime::run`] keep the runtime's own).
     pub launch: LaunchRequest,
 }
 
 /// What the launch asked the engine to arm, published as a world resource by
-/// [`App::start`]. Build one with [`App::with_launch`]; an app built without one
+/// [`Runtime::start`]. Build one with [`Runtime::with_launch`]; a runtime built without one
 /// runs the shipping behavior. Each `None` defers to that setting's default.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LaunchRequest {
@@ -150,12 +150,14 @@ impl LaunchRequest {
 pub fn run(tree: &StateTree, options: RunOptions) -> std::io::Result<()> {
     init_logging();
 
-    let mut app = App::new().in_tree(tree.clone()).with_launch(options.launch);
+    let mut runtime = Runtime::new()
+        .in_tree(tree.clone())
+        .with_launch(options.launch);
     let data_dir = tree.data_dir();
-    if let Err(error) = load_world(&mut app, BlobSource::Directory(&data_dir)) {
+    if let Err(error) = load_world(&mut runtime, BlobSource::Directory(&data_dir)) {
         return Err(report_startup_error(error));
     }
-    start_runtime(app, options).map_err(start_failure)
+    start_runtime(runtime, options).map_err(start_failure)
 }
 
 // A refused start, in the form a process exit status is built from.
@@ -178,10 +180,10 @@ fn report_startup_error(error: StartupError) -> std::io::Error {
     std::io::Error::new(error.io_kind(), error.to_string())
 }
 
-// Populate `app` with the world `source` holds, refusing a layout that cannot
+// Populate `runtime` with the world `source` holds, refusing a layout that cannot
 // hold every blob the world spans.
-fn load_world(app: &mut App, source: BlobSource<'_>) -> Result<(), StartupError> {
-    let max_blob_index = app.load_blob_from(&source.primary())?;
+fn load_world(runtime: &mut Runtime, source: BlobSource<'_>) -> Result<(), StartupError> {
+    let max_blob_index = runtime.load_blob_from(&source.primary())?;
     source.check_span(max_blob_index).map_or(Ok(()), Err)
 }
 
@@ -231,47 +233,47 @@ impl BlobSource<'_> {
 pub fn run_from(tree: &StateTree, blob: BlobSource<'_>) -> std::io::Result<()> {
     init_logging();
 
-    let mut app = App::new().in_tree(tree.clone());
-    if let Err(error) = load_world(&mut app, blob) {
+    let mut runtime = Runtime::new().in_tree(tree.clone());
+    if let Err(error) = load_world(&mut runtime, blob) {
         return Err(report_startup_error(error));
     }
-    start_runtime(app, RunOptions::default()).map_err(start_failure)
+    start_runtime(runtime, RunOptions::default()).map_err(start_failure)
 }
 
-// Startup and loop entry once the App's world is populated. Registers the
-// CTRL+C handler, activates AppKit on macOS, starts the app, then drives
+// Startup and loop entry once the Runtime's world is populated. Registers the
+// CTRL+C handler, activates AppKit on macOS, starts the runtime, then drives
 // frames -- pipelined (sim thread + render half) or serial (the
 // single-threaded world loop) -- until the window closes, a system stops the
 // world, or CTRL+C is received. External callers reach this through
-// `App::run` / `App::run_with`.
-pub(crate) fn start_runtime(mut app: App, options: RunOptions) -> Result<(), WorldError> {
+// `Runtime::run` / `Runtime::run_with`.
+pub(crate) fn start_runtime(mut runtime: Runtime, options: RunOptions) -> Result<(), WorldError> {
     // A host that installed its own subscriber keeps it (`try_init` no-ops),
     // so an embedded app gets logs without wiring any up itself.
     init_logging();
     tracing::info!("Running app...");
-    runloop::install_ctrlc_handler(&app);
+    runloop::install_ctrlc_handler(&runtime);
 
     // Resolved before `start()` (while the GraphicsConfig is still present) and
     // reused after, so the post-start loop choice doesn't depend on the config
     // component, which `start()` drains.
-    let renders = crate::ecs::renders(app.world());
+    let renders = crate::ecs::renders(runtime.world());
 
     if let Some(max) = options.max_frames {
-        for config in app.world_mut().query_mut::<GraphicsConfig>() {
+        for config in runtime.world_mut().query_mut::<GraphicsConfig>() {
             config.max_frames = Some(max);
         }
     }
     if options.screenshot.is_some() {
-        app.launch_mut().capture = true;
+        runtime.launch_mut().capture = true;
     }
-    app.world_mut().insert_resource(options.schedule);
+    runtime.world_mut().insert_resource(options.schedule);
 
     #[cfg(target_os = "macos")]
     if renders {
         runloop::activate_app_macos();
     }
 
-    if let Err(e) = app.start() {
+    if let Err(e) = runtime.start() {
         // Returned rather than exiting the process, so the world's systems
         // (and the GPU resources they hold) still drop on the way out.
         tracing::error!("failed to start app: {e}");
@@ -280,13 +282,13 @@ pub(crate) fn start_runtime(mut app: App, options: RunOptions) -> Result<(), Wor
 
     match options.mode {
         PipelineMode::Pipelined if renders => {
-            crate::app::pipeline::run_pipelined(app, options.screenshot.as_deref());
+            crate::app::pipeline::run_pipelined(runtime, options.screenshot.as_deref());
         }
         _ => {
             // The serial loop: no per-tick hook; a rendering macOS world pumps
             // the Cocoa run loop, every other case uses the tight loop.
-            runloop::run_loop(&mut app, cfg!(target_os = "macos") && renders, |_| {});
-            capture_exit_screenshot(&mut app, options.screenshot.as_deref());
+            runloop::run_loop(&mut runtime, cfg!(target_os = "macos") && renders, |_| {});
+            capture_exit_screenshot(&mut runtime, options.screenshot.as_deref());
         }
     }
 
@@ -295,9 +297,9 @@ pub(crate) fn start_runtime(mut app: App, options: RunOptions) -> Result<(), Wor
 
 // Capture the last presented frame on the way out of a serial run, when
 // requested. The backend is still parked in the world after the loop ends.
-fn capture_exit_screenshot(app: &mut App, path: Option<&str>) {
+fn capture_exit_screenshot(runtime: &mut Runtime, path: Option<&str>) {
     let Some(path) = path else { return };
-    let Some(mut backend) = crate::ecs::take_render_backend(app.world_mut()) else {
+    let Some(mut backend) = crate::ecs::take_render_backend(runtime.world_mut()) else {
         tracing::warn!("screenshot skipped: no live backend at exit");
         return;
     };
@@ -454,8 +456,8 @@ mod tests {
         let tree = StateTree::at(tmp.path());
 
         let data_dir = tree.data_dir();
-        let mut app = App::new().in_tree(tree.clone());
-        let error = load_world(&mut app, BlobSource::Directory(&data_dir))
+        let mut runtime = Runtime::new().in_tree(tree.clone());
+        let error = load_world(&mut runtime, BlobSource::Directory(&data_dir))
             .expect_err("an empty tree has no world");
         assert!(
             matches!(&error, StartupError::MissingData { blob } if *blob == data_dir.join("0")),
@@ -464,8 +466,8 @@ mod tests {
         assert_eq!(error.io_kind(), std::io::ErrorKind::NotFound);
 
         let file = tmp.join("missing.blob");
-        let mut app = App::new().in_tree(tree);
-        let error = load_world(&mut app, BlobSource::File(&file))
+        let mut runtime = Runtime::new().in_tree(tree);
+        let error = load_world(&mut runtime, BlobSource::File(&file))
             .expect_err("a named blob that is not there has no world");
         assert!(
             matches!(&error, StartupError::MissingData { blob } if *blob == file),
@@ -475,15 +477,15 @@ mod tests {
 
     // A world that refuses to start reports it through the return value. The
     // process stays alive, so the caller's cleanup and the world's own drops
-    // still run; an already-started app is the reproducible refusal.
+    // still run; an already-started runtime is the reproducible refusal.
     #[test]
     fn a_refused_start_returns_instead_of_exiting_the_process() {
-        let mut app = App::new();
-        app.start().expect("the first start succeeds");
+        let mut runtime = Runtime::new();
+        runtime.start().expect("the first start succeeds");
 
         assert!(
             matches!(
-                app.run_with(RunOptions::default()),
+                runtime.run_with(RunOptions::default()),
                 Err(WorldError::AlreadyStarted)
             ),
             "a second start is refused"

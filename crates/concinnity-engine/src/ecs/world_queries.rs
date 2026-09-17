@@ -60,14 +60,15 @@ pub fn gpu_profile(world: &World) -> Option<GpuProfile> {
     world.resource::<GpuProfile>().copied()
 }
 
-/// The state tree `App::start` published: where this world reads and writes.
+/// The state tree `Runtime::start` published: where this world reads and writes.
 /// `None` for a world running against no tree, which is a world that touches no
 /// disk. What every system reads instead of resolving a path of its own.
 pub fn state_tree(world: &World) -> Option<&StateTree> {
     world.resource::<StateTree>()
 }
 
-/// The process thread budget App published at start. `None` before `App::start`
+/// The process thread budget the runtime published at start. `None` before
+/// `Runtime::start`
 /// installs it. Read by the `cn debug` server's `budget` command.
 pub fn thread_budget(world: &World) -> Option<ThreadBudget> {
     world.resource::<ThreadBudget>().copied()

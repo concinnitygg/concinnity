@@ -17,7 +17,7 @@ use std::sync::{Mutex, OnceLock};
 use concinnity_core::ecs::StepResult;
 use concinnity_core::error::WorldError;
 use concinnity_core::render::backend_init::EmbeddedSurface;
-use concinnity_engine::{App, StartupError};
+use concinnity_engine::{Runtime, StartupError};
 use concinnity_host::store::paths::StateTree;
 
 /// Why a `cn_` call failed, or [`Ok`](CnError::Ok) when it did not.
@@ -67,11 +67,11 @@ impl From<StepResult> for CnStep {
 }
 
 struct HostState {
-    world: Option<App>,
+    world: Option<Runtime>,
 }
 
 // SAFETY: the only `HostState` lives behind the mutex below, so one thread at a
-// time reaches the `App` inside it. The single-thread requirement the module
+// time reaches the `Runtime` inside it. The single-thread requirement the module
 // documents is what makes that thread always the same one.
 unsafe impl Send for HostState {}
 
@@ -213,12 +213,12 @@ fn chain(e: &dyn std::error::Error) -> String {
 
 // Build and start a world rooted at `root` that renders into `surface`. Split
 // out so the failure path has one shape.
-fn open_world(root: &str, surface: EmbeddedSurface) -> Result<App, OpenError> {
+fn open_world(root: &str, surface: EmbeddedSurface) -> Result<Runtime, OpenError> {
     let root = std::path::Path::new(root);
     if !root.is_dir() {
         return Err(OpenError::NotADirectory(root.display().to_string()));
     }
-    let mut world = App::new().in_tree(StateTree::at(root));
+    let mut world = Runtime::new().in_tree(StateTree::at(root));
     world.load_blob()?;
     world.world_mut().insert_resource(surface);
     world.start()?;

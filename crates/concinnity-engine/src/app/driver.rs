@@ -5,11 +5,11 @@ use concinnity_core::Driver;
 use concinnity_core::ecs::World;
 use concinnity_core::error::WorldError;
 
-use crate::app::state::App;
+use crate::app::runtime::Runtime;
 
-impl Driver for App {
+impl Driver for Runtime {
     fn start(&mut self) -> Result<(), WorldError> {
-        App::start(self)
+        Runtime::start(self)
     }
 
     fn run(self: Box<Self>) -> Result<(), WorldError> {
@@ -21,7 +21,7 @@ impl Driver for App {
     }
 
     fn world_mut(&mut self) -> &mut World {
-        App::world_mut(self)
+        Runtime::world_mut(self)
     }
 }
 
@@ -35,7 +35,7 @@ mod tests {
     // A world with no GraphicsConfig starts without building a GPU.
     #[test]
     fn a_driver_starts_the_world_it_holds() {
-        let mut driver: Box<dyn Driver> = Box::new(App::new());
+        let mut driver: Box<dyn Driver> = Box::new(Runtime::new());
         assert!(driver.start().is_ok());
         assert!(matches!(driver.start(), Err(WorldError::AlreadyStarted)));
     }
@@ -44,14 +44,14 @@ mod tests {
     // caller can put it on a different loop.
     #[test]
     fn a_driver_hands_its_world_back_unrun() {
-        let mut app = App::new();
-        app.world_mut().add_component(AppConfig {
+        let mut runtime = Runtime::new();
+        runtime.world_mut().add_component(AppConfig {
             home: String::new(),
             max_memory_mb: 512,
             job_threads: 2,
         });
 
-        let driver: Box<dyn Driver> = Box::new(app);
+        let driver: Box<dyn Driver> = Box::new(runtime);
         let world = driver.into_world();
         assert!(
             world.query::<AppConfig>().next().is_some(),

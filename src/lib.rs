@@ -212,7 +212,7 @@ mod tests {
     #[test]
     fn a_world_without_graphics_starts_headless() {
         let mut app = super::App::from_world(starter_world());
-        app.inner_mut().start().expect("the world starts");
+        app.driver_mut().start().expect("the world starts");
     }
 
     // Without `std` the same app runs to completion in process: the headless

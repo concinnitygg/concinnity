@@ -88,7 +88,7 @@ impl Default for FrameTime {
 
 /// The live frame-rate cap in FPS (0 = unlimited), published by GraphicsSystem
 /// (from GraphicsConfig at init, refreshed by the settings row's live change)
-/// and read by the App-level frame pacer before each world step. Independent of
+/// and read by the runtime-level frame pacer before each world step. Independent of
 /// the quality preset (a user/hardware preference, like vsync).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FrameRateCap(pub u32);

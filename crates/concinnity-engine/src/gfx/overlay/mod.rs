@@ -151,7 +151,7 @@ impl System for OverlaySystem {
         }
         // Publish the menu state for every later system this tick: physics +
         // animation freeze while it is set, so a paused world stops consuming
-        // CPU/GPU behind the menu. The App-level pacer reads it before the
+        // CPU/GPU behind the menu. The runtime-level pacer reads it before the
         // next step to clamp the frame rate while a menu is open.
         ctx.insert_resource(MenuActive(frame.menu_active));
         ctx.insert_resource(frame);

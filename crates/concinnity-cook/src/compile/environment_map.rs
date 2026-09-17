@@ -124,7 +124,7 @@ pub(crate) fn compile_environment_map_payload(
         }
     };
     // A build-scoped pool, so a build never sizes the process-wide one before
-    // the App configures it.
+    // the runtime configures it.
     let pool = jobs::JobPool::new(jobs::default_threads());
     Ok(bake_payload(
         &hdr,

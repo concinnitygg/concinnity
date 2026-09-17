@@ -130,11 +130,11 @@ pub(crate) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> Str
                     "rss_mib": b.rss_mib,
                 },
             }),
-            // App::start publishes the budgets before the loop runs, so a None
+            // Runtime::start publishes the budgets before the loop runs, so a None
             // here means `tick` has not run since startup yet.
             None => serde_json::json!({
                 "ok": false,
-                "error": "budgets not published yet (App::start has not run)",
+                "error": "budgets not published yet (Runtime::start has not run)",
             }),
         },
         "profile" => {

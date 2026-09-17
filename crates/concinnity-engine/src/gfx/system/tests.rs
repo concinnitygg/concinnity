@@ -1124,7 +1124,7 @@ fn opaque_menu_backdrop_hides_world_and_freezes_gameplay_input() {
     }
     {
         let ctx = world.ctx();
-        // The App-level pacer clamps from this same resource next step.
+        // The runtime-level pacer clamps from this same resource next step.
         assert!(ctx.resource::<MenuActive>().unwrap().0);
         let input = ctx.resource::<FrameInput>().unwrap();
         assert!(!input.forward, "gameplay input frozen behind the menu");
@@ -2524,7 +2524,7 @@ fn persisted_display_and_system_overrides_reach_the_backend() {
             .0
             .is_empty()
     );
-    // The resolved cap reaches the App-level pacer through its own resource.
+    // The resolved cap reaches the runtime-level pacer through its own resource.
     assert!(world.resources.get::<FrameRateCap>().is_some());
 }
 

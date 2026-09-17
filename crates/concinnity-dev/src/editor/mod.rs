@@ -45,7 +45,7 @@ mod hook;
 // transport.
 mod hud;
 // Runtime injection of the HUD's reserved assets into a compiled world,
-// between the in-memory compile and `App::start`.
+// between the in-memory compile and `Runtime::start`.
 mod inject;
 // Applying an edit to the running preview world instead of rebuilding it.
 mod live;
@@ -100,8 +100,7 @@ use concinnity_cook::authoring::world::parse_world_jsonl;
 use concinnity_cook::authoring::world::write_world_jsonl;
 use concinnity_core::ecs::World;
 use concinnity_engine::app::run::LaunchRequest;
-use concinnity_engine::app::state;
-use concinnity_engine::app::state::App;
+use concinnity_engine::app::runtime::Runtime;
 use concinnity_engine::shutdown::ShutdownToken;
 use hook::EditorHook;
 
@@ -156,13 +155,13 @@ pub fn run_editor(
 
     // Bring up a renderable world by compiling those entries, seeding a render
     // marker when they alone would not render.
-    let mut app = crate::project::app().with_launch(launch);
-    boot_world(&mut app, &entries)?;
+    let mut runtime = crate::project::runtime().with_launch(launch);
+    boot_world(&mut runtime, &entries)?;
 
     // Inject the editor HUD elements before start (this also drops the world's
     // DebugHud, whose F1 role the editor takes over); the editor's DebugHook
     // tick drives them each frame.
-    inject::editor_hud(app.world_mut());
+    inject::editor_hud(runtime.world_mut());
 
     // Every editor session hot-reloads file-backed assets; with a debug port
     // the DebugServer owns the reload driver (so the `reload-assets` debug
@@ -188,7 +187,7 @@ pub fn run_editor(
         }
     };
 
-    crate::run::start_app(app, Some(hook))
+    crate::run::start_app(runtime, Some(hook))
 }
 
 // Resolve the world the editor opens on, and whether it opens on the Worlds
@@ -223,14 +222,14 @@ pub(crate) fn unsaved_world_path() -> String {
         .unwrap_or_else(|| WORLD_JSONL.to_string())
 }
 
-// Populate `app` with a renderable world for editing, compiled from the
+// Populate `runtime` with a renderable world for editing, compiled from the
 // authored entries in memory. Nothing under the build root is read: the blobs
 // there are refreshed only by an explicit build, so they may lag the world file
 // the editor is opening.
-fn boot_world(app: &mut App, entries: &[serde_json::Value]) -> std::io::Result<()> {
+fn boot_world(runtime: &mut Runtime, entries: &[serde_json::Value]) -> std::io::Result<()> {
     let jsonl = write_world_jsonl(entries).map_err(|e| std::io::Error::other(e.to_string()))?;
     let (world, _) = build_renderable(&jsonl)?;
-    app.load_world(world);
+    runtime.load_world(world);
     Ok(())
 }
 
@@ -279,9 +278,9 @@ impl DebugHook for MultiHook {
         }
     }
 
-    fn apply_world_swap(&mut self, app: &mut state::App) {
+    fn apply_world_swap(&mut self, runtime: &mut Runtime) {
         for hook in &mut self.hooks {
-            hook.apply_world_swap(app);
+            hook.apply_world_swap(runtime);
         }
     }
 
@@ -354,8 +353,9 @@ mod tests {
     }
 
     // The content of the booted world's only TextLabel.
-    fn booted_label(app: &App) -> String {
-        app.world()
+    fn booted_label(runtime: &Runtime) -> String {
+        runtime
+            .world()
             .query::<TextLabel>()
             .next()
             .expect("the authored label is in the booted world")
@@ -371,11 +371,11 @@ mod tests {
         let dir = concinnity_testing::TempTree::new();
         let build_root = open_project(dir.path());
 
-        let mut app = crate::project::app();
-        boot_world(&mut app, &renderable_entries("authored")).expect("the world builds");
+        let mut runtime = crate::project::runtime();
+        boot_world(&mut runtime, &renderable_entries("authored")).expect("the world builds");
 
-        assert!(concinnity_engine::ecs::renders(app.world()));
-        assert_eq!(booted_label(&app), "authored");
+        assert!(concinnity_engine::ecs::renders(runtime.world()));
+        assert_eq!(booted_label(&runtime), "authored");
         assert!(
             !build_root.join("data").exists() && !build_root.join("world-lock.json").exists(),
             "boot writes no blobs and no lock"
@@ -406,11 +406,11 @@ mod tests {
         let blob = concinnity_host::store::blob::primary_in(&build_root.join("data"));
         let before = std::fs::read(&blob).expect("the build wrote a primary blob");
 
-        let mut app = crate::project::app();
-        boot_world(&mut app, &renderable_entries("edited")).expect("the world builds");
+        let mut runtime = crate::project::runtime();
+        boot_world(&mut runtime, &renderable_entries("edited")).expect("the world builds");
 
         assert_eq!(
-            booted_label(&app),
+            booted_label(&runtime),
             "edited",
             "the entries win over the blobs the last build left"
         );
@@ -430,9 +430,9 @@ mod tests {
         let _guard = crate::test_support::lock();
         crate::test_support::isolate_state_dir();
 
-        let mut app = crate::project::app();
-        boot_world(&mut app, &[]).expect("an empty world seeds");
-        assert!(concinnity_engine::ecs::renders(app.world()));
+        let mut runtime = crate::project::runtime();
+        boot_world(&mut runtime, &[]).expect("an empty world seeds");
+        assert!(concinnity_engine::ecs::renders(runtime.world()));
     }
 
     // An explicit path is taken verbatim and loads directly, panel closed --

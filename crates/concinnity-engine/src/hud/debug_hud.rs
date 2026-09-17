@@ -229,7 +229,7 @@ impl System for DebugHudSystem {
             .next()
             .map(|c| (c.position, c.yaw, c.pitch));
 
-        // Process-level thread + memory budgets (published by App::start) and
+        // Process-level thread + memory budgets (published by Runtime::start) and
         // the live process RSS. Copied out to owned values before the mutable
         // chip write; each half is optional and renders `--` when absent. The
         // RSS read is a syscall, so it is resampled on an interval rather than

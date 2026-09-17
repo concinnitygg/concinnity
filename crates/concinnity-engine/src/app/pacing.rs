@@ -1,4 +1,4 @@
-//! CPU frame pacer for the FPS cap. Runs at the App level, before the world
+//! CPU frame pacer for the FPS cap. Runs at the runtime level, before the world
 //! steps, so no system pays the sleep inside its own step time and the cap
 //! applies whichever systems the world built. The cap value comes from the
 //! `FrameRateCap` resource (published by GraphicsSystem from GraphicsConfig +
@@ -43,7 +43,7 @@ fn effective_cap(user_cap: u32, menu_active: bool) -> u32 {
 }
 
 // Holds each frame's start to the target interval so the loop runs at most
-// `FrameRateCap` frames a second. One per `App`, driven once per world step.
+// `FrameRateCap` frames a second. One per `Runtime`, driven once per world step.
 #[derive(Debug, Default)]
 pub(crate) struct FramePacer {
     // The pacer's running target for the next frame's start.

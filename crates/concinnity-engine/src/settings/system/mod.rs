@@ -101,7 +101,7 @@ pub(crate) struct SettingsState {
     pub(crate) authored_anisotropy: u32,
     pub(crate) vsync: bool,
     // Frame-rate cap; a change republishes the `FrameRateCap` resource the
-    // App-level pacer reads.
+    // runtime-level pacer reads.
     pub(crate) fps_cap: u32,
     // Stats-HUD display toggles + the captured sub-row labels the master
     // toggle grays.

@@ -205,9 +205,9 @@ impl ActiveSceneFlow {
         Self { flow, epoch: None }
     }
 
-    // Seconds on the flow's clock at App time `now` (`FrameTime::elapsed`).
+    // Seconds on the flow's clock at runtime time `now` (`FrameTime::elapsed`).
     // The first read anchors the clock at zero, so a world started partway
-    // through an App's life times its fades from its own first frame.
+    // through a runtime's life times its fades from its own first frame.
     pub(crate) fn elapsed(&mut self, now: f32) -> f32 {
         (now - *self.epoch.get_or_insert(now)).max(0.0)
     }

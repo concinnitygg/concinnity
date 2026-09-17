@@ -6,7 +6,7 @@
 //! trait stays `pub(crate)` so it is not part of any public surface.
 
 use concinnity_core::ecs::World;
-use concinnity_engine::app::state::App;
+use concinnity_engine::app::runtime::Runtime;
 use concinnity_engine::shutdown::ShutdownToken;
 
 pub(crate) trait DebugHook: Send {
@@ -14,15 +14,15 @@ pub(crate) trait DebugHook: Send {
     // Receives the live world so the hook can inspect (and later mutate) it.
     fn tick(&mut self, world: &mut World);
 
-    // Called once per frame right after `tick`, handing the hook the whole app.
-    // Lets a hook perform an App-level world swap -- replace the world and
+    // Called once per frame right after `tick`, handing the hook the whole runtime.
+    // Lets a hook perform a Runtime-level world swap -- replace the world and
     // re-`start` it -- which `tick`'s `&mut World` cannot reach. The `cn editor`
     // live SAVE uses it to install the recompiled world (carrying the render
     // backend transplanted out of the pre-edit world) without recreating the
     // OS window. Default: no swap.
-    fn apply_world_swap(&mut self, _app: &mut App) {}
+    fn apply_world_swap(&mut self, _app: &mut Runtime) {}
 
-    // Called once before the run loop starts, handing the hook the app's
+    // Called once before the run loop starts, handing the hook the runtime's
     // shutdown token. A hook can cancel it to ask the engine to exit cleanly
     // (the run loop checks the token every iteration), e.g. a debug client
     // issuing a `shutdown` command. Default: ignore the token.

@@ -1246,7 +1246,7 @@ impl GraphicsSystem {
         }
         ctx.insert_resource(crate::ecs::DisplayModes(settings.display_modes.clone()));
         // The resolved frame-rate cap (world value or persisted override) for
-        // the App-level pacer; the settings row's live change republishes it.
+        // the runtime-level pacer; the settings row's live change republishes it.
         ctx.insert_resource(FrameRateCap(settings.fps_cap));
         let idx = display_mode::index_of(&settings.display_modes, settings.effective_resolution());
         if let Some(m) = settings.display_modes.get(idx) {

@@ -1,4 +1,4 @@
-//! The shared render/event loop that drives a live `App`. Both the compiled
+//! The shared render/event loop that drives a live `Runtime`. Both the compiled
 //! `cn run` runtime (`run::start_runtime`) and the interpreted `cn debug` path
 //! (in the editor crate) pump the same loop; the only difference is the per-tick
 //! hook the debug path threads through to run its DebugHook. Keeping the platform
@@ -13,13 +13,13 @@
 
 use concinnity_core::ecs::StepResult;
 
-use crate::app::state::App;
+use crate::app::runtime::Runtime;
 
-/// Install the process CTRL+C handler that cancels the app's shutdown token, so
+/// Install the process CTRL+C handler that cancels the runtime's shutdown token, so
 /// the render loop exits cleanly. Panics if a handler is already installed; only
 /// one entry point installs it per process.
-pub fn install_ctrlc_handler(app: &App) {
-    let token = app.shutdown_token();
+pub fn install_ctrlc_handler(runtime: &Runtime) {
+    let token = runtime.shutdown_token();
     let installed = ctrlc::set_handler(move || {
         tracing::info!("CTRL+C received, canceling all subsystems");
         token.cancel();
@@ -54,8 +54,8 @@ pub fn activate_app_macos() {
 /// `pump_events` is only meaningful on macOS (it gates the Cocoa pump): the
 /// caller sets it from whether the world actually renders, so a headless macOS
 /// world uses the same tight loop as every other platform.
-pub fn run_loop(app: &mut App, pump_events: bool, mut on_tick: impl FnMut(&mut App)) {
-    let shutdown = app.shutdown_token();
+pub fn run_loop(runtime: &mut Runtime, pump_events: bool, mut on_tick: impl FnMut(&mut Runtime)) {
+    let shutdown = runtime.shutdown_token();
 
     loop {
         if shutdown.is_canceled() {
@@ -70,9 +70,9 @@ pub fn run_loop(app: &mut App, pump_events: bool, mut on_tick: impl FnMut(&mut A
         #[cfg(not(target_os = "macos"))]
         let _ = pump_events;
 
-        on_tick(app);
+        on_tick(runtime);
 
-        match app.world_step() {
+        match runtime.world_step() {
             StepResult::Continue => {}
             StepResult::Stop | StepResult::Done => return,
         }

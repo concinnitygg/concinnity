@@ -1,5 +1,5 @@
 //! Runtime injection of the editor HUD elements into an already-compiled world.
-//! Runs between the world's in-memory compile and `App::start`, so the injected
+//! Runs between the world's in-memory compile and `Runtime::start`, so the injected
 //! components are indistinguishable from cooked ones -- and none of it is ever
 //! written back to the user's world.jsonl or blobs (the SAVE path serializes the
 //! authored entry list, not the live world). The elements are plain `Sprite` /

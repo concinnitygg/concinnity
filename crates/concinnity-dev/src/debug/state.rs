@@ -44,7 +44,7 @@ pub(crate) struct DebugState {
     pub(super) profile_frame_allocs: Option<u32>,
     // Render-backend stats from the most recent frame, for `profile`.
     pub(super) profile_render: profile::RenderStats,
-    // App shutdown token, set once via `DebugHook::attach_shutdown`. The
+    // Runtime shutdown token, set once via `DebugHook::attach_shutdown`. The
     // `shutdown` command cancels it to exit the engine cleanly.
     pub(super) shutdown_token: Option<ShutdownToken>,
     // Shared shader-reload flag captured from the active graphics backend.
@@ -63,7 +63,7 @@ pub(crate) struct DebugState {
     // camera never sets it).
     pub(super) camera: Option<CameraSnapshot>,
     // Process thread + memory budgets, refreshed every tick for the `budget`
-    // query. `None` until `App::start` has published them.
+    // query. `None` until `Runtime::start` has published them.
     pub(super) budget: Option<BudgetSnapshot>,
     // Live RAM back-off pressure on streaming, refreshed every tick for the
     // `streaming` query. `None` until StreamingSystem publishes its first sample

@@ -960,7 +960,7 @@ mod tests {
 
     // A menu freezes the solve: while `MenuActive(true)` is published the body
     // does not fall, and clearing it resumes the fall from where it froze.
-    // (The App-level simulation clock additionally holds its accumulator
+    // (The runtime-level simulation clock additionally holds its accumulator
     // across the pause, so a live run resumes without a catch-up burst.)
     #[test]
     fn menu_active_freezes_then_resumes_physics() {

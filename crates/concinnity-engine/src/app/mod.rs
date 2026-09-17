@@ -1,10 +1,10 @@
 //! Client application runtime: the world loop and the runtime systems that drive
 //! a compiled world. The build / edit / debug / preview paths live in the
 //! editor crate.
-//! `pub` so the editor crate (which drives a live App via the runtime API) can
+//! `pub` so the editor crate (which drives a live `Runtime` via the runtime API) can
 //! reach these runtime app items through `concinnity_engine::app::*`.
 
-/// Process-level thread + memory budgets computed at App start.
+/// Process-level thread + memory budgets computed at runtime start.
 pub mod budget;
 // Fixed-timestep accumulator advanced before each world step.
 pub(crate) mod clock;
@@ -17,11 +17,11 @@ pub(crate) mod pacing;
 pub(crate) mod pipeline;
 pub mod run;
 pub mod runloop;
+/// The `Runtime` value a host constructs, starts, and steps.
+pub mod runtime;
 /// Classification of fatal startup failures into a log line plus a sentence for
 /// the error screen.
 pub mod startup_error;
-/// The `App` value a host constructs, starts, and steps.
-pub mod state;
 /// Host-memory queries backing the memory budget + the live-usage readout.
 pub mod syscpu;
 pub mod sysmem;

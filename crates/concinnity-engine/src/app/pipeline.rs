@@ -1,7 +1,7 @@
 //! Pipelined frame driver: simulation of frame N+1 overlaps rendering of frame
 //! N. The main thread keeps everything the OS and GPU pin to it -- the event
 //! pumps (which run inside draw_frame / window_closed), the backend, frame
-//! submission, and swapchain recreation -- while a "sim" thread owns the App
+//! submission, and swapchain recreation -- while a "sim" thread owns the Runtime
 //! (pacer, fixed-tick clock, World::step) and produces RenderSnapshots.
 //!
 //! The snapshot channel is a rendezvous (bound 0): exactly one frame is in
@@ -19,28 +19,29 @@ use concinnity_core::render::feedback::FrameFeedback;
 use concinnity_core::render::snapshot::RenderSnapshot;
 use std::sync::mpsc::{Receiver, Sender};
 
-use crate::app::state::App;
+use crate::app::runtime::Runtime;
 use crate::ecs::PipelinedFrames;
 use crate::gfx::system::frame_policy::FramePolicy;
 use crate::gfx::system::submit::submit;
 use crate::shutdown::ShutdownToken;
 
-// Drive a started App with pipelined frames until it stops. Evicts the
+// Drive a started Runtime with pipelined frames until it stops. Evicts the
 // backend from the world onto this (main) thread, publishes the channel pair,
-// moves the App to the sim thread, and runs the render half here. A world
+// moves the Runtime to the sim thread, and runs the render half here. A world
 // that never built a backend (headless) falls back to the serial loop. A
 // panic on the sim thread is re-raised here after the render half drains, so
 // the process fails the same way a serial panic does. `screenshot` captures
 // the last presented frame on the way out (skipped after a device loss).
-pub(crate) fn run_pipelined(mut app: App, screenshot: Option<&str>) {
-    let Some(mut backend) = crate::ecs::take_render_backend(app.world_mut()) else {
-        crate::app::runloop::run_loop(&mut app, false, |_| {});
+pub(crate) fn run_pipelined(mut runtime: Runtime, screenshot: Option<&str>) {
+    let Some(mut backend) = crate::ecs::take_render_backend(runtime.world_mut()) else {
+        crate::app::runloop::run_loop(&mut runtime, false, |_| {});
         return;
     };
-    let shutdown = app.shutdown_token();
+    let shutdown = runtime.shutdown_token();
     let (snapshot_tx, snapshot_rx) = std::sync::mpsc::sync_channel::<RenderSnapshot>(0);
     let (feedback_tx, feedback_rx) = std::sync::mpsc::channel::<FrameFeedback>();
-    app.world_mut()
+    runtime
+        .world_mut()
         .insert_resource(PipelinedFrames(Some(crate::ecs::PipelineChannels {
             snapshot_tx,
             feedback_rx,
@@ -54,12 +55,12 @@ pub(crate) fn run_pipelined(mut app: App, screenshot: Option<&str>) {
                 if sim_shutdown.is_canceled() {
                     return;
                 }
-                match app.world_step() {
+                match runtime.world_step() {
                     StepResult::Continue => {}
                     StepResult::Stop | StepResult::Done => return,
                 }
             }
-            // The App (with the channel ends inside its world) drops here,
+            // The Runtime (with the channel ends inside its world) drops here,
             // which unblocks the render half's receive with Disconnected.
         })
         .expect("failed to spawn the sim thread");

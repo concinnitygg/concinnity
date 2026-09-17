@@ -1,4 +1,4 @@
-//! Process-level resource budgets computed once at App start from the host
+//! Process-level resource budgets computed once at runtime start from the host
 //! machine and the world's `AppConfig` overrides, then published as world
 //! resources so systems (and the debug server) can read them. Two budgets:
 //!

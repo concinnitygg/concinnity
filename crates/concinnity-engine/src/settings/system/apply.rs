@@ -480,7 +480,7 @@ impl SettingsState {
                 let cur = settings::fps_cap_index(self.fps_cap);
                 let next = settings::cycle(cur, opts.len(), op);
                 self.fps_cap = settings::fps_cap_at(next);
-                // No backend call: the App-level pacer reads the republished cap
+                // No backend call: the runtime-level pacer reads the republished cap
                 // before the next step, and the change re-bases its deadline.
                 ctx.insert_resource(FrameRateCap(self.fps_cap));
                 cfg.graphics.fps_cap = Some(self.fps_cap);

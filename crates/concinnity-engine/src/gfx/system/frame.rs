@@ -233,7 +233,7 @@ impl GraphicsSystem {
             queues.ops.drain_into(&mut snap.ops);
         }
 
-        // The FPS-cap pacer runs at the App level before the world steps (see
+        // The FPS-cap pacer runs at the runtime level before the world steps (see
         // `app::pacing`), so the frame time here already reflects the capped
         // interval.
         let frame_time = ctx.resource::<FrameTime>().copied().unwrap_or_default();
