@@ -22,7 +22,7 @@ fn first_weight() -> [f32; 4] {
 /// One vertex of a skinned mesh. Beyond position / color / uv it carries up
 /// to four joint bindings: `joints[k]` indexes the skeleton, `weights[k]` is
 /// its blend weight. Weights are normalized at build time.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 pub struct SkinnedVertexData {
     /// Vertex position `[x, y, z]` in model space.
     pub pos: [f32; 3],
@@ -42,7 +42,9 @@ pub struct SkinnedVertexData {
 
 /// One morph-target vertex delta: offsets added to the bind-pose position and
 /// normal, scaled by the target's weight at runtime.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields,
+)]
 #[serde(default)]
 pub struct MorphDelta {
     /// Position offset `[x, y, z]` in model space.
@@ -52,7 +54,7 @@ pub struct MorphDelta {
 }
 
 /// One joint of a skeleton's bind pose.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct SkeletonJoint {
     /// Human-readable joint name (animation tracks may reference it later).
@@ -120,7 +122,7 @@ impl Default for SkeletonJoint {
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct SkinnedMesh {
     /// Asset identity; injected via `inject_name`. Not part of `args`.
@@ -188,7 +190,7 @@ pub struct SkinnedMesh {
 
 /// A kinematic character capsule for a [SkinnedMesh](#skinnedmesh), in world
 /// units (after the mesh's `scale`).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct CharacterCapsule {
     /// Half-height of the capsule's cylindrical section.

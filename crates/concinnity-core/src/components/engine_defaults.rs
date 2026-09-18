@@ -25,7 +25,9 @@
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields,
+)]
 #[serde(default)]
 pub struct EngineDefaults {
     /// Inject the [StatHud](#stathud) when the world declares a

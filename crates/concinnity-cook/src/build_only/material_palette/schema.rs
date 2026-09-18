@@ -4,7 +4,9 @@
 ///
 /// Expands into [Material](#material) assets named `<palette_name>_<alias>`.
 /// [Prop](#prop)s reference the expanded names.
-#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Default, Clone, serde::Serialize, serde::Deserialize, concinnity_core::ecs::AssetFields,
+)]
 #[serde(default)]
 pub struct MaterialPalette {
     /// Name of a built-in or file-backed preset (e.g. "pal_stone_dungeon").
@@ -18,7 +20,7 @@ pub struct MaterialPalette {
 /// expanded [Material](#material) name) plus the Material fields the expansion
 /// fills in. Names in `albedo` / `normal_map` are unresolved [Texture](#texture)
 /// references, resolved on the expanded Material.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_core::ecs::AssetFields)]
 #[serde(default)]
 pub struct PaletteEntry {
     /// Alias suffix; the expanded material is named `<palette>_<alias>`.

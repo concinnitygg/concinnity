@@ -23,7 +23,7 @@ use crate::ecs::asset_id::AssetId;
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct SkyRotation {
     /// Asset identity; injected via `inject_name`. Not part of `args`.

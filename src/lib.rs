@@ -150,9 +150,11 @@ pub use concinnity_core::{component_mask, declare_components};
 // component's reference fields hold.
 pub use concinnity_core::ecs::{EnvironmentMapHandle, FontHandle, MaterialHandle, MeshHandle};
 
-// The identity a component names another by (a `Prop`'s `parent`, a `Model`'s
-// meshes). A world built here assigns these itself: an authoring build interns
-// them from declared names, which is not a step a Rust-built world takes.
+// The identity a component names another by, and the typed reference field
+// that holds one (a `Prop`'s `parent`). A world built here assigns ids itself:
+// an authoring build interns them from declared names, which is not a step a
+// Rust-built world takes.
+pub use concinnity_core::ecs::Ref;
 pub use concinnity_core::ecs::asset_id::AssetId;
 
 /// The runtime component vocabulary (`Camera3D`, `Room`, `DirectionalLight`,

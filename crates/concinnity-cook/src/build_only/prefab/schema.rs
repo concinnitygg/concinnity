@@ -17,7 +17,9 @@ use concinnity_core::components::PropCollider;
 /// transform.
 ///
 /// **Library presets** (JSON files in `assets/prefabs/`):
-#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Default, Clone, serde::Serialize, serde::Deserialize, concinnity_core::ecs::AssetFields,
+)]
 #[serde(default)]
 pub struct Prefab {
     /// Ordered list of entries. Each is a prop, a point light, or a nested
@@ -47,7 +49,7 @@ pub enum PrefabKind {
 /// `point_light` uses the `light_*` fields, and a `prefab` uses `prefab`. Names
 /// in `model` / `mesh` / `material` / `texture` / `parent` / `prefab` are
 /// unresolved references to other assets, resolved when the entry expands.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_core::ecs::AssetFields)]
 #[serde(default)]
 pub struct PrefabEntry {
     /// Entry name; the expanded asset is named `<instance>_<name>`.

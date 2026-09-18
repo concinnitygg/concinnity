@@ -4,6 +4,7 @@
 
 use concinnity_core::components::FpsCounter;
 use concinnity_core::components::TextLabel;
+use concinnity_core::ecs::Ref;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{Access, FrameTime, PipelineContext, StepResult, System};
 
@@ -23,7 +24,7 @@ impl FpsCounterSystem {
     pub(crate) fn new(config: FpsCounter) -> Self {
         Self {
             window: RateWindow::default(),
-            label: config.label,
+            label: config.label.map(Ref::id),
         }
     }
 }
@@ -56,6 +57,7 @@ impl System for FpsCounterSystem {
 mod tests {
     use crate::ecs::SYSTEMS;
     use concinnity_core::components::FpsCounter;
+    use concinnity_core::ecs::Ref;
     use concinnity_core::ecs::World;
 
     // An FpsCounter component spawns the internal counter system.
@@ -85,7 +87,7 @@ mod tests {
 
         let mut world = World::new();
         world.add_component(FpsCounter {
-            label: Some(AssetId(1)),
+            label: Some(Ref::new(AssetId(1))),
         });
         world.add_component(TextLabel {
             asset_id: AssetId(1),

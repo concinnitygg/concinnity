@@ -7,6 +7,7 @@ use concinnity_core::components::{
     AudioBus, AudioCommand, AudioCue, AudioEmitter, AudioOcclusionProbe, AudioTarget, Behavior,
     BodyDynamics, Camera3D, ContactEvent, CueKind, PlayCue, ScreenShown, Story, Transform,
 };
+use concinnity_core::ecs::Ref;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{
     AudioClipHandle, Entity, EntityByName, EventCursor, PayloadLocator, PipelineContext, SimTiming,
@@ -216,7 +217,7 @@ impl AudioSystem {
             entity,
             EmitterBinding {
                 id,
-                follows: emitter.prop,
+                follows: emitter.prop.map(Ref::id),
                 position: emitter.position,
                 occlusion: OcclusionSmoother::new(),
             },
@@ -271,7 +272,7 @@ impl System for AudioSystem {
             if !self.queue_clip(ctx, clip) {
                 tracing::warn!("AudioSystem: cue clip has no compiled payload, silent");
             }
-            self.cues.entry(screen).or_default().push(CueBinding {
+            self.cues.entry(screen.id()).or_default().push(CueBinding {
                 clip,
                 kind: cue.kind,
                 volume: cue.volume,
@@ -476,6 +477,7 @@ impl System for AudioSystem {
 
 #[cfg(test)]
 mod tests {
+    use concinnity_core::ecs::Ref;
     // These tests drive AudioSystem::init / step against a hand-built
     // PipelineContext and an in-memory blob, so no audio playback happens
     // (init may still probe for a device on a dev machine; every assertion
@@ -592,7 +594,7 @@ mod tests {
         let mut w = AudioWorld::new();
         let clip = w.clip(b"cue-clip-bytes");
         w.push(AudioCue {
-            screen: Some(screen),
+            screen: Some(Ref::new(screen)),
             clip: Some(clip),
             kind: CueKind::Music,
             volume: 0.7,
@@ -625,7 +627,7 @@ mod tests {
         let mut w = AudioWorld::new();
         let clip = w.clip(b"line-bytes");
         w.push(AudioCue {
-            screen: Some(screen),
+            screen: Some(Ref::new(screen)),
             clip: Some(clip),
             kind: CueKind::Sound,
             bus: Some(AudioBus::Voice),
@@ -648,7 +650,7 @@ mod tests {
     fn init_ignores_cue_without_clip() {
         let mut w = AudioWorld::new();
         w.push(AudioCue {
-            screen: Some(AssetId(90)),
+            screen: Some(Ref::new(AssetId(90))),
             clip: None,
             ..Default::default()
         });
@@ -672,7 +674,7 @@ mod tests {
         let cue_clip = w.clip(b"cue-audio");
         let page_clip = w.clip(b"story-page-audio");
         w.push(AudioCue {
-            screen: Some(screen),
+            screen: Some(Ref::new(screen)),
             clip: Some(cue_clip),
             ..Default::default()
         });
@@ -874,14 +876,14 @@ mod tests {
         let music_clip = w.clip(b"music");
         let sound_clip = w.clip(b"sound");
         w.push(AudioCue {
-            screen: Some(screen),
+            screen: Some(Ref::new(screen)),
             clip: Some(music_clip),
             kind: CueKind::Music,
             volume: 1.0,
             ..Default::default()
         });
         w.push(AudioCue {
-            screen: Some(screen),
+            screen: Some(Ref::new(screen)),
             clip: Some(sound_clip),
             kind: CueKind::Sound,
             volume: 1.0,

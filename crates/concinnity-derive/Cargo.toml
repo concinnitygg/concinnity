@@ -1,0 +1,28 @@
+[package]
+name = "concinnity-derive"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Derive macros for the Concinnity engine's authored asset schemas"
+readme = "README.md"
+keywords = ["gamedev", "derive", "concinnity"]
+categories = ["game-engines"]
+include = [
+    "/README.md",
+    "/src",
+]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }
+
+[lints]
+workspace = true

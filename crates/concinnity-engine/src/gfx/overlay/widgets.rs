@@ -4,6 +4,7 @@
 
 use concinnity_core::components::{Sprite, SpriteFit, TextAlign, TextInput, TextLabel};
 use concinnity_core::ecs::DropdownView;
+use concinnity_core::ecs::Ref;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::render::text;
 
@@ -82,7 +83,7 @@ pub(super) fn build_dropdown_overlay(
         tint,
         follow_cursor: false,
         visible: true,
-        screen: screen.screen,
+        screen: screen.screen.map(Ref::new),
         fit: SpriteFit::Fit,
         corner_radius: 0.0,
         border_width: 0.0,
@@ -148,7 +149,7 @@ pub(super) fn build_dropdown_overlay(
             wrap_width: (rect[2] - 2.0 * TEXT_PAD).max(0.0),
             max_lines: 1,
             visible: true,
-            screen: screen.screen,
+            screen: screen.screen.map(Ref::new),
         });
     }
 }
@@ -383,6 +384,7 @@ pub(super) fn build_text_input_overlay(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::ecs::Ref;
     use concinnity_core::ecs::{DropdownView, FontHandle};
     use concinnity_core::gfx::font;
 
@@ -576,7 +578,11 @@ mod tests {
         assert_eq!(rect(&sprites[3]), [400.0, 220.0, 200.0, 40.0]);
         assert_ne!(sprites[2].tint, sprites[3].tint);
         // Every sprite carries the view's screen, so it maps like the menu it drops from.
-        assert!(sprites.iter().all(|s| s.screen == view.screen && s.visible));
+        assert!(
+            sprites
+                .iter()
+                .all(|s| s.screen == view.screen.map(Ref::new) && s.visible)
+        );
         // One label per shown option, inset by the text pad and centered on a 16px line.
         assert_eq!(labels.len(), 3);
         assert_eq!(labels[0].content, "aa");

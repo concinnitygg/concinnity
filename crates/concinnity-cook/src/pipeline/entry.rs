@@ -355,6 +355,7 @@ mod tests {
         HitRegion, KeyBinding, Material, Prop, ScreenCommand, Sprite, TextLabel, UiAction,
     };
     use concinnity_core::ecs::MeshHandle;
+    use concinnity_core::ecs::Ref;
     use concinnity_core::ecs::asset_id::AssetId;
 
     #[test]
@@ -382,7 +383,7 @@ mod tests {
         // The `mesh` reference resolved to box's handle (0).
         assert_eq!(baked.mesh, Some(MeshHandle(0)));
         // The `scene` reference resolved to Scene `day`'s id (1).
-        assert_eq!(baked.scene, Some(AssetId(1)));
+        assert_eq!(baked.scene, Some(Ref::new(AssetId(1))));
     }
 
     // An anonymous asset still gets the id of its position, and the name table
@@ -940,19 +941,19 @@ mod tests {
             postcard::from_bytes::<Sprite>(&def(1).args_bytes)
                 .unwrap()
                 .screen,
-            screen
+            screen.map(Ref::new)
         );
         assert_eq!(
             postcard::from_bytes::<TextLabel>(&def(2).args_bytes)
                 .unwrap()
                 .screen,
-            screen
+            screen.map(Ref::new)
         );
         assert_eq!(
             postcard::from_bytes::<HitRegion>(&def(3).args_bytes)
                 .unwrap()
                 .screen,
-            screen
+            screen.map(Ref::new)
         );
     }
 

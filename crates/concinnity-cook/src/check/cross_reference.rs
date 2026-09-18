@@ -4,18 +4,19 @@
 //! acyclic. Every problem found is collected: validation never stops at the
 //! first error, so the caller can report them all in one pass.
 //!
-//! Flat single-target references are validated generically from the registry's
-//! `refs:` metadata (`validate_registry_refs`), so declaring a ref field on a
-//! registry entry IS enforcing it -- the same metadata drives the editor's Ref
-//! pickers. Only the structured references a flat (field, target) pair cannot
-//! express remain hand-written: each such asset implements `CrossReferenced` in
-//! `asset_refs` (lists, the polymorphic mesh sources, nested fields,
-//! required-ness) and `cross_refs_for` dispatches to it by type. A hand impl
-//! must not re-check a registry-declared field, or the problem reports twice.
+//! Reference fields are validated generically from the tables the registry
+//! derives from each schema's field types (`validate_registry_refs`), so typing
+//! a field `Ref<T>` IS enforcing it -- the same table drives the editor's Ref
+//! pickers. Only what a field type cannot state remains hand-written: each such
+//! asset implements `CrossReferenced` in `asset_refs` (the polymorphic mesh
+//! sources, references inside enum variants, required-ness) and
+//! `cross_refs_for` dispatches to it by type. A hand impl must not re-check a
+//! derived field, or the problem reports twice.
 
 use std::collections::{HashMap, HashSet};
 
 use super::asset_refs::{CrossRef, CrossReferenced, RefKind};
+use crate::authoring::field_path::string_leaves;
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::WorldJsonlAsset;
 
@@ -50,95 +51,61 @@ fn referenceable(assets: &[WorldJsonlAsset]) -> impl Iterator<Item = &WorldJsonl
     assets.iter().filter(|a| !a.is_anonymous())
 }
 
-// One registry entry's declared flat references: its type and the
-// (field, target type) pairs.
-type DeclaredRefs = (RegisteredType, &'static [(&'static str, &'static str)]);
-
-// Resolve every flat reference the registries declare: for each asset type's
-// `refs:` metadata (component and resource registries alike), a non-empty
-// string in the named field must be a declared asset of the target type.
-// Name-sets are built once per distinct target; every target names a real
-// declarable type (guarded by `ref_fields_name_real_target_types`).
+// Resolve every reference field the registry derives: each non-empty string
+// at the field's path must be a declared asset of one of its target types, or
+// of any type when the field names none. Name-sets are built once per distinct
+// target; every target names a real declarable type (guarded by
+// `ref_fields_name_real_target_types`).
 fn validate_registry_refs(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
-    let ref_lists: Vec<DeclaredRefs> = RegisteredType::all()
-        .iter()
-        .map(|t| (*t, t.ref_fields()))
-        .filter(|(_, refs)| !refs.is_empty())
-        .collect();
-
-    let mut scopes: HashMap<RegisteredType, HashSet<&str>> = HashMap::new();
-    for (_, refs) in &ref_lists {
-        for &(_, target) in refs.iter() {
-            let target = RegisteredType::parse(target)
-                .expect("ref_fields_name_real_target_types guards every target");
-            scopes.entry(target).or_insert_with(|| {
-                referenceable(assets)
-                    .filter(|a| a.asset_type == target)
-                    .map(|a| a.id.as_str())
-                    .collect()
-            });
+    let mut scopes: HashMap<&str, HashSet<&str>> = HashMap::new();
+    for ty in RegisteredType::all() {
+        for field in ty.ref_fields() {
+            for &target in field.targets {
+                scopes.entry(target).or_insert_with(|| {
+                    let target = RegisteredType::parse(target)
+                        .expect("ref_fields_name_real_target_types guards every target");
+                    referenceable(assets)
+                        .filter(|a| a.asset_type == target)
+                        .map(|a| a.id.as_str())
+                        .collect()
+                });
+            }
         }
     }
+    let any: HashSet<&str> = referenceable(assets).map(|a| a.id.as_str()).collect();
 
     for asset in assets {
-        for (list_type, refs) in &ref_lists {
-            if *list_type != asset.asset_type {
-                continue;
-            }
-            // A field may declare several targets (a Prop's `parent` is another
-            // Prop or the SkyRotation pivot); resolving in any one of them is
-            // enough, so the field is checked once against the union.
-            for field in fields_of(refs) {
-                let Some(referenced) = asset
-                    .args
-                    .get(field)
-                    .and_then(|v| v.as_str())
-                    .filter(|s| !s.is_empty())
-                else {
-                    continue;
+        for field in asset.asset_type.ref_fields() {
+            for (location, referenced) in string_leaves(&asset.args, &field.path) {
+                let resolves = if field.targets.is_empty() {
+                    any.contains(referenced)
+                } else {
+                    field.targets.iter().any(|t| scopes[t].contains(referenced))
                 };
-                let targets: Vec<RegisteredType> = refs
-                    .iter()
-                    .filter(|(name, _)| *name == field)
-                    .filter_map(|(_, target)| RegisteredType::parse(target))
-                    .collect();
-                if targets.iter().any(|t| scopes[t].contains(referenced)) {
+                if resolves {
                     continue;
                 }
                 errors.push(format!(
                     "{} '{}': {} '{}' not found, add {} asset with that `$id`",
-                    list_type.as_str(),
+                    asset.asset_type.as_str(),
                     asset.id,
-                    field,
+                    location,
                     referenced,
-                    one_of(&targets)
+                    one_of(field.targets)
                 ));
             }
         }
     }
 }
 
-// The distinct field names in a `refs:` list, in declaration order.
-fn fields_of(refs: &'static [(&'static str, &'static str)]) -> Vec<&'static str> {
-    let mut fields: Vec<&'static str> = Vec::new();
-    for &(field, _) in refs {
-        if !fields.contains(&field) {
-            fields.push(field);
-        }
-    }
-    fields
-}
-
-// "a Prop", or "a Prop or a SkyRotation" for a field with several targets.
-fn one_of(targets: &[RegisteredType]) -> String {
-    let named: Vec<String> = targets
-        .iter()
-        .map(|t| format!("a {}", t.as_str()))
-        .collect();
+// "a Prop", or "a Prop or a SkyRotation" for a field with several targets, or
+// "an" for a field that accepts any asset.
+fn one_of(targets: &[&str]) -> String {
+    let named: Vec<String> = targets.iter().map(|t| format!("a {t}")).collect();
     match named.split_last() {
         Some((last, [])) => last.clone(),
         Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
-        None => String::new(),
+        None => "an".to_string(),
     }
 }
 
@@ -146,10 +113,7 @@ fn one_of(targets: &[RegisteredType]) -> String {
 // validation pass; `contains` answers whether a reference resolves.
 struct RefScope<'a> {
     mesh_sources: HashSet<&'a str>,
-    materials: HashSet<&'a str>,
     scenes: HashSet<&'a str>,
-    block_types: HashSet<&'a str>,
-    skinned_meshes: HashSet<&'a str>,
     animations: HashSet<&'a str>,
     audio_clips: HashSet<&'a str>,
     screens: HashSet<&'a str>,
@@ -178,10 +142,7 @@ impl<'a> RefScope<'a> {
 
         RefScope {
             mesh_sources,
-            materials: by_type(RegisteredType::Material),
             scenes: by_type(RegisteredType::Scene),
-            block_types: by_type(RegisteredType::BlockType),
-            skinned_meshes: by_type(RegisteredType::SkinnedMesh),
             animations: by_type(RegisteredType::Animation),
             audio_clips: by_type(RegisteredType::AudioClip),
             screens: by_type(RegisteredType::Screen),
@@ -194,10 +155,7 @@ impl<'a> RefScope<'a> {
     fn contains(&self, kind: RefKind, name: &str) -> bool {
         match kind {
             RefKind::MeshSource => self.mesh_sources.contains(name),
-            RefKind::Material => self.materials.contains(name),
             RefKind::Scene => self.scenes.contains(name),
-            RefKind::BlockType => self.block_types.contains(name),
-            RefKind::SkinnedMesh => self.skinned_meshes.contains(name),
             RefKind::Animation => self.animations.contains(name),
             RefKind::AudioClip => self.audio_clips.contains(name),
             RefKind::Screen => self.screens.contains(name),
@@ -1235,37 +1193,38 @@ mod tests {
         assert!(validate_cross_references(&assets).is_ok());
     }
 
-    // The drift guard for the unified ref contract: EVERY (field, target)
-    // pair either registry declares -- component or resource asset -- is
-    // actually validated. A world holding only the referencing asset with a
-    // dangling name in that field must report it, so a declared-but-unchecked
-    // ref (the old asset_refs/registry drift) can never reappear.
+    // The drift guard for the derived ref contract: EVERY reference field the
+    // registry derives -- component, resource or build-only schema, at any
+    // nesting depth -- is actually validated. A world holding only the
+    // referencing asset with a dangling name at that path must report it.
     #[test]
     fn every_registry_ref_field_is_validated() {
-        let all: Vec<(RegisteredType, &[(&str, &str)])> = RegisteredType::all()
-            .iter()
-            .map(|t| (*t, t.ref_fields()))
-            .filter(|(_, refs)| !refs.is_empty())
-            .collect();
-        assert!(!all.is_empty());
-
-        for (ty, refs) in all {
-            for &(field, target) in refs {
-                let mut args = serde_json::Map::new();
-                args.insert(
-                    field.to_string(),
-                    serde_json::Value::String("ghost_ref".to_string()),
-                );
-                let probe = asset("probe", ty, serde_json::Value::Object(args));
+        let mut checked = 0;
+        for &ty in RegisteredType::all() {
+            for field in ty.ref_fields() {
+                let mut args = serde_json::json!({});
+                let mut cursor = &mut args;
+                for segment in field.path.split('.') {
+                    cursor = &mut cursor[segment];
+                }
+                *cursor = serde_json::Value::String("ghost_ref".to_string());
+                let probe = asset("probe", ty, args);
                 let errs = validate_cross_references(&[probe]).unwrap_err();
                 assert!(
                     errs.iter()
-                        .any(|e| e.contains("ghost_ref") && e.contains(field)),
-                    "{}.{field} (-> {target}): dangling reference not reported; got {errs:?}",
-                    ty.as_str()
+                        .any(|e| e.contains("ghost_ref") && e.contains(&field.path)),
+                    "{}.{} (-> {:?}): dangling reference not reported; got {errs:?}",
+                    ty.as_str(),
+                    field.path,
+                    field.targets
                 );
+                checked += 1;
             }
         }
+        assert!(
+            checked > 100,
+            "only {checked} reference fields were derived"
+        );
     }
 
     #[test]

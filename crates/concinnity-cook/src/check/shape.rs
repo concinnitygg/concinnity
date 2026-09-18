@@ -9,10 +9,10 @@
 //
 // The rules are driven by the registry's structural metadata (the `singleton`
 // flag), so the expansion passes, the editor, and these assertions share one
-// source of truth. Reference RESOLUTION is not a shape rule: every registry
-// `refs:` field is resolved generically by the cross-reference validator
-// (`validate_registry_refs`); the rules here judge relationships between
-// assets that already resolve.
+// source of truth. Reference RESOLUTION is not a shape rule: every reference
+// field the registry derives is resolved generically by the cross-reference
+// validator (`validate_registry_refs`); the rules here judge relationships
+// between assets that already resolve.
 
 use std::collections::HashSet;
 

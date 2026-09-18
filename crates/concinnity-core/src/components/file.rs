@@ -64,7 +64,7 @@ impl FileKind {
 }
 
 /// Authored fields of a `File`.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default, crate::ecs::AssetFields)]
 pub struct FileArgs {
     /// Path to the source file, relative to the project root.
     pub path: String,

@@ -19,7 +19,7 @@ use crate::ecs::asset_id::AssetId;
 /// Variables are world-scoped and shared. Per-entity state belongs in a
 /// behavior's `locals`, which are typed the same way but private to one entity
 /// and never persisted.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct Variables {
     /// Asset identity; injected via `inject_name`. Not part of `args`.
@@ -31,7 +31,7 @@ pub struct Variables {
 
 /// One variable declared by the world's [Variables](#variables). The declared
 /// value fixes both the variable's type and the value it holds at world start.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct VariableDecl {
     /// The name behaviors read and write the variable by.

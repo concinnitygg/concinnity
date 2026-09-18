@@ -127,7 +127,7 @@ pub enum ShaderStage {
 /// to compile, or omits its hook, fails the build naming the Shader and the
 /// hook. Under `cn debug` a save to either file recompiles it and swaps the
 /// live pipelines.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 pub struct Shader {
     /// Asset identity; injected via `inject_name`. Not part of `args`.
     #[serde(skip)]
@@ -160,7 +160,16 @@ impl Shader {
 /// The sources ride along for the reason an `SdfVolume`'s field does: an
 /// artifact is only loadable while the engine template it was built against
 /// still matches, and the renderer proves that by reassembling and digesting.
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+)]
 pub struct ShaderPrograms {
     /// The Shader's asset name, for diagnostics.
     pub name: String,

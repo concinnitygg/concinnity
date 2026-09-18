@@ -6,6 +6,7 @@
 // restore and write-back semantics, which are the same whatever the state is
 // kept in. A host's own store (a file, say) covers the medium itself.
 
+use crate::ecs::Ref;
 use alloc::collections::BTreeMap;
 use alloc::string::ToString;
 use alloc::vec;
@@ -269,7 +270,7 @@ fn distance_gates_a_condition() {
                 cond: BehaviorExpr::Lt(
                     Box::new(BehaviorExpr::Distance(
                         Box::new(BehaviorExpr::Bind("first".into())),
-                        Box::new(BehaviorExpr::Named(Some(AssetId(7)))),
+                        Box::new(BehaviorExpr::Named(Some(Ref::new(AssetId(7))))),
                     )),
                     Box::new(BehaviorExpr::Float(5.0)),
                 ),
@@ -618,7 +619,7 @@ fn spawn_emits_a_request_and_binds_nothing_this_tick() {
         on: BehaviorSource::Start,
         body: vec![
             BehaviorNode::Spawn {
-                template: Some(AssetId(3)),
+                template: Some(Ref::new(AssetId(3))),
                 position: [0.0, 1.0, 0.0],
                 rotation_deg: [0.0; 3],
                 scale: [1.0; 3],
@@ -953,7 +954,7 @@ fn counter_behavior() -> Behavior {
 
 fn despawn_named(target: u32) -> BehaviorNode {
     BehaviorNode::Despawn {
-        target: BehaviorExpr::Named(Some(AssetId(target))),
+        target: BehaviorExpr::Named(Some(Ref::new(AssetId(target)))),
     }
 }
 
@@ -1011,7 +1012,7 @@ fn nodes_apply_in_body_order() {
 #[test]
 fn enter_fires_on_matching_crossings_only() {
     let mut world = world_with(vec![Behavior {
-        on: BehaviorSource::Enter(Some(AssetId(5))),
+        on: BehaviorSource::Enter(Some(Ref::new(AssetId(5)))),
         body: vec![despawn_named(7)],
         ..Default::default()
     }]);
@@ -1048,7 +1049,7 @@ fn enter_fires_on_matching_crossings_only() {
 #[test]
 fn crossings_survive_a_menu_pause() {
     let mut world = world_with(vec![Behavior {
-        on: BehaviorSource::Enter(Some(AssetId(5))),
+        on: BehaviorSource::Enter(Some(Ref::new(AssetId(5)))),
         body: vec![despawn_named(7)],
         ..Default::default()
     }]);
@@ -1077,7 +1078,7 @@ fn crossings_survive_a_menu_pause() {
 #[test]
 fn interact_fires_on_matching_press_only() {
     let mut world = world_with(vec![Behavior {
-        on: BehaviorSource::Interact(Some(AssetId(4))),
+        on: BehaviorSource::Interact(Some(Ref::new(AssetId(4)))),
         body: vec![despawn_named(7)],
         ..Default::default()
     }]);
@@ -1109,10 +1110,10 @@ fn show_and_hide_send_visibility_requests() {
         on: BehaviorSource::Start,
         body: vec![
             BehaviorNode::Hide {
-                target: BehaviorExpr::Named(Some(AssetId(3))),
+                target: BehaviorExpr::Named(Some(Ref::new(AssetId(3)))),
             },
             BehaviorNode::Show {
-                target: BehaviorExpr::Named(Some(AssetId(3))),
+                target: BehaviorExpr::Named(Some(Ref::new(AssetId(3)))),
             },
         ],
         ..Default::default()

@@ -339,6 +339,7 @@ mod tests {
     use concinnity_core::components::{
         AudioCue, AudioEmitter, Camera3D, CameraController, PhysicsConfig, RigidBody,
     };
+    use concinnity_core::ecs::Ref;
     use concinnity_core::ecs::World;
 
     fn controlled_camera() -> Camera3D {
@@ -451,7 +452,7 @@ mod tests {
             ..Default::default()
         });
         world.add_component(AudioCue {
-            screen: Some(screen),
+            screen: Some(Ref::new(screen)),
             clip: Some(AudioClipHandle(0)),
             ..Default::default()
         });

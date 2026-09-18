@@ -1,9 +1,9 @@
 // Dynamic physics body schema for a companion Prop.
 
+use crate::components::Prop;
 use crate::ecs::AudioClipHandle;
-use crate::ecs::asset_id::AssetId;
-use crate::ecs::asset_id::de_opt_asset_ref;
 use crate::ecs::de_opt_audio_clip_handle;
+use crate::ecs::{Ref, de_opt_ref};
 
 /// Makes a companion [Prop](#prop) a dynamic physics body.
 ///
@@ -18,13 +18,13 @@ use crate::ecs::de_opt_audio_clip_handle;
 ///   "args": { "prop_name": "crate_a", "mass": 4.0, "friction": 0.6 }
 /// }
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct PropBody {
     /// The [Prop](#prop) this body drives. Must match a Prop declared in the
     /// same world.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub prop_name: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub prop_name: Option<Ref<Prop>>,
     /// Mass in kilograms. 0 lets the simulation derive mass from the collider
     /// shape and a default density.
     pub mass: f32,
@@ -63,6 +63,7 @@ impl Default for PropBody {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ecs::asset_id::AssetId;
 
     #[test]
     fn a_blank_body_falls_under_full_gravity_without_bouncing() {
@@ -82,12 +83,12 @@ mod tests {
             r#"{"prop_name":"ball","mass":2.5,"friction":0.1,"restitution":0.9,
                 "gravity_scale":0,"linear_damping":0.2}"#,
         );
-        assert_eq!(b.prop_name, Some(AssetId(4)));
+        assert_eq!(b.prop_name, Some(Ref::new(AssetId(4))));
         assert_eq!(b.gravity_scale, 0.0);
 
         let bytes = postcard::to_allocvec(&b).unwrap();
         let back: PropBody = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.prop_name, Some(AssetId(4)));
+        assert_eq!(back.prop_name, Some(Ref::new(AssetId(4))));
         assert_eq!(back.mass, 2.5);
         assert_eq!(back.friction, 0.1);
         assert_eq!(back.restitution, 0.9);

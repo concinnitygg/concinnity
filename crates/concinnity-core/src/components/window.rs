@@ -39,7 +39,7 @@ vocabulary!(WindowMode {
 ///   }
 /// }
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct Window {
     /// Window title shown in the title bar.

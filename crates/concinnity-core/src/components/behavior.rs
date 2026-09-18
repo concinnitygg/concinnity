@@ -6,10 +6,11 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::components::StoryPlayback;
+use crate::components::{Scene, Screen, TriggerVolume};
 use crate::ecs::AudioClipHandle;
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::asset_id::de_opt_asset_ref;
 use crate::ecs::de_opt_audio_clip_handle;
+use crate::ecs::{AnyAsset, Ref, de_opt_ref};
 
 /// A unit of world logic: an event source, the entities it runs against, its
 /// state, the world it reads, and the nodes it runs.
@@ -27,7 +28,7 @@ use crate::ecs::de_opt_audio_clip_handle;
 /// firing decision, which is made at fire time rather than after the delay.
 /// Timers, delays, and cooldowns freeze while a menu is open, like the rest of
 /// the world clock.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct Behavior {
     /// Asset identity; injected via `inject_name`. Not part of `args`.
@@ -85,12 +86,12 @@ pub enum BehaviorSource {
     /// Fires whenever the named world variable changes value.
     Variable(String),
     /// Fires when something enters the named [TriggerVolume](#triggervolume).
-    Enter(#[serde(deserialize_with = "de_opt_asset_ref")] Option<AssetId>),
+    Enter(#[serde(deserialize_with = "de_opt_ref")] Option<Ref<TriggerVolume>>),
     /// Fires when something leaves the named [TriggerVolume](#triggervolume).
-    Exit(#[serde(deserialize_with = "de_opt_asset_ref")] Option<AssetId>),
+    Exit(#[serde(deserialize_with = "de_opt_ref")] Option<Ref<TriggerVolume>>),
     /// Fires when the interact key is pressed on the named entity (a
     /// [Prop](#prop) declared `interactable`).
-    Interact(#[serde(deserialize_with = "de_opt_asset_ref")] Option<AssetId>),
+    Interact(#[serde(deserialize_with = "de_opt_ref")] Option<Ref<AnyAsset>>),
     /// Fires on an entity the tick after it spawns.
     Spawned,
 }
@@ -104,7 +105,7 @@ impl crate::components::Vocabulary for BehaviorSource {
 
 /// A per-entity state slot declared by a [Behavior](#behavior). The declared
 /// value fixes both the slot's type and its starting value.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct BehaviorLocal {
     /// The name nodes read the slot by.
@@ -115,7 +116,7 @@ pub struct BehaviorLocal {
 
 /// A world read declared by a [Behavior](#behavior), resolved once per tick
 /// into the entities carrying every named component.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct BehaviorQuery {
     /// The name expressions read the result by.
@@ -173,7 +174,7 @@ pub enum BehaviorExpr {
     /// Reads a name bound earlier by a `let` or `for_each` node.
     Bind(String),
     /// An entity declared in the world, addressed by asset name.
-    Named(#[serde(deserialize_with = "de_opt_asset_ref")] Option<AssetId>),
+    Named(#[serde(deserialize_with = "de_opt_ref")] Option<Ref<AnyAsset>>),
     /// The entity this behavior instance runs for. Only valid with a `scope`.
     #[serde(rename = "self")]
     SelfEntity,
@@ -360,8 +361,8 @@ pub enum BehaviorNode {
     /// `bind` makes the copy addressable for the rest of the body.
     Spawn {
         /// The placement copied (e.g. a [Prop](#prop)).
-        #[serde(default, deserialize_with = "de_opt_asset_ref")]
-        template: Option<AssetId>,
+        #[serde(default, deserialize_with = "de_opt_ref")]
+        template: Option<Ref<AnyAsset>>,
         /// World-space position of the copy.
         #[serde(default)]
         position: [f32; 3],
@@ -417,8 +418,8 @@ pub enum BehaviorNode {
     /// Jumps the world to a named [Scene](#scene).
     Scene {
         /// The scene jumped to.
-        #[serde(default, deserialize_with = "de_opt_asset_ref")]
-        scene: Option<AssetId>,
+        #[serde(default, deserialize_with = "de_opt_ref")]
+        scene: Option<Ref<Scene>>,
         /// The transition. See [SceneTransition](crate::components::SceneTransition).
         #[serde(default)]
         transition: crate::components::SceneTransition,
@@ -426,8 +427,8 @@ pub enum BehaviorNode {
     /// Shows a [Screen](#screen), replacing the top of the screen stack.
     Screen {
         /// The screen shown.
-        #[serde(default, deserialize_with = "de_opt_asset_ref")]
-        screen: Option<AssetId>,
+        #[serde(default, deserialize_with = "de_opt_ref")]
+        screen: Option<Ref<Screen>>,
     },
     /// Controls the world's [Story](#story) playback.
     Story(StoryPlayback),

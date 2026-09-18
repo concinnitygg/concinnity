@@ -7,6 +7,7 @@ use concinnity_core::components::{
     Behavior, BehaviorExpr, BehaviorNode, BehaviorSource, Prop, PropInstance,
 };
 use concinnity_core::components::{BehaviorQuery, Camera3D, Transform, Variables};
+use concinnity_core::ecs::Ref;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{MeshHandle, World};
 
@@ -27,7 +28,7 @@ fn a_prop_scoped_behavior_fires_once_started() {
     });
     world.add_component(Prop {
         asset_id: AssetId(2),
-        model: Some(AssetId(20)),
+        model: Some(Ref::new(AssetId(20))),
         position: [10.0, 0.0, 0.0],
         scale: [1.0; 3],
         ..Default::default()
@@ -89,7 +90,7 @@ fn a_behavior_moves_a_prop_the_simulation_owns() {
         ..Default::default()
     });
     world.add_component(PropBody {
-        prop_name: Some(AssetId(1)),
+        prop_name: Some(Ref::new(AssetId(1))),
         mass: 1.0,
         ..Default::default()
     });

@@ -16,7 +16,9 @@ use alloc::vec::Vec;
 /// emits one MSL translation unit for a pair of stages, and the Metal runtime
 /// wants both in one library. DXIL has no such form, so a container there
 /// holds exactly one.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields,
+)]
 pub struct CompiledProgram {
     /// Entry point names this artifact holds, as the shader source spells them.
     pub entries: Vec<String>,

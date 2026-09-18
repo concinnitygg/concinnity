@@ -7,8 +7,8 @@
 use alloc::string::ToString;
 
 use crate::components::{LoadingOverlay, Scene, Screen, Sprite, StreamingConfig, TextLabel};
-use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
+use crate::ecs::{PipelineContext, Ref};
 use crate::error::WorldError;
 
 use super::Minter;
@@ -37,7 +37,7 @@ pub(super) fn inject(ctx: &mut PipelineContext, minter: &mut Minter) -> Result<(
     // The screen first: every piece minted below belongs to it, whether it was
     // authored or minted here.
     let screen = match overlay.screen {
-        Some(screen) => screen,
+        Some(screen) => screen.id(),
         None => {
             let id = minter.id()?;
             ctx.push(Screen {
@@ -45,7 +45,7 @@ pub(super) fn inject(ctx: &mut PipelineContext, minter: &mut Minter) -> Result<(
                 fade_in_secs: 0.15,
                 ..Default::default()
             });
-            overlay.screen = Some(id);
+            overlay.screen = Some(Ref::new(id));
             id
         }
     };
@@ -108,10 +108,10 @@ pub(super) fn inject(ctx: &mut PipelineContext, minter: &mut Minter) -> Result<(
             x: CANVAS_WIDTH / 2.0,
             y: BAR_Y - 34.0,
             align: crate::components::TextAlign::Center,
-            screen: Some(screen),
+            screen: Some(Ref::new(screen)),
             ..Default::default()
         });
-        overlay.label = Some(id);
+        overlay.label = Some(Ref::new(id));
     }
 
     match ctx.query_mut::<LoadingOverlay>().next() {
@@ -135,12 +135,12 @@ fn sprite(
     minter: &mut Minter,
     screen: AssetId,
     sprite: Sprite,
-) -> Result<AssetId, WorldError> {
+) -> Result<Ref<Sprite>, WorldError> {
     let id = minter.id()?;
     ctx.push(Sprite {
         asset_id: id,
-        screen: Some(screen),
+        screen: Some(Ref::new(screen)),
         ..sprite
     });
-    Ok(id)
+    Ok(Ref::new(id))
 }

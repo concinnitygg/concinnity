@@ -14,6 +14,7 @@ categories = ["game-engines", "graphics", "rendering::engine"]
 [workspace.dependencies]
 concinnity-cook = { path = "crates/concinnity-cook", version = "0.19" }
 concinnity-core = { path = "crates/concinnity-core", version = "0.19" }
+concinnity-derive = { path = "crates/concinnity-derive", version = "0.19" }
 concinnity-dev = { path = "crates/concinnity-dev", version = "0.19", default-features = false }
 concinnity-device = { path = "crates/concinnity-device", version = "0.19", default-features = false }
 concinnity-engine = { path = "crates/concinnity-engine", version = "0.19", default-features = false }

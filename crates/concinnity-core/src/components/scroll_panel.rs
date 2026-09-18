@@ -1,7 +1,7 @@
 // Scrollable UI panel schema.
 
-use crate::ecs::asset_id::AssetId;
-use crate::ecs::asset_id::de_opt_asset_ref;
+use crate::components::{Screen, Sprite, TextLabel};
+use crate::ecs::{Ref, RefTarget, de_opt_ref};
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -19,13 +19,13 @@ use alloc::vec::Vec;
 ///
 /// All pixel fields are in the same reference-space coordinates as the Screen's
 /// other UI (see the overlay scaling notes on [MainMenu](#mainmenu)).
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct ScrollPanel {
     /// [Screen](#screen) this panel belongs to. The panel is only live while
     /// its screen is active.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub screen: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub screen: Option<Ref<Screen>>,
     /// Left edge of the content band in reference pixels.
     pub x: f32,
     /// Top edge of the content band in reference pixels.
@@ -40,12 +40,12 @@ pub struct ScrollPanel {
     pub groups: Vec<ScrollGroup>,
     /// Scrollbar thumb [Sprite](#sprite) the UI moves and resizes. `None` for a
     /// panel with no scrollbar.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub thumb: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub thumb: Option<Ref<Sprite>>,
     /// Scrollbar track [Sprite](#sprite). Hidden along with the thumb when the
     /// content fits the band.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub track: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub track: Option<Ref<Sprite>>,
     /// Left edge of the scrollbar track in reference pixels.
     pub track_x: f32,
     /// Top edge of the scrollbar track in reference pixels.
@@ -59,13 +59,13 @@ pub struct ScrollPanel {
 
 /// One row inside a [ScrollPanel](#scrollpanel): the elements that move
 /// together, the row's height, and the collapsible group it belongs to.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct ScrollRow {
     /// The [Sprite](#sprite)/[TextLabel](#textlabel) ids that make up this row
     /// and move (and clip) together. Click regions are matched to their row by
     /// position, so they are not listed here.
-    pub elements: Vec<AssetId>,
+    pub elements: Vec<Ref<ScrollElement>>,
     /// The row's authored top edge in reference pixels (its build-time, all
     /// groups expanded, unscrolled position).
     pub base_y: f32,
@@ -75,6 +75,15 @@ pub struct ScrollRow {
     /// hides this row, or `-1` for a row that is always shown (a group header
     /// or an ungrouped row).
     pub group: i32,
+}
+
+/// What a [ScrollRow](#scrollrow) element may name: a [Sprite](#sprite) or a
+/// [TextLabel](#textlabel).
+#[derive(Debug, Clone, Copy)]
+pub struct ScrollElement;
+
+impl RefTarget for ScrollElement {
+    const TYPES: &'static [&'static str] = &["Sprite", "TextLabel"];
 }
 
 impl Default for ScrollRow {
@@ -89,15 +98,15 @@ impl Default for ScrollRow {
 }
 
 /// A collapsible group of rows inside a [ScrollPanel](#scrollpanel).
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct ScrollGroup {
     /// Whether the group starts collapsed (its body rows hidden).
     pub collapsed: bool,
     /// The header [TextLabel](#textlabel) whose text gets a `+`/`-` prefix to
     /// reflect the collapsed state. `None` leaves the header text unchanged.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub header: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub header: Option<Ref<TextLabel>>,
     /// The header's base title (e.g. `"Advanced"`); the UI shows `"+ Advanced"`
     /// when collapsed and `"- Advanced"` when expanded.
     pub title: String,
@@ -106,6 +115,7 @@ pub struct ScrollGroup {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ecs::asset_id::AssetId;
 
     #[test]
     fn a_blank_row_belongs_to_no_group() {
@@ -145,14 +155,14 @@ mod tests {
                 "thumb":"bar","track":"bar_bg","track_x":600,"track_y":40,
                 "track_w":8,"track_h":400}"#,
         );
-        assert_eq!(p.screen, Some(AssetId(8)));
+        assert_eq!(p.screen, Some(Ref::new(AssetId(8))));
         assert_eq!(p.rows[0].elements, [AssetId(5), AssetId(5)]);
         assert_eq!(p.rows[0].group, 0);
         assert!(p.groups[0].collapsed);
-        assert_eq!(p.groups[0].header, Some(AssetId(10)));
+        assert_eq!(p.groups[0].header, Some(Ref::new(AssetId(10))));
         assert_eq!(p.groups[0].title, "Advanced");
-        assert_eq!(p.thumb, Some(AssetId(3)));
-        assert_eq!(p.track, Some(AssetId(6)));
+        assert_eq!(p.thumb, Some(Ref::new(AssetId(3))));
+        assert_eq!(p.track, Some(Ref::new(AssetId(6))));
 
         let bytes = postcard::to_allocvec(&p).unwrap();
         let back: ScrollPanel = postcard::from_bytes(&bytes).unwrap();

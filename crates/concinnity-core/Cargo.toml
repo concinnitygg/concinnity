@@ -27,6 +27,7 @@ detail = []
 [dependencies]
 
 bytemuck = { workspace = true, features = ["derive"] }
+concinnity-derive = { workspace = true }
 fontdue = { version = "0.9", default-features = false, features = ["hashbrown", "simd"] }
 hashbrown = "0.17.1"
 libm = "0.2"

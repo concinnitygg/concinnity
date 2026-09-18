@@ -537,7 +537,7 @@ impl GraphicsSystem {
         let palette: Vec<ChunkBlockType> = vw
             .palette
             .iter()
-            .map(|id| match block_types.get(id) {
+            .map(|id| match block_types.get(&id.id()) {
                 Some(bt) => block_type_to_chunk(bt),
                 None => {
                     tracing::warn!(
@@ -687,6 +687,7 @@ impl GraphicsSystem {
 
 #[cfg(test)]
 mod tests {
+    use concinnity_core::ecs::Ref;
     use std::sync::{Arc, Mutex};
 
     use super::*;
@@ -1247,7 +1248,7 @@ mod tests {
                 chunk_blocks: [8, 16, 8],
                 block_size: 2.0,
                 view_radius: 1,
-                palette: vec![air, ground],
+                palette: vec![Ref::new(air), Ref::new(ground)],
                 material: Some(handle),
                 ..Default::default()
             }),
@@ -1293,7 +1294,7 @@ mod tests {
         gs.setup_voxel_world_streaming(
             Some(VoxelWorld {
                 view_radius: 1,
-                palette: vec![AssetId(99), known],
+                palette: vec![Ref::new(AssetId(99)), Ref::new(known)],
                 ..Default::default()
             }),
             &std::collections::HashMap::from([(known, solid_block())]),

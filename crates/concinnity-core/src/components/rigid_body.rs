@@ -12,7 +12,7 @@
 /// ```json
 /// { "type": "RigidBody", "args": { "jump_height": 1.4 } }
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct RigidBody {
     /// Multiplier applied to the global gravity constant. 1.0 = normal gravity.

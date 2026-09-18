@@ -1,13 +1,12 @@
-// Per-asset cross-reference declarations for the STRUCTURED references a flat
-// registry `refs:` pair cannot express: lists (Model submeshes, voxel
-// palettes), the polymorphic mesh sources, nested fields
-// (Camera3D's follow controller), and required-ness (a missing mandatory
-// field is an authoring error, not an absent optional). Each such asset
-// implements `CrossReferenced`; the validator in `cross_reference.rs` resolves
-// each `RefKind` to the matching set of asset names and detects Prop parent
-// cycles. Flat references belong in the registry's `refs:` metadata instead
-// (validated generically by `validate_registry_refs`); an impl here must not
-// re-check a registry-declared field, or the problem reports twice.
+// Per-asset cross-reference declarations for what a field type cannot state:
+// the polymorphic mesh sources, references inside enum variants (a behavior's
+// nodes, a blendspace's members), and required-ness (a missing mandatory field
+// is an authoring error, not an absent optional). Each such asset implements
+// `CrossReferenced`; the validator in `cross_reference.rs` resolves each
+// `RefKind` to the matching set of asset names and detects Prop parent cycles.
+// A field typed `Ref<T>` or with a resource handle is validated generically
+// from the registry's derived table instead (`validate_registry_refs`); an impl
+// here must not re-check one, or the problem reports twice.
 //
 // This is build-time-only authoring logic; the asset data structs it operates
 // on, and their runtime `Component` impls, live in
@@ -25,10 +24,7 @@ use concinnity_core::components::{
 pub(crate) enum RefKind {
     // Mesh, ProceduralMesh, VoxelChunk, or a mesh-kind File.
     MeshSource,
-    Material,
     Scene,
-    BlockType,
-    SkinnedMesh,
     Animation,
     AudioClip,
     Screen,
@@ -63,50 +59,63 @@ pub(crate) trait CrossReferenced {
 // blendspace members. Serves reference validation over the raw world;
 // empty/missing names are skipped.
 pub(crate) fn state_clip_names(state: &serde_json::Value) -> Vec<String> {
-    let mut names = Vec::new();
-    let mut push = |v: Option<&serde_json::Value>| {
-        if let Some(clip) = v.and_then(|v| v.as_str())
-            && !clip.is_empty()
-        {
-            names.push(clip.to_string());
-        }
-    };
-    push(state.get("clip"));
+    let mut names: Vec<String> = state
+        .get("clip")
+        .and_then(|v| v.as_str())
+        .filter(|clip| !clip.is_empty())
+        .map(str::to_string)
+        .into_iter()
+        .collect();
     if let Some(blend) = state.get("blend") {
-        for point in blend
-            .get("points")
-            .and_then(|v| v.as_array())
-            .map(|a| a.as_slice())
-            .unwrap_or(&[])
-        {
-            push(point.get("clip"));
-        }
-        for row in blend
-            .get("rows")
-            .and_then(|v| v.as_array())
-            .map(|a| a.as_slice())
-            .unwrap_or(&[])
-        {
-            for cell in row.as_array().map(|a| a.as_slice()).unwrap_or(&[]) {
-                push(Some(cell));
-            }
-        }
+        names.extend(blend_clip_names(blend));
     }
     names
 }
 
+// The Animation names a blendspace's members reference: its 1D `points` or its
+// 2D `rows`. Empty/missing names are skipped.
+fn blend_clip_names(blend: &serde_json::Value) -> Vec<String> {
+    let points = blend
+        .get("points")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|point| point.get("clip"));
+    let cells = blend
+        .get("rows")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|row| row.as_array())
+        .flatten();
+    points
+        .chain(cells)
+        .filter_map(|v| v.as_str())
+        .filter(|clip| !clip.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+// A required reference left unset: absent, null, or an empty string. An
+// integer is an already-resolved id, so it counts as set.
+fn is_blank(value: Option<&serde_json::Value>) -> bool {
+    match value {
+        None | Some(serde_json::Value::Null) => true,
+        Some(serde_json::Value::String(s)) => s.is_empty(),
+        Some(_) => false,
+    }
+}
+
 impl CrossReferenced for AnimationGraph {
     fn cross_refs(name: &str, args: &serde_json::Value) -> Vec<CrossRef> {
+        // `target` and each state's `clip` resolve generically; the target's
+        // required-ness and the blendspace members, which sit in an enum
+        // variant, stay here.
         let mut refs = Vec::new();
-        match args.get("target").and_then(|v| v.as_str()).unwrap_or("") {
-            "" => refs.push(CrossRef::Issue(format!(
+        if is_blank(args.get("target")) {
+            refs.push(CrossRef::Issue(format!(
                 "AnimationGraph '{name}': `target` field is required (the SkinnedMesh to animate)"
-            ))),
-            target => refs.push(CrossRef::Resolve {
-                kind: RefKind::SkinnedMesh,
-                target: target.to_string(),
-                error: format!("AnimationGraph '{name}': target SkinnedMesh '{target}' not found"),
-            }),
+            )));
         }
         let states = args
             .get("states")
@@ -127,7 +136,7 @@ impl CrossReferenced for AnimationGraph {
                      members)"
                 )));
             }
-            for clip in clips {
+            for clip in state.get("blend").map(blend_clip_names).unwrap_or_default() {
                 refs.push(CrossRef::Resolve {
                     error: format!("AnimationGraph '{name}': {label} clip '{clip}' not found"),
                     kind: RefKind::Animation,
@@ -148,24 +157,21 @@ impl CrossReferenced for Camera3D {
         else {
             return Vec::new();
         };
-        match follow.get("target").and_then(|v| v.as_str()).unwrap_or("") {
-            "" => vec![CrossRef::Issue(format!(
+        // The target resolves generically; only its required-ness is here.
+        if is_blank(follow.get("target")) {
+            return vec![CrossRef::Issue(format!(
                 "Camera3D '{name}': `controller.follow.target` is required (the SkinnedMesh to follow)"
-            ))],
-            target => vec![CrossRef::Resolve {
-                kind: RefKind::SkinnedMesh,
-                target: target.to_string(),
-                error: format!("Camera3D '{name}': follow target SkinnedMesh '{target}' not found"),
-            }],
+            ))];
         }
+        Vec::new()
     }
 }
 
 impl CrossReferenced for Prop {
     fn cross_refs(name: &str, args: &serde_json::Value) -> Vec<CrossRef> {
-        // The flat references (model, material, texture, scene, parent) are
-        // registry-declared and resolved generically; only the polymorphic
-        // mesh source stays here. A Model takes precedence over a Mesh, so
+        // The typed references (model, material, scene, parent) resolve
+        // through the derived table; only the polymorphic mesh source stays
+        // here. A Model takes precedence over a Mesh, so
         // the mesh is checked only when no model is set.
         let arg = |key: &str| args.get(key).and_then(|v| v.as_str()).unwrap_or("");
         if !arg("model").is_empty() {
@@ -208,18 +214,6 @@ impl CrossReferenced for Model {
                         ),
                     });
                 }
-
-                let sub_mat = sub.get("material").and_then(|v| v.as_str()).unwrap_or("");
-                if !sub_mat.is_empty() {
-                    refs.push(CrossRef::Resolve {
-                        kind: RefKind::Material,
-                        target: sub_mat.to_string(),
-                        error: format!(
-                            "Model '{}': submesh[{}] material '{}' not found, add a Material asset with that `$id`",
-                            name, i, sub_mat
-                        ),
-                    });
-                }
             }
         }
 
@@ -229,9 +223,8 @@ impl CrossReferenced for Model {
 
 impl CrossReferenced for InstancedProp {
     fn cross_refs(name: &str, args: &serde_json::Value) -> Vec<CrossRef> {
-        // The flat references (material, texture) are registry-declared and
-        // resolved generically; the mesh stays here for its required-ness and
-        // its polymorphic target set.
+        // The material resolves through the derived table; the mesh stays
+        // here for its required-ness and its polymorphic target set.
         let mesh_ref = args.get("mesh").and_then(|v| v.as_str()).unwrap_or("");
         if mesh_ref.is_empty() {
             return vec![CrossRef::Issue(format!(
@@ -259,22 +252,14 @@ impl CrossReferenced for VoxelChunk {
             .and_then(|v| v.as_array())
             .map(|a| a.as_slice())
             .unwrap_or(&[]);
+        // Each named entry resolves generically; an entry that names nothing
+        // is caught here.
         for (i, entry) in palette.iter().enumerate() {
-            let bt_name = entry.as_str().unwrap_or("");
-            if bt_name.is_empty() {
+            if entry.as_str().unwrap_or("").is_empty() && !entry.is_u64() {
                 refs.push(CrossRef::Issue(format!(
                     "VoxelChunk '{}': palette[{}] is not a valid BlockType name",
                     name, i
                 )));
-            } else {
-                refs.push(CrossRef::Resolve {
-                    kind: RefKind::BlockType,
-                    target: bt_name.to_string(),
-                    error: format!(
-                        "VoxelChunk '{}': palette[{}] BlockType '{}' not found, add a BlockType asset with that `$id`",
-                        name, i, bt_name
-                    ),
-                });
             }
         }
 
@@ -291,22 +276,14 @@ impl CrossReferenced for VoxelWorld {
             .and_then(|v| v.as_array())
             .map(|a| a.as_slice())
             .unwrap_or(&[]);
+        // Each named entry resolves generically; an entry that names nothing
+        // is caught here.
         for (i, entry) in palette.iter().enumerate() {
-            let bt_name = entry.as_str().unwrap_or("");
-            if bt_name.is_empty() {
+            if entry.as_str().unwrap_or("").is_empty() && !entry.is_u64() {
                 refs.push(CrossRef::Issue(format!(
                     "VoxelWorld '{}': palette[{}] is not a valid BlockType name",
                     name, i
                 )));
-            } else {
-                refs.push(CrossRef::Resolve {
-                    kind: RefKind::BlockType,
-                    target: bt_name.to_string(),
-                    error: format!(
-                        "VoxelWorld '{}': palette[{}] BlockType '{}' not found, add a BlockType asset with that `$id`",
-                        name, i, bt_name
-                    ),
-                });
             }
         }
 
@@ -316,8 +293,8 @@ impl CrossReferenced for VoxelWorld {
 
 impl CrossReferenced for PhysicsJoint {
     fn cross_refs(name: &str, args: &serde_json::Value) -> Vec<CrossRef> {
-        // body_a / body_b resolution is registry-declared and generic; only
-        // the kind check and body_a's required-ness stay here.
+        // body_a / body_b resolve through the derived table; only the kind
+        // check and body_a's required-ness stay here.
         let arg_str = |key: &str| args.get(key).and_then(|v| v.as_str()).unwrap_or("");
         let mut refs = Vec::new();
 
@@ -503,22 +480,20 @@ mod tests {
 
     #[test]
     fn voxel_world_and_chunk_cross_refs_palette() {
-        // The flat material ref is registry-declared, so only the palette list
-        // is extracted here: an empty entry is an Issue, "grass" resolves.
-        let refs = VoxelWorld::cross_refs("ow", &json!({"palette": ["", "grass"]}));
-        assert_eq!(tally(&refs), (1, 1));
-        assert!(resolves_to(&refs, RefKind::BlockType, "grass"));
+        // Named entries resolve through the derived table, so only an entry
+        // naming nothing is caught here; a resolved id is not one.
+        let refs = VoxelWorld::cross_refs("ow", &json!({"palette": ["", "grass", 3]}));
+        assert_eq!(tally(&refs), (0, 1));
 
-        let chunk = VoxelChunk::cross_refs("c", &json!({"palette": ["stone", ""]}));
-        assert_eq!(tally(&chunk), (1, 1));
-        assert!(resolves_to(&chunk, RefKind::BlockType, "stone"));
+        let chunk = VoxelChunk::cross_refs("c", &json!({"palette": ["stone", null]}));
+        assert_eq!(tally(&chunk), (0, 1));
     }
 
     #[test]
     fn prop_cross_refs_model_takes_precedence_over_mesh() {
-        // The flat refs (model, material, texture, parent) are
-        // registry-declared, so only the mesh source is extracted here, and
-        // only when no model claims the prop.
+        // The typed refs (model, material, parent) resolve through the
+        // derived table, so only the mesh source is extracted here, and only
+        // when no model claims the prop.
         let refs = Prop::cross_refs("p", &json!({"model": "m", "mesh": "mesh_skipped"}));
         assert_eq!(tally(&refs), (0, 0));
         // With no model, the mesh path is used instead.
@@ -532,10 +507,10 @@ mod tests {
             "mdl",
             &json!({"meshes": [{"mesh": "m0", "material": "mat0"}, {}]}),
         );
-        // submesh0 -> mesh + material Resolves; submesh1 -> missing-mesh Issue.
-        assert_eq!(tally(&refs), (2, 1));
+        // submesh0 -> a mesh Resolve (its material resolves through the
+        // derived table); submesh1 -> missing-mesh Issue.
+        assert_eq!(tally(&refs), (1, 1));
         assert!(resolves_to(&refs, RefKind::MeshSource, "m0"));
-        assert!(resolves_to(&refs, RefKind::Material, "mat0"));
     }
 
     fn graph_json() -> serde_json::Value {
@@ -580,11 +555,9 @@ mod tests {
     }
 
     #[test]
-    fn anim_graph_cross_refs_cover_target_and_clips() {
-        let refs = AnimationGraph::cross_refs("g", &graph_json());
-        // One target resolve + two clip resolves.
-        assert_eq!(refs.len(), 3);
-        assert!(refs.iter().all(|r| matches!(r, CrossRef::Resolve { .. })));
+    fn anim_graph_cross_refs_leave_target_and_state_clips_to_the_table() {
+        // Both are typed reference fields, so the derived table resolves them.
+        assert!(AnimationGraph::cross_refs("g", &graph_json()).is_empty());
     }
 
     #[test]
@@ -604,14 +577,29 @@ mod tests {
 
     #[test]
     fn anim_graph_cross_refs_cover_blend_members() {
+        // Members sit in an enum variant, out of the table's reach.
         let refs = AnimationGraph::cross_refs("g", &blend1d_graph_json());
-        // One target resolve + three point-clip resolves.
-        assert_eq!(refs.len(), 4);
+        assert_eq!(refs.len(), 3);
         assert!(refs.iter().all(|r| matches!(r, CrossRef::Resolve { .. })));
+        assert!(resolves_to(&refs, RefKind::Animation, "walk"));
 
         let refs = AnimationGraph::cross_refs("g", &blend2d_graph_json());
-        // One target resolve + four grid-cell resolves.
-        assert_eq!(refs.len(), 5);
+        assert_eq!(refs.len(), 4);
+    }
+
+    #[test]
+    fn a_follow_camera_needs_a_target_it_leaves_to_the_table() {
+        let issues = |target: serde_json::Value| {
+            Camera3D::cross_refs(
+                "cam",
+                &json!({"controller": {"follow": {"target": target}}}),
+            )
+        };
+        assert_eq!(tally(&issues(json!(""))), (0, 1));
+        assert_eq!(tally(&issues(json!(null))), (0, 1));
+        assert!(issues(json!("hero")).is_empty());
+        assert!(issues(json!(4)).is_empty());
+        assert!(Camera3D::cross_refs("cam", &json!({"controller": {}})).is_empty());
     }
 
     #[test]

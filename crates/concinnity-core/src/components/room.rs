@@ -17,7 +17,7 @@ use alloc::vec::Vec;
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct RoomArgs {
     /// Half the room's width along X, in world units. Ignored when `size` is set.

@@ -37,7 +37,7 @@ pub const SDF_PARAMS_LEN: usize = 32;
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct SdfVolume {
     /// Asset identity; injected via `inject_name`. Not part of `args`.

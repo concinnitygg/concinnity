@@ -22,6 +22,7 @@ mod error;
 
 pub use error::AuthoringError;
 
+pub mod field_path;
 pub mod refs;
 pub mod registry;
 pub(crate) mod resource_type;

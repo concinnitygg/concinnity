@@ -430,13 +430,14 @@ fn entry_type(e: &serde_json::Value) -> Option<&str> {
     e.get("type").and_then(|v| v.as_str())
 }
 
-// The ids of the working entries whose type is `ty` (the reference options a
-// field targeting that type can pick from). An anonymous entry cannot be
-// referenced, so it is not offered.
-fn names_of_type(entries: &[serde_json::Value], ty: &str) -> Vec<String> {
+// The ids of the working entries whose type is one of `types`, or of every
+// entry when `types` is empty (the reference options a field targeting those
+// types can pick from). An anonymous entry cannot be referenced, so it is not
+// offered.
+fn names_of_types(entries: &[serde_json::Value], types: &[&str]) -> Vec<String> {
     entries
         .iter()
-        .filter(|e| entry_type(e) == Some(ty))
+        .filter(|e| types.is_empty() || entry_type(e).is_some_and(|t| types.contains(&t)))
         .filter_map(|e| declared_id(e).map(String::from))
         .collect()
 }

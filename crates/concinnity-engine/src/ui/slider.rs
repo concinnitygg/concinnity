@@ -3,6 +3,7 @@
 
 use concinnity_core::components::{FrameInput, SettingCommand, SettingOp};
 use concinnity_core::ecs::PipelineContext;
+use concinnity_core::ecs::Ref;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::gfx::overlay::OverlayTransform;
 
@@ -36,7 +37,7 @@ impl UiInputSystem {
                 ctx.events_mut::<SettingCommand>().send(SettingCommand {
                     setting: key,
                     op: SettingOp::SetFraction(track_fraction(qx, region_rect(r))),
-                    value_label: r.label,
+                    value_label: r.label.map(Ref::id),
                     persist: true,
                 });
             }
@@ -57,7 +58,7 @@ impl UiInputSystem {
                 ctx.events_mut::<SettingCommand>().send(SettingCommand {
                     setting: key,
                     op: SettingOp::SetFraction(track_fraction(qx, rect)),
-                    value_label: entry.region.label,
+                    value_label: entry.region.label.map(Ref::id),
                     persist: false,
                 });
             }

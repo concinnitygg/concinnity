@@ -1,8 +1,9 @@
 // Physics-joint constraint schema.
 
+use crate::components::Prop;
 use crate::components::{vocabulary, vocabulary_synonyms};
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::asset_id::de_opt_asset_ref;
+use crate::ecs::{Ref, de_opt_ref};
 
 /// The constraint shape a `PhysicsJoint` declares.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -91,7 +92,7 @@ impl PhysicsJointKind {
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct PhysicsJoint {
     /// Asset identity; injected via `inject_name`. Not part of `args`.
@@ -100,12 +101,12 @@ pub struct PhysicsJoint {
     /// Constraint shape; defaults to `fixed`. See [PhysicsJointKind].
     pub kind: PhysicsJointKind,
     /// First body: a [Prop](#prop) name. Required.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub body_a: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub body_a: Option<Ref<Prop>>,
     /// Second body: a [Prop](#prop) name. Empty means "world anchor", in which
     /// case `anchor_b` is interpreted as a world-space position.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub body_b: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub body_b: Option<Ref<Prop>>,
     /// Attach point in `body_a`'s local frame.
     pub anchor_a: [f32; 3],
     /// Attach point in `body_b`'s local frame (or world space if `body_b` is
@@ -226,8 +227,8 @@ mod tests {
                 "limits_enabled":true,"limits":[-90,0],"motor_max_force":12.5}"#,
         );
         assert_eq!(j.kind, PhysicsJointKind::Revolute);
-        assert_eq!(j.body_a, Some(crate::ecs::asset_id::AssetId(4)));
-        assert_eq!(j.body_b, Some(crate::ecs::asset_id::AssetId(5)));
+        assert_eq!(j.body_a, Some(Ref::new(crate::ecs::asset_id::AssetId(4))));
+        assert_eq!(j.body_b, Some(Ref::new(crate::ecs::asset_id::AssetId(5))));
 
         let bytes = postcard::to_allocvec(&j).unwrap();
         let back: PhysicsJoint = postcard::from_bytes(&bytes).unwrap();

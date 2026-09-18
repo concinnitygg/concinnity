@@ -76,7 +76,7 @@ pub(crate) fn capture_row_labels(
             && keys.contains(&key)
             && let Some(label) = r.label
         {
-            anchors.insert(label);
+            anchors.insert(label.id());
         }
     }
     if anchors.is_empty() {
@@ -84,7 +84,11 @@ pub(crate) fn capture_row_labels(
     }
     let rows: Vec<Vec<AssetId>> = ctx
         .query::<ScrollPanel>()
-        .flat_map(|p| p.rows.iter().map(|r| r.elements.clone()))
+        .flat_map(|p| {
+            p.rows
+                .iter()
+                .map(|r| r.elements.iter().map(|e| e.id()).collect())
+        })
         .collect();
     let dim = expand_dim_set(&anchors, &rows);
     ctx.query::<TextLabel>()
@@ -147,14 +151,14 @@ impl SettingsState {
             let (Some(handle_id), Some(value_id)) = (r.drag_handle, r.label) else {
                 continue;
             };
-            let handle_w = sprite_w.get(&handle_id).copied().unwrap_or(0.0);
+            let handle_w = sprite_w.get(&handle_id.id()).copied().unwrap_or(0.0);
             sliders.push(SliderViz {
                 key,
                 track_x: r.x,
                 track_w: r.width,
                 handle_w,
-                handle_id,
-                value_id,
+                handle_id: handle_id.id(),
+                value_id: value_id.id(),
             });
         }
         for s in &sliders {
@@ -192,8 +196,14 @@ impl SettingsState {
                 continue;
             };
             match *key {
-                SettingKey::KeyRebind(action) => rows.push(RebindViz { action, value_id }),
-                SettingKey::PadRebind(action) => pad_rows.push(PadRebindViz { action, value_id }),
+                SettingKey::KeyRebind(action) => rows.push(RebindViz {
+                    action,
+                    value_id: value_id.id(),
+                }),
+                SettingKey::PadRebind(action) => pad_rows.push(PadRebindViz {
+                    action,
+                    value_id: value_id.id(),
+                }),
                 _ => {}
             }
         }
@@ -227,7 +237,7 @@ impl SettingsState {
                 Some(value_id),
             ) = (&r.action, r.label)
             {
-                labels.insert(*key, value_id);
+                labels.insert(*key, value_id.id());
             }
         }
         self.cycle_value_labels = labels;
@@ -278,6 +288,7 @@ mod tests {
     use concinnity_core::ecs::ComponentSlot;
     use concinnity_core::ecs::ComponentStorage;
     use concinnity_core::ecs::FrameContext;
+    use concinnity_core::ecs::Ref;
     use concinnity_core::ecs::Resources;
     use concinnity_core::profile;
     use concinnity_host::store::blob::BlobData;
@@ -359,7 +370,7 @@ mod tests {
     fn region(action: &str, label: Option<u32>) -> HitRegion {
         HitRegion {
             action: Some(UiAction::parse(action, |_| None).unwrap()),
-            label: label.map(AssetId),
+            label: label.map(AssetId).map(Ref::new),
             ..Default::default()
         }
     }
@@ -461,11 +472,17 @@ mod tests {
         world.push(ScrollPanel {
             rows: vec![
                 ScrollRow {
-                    elements: vec![AssetId(1), AssetId(2), AssetId(3), AssetId(4), AssetId(5)],
+                    elements: vec![
+                        Ref::new(AssetId(1)),
+                        Ref::new(AssetId(2)),
+                        Ref::new(AssetId(3)),
+                        Ref::new(AssetId(4)),
+                        Ref::new(AssetId(5)),
+                    ],
                     ..Default::default()
                 },
                 ScrollRow {
-                    elements: vec![AssetId(20)],
+                    elements: vec![Ref::new(AssetId(20))],
                     ..Default::default()
                 },
             ],

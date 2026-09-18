@@ -29,7 +29,7 @@ use std::vec;
 /// **Generated names** are prefixed with the menu's `name` (`<name>_btn_0`,
 /// `<name>_label_0`, `<name>_cursor`, ...), so they never clash with
 /// hand-authored assets and you never reference them by hand.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_core::ecs::AssetFields)]
 #[serde(default)]
 pub struct MainMenu {
     /// Menu entries, top to bottom. Each one is a clickable button.
@@ -137,7 +137,9 @@ impl concinnity_core::components::Vocabulary for SettingsProfile {
 }
 
 /// One entry in a [MainMenu](#mainmenu).
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Default, serde::Serialize, serde::Deserialize, concinnity_core::ecs::AssetFields,
+)]
 #[serde(default)]
 pub struct MainMenuItem {
     /// Button text.

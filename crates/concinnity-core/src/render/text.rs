@@ -592,6 +592,7 @@ pub(crate) fn band_to_window(overlay: &OverlayTransform, band: [f32; 4]) -> [f32
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ecs::Ref;
     use crate::ecs::asset_id::AssetId;
     use crate::gfx::font::GlyphMetrics;
 
@@ -1066,7 +1067,7 @@ mod tests {
         let hud = make_label(FontHandle(0), "A", 100.0); // view == None
         let mut overlay_label = make_label(FontHandle(0), "A", 100.0);
         overlay_label.y = 100.0;
-        overlay_label.screen = Some(AssetId(5));
+        overlay_label.screen = Some(Ref::new(AssetId(5)));
 
         // 2x reference viewport (1280x720 -> 2560x1440): scale 2, centered.
         let vp = (2560.0, 1440.0);
@@ -1218,7 +1219,7 @@ mod tests {
         let first_y = |fit: SpriteFit| {
             let mut l = make_label(FontHandle(0), "A", 100.0);
             l.y = 600.0;
-            l.screen = Some(AssetId(5));
+            l.screen = Some(Ref::new(AssetId(5)));
             l.fit = fit;
             build_text_calls(
                 core::slice::from_ref(&l),

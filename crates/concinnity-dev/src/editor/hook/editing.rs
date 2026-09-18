@@ -6,7 +6,7 @@ use concinnity_cook::authoring::world::{args_with_id, replace_args};
 use concinnity_core::ecs::World;
 
 use super::{
-    EditorHook, FormTarget, FormTemplate, declared_id, names_of_type, short_status, visible_slot,
+    EditorHook, FormTarget, FormTemplate, declared_id, names_of_types, short_status, visible_slot,
 };
 use crate::editor::overrides;
 use crate::editor::panels::form;
@@ -118,7 +118,7 @@ impl EditorHook {
             .iter()
             .enumerate()
             .filter_map(|(i, f)| match f.kind {
-                form::FieldKind::Ref { target } => Some((i, self.ref_targets(target))),
+                form::FieldKind::Ref { targets } => Some((i, self.ref_options(targets))),
                 _ => None,
             })
             .collect();
@@ -172,18 +172,21 @@ impl EditorHook {
         self.form.args = form::assemble(&ty, Some(&self.form.args), &self.form.fields, &texts);
     }
 
-    // The names a reference field targeting `ty` can pick from: every asset of
-    // that type in the expanded world, not just the authored lines. A promoted
-    // asset's references point at generated assets, so an authored-only list
-    // would offer no way to retarget one (`form::set_ref_options` keeps the
-    // current value regardless, but could not offer its siblings).
-    fn ref_targets(&self, ty: &str) -> Vec<String> {
-        let mut names = names_of_type(&self.entries, ty);
-        let Some(target) = RegisteredType::parse(ty) else {
-            return names;
-        };
+    // The names a reference field targeting `targets` can pick from: every asset
+    // of those types in the expanded world, not just the authored lines, and
+    // every asset when the field names no type. A promoted asset's references
+    // point at generated assets, so an authored-only list would offer no way to
+    // retarget one (`form::set_ref_options` keeps the current value regardless,
+    // but could not offer its siblings).
+    fn ref_options(&self, targets: &[&str]) -> Vec<String> {
+        let mut names = names_of_types(&self.entries, targets);
+        let wanted: Vec<RegisteredType> = targets
+            .iter()
+            .filter_map(|t| RegisteredType::parse(t))
+            .collect();
         for asset in self.tree_groups.iter().flat_map(|g| &g.assets) {
-            if asset.asset_type == target && !names.iter().any(|n| n == &asset.name) {
+            let offered = wanted.is_empty() || wanted.contains(&asset.asset_type);
+            if offered && !names.iter().any(|n| n == &asset.name) {
                 names.push(asset.name.clone());
             }
         }

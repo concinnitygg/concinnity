@@ -23,7 +23,9 @@ use alloc::vec::Vec;
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields,
+)]
 #[serde(default)]
 pub struct ProceduralMesh {
     /// Asset identity; injected via `inject_name`. Not part of `args`.

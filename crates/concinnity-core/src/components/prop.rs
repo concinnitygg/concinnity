@@ -1,12 +1,13 @@
 // Scene-object prop schema.
 
+use crate::components::{Model, Scene};
 use crate::components::{vocabulary, vocabulary_synonyms};
 use crate::ecs::MaterialHandle;
 use crate::ecs::MeshHandle;
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::asset_id::de_opt_asset_ref;
 use crate::ecs::de_opt_material_handle;
 use crate::ecs::de_opt_mesh_handle;
+use crate::ecs::{Ref, RefTarget, de_opt_ref};
 use alloc::string::String;
 
 /// The collision volume a [PropCollider](#propcollider)'s `shape` names. The
@@ -52,7 +53,7 @@ impl PropColliderShape {
 /// The shape dimensions are in the prop's local space and are scaled by the
 /// prop's `scale`. `ball` and `capsule` use the X scale component (they assume
 /// uniform scaling).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct PropCollider {
     /// Collision shape: `aabb` (alias `cuboid`), `ball` (alias `sphere`), or
@@ -101,7 +102,7 @@ impl Default for PropCollider {
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct Prop {
     /// Asset identity; injected via `inject_name`. Not part of `args`.
@@ -110,8 +111,8 @@ pub struct Prop {
     /// A [Model](#model) asset. When set, the prop renders all sub-meshes of
     /// that model (each with its own material) sharing this prop's transform.
     /// Takes precedence over `mesh` and `material`.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub model: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub model: Option<Ref<Model>>,
     /// A [Mesh](#mesh) or [ProceduralMesh](#proceduralmesh) asset this prop
     /// renders. Used when `model` is unset.
     #[serde(deserialize_with = "de_opt_mesh_handle")]
@@ -142,12 +143,12 @@ pub struct Prop {
     /// `position`, `rotation_deg`, and `scale` are relative to the parent's
     /// world transform. The parent must be declared in the same world; circular
     /// chains are treated as an error.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub parent: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub parent: Option<Ref<PropParent>>,
     /// [Scene](#scene) this prop belongs to. `None` means the prop is visible
     /// in every scene. Used by scene switches for per-scene visibility.
-    #[serde(default, deserialize_with = "de_opt_asset_ref")]
-    pub scene: Option<AssetId>,
+    #[serde(default, deserialize_with = "de_opt_ref")]
+    pub scene: Option<Ref<Scene>>,
     /// Name of a [Prefab](#prefab) to instantiate at this prop's transform. When
     /// set, it expands into concrete child props and lights, replacing this
     /// prop. Cannot be combined with `model` or `mesh`.
@@ -161,6 +162,15 @@ pub struct Prop {
     /// follows the camera instead of simulating it dynamically.
     #[serde(skip)]
     pub is_held: bool,
+}
+
+/// What a [Prop](#prop)'s `parent` may name: another prop, or the
+/// [SkyRotation](#skyrotation) pivot.
+#[derive(Debug, Clone, Copy)]
+pub struct PropParent;
+
+impl RefTarget for PropParent {
+    const TYPES: &'static [&'static str] = &["Prop", "SkyRotation"];
 }
 
 impl Default for Prop {
@@ -255,11 +265,11 @@ mod tests {
             r#"{"model":"crate_model","mesh":"crate_mesh","material":"wood","parent":"shelf","scene":"vault"}"#,
         );
         // A Model is still an interned name; the resource kinds are handles.
-        assert_eq!(p.model, Some(AssetId(11)));
+        assert_eq!(p.model, Some(Ref::new(AssetId(11))));
         assert_eq!(p.mesh, Some(MeshHandle(10)));
         assert_eq!(p.material, Some(MaterialHandle(4)));
-        assert_eq!(p.parent, Some(AssetId(5)));
-        assert_eq!(p.scene, Some(AssetId(5)));
+        assert_eq!(p.parent, Some(Ref::new(AssetId(5))));
+        assert_eq!(p.scene, Some(Ref::new(AssetId(5))));
     }
 
     #[test]

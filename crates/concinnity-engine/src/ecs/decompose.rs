@@ -69,7 +69,7 @@ pub(crate) fn run(ctx: &mut PipelineContext) {
             ctx.insert(
                 *entity,
                 ModelRenderer {
-                    model,
+                    model: model.id(),
                     cull_distance: prop.cull_distance,
                 },
             );
@@ -96,7 +96,7 @@ pub(crate) fn run(ctx: &mut PipelineContext) {
             ctx.insert(*entity, Held);
         }
         if let Some(scene) = prop.scene {
-            ctx.insert(*entity, SceneMember(scene));
+            ctx.insert(*entity, SceneMember(scene.id()));
         }
     }
 
@@ -105,7 +105,7 @@ pub(crate) fn run(ctx: &mut PipelineContext) {
     // per entity. The source column drains with it.
     for body in ctx.drain::<PropBody>() {
         let Some(name) = body.prop_name else { continue };
-        let Some(&entity) = by_name.get(&name) else {
+        let Some(&entity) = by_name.get(&name.id()) else {
             continue;
         };
         ctx.insert(
@@ -127,7 +127,7 @@ pub(crate) fn run(ctx: &mut PipelineContext) {
     let mut children: HashMap<Entity, concinnity_core::memory::InlineVec<Entity>> = HashMap::new();
     for (entity, prop) in &props {
         if let Some(parent_id) = prop.parent
-            && let Some(&parent) = by_name.get(&parent_id)
+            && let Some(&parent) = by_name.get(&parent_id.id())
         {
             ctx.insert(*entity, Parent(parent));
             children.entry(parent).or_default().push(*entity);
@@ -159,6 +159,7 @@ mod tests {
     use super::*;
     use crate::ecs::SYSTEMS;
     use concinnity_core::components::{Prop, PropCollider};
+    use concinnity_core::ecs::Ref;
     use concinnity_core::ecs::{MaterialHandle, MeshHandle, World};
 
     fn prop(id: u32) -> Prop {
@@ -180,7 +181,7 @@ mod tests {
             ..Default::default()
         });
         let mut moon = prop(2);
-        moon.parent = Some(AssetId(7));
+        moon.parent = Some(Ref::new(AssetId(7)));
         world.add_component(moon);
         world.start(SYSTEMS).unwrap();
 
@@ -205,7 +206,7 @@ mod tests {
 
         // A model-backed parent placement.
         let mut frame = prop(1);
-        frame.model = Some(AssetId(100));
+        frame.model = Some(Ref::new(AssetId(100)));
         frame.position = [1.0, 2.0, 3.0];
         world.add_component(frame);
 
@@ -215,8 +216,8 @@ mod tests {
         panel.material = Some(MaterialHandle(102));
         panel.collider = Some(PropCollider::default());
         panel.interactable = true;
-        panel.scene = Some(AssetId(200));
-        panel.parent = Some(AssetId(1));
+        panel.scene = Some(Ref::new(AssetId(200)));
+        panel.parent = Some(Ref::new(AssetId(1)));
         panel.position = [4.0, 5.0, 6.0];
         panel.rotation_deg = [0.0, 90.0, 0.0];
         world.add_component(panel);
@@ -277,7 +278,7 @@ mod tests {
         let mut world = World::new();
         let mut child = prop(1);
         child.mesh = Some(MeshHandle(10));
-        child.parent = Some(AssetId(2));
+        child.parent = Some(Ref::new(AssetId(2)));
         world.add_component(child);
         let mut parent = prop(2);
         parent.mesh = Some(MeshHandle(11));
@@ -310,7 +311,7 @@ mod tests {
         a.mesh = Some(MeshHandle(10));
         world.add_component(a);
         let mut b = prop(2);
-        b.model = Some(AssetId(20));
+        b.model = Some(Ref::new(AssetId(20)));
         world.add_component(b);
 
         world.start(SYSTEMS).expect("start");
@@ -337,7 +338,7 @@ mod tests {
         wall.collider = Some(PropCollider::default());
         world.add_component(wall);
         world.add_component(PropBody {
-            prop_name: Some(AssetId(1)),
+            prop_name: Some(Ref::new(AssetId(1))),
             mass: 4.0,
             ..Default::default()
         });

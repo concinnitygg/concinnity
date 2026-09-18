@@ -29,7 +29,7 @@ use concinnity::components::{
     Behavior, BehaviorExpr, BehaviorNode, BehaviorSource, DirectionalLight, GraphicsConfig,
     PostProcessConfig, ProceduralMesh, Prop, SkyRotation, WaterSurface, WaterWave, Window,
 };
-use concinnity::{App, AssetId, MaterialHandle, MeshHandle, World, bake};
+use concinnity::{App, AssetId, MaterialHandle, MeshHandle, Ref, World, bake};
 
 // Degrees the cube turns per second.
 const SPIN_DEGREES_PER_SECOND: f32 = 36.0;
@@ -189,7 +189,7 @@ fn cube_world() -> Result<World, concinnity::Error> {
         mesh: Some(sun_mesh),
         material: Some(sun_material),
         position: sun_position(),
-        parent: Some(SKY_PIVOT),
+        parent: Some(Ref::new(SKY_PIVOT)),
         ..Default::default()
     });
 
@@ -316,7 +316,7 @@ fn spin_behavior() -> Behavior {
         body: CUBE_LAYERS
             .iter()
             .map(|id| BehaviorNode::SetTransform {
-                entity: BehaviorExpr::Named(Some(*id)),
+                entity: BehaviorExpr::Named(Some(Ref::new(*id))),
                 position: None,
                 rotation_deg: Some(spin_rotation()),
                 scale: None,
@@ -380,7 +380,7 @@ mod tests {
                     entity: BehaviorExpr::Named(Some(id)),
                     rotation_deg: Some(_),
                     ..
-                } => *id,
+                } => id.id(),
                 other => panic!("the spin writes a named rotation, not {other:?}"),
             })
             .collect();

@@ -14,7 +14,7 @@ pub const MAX_WATER_WAVES: usize = 4;
 /// height, `wavelength` distance between crests, and `speed` meters per second.
 /// `steepness` in [0, 1] pinches the crests and broadens the troughs (choppier
 /// water).
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct WaterWave {
     /// Peak height of the wave, in world units.
@@ -61,7 +61,7 @@ impl Default for WaterWave {
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct WaterSurface {
     /// Asset identity; injected via `inject_name`. Not part of `args`.

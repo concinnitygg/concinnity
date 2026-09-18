@@ -1,8 +1,9 @@
 // Scene marker schema.
 
+use crate::components::Camera3D;
 use crate::components::{vocabulary, vocabulary_synonyms};
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::asset_id::de_opt_asset_ref;
+use crate::ecs::{Ref, de_opt_ref};
 
 /// How a scene jump reaches the new scene. The single accepted vocabulary for
 /// a [Behavior](#behavior) scene node's `transition` and a `scene:<name>` UI
@@ -45,7 +46,7 @@ impl SceneTransition {
 /// [KeyBinding](#keybinding)) or a [Behavior](#behavior) scene node jumps to
 /// the named scene, with the transition ("Cut" or "FadeBlack") declared on the
 /// jump.
-#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct Scene {
     /// Asset identity; injected via `inject_name`. Not part of `args`.
@@ -53,8 +54,8 @@ pub struct Scene {
     pub asset_id: AssetId,
     /// A [CameraShot](#camerashot) or [Camera3D](#camera3d) to activate when
     /// this scene becomes active. `None` keeps the current camera unchanged.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub camera_shot: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub camera_shot: Option<Ref<Camera3D>>,
 }
 
 #[cfg(test)]
@@ -101,11 +102,11 @@ mod tests {
     #[test]
     fn a_named_shot_parses_and_round_trips_through_postcard() {
         let s: Scene = crate::test_support::from_json(r#"{"camera_shot":"establishing"}"#);
-        assert_eq!(s.camera_shot, Some(AssetId(12)));
+        assert_eq!(s.camera_shot, Some(Ref::new(AssetId(12))));
 
         let bytes = postcard::to_allocvec(&s).unwrap();
         let back: Scene = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.camera_shot, Some(AssetId(12)));
+        assert_eq!(back.camera_shot, Some(Ref::new(AssetId(12))));
         assert_eq!(back.asset_id, AssetId::default());
     }
 }

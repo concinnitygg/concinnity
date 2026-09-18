@@ -24,6 +24,7 @@
 
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::ID_KEY;
+use concinnity_core::ecs::RefField;
 use serde_json::{Map, Value};
 
 // The form's default (and minimum) scrolling window: the number of field rows the
@@ -50,10 +51,11 @@ pub(crate) enum FieldKind {
     // A string enum with a known variant set (`FormField::variants`), cycled
     // through by clicking rather than typed.
     Enum,
-    // An asset reference to an existing asset of type `target`. Rendered like an
-    // enum (cycle button) over `FormField::variants` = `(none)` + the world's
-    // assets of `target`, which the hook fills in (`set_ref_options`).
-    Ref { target: &'static str },
+    // An asset reference to an existing asset of one of the `targets` types (any
+    // type when empty). Rendered like an enum (cycle button) over
+    // `FormField::variants` = `(none)` + the world's assets of those types, which
+    // the hook fills in (`set_ref_options`).
+    Ref { targets: &'static [&'static str] },
     // A variable-length array (non-vector) at `FormField::key`, rendered as a header
     // row with add / remove buttons; its element count is carried in
     // `FormField::variant_idx`. The elements' own leaves follow it as indexed
@@ -129,26 +131,37 @@ fn kind_of(key: &str, v: &Value) -> Option<FieldKind> {
 #[derive(Clone, Copy)]
 struct TypeMeta {
     ct: Option<RegisteredType>,
-    // `(field, target type)` each; the add form turns each into a name picker.
-    refs: &'static [(&'static str, &'static str)],
+    // The derived reference fields; the add form turns each into a name picker.
+    refs: &'static [RefField],
 }
 
 impl TypeMeta {
-    // Build from an authoring type name. Reference fields come from the entry's
-    // `refs:` metadata, whichever group of the registry it is in.
+    // Build from an authoring type name. Reference fields come from the table
+    // the registry derives from the type's schema, whichever group it is in.
     fn of(ty: &str) -> Self {
         let ct = RegisteredType::parse(ty);
         let refs = ct.map(|c| c.ref_fields()).unwrap_or(&[]);
         TypeMeta { ct, refs }
     }
 
-    // The target asset type declared for `field`, if any.
-    fn ref_target(&self, field: &str) -> Option<&'static str> {
+    // The target asset types of the reference at `field`, if it is one. A list
+    // element's path carries its index, which the schema path does not.
+    fn ref_targets(&self, field: &str) -> Option<&'static [&'static str]> {
+        let field = schema_path(field);
         self.refs
             .iter()
-            .find(|(name, _)| *name == field)
-            .map(|(_, target)| *target)
+            .find(|f| f.path == field)
+            .map(|f| f.targets)
     }
+}
+
+// A form path with its list indices dropped (`meshes.0.material` ->
+// `meshes.material`): the address the registry's field tables use.
+fn schema_path(path: &str) -> String {
+    path.split('.')
+        .filter(|seg| seg.parse::<usize>().is_err())
+        .collect::<Vec<_>>()
+        .join(".")
 }
 
 // Fill a reference field's options: `(none)` followed by `names` (the world's
@@ -298,8 +311,13 @@ fn collect_value(
 ) {
     let leaf = path.rsplit('.').next().unwrap_or(path);
     // Asset-ref fields default to null (which `kind_of` skips), so detect them first
-    // from the type's declared references (matched by full path).
-    let ref_target = meta.ref_target(path);
+    // from the type's derived references (matched by path). A list of references
+    // is a list, whose elements are the pickers.
+    let ref_target = if def.is_array() {
+        None
+    } else {
+        meta.ref_targets(path)
+    };
 
     // A plain nested object that is not itself a declared reference is flattened into
     // its leaves one level deeper -- UNLESS the seed (an entry being edited) authored
@@ -320,7 +338,7 @@ fn collect_value(
 
     // A scalar / fixed 2..=4 numeric vector leaf (or a declared reference).
     let kind = match ref_target {
-        Some(target) => Some(FieldKind::Ref { target }),
+        Some(targets) => Some(FieldKind::Ref { targets }),
         None => kind_of(leaf, def),
     };
     if let Some(mut kind) = kind {
@@ -331,7 +349,9 @@ fn collect_value(
         let mut variants = Vec::new();
         let mut variant_idx = 0;
         if matches!(kind, FieldKind::Str)
-            && let Some(v) = meta.ct.and_then(|c| c.field_enum_variants(path))
+            && let Some(v) = meta
+                .ct
+                .and_then(|c| c.field_enum_variants(&schema_path(path)))
         {
             variant_idx = cur
                 .as_str()
@@ -986,7 +1006,12 @@ mod tests {
             .iter()
             .find(|f| f.key == "texture")
             .expect("texture ref field");
-        assert_eq!(tex.kind, FieldKind::Ref { target: "Texture" });
+        assert_eq!(
+            tex.kind,
+            FieldKind::Ref {
+                targets: &["Texture"]
+            }
+        );
         assert_eq!(tex.initial, "", "an unset ref stashes no target name");
 
         let mut f = tex.clone();
@@ -999,9 +1024,9 @@ mod tests {
         assert_eq!(coerce(&f, "", &Value::Null), Value::String("stone".into()));
     }
 
-    // A resource type declares its references through the same `refs:` metadata
-    // every other type uses: Material's albedo/normal/etc. fields must render as
-    // Texture pickers in the add form.
+    // A resource type's references come from the same derived table every other
+    // type's do: Material's albedo/normal/etc. fields must render as Texture
+    // pickers in the add form.
     #[test]
     fn resource_type_material_texture_fields_are_ref_pickers() {
         let fields = fields_for("Material", None);
@@ -1012,7 +1037,9 @@ mod tests {
                 .unwrap_or_else(|| panic!("Material `{key}` field"));
             assert_eq!(
                 f.kind,
-                FieldKind::Ref { target: "Texture" },
+                FieldKind::Ref {
+                    targets: &["Texture"]
+                },
                 "Material `{key}` should be a Texture ref picker"
             );
         }
@@ -1071,7 +1098,9 @@ mod tests {
     fn set_ref_options_preserves_an_unlisted_current_target() {
         let mut field = FormField {
             key: "texture".into(),
-            kind: FieldKind::Ref { target: "Texture" },
+            kind: FieldKind::Ref {
+                targets: &["Texture"],
+            },
             initial: "imported_tex".into(),
             boolval: false,
             variants: Vec::new(),
@@ -1112,7 +1141,7 @@ mod tests {
         assert_eq!(
             fps.iter().find(|f| f.key == "label").map(|f| f.kind),
             Some(FieldKind::Ref {
-                target: "TextLabel"
+                targets: &["TextLabel"]
             }),
             "FpsCounter.label is a reference picker"
         );
@@ -1670,18 +1699,63 @@ mod tests {
         assert_eq!(
             field("label"),
             Some(FieldKind::Ref {
-                target: "TextLabel"
+                targets: &["TextLabel"]
             })
         );
-        assert_eq!(field("screen"), Some(FieldKind::Ref { target: "Screen" }));
+        assert_eq!(
+            field("screen"),
+            Some(FieldKind::Ref {
+                targets: &["Screen"]
+            })
+        );
+        // Every typed reference is offered, including one no hand-kept list named.
+        assert_eq!(
+            field("drag_handle"),
+            Some(FieldKind::Ref {
+                targets: &["Sprite"]
+            })
+        );
         // Null Option fields the type does NOT declare as references are still left
         // at their defaults, not offered.
-        for skipped in ["hover_color", "hover_scale", "drag_handle"] {
+        for skipped in ["hover_color", "hover_scale"] {
             assert!(
                 field(skipped).is_none(),
                 "{skipped} (an undeclared null Option) is not an editable field"
             );
         }
+    }
+
+    // A list of references is a list header whose elements are the pickers, and
+    // a field naming two types offers both.
+    #[test]
+    fn reference_lists_and_multi_target_fields_become_pickers() {
+        let seed: Map<String, Value> =
+            serde_json::from_value(serde_json::json!({"palette": ["stone", "dirt"]})).unwrap();
+        let fields = fields_for("VoxelChunk", Some(&seed));
+        let field = |k: &str| fields.iter().find(|f| f.key == k).map(|f| f.kind);
+        assert_eq!(field("palette"), Some(FieldKind::Array));
+        assert_eq!(
+            field("palette.1"),
+            Some(FieldKind::Ref {
+                targets: &["BlockType"]
+            })
+        );
+
+        let fields = fields_for("Prop", None);
+        let parent = fields.iter().find(|f| f.key == "parent").map(|f| f.kind);
+        assert_eq!(
+            parent,
+            Some(FieldKind::Ref {
+                targets: &["Prop", "SkyRotation"]
+            })
+        );
+    }
+
+    #[test]
+    fn schema_path_drops_list_indices() {
+        assert_eq!(schema_path("meshes.0.material"), "meshes.material");
+        assert_eq!(schema_path("rows.1.0"), "rows");
+        assert_eq!(schema_path("collider.shape"), "collider.shape");
     }
 
     #[test]

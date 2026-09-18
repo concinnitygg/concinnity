@@ -14,7 +14,9 @@
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields,
+)]
 #[serde(default)]
 pub struct DirectionalLight {
     /// Direction pointing toward the light source. Does not need to be

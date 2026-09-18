@@ -18,7 +18,7 @@ use crate::components::{
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{
-    Entity, EntityByName, EventCursor, MenuActive, PipelineContext, ScheduleMode, SimTiming,
+    Entity, EntityByName, EventCursor, MenuActive, PipelineContext, Ref, ScheduleMode, SimTiming,
     StepResult, System, WorldPhysicsBudget,
 };
 use crate::math::{cos, sin, sqrt};
@@ -162,7 +162,7 @@ impl PhysicsSystem {
         Self {
             floor_y: config.floor_y,
             terrain,
-            terrain_mesh: config.terrain_mesh,
+            terrain_mesh: config.terrain_mesh.map(Ref::id),
             terrain_offset_y: config.terrain_offset_y,
             world: None,
             player: None,
@@ -391,11 +391,11 @@ impl System for PhysicsSystem {
             let Some(body_a_id) = joint.body_a else {
                 continue;
             };
-            let Some(handle_a) = body_handles.get(&body_a_id).copied() else {
+            let Some(handle_a) = body_handles.get(&body_a_id.id()).copied() else {
                 continue;
             };
             let handle_b = if let Some(body_b_id) = joint.body_b {
-                match body_handles.get(&body_b_id).copied() {
+                match body_handles.get(&body_b_id.id()).copied() {
                     Some(h) => h,
                     None => {
                         continue;
@@ -1488,7 +1488,7 @@ mod tests {
         world.components.push_typed(PhysicsJoint {
             asset_id: AssetId(2),
             kind: crate::components::PhysicsJointKind::Spherical,
-            body_a: Some(bob_id),
+            body_a: Some(Ref::new(bob_id)),
             body_b: None,
             // The bob's own center hangs one unit from the anchor point.
             anchor_a: [-1.0, 0.0, 0.0],
@@ -1625,7 +1625,7 @@ mod tests {
                 world.components.push_typed(mesh);
             }
             let mut config = terrain_config();
-            config.terrain_mesh = Some(AssetId(7));
+            config.terrain_mesh = Some(Ref::new(AssetId(7)));
             let mut physics = PhysicsSystem::new(config);
             physics.init(&mut world.ctx());
             assert!(

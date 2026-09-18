@@ -1,7 +1,7 @@
 // Scene-loading progress overlay schema.
 
-use crate::ecs::asset_id::AssetId;
-use crate::ecs::asset_id::de_opt_asset_ref;
+use crate::components::{Screen, Sprite, TextLabel};
+use crate::ecs::{Ref, de_opt_ref};
 
 /// Requests the scene-loading overlay: a full-window backdrop with a progress
 /// bar, shown while a scene jump waits for its streamed content and faded out
@@ -26,35 +26,36 @@ use crate::ecs::asset_id::de_opt_asset_ref;
 /// names, so the example below is only needed to restyle them. Declare an
 /// [EngineDefaults](#enginedefaults) with `"loading_overlay": false` to leave
 /// the world without one.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct LoadingOverlay {
     /// [Screen](#screen) the overlay shows while a scene loads. Its
     /// `pauses_world` (on by default) freezes the world beneath the overlay so
     /// the destination scene starts fresh when revealed.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub screen: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub screen: Option<Ref<Screen>>,
     /// Backdrop [Sprite](#sprite) covering the canvas. Its tint alpha is
     /// animated to reveal the scene once loading completes; an opaque tint
     /// hides the still-loading world completely.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub backdrop: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub backdrop: Option<Ref<Sprite>>,
     /// Progress-bar track [Sprite](#sprite); its width is the bar's full
     /// extent the fill is measured against.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub track: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub track: Option<Ref<Sprite>>,
     /// Progress-bar fill [Sprite](#sprite); the engine sets its width to the
     /// track width times the destination scene's load progress each frame.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub fill: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub fill: Option<Ref<Sprite>>,
     /// [TextLabel](#textlabel) rewritten each frame with the load percentage.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub label: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub label: Option<Ref<TextLabel>>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ecs::asset_id::AssetId;
 
     #[test]
     fn a_blank_overlay_claims_no_pieces() {
@@ -71,15 +72,15 @@ mod tests {
         let o: LoadingOverlay = crate::test_support::from_json(
             r#"{"screen":"load","backdrop":"dim","track":"bar_bg","fill":"bar","label":"pct"}"#,
         );
-        assert_eq!(o.screen, Some(AssetId(4)));
-        assert_eq!(o.backdrop, Some(AssetId(3)));
-        assert_eq!(o.track, Some(AssetId(6)));
-        assert_eq!(o.fill, Some(AssetId(3)));
-        assert_eq!(o.label, Some(AssetId(3)));
+        assert_eq!(o.screen, Some(Ref::new(AssetId(4))));
+        assert_eq!(o.backdrop, Some(Ref::new(AssetId(3))));
+        assert_eq!(o.track, Some(Ref::new(AssetId(6))));
+        assert_eq!(o.fill, Some(Ref::new(AssetId(3))));
+        assert_eq!(o.label, Some(Ref::new(AssetId(3))));
 
         let bytes = postcard::to_allocvec(&o).unwrap();
         let back: LoadingOverlay = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.track, Some(AssetId(6)));
-        assert_eq!(back.screen, Some(AssetId(4)));
+        assert_eq!(back.track, Some(Ref::new(AssetId(6))));
+        assert_eq!(back.screen, Some(Ref::new(AssetId(4))));
     }
 }

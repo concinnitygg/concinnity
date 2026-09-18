@@ -21,7 +21,16 @@ use super::compiled_programs::CompiledProgram;
 
 /// An `SdfVolume`'s payload: the authored field plus every entry the cook
 /// compiled from it.
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+)]
 pub struct SdfPrograms {
     /// The authored distance field, spliced at `{SDF_BODY}`. Kept so a renderer
     /// that cannot use a stored artifact can still assemble and compile.

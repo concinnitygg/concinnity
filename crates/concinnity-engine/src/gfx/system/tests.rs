@@ -39,6 +39,7 @@ use concinnity_core::ecs::MenuActive;
 use concinnity_core::ecs::MenuOverride;
 use concinnity_core::ecs::MeshHandle;
 use concinnity_core::ecs::PickIndex;
+use concinnity_core::ecs::Ref;
 use concinnity_core::ecs::ScreenStack;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{
@@ -447,13 +448,13 @@ fn init_parks_overlay_assets_with_the_hud_chips() {
     let (_state, hooks) = recording_hooks();
     let mut b = scene_builder();
     b.push(StatHud {
-        fps_label: Some(AssetId(10)),
-        vram_label: Some(AssetId(11)),
+        fps_label: Some(Ref::new(AssetId(10))),
+        vram_label: Some(Ref::new(AssetId(11))),
         ..Default::default()
     });
     b.push(DebugHud {
-        mouse_label: Some(AssetId(20)),
-        passes_label: Some(AssetId(21)),
+        mouse_label: Some(Ref::new(AssetId(20))),
+        passes_label: Some(Ref::new(AssetId(21))),
         ..Default::default()
     });
     let mut world = b.build();
@@ -824,9 +825,9 @@ fn first_declared_scene_applies_start_visibility() {
         let mut ctx = world.ctx();
         for prop in ctx.query_mut::<Prop>() {
             prop.scene = Some(if prop.asset_id == PROP {
-                scene_a
+                Ref::new(scene_a)
             } else {
-                scene_b
+                Ref::new(scene_b)
             });
         }
         ctx.push(Scene {
@@ -1094,7 +1095,7 @@ fn opaque_menu_backdrop_hides_world_and_freezes_gameplay_input() {
         height: 720.0,
         tint: [0.0, 0.0, 0.0, 1.0],
         visible: true,
-        screen: Some(AssetId(41)),
+        screen: Some(Ref::new(AssetId(41))),
         ..Default::default()
     });
     let mut world = b.build();
@@ -2534,7 +2535,7 @@ fn persisted_display_and_system_overrides_reach_the_backend() {
 fn push_settings_row(b: &mut WorldBuilder, key: &str, verb: &str, label: AssetId) {
     b.push(HitRegion {
         action: act(&format!("setting:{key}:{verb}")),
-        label: Some(label),
+        label: Some(Ref::new(label)),
         ..Default::default()
     });
     b.push(TextLabel {
@@ -2698,8 +2699,8 @@ fn slider_rows_sync_their_handle_and_label_to_the_live_value() {
             action: act(&format!("setting:{key}:drag")),
             x: 0.0,
             width: 100.0,
-            drag_handle: Some(handle),
-            label: Some(label),
+            drag_handle: Some(Ref::new(handle)),
+            label: Some(Ref::new(label)),
             ..Default::default()
         });
         b.push(Sprite {
@@ -2786,8 +2787,8 @@ fn every_owned_slider_key_recovers_a_live_value() {
             action: act(&format!("setting:{key}:drag")),
             x: 0.0,
             width: 100.0,
-            drag_handle: Some(handle),
-            label: Some(label),
+            drag_handle: Some(Ref::new(handle)),
+            label: Some(Ref::new(label)),
             ..Default::default()
         });
         b.push(Sprite {
@@ -2836,7 +2837,7 @@ fn rebind_rows_show_their_bound_keys_at_init() {
         let label = AssetId(400 + i as u32);
         b.push(HitRegion {
             action: act(&format!("setting:{}:rebind", action.setting_key())),
-            label: Some(label),
+            label: Some(Ref::new(label)),
             ..Default::default()
         });
         b.push(TextLabel {
@@ -2886,11 +2887,11 @@ fn scroll_panel_rows_clip_their_elements_to_the_panel_band() {
         height: 400.0,
         rows: vec![
             ScrollRow {
-                elements: vec![AssetId(500), AssetId(501)],
+                elements: vec![Ref::new(AssetId(500)), Ref::new(AssetId(501))],
                 ..Default::default()
             },
             ScrollRow {
-                elements: vec![AssetId(502)],
+                elements: vec![Ref::new(AssetId(502))],
                 ..Default::default()
             },
         ],
@@ -2947,11 +2948,11 @@ fn a_capability_gated_row_grays_out_its_whole_scroll_row() {
     b.push(ScrollPanel {
         rows: vec![
             ScrollRow {
-                elements: vec![AssetId(600), AssetId(601)],
+                elements: vec![Ref::new(AssetId(600)), Ref::new(AssetId(601))],
                 ..Default::default()
             },
             ScrollRow {
-                elements: vec![AssetId(602)],
+                elements: vec![Ref::new(AssetId(602))],
                 ..Default::default()
             },
         ],
@@ -3017,7 +3018,7 @@ fn master_toggles_gray_the_rows_they_govern() {
         rows: [700, 701, 702, 703]
             .into_iter()
             .map(|id| ScrollRow {
-                elements: vec![AssetId(id)],
+                elements: vec![Ref::new(AssetId(id))],
                 ..Default::default()
             })
             .collect(),

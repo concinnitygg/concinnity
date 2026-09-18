@@ -32,7 +32,7 @@ use alloc::string::{String, ToString};
 /// `max_memory_mb` and `job_threads` are `0` for "auto", where the engine sizes
 /// both from the host machine. A non-zero value overrides that choice, clamped
 /// to what the machine can safely give.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct AppConfigArgs {
     /// Display name of the application: the game's window title, the exported

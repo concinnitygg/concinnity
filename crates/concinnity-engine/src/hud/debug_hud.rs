@@ -10,6 +10,7 @@ use concinnity_core::components::Camera3D;
 use concinnity_core::components::DebugHud;
 use concinnity_core::components::FrameInput;
 use concinnity_core::components::TextLabel;
+use concinnity_core::ecs::Ref;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{Access, FrameTime, PipelineContext, StepResult, System};
 use concinnity_core::profile::PassTiming;
@@ -160,10 +161,10 @@ impl DebugHudSystem {
     // Build the debug HUD from a world's `DebugHud` request component.
     pub(crate) fn new(config: DebugHud) -> Self {
         Self {
-            passes_label: config.passes_label,
-            mouse_label: config.mouse_label,
-            camera_label: config.camera_label,
-            sys_label: config.sys_label,
+            passes_label: config.passes_label.map(Ref::id),
+            mouse_label: config.mouse_label.map(Ref::id),
+            camera_label: config.camera_label.map(Ref::id),
+            sys_label: config.sys_label.map(Ref::id),
             visible: false,
             pass_times: Vec::new(),
             mouse_pos: (0.0, 0.0),
@@ -278,6 +279,7 @@ fn rss_due(age: &mut Option<f32>, dt: f32) -> bool {
 mod tests {
     use super::*;
     use crate::ecs::SYSTEMS;
+    use concinnity_core::ecs::Ref;
     use concinnity_core::ecs::World;
 
     // The first read samples, frames short of the interval wait, and the frame
@@ -451,10 +453,10 @@ mod tests {
     fn hud_world() -> World {
         let mut world = World::new();
         world.add_component(DebugHud {
-            passes_label: Some(AssetId(1)),
-            mouse_label: Some(AssetId(2)),
-            camera_label: Some(AssetId(3)),
-            sys_label: Some(AssetId(4)),
+            passes_label: Some(Ref::new(AssetId(1))),
+            mouse_label: Some(Ref::new(AssetId(2))),
+            camera_label: Some(Ref::new(AssetId(3))),
+            sys_label: Some(Ref::new(AssetId(4))),
         });
         for id in [1u32, 2, 3, 4] {
             world.add_component(TextLabel {

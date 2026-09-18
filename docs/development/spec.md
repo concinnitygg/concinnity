@@ -112,6 +112,7 @@ Crates are defined under [crates/](../../crates).
 | `concinnity-dev`       | The dev tooling library: everything the `concinnity` binary does, minus its argv parsing.         |
 | `concinnity-slang`     | The `slangc` invocation, shared by build scripts and the renderer.                                |
 | `concinnity-toolchain` | Shared build-script support for the workspace.                                                    |
+| `concinnity-derive`    | Derive macros for the authored asset schemas (`AssetFields`); internal to core and cook.          |
 | `concinnity-ffi`       | The C ABI a host application links to embed the engine.                                           |
 | `concinnity-testing`   | Test scaffolding shared by the workspace; a dev-dependency only.                                  |
 
@@ -195,7 +196,7 @@ so the convention is to glob `components` and path-qualify `cook`.
 | Type                               | Meaning                                                                                            |
 | ---------------------------------- | -------------------------------------------------------------------------------------------------- |
 | `AssetId`                          | An asset's position in the expanded world, as a dense `u32`. The cook records each position's handle (its `$id`, or `<Type>#<ordinal>` when anonymous) beside it; the runtime never interns. |
-| `AssetRef<T>`                      | A typed reference to another asset by its `$id`, resolved during the cook.                         |
+| `Ref<T>`                           | A typed reference to another asset: an `AssetId` whose target type `T` the registry reads to validate the field and offer a picker for it. Authored as a `$id`, resolved during the cook. |
 | `MeshHandle`, `TextureHandle`, ... | Dense index into the matching per-kind resource table.                                             |
 | `Entity`                           | Generational id minted by the entity allocator when a component row is pushed.                     |
 | `PayloadLocator`                   | `{ blob_index: u32, offset: u64, len: u64 }` — where a compiled payload lives.                     |

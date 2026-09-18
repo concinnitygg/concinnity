@@ -25,8 +25,10 @@ use concinnity_core::components::Room;
 use concinnity_core::components::Spawner;
 use concinnity_core::ecs::ComponentTag;
 use concinnity_core::ecs::ResourceKind;
+use concinnity_core::ecs::{AssetFields, EnumField, FieldTable, RefField};
 pub use concinnity_core::ecs::{AssetOrigin, AssetPayload};
 use concinnity_host::thread::asset_id;
+use std::sync::OnceLock;
 
 /// Static authoring metadata for an asset type: how it is declared, whether it
 /// compiles a payload, and its default args JSON. Derived from the registry
@@ -82,7 +84,7 @@ pub enum ScopeResolution {
 
 // The empty args schema of a runtime-only component: never authored, so its
 // registration carries an empty default and its reserialize accepts `{}`.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, AssetFields)]
 pub(crate) struct NoArgs {}
 
 // Metadata scanners over a registry entry's `{ ... }` flag tokens. Each walks
@@ -137,24 +139,6 @@ macro_rules! __meta_validate {
         crate::authoring::validate::$f($val)
     };
     ($val:expr; $t:tt $($r:tt)*) => { __meta_validate!($val; $($r)*) };
-}
-
-// The `enums: [ ... ]` closed-vocabulary field list: each entry pairs a field
-// path with the type that owns the names, which reports them itself. Empty when
-// absent.
-macro_rules! __meta_enums {
-    () => { &[] };
-    (enums: [ $( ($fld:literal, $ty:path) ),+ $(,)? ] $($r:tt)*) => {
-        &[ $( ($fld, <$ty as concinnity_core::components::Vocabulary>::VARIANTS) ),+ ]
-    };
-    ($t:tt $($r:tt)*) => { __meta_enums!($($r)*) };
-}
-
-// The `refs: [ ... ]` reference-field list; empty when absent.
-macro_rules! __meta_refs {
-    () => { &[] };
-    (refs: [ $( ($fld:literal, $tgt:literal) ),+ $(,)? ] $($r:tt)*) => { &[ $( ($fld, $tgt) ),+ ] };
-    ($t:tt $($r:tt)*) => { __meta_refs!($($r)*) };
 }
 
 // The bare structural flags: `singleton` (at most one instance belongs to a
@@ -281,10 +265,11 @@ macro_rules! for_each_authored_type {
 }
 
 // Generate `RegisteredType` and its authoring methods from the composed
-// vocabulary. Invoked once, below, via `for_each_authored_type!`. All authoring
-// metadata (origin, payload, args schema, validators, reference fields) derives
-// from each entry's `{ ... }` metadata block; the runtime `Component` trait
-// carries none of it.
+// vocabulary. Invoked once, below, via `for_each_authored_type!`. The authoring
+// metadata (origin, payload, args schema, validators) derives from each entry's
+// `{ ... }` metadata block, and the reference and vocabulary fields from the
+// args schema's `AssetFields` impl; the runtime `Component` trait carries none
+// of it.
 macro_rules! define_registered_type {
     // Every registered type is here, whichever group it came from: one registry
     // means one `parse`, so a caller asking "what type is this?" cannot miss a
@@ -447,16 +432,28 @@ macro_rules! define_registered_type {
                     ),+
                 }
             }
-            /// This type's closed-vocabulary args fields, as (field path, the
-            /// names that field accepts), from the entry's `enums:` metadata.
+            // The reference and vocabulary tables `#[derive(AssetFields)]`
+            // generates for the authored args schema, built once per type.
+            fn field_table(self) -> &'static FieldTable {
+                match self {
+                    $(
+                        Self::$variant => {
+                            static TABLE: OnceLock<FieldTable> = OnceLock::new();
+                            TABLE.get_or_init(
+                                <__meta_args_ty!($ty; $($meta)*) as AssetFields>::field_table,
+                            )
+                        }
+                    ),+
+                }
+            }
+            /// This type's closed-vocabulary args fields: each field typed with
+            /// a `Vocabulary`, and the names it accepts.
             ///
             /// A path is dotted where the field sits inside a nested object
             /// (`collider.shape`), which is the same key an authoring form
             /// addresses a flattened leaf by.
-            pub fn enum_fields(self) -> &'static [(&'static str, &'static [&'static str])] {
-                match self {
-                    $( Self::$variant => __meta_enums!($($meta)*) ),+
-                }
+            pub fn enum_fields(self) -> &'static [EnumField] {
+                &self.field_table().enums
             }
             /// The names an args field accepts, or `None` if it is free text.
             /// Authoring tools offer a picker for the fields that answer here
@@ -465,8 +462,8 @@ macro_rules! define_registered_type {
             pub fn field_enum_variants(self, field: &str) -> Option<&'static [&'static str]> {
                 self.enum_fields()
                     .iter()
-                    .find(|(name, _)| *name == field)
-                    .map(|(_, variants)| *variants)
+                    .find(|f| f.path == field)
+                    .map(|f| f.variants)
             }
             /// The dense per-kind handle space this asset is assigned into, or
             /// `None` if it is not a resource asset. Cook assigns the handle;
@@ -490,14 +487,10 @@ macro_rules! define_registered_type {
                     $( Self::$variant => __meta_is_data!($($meta)*) ),+
                 }
             }
-            /// The asset-reference fields of this type, as (field, target_type),
-            /// from the entry's `refs:` metadata.
-            pub fn ref_fields(self) -> &'static [(&'static str, &'static str)] {
-                match self {
-                    $(
-                        Self::$variant => __meta_refs!($($meta)*)
-                    ),+
-                }
+            /// The asset-reference fields of this type: each field typed with a
+            /// `Ref<T>` or a resource handle, and the types it may name.
+            pub fn ref_fields(self) -> &'static [RefField] {
+                &self.field_table().refs
             }
             /// The structural flags, from the entry's metadata: `singleton`
             /// (at most one instance belongs to a world; authoring tools use an
@@ -996,7 +989,11 @@ mod tests {
             let Some(defaults) = ty.registration().default_args else {
                 continue;
             };
-            for (field, variants) in ty.enum_fields() {
+            for EnumField {
+                path: field,
+                variants,
+            } in ty.enum_fields()
+            {
                 assert!(
                     !variants.is_empty(),
                     "{}: `{field}` declares an empty vocabulary",
@@ -1042,9 +1039,13 @@ mod tests {
     }
 
     // Read / write a dotted path into an args object, creating the objects a
-    // path walks through (a Prop's `collider` defaults to null).
+    // path walks through (a Prop's `collider` defaults to null). A list on the
+    // way is addressed through its first element, created if the list is empty.
     fn at_path<'a>(args: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
-        path.split('.').try_fold(args, |v, seg| v.get(seg))
+        path.split('.').try_fold(args, |v, seg| {
+            let v = if v.is_array() { v.get(0)? } else { v };
+            v.get(seg)
+        })
     }
 
     fn set_at_path(args: &mut serde_json::Value, path: &str, value: serde_json::Value) {
@@ -1055,43 +1056,84 @@ mod tests {
                 cursor[seg] = value;
                 return;
             }
-            if !cursor[seg].is_object() {
-                cursor[seg] = serde_json::json!({});
+            match &mut cursor[seg] {
+                serde_json::Value::Array(items) => {
+                    if items.is_empty() {
+                        items.push(serde_json::json!({}));
+                    }
+                    cursor = &mut items[0];
+                }
+                slot => {
+                    if !slot.is_object() {
+                        *slot = serde_json::json!({});
+                    }
+                    cursor = slot;
+                }
             }
-            cursor = &mut cursor[seg];
         }
     }
 
-    // `ref_fields` reports each type's asset-reference fields and their targets;
-    // every referenced target must itself be a real component type.
+    fn ref_pairs(ty: RegisteredType) -> Vec<(&'static str, Vec<&'static str>)> {
+        ty.ref_fields()
+            .iter()
+            .map(|f| (f.path.as_str(), f.targets.to_vec()))
+            .collect()
+    }
+
+    // `ref_fields` reports each type's asset-reference fields and their targets,
+    // read off the schema's field types; every target is a real registered type.
     #[test]
     fn ref_fields_name_real_target_types() {
         assert_eq!(
-            RegisteredType::Decal.ref_fields(),
-            &[("texture", "Texture")]
+            ref_pairs(RegisteredType::Decal),
+            [("texture", vec!["Texture"])]
         );
         assert_eq!(
-            RegisteredType::AudioEmitter.ref_fields(),
-            &[("clip", "AudioClip"), ("prop", "Prop")]
+            ref_pairs(RegisteredType::AudioEmitter),
+            [("clip", vec!["AudioClip"]), ("prop", vec!["Prop"])]
+        );
+        // A field naming either of two types carries both.
+        assert!(ref_pairs(RegisteredType::Prop).contains(&("parent", vec!["Prop", "SkyRotation"])));
+        // Fields the hand-kept table missed: a nested path, a list, and the
+        // references a gap left unchecked.
+        assert!(
+            ref_pairs(RegisteredType::Camera3D)
+                .contains(&("controller.follow.target", vec!["SkinnedMesh"]))
+        );
+        assert_eq!(
+            ref_pairs(RegisteredType::VoxelChunk),
+            [("palette", vec!["BlockType"])]
+        );
+        assert_eq!(
+            ref_pairs(RegisteredType::PropBody)[0],
+            ("prop_name", vec!["Prop"])
+        );
+        assert_eq!(
+            ref_pairs(RegisteredType::PhysicsConfig),
+            [("terrain_mesh", vec!["ProceduralMesh"])]
         );
         // A type without references reports none.
         assert!(RegisteredType::PointLight.ref_fields().is_empty());
-        // Every declared ref field names an existing arg key and a real target
-        // type -- either a component or a resource-only asset (e.g. AudioClip,
-        // which has left the component registry).
+        // Every derived ref field names a real target type -- a component or a
+        // resource asset -- and its first segment is an arg of the type.
         for &ty in RegisteredType::all() {
             let default_args = ty.registration().default_args;
-            for &(field, target) in ty.ref_fields() {
-                assert!(
-                    RegisteredType::parse(target).is_some(),
-                    "{}.{field} targets unknown type {target}",
-                    ty.as_str()
-                );
+            for field in ty.ref_fields() {
+                for target in field.targets {
+                    assert!(
+                        RegisteredType::parse(target).is_some(),
+                        "{}.{} targets unknown type {target}",
+                        ty.as_str(),
+                        field.path
+                    );
+                }
+                let key = field.path.split('.').next().unwrap_or_default();
                 if let Some(serde_json::Value::Object(m)) = &default_args {
                     assert!(
-                        m.contains_key(field),
-                        "{}.{field} is not an arg of {}",
+                        m.contains_key(key),
+                        "{}.{} is not an arg of {}",
                         ty.as_str(),
+                        field.path,
                         ty.as_str()
                     );
                 }

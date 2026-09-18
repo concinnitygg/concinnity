@@ -154,6 +154,7 @@ mod tests {
     use concinnity_core::components::{Justify, LayoutRow, SpriteFit, TextAlign};
     use concinnity_core::ecs::Arena;
     use concinnity_core::ecs::FrameContext;
+    use concinnity_core::ecs::Ref;
     use concinnity_core::ecs::{ComponentSlot, ComponentStorage, FontHandle, Resources};
     use concinnity_core::gfx::font;
     use concinnity_core::profile::FrameProfile;
@@ -225,7 +226,7 @@ mod tests {
 
     fn row(cols: &[AssetId]) -> LayoutRow {
         LayoutRow {
-            cols: cols.to_vec(),
+            cols: cols.iter().copied().map(Ref::new).collect(),
             justify: Justify::Left,
         }
     }

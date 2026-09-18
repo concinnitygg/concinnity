@@ -1,6 +1,7 @@
 use concinnity_core::components::{
     Screen, Story, StoryChoice, StoryNode, StoryPage, StoryScaffold, StorySpeaker,
 };
+use concinnity_core::ecs::Ref;
 use concinnity_core::ecs::{AudioClipHandle, EventCursor, TextureHandle, World};
 use concinnity_host::thread::asset_id::intern;
 
@@ -31,17 +32,17 @@ fn sprite_named(name: &str) -> Sprite {
 // The build-resolved scaffold references for a story named "s".
 fn scaffold() -> StoryScaffold {
     StoryScaffold {
-        screen: Some(intern("s_stage")),
-        ending: Some(intern("s_ending")),
-        bg: Some(intern("s_stage_bg")),
-        left: Some(intern("s_stage_left")),
-        center: Some(intern("s_stage_center")),
-        right: Some(intern("s_stage_right")),
-        dialog_box: Some(intern("s_stage_box")),
-        name_label: Some(intern("s_stage_name")),
-        text_label: Some(intern("s_stage_text")),
-        option_boxes: vec![intern("s_stage_opt0_box")],
-        options: vec![intern("s_stage_opt0_lbl")],
+        screen: Some(Ref::new(intern("s_stage"))),
+        ending: Some(Ref::new(intern("s_ending"))),
+        bg: Some(Ref::new(intern("s_stage_bg"))),
+        left: Some(Ref::new(intern("s_stage_left"))),
+        center: Some(Ref::new(intern("s_stage_center"))),
+        right: Some(Ref::new(intern("s_stage_right"))),
+        dialog_box: Some(Ref::new(intern("s_stage_box"))),
+        name_label: Some(Ref::new(intern("s_stage_name"))),
+        text_label: Some(Ref::new(intern("s_stage_text"))),
+        option_boxes: vec![Ref::new(intern("s_stage_opt0_box"))],
+        options: vec![Ref::new(intern("s_stage_opt0_lbl"))],
         start_label: None,
         quit_label: None,
         continue_label: None,
@@ -50,16 +51,16 @@ fn scaffold() -> StoryScaffold {
         pause: None,
         settings: None,
         settings_label: None,
-        advance_marker: Some(intern("s_stage_marker")),
-        log_label: Some(intern("s_stage_qlog_lbl")),
-        auto_label: Some(intern("s_stage_qauto_lbl")),
-        skip_label: Some(intern("s_stage_qskip_lbl")),
-        save_label: Some(intern("s_stage_qsave_lbl")),
-        overlay_dim: Some(intern("s_stage_dim")),
-        backlog_label: Some(intern("s_stage_history")),
-        slot_title: Some(intern("s_stage_slot_title")),
-        slot_boxes: vec![intern("s_stage_slot0_box")],
-        slot_labels: vec![intern("s_stage_slot0_lbl")],
+        advance_marker: Some(Ref::new(intern("s_stage_marker"))),
+        log_label: Some(Ref::new(intern("s_stage_qlog_lbl"))),
+        auto_label: Some(Ref::new(intern("s_stage_qauto_lbl"))),
+        skip_label: Some(Ref::new(intern("s_stage_qskip_lbl"))),
+        save_label: Some(Ref::new(intern("s_stage_qsave_lbl"))),
+        overlay_dim: Some(Ref::new(intern("s_stage_dim"))),
+        backlog_label: Some(Ref::new(intern("s_stage_history"))),
+        slot_title: Some(Ref::new(intern("s_stage_slot_title"))),
+        slot_boxes: vec![Ref::new(intern("s_stage_slot0_box"))],
+        slot_labels: vec![Ref::new(intern("s_stage_slot0_lbl"))],
     }
 }
 
@@ -78,7 +79,7 @@ fn add_stage_furniture(world: &mut World) {
         "s_stage_slot0_box",
     ] {
         world.add_component(Sprite {
-            screen: Some(intern("s_stage")),
+            screen: Some(Ref::new(intern("s_stage"))),
             ..sprite_named(sprite)
         });
     }
@@ -95,7 +96,7 @@ fn add_stage_furniture(world: &mut World) {
         "s_stage_slot0_lbl",
     ] {
         world.add_component(TextLabel {
-            screen: Some(intern("s_stage")),
+            screen: Some(Ref::new(intern("s_stage"))),
             ..label_named(label)
         });
     }
@@ -130,10 +131,10 @@ fn multi_slot_world(story: Story, rows: usize) -> World {
     story.asset_id = intern("s");
     let mut sc = scaffold();
     sc.slot_boxes = (0..rows)
-        .map(|i| intern(&format!("s_stage_slot{i}_box")))
+        .map(|i| Ref::new(intern(&format!("s_stage_slot{i}_box"))))
         .collect();
     sc.slot_labels = (0..rows)
-        .map(|i| intern(&format!("s_stage_slot{i}_lbl")))
+        .map(|i| Ref::new(intern(&format!("s_stage_slot{i}_lbl"))))
         .collect();
     story.scaffold = sc;
     world.add_component(story);
@@ -149,11 +150,11 @@ fn multi_slot_world(story: Story, rows: usize) -> World {
     // Extra rows beyond slot0, which `add_stage_furniture` already provides.
     for i in 1..rows {
         world.add_component(Sprite {
-            screen: Some(intern("s_stage")),
+            screen: Some(Ref::new(intern("s_stage"))),
             ..sprite_named(&format!("s_stage_slot{i}_box"))
         });
         world.add_component(TextLabel {
-            screen: Some(intern("s_stage")),
+            screen: Some(Ref::new(intern("s_stage"))),
             ..label_named(&format!("s_stage_slot{i}_lbl"))
         });
     }
@@ -169,11 +170,11 @@ fn title_menu_world(story: Story) -> World {
     let mut story = story;
     story.asset_id = intern("s");
     let mut sc = scaffold();
-    sc.title = Some(intern("s_title"));
-    sc.start_label = Some(intern("s_title_start_lbl"));
-    sc.continue_label = Some(intern("s_title_continue_lbl"));
-    sc.load_label = Some(intern("s_title_load_lbl"));
-    sc.quit_label = Some(intern("s_title_quit_lbl"));
+    sc.title = Some(Ref::new(intern("s_title")));
+    sc.start_label = Some(Ref::new(intern("s_title_start_lbl")));
+    sc.continue_label = Some(Ref::new(intern("s_title_continue_lbl")));
+    sc.load_label = Some(Ref::new(intern("s_title_load_lbl")));
+    sc.quit_label = Some(Ref::new(intern("s_title_quit_lbl")));
     story.scaffold = sc;
     world.add_component(story);
     // The title menu is the initial screen; the stage and ending are inactive.
@@ -195,7 +196,7 @@ fn title_menu_world(story: Story) -> World {
         ("s_title_quit_lbl", 400.0, "Quit"),
     ] {
         world.add_component(TextLabel {
-            screen: Some(intern("s_title")),
+            screen: Some(Ref::new(intern("s_title"))),
             content: text.to_string(),
             y,
             ..label_named(name)
@@ -213,12 +214,12 @@ fn story_world_with_pause(story: Story) -> World {
     let mut story = story;
     story.asset_id = intern("s");
     let mut sc = scaffold();
-    sc.pause = Some(intern("s_pause"));
-    sc.settings = Some(intern("s_settings"));
-    sc.title = Some(intern("s_title"));
-    sc.start_label = Some(intern("s_title_start_lbl"));
-    sc.quit_label = Some(intern("s_title_quit_lbl"));
-    sc.settings_label = Some(intern("s_title_settings_lbl"));
+    sc.pause = Some(Ref::new(intern("s_pause")));
+    sc.settings = Some(Ref::new(intern("s_settings")));
+    sc.title = Some(Ref::new(intern("s_title")));
+    sc.start_label = Some(Ref::new(intern("s_title_start_lbl")));
+    sc.quit_label = Some(Ref::new(intern("s_title_quit_lbl")));
+    sc.settings_label = Some(Ref::new(intern("s_title_settings_lbl")));
     story.scaffold = sc;
     world.add_component(story);
     for (screen, initial) in [
@@ -243,7 +244,7 @@ fn story_world_with_pause(story: Story) -> World {
         ("s_title_bg", "s_title"),
     ] {
         world.add_component(Sprite {
-            screen: Some(intern(screen)),
+            screen: Some(Ref::new(intern(screen))),
             ..sprite_named(name)
         });
     }
@@ -253,7 +254,7 @@ fn story_world_with_pause(story: Story) -> World {
         "s_title_settings_lbl",
     ] {
         world.add_component(TextLabel {
-            screen: Some(intern("s_title")),
+            screen: Some(Ref::new(intern("s_title"))),
             ..label_named(lbl)
         });
     }
@@ -1461,8 +1462,14 @@ fn two_option_world(story: Story) -> World {
     let mut story = story;
     story.asset_id = intern("s");
     let mut sc = scaffold();
-    sc.option_boxes = vec![intern("s_stage_opt0_box"), intern("s_stage_opt1_box")];
-    sc.options = vec![intern("s_stage_opt0_lbl"), intern("s_stage_opt1_lbl")];
+    sc.option_boxes = vec![
+        Ref::new(intern("s_stage_opt0_box")),
+        Ref::new(intern("s_stage_opt1_box")),
+    ];
+    sc.options = vec![
+        Ref::new(intern("s_stage_opt0_lbl")),
+        Ref::new(intern("s_stage_opt1_lbl")),
+    ];
     story.scaffold = sc;
     world.add_component(story);
     for screen in ["s_stage", "s_ending"] {
@@ -1476,11 +1483,11 @@ fn two_option_world(story: Story) -> World {
     add_stage_furniture(&mut world);
     // The second option slot beyond slot0 that add_stage_furniture provides.
     world.add_component(Sprite {
-        screen: Some(intern("s_stage")),
+        screen: Some(Ref::new(intern("s_stage"))),
         ..sprite_named("s_stage_opt1_box")
     });
     world.add_component(TextLabel {
-        screen: Some(intern("s_stage")),
+        screen: Some(Ref::new(intern("s_stage"))),
         ..label_named("s_stage_opt1_lbl")
     });
     world

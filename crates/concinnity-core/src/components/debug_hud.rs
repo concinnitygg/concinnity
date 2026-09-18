@@ -1,7 +1,7 @@
 // Developer debug HUD schema.
 
-use crate::ecs::asset_id::AssetId;
-use crate::ecs::asset_id::de_opt_asset_ref;
+use crate::components::TextLabel;
+use crate::ecs::{Ref, de_opt_ref};
 
 /// Requests the developer debug HUD: a set of [TextLabel](#textlabel) chips
 /// with diagnostic readouts, anchored to the top-right of the window and
@@ -29,26 +29,27 @@ use crate::ecs::asset_id::de_opt_asset_ref;
 /// release builds leave it inert even when declared. Declare an
 /// [EngineDefaults](#enginedefaults) with `"debug_hud": false` to leave the
 /// world without one.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct DebugHud {
     /// [TextLabel](#textlabel) that receives the per-step GPU-timing chip text.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub passes_label: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub passes_label: Option<Ref<TextLabel>>,
     /// [TextLabel](#textlabel) that receives the cursor-position chip text.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub mouse_label: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub mouse_label: Option<Ref<TextLabel>>,
     /// [TextLabel](#textlabel) that receives the live camera-pose chip text.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub camera_label: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub camera_label: Option<Ref<TextLabel>>,
     /// [TextLabel](#textlabel) that receives the thread / memory budget chip text.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub sys_label: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub sys_label: Option<Ref<TextLabel>>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ecs::asset_id::AssetId;
 
     #[test]
     fn a_blank_hud_claims_no_labels() {
@@ -66,15 +67,15 @@ mod tests {
         let h: DebugHud = crate::test_support::from_json(
             r#"{"passes_label":"passes_chip","mouse_label":"","camera_label":"cam","sys_label":6}"#,
         );
-        assert_eq!(h.passes_label, Some(AssetId(11)));
+        assert_eq!(h.passes_label, Some(Ref::new(AssetId(11))));
         assert_eq!(h.mouse_label, None);
-        assert_eq!(h.camera_label, Some(AssetId(3)));
-        assert_eq!(h.sys_label, Some(AssetId(6)));
+        assert_eq!(h.camera_label, Some(Ref::new(AssetId(3))));
+        assert_eq!(h.sys_label, Some(Ref::new(AssetId(6))));
 
         let bytes = postcard::to_allocvec(&h).unwrap();
         let back: DebugHud = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.passes_label, Some(AssetId(11)));
+        assert_eq!(back.passes_label, Some(Ref::new(AssetId(11))));
         assert_eq!(back.mouse_label, None);
-        assert_eq!(back.sys_label, Some(AssetId(6)));
+        assert_eq!(back.sys_label, Some(Ref::new(AssetId(6))));
     }
 }

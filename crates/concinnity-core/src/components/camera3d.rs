@@ -29,7 +29,7 @@ pub enum FollowDrive {
 /// itself (camera-relative). The character must be a
 /// [SkinnedMesh](skinned_mesh.md) with a `capsule`, so it has a kinematic
 /// character capsule to move.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct FollowController {
     /// Name of the followed [SkinnedMesh](skinned_mesh.md). It must declare a
@@ -74,7 +74,7 @@ impl Default for FollowController {
 /// the internal camera controller, which turns mouse/keyboard input into a
 /// camera orientation and a movement intent. Set `controller` to `null` for a
 /// camera driven by something else (a `CameraShot` / `Scene` cutscene).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct CameraController {
     /// Direct 6-DoF flight mode. WASD moves along the camera's full forward
@@ -141,7 +141,7 @@ fn default_controller() -> Option<CameraController> {
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct Camera3DArgs {
     /// Vertical field-of-view in degrees.

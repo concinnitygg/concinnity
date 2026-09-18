@@ -9,6 +9,7 @@ use concinnity_core::components::LoadingOverlay;
 use concinnity_core::components::ScreenCommand;
 use concinnity_core::components::Sprite;
 use concinnity_core::components::TextLabel;
+use concinnity_core::ecs::Ref;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{Access, FrameTime, PipelineContext, ScreenStack, StepResult, System};
 use concinnity_core::render::scene_flow::FadePhase;
@@ -42,11 +43,11 @@ impl LoadingOverlaySystem {
     // Build the overlay from a world's `LoadingOverlay` request component.
     pub(crate) fn new(config: LoadingOverlay) -> Self {
         Self {
-            screen: config.screen,
-            backdrop: config.backdrop,
-            track: config.track,
-            fill: config.fill,
-            label: config.label,
+            screen: config.screen.map(Ref::id),
+            backdrop: config.backdrop.map(Ref::id),
+            track: config.track.map(Ref::id),
+            fill: config.fill.map(Ref::id),
+            label: config.label.map(Ref::id),
             phase: Phase::Hidden,
             backdrop_alpha: None,
         }
@@ -241,6 +242,7 @@ mod tests {
     use super::*;
     use crate::ecs::SYSTEMS;
     use concinnity_core::components::Screen;
+    use concinnity_core::ecs::Ref;
     use concinnity_core::ecs::World;
     use concinnity_core::render::scene_flow::SceneFlow;
 
@@ -253,11 +255,11 @@ mod tests {
 
     fn overlay_config() -> LoadingOverlay {
         LoadingOverlay {
-            screen: Some(SCREEN),
-            backdrop: Some(BACKDROP),
-            track: Some(TRACK),
-            fill: Some(FILL),
-            label: Some(LABEL),
+            screen: Some(Ref::new(SCREEN)),
+            backdrop: Some(Ref::new(BACKDROP)),
+            track: Some(Ref::new(TRACK)),
+            fill: Some(Ref::new(FILL)),
+            label: Some(Ref::new(LABEL)),
         }
     }
 
@@ -273,14 +275,14 @@ mod tests {
         world.add_component(Sprite {
             asset_id: BACKDROP,
             tint: [0.0, 0.0, 0.0, 1.0],
-            screen: Some(SCREEN),
+            screen: Some(Ref::new(SCREEN)),
             ..Default::default()
         });
         world.add_component(Sprite {
             asset_id: TRACK,
             x: 400.0,
             width: 480.0,
-            screen: Some(SCREEN),
+            screen: Some(Ref::new(SCREEN)),
             ..Default::default()
         });
         world.add_component(Sprite {
@@ -288,12 +290,12 @@ mod tests {
             x: 400.0,
             width: 0.0,
             visible: false,
-            screen: Some(SCREEN),
+            screen: Some(Ref::new(SCREEN)),
             ..Default::default()
         });
         world.add_component(TextLabel {
             asset_id: LABEL,
-            screen: Some(SCREEN),
+            screen: Some(Ref::new(SCREEN)),
             ..Default::default()
         });
         world.insert_resource(crate::ecs::ActiveSceneFlow::new(Some(SceneFlow {

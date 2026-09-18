@@ -6,13 +6,15 @@ use crate::animation::anim_graph::{
     Blend1D, Blend2D, ClipPlay, CmpOp, CompiledCondition, CompiledGraph, CompiledState,
     CompiledTransition, ParamSpec, StatePlay,
 };
-use crate::ecs::asset_id::{AssetId, de_opt_asset_ref};
+use crate::components::Animation;
+use crate::ecs::asset_id::AssetId;
+use crate::ecs::{Ref, de_opt_ref};
 use crate::ecs::{SkinnedMeshHandle, de_opt_skinned_mesh_handle};
 
 /// A named float parameter driving a graph's transitions. Gameplay systems
 /// (or the `anim-param` debug command) write parameter values at runtime;
 /// transitions compare against them. Flag-like parameters use 0 and 1.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct AnimationParam {
     /// Parameter name, referenced by transition conditions.
@@ -22,15 +24,15 @@ pub struct AnimationParam {
 }
 
 /// One member of a 1D blendspace: a clip pinned at a parameter `value`.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct AnimationBlendPoint {
     /// Parameter value at which this clip plays alone.
     pub value: f32,
     /// The [Animation](#animation) clip at this point. Must target the same
     /// [SkinnedMesh](#skinnedmesh) as the graph.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub clip: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub clip: Option<Ref<Animation>>,
 }
 
 /// A blendspace: several clips mixed continuously by parameter value instead
@@ -67,7 +69,7 @@ pub enum AnimationBlend {
         y_values: Vec<f32>,
         /// One row of [Animation](#animation) clip names per `y_values`
         /// entry, each row holding one clip per `x_values` entry.
-        rows: Vec<Vec<AssetId>>,
+        rows: Vec<Vec<Ref<Animation>>>,
         /// Phase-sync the members (see above).
         sync: bool,
     },
@@ -92,7 +94,7 @@ enum GraphBlendTagged {
         parameter_y: String,
         x_values: Vec<f32>,
         y_values: Vec<f32>,
-        rows: Vec<Vec<AssetId>>,
+        rows: Vec<Vec<Ref<Animation>>>,
         #[serde(default)]
         sync: bool,
     },
@@ -110,7 +112,7 @@ enum GraphBlendPlain {
         parameter_y: String,
         x_values: Vec<f32>,
         y_values: Vec<f32>,
-        rows: Vec<Vec<AssetId>>,
+        rows: Vec<Vec<Ref<Animation>>>,
         sync: bool,
     },
 }
@@ -172,7 +174,7 @@ impl<'de> serde::Deserialize<'de> for AnimationBlend {
 /// One state of the graph: while active it plays either a single
 /// [Animation](#animation) `clip` or a `blend` (a blendspace mixing several
 /// clips by parameter value). Exactly one of the two must be set.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct AnimationState {
     /// State name, referenced by `initial` and by transitions.
@@ -180,8 +182,8 @@ pub struct AnimationState {
     /// The [Animation](#animation) clip this state plays. Must target the
     /// same [SkinnedMesh](#skinnedmesh) as the graph. Leave unset when the
     /// state plays a `blend` instead.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub clip: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub clip: Option<Ref<Animation>>,
     /// A blendspace to play instead of a single `clip`.
     pub blend: Option<AnimationBlend>,
     /// Playback speed scale; 1.0 plays at authored speed.
@@ -212,7 +214,7 @@ impl Default for AnimationState {
 /// runtime probes straight down from the animated end joint; when a surface
 /// is within range, the chain bends so the end lands `foot_height` above it.
 /// Pinning pauses automatically while the character is airborne.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct AnimationIkChain {
     /// Names of the chain's root, middle, and end joints, in order. Exactly
@@ -242,7 +244,7 @@ impl Default for AnimationIkChain {
 
 /// One transition condition, `parameter <op> value`. All of a transition's
 /// conditions must pass for it to fire.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct AnimationCondition {
     /// Name of a declared graph parameter.
@@ -254,7 +256,7 @@ pub struct AnimationCondition {
 }
 
 /// One directed transition between two states.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct AnimationTransition {
     /// Source state name.
@@ -300,7 +302,7 @@ pub struct AnimationTransition {
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct AnimationGraph {
     /// Asset identity; injected via `inject_name`. Not part of `args`.
@@ -383,7 +385,7 @@ impl AnimationGraph {
                     return Err(ctx(format!("state '{}' has no `clip` or `blend`", s.name)));
                 }
                 (Some(clip_id), None) => {
-                    let (clip_play, clip_looping) = play_for(*clip_id)?;
+                    let (clip_play, clip_looping) = play_for(clip_id.id())?;
                     (StatePlay::Clip(clip_play), clip_looping)
                 }
                 // Blendspaces default to looping (their members are cyclic
@@ -457,9 +459,9 @@ fn compile_blend(
             .ok_or_else(|| err(format!("blend {axis} '{name}' is not a declared parameter")))
     };
     let strictly_ascending = |v: &[f32]| v.windows(2).all(|w| w[0] < w[1]);
-    let member = |clip: Option<AssetId>| -> Result<ClipPlay, String> {
+    let member = |clip: Option<Ref<Animation>>| -> Result<ClipPlay, String> {
         let id = clip.ok_or_else(|| err("blend member has no `clip`".into()))?;
-        Ok(play_for(id)?.0)
+        Ok(play_for(id.id())?.0)
     };
 
     match blend {

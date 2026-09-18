@@ -9,6 +9,7 @@
 
 use concinnity_core::components::StatHud;
 use concinnity_core::components::TextLabel;
+use concinnity_core::ecs::Ref;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{Access, FrameTime, HudPrefs, PipelineContext, StepResult, System};
 
@@ -155,12 +156,12 @@ impl StatHudSystem {
     // Build the HUD from a world's `StatHud` request component.
     pub(crate) fn new(config: StatHud) -> Self {
         Self {
-            fps_label: config.fps_label,
-            gpu_wait_label: config.gpu_wait_label,
-            vram_label: config.vram_label,
-            ram_label: config.ram_label,
-            ev_label: config.ev_label,
-            edr_label: config.edr_label,
+            fps_label: config.fps_label.map(Ref::id),
+            gpu_wait_label: config.gpu_wait_label.map(Ref::id),
+            vram_label: config.vram_label.map(Ref::id),
+            ram_label: config.ram_label.map(Ref::id),
+            ev_label: config.ev_label.map(Ref::id),
+            edr_label: config.edr_label.map(Ref::id),
             window: RateWindow::default(),
             gpu_wait_us: 0,
             vram_bytes: 0,
@@ -252,6 +253,7 @@ impl System for StatHudSystem {
 mod tests {
     use super::*;
     use crate::ecs::SYSTEMS;
+    use concinnity_core::ecs::Ref;
     use concinnity_core::ecs::World;
 
     #[test]
@@ -377,10 +379,10 @@ mod tests {
     fn hud_world() -> World {
         let mut world = World::new();
         world.add_component(StatHud {
-            fps_label: Some(AssetId(1)),
-            vram_label: Some(AssetId(2)),
-            ram_label: Some(AssetId(3)),
-            gpu_wait_label: Some(AssetId(4)),
+            fps_label: Some(Ref::new(AssetId(1))),
+            vram_label: Some(Ref::new(AssetId(2))),
+            ram_label: Some(Ref::new(AssetId(3))),
+            gpu_wait_label: Some(Ref::new(AssetId(4))),
             ..StatHud::default()
         });
         for id in [1u32, 2, 3, 4] {

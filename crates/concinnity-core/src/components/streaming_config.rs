@@ -12,7 +12,7 @@
 /// Texture streaming covers the color and normal-map textures (each capped
 /// independently via `texture_budget` / `texture_cap`). Mesh streaming covers
 /// static geometry; the skybox, rooms, and moving props always stay loaded.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct StreamingConfig {
     /// Maximum number of textures whose load is started per frame, applied

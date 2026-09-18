@@ -1,10 +1,11 @@
 // Editable single-line text-field schema.
 
+use crate::components::Screen;
 use crate::components::SpriteFit;
 use crate::ecs::FontHandle;
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::asset_id::de_opt_asset_ref;
 use crate::ecs::de_opt_font_handle;
+use crate::ecs::{Ref, de_opt_ref};
 use alloc::string::String;
 
 /// An editable single-line text field drawn as a UI overlay.
@@ -31,7 +32,7 @@ use alloc::string::String;
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct TextInput {
     /// Asset identity; injected via `inject_name`. Not part of `args`.
@@ -78,8 +79,8 @@ pub struct TextInput {
     pub fit: SpriteFit,
     /// [Screen](#screen) this field belongs to. `None` means the field is
     /// always visible.
-    #[serde(default, deserialize_with = "de_opt_asset_ref")]
-    pub screen: Option<AssetId>,
+    #[serde(default, deserialize_with = "de_opt_ref")]
+    pub screen: Option<Ref<Screen>>,
     /// Runtime keyboard-focus flag, set by the engine while this is the active
     /// field. Not authored and not serialized to a blob.
     #[serde(skip)]
@@ -158,7 +159,7 @@ mod tests {
         );
         assert_eq!(t.font, Some(FontHandle(4)));
         assert_eq!(t.content, "hello");
-        assert_eq!(t.screen, Some(AssetId(4)));
+        assert_eq!(t.screen, Some(Ref::new(AssetId(4))));
         // Focus, caret, and the completion ghost are skipped on the way in.
         assert!(!t.focused);
         assert_eq!(t.caret, 0);

@@ -3,6 +3,7 @@
 // resulting element-visibility and focus changes to the world.
 
 use concinnity_core::components::{Screen, ScreenCommand, ScreenInput};
+use concinnity_core::ecs::Ref;
 use concinnity_core::ecs::asset_id::AssetId;
 use std::collections::{BTreeMap, HashMap};
 
@@ -29,7 +30,7 @@ impl ScreenMeta {
             input: s.input,
             pauses_world: s.pauses_world,
             toggle_key: s.toggle_key.clone(),
-            focus: s.focus,
+            focus: s.focus.map(Ref::id),
             layer: s.layer,
         }
     }

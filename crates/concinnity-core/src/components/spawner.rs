@@ -1,15 +1,16 @@
 //! The `Spawner` asset: the authored args a world declares, and the runtime
 //! component (with its spawn accumulator) they bake into.
 
-use crate::ecs::Component;
+use crate::components::Prop;
 use crate::ecs::asset_id::AssetId;
+use crate::ecs::{Component, Ref};
 
 /// Authored fields of a `Spawner`; the runtime accumulator is not declared.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct SpawnerArgs {
-    /// Name of the placement to copy on each spawn.
-    pub template: AssetId,
+    /// The [Prop](#prop) placement to copy on each spawn.
+    pub template: Ref<Prop>,
     /// Seconds between spawns.
     pub interval: f32,
     /// Seconds each spawned copy lives before auto-removal; 0 keeps it forever.
@@ -19,7 +20,7 @@ pub struct SpawnerArgs {
 impl Default for SpawnerArgs {
     fn default() -> Self {
         Self {
-            template: AssetId::default(),
+            template: Ref::new(AssetId::default()),
             interval: 1.0,
             lifetime: 0.0,
         }
@@ -85,7 +86,7 @@ impl Spawner {
     /// baked blob record carries the result).
     pub fn bake(args: SpawnerArgs) -> Self {
         Self {
-            template: args.template,
+            template: args.template.id(),
             interval: args.interval.max(0.0),
             lifetime: args.lifetime.max(0.0),
             elapsed: 0.0,

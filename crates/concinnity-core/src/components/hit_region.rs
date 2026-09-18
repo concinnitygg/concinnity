@@ -2,8 +2,8 @@
 
 use crate::components::SpriteFit;
 use crate::components::UiAction;
-use crate::ecs::asset_id::AssetId;
-use crate::ecs::asset_id::de_opt_asset_ref;
+use crate::components::{Screen, Sprite, TextLabel};
+use crate::ecs::{Ref, de_opt_ref};
 
 /// A responsive invisible rectangular region in screen space.
 ///
@@ -24,7 +24,7 @@ use crate::ecs::asset_id::de_opt_asset_ref;
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct HitRegion {
     /// Left edge of the region in window pixels.
@@ -36,8 +36,8 @@ pub struct HitRegion {
     /// Height of the region in window pixels.
     pub height: f32,
     /// A [TextLabel](#textlabel) to style on hover. `None` = no label effect.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub label: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub label: Option<Ref<TextLabel>>,
     /// RGB color applied to the label while hovered. `None` = no change.
     pub hover_color: Option<[f32; 3]>,
     /// Scale applied to the label while hovered. None = no change.
@@ -53,13 +53,13 @@ pub struct HitRegion {
     /// The [Sprite](#sprite) a [Slider](#slider) drag region moves along its
     /// track. `None` for ordinary regions. Set automatically when a `Slider`
     /// expands; you don't set this directly.
-    #[serde(default, deserialize_with = "de_opt_asset_ref")]
-    pub drag_handle: Option<AssetId>,
+    #[serde(default, deserialize_with = "de_opt_ref")]
+    pub drag_handle: Option<Ref<Sprite>>,
     /// [Screen](#screen) this region belongs to. While a screen is active,
     /// only the top capturing screen's regions fire; with no screen active,
     /// only screen-less regions fire.
-    #[serde(default, deserialize_with = "de_opt_asset_ref")]
-    pub screen: Option<AssetId>,
+    #[serde(default, deserialize_with = "de_opt_ref")]
+    pub screen: Option<Ref<Screen>>,
     /// Whether this region is inert. A disabled region never hovers or fires.
     /// Set by the engine at runtime (e.g. a settings row whose feature the GPU
     /// cannot provide is disabled and grayed out); you don't set this directly.
@@ -105,6 +105,7 @@ impl Default for HitRegion {
 mod tests {
     use super::*;
     use crate::components::StoryCommand;
+    use crate::ecs::asset_id::AssetId;
 
     #[test]
     fn a_blank_region_is_an_enabled_button_sized_rectangle() {
@@ -130,9 +131,9 @@ mod tests {
                 "hover_color":[1,0.85,0.3],"hover_scale":1.1,"drag_handle":"grip",
                 "screen":"menu","disabled":true,"follow_label":true,"fit":"cover"}"#,
         );
-        assert_eq!(h.label, Some(AssetId(10)));
-        assert_eq!(h.drag_handle, Some(AssetId(4)));
-        assert_eq!(h.screen, Some(AssetId(4)));
+        assert_eq!(h.label, Some(Ref::new(AssetId(10))));
+        assert_eq!(h.drag_handle, Some(Ref::new(AssetId(4))));
+        assert_eq!(h.screen, Some(Ref::new(AssetId(4))));
         assert_eq!(h.action, Some(UiAction::Story(StoryCommand::Start)));
         assert_eq!(h.hover_scale, Some(1.1));
         assert_eq!(h.fit, SpriteFit::Cover);
@@ -143,7 +144,7 @@ mod tests {
         let back: HitRegion = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(back.hover_color, Some([1.0, 0.85, 0.3]));
         assert_eq!((back.width, back.height), (200.0, 48.0));
-        assert_eq!(back.label, Some(AssetId(10)));
+        assert_eq!(back.label, Some(Ref::new(AssetId(10))));
         assert_eq!(back.fit, SpriteFit::Cover);
         assert_eq!(back.action, h.action);
     }

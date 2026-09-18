@@ -1,11 +1,12 @@
 // Audio-cue schema.
 
 use crate::components::AudioBus;
+use crate::components::Screen;
 use crate::components::vocabulary;
 use crate::ecs::AudioClipHandle;
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::asset_id::de_opt_asset_ref;
 use crate::ecs::de_opt_audio_clip_handle;
+use crate::ecs::{Ref, de_opt_ref};
 
 /// Plays audio when a [Screen](#screen) is shown.
 ///
@@ -22,15 +23,15 @@ use crate::ecs::de_opt_audio_clip_handle;
 ///   a cue is seamless. A screen with a *different* music cue replaces the
 ///   track; a screen with *no* music cue leaves the current music playing.
 /// - `sound`: a one-shot effect, played every time the screen is shown.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct AudioCue {
     /// Asset identity; injected via `inject_name`. Not part of `args`.
     #[serde(skip)]
     pub asset_id: AssetId,
     /// The [Screen](#screen) whose activation triggers this cue.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub screen: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub screen: Option<Ref<Screen>>,
     /// The [AudioClip](#audioclip) to play.
     #[serde(deserialize_with = "de_opt_audio_clip_handle")]
     pub clip: Option<AudioClipHandle>,
@@ -114,7 +115,7 @@ mod tests {
             r#"{"clip":"theme","screen":"menu","kind":"music","volume":0.4}"#,
         );
         assert_eq!(c.clip, Some(AudioClipHandle(5)));
-        assert_eq!(c.screen, Some(AssetId(4)));
+        assert_eq!(c.screen, Some(Ref::new(AssetId(4))));
         assert_eq!(c.kind, CueKind::Music);
         assert_eq!(c.volume, 0.4);
         assert_eq!(
@@ -125,7 +126,7 @@ mod tests {
         let bytes = postcard::to_allocvec(&c).unwrap();
         let back: AudioCue = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(back.clip, Some(AudioClipHandle(5)));
-        assert_eq!(back.screen, Some(AssetId(4)));
+        assert_eq!(back.screen, Some(Ref::new(AssetId(4))));
         assert_eq!(back.kind, CueKind::Music);
         assert_eq!(back.asset_id, AssetId::default());
     }

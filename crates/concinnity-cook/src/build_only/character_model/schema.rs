@@ -26,7 +26,7 @@ use concinnity_core::ecs::de_opt_material_handle;
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_core::ecs::AssetFields)]
 #[serde(default)]
 pub struct CharacterModel {
     /// The [CharacterSchema](#characterschema) the source conforms to, by

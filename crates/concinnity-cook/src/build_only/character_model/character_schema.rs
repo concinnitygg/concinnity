@@ -16,7 +16,15 @@ pub enum KeyPolarity {
 }
 
 /// One joint the schema expects in a conforming skeleton.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    concinnity_core::ecs::AssetFields,
+)]
 #[serde(default)]
 pub struct SchemaJoint {
     /// Joint name.
@@ -28,7 +36,9 @@ pub struct SchemaJoint {
 }
 
 /// One shape key the schema knows, authored on the source or synthesized.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, concinnity_core::ecs::AssetFields,
+)]
 #[serde(default)]
 pub struct SchemaKey {
     /// Slider name; the target is `name` or the `name+` / `name-` pair.
@@ -65,7 +75,15 @@ impl SchemaKey {
 
 /// A named group of joints. A vertex belongs to a region by the skin weight
 /// it gives the region's joints.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    concinnity_core::ecs::AssetFields,
+)]
 #[serde(default)]
 pub struct SchemaRegion {
     /// Region name.
@@ -76,7 +94,15 @@ pub struct SchemaRegion {
 
 /// A proportion slider: one value in `[-1, 1]` written as a scale and / or
 /// length change on every listed joint.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    concinnity_core::ecs::AssetFields,
+)]
 #[serde(default)]
 pub struct ProportionGroup {
     /// Group name (the panel row).
@@ -106,7 +132,9 @@ impl ProportionGroup {
 
 /// Generator parameters for a synthesized target. Each generator reads the
 /// fields it needs and ignores the rest.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, concinnity_core::ecs::AssetFields,
+)]
 #[serde(default)]
 pub struct SynthParams {
     /// Displacement at full weight, in model units.
@@ -146,7 +174,15 @@ impl Default for SynthParams {
 
 /// A morph target the build generates from the mesh instead of reading from
 /// the source.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    concinnity_core::ecs::AssetFields,
+)]
 #[serde(default)]
 pub struct SynthesizedTarget {
     /// Slider name. A bipolar target emits `name+` and its negation `name-`.
@@ -177,7 +213,15 @@ impl SynthesizedTarget {
 }
 
 /// One panel section: a caption over the rows of the listed regions.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    concinnity_core::ecs::AssetFields,
+)]
 #[serde(default)]
 pub struct PanelSection {
     /// Section caption.
@@ -187,7 +231,15 @@ pub struct PanelSection {
 }
 
 /// A named slider vector the panel offers as a button.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    concinnity_core::ecs::AssetFields,
+)]
 #[serde(default)]
 pub struct ShapePreset {
     /// Preset name (the button caption).
@@ -237,7 +289,15 @@ pub struct ShapePreset {
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Default, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug,
+    Default,
+    Clone,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    concinnity_core::ecs::AssetFields,
+)]
 #[serde(default)]
 pub struct CharacterSchema {
     /// Required (and optional) joints with their parents.

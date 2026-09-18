@@ -1,7 +1,7 @@
 // World-level physics configuration schema.
 
-use crate::ecs::asset_id::AssetId;
-use crate::ecs::asset_id::de_opt_asset_ref;
+use crate::components::ProceduralMesh;
+use crate::ecs::{Ref, de_opt_ref};
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -25,7 +25,7 @@ use alloc::vec::Vec;
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct PhysicsConfig {
     /// Y coordinate of the floor. When left at 0.0 it is auto-detected from the
@@ -48,8 +48,8 @@ pub struct PhysicsConfig {
     /// "heightfield"`. When set, the physics surface is built from that mesh's
     /// source image so props rest on the visible terrain. Takes precedence over
     /// the `terrain_*` values above.
-    #[serde(default, deserialize_with = "de_opt_asset_ref")]
-    pub terrain_mesh: Option<AssetId>,
+    #[serde(default, deserialize_with = "de_opt_ref")]
+    pub terrain_mesh: Option<Ref<ProceduralMesh>>,
     /// Extra collision layer names beyond the built-ins (`world`, `prop`,
     /// `character`, `trigger`). At most 28; referenced by collider `layer`
     /// fields and `no_collide` pairs.
@@ -100,6 +100,7 @@ impl Default for PhysicsConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ecs::asset_id::AssetId;
     use alloc::string::ToString;
     use alloc::vec;
 
@@ -158,7 +159,7 @@ mod tests {
                 "terrain_subdivisions":64,"terrain_amplitude":12,"terrain_offset_y":2,
                 "terrain_mesh":"ground"}"#,
         );
-        assert_eq!(p.terrain_mesh, Some(AssetId(6)));
+        assert_eq!(p.terrain_mesh, Some(Ref::new(AssetId(6))));
 
         let bytes = postcard::to_allocvec(&p).unwrap();
         let back: PhysicsConfig = postcard::from_bytes(&bytes).unwrap();
@@ -168,6 +169,6 @@ mod tests {
         assert_eq!(back.terrain_subdivisions, 64);
         assert_eq!(back.terrain_amplitude, 12.0);
         assert_eq!(back.terrain_offset_y, 2.0);
-        assert_eq!(back.terrain_mesh, Some(AssetId(6)));
+        assert_eq!(back.terrain_mesh, Some(Ref::new(AssetId(6))));
     }
 }

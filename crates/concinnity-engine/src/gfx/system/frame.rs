@@ -554,7 +554,7 @@ impl GraphicsSystem {
             let band = [panel.x, panel.y, panel.width, panel.height];
             for row in &panel.rows {
                 for &id in &row.elements {
-                    clips.insert(id, band);
+                    clips.insert(id.id(), band);
                 }
             }
         }
@@ -584,7 +584,7 @@ impl GraphicsSystem {
             }
             r.disabled = true;
             if let Some(label) = r.label {
-                gated_value_labels.insert(label);
+                gated_value_labels.insert(label.id());
             }
         }
         if gated_value_labels.is_empty() {
@@ -595,7 +595,11 @@ impl GraphicsSystem {
         // value labels to every element of the rows that contain them.
         let rows: Vec<Vec<AssetId>> = ctx
             .query::<ScrollPanel>()
-            .flat_map(|p| p.rows.iter().map(|r| r.elements.clone()))
+            .flat_map(|p| {
+                p.rows
+                    .iter()
+                    .map(|r| r.elements.iter().map(|e| e.id()).collect())
+            })
             .collect();
         let dim = expand_dim_set(&gated_value_labels, &rows);
         for l in ctx.query_mut::<TextLabel>() {

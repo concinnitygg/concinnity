@@ -1043,6 +1043,7 @@ mod tests {
     use concinnity_core::ecs::ComponentSlot;
     use concinnity_core::ecs::ComponentStorage;
     use concinnity_core::ecs::FrameContext;
+    use concinnity_core::ecs::Ref;
     use concinnity_core::ecs::Resources;
     use concinnity_core::ecs::TextureHandle;
     use concinnity_core::gfx::render_types::NO_ALBEDO_SLOT;
@@ -2088,7 +2089,7 @@ mod tests {
 
         let mut prop = make_prop([0.0; 3]);
         prop.asset_id = AssetId(8);
-        prop.model = Some(AssetId(100));
+        prop.model = Some(Ref::new(AssetId(100)));
         prop.cull_distance = 30.0;
 
         let mut components = ComponentStorage::default();
@@ -2108,7 +2109,7 @@ mod tests {
         ctx.insert(
             e,
             ModelRenderer {
-                model: prop.model.unwrap(),
+                model: prop.model.unwrap().id(),
                 cull_distance: prop.cull_distance,
             },
         );

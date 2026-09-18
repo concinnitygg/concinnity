@@ -42,7 +42,9 @@ impl Ease {
 /// The direction is world space rather than camera relative, so a turn running
 /// over the same span does not bend the path: the two tracks stay independent,
 /// which is what lets them be read separately.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields,
+)]
 #[serde(default)]
 pub struct CameraTravel {
     /// World-space direction of the run. Need not be unit length.
@@ -71,7 +73,9 @@ pub struct CameraTravel {
 /// Either angle may be left out to keep the one the camera already holds,
 /// which is what makes a leg with only `seconds` a hold rather than a turn to
 /// zero.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields,
+)]
 #[serde(default)]
 pub struct CameraTurn {
     /// Heading the turn ends at, in degrees, or unset to hold the current one.
@@ -113,7 +117,9 @@ pub struct CameraTurn {
 ///     }],
 /// };
 /// ```
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields,
+)]
 #[serde(default)]
 pub struct CameraTrackArgs {
     /// Where the camera goes, leg by leg.
@@ -126,7 +132,16 @@ pub struct CameraTrackArgs {
 
 /// A point the travel track reaches, baked from a
 /// [CameraTravel](#cameratravel) leg.
-#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+)]
 pub struct CameraTravelKey {
     /// Offset from the camera's starting position reached at `end_seconds`.
     pub offset: [f32; 3],
@@ -142,7 +157,16 @@ pub struct CameraTravelKey {
 /// A heading the turn track reaches, baked from a [CameraTurn](#cameraturn)
 /// leg. Its duration is resolved at world start rather than here, because the
 /// first leg's turn is measured from the camera's authored heading.
-#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+)]
 pub struct CameraTurnKey {
     /// Heading reached, in degrees, or `None` to hold the current one.
     pub yaw_deg: Option<f32>,
@@ -188,7 +212,9 @@ pub struct CameraTurnKey {
 ///     ..Default::default()
 /// });
 /// ```
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields,
+)]
 pub struct CameraTrack {
     /// Asset identity; injected via `inject_name`. Not part of `args`.
     #[serde(skip)]

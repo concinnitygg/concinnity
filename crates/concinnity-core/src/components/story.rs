@@ -1,13 +1,14 @@
 // Branching-story graph schema.
 
 use crate::components::vocabulary;
+use crate::components::{Screen, Sprite, TextLabel};
 use crate::ecs::AudioClipHandle;
 use crate::ecs::TextureHandle;
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::asset_id::de_opt_asset_ref;
 use crate::ecs::de_audio_clip_handle_vec;
 use crate::ecs::de_opt_audio_clip_handle;
 use crate::ecs::de_texture_handle;
+use crate::ecs::{Ref, de_opt_ref};
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -28,7 +29,7 @@ use alloc::vec::Vec;
 /// shows the choice menu when a node ends in one, and plays page audio.
 /// Clicking the stage (or pressing Space) advances; `story:start` restarts
 /// from the first node.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct Story {
     /// Asset identity; injected via `inject_name`. Not part of `args`.
@@ -55,109 +56,109 @@ pub struct Story {
 /// The stage scaffolding a [Story](#story)'s build expansion generated: the
 /// [Screen](#screen)s, [Sprite](#sprite)s, and [TextLabel](#textlabel)s the
 /// story system mutates page by page.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct StoryScaffold {
     /// The stage [Screen](#screen) the story plays inside.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub screen: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub screen: Option<Ref<Screen>>,
     /// The [Screen](#screen) shown when the story ends.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub ending: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub ending: Option<Ref<Screen>>,
     /// Backdrop [Sprite](#sprite).
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub bg: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub bg: Option<Ref<Sprite>>,
     /// Stage-left portrait [Sprite](#sprite).
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub left: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub left: Option<Ref<Sprite>>,
     /// Stage-center portrait [Sprite](#sprite).
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub center: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub center: Option<Ref<Sprite>>,
     /// Stage-right portrait [Sprite](#sprite).
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub right: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub right: Option<Ref<Sprite>>,
     /// Dialog box backdrop [Sprite](#sprite).
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub dialog_box: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub dialog_box: Option<Ref<Sprite>>,
     /// Speaker name-plate [TextLabel](#textlabel).
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub name_label: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub name_label: Option<Ref<TextLabel>>,
     /// Dialog text [TextLabel](#textlabel).
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub text_label: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub text_label: Option<Ref<TextLabel>>,
     /// Choice button box [Sprite](#sprite)s, one per option slot.
-    pub option_boxes: Vec<AssetId>,
+    pub option_boxes: Vec<Ref<Sprite>>,
     /// Choice button [TextLabel](#textlabel)s, one per option slot.
-    pub options: Vec<AssetId>,
+    pub options: Vec<Ref<TextLabel>>,
     /// The title screen's Start [TextLabel](#textlabel). The story lays the
     /// title menu out at runtime, keeping only the buttons that apply
     /// contiguous (Continue and Load appear only when a save exists), so these
     /// labels are moved and cleared per the save state on disk.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub start_label: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub start_label: Option<Ref<TextLabel>>,
     /// The title screen's Quit [TextLabel](#textlabel).
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub quit_label: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub quit_label: Option<Ref<TextLabel>>,
     /// The title screen's Continue [TextLabel](#textlabel), hidden while no
     /// save exists.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub continue_label: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub continue_label: Option<Ref<TextLabel>>,
     /// The title screen [Screen](#screen), returned to when the load overlay is
     /// dismissed before play started.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub title: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub title: Option<Ref<Screen>>,
     /// The title screen's Load [TextLabel](#textlabel), hidden while no
     /// slot save exists.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub load_label: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub load_label: Option<Ref<TextLabel>>,
     /// The pause-menu [Screen](#screen) (the injected Escape overlay), shown over
     /// the stage and returned from to the stage. Unset when the world declares
     /// no pause menu.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub pause: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub pause: Option<Ref<Screen>>,
     /// The settings-screen entry [Screen](#screen) opened by the pause menu's and
     /// the title screen's Settings items. Unset when there is no pause menu.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub settings: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub settings: Option<Ref<Screen>>,
     /// The title screen's Settings [TextLabel](#textlabel), laid out with the
     /// other title buttons and hidden when there is no settings screen.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub settings_label: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub settings_label: Option<Ref<TextLabel>>,
     /// The small pulsing [Sprite](#sprite) shown when a fully revealed page
     /// waits for input.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub advance_marker: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub advance_marker: Option<Ref<Sprite>>,
     /// Quick-row Log [TextLabel](#textlabel) (dialogue history toggle).
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub log_label: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub log_label: Option<Ref<TextLabel>>,
     /// Quick-row Auto [TextLabel](#textlabel) (auto-advance toggle).
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub auto_label: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub auto_label: Option<Ref<TextLabel>>,
     /// Quick-row Skip [TextLabel](#textlabel) (fast-forward toggle).
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub skip_label: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub skip_label: Option<Ref<TextLabel>>,
     /// Quick-row Save [TextLabel](#textlabel) (opens the slot overlay).
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub save_label: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub save_label: Option<Ref<TextLabel>>,
     /// Full-canvas dim [Sprite](#sprite) behind the backlog and slot
     /// overlays.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub overlay_dim: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub overlay_dim: Option<Ref<Sprite>>,
     /// The backlog overlay's history [TextLabel](#textlabel).
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub backlog_label: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub backlog_label: Option<Ref<TextLabel>>,
     /// The slot overlay's heading [TextLabel](#textlabel) ("Save" / "Load").
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub slot_title: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub slot_title: Option<Ref<TextLabel>>,
     /// Slot row box [Sprite](#sprite)s.
-    pub slot_boxes: Vec<AssetId>,
+    pub slot_boxes: Vec<Ref<Sprite>>,
     /// Slot row [TextLabel](#textlabel)s.
-    pub slot_labels: Vec<AssetId>,
+    pub slot_labels: Vec<Ref<TextLabel>>,
 }
 
 /// One jump target in a [Story](#story): a run of pages optionally ending in
 /// a choice menu.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct StoryNode {
     /// The heading slug this node was compiled from (diagnostics only).
@@ -181,7 +182,7 @@ pub struct StoryNode {
 }
 
 /// One click-through page of a [StoryNode](#storynode).
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct StoryPage {
     /// The speaking character, shown as a name plate. `None` = narration.
@@ -208,7 +209,7 @@ pub struct StoryPage {
 }
 
 /// A resolved speaker attribution on a [StoryPage](#storypage).
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct StorySpeaker {
     /// Display name for the name plate.
@@ -219,7 +220,7 @@ pub struct StorySpeaker {
 
 /// The stage dressing current at a page or choice menu: the backdrop and the
 /// character portraits standing on stage.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct StoryStage {
     /// Backdrop image. `None` = flat dark fill.
@@ -234,7 +235,7 @@ pub struct StoryStage {
 
 /// One placed stage image: which [Texture](#texture) to sample and where it
 /// sits on the reference canvas.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct StoryImage {
     /// [Texture](#texture) to sample.
@@ -251,7 +252,7 @@ pub struct StoryImage {
 }
 
 /// One option in a [StoryNode](#storynode)'s choice menu.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct StoryChoice {
     /// Button text.
@@ -266,7 +267,7 @@ pub struct StoryChoice {
 /// One variable operation in a [Story](#story)'s script. All story state is
 /// named integer variables, starting at `0` each playthrough: a plain flag
 /// is a variable set to `1` and cleared to `0`.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct StoryOp {
     /// The variable name.
@@ -278,7 +279,7 @@ pub struct StoryOp {
 }
 
 /// One conditional jump in a [Story](#story)'s script.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct StoryGate {
     /// The variable the condition tests.
@@ -292,7 +293,7 @@ pub struct StoryGate {
 }
 
 /// A condition on a [StoryChoice](#storychoice).
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct StoryCondition {
     /// The variable the condition tests.
@@ -534,7 +535,7 @@ mod tests {
             }],
             ..StoryNode::default()
         });
-        s.scaffold.slot_labels.push(AssetId(9));
+        s.scaffold.slot_labels.push(Ref::new(AssetId(9)));
 
         let bytes = postcard::to_allocvec(&s).unwrap();
         let back: Story = postcard::from_bytes(&bytes).unwrap();

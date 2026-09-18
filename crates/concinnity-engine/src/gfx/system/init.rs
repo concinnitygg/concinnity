@@ -30,6 +30,7 @@ use concinnity_core::ecs::MenuOverride;
 use concinnity_core::ecs::OverlayImages;
 use concinnity_core::ecs::PayloadLocator;
 use concinnity_core::ecs::PipelineContext;
+use concinnity_core::ecs::Ref;
 use concinnity_core::ecs::SkinnedMeshHandle;
 use concinnity_core::ecs::TextureHandle;
 use concinnity_core::ecs::asset_id::AssetId;
@@ -257,6 +258,7 @@ impl GraphicsSystem {
                 [d.mouse_label, d.camera_label, d.sys_label, d.passes_label]
                     .into_iter()
                     .flatten()
+                    .map(Ref::id)
                     .collect()
             })
             .unwrap_or_default();
@@ -277,6 +279,7 @@ impl GraphicsSystem {
                 ]
                 .into_iter()
                 .flatten()
+                .map(Ref::id)
                 .collect()
             })
             .unwrap_or_default();
@@ -1961,7 +1964,7 @@ fn sync_setting_value_labels(
     let rows: Vec<(SettingKey, AssetId)> = ctx
         .query::<HitRegion>()
         .filter_map(|r| match r.action {
-            Some(UiAction::Setting { key, .. }) => Some((key, r.label?)),
+            Some(UiAction::Setting { key, .. }) => Some((key, r.label?.id())),
             _ => None,
         })
         .collect();
@@ -1991,7 +1994,7 @@ fn set_setting_row_label(ctx: &mut PipelineContext, key: SettingKey, text: &str)
     });
     if let Some(id) = label_id {
         for l in ctx.query_mut::<TextLabel>() {
-            if l.asset_id == id {
+            if l.asset_id == id.id() {
                 l.content = text.to_string();
                 break;
             }

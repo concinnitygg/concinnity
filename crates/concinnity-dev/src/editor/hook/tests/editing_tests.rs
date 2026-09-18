@@ -545,6 +545,26 @@ fn add_form_cycles_and_persists_an_enum_field() {
     );
 }
 
+// A field naming two target types offers the assets of both, and nothing else.
+#[test]
+fn add_form_ref_field_offers_every_target_type() {
+    let mut h = hook(vec![
+        entry("door", "Prop"),
+        entry("pivot", "SkyRotation"),
+        entry("grass_tex", "Texture"),
+    ]);
+    let mut world = world_with_fields();
+    h.panel_open = true;
+    h.open_form(&mut world, "Prop".to_string(), FormTarget::New);
+    let parent = h
+        .form
+        .fields
+        .iter()
+        .find(|f| f.key == "parent")
+        .expect("parent ref field");
+    assert_eq!(parent.variants, vec![form::NONE_LABEL, "door", "pivot"]);
+}
+
 #[test]
 fn add_form_ref_field_offers_and_persists_an_existing_asset() {
     let mut h = hook(vec![
@@ -562,7 +582,7 @@ fn add_form_ref_field_offers_and_persists_an_existing_asset() {
         .position(|f| f.key == "texture")
         .expect("texture ref field");
     assert!(
-        matches!(h.form.fields[idx].kind, form::FieldKind::Ref { target } if target == "Texture")
+        matches!(h.form.fields[idx].kind, form::FieldKind::Ref { targets } if targets == ["Texture"])
     );
     assert_eq!(
         h.form.fields[idx].variants,

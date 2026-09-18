@@ -27,6 +27,7 @@ use concinnity_core::components::{
     HitRegion, KeyBinding, NavDirection, Screen, ScrollPanel, SettingOp,
 };
 use concinnity_core::components::{SettingVerb, UiAction};
+use concinnity_core::ecs::Ref;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{
     Access, DropdownView, EventCursor, FontHandle, OpenDropdown, PipelineContext, ScreenStack,
@@ -362,7 +363,7 @@ impl System for UiInputSystem {
                 None => (None, None),
                 Some(label_id) => ctx
                     .query::<TextLabel>()
-                    .find(|l| l.asset_id == label_id)
+                    .find(|l| l.asset_id == label_id.id())
                     .map(|l| (Some(l.color), Some(l.scale)))
                     .unwrap_or((None, None)),
             };
@@ -380,8 +381,8 @@ impl System for UiInputSystem {
             let follow = if region.follow_label {
                 region.label.and_then(|lid| {
                     ctx.query::<TextLabel>()
-                        .find(|l| l.asset_id == lid)
-                        .map(|l| (lid, region.y - l.y))
+                        .find(|l| l.asset_id == lid.id())
+                        .map(|l| (lid.id(), region.y - l.y))
                 })
             } else {
                 None
@@ -392,7 +393,7 @@ impl System for UiInputSystem {
                 original_color,
                 original_scale,
                 was_hovered: false,
-                screen,
+                screen: screen.map(Ref::id),
                 slider_key,
                 scroll_row: None,
                 region_base_y,
@@ -413,7 +414,7 @@ impl System for UiInputSystem {
         for s in ctx.query::<Sprite>() {
             if let Some(screen_id) = s.screen {
                 self.sprites_by_screen
-                    .entry(screen_id)
+                    .entry(screen_id.id())
                     .or_default()
                     .push(s.asset_id);
             }
@@ -421,7 +422,7 @@ impl System for UiInputSystem {
         for l in ctx.query::<TextLabel>() {
             if let Some(screen_id) = l.screen {
                 self.labels_by_screen
-                    .entry(screen_id)
+                    .entry(screen_id.id())
                     .or_default()
                     .push(l.asset_id);
             }
@@ -429,7 +430,7 @@ impl System for UiInputSystem {
         for t in ctx.query::<TextInput>() {
             if let Some(screen_id) = t.screen {
                 self.text_inputs_by_screen
-                    .entry(screen_id)
+                    .entry(screen_id.id())
                     .or_default()
                     .push(t.asset_id);
             }
@@ -883,7 +884,7 @@ impl UiInputSystem {
             ctx.events_mut::<SettingCommand>().send(SettingCommand {
                 setting: key,
                 op,
-                value_label,
+                value_label: value_label.map(Ref::id),
                 persist: true,
             });
             return;
@@ -1026,7 +1027,11 @@ impl UiInputSystem {
         // Snapshot the authored y of every element any panel row references.
         let wanted: std::collections::HashSet<AssetId> = panels
             .iter()
-            .flat_map(|p| p.rows.iter().flat_map(|r| r.elements.iter().copied()))
+            .flat_map(|p| {
+                p.rows
+                    .iter()
+                    .flat_map(|r| r.elements.iter().map(|e| e.id()))
+            })
             .collect();
         let mut elem_y: HashMap<AssetId, f32> = HashMap::new();
         for s in ctx.query::<Sprite>() {
@@ -1048,10 +1053,10 @@ impl UiInputSystem {
                     let base_ys = r
                         .elements
                         .iter()
-                        .map(|id| elem_y.get(id).copied().unwrap_or(r.base_y))
+                        .map(|id| elem_y.get(&id.id()).copied().unwrap_or(r.base_y))
                         .collect();
                     RowState {
-                        elements: r.elements.clone(),
+                        elements: r.elements.iter().map(|e| e.id()).collect(),
                         base_ys,
                         base_y: r.base_y,
                         height: r.height,
@@ -1064,17 +1069,17 @@ impl UiInputSystem {
                 .iter()
                 .map(|g| GroupState {
                     collapsed: g.collapsed,
-                    header: g.header,
+                    header: g.header.map(Ref::id),
                     title: g.title.clone(),
                 })
                 .collect();
             self.panels.push(PanelState {
-                screen: p.screen,
+                screen: p.screen.map(Ref::id),
                 band: [p.x, p.y, p.width, p.height],
                 rows,
                 groups,
-                thumb: p.thumb,
-                track: p.track,
+                thumb: p.thumb.map(Ref::id),
+                track: p.track.map(Ref::id),
                 track_x: p.track_x,
                 track_y: p.track_y,
                 track_w: p.track_w,
@@ -1420,6 +1425,7 @@ fn fire_action(
 
 #[cfg(test)]
 mod tests {
+    use concinnity_core::ecs::Ref;
     // UiInputSystem is internal: each test seeds the gating components
     // (HitRegion / Screen / KeyBinding) before `world.start(SYSTEMS)`, which constructs
     // the system from them via the build schedule.
@@ -1486,7 +1492,7 @@ mod tests {
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
-            screen: Some(screen),
+            screen: Some(Ref::new(screen)),
             wrap_width: 0.0,
             max_lines: 0,
         }
@@ -1527,7 +1533,7 @@ mod tests {
             y: 10.0,
             width: 100.0,
             height: 40.0,
-            label: Some(AssetId(1)),
+            label: Some(Ref::new(AssetId(1))),
             hover_color: Some([1.0, 0.0, 0.0]),
             hover_scale: Some(2.0),
             action: None,
@@ -1599,7 +1605,7 @@ mod tests {
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
-            screen: Some(menu),
+            screen: Some(Ref::new(menu)),
             wrap_width: 0.0,
             max_lines: 0,
         });
@@ -1608,12 +1614,12 @@ mod tests {
             y: 10.0,
             width: 100.0,
             height: 40.0,
-            label: Some(AssetId(1)),
+            label: Some(Ref::new(AssetId(1))),
             hover_color: Some([1.0, 0.85, 0.3]),
             hover_scale: Some(1.0),
             action: act("screen:show:81"),
             drag_handle: None,
-            screen: Some(menu),
+            screen: Some(Ref::new(menu)),
             disabled: false,
             follow_label: false,
             fit: SpriteFit::Fit,
@@ -1673,7 +1679,7 @@ mod tests {
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
-            screen: Some(screen),
+            screen: Some(Ref::new(screen)),
             wrap_width: 0.0,
             max_lines: 0,
         });
@@ -1683,12 +1689,12 @@ mod tests {
             y: 100.0,
             width: 200.0,
             height: 40.0,
-            label: Some(AssetId(1)),
+            label: Some(Ref::new(AssetId(1))),
             hover_color: Some([1.0, 0.85, 0.3]),
             hover_scale: Some(1.0),
             action: act("setting:window_mode:open"),
             drag_handle: None,
-            screen: Some(screen),
+            screen: Some(Ref::new(screen)),
             disabled: false,
             follow_label: false,
             fit: SpriteFit::Fit,
@@ -1764,7 +1770,7 @@ mod tests {
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             visible: true,
-            screen: Some(screen),
+            screen: Some(Ref::new(screen)),
             wrap_width: 0.0,
             max_lines: 0,
         });
@@ -1773,12 +1779,12 @@ mod tests {
             y: 100.0,
             width: 200.0,
             height: 40.0,
-            label: Some(AssetId(1)),
+            label: Some(Ref::new(AssetId(1))),
             hover_color: Some([1.0, 0.85, 0.3]),
             hover_scale: Some(1.0),
             action: act("setting:resolution:open"),
             drag_handle: None,
-            screen: Some(screen),
+            screen: Some(Ref::new(screen)),
             disabled: false,
             follow_label: false,
             fit: SpriteFit::Fit,
@@ -2018,7 +2024,7 @@ mod tests {
             y: 10.0,
             width: 100.0,
             height: 40.0,
-            label: Some(AssetId(1)),
+            label: Some(Ref::new(AssetId(1))),
             hover_color: Some([1.0, 0.85, 0.3]),
             // Matches the label's scale, so hover must not resize it.
             hover_scale: Some(0.66),
@@ -2121,7 +2127,7 @@ mod tests {
             tint: [0.0, 0.0, 0.0, 0.5],
             follow_cursor: false,
             visible: true, // intentionally true to confirm init hides it
-            screen: Some(screen_id),
+            screen: Some(Ref::new(screen_id)),
             fit: SpriteFit::Fit,
             corner_radius: 0.0,
             border_width: 0.0,
@@ -2201,7 +2207,7 @@ mod tests {
             hover_scale: None,
             action: act("scene:7"),
             drag_handle: None,
-            screen: Some(screen_id),
+            screen: Some(Ref::new(screen_id)),
             disabled: false,
             follow_label: false,
             fit: SpriteFit::Fit,
@@ -2366,7 +2372,7 @@ mod tests {
             y: 0.0,
             width: 100.0,
             height: 100.0,
-            label: Some(value_label),
+            label: Some(Ref::new(value_label)),
             hover_color: None,
             hover_scale: None,
             action: act("setting:vsync:next"),
@@ -2480,11 +2486,11 @@ mod tests {
             y: 0.0,
             width: 200.0,
             height: 40.0,
-            label: Some(value_label),
+            label: Some(Ref::new(value_label)),
             hover_color: None,
             hover_scale: None,
             action: act("setting:exposure:drag"),
-            drag_handle: Some(AssetId(8)),
+            drag_handle: Some(Ref::new(AssetId(8))),
             screen: None,
             disabled: false,
             follow_label: false,
@@ -2553,12 +2559,12 @@ mod tests {
             y: 100.0,
             width: 300.0,
             height: 40.0,
-            label: Some(header),
+            label: Some(Ref::new(header)),
             hover_color: None,
             hover_scale: None,
             action: act("group:toggle:0"),
             drag_handle: None,
-            screen: Some(screen),
+            screen: Some(Ref::new(screen)),
             disabled: false,
             follow_label: false,
             fit: SpriteFit::Fit,
@@ -2575,26 +2581,26 @@ mod tests {
             hover_scale: None,
             action: act("setting:vsync:next"),
             drag_handle: None,
-            screen: Some(screen),
+            screen: Some(Ref::new(screen)),
             disabled: false,
             follow_label: false,
             fit: SpriteFit::Fit,
         });
         world.add_component(ScrollPanel {
-            screen: Some(screen),
+            screen: Some(Ref::new(screen)),
             x: 0.0,
             y: 100.0,
             width: 300.0,
             height: 100.0,
             rows: vec![
                 ScrollRow {
-                    elements: vec![header],
+                    elements: vec![Ref::new(header)],
                     base_y: 100.0,
                     height: 40.0,
                     group: -1,
                 },
                 ScrollRow {
-                    elements: vec![body],
+                    elements: vec![Ref::new(body)],
                     base_y: 140.0,
                     height: 40.0,
                     group: 0,
@@ -2602,7 +2608,7 @@ mod tests {
             ],
             groups: vec![ScrollGroup {
                 collapsed: false,
-                header: Some(header),
+                header: Some(Ref::new(header)),
                 title: "Adv".to_string(),
             }],
             thumb: None,
@@ -2649,14 +2655,14 @@ mod tests {
         world.add_component(panel_label(61, 0.0, screen, "Row0"));
         // Three 40px rows (120px) in a 60px band -> overflows by 60px.
         world.add_component(ScrollPanel {
-            screen: Some(screen),
+            screen: Some(Ref::new(screen)),
             x: 0.0,
             y: 0.0,
             width: 300.0,
             height: 60.0,
             rows: vec![
                 ScrollRow {
-                    elements: vec![e0],
+                    elements: vec![Ref::new(e0)],
                     base_y: 0.0,
                     height: 40.0,
                     group: -1,
@@ -2736,21 +2742,21 @@ mod tests {
                 hover_scale: None,
                 action: act(&format!("setting:{key}:next")),
                 drag_handle: None,
-                screen: Some(screen),
+                screen: Some(Ref::new(screen)),
                 disabled: false,
                 follow_label: false,
                 fit: SpriteFit::Fit,
             });
         }
         world.add_component(ScrollPanel {
-            screen: Some(screen),
+            screen: Some(Ref::new(screen)),
             x: 0.0,
             y: 0.0,
             width: 300.0,
             height: 60.0,
             rows: vec![
                 ScrollRow {
-                    elements: vec![e0],
+                    elements: vec![Ref::new(e0)],
                     base_y: 0.0,
                     height: 40.0,
                     group: -1,
@@ -2884,7 +2890,7 @@ mod tests {
             y: 0.0,
             width: 100.0,
             height: 40.0,
-            label: Some(value),
+            label: Some(Ref::new(value)),
             hover_color: None,
             hover_scale: None,
             action: act("setting:key_forward:rebind"),
@@ -3130,7 +3136,7 @@ mod tests {
                 tint: [0.0, 0.0, 0.0, 1.0],
                 follow_cursor: false,
                 visible: false,
-                screen: Some(screen),
+                screen: Some(Ref::new(screen)),
                 fit: SpriteFit::Fit,
                 corner_radius: 0.0,
                 border_width: 0.0,
@@ -3205,7 +3211,7 @@ mod tests {
             width: 10.0,
             height: 10.0,
             visible: true,
-            screen: Some(AssetId(80)),
+            screen: Some(Ref::new(AssetId(80))),
             ..Default::default()
         });
         world.start(SYSTEMS).unwrap();
@@ -3241,13 +3247,13 @@ mod tests {
         world.add_component(Screen {
             asset_id: AssetId(90),
             toggle_key: "Backtick".to_string(),
-            focus: Some(AssetId(91)),
+            focus: Some(Ref::new(AssetId(91))),
             ..Default::default()
         });
         world.add_component(TextInput {
             asset_id: AssetId(91),
             visible: true,
-            screen: Some(AssetId(90)),
+            screen: Some(Ref::new(AssetId(90))),
             ..Default::default()
         });
         world.start(SYSTEMS).unwrap();
@@ -3337,7 +3343,7 @@ mod tests {
         world.add_component(KeyBinding {
             key: "Space".to_string(),
             action: act("screen:show:111"),
-            screen: Some(AssetId(110)),
+            screen: Some(Ref::new(AssetId(110))),
         });
         world.start(SYSTEMS).unwrap();
 
@@ -3387,7 +3393,7 @@ mod tests {
                 width: 10.0,
                 height: 10.0,
                 visible: true,
-                screen: Some(AssetId(screen)),
+                screen: Some(Ref::new(AssetId(screen))),
                 ..Default::default()
             });
         }
@@ -3533,12 +3539,12 @@ mod tests {
                 y,
                 width: 200.0,
                 height: 40.0,
-                label: Some(AssetId(id)),
+                label: Some(Ref::new(AssetId(id))),
                 hover_color: Some([1.0, 0.85, 0.3]),
                 hover_scale: Some(1.0),
                 action: act(action),
                 drag_handle: None,
-                screen: Some(menu),
+                screen: Some(Ref::new(menu)),
                 disabled: false,
                 follow_label: false,
                 fit: SpriteFit::Fit,
@@ -3656,12 +3662,12 @@ mod tests {
                 y: 100.0,
                 width: 50.0,
                 height: 40.0,
-                label: Some(AssetId(1)),
+                label: Some(Ref::new(AssetId(1))),
                 hover_color: Some([1.0, 0.85, 0.3]),
                 hover_scale: Some(1.0),
                 action: act(&format!("setting:vsync:{suffix}")),
                 drag_handle: None,
-                screen: Some(screen),
+                screen: Some(Ref::new(screen)),
                 disabled: false,
                 follow_label: false,
                 fit: SpriteFit::Fit,
@@ -3672,12 +3678,12 @@ mod tests {
             y: 200.0,
             width: 110.0,
             height: 40.0,
-            label: Some(AssetId(2)),
+            label: Some(Ref::new(AssetId(2))),
             hover_color: Some([1.0, 0.85, 0.3]),
             hover_scale: Some(1.0),
             action: act("setting:exposure:drag"),
             drag_handle: None,
-            screen: Some(screen),
+            screen: Some(Ref::new(screen)),
             disabled: false,
             follow_label: false,
             fit: SpriteFit::Fit,
@@ -3816,7 +3822,7 @@ mod tests {
             hover_scale: None,
             action: act("story:advance"),
             drag_handle: None,
-            screen: Some(stage),
+            screen: Some(Ref::new(stage)),
             disabled: false,
             follow_label: false,
             fit: SpriteFit::Fit,
@@ -3850,7 +3856,7 @@ mod tests {
             y: 0.0,
             width: 100.0,
             height: 40.0,
-            label: Some(AssetId(7)),
+            label: Some(Ref::new(AssetId(7))),
             hover_color: None,
             hover_scale: None,
             action: act("setting:pad_jump:rebind"),

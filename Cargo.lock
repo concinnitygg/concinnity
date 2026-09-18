@@ -432,6 +432,7 @@ version = "0.19.51"
 dependencies = [
  "bytemuck",
  "ciborium",
+ "concinnity-derive",
  "fontdue",
  "hashbrown 0.17.1",
  "libm",
@@ -442,6 +443,15 @@ dependencies = [
  "serde_json",
  "spin",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "concinnity-derive"
+version = "0.19.51"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

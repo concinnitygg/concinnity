@@ -1,8 +1,9 @@
 // Overlay-screen schema.
 
+use crate::components::TextInput;
 use crate::components::vocabulary;
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::asset_id::de_opt_asset_ref;
+use crate::ecs::{Ref, de_opt_ref};
 use alloc::string::String;
 
 /// How a [Screen](#screen) treats input while it is active.
@@ -51,7 +52,7 @@ vocabulary!(ScreenInput {
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct Screen {
     /// Assigned by the loader; not authored.
@@ -72,8 +73,8 @@ pub struct Screen {
     pub pauses_world: bool,
     /// [TextInput](#textinput) that receives keyboard focus whenever this
     /// screen reaches the top of the stack.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub focus: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub focus: Option<Ref<TextInput>>,
     /// Draw-order bias against the always-on HUD and other screens. Screens
     /// default above the HUD in stack order; a negative layer draws beneath
     /// the HUD, a higher layer stays above later-pushed screens.
@@ -123,7 +124,7 @@ mod tests {
         assert_eq!(s.input, ScreenInput::Passthrough);
         assert!(!s.pauses_world);
         assert!(s.initial);
-        assert_eq!(s.focus, Some(AssetId(12)));
+        assert_eq!(s.focus, Some(Ref::new(AssetId(12))));
         assert_eq!(
             serde_json::to_string(&ScreenInput::Passthrough).unwrap(),
             r#""passthrough""#

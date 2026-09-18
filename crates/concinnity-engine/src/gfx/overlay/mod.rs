@@ -216,17 +216,17 @@ impl OverlaySystem {
         self.layers.clear();
         if let Some(screen_layers) = screen_layers.filter(|l| !l.is_empty()) {
             for s in ctx.query::<Sprite>() {
-                if let Some(layer) = s.screen.and_then(|id| screen_layers.get(&id)) {
+                if let Some(layer) = s.screen.and_then(|id| screen_layers.get(&id.id())) {
                     self.layers.insert(s.asset_id, *layer);
                 }
             }
             for l in ctx.query::<TextLabel>() {
-                if let Some(layer) = l.screen.and_then(|id| screen_layers.get(&id)) {
+                if let Some(layer) = l.screen.and_then(|id| screen_layers.get(&id.id())) {
                     self.layers.insert(l.asset_id, *layer);
                 }
             }
             for t in ctx.query::<TextInput>() {
-                if let Some(layer) = t.screen.and_then(|id| screen_layers.get(&id)) {
+                if let Some(layer) = t.screen.and_then(|id| screen_layers.get(&id.id())) {
                     self.layers.insert(t.asset_id, *layer);
                 }
             }
@@ -399,6 +399,7 @@ mod tests {
     use concinnity_core::components::{SpriteFit, TextAlign};
     use concinnity_core::ecs::Arena;
     use concinnity_core::ecs::FrameContext;
+    use concinnity_core::ecs::Ref;
     use concinnity_core::ecs::{
         ComponentSlot, ComponentStorage, CursorState, DropdownView, FontHandle, HudLayers,
         MenuOverride, OpenDropdown, Resources, ScreenStack,
@@ -488,7 +489,7 @@ mod tests {
         Sprite {
             width: REF_W,
             height: REF_H,
-            screen: Some(SCREEN),
+            screen: Some(Ref::new(SCREEN)),
             ..sprite(id)
         }
     }
@@ -694,15 +695,15 @@ mod tests {
         let mut w = TestWorld::new();
         w.push(label(AssetId(1), "hud"));
         w.push(Sprite {
-            screen: Some(SCREEN),
+            screen: Some(Ref::new(SCREEN)),
             ..sprite(AssetId(2))
         });
         w.push(TextLabel {
-            screen: Some(SCREEN),
+            screen: Some(Ref::new(SCREEN)),
             ..label(AssetId(3), "menu")
         });
         w.push(TextInput {
-            screen: Some(SCREEN),
+            screen: Some(Ref::new(SCREEN)),
             ..text_input(AssetId(4))
         });
         w.resources.insert(screen_stack(7));
@@ -725,7 +726,7 @@ mod tests {
         let mut w = TestWorld::new();
         w.push(sprite(AssetId(1)));
         w.push(Sprite {
-            screen: Some(AssetId(99)),
+            screen: Some(Ref::new(AssetId(99))),
             ..sprite(AssetId(2))
         });
         w.resources.insert(screen_stack(7));
@@ -740,7 +741,7 @@ mod tests {
     fn editor_layer_overrides_lift_elements_above_screen_layers() {
         let mut w = TestWorld::new();
         w.push(Sprite {
-            screen: Some(SCREEN),
+            screen: Some(Ref::new(SCREEN)),
             ..sprite(AssetId(1))
         });
         w.push(sprite(AssetId(2)));
@@ -821,11 +822,11 @@ mod tests {
         // both owned by the active screen.
         w.push(backdrop(AssetId(1)));
         w.push(Sprite {
-            screen: Some(SCREEN),
+            screen: Some(Ref::new(SCREEN)),
             ..sprite(AssetId(2))
         });
         w.push(TextLabel {
-            screen: Some(SCREEN),
+            screen: Some(Ref::new(SCREEN)),
             ..label(AssetId(3), "Window Mode")
         });
         w.resources.insert(screen_stack(7));

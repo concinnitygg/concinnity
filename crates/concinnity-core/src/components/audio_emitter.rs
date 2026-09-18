@@ -1,11 +1,11 @@
 // Positional audio-emitter schema.
 
 use crate::components::AudioBus;
+use crate::components::Prop;
 use crate::components::vocabulary;
 use crate::ecs::AudioClipHandle;
-use crate::ecs::asset_id::AssetId;
-use crate::ecs::asset_id::de_opt_asset_ref;
 use crate::ecs::de_opt_audio_clip_handle;
+use crate::ecs::{Ref, de_opt_ref};
 
 /// A point source of sound in the world.
 ///
@@ -25,7 +25,7 @@ use crate::ecs::de_opt_audio_clip_handle;
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct AudioEmitter {
     /// The [AudioClip](#audioclip) this emitter plays.
@@ -38,8 +38,8 @@ pub struct AudioEmitter {
     /// Whether the clip restarts when it ends.
     pub looping: bool,
     /// Optional [Prop](#prop) whose position the emitter tracks each frame.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub prop: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub prop: Option<Ref<Prop>>,
     /// Distance from the listener at which the sound plays at full volume.
     pub min_distance: f32,
     /// Distance from the listener beyond which the sound is inaudible. Must
@@ -89,6 +89,7 @@ impl Default for AudioEmitter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ecs::asset_id::AssetId;
 
     #[test]
     fn a_blank_emitter_loops_at_the_origin() {
@@ -111,14 +112,14 @@ mod tests {
             r#"{"clip":"hum","prop":"lamp","position":[1,2,3],"volume":0.5,"looping":false}"#,
         );
         assert_eq!(e.clip, Some(AudioClipHandle(3)));
-        assert_eq!(e.prop, Some(AssetId(4)));
+        assert_eq!(e.prop, Some(Ref::new(AssetId(4))));
         assert_eq!(e.position, [1.0, 2.0, 3.0]);
         assert!(!e.looping);
 
         let bytes = postcard::to_allocvec(&e).unwrap();
         let back: AudioEmitter = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(back.clip, Some(AudioClipHandle(3)));
-        assert_eq!(back.prop, Some(AssetId(4)));
+        assert_eq!(back.prop, Some(Ref::new(AssetId(4))));
         assert_eq!(back.volume, 0.5);
     }
 

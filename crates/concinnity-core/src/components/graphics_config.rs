@@ -46,7 +46,7 @@ vocabulary!(ShadowUpdate {
 ///   "args": { "clear_color": [0.1, 0.1, 0.15, 1.0], "frames_in_flight": 2 }
 /// }
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct GraphicsConfig {
     /// Cap the render loop at this many frames, then exit. Unset runs until the

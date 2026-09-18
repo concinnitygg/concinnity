@@ -1,8 +1,8 @@
 // InputKey-to-action binding schema.
 
+use crate::components::Screen;
 use crate::components::UiAction;
-use crate::ecs::asset_id::AssetId;
-use crate::ecs::asset_id::de_opt_asset_ref;
+use crate::ecs::{Ref, de_opt_ref};
 use alloc::string::String;
 
 /// Maps a keyboard key to an action.
@@ -35,7 +35,7 @@ use alloc::string::String;
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct KeyBinding {
     /// The key name to bind (e.g. `"Escape"`).
@@ -45,14 +45,15 @@ pub struct KeyBinding {
     pub action: Option<UiAction>,
     /// [Screen](#screen) this binding is scoped to: the binding only fires
     /// while that screen is on top of the stack. Unset, the binding is global.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub screen: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub screen: Option<Ref<Screen>>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::components::ScreenCommand;
+    use crate::ecs::asset_id::AssetId;
 
     #[test]
     fn a_binding_with_no_screen_is_global() {
@@ -69,12 +70,12 @@ mod tests {
         );
         assert_eq!(b.key, "Escape");
         assert_eq!(b.action, Some(UiAction::Screen(ScreenCommand::Hide)));
-        assert_eq!(b.screen, Some(AssetId(4)));
+        assert_eq!(b.screen, Some(Ref::new(AssetId(4))));
 
         let bytes = postcard::to_allocvec(&b).unwrap();
         let back: KeyBinding = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(back.key, "Escape");
-        assert_eq!(back.screen, Some(AssetId(4)));
+        assert_eq!(back.screen, Some(Ref::new(AssetId(4))));
         assert_eq!(back.action, b.action);
     }
 }

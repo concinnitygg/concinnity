@@ -221,10 +221,15 @@ mod tests {
     // deterministic stand-in first, so they stay correct regardless of the order
     // the test harness runs them in (installs are idempotent, last-writer-wins).
     use super::*;
-    use crate::ecs::asset_id::{AssetId, AssetRef, de_opt_asset_ref, de_opt_asset_ref_typed};
+    use crate::ecs::asset_id::AssetId;
+    use crate::ecs::{Ref, RefTarget, de_opt_ref};
     use crate::test_support::{install_resolvers, len_handle_resolver, len_name_resolver};
 
     struct Clip;
+
+    impl RefTarget for Clip {
+        const TYPES: &'static [&'static str] = &["AudioClip"];
+    }
 
     #[test]
     fn a_slot_reads_back_the_function_pointer_it_was_given() {
@@ -260,11 +265,10 @@ mod tests {
     }
 
     #[test]
-    fn asset_ref_resolves_a_name_through_the_seam() {
+    fn a_ref_resolves_a_name_through_the_seam() {
         set_name_resolver(len_name_resolver);
-        let r: AssetRef<Clip> = serde_json::from_str("\"wall\"").unwrap();
-        assert_eq!(r.id(), Some(AssetId(4)));
-        assert!(r.is_resolved());
+        let r: Ref<Clip> = serde_json::from_str("\"wall\"").unwrap();
+        assert_eq!(r.id(), AssetId(4));
     }
 
     #[test]
@@ -295,33 +299,20 @@ mod tests {
     }
 
     #[test]
-    fn opt_helpers_resolve_a_name_and_pass_through_an_id() {
+    fn the_optional_ref_helper_resolves_a_name() {
         set_name_resolver(len_name_resolver);
 
         #[derive(serde::Deserialize)]
-        struct Bare {
-            #[serde(default, deserialize_with = "de_opt_asset_ref")]
-            r: Option<AssetId>,
-        }
-        #[derive(serde::Deserialize)]
         struct Typed {
-            #[serde(default, deserialize_with = "de_opt_asset_ref_typed")]
-            r: Option<AssetRef<Clip>>,
+            #[serde(default, deserialize_with = "de_opt_ref")]
+            r: Option<Ref<Clip>>,
         }
 
         assert_eq!(
-            serde_json::from_str::<Bare>("{\"r\":\"mesh_a\"}")
+            serde_json::from_str::<Typed>("{\"r\":\"mesh_a\"}")
                 .unwrap()
                 .r,
-            Some(AssetId(6))
-        );
-        assert_eq!(
-            serde_json::from_str::<Typed>("{\"r\":\"abc\"}")
-                .unwrap()
-                .r
-                .unwrap()
-                .id(),
-            Some(AssetId(3))
+            Some(Ref::new(AssetId(6)))
         );
     }
 }

@@ -49,7 +49,7 @@ pub(super) fn plan(
 }
 
 // Whether the edit moved which assets this one names, over both sources the
-// build resolves: the registry's flat `refs:` fields and the structured
+// build resolves: the registry's derived reference fields and the structured
 // `CrossReferenced` impls.
 fn changes_references(
     ct: RegisteredType,
@@ -206,8 +206,8 @@ mod tests {
         );
     }
 
-    // A reference a flat `refs:` pair cannot express is guarded the same way:
-    // Camera3D reaches its follow target through a nested controller field.
+    // A nested reference is guarded the same way: Camera3D reaches its follow
+    // target through a controller field.
     #[test]
     fn a_changed_structured_reference_declines() {
         let follow = |target: &str, distance: f64| {

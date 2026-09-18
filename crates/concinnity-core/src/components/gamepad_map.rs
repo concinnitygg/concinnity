@@ -39,7 +39,9 @@ impl GamepadAction {
 /// consumers via [ControlsCommand](#controlscommand) on a rebind. Each field is
 /// `#[serde(default)]` so adding an action in a future build never invalidates
 /// an existing settings file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields,
+)]
 pub struct GamepadMap {
     /// Held to sprint while moving.
     #[serde(default = "def_sprint")]

@@ -71,6 +71,28 @@ resource_handles! {
     ShaderHandle,
 }
 
+// The handles an authored field names a resource by, and the resource type
+// each resolves to. A mesh handle is absent: its target set depends on a
+// File's kind, which a type cannot state, so its fields keep a structured check.
+macro_rules! handle_ref_targets {
+    ( $( $handle:ident => $target:literal ),+ $(,)? ) => {
+        $(
+            impl crate::ecs::ReferenceField for $handle {
+                const TARGETS: &'static [&'static str] = &[$target];
+            }
+        )+
+    };
+}
+
+handle_ref_targets! {
+    TextureHandle => "Texture",
+    MaterialHandle => "Material",
+    ShaderHandle => "Shader",
+    FontHandle => "Font",
+    AudioClipHandle => "AudioClip",
+    SkinnedMeshHandle => "SkinnedMesh",
+}
+
 // One reference-resolution seam and `deserialize_with` helper per resource
 // kind. A real build has the declaration-ordered handle map installed, so a
 // name resolves to the resource's handle. Outside a build (single-asset
@@ -94,7 +116,7 @@ macro_rules! handle_ref_de {
         )]
         ///
         #[doc = concat!(
-            "Mirrors [`de_opt_asset_ref`](crate::ecs::asset_id::de_opt_asset_ref) ",
+            "Mirrors [`de_opt_ref`](crate::ecs::de_opt_ref) ",
             "but resolves to a [`",
             stringify!($handle),
             "`]: an integer is an already-resolved handle (the compiled-args / ",

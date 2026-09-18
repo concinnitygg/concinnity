@@ -8,7 +8,7 @@ use crate::ecs::de_opt_mesh_handle;
 use alloc::vec::Vec;
 
 /// Per-instance transform within an `InstancedProp`.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct InstanceTransform {
     /// World-space position `[x, y, z]`.
@@ -37,7 +37,7 @@ impl Default for InstanceTransform {
 ///
 /// Each `instances` entry has the shape `{"position":[x,y,z], "rotation_deg":[p,y,r], "scale":[sx,sy,sz]}`.
 /// `rotation_deg` and `scale` may be omitted (defaults `[0,0,0]` and `[1,1,1]`).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct InstancedProp {
     /// Asset identity; injected via `inject_name`. Not part of `args`.

@@ -1,7 +1,8 @@
 // Infinite procedurally generated voxel world schema.
 
+use crate::components::BlockType;
 use crate::ecs::MaterialHandle;
-use crate::ecs::asset_id::AssetId;
+use crate::ecs::Ref;
 use crate::ecs::de_opt_material_handle;
 use alloc::vec::Vec;
 
@@ -18,7 +19,7 @@ use alloc::vec::Vec;
 /// 0 as air, index 1 as the surface block, and index 2 (when present) as the
 /// subsurface block. `material` supplies the textures and lighting shared by
 /// every chunk.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct VoxelWorld {
     /// Deterministic terrain seed. The same seed always generates the same
@@ -42,7 +43,7 @@ pub struct VoxelWorld {
     pub load_budget: u32,
     /// [BlockType](#blocktype) asset names. Index 0 is air; 1 is the surface
     /// block; 2, when present, is the subsurface block.
-    pub palette: Vec<AssetId>,
+    pub palette: Vec<Ref<BlockType>>,
     /// [Material](#material) shared by every chunk: textures and lighting.
     #[serde(deserialize_with = "de_opt_material_handle")]
     pub material: Option<MaterialHandle>,
@@ -126,6 +127,7 @@ impl VoxelWorld {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ecs::asset_id::AssetId;
 
     #[test]
     fn defaults_stream_a_small_radius_with_impostors_off() {

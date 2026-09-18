@@ -1,11 +1,12 @@
 // Screen-space UI text-label schema.
 
+use crate::components::Screen;
 use crate::components::SpriteFit;
 use crate::components::vocabulary;
 use crate::ecs::FontHandle;
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::asset_id::de_opt_asset_ref;
 use crate::ecs::de_opt_font_handle;
+use crate::ecs::{Ref, de_opt_ref};
 use alloc::string::String;
 
 /// Horizontal alignment of a [TextLabel](#textlabel) relative to its `x`.
@@ -54,7 +55,7 @@ vocabulary!(TextAlign {
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct TextLabel {
     /// Asset identity; injected via `inject_name`. Not part of `args`.
@@ -109,8 +110,8 @@ pub struct TextLabel {
     pub visible: bool,
     /// [Screen](#screen) this label belongs to. `None` means the label is
     /// always visible.
-    #[serde(default, deserialize_with = "de_opt_asset_ref")]
-    pub screen: Option<AssetId>,
+    #[serde(default, deserialize_with = "de_opt_ref")]
+    pub screen: Option<Ref<Screen>>,
 }
 
 impl Default for TextLabel {
@@ -183,7 +184,7 @@ mod tests {
                 "visible":false,"screen":"menu"}"#,
         );
         assert_eq!(l.font, Some(FontHandle(4)));
-        assert_eq!(l.screen, Some(AssetId(4)));
+        assert_eq!(l.screen, Some(Ref::new(AssetId(4))));
         assert_eq!(l.align, TextAlign::Right);
         assert!(l.centered);
         assert!(!l.visible);

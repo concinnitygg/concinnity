@@ -1,6 +1,7 @@
 // Screen toggle keys and KeyBindings, matched against the frame's pressed key.
 
 use concinnity_core::components::{KeyBinding, ScreenCommand, UiAction};
+use concinnity_core::ecs::Ref;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{PipelineContext, StepResult};
 
@@ -44,7 +45,7 @@ fn matching_binding<'a>(
     top: Option<AssetId>,
 ) -> Option<&'a UiAction> {
     bindings.iter().find_map(|kb| {
-        let scoped_out = kb.screen.is_some() && kb.screen != top;
+        let scoped_out = kb.screen.is_some() && kb.screen != top.map(Ref::new);
         if kb.key == name && !scoped_out {
             kb.action.as_ref()
         } else {
@@ -56,6 +57,7 @@ fn matching_binding<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::ecs::Ref;
 
     // A distinguishable stand-in action per binding.
     fn action(n: usize) -> UiAction {
@@ -66,7 +68,7 @@ mod tests {
         KeyBinding {
             key: key.to_string(),
             action,
-            screen: screen.map(AssetId),
+            screen: screen.map(AssetId).map(Ref::new),
         }
     }
 

@@ -8,7 +8,9 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 /// One named shape value in `[-1, 1]`.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields,
+)]
 #[serde(default)]
 pub struct ShapeSlider {
     /// Slider name; matched against the target mesh's morph-target names.
@@ -18,7 +20,9 @@ pub struct ShapeSlider {
 }
 
 /// One joint's proportion change.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields,
+)]
 #[serde(default)]
 pub struct JointProportion {
     /// Name of the joint in the target mesh's `skeleton`.
@@ -84,7 +88,7 @@ impl Default for JointProportion {
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct CharacterShape {
     /// Asset identity; injected via `inject_name`. Not part of `args`.

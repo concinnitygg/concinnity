@@ -20,7 +20,7 @@ use crate::ecs::de_opt_texture_handle;
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct Material {
     /// Asset identity; injected via `inject_name`. Not part of `args`.

@@ -1,3 +1,4 @@
+use crate::ecs::Ref;
 use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -52,7 +53,7 @@ fn a_rendering_world_gets_the_debug_hud_its_chips_and_a_font() {
     );
     for chip in &chips {
         assert_eq!(chip.font, Some(crate::ecs::FontHandle(0)));
-        assert!(named.contains(&Some(chip.asset_id)));
+        assert!(named.contains(&Some(Ref::new(chip.asset_id))));
         assert!(chip.asset_id.is_minted());
     }
 }
@@ -70,14 +71,14 @@ fn a_world_that_does_not_render_gets_no_hud() {
 fn an_authored_debug_hud_keeps_the_labels_it_names() {
     let mut world = rendering();
     world.add_component(DebugHud {
-        passes_label: Some(AssetId(7)),
+        passes_label: Some(Ref::new(AssetId(7))),
         ..Default::default()
     });
     complete(&mut world).unwrap();
 
     assert_eq!(world.query::<DebugHud>().count(), 1);
     let hud = world.query::<DebugHud>().next().unwrap();
-    assert_eq!(hud.passes_label, Some(AssetId(7)));
+    assert_eq!(hud.passes_label, Some(Ref::new(AssetId(7))));
     // Only the three unset slots minted a chip.
     assert_eq!(labels(&world).len(), 3);
 }
@@ -312,19 +313,26 @@ fn a_streamed_world_gets_the_loading_overlay_and_its_pieces() {
         .expect("an overlay");
     let screen = overlay.screen.expect("a screen");
     assert_eq!(world.query::<Screen>().count(), 1);
-    assert_eq!(world.query::<Screen>().next().unwrap().asset_id, screen);
+    assert_eq!(
+        world.query::<Screen>().next().unwrap().asset_id,
+        screen.id()
+    );
 
     // Backdrop, track, and fill, each on the overlay's screen.
     let sprites: Vec<Sprite> = world.query::<Sprite>().cloned().collect();
     assert_eq!(sprites.len(), 3);
     assert!(sprites.iter().all(|s| s.screen == Some(screen)));
     let named = [overlay.backdrop, overlay.track, overlay.fill];
-    assert!(sprites.iter().all(|s| named.contains(&Some(s.asset_id))));
+    assert!(
+        sprites
+            .iter()
+            .all(|s| named.contains(&Some(Ref::new(s.asset_id))))
+    );
 
     let label = overlay.label.expect("a label");
     let text = labels(&world)
         .into_iter()
-        .find(|l| l.asset_id == label)
+        .find(|l| l.asset_id == label.id())
         .expect("the label was injected");
     assert_eq!(text.content, "Loading");
     assert_eq!(text.screen, Some(screen));
@@ -336,13 +344,13 @@ fn a_streamed_world_gets_the_loading_overlay_and_its_pieces() {
 fn an_authored_overlay_is_completed_and_keeps_what_it_names() {
     let mut world = rendering();
     world.add_component(LoadingOverlay {
-        backdrop: Some(AssetId(4)),
+        backdrop: Some(Ref::new(AssetId(4))),
         ..Default::default()
     });
     complete(&mut world).unwrap();
 
     let overlay = world.query::<LoadingOverlay>().next().unwrap();
-    assert_eq!(overlay.backdrop, Some(AssetId(4)));
+    assert_eq!(overlay.backdrop, Some(Ref::new(AssetId(4))));
     assert!(overlay.screen.is_some() && overlay.track.is_some() && overlay.fill.is_some());
     // Only track and fill were minted; the authored backdrop stands.
     assert_eq!(world.query::<Sprite>().count(), 2);

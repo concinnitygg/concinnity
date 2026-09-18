@@ -16,7 +16,9 @@
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Default, Clone, serde::Serialize, serde::Deserialize, concinnity_core::ecs::AssetFields,
+)]
 #[serde(default)]
 pub struct LightRig {
     /// Name of a built-in or file-backed preset (e.g. "rig_outdoor_sun_fill").

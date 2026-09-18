@@ -3,7 +3,7 @@
 /// One `FrameInput` is updated each frame from the window's keyboard and mouse
 /// state and read by camera and UI behavior. It is maintained automatically and
 /// is never saved with the world.
-#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 pub struct FrameInput {
     /// True while the move-forward key (W) is held.
     pub forward: bool,

@@ -12,7 +12,7 @@ use concinnity_core::ecs::World;
 use crate::editor::asset_handle::AssetHandle;
 use crate::editor::create_menu;
 use crate::editor::hook::drag;
-use crate::editor::hook::{EditorHook, names_of_type};
+use crate::editor::hook::{EditorHook, names_of_types};
 use crate::editor::hud;
 use crate::editor::panels::registry::{self, PanelKey};
 use crate::editor::widget::{self, point_in};
@@ -30,7 +30,7 @@ pub(in crate::editor::hook) struct CreateMenu {
 impl EditorHook {
     // The menu rows for the current entry list and fold state.
     pub(in crate::editor::hook) fn create_menu_items(&self) -> Vec<create_menu::MenuItem> {
-        let prefabs = names_of_type(&self.entries, "Prefab");
+        let prefabs = names_of_types(&self.entries, &["Prefab"]);
         let open = self.create_menu.as_ref().is_some_and(|m| m.prefabs_open);
         create_menu::items(&prefabs, open)
     }
@@ -52,7 +52,7 @@ impl EditorHook {
         let Some(pos) = self.drop_point(world, vp, [mx, my], input.ctrl) else {
             return;
         };
-        let rows = create_menu::items(&names_of_type(&self.entries, "Prefab"), false).len();
+        let rows = create_menu::items(&names_of_types(&self.entries, &["Prefab"]), false).len();
         if rows == 0 {
             return;
         }

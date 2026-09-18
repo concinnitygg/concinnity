@@ -1,10 +1,11 @@
 // Screen-space sprite overlay schema.
 
+use crate::components::Screen;
 use crate::components::vocabulary;
 use crate::ecs::TextureHandle;
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::asset_id::de_opt_asset_ref;
 use crate::ecs::de_opt_texture_handle;
+use crate::ecs::{Ref, de_opt_ref};
 
 /// Screen-space 2D rectangle drawn as a UI overlay each frame.
 ///
@@ -26,7 +27,7 @@ use crate::ecs::de_opt_texture_handle;
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct Sprite {
     /// Assigned by the loader; not authored.
@@ -57,8 +58,8 @@ pub struct Sprite {
     pub visible: bool,
     /// [Screen](#screen) this sprite belongs to. `None` means the sprite is
     /// always visible (e.g. a scene background).
-    #[serde(default, deserialize_with = "de_opt_asset_ref")]
-    pub screen: Option<AssetId>,
+    #[serde(default, deserialize_with = "de_opt_ref")]
+    pub screen: Option<Ref<Screen>>,
     /// How a screen-owned sprite maps from the reference canvas to the window
     /// when their aspect ratios differ.
     pub fit: SpriteFit,
@@ -173,7 +174,7 @@ mod tests {
                 "fit":"cover","corner_radius":4,"border_width":2,"border_color":[1,0,0,1]}"#,
         );
         assert_eq!(s.texture, Some(TextureHandle(10)));
-        assert_eq!(s.screen, Some(AssetId(4)));
+        assert_eq!(s.screen, Some(Ref::new(AssetId(4))));
         assert!(s.follow_cursor);
         assert!(!s.visible);
 

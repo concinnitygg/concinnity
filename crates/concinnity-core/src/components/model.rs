@@ -8,7 +8,7 @@ use crate::ecs::de_opt_mesh_handle;
 use alloc::vec::Vec;
 
 /// One geometric part of a Model, referencing a mesh and its surface material.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 pub struct SubMeshRef {
     /// A [Mesh](#mesh) or [ProceduralMesh](#proceduralmesh) asset.
     #[serde(default, deserialize_with = "de_opt_mesh_handle")]
@@ -26,7 +26,7 @@ pub struct SubMeshRef {
 /// Each `mesh` must name a [Mesh](#mesh) or [ProceduralMesh](#proceduralmesh)
 /// asset present in the scene. `material` may be empty to use the default
 /// material.
-#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct Model {
     /// Asset identity; injected via `inject_name`. Not part of `args`.

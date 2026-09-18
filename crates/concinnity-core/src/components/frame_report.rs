@@ -27,7 +27,9 @@ const DEFAULT_BUDGET_MS: f32 = 1000.0 / 60.0;
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields,
+)]
 #[serde(default)]
 pub struct FrameReport {
     /// Asset identity; injected via `inject_name`. Not part of `args`.

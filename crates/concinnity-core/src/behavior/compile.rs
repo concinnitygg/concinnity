@@ -221,7 +221,7 @@ fn compile_node(
             bind,
         } => match template {
             Some(template) => COp::Spawn {
-                template: *template,
+                template: template.id(),
                 position: *position,
                 rotation_deg: *rotation_deg,
                 // A zero scale would make the copy invisible; treat it as unit
@@ -249,13 +249,13 @@ fn compile_node(
         },
         BehaviorNode::Scene { scene, transition } => match scene {
             Some(scene) => COp::Scene {
-                scene: *scene,
+                scene: scene.id(),
                 transition: *transition,
             },
             None => COp::Never,
         },
         BehaviorNode::Screen { screen } => match screen {
-            Some(screen) => COp::Screen(*screen),
+            Some(screen) => COp::Screen(screen.id()),
             None => COp::Never,
         },
         BehaviorNode::Story(playback) => COp::Story(*playback),
@@ -279,7 +279,7 @@ fn compile_expr(expr: &BehaviorExpr, names: &mut Names<'_>, vars: &mut VarTable)
         BehaviorExpr::Var(name) => CExpr::Var(vars.intern(name)),
         BehaviorExpr::Local(name) => names.local(name).map_or(CExpr::Never, CExpr::Local),
         BehaviorExpr::Bind(name) => names.binding(name).map_or(CExpr::Never, CExpr::Bind),
-        BehaviorExpr::Named(id) => id.map_or(CExpr::Never, CExpr::Named),
+        BehaviorExpr::Named(id) => id.map_or(CExpr::Never, |id| CExpr::Named(id.id())),
         BehaviorExpr::SelfEntity => CExpr::SelfEntity,
         BehaviorExpr::Dt => CExpr::Dt,
         BehaviorExpr::Elapsed => CExpr::Elapsed,
@@ -376,6 +376,7 @@ mod tests {
     use super::*;
     use crate::components::{BehaviorLiteral, BehaviorLocal, BehaviorQuery, CueKind};
     use crate::ecs::AudioClipHandle;
+    use crate::ecs::Ref;
     use crate::ecs::asset_id::AssetId;
     use alloc::vec;
 
@@ -487,7 +488,7 @@ mod tests {
         ));
         assert!(matches!(
             op(BehaviorNode::Scene {
-                scene: Some(AssetId(4)),
+                scene: Some(Ref::new(AssetId(4))),
                 transition: crate::components::SceneTransition::FadeBlack,
             }),
             COp::Scene {
@@ -497,7 +498,7 @@ mod tests {
         ));
         assert!(matches!(
             op(BehaviorNode::Screen {
-                screen: Some(AssetId(5)),
+                screen: Some(Ref::new(AssetId(5))),
             }),
             COp::Screen(AssetId(5))
         ));
@@ -509,7 +510,7 @@ mod tests {
     fn a_zero_scaled_spawn_compiles_to_unit_scale() {
         let spawn = |scale| {
             op(BehaviorNode::Spawn {
-                template: Some(AssetId(1)),
+                template: Some(Ref::new(AssetId(1))),
                 position: [1.0, 2.0, 3.0],
                 rotation_deg: [0.0; 3],
                 scale,
@@ -531,7 +532,7 @@ mod tests {
 
     #[test]
     fn show_and_hide_compile_to_the_same_node_with_opposite_visibility() {
-        let target = || BehaviorExpr::Named(Some(AssetId(1)));
+        let target = || BehaviorExpr::Named(Some(Ref::new(AssetId(1))));
         assert!(matches!(
             op(BehaviorNode::Show { target: target() }),
             COp::Visible(_, true)
@@ -547,7 +548,7 @@ mod tests {
         assert!(matches!(
             op(BehaviorNode::Reparent {
                 child: BehaviorExpr::SelfEntity,
-                parent: Some(BehaviorExpr::Named(Some(AssetId(1)))),
+                parent: Some(BehaviorExpr::Named(Some(Ref::new(AssetId(1))))),
             }),
             COp::Reparent {
                 parent: Some(_),

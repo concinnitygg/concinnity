@@ -1,7 +1,7 @@
 // Stats HUD schema.
 
-use crate::ecs::asset_id::AssetId;
-use crate::ecs::asset_id::de_opt_asset_ref;
+use crate::components::TextLabel;
+use crate::ecs::{Ref, de_opt_ref};
 
 /// Requests the default on-screen stats HUD. Drives a set of
 /// [TextLabel](#textlabel) chips with live engine stats, refreshed on a fixed
@@ -35,32 +35,33 @@ use crate::ecs::asset_id::de_opt_asset_ref;
 /// So the example below is only needed to restyle the chips or run a HUD
 /// without a menu. Declare an [EngineDefaults](#enginedefaults) with
 /// `"hud": false` to leave the chips unfilled.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct StatHud {
     /// [TextLabel](#textlabel) that receives the frame-rate chip text.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub fps_label: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub fps_label: Option<Ref<TextLabel>>,
     /// [TextLabel](#textlabel) that receives the blocked-on-GPU chip text.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub gpu_wait_label: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub gpu_wait_label: Option<Ref<TextLabel>>,
     /// [TextLabel](#textlabel) that receives the GPU-memory chip text.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub vram_label: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub vram_label: Option<Ref<TextLabel>>,
     /// [TextLabel](#textlabel) that receives the host-memory (RSS) chip text.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub ram_label: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub ram_label: Option<Ref<TextLabel>>,
     /// [TextLabel](#textlabel) that receives the auto-exposure chip text.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub ev_label: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub ev_label: Option<Ref<TextLabel>>,
     /// [TextLabel](#textlabel) that receives the HDR-headroom chip text.
-    #[serde(deserialize_with = "de_opt_asset_ref")]
-    pub edr_label: Option<AssetId>,
+    #[serde(deserialize_with = "de_opt_ref")]
+    pub edr_label: Option<Ref<TextLabel>>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ecs::asset_id::AssetId;
 
     #[test]
     fn a_blank_hud_claims_no_labels() {
@@ -81,17 +82,17 @@ mod tests {
             r#"{"fps_label":"fps_chip","gpu_wait_label":"vram","vram_label":"vram",
                 "ram_label":"","ev_label":3,"edr_label":"edr_chip"}"#,
         );
-        assert_eq!(h.fps_label, Some(AssetId(8)));
-        assert_eq!(h.gpu_wait_label, Some(AssetId(4)));
-        assert_eq!(h.vram_label, Some(AssetId(4)));
+        assert_eq!(h.fps_label, Some(Ref::new(AssetId(8))));
+        assert_eq!(h.gpu_wait_label, Some(Ref::new(AssetId(4))));
+        assert_eq!(h.vram_label, Some(Ref::new(AssetId(4))));
         assert_eq!(h.ram_label, None);
-        assert_eq!(h.ev_label, Some(AssetId(3)));
-        assert_eq!(h.edr_label, Some(AssetId(8)));
+        assert_eq!(h.ev_label, Some(Ref::new(AssetId(3))));
+        assert_eq!(h.edr_label, Some(Ref::new(AssetId(8))));
 
         let bytes = postcard::to_allocvec(&h).unwrap();
         let back: StatHud = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.fps_label, Some(AssetId(8)));
+        assert_eq!(back.fps_label, Some(Ref::new(AssetId(8))));
         assert_eq!(back.ram_label, None);
-        assert_eq!(back.ev_label, Some(AssetId(3)));
+        assert_eq!(back.ev_label, Some(Ref::new(AssetId(3))));
     }
 }

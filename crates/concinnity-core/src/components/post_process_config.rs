@@ -36,7 +36,7 @@ use crate::math::exp2;
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct PostProcessConfig {
     /// Additive bloom contribution. 0 skips bloom entirely.

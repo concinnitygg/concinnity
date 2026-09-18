@@ -33,6 +33,8 @@
 )]
 
 extern crate alloc;
+// The derive macros emit `::concinnity_core::` paths, which resolve here too.
+extern crate self as concinnity_core;
 #[cfg(test)]
 extern crate std;
 

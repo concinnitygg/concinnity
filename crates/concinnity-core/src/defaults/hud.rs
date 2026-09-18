@@ -8,14 +8,14 @@ use alloc::string::String;
 use crate::components::{DebugHud, StatHud, TextLabel};
 use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{ComponentSlot, FontHandle};
+use crate::ecs::{ComponentSlot, FontHandle, Ref};
 use crate::error::WorldError;
 
 use super::Minter;
 
 // A HUD's label slots, in chip order. Function pointers rather than field
 // offsets so the two HUD types share one filling pass.
-type Slot<H> = fn(&mut H) -> &mut Option<AssetId>;
+type Slot<H> = fn(&mut H) -> &mut Option<Ref<TextLabel>>;
 
 const DEBUG_SLOTS: [Slot<DebugHud>; 4] = [
     |h| &mut h.passes_label,
@@ -74,7 +74,7 @@ where
         let font = minter.hud_font(ctx)?;
         for i in unset {
             let id = minter.id()?;
-            *slots[i](&mut hud) = Some(id);
+            *slots[i](&mut hud) = Some(Ref::new(id));
             ctx.push(chip(id, font));
         }
     }

@@ -6,26 +6,20 @@
 //! so the behavior pinned here is what an out-of-engine tool reading authoring
 //! JSON sees.
 
-use concinnity_core::ecs::asset_id::{AssetId, AssetRef, de_opt_asset_ref, de_opt_asset_ref_typed};
+use concinnity_core::components::Texture;
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{
     AudioClipHandle, FontHandle, MaterialHandle, MeshHandle, ShaderHandle, SkinnedMeshHandle,
     TextureHandle, de_audio_clip_handle_vec, de_opt_audio_clip_handle, de_opt_font_handle,
     de_opt_material_handle, de_opt_mesh_handle, de_opt_shader_handle, de_opt_skinned_mesh_handle,
     de_opt_texture_handle, de_texture_handle,
 };
-
-struct Texture;
+use concinnity_core::ecs::{Ref, de_opt_ref};
 
 #[derive(Debug, serde::Deserialize)]
-struct Bare {
-    #[serde(default, deserialize_with = "de_opt_asset_ref")]
-    r: Option<AssetId>,
-}
-
-#[derive(serde::Deserialize)]
-struct Typed {
-    #[serde(default, deserialize_with = "de_opt_asset_ref_typed")]
-    r: Option<AssetRef<Texture>>,
+struct Optional {
+    #[serde(default, deserialize_with = "de_opt_ref")]
+    r: Option<Ref<Texture>>,
 }
 
 #[derive(serde::Deserialize)]
@@ -62,12 +56,16 @@ fn handles_error(json: &str) -> String {
 }
 
 #[test]
-fn an_asset_id_name_is_a_deserialization_error() {
+fn a_reference_name_is_a_deserialization_error() {
     let err = serde_json::from_str::<AssetId>("\"floor\"")
         .unwrap_err()
         .to_string();
     assert!(err.contains("no asset-name resolver installed"), "{err}");
-    let err = serde_json::from_str::<Bare>("{\"r\":\"floor\"}")
+    let err = serde_json::from_str::<Ref<Texture>>("\"floor\"")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("no asset-name resolver installed"), "{err}");
+    let err = serde_json::from_str::<Optional>("{\"r\":\"floor\"}")
         .unwrap_err()
         .to_string();
     assert!(err.contains("no asset-name resolver installed"), "{err}");
@@ -102,28 +100,13 @@ fn every_handle_kind_names_itself_in_the_error() {
 }
 
 #[test]
-fn a_typed_reference_keeps_the_name_instead_of_failing() {
-    // Unlike a bare AssetId, an AssetRef has somewhere to put an unresolved
-    // name, so an authoring tool can read and rewrite a world it cannot resolve.
-    let r: AssetRef<Texture> = serde_json::from_str("\"floor\"").unwrap();
-    assert_eq!(r.name(), "floor");
-    assert_eq!(r.id(), None);
-    assert!(!r.is_resolved());
-
-    let holder: Typed = serde_json::from_str("{\"r\":\"wall\"}").unwrap();
-    let r = holder.r.expect("a name is still a reference");
-    assert_eq!(r.name(), "wall");
-    assert!(!r.is_resolved());
-}
-
-#[test]
 fn already_resolved_integers_still_parse() {
     // The compiled-args and baked forms never consult a resolver, so they read
     // the same with the seam unset.
     assert_eq!(serde_json::from_str::<AssetId>("5").unwrap(), AssetId(5));
     assert_eq!(
-        serde_json::from_str::<Bare>("{\"r\":5}").unwrap().r,
-        Some(AssetId(5))
+        serde_json::from_str::<Optional>("{\"r\":5}").unwrap().r,
+        Some(Ref::new(AssetId(5)))
     );
     let h: Handles = serde_json::from_str(
         r#"{"tex":3,"mesh":4,"material":5,"shader":6,"target":7,"font":8,"clip":9,

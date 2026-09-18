@@ -6,7 +6,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 /// A single vertex as supplied in raw Mesh args.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 pub struct VertexData {
     /// Vertex position `[x, y, z]` in model space.
     pub pos: [f32; 3],
@@ -33,7 +33,7 @@ pub struct VertexData {
 ///
 /// **Winding:** triangles must be counter-clockwise when viewed from the front.
 /// Reversed winding = invisible face.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct Mesh {
     /// Asset identity; injected via `inject_name`. Not part of `args`.

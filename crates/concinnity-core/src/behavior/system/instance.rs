@@ -7,7 +7,7 @@ use alloc::vec::Vec;
 
 use crate::behavior::Val;
 use crate::components::{Behavior, BehaviorSource, InteractEvent, VolumeEvent};
-use crate::ecs::{Entity, asset_id::AssetId};
+use crate::ecs::{Entity, Ref, asset_id::AssetId};
 
 #[derive(Debug)]
 pub(super) struct Instance {
@@ -62,10 +62,10 @@ impl Instance {
                 self.last_value = current;
                 changed
             }
-            BehaviorSource::Enter(volume) => crossing_matches(crossings, *volume, true),
-            BehaviorSource::Exit(volume) => crossing_matches(crossings, *volume, false),
+            BehaviorSource::Enter(volume) => crossing_matches(crossings, volume.map(Ref::id), true),
+            BehaviorSource::Exit(volume) => crossing_matches(crossings, volume.map(Ref::id), false),
             BehaviorSource::Interact(target) => {
-                target.is_some_and(|target| presses.iter().any(|p| p.target == target))
+                target.is_some_and(|target| presses.iter().any(|p| target == p.target))
             }
         };
         if !sourced || (def.once && self.fired_once) || self.cooldown_left > 0.0 {

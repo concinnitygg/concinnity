@@ -32,10 +32,11 @@
 //! concinnity-cook, constructed from the trait's metadata consts.
 
 pub mod access_check;
+pub mod asset_fields;
 pub mod asset_id;
-pub mod asset_ref;
 pub mod handle;
 pub mod locator;
+pub mod reference;
 pub mod resolver;
 
 mod access;
@@ -91,6 +92,11 @@ pub use tick::{AtomicTick, MAX_CHANGE_AGE, Tick};
 pub use component::{
     AssetOrigin, AssetPayload, Component, ResourceAsset, RuntimeComponent, decode_baked,
 };
+
+// Typed asset references and the authoring tables derived from field types.
+pub use asset_fields::{AssetFields, EnumField, FieldTable, RefField, ReferenceField};
+pub use concinnity_derive::AssetFields;
+pub use reference::{AnyAsset, Ref, RefTarget, de_opt_ref};
 
 // Systems' view of the world during a tick.
 pub use context::PipelineContext;

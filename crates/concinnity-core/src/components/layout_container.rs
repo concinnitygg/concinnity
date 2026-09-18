@@ -1,5 +1,7 @@
 // Row-based label layout container schema.
 
+use crate::components::TextLabel;
+use crate::ecs::Ref;
 use crate::ecs::asset_id::AssetId;
 use alloc::vec::Vec;
 
@@ -21,12 +23,12 @@ pub enum Justify {
 }
 
 /// One horizontal row of labels inside a `LayoutContainer`.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct LayoutRow {
     /// The [TextLabel](#textlabel)s in this row, laid out left to right. Their
     /// own `x`/`y` are ignored: the container positions them.
-    pub cols: Vec<AssetId>,
+    pub cols: Vec<Ref<TextLabel>>,
     /// How this row is placed within the container's content width.
     pub justify: Justify,
 }
@@ -64,7 +66,7 @@ impl Default for LayoutRow {
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct LayoutContainer {
     /// Left edge of the container in window pixels.
@@ -153,7 +155,7 @@ impl LayoutContainer {
             let mut sum = 0.0_f32;
             let mut n = 0usize;
             for &id in &row.cols {
-                if let Some(b) = size_of(id) {
+                if let Some(b) = size_of(id.id()) {
                     sum += b.w;
                     n += 1;
                 }
@@ -173,7 +175,7 @@ impl LayoutContainer {
             let mut n = 0usize;
             let mut row_h = 0.0_f32;
             for &id in &row.cols {
-                if let Some(b) = size_of(id) {
+                if let Some(b) = size_of(id.id()) {
                     n += 1;
                     row_h = row_h.max(b.h);
                 }
@@ -195,7 +197,7 @@ impl LayoutContainer {
                 };
                 let mut x_cursor = self.x + start;
                 for &id in &row.cols {
-                    let Some(b) = size_of(id) else {
+                    let Some(b) = size_of(id.id()) else {
                         continue;
                     };
                     // Box occupies [x_cursor, x_cursor + b.w]; the text origin the
@@ -203,7 +205,7 @@ impl LayoutContainer {
                     // horizontal padding and the (possibly different) vertical
                     // inset, since the box hugs the visible glyphs.
                     out.push(LabelPlacement {
-                        id,
+                        id: id.id(),
                         x: x_cursor + b.pad,
                         y: y_cursor + b.top_inset,
                     });
@@ -233,7 +235,7 @@ mod tests {
 
     fn row(justify: Justify, cols: &[u32]) -> LayoutRow {
         LayoutRow {
-            cols: cols.iter().copied().map(AssetId).collect(),
+            cols: cols.iter().map(|&c| Ref::new(AssetId(c))).collect(),
             justify,
         }
     }

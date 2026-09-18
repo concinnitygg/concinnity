@@ -152,11 +152,11 @@ fn map_type(ty: &syn::Type) -> DocFieldType {
                     DocFieldType::Integer
                 }
                 "bool" => DocFieldType::Bool,
-                // `AssetId` and the per-kind resource handles are authored as a
-                // by-name reference string (an already-resolved integer is the
-                // compiled form), so they document as a string like any other
-                // cross-reference field.
-                "String" | "AssetId" => DocFieldType::Str,
+                // `Ref<T>`, `AssetId` and the per-kind resource handles are
+                // authored as a by-name reference string (an already-resolved
+                // integer is the compiled form), so they document as a string
+                // like any other cross-reference field.
+                "String" | "AssetId" | "Ref" => DocFieldType::Str,
                 // An action is authored as its text form.
                 "UiAction" => DocFieldType::Str,
                 "TextureHandle"
@@ -253,6 +253,14 @@ mod tests {
     #[test]
     fn references_by_name_map_to_strings() {
         assert_eq!(ty_of("AssetId"), DocFieldType::Str);
+        assert_eq!(ty_of("Ref<Prop>"), DocFieldType::Str);
+        assert_eq!(
+            ty_of("Vec<Ref<BlockType>>"),
+            DocFieldType::Array {
+                elem: Box::new(DocFieldType::Str),
+                len: None
+            }
+        );
         assert_eq!(ty_of("TextureHandle"), DocFieldType::Str);
     }
 

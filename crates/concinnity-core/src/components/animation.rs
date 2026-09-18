@@ -71,7 +71,7 @@ impl<'de> serde::Deserialize<'de> for Keyframe {
 }
 
 /// An animation channel: a time-ordered list of keyframes for one joint.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 pub struct AnimationTrack {
     /// Index of the joint in the target skeleton this track drives.
     pub joint: usize,
@@ -107,7 +107,7 @@ pub struct AnimationTrack {
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct Animation {
     /// Asset identity; injected via `inject_name`. Not part of `args`.
@@ -167,7 +167,7 @@ pub struct Animation {
 
 /// One morph-weight keyframe of an [Animation](#animation): per-target
 /// weights at one sample time.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct MorphKey {
     /// Sample time in seconds from clip start.

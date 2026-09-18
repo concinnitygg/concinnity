@@ -1238,7 +1238,9 @@ mod tests {
         variants.extend((0..n).map(|i| format!("tex_{i}")));
         FormField {
             key: "texture".into(),
-            kind: FieldKind::Ref { target: "Texture" },
+            kind: FieldKind::Ref {
+                targets: &["Texture"],
+            },
             initial: String::new(),
             boolval: false,
             variants,

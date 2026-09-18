@@ -2,6 +2,7 @@
 // region, with the clicks that need the whole system (group toggles, rebind
 // capture, dropdown opens) returned for the caller to apply.
 
+use concinnity_core::ecs::Ref;
 use std::collections::{HashMap, HashSet};
 
 use concinnity_core::components::{FrameInput, SettingVerb, SpriteFit, TextLabel, UiAction};
@@ -219,7 +220,7 @@ impl UiInputSystem {
                 if entry.was_hovered {
                     set_label_style(
                         ctx,
-                        entry.region.label,
+                        entry.region.label.map(Ref::id),
                         entry.original_color,
                         entry.original_scale,
                     );
@@ -256,9 +257,14 @@ impl UiInputSystem {
             );
 
             if hovered && !entry.was_hovered {
-                set_label_style(ctx, r.label, r.hover_color, r.hover_scale);
+                set_label_style(ctx, r.label.map(Ref::id), r.hover_color, r.hover_scale);
             } else if !hovered && entry.was_hovered {
-                set_label_style(ctx, r.label, entry.original_color, entry.original_scale);
+                set_label_style(
+                    ctx,
+                    r.label.map(Ref::id),
+                    entry.original_color,
+                    entry.original_scale,
+                );
             }
             entry.was_hovered = hovered;
 
@@ -274,7 +280,7 @@ impl UiInputSystem {
                 Some(UiAction::Setting {
                     key,
                     verb: SettingVerb::Rebind,
-                }) => outcome.start_capture = Some((*key, r.label)),
+                }) => outcome.start_capture = Some((*key, r.label.map(Ref::id))),
                 Some(UiAction::Setting {
                     key,
                     verb: SettingVerb::Open,
@@ -282,7 +288,7 @@ impl UiInputSystem {
                     // Snapshot the control rect and the row's un-hovered value style.
                     outcome.start_open = Some(OpenRequest {
                         setting: *key,
-                        value_label: r.label,
+                        value_label: r.label.map(Ref::id),
                         anchor: region_rect(r),
                         screen: entry.screen,
                         color: entry.original_color,
@@ -290,7 +296,7 @@ impl UiInputSystem {
                     });
                 }
                 Some(action) => {
-                    if let Some(result) = fire_action(action, r.label, ctx) {
+                    if let Some(result) = fire_action(action, r.label.map(Ref::id), ctx) {
                         outcome.fired = Some(result);
                         return outcome;
                     }

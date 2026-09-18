@@ -7,6 +7,7 @@
 //! The authoring-only vocabulary is not covered here: those types are not
 //! components, and their schema checks live beside them in their own modules.
 
+use crate::ecs::Ref;
 use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -211,7 +212,7 @@ mod story {
         // Name-string references resolved to ids through the interner (the
         // build-time path); the omitted dialog_box stays unset.
         use crate::test_support::intern;
-        assert_eq!(s.scaffold.screen, Some(intern("s_stage")));
+        assert_eq!(s.scaffold.screen, Some(Ref::new(intern("s_stage"))));
         assert_eq!(s.scaffold.options, vec![intern("s_stage_opt0_lbl")]);
         assert_eq!(s.scaffold.option_boxes, vec![intern("s_stage_opt0_box")]);
         assert_eq!(s.scaffold.dialog_box, None);
@@ -521,7 +522,7 @@ mod layout_container {
             col_gap: 4.0,
             row_gap: 5.0,
             rows: vec![LayoutRow {
-                cols: vec![AssetId(1), AssetId(2)],
+                cols: vec![Ref::new(AssetId(1)), Ref::new(AssetId(2))],
                 justify: Justify::Left,
             }],
             visible: true,
@@ -562,7 +563,11 @@ mod layout_container {
             col_gap: 10.0,
             row_gap: 0.0,
             rows: vec![LayoutRow {
-                cols: vec![AssetId(1), AssetId(99), AssetId(2)],
+                cols: vec![
+                    Ref::new(AssetId(1)),
+                    Ref::new(AssetId(99)),
+                    Ref::new(AssetId(2)),
+                ],
                 justify: Justify::Left,
             }],
             visible: true,
@@ -593,11 +598,11 @@ mod layout_container {
             row_gap: 6.0,
             rows: vec![
                 LayoutRow {
-                    cols: vec![AssetId(1), AssetId(2)],
+                    cols: vec![Ref::new(AssetId(1)), Ref::new(AssetId(2))],
                     justify: Justify::Left,
                 },
                 LayoutRow {
-                    cols: vec![AssetId(3)],
+                    cols: vec![Ref::new(AssetId(3))],
                     justify: Justify::Left,
                 },
             ],
@@ -627,11 +632,11 @@ mod layout_container {
             row_gap: 0.0,
             rows: vec![
                 LayoutRow {
-                    cols: vec![AssetId(1)],
+                    cols: vec![Ref::new(AssetId(1))],
                     justify: Justify::Left,
                 },
                 LayoutRow {
-                    cols: vec![AssetId(2)],
+                    cols: vec![Ref::new(AssetId(2))],
                     justify: Justify::Center,
                 },
             ],
@@ -660,11 +665,15 @@ mod layout_container {
             rows: vec![
                 // Widest row sets content width to 200.
                 LayoutRow {
-                    cols: vec![AssetId(10)],
+                    cols: vec![Ref::new(AssetId(10))],
                     justify: Justify::Left,
                 },
                 LayoutRow {
-                    cols: vec![AssetId(1), AssetId(2), AssetId(3)],
+                    cols: vec![
+                        Ref::new(AssetId(1)),
+                        Ref::new(AssetId(2)),
+                        Ref::new(AssetId(3)),
+                    ],
                     justify: Justify::SpaceBetween,
                 },
             ],
@@ -740,7 +749,7 @@ mod scroll_panel {
                 "track_x": 305, "track_y": 20, "track_w": 6, "track_h": 200
             }"#;
         let p: ScrollPanel = serde_json::from_str(json).unwrap();
-        assert_eq!(p.screen, Some(AssetId(6)));
+        assert_eq!(p.screen, Some(Ref::new(AssetId(6))));
         assert_eq!(p.rows.len(), 2);
         assert_eq!(p.rows[0].elements, vec![AssetId(0), AssetId(1)]);
         assert_eq!(p.rows[0].group, -1);
@@ -748,33 +757,33 @@ mod scroll_panel {
         assert_eq!(p.rows[1].group, 0);
         assert_eq!(p.groups.len(), 1);
         assert!(p.groups[0].collapsed);
-        assert_eq!(p.groups[0].header, Some(AssetId(2)));
+        assert_eq!(p.groups[0].header, Some(Ref::new(AssetId(2))));
         assert_eq!(p.groups[0].title, "Advanced");
-        assert_eq!(p.thumb, Some(AssetId(4)));
-        assert_eq!(p.track, Some(AssetId(5)));
+        assert_eq!(p.thumb, Some(Ref::new(AssetId(4))));
+        assert_eq!(p.track, Some(Ref::new(AssetId(5))));
     }
 
     #[test]
     fn round_trips_through_serde() {
         let p = ScrollPanel {
-            screen: Some(AssetId(2)),
+            screen: Some(Ref::new(AssetId(2))),
             x: 1.0,
             y: 2.0,
             width: 3.0,
             height: 4.0,
             rows: vec![ScrollRow {
-                elements: vec![AssetId(5)],
+                elements: vec![Ref::new(AssetId(5))],
                 base_y: 2.0,
                 height: 40.0,
                 group: 0,
             }],
             groups: vec![ScrollGroup {
                 collapsed: false,
-                header: Some(AssetId(7)),
+                header: Some(Ref::new(AssetId(7))),
                 title: "Advanced".to_string(),
             }],
-            thumb: Some(AssetId(8)),
-            track: Some(AssetId(9)),
+            thumb: Some(Ref::new(AssetId(8))),
+            track: Some(Ref::new(AssetId(9))),
             track_x: 5.0,
             track_y: 6.0,
             track_w: 7.0,

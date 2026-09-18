@@ -1,0 +1,25 @@
+//! Derive macros for the Concinnity engine's authored asset schemas.
+//!
+//! Internal to the engine: `concinnity-core` and `concinnity-cook` derive with
+//! it, and nothing re-exports it past them.
+
+mod asset_fields;
+mod serde_attrs;
+
+use proc_macro::TokenStream;
+
+/// Generate `concinnity_core::ecs::AssetFields` for a struct with named
+/// fields: its reference fields and closed-vocabulary fields, found by field
+/// type, recursing into fields whose type derives `AssetFields` as well.
+///
+/// Reads serde's field attributes for the authored key: `rename` replaces the
+/// field name, `flatten` lifts a nested schema to this level, and `skip` /
+/// `skip_deserializing` leave a field out. A container `rename_all` is refused,
+/// since no schema uses one.
+#[proc_macro_derive(AssetFields, attributes(serde))]
+pub fn derive_asset_fields(input: TokenStream) -> TokenStream {
+    let input = syn::parse_macro_input!(input as syn::DeriveInput);
+    asset_fields::expand(&input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}

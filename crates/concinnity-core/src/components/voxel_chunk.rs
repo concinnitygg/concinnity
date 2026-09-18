@@ -1,6 +1,8 @@
 // Voxel-chunk schema.
 
+use crate::components::BlockType;
 use crate::ecs::PayloadLocator;
+use crate::ecs::Ref;
 use crate::ecs::asset_id::AssetId;
 use alloc::vec::Vec;
 
@@ -15,14 +17,14 @@ use alloc::vec::Vec;
 /// `solid: false` (typically named `air`); cells whose palette entry is
 /// non-solid emit no faces. Faces are only emitted between a solid block and
 /// either an empty neighbor or the outside of the chunk.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct VoxelChunk {
     /// Asset identity; injected via `inject_name`. Not part of `args`.
     #[serde(skip)]
     pub asset_id: AssetId,
     /// [BlockType](#blocktype) asset names. `blocks[i]` is an index into this list.
-    pub palette: Vec<AssetId>,
+    pub palette: Vec<Ref<BlockType>>,
     /// Chunk dimensions `[dx, dy, dz]` in blocks.
     pub dim: [u32; 3],
     /// World units per block edge.
