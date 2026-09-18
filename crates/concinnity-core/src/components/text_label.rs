@@ -2,7 +2,7 @@
 
 use crate::components::Screen;
 use crate::components::SpriteFit;
-use crate::components::vocabulary;
+use crate::components::Vocabulary;
 use crate::ecs::FontHandle;
 use crate::ecs::de_opt_font_handle;
 use crate::ecs::{Ref, de_opt_ref};
@@ -13,23 +13,22 @@ use alloc::string::String;
 /// `Center` and `Right` measure the rendered text with the real font metrics
 /// each frame, so a label stays visually centered (or right-aligned) at any
 /// scale without the author estimating glyph widths.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default, Vocabulary,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum TextAlign {
     /// `x` is the left edge of the text (the default).
     #[default]
+    #[vocab("left")]
     Left,
     /// `x` is the horizontal center of the text.
+    #[vocab("center")]
     Center,
     /// `x` is the right edge of the text.
+    #[vocab("right")]
     Right,
 }
-
-vocabulary!(TextAlign {
-    Left => "left",
-    Center => "center",
-    Right => "right",
-});
 
 /// Screen-space text drawn as a UI overlay on top of the 3D scene each frame.
 ///

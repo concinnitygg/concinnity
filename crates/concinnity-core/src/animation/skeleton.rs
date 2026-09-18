@@ -21,7 +21,9 @@ use crate::transform::{
 
 /// A joint's local transform: translation, YXZ Euler rotation in degrees, and
 /// per-axis scale. Used both for the bind pose and for animation keyframes.
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields,
+)]
 #[serde(default)]
 pub struct JointPose {
     /// Local translation.

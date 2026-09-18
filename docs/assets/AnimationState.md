@@ -8,7 +8,7 @@ clips by parameter value). Exactly one of the two must be set.
 
 ## Parameters
 
-- `name`: A string. State name, referenced by `initial` and by transitions.
+- `name`: A string. State name, referenced by `initial` and by transitions. Defaults to `""`.
 - `clip`: A string. The [Animation](Animation.md) clip this state plays. Must target the same [SkinnedMesh](SkinnedMesh.md) as the graph. Leave unset when the state plays a `blend` instead.
 - `blend`: An object. A blendspace to play instead of a single `clip`. Optional.
 - `rate`: A float. Playback speed scale; 1.0 plays at authored speed. Defaults to `1.0`.

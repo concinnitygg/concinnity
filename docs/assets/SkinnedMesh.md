@@ -37,16 +37,16 @@ supply them.
 
 ## Parameters
 
-- `source`: A string. Optional path to a `.glb` / `.gltf` / `.fbx` file. When set, the build imports `vertices` / `indices` / `skeleton` from it; an inline-authored mesh leaves this empty.
+- `source`: A string. Optional path to a `.glb` / `.gltf` / `.fbx` file. When set, the build imports `vertices` / `indices` / `skeleton` from it; an inline-authored mesh leaves this empty. Defaults to `""`.
 - `skin_index`: An integer. Which skinned mesh of `source` to import, in file declaration order (default 0). A character split into several meshes bound to one skeleton (body, hair, clothes) needs one `SkinnedMesh` per part, each naming its own index.
-- `vertices`: An array of [SkinnedVertexData](SkinnedVertexData.md) objects. Skinned vertex list.
-- `indices`: An array of integers. Triangle index list.
-- `morph_target_names`: An array of strings. Morph-target names, one per target, in target order. Filled from the source file's target names when importing; empty for a mesh without morph targets.
-- `morph_deltas`: An array of [MorphDelta](MorphDelta.md) objects. Dense morph-target deltas, target-major: entry `t * vertex_count + v` is target `t`'s delta for vertex `v`. Length must be `morph_target_names.len() * vertices.len()`. An [Animation](Animation.md) with a `morph_track` drives the per-target weights at runtime.
+- `vertices`: An array of [SkinnedVertexData](SkinnedVertexData.md) objects. Skinned vertex list. Defaults to `[]`.
+- `indices`: An array of integers. Triangle index list. Defaults to `[]`.
+- `morph_target_names`: An array of strings. Morph-target names, one per target, in target order. Filled from the source file's target names when importing; empty for a mesh without morph targets. Defaults to `[]`.
+- `morph_deltas`: An array of [MorphDelta](MorphDelta.md) objects. Dense morph-target deltas, target-major: entry `t * vertex_count + v` is target `t`'s delta for vertex `v`. Length must be `morph_target_names.len() * vertices.len()`. An [Animation](Animation.md) with a `morph_track` drives the per-target weights at runtime. Defaults to `[]`.
 - `material`: A string. [Material](Material.md); provides the albedo texture plus lighting parameters. Optional.
-- `position`: An array of 3 floats. World-space position.
-- `rotation_deg`: An array of 3 floats. World rotation, Euler degrees [pitch, yaw, roll], YXZ order.
-- `scale`: An array of 3 floats. World scale.
+- `position`: An array of 3 floats. World-space position. Defaults to `[0.0, 0.0, 0.0]`.
+- `rotation_deg`: An array of 3 floats. World rotation, Euler degrees [pitch, yaw, roll], YXZ order. Defaults to `[0.0, 0.0, 0.0]`.
+- `scale`: An array of 3 floats. World scale. Defaults to `[0.0, 0.0, 0.0]`.
 - `lod_levels`: An integer. Number of level-of-detail versions to generate, including the original. `1` (the default) generates none; values are clamped to `[1, 8]`.
 - `lod_distances`: An array of floats. Camera distances at which to switch to each lower-detail version. When non-empty, must have exactly `lod_levels - 1` entries; empty lets the build choose defaults.
 - `max_instances`: An integer. How many runtime copies of this mesh may exist at once beyond the authored one. `0` (the default) means the mesh is not runtime-spawnable. A non-zero value pre-reserves that many extra instance slots at load: the engine appends that many hidden bind-pose copies to the skinned geometry so a runtime spawn can claim one without growing any GPU buffer, and a despawn returns it to the pool. Spawns past the reserve are dropped (a warning is logged). Capped at 4096.

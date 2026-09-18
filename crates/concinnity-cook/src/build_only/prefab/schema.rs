@@ -30,17 +30,20 @@ pub struct Prefab {
 /// Which kind of asset a [PrefabEntry] expands into.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[derive(Default)]
+#[derive(Default, concinnity_core::components::Vocabulary)]
 pub enum PrefabKind {
     /// A [Prop](#prop) built from the entry's `model` / `mesh` / `material` /
     /// `texture` and transform fields.
     #[default]
+    #[vocab("prop")]
     Prop,
     /// A [PointLight](#pointlight) built from the entry's `light_*` fields at the
     /// entry's `position`.
+    #[vocab("point_light")]
     PointLight,
     /// A nested prefab named by the entry's `prefab` field, expanded relative to
     /// this entry's transform.
+    #[vocab("prefab")]
     Prefab,
 }
 

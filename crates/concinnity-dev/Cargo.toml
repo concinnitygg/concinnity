@@ -27,8 +27,8 @@ vulkan = ["concinnity-engine/vulkan"]
 
 [dependencies]
 concinnity-engine = { workspace = true }
-concinnity-cook = { workspace = true }
-concinnity-core = { workspace = true }
+concinnity-cook = { workspace = true, features = ["schema"] }
+concinnity-core = { workspace = true, features = ["schema"] }
 concinnity-host = { workspace = true }
 
 ciborium = { workspace = true }
@@ -39,8 +39,6 @@ rayon = { workspace = true }
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
 serde = { workspace = true, features = ["derive", "std"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
-# `cn docs` reads the asset prose out of the engine's own sources.
-syn = { version = "2", features = ["full"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 ureq = { version = "3.2.0", default-features = false }

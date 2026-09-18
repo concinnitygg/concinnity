@@ -7,5 +7,5 @@ it gives the region's joints.
 
 ## Parameters
 
-- `name`: A string. Region name.
-- `joints`: An array of strings. Member joints.
+- `name`: A string. Region name. Defaults to `""`.
+- `joints`: An array of strings. Member joints. Defaults to `[]`.

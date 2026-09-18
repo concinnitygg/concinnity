@@ -26,9 +26,9 @@ back the target [SkinnedMesh](SkinnedMesh.md) so the joint indices agree.
 ## Parameters
 
 - `target`: A string. The [SkinnedMesh](SkinnedMesh.md) asset this clip animates. Optional.
-- `source`: A string. Optional path to a `.glb`, `.gltf`, or `.fbx` file. When set, the build imports `duration` + `tracks` from it; inline-authored clips leave this empty.
+- `source`: A string. Optional path to a `.glb`, `.gltf`, or `.fbx` file. When set, the build imports `duration` + `tracks` from it; inline-authored clips leave this empty. Defaults to `""`.
 - `animation_index`: An integer. Index of the animation to import when `source` is set and the file contains several. Ignored when `animation_name` is non-empty. Defaults to `0`.
-- `animation_name`: A string. Name of the animation to import. When set, the matching clip in the source file is looked up by name; takes precedence over `animation_index`.
+- `animation_name`: A string. Name of the animation to import. When set, the matching clip in the source file is looked up by name; takes precedence over `animation_index`. Defaults to `""`.
 - `sample_rate`: A float. Keys per second baked from sources whose curves need resampling at import (FBX). glTF keyframes pass through untouched. Default 30.
 - `duration`: A float. Clip length in seconds. Overridden by glTF import. Defaults to `1.0`.
 - `looping`: A boolean. When true, playback wraps after `duration`. Defaults to `true`.
@@ -36,6 +36,6 @@ back the target [SkinnedMesh](SkinnedMesh.md) so the joint indices agree.
 - `fade_in_secs`: A float. When non-zero, the clip's contribution ramps from 0 to its declared `weight` over this many seconds after the world starts. Zero (the default) plays the clip at full `weight` from the first frame.
 - `root_motion`: A boolean. When true, the build strips the root joint's travel out of the pose and bakes it into `root_track`: the pose stays anchored in place and the runtime moves the character by the curve's frame-to-frame delta instead (the [SkinnedMesh](SkinnedMesh.md) `capsule` is the usual consumer). X and Z travel is always stripped; Y only with `root_motion_y`. Defaults to `false`.
 - `root_motion_y`: A boolean. Also strip the root joint's vertical travel into `root_track`. Leave false (the default) so jumps and crouches stay authored in the pose.
-- `root_track`: An array of objects. The displacement curve baked out of the root joint by the build when `root_motion` is set. Filled by the build; not usually authored by hand.
-- `tracks`: An array of [AnimationTrack](AnimationTrack.md) objects. Per-joint keyframe channels.
-- `morph_track`: An array of [MorphKey](MorphKey.md) objects. Morph-target weight keys for the target mesh, in time order. Each key holds one weight per morph target of the [SkinnedMesh](SkinnedMesh.md). Filled by the glTF import; empty when the clip animates no morph targets.
+- `root_track`: An array of objects. The displacement curve baked out of the root joint by the build when `root_motion` is set. Filled by the build; not usually authored by hand. Defaults to `[]`.
+- `tracks`: An array of [AnimationTrack](AnimationTrack.md) objects. Per-joint keyframe channels. Defaults to `[]`.
+- `morph_track`: An array of [MorphKey](MorphKey.md) objects. Morph-target weight keys for the target mesh, in time order. Each key holds one weight per morph target of the [SkinnedMesh](SkinnedMesh.md). Filled by the glTF import; empty when the clip animates no morph targets. Defaults to `[]`.

@@ -38,6 +38,8 @@ pub mod handle;
 pub mod locator;
 pub mod reference;
 pub mod resolver;
+#[cfg(feature = "schema")]
+pub mod schema;
 
 mod access;
 mod built_system;

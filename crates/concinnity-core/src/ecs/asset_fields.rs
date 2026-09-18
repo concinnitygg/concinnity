@@ -235,7 +235,7 @@ mod tests {
         list: Vec<Ref<TextLabel>>,
         grid: Vec<Vec<Ref<AnyAsset>>>,
         texture: Option<TextureHandle>,
-        #[serde(default, rename = "inner")]
+        #[serde(rename = "inner")]
         middle: Middle,
         #[serde(flatten)]
         flat: Leaf,

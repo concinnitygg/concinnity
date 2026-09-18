@@ -1,12 +1,15 @@
-//! `#[derive(AssetFields)]`: one probe call per authored field.
+//! `#[derive(AssetFields)]`: one probe call per authored field, and the
+//! struct's schema.
 
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Data, DeriveInput, Fields};
 
-use crate::serde_attrs::{check_container_attrs, field_attrs};
+use crate::schema::{AuthoredField, struct_schema};
+use crate::serde_attrs::{container_attrs, field_attrs};
 
-/// The impl for `input`, or the error naming why it cannot derive.
+/// The impl for `input`, and its schema, or the error naming why it cannot
+/// derive.
 pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     let Data::Struct(data) = &input.data else {
         return Err(syn::Error::new_spanned(
@@ -20,28 +23,43 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
             "AssetFields derives only on structs with named fields",
         ));
     };
-    check_container_attrs(&input.attrs)?;
+    let container = container_attrs(&input.attrs)?;
+    if container.rename_all.is_some() {
+        return Err(syn::Error::new_spanned(
+            &input.ident,
+            "AssetFields does not support `rename_all`",
+        ));
+    }
 
-    let mut probes = Vec::new();
+    let mut authored = Vec::new();
     for field in &fields.named {
         let attrs = field_attrs(&field.attrs)?;
         if attrs.skip {
             continue;
         }
-        let ty = &field.ty;
         let key = if attrs.flatten {
-            quote!(::core::option::Option::None)
+            String::new()
         } else {
-            let name = match attrs.rename {
-                Some(rename) => rename,
+            let name = match &attrs.rename {
+                Some(rename) => rename.clone(),
                 None => field
                     .ident
                     .as_ref()
                     .expect("a named field has an ident")
                     .to_string(),
             };
-            let name = name.strip_prefix("r#").unwrap_or(&name).to_string();
-            quote!(::core::option::Option::Some(#name))
+            name.strip_prefix("r#").unwrap_or(&name).to_string()
+        };
+        authored.push(AuthoredField { field, attrs, key });
+    }
+
+    let mut probes = Vec::new();
+    for AuthoredField { field, key, .. } in &authored {
+        let ty = &field.ty;
+        let key = if key.is_empty() {
+            quote!(::core::option::Option::None)
+        } else {
+            quote!(::core::option::Option::Some(#key))
         };
         probes.push(quote! {
             (&&&&::concinnity_core::ecs::asset_fields::probe::Probe::<#ty>::NEW)
@@ -65,6 +83,7 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
 
     let ident = &input.ident;
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+    let schema = struct_schema(input, &container, &authored);
     Ok(quote! {
         impl #impl_generics ::concinnity_core::ecs::asset_fields::AssetFields
             for #ident #ty_generics #where_clause
@@ -76,6 +95,7 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
                 #body
             }
         }
+        #schema
     })
 }
 
@@ -128,6 +148,60 @@ mod tests {
     fn a_fieldless_schema_touches_no_probe() {
         let out = expanded(syn::parse_quote! { struct NoArgs {} });
         assert!(!out.contains("Probe"), "{out}");
+    }
+
+    #[test]
+    fn the_schema_sits_behind_the_consumers_feature() {
+        let out = expanded(syn::parse_quote! {
+            /// A widget.
+            #[serde(default)]
+            struct Widget {
+                /// Its size.
+                #[serde(rename = "extent")]
+                size: f32,
+                #[serde(default = "seven")]
+                count: u32,
+                #[serde(skip)]
+                cache: u32,
+            }
+        });
+        let (runtime, schema) = out
+            .split_once("# [cfg (feature = \"schema\")]")
+            .expect("the schema is gated");
+        assert!(!runtime.contains("schema ::"), "{runtime}");
+        assert!(
+            schema.contains("name : \"Widget\" , doc : \"A widget.\""),
+            "{schema}"
+        );
+        assert!(
+            schema.contains("key : \"extent\" , doc : \"Its size.\""),
+            "{schema}"
+        );
+        assert!(!schema.contains("cache"), "{schema}");
+        assert!(schema.contains("FieldType :: Nested"), "{schema}");
+        // The field's own default outranks the container's.
+        assert!(schema.contains("FieldDefault :: Container"), "{schema}");
+        assert!(schema.contains("let value : u32 = seven ()"), "{schema}");
+        assert!(
+            schema.contains(
+                "let value : Self = < Self as :: core :: default :: Default > :: default ()"
+            ),
+            "{schema}"
+        );
+    }
+
+    #[test]
+    fn a_field_with_no_default_is_required_unless_it_is_an_option() {
+        let out = expanded(syn::parse_quote! {
+            struct S {
+                a: u8,
+                b: Option<u8>,
+                #[serde(deserialize_with = "de")]
+                c: Option<u8>,
+            }
+        });
+        assert_eq!(out.matches("FieldDefault :: Required").count(), 2, "{out}");
+        assert_eq!(out.matches("FieldDefault :: Null").count(), 1, "{out}");
     }
 
     #[test]

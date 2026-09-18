@@ -23,11 +23,14 @@ include = [
 # global counters and the tagged ledger ship unconditionally; this is the tier a
 # shipped build should not pay for on every allocation.
 detail = []
+# The authored schema's static description, rustdoc included, for authoring tools.
+schema = ["dep:erased-serde"]
 
 [dependencies]
 
 bytemuck = { workspace = true, features = ["derive"] }
 concinnity-derive = { workspace = true }
+erased-serde = { version = "0.4", default-features = false, features = ["alloc"], optional = true }
 fontdue = { version = "0.9", default-features = false, features = ["hashbrown", "simd"] }
 hashbrown = "0.17.1"
 libm = "0.2"

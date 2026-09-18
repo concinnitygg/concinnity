@@ -1,6 +1,6 @@
 // World rendering configuration schema.
 
-use crate::components::vocabulary;
+use crate::components::Vocabulary;
 
 /// How often each cascaded-shadow-map slice is re-rendered. The shadow pass
 /// re-rasterizes all scene geometry into every cascade, so it is one of the
@@ -15,20 +15,17 @@ use crate::components::vocabulary;
 /// before it is sampled, so there is never missing shadow data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[derive(Default)]
+#[derive(Default, Vocabulary)]
 pub enum ShadowUpdate {
     /// Re-render every cascade every frame.
+    #[vocab("every_frame")]
     EveryFrame,
     /// Re-render the near cascades every frame and the distant ones on a
     /// rotation.
     #[default]
+    #[vocab("hybrid")]
     Hybrid,
 }
-
-vocabulary!(ShadowUpdate {
-    EveryFrame => "every_frame",
-    Hybrid => "hybrid",
-});
 
 /// Rendering settings for the world: frame pacing, shadows, and clear color.
 /// One per world. The GPU backend is chosen by the engine for the platform and

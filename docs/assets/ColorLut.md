@@ -15,4 +15,4 @@ Two source formats are accepted, picked by file extension:
 
 ## Parameters
 
-- `source`: A string. Path to the source `.cube` or `.png` LUT file.
+- `source`: A string. Path to the source `.cube` or `.png` LUT file. Defaults to `""`.

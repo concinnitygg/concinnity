@@ -16,11 +16,11 @@ beyond `max_distance`.
 ## Parameters
 
 - `clip`: A string. The [AudioClip](AudioClip.md) this emitter plays. Optional.
-- `position`: An array of 3 floats. World-space position of the sound source.
+- `position`: An array of 3 floats. World-space position of the sound source. Defaults to `[0.0, 0.0, 0.0]`.
 - `volume`: A float. Linear gain multiplier applied to the clip. Defaults to `1.0`.
 - `looping`: A boolean. Whether the clip restarts when it ends. Defaults to `true`.
 - `prop`: A string. Optional [Prop](Prop.md) whose position the emitter tracks each frame.
 - `min_distance`: A float. Distance from the listener at which the sound plays at full volume. Defaults to `1.0`.
 - `max_distance`: A float. Distance from the listener beyond which the sound is inaudible. Must exceed `min_distance`. Defaults to `50.0`.
-- `rolloff`: A string (see [Rolloff](Rolloff.md)). How volume falls between `min_distance` and `max_distance`.
+- `rolloff`: A string (see [Rolloff](Rolloff.md)). How volume falls between `min_distance` and `max_distance`. Defaults to `"logarithmic"`.
 - `bus`: A string (see [AudioBus](AudioBus.md)). Mix bus the emitter routes through. Defaults to `sfx`.

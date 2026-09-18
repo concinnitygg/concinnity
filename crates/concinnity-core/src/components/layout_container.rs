@@ -1,24 +1,31 @@
 // Row-based label layout container schema.
 
 use crate::components::TextLabel;
+use crate::components::Vocabulary;
 use crate::ecs::Ref;
 use crate::ecs::asset_id::AssetId;
 use alloc::vec::Vec;
 
 /// Horizontal placement of a row's labels within the container's content width
 /// (the width of the widest row). Ignored when a row is as wide as the content.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize, Vocabulary,
+)]
 #[serde(rename_all = "kebab-case")]
 pub enum Justify {
     /// Pack labels against the left edge (the default).
     #[default]
+    #[vocab("left")]
     Left,
     /// Center the row within the content width.
+    #[vocab("center")]
     Center,
     /// Pack labels against the right edge.
+    #[vocab("right")]
     Right,
     /// Spread the row across the full content width, distributing the slack
     /// evenly between labels. A single-label row falls back to `Left`.
+    #[vocab("space-between")]
     SpaceBetween,
 }
 

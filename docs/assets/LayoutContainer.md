@@ -22,5 +22,5 @@ loaded, or which is hidden, is skipped and reserves no space.
 - `y`: A float. Top edge of the container in window pixels. Defaults to `10.0`.
 - `col_gap`: A float. Pixels between adjacent labels in a row, measured between their background boxes. Defaults to `6.0`.
 - `row_gap`: A float. Pixels between adjacent rows, measured between their background boxes. Defaults to `6.0`.
-- `rows`: An array of [LayoutRow](LayoutRow.md) objects. Rows of labels, top to bottom.
+- `rows`: An array of [LayoutRow](LayoutRow.md) objects. Rows of labels, top to bottom. Defaults to `[]`.
 - `visible`: A boolean. When false, the container leaves its labels where they are instead of repositioning them. Defaults to `true`.

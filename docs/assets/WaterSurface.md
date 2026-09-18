@@ -19,9 +19,9 @@ animated waves.
 - `subdivisions`: An integer. Grid subdivisions across the surface. Higher gives smoother waves. Clamped to [8, 255]. Defaults to `64`.
 - `waves`: An array of [WaterWave](WaterWave.md) objects. The waves summed to animate the surface (up to 4). Defaults to a single gentle wave.
 - `deep_color`: An array of 3 floats. Linear-space RGB color of deep water. Defaults to `[0.02, 0.05, 0.15]`.
-- `shallow_color`: An array of 3 floats. Linear-space RGB color of shallow water near the shore. Defaults to `[0.20, 0.50, 0.55]`.
+- `shallow_color`: An array of 3 floats. Linear-space RGB color of shallow water near the shore. Defaults to `[0.2, 0.5, 0.55]`.
 - `depth_falloff_meters`: A float. Depth over which the color blends from shallow to deep, in meters. Defaults to `4.0`.
-- `foam_width_meters`: A float. Width of the shoreline foam band, in meters. Defaults to `0.30`.
+- `foam_width_meters`: A float. Width of the shoreline foam band, in meters. Defaults to `0.3`.
 - `foam_intensity`: A float. Strength of the shoreline foam, in [0, 1]. Defaults to `0.8`.
 - `fresnel_power`: A float. Sharpness of the grazing-angle reflection. Higher confines reflections to steeper viewing angles. Defaults to `5.0`.
 - `roughness`: A float. Surface roughness in [0, 1]. Higher gives blurrier reflections, and pushes a mirrored reflection further off its line with each wave: a near-mirror surface keeps its reflection almost still. Defaults to `0.05`.

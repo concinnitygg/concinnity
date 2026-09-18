@@ -20,4 +20,4 @@ transform.
 
 ## Parameters
 
-- `props`: An array of [PrefabEntry](PrefabEntry.md) objects. Ordered list of entries. Each is a prop, a point light, or a nested prefab (selected by `kind`), placed relative to the instance transform.
+- `props`: An array of [PrefabEntry](PrefabEntry.md) objects. Ordered list of entries. Each is a prop, a point light, or a nested prefab (selected by `kind`), placed relative to the instance transform. Defaults to `[]`.

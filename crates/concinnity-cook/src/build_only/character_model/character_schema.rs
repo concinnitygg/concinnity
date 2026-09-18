@@ -5,13 +5,25 @@ use concinnity_core::components::JointProportion;
 use concinnity_core::components::ShapeSlider;
 
 /// Whether a shape key is one target or a `+` / `-` pair.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    concinnity_core::components::Vocabulary,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum KeyPolarity {
     /// One target named exactly `name`; the slider runs `[0, 1]`.
     #[default]
+    #[vocab("unipolar")]
     Unipolar,
     /// Two targets `name+` / `name-`; the slider runs `[-1, 1]`.
+    #[vocab("bipolar")]
     Bipolar,
 }
 

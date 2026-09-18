@@ -2,7 +2,7 @@
 //! their `Default`), the `Component` impl, and the methods that resolve the
 //! authored tunables into the renderer's clamped `gfx` settings.
 
-use crate::components::vocabulary;
+use crate::components::Vocabulary;
 use crate::ecs::Component;
 use crate::gfx::render_types::PostProcessTunables;
 use crate::math::exp2;
@@ -178,25 +178,22 @@ pub struct PostProcessConfig {
 /// and `UltraPerformance` at 1/9.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[derive(Default)]
+#[derive(Default, Vocabulary)]
 pub enum UpscaleQuality {
     /// 4/9 of the output pixel count.
     #[default]
+    #[vocab("quality")]
     Quality,
     /// Roughly a third of the output pixel count.
+    #[vocab("balanced")]
     Balanced,
     /// A quarter of the output pixel count.
+    #[vocab("performance")]
     Performance,
     /// A ninth of the output pixel count.
+    #[vocab("ultra_performance")]
     UltraPerformance,
 }
-
-vocabulary!(UpscaleQuality {
-    Quality => "quality",
-    Balanced => "balanced",
-    Performance => "performance",
-    UltraPerformance => "ultra_performance",
-});
 
 impl UpscaleQuality {
     /// Per-axis input-to-output ratio. The render target's width/height are
@@ -219,25 +216,22 @@ impl UpscaleQuality {
 /// as its native path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[derive(Default)]
+#[derive(Default, Vocabulary)]
 pub enum UpscalerBackend {
     /// Pick the best backend the device offers.
     #[default]
+    #[vocab("auto")]
     Auto,
     /// AMD FidelityFX Super Resolution 3.
+    #[vocab("fsr3")]
     Fsr3,
     /// NVIDIA DLSS, through NGX.
+    #[vocab("dlss")]
     Dlss,
     /// Intel XeSS.
+    #[vocab("xess")]
     Xess,
 }
-
-vocabulary!(UpscalerBackend {
-    Auto => "auto",
-    Fsr3 => "fsr3",
-    Dlss => "dlss",
-    Xess => "xess",
-});
 
 /// Anti-aliasing mode for `PostProcessConfig.aa_mode`. `Off` runs no edge
 /// smoothing; `Fxaa` (default) applies the composite's single-frame edge
@@ -251,22 +245,19 @@ vocabulary!(UpscalerBackend {
 /// the same. See `hdr_sample_count`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[derive(Default)]
+#[derive(Default, Vocabulary)]
 pub enum AaMode {
     /// No edge smoothing.
+    #[vocab("off")]
     Off,
     /// Single-frame edge filter in the composite.
     #[default]
+    #[vocab("fxaa")]
     Fxaa,
     /// Temporal anti-aliasing: jittered projection plus a reprojected history.
+    #[vocab("taa")]
     Taa,
 }
-
-vocabulary!(AaMode {
-    Off => "off",
-    Fxaa => "fxaa",
-    Taa => "taa",
-});
 
 impl AaMode {
     /// Whether the temporal anti-aliasing pass runs. Only the `Taa` mode does;
@@ -322,19 +313,16 @@ pub fn hdr_sample_count(aa_mode: AaMode, temporal_upscaling: bool) -> u32 {
 /// used; `Ssgi` layers a screen-space global-illumination bounce on top.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[derive(Default)]
+#[derive(Default, Vocabulary)]
 pub enum IndirectLighting {
     /// Image-based lighting only.
     #[default]
+    #[vocab("ibl")]
     Ibl,
     /// Image-based lighting plus a screen-space bounce.
+    #[vocab("ssgi")]
     Ssgi,
 }
-
-vocabulary!(IndirectLighting {
-    Ibl => "ibl",
-    Ssgi => "ssgi",
-});
 
 /// Internal render resolution of the SSGI gather pass (only meaningful when
 /// `indirect_lighting` is `ssgi`). The gather is the expensive part (a
@@ -345,22 +333,19 @@ vocabulary!(IndirectLighting {
 /// resolution; `quarter` is the cheapest, for low-end GPUs or debugging.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[derive(Default)]
+#[derive(Default, Vocabulary)]
 pub enum SsgiResolution {
     /// Gather at native resolution.
+    #[vocab("full")]
     Full,
     /// Gather at half resolution per axis.
     #[default]
+    #[vocab("half")]
     Half,
     /// Gather at quarter resolution per axis.
+    #[vocab("quarter")]
     Quarter,
 }
-
-vocabulary!(SsgiResolution {
-    Full => "full",
-    Half => "half",
-    Quarter => "quarter",
-});
 
 impl SsgiResolution {
     /// Per-axis render-resolution divisor the gather target is scaled by.
@@ -383,22 +368,19 @@ impl SsgiResolution {
 /// full-resolution reflection for low roughness.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[derive(Default)]
+#[derive(Default, Vocabulary)]
 pub enum ReflectionBlurResolution {
     /// Blur at native resolution.
+    #[vocab("full")]
     Full,
     /// Blur at half resolution per axis.
     #[default]
+    #[vocab("half")]
     Half,
     /// Blur at quarter resolution per axis.
+    #[vocab("quarter")]
     Quarter,
 }
-
-vocabulary!(ReflectionBlurResolution {
-    Full => "full",
-    Half => "half",
-    Quarter => "quarter",
-});
 
 impl ReflectionBlurResolution {
     /// Per-axis render-resolution divisor the reflection blur target is scaled

@@ -1,18 +1,11 @@
 // Renders an asset type's doc body: field type phrases, parameter bullets,
 // enum value lists, and cross-reference link rewriting.
 //
-// Build-side only, and free of syn, so the prose rendering is unit-testable on
-// plain descriptors away from the source extraction that produces them. Page
-// assembly from the finished bodies lives in the library (`src/docs/page.rs`).
+// Works on plain descriptors, so the prose rendering is unit-testable away from
+// the schema walk that produces them. Page assembly from the finished bodies
+// lives in `page.rs`.
 
 use std::collections::HashMap;
-
-// Field type rendering
-//
-// build.rs translates each Rust field type into one of these JSON-shaped
-// descriptors, then this module renders it to an English phrase. Keeping the
-// rendering here (std-only, no syn) lets it be unit-tested in the crate's test
-// build, away from the build script.
 
 // A JSON-shaped description of a field's type. `Enum` carries the accepted
 // string values; `Named`/`NamedEnum` carry a documented type's name, which is
@@ -51,7 +44,7 @@ pub(super) struct FieldEntry {
     // True for `Option<T>` fields.
     pub optional: bool,
     // Rendered default value (e.g. `2048`, `true`, `[0.0, 0.0]`, `"metal"`),
-    // or `None` when no default is discoverable (derived `Default`, or absent).
+    // or `None` when the key is required or its default does not serialize.
     pub default: Option<String>,
     pub doc: String,
 }

@@ -9,7 +9,7 @@ references, resolved on the expanded Material.
 
 ## Parameters
 
-- `alias`: A string. Alias suffix; the expanded material is named `<palette>_<alias>`.
+- `alias`: A string. Alias suffix; the expanded material is named `<palette>_<alias>`. Defaults to `"surface"`.
 - `albedo`: A string. [Texture](Texture.md) name for the material's albedo.
 - `normal_map`: A string. [Texture](Texture.md) name for the material's normal map.
 - `roughness`: A float. Surface roughness in [0, 1]. Defaults to `0.8`.

@@ -16,9 +16,9 @@ either an empty neighbor or the outside of the chunk.
 
 ## Parameters
 
-- `palette`: An array of strings. [BlockType](BlockType.md) asset names. `blocks[i]` is an index into this list.
+- `palette`: An array of strings. [BlockType](BlockType.md) asset names. `blocks[i]` is an index into this list. Defaults to `[]`.
 - `dim`: An array of 3 integers. Chunk dimensions `[dx, dy, dz]` in blocks. Defaults to `[0, 0, 0]`.
 - `block_size`: A float. World units per block edge. Defaults to `1.0`.
-- `blocks`: An array of integers. Flat block array, length `dx*dy*dz`. Index = `x + y*dx + z*dx*dy`.
+- `blocks`: An array of integers. Flat block array, length `dx*dy*dz`. Index = `x + y*dx + z*dx*dy`. Defaults to `[]`.
 - `lod_levels`: An integer. Number of level-of-detail versions to generate, including the original. `1` (the default) generates none.
 - `lod_distances`: An array of floats. Camera distances at which to switch to each lower-detail version; empty lets the build choose defaults.

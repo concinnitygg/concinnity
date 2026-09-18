@@ -4,7 +4,7 @@
 
 - [Animation](Animation.md) - A skeletal animation clip that animates one [SkinnedMesh](SkinnedMesh.md).
 - [AnimationGraph](AnimationGraph.md) - An animation state machine for one [SkinnedMesh](SkinnedMesh.md).
-- [AppConfig](AppConfig.md) - Runtime half of the AppConfig asset: where the application keeps what it writes, and its process resource budgets.
+- [AppConfig](AppConfig.md) - Names, identifies, and sizes the application.
 - [AudioClip](AudioClip.md) - A baked audio clip: the sound an [AudioEmitter](AudioEmitter.md) plays.
 - [AudioCue](AudioCue.md) - Plays audio when a [Screen](Screen.md) is shown.
 - [AudioEmitter](AudioEmitter.md) - A point source of sound in the world.

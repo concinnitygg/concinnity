@@ -10,7 +10,7 @@ For custom / hand-authored geometry use [Mesh](Mesh.md) instead.
 
 ## Parameters
 
-- `generator`: A string. Built-in generator name (required), e.g. `room`, `box`, `cylinder`, `sphere`, `terrain`, `heightfield`, `skybox`, or `extrude`.
+- `generator`: A string. Built-in generator name (required), e.g. `room`, `box`, `cylinder`, `sphere`, `terrain`, `heightfield`, `skybox`, or `extrude`. Defaults to `""`.
 - `half_width`: A float. Half-width along X (room / box / plane / terrain), in world units. Defaults to `8.0`.
 - `half_depth`: A float. Half-depth along Z (room / box / plane / terrain), in world units. Defaults to `10.0`.
 - `ceiling_height`: A float. Ceiling height for the `room` generator, in world units. Defaults to `3.5`.

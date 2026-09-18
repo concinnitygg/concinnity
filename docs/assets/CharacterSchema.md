@@ -32,10 +32,10 @@ conforms to it.
 
 ## Parameters
 
-- `joints`: An array of [SchemaJoint](SchemaJoint.md) objects. Required (and optional) joints with their parents.
-- `keys`: An array of [SchemaKey](SchemaKey.md) objects. Shape keys a conforming source carries.
-- `regions`: An array of [SchemaRegion](SchemaRegion.md) objects. Named joint groups.
-- `proportion_groups`: An array of [ProportionGroup](ProportionGroup.md) objects. Proportion rows.
-- `synthesized`: An array of [SynthesizedTarget](SynthesizedTarget.md) objects. Targets the build generates from the mesh.
-- `panel`: An array of [PanelSection](PanelSection.md) objects. Panel sections in display order. Regions no section lists, and keys the schema does not know, show under a trailing "Other" section.
-- `presets`: An array of [ShapePreset](ShapePreset.md) objects. Named slider vectors offered as buttons.
+- `joints`: An array of [SchemaJoint](SchemaJoint.md) objects. Required (and optional) joints with their parents. Defaults to `[]`.
+- `keys`: An array of [SchemaKey](SchemaKey.md) objects. Shape keys a conforming source carries. Defaults to `[]`.
+- `regions`: An array of [SchemaRegion](SchemaRegion.md) objects. Named joint groups. Defaults to `[]`.
+- `proportion_groups`: An array of [ProportionGroup](ProportionGroup.md) objects. Proportion rows. Defaults to `[]`.
+- `synthesized`: An array of [SynthesizedTarget](SynthesizedTarget.md) objects. Targets the build generates from the mesh. Defaults to `[]`.
+- `panel`: An array of [PanelSection](PanelSection.md) objects. Panel sections in display order. Regions no section lists, and keys the schema does not know, show under a trailing "Other" section. Defaults to `[]`.
+- `presets`: An array of [ShapePreset](ShapePreset.md) objects. Named slider vectors offered as buttons. Defaults to `[]`.

@@ -17,8 +17,8 @@ story system mutates page by page.
 - `dialog_box`: A string. Dialog box backdrop [Sprite](Sprite.md). Optional.
 - `name_label`: A string. Speaker name-plate [TextLabel](TextLabel.md). Optional.
 - `text_label`: A string. Dialog text [TextLabel](TextLabel.md). Optional.
-- `option_boxes`: An array of strings. Choice button box [Sprite](Sprite.md)s, one per option slot.
-- `options`: An array of strings. Choice button [TextLabel](TextLabel.md)s, one per option slot.
+- `option_boxes`: An array of strings. Choice button box [Sprite](Sprite.md)s, one per option slot. Defaults to `[]`.
+- `options`: An array of strings. Choice button [TextLabel](TextLabel.md)s, one per option slot. Defaults to `[]`.
 - `start_label`: A string. The title screen's Start [TextLabel](TextLabel.md). The story lays the title menu out at runtime, keeping only the buttons that apply contiguous (Continue and Load appear only when a save exists), so these labels are moved and cleared per the save state on disk. Optional.
 - `quit_label`: A string. The title screen's Quit [TextLabel](TextLabel.md). Optional.
 - `continue_label`: A string. The title screen's Continue [TextLabel](TextLabel.md), hidden while no save exists. Optional.
@@ -35,5 +35,5 @@ story system mutates page by page.
 - `overlay_dim`: A string. Full-canvas dim [Sprite](Sprite.md) behind the backlog and slot overlays. Optional.
 - `backlog_label`: A string. The backlog overlay's history [TextLabel](TextLabel.md). Optional.
 - `slot_title`: A string. The slot overlay's heading [TextLabel](TextLabel.md) ("Save" / "Load"). Optional.
-- `slot_boxes`: An array of strings. Slot row box [Sprite](Sprite.md)s.
-- `slot_labels`: An array of strings. Slot row [TextLabel](TextLabel.md)s.
+- `slot_boxes`: An array of strings. Slot row box [Sprite](Sprite.md)s. Defaults to `[]`.
+- `slot_labels`: An array of strings. Slot row [TextLabel](TextLabel.md)s. Defaults to `[]`.

@@ -39,6 +39,6 @@ with no per-frame shape work, for characters that never change shape.
 ## Parameters
 
 - `target`: A string. The [SkinnedMesh](SkinnedMesh.md) this shape deforms. Optional.
-- `sliders`: An array of [ShapeSlider](ShapeSlider.md) objects. Named shape values, each resolved to the mesh's morph targets.
-- `proportions`: An array of [JointProportion](JointProportion.md) objects. Per-joint scale and length changes.
-- `bake`: A boolean. Flatten the shape into the target mesh at build time and drop this asset, instead of deforming at runtime.
+- `sliders`: An array of [ShapeSlider](ShapeSlider.md) objects. Named shape values, each resolved to the mesh's morph targets. Defaults to `[]`.
+- `proportions`: An array of [JointProportion](JointProportion.md) objects. Per-joint scale and length changes. Defaults to `[]`.
+- `bake`: A boolean. Flatten the shape into the target mesh at build time and drop this asset, instead of deforming at runtime. Defaults to `false`.

@@ -120,16 +120,6 @@ macro_rules! __meta_args_ty {
     ($default:path; $t:tt $($r:tt)*) => { __meta_args_ty!($default; $($r)*) };
 }
 
-// The args schema's NAME, for the docs pipeline (which renders the args
-// struct's fields, keyed by the struct's own name). A divergent asset's schema
-// is declared as `<Asset>Args` and exposed under the asset's name in `cook`, so
-// the entry's `args: <Asset>` yields both.
-macro_rules! __meta_args_name {
-    ($default:ident;) => { stringify!($default) };
-    ($default:ident; args: $a:ident $($r:tt)*) => { concat!(stringify!($a), "Args") };
-    ($default:ident; $t:tt $($r:tt)*) => { __meta_args_name!($default; $($r)*) };
-}
-
 // Apply the entry's bake-time validator (`validate: <fn>`, from
 // `crate::authoring::validate`) to a typed value; identity when the entry
 // declares none.
@@ -343,13 +333,16 @@ macro_rules! define_registered_type {
                 )+
                 None
             }
-            /// The name of this type's authored args schema struct: the
-            /// component itself for pass-through types, the `args:` override
-            /// for the divergent ones. The docs pipeline renders that struct's
-            /// fields as the asset's parameters.
-            pub fn args_struct_name(self) -> &'static str {
+            /// This type's authored args schema: the component itself for
+            /// pass-through types, the `args:` override for the divergent
+            /// ones, and an empty schema for a runtime-only component.
+            #[cfg(feature = "schema")]
+            pub fn schema(self) -> &'static concinnity_core::ecs::schema::TypeSchema {
                 match self {
-                    $( Self::$variant => __meta_args_name!($variant; $($meta)*) ),+
+                    $(
+                        Self::$variant => <__meta_args_ty!($ty; $($meta)*)
+                            as concinnity_core::ecs::schema::Schema>::SCHEMA
+                    ),+
                 }
             }
             /// This type's static authoring metadata.
@@ -851,27 +844,20 @@ mod tests {
         }
     }
 
-    // The docs pipeline renders an asset's parameters from the fields of the
-    // struct this names, looked up by the struct's own name in the extracted
-    // schema. A divergent asset's registry entry names the asset (`args: Room`)
-    // and its schema is declared as `RoomArgs`, so the two are
-    // bridged by that naming convention; a rename on either side that broke it
-    // would silently render an empty parameter table.
+    // An asset documents the schema a world line is read through: the
+    // `args:` override for a divergent asset, the asset itself otherwise, and
+    // nothing for a component no world declares.
+    #[cfg(feature = "schema")]
     #[test]
-    fn a_divergent_asset_names_the_schema_struct_the_docs_render() {
-        assert_eq!(RegisteredType::Room.args_struct_name(), "RoomArgs");
-        assert_eq!(RegisteredType::Camera3D.args_struct_name(), "Camera3DArgs");
-        assert_eq!(RegisteredType::File.args_struct_name(), "FileArgs");
-        assert_eq!(RegisteredType::Spawner.args_struct_name(), "SpawnerArgs");
-        assert_eq!(
-            RegisteredType::AppConfig.args_struct_name(),
-            "AppConfigArgs"
-        );
-        // A pass-through asset's schema is the asset itself, whichever group it
-        // is in.
-        assert_eq!(RegisteredType::PointLight.args_struct_name(), "PointLight");
-        assert_eq!(RegisteredType::Prefab.args_struct_name(), "Prefab");
-        assert_eq!(RegisteredType::Texture.args_struct_name(), "Texture");
+    fn each_type_documents_its_args_schema() {
+        let name = |ty: RegisteredType| ty.schema().name;
+        assert_eq!(name(RegisteredType::Room), "RoomArgs");
+        assert_eq!(name(RegisteredType::Camera3D), "Camera3DArgs");
+        assert_eq!(name(RegisteredType::AppConfig), "AppConfigArgs");
+        assert_eq!(name(RegisteredType::PointLight), "PointLight");
+        assert_eq!(name(RegisteredType::Prefab), "Prefab");
+        assert_eq!(name(RegisteredType::Texture), "Texture");
+        assert_eq!(name(RegisteredType::Transform), "NoArgs");
     }
 
     #[test]
@@ -996,13 +982,7 @@ mod tests {
                     ty.as_str()
                 );
                 for name in *variants {
-                    let mut args = defaults.clone();
-                    set_at_path(
-                        &mut args,
-                        field,
-                        serde_json::Value::String(name.to_string()),
-                    );
-                    let back = ty.normalized_args(&args).unwrap_or_else(|e| {
+                    let back = normalized_at_path(ty, &defaults, field, name).unwrap_or_else(|e| {
                         panic!(
                             "{}: `{field}` rejects its own name {name}: {e}",
                             ty.as_str()
@@ -1018,14 +998,8 @@ mod tests {
                 }
                 // A name outside the vocabulary is refused, so the picker is
                 // the whole of what the field accepts.
-                let mut args = defaults.clone();
-                set_at_path(
-                    &mut args,
-                    field,
-                    serde_json::Value::String("__not_a_variant__".to_string()),
-                );
                 assert!(
-                    ty.normalized_args(&args).is_err(),
+                    normalized_at_path(ty, &defaults, field, "__not_a_variant__").is_err(),
                     "{}: `{field}` accepts a name outside its vocabulary",
                     ty.as_str()
                 );
@@ -1034,9 +1008,38 @@ mod tests {
         assert!(checked > 20, "only {checked} declared names were reachable");
     }
 
-    // Read / write a dotted path into an args object, creating the objects a
-    // path walks through (a Prop's `collider` defaults to null). A list on the
-    // way is addressed through its first element, created if the list is empty.
+    // `defaults` with `name` written at the dotted `path`, normalized. A key
+    // the path walks through that the defaults do not hold may be an object or
+    // a list (inside a list item the test just created, a Story choice's
+    // `condition` is an object and a page's `gates` a list), so each shape of
+    // the absent segments is tried; `Err` when no shape accepts the name.
+    fn normalized_at_path(
+        ty: RegisteredType,
+        defaults: &serde_json::Value,
+        path: &str,
+        name: &str,
+    ) -> Result<serde_json::Value, AuthoringError> {
+        let segments = path.split('.').count();
+        let mut last = None;
+        for lists in 0..1u32 << segments {
+            let mut args = defaults.clone();
+            set_at_path(
+                &mut args,
+                path,
+                serde_json::Value::String(name.to_string()),
+                lists,
+            );
+            match ty.normalized_args(&args) {
+                Ok(back) => return Ok(back),
+                Err(e) => last = Some(e),
+            }
+        }
+        Err(last.expect("a path has at least one segment"))
+    }
+
+    // Read / write a dotted path into an args object, creating what the path
+    // walks through (a Prop's `collider` defaults to null). A list on the way
+    // is addressed through its first element, created if the list is empty.
     fn at_path<'a>(args: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
         path.split('.').try_fold(args, |v, seg| {
             let v = if v.is_array() { v.get(0)? } else { v };
@@ -1044,13 +1047,21 @@ mod tests {
         })
     }
 
-    fn set_at_path(args: &mut serde_json::Value, path: &str, value: serde_json::Value) {
+    fn set_at_path(
+        args: &mut serde_json::Value,
+        path: &str,
+        value: serde_json::Value,
+        absent_as_list: u32,
+    ) {
         let mut cursor = args;
-        let mut segs = path.split('.').peekable();
-        while let Some(seg) = segs.next() {
+        let mut segs = path.split('.').enumerate().peekable();
+        while let Some((i, seg)) = segs.next() {
             if segs.peek().is_none() {
                 cursor[seg] = value;
                 return;
+            }
+            if absent_as_list & (1 << i) != 0 && cursor.get(seg).is_none() {
+                cursor[seg] = serde_json::json!([]);
             }
             match &mut cursor[seg] {
                 serde_json::Value::Array(items) => {

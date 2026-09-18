@@ -1,5 +1,6 @@
 // Scripted camera path schema: the authored legs and the keys they bake into.
 
+use crate::components::Vocabulary;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -7,17 +8,23 @@ use crate::math::vec3;
 
 /// How a [CameraTrack](#cameratrack) leg paces the run between its start and
 /// its end.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize, Vocabulary,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum Ease {
     /// Constant rate for the whole leg.
     #[default]
+    #[vocab("linear")]
     Linear,
     /// Starts at rest and reaches full rate at the end.
+    #[vocab("in")]
     In,
     /// Starts at full rate and comes to rest at the end.
+    #[vocab("out")]
     Out,
     /// Starts and ends at rest.
+    #[vocab("in_out")]
     InOut,
 }
 
@@ -95,7 +102,24 @@ pub struct CameraTurn {
     pub ease: Ease,
 }
 
-/// Authored fields of a `CameraTrack`; the baked keys are not declared.
+/// Drives the world's [Camera3D](#camera3d) along a scripted path, so a
+/// fly-through visits the same poses on every machine that runs it.
+///
+/// One per world, and its presence takes the camera away from the input
+/// controller: a world declaring a track is driven by the track, whatever
+/// `controller` the camera carries.
+///
+/// The track has two independent lists played against one clock. `travel` is
+/// where the camera goes and `turn` is where it looks, so a leg of each runs
+/// at the same time and the camera can turn toward one thing while traveling
+/// toward another. Each list runs from the camera's authored pose; when one
+/// runs out the camera holds that list's last value while the other finishes.
+///
+/// The clock is the fixed simulation step, not the frame delta. A machine that
+/// renders half as fast visits the same poses at the same track times and
+/// simply samples fewer of them, which is what makes two runs comparable. The
+/// track freezes while a world-pausing screen is open, like the rest of the
+/// simulation.
 ///
 /// ```rust
 /// # use concinnity_core::components::cook::CameraTrack as CameraTrackArgs;
@@ -179,24 +203,8 @@ pub struct CameraTurnKey {
     pub ease: Ease,
 }
 
-/// Drives the world's [Camera3D](#camera3d) along a scripted path, so a
-/// fly-through visits the same poses on every machine that runs it.
-///
-/// One per world, and its presence takes the camera away from the input
-/// controller: a world declaring a track is driven by the track, whatever
-/// `controller` the camera carries.
-///
-/// The track has two independent lists played against one clock. `travel` is
-/// where the camera goes and `turn` is where it looks, so a leg of each runs
-/// at the same time and the camera can turn toward one thing while traveling
-/// toward another. Each list runs from the camera's authored pose; when one
-/// runs out the camera holds that list's last value while the other finishes.
-///
-/// The clock is the fixed simulation step, not the frame delta. A machine that
-/// renders half as fast visits the same poses at the same track times and
-/// simply samples fewer of them, which is what makes two runs comparable. The
-/// track freezes while a world-pausing screen is open, like the rest of the
-/// simulation.
+/// The runtime `CameraTrack`: the keys
+/// [`cook::CameraTrack`](crate::components::cook::CameraTrack)'s legs bake into.
 ///
 /// ```rust
 /// # use concinnity_core::components::{CameraTrack, CameraTravel, Ease};

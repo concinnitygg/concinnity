@@ -25,5 +25,5 @@ every chunk.
 - `impostor_radius`: An integer. Outer chunk radius streamed as cheap coarse impostors. Chunks farther than `view_radius` but within `impostor_radius` render as a low-detail surface mesh instead of full voxel geometry. `0` (the default) or any value `<= view_radius` disables impostors.
 - `impostor_step`: An integer. Coarse-grid step (in blocks) for distant-chunk impostors: the surface is sampled every `impostor_step` blocks. Higher = cheaper and coarser. Defaults to `4`.
 - `load_budget`: An integer. Maximum number of chunks generated and loaded per frame. Defaults to `3`.
-- `palette`: An array of strings. [BlockType](BlockType.md) asset names. Index 0 is air; 1 is the surface block; 2, when present, is the subsurface block.
+- `palette`: An array of strings. [BlockType](BlockType.md) asset names. Index 0 is air; 1 is the surface block; 2, when present, is the subsurface block. Defaults to `[]`.
 - `material`: A string. [Material](Material.md) shared by every chunk: textures and lighting. Optional.

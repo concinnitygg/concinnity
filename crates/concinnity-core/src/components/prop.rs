@@ -1,7 +1,7 @@
 // Scene-object prop schema.
 
 use crate::components::{Model, Scene};
-use crate::components::{vocabulary, vocabulary_synonyms};
+use crate::components::{Vocabulary, vocabulary_synonyms};
 use crate::ecs::MaterialHandle;
 use crate::ecs::MeshHandle;
 use crate::ecs::de_opt_material_handle;
@@ -12,22 +12,20 @@ use alloc::string::String;
 /// The collision volume a [PropCollider](#propcollider)'s `shape` names. The
 /// single accepted vocabulary: the build rejects an authored name this does not
 /// recognize, and the runtime resolves the same name through it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Vocabulary)]
 pub enum PropColliderShape {
     /// Box sized by `half_extents`. Authored as `aabb` or `cuboid`.
     #[default]
+    #[vocab("cuboid")]
     Cuboid,
     /// Sphere sized by `radius`. Authored as `ball` or `sphere`.
+    #[vocab("ball")]
     Ball,
     /// Capsule sized by `radius` and `half_height`.
+    #[vocab("capsule")]
     Capsule,
 }
 
-vocabulary!(PropColliderShape {
-    Cuboid => "cuboid",
-    Ball => "ball",
-    Capsule => "capsule",
-});
 vocabulary_synonyms!(PropColliderShape, "a collider shape index");
 
 impl PropColliderShape {

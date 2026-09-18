@@ -1,28 +1,25 @@
 // Application window schema.
 
-use crate::components::vocabulary;
+use crate::components::Vocabulary;
 use alloc::string::String;
 use alloc::string::ToString;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[derive(Default)]
+#[derive(Default, Vocabulary)]
 /// How the application window is presented.
 pub enum WindowMode {
     /// A resizable desktop window.
     #[default]
+    #[vocab("windowed")]
     Windowed,
     /// Exclusive fullscreen at the display's mode.
+    #[vocab("fullscreen")]
     Fullscreen,
     /// A borderless window filling the display.
+    #[vocab("borderless")]
     Borderless,
 }
-
-vocabulary!(WindowMode {
-    Windowed => "windowed",
-    Fullscreen => "fullscreen",
-    Borderless => "borderless",
-});
 
 /// Declares the application window.
 ///

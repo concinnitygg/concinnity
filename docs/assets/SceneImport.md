@@ -28,8 +28,8 @@ is set to `false`.
 
 ## Parameters
 
-- `source`: A string. Path to the scene file, relative to the project root. `.fbx` or `.glb`.
-- `scene`: A string. [Scene](Scene.md) the generated [Prop](Prop.md)s belong to. Empty leaves them unbound, which makes them visible in every scene.
+- `source`: A string. Path to the scene file, relative to the project root. `.fbx` or `.glb`. Defaults to `""`.
+- `scene`: A string. [Scene](Scene.md) the generated [Prop](Prop.md)s belong to. Empty leaves them unbound, which makes them visible in every scene. Defaults to `""`.
 - `texture_max_size`: An integer. Ceiling on the longest edge of each imported texture, in pixels. Large source maps (2K-4K) are box-filtered down so the compiled scene, which stores uncompressed pixels, stays within a sane memory budget. `0` keeps each texture at its source resolution. Defaults to `512`.
 - `emissive_map_strength`: A float. Emissive factor applied to a material that carries an emissive map. Scene files often ship a zero emissive factor that would cancel the map, so a textured emissive gets this punchy factor instead. Defaults to `3.0`.
 - `emit_camera`: A boolean. Whether to emit a [Camera3D](Camera3D.md) framed to the scene's bounds. Suppressed automatically when the world already declares a `Camera3D`. Defaults to `true`.

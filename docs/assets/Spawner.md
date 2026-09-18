@@ -17,6 +17,6 @@ the spawner where you want the stream to originate.
 
 ## Parameters
 
-- `template`: A string. The [Prop](Prop.md) placement to copy on each spawn.
+- `template`: A string. The [Prop](Prop.md) placement to copy on each spawn. Defaults to `0`.
 - `interval`: A float. Seconds between spawns. Defaults to `1.0`.
 - `lifetime`: A float. Seconds each spawned copy lives before auto-removal; 0 keeps it forever. Defaults to `0.0`.

@@ -25,6 +25,6 @@ InputKey names are case-sensitive canonical names (e.g. `"Escape"`, `"Space"`,
 
 ## Parameters
 
-- `key`: A string. The key name to bind (e.g. `"Escape"`).
-- `action`: A string. The action to fire when the key is pressed. Empty fires nothing. Optional.
+- `key`: A string. The key name to bind (e.g. `"Escape"`). Defaults to `""`.
+- `action`: A string. The action to fire when the key is pressed. Empty fires nothing. Defaults to `""`.
 - `screen`: A string. [Screen](Screen.md) this binding is scoped to: the binding only fires while that screen is on top of the stack. Unset, the binding is global.

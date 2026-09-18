@@ -2,7 +2,7 @@
 
 use crate::components::AudioBus;
 use crate::components::Prop;
-use crate::components::vocabulary;
+use crate::components::Vocabulary;
 use crate::ecs::AudioClipHandle;
 use crate::ecs::de_opt_audio_clip_handle;
 use crate::ecs::{Ref, de_opt_ref};
@@ -52,23 +52,22 @@ pub struct AudioEmitter {
 }
 
 /// How an [AudioEmitter](#audioemitter)'s volume falls with distance.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default, Vocabulary,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Rolloff {
     /// Natural falloff, steep near the source. The default.
     #[default]
+    #[vocab("logarithmic")]
     Logarithmic,
     /// Gradual falloff spread evenly across the range.
+    #[vocab("linear")]
     Linear,
     /// No distance falloff: constant volume everywhere (panning still applies).
+    #[vocab("none")]
     None,
 }
-
-vocabulary!(Rolloff {
-    Logarithmic => "logarithmic",
-    Linear => "linear",
-    None => "none",
-});
 
 impl Default for AudioEmitter {
     fn default() -> Self {

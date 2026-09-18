@@ -2,7 +2,7 @@
 
 use crate::components::AudioBus;
 use crate::components::Screen;
-use crate::components::vocabulary;
+use crate::components::Vocabulary;
 use crate::ecs::AudioClipHandle;
 use crate::ecs::de_opt_audio_clip_handle;
 use crate::ecs::{Ref, de_opt_ref};
@@ -45,21 +45,20 @@ pub struct AudioCue {
 }
 
 /// How an [AudioCue](#audiocue) plays its clip.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default, Vocabulary,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum CueKind {
-    /// Loops until a screen with a different music cue is shown. Re-triggering
-    /// the currently playing clip is a no-op, so shared cues are seamless.
-    Music,
     /// A one-shot effect, played on every activation of the screen.
     #[default]
+    #[vocab("sound")]
     Sound,
+    /// Loops until a screen with a different music cue is shown. Re-triggering
+    /// the currently playing clip is a no-op, so shared cues are seamless.
+    #[vocab("music")]
+    Music,
 }
-
-vocabulary!(CueKind {
-    Sound => "sound",
-    Music => "music",
-});
 
 impl Default for AudioCue {
     fn default() -> Self {

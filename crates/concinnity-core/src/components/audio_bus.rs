@@ -1,28 +1,25 @@
 // Audio mix-bus schema shared by the audio asset types.
 
-use crate::components::vocabulary;
+use crate::components::Vocabulary;
 
 /// A mix bus grouping related sounds under one user volume.
 ///
 /// Every sound routes through one of three buses under the master output:
 /// `music` for looping tracks, `sfx` for effects and positional emitters, and
 /// `voice` for dialogue. Each bus has its own volume in the settings menu.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Vocabulary)]
 #[serde(rename_all = "lowercase")]
 pub enum AudioBus {
     /// Looping music tracks.
+    #[vocab("music")]
     Music,
     /// Sound effects and positional emitters.
+    #[vocab("sfx")]
     Sfx,
     /// Dialogue and narration.
+    #[vocab("voice")]
     Voice,
 }
-
-vocabulary!(AudioBus {
-    Music => "music",
-    Sfx => "sfx",
-    Voice => "voice",
-});
 
 #[cfg(test)]
 mod tests {

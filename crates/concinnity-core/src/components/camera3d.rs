@@ -1,24 +1,27 @@
 //! Runtime 3D camera component. Its authored args and controller config live in
 //! this file, alongside the runtime component they bake into.
 
+use crate::components::Vocabulary;
 use crate::ecs::Component;
 use crate::ecs::SkinnedMeshHandle;
 use crate::ecs::de_opt_skinned_mesh_handle;
 use alloc::string::{String, ToString};
 
 /// How a followed character converts movement input into displacement.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Vocabulary)]
 #[serde(rename_all = "snake_case")]
 pub enum FollowDrive {
     /// The controller only writes the speed parameter and the facing; the
     /// character moves by the displacement its animation clips carry (clips
     /// baked with [root_motion](animation.md)). Clips must travel along
     /// local -Z so the facing yaw and the travel direction agree.
+    #[vocab("root_motion")]
     RootMotion,
     /// The controller moves the character capsule directly at the camera
     /// controller's `move_speed`, for characters whose clips animate in
     /// place. The speed parameter is still written, so a locomotion
     /// blendspace matches the visual gait to the travel speed.
+    #[vocab("direct")]
     Direct,
 }
 
@@ -128,8 +131,7 @@ fn default_controller() -> Option<CameraController> {
     Some(CameraController::default())
 }
 
-/// Authored fields of a `Camera3D`; the runtime view matrix and per-frame input
-/// intent are not declared.
+/// Declares the 3D camera. One per scene.
 ///
 /// ```rust
 /// # use concinnity_core::components::cook::Camera3D as Camera3DArgs;
@@ -277,7 +279,9 @@ mod tests {
     }
 }
 
-/// Declares the 3D camera. One per scene.
+/// The runtime `Camera3D`: the authored fields of
+/// [`cook::Camera3D`](crate::components::cook::Camera3D) plus the view matrix and
+/// per-frame input intent, which are not declared.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Camera3D {
     /// Vertical field of view in degrees.

@@ -7,11 +7,14 @@ use crate::ecs::{SkinnedMeshHandle, de_opt_skinned_mesh_handle};
 /// One keyframe in an animation track: a joint pose sampled at `time` seconds.
 /// The pose fields (`translation`, `rotation_deg`, `scale`) are given directly
 /// on the keyframe, each defaulting to the identity transform when omitted.
-#[derive(Debug, Clone)]
+// The `flatten` states the authored shape the hand-written serde impls below
+// read, for the derived schema.
+#[derive(Debug, Clone, crate::ecs::AssetFields)]
 pub struct Keyframe {
     /// Time of this keyframe in seconds from the clip start.
     pub time: f32,
     /// The joint's transform at this keyframe.
+    #[serde(flatten)]
     pub pose: JointPose,
 }
 

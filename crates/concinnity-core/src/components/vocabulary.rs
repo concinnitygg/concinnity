@@ -1,5 +1,5 @@
 // Closed authored vocabularies: the trait a fixed-word field's type carries,
-// and the two macros that give one its name list and its serde impls.
+// and the macro that builds serde impls accepting authored synonyms.
 
 /// The closed set of names an authored field of this type accepts.
 ///
@@ -7,47 +7,21 @@
 /// a text box: the asset registry names the type per field and reads
 /// [`Vocabulary::VARIANTS`] off it, so a variant added to the enum reaches the
 /// editor with no second list to update.
+///
+/// `#[derive(Vocabulary)]` implements it for an enum of unit variants, along
+/// with `ALL`, `NAMES` and `as_str`. A variant's name is its
+/// `#[vocab("Name")]`, or else what serde writes for it; the generated
+/// `as_str` matches exhaustively, so a variant cannot go missing from the
+/// lists.
 pub trait Vocabulary {
     /// Every canonical authored name, in the order a picker steps through
     /// them. Each is what serde writes for its variant.
     const VARIANTS: &'static [&'static str];
 }
 
-/// Give an enum its authored-name list: `ALL`, `NAMES`, `as_str`, and the
-/// [`Vocabulary`] impl the asset registry reads.
-///
-/// The generated `as_str` matches exhaustively, so a variant added without a
-/// name here fails to compile rather than going missing from the lists.
-///
-/// The names must be what serde writes for the variant: for a derived
-/// `Serialize` that is the variant's `rename_all` spelling, and for one built
-/// by [`vocabulary_synonyms`] it is this list by construction. One test in the
-/// cook's registry holds every declared field to that.
-macro_rules! vocabulary {
-    ($ty:ident { $($variant:ident => $name:literal),+ $(,)? }) => {
-        impl $ty {
-            /// Every variant, in the order an editor picker steps through them.
-            pub const ALL: &'static [$ty] = &[$($ty::$variant),+];
-
-            /// Every variant's authored name, in [`Self::ALL`] order. The
-            /// editor's picker list.
-            pub const NAMES: &'static [&'static str] = &[$($name),+];
-
-            /// This variant's canonical authored name: what serde writes for it.
-            pub const fn as_str(self) -> &'static str {
-                match self { $($ty::$variant => $name),+ }
-            }
-        }
-
-        impl $crate::components::Vocabulary for $ty {
-            const VARIANTS: &'static [&'static str] = <$ty>::NAMES;
-        }
-    };
-}
-
 /// Build the serde impls of a vocabulary that accepts authored synonyms, on top
-/// of the `from_str_norm` the enum defines and the `as_str` [`vocabulary`]
-/// generates.
+/// of the `from_str_norm` the enum defines and the `as_str`
+/// `#[derive(Vocabulary)]` generates.
 ///
 /// A human-readable format carries the canonical name and accepts every synonym
 /// `from_str_norm` knows, so authored JSON is unchanged by typing a field with
@@ -91,7 +65,7 @@ macro_rules! vocabulary_synonyms {
     };
 }
 
-pub(crate) use {vocabulary, vocabulary_synonyms};
+pub(crate) use vocabulary_synonyms;
 
 #[cfg(test)]
 mod tests {

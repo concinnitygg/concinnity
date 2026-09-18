@@ -18,4 +18,4 @@ and never persisted.
 
 ## Parameters
 
-- `vars`: An array of [VariableDecl](VariableDecl.md) objects. Every variable the world declares.
+- `vars`: An array of [VariableDecl](VariableDecl.md) objects. Every variable the world declares. Defaults to `[]`.

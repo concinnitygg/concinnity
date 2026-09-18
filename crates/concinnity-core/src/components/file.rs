@@ -1,36 +1,49 @@
 //! Runtime `File` component. Its authored args and `FileKind` live in the schema
 //! crate (concinnity_core::components::file).
 
+use crate::components::Vocabulary;
 use crate::ecs::{Component, PayloadLocator};
 use alloc::string::String;
 
 /// The category of file content, inferred from the extension when not supplied.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Vocabulary)]
 #[serde(rename_all = "lowercase")]
 pub enum FileKind {
     /// Wavefront OBJ geometry.
+    #[vocab("obj")]
     Obj,
     /// PNG image.
+    #[vocab("png")]
     Png,
     /// JPEG image, `.jpg`.
+    #[vocab("jpg")]
     Jpg,
     /// JPEG image, `.jpeg`.
+    #[vocab("jpeg")]
     Jpeg,
     /// Windows bitmap image.
+    #[vocab("bmp")]
     Bmp,
     /// Truevision TGA image.
+    #[vocab("tga")]
     Tga,
     /// GIF image.
+    #[vocab("gif")]
     Gif,
     /// TrueType font.
+    #[vocab("ttf")]
     Ttf,
     /// OpenType font.
+    #[vocab("otf")]
     Otf,
     /// Plain text.
+    #[vocab("txt")]
     Txt,
     /// Markdown text, the medium the story importer reads.
+    #[vocab("md")]
     Md,
     /// Wavefront material library accompanying an OBJ.
+    #[vocab("mtl")]
     Mtl,
 }
 
@@ -62,7 +75,10 @@ impl FileKind {
     }
 }
 
-/// Authored fields of a `File`.
+/// References a source file by path.
+///
+/// For supported kinds the build compiles the file into the world (an `.obj`
+/// becomes mesh data); other kinds are path-only references.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default, crate::ecs::AssetFields)]
 pub struct FileArgs {
     /// Path to the source file, relative to the project root.
@@ -154,10 +170,8 @@ mod tests {
     }
 }
 
-/// References a source file by path.
-///
-/// For supported kinds the build compiles the file into the world (an `.obj`
-/// becomes mesh data); other kinds are path-only references.
+/// The runtime `File`: the authored fields of
+/// [`cook::File`](crate::components::cook::File) plus its payload locator.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct File {
     /// Path to the source file, relative to the world.

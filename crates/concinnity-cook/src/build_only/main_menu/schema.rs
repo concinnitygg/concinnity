@@ -109,31 +109,29 @@ pub struct MainMenu {
 }
 
 /// Which settings screen a [MainMenu](#mainmenu)'s `"settings"` item builds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    concinnity_core::components::Vocabulary,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum SettingsProfile {
     /// The complete Video / Audio / Controls settings, with the graphics
     /// quality preset and the Quality / Advanced render-feature groups.
     #[default]
+    #[vocab("full")]
     Full,
     /// A trimmed Video tab (window mode, resolution, vsync, frame rate) and an
     /// Audio tab (volume) only: no Controls tab, no graphics quality preset,
     /// and no scene-render groups. Suits a world that renders no 3D scene.
+    #[vocab("minimal")]
     Minimal,
-}
-
-impl SettingsProfile {
-    /// This profile's authored name: what serde writes for it.
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Full => "full",
-            Self::Minimal => "minimal",
-        }
-    }
-}
-
-impl concinnity_core::components::Vocabulary for SettingsProfile {
-    const VARIANTS: &'static [&'static str] = &[Self::Full.as_str(), Self::Minimal.as_str()];
 }
 
 /// One entry in a [MainMenu](#mainmenu).

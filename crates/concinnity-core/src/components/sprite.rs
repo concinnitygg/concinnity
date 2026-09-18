@@ -1,7 +1,7 @@
 // Screen-space sprite overlay schema.
 
 use crate::components::Screen;
-use crate::components::vocabulary;
+use crate::components::Vocabulary;
 use crate::ecs::TextureHandle;
 use crate::ecs::de_opt_texture_handle;
 use crate::ecs::{Ref, de_opt_ref};
@@ -82,32 +82,31 @@ pub struct Sprite {
 ///
 /// Screen-owned UI is authored against a fixed reference canvas and uniformly
 /// scaled to the window at runtime.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default, Vocabulary,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum SpriteFit {
     /// The canvas fits inside the window, centered, leaving margins on the
     /// shorter axis. UI elements keep their proportions and stay fully
     /// visible.
     #[default]
+    #[vocab("fit")]
     Fit,
     /// The canvas fills the window, centered, cropping the overflowing axis
     /// equally on both sides. Full-bleed stage imagery (scene backdrops,
     /// character portraits) reaches the window edges without distorting, and
     /// content anchored to a canvas edge stays flush with the window edge.
+    #[vocab("cover")]
     Cover,
     /// The canvas keeps the `fit` scale (no cropping), but the whole overlay is
     /// shifted so the reference bottom edge lands on the window bottom edge.
     /// Bottom-anchored furniture (a visual-novel dialog box and its controls)
     /// hugs the window bottom at any aspect ratio instead of floating above a
     /// letterbox margin.
+    #[vocab("bottom")]
     Bottom,
 }
-
-vocabulary!(SpriteFit {
-    Fit => "fit",
-    Cover => "cover",
-    Bottom => "bottom",
-});
 
 impl Default for Sprite {
     fn default() -> Self {

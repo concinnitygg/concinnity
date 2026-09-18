@@ -20,10 +20,10 @@ Reversed winding = invisible face.
 
 ## Parameters
 
-- `source`: A string. Optional path to a `.glb` file. When set, the build imports `vertices` / `indices` from it; inline geometry leaves this empty.
+- `source`: A string. Optional path to a `.glb` file. When set, the build imports `vertices` / `indices` from it; inline geometry leaves this empty. Defaults to `""`.
 - `primitive_index`: An integer. Which primitive (counted across all meshes in the file) to import from `source`. Ignored when `source` is empty. Defaults to `0`.
 - `chunk_index`: An integer. Pick a single chunk of an oversized imported primitive. `None` (the default) imports the whole primitive, which is fine whenever its vertex count fits in 16-bit indices; larger primitives are split into chunks on import, one Mesh per chunk.
-- `vertices`: An array of [VertexData](VertexData.md) objects. Vertex list.  Each vertex: `{"pos":[x,y,z], "color":[r,g,b], "uv":[u,v]}`.
-- `indices`: An array of integers. Triangle index list (16-bit values).
+- `vertices`: An array of [VertexData](VertexData.md) objects. Vertex list.  Each vertex: `{"pos":[x,y,z], "color":[r,g,b], "uv":[u,v]}`. Defaults to `[]`.
+- `indices`: An array of integers. Triangle index list (16-bit values). Defaults to `[]`.
 - `lod_levels`: An integer. Number of level-of-detail versions to generate, including the original. `1` (the default) generates none; values are clamped to `[1, 8]`.
 - `lod_distances`: An array of floats. Camera distances at which to switch to each lower-detail version. Length should be `lod_levels - 1`; empty lets the build derive a default sequence. The version for index `i` is used at camera distance ≥ `lod_distances[i]`.

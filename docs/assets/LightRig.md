@@ -13,5 +13,5 @@ in `lights`.
 
 ## Parameters
 
-- `preset`: A string. Name of a built-in or file-backed preset (e.g. "rig_outdoor_sun_fill"). When set, `lights` is ignored.
-- `lights`: An array of strings. Names of existing [DirectionalLight](DirectionalLight.md) or [PointLight](PointLight.md) assets to include in this rig. Ignored when `preset` is set.
+- `preset`: A string. Name of a built-in or file-backed preset (e.g. "rig_outdoor_sun_fill"). When set, `lights` is ignored. Defaults to `""`.
+- `lights`: An array of strings. Names of existing [DirectionalLight](DirectionalLight.md) or [PointLight](PointLight.md) assets to include in this rig. Ignored when `preset` is set. Defaults to `[]`.

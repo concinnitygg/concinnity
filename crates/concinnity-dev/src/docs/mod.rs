@@ -1,21 +1,22 @@
 // `cn docs`: write the asset reference pages under docs/assets/.
 //
-// The prose is rustdoc, serde keys, and `Default` literals, none of which
-// survive compilation, so the reference is read from the engine's own asset
-// sources each time this runs: `schema` parses them, `reference` joins the two
-// trees over the authoring registry and renders each body, `page` assembles the
-// pages. That makes this a command for a checkout of the engine, which is the
-// only place the pages are regenerated.
+// The prose, keys, types and defaults all come from the schema the derives
+// compile into the engine (`concinnity_core::ecs::schema`, behind the `schema`
+// feature): `reference` walks it from the authoring registry and renders each
+// body, `defaults` serializes what an omitted key reads as, and `page`
+// assembles the pages. Nothing is read from the engine's sources, so any build
+// of `cn` regenerates the same pages.
 //
 // The pages are committed to the repository. Whether they still match the
 // sources is a question about a checkout, not about this code, so it belongs to
 // a repository check rather than a unit test: a test that reads the committed
 // pages passes or fails on files no test wrote.
 
+mod defaults;
 mod page;
+mod prose;
 mod reference;
 mod render;
-mod schema;
 
 use page::{AUTOGEN_MARKER, IndexEntry, render_index, render_page};
 use reference::AssetDoc;
@@ -54,19 +55,15 @@ fn pages(docs: &[AssetDoc]) -> BTreeMap<String, String> {
     out
 }
 
-// Write the pages under `<root>/docs/assets`, defaulting to the current
-// directory. `<root>` is also the engine checkout the prose is read from.
-// Unchanged pages are left alone, so running this on an up-to-date tree touches
-// nothing.
-/// Regenerate the asset reference pages under `docs/assets/`, read out of the
-/// engine's own schema sources.
+/// Regenerate the asset reference pages under `docs/assets/` from the
+/// authored schema compiled into this build.
 ///
-/// `root` is the engine checkout to read from; `None` uses the working
-/// directory.
+/// `root` is the directory the pages go under; `None` uses the working
+/// directory. Unchanged pages are left alone, so running this on an
+/// up-to-date tree touches nothing.
 pub fn docs(root: Option<&str>) -> io::Result<()> {
-    let engine_root = PathBuf::from(root.unwrap_or("."));
-    let pages = pages(&reference::build(&engine_root)?);
-    let dir = engine_root.join(PAGES_DIR);
+    let pages = pages(&reference::build(&reference::registry_assets()));
+    let dir = PathBuf::from(root.unwrap_or(".")).join(PAGES_DIR);
     let (written, removed) = write_pages(&dir, &pages)?;
 
     println!(
@@ -122,114 +119,118 @@ fn remove_stale_pages(dir: &Path, keep: &BTreeMap<String, String>) -> io::Result
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::ecs::schema::{
+        Body, FieldDefault, FieldSchema, FieldType, TypeSchema, ValueSchema,
+    };
+    use std::collections::BTreeMap as Map;
 
-    // A vocabulary the test wrote, in the shape the extractor reads: rustdoc on
-    // the struct and on each field, and a `Default` impl for the defaults the
-    // parameter table renders.
+    // A vocabulary the test wrote, in the shape the derives emit: a doc on the
+    // type and on each field, and serde's defaults for the parameter table.
     //
-    // Reading the engine's own sources instead would tie these to whichever
-    // assets it happens to declare, and would assert nothing a source edit
-    // could not silently satisfy: the anchor-link check below only means
-    // something because this vocabulary contains an anchor link.
-    const SOURCES: &str = r#"
-        /// A widget in the world.
-        ///
-        /// The shape it embeds is a [collider](#widgetcollider).
-        pub struct Widget {
-            /// The mesh to draw.
-            pub mesh: String,
-            /// The shape it collides with.
-            pub collider: Option<WidgetCollider>,
-        }
-        impl Default for Widget {
-            fn default() -> Self {
-                Self { mesh: "cube".to_string(), collider: None }
-            }
-        }
+    // The engine's own schema instead would tie these to whichever assets it
+    // happens to declare, and would assert nothing a doc edit could not
+    // silently satisfy: the anchor-link check below only means something
+    // because this vocabulary contains an anchor link.
+    static WIDGET: TypeSchema = TypeSchema {
+        name: "Widget",
+        doc: "A widget in the world.\n\nThe shape it embeds is a [collider](#widgetcollider).",
+        body: Body::Fields(&[
+            FieldSchema {
+                key: "mesh",
+                doc: "The mesh\nto draw.",
+                ty: || FieldType::Str,
+                default: FieldDefault::Value(|| Some(Box::new("cube"))),
+            },
+            FieldSchema {
+                key: "collider",
+                doc: "The shape it collides with.",
+                ty: || FieldType::Optional(|| FieldType::Nested(&WIDGET_COLLIDER)),
+                default: FieldDefault::Null,
+            },
+            FieldSchema {
+                key: "target",
+                doc: "What it points at.",
+                ty: || FieldType::Reference(&[]),
+                default: FieldDefault::Value(|| Some(Box::new(""))),
+            },
+        ]),
+        default: None,
+    };
 
-        /// A collider shape a widget embeds.
-        pub struct WidgetCollider {
-            /// Half the box's size on each axis.
-            pub half_extents: [f32; 3],
-        }
-        impl Default for WidgetCollider {
-            fn default() -> Self {
-                Self { half_extents: [0.5, 0.5, 0.5] }
-            }
-        }
+    static WIDGET_COLLIDER: TypeSchema = TypeSchema {
+        name: "WidgetCollider",
+        doc: "A collider shape a widget embeds.",
+        body: Body::Fields(&[FieldSchema {
+            key: "half_extents",
+            doc: "Half the box's size on each axis.",
+            ty: || FieldType::Array {
+                elem: || FieldType::Float,
+                len: Some(3),
+            },
+            default: FieldDefault::Container,
+        }]),
+        default: Some(|| Some(Box::new(Map::from([("half_extents", [0.5_f32; 3])])))),
+    };
 
-        /// A gadget that makes noise.
-        pub struct Gadget {
-            /// How loud, from silent to full.
-            pub volume: f32,
-        }
-        impl Default for Gadget {
-            fn default() -> Self {
-                Self { volume: 1.0 }
-            }
-        }
+    static GADGET: TypeSchema = TypeSchema {
+        name: "GadgetArgs",
+        doc: "A gadget that makes noise.",
+        body: Body::Fields(&[
+            FieldSchema {
+                key: "volume",
+                doc: "How loud, from silent to full.",
+                ty: || FieldType::Float,
+                default: FieldDefault::Value(|| Some(Box::new(1.0_f32))),
+            },
+            FieldSchema {
+                key: "mode",
+                doc: "How it plays.",
+                ty: || FieldType::Enum(&MODE),
+                default: FieldDefault::Required,
+            },
+            FieldSchema {
+                key: "widget",
+                doc: "The widget it sits on.",
+                ty: || FieldType::Nested(&WIDGET),
+                default: FieldDefault::Required,
+            },
+        ]),
+        default: None,
+    };
 
-        /// Engine bookkeeping no world declares.
-        pub struct Internal {
-            /// A counter.
-            pub ticks: u32,
-        }
-        impl Default for Internal {
-            fn default() -> Self {
-                Self { ticks: 0 }
-            }
-        }
-    "#;
+    static MODE: TypeSchema = TypeSchema {
+        name: "Mode",
+        doc: "",
+        body: Body::Values(&[
+            ValueSchema {
+                name: "once",
+                doc: "Plays once",
+            },
+            ValueSchema {
+                name: "loop",
+                doc: "",
+            },
+        ]),
+        default: None,
+    };
 
-    // A build-only asset's schema module, read on its own.
-    const GIZMO_SCHEMA: &str = r#"
-        /// A gizmo the build expands into widgets.
-        pub struct Gizmo {
-            /// How many widgets it becomes.
-            pub count: u32,
-        }
-        impl Default for Gizmo {
-            fn default() -> Self {
-                Self { count: 1 }
-            }
-        }
-    "#;
+    fn synthetic_reference() -> Vec<AssetDoc> {
+        reference::build(&[
+            reference::AssetEntry {
+                name: "Widget",
+                schema: &WIDGET,
+            },
+            reference::AssetEntry {
+                name: "Gadget",
+                schema: &GADGET,
+            },
+        ])
+    }
 
-    // The expansion beside it, whose private working type shares a stored
-    // asset's name.
-    const GIZMO_EXPAND: &str = r#"
-        /// Expansion scratch that is not the stored widget.
-        pub struct Widget {
-            /// Scratch state.
-            pub scratch: u32,
-        }
-    "#;
-
-    // The reference over `SOURCES` and the Gizmo module, and the tree it was
-    // read from. The tree is returned so it outlives the borrow-free `Vec` the
-    // caller works with.
-    fn synthetic_reference() -> (concinnity_testing::TempTree, Vec<AssetDoc>) {
-        let tree = concinnity_testing::TempTree::new();
-        tree.write("schema/vocabulary.rs", SOURCES);
-        // A non-Rust neighbor the walk must skip.
-        tree.write("schema/notes.md", "not rust");
-        tree.write("build_only/gizmo/schema.rs", GIZMO_SCHEMA);
-        tree.write("build_only/gizmo/expand.rs", GIZMO_EXPAND);
-
-        let components = [
-            reference::ComponentMeta::pass_through("Widget", "External"),
-            reference::ComponentMeta::pass_through("Gadget", "External"),
-            reference::ComponentMeta::pass_through("Gizmo", "BuildOnly"),
-            // Never declared in a world, so it must get no page.
-            reference::ComponentMeta::pass_through("Internal", "RuntimeOnly"),
-        ];
-        let docs = reference::build_from(
-            &[tree.join("schema")],
-            &[tree.join("build_only/gizmo/schema.rs")],
-            &components,
-        )
-        .expect("the synthetic sources parse");
-        (tree, docs)
+    fn describe<'a>(docs: &'a [AssetDoc], type_name: &str) -> &'a AssetDoc {
+        docs.iter()
+            .find(|d| d.type_name == type_name)
+            .unwrap_or_else(|| panic!("{type_name} is documented"))
     }
 
     // Writing into a fresh directory produces the whole page set; a stale
@@ -267,93 +268,86 @@ mod tests {
         assert!(dir.join("diagram.png").exists(), "non-page should stay");
     }
 
-    fn describe<'a>(docs: &'a [AssetDoc], type_name: &str) -> Option<&'a AssetDoc> {
-        docs.iter()
-            .find(|d| d.type_name.eq_ignore_ascii_case(type_name))
-    }
-
-    // An asset is found by name whatever its casing, a type a field embeds is
-    // documented in its own right rather than only inlined, and a RuntimeOnly
-    // component -- one no world declares -- gets no page at all.
+    // Assets are named by registry name, not by their args schema's; a nested
+    // struct and a documented enum a field reaches get pages of their own; and
+    // a field embedding another asset links to that asset rather than to a
+    // second page for its schema.
     #[test]
-    fn every_documented_type_is_found_by_name() {
-        let (_tree, docs) = synthetic_reference();
-
-        let d = describe(&docs, "Widget").expect("Widget should be documented");
-        assert_eq!(d.type_name, "Widget");
-        assert!(d.full_doc.contains(&d.summary));
-        assert!(describe(&docs, "widget").is_some());
-        assert!(describe(&docs, "WIDGET").is_some());
-        assert!(describe(&docs, "NotARealAsset").is_none());
-
-        let embedded = describe(&docs, "WidgetCollider").expect("the embedded type is documented");
-        assert!(embedded.is_reference_type);
-        assert!(!d.is_reference_type, "an asset is not a reference type");
-
+    fn assets_and_the_types_their_fields_reach_are_documented() {
+        let docs = synthetic_reference();
+        let names: Vec<(&str, bool)> = docs
+            .iter()
+            .map(|d| (d.type_name.as_str(), d.is_reference_type))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                ("Gadget", false),
+                ("Widget", false),
+                ("Mode", true),
+                ("WidgetCollider", true),
+            ]
+        );
+        let gadget = describe(&docs, "Gadget");
         assert!(
-            describe(&docs, "Internal").is_none(),
-            "a RuntimeOnly component is engine-internal and gets no page"
+            gadget
+                .full_doc
+                .contains("- `widget`: A [Widget](Widget.md) object. The widget it sits on."),
+            "{}",
+            gadget.full_doc
+        );
+        assert!(
+            gadget
+                .full_doc
+                .contains("- `mode`: A string (see [Mode](Mode.md)). How it plays."),
+            "{}",
+            gadget.full_doc
+        );
+        let mode = describe(&docs, "Mode");
+        assert_eq!(mode.summary, "A set of named string values.");
+        assert!(
+            mode.full_doc.contains("- `once`: Plays once.\n- `loop`"),
+            "{}",
+            mode.full_doc
         );
     }
 
-    // Every entry resolved real prose. An empty summary means the sources went
-    // unread, which would otherwise surface as a page set of bare titles.
+    // A field's prose, type and default reach its bullet: a literal default, a
+    // default read off the containing type's `Default`, and an optional with
+    // none. A reference defaulting to no name states no default.
     #[test]
-    fn every_type_resolved_documentation() {
-        let (_tree, docs) = synthetic_reference();
-        assert_eq!(docs.len(), 4, "three assets and the type they embed");
-
-        for d in &docs {
-            assert!(!d.summary.is_empty(), "{} has no summary", d.type_name);
+    fn each_field_states_its_type_doc_and_default() {
+        let docs = synthetic_reference();
+        let widget = describe(&docs, "Widget");
+        assert_eq!(widget.summary, "A widget in the world.");
+        for line in [
+            "- `mesh`: A string. The mesh to draw. Defaults to `\"cube\"`.",
+            "- `collider`: A [WidgetCollider](WidgetCollider.md) object. The shape it collides with. Optional.",
+        ] {
             assert!(
-                !d.summary.contains('\n'),
-                "{}'s summary spans multiple lines: {:?}",
-                d.type_name,
-                d.summary
+                widget.full_doc.contains(line),
+                "{line}\n{}",
+                widget.full_doc
             );
         }
-
-        // The summary is the first paragraph, not the whole body.
-        let widget = describe(&docs, "Widget").expect("Widget");
-        assert_eq!(widget.summary, "A widget in the world.");
-
-        // A field's own prose and its default both reach the parameter table.
+        let collider = describe(&docs, "WidgetCollider");
         assert!(
-            widget.full_doc.contains("The mesh to draw."),
-            "{:?}",
-            widget.full_doc
+            collider.full_doc.contains(
+                "- `half_extents`: An array of 3 floats. Half the box's size on each axis. Defaults to `[0.5, 0.5, 0.5]`."
+            ),
+            "{}",
+            collider.full_doc
         );
-        assert!(widget.full_doc.contains("cube"), "{:?}", widget.full_doc);
-    }
-
-    // A build-only asset is documented from its schema module alone: the
-    // expansion beside it adds no page, and its same-named working type does
-    // not replace the stored asset's prose.
-    #[test]
-    fn a_build_only_expansion_contributes_nothing() {
-        let (_tree, docs) = synthetic_reference();
-
-        let gizmo = describe(&docs, "Gizmo").expect("Gizmo should be documented");
-        assert_eq!(gizmo.summary, "A gizmo the build expands into widgets.");
-        assert!(!gizmo.is_reference_type);
-
-        assert_eq!(
-            docs.iter().filter(|d| d.type_name == "Widget").count(),
-            1,
-            "the expansion's Widget gets no page of its own"
-        );
-        let widget = describe(&docs, "Widget").expect("Widget");
-        assert_eq!(widget.summary, "A widget in the world.");
         assert!(
-            !widget.full_doc.contains("scratch"),
-            "{:?}",
-            widget.full_doc
+            describe(&docs, "Gadget")
+                .full_doc
+                .contains("Defaults to `1.0`.")
         );
     }
 
     #[test]
     fn pages_cover_every_type_plus_the_index() {
-        let (_tree, docs) = synthetic_reference();
+        let docs = synthetic_reference();
         let pages = pages(&docs);
 
         assert_eq!(pages.len(), docs.len() + 1);
@@ -370,12 +364,13 @@ mod tests {
     // exempt, since they never render as links and a doc may legitimately show
     // anchor syntax verbatim (StoryImport documents its own Markdown dialect).
     //
-    // `SOURCES` contains such a link, so this fails if the rewriting stops
-    // happening -- not only if some asset's prose happens to carry one.
+    // The synthetic vocabulary contains such a link, so this fails if the
+    // rewriting stops happening -- not only if some asset's prose happens to
+    // carry one.
     #[test]
     fn no_in_page_anchor_links_remain() {
-        let (_tree, docs) = synthetic_reference();
-        let widget = describe(&docs, "Widget").expect("Widget");
+        let docs = synthetic_reference();
+        let widget = describe(&docs, "Widget");
 
         assert!(
             widget.full_doc.contains("](WidgetCollider.md)"),
@@ -390,6 +385,18 @@ mod tests {
                 d.full_doc
             );
         }
+    }
+
+    // The registry documents every type a world may declare, the build-only
+    // ones included, and none of the components only a running world mints.
+    #[test]
+    fn the_registry_lists_every_authorable_asset() {
+        let assets = reference::registry_assets();
+        let has = |name: &str| assets.iter().any(|a| a.name == name);
+        assert!(has("Prop") && has("Prefab") && has("Texture"));
+        assert!(!has("Transform"));
+        let room = assets.iter().find(|a| a.name == "Room").expect("Room");
+        assert_eq!(room.schema.name, "RoomArgs");
     }
 
     // Strip fenced code blocks and inline code spans, leaving the prose that

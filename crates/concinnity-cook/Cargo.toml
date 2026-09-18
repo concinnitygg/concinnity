@@ -17,6 +17,9 @@ include = [
     "/assets",
 ]
 
+[features]
+schema = ["concinnity-core/schema"]
+
 [dependencies]
 concinnity-core = { workspace = true }
 concinnity-host = { workspace = true }

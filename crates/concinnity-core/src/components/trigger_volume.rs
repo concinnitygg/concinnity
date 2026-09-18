@@ -1,7 +1,7 @@
 // Trigger-volume schema: a spatial sensor region.
 
 use crate::components::PropCollider;
-use crate::components::vocabulary;
+use crate::components::Vocabulary;
 
 /// An invisible sensor region that reports when something enters or leaves it.
 ///
@@ -36,24 +36,23 @@ pub struct TriggerVolume {
 }
 
 /// What a [TriggerVolume](#triggervolume) senses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize, Vocabulary,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum TriggerFilter {
     /// Only the player character (the controlled camera capsule or the
     /// followed character).
     #[default]
+    #[vocab("player")]
     Player,
     /// Only dynamic props (a `Prop` with a `PropBody`).
+    #[vocab("props")]
     Props,
     /// Anything the physics simulation moves.
+    #[vocab("any")]
     Any,
 }
-
-vocabulary!(TriggerFilter {
-    Player => "player",
-    Props => "props",
-    Any => "any",
-});
 
 #[cfg(test)]
 mod tests {

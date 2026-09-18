@@ -32,8 +32,8 @@ hand-authored assets and you never reference them by hand.
 
 ## Parameters
 
-- `items`: An array of [MainMenuItem](MainMenuItem.md) objects. Menu entries, top to bottom. Each one is a clickable button.
-- `title`: A string. Optional heading drawn above the items. Empty draws no heading.
+- `items`: An array of [MainMenuItem](MainMenuItem.md) objects. Menu entries, top to bottom. Each one is a clickable button. Defaults to `[{"label": "Return", "action": "return"}, {"label": "Settings", "action": "settings"}, {"label": "Quit", "action": "quit"}]`.
+- `title`: A string. Optional heading drawn above the items. Empty draws no heading. Defaults to `""`.
 - `initial`: A boolean. Show the menu as soon as the world loads. Off by default: the scene shows first and the toggle key opens the menu.
 - `toggle_key`: A string. InputKey that toggles the menu while the cursor is free. Empty binds no key. Only `"Escape"` is currently recognized by the runtime. Defaults to `"Escape"`.
 - `dim`: An array of 4 floats. RGBA fill drawn across the whole window behind the items. Defaults to opaque black: a fully opaque alpha (1.0) hides the scene completely, which lets the renderer skip the entire world render while the menu is open, so the frame costs only the menu overlay. Lower the alpha to keep the world visible behind a translucent fade (the world then keeps rendering); an alpha of 0 draws no backdrop at all.
@@ -43,7 +43,7 @@ hand-authored assets and you never reference them by hand.
 - `button_width`: A float. Width of each item's clickable region in pixels. Defaults to `360.0`.
 - `button_height`: A float. Height of each item's clickable region in pixels. Defaults to `60.0`.
 - `row_gap`: A float. Pixels between adjacent items. Defaults to `14.0`.
-- `font`: A string. [Font](Font.md) for the item text. Empty uses the built-in font.
+- `font`: A string. [Font](Font.md) for the item text. Empty uses the built-in font. Defaults to `""`.
 - `font_px`: A float. Pixel size of the item text when this menu emits its own built-in font (that is, when `font` is empty). Ignored when `font` names a [Font](Font.md), which carries its own size. In reference-space pixels. Defaults to `48.0`.
 - `text_color`: An array of 3 floats. Linear-space RGB color of the item text. Defaults to `[0.85, 0.85, 0.85]`.
 - `text_scale`: A float. Scale applied to the item text. Defaults to `1.1`.
@@ -52,5 +52,5 @@ hand-authored assets and you never reference them by hand.
 - `cursor`: A boolean. Draw an in-engine arrow cursor while the menu is shown (the system cursor is hidden). When false the system cursor is used. Defaults to `true`.
 - `cursor_color`: An array of 4 floats. RGBA fill color of the arrow cursor. A contrasting outline is added automatically so it stays legible over any scene. Defaults to `[1.0, 1.0, 1.0, 1.0]`.
 - `cursor_size`: A float. Arrow cursor height in pixels (its width follows the arrow's shape). Defaults to `22.0`.
-- `settings_profile`: A string (see [SettingsProfile](SettingsProfile.md)). Which settings screen the `"settings"` item generates. `full` is the complete Video / Audio / Controls set a 3D world configures; `minimal` is the trimmed Video (window mode, resolution, vsync, frame rate) and Audio (volume) set that fits a world with nothing to render into (a visual-novel story, say), dropping the Controls tab and every scene-render group.
+- `settings_profile`: A string (see [SettingsProfile](SettingsProfile.md)). Which settings screen the `"settings"` item generates. `full` is the complete Video / Audio / Controls set a 3D world configures; `minimal` is the trimmed Video (window mode, resolution, vsync, frame rate) and Audio (volume) set that fits a world with nothing to render into (a visual-novel story, say), dropping the Controls tab and every scene-render group. Defaults to `"full"`.
 - `settings_back_action`: A string. Action fired by the settings screen's Back button, overriding the default (which returns to this menu). Setting it also generates the settings screen even when no item uses the `"settings"` convenience, so a caller that opens settings by its own action (a story, say) still gets the screen. Empty keeps the default Back-to-menu behavior.

@@ -17,14 +17,14 @@ useful for HUD chips.
 ## Parameters
 
 - `font`: A string. The [Font](Font.md) asset to use for rendering. Unset draws with the engine's built-in face at its native 24px.
-- `content`: A string. Text to display. Can be updated each frame.
+- `content`: A string. Text to display. Can be updated each frame. Defaults to `""`.
 - `x`: A float. Horizontal position in pixels from the left edge of the window. Defaults to `10.0`.
 - `y`: A float. Vertical position in pixels from the top edge of the window. Defaults to `10.0`.
 - `color`: An array of 3 floats. Linear-space RGB text color. Defaults to `[1.0, 1.0, 1.0]`.
 - `scale`: A float. Uniform scale applied on top of the font's `size_px` (24 for the built-in face). 1.0 = native size. Ignored when `centered` is set, which sizes the text to the viewport instead. Defaults to `1.0`.
 - `centered`: A boolean. When true, fit the label to the viewport and center it there each frame, so `x`, `y`, `align` and `scale` are all ignored. Defaults to `false`.
-- `align`: A string (see [TextAlign](TextAlign.md)). Horizontal alignment relative to `x` (measured with the real font metrics). Ignored when `centered` is set.
-- `fit`: A string (see [SpriteFit](SpriteFit.md)). How a screen-owned label maps from the reference canvas to the window when their aspect ratios differ (matches [Sprite](Sprite.md)'s `fit`). `Bottom` keeps a label flush with a bottom-anchored sprite it labels.
+- `align`: A string (see [TextAlign](TextAlign.md)). Horizontal alignment relative to `x` (measured with the real font metrics). Ignored when `centered` is set. Defaults to `"left"`.
+- `fit`: A string (see [SpriteFit](SpriteFit.md)). How a screen-owned label maps from the reference canvas to the window when their aspect ratios differ (matches [Sprite](Sprite.md)'s `fit`). `Bottom` keeps a label flush with a bottom-anchored sprite it labels. Defaults to `"fit"`.
 - `background`: An array of 4 floats. RGBA fill of a box drawn behind the text. An alpha of 0 (the default) draws no box; any alpha > 0 draws the box at that opacity.
 - `padding`: A float. Pixels the background box extends past the text on every side. Only meaningful when `background` is visible. Defaults to `0.0`.
 - `wrap_width`: A float. Width in the label's own pixels that text wraps within. `0` (the default) never wraps, so the text runs as far as it needs to. Any greater value breaks the content into lines at word boundaries, using the real font metrics, splitting a word only when it cannot fit a line on its own. Authored newlines are kept as breaks either way. Ignored when `centered` is set, since a centered label is sized to the viewport rather than to a container.

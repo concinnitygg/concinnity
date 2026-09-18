@@ -1,27 +1,26 @@
 // Overlay-screen schema.
 
 use crate::components::TextInput;
-use crate::components::vocabulary;
+use crate::components::Vocabulary;
 use crate::ecs::{Ref, de_opt_ref};
 use alloc::string::String;
 
 /// How a [Screen](#screen) treats input while it is active.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Vocabulary,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum ScreenInput {
     /// The screen owns input while it is the topmost capturing screen:
     /// gameplay input is suppressed and lower screens' [HitRegion](#hitregion)s
     /// stop firing.
     #[default]
+    #[vocab("capture")]
     Capture,
     /// The screen only draws; input passes through to whatever is beneath it.
+    #[vocab("passthrough")]
     Passthrough,
 }
-
-vocabulary!(ScreenInput {
-    Capture => "capture",
-    Passthrough => "passthrough",
-});
 
 /// A named full-screen layer of UI drawn over the world: a pause menu, a
 /// settings page, a console, a score overlay.

@@ -11,5 +11,5 @@ its blend weight. Weights are normalized at build time.
 - `pos`: An array of 3 floats. Vertex position `[x, y, z]` in model space.
 - `color`: An array of 3 floats. Vertex color `[r, g, b]` in [0, 1]. Defaults to white.
 - `uv`: An array of 2 floats. Texture coordinates in [0, 1] space. Defaults to [0, 0].
-- `joints`: An array of 4 integers. Joint indices this vertex is bound to. Unused slots can be 0.
+- `joints`: An array of 4 integers. Joint indices this vertex is bound to. Unused slots can be 0. Defaults to `[0, 0, 0, 0]`.
 - `weights`: An array of 4 floats. Blend weights parallel to `joints`. Defaults to fully bound to joint 0.

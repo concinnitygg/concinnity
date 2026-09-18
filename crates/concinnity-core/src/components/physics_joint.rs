@@ -1,35 +1,33 @@
 // Physics-joint constraint schema.
 
 use crate::components::Prop;
-use crate::components::{vocabulary, vocabulary_synonyms};
+use crate::components::{Vocabulary, vocabulary_synonyms};
 use crate::ecs::{Ref, de_opt_ref};
 
 /// The constraint shape a `PhysicsJoint` declares.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Vocabulary)]
 pub enum PhysicsJointKind {
     /// All 6 degrees of freedom locked. The bodies move and rotate as one
     /// rigid assembly relative to their anchors. Use to weld two props
     /// together.
     #[default]
+    #[vocab("fixed")]
     Fixed,
     /// Single rotational axis. Rotation around `axis` (in each body's local
     /// frame) is free; everything else is locked. The canonical door hinge.
+    #[vocab("revolute")]
     Revolute,
     /// Three rotational axes free, all translation locked. Ball-and-socket
     /// joint: the canonical rope link or a hip socket.
+    #[vocab("spherical")]
     Spherical,
     /// Single translational axis. Sliding along `axis` is free; rotation and
     /// the other two translational axes are locked. The canonical slider /
     /// piston.
+    #[vocab("prismatic")]
     Prismatic,
 }
 
-vocabulary!(PhysicsJointKind {
-    Fixed => "fixed",
-    Revolute => "revolute",
-    Spherical => "spherical",
-    Prismatic => "prismatic",
-});
 vocabulary_synonyms!(PhysicsJointKind, "a joint kind index");
 
 impl PhysicsJointKind {

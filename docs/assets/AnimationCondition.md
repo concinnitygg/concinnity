@@ -7,6 +7,6 @@ conditions must pass for it to fire.
 
 ## Parameters
 
-- `parameter`: A string. Name of a declared graph parameter.
-- `op`: An object. Comparison operator: `lt`, `le`, `gt`, `ge`, `eq`, or `ne`.
-- `value`: A float. Right-hand side of the comparison.
+- `parameter`: A string. Name of a declared graph parameter. Defaults to `""`.
+- `op`: An object. Comparison operator: `lt`, `le`, `gt`, `ge`, `eq`, or `ne`. Defaults to `"lt"`.
+- `value`: A float. Right-hand side of the comparison. Defaults to `0.0`.

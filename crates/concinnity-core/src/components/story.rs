@@ -1,6 +1,6 @@
 // Branching-story graph schema.
 
-use crate::components::vocabulary;
+use crate::components::Vocabulary;
 use crate::components::{Screen, Sprite, TextLabel};
 use crate::ecs::AudioClipHandle;
 use crate::ecs::TextureHandle;
@@ -302,21 +302,29 @@ pub struct StoryCondition {
 
 /// A comparison operator in a [Story](#story) condition. An unset variable
 /// reads as `0`, so a plain flag test is `Ne 0` and its negation `Eq 0`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize, Vocabulary,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum StoryCompareOp {
     /// Equal.
+    #[vocab("eq")]
     Eq,
     /// Not equal.
     #[default]
+    #[vocab("ne")]
     Ne,
     /// Less than.
+    #[vocab("lt")]
     Lt,
     /// Less than or equal.
+    #[vocab("le")]
     Le,
     /// Greater than.
+    #[vocab("gt")]
     Gt,
     /// Greater than or equal.
+    #[vocab("ge")]
     Ge,
 }
 
@@ -359,20 +367,19 @@ pub struct StoryReload {
 }
 
 /// The [Story](#story) playback command a [Behavior](#behavior) node sends.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize, Vocabulary,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum StoryPlayback {
     /// Start the story from its beginning.
     #[default]
+    #[vocab("start")]
     Start,
     /// Resume the story from its auto-save.
+    #[vocab("continue")]
     Continue,
 }
-
-vocabulary!(StoryPlayback {
-    Start => "start",
-    Continue => "continue",
-});
 
 #[cfg(test)]
 mod tests {

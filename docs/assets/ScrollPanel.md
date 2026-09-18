@@ -20,15 +20,15 @@ other UI (see the overlay scaling notes on [MainMenu](MainMenu.md)).
 ## Parameters
 
 - `screen`: A string. [Screen](Screen.md) this panel belongs to. The panel is only live while its screen is active. Optional.
-- `x`: A float. Left edge of the content band in reference pixels.
-- `y`: A float. Top edge of the content band in reference pixels.
-- `width`: A float. Width of the content band in reference pixels.
-- `height`: A float. Height of the content band (the visible window) in reference pixels.
-- `rows`: An array of [ScrollRow](ScrollRow.md) objects. The rows in the band, top to bottom.
-- `groups`: An array of [ScrollGroup](ScrollGroup.md) objects. Collapsible groups, referenced by index from [ScrollRow::group].
+- `x`: A float. Left edge of the content band in reference pixels. Defaults to `0.0`.
+- `y`: A float. Top edge of the content band in reference pixels. Defaults to `0.0`.
+- `width`: A float. Width of the content band in reference pixels. Defaults to `0.0`.
+- `height`: A float. Height of the content band (the visible window) in reference pixels. Defaults to `0.0`.
+- `rows`: An array of [ScrollRow](ScrollRow.md) objects. The rows in the band, top to bottom. Defaults to `[]`.
+- `groups`: An array of [ScrollGroup](ScrollGroup.md) objects. Collapsible groups, referenced by index from [ScrollRow::group]. Defaults to `[]`.
 - `thumb`: A string. Scrollbar thumb [Sprite](Sprite.md) the UI moves and resizes. `None` for a panel with no scrollbar. Optional.
 - `track`: A string. Scrollbar track [Sprite](Sprite.md). Hidden along with the thumb when the content fits the band. Optional.
-- `track_x`: A float. Left edge of the scrollbar track in reference pixels.
-- `track_y`: A float. Top edge of the scrollbar track in reference pixels.
-- `track_w`: A float. Width of the scrollbar track in reference pixels.
-- `track_h`: A float. Height of the scrollbar track in reference pixels (the thumb travels within it).
+- `track_x`: A float. Left edge of the scrollbar track in reference pixels. Defaults to `0.0`.
+- `track_y`: A float. Top edge of the scrollbar track in reference pixels. Defaults to `0.0`.
+- `track_w`: A float. Width of the scrollbar track in reference pixels. Defaults to `0.0`.
+- `track_h`: A float. Height of the scrollbar track in reference pixels (the thumb travels within it). Defaults to `0.0`.

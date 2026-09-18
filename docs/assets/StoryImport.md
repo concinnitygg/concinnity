@@ -102,6 +102,6 @@ You wake at a roadside inn. A note rests on the pillow.
 
 ## Parameters
 
-- `source`: A string. Path to the Markdown story file, relative to the project root.
+- `source`: A string. Path to the Markdown story file, relative to the project root. Defaults to `""`.
 - `title_screen`: A boolean. Whether to generate a title screen (story title, Start and Quit buttons) as the initial screen. When `false`, the story's first page is the initial screen and the generated ending offers a Restart instead of Back to title. Defaults to `true`.
 - `text_speed`: A float. Dialogue reveal speed in characters per second. `0` shows each page instantly. Defaults to `45.0`.

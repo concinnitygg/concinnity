@@ -1,26 +1,24 @@
 // Scene marker schema.
 
 use crate::components::Camera3D;
-use crate::components::{vocabulary, vocabulary_synonyms};
+use crate::components::{Vocabulary, vocabulary_synonyms};
 use crate::ecs::{Ref, de_opt_ref};
 
 /// How a scene jump reaches the new scene. The single accepted vocabulary for
 /// a [Behavior](#behavior) scene node's `transition` and a `scene:<name>` UI
 /// action.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Vocabulary)]
 pub enum SceneTransition {
     /// Fade the whole composited image to black, swap scenes at the bottom of
     /// the fade, then fade back in.
     #[default]
+    #[vocab("FadeBlack")]
     FadeBlack,
     /// Swap scenes on the next frame with no fade.
+    #[vocab("Cut")]
     Cut,
 }
 
-vocabulary!(SceneTransition {
-    FadeBlack => "FadeBlack",
-    Cut => "Cut",
-});
 vocabulary_synonyms!(SceneTransition, "a scene transition index");
 
 impl SceneTransition {

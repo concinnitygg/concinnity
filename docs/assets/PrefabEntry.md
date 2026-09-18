@@ -10,8 +10,8 @@ unresolved references to other assets, resolved when the entry expands.
 
 ## Parameters
 
-- `name`: A string. Entry name; the expanded asset is named `<instance>_<name>`.
-- `kind`: A string (see [PrefabKind](PrefabKind.md)). Which asset this entry expands into.
+- `name`: A string. Entry name; the expanded asset is named `<instance>_<name>`. Defaults to `""`.
+- `kind`: A string (see [PrefabKind](PrefabKind.md)). Which asset this entry expands into. Defaults to `"prop"`.
 - `position`: An array of 3 floats. Local position relative to the instance transform. Defaults to `[0.0, 0.0, 0.0]`.
 - `rotation_deg`: An array of 3 floats. Local rotation, Euler degrees [pitch, yaw, roll], YXZ order. Defaults to `[0.0, 0.0, 0.0]`.
 - `scale`: An array of 3 floats. Local scale. Defaults to `[1.0, 1.0, 1.0]`.

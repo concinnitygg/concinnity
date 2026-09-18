@@ -17,20 +17,20 @@ Like other overlay elements it belongs to the [Screen](Screen.md) its
 ## Parameters
 
 - `font`: A string. The [Font](Font.md) used to render the field's text. Unset draws with the engine's built-in face at its native 24px.
-- `content`: A string. The current text. Edited in place as the player types; set an initial value here to pre-fill the field.
-- `placeholder`: A string. Dimmer prompt shown while `content` is empty and the field is unfocused.
+- `content`: A string. The current text. Edited in place as the player types; set an initial value here to pre-fill the field. Defaults to `""`.
+- `placeholder`: A string. Dimmer prompt shown while `content` is empty and the field is unfocused. Defaults to `""`.
 - `x`: A float. Left edge in screen pixels from the window's top-left. Defaults to `0.0`.
 - `y`: A float. Top edge in screen pixels from the window's top-left. Defaults to `0.0`.
 - `width`: A float. Field width in screen pixels. Defaults to `240.0`.
 - `height`: A float. Field height in screen pixels. Defaults to `40.0`.
 - `scale`: A float. Uniform scale applied on top of the font's `size_px` (24 for the built-in face). 1.0 = native size. Defaults to `1.0`.
 - `text_color`: An array of 3 floats. Linear-space RGB color of the typed text. Defaults to `[0.95, 0.95, 0.97]`.
-- `placeholder_color`: An array of 3 floats. Linear-space RGB color of the placeholder prompt. Defaults to `[0.55, 0.55, 0.60]`.
-- `background`: An array of 4 floats. RGBA fill of the field's background box, each channel in [0, 1]. Defaults to `[0.10, 0.10, 0.13, 1.0]`.
+- `placeholder_color`: An array of 3 floats. Linear-space RGB color of the placeholder prompt. Defaults to `[0.55, 0.55, 0.6]`.
+- `background`: An array of 4 floats. RGBA fill of the field's background box, each channel in [0, 1]. Defaults to `[0.1, 0.1, 0.13, 1.0]`.
 - `caret_color`: An array of 3 floats. Linear-space RGB color of the caret bar. Defaults to `[0.95, 0.95, 0.97]`.
 - `corner_radius`: A float. Corner rounding radius of the background box, in field pixels. Defaults to `4.0`.
 - `padding`: A float. Inner horizontal inset from the box edge to the text, in pixels. Defaults to `8.0`.
 - `max_len`: An integer. Maximum number of characters accepted. 0 means no limit. Defaults to `0`.
 - `visible`: A boolean. When false the field is skipped each frame and cannot take focus. Defaults to `true`.
-- `fit`: A string (see [SpriteFit](SpriteFit.md)). How a screen-owned field maps from the reference canvas to the window when their aspect ratios differ (matches [Sprite](Sprite.md)'s `fit`).
+- `fit`: A string (see [SpriteFit](SpriteFit.md)). How a screen-owned field maps from the reference canvas to the window when their aspect ratios differ (matches [Sprite](Sprite.md)'s `fit`). Defaults to `"fit"`.
 - `screen`: A string. [Screen](Screen.md) this field belongs to. `None` means the field is always visible. Optional.

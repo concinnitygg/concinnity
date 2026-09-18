@@ -9,5 +9,5 @@ Expands into [Material](Material.md) assets named `<palette_name>_<alias>`.
 
 ## Parameters
 
-- `preset`: A string. Name of a built-in or file-backed preset (e.g. "pal_stone_dungeon"). When set, `entries` is ignored.
-- `entries`: An array of [PaletteEntry](PaletteEntry.md) objects. Inline material entries. Ignored when `preset` is set.
+- `preset`: A string. Name of a built-in or file-backed preset (e.g. "pal_stone_dungeon"). When set, `entries` is ignored. Defaults to `""`.
+- `entries`: An array of [PaletteEntry](PaletteEntry.md) objects. Inline material entries. Ignored when `preset` is set. Defaults to `[]`.

@@ -13,4 +13,4 @@ material.
 
 ## Parameters
 
-- `meshes`: An array of [SubMeshRef](SubMeshRef.md) objects. Ordered list of sub-meshes that make up this model.
+- `meshes`: An array of [SubMeshRef](SubMeshRef.md) objects. Ordered list of sub-meshes that make up this model. Defaults to `[]`.

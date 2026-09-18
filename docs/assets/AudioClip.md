@@ -12,4 +12,4 @@ An `AudioClip` is inert on its own: reference it from an
 
 ## Parameters
 
-- `source`: A string. Path to the source audio file.
+- `source`: A string. Path to the source audio file. Defaults to `""`.

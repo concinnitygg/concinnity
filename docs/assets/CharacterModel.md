@@ -17,8 +17,8 @@ imported and appear under the editor panel's "Other" section.
 
 ## Parameters
 
-- `schema`: A string. The [CharacterSchema](CharacterSchema.md) the source conforms to, by asset name or the reserved `builtin:humanoid`.
-- `source`: A string. Path to the `.glb` / `.gltf` body.
+- `schema`: A string. The [CharacterSchema](CharacterSchema.md) the source conforms to, by asset name or the reserved `builtin:humanoid`. Defaults to `"builtin:humanoid"`.
+- `source`: A string. Path to the `.glb` / `.gltf` body. Defaults to `""`.
 - `skin_index`: An integer. Which skinned mesh of `source` to import, in file order. Defaults to `0`.
 - `material`: A string. [Material](Material.md) of the emitted mesh. Optional.
 - `position`: An array of 3 floats. World-space position. Defaults to `[0.0, 0.0, 0.0]`.

@@ -23,5 +23,5 @@ simulation.
 
 ## Parameters
 
-- `travel`: An array of [CameraTravel](CameraTravel.md) objects. Where the camera goes, leg by leg.
-- `turn`: An array of [CameraTurn](CameraTurn.md) objects. Where the camera looks, leg by leg. Played against the same clock as `travel` and independent of it, so the camera can turn one way while traveling another.
+- `travel`: An array of [CameraTravel](CameraTravel.md) objects. Where the camera goes, leg by leg. Defaults to `[]`.
+- `turn`: An array of [CameraTurn](CameraTurn.md) objects. Where the camera looks, leg by leg. Played against the same clock as `travel` and independent of it, so the camera can turn one way while traveling another. Defaults to `[]`.

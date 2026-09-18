@@ -8,6 +8,6 @@ is a variable set to `1` and cleared to `0`.
 
 ## Parameters
 
-- `name`: A string. The variable name.
-- `value`: An integer. The value assigned (or added).
-- `add`: A boolean. `false` assigns `value`; `true` adds it to the current value.
+- `name`: A string. The variable name. Defaults to `""`.
+- `value`: An integer. The value assigned (or added). Defaults to `0`.
+- `add`: A boolean. `false` assigns `value`; `true` adds it to the current value. Defaults to `false`.

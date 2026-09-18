@@ -465,41 +465,11 @@ fn add_without_a_discoverable_world_falls_back_to_world_jsonl() {
     );
 }
 
-// `cn docs` reads the asset prose out of the engine's own sources, so it needs
-// no world but does need a checkout. The sources are copied into the temp root
-// rather than pointing `--root` at the repository, so the run cannot write to
-// the working tree. The build-only schema modules are the files the docs
-// generator's table names; a missing one fails the run.
+// `cn docs` renders the schema compiled into the binary, so it needs neither a
+// world nor the engine's sources: an empty directory gets the whole reference.
 #[test]
 fn docs_writes_the_asset_reference_pages() {
     let project = Project::empty();
-    let components = "crates/concinnity-core/src/components";
-    copy_dir(
-        &repo_root().join(components),
-        &project.path().join(components),
-    );
-    for module in [
-        "camera_shot/schema.rs",
-        "character_model/schema.rs",
-        "character_model/character_schema.rs",
-        "include/schema.rs",
-        "light_rig/schema.rs",
-        "main_menu/schema.rs",
-        "material_palette/schema.rs",
-        "option_select/schema.rs",
-        "panel/schema.rs",
-        "prefab/schema.rs",
-        "scene_import/schema.rs",
-        "slider/schema.rs",
-        "story/schema.rs",
-    ] {
-        let file = format!("crates/concinnity-cook/src/build_only/{module}");
-        let dest = project.path().join(&file);
-        std::fs::create_dir_all(dest.parent().expect("nested path"))
-            .expect("create the module dir");
-        std::fs::copy(repo_root().join(&file), dest).expect("copy the schema module");
-    }
-
     let root = project.path().to_string_lossy().into_owned();
     let out = project.cn(&["docs", "--root", &root]);
     expect_ok(&out, "cn docs");
@@ -508,40 +478,10 @@ fn docs_writes_the_asset_reference_pages() {
     let pages = project.path().join("docs").join("assets");
     assert!(pages.join("TextLabel.md").exists(), "no TextLabel page");
     assert!(pages.join("Window.md").exists(), "no Window page");
-}
-
-// Without those sources there is nothing to read, and saying so beats writing an
-// empty reference over the pages already on disk.
-#[test]
-fn docs_outside_an_engine_checkout_says_so() {
-    let project = Project::empty();
-    let root = project.path().to_string_lossy().into_owned();
-    let out = project.cn(&["docs", "--root", &root]);
-
-    assert!(!out.status.success(), "cn docs should fail with no sources");
     assert!(
-        stderr(&out).contains("checkout of the engine"),
-        "{}",
-        stderr(&out)
+        pages.join("MainMenuItem.md").exists(),
+        "no MainMenuItem page"
     );
-}
-
-// The repository root, which is this package's own directory.
-fn repo_root() -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf()
-}
-
-fn copy_dir(from: &Path, to: &Path) {
-    std::fs::create_dir_all(to).expect("create the destination tree");
-    for entry in std::fs::read_dir(from).expect("read the source tree") {
-        let path = entry.expect("directory entry").path();
-        let dest = to.join(path.file_name().expect("named entry"));
-        if path.is_dir() {
-            copy_dir(&path, &dest);
-        } else {
-            std::fs::copy(&path, &dest).expect("copy a source file");
-        }
-    }
 }
 
 // Export refuses a target that is not the host before it builds anything, so

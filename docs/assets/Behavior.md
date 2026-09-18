@@ -21,11 +21,11 @@ the world clock.
 
 ## Parameters
 
-- `on`: An object. The event that fires this behavior.
-- `scope`: An array of strings. Component names selecting the entities this behavior runs against. An empty list runs it once, world-scoped, with no `"self"`. The names are matched against the components entities carry while the world runs, which are not always the ones a world declares: the build expands some types away, compiles others into the resource stream, and a load-time pass decomposes the rest. `"Prop"` is the common case and works, resolving to the marker decomposition leaves on every prop's entity, model- and mesh-backed alike. A name with no runtime counterpart is a build error rather than a scope that silently matches nothing.
-- `locals`: An array of [BehaviorLocal](BehaviorLocal.md) objects. Per-entity state. Each matching entity gets its own copy, reset to the declared value when the world starts. Locals are never persisted.
-- `queries`: An array of [BehaviorQuery](BehaviorQuery.md) objects. World reads, resolved once per tick into a stable-ordered entity list.
-- `do`: An array of objects. The nodes run, in order, each time the behavior fires.
-- `once`: A boolean. Fire at most once per run.
-- `delay`: A float. Seconds between the firing decision and the nodes running (`0` runs them immediately).
-- `cooldown`: A float. Minimum seconds between firings (`0` allows every firing).
+- `on`: An object. The event that fires this behavior. Defaults to `"start"`.
+- `scope`: An array of strings. Component names selecting the entities this behavior runs against. An empty list runs it once, world-scoped, with no `"self"`. The names are matched against the components entities carry while the world runs, which are not always the ones a world declares: the build expands some types away, compiles others into the resource stream, and a load-time pass decomposes the rest. `"Prop"` is the common case and works, resolving to the marker decomposition leaves on every prop's entity, model- and mesh-backed alike. A name with no runtime counterpart is a build error rather than a scope that silently matches nothing. Defaults to `[]`.
+- `locals`: An array of [BehaviorLocal](BehaviorLocal.md) objects. Per-entity state. Each matching entity gets its own copy, reset to the declared value when the world starts. Locals are never persisted. Defaults to `[]`.
+- `queries`: An array of [BehaviorQuery](BehaviorQuery.md) objects. World reads, resolved once per tick into a stable-ordered entity list. Defaults to `[]`.
+- `do`: An array of objects. The nodes run, in order, each time the behavior fires. Defaults to `[]`.
+- `once`: A boolean. Fire at most once per run. Defaults to `false`.
+- `delay`: A float. Seconds between the firing decision and the nodes running (`0` runs them immediately). Defaults to `0.0`.
+- `cooldown`: A float. Minimum seconds between firings (`0` allows every firing). Defaults to `0.0`.

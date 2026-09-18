@@ -14,7 +14,7 @@ Pinning pauses automatically while the character is airborne.
 
 ## Parameters
 
-- `joints`: An array of strings. Names of the chain's root, middle, and end joints, in order. Exactly three are required, matching the target skeleton's joint names.
+- `joints`: An array of strings. Names of the chain's root, middle, and end joints, in order. Exactly three are required, matching the target skeleton's joint names. Defaults to `[]`.
 - `pole`: An array of 3 floats. Bend direction in mesh space: the middle joint bows toward this vector (a knee points forward, an elbow backward). Defaults to `[0.0, 0.0, 1.0]`.
-- `weight_parameter`: A string. Name of a declared graph parameter scaling the solve in `[0, 1]`; empty pins at full strength. Lets gameplay fade IK in and out.
+- `weight_parameter`: A string. Name of a declared graph parameter scaling the solve in `[0, 1]`; empty pins at full strength. Lets gameplay fade IK in and out. Defaults to `""`.
 - `foot_height`: A float. Height the end joint rests above the probed surface, in mesh units (the sole-to-ankle offset for a foot). Defaults to `0.0`.

@@ -79,8 +79,8 @@ pub(crate) enum Commands {
 
     /// Regenerate the asset reference pages under docs/assets
     //
-    // Reads the asset schema and its rustdoc out of the engine source tree, so
-    // this runs against a checkout of the engine itself, not an app.
+    // Renders the asset schema compiled into this build, rustdoc included, so
+    // it needs no source tree.
     #[command(name = "docs")]
     Docs(DocsArgs),
 
@@ -289,7 +289,7 @@ pub(crate) struct ExplainArgs {
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct DocsArgs {
-    /// Engine repository root to read sources from and write pages into
+    /// Directory to write the docs/assets pages under
     #[arg(long, default_value = ".")]
     pub(crate) root: Option<String>,
 }

@@ -7,8 +7,8 @@ sits on the reference canvas.
 
 ## Parameters
 
-- `texture`: A string. [Texture](Texture.md) to sample.
-- `x`: A float. Left edge on the reference canvas.
-- `y`: A float. Top edge on the reference canvas.
-- `width`: A float. Width on the reference canvas.
-- `height`: A float. Height on the reference canvas.
+- `texture`: A string. [Texture](Texture.md) to sample. Defaults to `0`.
+- `x`: A float. Left edge on the reference canvas. Defaults to `0.0`.
+- `y`: A float. Top edge on the reference canvas. Defaults to `0.0`.
+- `width`: A float. Width on the reference canvas. Defaults to `0.0`.
+- `height`: A float. Height on the reference canvas. Defaults to `0.0`.

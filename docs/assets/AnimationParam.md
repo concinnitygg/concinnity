@@ -8,5 +8,5 @@ transitions compare against them. Flag-like parameters use 0 and 1.
 
 ## Parameters
 
-- `name`: A string. Parameter name, referenced by transition conditions.
-- `default`: A float. Initial value at world start.
+- `name`: A string. Parameter name, referenced by transition conditions. Defaults to `""`.
+- `default`: A float. Initial value at world start. Defaults to `0.0`.

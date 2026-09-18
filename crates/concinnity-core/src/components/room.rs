@@ -6,8 +6,18 @@ use crate::ecs::de_opt_texture_handle;
 use crate::ecs::{Component, PayloadLocator};
 use alloc::vec::Vec;
 
-/// Authored fields of a `Room`; the resolved dimensions and payload locator are
-/// runtime state.
+/// A self-contained room (floor, ceiling, four walls), with optional texturing.
+///
+/// Prefer `Room` over a [ProceduralMesh](#proceduralmesh) (generator `"room"`) +
+/// [Prop](#prop) pair for a shorter declaration. The room is placed at the world
+/// origin.
+///
+/// Dimensions can be given as `size: [width, depth, height]` (full extents) or
+/// as `half_width`, `half_depth`, and `ceiling_height` individually.
+///
+/// `texture`, `wall_texture`, `floor_texture`, and `ceiling_texture` are checked
+/// in that order; the first set value wins. Generator names such as `"brick"` or
+/// `"concrete"` resolve to a matching [Texture](#texture) at build time.
 ///
 /// ```rust
 /// # use concinnity_core::components::cook::Room as RoomArgs;
@@ -118,18 +128,9 @@ mod tests {
     }
 }
 
-/// A self-contained room (floor, ceiling, four walls), with optional texturing.
-///
-/// Prefer `Room` over a [ProceduralMesh](#proceduralmesh) (generator `"room"`) +
-/// [Prop](#prop) pair for a shorter declaration. The room is placed at the world
-/// origin.
-///
-/// Dimensions can be given as `size: [width, depth, height]` (full extents) or
-/// as `half_width`, `half_depth`, and `ceiling_height` individually.
-///
-/// `texture`, `wall_texture`, `floor_texture`, and `ceiling_texture` are checked
-/// in that order; the first set value wins. Generator names such as `"brick"` or
-/// `"concrete"` resolve to a matching [Texture](#texture) at build time.
+/// The runtime `Room`: the dimensions resolved from
+/// [`cook::Room`](crate::components::cook::Room)'s authored fields, and its payload
+/// locator.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Room {
     /// Half the room's width in world units.

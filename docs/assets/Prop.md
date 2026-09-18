@@ -26,5 +26,5 @@ Rotation notes:
 - `pickup`: A boolean. When true, the player can pick up and carry this prop with the interact key (E). A companion [PropBody](PropBody.md) must also be declared so the prop falls correctly after being dropped. Defaults to `false`.
 - `parent`: A string. Another [Prop](Prop.md) whose world transform this prop inherits. When set, `position`, `rotation_deg`, and `scale` are relative to the parent's world transform. The parent must be declared in the same world; circular chains are treated as an error. Optional.
 - `scene`: A string. [Scene](Scene.md) this prop belongs to. `None` means the prop is visible in every scene. Used by scene switches for per-scene visibility. Optional.
-- `prefab`: A string. Name of a [Prefab](Prefab.md) to instantiate at this prop's transform. When set, it expands into concrete child props and lights, replacing this prop. Cannot be combined with `model` or `mesh`.
+- `prefab`: A string. Name of a [Prefab](Prefab.md) to instantiate at this prop's transform. When set, it expands into concrete child props and lights, replacing this prop. Cannot be combined with `model` or `mesh`. Defaults to `""`.
 - `cull_distance`: A float. Optional view-distance cutoff in world units. When > 0 the prop is hidden once the camera is further than this from it. 0 (default) keeps the prop visible at any distance.
