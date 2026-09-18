@@ -137,7 +137,6 @@ mod tests {
             uv_top: Some([0.0, 0.0, 0.25, 0.25]),
             uv_bottom: None,
             uv_side: None,
-            ..Default::default()
         };
         let chunk = block_type_to_chunk(&bt);
         assert!(chunk.solid);

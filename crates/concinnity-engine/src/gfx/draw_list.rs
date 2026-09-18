@@ -2,7 +2,9 @@
 //! None of these functions hold or borrow a backend handle.
 
 use concinnity_core::components::InstancedProp;
-use concinnity_core::components::{File, FileKind, ProceduralMesh, Room, SubMeshRef, VoxelChunk};
+use concinnity_core::components::{
+    File, FileKind, Identity, ProceduralMesh, Room, SubMeshRef, VoxelChunk,
+};
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{Entity, MaterialHandle, MeshHandle, PayloadLocator, PipelineContext};
 use concinnity_core::gfx::frustum;
@@ -131,7 +133,7 @@ fn local_bounds(verts: &[Vertex]) -> ([f32; 3], [f32; 3]) {
 
 // The renderer-relevant view of one placement that build_draw_list consumes:
 // the mesh/model/material/texture refs, the cull distance, whether it is dynamic
-// (skips frustum culling), and the asset id (error logging only). Built from an
+// (skips frustum culling), and the asset id. Built from an
 // entity's MeshRenderer/ModelRenderer + tag components by
 // `decomposed_renderable_item`.
 //
@@ -141,7 +143,7 @@ fn local_bounds(verts: &[Vertex]) -> ([f32; 3], [f32; 3]) {
 // otherwise risk being culled against its stale init-time AABB.
 #[derive(Debug, PartialEq)]
 pub(crate) struct RenderableItem {
-    pub asset_id: AssetId,
+    pub asset_id: Option<AssetId>,
     pub model: Option<AssetId>,
     pub mesh: Option<MeshHandle>,
     pub material: Option<MaterialHandle>,
@@ -150,14 +152,9 @@ pub(crate) struct RenderableItem {
 }
 
 // Build one entity's RenderableItem: read its renderer fields from its
-// MeshRenderer xor ModelRenderer and its dynamic flag from the Pickup /
-// Interactable / Parent / Collider tags. asset_id is for error logging only
-// (resolved from the name index by the caller).
-pub(crate) fn decomposed_renderable_item(
-    ctx: &PipelineContext,
-    entity: Entity,
-    asset_id: AssetId,
-) -> RenderableItem {
+// MeshRenderer xor ModelRenderer, its dynamic flag from the Pickup /
+// Interactable / Parent / Collider tags, and its asset id from its Identity.
+pub(crate) fn decomposed_renderable_item(ctx: &PipelineContext, entity: Entity) -> RenderableItem {
     use concinnity_core::components::{
         Collider, Interactable, MeshRenderer, ModelRenderer, Parent, Pickup,
     };
@@ -174,7 +171,7 @@ pub(crate) fn decomposed_renderable_item(
         || ctx.get::<Parent>(entity).is_some()
         || ctx.get::<Collider>(entity).is_some();
     RenderableItem {
-        asset_id,
+        asset_id: ctx.get::<Identity>(entity).map(|i| i.id()),
         model,
         mesh,
         material,
@@ -288,28 +285,31 @@ pub(crate) fn load_mesh_geometry(
     // payload is in the runtime store with the rest of the trailing
     // `MeshBlock::Runtime` block, loaded after the compiled ones so a handle
     // the build assigned keeps its index.
-    let (proc_meshes, baked_meshes): (Vec<ProceduralMesh>, Vec<ProceduralMesh>) = ctx
-        .query::<ProceduralMesh>()
-        .cloned()
-        .partition(|m| m.locator.is_some());
+    type Identified<C> = (Option<AssetId>, C);
+    let (proc_meshes, baked_meshes): (
+        Vec<Identified<ProceduralMesh>>,
+        Vec<Identified<ProceduralMesh>>,
+    ) = ctx
+        .query_with_entity::<ProceduralMesh>()
+        .map(|(entity, m)| (ctx.get::<Identity>(entity).map(|i| i.id()), m.clone()))
+        .partition(|(_, m)| m.locator.is_some());
     let baked_payloads = ctx
         .resource::<concinnity_core::resource::RuntimeMeshPayloads>()
         .cloned()
         .unwrap_or_default();
-    for mesh in &baked_meshes {
-        if baked_payloads.get(mesh.asset_id).is_none() {
+    for (id, _) in &baked_meshes {
+        if id.is_none_or(|id| baked_payloads.get(id).is_none()) {
             tracing::error!(
-                "GraphicsSystem: ProceduralMesh {} was baked at start but left no payload",
-                mesh.asset_id
+                "GraphicsSystem: ProceduralMesh {id:?} was baked at start but left no payload"
             );
             return None;
         }
     }
-    let voxel_chunks = ctx.drain::<VoxelChunk>();
-    let file_assets = ctx.drain::<File>();
-    let file_meshes: Vec<&File> = file_assets
+    let voxel_chunks = ctx.drain_with_ids::<VoxelChunk>();
+    let file_assets = ctx.drain_with_ids::<File>();
+    let file_meshes: Vec<&Identified<File>> = file_assets
         .iter()
-        .filter(|f| f.kind.as_ref().map(FileKind::is_mesh).unwrap_or(false))
+        .filter(|(_, f)| f.kind.as_ref().map(FileKind::is_mesh).unwrap_or(false))
         .collect();
 
     if mesh_table.is_empty()
@@ -341,19 +341,17 @@ pub(crate) fn load_mesh_geometry(
     sink.push_components(
         ctx,
         "ProceduralMesh",
-        proc_meshes.iter().map(|m| (m.asset_id, m.locator.as_ref())),
+        proc_meshes.iter().map(|(id, m)| (*id, m.locator.as_ref())),
     )?;
     sink.push_components(
         ctx,
         "VoxelChunk",
-        voxel_chunks
-            .iter()
-            .map(|c| (c.asset_id, c.locator.as_ref())),
+        voxel_chunks.iter().map(|(id, c)| (*id, c.locator.as_ref())),
     )?;
     sink.push_components(
         ctx,
         "File",
-        file_meshes.iter().map(|f| (f.asset_id, f.locator.as_ref())),
+        file_meshes.iter().map(|(id, f)| (*id, f.locator.as_ref())),
     )?;
 
     // The world's own block: geometry baked at start, whose payload bytes are
@@ -378,8 +376,8 @@ pub(crate) fn load_mesh_geometry(
     let always_resident_meshes: std::collections::HashSet<usize> = proc_meshes
         .iter()
         .chain(&baked_meshes)
-        .filter(|pm| pm.generator == "skybox")
-        .filter_map(|pm| component_handles.get(&pm.asset_id).copied())
+        .filter(|(_, pm)| pm.generator == "skybox")
+        .filter_map(|(id, _)| component_handles.get(&(*id)?).copied())
         .collect();
 
     Some(MeshGeometry {
@@ -491,11 +489,11 @@ impl<'a> MeshSink<'a> {
         &mut self,
         ctx: &mut PipelineContext,
         label: &str,
-        items: impl Iterator<Item = (AssetId, Option<&'m PayloadLocator>)>,
+        items: impl Iterator<Item = (Option<AssetId>, Option<&'m PayloadLocator>)>,
     ) -> Option<()> {
         for (i, (id, locator)) in items.enumerate() {
-            let Some(locator) = locator else {
-                tracing::error!("GraphicsSystem: {label}[{i}] {id} has no compiled payload");
+            let (Some(id), Some(locator)) = (id, locator) else {
+                tracing::error!("GraphicsSystem: {label}[{i}] {id:?} has no compiled payload");
                 return None;
             };
             let bounds = self.deferred.def_bounds(id, self.geometry.len());
@@ -511,18 +509,18 @@ impl<'a> MeshSink<'a> {
 pub(crate) fn load_room_geometry(
     ctx: &mut PipelineContext,
 ) -> Option<(Vec<RoomGeometry>, Vec<u32>)> {
-    let rooms = ctx.drain::<Room>();
+    let rooms = ctx.drain_with_ids::<Room>();
     let mut room_geometry: Vec<RoomGeometry> = Vec::new();
     let mut blob_indices: Vec<u32> = Vec::new();
 
-    for (i, room) in rooms.into_iter().enumerate() {
+    for (i, (id, room)) in rooms.into_iter().enumerate() {
         let locator = match &room.locator {
             Some(l) => l.clone(),
             None => {
                 tracing::error!(
-                    "GraphicsSystem: Room[{}] {} has no compiled payload -- did the build succeed?",
+                    "GraphicsSystem: Room[{}] {:?} has no compiled payload -- did the build succeed?",
                     i,
-                    room.asset_id
+                    id
                 );
                 return None;
             }
@@ -532,8 +530,8 @@ pub(crate) fn load_room_geometry(
             Ok(b) => b.to_vec(),
             Err(e) => {
                 tracing::error!(
-                    "GraphicsSystem: failed to read Room {} payload: {}",
-                    room.asset_id,
+                    "GraphicsSystem: failed to read Room {:?} payload: {}",
+                    id,
                     e
                 );
                 return None;
@@ -680,7 +678,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                 Some(s) => s,
                 None => {
                     tracing::error!(
-                        "GraphicsSystem: Prop {} references unknown model {} -- add a Model asset with that id",
+                        "GraphicsSystem: Prop {:?} references unknown model {} -- add a Model asset with that id",
                         item.asset_id,
                         model_id
                     );
@@ -768,7 +766,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                 Some(m) => m.index(),
                 None => {
                     tracing::error!(
-                        "GraphicsSystem: Prop {} has neither a model nor a mesh",
+                        "GraphicsSystem: Prop {:?} has neither a model nor a mesh",
                         item.asset_id
                     );
                     return None;
@@ -786,7 +784,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                 Some(t) => t,
                 None => {
                     tracing::error!(
-                        "GraphicsSystem: Prop {} references out-of-range mesh handle {} -- add a Mesh or ProceduralMesh asset with that name",
+                        "GraphicsSystem: Prop {:?} references out-of-range mesh handle {} -- add a Mesh or ProceduralMesh asset with that name",
                         item.asset_id,
                         mesh_handle
                     );
@@ -797,7 +795,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                 Ok(entry) => entry,
                 Err(mat_id) => {
                     tracing::error!(
-                        "GraphicsSystem: Prop {} references unknown material {} -- add a Material asset with that id",
+                        "GraphicsSystem: Prop {:?} references unknown material {} -- add a Material asset with that id",
                         item.asset_id,
                         mat_id.index()
                     );
@@ -853,7 +851,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
     // The cluster mesh is appended once; per-instance model matrices are
     // resolved up front and uploaded to the GPU each frame. The cluster's
     // union AABB is used as a single frustum-cull test for the whole batch.
-    for inst in instanced_props {
+    for (cluster, inst) in instanced_props.iter().enumerate() {
         let mesh_handle = match inst.mesh {
             Some(m) if !inst.instances.is_empty() => m.index(),
             _ => continue,
@@ -873,8 +871,8 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
             Some(t) => t,
             None => {
                 tracing::error!(
-                    "GraphicsSystem: InstancedProp {} references out-of-range mesh handle {}",
-                    inst.asset_id,
+                    "GraphicsSystem: InstancedProp[{}] references out-of-range mesh handle {}",
+                    cluster,
                     mesh_handle
                 );
                 return None;
@@ -884,8 +882,8 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
             Ok(entry) => entry,
             Err(mat_id) => {
                 tracing::error!(
-                    "GraphicsSystem: InstancedProp {} references unknown material {}",
-                    inst.asset_id,
+                    "GraphicsSystem: InstancedProp[{}] references unknown material {}",
+                    cluster,
                     mat_id.index()
                 );
                 return None;
@@ -1053,7 +1051,6 @@ mod tests {
 
     fn make_prop(position: [f32; 3]) -> Prop {
         Prop {
-            asset_id: AssetId::default(),
             model: None,
             mesh: None,
             material: None,
@@ -1101,7 +1098,6 @@ mod tests {
         let mesh_geometry = vec![unit_quad_mesh()];
 
         let inst = InstancedProp {
-            asset_id: AssetId::default(),
             mesh: Some(MeshHandle(0)),
             material: None,
             cull_distance: 0.0,
@@ -1179,7 +1175,6 @@ mod tests {
         let mesh_geometry = vec![unit_quad_mesh()];
 
         let inst = InstancedProp {
-            asset_id: AssetId::default(),
             mesh: Some(MeshHandle(0)),
             material: None,
             cull_distance: 0.0,
@@ -1220,7 +1215,7 @@ mod tests {
 
         // A single static mesh-backed item referencing the always-resident mesh.
         let items = vec![RenderableItem {
-            asset_id: AssetId(0),
+            asset_id: None,
             model: None,
             mesh: Some(MeshHandle(0)),
             material: None,
@@ -1264,7 +1259,6 @@ mod tests {
         use concinnity_host::store::blob::BlobData;
 
         let mut prop = make_prop([0.0; 3]);
-        prop.asset_id = AssetId(7);
         prop.mesh = Some(MeshHandle(10));
         prop.material = Some(MaterialHandle(20));
         prop.cull_distance = 50.0;
@@ -1296,11 +1290,12 @@ mod tests {
         ctx.insert(e, Pickup);
         ctx.insert(e, Collider(prop.collider.clone().unwrap()));
 
-        let item = decomposed_renderable_item(&ctx, e, prop.asset_id);
+        ctx.identify(e, AssetId(7));
+        let item = decomposed_renderable_item(&ctx, e);
         assert_eq!(
             item,
             RenderableItem {
-                asset_id: AssetId(7),
+                asset_id: Some(AssetId(7)),
                 model: None,
                 mesh: Some(MeshHandle(10)),
                 material: Some(MaterialHandle(20)),
@@ -1312,7 +1307,7 @@ mod tests {
 
     fn mesh_item(mesh: AssetId) -> RenderableItem {
         RenderableItem {
-            asset_id: mesh,
+            asset_id: Some(mesh),
             model: None,
             // A `.mesh` handle indexes the dense geometry slice directly, so a
             // test item's handle is the geometry index it draws.
@@ -1325,7 +1320,7 @@ mod tests {
 
     fn model_item(model: AssetId) -> RenderableItem {
         RenderableItem {
-            asset_id: model,
+            asset_id: Some(model),
             model: Some(model),
             mesh: None,
             material: None,
@@ -1446,7 +1441,6 @@ mod tests {
     #[test]
     fn build_draw_list_places_room_at_origin_with_texture_and_lods() {
         let room = Room {
-            asset_id: AssetId(50),
             half_width: 8.0,
             half_depth: 10.0,
             ceiling_height: 3.5,
@@ -1502,7 +1496,7 @@ mod tests {
         // The texture handle is the pool slot directly; the pool size (3) makes
         // slot 2 in range.
         let item = RenderableItem {
-            asset_id: AssetId(0),
+            asset_id: None,
             model: None,
             mesh: Some(MeshHandle(0)),
             material: None,
@@ -1643,7 +1637,7 @@ mod tests {
         // Item carrying neither a model nor a mesh.
         assert!(none(DrawListInputs {
             items: &[RenderableItem {
-                asset_id: AssetId(0),
+                asset_id: None,
                 model: None,
                 mesh: None,
                 material: None,
@@ -1662,7 +1656,6 @@ mod tests {
 
         // InstancedProp mesh id has no geometry.
         let inst_bad_mesh = InstancedProp {
-            asset_id: AssetId::default(),
             mesh: Some(MeshHandle(999)),
             material: None,
             cull_distance: 0.0,
@@ -1682,7 +1675,6 @@ mod tests {
 
         // InstancedProp material absent from the material_map.
         let inst_bad_mat = InstancedProp {
-            asset_id: AssetId::default(),
             mesh: Some(MeshHandle(0)),
             material: Some(MaterialHandle(404)),
             cull_distance: 0.0,
@@ -1707,6 +1699,8 @@ mod tests {
     struct BlobWorld {
         components: ComponentStorage,
         section: Vec<u8>,
+        // Entities to identify once the world is sealed with its resources.
+        ids: Vec<(Entity, AssetId)>,
     }
 
     struct SealedWorld {
@@ -1722,6 +1716,7 @@ mod tests {
             Self {
                 components: ComponentStorage::default(),
                 section: Vec::new(),
+                ids: Vec::new(),
             }
         }
 
@@ -1739,14 +1734,23 @@ mod tests {
             self.components.push_typed(c);
         }
 
+        fn push_identified<C: ComponentSlot>(&mut self, id: AssetId, c: C) {
+            let entity = self.components.push_typed(c);
+            self.ids.push((entity, id));
+        }
+
         fn seal(self) -> SealedWorld {
-            SealedWorld {
+            let mut world = SealedWorld {
                 components: self.components,
                 blob: BlobData::new(vec![Some(self.section)]),
                 profile: profile::FrameProfile::default(),
                 resources: Resources::new(),
                 scratch: Arena::with_capacity(64 * 1024),
+            };
+            for (entity, id) in self.ids {
+                world.ctx().identify(entity, id);
             }
+            world
         }
     }
 
@@ -1881,12 +1885,14 @@ mod tests {
     fn load_mesh_geometry_marks_skybox_always_resident() {
         let mut b = BlobWorld::new();
         let loc = b.payload(&tri_payload());
-        b.push(ProceduralMesh {
-            asset_id: AssetId(2),
-            generator: "skybox".to_string(),
-            locator: Some(loc),
-            ..Default::default()
-        });
+        b.push_identified(
+            AssetId(2),
+            ProceduralMesh {
+                generator: "skybox".to_string(),
+                locator: Some(loc),
+                ..Default::default()
+            },
+        );
         let mut world = b.seal();
         let mut ctx = world.ctx();
 
@@ -1910,17 +1916,21 @@ mod tests {
         let compiled = b.payload(&tri_payload());
         // One compiled ProceduralMesh (handle 1, after the Mesh block) and one
         // baked at start.
-        b.push(ProceduralMesh {
-            asset_id: AssetId(2),
-            generator: "box".to_string(),
-            locator: Some(compiled.clone()),
-            ..Default::default()
-        });
-        b.push(ProceduralMesh {
-            asset_id: AssetId(3),
-            generator: "skybox".to_string(),
-            ..Default::default()
-        });
+        b.push_identified(
+            AssetId(2),
+            ProceduralMesh {
+                generator: "box".to_string(),
+                locator: Some(compiled.clone()),
+                ..Default::default()
+            },
+        );
+        b.push_identified(
+            AssetId(3),
+            ProceduralMesh {
+                generator: "skybox".to_string(),
+                ..Default::default()
+            },
+        );
         let mut world = b.seal().with_mesh_table(vec![Some(compiled)]);
         let mut payloads = concinnity_core::resource::RuntimeMeshPayloads::default();
         payloads.push(AssetId(3), tri_payload());
@@ -1949,11 +1959,13 @@ mod tests {
     #[test]
     fn load_mesh_geometry_baked_mesh_without_a_payload_returns_none() {
         let mut b = BlobWorld::new();
-        b.push(ProceduralMesh {
-            asset_id: AssetId(3),
-            generator: "skybox".to_string(),
-            ..Default::default()
-        });
+        b.push_identified(
+            AssetId(3),
+            ProceduralMesh {
+                generator: "skybox".to_string(),
+                ..Default::default()
+            },
+        );
         let mut world = b.seal();
         let mut ctx = world.ctx();
         assert!(load_mesh_geometry(&mut ctx, &DeferredMeshSources::default(), false).is_none());
@@ -2039,7 +2051,6 @@ mod tests {
 
     fn test_room(locator: Option<PayloadLocator>) -> Room {
         Room {
-            asset_id: AssetId(50),
             half_width: 8.0,
             half_depth: 10.0,
             ceiling_height: 3.5,
@@ -2088,7 +2099,6 @@ mod tests {
         use concinnity_host::store::blob::BlobData;
 
         let mut prop = make_prop([0.0; 3]);
-        prop.asset_id = AssetId(8);
         prop.model = Some(Ref::new(AssetId(100)));
         prop.cull_distance = 30.0;
 
@@ -2114,11 +2124,12 @@ mod tests {
             },
         );
 
-        let item = decomposed_renderable_item(&ctx, e, prop.asset_id);
+        ctx.identify(e, AssetId(8));
+        let item = decomposed_renderable_item(&ctx, e);
         assert_eq!(
             item,
             RenderableItem {
-                asset_id: AssetId(8),
+                asset_id: Some(AssetId(8)),
                 model: Some(AssetId(100)),
                 mesh: None,
                 material: None,

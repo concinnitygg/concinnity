@@ -6,7 +6,7 @@ use concinnity_core::ecs::RuntimeComponent;
 use crate::bake::{EnvironmentMapPayload, FontPayload, MeshPayload};
 use crate::system::{ComponentSlot, Entity, Phase, System};
 
-use crate::{EnvironmentMapHandle, FontHandle, MaterialHandle, MeshHandle, WorldError};
+use crate::{AssetId, EnvironmentMapHandle, FontHandle, MaterialHandle, MeshHandle, WorldError};
 
 // One world on both tiers: it carries the components and the systems built over
 // them, and needs no operating system to do either. What differs is what a tier
@@ -56,6 +56,29 @@ impl World {
     /// ```
     pub fn add_component<C: RuntimeComponent>(&mut self, component: C) {
         self.inner.add_component(component);
+    }
+
+    /// Add one component on an entity identified as the asset `id`, so a
+    /// reference to `id` (a [`Prop`](crate::components::Prop)'s `parent`, say)
+    /// resolves to it. Returns the entity.
+    ///
+    /// An id names one live entity: when `id` is already taken, the component
+    /// is added without an identity.
+    ///
+    /// ```
+    /// # use concinnity::{AssetId, World};
+    /// # use concinnity::components::{Prop, SkyRotation};
+    /// # use concinnity::Ref;
+    /// const PIVOT: AssetId = AssetId(1);
+    /// let mut world = World::new();
+    /// world.add_identified(PIVOT, SkyRotation::default());
+    /// world.add_component(Prop {
+    ///     parent: Some(Ref::new(PIVOT)),
+    ///     ..Default::default()
+    /// });
+    /// ```
+    pub fn add_identified<C: RuntimeComponent>(&mut self, id: AssetId, component: C) -> Entity {
+        self.inner.add(component.into(), Some(id))
     }
 
     /// Allocate an entity that holds no components yet, to be filled with

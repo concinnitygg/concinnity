@@ -45,7 +45,10 @@ impl SourceTicks {
 /// variables get their slots first so each carries its authored type and
 /// starting value; a name a body mentions without a declaration is interned as
 /// an integer starting at zero while it compiles.
-pub(super) fn resolve(variables: &[Variables], behaviors: &[Behavior]) -> Resolved {
+pub(super) fn resolve<'a>(
+    variables: &[Variables],
+    behaviors: impl Iterator<Item = (Option<AssetId>, &'a Behavior)>,
+) -> Resolved {
     let mut var_table = VarTable::default();
     for declared in variables {
         for decl in &declared.vars {
@@ -53,9 +56,7 @@ pub(super) fn resolve(variables: &[Variables], behaviors: &[Behavior]) -> Resolv
         }
     }
     let programs: Vec<Program> = behaviors
-        .iter()
-        .cloned()
-        .map(|def| compile(def, &mut var_table))
+        .map(|(id, def)| compile(id, def.clone(), &mut var_table))
         .collect();
     Resolved {
         programs,
@@ -83,10 +84,7 @@ pub(super) fn carry_instances(
     prev_instances: Vec<Vec<Instance>>,
     next: &[Program],
 ) -> Carried {
-    let keys: Vec<(AssetId, u64)> = prev
-        .iter()
-        .map(|p| (p.def.asset_id, def_hash(&p.def)))
-        .collect();
+    let keys: Vec<(Option<AssetId>, u64)> = prev.iter().map(|p| (p.id, def_hash(&p.def))).collect();
     let mut held: Vec<Option<Vec<Instance>>> = prev_instances.into_iter().map(Some).collect();
     held.resize_with(keys.len(), || None);
     let mut moved = Vec::new();
@@ -94,7 +92,7 @@ pub(super) fn carry_instances(
 
     let mut instances = Vec::with_capacity(next.len());
     for (i, program) in next.iter().enumerate() {
-        let key = (program.def.asset_id, def_hash(&program.def));
+        let key = (program.id, def_hash(&program.def));
         let mut kept = Vec::new();
         if let Some(j) = keys.iter().position(|k| *k == key)
             && let Some(held) = held[j].take()
@@ -147,25 +145,32 @@ mod tests {
                 name: name.to_string(),
                 value,
             }],
-            ..Default::default()
         }
     }
 
-    fn setter(id: u32, var: &str, value: i32) -> Behavior {
-        Behavior {
-            asset_id: AssetId(id),
+    fn setter(id: u32, var: &str, value: i32) -> (AssetId, Behavior) {
+        let def = Behavior {
             body: vec![BehaviorNode::Set {
                 var: var.to_string(),
                 value: BehaviorExpr::Int(value),
                 add: false,
             }],
             ..Default::default()
-        }
+        };
+        (AssetId(id), def)
+    }
+
+    // Resolve against behaviors paired with their asset ids.
+    fn resolve_all(variables: &[Variables], behaviors: &[(AssetId, Behavior)]) -> Resolved {
+        resolve(
+            variables,
+            behaviors.iter().map(|(id, def)| (Some(*id), def)),
+        )
     }
 
     #[test]
     fn declared_variables_keep_their_authored_type_and_start() {
-        let resolved = resolve(&[declared("score", BehaviorLiteral::Int(7))], &[]);
+        let resolved = resolve_all(&[declared("score", BehaviorLiteral::Int(7))], &[]);
         assert_eq!(resolved.var_table.slot_of("score"), Some(0));
         assert_eq!(resolved.var_table.initial(), vec![Val::Int(7)]);
     }
@@ -174,7 +179,7 @@ mod tests {
     // against the same table a declaration would have given it.
     #[test]
     fn an_undeclared_name_is_interned_while_the_body_compiles() {
-        let resolved = resolve(&[], &[setter(1, "hits", 3)]);
+        let resolved = resolve_all(&[], &[setter(1, "hits", 3)]);
         assert_eq!(resolved.programs.len(), 1);
         assert_eq!(resolved.var_table.names(), &["hits".to_string()]);
         assert_eq!(resolved.var_table.initial(), vec![Val::Int(0)]);
@@ -183,15 +188,15 @@ mod tests {
     // A world starting is this same path with nothing to carry over.
     #[test]
     fn a_first_resolution_starts_every_slot_where_it_was_declared() {
-        let resolved = resolve(&[declared("score", BehaviorLiteral::Int(7))], &[]);
+        let resolved = resolve_all(&[declared("score", BehaviorLiteral::Int(7))], &[]);
         let vars = carry_vars(&VarTable::default(), &[], &resolved.var_table);
         assert_eq!(vars, vec![Val::Int(7)]);
     }
 
     #[test]
     fn an_untouched_declaration_keeps_the_running_value() {
-        let before = resolve(&[declared("score", BehaviorLiteral::Int(0))], &[]);
-        let after = resolve(
+        let before = resolve_all(&[declared("score", BehaviorLiteral::Int(0))], &[]);
+        let after = resolve_all(
             &[declared("score", BehaviorLiteral::Int(0))],
             &[setter(1, "score", 5)],
         );
@@ -203,24 +208,24 @@ mod tests {
     // rather than showing the author a field that appears not to apply.
     #[test]
     fn an_edited_declaration_takes_its_new_value() {
-        let before = resolve(&[declared("score", BehaviorLiteral::Int(0))], &[]);
-        let after = resolve(&[declared("score", BehaviorLiteral::Int(9))], &[]);
+        let before = resolve_all(&[declared("score", BehaviorLiteral::Int(0))], &[]);
+        let after = resolve_all(&[declared("score", BehaviorLiteral::Int(9))], &[]);
         let carried = carry_vars(&before.var_table, &[Val::Int(42)], &after.var_table);
         assert_eq!(carried, vec![Val::Int(9)]);
     }
 
     #[test]
     fn a_retyped_declaration_takes_its_new_value() {
-        let before = resolve(&[declared("flag", BehaviorLiteral::Int(0))], &[]);
-        let after = resolve(&[declared("flag", BehaviorLiteral::Bool(true))], &[]);
+        let before = resolve_all(&[declared("flag", BehaviorLiteral::Int(0))], &[]);
+        let after = resolve_all(&[declared("flag", BehaviorLiteral::Bool(true))], &[]);
         let carried = carry_vars(&before.var_table, &[Val::Int(3)], &after.var_table);
         assert_eq!(carried, vec![Val::Bool(true)]);
     }
 
     #[test]
     fn a_new_declaration_starts_where_it_was_declared() {
-        let before = resolve(&[], &[]);
-        let after = resolve(&[declared("score", BehaviorLiteral::Int(4))], &[]);
+        let before = resolve_all(&[], &[]);
+        let after = resolve_all(&[declared("score", BehaviorLiteral::Int(4))], &[]);
         assert_eq!(
             carry_vars(&before.var_table, &[], &after.var_table),
             vec![Val::Int(4)]
@@ -231,7 +236,7 @@ mod tests {
     // than its old slot number.
     #[test]
     fn a_carried_value_follows_its_name_across_a_reordered_table() {
-        let before = resolve(
+        let before = resolve_all(
             &[Variables {
                 vars: vec![
                     VariableDecl {
@@ -243,11 +248,10 @@ mod tests {
                         value: BehaviorLiteral::Int(0),
                     },
                 ],
-                ..Default::default()
             }],
             &[],
         );
-        let after = resolve(
+        let after = resolve_all(
             &[Variables {
                 vars: vec![
                     VariableDecl {
@@ -259,7 +263,6 @@ mod tests {
                         value: BehaviorLiteral::Int(0),
                     },
                 ],
-                ..Default::default()
             }],
             &[],
         );
@@ -273,8 +276,8 @@ mod tests {
 
     #[test]
     fn an_unchanged_behavior_keeps_its_instances() {
-        let prev = resolve(&[], &[setter(1, "a", 1), setter(2, "b", 1)]);
-        let next = resolve(&[], &[setter(1, "a", 1), setter(2, "b", 1)]);
+        let prev = resolve_all(&[], &[setter(1, "a", 1), setter(2, "b", 1)]);
+        let next = resolve_all(&[], &[setter(1, "a", 1), setter(2, "b", 1)]);
         let instances = vec![
             vec![Instance::new(None, Vec::new(), false)],
             vec![
@@ -292,8 +295,8 @@ mod tests {
     // that one starts fresh while its neighbor carries.
     #[test]
     fn an_edited_behavior_starts_fresh() {
-        let prev = resolve(&[], &[setter(1, "a", 1), setter(2, "b", 1)]);
-        let next = resolve(&[], &[setter(1, "a", 99), setter(2, "b", 1)]);
+        let prev = resolve_all(&[], &[setter(1, "a", 1), setter(2, "b", 1)]);
+        let next = resolve_all(&[], &[setter(1, "a", 99), setter(2, "b", 1)]);
         let instances = vec![
             vec![Instance::new(None, Vec::new(), false)],
             vec![Instance::new(None, Vec::new(), false)],
@@ -308,8 +311,8 @@ mod tests {
     // inherit that asset's firing history.
     #[test]
     fn instances_never_move_between_assets() {
-        let prev = resolve(&[], &[setter(1, "a", 1)]);
-        let next = resolve(&[], &[setter(2, "a", 1)]);
+        let prev = resolve_all(&[], &[setter(1, "a", 1)]);
+        let next = resolve_all(&[], &[setter(2, "a", 1)]);
         let instances = vec![vec![Instance::new(None, Vec::new(), false)]];
         let carried = carry_instances(&prev.programs, instances, &next.programs);
         assert!(carried.instances[0].is_empty());

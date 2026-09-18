@@ -31,15 +31,11 @@ pub(super) struct BillboardSpot {
     dist: f32,
 }
 
-// name -> interned id -> live entity, the same resolve the gizmo uses. The
-// index is built at load, so entries despawned by the start-time drains
-// (Window, GraphicsConfig, Scene, ...) are filtered by liveness.
+// name -> interned id -> live entity, the same resolve the gizmo uses. An
+// asset whose component a start-time drain consumed (Window, GraphicsConfig,
+// Scene, ...) has no entity left to resolve to.
 pub(super) fn entity_by_name(world: &World, name: &str) -> Option<Entity> {
-    let id = asset_id::lookup(name)?;
-    world
-        .resource::<concinnity_core::ecs::EntityByName>()?
-        .get(id)
-        .filter(|&e| world.is_alive(e))
+    world.entity_of(asset_id::lookup(name)?)
 }
 
 impl EditorHook {

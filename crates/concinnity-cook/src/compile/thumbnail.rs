@@ -585,7 +585,6 @@ mod tests {
                     material: None,
                 },
             ],
-            ..Default::default()
         };
         let def = |disc: u8, args_bytes: Vec<u8>, payload| BlobAssetDef {
             name: None,
@@ -621,7 +620,6 @@ mod tests {
                 mesh: Some(MeshHandle(99)),
                 material: None,
             }],
-            ..Default::default()
         };
         broken.defs[0].args_bytes = postcard::to_allocvec(&orphan).unwrap();
         let bake = collect(&broken, &|_| false);

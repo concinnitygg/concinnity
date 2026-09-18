@@ -17,7 +17,6 @@ use concinnity_core::ecs::FontHandle;
 use concinnity_core::ecs::PickIndex;
 use concinnity_core::ecs::TransientSaves;
 use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
 
 use super::hud;
 use super::panels::registry::{self, PanelKey};
@@ -87,92 +86,89 @@ pub(crate) fn editor_hud(world: &mut World) {
     // previewed world and nothing else, so every editor element that follows
     // draws over it (the per-frame layer map pins the same order while a
     // preview's attract camera is running).
-    world.add_component(button_sprite(
+    world.push_identified(
         super::worlds::cinematic::FADE,
-        hidden,
-        [0.0, 0.0, 0.0, 0.0],
-        false,
-    ));
+        button_sprite(hidden, [0.0, 0.0, 0.0, 0.0], false),
+    );
     // The loading cover goes in with it: it stands over the same area while the
     // world behind is compiled, above the fade and below everything else.
     for id in super::worlds::loading::all_sprite_ids() {
-        world.add_component(button_sprite(id, hidden, [0.0, 0.0, 0.0, 0.0], false));
+        world.push_identified(id, button_sprite(hidden, [0.0, 0.0, 0.0, 0.0], false));
     }
     for id in super::worlds::loading::all_label_ids() {
-        world.add_component(row_label(id, "", hidden, font, false));
+        world.push_identified(id, row_label("", hidden, font, false));
     }
-    for s in super::viewport::billboards::sprites() {
-        world.add_component(s);
+    for (id, s) in super::viewport::billboards::sprites() {
+        world.push_identified(id, s);
     }
     for id in super::viewport::billboards::all_label_ids() {
-        let mut l = centered_label(id, "", [0.0; 4], font);
+        let mut l = centered_label("", [0.0; 4], font);
         l.visible = false;
-        world.add_component(l);
+        world.push_identified(id, l);
     }
-    for s in super::viewport::highlight::outline_sprites() {
-        world.add_component(s);
+    for (id, s) in super::viewport::highlight::outline_sprites() {
+        world.push_identified(id, s);
     }
-    world.add_component(super::viewport::marquee::rect_sprite());
-    for s in super::viewport::gizmo::sprites() {
-        world.add_component(s);
+    let (id, rect) = super::viewport::marquee::rect_sprite();
+    world.push_identified(id, rect);
+    for (id, s) in super::viewport::gizmo::sprites() {
+        world.push_identified(id, s);
     }
     // The editor's in-engine mouse cursor (a follow_cursor sprite): the tick
     // shows it while the editor owns the pointer and drives its resize shape.
-    world.add_component(super::viewport::cursor::sprite());
-    world.add_component(row_label(
+    let (id, cursor) = super::viewport::cursor::sprite();
+    world.push_identified(id, cursor);
+    world.push_identified(
         super::viewport::gizmo::MODE_LABEL,
-        "",
-        [0.0, 0.0, 0.0, 0.0],
-        font,
-        false,
-    ));
+        row_label("", [0.0, 0.0, 0.0, 0.0], font, false),
+    );
     for key in PanelKey::ALL {
         let p = registry::panel(key);
         for id in p.sprite_ids() {
-            world.add_component(button_sprite(id, hidden, [0.1, 0.1, 0.12, 1.0], false));
+            world.push_identified(id, button_sprite(hidden, [0.1, 0.1, 0.12, 1.0], false));
         }
         for id in p.label_ids() {
-            world.add_component(row_label(id, "", hidden, font, false));
+            world.push_identified(id, row_label("", hidden, font, false));
         }
         for (id, placeholder) in p.field_ids() {
-            world.add_component(text_field(id, placeholder, font));
+            world.push_identified(id, text_field(placeholder, font));
         }
     }
     // The right-click create menu floats over the panels (its per-frame layer
     // also pins it above them while open).
     for id in super::create_menu::all_sprite_ids() {
-        world.add_component(button_sprite(id, hidden, [0.1, 0.1, 0.12, 1.0], false));
+        world.push_identified(id, button_sprite(hidden, [0.1, 0.1, 0.12, 1.0], false));
     }
     for id in super::create_menu::all_label_ids() {
-        world.add_component(row_label(id, "", hidden, font, false));
+        world.push_identified(id, row_label("", hidden, font, false));
     }
     // The Display menu floats over the panels the same way.
     for id in super::view_menu::all_sprite_ids() {
-        world.add_component(button_sprite(id, hidden, [0.1, 0.1, 0.12, 1.0], false));
+        world.push_identified(id, button_sprite(hidden, [0.1, 0.1, 0.12, 1.0], false));
     }
     for id in super::view_menu::all_label_ids() {
-        world.add_component(row_label(id, "", hidden, font, false));
+        world.push_identified(id, row_label("", hidden, font, false));
     }
     inject_top_bar(world, font);
     // The toast stack goes in after the top bar: it draws over everything (its
     // per-frame layer also pins it there while live).
     for id in super::toast_overlay::all_sprite_ids() {
-        world.add_component(button_sprite(id, hidden, [0.1, 0.1, 0.12, 1.0], false));
+        world.push_identified(id, button_sprite(hidden, [0.1, 0.1, 0.12, 1.0], false));
     }
     for id in super::toast_overlay::all_label_ids() {
-        world.add_component(row_label(id, "", hidden, font, false));
+        world.push_identified(id, row_label("", hidden, font, false));
     }
     // The confirmation dialog goes in last of all: while open it is
     // screen-modal and draws over everything, toasts included (its per-frame
     // layer also pins it there).
     for id in super::modal::all_sprite_ids() {
-        world.add_component(button_sprite(id, hidden, [0.1, 0.1, 0.12, 1.0], false));
+        world.push_identified(id, button_sprite(hidden, [0.1, 0.1, 0.12, 1.0], false));
     }
     for id in super::modal::all_label_ids() {
-        world.add_component(row_label(id, "", hidden, font, false));
+        world.push_identified(id, row_label("", hidden, font, false));
     }
     for id in super::modal::all_field_ids() {
-        world.add_component(text_field(id, "world name", font));
+        world.push_identified(id, text_field("world name", font));
     }
 }
 
@@ -219,12 +215,10 @@ fn pin_editor_window(world: &mut World) {
 fn inject_top_bar(world: &mut World, font: Option<FontHandle>) {
     let bar = hud::layout(REF_W);
 
-    world.add_component(button_sprite(
+    world.push_identified(
         hud::BAR_BG,
-        [0.0, 0.0, REF_W, hud::BAR_H],
-        theme::CHROME_TINT,
-        true,
-    ));
+        button_sprite([0.0, 0.0, REF_W, hud::BAR_H], theme::CHROME_TINT, true),
+    );
     for (id, rect) in [
         (hud::SAVE_BUTTON, bar.save),
         (hud::VIEW_BUTTON, bar.view),
@@ -235,44 +229,35 @@ fn inject_top_bar(world: &mut World, font: Option<FontHandle>) {
         (hud::STEP_BUTTON, bar.step),
         (hud::STOP_BUTTON, bar.stop),
     ] {
-        world.add_component(button_sprite(id, rect, theme::BUTTON_TINT, true));
+        world.push_identified(id, button_sprite(rect, theme::BUTTON_TINT, true));
     }
-    world.add_component(centered_label(hud::SAVE_LABEL, "Save", bar.save, font));
-    world.add_component(centered_label(hud::VIEW_LABEL, "View", bar.view, font));
-    world.add_component(centered_label(
+    world.push_identified(hud::SAVE_LABEL, centered_label("Save", bar.save, font));
+    world.push_identified(hud::VIEW_LABEL, centered_label("View", bar.view, font));
+    world.push_identified(
         hud::DISPLAY_LABEL,
-        "Display",
-        bar.display,
-        font,
-    ));
-    world.add_component(centered_label(hud::UNDO_LABEL, "Undo", bar.undo, font));
-    world.add_component(centered_label(hud::REDO_LABEL, "Redo", bar.redo, font));
-    world.add_component(centered_label(hud::PLAY_LABEL, "Play", bar.play, font));
-    world.add_component(centered_label(hud::STEP_LABEL, "Step", bar.step, font));
-    world.add_component(centered_label(hud::STOP_LABEL, "Stop", bar.stop, font));
+        centered_label("Display", bar.display, font),
+    );
+    world.push_identified(hud::UNDO_LABEL, centered_label("Undo", bar.undo, font));
+    world.push_identified(hud::REDO_LABEL, centered_label("Redo", bar.redo, font));
+    world.push_identified(hud::PLAY_LABEL, centered_label("Play", bar.play, font));
+    world.push_identified(hud::STEP_LABEL, centered_label("Step", bar.step, font));
+    world.push_identified(hud::STOP_LABEL, centered_label("Stop", bar.stop, font));
 }
 
 // Materialize a templates asset spec into a live component through the engine's
 // own accept path (serde over the spec's args) -- the same conversion the cook
-// pipeline runs on a world line. The reserved `asset_id` and the reused font are
-// set by the caller afterward (neither is part of the spec's args).
+// pipeline runs on a world line. The reused font is set by the caller afterward
+// (it is not part of the spec's args), and the reserved id is given at push.
 fn materialize<T: serde::de::DeserializeOwned>(spec: AssetSpec) -> T {
     serde_json::from_value(crate::authoring::spec_args(&spec))
         .expect("editor HUD spec deserializes into its component")
 }
 
-fn button_sprite(id: AssetId, rect: [f32; 4], tint: [f32; 4], visible: bool) -> Sprite {
-    let mut s: Sprite = materialize(asset::sprite("", rect, tint).set("visible", visible));
-    s.asset_id = id;
-    s
+fn button_sprite(rect: [f32; 4], tint: [f32; 4], visible: bool) -> Sprite {
+    materialize(asset::sprite("", rect, tint).set("visible", visible))
 }
 
-fn centered_label(
-    id: AssetId,
-    content: &str,
-    rect: [f32; 4],
-    font: Option<FontHandle>,
-) -> TextLabel {
+fn centered_label(content: &str, rect: [f32; 4], font: Option<FontHandle>) -> TextLabel {
     let pos = [rect[0] + rect[2] * 0.5, rect[1] + hud::LABEL_TOP];
     let mut l: TextLabel = materialize(asset::text_label(
         "",
@@ -281,37 +266,28 @@ fn centered_label(
         [1.0, 1.0, 1.0],
         "center",
     ));
-    l.asset_id = id;
     l.font = font;
     l.scale = theme::TEXT_SCALE;
     l
 }
 
-fn row_label(
-    id: AssetId,
-    content: &str,
-    rect: [f32; 4],
-    font: Option<FontHandle>,
-    visible: bool,
-) -> TextLabel {
+fn row_label(content: &str, rect: [f32; 4], font: Option<FontHandle>, visible: bool) -> TextLabel {
     let pos = [rect[0] + 12.0, rect[1] + 10.0];
     let mut l: TextLabel = materialize(
         asset::text_label("", content, pos, [0.9, 0.9, 0.92], "left").set("visible", visible),
     );
-    l.asset_id = id;
     l.font = font;
     l.scale = theme::TEXT_SCALE;
     l
 }
 
-fn text_field(id: AssetId, placeholder: &str, font: Option<FontHandle>) -> TextInput {
+fn text_field(placeholder: &str, font: Option<FontHandle>) -> TextInput {
     let mut t: TextInput = materialize(
         asset::text_input("", placeholder)
             .set("background", [0.14, 0.15, 0.20, 1.0])
             .set("max_len", 48u32)
             .set("visible", false),
     );
-    t.asset_id = id;
     t.font = font;
     t.scale = theme::TEXT_SCALE;
     t
@@ -321,6 +297,8 @@ fn text_field(id: AssetId, placeholder: &str, font: Option<FontHandle>) -> TextI
 mod tests {
     use super::super::panels::{assets_panel, form_panel, preview, template, template_panel, view};
     use super::*;
+    use concinnity_core::components::Identity;
+    use concinnity_core::ecs::asset_id::AssetId;
     use concinnity_core::resource::FontTable;
 
     // The editor draws its own chrome, so injection turns the world's title bar
@@ -403,11 +381,7 @@ mod tests {
         // Top-bar buttons are visible.
         for id in [hud::SAVE_BUTTON, hud::VIEW_BUTTON] {
             assert!(
-                world
-                    .query::<Sprite>()
-                    .find(|s| s.asset_id == id)
-                    .unwrap()
-                    .visible,
+                world.get_by_id::<Sprite>(id).unwrap().visible,
                 "{id:?} visible"
             );
         }
@@ -415,8 +389,7 @@ mod tests {
         // The View button is labeled "View".
         assert_eq!(
             world
-                .query::<TextLabel>()
-                .find(|l| l.asset_id == hud::VIEW_LABEL)
+                .get_by_id::<TextLabel>(hud::VIEW_LABEL)
                 .unwrap()
                 .content,
             "View"
@@ -445,18 +418,17 @@ mod tests {
             template_panel::row_bg(0),
         ] {
             assert!(
-                !world
-                    .query::<Sprite>()
-                    .find(|s| s.asset_id == id)
-                    .unwrap()
-                    .visible,
+                !world.get_by_id::<Sprite>(id).unwrap().visible,
                 "{id:?} starts hidden"
             );
         }
 
         // Draw order is insertion order: the top bar goes in AFTER the panels so
         // a dragged panel slides behind it (matching the hook's hit-test order).
-        let sprites: Vec<AssetId> = world.query::<Sprite>().map(|s| s.asset_id).collect();
+        let sprites: Vec<AssetId> = world
+            .join2::<Sprite, Identity>()
+            .map(|(_, _, identity)| identity.id())
+            .collect();
         let pos = |id: AssetId| sprites.iter().position(|&x| x == id).unwrap();
         assert!(pos(assets_panel::PANEL_BG) < pos(hud::SAVE_BUTTON));
         assert!(pos(preview::PANEL_BG) < pos(hud::SAVE_BUTTON));
@@ -465,7 +437,10 @@ mod tests {
         assert!(pos(template_panel::PANEL_BG) < pos(hud::SAVE_BUTTON));
 
         // Both typed fields exist, hidden, and reference the reused font.
-        let fields: Vec<AssetId> = world.query::<TextInput>().map(|t| t.asset_id).collect();
+        let fields: Vec<AssetId> = world
+            .join2::<TextInput, Identity>()
+            .map(|(_, _, identity)| identity.id())
+            .collect();
         assert!(fields.contains(&assets_panel::SEARCH_INPUT));
         assert!(fields.contains(&form_panel::NAME_INPUT));
         assert!(world.query::<TextInput>().all(|t| !t.visible));
@@ -476,6 +451,27 @@ mod tests {
         assert!(world.query::<TextInput>().all(|t| t.screen.is_none()));
     }
 
+    // Every injected element carries its reserved id, so every lookup the tick
+    // makes by id resolves: no two elements share an id, and none collides
+    // with another.
+    #[test]
+    fn every_injected_element_is_identified() {
+        let mut world = World::new();
+        editor_hud(&mut world);
+        assert_eq!(
+            world.join2::<Sprite, Identity>().count(),
+            world.query::<Sprite>().count()
+        );
+        assert_eq!(
+            world.join2::<TextLabel, Identity>().count(),
+            world.query::<TextLabel>().count()
+        );
+        assert_eq!(
+            world.join2::<TextInput, Identity>().count(),
+            world.query::<TextInput>().count()
+        );
+    }
+
     // The button + field text draws with the engine HUD face, baked into the
     // world's font table here rather than at world start -- NOT the first
     // label in the world, whose font may be a user world's oversized display
@@ -484,11 +480,13 @@ mod tests {
     #[test]
     fn bakes_the_engine_hud_face_and_takes_over_the_debug_hud() {
         let mut world = World::new();
-        world.add_component(TextLabel {
-            asset_id: AssetId(0),
-            font: Some(FontHandle(99)),
-            ..Default::default()
-        });
+        world.push_identified(
+            AssetId(0),
+            TextLabel {
+                font: Some(FontHandle(99)),
+                ..Default::default()
+            },
+        );
         world.add_component(DebugHud::default());
         editor_hud(&mut world);
 
@@ -496,14 +494,10 @@ mod tests {
         let fonts = world.resource::<FontTable>().expect("the face was baked");
         assert_eq!(fonts.len(), 1);
         let baked = FontHandle(0);
-        let save = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == hud::SAVE_LABEL)
-            .unwrap();
+        let save = world.get_by_id::<TextLabel>(hud::SAVE_LABEL).unwrap();
         assert_eq!(save.font, Some(baked));
         let field = world
-            .query::<TextInput>()
-            .find(|t| t.asset_id == form_panel::NAME_INPUT)
+            .get_by_id::<TextInput>(form_panel::NAME_INPUT)
             .unwrap();
         assert_eq!(field.font, Some(baked));
 
@@ -541,32 +535,26 @@ mod tests {
     fn constructors_materialize_expected_components() {
         use concinnity_core::components::TextAlign;
 
-        let s = button_sprite(
-            AssetId(1),
-            [10.0, 20.0, 100.0, 40.0],
-            [1.0, 0.0, 0.0, 1.0],
-            true,
-        );
+        let s = button_sprite([10.0, 20.0, 100.0, 40.0], [1.0, 0.0, 0.0, 1.0], true);
         assert_eq!((s.x, s.y, s.width, s.height), (10.0, 20.0, 100.0, 40.0));
         assert_eq!(s.tint, [1.0, 0.0, 0.0, 1.0]);
         assert!(s.visible);
-        assert_eq!(s.asset_id, AssetId(1));
 
-        let t = text_field(AssetId(2), "name", Some(FontHandle(9)));
+        let t = text_field("name", Some(FontHandle(9)));
         assert_eq!(t.placeholder, "name");
         assert_eq!(t.background, [0.14, 0.15, 0.20, 1.0]);
         assert_eq!(t.max_len, 48);
         assert!(!t.visible);
         assert_eq!(t.font, Some(FontHandle(9)));
 
-        let c = centered_label(AssetId(3), "SAVE", [0.0, 0.0, 88.0, 88.0], None);
+        let c = centered_label("SAVE", [0.0, 0.0, 88.0, 88.0], None);
         assert_eq!(c.content, "SAVE");
         assert_eq!(c.align, TextAlign::Center);
         assert_eq!(c.x, 44.0, "centered on the button width");
         assert_eq!(c.color, [1.0, 1.0, 1.0]);
         assert!(c.visible);
 
-        let r = row_label(AssetId(4), "row", [0.0, 0.0, 100.0, 40.0], None, false);
+        let r = row_label("row", [0.0, 0.0, 100.0, 40.0], None, false);
         assert_eq!(r.align, TextAlign::Left);
         assert_eq!(r.color, [0.9, 0.9, 0.92]);
         assert!(!r.visible);

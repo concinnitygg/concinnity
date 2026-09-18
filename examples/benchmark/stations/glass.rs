@@ -100,7 +100,6 @@ pub(crate) fn declare(world: &mut WorldBuilder, center: [f32; 3]) {
             refraction_strength: 0.14,
             fresnel_power: 3.0,
             visible: true,
-            ..Default::default()
         },
     );
 

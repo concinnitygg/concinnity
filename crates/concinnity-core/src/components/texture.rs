@@ -1,7 +1,6 @@
 // 2D texture image schema.
 
 use crate::ecs::PayloadLocator;
-use crate::ecs::asset_id::AssetId;
 use alloc::string::String;
 
 /// A 2D texture image.
@@ -23,9 +22,6 @@ use alloc::string::String;
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct Texture {
-    /// Asset identity; injected via `inject_name`. Not part of `args`.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// Procedural generator name. Empty or omitted means use `source` instead.
     pub generator: String,
     /// Path to the source image, relative to the project root.
@@ -52,7 +48,6 @@ pub struct Texture {
 impl Default for Texture {
     fn default() -> Self {
         Self {
-            asset_id: AssetId::default(),
             generator: String::new(),
             source: String::new(),
             image_index: 0,
@@ -101,7 +96,6 @@ mod tests {
         assert_eq!(back.source, "bistro.fbx");
         assert_eq!(back.image_index, 7);
         assert_eq!(back.max_size, 1024);
-        assert_eq!(back.asset_id, AssetId::default());
         assert!(back.locator.is_none());
     }
 }

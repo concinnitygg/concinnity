@@ -232,11 +232,9 @@ fn outline_color(fill: [f32; 3]) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ecs::asset_id::AssetId;
 
     fn cursor(tint: [f32; 4], height: f32) -> Sprite {
         Sprite {
-            asset_id: AssetId::default(),
             x: 0.0,
             y: 0.0,
             width: height,

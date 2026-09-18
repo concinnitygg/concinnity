@@ -44,9 +44,7 @@ pub(super) fn plan(
         return None;
     }
     let id = asset_id::lookup(name)?;
-    let entity = world
-        .resource::<concinnity_core::ecs::EntityByName>()?
-        .get(id)?;
+    let entity = world.entity_of(id)?;
     let mut change = DrawChange {
         entity,
         material: None,

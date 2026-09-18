@@ -2,7 +2,7 @@
 // StatHud chip anchoring. All of it needs the loaded font metrics, which is
 // why it runs in the overlay build rather than the HUD systems themselves.
 
-use concinnity_core::components::{LabelBox, LabelPlacement, LayoutContainer, TextLabel};
+use concinnity_core::components::{Identity, LabelBox, LabelPlacement, LayoutContainer, TextLabel};
 use concinnity_core::ecs::PipelineContext;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::render::text;
@@ -33,9 +33,9 @@ pub(super) fn apply_label_layout(
     }
     // Measure every label once, keyed by id.
     scratch.boxes.clear();
-    for label in ctx.query::<TextLabel>() {
+    for (_, label, identity) in ctx.join2::<TextLabel, Identity>() {
         if let Some(b) = text::measure_label_box(label, loaded_fonts) {
-            scratch.boxes.insert(label.asset_id, b);
+            scratch.boxes.insert(identity.id(), b);
         }
     }
     // Resolve placements, then write them back into the labels.
@@ -50,8 +50,8 @@ pub(super) fn apply_label_layout(
             scratch.placed.insert(p.id, (p.x, p.y));
         }
     }
-    for label in ctx.query_mut::<TextLabel>() {
-        if let Some(&(x, y)) = scratch.placed.get(&label.asset_id) {
+    for (&id, &(x, y)) in &scratch.placed {
+        if let Some(label) = ctx.get_mut_by_id::<TextLabel>(id) {
             label.x = x;
             label.y = y;
         }
@@ -122,7 +122,7 @@ fn position_chip_strip(
 ) {
     let mut run = MARGIN;
     for &id in chip_ids {
-        let Some(l) = crate::ecs::by_asset_id::find_mut::<TextLabel>(ctx, id) else {
+        let Some(l) = ctx.get_mut_by_id::<TextLabel>(id) else {
             continue;
         };
         if l.content.is_empty() {
@@ -203,9 +203,8 @@ mod tests {
         fonts
     }
 
-    fn chip(id: AssetId, content: &str) -> TextLabel {
+    fn chip(content: &str) -> TextLabel {
         TextLabel {
-            asset_id: id,
             font: Some(FONT),
             content: content.to_string(),
             x: SENTINEL,
@@ -256,6 +255,10 @@ mod tests {
             self.components.push_typed(c);
         }
 
+        fn label(&mut self, id: AssetId, label: TextLabel) {
+            self.ctx().push_identified(id, label);
+        }
+
         fn ctx(&mut self) -> PipelineContext<'_> {
             PipelineContext {
                 components: &mut self.components,
@@ -268,10 +271,7 @@ mod tests {
 
         fn label_at(&mut self, id: AssetId) -> (f32, f32) {
             let ctx = self.ctx();
-            let l = ctx
-                .query::<TextLabel>()
-                .find(|l| l.asset_id == id)
-                .expect("label pushed");
+            let l = ctx.get_by_id::<TextLabel>(id).expect("label pushed");
             (l.x, l.y)
         }
     }
@@ -281,9 +281,9 @@ mod tests {
     #[test]
     fn apply_label_layout_places_rows_from_the_container_origin() {
         let mut w = TestWorld::new();
-        w.push(chip(AssetId(1), "aa"));
-        w.push(chip(AssetId(2), "aaaa"));
-        w.push(chip(AssetId(3), "aaaaaa"));
+        w.label(AssetId(1), chip("aa"));
+        w.label(AssetId(2), chip("aaaa"));
+        w.label(AssetId(3), chip("aaaaaa"));
         w.push(LayoutContainer {
             x: 100.0,
             y: 50.0,
@@ -306,7 +306,7 @@ mod tests {
     #[test]
     fn apply_label_layout_ignores_hidden_containers() {
         let mut w = TestWorld::new();
-        w.push(chip(AssetId(1), "aa"));
+        w.label(AssetId(1), chip("aa"));
         w.push(LayoutContainer {
             rows: vec![row(&[AssetId(1)])],
             visible: false,
@@ -325,14 +325,14 @@ mod tests {
     #[test]
     fn apply_label_layout_drops_labels_it_cannot_measure() {
         let mut w = TestWorld::new();
-        w.push(chip(AssetId(1), "aa"));
-        let mut hidden = chip(AssetId(2), "aaaa");
+        w.label(AssetId(1), chip("aa"));
+        let mut hidden = chip("aaaa");
         hidden.visible = false;
-        w.push(hidden);
-        let mut orphan = chip(AssetId(3), "aaaa");
+        w.label(AssetId(2), hidden);
+        let mut orphan = chip("aaaa");
         orphan.font = Some(FontHandle(99));
-        w.push(orphan);
-        w.push(chip(AssetId(4), "aaaaaa"));
+        w.label(AssetId(3), orphan);
+        w.label(AssetId(4), chip("aaaaaa"));
         w.push(LayoutContainer {
             x: 100.0,
             y: 50.0,
@@ -357,7 +357,7 @@ mod tests {
     #[test]
     fn apply_label_layout_reuses_scratch_without_stale_placements() {
         let mut w = TestWorld::new();
-        w.push(chip(AssetId(1), "aa"));
+        w.label(AssetId(1), chip("aa"));
         w.push(LayoutContainer {
             x: 100.0,
             y: 50.0,
@@ -384,8 +384,8 @@ mod tests {
     #[test]
     fn position_debug_hud_right_anchors_chips_top_down() {
         let mut w = TestWorld::new();
-        w.push(chip(AssetId(1), "aa"));
-        w.push(chip(AssetId(2), "aaaa"));
+        w.label(AssetId(1), chip("aa"));
+        w.label(AssetId(2), chip("aaaa"));
         position_debug_hud(
             &mut w.ctx(),
             &[AssetId(1), AssetId(2)],
@@ -404,12 +404,12 @@ mod tests {
     #[test]
     fn position_debug_hud_skips_chips_it_cannot_measure() {
         let mut w = TestWorld::new();
-        w.push(chip(AssetId(1), "aa"));
-        w.push(chip(AssetId(2), ""));
-        let mut orphan = chip(AssetId(3), "aaaa");
+        w.label(AssetId(1), chip("aa"));
+        w.label(AssetId(2), chip(""));
+        let mut orphan = chip("aaaa");
         orphan.font = Some(FontHandle(99));
-        w.push(orphan);
-        w.push(chip(AssetId(4), "aaaa"));
+        w.label(AssetId(3), orphan);
+        w.label(AssetId(4), chip("aaaa"));
         position_debug_hud(
             &mut w.ctx(),
             &[AssetId(1), AssetId(2), AssetId(3), AssetId(4)],
@@ -427,7 +427,7 @@ mod tests {
     #[test]
     fn position_debug_hud_clamps_a_chip_wider_than_the_window() {
         let mut w = TestWorld::new();
-        w.push(chip(AssetId(1), "aa"));
+        w.label(AssetId(1), chip("aa"));
         position_debug_hud(&mut w.ctx(), &[AssetId(1)], &loaded_fonts(), 15.0);
         assert_eq!(w.label_at(AssetId(1)).0, 10.0);
     }
@@ -436,7 +436,7 @@ mod tests {
     #[test]
     fn position_debug_hud_ignores_an_empty_chip_list_or_window() {
         let mut w = TestWorld::new();
-        w.push(chip(AssetId(1), "aa"));
+        w.label(AssetId(1), chip("aa"));
         position_debug_hud(&mut w.ctx(), &[], &loaded_fonts(), 1000.0);
         assert_eq!(w.label_at(AssetId(1)), (SENTINEL, SENTINEL));
         position_debug_hud(&mut w.ctx(), &[AssetId(1)], &loaded_fonts(), 0.0);
@@ -448,12 +448,12 @@ mod tests {
     #[test]
     fn position_stat_hud_packs_chips_left_to_right() {
         let mut w = TestWorld::new();
-        let mut first = chip(AssetId(1), "aa");
+        let mut first = chip("aa");
         first.padding = 4.0;
-        let mut second = chip(AssetId(2), "aaaa");
+        let mut second = chip("aaaa");
         second.padding = 4.0;
-        w.push(first);
-        w.push(second);
+        w.label(AssetId(1), first);
+        w.label(AssetId(2), second);
         position_stat_hud(&mut w.ctx(), &[AssetId(1), AssetId(2)], &loaded_fonts());
         // Box 1 at the margin, its origin 4px in.
         assert_eq!(w.label_at(AssetId(1)), (14.0, 12.0));
@@ -465,9 +465,9 @@ mod tests {
     #[test]
     fn position_stat_hud_skips_blank_chips() {
         let mut w = TestWorld::new();
-        w.push(chip(AssetId(1), "aa"));
-        w.push(chip(AssetId(2), ""));
-        w.push(chip(AssetId(3), "aaaa"));
+        w.label(AssetId(1), chip("aa"));
+        w.label(AssetId(2), chip(""));
+        w.label(AssetId(3), chip("aaaa"));
         position_stat_hud(
             &mut w.ctx(),
             &[AssetId(1), AssetId(2), AssetId(3)],
@@ -483,7 +483,7 @@ mod tests {
     #[test]
     fn position_stat_hud_ignores_an_empty_chip_list() {
         let mut w = TestWorld::new();
-        w.push(chip(AssetId(1), "aa"));
+        w.label(AssetId(1), chip("aa"));
         position_stat_hud(&mut w.ctx(), &[], &loaded_fonts());
         assert_eq!(w.label_at(AssetId(1)), (SENTINEL, SENTINEL));
     }

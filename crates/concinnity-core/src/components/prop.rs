@@ -4,7 +4,6 @@ use crate::components::{Model, Scene};
 use crate::components::{vocabulary, vocabulary_synonyms};
 use crate::ecs::MaterialHandle;
 use crate::ecs::MeshHandle;
-use crate::ecs::asset_id::AssetId;
 use crate::ecs::de_opt_material_handle;
 use crate::ecs::de_opt_mesh_handle;
 use crate::ecs::{Ref, RefTarget, de_opt_ref};
@@ -105,9 +104,6 @@ impl Default for PropCollider {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct Prop {
-    /// Asset identity; injected via `inject_name`. Not part of `args`.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// A [Model](#model) asset. When set, the prop renders all sub-meshes of
     /// that model (each with its own material) sharing this prop's transform.
     /// Takes precedence over `mesh` and `material`.
@@ -176,7 +172,6 @@ impl RefTarget for PropParent {
 impl Default for Prop {
     fn default() -> Self {
         Self {
-            asset_id: AssetId::default(),
             model: None,
             mesh: None,
             material: None,
@@ -198,6 +193,7 @@ impl Default for Prop {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ecs::asset_id::AssetId;
 
     // The accepted list, the parser and the load are one vocabulary: every
     // listed name resolves and deserializes, and every shape's canonical name
@@ -300,6 +296,5 @@ mod tests {
         assert_eq!(back.cull_distance, 60.0);
         // Held state is runtime-only, so it never rides the wire.
         assert!(!back.is_held);
-        assert_eq!(back.asset_id, AssetId::default());
     }
 }

@@ -41,21 +41,18 @@ pub(super) fn install_graphs(
     clip_slots: &HashMap<AssetId, (SkinnedMeshHandle, usize)>,
 ) -> usize {
     let mut installed = 0usize;
-    for g in ctx.drain::<AnimationGraph>() {
+    for (id, g) in ctx.drain_with_ids::<AnimationGraph>() {
         // The authored SkinnedMesh handle keys the target bucket (shared with
         // the clip drain) and the runtime `AnimationParams` / `SkeletonPose` /
         // `GroundProbes` this publishes below.
         let Some(target) = g.target else {
-            tracing::warn!(
-                "AnimationSystem: AnimationGraph {} has no target, ignored",
-                g.asset_id
-            );
+            tracing::warn!("AnimationSystem: AnimationGraph {id:?} has no target, ignored");
             continue;
         };
         let Some(bucket) = targets.get_mut(&target) else {
             tracing::warn!(
-                "AnimationSystem: AnimationGraph {} targets handle {} which has no clips, ignored",
-                g.asset_id,
+                "AnimationSystem: AnimationGraph {:?} targets handle {} which has no clips, ignored",
+                id,
                 target.index()
             );
             continue;
@@ -83,12 +80,12 @@ pub(super) fn install_graphs(
                     .find(|p| p.mesh_id == target)
                     .map(|p| p.skeleton.clone())
                 {
-                    super::ik::resolve_chains(g.asset_id, &g.ik_chains, &g.parameters, &skeleton)
+                    super::ik::resolve_chains(id, &g.ik_chains, &g.parameters, &skeleton)
                 } else {
                     tracing::warn!(
-                        "AnimationSystem: AnimationGraph {} has ik_chains but target handle {} has \
+                        "AnimationSystem: AnimationGraph {:?} has ik_chains but target handle {} has \
                          no skeleton pose; IK disabled",
-                        g.asset_id,
+                        id,
                         target.index()
                     );
                     Vec::new()
@@ -108,7 +105,9 @@ pub(super) fn install_graphs(
                 });
                 installed += 1;
             }
-            Err(e) => tracing::warn!("AnimationSystem: {e}; falling back to weighted blend"),
+            Err(e) => tracing::warn!(
+                "AnimationSystem: AnimationGraph {id:?}: {e}; falling back to weighted blend"
+            ),
         }
     }
     installed

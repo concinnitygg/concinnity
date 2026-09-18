@@ -19,6 +19,30 @@ pub type ClipRects = HashMap<AssetId, [f32; 4]>;
 /// Draw layer per overlay asset. An asset absent from the table is layer 0.
 pub type OverlayLayers = HashMap<AssetId, i32>;
 
+/// Where one overlay element's draw call lands, resolved by the caller from
+/// the element's asset id through [`ClipRects`] and [`OverlayLayers`].
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Placement {
+    /// Scissor band `[x, y, width, height]` in the reference canvas; `None`
+    /// draws unclipped.
+    pub clip: Option<[f32; 4]>,
+    /// Draw layer; 0 unless a screen or override lifts the element.
+    pub layer: i32,
+}
+
+impl Placement {
+    /// The placement of the element with `id`, read from the frame's tables.
+    pub fn of(id: Option<AssetId>, clips: &ClipRects, layers: &OverlayLayers) -> Self {
+        let Some(id) = id else {
+            return Self::default();
+        };
+        Self {
+            clip: clips.get(&id).copied(),
+            layer: layers.get(&id).copied().unwrap_or(0),
+        }
+    }
+}
+
 /// Slot in the backend's atlas pool per streamed texture. A textured sprite
 /// whose texture is absent falls back to a solid fill.
 pub type TextureSlots = HashMap<TextureHandle, usize>;

@@ -220,13 +220,7 @@ mod tests {
 
         let meshes: alloc::vec::Vec<_> = world.inner().query::<ProceduralMesh>().collect();
         assert_eq!(meshes.len(), 1);
-        assert_eq!(
-            meshes[0],
-            &ProceduralMesh {
-                asset_id: meshes[0].asset_id,
-                ..sphere
-            }
-        );
+        assert_eq!(meshes[0], &sphere);
     }
 
     // Raw geometry takes the same path as a generator's: bake, hand over, run.

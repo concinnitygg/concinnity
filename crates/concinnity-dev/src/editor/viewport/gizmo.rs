@@ -205,7 +205,7 @@ pub(crate) fn axis_drag_t(origin: [f32; 3], axis: [f32; 3], ray: &PickRay) -> Op
 
 // Injected sprites: hidden squares, one run + tip per axis. The tint is fixed
 // per axis; the tick only moves and shows them.
-pub(crate) fn sprites() -> Vec<Sprite> {
+pub(crate) fn sprites() -> Vec<(AssetId, Sprite)> {
     let mut out = Vec::new();
     for (axis, tint) in AXIS_TINTS.iter().enumerate() {
         for seg in 0..SEGMENTS {
@@ -216,13 +216,13 @@ pub(crate) fn sprites() -> Vec<Sprite> {
     out
 }
 
-fn square(id: AssetId, tint: [f32; 4]) -> Sprite {
-    Sprite {
-        asset_id: id,
+fn square(id: AssetId, tint: [f32; 4]) -> (AssetId, Sprite) {
+    let square = Sprite {
         tint,
         visible: false,
         ..Default::default()
-    }
+    };
+    (id, square)
 }
 
 // Lay the dotted runs from just outside the origin to each tip, center the
@@ -257,7 +257,7 @@ pub(crate) fn place(world: &mut World, layout: &Layout, mode: GizmoMode) {
 
 pub(crate) fn hide(world: &mut World) {
     for id in all_sprite_ids() {
-        if let Some(s) = world.query_mut::<Sprite>().find(|s| s.asset_id == id) {
+        if let Some(s) = world.get_mut_by_id::<Sprite>(id) {
             s.visible = false;
         }
     }
@@ -265,7 +265,7 @@ pub(crate) fn hide(world: &mut World) {
 }
 
 fn place_square(world: &mut World, id: AssetId, center: [f32; 2], size: f32, radius: f32) {
-    if let Some(s) = world.query_mut::<Sprite>().find(|s| s.asset_id == id) {
+    if let Some(s) = world.get_mut_by_id::<Sprite>(id) {
         s.x = center[0] - size * 0.5;
         s.y = center[1] - size * 0.5;
         s.width = size;

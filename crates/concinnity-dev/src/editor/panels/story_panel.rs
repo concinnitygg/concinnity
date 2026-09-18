@@ -479,38 +479,20 @@ mod tests {
         let mut world = injected_world();
         let l = lines(4);
         place(&mut world, Some(&view(&l, 0, 1)), [20.0, 20.0], size());
-        let input = world
-            .query::<TextInput>()
-            .find(|t| t.asset_id == LINE_INPUT)
-            .unwrap();
+        let input = world.get_by_id::<TextInput>(LINE_INPUT).unwrap();
         assert!(
             input.visible && input.focused,
             "edit line is the live input"
         );
-        let slot1 = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == row_label(1))
-            .unwrap();
+        let slot1 = world.get_by_id::<TextLabel>(row_label(1)).unwrap();
         assert!(!slot1.visible, "the edit slot's label yields to the input");
-        let slot2 = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == row_label(2))
-            .unwrap();
+        let slot2 = world.get_by_id::<TextLabel>(row_label(2)).unwrap();
         assert!(slot2.visible);
         assert_eq!(slot2.content, "line 2");
         // Rows past the story are blank; short story shows no scrollbar.
-        let slot5 = world
-            .query::<Sprite>()
-            .find(|s| s.asset_id == row_bg(5))
-            .unwrap();
+        let slot5 = world.get_by_id::<Sprite>(row_bg(5)).unwrap();
         assert!(!slot5.visible);
-        assert!(
-            !world
-                .query::<Sprite>()
-                .find(|s| s.asset_id == LINE_THUMB)
-                .unwrap()
-                .visible
-        );
+        assert!(!world.get_by_id::<Sprite>(LINE_THUMB).unwrap().visible);
     }
 
     #[test]
@@ -518,17 +500,10 @@ mod tests {
         let mut world = injected_world();
         let l = lines(40);
         place(&mut world, Some(&view(&l, 20, 3)), [20.0, 20.0], size());
-        let input = world
-            .query::<TextInput>()
-            .find(|t| t.asset_id == LINE_INPUT)
-            .unwrap();
+        let input = world.get_by_id::<TextInput>(LINE_INPUT).unwrap();
         assert!(!input.visible, "a scrolled-away edit line has no control");
         assert!(
-            world
-                .query::<Sprite>()
-                .find(|s| s.asset_id == LINE_THUMB)
-                .unwrap()
-                .visible,
+            world.get_by_id::<Sprite>(LINE_THUMB).unwrap().visible,
             "a long story shows the scrollbar"
         );
     }
@@ -542,26 +517,13 @@ mod tests {
             ..view(&l, 0, 0)
         };
         place(&mut world, Some(&v), [20.0, 20.0], size());
-        let r0 = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == row_label(0))
-            .unwrap();
+        let r0 = world.get_by_id::<TextLabel>(row_label(0)).unwrap();
         assert!(r0.visible && r0.content == "+ Create story");
         assert!(
-            !world
-                .query::<Sprite>()
-                .find(|s| s.asset_id == APPLY_BG)
-                .unwrap()
-                .visible,
+            !world.get_by_id::<Sprite>(APPLY_BG).unwrap().visible,
             "Apply hidden in create mode"
         );
-        assert!(
-            !world
-                .query::<TextInput>()
-                .find(|t| t.asset_id == LINE_INPUT)
-                .unwrap()
-                .visible
-        );
+        assert!(!world.get_by_id::<TextInput>(LINE_INPUT).unwrap().visible);
     }
 
     #[test]

@@ -320,34 +320,21 @@ mod tests {
         let mut world = injected_world();
         let backing = rows(3);
         place(&mut world, Some(&view(&backing, 1)), [20.0, 20.0]);
-        let caption = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == row_label(0))
-            .unwrap();
+        let caption = world.get_by_id::<TextLabel>(row_label(0)).unwrap();
         assert!(caption.visible && caption.content == "item 0");
-        let tag = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == row_tag(0))
-            .unwrap();
+        let tag = world.get_by_id::<TextLabel>(row_tag(0)).unwrap();
         assert!(tag.visible && tag.content == "entity");
         // Only the selected row keeps a background with the cursor away.
         let lit: Vec<usize> = (0..ROW_POOL)
             .filter(|&i| {
                 world
-                    .query::<Sprite>()
-                    .find(|s| s.asset_id == row_bg(i))
+                    .get_by_id::<Sprite>(row_bg(i))
                     .is_some_and(|s| s.visible)
             })
             .collect();
         assert_eq!(lit, vec![1]);
         // Slots past the window are blank.
-        assert!(
-            !world
-                .query::<TextLabel>()
-                .find(|l| l.asset_id == row_label(3))
-                .unwrap()
-                .visible
-        );
+        assert!(!world.get_by_id::<TextLabel>(row_label(3)).unwrap().visible);
         let input = world.query::<TextInput>().next().unwrap();
         assert!(input.visible && input.focused);
     }
@@ -357,10 +344,7 @@ mod tests {
         let mut world = injected_world();
         let backing = rows(0);
         place(&mut world, Some(&view(&backing, 0)), [20.0, 20.0]);
-        let first = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == row_label(0))
-            .unwrap();
+        let first = world.get_by_id::<TextLabel>(row_label(0)).unwrap();
         assert!(first.visible && first.content == "no match");
     }
 

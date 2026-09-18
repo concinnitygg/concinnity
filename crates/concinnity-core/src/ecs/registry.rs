@@ -69,9 +69,9 @@ macro_rules! for_each_component {
                 GraphicsConfig    => $crate::components::GraphicsConfig { gen, external, singleton, renders, consumed },
                 Shader            => $crate::components::Shader { manual, external, compiled, consumed },
                 Camera3D          => $crate::components::Camera3D { manual, external, useful_blank, live, args: Camera3D },
-                CameraTrack       => $crate::components::CameraTrack { manual, external, singleton, id, args: CameraTrack },
+                CameraTrack       => $crate::components::CameraTrack { manual, external, singleton, args: CameraTrack },
                 FrameInput        => $crate::components::FrameInput { gen, runtime },
-                Prop              => $crate::components::Prop { gen, external, id, renders, validate: prop, consumed: PropInstance },
+                Prop              => $crate::components::Prop { gen, external, renders, validate: prop, consumed: PropInstance },
                 RigidBody         => $crate::components::RigidBody { gen, external, validate: rigid_body },
                 PropBody          => $crate::components::PropBody { gen, external, consumed },
                 Room              => $crate::components::Room { manual, external, compiled, useful_blank, args: Room, consumed },
@@ -79,35 +79,35 @@ macro_rules! for_each_component {
                 PointLight        => $crate::components::PointLight { gen, external, useful_blank, validate: point_light },
                 SpotLight         => $crate::components::SpotLight { gen, external, useful_blank, validate: spot_light },
                 RectAreaLight     => $crate::components::RectAreaLight { gen, external, useful_blank, validate: rect_area_light },
-                ProceduralMesh    => $crate::components::ProceduralMesh { gen, external, compiled, id },
-                Model             => $crate::components::Model { gen, external, id, consumed },
-                Scene             => $crate::components::Scene { gen, external, id, consumed },
-                TextLabel         => $crate::components::TextLabel { gen, external, id, useful_blank, renders, live },
+                ProceduralMesh    => $crate::components::ProceduralMesh { gen, external, compiled },
+                Model             => $crate::components::Model { gen, external, consumed },
+                Scene             => $crate::components::Scene { gen, external, consumed },
+                TextLabel         => $crate::components::TextLabel { gen, external, useful_blank, renders, live },
                 HitRegion         => $crate::components::HitRegion { gen, external, useful_blank, consumed },
                 File              => $crate::components::File { manual, external, compiled, args: File, consumed },
-                BlockType         => $crate::components::BlockType { gen, external, id, useful_blank, consumed },
-                VoxelChunk        => $crate::components::VoxelChunk { gen, external, compiled, id, validate: voxel_chunk, consumed },
-                InstancedProp     => $crate::components::InstancedProp { gen, external, id, renders, validate: instanced_prop, consumed },
+                BlockType         => $crate::components::BlockType { gen, external, useful_blank, consumed },
+                VoxelChunk        => $crate::components::VoxelChunk { gen, external, compiled, validate: voxel_chunk, consumed },
+                InstancedProp     => $crate::components::InstancedProp { gen, external, renders, validate: instanced_prop, consumed },
                 PostProcessConfig => $crate::components::PostProcessConfig { manual, external, singleton, consumed },
-                Animation         => $crate::components::Animation { gen, external, id, consumed },
+                Animation         => $crate::components::Animation { gen, external, consumed },
                 SkeletonPose      => $crate::components::SkeletonPose { runtime, build: skeleton_pose },
                 StreamingConfig   => $crate::components::StreamingConfig { gen, external, singleton, consumed },
                 VoxelWorld        => $crate::components::VoxelWorld { gen, external, renders, consumed },
                 AudioEmitter      => $crate::components::AudioEmitter { gen, external, useful_blank },
-                Sprite            => $crate::components::Sprite { gen, external, id, useful_blank, renders, live },
+                Sprite            => $crate::components::Sprite { gen, external, useful_blank, renders, live },
                 KeyBinding        => $crate::components::KeyBinding { gen, external, useful_blank, consumed },
-                Screen            => $crate::components::Screen { gen, external, id, useful_blank, consumed },
-                Decal             => $crate::components::Decal { gen, external, id, useful_blank, validate: decal, consumed },
+                Screen            => $crate::components::Screen { gen, external, useful_blank, consumed },
+                Decal             => $crate::components::Decal { gen, external, useful_blank, validate: decal, consumed },
                 VolumetricFog     => $crate::components::VolumetricFog { gen, external, useful_blank, validate: volumetric_fog, consumed },
-                PhysicsJoint             => $crate::components::PhysicsJoint { gen, external, id, consumed },
-                ParticleEmitter   => $crate::components::ParticleEmitter { gen, external, id, useful_blank, validate: particle_emitter, consumed },
-                WaterSurface      => $crate::components::WaterSurface { gen, external, id, useful_blank, renders, validate: water_surface, consumed },
+                PhysicsJoint             => $crate::components::PhysicsJoint { gen, external, consumed },
+                ParticleEmitter   => $crate::components::ParticleEmitter { gen, external, useful_blank, validate: particle_emitter, consumed },
+                WaterSurface      => $crate::components::WaterSurface { gen, external, useful_blank, renders, validate: water_surface, consumed },
                 SdfVolume         => $crate::components::SdfVolume { manual, external, compiled, renders, validate: sdf_volume, consumed },
-                GlassPanel        => $crate::components::GlassPanel { gen, external, id, useful_blank, validate: glass_panel, consumed },
+                GlassPanel        => $crate::components::GlassPanel { gen, external, useful_blank, validate: glass_panel, consumed },
                 LayoutContainer   => $crate::components::LayoutContainer { gen, external, renders, live },
                 PhysicsConfig     => $crate::components::PhysicsConfig { gen, external, singleton },
                 FpsCounter        => $crate::components::FpsCounter { gen, external, useful_blank },
-                FrameReport       => $crate::components::FrameReport { gen, external, singleton, id },
+                FrameReport       => $crate::components::FrameReport { gen, external, singleton },
                 StatHud           => $crate::components::StatHud { gen, external, renders },
                 ScrollPanel       => $crate::components::ScrollPanel { gen, external, consumed },
                 ReflectionProbe   => $crate::components::ReflectionProbe { gen, external, useful_blank, validate: reflection_probe },
@@ -129,23 +129,24 @@ macro_rules! for_each_component {
                 Spawner           => $crate::components::Spawner { manual, external, args: Spawner },
                 DebugHud          => $crate::components::DebugHud { gen, external, renders },
                 AudioCue          => $crate::components::AudioCue { gen, external, useful_blank },
-                Story             => $crate::components::Story { gen, external, id },
+                Story             => $crate::components::Story { gen, external },
                 AppConfig         => $crate::components::AppConfig { manual, external, singleton, args: AppConfig },
-                AnimationGraph         => $crate::components::AnimationGraph { gen, external, id, consumed },
+                AnimationGraph         => $crate::components::AnimationGraph { gen, external, consumed },
                 AnimationParams        => $crate::components::AnimationParams { runtime, build: anim_params },
                 CharacterRig      => $crate::components::CharacterRig { runtime, build: character_rig },
                 GroundProbes      => $crate::components::GroundProbes { runtime },
                 CameraProbe       => $crate::components::CameraProbe { runtime },
-                TextInput         => $crate::components::TextInput { gen, external, id, useful_blank, renders, live },
-                Behavior          => $crate::components::Behavior { gen, external, id, useful_blank, live },
+                TextInput         => $crate::components::TextInput { gen, external, useful_blank, renders, live },
+                Behavior          => $crate::components::Behavior { gen, external, useful_blank, live },
                 Variables         => $crate::components::Variables { gen, external, singleton, live },
-                TriggerVolume     => $crate::components::TriggerVolume { gen, external, id, useful_blank },
+                TriggerVolume     => $crate::components::TriggerVolume { gen, external, useful_blank },
                 Hidden            => $crate::components::Hidden { runtime },
                 LoadingOverlay    => $crate::components::LoadingOverlay { gen, external, singleton, renders },
                 AudioOcclusionProbe => $crate::components::AudioOcclusionProbe { runtime },
-                CharacterShape    => $crate::components::CharacterShape { gen, external, id },
+                CharacterShape    => $crate::components::CharacterShape { gen, external },
                 EngineDefaults    => $crate::components::EngineDefaults { gen, external, singleton, consumed },
-                SkyRotation       => $crate::components::SkyRotation { gen, external, singleton, id, validate: sky_rotation },
+                SkyRotation       => $crate::components::SkyRotation { gen, external, singleton, validate: sky_rotation },
+                Identity          => $crate::components::Identity { runtime },
             },
 
             // Resource: declared in a world and compiled into the blob's
@@ -175,7 +176,7 @@ crate::for_each_component!(define_components);
 // Generate the trivial `impl Component` blocks from the shared component list.
 //
 // The runtime trait is small: a NAME, a `from_baked` blob loader, and the
-// optional identity / payload injection hooks. Most components are pure data
+// optional payload injection hook. Most components are pure data
 // whose impl is mechanical, generated here from each list entry's compact
 // `{ ... }` metadata block. Entries whose impl is bespoke mark themselves
 // `manual` and keep their impl; their trailing flags (origin, args type)
@@ -189,8 +190,6 @@ crate::for_each_component!(define_components);
 //     compiled                  -- an `inject_locator` that stores into
 //                                  `self.locator` (and marks the payload
 //                                  world-side)
-//     id                        -- an `inject_name` that stores into
-//                                  `self.asset_id`
 //     singleton                 -- at most one instance belongs to a world
 //                                  (world-side only)
 //     useful_blank              -- meaningful when declared with only default
@@ -233,7 +232,7 @@ macro_rules! cn_impl_components {
     (@one $variant:ident $ty:path { manual $($rest:tt)* }) => {};
 
     // Generated impls: seed an empty method accumulator, then consume the flag
-    // list one token at a time. Only `compiled` and `id` contribute runtime
+    // list one token at a time. Only `compiled` contributes runtime
     // code; the authoring flags are consumed (and used) by the world registry.
     (@one $variant:ident $ty:path { gen $($flags:tt)* }) => {
         cn_impl_components!(@munch $variant $ty [] $($flags)*);
@@ -252,13 +251,6 @@ macro_rules! cn_impl_components {
             [$($body)*
              fn inject_locator(&mut self, locator: $crate::ecs::PayloadLocator) {
                  self.locator = Some(locator);
-             }]
-            $($rest)*);
-    };
-    (@munch $variant:ident $ty:path [$($body:tt)*] , id $($rest:tt)*) => {
-        cn_impl_components!(@munch $variant $ty
-            [$($body)* fn inject_name(&mut self, id: $crate::ecs::asset_id::AssetId) {
-                 self.asset_id = id;
              }]
             $($rest)*);
     };
@@ -423,12 +415,11 @@ mod tests {
         assert_eq!(asset.tag(), ComponentTag::Transform);
     }
 
-    // Injection is a no-op for a type that overrides neither hook, so it lands
-    // on the value without changing what the value holds.
+    // Injection is a no-op for a type that does not override the hook, so it
+    // lands on the value without changing what the value holds.
     #[test]
     fn injection_dispatches_to_the_variant_it_holds() {
         let mut asset = ComponentAsset::from(Transform::default());
-        asset.inject_name(AssetId(3));
         asset.inject_locator(PayloadLocator {
             blob_index: 0,
             offset: 0,
@@ -476,8 +467,7 @@ mod tests {
         }
     }
 
-    // The record's discriminant picks the type, the bytes rebuild the value,
-    // and a named record has its identity injected on the way out.
+    // The record's discriminant picks the type and the bytes rebuild the value.
     #[test]
     fn a_baked_record_loads_as_the_component_its_discriminant_names() {
         let prop = Prop {
@@ -492,7 +482,6 @@ mod tests {
             panic!("expected a prop");
         };
         assert_eq!(loaded.position, [1.0, 2.0, 3.0]);
-        assert_eq!(loaded.asset_id, AssetId(7));
     }
 
     #[test]

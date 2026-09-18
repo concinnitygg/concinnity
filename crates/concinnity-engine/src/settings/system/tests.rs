@@ -100,31 +100,6 @@ impl Fixture {
             Ok(())
         });
 
-        let mut components = ComponentStorage::default();
-        for (id, content) in [
-            (VALUE_LABEL, "value"),
-            (QUALITY_LABEL, "quality"),
-            (SUB_ROW_LABEL, "sub"),
-            (REBIND_LABEL, "rebind"),
-            (VICTIM_LABEL, "victim"),
-            (RESOLUTION_LABEL, "resolution"),
-            (TOGGLE_LABEL, "toggle"),
-            (PAD_REBIND_LABEL, "pad_rebind"),
-            (PAD_VICTIM_LABEL, "pad_victim"),
-        ] {
-            components.push_typed(TextLabel {
-                asset_id: id,
-                content: content.to_string(),
-                color: LIT,
-                ..Default::default()
-            });
-        }
-        components.push_typed(Sprite {
-            asset_id: HANDLE,
-            x: 0.0,
-            ..Default::default()
-        });
-
         let cycle_value_labels = [
             (SettingKey::GraphicsQuality, QUALITY_LABEL),
             (SettingKey::RenderScale, VALUE_LABEL),
@@ -210,9 +185,9 @@ impl Fixture {
             published_disabled_inputs: None,
         };
 
-        Fixture {
+        let mut fixture = Fixture {
             world: World {
-                components,
+                components: ComponentStorage::default(),
                 blob: BlobData::new(vec![Some(Vec::new())]),
                 profile: FrameProfile::default(),
                 resources: Resources::new(),
@@ -222,7 +197,38 @@ impl Fixture {
             backend,
             calls,
             saved,
+        };
+        {
+            let mut ctx = fixture.world.ctx();
+            for (id, content) in [
+                (VALUE_LABEL, "value"),
+                (QUALITY_LABEL, "quality"),
+                (SUB_ROW_LABEL, "sub"),
+                (REBIND_LABEL, "rebind"),
+                (VICTIM_LABEL, "victim"),
+                (RESOLUTION_LABEL, "resolution"),
+                (TOGGLE_LABEL, "toggle"),
+                (PAD_REBIND_LABEL, "pad_rebind"),
+                (PAD_VICTIM_LABEL, "pad_victim"),
+            ] {
+                ctx.push_identified(
+                    id,
+                    TextLabel {
+                        content: content.to_string(),
+                        color: LIT,
+                        ..Default::default()
+                    },
+                );
+            }
+            ctx.push_identified(
+                HANDLE,
+                Sprite {
+                    x: 0.0,
+                    ..Default::default()
+                },
+            );
         }
+        fixture
     }
 
     // Queue `cmds` and run one drain over them, replaying the recorded ops
@@ -261,8 +267,7 @@ impl Fixture {
     fn label(&mut self, id: AssetId) -> String {
         self.world
             .ctx()
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == id)
+            .get_by_id::<TextLabel>(id)
             .map(|l| l.content.clone())
             .expect("label present")
     }
@@ -270,8 +275,7 @@ impl Fixture {
     fn label_color(&mut self, id: AssetId) -> [f32; 3] {
         self.world
             .ctx()
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == id)
+            .get_by_id::<TextLabel>(id)
             .map(|l| l.color)
             .expect("label present")
     }
@@ -455,8 +459,7 @@ fn slider_moves_the_handle_along_its_track() {
     let handle_x = f
         .world
         .ctx()
-        .query::<Sprite>()
-        .find(|s| s.asset_id == HANDLE)
+        .get_by_id::<Sprite>(HANDLE)
         .map(|s| s.x)
         .expect("handle present");
     // track_x 100 + 0.5 * (track_w 200 - handle_w 20).
@@ -472,8 +475,7 @@ fn slider_clamps_an_out_of_range_fraction() {
     let handle_x = f
         .world
         .ctx()
-        .query::<Sprite>()
-        .find(|s| s.asset_id == HANDLE)
+        .get_by_id::<Sprite>(HANDLE)
         .map(|s| s.x)
         .expect("handle present");
     assert_eq!(handle_x, 280.0, "pinned to the track's right end");
@@ -488,8 +490,7 @@ fn slider_steps_by_next_and_prev() {
     let handle_x = |f: &mut Fixture| {
         f.world
             .ctx()
-            .query::<Sprite>()
-            .find(|s| s.asset_id == HANDLE)
+            .get_by_id::<Sprite>(HANDLE)
             .map(|s| s.x)
             .expect("handle present")
     };

@@ -45,9 +45,9 @@ pub trait BehaviorStore: core::fmt::Debug + Send {
     fn write(&self, state: &BehaviorState);
 }
 
-/// Content hash of a behavior definition. Asset identity is excluded (its serde
-/// skip), so a restored fired flag applies to the behavior it was saved for and
-/// to no other.
+/// Content hash of a behavior definition. A save pairs it with the behavior's
+/// asset id, so a restored fired flag applies to the behavior it was saved for,
+/// unedited, and to no other.
 pub fn def_hash(def: &Behavior) -> u64 {
     let bytes = postcard::to_allocvec(def).unwrap_or_default();
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
@@ -62,21 +62,15 @@ pub fn def_hash(def: &Behavior) -> u64 {
 mod tests {
     use super::*;
     use crate::components::BehaviorSource;
-    use crate::ecs::asset_id::AssetId;
     use alloc::string::ToString;
 
     #[test]
-    fn def_hash_tracks_content_not_identity() {
+    fn def_hash_tracks_content() {
         let a = Behavior {
-            asset_id: AssetId(1),
             on: BehaviorSource::Tick,
             ..Default::default()
         };
-        let same_content = Behavior {
-            asset_id: AssetId(9),
-            ..a.clone()
-        };
-        assert_eq!(def_hash(&a), def_hash(&same_content));
+        assert_eq!(def_hash(&a), def_hash(&a.clone()));
 
         let edited = Behavior {
             on: BehaviorSource::Variable("v".to_string()),

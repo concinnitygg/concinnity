@@ -48,7 +48,7 @@ mod context;
 mod declare;
 mod define_components;
 mod entity;
-mod entity_by_name;
+mod entity_by_id;
 mod event;
 mod event_store;
 mod ext_columns;
@@ -126,11 +126,8 @@ pub use protocol::{
 // table names the gate that builds each one.
 pub use system::{StepResult, System};
 
-// The name -> Entity index the load-time Prop decomposition pass publishes.
-// Renderer-free, so the physics / audio subsystem crates can resolve a name
-// reference to an Entity through it; the client's load-time decomposition pass
-// publishes it.
-pub use entity_by_name::EntityByName;
+// The asset id -> Entity index every identified entity is registered in.
+pub use entity_by_id::EntityById;
 
 // The payload-access seam systems reach through: keeps the storage mechanism
 // free of blob file I/O (`concinnity_host::store`'s `BlobData` is the runtime

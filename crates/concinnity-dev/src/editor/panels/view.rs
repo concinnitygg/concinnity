@@ -159,15 +159,9 @@ mod tests {
             &rows(&[("Assets", false), ("Preview", true), ("Templates", false)]),
             [0.0, 0.0],
         );
-        let title = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == title_label(BASE))
-            .unwrap();
+        let title = world.get_by_id::<TextLabel>(title_label(BASE)).unwrap();
         assert!(title.visible && title.content == "View");
-        let first = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == row_label(BASE, 0))
-            .unwrap();
+        let first = world.get_by_id::<TextLabel>(row_label(BASE, 0)).unwrap();
         assert_eq!(first.content, "Assets");
     }
 
@@ -183,8 +177,7 @@ mod tests {
             [0.0, 0.0],
         );
         let off = world
-            .query::<Sprite>()
-            .find(|s| s.asset_id == check_box(0))
+            .get_by_id::<Sprite>(check_box(0))
             .cloned()
             .unwrap()
             .tint;
@@ -195,11 +188,7 @@ mod tests {
             &rows(&[("Assets", true)]),
             [0.0, 0.0],
         );
-        let on = world
-            .query::<Sprite>()
-            .find(|s| s.asset_id == check_box(0))
-            .unwrap()
-            .tint;
+        let on = world.get_by_id::<Sprite>(check_box(0)).unwrap().tint;
         assert_ne!(off, on, "the checkbox tint flips with the panel state");
     }
 

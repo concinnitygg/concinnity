@@ -276,24 +276,26 @@ pub(crate) struct Icon {
 
 // The injected pools, all hidden: icon chips with their glyph labels and the
 // box-outline dot run. Per-frame placement recolors the mutable parts.
-pub(crate) fn sprites() -> Vec<Sprite> {
-    let mut out: Vec<Sprite> = (0..MAX_BILLBOARDS)
-        .map(|i| Sprite {
-            asset_id: icon_id(i),
-            tint: ICON_TINT,
-            corner_radius: ICON_RADIUS,
-            border_width: ICON_BORDER_W,
-            visible: false,
-            ..Default::default()
+pub(crate) fn sprites() -> Vec<(AssetId, Sprite)> {
+    let mut out: Vec<(AssetId, Sprite)> = (0..MAX_BILLBOARDS)
+        .map(|i| {
+            let icon = Sprite {
+                tint: ICON_TINT,
+                corner_radius: ICON_RADIUS,
+                border_width: ICON_BORDER_W,
+                visible: false,
+                ..Default::default()
+            };
+            (icon_id(i), icon)
         })
         .collect();
     for edge in 0..BOX_EDGES {
         for seg in 0..EDGE_SEGMENTS {
-            out.push(Sprite {
-                asset_id: box_segment_id(edge, seg),
+            let dot = Sprite {
                 visible: false,
                 ..Default::default()
-            });
+            };
+            out.push((box_segment_id(edge, seg), dot));
         }
     }
     out
@@ -381,7 +383,7 @@ pub(crate) fn hide(world: &mut World) {
 }
 
 fn sprite_mut(world: &mut World, id: AssetId) -> Option<&mut Sprite> {
-    world.query_mut::<Sprite>().find(|s| s.asset_id == id)
+    world.get_mut_by_id::<Sprite>(id)
 }
 
 #[cfg(test)]

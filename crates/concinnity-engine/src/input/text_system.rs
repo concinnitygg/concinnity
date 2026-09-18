@@ -6,8 +6,7 @@
 //! place.
 
 use concinnity_core::components::{FrameInput, InputKey, SpriteFit, TextInput};
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::ecs::{Access, PipelineContext, StepResult, System};
+use concinnity_core::ecs::{Access, Entity, PipelineContext, StepResult, System};
 use concinnity_core::gfx::overlay::OverlayTransform;
 
 // One text edit applied at the caret in a single frame.
@@ -130,11 +129,11 @@ impl System for TextInputSystem {
         // (last one wins, matching draw order); a click that misses every field
         // blurs them all. Between clicks the focus flag on the component stands,
         // so another system (or the editor) can pre-focus a field.
-        let hit_id: Option<AssetId> = if input.left_click {
+        let hit: Option<Entity> = if input.left_click {
             let mut hit = None;
-            for ti in ctx.query::<TextInput>() {
+            for (entity, ti) in ctx.query_with_entity::<TextInput>() {
                 if ti.visible && cursor_in_field(ti, input.mouse_x, input.mouse_y, input.viewport) {
-                    hit = Some(ti.asset_id);
+                    hit = Some(entity);
                 }
             }
             hit
@@ -142,9 +141,9 @@ impl System for TextInputSystem {
             None
         };
 
-        for ti in ctx.query_mut::<TextInput>() {
+        for (entity, ti) in ctx.query_mut_with_entity::<TextInput>() {
             if input.left_click {
-                ti.focused = ti.visible && Some(ti.asset_id) == hit_id;
+                ti.focused = ti.visible && Some(entity) == hit;
             }
             // Only the focused field's caret is edited or drawn, so only it needs
             // the per-frame char-count walk. A click moves the caret to the end;
@@ -168,6 +167,7 @@ impl System for TextInputSystem {
 mod tests {
     use super::*;
     use crate::ecs::SYSTEMS;
+    use concinnity_core::ecs::asset_id::AssetId;
 
     #[test]
     fn insert_appends_and_advances_caret() {
@@ -282,12 +282,14 @@ mod tests {
         // A world with just a TextInput builds only TextInputSystem; a typed
         // character lands in the focused field.
         let mut world = World::new();
-        world.add_component(TextInput {
-            asset_id: AssetId(1),
-            focused: true,
-            screen: None,
-            ..Default::default()
-        });
+        world.push_identified(
+            AssetId(1),
+            TextInput {
+                focused: true,
+                screen: None,
+                ..Default::default()
+            },
+        );
         world.start(SYSTEMS).unwrap();
         world.add_component(FrameInput {
             typed_char: Some('h'),
@@ -300,24 +302,28 @@ mod tests {
     #[test]
     fn click_focuses_the_field_under_the_cursor() {
         let mut world = World::new();
-        world.add_component(TextInput {
-            asset_id: AssetId(1),
-            x: 0.0,
-            y: 0.0,
-            width: 100.0,
-            height: 40.0,
-            screen: None,
-            ..Default::default()
-        });
-        world.add_component(TextInput {
-            asset_id: AssetId(2),
-            x: 200.0,
-            y: 0.0,
-            width: 100.0,
-            height: 40.0,
-            screen: None,
-            ..Default::default()
-        });
+        world.push_identified(
+            AssetId(1),
+            TextInput {
+                x: 0.0,
+                y: 0.0,
+                width: 100.0,
+                height: 40.0,
+                screen: None,
+                ..Default::default()
+            },
+        );
+        world.push_identified(
+            AssetId(2),
+            TextInput {
+                x: 200.0,
+                y: 0.0,
+                width: 100.0,
+                height: 40.0,
+                screen: None,
+                ..Default::default()
+            },
+        );
         world.start(SYSTEMS).unwrap();
         // Click inside field 2.
         world.add_component(FrameInput {
@@ -329,8 +335,8 @@ mod tests {
         });
         world.step();
         let focus: Vec<(u32, bool)> = world
-            .query::<TextInput>()
-            .map(|t| (t.asset_id.0, t.focused))
+            .join2::<TextInput, concinnity_core::components::Identity>()
+            .map(|(_, t, identity)| (identity.id().0, t.focused))
             .collect();
         assert!(focus.contains(&(1, false)));
         assert!(focus.contains(&(2, true)));

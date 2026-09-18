@@ -15,8 +15,7 @@ use crate::memory::{Arena, MemTag};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
-use crate::ecs::asset_id::AssetIdsExhausted;
-use crate::ecs::asset_id::{AssetId, MintedIds};
+use crate::ecs::asset_id::AssetId;
 use crate::ecs::user_system::{self, UserSystem};
 use crate::ecs::waves::{self, ExecSchedule};
 use crate::ecs::{
@@ -113,17 +112,6 @@ impl Default for World {
     }
 }
 
-// The next minted id, drawn from the world's shared counter so ids handed out
-// before start and by the completion pass never collide.
-fn mint_id(ctx: &mut PipelineContext) -> Result<AssetId, AssetIdsExhausted> {
-    if ctx.resource::<MintedIds>().is_none() {
-        ctx.insert_resource(MintedIds::default());
-    }
-    ctx.resource_mut::<MintedIds>()
-        .expect("the counter was just ensured")
-        .next_id()
-}
-
 impl World {
     /// An empty world, for contexts that have no compiled payloads (e.g. unit
     /// tests, or worlds built entirely from runtime-only components).
@@ -157,10 +145,14 @@ impl World {
         }
     }
 
-    /// Add a component loaded from a blob def, returning its minted entity so
-    /// the loaders can index it by name.
-    pub fn add(&mut self, component: ComponentAsset) -> Entity {
-        self.components.push(component)
+    /// Add a component loaded from a blob def on a new entity, identified by
+    /// the def's asset id when it has one (see [`World::identify`]).
+    pub fn add(&mut self, component: ComponentAsset, id: Option<AssetId>) -> Entity {
+        let entity = self.components.push(component);
+        if let Some(id) = id {
+            self.identify(entity, id);
+        }
+        entity
     }
 
     /// Add one component to the world.
@@ -187,11 +179,10 @@ impl World {
     ) -> Result<MeshHandle, WorldError> {
         let (bytes, procedural) = payload.into_parts();
         let mut ctx = self.context();
-        let id = mint_id(&mut ctx)?;
+        let id = ctx.mint_id()?;
         let handle = crate::resource::append_mesh(&mut ctx, id, bytes);
-        if let Some(mut mesh) = procedural {
-            mesh.asset_id = id;
-            ctx.push(mesh);
+        if let Some(mesh) = procedural {
+            ctx.push_identified(id, mesh);
         }
         Ok(handle)
     }
@@ -220,7 +211,7 @@ impl World {
 
     /// Remove and drop every component of type C.
     pub fn remove_all<C: ComponentSlot>(&mut self) {
-        let _ = self.components.drain::<C>();
+        let _ = crate::ecs::entity_by_id::drain::<C>(&mut self.components, &mut self.resources);
     }
 
     /// Whether the world holds neither components nor systems.
@@ -294,11 +285,9 @@ impl World {
         self.components.is_alive(entity)
     }
 
-    /// Despawn an entity (all its components, recycling its id). Stands in for
-    /// the GraphicsSystem-mediated despawn in system tests that need an entity
-    /// gone before a later system step (e.g. physics-body reaping).
-    pub fn despawn(&mut self, entity: Entity) {
-        self.components.despawn(entity);
+    // The component storage and the resources, borrowed together.
+    pub(crate) fn storage_and_resources(&mut self) -> (&mut ComponentStorage, &mut Resources) {
+        (&mut self.components, &mut self.resources)
     }
 
     /// Read-only join over two component types, for code holding a `World`
@@ -725,12 +714,10 @@ mod tests {
         let (id, stored) = payloads.iter().nth(handle.index()).expect("the payload");
         assert_eq!(stored, &bytes[..]);
         let added: Vec<_> = world.query::<crate::components::ProceduralMesh>().collect();
+        assert_eq!(added, [&mesh]);
         assert_eq!(
-            added,
-            [&crate::components::ProceduralMesh {
-                asset_id: id,
-                ..mesh
-            }]
+            world.get_by_id::<crate::components::ProceduralMesh>(id),
+            Some(&mesh)
         );
     }
 

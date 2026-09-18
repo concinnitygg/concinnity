@@ -15,7 +15,7 @@ use crate::components::{
     PropInstance, RenderHandle, SkeletonPose, Spawner, Transform,
 };
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{Entity, EntityByName, FrameVec, PipelineContext};
+use crate::ecs::{Entity, FrameVec, PipelineContext};
 
 /// Instantiate a runtime copy of `template`'s renderable: clone each of its
 /// backend draw slots at `transform` through `clone_slot`, then build a new
@@ -24,10 +24,9 @@ use crate::ecs::{Entity, EntityByName, FrameVec, PipelineContext};
 ///
 /// `clone_slot(src_draw_idx, model)` returns the new backend slot index (a
 /// vacated slot reused, or a freshly appended one); it is the seam a host wires
-/// to its own allocator. When `name` is Some the new entity is registered under
-/// it so it can later be addressed by name like an authored placement;
-/// transient spawns (a Spawner's churn) pass None to avoid interning a name per
-/// spawn. Returns the new entity, or None when the template has no draw slots to
+/// to its own allocator. When `name` is Some the new entity is identified by it
+/// (see `PipelineContext::identify`) so it can later be addressed like an
+/// authored placement; transient spawns (a Spawner's churn) pass None. Returns the new entity, or None when the template has no draw slots to
 /// copy or a clone fails.
 pub fn spawn_from_template(
     ctx: &mut PipelineContext,
@@ -82,10 +81,8 @@ pub fn spawn_from_template(
     if let Some(secs) = lifetime {
         ctx.insert(entity, Lifetime { remaining: secs });
     }
-    if let Some(name) = name
-        && let Some(by_name) = ctx.resource_mut::<EntityByName>()
-    {
-        by_name.0.insert(name, entity);
+    if let Some(name) = name {
+        ctx.identify(entity, name);
     }
     Some(entity)
 }
@@ -99,8 +96,8 @@ pub fn spawn_from_template(
 /// entity carries its own SkeletonPose (so an animation system drives it, keyed
 /// on the shared mesh id, in lockstep with the template), a Transform (so the
 /// per-frame model push can move it), and an optional Lifetime. When `name` is
-/// Some the instance is registered so it can be addressed (e.g. despawned) by
-/// name. Returns the new entity, or None when the template is not skinned or
+/// Some the instance is identified by it so it can be addressed (e.g.
+/// despawned). Returns the new entity, or None when the template is not skinned or
 /// its instance pool is exhausted.
 pub fn spawn_skinned_from_template(
     ctx: &mut PipelineContext,
@@ -126,10 +123,8 @@ pub fn spawn_skinned_from_template(
     if let Some(secs) = lifetime {
         ctx.insert(entity, Lifetime { remaining: secs });
     }
-    if let Some(name) = name
-        && let Some(by_name) = ctx.resource_mut::<EntityByName>()
-    {
-        by_name.0.insert(name, entity);
+    if let Some(name) = name {
+        ctx.identify(entity, name);
     }
     Some(entity)
 }
@@ -309,8 +304,6 @@ mod tests {
     #[test]
     fn spawned_copy_carries_the_template_physics_components() {
         run(|ctx| {
-            ctx.insert_resource(EntityByName::default());
-
             let template = ctx.components.spawn();
             ctx.insert(template, Transform::default());
             ctx.insert(
@@ -366,8 +359,6 @@ mod tests {
     #[test]
     fn freed_draw_slot_is_reused_by_the_next_spawn() {
         run(|ctx| {
-            ctx.insert_resource(EntityByName::default());
-
             // A template placement occupying draw slot 0.
             let template = ctx.components.spawn();
             ctx.insert(template, Transform::default());
@@ -429,8 +420,6 @@ mod tests {
     #[test]
     fn skinned_spawn_claims_and_recycles_a_pooled_slot() {
         run(|ctx| {
-            ctx.insert_resource(EntityByName::default());
-
             // A skinned template at draw slot 0 with two pre-reserved hidden
             // copies (slots 1 and 2) in the pool.
             let template = ctx.components.spawn();
@@ -507,9 +496,8 @@ mod tests {
     }
 
     #[test]
-    fn spawn_registers_the_instance_by_name() {
+    fn spawn_identifies_the_named_instance() {
         run(|ctx| {
-            ctx.insert_resource(EntityByName::default());
             let template = ctx.components.spawn();
             ctx.insert(template, Transform::default());
             ctx.insert(template, RenderHandle { draws: [0].into() });
@@ -525,8 +513,12 @@ mod tests {
             )
             .expect("spawn");
 
-            let by_name = ctx.resource::<EntityByName>().unwrap();
-            assert_eq!(by_name.get(AssetId(42)), Some(spawned));
+            assert_eq!(ctx.entity_of(AssetId(42)), Some(spawned));
+            assert_eq!(
+                ctx.get::<crate::components::Identity>(spawned)
+                    .map(|i| i.id()),
+                Some(AssetId(42))
+            );
         });
     }
 

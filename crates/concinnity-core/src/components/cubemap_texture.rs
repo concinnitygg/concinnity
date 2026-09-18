@@ -1,7 +1,6 @@
 // HDR cubemap texture schema.
 
 use crate::ecs::PayloadLocator;
-use crate::ecs::asset_id::AssetId;
 use alloc::string::String;
 
 /// A six-face HDR cubemap baked from an equirectangular Radiance HDR source.
@@ -20,9 +19,6 @@ use alloc::string::String;
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct CubemapTexture {
-    /// Asset identity; injected via `inject_name`. Not part of `args`.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// Path to the source equirectangular HDR (`.hdr`) file, relative to the
     /// project root.
     pub source: String,
@@ -36,7 +32,6 @@ pub struct CubemapTexture {
 impl Default for CubemapTexture {
     fn default() -> Self {
         Self {
-            asset_id: AssetId::default(),
             source: String::new(),
             face_size: 256,
             locator: None,
@@ -53,7 +48,6 @@ mod tests {
         let c = CubemapTexture::default();
         assert!(c.source.is_empty());
         assert_eq!(c.face_size, 256);
-        assert_eq!(c.asset_id, AssetId::default());
         assert!(c.locator.is_none());
     }
 
@@ -68,7 +62,6 @@ mod tests {
         let back: CubemapTexture = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(back.face_size, 1024);
         // Identity and payload location are injected, never carried on the wire.
-        assert_eq!(back.asset_id, AssetId::default());
         assert!(back.locator.is_none());
     }
 }

@@ -19,17 +19,15 @@ use crate::editor::viewport::billboards;
 // pools.
 fn billboard_world(light_pos: [f32; 3], picks: Vec<(AssetId, [f32; 3], [f32; 3])>) -> World {
     let mut world = pick_world([0.0; 3], picks);
-    for s in billboards::sprites() {
-        world.add_component(s);
+    for (id, s) in billboards::sprites() {
+        world.push_identified(id, s);
     }
     let entity = world.push(PointLight {
         position: light_pos,
         ..Default::default()
     });
     let id = asset_id::intern("lamp");
-    let mut by_name = std::collections::BTreeMap::new();
-    by_name.insert(id, entity);
-    world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
+    world.identify(entity, id);
     world
 }
 
@@ -57,12 +55,11 @@ fn billboard_click_selects_the_light_and_seeds_its_transform() {
     // The seeded Transform mirrors the authored position, so the gizmo's
     // member resolve works on the light.
     let entity = world
-        .resource::<concinnity_core::ecs::EntityByName>()
+        .resource::<concinnity_core::ecs::EntityById>()
         .unwrap()
-        .0
-        .values()
+        .iter()
         .next()
-        .copied()
+        .map(|(_, e)| e)
         .unwrap();
     let t = world.get::<Transform>(entity).unwrap();
     assert_eq!(t.position, [0.0, 0.0, -5.0]);

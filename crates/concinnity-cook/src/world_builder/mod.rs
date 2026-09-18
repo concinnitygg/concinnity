@@ -128,7 +128,7 @@ impl WorldBuilder {
             if let Some(locator) = &def.payload {
                 component.inject_locator(locator.clone());
             }
-            world.add(component);
+            world.add(component, def.name);
         }
 
         // Load the compiled resource stream into the per-kind tables the

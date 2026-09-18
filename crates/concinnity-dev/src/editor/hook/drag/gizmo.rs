@@ -98,9 +98,7 @@ impl EditorHook {
         }
         let has_position = merged.get("position").is_some_and(|p| p.is_array());
         let id = self.handle_asset_id(handle)?;
-        let entity = world
-            .resource::<concinnity_core::ecs::EntityByName>()?
-            .get(id)?;
+        let entity = world.entity_of(id)?;
         if world.get::<Parent>(entity).is_some() {
             return None;
         }

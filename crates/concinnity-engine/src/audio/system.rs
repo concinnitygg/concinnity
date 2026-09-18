@@ -10,8 +10,8 @@ use concinnity_core::components::{
 use concinnity_core::ecs::Ref;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{
-    AudioClipHandle, Entity, EntityByName, EventCursor, PayloadLocator, PipelineContext, SimTiming,
-    StepResult, System,
+    AudioClipHandle, Entity, EventCursor, PayloadLocator, PipelineContext, SimTiming, StepResult,
+    System,
 };
 use concinnity_core::resource::AudioClipTable;
 use std::collections::{HashMap, HashSet};
@@ -441,8 +441,7 @@ impl System for AudioSystem {
         if self.emitters.values().any(|b| b.follows.is_some()) {
             for binding in self.emitters.values_mut() {
                 if let Some(prop_id) = binding.follows
-                    && let Some(entity) =
-                        ctx.resource::<EntityByName>().and_then(|n| n.get(prop_id))
+                    && let Some(entity) = ctx.entity_of(prop_id)
                     && let Some(t) = ctx.get::<Transform>(entity)
                 {
                     binding.position = t.position;
@@ -494,9 +493,9 @@ mod tests {
     };
     use concinnity_core::ecs::asset_id::AssetId;
     use concinnity_core::ecs::{
-        Arena, AudioClipHandle, ComponentSlot, ComponentStorage, Entity, EntityByName,
-        FrameContext, PayloadLocator, PipelineContext, ResourceKind, ResourceRecord, Resources,
-        StepResult, System,
+        Arena, AudioClipHandle, ComponentSlot, ComponentStorage, Entity, FrameContext,
+        PayloadLocator, PipelineContext, ResourceKind, ResourceRecord, Resources, StepResult,
+        System,
     };
     use concinnity_core::profile::FrameProfile;
     use concinnity_core::resource::AudioClipTable;
@@ -965,9 +964,7 @@ mod tests {
                     scale: [1.0; 3],
                 },
             );
-            let mut by_name = std::collections::BTreeMap::new();
-            by_name.insert(prop, e);
-            ctx.insert_resource(EntityByName(by_name));
+            ctx.identify(e, prop);
             e
         };
         assert!(sealed.ctx().get::<Transform>(entity).is_some());

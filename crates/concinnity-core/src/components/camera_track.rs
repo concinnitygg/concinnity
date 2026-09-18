@@ -3,7 +3,6 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::ecs::asset_id::AssetId;
 use crate::math::vec3;
 
 /// How a [CameraTrack](#cameratrack) leg paces the run between its start and
@@ -216,9 +215,6 @@ pub struct CameraTurnKey {
     Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields,
 )]
 pub struct CameraTrack {
-    /// Asset identity; injected via `inject_name`. Not part of `args`.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// The travel track, as offsets from the camera's starting position.
     pub travel: Vec<CameraTravelKey>,
     /// The turn track, as absolute headings.
@@ -274,7 +270,6 @@ impl CameraTrack {
             })
             .collect();
         Self {
-            asset_id: AssetId::default(),
             travel,
             turn,
             segments,
@@ -296,10 +291,6 @@ pub(crate) fn travel_seconds(leg: &CameraTravel) -> f32 {
 
 impl crate::ecs::Component for CameraTrack {
     const NAME: &'static str = "CameraTrack";
-
-    fn inject_name(&mut self, id: AssetId) {
-        self.asset_id = id;
-    }
 
     fn from_baked(bytes: &[u8]) -> Result<Self, crate::error::AssetError> {
         crate::ecs::decode_baked(bytes)

@@ -75,11 +75,7 @@ impl UiInputSystem {
         ctx: &mut PipelineContext,
     ) {
         let prev_text = value_label
-            .and_then(|id| {
-                ctx.query::<TextLabel>()
-                    .find(|l| l.asset_id == id)
-                    .map(|l| l.content.clone())
-            })
+            .and_then(|id| ctx.get_by_id::<TextLabel>(id).map(|l| l.content.clone()))
             .unwrap_or_default();
         if let Some(id) = value_label {
             let prompt = if captures_button(setting_key) {

@@ -172,8 +172,8 @@ resource_tables! {
     // locates the compiled geometry (vertices + indices + skeleton) while
     // `data_bytes` carries the baked runtime fields (placement, material/texture
     // handles, capsule, spawn reserve) as a `(name_id, SkinnedMesh)` postcard
-    // tuple -- `asset_id` is serde-skipped on the schema struct, so the interned
-    // name travels beside it for the runtime's spawn-by-name registration.
+    // tuple -- the struct carries no identity, so the interned name travels
+    // beside it for the runtime's spawn-by-name registration.
     SkinnedMeshTable => SkinnedMesh,
     // Materials, indexed by `MaterialHandle`. Unlike the payload-backed tables,
     // a Material is a DATA resource: cook bakes its validated args into the

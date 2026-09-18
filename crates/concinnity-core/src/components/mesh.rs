@@ -1,7 +1,6 @@
 // Raw mesh geometry schema.
 
 use crate::ecs::PayloadLocator;
-use crate::ecs::asset_id::AssetId;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -36,9 +35,6 @@ pub struct VertexData {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct Mesh {
-    /// Asset identity; injected via `inject_name`. Not part of `args`.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// Optional path to a `.glb` file. When set, the build imports
     /// `vertices` / `indices` from it; inline geometry leaves this empty.
     pub source: String,
@@ -76,7 +72,6 @@ fn default_lod_levels() -> u32 {
 impl Default for Mesh {
     fn default() -> Self {
         Self {
-            asset_id: AssetId::default(),
             source: String::new(),
             primitive_index: 0,
             chunk_index: None,
@@ -145,7 +140,6 @@ mod tests {
         assert_eq!(back.lod_distances, [10.0, 40.0]);
         assert_eq!(back.vertices[0].uv, [0.5, 0.5]);
         assert_eq!(back.indices, [0, 0, 0]);
-        assert_eq!(back.asset_id, AssetId::default());
     }
 
     #[test]

@@ -146,12 +146,14 @@ fn cube_world() -> Result<World, concinnity::Error> {
     // The turning sky. It carries the sun's light and its body together, so
     // the two never disagree about where the sun is: the light's direction is
     // rotated each frame and the body orbits the pivot as its parent.
-    world.add_component(SkyRotation {
-        asset_id: SKY_PIVOT,
-        axis: SKY_AXIS,
-        degrees_per_second: SKY_DEGREES_PER_SECOND,
-        angle_deg: 0.0,
-    });
+    world.add_identified(
+        SKY_PIVOT,
+        SkyRotation {
+            axis: SKY_AXIS,
+            degrees_per_second: SKY_DEGREES_PER_SECOND,
+            angle_deg: 0.0,
+        },
+    );
 
     // The sun: one green light, starting high behind the camera and rising
     // over it as the sky turns. The one directional light in the world, which
@@ -238,7 +240,6 @@ fn cube_world() -> Result<World, concinnity::Error> {
         roughness: 0.10,
         refraction_strength: 0.02,
         visible: true,
-        ..Default::default()
     });
 
     // The cube is three props at one transform: the black body from the box
@@ -297,14 +298,16 @@ fn sun_position() -> [f32; 3] {
 
 // One layer of the cube, at the cube's transform.
 fn place_on_cube(world: &mut World, id: AssetId, mesh: MeshHandle, material: MaterialHandle) {
-    world.add_component(Prop {
-        asset_id: id,
-        mesh: Some(mesh),
-        material: Some(material),
-        position: [0.0, CUBE_HEIGHT, 0.0],
-        rotation_deg: CUBE_TILT_DEGREES,
-        ..Default::default()
-    });
+    world.add_identified(
+        id,
+        Prop {
+            mesh: Some(mesh),
+            material: Some(material),
+            position: [0.0, CUBE_HEIGHT, 0.0],
+            rotation_deg: CUBE_TILT_DEGREES,
+            ..Default::default()
+        },
+    );
 }
 
 // The spin, written to each of the cube's three layers by name. It runs once a

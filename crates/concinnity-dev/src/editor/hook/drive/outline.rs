@@ -321,15 +321,13 @@ mod tests {
     }
 
     // A world holding one named entity carrying `component`, resolvable
-    // through the same EntityByName path the gizmo and billboards use.
+    // through the same `EntityById` path the gizmo and billboards use.
     fn world_with<C: ComponentSlot>(name: &str, component: C) -> World {
         asset_id::reset_interner();
         let id = asset_id::intern(name);
         let mut world = World::new();
         let entity = world.push(component);
-        let mut by_name = std::collections::BTreeMap::new();
-        by_name.insert(id, entity);
-        world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
+        world.identify(entity, id);
         world
     }
 
@@ -435,12 +433,11 @@ mod tests {
 
         // A gizmo-dragged Transform moves the outline off the authored spot.
         let e = world
-            .resource::<concinnity_core::ecs::EntityByName>()
+            .resource::<concinnity_core::ecs::EntityById>()
             .unwrap()
-            .0
-            .values()
+            .iter()
             .next()
-            .copied()
+            .map(|(_, e)| e)
             .unwrap();
         world.insert(
             e,
@@ -470,12 +467,11 @@ mod tests {
             }),
         );
         let e = world
-            .resource::<concinnity_core::ecs::EntityByName>()
+            .resource::<concinnity_core::ecs::EntityById>()
             .unwrap()
-            .0
-            .values()
+            .iter()
             .next()
-            .copied()
+            .map(|(_, e)| e)
             .unwrap();
         world.insert(e, Transform::default());
         let mut h = hook(vec![entry("crate", "Prop")]);

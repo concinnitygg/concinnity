@@ -7,7 +7,6 @@
 
 use crate::ecs::Component;
 use crate::ecs::PayloadLocator;
-use crate::ecs::asset_id::AssetId;
 use alloc::string::String;
 
 /// Per-volume parameter slots packed into a single fixed-size uniform
@@ -40,9 +39,6 @@ pub const SDF_PARAMS_LEN: usize = 32;
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct SdfVolume {
-    /// Asset identity; injected via `inject_name`. Not part of `args`.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// World-space center of the bounding box.
     pub center: [f32; 3],
     /// XYZ half-widths of the bounding box. The raymarch is clipped to the box,
@@ -89,7 +85,6 @@ pub struct SdfVolume {
 impl Default for SdfVolume {
     fn default() -> Self {
         Self {
-            asset_id: AssetId::default(),
             center: [0.0, 0.0, 0.0],
             extent: [1.0, 1.0, 1.0],
             fragment_shader: String::new(),
@@ -182,7 +177,6 @@ mod tests {
         assert_eq!(back.extent, [3.0, 3.0, 3.0]);
         assert_eq!(back.fragment_shader, "shaders/blob.slang".to_string());
         // Identity and payload location are injected at load, never authored.
-        assert_eq!(back.asset_id, AssetId::default());
         assert!(back.locator.is_none());
     }
 
@@ -208,10 +202,6 @@ impl Component for SdfVolume {
 
     fn from_baked(bytes: &[u8]) -> Result<Self, crate::error::AssetError> {
         crate::ecs::decode_baked(bytes)
-    }
-
-    fn inject_name(&mut self, id: AssetId) {
-        self.asset_id = id;
     }
 
     fn inject_locator(&mut self, locator: PayloadLocator) {

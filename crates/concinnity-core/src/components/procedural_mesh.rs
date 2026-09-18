@@ -3,7 +3,6 @@
 //! `PhysicsSystem` relies on.
 
 use crate::ecs::PayloadLocator;
-use crate::ecs::asset_id::AssetId;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -28,9 +27,6 @@ use alloc::vec::Vec;
 )]
 #[serde(default)]
 pub struct ProceduralMesh {
-    /// Asset identity; injected via `inject_name`. Not part of `args`.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// Built-in generator name (required), e.g. `room`, `box`, `cylinder`,
     /// `sphere`, `terrain`, `heightfield`, `skybox`, or `extrude`.
     pub generator: String,
@@ -102,7 +98,6 @@ pub struct ProceduralMesh {
 impl Default for ProceduralMesh {
     fn default() -> Self {
         Self {
-            asset_id: AssetId::default(),
             generator: String::new(),
             half_width: 8.0,
             half_depth: 10.0,
@@ -207,6 +202,5 @@ mod tests {
         assert_eq!(back.corner_segments, Some(4));
         assert_eq!(back.half_extents, Some([1.0, 2.0, 3.0]));
         assert_eq!(back.size, Some(100.0));
-        assert_eq!(back.asset_id, AssetId::default());
     }
 }

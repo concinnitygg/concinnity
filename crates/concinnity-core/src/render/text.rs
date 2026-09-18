@@ -6,7 +6,7 @@ use crate::components::{LabelBox, SpriteFit, TextAlign, TextLabel};
 use crate::ecs::FontHandle;
 use crate::gfx::overlay::OverlayTransform;
 use crate::gfx::render_types::{TextDrawCall, TextVertex};
-use crate::render::overlay_maps::{ClipRects, OverlayLayers};
+use crate::render::overlay_maps::Placement;
 use alloc::borrow::Cow;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -362,24 +362,25 @@ pub fn build_text_calls(
     labels: &[TextLabel],
     loaded_fonts: &FontSet,
     viewport: [f32; 2],
-    clips: &ClipRects,
-    layers: &OverlayLayers,
 ) -> Vec<TextDrawCall> {
     let mut out = crate::render::call_buffer::TextCallBuffer::default();
-    build_text_calls_into(&mut out, labels, loaded_fonts, viewport, clips, layers);
+    build_text_calls_into(
+        &mut out,
+        labels.iter().map(|l| (l, Placement::default())),
+        loaded_fonts,
+        viewport,
+    );
     out.take()
 }
 
 /// `build_text_calls`, appending onto an existing draw list so a caller
 /// assembling a frame from several element groups reuses one buffer (and, in
 /// steady state, the pooled geometry of the spent frame it recycled).
-pub fn build_text_calls_into(
+pub fn build_text_calls_into<'a>(
     out: &mut crate::render::call_buffer::TextCallBuffer,
-    labels: &[TextLabel],
+    labels: impl IntoIterator<Item = (&'a TextLabel, Placement)>,
     loaded_fonts: &FontSet,
     viewport: [f32; 2],
-    clips: &ClipRects,
-    layers: &OverlayLayers,
 ) {
     let [win_w, win_h] = viewport;
     // Screen-owned labels are overlay UI authored in the reference canvas; map
@@ -389,7 +390,7 @@ pub fn build_text_calls_into(
     // Alternate mappings a view-owned label may opt into via `fit`.
     let bottom = OverlayTransform::bottom_anchored_from_viewport(viewport);
     let cover = OverlayTransform::cover_from_viewport(viewport);
-    for label in labels {
+    for (label, placement) in labels {
         if !label.visible {
             continue;
         }
@@ -572,10 +573,8 @@ pub fn build_text_calls_into(
                 vertices,
                 indices,
                 atlas_slot: font.atlas_slot,
-                clip_rect: clips
-                    .get(&label.asset_id)
-                    .map(|b| band_to_window(&overlay, *b)),
-                layer: layers.get(&label.asset_id).copied().unwrap_or(0),
+                clip_rect: placement.clip.map(|b| band_to_window(&overlay, b)),
+                layer: placement.layer,
             });
         }
     }
@@ -597,14 +596,6 @@ mod tests {
     use crate::gfx::font::GlyphMetrics;
 
     use alloc::string::ToString;
-    // No clip bands: every label draws unclipped.
-    fn no_clips() -> ClipRects {
-        ClipRects::new()
-    }
-    fn no_layers() -> OverlayLayers {
-        OverlayLayers::new()
-    }
-
     fn make_glyph(atlas_w: u16, atlas_h: u16, advance_px: f32) -> GlyphMetrics {
         GlyphMetrics {
             char_code: 0,
@@ -635,7 +626,6 @@ mod tests {
 
     fn make_label(font: FontHandle, content: &str, x: f32) -> TextLabel {
         TextLabel {
-            asset_id: AssetId::default(),
             font: Some(font),
             content: content.to_string(),
             x,
@@ -733,13 +723,7 @@ mod tests {
         let boxed = measure_label_box(&label, &fonts).unwrap();
         // Two lines of five glyphs, not one line of eight.
         assert!(boxed.w <= 50.0, "{boxed:?}");
-        let calls = build_text_calls(
-            core::slice::from_ref(&label),
-            &fonts,
-            [200.0, 200.0],
-            &no_clips(),
-            &no_layers(),
-        );
+        let calls = build_text_calls(core::slice::from_ref(&label), &fonts, [200.0, 200.0]);
         let right = calls[0]
             .vertices
             .iter()
@@ -751,7 +735,7 @@ mod tests {
     #[test]
     fn empty_labels_returns_empty_calls() {
         let fonts = FontSet::default();
-        assert!(build_text_calls(&[], &fonts, [0.0, 0.0], &no_clips(), &no_layers()).is_empty());
+        assert!(build_text_calls(&[], &fonts, [0.0, 0.0],).is_empty());
     }
 
     // A world assembled in code has no compiled Font for its labels to name, so
@@ -766,24 +750,12 @@ mod tests {
         label.font = None;
 
         // With no fallback there is no face to lay the glyphs out with.
-        let calls = build_text_calls(
-            core::slice::from_ref(&label),
-            &fonts,
-            [0.0, 0.0],
-            &no_clips(),
-            &no_layers(),
-        );
+        let calls = build_text_calls(core::slice::from_ref(&label), &fonts, [0.0, 0.0]);
         assert!(calls.is_empty());
         assert!(measure_label_box(&label, &fonts).is_none());
 
         fonts.set_fallback(FontHandle(0));
-        let calls = build_text_calls(
-            core::slice::from_ref(&label),
-            &fonts,
-            [0.0, 0.0],
-            &no_clips(),
-            &no_layers(),
-        );
+        let calls = build_text_calls(core::slice::from_ref(&label), &fonts, [0.0, 0.0]);
         assert_eq!(calls.len(), 1);
         assert!(measure_label_box(&label, &fonts).is_some());
     }
@@ -820,16 +792,7 @@ mod tests {
     fn unknown_font_produces_no_call() {
         let fonts = FontSet::default();
         let label = make_label(FontHandle(99), "hello", 0.0);
-        assert!(
-            build_text_calls(
-                core::slice::from_ref(&label),
-                &fonts,
-                [0.0, 0.0],
-                &no_clips(),
-                &no_layers()
-            )
-            .is_empty()
-        );
+        assert!(build_text_calls(core::slice::from_ref(&label), &fonts, [0.0, 0.0],).is_empty());
     }
 
     #[test]
@@ -838,13 +801,7 @@ mod tests {
         let mut fonts = FontSet::default();
         fonts.insert(FontHandle(0), make_font(&[('A', g)]));
         let label = make_label(FontHandle(0), "A", 0.0);
-        let calls = build_text_calls(
-            core::slice::from_ref(&label),
-            &fonts,
-            [0.0, 0.0],
-            &no_clips(),
-            &no_layers(),
-        );
+        let calls = build_text_calls(core::slice::from_ref(&label), &fonts, [0.0, 0.0]);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].vertices.len(), 4);
         assert_eq!(calls[0].indices.len(), 6);
@@ -859,13 +816,7 @@ mod tests {
         let mut label = make_label(FontHandle(0), "A", 0.0);
         label.background = [0.0, 0.3, 0.1, 0.85];
         label.padding = 4.0;
-        let calls = build_text_calls(
-            core::slice::from_ref(&label),
-            &fonts,
-            [0.0, 0.0],
-            &no_clips(),
-            &no_layers(),
-        );
+        let calls = build_text_calls(core::slice::from_ref(&label), &fonts, [0.0, 0.0]);
         assert_eq!(calls.len(), 1);
         // 4 box verts prepended + 4 glyph verts; 6 box indices + 6 glyph.
         assert_eq!(calls[0].vertices.len(), 8);
@@ -901,13 +852,7 @@ mod tests {
         let mut label = make_label(FontHandle(0), "A", 0.0);
         label.background = [0.1, 0.1, 0.1, 1.0];
         label.padding = 4.0;
-        let calls = build_text_calls(
-            core::slice::from_ref(&label),
-            &fonts,
-            [0.0, 0.0],
-            &no_clips(),
-            &no_layers(),
-        );
+        let calls = build_text_calls(core::slice::from_ref(&label), &fonts, [0.0, 0.0]);
         let v = &calls[0].vertices;
         // Verts 0..4 are the box; 4..8 the glyph quad.
         let (box_top, box_bot) = (v[0].pos[1], v[2].pos[1]);
@@ -932,16 +877,7 @@ mod tests {
         let mut label = make_label(FontHandle(0), "", 0.0);
         label.background = [0.0, 0.3, 0.1, 0.85];
         // A blanked label (e.g. a toggled-off HUD chip) draws no box.
-        assert!(
-            build_text_calls(
-                core::slice::from_ref(&label),
-                &fonts,
-                [0.0, 0.0],
-                &no_clips(),
-                &no_layers()
-            )
-            .is_empty()
-        );
+        assert!(build_text_calls(core::slice::from_ref(&label), &fonts, [0.0, 0.0],).is_empty());
     }
 
     #[test]
@@ -952,13 +888,7 @@ mod tests {
         fonts.insert(FontHandle(0), make_font(&[(' ', space), ('A', g)]));
         // Two spaces then 'A': only 'A' produces geometry.
         let label = make_label(FontHandle(0), "  A", 0.0);
-        let calls = build_text_calls(
-            core::slice::from_ref(&label),
-            &fonts,
-            [0.0, 0.0],
-            &no_clips(),
-            &no_layers(),
-        );
+        let calls = build_text_calls(core::slice::from_ref(&label), &fonts, [0.0, 0.0]);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].vertices.len(), 4);
         // 'A' quad starts after 2 × advance_px(space) = 16.0
@@ -983,13 +913,7 @@ mod tests {
         let mut fonts = FontSet::default();
         fonts.insert(FontHandle(0), make_font(&[('X', zero), ('A', g)]));
         let label = make_label(FontHandle(0), "XA", 0.0);
-        let calls = build_text_calls(
-            core::slice::from_ref(&label),
-            &fonts,
-            [0.0, 0.0],
-            &no_clips(),
-            &no_layers(),
-        );
+        let calls = build_text_calls(core::slice::from_ref(&label), &fonts, [0.0, 0.0]);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].vertices.len(), 4); // only 'A'
         // 'A' starts at x = advance_px('X') = 5.0
@@ -1004,13 +928,7 @@ mod tests {
         let mut fonts = FontSet::default();
         fonts.insert(FontHandle(0), make_font(&[('A', g)]));
         let label = make_label(FontHandle(0), "A\nA", 0.0);
-        let calls = build_text_calls(
-            core::slice::from_ref(&label),
-            &fonts,
-            [0.0, 0.0],
-            &no_clips(),
-            &no_layers(),
-        );
+        let calls = build_text_calls(core::slice::from_ref(&label), &fonts, [0.0, 0.0]);
         assert_eq!(calls.len(), 1);
         // Two glyphs -> two quads -> 8 vertices, 12 indices.
         assert_eq!(calls[0].vertices.len(), 8);
@@ -1041,13 +959,7 @@ mod tests {
         // line_height = 16*5.3125 = 85; baseline centers the cap band:
         // baseline = 7.5 + (85 + 12*5.3125)/2 = 7.5 + 74.375 = 81.875
         // gx = x0 + bearing_x*scale = 46.875, gy = baseline - bearing_y*scale = 81.875 - 63.75 = 18.125
-        let calls = build_text_calls(
-            core::slice::from_ref(&label),
-            &fonts,
-            [200.0, 100.0],
-            &no_clips(),
-            &no_layers(),
-        );
+        let calls = build_text_calls(core::slice::from_ref(&label), &fonts, [200.0, 100.0]);
         assert_eq!(calls.len(), 1);
         let v = &calls[0].vertices[0];
         assert!((v.pos[0] - 46.875).abs() < 1e-3, "gx={}", v.pos[0]);
@@ -1071,20 +983,9 @@ mod tests {
 
         // 2x reference viewport (1280x720 -> 2560x1440): scale 2, centered.
         let vp = (2560.0, 1440.0);
-        let hud_calls = build_text_calls(
-            core::slice::from_ref(&hud),
-            &fonts,
-            [vp.0, vp.1],
-            &no_clips(),
-            &no_layers(),
-        );
-        let ovl_calls = build_text_calls(
-            core::slice::from_ref(&overlay_label),
-            &fonts,
-            [vp.0, vp.1],
-            &no_clips(),
-            &no_layers(),
-        );
+        let hud_calls = build_text_calls(core::slice::from_ref(&hud), &fonts, [vp.0, vp.1]);
+        let ovl_calls =
+            build_text_calls(core::slice::from_ref(&overlay_label), &fonts, [vp.0, vp.1]);
         // HUD label keeps its literal origin (x = 100).
         assert!((hud_calls[0].vertices[0].pos[0] - 100.0).abs() < 1e-3);
         // Overlay label: forward(100,100) at scale 2 -> x = 1280 + (100-640)*2 = 200.
@@ -1145,15 +1046,7 @@ mod tests {
         let first_x = |align: TextAlign| {
             let mut l = make_label(FontHandle(0), "AA", 100.0);
             l.align = align;
-            build_text_calls(
-                core::slice::from_ref(&l),
-                &fonts,
-                [0.0, 0.0],
-                &no_clips(),
-                &no_layers(),
-            )[0]
-            .vertices[0]
-                .pos[0]
+            build_text_calls(core::slice::from_ref(&l), &fonts, [0.0, 0.0])[0].vertices[0].pos[0]
         };
         assert!((first_x(TextAlign::Left) - 100.0).abs() < 1e-4);
         assert!((first_x(TextAlign::Center) - 90.0).abs() < 1e-4);
@@ -1162,36 +1055,27 @@ mod tests {
 
     #[test]
     fn clip_band_scissors_the_call() {
-        // A label registered in `clips` gets its call scissored to the band,
+        // A label placed with a clip band gets its call scissored to the band,
         // mapped through the overlay transform to window space. At the reference
         // viewport the overlay is identity, so the scissor equals the band.
         let g = make_glyph(10, 12, 11.0);
         let mut fonts = FontSet::default();
         fonts.insert(FontHandle(0), make_font(&[('A', g)]));
-        let mut label = make_label(FontHandle(0), "A", 0.0);
-        label.asset_id = AssetId(7);
-        let mut clips = ClipRects::new();
+        let label = make_label(FontHandle(0), "A", 0.0);
         let band = [10.0, 20.0, 300.0, 40.0];
-        clips.insert(AssetId(7), band);
-        let calls = build_text_calls(
-            core::slice::from_ref(&label),
-            &fonts,
-            [1280.0, 720.0],
-            &clips,
-            &no_layers(),
-        );
+        let placed = |placement| {
+            let mut out = crate::render::call_buffer::TextCallBuffer::default();
+            build_text_calls_into(&mut out, [(&label, placement)], &fonts, [1280.0, 720.0]);
+            out.take()
+        };
+        let calls = placed(Placement {
+            clip: Some(band),
+            layer: 0,
+        });
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].clip_rect, Some(band));
-        // A label absent from `clips` (asset_id 0) draws unclipped.
-        let other = make_label(FontHandle(0), "A", 0.0);
-        let unclipped = build_text_calls(
-            core::slice::from_ref(&other),
-            &fonts,
-            [1280.0, 720.0],
-            &clips,
-            &no_layers(),
-        );
-        assert_eq!(unclipped[0].clip_rect, None);
+        // A label placed without a band draws unclipped.
+        assert_eq!(placed(Placement::default())[0].clip_rect, None);
     }
 
     #[test]
@@ -1221,15 +1105,7 @@ mod tests {
             l.y = 600.0;
             l.screen = Some(Ref::new(AssetId(5)));
             l.fit = fit;
-            build_text_calls(
-                core::slice::from_ref(&l),
-                &fonts,
-                [vp.0, vp.1],
-                &no_clips(),
-                &no_layers(),
-            )[0]
-            .vertices[0]
-                .pos[1]
+            build_text_calls(core::slice::from_ref(&l), &fonts, [vp.0, vp.1])[0].vertices[0].pos[1]
         };
         let fit_y = first_y(SpriteFit::Fit);
         let bottom_y = first_y(SpriteFit::Bottom);
@@ -1251,13 +1127,7 @@ mod tests {
         fonts.insert(FontHandle(0), make_font(&[(' ', space), ('A', g)]));
         // '?' has no metric; it consumes one space advance before 'A'.
         let label = make_label(FontHandle(0), "?A", 0.0);
-        let calls = build_text_calls(
-            core::slice::from_ref(&label),
-            &fonts,
-            [0.0, 0.0],
-            &no_clips(),
-            &no_layers(),
-        );
+        let calls = build_text_calls(core::slice::from_ref(&label), &fonts, [0.0, 0.0]);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].vertices.len(), 4); // only 'A' draws a quad
         assert!((calls[0].vertices[0].pos[0] - 7.0).abs() < 1e-4);

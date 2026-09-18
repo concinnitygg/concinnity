@@ -201,9 +201,9 @@ fn compile_skinned_mesh_payload(args: &serde_json::Value) -> std::io::Result<Vec
 // capsule, and spawn reserve) into the resource record's `data_bytes`, applying
 // the clamps that used to run in the retired `from_args`. The geometry is
 // dropped from the baked form -- it rides the compiled payload. Serialized as a
-// `(name_id, mesh)` JSON tuple: `asset_id` is `#[serde(skip)]` on the schema
-// struct, so the interned name (which the runtime's spawn-by-name registration
-// still needs) travels beside it.
+// `(name_id, mesh)` JSON tuple: the struct carries no identity, so the interned
+// name (which the runtime's spawn-by-name registration still needs) travels
+// beside it.
 fn compile_skinned_mesh_data(name: &str, args: &serde_json::Value) -> Result<Vec<u8>, String> {
     let mut sm: SkinnedMesh =
         Deserialize::deserialize(args).map_err(|e| format!("SkinnedMesh args: {e}"))?;

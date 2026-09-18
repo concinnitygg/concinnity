@@ -182,6 +182,7 @@ impl System for StatHudSystem {
         Access::new()
             .writes_components(crate::component_mask![TextLabel])
             .reads_resources(crate::resource_mask![
+                concinnity_core::ecs::EntityById,
                 HudPrefs,
                 FrameTime,
                 crate::app::budget::MemoryBudget,
@@ -386,18 +387,14 @@ mod tests {
             ..StatHud::default()
         });
         for id in [1u32, 2, 3, 4] {
-            world.add_component(TextLabel {
-                asset_id: AssetId(id),
-                ..Default::default()
-            });
+            world.push_identified(AssetId(id), TextLabel::default());
         }
         world
     }
 
     fn chip(world: &World, id: u32) -> String {
         world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == AssetId(id))
+            .get_by_id::<TextLabel>(AssetId(id))
             .map(|l| l.content.clone())
             .unwrap_or_default()
     }

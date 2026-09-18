@@ -4,7 +4,6 @@ use crate::components::Screen;
 use crate::components::SpriteFit;
 use crate::components::vocabulary;
 use crate::ecs::FontHandle;
-use crate::ecs::asset_id::AssetId;
 use crate::ecs::de_opt_font_handle;
 use crate::ecs::{Ref, de_opt_ref};
 use alloc::string::String;
@@ -58,9 +57,6 @@ vocabulary!(TextAlign {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct TextLabel {
-    /// Asset identity; injected via `inject_name`. Not part of `args`.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// The [Font](#font) asset to use for rendering. Unset draws with the
     /// engine's built-in face at its native 24px.
     #[serde(deserialize_with = "de_opt_font_handle")]
@@ -117,7 +113,6 @@ pub struct TextLabel {
 impl Default for TextLabel {
     fn default() -> Self {
         Self {
-            asset_id: AssetId::default(),
             font: None,
             content: String::new(),
             x: 10.0,
@@ -140,6 +135,7 @@ impl Default for TextLabel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ecs::asset_id::AssetId;
 
     #[test]
     fn a_blank_label_draws_white_left_aligned_text_with_no_background() {
@@ -199,6 +195,5 @@ mod tests {
         assert_eq!(back.padding, 6.0);
         assert_eq!(back.wrap_width, 320.0);
         assert_eq!(back.max_lines, 3);
-        assert_eq!(back.asset_id, AssetId::default());
     }
 }

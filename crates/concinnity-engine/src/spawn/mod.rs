@@ -41,13 +41,10 @@ fn resolve_target(ctx: &PipelineContext, target: EntityTarget) -> Option<Entity>
     }
 }
 
-// The entity a decomposed name resolves to. Borrows the name index only for
-// the lookup, so the caller is free to take `&mut ctx` immediately after.
+// The entity an asset id resolves to. Borrows the index only for the lookup,
+// so the caller is free to take `&mut ctx` immediately after.
 fn resolve_name(ctx: &PipelineContext, name: AssetId) -> Option<Entity> {
-    ctx.resource::<concinnity_core::ecs::EntityByName>()?
-        .0
-        .get(&name)
-        .copied()
+    ctx.entity_of(name)
 }
 
 mod despawn;
@@ -295,7 +292,7 @@ impl SpawnSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::ecs::{Arena, ComponentStorage, EntityByName, FrameContext, Resources};
+    use concinnity_core::ecs::{Arena, ComponentStorage, FrameContext, Resources};
     use concinnity_core::profile::FrameProfile;
     use concinnity_host::store::blob::BlobData;
 
@@ -328,10 +325,10 @@ mod tests {
     }
 
     #[test]
-    fn a_named_target_resolves_through_the_name_index() {
+    fn a_named_target_resolves_through_the_index() {
         run(|ctx| {
             let entity = ctx.components.spawn();
-            ctx.insert_resource(EntityByName([(AssetId(7), entity)].into()));
+            ctx.identify(entity, AssetId(7));
             assert_eq!(
                 resolve_target(ctx, EntityTarget::Name(AssetId(7))),
                 Some(entity)

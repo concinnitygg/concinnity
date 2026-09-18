@@ -239,14 +239,8 @@ mod tests {
     fn world_with(ids: &[AssetId]) -> World {
         let mut world = World::new();
         for &id in ids {
-            world.add_component(Sprite {
-                asset_id: id,
-                ..Default::default()
-            });
-            world.add_component(TextLabel {
-                asset_id: id,
-                ..Default::default()
-            });
+            let row = world.push_identified(id, Sprite::default());
+            world.insert(row, TextLabel::default());
         }
         world
     }
@@ -269,10 +263,7 @@ mod tests {
             [10.0, 20.0, 300.0, ROW_H],
             ROW_TINT,
         );
-        let l = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == AssetId(1))
-            .unwrap();
+        let l = world.get_by_id::<TextLabel>(AssetId(1)).unwrap();
         assert_eq!(l.x, 10.0 + PAD, "header caption sits at the base pad");
         assert_eq!(l.color, HEADER_LABEL);
 
@@ -289,10 +280,7 @@ mod tests {
             [10.0, 20.0, 300.0, ROW_H],
             ROW_TINT,
         );
-        let l = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == AssetId(2))
-            .unwrap();
+        let l = world.get_by_id::<TextLabel>(AssetId(2)).unwrap();
         assert_eq!(l.x, 10.0 + PAD + INDENT, "name caption is indented");
         assert_eq!(l.color, LABEL);
     }

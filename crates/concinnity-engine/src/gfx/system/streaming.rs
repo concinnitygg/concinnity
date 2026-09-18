@@ -2,7 +2,7 @@
 // and voxel-world streaming pools onto the backend, plus the stats accessor.
 
 use concinnity_core::components::{
-    BlockType, RenderHandle, Scene, SceneMember, StreamingConfig, VoxelWorld,
+    BlockType, Identity, RenderHandle, Scene, SceneMember, StreamingConfig, VoxelWorld,
 };
 use concinnity_core::ecs::MaterialHandle;
 use concinnity_core::ecs::PayloadLocator;
@@ -75,9 +75,7 @@ pub(super) fn deferred_texture_slots(
     if !streaming {
         return deferred;
     }
-    // Scenes are still undrained at this point; the first declared is the
-    // start scene (the one setup_scene_flow pins).
-    let Some(start) = ctx.query::<Scene>().next().map(|s| s.asset_id) else {
+    let Some(start) = start_scene(ctx) else {
         return deferred;
     };
     let Some(groups) = ctx.resource::<crate::ecs::BlobSceneGroups>() else {
@@ -97,6 +95,13 @@ pub(super) fn deferred_texture_slots(
     deferred
 }
 
+// The start scene: the first declared Scene, which `setup_scene_flow` pins.
+// Scenes are still undrained while init consults it.
+fn start_scene(ctx: &PipelineContext) -> Option<AssetId> {
+    ctx.join2::<Scene, Identity>()
+        .next()
+        .map(|(_, _, identity)| identity.id())
+}
 // Mesh sources whose payload decode init defers: exclusively owned by a scene
 // other than the start scene, gated behind streaming like the texture path.
 // Members without a baked bounds record fall out (they decode eagerly).
@@ -108,7 +113,7 @@ pub(super) fn deferred_mesh_sources(
     if !streaming {
         return out;
     }
-    let Some(start) = ctx.query::<Scene>().next().map(|s| s.asset_id) else {
+    let Some(start) = start_scene(ctx) else {
         return out;
     };
     let Some(groups) = ctx.resource::<crate::ecs::BlobSceneGroups>() else {
@@ -148,13 +153,13 @@ pub(super) fn deferred_mesh_sources(
 pub(super) fn deferred_shader_buckets(
     ctx: &PipelineContext,
     streaming: bool,
-    shader_ids: &[AssetId],
+    shader_ids: &[Option<AssetId>],
 ) -> Vec<(usize, AssetId)> {
     let mut deferred = Vec::new();
     if !streaming {
         return deferred;
     }
-    let Some(start) = ctx.query::<Scene>().next().map(|s| s.asset_id) else {
+    let Some(start) = start_scene(ctx) else {
         return deferred;
     };
     let Some(groups) = ctx.resource::<crate::ecs::BlobSceneGroups>() else {
@@ -165,7 +170,7 @@ pub(super) fn deferred_shader_buckets(
             continue;
         }
         for &def in &group.defs {
-            if let Some(bucket) = shader_ids.iter().position(|&id| id == def)
+            if let Some(bucket) = shader_ids.iter().position(|&id| id == Some(def))
                 && bucket > 0
             {
                 deferred.push((bucket, group.scene));
@@ -719,20 +724,17 @@ mod tests {
         // `scenes` are pushed in declaration order, so the first is the start
         // scene the deferral spares.
         fn new(scenes: &[AssetId]) -> Self {
-            let mut components = ComponentStorage::default();
-            for &asset_id in scenes {
-                components.push_typed(Scene {
-                    asset_id,
-                    camera_shot: None,
-                });
-            }
-            Self {
-                components,
+            let mut world = Self {
+                components: ComponentStorage::default(),
                 blob: BlobData::empty(),
                 profile: Default::default(),
                 resources: Resources::new(),
                 scratch: Arena::with_capacity(64 * 1024),
+            };
+            for &id in scenes {
+                world.ctx().push_identified(id, Scene { camera_shot: None });
             }
+            world
         }
 
         fn with_groups(mut self, groups: Vec<SceneGroup>) -> Self {
@@ -897,7 +899,7 @@ mod tests {
         const DEFAULT_SHADER: AssetId = AssetId(20);
         const SCENE_SHADER: AssetId = AssetId(21);
         const OTHER_DEF: AssetId = AssetId(22);
-        let shaders = [DEFAULT_SHADER, SCENE_SHADER];
+        let shaders = [Some(DEFAULT_SHADER), Some(SCENE_SHADER)];
 
         let mut world = ResidencyWorld::new(&[START, LATER]).with_groups(vec![
             group(START, Vec::new(), vec![DEFAULT_SHADER]),
@@ -922,7 +924,7 @@ mod tests {
     // groups nothing is scene-owned.
     #[test]
     fn shader_deferral_is_empty_without_streaming_scenes_or_groups() {
-        let shaders = [AssetId(20), AssetId(21)];
+        let shaders = [Some(AssetId(20)), Some(AssetId(21))];
         let groups = vec![group(LATER, Vec::new(), vec![AssetId(21)])];
 
         let mut unstreamed = ResidencyWorld::new(&[START, LATER]).with_groups(groups.clone());

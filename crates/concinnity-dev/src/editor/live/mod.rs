@@ -149,9 +149,7 @@ mod tests {
     fn world_with_sprite(name: &str) -> World {
         let mut world = World::new();
         let entity = world.push(Sprite::default());
-        let mut by_name = BTreeMap::new();
-        by_name.insert(asset_id::intern(name), entity);
-        world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
+        world.identify(entity, asset_id::intern(name));
         world
     }
 
@@ -221,9 +219,7 @@ mod tests {
     fn a_build_only_type_declines() {
         let mut world = World::new();
         let e = world.push(Transform::default());
-        let mut by_name = BTreeMap::new();
-        by_name.insert(asset_id::intern("hero"), e);
-        world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
+        world.identify(e, asset_id::intern("hero"));
         let changes = [change(
             "hero",
             "CharacterModel",

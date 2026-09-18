@@ -22,10 +22,7 @@ fn hook(entries: Vec<serde_json::Value>) -> EditorHook {
 fn palette_world() -> World {
     let mut world = World::new();
     for id in palette::panel::all_field_ids() {
-        world.add_component(TextInput {
-            asset_id: id,
-            ..Default::default()
-        });
+        world.push_identified(id, TextInput::default());
     }
     world
 }

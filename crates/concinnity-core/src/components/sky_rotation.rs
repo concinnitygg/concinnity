@@ -1,7 +1,5 @@
 // Celestial-sphere rotation schema.
 
-use crate::ecs::asset_id::AssetId;
-
 /// Turns the whole celestial sphere: the sky, the image-based lighting it
 /// casts, every [DirectionalLight](#directionallight), and any
 /// [Prop](#prop) hung on it.
@@ -26,9 +24,6 @@ use crate::ecs::asset_id::AssetId;
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct SkyRotation {
-    /// Asset identity; injected via `inject_name`. Not part of `args`.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// The celestial pole in world space: the axis the sphere turns about.
     /// Does not need to be normalized.
     pub axis: [f32; 3],
@@ -41,7 +36,6 @@ pub struct SkyRotation {
 impl Default for SkyRotation {
     fn default() -> Self {
         Self {
-            asset_id: AssetId::default(),
             axis: [1.0, 0.0, 0.0],
             degrees_per_second: 1.0,
             angle_deg: 0.0,

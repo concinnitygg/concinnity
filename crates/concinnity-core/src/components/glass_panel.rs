@@ -1,7 +1,5 @@
 // Colored glass-panel schema.
 
-use crate::ecs::asset_id::AssetId;
-
 /// A flat translucent panel of colored glass. A fixed-orientation rectangular
 /// quad that refracts and tints the scene behind it and brightens the
 /// grazing-angle rim with a Fresnel highlight.
@@ -29,9 +27,6 @@ use crate::ecs::asset_id::AssetId;
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct GlassPanel {
-    /// Asset identity; injected via `inject_name`. Not part of `args`.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// World-space position of the panel's center.
     pub center: [f32; 3],
     /// Facing direction of the panel. Normalized on load; defaults to +Z when
@@ -56,7 +51,6 @@ pub struct GlassPanel {
 impl Default for GlassPanel {
     fn default() -> Self {
         Self {
-            asset_id: AssetId::default(),
             center: [0.0, 1.0, 0.0],
             normal: [0.0, 0.0, 1.0],
             half_size: [1.0, 1.0],
@@ -106,6 +100,5 @@ mod tests {
         assert_eq!(back.refraction_strength, 0.1);
         // Fresnel was not authored, so it keeps the schema default.
         assert_eq!(back.fresnel_power, 4.0);
-        assert_eq!(back.asset_id, AssetId::default());
     }
 }

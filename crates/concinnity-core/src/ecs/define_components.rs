@@ -161,10 +161,7 @@ macro_rules! define_components {
             pub fn from_baked(def: &BlobAssetDef) -> Result<Self, AssetError> {
                 $(
                     if def.discriminant == ComponentTag::$variant as u8 {
-                        let mut c = <$ty as Component>::from_baked(&def.args_bytes)?;
-                        if let Some(id) = def.name {
-                            <$ty as Component>::inject_name(&mut c, id);
-                        }
+                        let c = <$ty as Component>::from_baked(&def.args_bytes)?;
                         return Ok(ComponentAsset::$variant(c));
                     }
                 )+
@@ -179,15 +176,6 @@ macro_rules! define_components {
             pub fn inject_locator(&mut self, locator: PayloadLocator) {
                 match self {
                     $( ComponentAsset::$variant(c) => c.inject_locator(locator) ),+
-                }
-            }
-
-            /// Inject the asset's declared identity after construction.
-            /// Delegates to `Component::inject_name`; a no-op for types that
-            /// never look themselves up by id.
-            pub fn inject_name(&mut self, id: $crate::ecs::asset_id::AssetId) {
-                match self {
-                    $( ComponentAsset::$variant(c) => c.inject_name(id) ),+
                 }
             }
 

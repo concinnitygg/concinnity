@@ -3,7 +3,6 @@
 use crate::components::Screen;
 use crate::components::SpriteFit;
 use crate::ecs::FontHandle;
-use crate::ecs::asset_id::AssetId;
 use crate::ecs::de_opt_font_handle;
 use crate::ecs::{Ref, de_opt_ref};
 use alloc::string::String;
@@ -35,9 +34,6 @@ use alloc::string::String;
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct TextInput {
-    /// Asset identity; injected via `inject_name`. Not part of `args`.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// The [Font](#font) used to render the field's text. Unset draws with the
     /// engine's built-in face at its native 24px.
     #[serde(deserialize_with = "de_opt_font_handle")]
@@ -100,7 +96,6 @@ pub struct TextInput {
 impl Default for TextInput {
     fn default() -> Self {
         Self {
-            asset_id: AssetId::default(),
             font: None,
             content: String::new(),
             placeholder: String::new(),
@@ -129,6 +124,7 @@ impl Default for TextInput {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ecs::asset_id::AssetId;
 
     #[test]
     fn a_blank_field_is_visible_empty_and_unfocused() {
@@ -172,7 +168,6 @@ mod tests {
         assert_eq!(back.max_len, 32);
         assert_eq!(back.font, Some(FontHandle(4)));
         assert!(!back.focused);
-        assert_eq!(back.asset_id, AssetId::default());
     }
 
     #[test]

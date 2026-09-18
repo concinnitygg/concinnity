@@ -1,6 +1,5 @@
 // Animated water-surface schema.
 
-use crate::ecs::asset_id::AssetId;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -64,9 +63,6 @@ impl Default for WaterWave {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct WaterSurface {
-    /// Asset identity; injected via `inject_name`. Not part of `args`.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// World-space position of the surface's center.
     pub center: [f32; 3],
     /// Half-width and half-depth of the surface `[x, z]`, in world units.
@@ -103,7 +99,6 @@ pub struct WaterSurface {
 impl Default for WaterSurface {
     fn default() -> Self {
         Self {
-            asset_id: AssetId::default(),
             center: [0.0, 0.0, 0.0],
             extent: [10.0, 10.0],
             subdivisions: 64,
@@ -183,6 +178,5 @@ mod tests {
         assert_eq!(back.depth_falloff_meters, 8.0);
         assert_eq!(back.foam_intensity, 1.2);
         assert_eq!(back.refraction_strength, 0.3);
-        assert_eq!(back.asset_id, AssetId::default());
     }
 }

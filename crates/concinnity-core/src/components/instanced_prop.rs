@@ -2,7 +2,6 @@
 
 use crate::ecs::MaterialHandle;
 use crate::ecs::MeshHandle;
-use crate::ecs::asset_id::AssetId;
 use crate::ecs::de_opt_material_handle;
 use crate::ecs::de_opt_mesh_handle;
 use alloc::vec::Vec;
@@ -40,9 +39,6 @@ impl Default for InstanceTransform {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct InstancedProp {
-    /// Asset identity; injected via `inject_name`. Not part of `args`.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// A [Mesh](#mesh), [ProceduralMesh](#proceduralmesh),
     /// [VoxelChunk](#voxelchunk), or mesh-kind [File](#file) asset.
     #[serde(deserialize_with = "de_opt_mesh_handle")]
@@ -59,7 +55,6 @@ pub struct InstancedProp {
 impl Default for InstancedProp {
     fn default() -> Self {
         Self {
-            asset_id: AssetId::default(),
             mesh: None,
             material: None,
             instances: Vec::new(),
@@ -109,6 +104,5 @@ mod tests {
         assert_eq!(back.instances.len(), 2);
         assert_eq!(back.instances[1].position, [3.0, 0.0, 4.0]);
         assert_eq!(back.cull_distance, 120.0);
-        assert_eq!(back.asset_id, AssetId::default());
     }
 }

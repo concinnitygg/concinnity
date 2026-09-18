@@ -353,9 +353,7 @@ fn selection_bounds_fall_back_to_a_billboards_transform() {
         rotation_deg: [0.0; 3],
         scale: [1.0; 3],
     });
-    let mut by_name = std::collections::BTreeMap::new();
-    by_name.insert(id, entity);
-    world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
+    world.identify(entity, id);
     world.insert_resource(PickIndex::default());
 
     let mut h = hook();

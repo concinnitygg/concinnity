@@ -1,7 +1,6 @@
 // 3D color-grading lookup-table schema.
 
 use crate::ecs::PayloadLocator;
-use crate::ecs::asset_id::AssetId;
 use alloc::string::String;
 
 /// A 3D color-grading lookup table applied as a final post-process step. The
@@ -26,9 +25,6 @@ use alloc::string::String;
 #[serde(default)]
 #[derive(Default)]
 pub struct ColorLut {
-    /// Asset identity; injected via `inject_name`. Not part of `args`.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// Path to the source `.cube` or `.png` LUT file.
     pub source: String,
     /// Injected at load time from the compiled blob payload.
@@ -44,7 +40,6 @@ mod tests {
     fn a_blank_lut_names_no_source() {
         let l = ColorLut::default();
         assert!(l.source.is_empty());
-        assert_eq!(l.asset_id, AssetId::default());
         assert!(l.locator.is_none());
     }
 

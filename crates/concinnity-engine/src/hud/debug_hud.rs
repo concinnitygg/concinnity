@@ -186,6 +186,7 @@ impl System for DebugHudSystem {
             .reads_components(crate::component_mask![Camera3D])
             .writes_components(crate::component_mask![TextLabel])
             .reads_resources(crate::resource_mask![
+                concinnity_core::ecs::EntityById,
                 FrameInput,
                 FrameTime,
                 crate::app::budget::ThreadBudget,
@@ -459,11 +460,13 @@ mod tests {
             sys_label: Some(Ref::new(AssetId(4))),
         });
         for id in [1u32, 2, 3, 4] {
-            world.add_component(TextLabel {
-                asset_id: AssetId(id),
-                content: "stale".to_string(),
-                ..Default::default()
-            });
+            world.push_identified(
+                AssetId(id),
+                TextLabel {
+                    content: "stale".to_string(),
+                    ..Default::default()
+                },
+            );
         }
         world.add_component(Camera3D {
             fov_y_degrees: 75.0,
@@ -483,8 +486,7 @@ mod tests {
 
     fn chip(world: &World, id: u32) -> String {
         world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == AssetId(id))
+            .get_by_id::<TextLabel>(AssetId(id))
             .map(|l| l.content.clone())
             .unwrap_or_default()
     }

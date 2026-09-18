@@ -563,45 +563,21 @@ mod tests {
         let mut world = injected_world();
         let r = rows(2);
         place(&mut world, Some(&view(&r, 0)), [20.0, 20.0], size());
-        let title = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == TITLE_LABEL)
-            .unwrap();
+        let title = world.get_by_id::<TextLabel>(TITLE_LABEL).unwrap();
         assert!(title.visible && title.content == "Import");
-        let header = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == LIST_HEADER)
-            .unwrap();
+        let header = world.get_by_id::<TextLabel>(LIST_HEADER).unwrap();
         assert_eq!(header.content, "Imports (2)");
-        let first = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == row_label(0))
-            .unwrap();
+        let first = world.get_by_id::<TextLabel>(row_label(0)).unwrap();
         assert!(first.visible && first.content == "import 0");
-        let input = world
-            .query::<TextInput>()
-            .find(|t| t.asset_id == PATH_INPUT)
-            .unwrap();
+        let input = world.get_by_id::<TextInput>(PATH_INPUT).unwrap();
         assert!(input.visible && input.focused);
-        let browse = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == BROWSE_LABEL)
-            .unwrap();
+        let browse = world.get_by_id::<TextLabel>(BROWSE_LABEL).unwrap();
         assert!(browse.visible && browse.content == "Browse...");
         // An empty list keeps the header but no rows.
         place(&mut world, Some(&view(&[], 0)), [20.0, 20.0], size());
-        let header = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == LIST_HEADER)
-            .unwrap();
+        let header = world.get_by_id::<TextLabel>(LIST_HEADER).unwrap();
         assert_eq!(header.content, "Imports (none yet)");
-        assert!(
-            !world
-                .query::<Sprite>()
-                .find(|s| s.asset_id == row_bg(0))
-                .unwrap()
-                .visible
-        );
+        assert!(!world.get_by_id::<Sprite>(row_bg(0)).unwrap().visible);
     }
 
     #[test]
@@ -610,13 +586,7 @@ mod tests {
         let r = rows(30);
         let v = view(&r, 10);
         place(&mut world, Some(&v), [20.0, 20.0], size());
-        assert!(
-            world
-                .query::<Sprite>()
-                .find(|s| s.asset_id == LIST_THUMB)
-                .unwrap()
-                .visible
-        );
+        assert!(world.get_by_id::<Sprite>(LIST_THUMB).unwrap().visible);
         let o = [20.0, 20.0];
         let r0 = row_rect(o, IMPORT_W, 0);
         assert_eq!(
@@ -656,8 +626,7 @@ mod tests {
         // The row just past the default pool is visible only because we grew.
         assert!(
             world
-                .query::<TextLabel>()
-                .find(|l| l.asset_id == row_label(IMPORT_POOL))
+                .get_by_id::<TextLabel>(row_label(IMPORT_POOL))
                 .unwrap()
                 .visible
         );

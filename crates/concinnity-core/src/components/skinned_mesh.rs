@@ -6,7 +6,6 @@
 
 use crate::ecs::MaterialHandle;
 use crate::ecs::PayloadLocator;
-use crate::ecs::asset_id::AssetId;
 use crate::ecs::de_opt_material_handle;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -125,9 +124,6 @@ impl Default for SkeletonJoint {
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct SkinnedMesh {
-    /// Asset identity; injected via `inject_name`. Not part of `args`.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// Optional path to a `.glb` / `.gltf` / `.fbx` file. When set, the
     /// build imports `vertices` / `indices` / `skeleton` from it; an
     /// inline-authored mesh leaves this empty.
@@ -300,7 +296,6 @@ mod tests {
         assert_eq!(back.max_instances, 4);
         assert_eq!(back.capsule.expect("capsule").half_height, 0.9);
         // Identity and payload location are injected at load, never authored.
-        assert_eq!(back.asset_id, AssetId::default());
         assert!(back.locator.is_none());
     }
 }

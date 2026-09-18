@@ -445,12 +445,14 @@ mod tests {
         // The cue references its clip by handle. Matching (screen + clip present)
         // is independent of the clip payload, so no `AudioClipTable` is needed
         // here -- the counter observes the match, not playback.
-        world.add_component(Screen {
-            asset_id: screen,
-            initial: true,
-            fade_in_secs: 0.0,
-            ..Default::default()
-        });
+        world.push_identified(
+            screen,
+            Screen {
+                initial: true,
+                fade_in_secs: 0.0,
+                ..Default::default()
+            },
+        );
         world.add_component(AudioCue {
             screen: Some(Ref::new(screen)),
             clip: Some(AudioClipHandle(0)),

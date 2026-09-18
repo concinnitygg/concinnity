@@ -1269,8 +1269,7 @@ mod tests {
 
     fn sprite(world: &World, id: AssetId) -> Sprite {
         world
-            .query::<Sprite>()
-            .find(|s| s.asset_id == id)
+            .get_by_id::<Sprite>(id)
             .cloned()
             .expect("sprite present")
     }
@@ -1279,15 +1278,13 @@ mod tests {
     }
     fn label(world: &World, id: AssetId) -> TextLabel {
         world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == id)
+            .get_by_id::<TextLabel>(id)
             .cloned()
             .expect("label present")
     }
     fn input(world: &World, id: AssetId) -> TextInput {
         world
-            .query::<TextInput>()
-            .find(|t| t.asset_id == id)
+            .get_by_id::<TextInput>(id)
             .cloned()
             .expect("input present")
     }
@@ -1524,10 +1521,8 @@ mod tests {
     #[test]
     fn color_vector_field_shows_a_live_swatch() {
         let mut world = injected_world();
-        for t in world.query_mut::<TextInput>() {
-            if t.asset_id == form_input(0) {
-                t.content = "1, 0, 0".into();
-            }
+        if let Some(t) = world.get_mut_by_id::<TextInput>(form_input(0)) {
+            t.content = "1, 0, 0".into();
         }
         let fields = [FormField {
             key: "color".into(),

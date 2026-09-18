@@ -1293,16 +1293,14 @@ mod tests {
 
     fn sprite(world: &World, id: AssetId) -> Sprite {
         world
-            .query::<Sprite>()
-            .find(|s| s.asset_id == id)
+            .get_by_id::<Sprite>(id)
             .cloned()
             .expect("sprite present")
     }
 
     fn label(world: &World, id: AssetId) -> TextLabel {
         world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == id)
+            .get_by_id::<TextLabel>(id)
             .cloned()
             .expect("label present")
     }
@@ -1584,12 +1582,7 @@ mod tests {
         let mut f = Fixture::new();
         f.picker_options = vec!["PointLight".to_string()];
         let o = test_origin();
-        let field = |w: &World| {
-            w.query::<TextInput>()
-                .find(|t| t.asset_id == SEARCH_INPUT)
-                .cloned()
-                .unwrap()
-        };
+        let field = |w: &World| w.get_by_id::<TextInput>(SEARCH_INPUT).cloned().unwrap();
         place(&mut world, Some(&f.view()), o, size());
         let t = field(&world);
         assert!(t.visible && !t.focused, "shown, unfocused until clicked");

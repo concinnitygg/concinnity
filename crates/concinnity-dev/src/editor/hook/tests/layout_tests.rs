@@ -393,18 +393,8 @@ fn templates_panel_press_drags_and_focuses() {
 // action logic the other tests cover).
 #[test]
 fn tick_lays_out_the_open_panel_in_every_state() {
-    let sprite_visible = |w: &World, id: AssetId| {
-        w.query::<Sprite>()
-            .find(|s| s.asset_id == id)
-            .unwrap()
-            .visible
-    };
-    let label = |w: &World, id: AssetId| {
-        w.query::<TextLabel>()
-            .find(|l| l.asset_id == id)
-            .unwrap()
-            .clone()
-    };
+    let sprite_visible = |w: &World, id: AssetId| w.get_by_id::<Sprite>(id).unwrap().visible;
+    let label = |w: &World, id: AssetId| w.get_by_id::<TextLabel>(id).unwrap().clone();
 
     let mut world = World::new();
     inject::editor_hud(&mut world);
@@ -440,8 +430,7 @@ fn tick_lays_out_the_open_panel_in_every_state() {
     );
     assert!(
         world
-            .query::<TextInput>()
-            .find(|t| t.asset_id == assets_panel::SEARCH_INPUT)
+            .get_by_id::<TextInput>(assets_panel::SEARCH_INPUT)
             .unwrap()
             .visible
     );
@@ -475,8 +464,7 @@ fn tick_lays_out_the_open_panel_in_every_state() {
     assert_eq!(label(&world, form_panel::APPLY_LABEL).content, "Add");
     assert!(
         world
-            .query::<TextInput>()
-            .find(|t| t.asset_id == form_panel::NAME_INPUT)
+            .get_by_id::<TextInput>(form_panel::NAME_INPUT)
             .unwrap()
             .visible,
         "the name heading shows"

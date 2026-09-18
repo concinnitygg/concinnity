@@ -2,7 +2,6 @@
 
 use crate::components::Camera3D;
 use crate::components::{vocabulary, vocabulary_synonyms};
-use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Ref, de_opt_ref};
 
 /// How a scene jump reaches the new scene. The single accepted vocabulary for
@@ -49,9 +48,6 @@ impl SceneTransition {
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct Scene {
-    /// Asset identity; injected via `inject_name`. Not part of `args`.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// A [CameraShot](#camerashot) or [Camera3D](#camera3d) to activate when
     /// this scene becomes active. `None` keeps the current camera unchanged.
     #[serde(deserialize_with = "de_opt_ref")]
@@ -61,6 +57,7 @@ pub struct Scene {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ecs::asset_id::AssetId;
 
     // NAMES is what the editor's picker offers and what an authored world
     // writes, so every one has to resolve and every transition has to be named.
@@ -90,7 +87,6 @@ mod tests {
     fn a_scene_with_no_shot_leaves_the_camera_where_it_is() {
         let s = Scene::default();
         assert!(s.camera_shot.is_none());
-        assert_eq!(s.asset_id, AssetId::default());
         assert!(
             serde_json::from_str::<Scene>("{}")
                 .unwrap()
@@ -107,6 +103,5 @@ mod tests {
         let bytes = postcard::to_allocvec(&s).unwrap();
         let back: Scene = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(back.camera_shot, Some(Ref::new(AssetId(12))));
-        assert_eq!(back.asset_id, AssetId::default());
     }
 }

@@ -160,12 +160,14 @@ impl<'a> PipelineContext<'a> {
         self.components.values_mut::<C>()
     }
 
-    /// Remove and return all components of type C, despawning each removed
-    /// row's Entity so the indices recycle.
+    /// Remove and return all components of type C. An owner left with no
+    /// component but its [`Identity`](crate::components::Identity) is
+    /// despawned (see [`EntityById`](crate::ecs::EntityById)), so a consumed
+    /// asset's entity recycles.
     pub fn drain<C: ComponentSlot>(&mut self) -> Vec<C> {
         #[cfg(debug_assertions)]
         note_structural("drain");
-        self.components.drain::<C>()
+        crate::ecs::entity_by_id::drain(self.components, self.resources)
     }
 
     /// Push a runtime-produced component into the matching typed column,
@@ -192,15 +194,6 @@ impl<'a> PipelineContext<'a> {
         #[cfg(debug_assertions)]
         note_structural("remove");
         self.components.remove_typed::<C>(entity)
-    }
-
-    /// Remove an entity entirely: swap-remove its row from every component
-    /// column and recycle its id (a stale handle to it then reads as dead). A
-    /// no-op on an already-dead or unknown entity.
-    pub fn despawn(&mut self, entity: Entity) {
-        #[cfg(debug_assertions)]
-        note_structural("despawn");
-        self.components.despawn(entity);
     }
 
     /// Whether an entity is still live (not despawned, matching generation).

@@ -94,12 +94,12 @@ fn raw_world() -> World {
 // world keeps it: a cooked mesh's payload rides its locator, a raw one's sits
 // in the runtime payload store.
 fn mesh_payload(world: &mut World) -> Vec<u8> {
-    let mesh = world
+    let (id, mesh) = world
         .inner()
-        .query::<ProceduralMesh>()
+        .join2::<ProceduralMesh, concinnity_core::components::Identity>()
         .next()
-        .expect("the cube's mesh")
-        .clone();
+        .map(|(_, mesh, identity)| (identity.id(), mesh.clone()))
+        .expect("the cube's mesh");
     match mesh.locator {
         Some(locator) => world
             .inner_mut()
@@ -112,7 +112,7 @@ fn mesh_payload(world: &mut World) -> Vec<u8> {
             .inner()
             .resource::<concinnity_core::resource::RuntimeMeshPayloads>()
             .expect("the runtime payload store")
-            .get(mesh.asset_id)
+            .get(id)
             .expect("the mesh's payload")
             .to_vec(),
     }

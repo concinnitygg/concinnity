@@ -33,21 +33,19 @@ impl System for FpsCounterSystem {
     fn access(&self) -> Access {
         Access::new()
             .writes_components(crate::component_mask![TextLabel])
-            .reads_resources(crate::resource_mask![FrameTime])
+            .reads_resources(crate::resource_mask![
+                concinnity_core::ecs::EntityById,
+                FrameTime
+            ])
     }
 
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
         let dt = ctx.resource::<FrameTime>().copied().unwrap_or_default().dt;
         if let Some((frames, secs)) = self.window.tick(dt, WINDOW_SECS) {
             let fps = frames as f32 / secs;
-            if let Some(label_id) = self.label {
-                for lbl in ctx.query_mut::<TextLabel>() {
-                    if lbl.asset_id == label_id {
-                        lbl.content = format!("FPS: {:.0}", fps);
-                        break;
-                    }
-                }
-            }
+            crate::ecs::by_asset_id::update::<TextLabel>(ctx, self.label, |l| {
+                l.content = format!("FPS: {:.0}", fps);
+            });
         }
         StepResult::Continue
     }
@@ -89,10 +87,7 @@ mod tests {
         world.add_component(FpsCounter {
             label: Some(Ref::new(AssetId(1))),
         });
-        world.add_component(TextLabel {
-            asset_id: AssetId(1),
-            ..Default::default()
-        });
+        world.push_identified(AssetId(1), TextLabel::default());
         world.start(SYSTEMS).unwrap();
 
         // Two half-second frames: the second closes the 1s window.
@@ -111,8 +106,7 @@ mod tests {
         use concinnity_core::ecs::asset_id::AssetId;
 
         world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == AssetId(1))
+            .get_by_id::<TextLabel>(AssetId(1))
             .map(|l| l.content.clone())
             .unwrap_or_default()
     }

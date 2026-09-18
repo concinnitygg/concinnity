@@ -3,7 +3,6 @@
 use crate::components::Screen;
 use crate::components::vocabulary;
 use crate::ecs::TextureHandle;
-use crate::ecs::asset_id::AssetId;
 use crate::ecs::de_opt_texture_handle;
 use crate::ecs::{Ref, de_opt_ref};
 
@@ -30,9 +29,6 @@ use crate::ecs::{Ref, de_opt_ref};
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct Sprite {
-    /// Assigned by the loader; not authored.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// Left edge in screen pixels from the window's top-left.
     pub x: f32,
     /// Top edge in screen pixels from the window's top-left.
@@ -116,7 +112,6 @@ vocabulary!(SpriteFit {
 impl Default for Sprite {
     fn default() -> Self {
         Self {
-            asset_id: AssetId::default(),
             x: 0.0,
             y: 0.0,
             width: 100.0,
@@ -137,6 +132,7 @@ impl Default for Sprite {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ecs::asset_id::AssetId;
 
     #[test]
     fn a_blank_sprite_is_a_visible_untinted_square_with_no_border() {
@@ -186,6 +182,5 @@ mod tests {
         assert_eq!(back.corner_radius, 4.0);
         assert_eq!(back.border_width, 2.0);
         assert_eq!(back.border_color, [1.0, 0.0, 0.0, 1.0]);
-        assert_eq!(back.asset_id, AssetId::default());
     }
 }

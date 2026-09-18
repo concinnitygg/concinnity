@@ -2,7 +2,6 @@
 //! component they bake into.
 
 use crate::ecs::TextureHandle;
-use crate::ecs::asset_id::AssetId;
 use crate::ecs::de_opt_texture_handle;
 use crate::ecs::{Component, PayloadLocator};
 use alloc::vec::Vec;
@@ -133,8 +132,6 @@ mod tests {
 /// `"concrete"` resolve to a matching [Texture](#texture) at build time.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Room {
-    /// Assigned by the loader; not authored.
-    pub asset_id: AssetId,
     /// Half the room's width in world units.
     pub half_width: f32,
     /// Half the room's depth in world units.
@@ -179,7 +176,6 @@ impl Room {
             (args.half_width, args.half_depth, args.ceiling_height)
         };
         Self {
-            asset_id: AssetId::default(),
             half_width,
             half_depth,
             ceiling_height,
@@ -202,10 +198,6 @@ impl Component for Room {
     fn inject_locator(&mut self, locator: PayloadLocator) {
         self.locator = Some(locator);
     }
-
-    fn inject_name(&mut self, id: AssetId) {
-        self.asset_id = id;
-    }
 }
 
 #[cfg(test)]
@@ -215,7 +207,6 @@ mod runtime_tests {
     #[test]
     fn effective_texture_returns_texture_field_first() {
         let room = Room {
-            asset_id: AssetId::default(),
             half_width: 8.0,
             half_depth: 10.0,
             ceiling_height: 3.5,
@@ -231,7 +222,6 @@ mod runtime_tests {
     #[test]
     fn effective_texture_falls_back_to_wall_texture() {
         let room = Room {
-            asset_id: AssetId::default(),
             half_width: 8.0,
             half_depth: 10.0,
             ceiling_height: 3.5,

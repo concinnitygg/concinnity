@@ -77,10 +77,7 @@ fn lighting_opens_via_the_view_panel_and_seeds() {
         "the sun intensity control seeds from the entry"
     );
     h.tick(&mut world);
-    let bg = world
-        .query::<Sprite>()
-        .find(|s| s.asset_id == lighting_panel::PANEL_BG)
-        .unwrap();
+    let bg = world.get_by_id::<Sprite>(lighting_panel::PANEL_BG).unwrap();
     assert!(bg.visible, "the panel renders once open");
 }
 

@@ -40,11 +40,13 @@ pub(super) fn inject(ctx: &mut PipelineContext, minter: &mut Minter) -> Result<(
         Some(screen) => screen.id(),
         None => {
             let id = minter.id()?;
-            ctx.push(Screen {
-                asset_id: id,
-                fade_in_secs: 0.15,
-                ..Default::default()
-            });
+            ctx.push_identified(
+                id,
+                Screen {
+                    fade_in_secs: 0.15,
+                    ..Default::default()
+                },
+            );
             overlay.screen = Some(Ref::new(id));
             id
         }
@@ -101,16 +103,18 @@ pub(super) fn inject(ctx: &mut PipelineContext, minter: &mut Minter) -> Result<(
     if overlay.label.is_none() {
         let font = minter.hud_font(ctx)?;
         let id = minter.id()?;
-        ctx.push(TextLabel {
-            asset_id: id,
-            font: Some(font),
-            content: "Loading".to_string(),
-            x: CANVAS_WIDTH / 2.0,
-            y: BAR_Y - 34.0,
-            align: crate::components::TextAlign::Center,
-            screen: Some(Ref::new(screen)),
-            ..Default::default()
-        });
+        ctx.push_identified(
+            id,
+            TextLabel {
+                font: Some(font),
+                content: "Loading".to_string(),
+                x: CANVAS_WIDTH / 2.0,
+                y: BAR_Y - 34.0,
+                align: crate::components::TextAlign::Center,
+                screen: Some(Ref::new(screen)),
+                ..Default::default()
+            },
+        );
         overlay.label = Some(Ref::new(id));
     }
 
@@ -137,10 +141,12 @@ fn sprite(
     sprite: Sprite,
 ) -> Result<Ref<Sprite>, WorldError> {
     let id = minter.id()?;
-    ctx.push(Sprite {
-        asset_id: id,
-        screen: Some(Ref::new(screen)),
-        ..sprite
-    });
+    ctx.push_identified(
+        id,
+        Sprite {
+            screen: Some(Ref::new(screen)),
+            ..sprite
+        },
+    );
     Ok(Ref::new(id))
 }

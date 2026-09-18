@@ -7,6 +7,7 @@
 use alloc::vec::Vec;
 
 use crate::components::Behavior;
+use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Arena, ComponentStorage, FrameContext, NoPayloads, PipelineContext, Resources};
 use crate::profile::FrameProfile;
 
@@ -41,8 +42,9 @@ pub(super) fn world_with(behaviors: Vec<Behavior>) -> TestWorld {
         scratch: Arena::with_capacity(64 * 1024),
         elapsed: 0.0,
     };
-    for b in behaviors {
-        world.components.push_typed(b);
+    // Each behavior is identified by its position, from 1.
+    for (b, id) in behaviors.into_iter().zip(1..) {
+        world.ctx().push_identified(AssetId(id), b);
     }
     world
 }

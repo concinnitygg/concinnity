@@ -30,7 +30,7 @@ impl BehaviorSystem {
             ctx.insert_resource(TracePaths(
                 self.programs
                     .iter()
-                    .map(|p| (p.def.asset_id, p.paths.clone()))
+                    .filter_map(|p| Some((p.id?, p.paths.clone())))
                     .collect(),
             ));
         }
@@ -39,7 +39,9 @@ impl BehaviorSystem {
         let mut seen = BTreeSet::new();
         let mut events = Vec::new();
         for (i, nodes) in fired {
-            let behavior = self.programs[*i].def.asset_id;
+            let Some(behavior) = self.programs[*i].id else {
+                continue;
+            };
             for node in nodes {
                 let event = TraceEvent {
                     behavior,
@@ -89,8 +91,11 @@ impl BehaviorSystem {
             else {
                 continue;
             };
+            let Some(id) = program.id else {
+                continue;
+            };
             for (decl, value) in program.def.locals.iter().zip(&instance.locals) {
-                out.push((program.def.asset_id, decl.name.clone(), value.to_trace()));
+                out.push((id, decl.name.clone(), value.to_trace()));
             }
         }
         out

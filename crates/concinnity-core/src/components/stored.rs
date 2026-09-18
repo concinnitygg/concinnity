@@ -79,7 +79,7 @@ pub use super::{
     AnimationTransition, AppConfig, AudioCommand, AudioOcclusionProbe, AudioTarget, BodyDynamics,
     Camera3D, CameraProbe, CharacterRig, Children, Collider, ContactEvent, ControlsCommand,
     DespawnRequest, EntityTarget, File, FrameInput, GamepadAction, GamepadButton, GamepadMap,
-    GlobalTransform, GroundProbe, GroundProbes, Held, Hidden, InputKey, InteractEvent,
+    GlobalTransform, GroundProbe, GroundProbes, Held, Hidden, Identity, InputKey, InteractEvent,
     Interactable, Keyframe, Lifetime, MeshRenderer, ModelRenderer, MorphKey, NavDirection, Parent,
     Pickup, PlayCue, PropInstance, RenderHandle, ReparentRequest, Room, RootMotionEvent,
     SceneCommand, SceneMember, ScreenCommand, ScreenShown, SettingCommand, SettingOp, SkeletonPose,

@@ -1,7 +1,6 @@
 // Font glyph-atlas schema.
 
 use crate::ecs::PayloadLocator;
-use crate::ecs::asset_id::AssetId;
 use alloc::string::String;
 
 /// Rasterizes a TrueType font into a glyph atlas at build time.
@@ -25,9 +24,6 @@ use alloc::string::String;
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct Font {
-    /// Asset identity; injected via `inject_name`. Not part of `args`.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// Path to the TTF file, relative to the project root.
     pub path: String,
     /// Rasterization size in pixels. Determines the rendered glyph height.
@@ -40,7 +36,6 @@ pub struct Font {
 impl Default for Font {
     fn default() -> Self {
         Self {
-            asset_id: AssetId::default(),
             path: String::new(),
             size_px: 20,
             locator: None,
@@ -57,7 +52,6 @@ mod tests {
         let f = Font::default();
         assert!(f.path.is_empty());
         assert_eq!(f.size_px, 20);
-        assert_eq!(f.asset_id, AssetId::default());
         assert!(f.locator.is_none());
     }
 

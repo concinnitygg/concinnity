@@ -826,7 +826,7 @@ mod text_input {
 
     #[test]
     fn runtime_state_is_not_serialized() {
-        // `focused` / `caret` / `asset_id` are runtime-only, so `args` (the
+        // `focused` / `caret` are runtime-only, so `args` (the
         // public schema) never carries them.
         let t = TextInput {
             focused: true,
@@ -836,7 +836,6 @@ mod text_input {
         let v = serde_json::to_value(&t).unwrap();
         assert!(v.get("focused").is_none());
         assert!(v.get("caret").is_none());
-        assert!(v.get("asset_id").is_none());
         assert!(v.is_object());
     }
 }

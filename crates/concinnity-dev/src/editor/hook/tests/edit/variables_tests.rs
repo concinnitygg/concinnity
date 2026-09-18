@@ -22,10 +22,7 @@ use crate::editor::widget;
 fn variables_session(entries: Vec<serde_json::Value>) -> (EditorHook, World) {
     let mut world = World::new();
     for id in variables_panel::all_field_ids() {
-        world.add_component(TextInput {
-            asset_id: id,
-            ..Default::default()
-        });
+        world.push_identified(id, TextInput::default());
     }
     let mut h = hook(entries);
     registry::panel(PanelKey::Variables).toggle(&mut h, &mut world);

@@ -14,6 +14,7 @@ mod scroll_layout;
 mod slider;
 
 use concinnity_core::components::FrameInput;
+use concinnity_core::components::Identity;
 use concinnity_core::components::SceneCommand;
 use concinnity_core::components::ScreenCommand;
 use concinnity_core::components::ScreenShown;
@@ -39,6 +40,7 @@ use screen::{ScreenMeta, ScreenRegistry};
 use scroll_layout::RowSpec;
 use std::collections::HashMap;
 
+use crate::ecs::by_asset_id;
 use crate::settings;
 use concinnity_core::settings::SettingKey;
 
@@ -237,7 +239,7 @@ pub(crate) struct UiInputSystem {
     regions: Vec<RegionEntry>,
     bindings: Vec<KeyBinding>,
     screens: ScreenRegistry,
-    // asset_id of UI elements (Sprite, TextLabel) by their owning screen.
+    // Asset ids of UI elements (Sprite, TextLabel) by their owning screen.
     // Built at init() from `<screen_name>_*` name prefixes.
     sprites_by_screen: HashMap<AssetId, Vec<AssetId>>,
     labels_by_screen: HashMap<AssetId, Vec<AssetId>>,
@@ -314,9 +316,10 @@ impl UiInputSystem {
 impl System for UiInputSystem {
     fn access(&self) -> Access {
         Access::new()
-            .reads_components(crate::component_mask![FrameInput])
+            .reads_components(crate::component_mask![FrameInput, Identity])
             .writes_components(crate::component_mask![TextLabel, Sprite, TextInput])
             .reads_resources(crate::resource_mask![
+                concinnity_core::ecs::EntityById,
                 crate::ecs::DisabledSettingRows,
                 crate::ecs::DisplayModes,
             ])
@@ -335,11 +338,11 @@ impl System for UiInputSystem {
         // Drain Screen assets, record each one's policies, and pick the one
         // flagged `initial` to open at world start.
         let mut initial: Option<AssetId> = None;
-        for s in ctx.drain::<Screen>() {
-            self.screens
-                .register(s.asset_id, ScreenMeta::from_asset(&s));
+        for (id, s) in ctx.drain_with_ids::<Screen>() {
+            let Some(id) = id else { continue };
+            self.screens.register(id, ScreenMeta::from_asset(&s));
             if s.initial && initial.is_none() {
-                initial = Some(s.asset_id);
+                initial = Some(id);
             }
         }
 
@@ -362,8 +365,7 @@ impl System for UiInputSystem {
             let (original_color, original_scale) = match region.label {
                 None => (None, None),
                 Some(label_id) => ctx
-                    .query::<TextLabel>()
-                    .find(|l| l.asset_id == label_id.id())
+                    .get_by_id::<TextLabel>(label_id.id())
                     .map(|l| (Some(l.color), Some(l.scale)))
                     .unwrap_or((None, None)),
             };
@@ -380,8 +382,7 @@ impl System for UiInputSystem {
             // the runtime layout can move the label and the region tracks it.
             let follow = if region.follow_label {
                 region.label.and_then(|lid| {
-                    ctx.query::<TextLabel>()
-                        .find(|l| l.asset_id == lid.id())
+                    ctx.get_by_id::<TextLabel>(lid.id())
                         .map(|l| (lid.id(), region.y - l.y))
                 })
             } else {
@@ -411,28 +412,28 @@ impl System for UiInputSystem {
         // Build screen → UI-element maps by reading each Sprite/TextLabel's
         // resolved `screen` field (the build pipeline writes it from the
         // <screen>_* name prefix).
-        for s in ctx.query::<Sprite>() {
+        for (_, s, identity) in ctx.join2::<Sprite, Identity>() {
             if let Some(screen_id) = s.screen {
                 self.sprites_by_screen
                     .entry(screen_id.id())
                     .or_default()
-                    .push(s.asset_id);
+                    .push(identity.id());
             }
         }
-        for l in ctx.query::<TextLabel>() {
+        for (_, l, identity) in ctx.join2::<TextLabel, Identity>() {
             if let Some(screen_id) = l.screen {
                 self.labels_by_screen
                     .entry(screen_id.id())
                     .or_default()
-                    .push(l.asset_id);
+                    .push(identity.id());
             }
         }
-        for t in ctx.query::<TextInput>() {
+        for (_, t, identity) in ctx.join2::<TextInput, Identity>() {
             if let Some(screen_id) = t.screen {
                 self.text_inputs_by_screen
                     .entry(screen_id.id())
                     .or_default()
-                    .push(t.asset_id);
+                    .push(identity.id());
             }
         }
 
@@ -442,35 +443,14 @@ impl System for UiInputSystem {
 
         // Screens start hidden: zero out the visibility of every screen-owned
         // Sprite and TextLabel.
-        for ids in self.sprites_by_screen.values() {
-            for &id in ids {
-                for sp in ctx.query_mut::<Sprite>() {
-                    if sp.asset_id == id {
-                        sp.visible = false;
-                        break;
-                    }
-                }
-            }
+        for &id in self.sprites_by_screen.values().flatten() {
+            by_asset_id::update::<Sprite>(ctx, Some(id), |sp| sp.visible = false);
         }
-        for ids in self.labels_by_screen.values() {
-            for &id in ids {
-                for lbl in ctx.query_mut::<TextLabel>() {
-                    if lbl.asset_id == id {
-                        lbl.visible = false;
-                        break;
-                    }
-                }
-            }
+        for &id in self.labels_by_screen.values().flatten() {
+            by_asset_id::update::<TextLabel>(ctx, Some(id), |l| l.visible = false);
         }
-        for ids in self.text_inputs_by_screen.values() {
-            for &id in ids {
-                for ti in ctx.query_mut::<TextInput>() {
-                    if ti.asset_id == id {
-                        ti.visible = false;
-                        break;
-                    }
-                }
-            }
+        for &id in self.text_inputs_by_screen.values().flatten() {
+            by_asset_id::update::<TextInput>(ctx, Some(id), |ti| ti.visible = false);
         }
 
         // Open the initial screen (if any) through the same transition path as
@@ -737,8 +717,7 @@ impl UiInputSystem {
         let (font, current) = req
             .value_label
             .and_then(|id| {
-                ctx.query::<TextLabel>()
-                    .find(|l| l.asset_id == id)
+                ctx.get_by_id::<TextLabel>(id)
                     .map(|l| (l.font, l.content.clone()))
             })
             .unwrap_or((None, String::new()));
@@ -827,9 +806,13 @@ impl UiInputSystem {
         let empty_labels: std::collections::HashSet<AssetId> = if follow_labels.is_empty() {
             std::collections::HashSet::new()
         } else {
-            ctx.query::<TextLabel>()
-                .filter(|l| follow_labels.contains(&l.asset_id) && l.content.is_empty())
-                .map(|l| l.asset_id)
+            follow_labels
+                .iter()
+                .copied()
+                .filter(|&id| {
+                    ctx.get_by_id::<TextLabel>(id)
+                        .is_some_and(|l| l.content.is_empty())
+                })
                 .collect()
         };
 
@@ -961,8 +944,9 @@ impl UiInputSystem {
                 .and_then(|id| self.screens.meta(id))
                 .and_then(|m| m.focus);
             for ti in ctx.query_mut::<TextInput>() {
-                ti.focused = Some(ti.asset_id) == focus;
+                ti.focused = false;
             }
+            by_asset_id::update::<TextInput>(ctx, focus, |ti| ti.focused = true);
         }
         if let Some(top) = transition.new_top {
             ctx.events_mut::<ScreenShown>()
@@ -982,35 +966,19 @@ impl UiInputSystem {
     }
 
     fn set_screen_visibility(&self, screen_id: AssetId, visible: bool, ctx: &mut PipelineContext) {
-        if let Some(ids) = self.sprites_by_screen.get(&screen_id) {
-            for &id in ids {
-                for s in ctx.query_mut::<Sprite>() {
-                    if s.asset_id == id {
-                        s.visible = visible;
-                        break;
-                    }
-                }
-            }
+        for &id in self.sprites_by_screen.get(&screen_id).into_iter().flatten() {
+            by_asset_id::update::<Sprite>(ctx, Some(id), |s| s.visible = visible);
         }
-        if let Some(ids) = self.labels_by_screen.get(&screen_id) {
-            for &id in ids {
-                for l in ctx.query_mut::<TextLabel>() {
-                    if l.asset_id == id {
-                        l.visible = visible;
-                        break;
-                    }
-                }
-            }
+        for &id in self.labels_by_screen.get(&screen_id).into_iter().flatten() {
+            by_asset_id::update::<TextLabel>(ctx, Some(id), |l| l.visible = visible);
         }
-        if let Some(ids) = self.text_inputs_by_screen.get(&screen_id) {
-            for &id in ids {
-                for ti in ctx.query_mut::<TextInput>() {
-                    if ti.asset_id == id {
-                        ti.visible = visible;
-                        break;
-                    }
-                }
-            }
+        for &id in self
+            .text_inputs_by_screen
+            .get(&screen_id)
+            .into_iter()
+            .flatten()
+        {
+            by_asset_id::update::<TextInput>(ctx, Some(id), |ti| ti.visible = visible);
         }
     }
 
@@ -1033,17 +1001,16 @@ impl UiInputSystem {
                     .flat_map(|r| r.elements.iter().map(|e| e.id()))
             })
             .collect();
-        let mut elem_y: HashMap<AssetId, f32> = HashMap::new();
-        for s in ctx.query::<Sprite>() {
-            if wanted.contains(&s.asset_id) {
-                elem_y.insert(s.asset_id, s.y);
-            }
-        }
-        for l in ctx.query::<TextLabel>() {
-            if wanted.contains(&l.asset_id) {
-                elem_y.insert(l.asset_id, l.y);
-            }
-        }
+        let elem_y: HashMap<AssetId, f32> = wanted
+            .iter()
+            .filter_map(|&id| {
+                let y = ctx
+                    .get_by_id::<TextLabel>(id)
+                    .map(|l| l.y)
+                    .or_else(|| ctx.get_by_id::<Sprite>(id).map(|s| s.y))?;
+                Some((id, y))
+            })
+            .collect();
 
         for p in panels {
             let rows = p
@@ -1277,8 +1244,8 @@ impl UiInputSystem {
         }
 
         // Apply the accumulated component writes.
-        for s in ctx.query_mut::<Sprite>() {
-            if let Some(u) = self.layout.sprites.get(&s.asset_id) {
+        for (&id, u) in &self.layout.sprites {
+            if let Some(s) = ctx.get_mut_by_id::<Sprite>(id) {
                 if let Some(y) = u.y {
                     s.y = y;
                 }
@@ -1290,8 +1257,8 @@ impl UiInputSystem {
                 }
             }
         }
-        for l in ctx.query_mut::<TextLabel>() {
-            if let Some(u) = self.layout.labels.get(&l.asset_id) {
+        for (&id, u) in &self.layout.labels {
+            if let Some(l) = ctx.get_mut_by_id::<TextLabel>(id) {
                 if let Some(y) = u.y {
                     l.y = y;
                 }
@@ -1360,20 +1327,14 @@ fn set_label_style(
     color: Option<[f32; 3]>,
     scale: Option<f32>,
 ) {
-    let Some(label_id) = label else {
-        return;
-    };
-    for lbl in ctx.query_mut::<TextLabel>() {
-        if lbl.asset_id == label_id {
-            if let Some(c) = color {
-                lbl.color = c;
-            }
-            if let Some(s) = scale {
-                lbl.scale = s;
-            }
-            break;
+    by_asset_id::update::<TextLabel>(ctx, label, |lbl| {
+        if let Some(c) = color {
+            lbl.color = c;
         }
-    }
+        if let Some(s) = scale {
+            lbl.scale = s;
+        }
+    });
 }
 
 // Execute an action. Returns Some(StepResult) when the action produces an
@@ -1477,9 +1438,8 @@ mod tests {
     }
 
     // A screen-owned TextLabel used as a scroll-panel element.
-    fn panel_label(id: u32, y: f32, screen: AssetId, content: &str) -> TextLabel {
+    fn panel_label(y: f32, screen: AssetId, content: &str) -> TextLabel {
         TextLabel {
-            asset_id: AssetId(id),
             font: None,
             content: content.to_string(),
             x: 0.0,
@@ -1499,35 +1459,33 @@ mod tests {
     }
 
     fn label_field<T>(world: &World, id: AssetId, f: impl Fn(&TextLabel) -> T) -> T {
-        world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == id)
-            .map(f)
-            .unwrap()
+        world.get_by_id::<TextLabel>(id).map(f).unwrap()
     }
 
     #[test]
     fn hover_applies_and_restores_label_style() {
         let mut world = World::new();
 
-        world.add_component(TextLabel {
-            asset_id: AssetId(1),
-            font: None,
-            content: "Hello".to_string(),
-            x: 0.0,
-            y: 0.0,
-            color: [1.0, 1.0, 1.0],
-            scale: 1.0,
-            centered: false,
-            align: TextAlign::Left,
-            fit: SpriteFit::Fit,
-            background: [0.0, 0.0, 0.0, 0.0],
-            padding: 0.0,
-            visible: true,
-            screen: None,
-            wrap_width: 0.0,
-            max_lines: 0,
-        });
+        world.push_identified(
+            AssetId(1),
+            TextLabel {
+                font: None,
+                content: "Hello".to_string(),
+                x: 0.0,
+                y: 0.0,
+                color: [1.0, 1.0, 1.0],
+                scale: 1.0,
+                centered: false,
+                align: TextAlign::Left,
+                fit: SpriteFit::Fit,
+                background: [0.0, 0.0, 0.0, 0.0],
+                padding: 0.0,
+                visible: true,
+                screen: None,
+                wrap_width: 0.0,
+                max_lines: 0,
+            },
+        );
         world.add_component(HitRegion {
             x: 10.0,
             y: 10.0,
@@ -1551,8 +1509,7 @@ mod tests {
 
         // Label should be styled.
         let lbl_color = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == AssetId(1))
+            .get_by_id::<TextLabel>(AssetId(1))
             .map(|l| l.color)
             .unwrap();
         assert_eq!(lbl_color, [1.0, 0.0, 0.0]);
@@ -1562,8 +1519,7 @@ mod tests {
         world.step();
 
         let lbl_color_after = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == AssetId(1))
+            .get_by_id::<TextLabel>(AssetId(1))
             .map(|l| l.color)
             .unwrap();
         assert_eq!(lbl_color_after, [1.0, 1.0, 1.0]);
@@ -1578,37 +1534,43 @@ mod tests {
         let mut world = World::new();
         let menu = AssetId(80);
         let settings = AssetId(81);
-        world.add_component(Screen {
-            asset_id: menu,
-            initial: true,
-            fade_in_secs: 0.0,
-            ..Default::default()
-        });
-        world.add_component(Screen {
-            asset_id: settings,
-            initial: false,
-            fade_in_secs: 0.0,
-            ..Default::default()
-        });
+        world.push_identified(
+            menu,
+            Screen {
+                initial: true,
+                fade_in_secs: 0.0,
+                ..Default::default()
+            },
+        );
+        world.push_identified(
+            settings,
+            Screen {
+                initial: false,
+                fade_in_secs: 0.0,
+                ..Default::default()
+            },
+        );
         // The menu's "Settings" label + its hit region (screen-owned).
-        world.add_component(TextLabel {
-            asset_id: AssetId(1),
-            font: None,
-            content: "Settings".to_string(),
-            x: 0.0,
-            y: 0.0,
-            color: [1.0, 1.0, 1.0],
-            scale: 1.0,
-            centered: false,
-            align: TextAlign::Left,
-            fit: SpriteFit::Fit,
-            background: [0.0, 0.0, 0.0, 0.0],
-            padding: 0.0,
-            visible: true,
-            screen: Some(Ref::new(menu)),
-            wrap_width: 0.0,
-            max_lines: 0,
-        });
+        world.push_identified(
+            AssetId(1),
+            TextLabel {
+                font: None,
+                content: "Settings".to_string(),
+                x: 0.0,
+                y: 0.0,
+                color: [1.0, 1.0, 1.0],
+                scale: 1.0,
+                centered: false,
+                align: TextAlign::Left,
+                fit: SpriteFit::Fit,
+                background: [0.0, 0.0, 0.0, 0.0],
+                padding: 0.0,
+                visible: true,
+                screen: Some(Ref::new(menu)),
+                wrap_width: 0.0,
+                max_lines: 0,
+            },
+        );
         world.add_component(HitRegion {
             x: 10.0,
             y: 10.0,
@@ -1659,30 +1621,34 @@ mod tests {
     fn dropdown_world() -> (World, AssetId) {
         let screen = AssetId(9);
         let mut world = World::new();
-        world.add_component(Screen {
-            asset_id: screen,
-            initial: true,
-            ..Default::default()
-        });
+        world.push_identified(
+            screen,
+            Screen {
+                initial: true,
+                ..Default::default()
+            },
+        );
         // The row's value label (screen-owned), currently "Windowed" (option 0).
-        world.add_component(TextLabel {
-            asset_id: AssetId(1),
-            font: None,
-            content: "Windowed".to_string(),
-            x: 0.0,
-            y: 0.0,
-            color: [0.85, 0.85, 0.85],
-            scale: 1.0,
-            centered: false,
-            align: TextAlign::Left,
-            fit: SpriteFit::Fit,
-            background: [0.0, 0.0, 0.0, 0.0],
-            padding: 0.0,
-            visible: true,
-            screen: Some(Ref::new(screen)),
-            wrap_width: 0.0,
-            max_lines: 0,
-        });
+        world.push_identified(
+            AssetId(1),
+            TextLabel {
+                font: None,
+                content: "Windowed".to_string(),
+                x: 0.0,
+                y: 0.0,
+                color: [0.85, 0.85, 0.85],
+                scale: 1.0,
+                centered: false,
+                align: TextAlign::Left,
+                fit: SpriteFit::Fit,
+                background: [0.0, 0.0, 0.0, 0.0],
+                padding: 0.0,
+                visible: true,
+                screen: Some(Ref::new(screen)),
+                wrap_width: 0.0,
+                max_lines: 0,
+            },
+        );
         // The control button whose click opens the list.
         world.add_component(HitRegion {
             x: 400.0,
@@ -1742,11 +1708,13 @@ mod tests {
     fn scrolled_dropdown_world() -> World {
         let screen = AssetId(9);
         let mut world = World::new();
-        world.add_component(Screen {
-            asset_id: screen,
-            initial: true,
-            ..Default::default()
-        });
+        world.push_identified(
+            screen,
+            Screen {
+                initial: true,
+                ..Default::default()
+            },
+        );
         // 20 modes, 1000x100 (0Hz) .. 1000x2000 (0Hz); the row's value label
         // currently shows the 11th (index 10).
         let modes: Vec<display_mode::DisplayMode> = (1..=20)
@@ -1756,24 +1724,26 @@ mod tests {
                 refresh_hz: 0,
             })
             .collect();
-        world.add_component(TextLabel {
-            asset_id: AssetId(1),
-            font: None,
-            content: modes[10].label(),
-            x: 0.0,
-            y: 0.0,
-            color: [0.85, 0.85, 0.85],
-            scale: 1.0,
-            centered: false,
-            align: TextAlign::Left,
-            fit: SpriteFit::Fit,
-            background: [0.0, 0.0, 0.0, 0.0],
-            padding: 0.0,
-            visible: true,
-            screen: Some(Ref::new(screen)),
-            wrap_width: 0.0,
-            max_lines: 0,
-        });
+        world.push_identified(
+            AssetId(1),
+            TextLabel {
+                font: None,
+                content: modes[10].label(),
+                x: 0.0,
+                y: 0.0,
+                color: [0.85, 0.85, 0.85],
+                scale: 1.0,
+                centered: false,
+                align: TextAlign::Left,
+                fit: SpriteFit::Fit,
+                background: [0.0, 0.0, 0.0, 0.0],
+                padding: 0.0,
+                visible: true,
+                screen: Some(Ref::new(screen)),
+                wrap_width: 0.0,
+                max_lines: 0,
+            },
+        );
         world.add_component(HitRegion {
             x: 400.0,
             y: 100.0,
@@ -2001,24 +1971,26 @@ mod tests {
     fn hover_with_matching_scale_changes_color_only() {
         let mut world = World::new();
 
-        world.add_component(TextLabel {
-            asset_id: AssetId(1),
-            font: None,
-            content: "Vsync".to_string(),
-            x: 0.0,
-            y: 0.0,
-            color: [0.85, 0.85, 0.85],
-            scale: 0.66,
-            centered: false,
-            align: TextAlign::Left,
-            fit: SpriteFit::Fit,
-            background: [0.0, 0.0, 0.0, 0.0],
-            padding: 0.0,
-            visible: true,
-            screen: None,
-            wrap_width: 0.0,
-            max_lines: 0,
-        });
+        world.push_identified(
+            AssetId(1),
+            TextLabel {
+                font: None,
+                content: "Vsync".to_string(),
+                x: 0.0,
+                y: 0.0,
+                color: [0.85, 0.85, 0.85],
+                scale: 0.66,
+                centered: false,
+                align: TextAlign::Left,
+                fit: SpriteFit::Fit,
+                background: [0.0, 0.0, 0.0, 0.0],
+                padding: 0.0,
+                visible: true,
+                screen: None,
+                wrap_width: 0.0,
+                max_lines: 0,
+            },
+        );
         world.add_component(HitRegion {
             x: 10.0,
             y: 10.0,
@@ -2041,8 +2013,7 @@ mod tests {
         world.step();
 
         let lbl = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == AssetId(1))
+            .get_by_id::<TextLabel>(AssetId(1))
             .map(|l| (l.color, l.scale))
             .unwrap();
         assert_eq!(lbl.0, [1.0, 0.85, 0.3], "hover should change color");
@@ -2111,34 +2082,37 @@ mod tests {
         let mut world = World::new();
 
         let screen_id = AssetId(10);
-        world.add_component(Screen {
-            asset_id: screen_id,
-            initial: false,
-            fade_in_secs: 0.0,
-            ..Default::default()
-        });
-        world.add_component(Sprite {
-            asset_id: AssetId(11),
-            x: 0.0,
-            y: 0.0,
-            width: 100.0,
-            height: 100.0,
-            texture: None,
-            tint: [0.0, 0.0, 0.0, 0.5],
-            follow_cursor: false,
-            visible: true, // intentionally true to confirm init hides it
-            screen: Some(Ref::new(screen_id)),
-            fit: SpriteFit::Fit,
-            corner_radius: 0.0,
-            border_width: 0.0,
-            border_color: [0.0, 0.0, 0.0, 1.0],
-        });
+        world.push_identified(
+            screen_id,
+            Screen {
+                initial: false,
+                fade_in_secs: 0.0,
+                ..Default::default()
+            },
+        );
+        world.push_identified(
+            AssetId(11),
+            Sprite {
+                x: 0.0,
+                y: 0.0,
+                width: 100.0,
+                height: 100.0,
+                texture: None,
+                tint: [0.0, 0.0, 0.0, 0.5],
+                follow_cursor: false,
+                visible: true, // intentionally true to confirm init hides it
+                screen: Some(Ref::new(screen_id)),
+                fit: SpriteFit::Fit,
+                corner_radius: 0.0,
+                border_width: 0.0,
+                border_color: [0.0, 0.0, 0.0, 1.0],
+            },
+        );
         world.start(SYSTEMS).unwrap();
 
         // init() hides screen elements.
         let visible_after_init = world
-            .query::<Sprite>()
-            .find(|s| s.asset_id == AssetId(11))
+            .get_by_id::<Sprite>(AssetId(11))
             .map(|s| s.visible)
             .unwrap();
         assert!(!visible_after_init, "screen starts hidden after init");
@@ -2151,8 +2125,7 @@ mod tests {
         world.step();
 
         let visible_after_show = world
-            .query::<Sprite>()
-            .find(|s| s.asset_id == AssetId(11))
+            .get_by_id::<Sprite>(AssetId(11))
             .map(|s| s.visible)
             .unwrap();
         assert!(visible_after_show, "screen sprite is visible after Show");
@@ -2165,8 +2138,7 @@ mod tests {
         world.step();
 
         let visible_after_hide = world
-            .query::<Sprite>()
-            .find(|s| s.asset_id == AssetId(11))
+            .get_by_id::<Sprite>(AssetId(11))
             .map(|s| s.visible)
             .unwrap();
         assert!(!visible_after_hide, "screen sprite is hidden after Hide");
@@ -2190,12 +2162,14 @@ mod tests {
     fn overlay_region_world() -> World {
         let mut world = World::new();
         let screen_id = AssetId(30);
-        world.add_component(Screen {
-            asset_id: screen_id,
-            initial: true,
-            fade_in_secs: 0.0,
-            ..Default::default()
-        });
+        world.push_identified(
+            screen_id,
+            Screen {
+                initial: true,
+                fade_in_secs: 0.0,
+                ..Default::default()
+            },
+        );
         // Reference-space rect [200,400] x [200,260].
         world.add_component(HitRegion {
             x: 200.0,
@@ -2247,12 +2221,14 @@ mod tests {
         let mut world = World::new();
 
         let screen_id = AssetId(20);
-        world.add_component(Screen {
-            asset_id: screen_id,
-            initial: false,
-            fade_in_secs: 0.0,
-            ..Default::default()
-        });
+        world.push_identified(
+            screen_id,
+            Screen {
+                initial: false,
+                fade_in_secs: 0.0,
+                ..Default::default()
+            },
+        );
         // A scene-level region (no screen) that would normally fire.
         world.add_component(HitRegion {
             x: 0.0,
@@ -2545,14 +2521,16 @@ mod tests {
         let mut world = World::new();
         let screen = AssetId(50);
         let (header, body) = (AssetId(51), AssetId(52));
-        world.add_component(Screen {
-            asset_id: screen,
-            initial: true,
-            fade_in_secs: 0.0,
-            ..Default::default()
-        });
-        world.add_component(panel_label(51, 100.0, screen, "- Adv"));
-        world.add_component(panel_label(52, 140.0, screen, "Body"));
+        world.push_identified(
+            screen,
+            Screen {
+                initial: true,
+                fade_in_secs: 0.0,
+                ..Default::default()
+            },
+        );
+        world.push_identified(AssetId(51), panel_label(100.0, screen, "- Adv"));
+        world.push_identified(AssetId(52), panel_label(140.0, screen, "Body"));
         // Header click region (toggles group 0).
         world.add_component(HitRegion {
             x: 0.0,
@@ -2646,13 +2624,15 @@ mod tests {
         let mut world = World::new();
         let screen = AssetId(60);
         let e0 = AssetId(61);
-        world.add_component(Screen {
-            asset_id: screen,
-            initial: true,
-            fade_in_secs: 0.0,
-            ..Default::default()
-        });
-        world.add_component(panel_label(61, 0.0, screen, "Row0"));
+        world.push_identified(
+            screen,
+            Screen {
+                initial: true,
+                fade_in_secs: 0.0,
+                ..Default::default()
+            },
+        );
+        world.push_identified(AssetId(61), panel_label(0.0, screen, "Row0"));
         // Three 40px rows (120px) in a 60px band -> overflows by 60px.
         world.add_component(ScrollPanel {
             screen: Some(Ref::new(screen)),
@@ -2721,13 +2701,15 @@ mod tests {
         let mut world = World::new();
         let screen = AssetId(60);
         let e0 = AssetId(61);
-        world.add_component(Screen {
-            asset_id: screen,
-            initial: true,
-            fade_in_secs: 0.0,
-            ..Default::default()
-        });
-        world.add_component(panel_label(61, 0.0, screen, "Row0"));
+        world.push_identified(
+            screen,
+            Screen {
+                initial: true,
+                fade_in_secs: 0.0,
+                ..Default::default()
+            },
+        );
+        world.push_identified(AssetId(61), panel_label(0.0, screen, "Row0"));
         for (key, y) in ["vsync", "window_mode", "fps_cap"]
             .into_iter()
             .zip([0.0, 40.0, 80.0])
@@ -2867,24 +2849,26 @@ mod tests {
     fn rebind_world() -> (World, AssetId) {
         let mut world = World::new();
         let value = AssetId(7);
-        world.add_component(TextLabel {
-            asset_id: value,
-            font: None,
-            content: "W".to_string(),
-            x: 0.0,
-            y: 0.0,
-            color: [1.0, 1.0, 1.0],
-            scale: 1.0,
-            centered: false,
-            align: TextAlign::Left,
-            fit: SpriteFit::Fit,
-            background: [0.0, 0.0, 0.0, 0.0],
-            padding: 0.0,
-            visible: true,
-            screen: None,
-            wrap_width: 0.0,
-            max_lines: 0,
-        });
+        world.push_identified(
+            value,
+            TextLabel {
+                font: None,
+                content: "W".to_string(),
+                x: 0.0,
+                y: 0.0,
+                color: [1.0, 1.0, 1.0],
+                scale: 1.0,
+                centered: false,
+                align: TextAlign::Left,
+                fit: SpriteFit::Fit,
+                background: [0.0, 0.0, 0.0, 0.0],
+                padding: 0.0,
+                visible: true,
+                screen: None,
+                wrap_width: 0.0,
+                max_lines: 0,
+            },
+        );
         world.add_component(HitRegion {
             x: 0.0,
             y: 0.0,
@@ -2992,12 +2976,14 @@ mod tests {
         let first = AssetId(80);
         let second = AssetId(81);
         for (id, initial) in [(first, true), (second, false)] {
-            world.add_component(Screen {
-                asset_id: id,
-                initial,
-                fade_in_secs: 0.0,
-                ..Default::default()
-            });
+            world.push_identified(
+                id,
+                Screen {
+                    initial,
+                    fade_in_secs: 0.0,
+                    ..Default::default()
+                },
+            );
         }
         world.start(SYSTEMS).unwrap();
         let mut cursor = EventCursor::default();
@@ -3022,12 +3008,14 @@ mod tests {
         let mut world = World::new();
 
         let screen_id = AssetId(50);
-        world.add_component(Screen {
-            asset_id: screen_id,
-            initial: false,
-            fade_in_secs: 0.0,
-            ..Default::default()
-        });
+        world.push_identified(
+            screen_id,
+            Screen {
+                initial: false,
+                fade_in_secs: 0.0,
+                ..Default::default()
+            },
+        );
         world.add_component(KeyBinding {
             key: "Escape".to_string(),
             action: act("screen:toggle:50"),
@@ -3112,36 +3100,42 @@ mod tests {
         let mut world = World::new();
         let menu = AssetId(60);
         let settings = AssetId(61);
-        world.add_component(Screen {
-            asset_id: menu,
-            initial: false,
-            fade_in_secs: 0.0,
-            ..Default::default()
-        });
-        world.add_component(Screen {
-            asset_id: settings,
-            initial: false,
-            fade_in_secs: 0.0,
-            ..Default::default()
-        });
+        world.push_identified(
+            menu,
+            Screen {
+                initial: false,
+                fade_in_secs: 0.0,
+                ..Default::default()
+            },
+        );
+        world.push_identified(
+            settings,
+            Screen {
+                initial: false,
+                fade_in_secs: 0.0,
+                ..Default::default()
+            },
+        );
         // One sprite per screen, to observe which screen is active by visibility.
         for (id, screen) in [(70u32, menu), (71u32, settings)] {
-            world.add_component(Sprite {
-                asset_id: AssetId(id),
-                x: 0.0,
-                y: 0.0,
-                width: 10.0,
-                height: 10.0,
-                texture: None,
-                tint: [0.0, 0.0, 0.0, 1.0],
-                follow_cursor: false,
-                visible: false,
-                screen: Some(Ref::new(screen)),
-                fit: SpriteFit::Fit,
-                corner_radius: 0.0,
-                border_width: 0.0,
-                border_color: [0.0, 0.0, 0.0, 1.0],
-            });
+            world.push_identified(
+                AssetId(id),
+                Sprite {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 10.0,
+                    height: 10.0,
+                    texture: None,
+                    tint: [0.0, 0.0, 0.0, 1.0],
+                    follow_cursor: false,
+                    visible: false,
+                    screen: Some(Ref::new(screen)),
+                    fit: SpriteFit::Fit,
+                    corner_radius: 0.0,
+                    border_width: 0.0,
+                    border_color: [0.0, 0.0, 0.0, 1.0],
+                },
+            );
         }
         world.add_component(KeyBinding {
             key: "Escape".to_string(),
@@ -3151,8 +3145,7 @@ mod tests {
         world.start(SYSTEMS).unwrap();
 
         let shown = |w: &World, id: u32| {
-            w.query::<Sprite>()
-                .find(|s| s.asset_id == AssetId(id))
+            w.get_by_id::<Sprite>(AssetId(id))
                 .map(|s| s.visible)
                 .unwrap()
         };
@@ -3201,26 +3194,25 @@ mod tests {
     #[test]
     fn toggle_key_opens_and_closes_a_screen() {
         let mut world = World::new();
-        world.add_component(Screen {
-            asset_id: AssetId(80),
-            toggle_key: "Backtick".to_string(),
-            ..Default::default()
-        });
-        world.add_component(Sprite {
-            asset_id: AssetId(81),
-            width: 10.0,
-            height: 10.0,
-            visible: true,
-            screen: Some(Ref::new(AssetId(80))),
-            ..Default::default()
-        });
+        world.push_identified(
+            AssetId(80),
+            Screen {
+                toggle_key: "Backtick".to_string(),
+                ..Default::default()
+            },
+        );
+        world.push_identified(
+            AssetId(81),
+            Sprite {
+                width: 10.0,
+                height: 10.0,
+                visible: true,
+                screen: Some(Ref::new(AssetId(80))),
+                ..Default::default()
+            },
+        );
         world.start(SYSTEMS).unwrap();
-        let shown = |w: &World| {
-            w.query::<Sprite>()
-                .find(|s| s.asset_id == AssetId(81))
-                .unwrap()
-                .visible
-        };
+        let shown = |w: &World| w.get_by_id::<Sprite>(AssetId(81)).unwrap().visible;
         assert!(!shown(&world), "screens start hidden");
 
         let backtick = |w: &mut World| {
@@ -3244,22 +3236,25 @@ mod tests {
     #[test]
     fn focus_field_follows_the_top_screen() {
         let mut world = World::new();
-        world.add_component(Screen {
-            asset_id: AssetId(90),
-            toggle_key: "Backtick".to_string(),
-            focus: Some(Ref::new(AssetId(91))),
-            ..Default::default()
-        });
-        world.add_component(TextInput {
-            asset_id: AssetId(91),
-            visible: true,
-            screen: Some(Ref::new(AssetId(90))),
-            ..Default::default()
-        });
+        world.push_identified(
+            AssetId(90),
+            Screen {
+                toggle_key: "Backtick".to_string(),
+                focus: Some(Ref::new(AssetId(91))),
+                ..Default::default()
+            },
+        );
+        world.push_identified(
+            AssetId(91),
+            TextInput {
+                visible: true,
+                screen: Some(Ref::new(AssetId(90))),
+                ..Default::default()
+            },
+        );
         world.start(SYSTEMS).unwrap();
         let focused = |w: &World| {
-            w.query::<TextInput>()
-                .find(|t| t.asset_id == AssetId(91))
+            w.get_by_id::<TextInput>(AssetId(91))
                 .map(|t| (t.visible, t.focused))
                 .unwrap()
         };
@@ -3285,22 +3280,18 @@ mod tests {
     #[test]
     fn keybindings_are_suspended_while_typing() {
         let mut world = World::new();
-        world.add_component(Screen {
-            asset_id: AssetId(100),
-            ..Default::default()
-        });
+        world.push_identified(AssetId(100), Screen::default());
         world.add_component(KeyBinding {
             key: "T".to_string(),
             action: act("screen:toggle:100"),
             ..Default::default()
         });
         let mut field = TextInput {
-            asset_id: AssetId(101),
             visible: true,
             ..Default::default()
         };
         field.focused = true;
-        world.add_component(field);
+        world.push_identified(AssetId(101), field);
         world.start(SYSTEMS).unwrap();
 
         world.add_component(FrameInput {
@@ -3332,14 +3323,8 @@ mod tests {
     #[test]
     fn scoped_keybinding_fires_only_while_its_screen_is_top() {
         let mut world = World::new();
-        world.add_component(Screen {
-            asset_id: AssetId(110),
-            ..Default::default()
-        });
-        world.add_component(Screen {
-            asset_id: AssetId(111),
-            ..Default::default()
-        });
+        world.push_identified(AssetId(110), Screen::default());
+        world.push_identified(AssetId(111), Screen::default());
         world.add_component(KeyBinding {
             key: "Space".to_string(),
             action: act("screen:show:111"),
@@ -3384,26 +3369,20 @@ mod tests {
     fn push_stacks_over_the_current_screen() {
         let mut world = World::new();
         for (screen, sprite) in [(120u32, 130u32), (121, 131)] {
-            world.add_component(Screen {
-                asset_id: AssetId(screen),
-                ..Default::default()
-            });
-            world.add_component(Sprite {
-                asset_id: AssetId(sprite),
-                width: 10.0,
-                height: 10.0,
-                visible: true,
-                screen: Some(Ref::new(AssetId(screen))),
-                ..Default::default()
-            });
+            world.push_identified(AssetId(screen), Screen::default());
+            world.push_identified(
+                AssetId(sprite),
+                Sprite {
+                    width: 10.0,
+                    height: 10.0,
+                    visible: true,
+                    screen: Some(Ref::new(AssetId(screen))),
+                    ..Default::default()
+                },
+            );
         }
         world.start(SYSTEMS).unwrap();
-        let shown = |w: &World, id: u32| {
-            w.query::<Sprite>()
-                .find(|s| s.asset_id == AssetId(id))
-                .unwrap()
-                .visible
-        };
+        let shown = |w: &World, id: u32| w.get_by_id::<Sprite>(AssetId(id)).unwrap().visible;
         let settle = |w: &mut World| {
             w.add_component(FrameInput::default());
             w.step();
@@ -3441,12 +3420,14 @@ mod tests {
     #[test]
     fn ui_component_spawns_internal_system() {
         let mut world = World::new();
-        world.add_component(Screen {
-            asset_id: AssetId(1),
-            initial: false,
-            fade_in_secs: 0.0,
-            ..Default::default()
-        });
+        world.push_identified(
+            AssetId(1),
+            Screen {
+                initial: false,
+                fade_in_secs: 0.0,
+                ..Default::default()
+            },
+        );
         world.start(SYSTEMS).unwrap();
 
         let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
@@ -3517,23 +3498,27 @@ mod tests {
     fn focus_menu_world() -> World {
         let mut world = World::new();
         let menu = AssetId(90);
-        world.add_component(Screen {
-            asset_id: menu,
-            initial: true,
-            fade_in_secs: 0.0,
-            ..Default::default()
-        });
-        world.add_component(Screen {
-            asset_id: AssetId(91),
-            initial: false,
-            fade_in_secs: 0.0,
-            ..Default::default()
-        });
+        world.push_identified(
+            menu,
+            Screen {
+                initial: true,
+                fade_in_secs: 0.0,
+                ..Default::default()
+            },
+        );
+        world.push_identified(
+            AssetId(91),
+            Screen {
+                initial: false,
+                fade_in_secs: 0.0,
+                ..Default::default()
+            },
+        );
         for (id, y, action) in [
             (1u32, 100.0f32, "screen:show:91"),
             (2, 200.0, "screen:hide"),
         ] {
-            world.add_component(panel_label(id, y, menu, "Btn"));
+            world.push_identified(AssetId(id), panel_label(y, menu, "Btn"));
             world.add_component(HitRegion {
                 x: 0.0,
                 y,
@@ -3647,14 +3632,16 @@ mod tests {
     fn focus_left_right_adjusts_value_rows() {
         let mut world = World::new();
         let screen = AssetId(95);
-        world.add_component(Screen {
-            asset_id: screen,
-            initial: true,
-            fade_in_secs: 0.0,
-            ..Default::default()
-        });
-        world.add_component(panel_label(1, 100.0, screen, "Vsync"));
-        world.add_component(panel_label(2, 200.0, screen, "50"));
+        world.push_identified(
+            screen,
+            Screen {
+                initial: true,
+                fade_in_secs: 0.0,
+                ..Default::default()
+            },
+        );
+        world.push_identified(AssetId(1), panel_label(100.0, screen, "Vsync"));
+        world.push_identified(AssetId(2), panel_label(200.0, screen, "50"));
         // The stepper's two regions (prev + next) share the row.
         for (x, suffix) in [(200.0, "prev"), (260.0, "next")] {
             world.add_component(HitRegion {
@@ -3752,13 +3739,15 @@ mod tests {
     fn back_mirrors_escape_only_while_a_screen_is_active() {
         let mut world = World::new();
         let menu = AssetId(97);
-        world.add_component(Screen {
-            asset_id: menu,
-            initial: false,
-            fade_in_secs: 0.0,
-            toggle_key: "Escape".to_string(),
-            ..Default::default()
-        });
+        world.push_identified(
+            menu,
+            Screen {
+                initial: false,
+                fade_in_secs: 0.0,
+                toggle_key: "Escape".to_string(),
+                ..Default::default()
+            },
+        );
         world.start(SYSTEMS).unwrap();
 
         // Back with no screen active: nothing opens.
@@ -3806,12 +3795,14 @@ mod tests {
     fn confirm_without_focus_fires_a_full_canvas_region() {
         let mut world = World::new();
         let stage = AssetId(98);
-        world.add_component(Screen {
-            asset_id: stage,
-            initial: true,
-            fade_in_secs: 0.0,
-            ..Default::default()
-        });
+        world.push_identified(
+            stage,
+            Screen {
+                initial: true,
+                fade_in_secs: 0.0,
+                ..Default::default()
+            },
+        );
         world.add_component(HitRegion {
             x: 0.0,
             y: 0.0,
@@ -3848,9 +3839,9 @@ mod tests {
     #[test]
     fn pad_capture_binds_east_instead_of_backing_out() {
         let mut world = World::new();
-        let mut label = panel_label(7, 0.0, AssetId(0), "South");
+        let mut label = panel_label(0.0, AssetId(0), "South");
         label.screen = None;
-        world.add_component(label);
+        world.push_identified(AssetId(7), label);
         world.add_component(HitRegion {
             x: 0.0,
             y: 0.0,

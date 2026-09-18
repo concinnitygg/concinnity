@@ -20,19 +20,23 @@ use crate::ecs::SYSTEMS;
 #[test]
 fn a_prop_scoped_behavior_fires_once_started() {
     let mut world = World::new();
-    world.add_component(Prop {
-        asset_id: AssetId(1),
-        mesh: Some(MeshHandle(10)),
-        scale: [1.0; 3],
-        ..Default::default()
-    });
-    world.add_component(Prop {
-        asset_id: AssetId(2),
-        model: Some(Ref::new(AssetId(20))),
-        position: [10.0, 0.0, 0.0],
-        scale: [1.0; 3],
-        ..Default::default()
-    });
+    world.push_identified(
+        AssetId(1),
+        Prop {
+            mesh: Some(MeshHandle(10)),
+            scale: [1.0; 3],
+            ..Default::default()
+        },
+    );
+    world.push_identified(
+        AssetId(2),
+        Prop {
+            model: Some(Ref::new(AssetId(20))),
+            position: [10.0, 0.0, 0.0],
+            scale: [1.0; 3],
+            ..Default::default()
+        },
+    );
     world.add_component(Behavior {
         on: BehaviorSource::Tick,
         scope: vec!["Prop".into()],
@@ -76,19 +80,21 @@ fn a_behavior_moves_a_prop_the_simulation_owns() {
     use concinnity_core::components::{PropBody, PropCollider};
 
     let mut world = World::new();
-    world.add_component(Prop {
-        asset_id: AssetId(1),
-        mesh: Some(MeshHandle(10)),
-        position: [0.0, 5.0, 0.0],
-        scale: [1.0; 3],
-        collider: Some(PropCollider {
-            shape: concinnity_core::components::PropColliderShape::Ball,
-            radius: 0.5,
-            half_extents: [0.5; 3],
+    world.push_identified(
+        AssetId(1),
+        Prop {
+            mesh: Some(MeshHandle(10)),
+            position: [0.0, 5.0, 0.0],
+            scale: [1.0; 3],
+            collider: Some(PropCollider {
+                shape: concinnity_core::components::PropColliderShape::Ball,
+                radius: 0.5,
+                half_extents: [0.5; 3],
+                ..Default::default()
+            }),
             ..Default::default()
-        }),
-        ..Default::default()
-    });
+        },
+    );
     world.add_component(PropBody {
         prop_name: Some(Ref::new(AssetId(1))),
         mass: 1.0,
@@ -137,7 +143,6 @@ fn a_saving_world_restores_its_variable_through_the_file_store() {
     let dir = tree.join("state");
 
     let saver = || Behavior {
-        asset_id: AssetId(1),
         on: BehaviorSource::Start,
         body: vec![
             BehaviorNode::Set {
@@ -154,7 +159,6 @@ fn a_saving_world_restores_its_variable_through_the_file_store() {
             name: "visits".into(),
             value: BehaviorLiteral::Int(0),
         }],
-        ..Default::default()
     };
 
     // One run: the `save` node's write reaches the file.
@@ -190,12 +194,14 @@ fn a_distance_gate_on_the_queried_camera_decides_by_where_the_camera_is() {
     use concinnity_core::components::cook::Camera3D as Camera3DArgs;
 
     let mut world = World::new();
-    world.add_component(Prop {
-        asset_id: AssetId(1),
-        mesh: Some(MeshHandle(10)),
-        scale: [1.0; 3],
-        ..Default::default()
-    });
+    world.push_identified(
+        AssetId(1),
+        Prop {
+            mesh: Some(MeshHandle(10)),
+            scale: [1.0; 3],
+            ..Default::default()
+        },
+    );
     // Uncontrolled, so nothing but this test moves it.
     world.add_component(Camera3D::bake(Camera3DArgs {
         position: [0.0, 0.0, 100.0],

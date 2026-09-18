@@ -10,8 +10,7 @@ use alloc::string::String;
 use crate::components::{Collider, Pickup, PropCollider, Transform};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{
-    Arena, ComponentStorage, Entity, EntityByName, FrameContext, NoPayloads, PipelineContext,
-    Resources,
+    Arena, ComponentStorage, Entity, FrameContext, NoPayloads, PipelineContext, Resources,
 };
 use crate::profile::FrameProfile;
 
@@ -45,8 +44,8 @@ impl TestWorld {
     }
 
     // Push a decomposed prop (Transform + Collider, plus the Pickup tag when
-    // asked) exactly as the load-time decomposition would, and register it in
-    // the name index under `id` so joints can resolve it.
+    // asked) exactly as the load-time decomposition would, and identify it as
+    // `id` so joints can resolve it.
     pub(super) fn spawn_prop(&mut self, id: AssetId, position: [f32; 3], pickup: bool) -> Entity {
         let entity = self.components.push_typed(Transform {
             position,
@@ -65,16 +64,7 @@ impl TestWorld {
         if pickup {
             self.components.insert_typed(entity, Pickup);
         }
-        match self.resources.get_mut::<EntityByName>() {
-            Some(index) => {
-                index.0.insert(id, entity);
-            }
-            None => {
-                let mut index = alloc::collections::BTreeMap::new();
-                index.insert(id, entity);
-                self.resources.insert(EntityByName(index));
-            }
-        }
+        self.ctx().identify(entity, id);
         entity
     }
 }

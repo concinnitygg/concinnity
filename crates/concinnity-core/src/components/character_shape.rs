@@ -2,7 +2,6 @@
 // that deform a SkinnedMesh at runtime.
 
 use crate::ecs::SkinnedMeshHandle;
-use crate::ecs::asset_id::AssetId;
 use crate::ecs::de_opt_skinned_mesh_handle;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -91,9 +90,6 @@ impl Default for JointProportion {
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct CharacterShape {
-    /// Asset identity; injected via `inject_name`. Not part of `args`.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// The [SkinnedMesh](#skinnedmesh) this shape deforms.
     #[serde(deserialize_with = "de_opt_skinned_mesh_handle")]
     pub target: Option<SkinnedMeshHandle>,
@@ -253,7 +249,6 @@ mod tests {
         assert_eq!(back.proportions, s.proportions);
         assert_eq!(back.proportions[0].scale, 1.05);
         assert!(!back.bake, "runtime deformation is the default");
-        assert_eq!(back.asset_id, AssetId::default());
         // A blank proportion is the identity.
         let p = JointProportion::default();
         assert_eq!((p.scale, p.length), (1.0, 0.0));

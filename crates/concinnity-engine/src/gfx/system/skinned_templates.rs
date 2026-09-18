@@ -119,11 +119,9 @@ impl GraphicsSystem {
                     local_max: local_bounds.1,
                 });
             }
-            // A runtime SpawnRequest resolves the template by its mesh name,
-            // the same way the static spawn path resolves a named placement.
-            if let Some(by_name) = ctx.resource_mut::<concinnity_core::ecs::EntityByName>() {
-                by_name.0.insert(name_id, entity);
-            }
+            // A runtime SpawnRequest resolves the template by its mesh's id,
+            // the same way the static spawn path resolves a placement.
+            ctx.identify(entity, name_id);
             // PhysicsSystem (init runs later this tick) creates the kinematic
             // capsule from the rig, and the render transform follows it.
             if let Some((half_height, radius)) = capsule {

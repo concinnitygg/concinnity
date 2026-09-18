@@ -101,20 +101,14 @@ pub(in crate::editor::hook) fn world_with_fields() -> World {
         .into_iter()
         .chain(form_panel::all_field_ids())
     {
-        world.add_component(TextInput {
-            asset_id: id,
-            ..Default::default()
-        });
+        world.push_identified(id, TextInput::default());
     }
     world
 }
 
 pub(in crate::editor::hook) fn set_field(world: &mut World, id: AssetId, text: &str) {
-    for t in world.query_mut::<TextInput>() {
-        if t.asset_id == id {
-            t.content = text.to_string();
-            break;
-        }
+    if let Some(t) = world.get_mut_by_id::<TextInput>(id) {
+        t.content = text.to_string();
     }
 }
 
@@ -227,10 +221,11 @@ pub(in crate::editor::hook) fn pick_world(
         interact_requested: false,
         controller: None,
     });
-    for s in highlight::outline_sprites() {
-        world.add_component(s);
+    for (id, s) in highlight::outline_sprites() {
+        world.push_identified(id, s);
     }
-    world.add_component(marquee::rect_sprite());
+    let (id, rect) = marquee::rect_sprite();
+    world.push_identified(id, rect);
     world.insert_resource(PickIndex {
         entries: picks
             .into_iter()
@@ -318,10 +313,7 @@ pub(in crate::editor::hook) fn behavior_session(
 ) -> (EditorHook, World) {
     let mut world = World::new();
     for id in behavior::panel::all_field_ids() {
-        world.add_component(TextInput {
-            asset_id: id,
-            ..Default::default()
-        });
+        world.push_identified(id, TextInput::default());
     }
     let mut h = hook(entries);
     registry::panel(PanelKey::Behavior).toggle(&mut h, &mut world);
@@ -383,12 +375,10 @@ pub(in crate::editor::hook) fn two_prop_rig(
     };
     let e1 = world.push(transform(s1));
     let e2 = world.push(transform(s2));
-    let mut by_name = std::collections::BTreeMap::new();
-    by_name.insert(a, e1);
-    by_name.insert(b, e2);
-    world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
-    for s in gizmo::sprites() {
-        world.add_component(s);
+    world.identify(e1, a);
+    world.identify(e2, b);
+    for (id, s) in gizmo::sprites() {
+        world.push_identified(id, s);
     }
     let entry = |name: &str, p: [f32; 3]| serde_json::json!({ "type": "Prop", "args": { "$id": name, "position": p } });
     let h = hook(vec![entry("box_a", s1), entry("box_b", s2)]);
@@ -517,10 +507,7 @@ pub(in crate::editor::hook) fn hook_at(
 pub(in crate::editor::hook) fn world_with_name_field() -> World {
     let mut world = World::new();
     for id in modal::all_field_ids() {
-        world.add_component(TextInput {
-            asset_id: id,
-            ..Default::default()
-        });
+        world.push_identified(id, TextInput::default());
     }
     world
 }

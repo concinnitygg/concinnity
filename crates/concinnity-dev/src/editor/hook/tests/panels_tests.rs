@@ -69,9 +69,9 @@ fn show_every_element(p: &dyn Panel, world: &mut World) {
 fn visible_sprites(p: &dyn Panel, world: &World) -> Vec<AssetId> {
     let ids = p.sprite_ids();
     world
-        .query::<Sprite>()
-        .filter(|s| s.visible && ids.contains(&s.asset_id))
-        .map(|s| s.asset_id)
+        .join2::<Sprite, concinnity_core::components::Identity>()
+        .filter(|(_, s, identity)| s.visible && ids.contains(&identity.id()))
+        .map(|(_, _, identity)| identity.id())
         .collect()
 }
 
@@ -88,22 +88,19 @@ fn hide_blanks_every_declared_element() {
 
         for id in p.sprite_ids() {
             let s = world
-                .query::<Sprite>()
-                .find(|s| s.asset_id == id)
+                .get_by_id::<Sprite>(id)
                 .unwrap_or_else(|| panic!("{key:?} declares sprite {id:?} but injection has none"));
             assert!(!s.visible, "{key:?} left sprite {id:?} visible after hide");
         }
         for id in p.label_ids() {
             let l = world
-                .query::<TextLabel>()
-                .find(|l| l.asset_id == id)
+                .get_by_id::<TextLabel>(id)
                 .unwrap_or_else(|| panic!("{key:?} declares label {id:?} but injection has none"));
             assert!(!l.visible, "{key:?} left label {id:?} visible after hide");
         }
         for (id, _) in p.field_ids() {
             let t = world
-                .query::<TextInput>()
-                .find(|t| t.asset_id == id)
+                .get_by_id::<TextInput>(id)
                 .unwrap_or_else(|| panic!("{key:?} declares field {id:?} but injection has none"));
             assert!(!t.visible, "{key:?} left field {id:?} visible after hide");
         }
@@ -451,13 +448,12 @@ fn preview_rows_toggle_play_mode_and_fly() {
 #[test]
 fn tick_view_button_opens_view_then_a_row_opens_templates() {
     let vis = |w: &World, id: AssetId| {
-        w.query::<Sprite>()
-            .find(|s| s.asset_id == id)
+        w.get_by_id::<Sprite>(id)
             .map(|s| s.visible)
             .unwrap_or(false)
     };
     let rect = |w: &World, id: AssetId| {
-        let s = w.query::<Sprite>().find(|s| s.asset_id == id).unwrap();
+        let s = w.get_by_id::<Sprite>(id).unwrap();
         [s.x, s.y, s.width, s.height]
     };
     let mut world = World::new();
@@ -517,13 +513,12 @@ fn tick_view_button_opens_view_then_a_row_opens_templates() {
 #[test]
 fn tick_picking_a_template_spawns_the_detail_panel_then_apply_adds() {
     let vis = |w: &World, id: AssetId| {
-        w.query::<Sprite>()
-            .find(|s| s.asset_id == id)
+        w.get_by_id::<Sprite>(id)
             .map(|s| s.visible)
             .unwrap_or(false)
     };
     let rect = |w: &World, id: AssetId| {
-        let s = w.query::<Sprite>().find(|s| s.asset_id == id).unwrap();
+        let s = w.get_by_id::<Sprite>(id).unwrap();
         [s.x, s.y, s.width, s.height]
     };
     let mut world = World::new();
@@ -559,8 +554,7 @@ fn tick_picking_a_template_spawns_the_detail_panel_then_apply_adds() {
     assert_eq!(h.open_template, Some(0), "the detail panel opened on pick");
     assert!(vis(&world, template_panel::PANEL_BG), "detail panel shown");
     let title = world
-        .query::<TextLabel>()
-        .find(|l| l.asset_id == template_panel::TITLE_LABEL)
+        .get_by_id::<TextLabel>(template_panel::TITLE_LABEL)
         .unwrap();
     assert!(
         title.content.starts_with("Template "),

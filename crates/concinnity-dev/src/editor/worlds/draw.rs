@@ -361,19 +361,11 @@ mod tests {
     }
 
     fn sprite(world: &World, id: AssetId) -> Sprite {
-        world
-            .query::<Sprite>()
-            .find(|s| s.asset_id == id)
-            .cloned()
-            .unwrap()
+        world.get_by_id::<Sprite>(id).cloned().unwrap()
     }
 
     fn label(world: &World, id: AssetId) -> TextLabel {
-        world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == id)
-            .cloned()
-            .unwrap()
+        world.get_by_id::<TextLabel>(id).cloned().unwrap()
     }
 
     #[test]

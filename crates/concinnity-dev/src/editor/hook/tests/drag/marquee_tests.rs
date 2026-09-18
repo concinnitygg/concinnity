@@ -49,8 +49,7 @@ fn marquee_drag_selects_the_boxed_assets() {
     assert!(h.marquee.is_some(), "an empty-space press arms the marquee");
     drag_to(&mut world, &mut h, [560.0, 700.0]);
     let rect = world
-        .query::<Sprite>()
-        .find(|s| s.asset_id == marquee::RECT)
+        .get_by_id::<Sprite>(marquee::RECT)
         .cloned()
         .expect("marquee sprite injected");
     assert!(rect.visible, "the rect shows once the drag clears the slop");
@@ -66,11 +65,7 @@ fn marquee_drag_selects_the_boxed_assets() {
     );
     assert!(h.marquee.is_none(), "release ends the marquee");
     assert!(
-        !world
-            .query::<Sprite>()
-            .find(|s| s.asset_id == marquee::RECT)
-            .unwrap()
-            .visible,
+        !world.get_by_id::<Sprite>(marquee::RECT).unwrap().visible,
         "the rect hides after release"
     );
 
@@ -109,8 +104,7 @@ fn selection_rings_cover_every_member() {
     let ids = highlight::all_sprite_ids();
     let ring = |world: &World, i: usize| {
         world
-            .query::<Sprite>()
-            .find(|s| s.asset_id == ids[i])
+            .get_by_id::<Sprite>(ids[i])
             .cloned()
             .expect("ring pool injected")
     };

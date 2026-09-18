@@ -1,7 +1,6 @@
 // Baked image-based lighting environment schema.
 
 use crate::ecs::PayloadLocator;
-use crate::ecs::asset_id::AssetId;
 use alloc::string::String;
 
 /// A baked lighting environment built from an equirectangular source (or a
@@ -55,9 +54,6 @@ use alloc::string::String;
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct EnvironmentMap {
-    /// Asset identity; injected via `inject_name`. Not part of `args`.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// Path to the source equirectangular panorama -- a Radiance `.hdr`, or a
     /// panorama-sphere `.glb` / `.gltf` -- relative to the project root.
     /// Mutually exclusive with `generator`.
@@ -106,7 +102,6 @@ pub struct EnvironmentMap {
 impl Default for EnvironmentMap {
     fn default() -> Self {
         Self {
-            asset_id: AssetId::default(),
             source: String::new(),
             generator: String::new(),
             prefilter_face_size: 512,
@@ -156,7 +151,6 @@ mod tests {
         let back: EnvironmentMap = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(back.irradiance_face_size, 16);
         assert_eq!(back.prefilter_samples, 512);
-        assert_eq!(back.asset_id, AssetId::default());
         assert!(back.locator.is_none());
     }
 

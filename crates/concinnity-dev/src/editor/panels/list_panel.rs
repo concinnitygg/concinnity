@@ -267,26 +267,16 @@ mod tests {
     fn injected_world(rows: usize) -> World {
         let mut world = World::new();
         for id in all_sprite_ids(BASE, rows, true) {
-            world.add_component(Sprite {
-                asset_id: id,
-                ..Default::default()
-            });
+            world.push_identified(id, Sprite::default());
         }
         for id in all_label_ids(BASE, rows, true) {
-            world.add_component(TextLabel {
-                asset_id: id,
-                ..Default::default()
-            });
+            world.push_identified(id, TextLabel::default());
         }
         world
     }
 
     fn sprite(world: &World, id: AssetId) -> Sprite {
-        world
-            .query::<Sprite>()
-            .find(|s| s.asset_id == id)
-            .cloned()
-            .unwrap()
+        world.get_by_id::<Sprite>(id).cloned().unwrap()
     }
 
     #[test]
@@ -379,23 +369,14 @@ mod tests {
             &[Row::checkbox("Toggle", true)],
             [0.0, 0.0],
         );
-        let title = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == title_label(BASE))
-            .unwrap();
+        let title = world.get_by_id::<TextLabel>(title_label(BASE)).unwrap();
         assert!(title.visible && title.content == "Panel");
         // The close button always shows its "X".
-        let close = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == close_label(BASE))
-            .unwrap();
+        let close = world.get_by_id::<TextLabel>(close_label(BASE)).unwrap();
         assert!(close.visible && close.content == "X");
         // The checkbox is green while on and the label is inset past the box.
         assert_eq!(sprite(&world, check_box(BASE, 0)).tint, BOX_TINT_ON);
-        let label = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == row_label(BASE, 0))
-            .unwrap();
+        let label = world.get_by_id::<TextLabel>(row_label(BASE, 0)).unwrap();
         assert_eq!(label.content, "Toggle");
         assert_eq!(label.x, o[0] + CHECK_LABEL_INSET);
         // Off flips the checkbox tint.
@@ -417,16 +398,10 @@ mod tests {
         // so its rows have nothing to inset past: the label sits at PAD.
         let mut world = World::new();
         for id in all_sprite_ids(BASE, 1, false) {
-            world.add_component(Sprite {
-                asset_id: id,
-                ..Default::default()
-            });
+            world.push_identified(id, Sprite::default());
         }
         for id in all_label_ids(BASE, 1, false) {
-            world.add_component(TextLabel {
-                asset_id: id,
-                ..Default::default()
-            });
+            world.push_identified(id, TextLabel::default());
         }
         let o = [20.0, 20.0];
         place(
@@ -438,10 +413,7 @@ mod tests {
             &[Row::label("Just text")],
             [0.0, 0.0],
         );
-        let label = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == row_label(BASE, 0))
-            .unwrap();
+        let label = world.get_by_id::<TextLabel>(row_label(BASE, 0)).unwrap();
         assert_eq!(
             label.x,
             o[0] + PAD,

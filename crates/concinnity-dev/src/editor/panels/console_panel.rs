@@ -347,8 +347,7 @@ mod tests {
         );
         assert!(
             world
-                .query::<TextLabel>()
-                .find(|l| l.asset_id == row_label(LINE_POOL))
+                .get_by_id::<TextLabel>(row_label(LINE_POOL))
                 .unwrap()
                 .visible
         );
@@ -378,38 +377,17 @@ mod tests {
             ..view(&l, 2, 0)
         };
         place(&mut world, Some(&v), [20.0, 20.0], size());
-        let first = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == row_label(0))
-            .unwrap();
+        let first = world.get_by_id::<TextLabel>(row_label(0)).unwrap();
         assert!(first.visible && first.content == "boom");
         assert_eq!(first.color, theme::LOG_ERROR);
-        let second = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == row_label(1))
-            .unwrap();
+        let second = world.get_by_id::<TextLabel>(row_label(1)).unwrap();
         assert_eq!(second.color, theme::LOG_COMMAND);
-        assert!(
-            !world
-                .query::<TextLabel>()
-                .find(|l| l.asset_id == row_label(2))
-                .unwrap()
-                .visible
-        );
-        let input = world
-            .query::<TextInput>()
-            .find(|t| t.asset_id == INPUT)
-            .unwrap();
+        assert!(!world.get_by_id::<TextLabel>(row_label(2)).unwrap().visible);
+        let input = world.get_by_id::<TextInput>(INPUT).unwrap();
         assert!(input.visible && input.focused);
         assert_eq!(input.ghost, "cube");
         // A short log shows no scrollbar.
-        assert!(
-            !world
-                .query::<Sprite>()
-                .find(|s| s.asset_id == LOG_THUMB)
-                .unwrap()
-                .visible
-        );
+        assert!(!world.get_by_id::<Sprite>(LOG_THUMB).unwrap().visible);
     }
 
     #[test]
@@ -417,13 +395,7 @@ mod tests {
         let mut world = injected_world();
         let l = lines(LINE_POOL);
         place(&mut world, Some(&view(&l, 40, 10)), [20.0, 20.0], size());
-        assert!(
-            world
-                .query::<Sprite>()
-                .find(|s| s.asset_id == LOG_THUMB)
-                .unwrap()
-                .visible
-        );
+        assert!(world.get_by_id::<Sprite>(LOG_THUMB).unwrap().visible);
     }
 
     #[test]

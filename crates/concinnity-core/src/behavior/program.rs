@@ -212,6 +212,9 @@ pub enum COp {
 /// One compiled behavior.
 #[derive(Debug)]
 pub struct Program {
+    /// The asset id of the behavior this was compiled from, `None` for one a
+    /// world was given without an identity.
+    pub id: Option<AssetId>,
     /// The authored definition this was compiled from.
     pub def: Behavior,
     /// Components an entity must carry for this behavior to run against it.
@@ -341,6 +344,7 @@ mod tests {
 
     fn program(body: Vec<CNode>) -> Program {
         Program {
+            id: None,
             def: Default::default(),
             scope: Vec::new(),
             local_inits: Vec::new(),

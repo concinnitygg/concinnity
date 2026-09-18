@@ -509,20 +509,9 @@ mod tests {
         let (derived, rows, values) = fixture();
         let v = view(&rows, &derived, &values, Some("body_shape"));
         place(&mut world, Some(&v), [20.0, 20.0], size(rows.len()));
-        let label = |world: &World, id: AssetId| {
-            world
-                .query::<TextLabel>()
-                .find(|l| l.asset_id == id)
-                .unwrap()
-                .clone()
-        };
-        let sprite_visible = |world: &World, id: AssetId| {
-            world
-                .query::<Sprite>()
-                .find(|s| s.asset_id == id)
-                .unwrap()
-                .visible
-        };
+        let label = |world: &World, id: AssetId| world.get_by_id::<TextLabel>(id).unwrap().clone();
+        let sprite_visible =
+            |world: &World, id: AssetId| world.get_by_id::<Sprite>(id).unwrap().visible;
         assert_eq!(
             label(&world, TITLE_LABEL).content,
             "Character Shape: body_shape"
@@ -571,14 +560,7 @@ mod tests {
             Some(ShapeAction::Preset(1))
         );
         place(&mut world, Some(&v), o, s);
-        let label = |id: AssetId| {
-            world
-                .query::<TextLabel>()
-                .find(|l| l.asset_id == id)
-                .unwrap()
-                .content
-                .clone()
-        };
+        let label = |id: AssetId| world.get_by_id::<TextLabel>(id).unwrap().content.clone();
         assert_eq!(label(row_label(0)), "Presets");
         assert_eq!(label(row_label(2)), "apply heavy");
         assert_eq!(label(row_label(3)), "Face");

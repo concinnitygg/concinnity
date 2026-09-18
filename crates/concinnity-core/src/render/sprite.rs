@@ -12,7 +12,7 @@ use alloc::vec::Vec;
 use crate::components::{Sprite, SpriteFit};
 use crate::gfx::overlay::{OverlayTransform, UI_REFERENCE_SIZE};
 use crate::gfx::render_types::{TextDrawCall, TextVertex};
-use crate::render::overlay_maps::{ClipRects, OverlayLayers, TextureSlots};
+use crate::render::overlay_maps::{Placement, TextureSlots};
 
 /// A view-owned sprite that spans the whole reference canvas is a full-screen
 /// backdrop (e.g. a menu dim): it is stretched to fill the live window rather
@@ -42,18 +42,14 @@ pub(crate) fn build_sprite_calls(
     default_atlas_slot: Option<usize>,
     texture_slots: &TextureSlots,
     viewport: [f32; 2],
-    clips: &ClipRects,
-    layers: &OverlayLayers,
 ) -> Vec<TextDrawCall> {
     let mut out = crate::render::call_buffer::TextCallBuffer::default();
     build_sprite_calls_into(
         &mut out,
-        sprites,
+        sprites.iter().map(|s| (s, Placement::default())),
         default_atlas_slot,
         texture_slots,
         viewport,
-        clips,
-        layers,
     );
     out.take()
 }
@@ -63,14 +59,12 @@ pub(crate) fn build_sprite_calls(
 /// steady state, the pooled geometry of the spent frame it recycled). A
 /// `follow_cursor` sprite is skipped: it is the cursor pass's silhouette
 /// source (see `cursor.rs`), not a scene quad.
-pub fn build_sprite_calls_into(
+pub fn build_sprite_calls_into<'a>(
     out: &mut crate::render::call_buffer::TextCallBuffer,
-    sprites: &[Sprite],
+    sprites: impl IntoIterator<Item = (&'a Sprite, Placement)>,
     default_atlas_slot: Option<usize>,
     texture_slots: &TextureSlots,
     viewport: [f32; 2],
-    clips: &ClipRects,
-    layers: &OverlayLayers,
 ) {
     let fill_slot = match default_atlas_slot {
         Some(s) => s,
@@ -80,7 +74,7 @@ pub fn build_sprite_calls_into(
     let cover = OverlayTransform::cover_from_viewport(viewport);
     let bottom = OverlayTransform::bottom_anchored_from_viewport(viewport);
     let [vw, vh] = viewport;
-    for s in sprites {
+    for (s, placement) in sprites {
         if !s.visible || s.follow_cursor {
             continue;
         }
@@ -214,10 +208,10 @@ pub fn build_sprite_calls_into(
             vertices,
             indices,
             atlas_slot: texture_slot.unwrap_or(fill_slot),
-            clip_rect: clips
-                .get(&s.asset_id)
-                .map(|b| crate::render::text::band_to_window(&overlay, *b)),
-            layer: layers.get(&s.asset_id).copied().unwrap_or(0),
+            clip_rect: placement
+                .clip
+                .map(|b| crate::render::text::band_to_window(&overlay, b)),
+            layer: placement.layer,
         });
     }
 }
@@ -423,20 +417,12 @@ mod tests {
     use crate::ecs::asset_id::AssetId;
 
     use alloc::vec;
-    fn no_clips() -> ClipRects {
-        ClipRects::new()
-    }
-    fn no_layers() -> OverlayLayers {
-        OverlayLayers::new()
-    }
-
     fn no_slots() -> TextureSlots {
         TextureSlots::new()
     }
 
     fn sprite(x: f32, y: f32, w: f32, h: f32, tint: [f32; 4]) -> Sprite {
         Sprite {
-            asset_id: AssetId::default(),
             x,
             y,
             width: w,
@@ -457,29 +443,15 @@ mod tests {
     fn no_fonts_means_no_calls() {
         let s = sprite(0.0, 0.0, 100.0, 100.0, [1.0, 0.0, 0.0, 1.0]);
         assert!(
-            build_sprite_calls(
-                core::slice::from_ref(&s),
-                None,
-                &no_slots(),
-                [0.0, 0.0],
-                &no_clips(),
-                &no_layers()
-            )
-            .is_empty()
+            build_sprite_calls(core::slice::from_ref(&s), None, &no_slots(), [0.0, 0.0],)
+                .is_empty()
         );
     }
 
     #[test]
     fn visible_sprite_emits_quad_with_sentinel_uv() {
         let s = sprite(10.0, 20.0, 100.0, 50.0, [0.5, 0.5, 0.5, 0.75]);
-        let calls = build_sprite_calls(
-            core::slice::from_ref(&s),
-            Some(0),
-            &no_slots(),
-            [0.0, 0.0],
-            &no_clips(),
-            &no_layers(),
-        );
+        let calls = build_sprite_calls(core::slice::from_ref(&s), Some(0), &no_slots(), [0.0, 0.0]);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].vertices.len(), 4);
         assert_eq!(calls[0].indices, vec![0, 1, 2, 0, 2, 3]);
@@ -503,8 +475,6 @@ mod tests {
                 Some(0),
                 &no_slots(),
                 [0.0, 0.0],
-                &no_clips(),
-                &no_layers()
             )
             .is_empty(),
             "borderless transparent fill still skips"
@@ -518,8 +488,6 @@ mod tests {
             Some(0),
             &no_slots(),
             [0.0, 0.0],
-            &no_clips(),
-            &no_layers(),
         );
         assert_eq!(calls.len(), 1, "the border ring draws");
         // Four edge strips, every vertex in the border color at full alpha:
@@ -551,8 +519,6 @@ mod tests {
             Some(0),
             &no_slots(),
             [0.0, 0.0],
-            &no_clips(),
-            &no_layers(),
         );
         assert_eq!(calls[0].vertices.len(), 8);
     }
@@ -571,8 +537,6 @@ mod tests {
             Some(0),
             &no_slots(),
             [0.0, 0.0],
-            &no_clips(),
-            &no_layers(),
         );
         assert_eq!(calls.len(), 1);
         let verts = &calls[0].vertices;
@@ -617,8 +581,6 @@ mod tests {
             Some(0),
             &no_slots(),
             [0.0, 0.0],
-            &no_clips(),
-            &no_layers(),
         );
         let verts = &calls[0].vertices;
         let covered = |x: f32, y: f32, color: [f32; 3]| {
@@ -639,8 +601,6 @@ mod tests {
             Some(0),
             &no_slots(),
             [0.0, 0.0],
-            &no_clips(),
-            &no_layers(),
         );
         let verts = &calls[0].vertices;
         assert_eq!(verts.len(), 4 + 16, "one quad of fill, four edge strips");
@@ -662,14 +622,7 @@ mod tests {
         s.texture = Some(TextureHandle(42));
         let mut slots = no_slots();
         slots.insert(TextureHandle(42), 3);
-        let calls = build_sprite_calls(
-            core::slice::from_ref(&s),
-            Some(0),
-            &slots,
-            [0.0, 0.0],
-            &no_clips(),
-            &no_layers(),
-        );
+        let calls = build_sprite_calls(core::slice::from_ref(&s), Some(0), &slots, [0.0, 0.0]);
         assert_eq!(calls.len(), 1);
         // The call binds the sprite texture's atlas slot, not the font's.
         assert_eq!(calls[0].atlas_slot, 3);
@@ -689,14 +642,7 @@ mod tests {
     fn rounded_sprite_tessellates_with_a_feathered_edge() {
         let mut s = sprite(100.0, 100.0, 400.0, 200.0, [0.1, 0.2, 0.3, 0.9]);
         s.corner_radius = 20.0;
-        let calls = build_sprite_calls(
-            core::slice::from_ref(&s),
-            Some(0),
-            &no_slots(),
-            [0.0, 0.0],
-            &no_clips(),
-            &no_layers(),
-        );
+        let calls = build_sprite_calls(core::slice::from_ref(&s), Some(0), &no_slots(), [0.0, 0.0]);
         assert_eq!(calls.len(), 1);
         let vs = &calls[0].vertices;
         // An inner solid ring and an outer transparent ring, 4 corner arcs of
@@ -729,14 +675,7 @@ mod tests {
         let mut s = sprite(100.0, 100.0, 200.0, 120.0, [0.1, 0.2, 0.3, 1.0]);
         s.border_width = 2.0;
         s.border_color = [0.8, 0.4, 0.2, 1.0];
-        let calls = build_sprite_calls(
-            core::slice::from_ref(&s),
-            Some(0),
-            &no_slots(),
-            [0.0, 0.0],
-            &no_clips(),
-            &no_layers(),
-        );
+        let calls = build_sprite_calls(core::slice::from_ref(&s), Some(0), &no_slots(), [0.0, 0.0]);
         assert_eq!(calls.len(), 1);
         let vs = &calls[0].vertices;
         // Both the border-colored outer layer and the tinted fill are present.
@@ -777,14 +716,7 @@ mod tests {
         // A color but no width draws no border (just the fill quad).
         s.border_width = 0.0;
         s.border_color = [1.0, 0.0, 0.0, 1.0];
-        let calls = build_sprite_calls(
-            core::slice::from_ref(&s),
-            Some(0),
-            &no_slots(),
-            [0.0, 0.0],
-            &no_clips(),
-            &no_layers(),
-        );
+        let calls = build_sprite_calls(core::slice::from_ref(&s), Some(0), &no_slots(), [0.0, 0.0]);
         assert_eq!(
             calls[0].vertices.len(),
             4,
@@ -806,8 +738,6 @@ mod tests {
             Some(0),
             &no_slots(),
             [2.0 * UI_REFERENCE_SIZE[0], 2.0 * UI_REFERENCE_SIZE[1]],
-            &no_clips(),
-            &no_layers(),
         );
         let vs = &calls[0].vertices;
         let min_x = vs.iter().map(|v| v.pos[0]).fold(f32::MAX, f32::min);
@@ -825,14 +755,7 @@ mod tests {
         let mut s = sprite(0.0, 0.0, 10.0, 10.0, [0.2, 0.3, 0.4, 1.0]);
         s.texture = Some(TextureHandle(42));
         // The texture never made it into the atlas pool: solid-fill sentinel.
-        let calls = build_sprite_calls(
-            core::slice::from_ref(&s),
-            Some(5),
-            &no_slots(),
-            [0.0, 0.0],
-            &no_clips(),
-            &no_layers(),
-        );
+        let calls = build_sprite_calls(core::slice::from_ref(&s), Some(5), &no_slots(), [0.0, 0.0]);
         assert_eq!(calls[0].atlas_slot, 5);
         assert!(calls[0].vertices[0].uv[0] < 0.0);
         assert_eq!(calls[0].vertices[0].mode, 0.0);
@@ -843,15 +766,8 @@ mod tests {
         let mut s = sprite(0.0, 0.0, 100.0, 100.0, [1.0, 1.0, 1.0, 1.0]);
         s.visible = false;
         assert!(
-            build_sprite_calls(
-                core::slice::from_ref(&s),
-                Some(0),
-                &no_slots(),
-                [0.0, 0.0],
-                &no_clips(),
-                &no_layers()
-            )
-            .is_empty()
+            build_sprite_calls(core::slice::from_ref(&s), Some(0), &no_slots(), [0.0, 0.0],)
+                .is_empty()
         );
     }
 
@@ -859,15 +775,8 @@ mod tests {
     fn zero_alpha_sprite_is_skipped() {
         let s = sprite(0.0, 0.0, 100.0, 100.0, [1.0, 1.0, 1.0, 0.0]);
         assert!(
-            build_sprite_calls(
-                core::slice::from_ref(&s),
-                Some(0),
-                &no_slots(),
-                [0.0, 0.0],
-                &no_clips(),
-                &no_layers()
-            )
-            .is_empty()
+            build_sprite_calls(core::slice::from_ref(&s), Some(0), &no_slots(), [0.0, 0.0],)
+                .is_empty()
         );
     }
 
@@ -883,8 +792,6 @@ mod tests {
             Some(0),
             &no_slots(),
             [2560.0, 1440.0],
-            &no_clips(),
-            &no_layers(),
         );
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].vertices[0].pos, [200.0, 200.0]);
@@ -902,8 +809,6 @@ mod tests {
             Some(0),
             &no_slots(),
             [2560.0, 1440.0],
-            &no_clips(),
-            &no_layers(),
         );
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].vertices[0].pos, [0.0, 0.0]);
@@ -923,8 +828,6 @@ mod tests {
             Some(0),
             &no_slots(),
             [1024.0, 768.0],
-            &no_clips(),
-            &no_layers(),
         );
         let scale = 768.0 / 720.0;
         let overflow = (1280.0 * scale - 1024.0) / 2.0;
@@ -956,8 +859,6 @@ mod tests {
             Some(0),
             &no_slots(),
             [1024.0, 768.0],
-            &no_clips(),
-            &no_layers(),
         );
         let bottom = calls[0].vertices[2].pos[1];
         assert!((bottom - 768.0).abs() < 1e-3, "bottom={bottom}");
@@ -972,84 +873,54 @@ mod tests {
             Some(0),
             &no_slots(),
             [2560.0, 1440.0],
-            &no_clips(),
-            &no_layers(),
         );
         assert_eq!(calls[0].vertices[0].pos, [10.0, 20.0]);
         assert_eq!(calls[0].vertices[2].pos, [110.0, 70.0]);
     }
 
+    // Build one sprite's calls at an explicit placement.
+    fn placed(s: &Sprite, placement: Placement, viewport: [f32; 2]) -> Vec<TextDrawCall> {
+        let mut out = crate::render::call_buffer::TextCallBuffer::default();
+        build_sprite_calls_into(&mut out, [(s, placement)], Some(0), &no_slots(), viewport);
+        out.take()
+    }
+
     #[test]
     fn clipped_element_carries_window_space_clip_rect() {
-        // A view-owned sprite whose id is in the clips map gets a clip_rect
-        // mapped from the reference-space band through the overlay; one not in
-        // the map stays unclipped.
+        // A view-owned sprite placed with a clip band gets a clip_rect mapped
+        // from the reference-space band through the overlay; one placed
+        // without a band stays unclipped.
         let mut s = sprite(100.0, 100.0, 50.0, 50.0, [1.0, 1.0, 1.0, 1.0]);
-        s.asset_id = AssetId(7);
         s.screen = Some(Ref::new(AssetId(1)));
-        let mut clips = no_clips();
         // Reference band [200,200] size [200,60] at a 2x viewport (1280x720 ->
         // 2560x1440, scale 2 about the center): forward(200,200)=(400,400),
         // forward(400,260)=(800,520) -> clip [400,400,400,120].
-        clips.insert(AssetId(7), [200.0, 200.0, 200.0, 60.0]);
-        let calls = build_sprite_calls(
-            core::slice::from_ref(&s),
-            Some(0),
-            &no_slots(),
-            [2560.0, 1440.0],
-            &clips,
-            &no_layers(),
-        );
+        let band = Placement {
+            clip: Some([200.0, 200.0, 200.0, 60.0]),
+            layer: 0,
+        };
+        let calls = placed(&s, band, [2560.0, 1440.0]);
         let clip = calls[0].clip_rect.expect("clipped sprite has a clip rect");
         assert!((clip[0] - 400.0).abs() < 1e-3, "x={}", clip[0]);
         assert!((clip[1] - 400.0).abs() < 1e-3, "y={}", clip[1]);
         assert!((clip[2] - 400.0).abs() < 1e-3, "w={}", clip[2]);
         assert!((clip[3] - 120.0).abs() < 1e-3, "h={}", clip[3]);
 
-        // A sprite not in the clips map is unclipped.
-        let mut other = sprite(0.0, 0.0, 10.0, 10.0, [1.0, 1.0, 1.0, 1.0]);
-        other.asset_id = AssetId(9);
-        other.screen = Some(Ref::new(AssetId(1)));
-        let calls = build_sprite_calls(
-            core::slice::from_ref(&other),
-            Some(0),
-            &no_slots(),
-            [2560.0, 1440.0],
-            &clips,
-            &no_layers(),
-        );
+        let calls = placed(&s, Placement::default(), [2560.0, 1440.0]);
         assert!(calls[0].clip_rect.is_none());
     }
 
-    // A sprite's call carries the draw layer its id maps to (used by the editor's
-    // panel occlusion sort); an id absent from the map draws at layer 0.
+    // A sprite's call carries the draw layer it is placed at (used by the
+    // editor's panel occlusion sort).
     #[test]
-    fn sprite_call_takes_its_layer_from_the_map() {
-        let mut mapped = sprite(0.0, 0.0, 10.0, 10.0, [1.0, 1.0, 1.0, 1.0]);
-        mapped.asset_id = AssetId(42);
-        let mut layers = OverlayLayers::new();
-        layers.insert(AssetId(42), 7);
-        let calls = build_sprite_calls(
-            core::slice::from_ref(&mapped),
-            Some(0),
-            &no_slots(),
-            [100.0, 100.0],
-            &no_clips(),
-            &layers,
-        );
-        assert_eq!(calls[0].layer, 7);
-
-        let mut unmapped = sprite(0.0, 0.0, 10.0, 10.0, [1.0, 1.0, 1.0, 1.0]);
-        unmapped.asset_id = AssetId(99);
-        let calls = build_sprite_calls(
-            core::slice::from_ref(&unmapped),
-            Some(0),
-            &no_slots(),
-            [100.0, 100.0],
-            &no_clips(),
-            &layers,
-        );
-        assert_eq!(calls[0].layer, 0, "an unmapped id is layer 0");
+    fn sprite_call_takes_its_placed_layer() {
+        let s = sprite(0.0, 0.0, 10.0, 10.0, [1.0, 1.0, 1.0, 1.0]);
+        let layered = Placement {
+            clip: None,
+            layer: 7,
+        };
+        assert_eq!(placed(&s, layered, [100.0, 100.0])[0].layer, 7);
+        assert_eq!(placed(&s, Placement::default(), [100.0, 100.0])[0].layer, 0);
     }
 
     // A `follow_cursor` sprite is the cursor pass's silhouette source, never a
@@ -1059,15 +930,8 @@ mod tests {
         let mut s = sprite(0.0, 0.0, 10.0, 10.0, [1.0, 1.0, 1.0, 1.0]);
         s.follow_cursor = true;
         assert!(
-            build_sprite_calls(
-                core::slice::from_ref(&s),
-                Some(0),
-                &no_slots(),
-                [0.0, 0.0],
-                &no_clips(),
-                &no_layers()
-            )
-            .is_empty()
+            build_sprite_calls(core::slice::from_ref(&s), Some(0), &no_slots(), [0.0, 0.0],)
+                .is_empty()
         );
     }
 }

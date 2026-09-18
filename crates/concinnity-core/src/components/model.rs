@@ -2,7 +2,6 @@
 
 use crate::ecs::MaterialHandle;
 use crate::ecs::MeshHandle;
-use crate::ecs::asset_id::AssetId;
 use crate::ecs::de_opt_material_handle;
 use crate::ecs::de_opt_mesh_handle;
 use alloc::vec::Vec;
@@ -29,9 +28,6 @@ pub struct SubMeshRef {
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct Model {
-    /// Asset identity; injected via `inject_name`. Not part of `args`.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// Ordered list of sub-meshes that make up this model.
     pub meshes: Vec<SubMeshRef>,
 }
@@ -44,7 +40,6 @@ mod tests {
     fn a_blank_model_has_no_sub_meshes() {
         let m = Model::default();
         assert!(m.meshes.is_empty());
-        assert_eq!(m.asset_id, AssetId::default());
     }
 
     #[test]
@@ -72,6 +67,5 @@ mod tests {
         assert_eq!(back.meshes[0].material, Some(MaterialHandle(4)));
         assert_eq!(back.meshes[1].mesh, Some(MeshHandle(4)));
         assert_eq!(back.meshes[1].material, Some(MaterialHandle(5)));
-        assert_eq!(back.asset_id, AssetId::default());
     }
 }

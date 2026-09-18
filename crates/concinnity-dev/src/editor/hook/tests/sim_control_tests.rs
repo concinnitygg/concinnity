@@ -96,9 +96,7 @@ fn an_edit_applied_live_leaves_the_simulation_running() {
     h.world_shadows = Some(Default::default());
     let mut world = World::new();
     let e = world.push(Sprite::default());
-    let mut by_name = std::collections::BTreeMap::new();
-    by_name.insert(asset_id::intern("badge"), e);
-    world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
+    world.identify(e, asset_id::intern("badge"));
 
     h.entries[0]["args"]["width"] = serde_json::json!(16.0);
     h.mark_changed();
@@ -119,12 +117,9 @@ fn an_edit_applied_live_leaves_the_simulation_running() {
 // entries use.
 fn named_world(assets: Vec<(&str, ComponentAsset)>) -> World {
     let mut world = World::new();
-    let mut by_name = std::collections::BTreeMap::new();
     for (name, asset) in assets {
-        let entity = world.add(asset);
-        by_name.insert(asset_id::intern(name), entity);
+        world.add(asset, Some(asset_id::intern(name)));
     }
-    world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
     world
 }
 

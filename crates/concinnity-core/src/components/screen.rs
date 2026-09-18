@@ -2,7 +2,6 @@
 
 use crate::components::TextInput;
 use crate::components::vocabulary;
-use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Ref, de_opt_ref};
 use alloc::string::String;
 
@@ -55,9 +54,6 @@ vocabulary!(ScreenInput {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct Screen {
-    /// Assigned by the loader; not authored.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// When true, this screen is shown as soon as the world loads.
     pub initial: bool,
     /// Seconds to fade the screen in when it's shown. 0 shows it instantly.
@@ -84,7 +80,6 @@ pub struct Screen {
 impl Default for Screen {
     fn default() -> Self {
         Self {
-            asset_id: AssetId::default(),
             initial: false,
             fade_in_secs: 0.0,
             toggle_key: String::new(),
@@ -99,6 +94,7 @@ impl Default for Screen {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ecs::asset_id::AssetId;
 
     #[test]
     fn a_blank_screen_captures_input_and_pauses_the_world() {
@@ -137,6 +133,5 @@ mod tests {
         assert_eq!(back.input, ScreenInput::Passthrough);
         // A negative layer sits below the default overlays.
         assert_eq!(back.layer, -1);
-        assert_eq!(back.asset_id, AssetId::default());
     }
 }

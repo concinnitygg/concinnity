@@ -93,7 +93,7 @@ define_access_ids! {
         ScheduleMode,
         crate::ecs::ActiveSceneFlow,
         crate::ecs::SceneResidencyStatus,
-        concinnity_core::ecs::EntityByName,
+        concinnity_core::ecs::EntityById,
         crate::app::budget::MemoryBudget,
         crate::app::budget::ThreadBudget,
         crate::gfx::overlay::OverlayFrame,

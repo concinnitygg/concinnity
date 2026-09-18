@@ -4,7 +4,6 @@ use crate::components::vocabulary;
 use crate::components::{Screen, Sprite, TextLabel};
 use crate::ecs::AudioClipHandle;
 use crate::ecs::TextureHandle;
-use crate::ecs::asset_id::AssetId;
 use crate::ecs::de_audio_clip_handle_vec;
 use crate::ecs::de_opt_audio_clip_handle;
 use crate::ecs::de_texture_handle;
@@ -32,9 +31,6 @@ use alloc::vec::Vec;
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct Story {
-    /// Asset identity; injected via `inject_name`. Not part of `args`.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// The story title, as shown on the generated title screen.
     pub title: String,
     /// The node graph in document order. Play starts at the first node; a
@@ -341,7 +337,6 @@ impl StoryCompareOp {
 impl Default for Story {
     fn default() -> Self {
         Self {
-            asset_id: AssetId::default(),
             title: String::new(),
             nodes: Vec::new(),
             text_speed: 45.0,
@@ -382,6 +377,7 @@ vocabulary!(StoryPlayback {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ecs::asset_id::AssetId;
     use alloc::vec;
 
     // NAMES is what the editor's picker offers, so it has to be what serde

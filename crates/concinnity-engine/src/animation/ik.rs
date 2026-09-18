@@ -40,7 +40,7 @@ pub(super) struct IkChainRuntime {
 // declarations. Unresolvable chains are dropped with a warning, so one bad
 // name never takes down the rest.
 pub(super) fn resolve_chains(
-    graph_id: AssetId,
+    graph_id: Option<AssetId>,
     authored: &[AnimationIkChain],
     parameters: &[AnimationParam],
     skeleton: &Skeleton,
@@ -48,7 +48,7 @@ pub(super) fn resolve_chains(
     let mut chains = Vec::new();
     for (i, c) in authored.iter().enumerate() {
         let fail = |detail: String| {
-            tracing::warn!("AnimationGraph {graph_id}: ik_chains[{i}] {detail}; chain disabled");
+            tracing::warn!("AnimationGraph {graph_id:?}: ik_chains[{i}] {detail}; chain disabled");
         };
         if c.joints.len() != 3 {
             fail(format!("names {} joints, expected 3", c.joints.len()));
@@ -316,7 +316,7 @@ mod tests {
     fn resolves_a_valid_full_strength_chain() {
         let skel = leg_skeleton();
         let out = resolve_chains(
-            AssetId(1),
+            Some(AssetId(1)),
             &[chain(&["hip", "knee", "foot"], "")],
             &[],
             &skel,
@@ -347,7 +347,7 @@ mod tests {
             },
         ];
         let out = resolve_chains(
-            AssetId(1),
+            Some(AssetId(1)),
             &[chain(&["hip", "knee", "foot"], "ik")],
             &params,
             &skel,
@@ -363,7 +363,7 @@ mod tests {
     #[test]
     fn rejects_a_chain_with_the_wrong_joint_count() {
         let skel = leg_skeleton();
-        let out = resolve_chains(AssetId(1), &[chain(&["hip", "knee"], "")], &[], &skel);
+        let out = resolve_chains(Some(AssetId(1)), &[chain(&["hip", "knee"], "")], &[], &skel);
         assert!(out.is_empty(), "a two-joint chain is dropped");
     }
 
@@ -371,7 +371,7 @@ mod tests {
     fn rejects_a_chain_naming_a_missing_joint() {
         let skel = leg_skeleton();
         let out = resolve_chains(
-            AssetId(1),
+            Some(AssetId(1)),
             &[chain(&["hip", "knee", "toe"], "")],
             &[],
             &skel,
@@ -385,7 +385,7 @@ mod tests {
         // hip -> stray -> foot: stray is a root, not hip's child, so parentage
         // is broken.
         let out = resolve_chains(
-            AssetId(1),
+            Some(AssetId(1)),
             &[chain(&["hip", "stray", "foot"], "")],
             &[],
             &skel,
@@ -397,7 +397,7 @@ mod tests {
     fn rejects_a_chain_with_an_undeclared_weight_parameter() {
         let skel = leg_skeleton();
         let out = resolve_chains(
-            AssetId(1),
+            Some(AssetId(1)),
             &[chain(&["hip", "knee", "foot"], "ghost")],
             &[],
             &skel,
@@ -412,7 +412,7 @@ mod tests {
     fn keeps_the_good_chains_when_one_is_bad() {
         let skel = leg_skeleton();
         let out = resolve_chains(
-            AssetId(1),
+            Some(AssetId(1)),
             &[
                 chain(&["hip", "knee"], ""),         // bad: wrong count
                 chain(&["hip", "knee", "foot"], ""), // good

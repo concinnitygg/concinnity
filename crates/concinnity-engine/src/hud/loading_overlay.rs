@@ -54,8 +54,7 @@ impl LoadingOverlaySystem {
     }
 
     fn sprite_mut<'a>(ctx: &'a mut PipelineContext, id: Option<AssetId>) -> Option<&'a mut Sprite> {
-        let id = id?;
-        ctx.query_mut::<Sprite>().find(|s| s.asset_id == id)
+        ctx.get_mut_by_id::<Sprite>(id?)
     }
 
     fn set_visible(ctx: &mut PipelineContext, id: Option<AssetId>, visible: bool) {
@@ -81,7 +80,7 @@ impl LoadingOverlaySystem {
         }
         Self::set_visible(ctx, self.track, true);
         if let Some(id) = self.label
-            && let Some(label) = ctx.query_mut::<TextLabel>().find(|l| l.asset_id == id)
+            && let Some(label) = ctx.get_mut_by_id::<TextLabel>(id)
         {
             label.visible = true;
         }
@@ -93,7 +92,7 @@ impl LoadingOverlaySystem {
         let progress = progress.clamp(0.0, 1.0);
         let track = self
             .track
-            .and_then(|id| ctx.query::<Sprite>().find(|s| s.asset_id == id))
+            .and_then(|id| ctx.get_by_id::<Sprite>(id))
             .map(|s| (s.x, s.width));
         if let Some(fill) = Self::sprite_mut(ctx, self.fill) {
             if let Some((x, width)) = track {
@@ -103,7 +102,7 @@ impl LoadingOverlaySystem {
             fill.visible = progress > 0.0;
         }
         if let Some(id) = self.label
-            && let Some(label) = ctx.query_mut::<TextLabel>().find(|l| l.asset_id == id)
+            && let Some(label) = ctx.get_mut_by_id::<TextLabel>(id)
         {
             label.content = format!("Loading {:.0}%", progress * 100.0);
         }
@@ -114,7 +113,7 @@ impl LoadingOverlaySystem {
         Self::set_visible(ctx, self.track, false);
         Self::set_visible(ctx, self.fill, false);
         if let Some(id) = self.label
-            && let Some(label) = ctx.query_mut::<TextLabel>().find(|l| l.asset_id == id)
+            && let Some(label) = ctx.get_mut_by_id::<TextLabel>(id)
         {
             label.visible = false;
         }
@@ -135,6 +134,7 @@ impl System for LoadingOverlaySystem {
         Access::new()
             .writes_components(crate::component_mask![Sprite, TextLabel])
             .reads_resources(crate::resource_mask![
+                concinnity_core::ecs::EntityById,
                 crate::ecs::ActiveSceneFlow,
                 crate::ecs::SceneResidencyStatus,
                 ScreenStack,
@@ -268,36 +268,41 @@ mod tests {
     fn overlay_world() -> World {
         let mut world = World::new();
         world.add_component(overlay_config());
-        world.add_component(Screen {
-            asset_id: SCREEN,
-            ..Default::default()
-        });
-        world.add_component(Sprite {
-            asset_id: BACKDROP,
-            tint: [0.0, 0.0, 0.0, 1.0],
-            screen: Some(Ref::new(SCREEN)),
-            ..Default::default()
-        });
-        world.add_component(Sprite {
-            asset_id: TRACK,
-            x: 400.0,
-            width: 480.0,
-            screen: Some(Ref::new(SCREEN)),
-            ..Default::default()
-        });
-        world.add_component(Sprite {
-            asset_id: FILL,
-            x: 400.0,
-            width: 0.0,
-            visible: false,
-            screen: Some(Ref::new(SCREEN)),
-            ..Default::default()
-        });
-        world.add_component(TextLabel {
-            asset_id: LABEL,
-            screen: Some(Ref::new(SCREEN)),
-            ..Default::default()
-        });
+        world.push_identified(SCREEN, Screen::default());
+        world.push_identified(
+            BACKDROP,
+            Sprite {
+                tint: [0.0, 0.0, 0.0, 1.0],
+                screen: Some(Ref::new(SCREEN)),
+                ..Default::default()
+            },
+        );
+        world.push_identified(
+            TRACK,
+            Sprite {
+                x: 400.0,
+                width: 480.0,
+                screen: Some(Ref::new(SCREEN)),
+                ..Default::default()
+            },
+        );
+        world.push_identified(
+            FILL,
+            Sprite {
+                x: 400.0,
+                width: 0.0,
+                visible: false,
+                screen: Some(Ref::new(SCREEN)),
+                ..Default::default()
+            },
+        );
+        world.push_identified(
+            LABEL,
+            TextLabel {
+                screen: Some(Ref::new(SCREEN)),
+                ..Default::default()
+            },
+        );
         world.insert_resource(crate::ecs::ActiveSceneFlow::new(Some(SceneFlow {
             scenes: vec![SCENE],
             current: SCENE,
@@ -319,7 +324,7 @@ mod tests {
     }
 
     fn sprite(world: &World, id: AssetId) -> &Sprite {
-        world.query::<Sprite>().find(|s| s.asset_id == id).unwrap()
+        world.get_by_id::<Sprite>(id).unwrap()
     }
 
     #[test]
@@ -333,10 +338,7 @@ mod tests {
         let fill = sprite(&world, FILL);
         assert!(fill.visible);
         assert!((fill.width - 480.0 * 0.25).abs() < 1e-3);
-        let label = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == LABEL)
-            .unwrap();
+        let label = world.get_by_id::<TextLabel>(LABEL).unwrap();
         assert_eq!(label.content, "Loading 25%");
     }
 
@@ -360,11 +362,13 @@ mod tests {
     #[test]
     fn an_open_pausing_screen_defers_the_overlay() {
         let mut world = overlay_world();
-        world.add_component(Screen {
-            asset_id: AssetId(20),
-            initial: true,
-            ..Default::default()
-        });
+        world.push_identified(
+            AssetId(20),
+            Screen {
+                initial: true,
+                ..Default::default()
+            },
+        );
         set_status(&mut world, SceneLoadState::Loading, 0.5);
         world.start(SYSTEMS).unwrap();
         // Two steps: the first publishes the initial screen's stack, the

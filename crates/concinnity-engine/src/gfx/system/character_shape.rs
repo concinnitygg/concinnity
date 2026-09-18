@@ -4,7 +4,7 @@
 
 use concinnity_core::animation::proportions::ProportionLayer;
 use concinnity_core::animation::skeleton::Skeleton;
-use concinnity_core::components::{CharacterCapsule, CharacterShape, SkeletonPose};
+use concinnity_core::components::{CharacterCapsule, CharacterShape, Identity, SkeletonPose};
 use concinnity_core::ecs::{PipelineContext, SkinnedMeshHandle};
 use std::collections::HashMap;
 
@@ -18,20 +18,17 @@ pub(crate) struct ShapeLayers {
 // in the world so an editor can keep editing them.
 pub(super) fn collect(ctx: &PipelineContext) -> HashMap<SkinnedMeshHandle, CharacterShape> {
     let mut map = HashMap::new();
-    for shape in ctx.query::<CharacterShape>() {
+    for (entity, shape) in ctx.query_with_entity::<CharacterShape>() {
+        let id = ctx.get::<Identity>(entity).map(|i| i.id());
         match shape.target {
             Some(target) => {
                 if map.insert(target, shape.clone()).is_some() {
                     tracing::warn!(
-                        "CharacterShape '{}': its target already has a shape; the later one wins",
-                        shape.asset_id
+                        "CharacterShape {id:?}: its target already has a shape; the later one wins"
                     );
                 }
             }
-            None => tracing::warn!(
-                "CharacterShape '{}' has no target SkinnedMesh, ignored",
-                shape.asset_id
-            ),
+            None => tracing::warn!("CharacterShape {id:?} has no target SkinnedMesh, ignored"),
         }
     }
     map
@@ -47,15 +44,15 @@ pub(super) fn resolve(
 ) -> ShapeLayers {
     for name in &shape.resolve_sliders(morph_names).unresolved {
         tracing::warn!(
-            "CharacterShape '{}': slider '{}' matches no morph target of its mesh",
-            shape.asset_id,
+            "CharacterShape on mesh {:?}: slider '{}' matches no morph target of it",
+            shape.target.map(|t| t.index()),
             name
         );
     }
     for joint in shape.unresolved_joints(|name| skeleton.joint_index(name).is_some()) {
         tracing::warn!(
-            "CharacterShape '{}': joint '{}' is not in its mesh's skeleton",
-            shape.asset_id,
+            "CharacterShape on mesh {:?}: joint '{}' is not in its skeleton",
+            shape.target.map(|t| t.index()),
             joint
         );
     }

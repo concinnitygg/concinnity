@@ -20,15 +20,15 @@ const BORDER_W: f32 = 1.5;
 // Accent fill faint enough to keep the scene readable through the band.
 const FILL_TINT: [f32; 4] = [0.26, 0.42, 0.66, 0.12];
 
-pub(crate) fn rect_sprite() -> Sprite {
-    Sprite {
-        asset_id: RECT,
+pub(crate) fn rect_sprite() -> (AssetId, Sprite) {
+    let rect = Sprite {
         tint: FILL_TINT,
         border_width: BORDER_W,
         border_color: theme::ACCENT_TINT,
         visible: false,
         ..Default::default()
-    }
+    };
+    (RECT, rect)
 }
 
 // The `[x, y, w, h]` rect spanned by two drag corners, in any order.
@@ -61,7 +61,7 @@ pub(crate) fn hide(world: &mut World) {
 }
 
 fn sprite_mut(world: &mut World) -> Option<&mut Sprite> {
-    world.query_mut::<Sprite>().find(|s| s.asset_id == RECT)
+    world.get_mut_by_id::<Sprite>(RECT)
 }
 
 #[cfg(test)]

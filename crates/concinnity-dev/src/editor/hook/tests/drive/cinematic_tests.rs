@@ -69,16 +69,10 @@ fn preview_world(controller: Option<CameraController>, bounds: bool) -> World {
     let mut world = world_with_name_field();
     world.add_component(camera(controller));
     for id in std::iter::once(cinematic::FADE).chain(worlds::loading::all_sprite_ids()) {
-        world.add_component(Sprite {
-            asset_id: id,
-            ..Default::default()
-        });
+        world.push_identified(id, Sprite::default());
     }
     for id in worlds::loading::all_label_ids() {
-        world.add_component(TextLabel {
-            asset_id: id,
-            ..Default::default()
-        });
+        world.push_identified(id, TextLabel::default());
     }
     let entries = match bounds {
         true => vec![PickEntry {
@@ -98,8 +92,7 @@ fn pose(world: &World) -> CameraPose {
 
 fn fade(world: &World) -> Sprite {
     world
-        .query::<Sprite>()
-        .find(|s| s.asset_id == cinematic::FADE)
+        .get_by_id::<Sprite>(cinematic::FADE)
         .cloned()
         .expect("the fade sprite is injected")
 }
@@ -309,8 +302,7 @@ fn a_pending_rebuild_holds_the_cycle_at_black() {
     assert_eq!(pose(&world), AUTHORED, "the outgoing world is left alone");
     assert!(h.cinematic_restore.is_none());
     let cover = world
-        .query::<Sprite>()
-        .find(|s| s.asset_id == worlds::loading::COVER)
+        .get_by_id::<Sprite>(worlds::loading::COVER)
         .cloned()
         .expect("the cover is injected");
     assert!(

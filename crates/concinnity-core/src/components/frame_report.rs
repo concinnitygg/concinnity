@@ -1,7 +1,5 @@
 // Frame-report schema: how a world asks its frames to be measured.
 
-use crate::ecs::asset_id::AssetId;
-
 /// A 60 Hz frame, the budget a report counts against unless a world says
 /// otherwise.
 const DEFAULT_BUDGET_MS: f32 = 1000.0 / 60.0;
@@ -32,9 +30,6 @@ const DEFAULT_BUDGET_MS: f32 = 1000.0 / 60.0;
 )]
 #[serde(default)]
 pub struct FrameReport {
-    /// Asset identity; injected via `inject_name`. Not part of `args`.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// Frames earlier than this many seconds into the run are dropped.
     ///
     /// Shader compilation, streaming residency, temporal-antialiasing history
@@ -61,7 +56,6 @@ pub struct FrameReport {
 impl Default for FrameReport {
     fn default() -> Self {
         Self {
-            asset_id: AssetId::default(),
             warmup_seconds: 2.0,
             budget_ms: DEFAULT_BUDGET_MS,
             stop_when_complete: true,

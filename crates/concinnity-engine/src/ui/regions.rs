@@ -163,18 +163,13 @@ impl UiInputSystem {
         }
     }
 
-    // Resolve each followed label's (y, is-empty) in one query pass, so the
-    // region pass reads a map instead of scanning every TextLabel per region.
+    // Resolve each followed label's (y, is-empty) once, so the region pass
+    // reads a map instead of looking a label up per region.
     fn resolve_follow_labels(&mut self, ctx: &PipelineContext) {
         self.follow_labels.clear();
-        if self.follow_label_ids.is_empty() {
-            return;
-        }
-        for l in ctx.query::<TextLabel>() {
-            if self.follow_label_ids.contains(&l.asset_id) {
-                self.follow_labels
-                    .entry(l.asset_id)
-                    .or_insert((l.y, l.content.is_empty()));
+        for &id in &self.follow_label_ids {
+            if let Some(l) = ctx.get_by_id::<TextLabel>(id) {
+                self.follow_labels.insert(id, (l.y, l.content.is_empty()));
             }
         }
     }

@@ -55,11 +55,13 @@ fn content_grid_lists_filters_and_selects_visual_assets() {
     h.content_type = 0;
 
     // The search field ranks name matches.
-    world.add_component(TextInput {
-        asset_id: content_panel::SEARCH_INPUT,
-        content: "tex".to_string(),
-        ..Default::default()
-    });
+    world.push_identified(
+        content_panel::SEARCH_INPUT,
+        TextInput {
+            content: "tex".to_string(),
+            ..Default::default()
+        },
+    );
     let (cells, _) = h.content_cells(&world);
     assert_eq!(cells[0].name, "brick_tex", "the query's best match leads");
 

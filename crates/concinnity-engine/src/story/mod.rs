@@ -327,6 +327,7 @@ impl System for StorySystem {
             .reads_components(crate::component_mask![FrameInput])
             .writes_components(crate::component_mask![TextLabel, Sprite])
             .reads_resources(crate::resource_mask![
+                concinnity_core::ecs::EntityById,
                 StoryReload,
                 ScreenShown,
                 StoryCommand,

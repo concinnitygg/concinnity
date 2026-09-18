@@ -5,7 +5,6 @@
 use concinnity_core::components::{Sprite, SpriteFit, TextAlign, TextInput, TextLabel};
 use concinnity_core::ecs::DropdownView;
 use concinnity_core::ecs::Ref;
-use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::render::text;
 
 // Persistent buffers for the synthesized elements, kept on the overlay system
@@ -74,7 +73,6 @@ pub(super) fn build_dropdown_overlay(
     };
     out.begin();
     let mk_sprite = |rect: [f32; 4], tint: [f32; 4]| Sprite {
-        asset_id: AssetId::default(),
         x: rect[0],
         y: rect[1],
         width: rect[2],
@@ -132,7 +130,6 @@ pub(super) fn build_dropdown_overlay(
     for (opt, rect) in screen.options.iter().skip(first).zip(&layout.items) {
         let content = out.string(opt);
         out.labels.push(TextLabel {
-            asset_id: AssetId::default(),
             font: screen.font,
             content,
             x: rect[0] + TEXT_PAD,
@@ -241,7 +238,6 @@ pub(super) fn build_text_input_overlay(
 
     out.begin();
     out.sprites.push(Sprite {
-        asset_id: AssetId::default(),
         x: ti.x,
         y: ti.y,
         width: ti.width,
@@ -294,7 +290,6 @@ pub(super) fn build_text_input_overlay(
     };
 
     out.labels.push(TextLabel {
-        asset_id: AssetId::default(),
         font: ti.font,
         content,
         x: ti.x + ti.padding + x_offset,
@@ -337,7 +332,6 @@ pub(super) fn build_text_input_overlay(
             if end > 0 {
                 let content = out.string(&ti.ghost[..end]);
                 out.labels.push(TextLabel {
-                    asset_id: AssetId::default(),
                     font: ti.font,
                     content,
                     x: ti.x + ti.padding + content_w + CARET_W,
@@ -363,7 +357,6 @@ pub(super) fn build_text_input_overlay(
     if ti.focused && font.is_some() && caret_visible {
         let caret_x = ti.x + ti.padding + caret_off;
         out.sprites.push(Sprite {
-            asset_id: AssetId::default(),
             x: caret_x,
             y: text_y,
             width: CARET_W,
@@ -385,6 +378,7 @@ pub(super) fn build_text_input_overlay(
 mod tests {
     use super::*;
     use concinnity_core::ecs::Ref;
+    use concinnity_core::ecs::asset_id::AssetId;
     use concinnity_core::ecs::{DropdownView, FontHandle};
     use concinnity_core::gfx::font;
 

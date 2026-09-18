@@ -4,7 +4,6 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::components::BehaviorLiteral;
-use crate::ecs::asset_id::AssetId;
 
 /// The world's shared variables: the state [Behavior](#behavior)s read with
 /// `var` and write with `set`, and the state a `save` node persists.
@@ -22,9 +21,6 @@ use crate::ecs::asset_id::AssetId;
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct Variables {
-    /// Asset identity; injected via `inject_name`. Not part of `args`.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// Every variable the world declares.
     pub vars: Vec<VariableDecl>,
 }

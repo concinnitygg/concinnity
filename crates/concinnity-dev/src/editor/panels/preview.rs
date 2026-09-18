@@ -228,8 +228,7 @@ mod tests {
         );
         let value = |i| {
             world
-                .query::<TextLabel>()
-                .find(|l| l.asset_id == list_panel::value_label(BASE, i))
+                .get_by_id::<TextLabel>(list_panel::value_label(BASE, i))
                 .cloned()
                 .unwrap()
         };
@@ -253,16 +252,9 @@ mod tests {
             align: false,
         };
         place(&mut world, o, off_state, [0.0, 0.0]);
-        let title = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == title_label(BASE))
-            .unwrap();
+        let title = world.get_by_id::<TextLabel>(title_label(BASE)).unwrap();
         assert!(title.visible && title.content == "Preview");
-        let off = world
-            .query::<Sprite>()
-            .find(|s| s.asset_id == CHECK_BOX)
-            .cloned()
-            .unwrap();
+        let off = world.get_by_id::<Sprite>(CHECK_BOX).cloned().unwrap();
         place(
             &mut world,
             o,
@@ -272,10 +264,7 @@ mod tests {
             },
             [0.0, 0.0],
         );
-        let on = world
-            .query::<Sprite>()
-            .find(|s| s.asset_id == CHECK_BOX)
-            .unwrap();
+        let on = world.get_by_id::<Sprite>(CHECK_BOX).unwrap();
         assert_ne!(off.tint, on.tint, "the checkbox greens while playing");
     }
 

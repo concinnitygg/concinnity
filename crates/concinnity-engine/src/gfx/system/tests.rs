@@ -53,7 +53,6 @@ use concinnity_core::render::backend;
 use concinnity_core::render::backend::{GpuProfile, GpuTier, GpuVendor};
 use concinnity_core::render::backend_init::SwapchainConfig;
 use concinnity_core::render::error;
-use concinnity_core::render::overlay_maps;
 use concinnity_core::render::text;
 use concinnity_core::resource::ColorLutTable;
 use concinnity_core::resource::EnvironmentMapTable;
@@ -121,6 +120,8 @@ struct WorldBuilder {
     color_lut_records: Vec<concinnity_core::ecs::ResourceRecord>,
     env_map_records: Vec<concinnity_core::ecs::ResourceRecord>,
     skinned_records: Vec<concinnity_core::ecs::ResourceRecord>,
+    // Entities to identify once `build` has the resources to index them in.
+    ids: Vec<(Entity, AssetId)>,
 }
 
 impl WorldBuilder {
@@ -135,6 +136,7 @@ impl WorldBuilder {
             color_lut_records: Vec::new(),
             env_map_records: Vec::new(),
             skinned_records: Vec::new(),
+            ids: Vec::new(),
         }
     }
 
@@ -150,6 +152,11 @@ impl WorldBuilder {
 
     fn push<C: ComponentSlot>(&mut self, c: C) {
         self.components.push_typed(c);
+    }
+
+    fn push_identified<C: ComponentSlot>(&mut self, id: AssetId, c: C) {
+        let entity = self.components.push_typed(c);
+        self.ids.push((entity, id));
     }
 
     // One Shader whose payload carries the given compiled programs, one per
@@ -224,13 +231,15 @@ impl WorldBuilder {
                 payload: None,
                 data_bytes: mat_bytes,
             });
-        self.push(Prop {
-            asset_id: prop,
-            mesh: Some(mesh_handle),
-            material: Some(MaterialHandle(mat_handle)),
-            position: [1.0, 2.0, 3.0],
-            ..Default::default()
-        });
+        self.push_identified(
+            prop,
+            Prop {
+                mesh: Some(mesh_handle),
+                material: Some(MaterialHandle(mat_handle)),
+                position: [1.0, 2.0, 3.0],
+                ..Default::default()
+            },
+        );
     }
 
     fn build(mut self) -> TestWorld {
@@ -244,13 +253,17 @@ impl WorldBuilder {
         resources.insert(ColorLutTable::from_records(&mut self.color_lut_records));
         resources.insert(EnvironmentMapTable::from_records(&mut self.env_map_records));
         resources.insert(SkinnedMeshTable::from_records(&mut self.skinned_records));
-        TestWorld {
+        let mut world = TestWorld {
             components: self.components,
             blob: BlobData::new(vec![Some(self.section)]),
             profile: FrameProfile::default(),
             resources,
             scratch: Arena::with_capacity(64 * 1024),
+        };
+        for (entity, id) in self.ids {
+            world.ctx().identify(entity, id);
         }
+        world
     }
 }
 
@@ -823,21 +836,16 @@ fn first_declared_scene_applies_start_visibility() {
         // Assign scenes on the two props before decomposition maps them to
         // SceneMember components.
         let mut ctx = world.ctx();
-        for prop in ctx.query_mut::<Prop>() {
-            prop.scene = Some(if prop.asset_id == PROP {
+        let first = ctx.entity_of(PROP).expect("the first prop is identified");
+        for (entity, prop) in ctx.query_mut_with_entity::<Prop>() {
+            prop.scene = Some(if entity == first {
                 Ref::new(scene_a)
             } else {
                 Ref::new(scene_b)
             });
         }
-        ctx.push(Scene {
-            asset_id: scene_a,
-            camera_shot: None,
-        });
-        ctx.push(Scene {
-            asset_id: scene_b,
-            camera_shot: None,
-        });
+        ctx.push_identified(scene_a, Scene { camera_shot: None });
+        ctx.push_identified(scene_b, Scene { camera_shot: None });
     }
     let mut gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
@@ -878,10 +886,9 @@ fn jump_to_undeclared_scene_warns_and_changes_nothing() {
 
     let (state, hooks) = recording_hooks();
     let mut world = scene_builder().build();
-    world.ctx().push(Scene {
-        asset_id: AssetId(20),
-        camera_shot: None,
-    });
+    world
+        .ctx()
+        .push_identified(AssetId(20), Scene { camera_shot: None });
     let mut gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
     lock(&state).visibility.clear();
@@ -1087,17 +1094,19 @@ fn opaque_menu_backdrop_hides_world_and_freezes_gameplay_input() {
     b.push(HitRegion::default());
     // A visible, opaque, view-owned sprite spanning the whole 1280x720
     // reference canvas: a menu dim at full alpha.
-    b.push(Sprite {
-        asset_id: AssetId(40),
-        x: 0.0,
-        y: 0.0,
-        width: 1280.0,
-        height: 720.0,
-        tint: [0.0, 0.0, 0.0, 1.0],
-        visible: true,
-        screen: Some(Ref::new(AssetId(41))),
-        ..Default::default()
-    });
+    b.push_identified(
+        AssetId(40),
+        Sprite {
+            x: 0.0,
+            y: 0.0,
+            width: 1280.0,
+            height: 720.0,
+            tint: [0.0, 0.0, 0.0, 1.0],
+            visible: true,
+            screen: Some(Ref::new(AssetId(41))),
+            ..Default::default()
+        },
+    );
     let mut world = b.build();
     // The active-screen state UiInputSystem publishes when a world-pausing
     // screen (id 41) is open; the overlay derives menu_active from it.
@@ -1680,15 +1689,12 @@ fn replay_pending_ops(world: &mut TestWorld) {
     crate::ecs::ActiveRenderQueues::put(&mut world.resources, queues);
 }
 
-// The entity a name resolves to through the decomposition's name index.
+// The entity an asset id resolves to through `EntityById`.
 fn entity_named(world: &mut TestWorld, name: AssetId) -> Entity {
-    *world
+    world
         .ctx()
-        .resource::<concinnity_core::ecs::EntityByName>()
-        .expect("name index published at load")
-        .0
-        .get(&name)
-        .expect("name resolves to an entity")
+        .entity_of(name)
+        .expect("the id resolves to an entity")
 }
 
 // With no op queue / slot allocator (graphics never inited) there are no draw
@@ -2538,12 +2544,14 @@ fn push_settings_row(b: &mut WorldBuilder, key: &str, verb: &str, label: AssetId
         label: Some(Ref::new(label)),
         ..Default::default()
     });
-    b.push(TextLabel {
-        asset_id: label,
-        content: "<placeholder>".to_string(),
-        color: LIT,
-        ..Default::default()
-    });
+    b.push_identified(
+        label,
+        TextLabel {
+            content: "<placeholder>".to_string(),
+            color: LIT,
+            ..Default::default()
+        },
+    );
 }
 
 // The authored (non-grayed) row color the tests below start every label at, so a
@@ -2554,8 +2562,7 @@ const LIT: [f32; 3] = [0.9, 0.9, 0.9];
 fn label_text(world: &mut TestWorld, id: AssetId) -> String {
     world
         .ctx()
-        .query::<TextLabel>()
-        .find(|l| l.asset_id == id)
+        .get_by_id::<TextLabel>(id)
         .expect("label present")
         .content
         .clone()
@@ -2565,8 +2572,7 @@ fn label_text(world: &mut TestWorld, id: AssetId) -> String {
 fn label_color(world: &mut TestWorld, id: AssetId) -> [f32; 3] {
     world
         .ctx()
-        .query::<TextLabel>()
-        .find(|l| l.asset_id == id)
+        .get_by_id::<TextLabel>(id)
         .expect("label present")
         .color
 }
@@ -2703,16 +2709,20 @@ fn slider_rows_sync_their_handle_and_label_to_the_live_value() {
             label: Some(Ref::new(label)),
             ..Default::default()
         });
-        b.push(Sprite {
-            asset_id: handle,
-            width: 10.0,
-            ..Default::default()
-        });
-        b.push(TextLabel {
-            asset_id: label,
-            content: "<placeholder>".to_string(),
-            ..Default::default()
-        });
+        b.push_identified(
+            handle,
+            Sprite {
+                width: 10.0,
+                ..Default::default()
+            },
+        );
+        b.push_identified(
+            label,
+            TextLabel {
+                content: "<placeholder>".to_string(),
+                ..Default::default()
+            },
+        );
     }
     // A drag region missing its handle / label is skipped rather than panicking.
     b.push(HitRegion {
@@ -2726,8 +2736,7 @@ fn slider_rows_sync_their_handle_and_label_to_the_live_value() {
     let handle_x = |world: &mut TestWorld, id: AssetId| {
         world
             .ctx()
-            .query::<Sprite>()
-            .find(|s| s.asset_id == id)
+            .get_by_id::<Sprite>(id)
             .expect("handle sprite present")
             .x
     };
@@ -2791,16 +2800,20 @@ fn every_owned_slider_key_recovers_a_live_value() {
             label: Some(Ref::new(label)),
             ..Default::default()
         });
-        b.push(Sprite {
-            asset_id: handle,
-            width: 10.0,
-            ..Default::default()
-        });
-        b.push(TextLabel {
-            asset_id: label,
-            content: "<placeholder>".to_string(),
-            ..Default::default()
-        });
+        b.push_identified(
+            handle,
+            Sprite {
+                width: 10.0,
+                ..Default::default()
+            },
+        );
+        b.push_identified(
+            label,
+            TextLabel {
+                content: "<placeholder>".to_string(),
+                ..Default::default()
+            },
+        );
     }
     let mut world = b.build();
     let gs = init_graphics(&mut world, hooks);
@@ -2840,11 +2853,13 @@ fn rebind_rows_show_their_bound_keys_at_init() {
             label: Some(Ref::new(label)),
             ..Default::default()
         });
-        b.push(TextLabel {
-            asset_id: label,
-            content: "<placeholder>".to_string(),
-            ..Default::default()
-        });
+        b.push_identified(
+            label,
+            TextLabel {
+                content: "<placeholder>".to_string(),
+                ..Default::default()
+            },
+        );
     }
     let mut world = b.build();
     let gs = init_graphics(&mut world, hooks);
@@ -2937,12 +2952,14 @@ fn a_capability_gated_row_grays_out_its_whole_scroll_row() {
     let mut b = post_config_scene(Default::default());
     // The gated row: name + value labels, both listed in one scroll row.
     push_settings_row(&mut b, "upscale_backend", "next", AssetId(600));
-    b.push(TextLabel {
-        asset_id: AssetId(601),
-        content: "Upscaler".to_string(),
-        color: LIT,
-        ..Default::default()
-    });
+    b.push_identified(
+        AssetId(601),
+        TextLabel {
+            content: "Upscaler".to_string(),
+            color: LIT,
+            ..Default::default()
+        },
+    );
     // An ungated row alongside it, which must stay lit.
     push_settings_row(&mut b, "vsync", "next", AssetId(602));
     b.push(ScrollPanel {
@@ -3111,13 +3128,15 @@ impl WorldBuilder {
 fn text_naming_no_font_falls_back_to_the_built_in_face() {
     let (state, hooks) = recording_hooks();
     let mut b = scene_builder();
-    b.push(TextLabel {
-        asset_id: AssetId(800),
-        content: "Hello, world!".to_string(),
-        font: None,
-        visible: true,
-        ..Default::default()
-    });
+    b.push_identified(
+        AssetId(800),
+        TextLabel {
+            content: "Hello, world!".to_string(),
+            font: None,
+            visible: true,
+            ..Default::default()
+        },
+    );
     let mut world = b.build();
     let gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
@@ -3134,13 +3153,7 @@ fn text_naming_no_font_falls_back_to_the_built_in_face() {
 
     // The whole point: the label shapes into real glyph geometry rather than
     // being dropped for want of a font.
-    let calls = text::build_text_calls(
-        &labels,
-        &overlay.fonts,
-        [640.0, 360.0],
-        &overlay_maps::ClipRects::new(),
-        &overlay_maps::OverlayLayers::new(),
-    );
+    let calls = text::build_text_calls(&labels, &overlay.fonts, [640.0, 360.0]);
     assert_eq!(calls.len(), 1, "one draw call for the one label");
     // The space carries no quad of its own; every other character draws one.
     let glyphs = "Hello, world!".chars().filter(|c| *c != ' ').count();
@@ -3173,13 +3186,15 @@ fn a_world_whose_text_names_its_fonts_registers_no_fallback() {
     let (state, hooks) = recording_hooks();
     let mut b = scene_builder();
     let font = b.push_resource(ResourceKind::Font, &font_payload(32, 32));
-    b.push(TextLabel {
-        asset_id: AssetId(800),
-        content: "Hello, world!".to_string(),
-        font: Some(FontHandle(font)),
-        visible: true,
-        ..Default::default()
-    });
+    b.push_identified(
+        AssetId(800),
+        TextLabel {
+            content: "Hello, world!".to_string(),
+            font: Some(FontHandle(font)),
+            visible: true,
+            ..Default::default()
+        },
+    );
     let mut world = b.build();
     let gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
@@ -3214,12 +3229,14 @@ fn fonts_and_sprite_textures_share_the_text_atlas_pool() {
     // to reference. Two sprites share it, so it is decoded once.
     let sprite_tex = b.push_resource(ResourceKind::Texture, &texture_payload(4, 4));
     for id in [800u32, 801] {
-        b.push(Sprite {
-            asset_id: AssetId(id),
-            texture: Some(TextureHandle(sprite_tex)),
-            visible: true,
-            ..Default::default()
-        });
+        b.push_identified(
+            AssetId(id),
+            Sprite {
+                texture: Some(TextureHandle(sprite_tex)),
+                visible: true,
+                ..Default::default()
+            },
+        );
     }
     let mut world = b.build();
     let gs = init_graphics(&mut world, hooks);
@@ -3259,12 +3276,14 @@ fn fonts_and_sprite_textures_share_the_text_atlas_pool() {
 fn a_sprite_with_an_unknown_texture_keeps_its_tint() {
     let (state, hooks) = recording_hooks();
     let mut b = scene_builder();
-    b.push(Sprite {
-        asset_id: AssetId(810),
-        texture: Some(TextureHandle(99)),
-        visible: true,
-        ..Default::default()
-    });
+    b.push_identified(
+        AssetId(810),
+        Sprite {
+            texture: Some(TextureHandle(99)),
+            visible: true,
+            ..Default::default()
+        },
+    );
     let mut world = b.build();
     let gs = init_graphics(&mut world, hooks);
 
@@ -3498,19 +3517,21 @@ fn instanced_prop_bakes_its_instances_into_one_cluster() {
 
     let (state, hooks) = recording_hooks();
     let mut b = scene_builder();
-    b.push(InstancedProp {
-        asset_id: AssetId(820),
-        mesh: Some(MeshHandle(0)),
-        material: Some(MaterialHandle(0)),
-        instances: (0..3)
-            .map(|i| InstanceTransform {
-                position: [i as f32 * 2.0, 0.0, 0.0],
-                rotation_deg: [0.0; 3],
-                scale: [1.0; 3],
-            })
-            .collect(),
-        ..Default::default()
-    });
+    b.push_identified(
+        AssetId(820),
+        InstancedProp {
+            mesh: Some(MeshHandle(0)),
+            material: Some(MaterialHandle(0)),
+            instances: (0..3)
+                .map(|i| InstanceTransform {
+                    position: [i as f32 * 2.0, 0.0, 0.0],
+                    rotation_deg: [0.0; 3],
+                    scale: [1.0; 3],
+                })
+                .collect(),
+            ..Default::default()
+        },
+    );
     let mut world = b.build();
     let gs = init_graphics(&mut world, hooks);
 
@@ -3539,39 +3560,47 @@ fn one_shot_world_fx_are_resolved_and_drained_at_init() {
 
     let (state, hooks) = recording_hooks();
     let mut b = scene_builder();
-    b.push(Decal {
-        asset_id: AssetId(830),
-        texture: Some(TextureHandle(0)),
-        size: [1.0; 3],
-        visible: true,
-        ..Default::default()
-    });
-    b.push(ParticleEmitter {
-        asset_id: AssetId(831),
-        texture: Some(TextureHandle(0)),
-        max_particles: 16,
-        visible: true,
-        ..Default::default()
-    });
+    b.push_identified(
+        AssetId(830),
+        Decal {
+            texture: Some(TextureHandle(0)),
+            size: [1.0; 3],
+            visible: true,
+            ..Default::default()
+        },
+    );
+    b.push_identified(
+        AssetId(831),
+        ParticleEmitter {
+            texture: Some(TextureHandle(0)),
+            max_particles: 16,
+            visible: true,
+            ..Default::default()
+        },
+    );
     b.push(WaterSurface::default());
     b.push(GlassPanel::default());
     let sdf_frag = b.payload(b"sdf-fragment-bytes");
-    b.push(SdfVolume {
-        asset_id: AssetId(832),
-        extent: [2.0; 3],
-        locator: Some(sdf_frag),
-        visible: true,
-        ..Default::default()
-    });
+    b.push_identified(
+        AssetId(832),
+        SdfVolume {
+            extent: [2.0; 3],
+            locator: Some(sdf_frag),
+            visible: true,
+            ..Default::default()
+        },
+    );
     // A volume whose fragment shader never compiled is skipped with a warning
     // rather than failing the whole world build.
-    b.push(SdfVolume {
-        asset_id: AssetId(833),
-        extent: [2.0; 3],
-        locator: None,
-        visible: true,
-        ..Default::default()
-    });
+    b.push_identified(
+        AssetId(833),
+        SdfVolume {
+            extent: [2.0; 3],
+            locator: None,
+            visible: true,
+            ..Default::default()
+        },
+    );
     let mut world = b.build();
     let gs = init_graphics(&mut world, hooks);
 
@@ -3595,30 +3624,35 @@ fn sdf_volumes_without_a_readable_payload_are_skipped() {
     let mut b = WorldBuilder::new();
     let named = asset_id::intern("glass_orb");
     let frag = b.payload(b"sdf-fragment-bytes");
-    b.push(SdfVolume {
-        asset_id: named,
-        locator: Some(frag),
-        ..Default::default()
-    });
-    b.push(SdfVolume {
-        asset_id: AssetId(841),
-        locator: None,
-        ..Default::default()
-    });
-    b.push(SdfVolume {
-        asset_id: AssetId(842),
-        locator: Some(PayloadLocator {
-            blob_index: 7,
-            offset: 0,
-            len: 4,
-        }),
-        ..Default::default()
-    });
+    b.push_identified(
+        named,
+        SdfVolume {
+            locator: Some(frag),
+            ..Default::default()
+        },
+    );
+    b.push_identified(
+        AssetId(841),
+        SdfVolume {
+            locator: None,
+            ..Default::default()
+        },
+    );
+    b.push_identified(
+        AssetId(842),
+        SdfVolume {
+            locator: Some(PayloadLocator {
+                blob_index: 7,
+                offset: 0,
+                len: 4,
+            }),
+            ..Default::default()
+        },
+    );
     let mut world = b.build();
 
     let volumes = super::world_fx::drain_sdf_volumes(&mut world.ctx());
     assert_eq!(volumes.len(), 1);
-    assert_eq!(volumes[0].volume.asset_id, named);
     assert_eq!(volumes[0].fragment_source, b"sdf-fragment-bytes");
     assert_eq!(volumes[0].label, "glass_orb");
     assert_eq!(world.ctx().query::<SdfVolume>().count(), 0, "drained");
@@ -3750,15 +3784,7 @@ fn morph_target_upload_failure_fails_init() {
         let (state, hooks) = recording_hooks();
         lock(&state).fail_morph_upload = fail;
         let mut b = scene_builder();
-        push_skinned_payload(
-            &mut b,
-            MORPHED,
-            SkinnedMesh {
-                asset_id: MORPHED,
-                ..Default::default()
-            },
-            &payload,
-        );
+        push_skinned_payload(&mut b, MORPHED, SkinnedMesh::default(), &payload);
         let mut world = b.build();
         let gs = init_graphics(&mut world, hooks);
 
@@ -3785,7 +3811,6 @@ fn skinned_mesh_world_uploads_geometry_and_publishes_poses() {
         &mut b,
         RIGGED,
         SkinnedMesh {
-            asset_id: RIGGED,
             material: Some(MaterialHandle(0)),
             position: [5.0, 0.0, 0.0],
             capsule: Some(CharacterCapsule {
@@ -3796,15 +3821,7 @@ fn skinned_mesh_world_uploads_geometry_and_publishes_poses() {
         },
         4,
     );
-    push_skinned_mesh(
-        &mut b,
-        PLAIN,
-        SkinnedMesh {
-            asset_id: PLAIN,
-            ..Default::default()
-        },
-        3,
-    );
+    push_skinned_mesh(&mut b, PLAIN, SkinnedMesh::default(), 3);
     let mut world = b.build();
     let gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
@@ -3844,11 +3861,8 @@ fn skinned_mesh_world_uploads_geometry_and_publishes_poses() {
     assert_eq!(names.0.get(&PLAIN).map(|h| h.0), Some(1));
     // Each template is registered under its mesh name, so a runtime SpawnRequest
     // resolves it the same way a static placement resolves.
-    let by_name = ctx
-        .resource::<concinnity_core::ecs::EntityByName>()
-        .unwrap();
-    assert!(by_name.0.contains_key(&RIGGED));
-    assert!(by_name.0.contains_key(&PLAIN));
+    assert!(ctx.entity_of(RIGGED).is_some());
+    assert!(ctx.entity_of(PLAIN).is_some());
 }
 
 // `max_instances` pre-reserves hidden bind-pose copies of a skinned mesh, each
@@ -3867,7 +3881,6 @@ fn skinned_instance_reserves_get_their_own_vertex_regions() {
         &mut b,
         HERO,
         SkinnedMesh {
-            asset_id: HERO,
             max_instances: 3,
             ..Default::default()
         },
@@ -3913,7 +3926,6 @@ fn a_skinned_mesh_with_an_unknown_material_fails_init() {
         &mut b,
         AssetId(843),
         SkinnedMesh {
-            asset_id: AssetId(843),
             material: Some(MaterialHandle(99)),
             ..Default::default()
         },
@@ -3934,14 +3946,7 @@ fn a_skinned_mesh_without_usable_geometry_fails_init() {
     use concinnity_core::ecs::{ResourceKind, ResourceRecord};
 
     let record = |b: &mut WorldBuilder, payload: Option<PayloadLocator>| {
-        let data = postcard::to_allocvec(&(
-            844u32,
-            SkinnedMesh {
-                asset_id: AssetId(844),
-                ..Default::default()
-            },
-        ))
-        .unwrap();
+        let data = postcard::to_allocvec(&(844u32, SkinnedMesh::default())).unwrap();
         b.skinned_records.push(ResourceRecord {
             resource_kind: ResourceKind::SkinnedMesh,
             handle: 0,
@@ -3988,15 +3993,7 @@ fn skinned_poses_upload_when_flagged_and_freeze_behind_a_menu() {
 
     let (state, hooks) = recording_hooks();
     let mut b = scene_builder();
-    push_skinned_mesh(
-        &mut b,
-        AssetId(845),
-        SkinnedMesh {
-            asset_id: AssetId(845),
-            ..Default::default()
-        },
-        3,
-    );
+    push_skinned_mesh(&mut b, AssetId(845), SkinnedMesh::default(), 3);
     let mut world = b.build();
     let mut gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
@@ -4095,12 +4092,14 @@ fn every_material_texture_reference_resolves_to_its_shared_pool_slot() {
         orm_map: Some(TextureHandle(slots[3])),
         ..Default::default()
     });
-    b.push(Prop {
-        asset_id: AssetId(850),
-        mesh: Some(MeshHandle(0)),
-        material: Some(mat),
-        ..Default::default()
-    });
+    b.push_identified(
+        AssetId(850),
+        Prop {
+            mesh: Some(MeshHandle(0)),
+            material: Some(mat),
+            ..Default::default()
+        },
+    );
     let mut world = b.build();
     let gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
@@ -4214,17 +4213,19 @@ fn an_instanced_vertex_shader_payload_reaches_the_backend() {
     b.push_shader(&["vertex_main_bindless", "fragment_main_bindless"]);
     b.push(Camera3D::bake(Default::default()));
     b.push_textured_quad(MESH, TEX, MAT, PROP);
-    b.push(InstancedProp {
-        asset_id: AssetId(851),
-        mesh: Some(MeshHandle(0)),
-        material: Some(MaterialHandle(0)),
-        instances: vec![InstanceTransform {
-            position: [0.0; 3],
-            rotation_deg: [0.0; 3],
-            scale: [1.0; 3],
-        }],
-        ..Default::default()
-    });
+    b.push_identified(
+        AssetId(851),
+        InstancedProp {
+            mesh: Some(MeshHandle(0)),
+            material: Some(MaterialHandle(0)),
+            instances: vec![InstanceTransform {
+                position: [0.0; 3],
+                rotation_deg: [0.0; 3],
+                scale: [1.0; 3],
+            }],
+            ..Default::default()
+        },
+    );
     let mut world = b.build();
     let gs = init_graphics(&mut world, hooks);
 
@@ -4270,7 +4271,6 @@ fn skinned_lod_alternates_rebase_onto_their_slot_vertex_region() {
     let data = postcard::to_allocvec(&(
         852u32,
         SkinnedMesh {
-            asset_id: AssetId(852),
             max_instances: 1,
             ..Default::default()
         },
@@ -4426,7 +4426,6 @@ fn a_spawn_naming_a_skinned_template_takes_the_instance_pool_path() {
         &mut b,
         HERO,
         SkinnedMesh {
-            asset_id: HERO,
             // No instances reserved, so the pool has nothing to hand out.
             max_instances: 0,
             ..Default::default()
@@ -4585,27 +4584,29 @@ fn story_stage_images_are_resident_before_any_sprite_references_them() {
             ..Default::default()
         })
     };
-    b.push(Story {
-        asset_id: AssetId(870),
-        nodes: vec![StoryNode {
-            pages: vec![StoryPage {
-                stage: StoryStage {
-                    bg: image(slots[0]),
-                    left: image(slots[1]),
+    b.push_identified(
+        AssetId(870),
+        Story {
+            nodes: vec![StoryNode {
+                pages: vec![StoryPage {
+                    stage: StoryStage {
+                        bg: image(slots[0]),
+                        left: image(slots[1]),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }],
+                // A choice menu carries its own stage dressing too.
+                choice_stage: StoryStage {
+                    center: image(slots[2]),
+                    right: image(slots[3]),
                     ..Default::default()
                 },
                 ..Default::default()
             }],
-            // A choice menu carries its own stage dressing too.
-            choice_stage: StoryStage {
-                center: image(slots[2]),
-                right: image(slots[3]),
-                ..Default::default()
-            },
             ..Default::default()
-        }],
-        ..Default::default()
-    });
+        },
+    );
     let mut world = b.build();
     let gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
@@ -4713,7 +4714,6 @@ fn skinned_mesh_joins_the_pick_index_when_opted_in() {
         &mut b,
         BODY,
         SkinnedMesh {
-            asset_id: BODY,
             material: Some(MaterialHandle(0)),
             position: [5.0, 0.0, 0.0],
             ..Default::default()
@@ -4760,15 +4760,7 @@ fn skinned_mesh_joins_the_pick_index_when_opted_in() {
     // Not opted in: the template stays a bare pose.
     let (_state, hooks) = recording_hooks();
     let mut b = scene_builder();
-    push_skinned_mesh(
-        &mut b,
-        BODY,
-        SkinnedMesh {
-            asset_id: BODY,
-            ..Default::default()
-        },
-        4,
-    );
+    push_skinned_mesh(&mut b, BODY, SkinnedMesh::default(), 4);
     let mut world = b.build();
     let gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);

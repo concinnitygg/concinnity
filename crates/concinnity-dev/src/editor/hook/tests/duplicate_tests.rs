@@ -61,10 +61,7 @@ fn ctrl_d_duplicates_unless_the_behavior_panel_owns_it() {
         ..Default::default()
     });
     for id in behavior::panel::all_field_ids() {
-        world.add_component(TextInput {
-            asset_id: id,
-            ..Default::default()
-        });
+        world.push_identified(id, TextInput::default());
     }
     let mut h = hook(vec![entry("box", "Sprite")]);
     select(&mut h, &["box"]);

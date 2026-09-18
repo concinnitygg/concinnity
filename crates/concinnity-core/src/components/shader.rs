@@ -5,7 +5,6 @@
 
 use crate::ecs::Component;
 use crate::ecs::PayloadLocator;
-use crate::ecs::asset_id::AssetId;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -129,9 +128,6 @@ pub enum ShaderStage {
 /// live pipelines.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 pub struct Shader {
-    /// Asset identity; injected via `inject_name`. Not part of `args`.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// Path to the `.slang` file defining `shade`. Required.
     pub fragment: String,
     /// Path to the `.slang` file defining `transform`. Omit to keep the
@@ -209,10 +205,6 @@ impl Component for Shader {
     fn inject_locator(&mut self, locator: PayloadLocator) {
         self.locator = Some(locator);
     }
-
-    fn inject_name(&mut self, id: crate::ecs::asset_id::AssetId) {
-        self.asset_id = id;
-    }
 }
 
 #[cfg(test)]
@@ -233,7 +225,6 @@ mod tests {
             Some("assets/shaders/water.slang")
         );
         // The identity and payload locator are injected, never authored.
-        assert_eq!(s.asset_id, AssetId::default());
         assert!(s.locator.is_none());
 
         let both: Shader =
@@ -299,15 +290,12 @@ mod tests {
     }
 
     // Shader keeps a hand-written Component impl rather than the generated
-    // one, so its identity and payload injection are its own code.
+    // one, so its payload injection is its own code.
     #[test]
-    fn a_shader_takes_its_identity_and_payload_on_load() {
+    fn a_shader_takes_its_payload_on_load() {
         let bytes = postcard::to_allocvec(&Shader::default()).expect("a shader encodes");
         let mut shader = <Shader as Component>::from_baked(&bytes).expect("it loads back");
         assert_eq!(Shader::NAME, "Shader");
-
-        shader.inject_name(AssetId(4));
-        assert_eq!(shader.asset_id, AssetId(4));
 
         let locator = PayloadLocator {
             blob_index: 1,

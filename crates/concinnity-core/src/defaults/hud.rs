@@ -7,7 +7,6 @@ use alloc::string::String;
 
 use crate::components::{DebugHud, StatHud, TextLabel};
 use crate::ecs::PipelineContext;
-use crate::ecs::asset_id::AssetId;
 use crate::ecs::{ComponentSlot, FontHandle, Ref};
 use crate::error::WorldError;
 
@@ -75,7 +74,7 @@ where
         for i in unset {
             let id = minter.id()?;
             *slots[i](&mut hud) = Some(Ref::new(id));
-            ctx.push(chip(id, font));
+            ctx.push_identified(id, chip(font));
         }
     }
 
@@ -90,9 +89,8 @@ where
 
 // The chip a HUD readout writes into: small, light-on-dark, with a padded
 // background box so it stays legible over any scene.
-fn chip(id: AssetId, font: FontHandle) -> TextLabel {
+fn chip(font: FontHandle) -> TextLabel {
     TextLabel {
-        asset_id: id,
         font: Some(font),
         content: String::new(),
         scale: 0.7,

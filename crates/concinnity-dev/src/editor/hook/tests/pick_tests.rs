@@ -202,8 +202,7 @@ fn selection_ring_tracks_the_picked_asset() {
 
     let ring = |world: &World| {
         world
-            .query::<Sprite>()
-            .find(|s| s.asset_id == highlight::all_sprite_ids()[0])
+            .get_by_id::<Sprite>(highlight::all_sprite_ids()[0])
             .cloned()
             .expect("outline sprite injected")
     };

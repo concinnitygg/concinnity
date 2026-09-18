@@ -51,9 +51,9 @@ impl GraphicsSystem {
     // scene's props are hidden.
     pub(super) fn setup_scene_flow(&mut self, ctx: &mut PipelineContext) {
         let scenes: Vec<AssetId> = ctx
-            .drain::<Scene>()
+            .drain_with_ids::<Scene>()
             .into_iter()
-            .map(|s| s.asset_id)
+            .filter_map(|(id, _)| id)
             .collect();
         if scenes.is_empty() {
             return;

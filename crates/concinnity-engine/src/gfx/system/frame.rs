@@ -602,10 +602,10 @@ impl GraphicsSystem {
             })
             .collect();
         let dim = expand_dim_set(&gated_value_labels, &rows);
-        for l in ctx.query_mut::<TextLabel>() {
-            if dim.contains(&l.asset_id) {
+        for id in dim {
+            crate::ecs::by_asset_id::update::<TextLabel>(ctx, Some(id), |l| {
                 l.color = DISABLED_ROW_COLOR;
-            }
+            });
         }
     }
 }

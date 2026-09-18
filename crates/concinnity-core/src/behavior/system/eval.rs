@@ -11,7 +11,7 @@ use super::BehaviorSystem;
 use super::instance::Instance;
 use crate::behavior::{Effect, Program, Spatial, Val, View, exec, position, spatial};
 use crate::components::Transform;
-use crate::ecs::{ComponentStorage, Entity, EntityByName, PipelineContext};
+use crate::ecs::{ComponentStorage, Entity, EntityById, PipelineContext};
 
 // Below this many firing instances the fan-out costs more than the work.
 pub(super) const PARALLEL_EVAL_MIN_JOBS: usize = 64;
@@ -64,7 +64,7 @@ pub(super) struct Snapshot {
 pub(super) struct EvalCtx<'a> {
     pub(super) components: &'a ComponentStorage,
     // Resolved once per tick rather than per name lookup.
-    pub(super) names: Option<&'a EntityByName>,
+    pub(super) names: Option<&'a EntityById>,
     pub(super) snapshot: &'a Snapshot,
     pub(super) programs: &'a [Program],
     pub(super) instances: &'a [Vec<Instance>],

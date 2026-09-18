@@ -128,16 +128,10 @@ mod tests {
     fn place_labels_rows_from_the_templates_crate() {
         let mut world = injected_world();
         place(&mut world, default_origin(1280.0), size(), None, [0.0, 0.0]);
-        let title = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == title_label(BASE))
-            .unwrap();
+        let title = world.get_by_id::<TextLabel>(title_label(BASE)).unwrap();
         assert!(title.visible && title.content == "Templates");
         for i in 0..count() {
-            let l = world
-                .query::<TextLabel>()
-                .find(|l| l.asset_id == row_label(BASE, i))
-                .unwrap();
+            let l = world.get_by_id::<TextLabel>(row_label(BASE, i)).unwrap();
             assert_eq!(
                 l.content,
                 concinnity_cook::authoring::template::TEMPLATES[i].title
@@ -152,18 +146,9 @@ mod tests {
         let o = default_origin(1280.0);
         // Idle tint first, then the selected tint differs.
         place(&mut world, o, size(), None, [0.0, 0.0]);
-        let idle = world
-            .query::<Sprite>()
-            .find(|s| s.asset_id == row_bg(0))
-            .cloned()
-            .unwrap()
-            .tint;
+        let idle = world.get_by_id::<Sprite>(row_bg(0)).cloned().unwrap().tint;
         place(&mut world, o, size(), Some(0), [0.0, 0.0]);
-        let selected = world
-            .query::<Sprite>()
-            .find(|s| s.asset_id == row_bg(0))
-            .unwrap()
-            .tint;
+        let selected = world.get_by_id::<Sprite>(row_bg(0)).unwrap().tint;
         assert_ne!(idle, selected);
     }
 

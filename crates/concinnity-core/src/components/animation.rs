@@ -2,7 +2,6 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::animation::skeleton::{self as skinning, JointPose};
-use crate::ecs::asset_id::AssetId;
 use crate::ecs::{SkinnedMeshHandle, de_opt_skinned_mesh_handle};
 
 /// One keyframe in an animation track: a joint pose sampled at `time` seconds.
@@ -110,9 +109,6 @@ pub struct AnimationTrack {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct Animation {
-    /// Asset identity; injected via `inject_name`. Not part of `args`.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// The [SkinnedMesh](#skinnedmesh) asset this clip animates.
     #[serde(deserialize_with = "de_opt_skinned_mesh_handle")]
     pub target: Option<SkinnedMeshHandle>,
@@ -179,7 +175,6 @@ pub struct MorphKey {
 impl Default for Animation {
     fn default() -> Self {
         Self {
-            asset_id: AssetId::default(),
             target: None,
             source: String::new(),
             animation_index: 0,

@@ -23,7 +23,7 @@ use crate::components::{
     BodyDynamics, Camera3D, CharacterRig, Collider, PhysicsJoint, Prop, Transform, TriggerVolume,
 };
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{Entity, EntityByName, PhysicsBudgetRecord, PipelineContext, Ref};
+use crate::ecs::{Entity, PhysicsBudgetRecord, PipelineContext, Ref};
 
 use super::props::{PropCollSnap, PropPhysics};
 use super::rig::RigPhysics;
@@ -80,11 +80,9 @@ pub(crate) fn scan_counts(ctx: &PipelineContext) -> PhysicsCounts {
         .collect();
     let dynamic_colliders = bodies.iter().filter(|e| dynamics.contains(e)).count() as u32;
 
-    let named = ctx.resource::<EntityByName>();
     let has_body = |body: Ref<Prop>| {
-        named
-            .and_then(|index| index.0.get(&body.id()))
-            .is_some_and(|entity| bodies.contains(entity))
+        ctx.entity_of(body.id())
+            .is_some_and(|entity| bodies.contains(&entity))
     };
 
     let mut counts = PhysicsCounts {

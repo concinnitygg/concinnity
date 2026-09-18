@@ -46,15 +46,10 @@ impl GraphicsSystem {
 
         // `items` and `world_mats` are column-aligned with `prop_entities`.
         let resolved = propagation::resolve_world_matrices(ctx);
-        let entity_name: HashMap<Entity, AssetId> = ctx
-            .resource::<concinnity_core::ecs::EntityByName>()
-            .map(|n| n.0.iter().map(|(&id, &e)| (e, id)).collect())
-            .unwrap_or_default();
         let mut items = Vec::with_capacity(prop_entities.len());
         let mut world_mats = Vec::with_capacity(prop_entities.len());
         for &entity in &prop_entities {
-            let asset_id = entity_name.get(&entity).copied().unwrap_or_default();
-            items.push(draw_list::decomposed_renderable_item(ctx, entity, asset_id));
+            items.push(draw_list::decomposed_renderable_item(ctx, entity));
             world_mats.push(
                 resolved
                     .get(&entity)
@@ -99,10 +94,10 @@ impl GraphicsSystem {
                 .collect();
             ctx.insert(entity, RenderHandle { draws });
             ctx.insert(entity, GlobalTransform(world_mats[i]));
-            if want_pick {
+            if want_pick && let Some(asset_id) = items[i].asset_id {
                 let (local_min, local_max) = data.prop_local_bounds[i];
                 self.pick_candidates.push(PickCandidate {
-                    asset_id: items[i].asset_id,
+                    asset_id,
                     entity,
                     local_min,
                     local_max,

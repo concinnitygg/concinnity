@@ -1,7 +1,6 @@
 //! Runtime `File` component. Its authored args and `FileKind` live in the schema
 //! crate (concinnity_core::components::file).
 
-use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Component, PayloadLocator};
 use alloc::string::String;
 
@@ -161,8 +160,6 @@ mod tests {
 /// becomes mesh data); other kinds are path-only references.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct File {
-    /// Assigned by the loader; not authored.
-    pub asset_id: AssetId,
     /// Path to the source file, relative to the world.
     pub path: String,
     /// Content category, derived from the extension when not authored.
@@ -181,7 +178,6 @@ impl File {
             .clone()
             .or_else(|| super::path_extension(&args.path).and_then(FileKind::from_ext));
         Self {
-            asset_id: AssetId::default(),
             path: args.path,
             kind,
             locator: None,
@@ -198,10 +194,6 @@ impl Component for File {
 
     fn inject_locator(&mut self, locator: PayloadLocator) {
         self.locator = Some(locator);
-    }
-
-    fn inject_name(&mut self, id: AssetId) {
-        self.asset_id = id;
     }
 }
 

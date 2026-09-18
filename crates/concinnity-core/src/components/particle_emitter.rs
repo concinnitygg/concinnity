@@ -1,7 +1,6 @@
 // Billboard particle-emitter schema.
 
 use crate::ecs::TextureHandle;
-use crate::ecs::asset_id::AssetId;
 use crate::ecs::de_opt_texture_handle;
 
 /// A billboard particle emitter.
@@ -31,9 +30,6 @@ use crate::ecs::de_opt_texture_handle;
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct ParticleEmitter {
-    /// Asset identity; injected via `inject_name`. Not part of `args`.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// [Texture](#texture) sampled per particle. `None` uses a white fallback so
     /// the color gradient still shows.
     #[serde(deserialize_with = "de_opt_texture_handle")]
@@ -78,7 +74,6 @@ pub struct ParticleEmitter {
 impl Default for ParticleEmitter {
     fn default() -> Self {
         Self {
-            asset_id: AssetId::default(),
             texture: None,
             position: [0.0, 0.0, 0.0],
             direction: [0.0, 1.0, 0.0],
@@ -142,6 +137,5 @@ mod tests {
         assert_eq!(back.gravity, [0.0, 0.0, 0.0]);
         assert_eq!(back.max_particles, 2048);
         assert_eq!(back.color_start, [1.0, 0.6, 0.2, 1.0]);
-        assert_eq!(back.asset_id, AssetId::default());
     }
 }

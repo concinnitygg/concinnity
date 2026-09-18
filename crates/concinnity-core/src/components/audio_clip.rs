@@ -1,7 +1,6 @@
 // Baked audio-clip schema.
 
 use crate::ecs::PayloadLocator;
-use crate::ecs::asset_id::AssetId;
 use alloc::string::String;
 
 /// A baked audio clip: the sound an [AudioEmitter](#audioemitter) plays.
@@ -23,9 +22,6 @@ use alloc::string::String;
 #[serde(default)]
 #[derive(Default)]
 pub struct AudioClip {
-    /// Asset identity; injected via `inject_name`. Not part of `args`.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// Path to the source audio file.
     pub source: String,
     /// Injected at load time from the compiled blob payload.
@@ -41,7 +37,6 @@ mod tests {
     fn a_blank_clip_names_no_source() {
         let c = AudioClip::default();
         assert!(c.source.is_empty());
-        assert_eq!(c.asset_id, AssetId::default());
         assert!(c.locator.is_none());
     }
 
@@ -59,7 +54,6 @@ mod tests {
         let bytes = postcard::to_allocvec(&c).unwrap();
         let back: AudioClip = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(back.source, "audio/theme.wav");
-        assert_eq!(back.asset_id, AssetId::default());
         assert!(back.locator.is_none());
     }
 }

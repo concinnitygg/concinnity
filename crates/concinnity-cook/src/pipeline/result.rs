@@ -5,8 +5,8 @@ use concinnity_core::blob::{MeshBoundsRecord, PhysicsBudgetRecord, ResourceKind,
 use concinnity_core::ecs::{BlobAssetDef, ResourceRecord};
 
 /// A texture's identity + on-disk source, in `TextureHandle` order. Now that
-/// Texture is a resource (no `source`/`asset_id` on a component the renderer
-/// drains), this is how a dev build hands the `cn debug` tools what they need: the
+/// Texture is a resource (no `source` on a component the renderer drains),
+/// this is how a dev build hands the `cn debug` tools what they need: the
 /// hot-reload watcher maps `source` -> handle, and the runtime spawn-by-name path
 /// maps `name_id` -> handle. `source` is empty for a procedural texture (nothing
 /// to watch). `name_id` is the interned asset name (same interner the runtime

@@ -52,7 +52,7 @@ impl EditorHook {
     }
 
     // The dense id this build gave a handle's asset, for the world-side joins
-    // (the pick index, `EntityByName`). The build records every asset under
+    // (the pick index, `EntityById`). The build records every asset under
     // its handle, an anonymous one under its label, so one lookup serves both.
     pub(in crate::editor) fn handle_asset_id(&self, handle: &AssetHandle) -> Option<AssetId> {
         asset_id::lookup(&self.handle_name(handle)?)

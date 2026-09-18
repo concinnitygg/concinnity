@@ -69,11 +69,7 @@ impl EditorHook {
             .active()
             .and_then(|h| self.handle_name(h))
             .and_then(|name| trace::id_of(&name))
-            .and_then(|id| {
-                world
-                    .resource::<concinnity_core::ecs::EntityByName>()
-                    .and_then(|n| n.get(id))
-            })
+            .and_then(|id| world.entity_of(id))
             .map(|e| e.to_bits());
         let breakpoints = self.resolve_breakpoints(world);
         world.insert_resource(TraceRequest {

@@ -78,7 +78,6 @@ pub(crate) fn declare(world: &mut WorldBuilder, center: [f32; 3]) {
             roughness: 0.08,
             refraction_strength: 0.03,
             visible: true,
-            ..Default::default()
         },
     );
 }

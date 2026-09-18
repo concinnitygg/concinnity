@@ -3,6 +3,7 @@ use concinnity_core::components::{
     Animation, AnimationGraph, AnimationParams, CharacterRig, PhysicsConfig, Prop, PropCollider,
     RootMotionEvent, SkeletonPose,
 };
+use concinnity_core::ecs::ComponentSlot;
 use concinnity_core::ecs::EventCursor;
 use concinnity_core::ecs::FrameTime;
 use concinnity_core::ecs::MenuActive;
@@ -52,25 +53,29 @@ fn anim_graph_component_spawns_internal_system() {
     assert_eq!(names, ["AnimationSystem"]);
 }
 
-// A clip targeting `hero`, named so graph states can reference it.
-fn clip(name: &str, duration: f32) -> Animation {
+// A clip targeting `hero`. Added under a name (see `add_named`) so graph
+// states can reference it.
+fn clip(duration: f32) -> Animation {
     // Install the name resolver so the `"target":"hero"` reference deserializes.
     // Must not reset the interner: `intern` below accumulates ids across calls.
     asset_id::ensure_name_resolver();
-    let mut a: Animation = serde_json::from_value(serde_json::json!({
+    serde_json::from_value(serde_json::json!({
         "target": "hero",
         "duration": duration,
         "looping": true,
     }))
-    .unwrap();
-    a.asset_id = intern(name);
-    a
+    .unwrap()
+}
+
+// Add `c` identified by the interned `name`, the way a loaded world has it.
+fn add_named<C: ComponentSlot>(world: &mut World, name: &str, c: C) {
+    world.push_identified(intern(name), c);
 }
 
 // idle/run graph on `hero`, transitioning on `speed` in both directions with
 // snap fades (duration 0) so state flips are visible after one step.
 fn hero_graph() -> AnimationGraph {
-    let mut g: AnimationGraph = serde_json::from_value(serde_json::json!({
+    serde_json::from_value(serde_json::json!({
         "target": "hero",
         "parameters": [{"name": "speed", "default": 0.0}],
         "initial": "idle",
@@ -85,16 +90,14 @@ fn hero_graph() -> AnimationGraph {
              "conditions": [{"parameter": "speed", "op": "le", "value": 0.5}]}
         ]
     }))
-    .unwrap();
-    g.asset_id = intern("hero_graph");
-    g
+    .unwrap()
 }
 
 fn graph_world() -> World {
     let mut world = World::new();
-    world.add_component(clip("idle_clip", 1.0));
-    world.add_component(clip("run_clip", 0.8));
-    world.add_component(hero_graph());
+    add_named(&mut world, "idle_clip", clip(1.0));
+    add_named(&mut world, "run_clip", clip(0.8));
+    add_named(&mut world, "hero_graph", hero_graph());
     world.start(SYSTEMS).unwrap();
     world
 }
@@ -143,11 +146,11 @@ fn blendspace_weights_follow_the_parameter() {
     let target = SkinnedMeshHandle(intern("hero_blend").0);
     let mut world = World::new();
     for (name, duration) in [("bl_idle", 1.0), ("bl_walk", 0.8), ("bl_run", 0.6)] {
-        let mut a = clip(name, duration);
+        let mut a = clip(duration);
         a.target = Some(SkinnedMeshHandle(target.0));
-        world.add_component(a);
+        add_named(&mut world, name, a);
     }
-    let mut g: AnimationGraph = serde_json::from_value(serde_json::json!({
+    let g: AnimationGraph = serde_json::from_value(serde_json::json!({
         "target": "hero_blend",
         "parameters": [{"name": "speed", "default": 0.0}],
         "states": [
@@ -161,8 +164,7 @@ fn blendspace_weights_follow_the_parameter() {
         ]
     }))
     .unwrap();
-    g.asset_id = intern("hero_blend_graph");
-    world.add_component(g);
+    add_named(&mut world, "hero_blend_graph", g);
     world.start(SYSTEMS).unwrap();
     world.step();
 
@@ -246,7 +248,7 @@ fn mode_mismatched_commands_are_rejected() {
     });
 
     let mut flat_world = World::new();
-    let mut a = clip("solo_clip", 1.0);
+    let mut a = clip(1.0);
     a.target = Some(SkinnedMeshHandle(intern("flat_hero").0));
     flat_world.add_component(a);
     flat_world.start(SYSTEMS).unwrap();
@@ -267,7 +269,7 @@ fn mode_mismatched_commands_are_rejected() {
 fn root_motion_clip_publishes_displacement_events() {
     let target = SkinnedMeshHandle(intern("hero_rm").0);
     let mut world = World::new();
-    let mut a: Animation = serde_json::from_value(serde_json::json!({
+    let a: Animation = serde_json::from_value(serde_json::json!({
         "target": "hero_rm",
         "duration": 1.0,
         "looping": true,
@@ -278,8 +280,7 @@ fn root_motion_clip_publishes_displacement_events() {
         ],
     }))
     .unwrap();
-    a.asset_id = intern("hero_rm_walk");
-    world.add_component(a);
+    add_named(&mut world, "hero_rm_walk", a);
     world.start(SYSTEMS).unwrap();
 
     world.insert_resource(frame_dt(0.005));
@@ -314,7 +315,7 @@ fn root_motion_events_emit_in_handle_order() {
     let mut handles = Vec::new();
     for name in ["rm_ord_c", "rm_ord_a", "rm_ord_b"] {
         handles.push(SkinnedMeshHandle(intern(name).0));
-        let mut a: Animation = serde_json::from_value(serde_json::json!({
+        let a: Animation = serde_json::from_value(serde_json::json!({
             "target": name,
             "duration": 1.0,
             "looping": true,
@@ -325,8 +326,7 @@ fn root_motion_events_emit_in_handle_order() {
             ],
         }))
         .unwrap();
-        a.asset_id = intern(&format!("{name}_clip"));
-        world.add_component(a);
+        add_named(&mut world, &format!("{name}_clip"), a);
     }
     world.start(SYSTEMS).unwrap();
 
@@ -380,7 +380,7 @@ fn ik_pins_the_foot_to_a_raised_ledge() {
     world.add_component(CharacterRig::new(target, 0, transform::IDENTITY, 0.5, 0.3));
 
     // A constant clip (the bind pose) so the graph has something to play.
-    let mut stand: Animation = serde_json::from_value(serde_json::json!({
+    let stand: Animation = serde_json::from_value(serde_json::json!({
         "target": "hero_ik",
         "duration": 1.0,
         "looping": true,
@@ -390,33 +390,33 @@ fn ik_pins_the_foot_to_a_raised_ledge() {
         ]}],
     }))
     .unwrap();
-    stand.asset_id = intern("hero_ik_stand");
-    world.add_component(stand);
+    add_named(&mut world, "hero_ik_stand", stand);
 
-    let mut graph: AnimationGraph = serde_json::from_value(serde_json::json!({
+    let graph: AnimationGraph = serde_json::from_value(serde_json::json!({
         "target": "hero_ik",
         "states": [{"name": "stand", "clip": "hero_ik_stand"}],
         "ik_chains": [{"joints": ["hip", "knee", "foot"], "pole": [0.0, 0.0, 1.0]}],
     }))
     .unwrap();
-    graph.asset_id = intern("hero_ik_graph");
-    world.add_component(graph);
+    add_named(&mut world, "hero_ik_graph", graph);
 
     // Flat floor for the capsule; a ledge (top at y = 0.25) under the foot
     // only, clear of the capsule standing at the origin.
     world.add_component(PhysicsConfig::default());
-    world.add_component(Prop {
-        asset_id: intern("ledge"),
-        position: [0.75, 0.1, 0.0],
-        collider: Some(PropCollider {
-            shape: concinnity_core::components::PropColliderShape::Cuboid,
-            half_extents: [0.3, 0.15, 0.3],
-            radius: 0.0,
-            half_height: 0.0,
-            layer: String::new(),
-        }),
-        ..Default::default()
-    });
+    world.push_identified(
+        intern("ledge"),
+        Prop {
+            position: [0.75, 0.1, 0.0],
+            collider: Some(PropCollider {
+                shape: concinnity_core::components::PropColliderShape::Cuboid,
+                half_extents: [0.3, 0.15, 0.3],
+                radius: 0.0,
+                half_height: 0.0,
+                layer: String::new(),
+            }),
+            ..Default::default()
+        },
+    );
     world.start(SYSTEMS).unwrap();
 
     // Ray out -> physics answer -> solve; a few extra steps let the capsule
@@ -452,7 +452,7 @@ fn ik_pins_the_foot_to_a_raised_ledge() {
 fn rig_capsule_follows_root_motion() {
     let target = SkinnedMeshHandle(intern("hero_rig").0);
     let mut world = World::new();
-    let mut a: Animation = serde_json::from_value(serde_json::json!({
+    let a: Animation = serde_json::from_value(serde_json::json!({
         "target": "hero_rig",
         "duration": 1.0,
         "looping": true,
@@ -463,8 +463,7 @@ fn rig_capsule_follows_root_motion() {
         ],
     }))
     .unwrap();
-    a.asset_id = intern("hero_rig_walk");
-    world.add_component(a);
+    add_named(&mut world, "hero_rig_walk", a);
     world.add_component(PhysicsConfig::default());
     // GraphicsSystem publishes rigs in a rendering world; this headless test
     // seeds one directly before start so PhysicsSystem::init sees it.
@@ -522,8 +521,8 @@ fn graph_freezes_while_menu_open() {
 #[test]
 fn a_paused_frame_does_not_advance_clip_time() {
     let target = SkinnedMeshHandle(intern("pause_skip").0);
-    let slide = || {
-        let mut a: Animation = serde_json::from_value(serde_json::json!({
+    let slide = || -> Animation {
+        serde_json::from_value(serde_json::json!({
             "target": "pause_skip",
             "duration": 20.0,
             "looping": true,
@@ -532,9 +531,7 @@ fn a_paused_frame_does_not_advance_clip_time() {
                 {"time": 20.0, "translation": [20.0, 0.0, 0.0]}
             ]}],
         }))
-        .unwrap();
-        a.asset_id = intern("pause_skip_slide");
-        a
+        .unwrap()
     };
     let root_x =
         |world: &World| world.query::<SkeletonPose>().next().unwrap().joint_matrices[0][3][0];
@@ -578,8 +575,8 @@ fn runtime_clip(duration: f32) -> skeleton::AnimationClip {
 }
 
 // A single flat clip targeting `target`, weight 1.
-fn flat_clip(name: &str, target: SkinnedMeshHandle) -> Animation {
-    let mut a = clip(name, 1.0);
+fn flat_clip(target: SkinnedMeshHandle) -> Animation {
+    let mut a = clip(1.0);
     a.target = Some(SkinnedMeshHandle(target.0));
     a
 }
@@ -590,7 +587,7 @@ fn flat_clip(name: &str, target: SkinnedMeshHandle) -> Animation {
 fn apply_reloaded_clip_reseats_a_flat_slot_and_rejects_bad_targets() {
     let target = SkinnedMeshHandle(intern("flat_reload").0);
     let mut world = World::new();
-    world.add_component(flat_clip("fr_solo", target));
+    world.add_component(flat_clip(target));
     world.start(SYSTEMS).unwrap();
     world.step();
 
@@ -671,7 +668,7 @@ fn single_joint_pose(target: SkinnedMeshHandle) -> SkeletonPose {
 fn flat_single_clip_samples_the_pose() {
     let target = SkinnedMeshHandle(intern("flat_single_pose").0);
     let mut world = World::new();
-    world.add_component(flat_clip("fs_solo", target));
+    world.add_component(flat_clip(target));
     world.add_component(single_joint_pose(target));
     world.start(SYSTEMS).unwrap();
     world.step();
@@ -692,10 +689,10 @@ fn flat_fade_in_blends_multiple_clips_into_the_pose() {
     let target = SkinnedMeshHandle(intern("flat_blend_pose").0);
     let mut world = World::new();
     // One clip requests a fade-in, so init builds a startup weight ramp.
-    let mut faded = flat_clip("fb_a", target);
+    let mut faded = flat_clip(target);
     faded.fade_in_secs = 0.5;
     world.add_component(faded);
-    world.add_component(flat_clip("fb_b", target));
+    world.add_component(flat_clip(target));
     world.add_component(single_joint_pose(target));
     world.start(SYSTEMS).unwrap();
     // First step anchors the fade ramp; second advances it further. Both run
@@ -721,7 +718,7 @@ fn morph_base_layer_composes_with_clip_morph_tracks() {
 
     let target = SkinnedMeshHandle(intern("morph_base_pose").0);
     let mut world = World::new();
-    let mut a = flat_clip("mb_clip", target);
+    let mut a = flat_clip(target);
     a.morph_track = vec![
         MorphKey {
             time: 0.0,
@@ -749,7 +746,7 @@ fn morph_base_layer_composes_with_clip_morph_tracks() {
     // Without a morph track, the base layer stays in place.
     let target = SkinnedMeshHandle(intern("morph_base_only").0);
     let mut world = World::new();
-    world.add_component(flat_clip("mb_plain", target));
+    world.add_component(flat_clip(target));
     world.add_component(
         single_joint_pose(target).with_shape(vec![0.25], ProportionLayer::default()),
     );
@@ -769,7 +766,7 @@ fn proportions_apply_to_the_sampled_pose() {
 
     let target = SkinnedMeshHandle(intern("proportioned_pose").0);
     let mut world = World::new();
-    world.add_component(flat_clip("pp_clip", target));
+    world.add_component(flat_clip(target));
     let pose = single_joint_pose(target);
     let layer = ProportionLayer::resolve(
         &pose.skeleton,

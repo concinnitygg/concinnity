@@ -4,7 +4,6 @@ use crate::components::AudioBus;
 use crate::components::Screen;
 use crate::components::vocabulary;
 use crate::ecs::AudioClipHandle;
-use crate::ecs::asset_id::AssetId;
 use crate::ecs::de_opt_audio_clip_handle;
 use crate::ecs::{Ref, de_opt_ref};
 
@@ -26,9 +25,6 @@ use crate::ecs::{Ref, de_opt_ref};
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct AudioCue {
-    /// Asset identity; injected via `inject_name`. Not part of `args`.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// The [Screen](#screen) whose activation triggers this cue.
     #[serde(deserialize_with = "de_opt_ref")]
     pub screen: Option<Ref<Screen>>,
@@ -68,7 +64,6 @@ vocabulary!(CueKind {
 impl Default for AudioCue {
     fn default() -> Self {
         Self {
-            asset_id: AssetId::default(),
             screen: None,
             clip: None,
             kind: CueKind::Sound,
@@ -82,6 +77,7 @@ impl Default for AudioCue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ecs::asset_id::AssetId;
 
     // NAMES is what the editor's picker offers, so it has to be what serde
     // accepts. A variant added without extending both lists fails here.
@@ -128,7 +124,6 @@ mod tests {
         assert_eq!(back.clip, Some(AudioClipHandle(5)));
         assert_eq!(back.screen, Some(Ref::new(AssetId(4))));
         assert_eq!(back.kind, CueKind::Music);
-        assert_eq!(back.asset_id, AssetId::default());
     }
 
     #[test]

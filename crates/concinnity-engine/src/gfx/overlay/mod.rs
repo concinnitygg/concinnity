@@ -14,6 +14,7 @@
 //! measured is exactly what is drawn.
 
 use concinnity_core::components::FrameInput;
+use concinnity_core::components::Identity;
 use concinnity_core::components::LayoutContainer;
 use concinnity_core::components::Sprite;
 use concinnity_core::components::TextInput;
@@ -27,6 +28,7 @@ use concinnity_core::gfx::render_types;
 use concinnity_core::render::call_buffer;
 use concinnity_core::render::cursor;
 use concinnity_core::render::overlay_maps;
+use concinnity_core::render::overlay_maps::Placement;
 use concinnity_core::render::sprite as gfx_sprite;
 use concinnity_core::render::text;
 
@@ -104,9 +106,15 @@ impl OverlaySystem {
 impl System for OverlaySystem {
     fn access(&self) -> Access {
         Access::new()
-            .reads_components(crate::component_mask![Sprite, TextInput, LayoutContainer])
+            .reads_components(crate::component_mask![
+                Sprite,
+                TextInput,
+                LayoutContainer,
+                Identity
+            ])
             .writes_components(crate::component_mask![TextLabel])
             .reads_resources(crate::resource_mask![
+                concinnity_core::ecs::EntityById,
                 FrameInput,
                 CursorState,
                 ScreenStack,
@@ -195,11 +203,10 @@ impl OverlaySystem {
         // Pack the StatHud chips into a tight strip in the top-left corner.
         hud_layout::position_stat_hud(ctx, &assets.stat_hud_chips, &assets.fonts);
         let default_atlas_slot = assets.fonts.any_atlas_slot();
-        // The component columns are contiguous, so the shapers take the whole
-        // slices; each skips what is not its own (hidden elements, and
-        // `follow_cursor` sprites, which only the cursor pass draws).
+        // The shapers take whole columns, each element at its placement; each
+        // skips what is not its own (hidden elements, and `follow_cursor`
+        // sprites, which only the cursor pass draws).
         let sprites: &[Sprite] = ctx.query::<Sprite>().as_slice();
-        let labels: &[TextLabel] = ctx.query::<TextLabel>().as_slice();
 
         // Per-element draw layers, from two sources merged into one map:
         //   - the screen stack: every element of an active Screen takes its
@@ -211,23 +218,22 @@ impl OverlaySystem {
         // An id absent from the map is layer 0. When the map ends up empty (no
         // active screen, no editor), the sort below is skipped and draw order is
         // pure insertion order, as before.
-        let empty_layers = overlay_maps::OverlayLayers::new();
         let screen_layers = ctx.resource::<ScreenStack>().map(|s| &s.layers);
         self.layers.clear();
         if let Some(screen_layers) = screen_layers.filter(|l| !l.is_empty()) {
-            for s in ctx.query::<Sprite>() {
+            for (_, s, identity) in ctx.join2::<Sprite, Identity>() {
                 if let Some(layer) = s.screen.and_then(|id| screen_layers.get(&id.id())) {
-                    self.layers.insert(s.asset_id, *layer);
+                    self.layers.insert(identity.id(), *layer);
                 }
             }
-            for l in ctx.query::<TextLabel>() {
+            for (_, l, identity) in ctx.join2::<TextLabel, Identity>() {
                 if let Some(layer) = l.screen.and_then(|id| screen_layers.get(&id.id())) {
-                    self.layers.insert(l.asset_id, *layer);
+                    self.layers.insert(identity.id(), *layer);
                 }
             }
-            for t in ctx.query::<TextInput>() {
+            for (_, t, identity) in ctx.join2::<TextInput, Identity>() {
                 if let Some(layer) = t.screen.and_then(|id| screen_layers.get(&id.id())) {
-                    self.layers.insert(t.asset_id, *layer);
+                    self.layers.insert(identity.id(), *layer);
                 }
             }
         }
@@ -237,23 +243,25 @@ impl OverlaySystem {
             }
         }
         let hud_layers = &self.layers;
+        let placement = |entity| {
+            let id = ctx.get::<Identity>(entity).map(|i| i.id());
+            Placement::of(id, &assets.clip_rects, hud_layers)
+        };
 
         gfx_sprite::build_sprite_calls_into(
             &mut self.buffer,
-            sprites,
+            ctx.query_with_entity::<Sprite>()
+                .map(|(entity, s)| (s, placement(entity))),
             default_atlas_slot,
             &assets.sprite_texture_slots,
             [win_w, win_h],
-            &assets.clip_rects,
-            hud_layers,
         );
         text::build_text_calls_into(
             &mut self.buffer,
-            labels,
+            ctx.query_with_entity::<TextLabel>()
+                .map(|(entity, l)| (l, placement(entity))),
             &assets.fonts,
             [win_w, win_h],
-            &assets.clip_rects,
-            hud_layers,
         );
 
         // A settings dropdown's open list draws on top of the menu (after the
@@ -261,32 +269,27 @@ impl OverlaySystem {
         // the scroll band's scissor. Built as transient overlay Sprites +
         // TextLabels fed through the same shapers (with no clip bands).
         if let Some(view) = ctx.resource::<OpenDropdown>().and_then(|d| d.0.as_ref()) {
-            let no_clips = overlay_maps::ClipRects::new();
             widgets::build_dropdown_overlay(view, &assets.fonts, &mut self.widget_scratch);
-            let dd_start = self.buffer.calls.len();
+            // The synthesized list is no asset, so nothing would lift it out of
+            // layer 0 -- where the sort below buries it under the opaque rows it
+            // drops from (functional, but invisible).
+            let on_top = Placement {
+                clip: None,
+                layer: DROPDOWN_LAYER,
+            };
             gfx_sprite::build_sprite_calls_into(
                 &mut self.buffer,
-                &self.widget_scratch.sprites,
+                self.widget_scratch.sprites.iter().map(|s| (s, on_top)),
                 default_atlas_slot,
                 &assets.sprite_texture_slots,
                 [win_w, win_h],
-                &no_clips,
-                &empty_layers,
             );
             text::build_text_calls_into(
                 &mut self.buffer,
-                &self.widget_scratch.labels,
+                self.widget_scratch.labels.iter().map(|l| (l, on_top)),
                 &assets.fonts,
                 [win_w, win_h],
-                &no_clips,
-                &empty_layers,
             );
-            // The synthesized list carries no asset id, so nothing would lift it out
-            // of layer 0 -- where the sort below buries it under the opaque rows it
-            // drops from (functional, but invisible).
-            for c in &mut self.buffer.calls[dd_start..] {
-                c.layer = DROPDOWN_LAYER;
-            }
         }
 
         // Text-input fields draw as a background box + their text + a caret,
@@ -297,7 +300,7 @@ impl OverlaySystem {
         // field's caret pulses rather than sitting solid.
         const CARET_BLINK_PERIOD: f32 = 1.06;
         let caret_visible = (elapsed % CARET_BLINK_PERIOD) < CARET_BLINK_PERIOD * 0.5;
-        for ti in ctx.query::<TextInput>() {
+        for (entity, ti) in ctx.query_with_entity::<TextInput>() {
             if !ti.visible {
                 continue;
             }
@@ -307,32 +310,23 @@ impl OverlaySystem {
                 caret_visible,
                 &mut self.widget_scratch,
             );
-            // The synthesized overlay carries no asset id, so its calls take the
-            // field's own layer (from the field's id) rather than looking up the
-            // default id -- otherwise a focused panel's text fields would sink
-            // below it.
-            let ti_layer = hud_layers.get(&ti.asset_id).copied().unwrap_or(0);
-            let ti_start = self.buffer.calls.len();
+            // The synthesized overlay is no asset, so its calls take the field's
+            // own placement -- otherwise a focused panel's text fields would
+            // sink below it.
+            let field = placement(entity);
             gfx_sprite::build_sprite_calls_into(
                 &mut self.buffer,
-                &self.widget_scratch.sprites,
+                self.widget_scratch.sprites.iter().map(|s| (s, field)),
                 default_atlas_slot,
                 &assets.sprite_texture_slots,
                 [win_w, win_h],
-                &assets.clip_rects,
-                &empty_layers,
             );
             text::build_text_calls_into(
                 &mut self.buffer,
-                &self.widget_scratch.labels,
+                self.widget_scratch.labels.iter().map(|l| (l, field)),
                 &assets.fonts,
                 [win_w, win_h],
-                &assets.clip_rects,
-                &empty_layers,
             );
-            for c in &mut self.buffer.calls[ti_start..] {
-                c.layer = ti_layer;
-            }
         }
 
         // A menu cursor is present when any visible follow_cursor sprite is
@@ -464,9 +458,8 @@ mod tests {
     }
 
     // An opaque HUD sprite (window pixels, no screen), visible by default.
-    fn sprite(id: AssetId) -> Sprite {
+    fn sprite() -> Sprite {
         Sprite {
-            asset_id: id,
             x: 0.0,
             y: 0.0,
             width: 10.0,
@@ -485,18 +478,17 @@ mod tests {
 
     // A screen-owned sprite spanning the whole reference canvas: the menu-dim
     // shape `covers_canvas` recognizes.
-    fn backdrop(id: AssetId) -> Sprite {
+    fn backdrop() -> Sprite {
         Sprite {
             width: REF_W,
             height: REF_H,
             screen: Some(Ref::new(SCREEN)),
-            ..sprite(id)
+            ..sprite()
         }
     }
 
-    fn label(id: AssetId, content: &str) -> TextLabel {
+    fn label(content: &str) -> TextLabel {
         TextLabel {
-            asset_id: id,
             font: Some(FONT),
             content: content.to_string(),
             x: 0.0,
@@ -530,9 +522,8 @@ mod tests {
         }
     }
 
-    fn text_input(id: AssetId) -> TextInput {
+    fn text_input() -> TextInput {
         TextInput {
-            asset_id: id,
             font: Some(FONT),
             content: "ab".to_string(),
             ..Default::default()
@@ -569,8 +560,8 @@ mod tests {
             }
         }
 
-        fn push<C: ComponentSlot>(&mut self, c: C) {
-            self.components.push_typed(c);
+        fn push_as<C: ComponentSlot>(&mut self, id: AssetId, c: C) {
+            self.ctx().push_identified(id, c);
         }
 
         fn ctx(&mut self) -> PipelineContext<'_> {
@@ -605,7 +596,7 @@ mod tests {
     #[test]
     fn step_without_overlay_assets_publishes_nothing() {
         let mut w = TestWorld::new();
-        w.push(sprite(AssetId(1)));
+        w.push_as(AssetId(1), sprite());
         let mut sys = OverlaySystem::new();
         sys.step(&mut w.ctx());
         assert!(w.resources.get::<OverlayFrame>().is_none());
@@ -617,7 +608,7 @@ mod tests {
     #[test]
     fn step_publishes_the_frame_and_parks_the_assets_back() {
         let mut w = TestWorld::new();
-        w.push(sprite(AssetId(1)));
+        w.push_as(AssetId(1), sprite());
         w.resources.insert(assets());
         let mut sys = OverlaySystem::new();
         sys.step(&mut w.ctx());
@@ -646,7 +637,7 @@ mod tests {
         // the menu state follows the override while world_hidden keeps tracking
         // what is actually drawn.
         let mut w = TestWorld::new();
-        w.push(backdrop(AssetId(1)));
+        w.push_as(AssetId(1), backdrop());
         w.resources.insert(assets());
         w.resources.insert(screen_stack(0));
         w.resources.insert(MenuOverride(Some(false)));
@@ -675,7 +666,7 @@ mod tests {
     #[test]
     fn viewport_follows_frame_input_and_falls_back_to_the_init_size() {
         let mut w = TestWorld::new();
-        w.push(backdrop(AssetId(1)));
+        w.push_as(AssetId(1), backdrop());
         let frame = w.build(0.0);
         assert_eq!(x_span(&frame.calls[0]), (0.0, REF_W));
 
@@ -693,19 +684,28 @@ mod tests {
     #[test]
     fn screen_layers_spread_onto_the_elements_the_screen_owns() {
         let mut w = TestWorld::new();
-        w.push(label(AssetId(1), "hud"));
-        w.push(Sprite {
-            screen: Some(Ref::new(SCREEN)),
-            ..sprite(AssetId(2))
-        });
-        w.push(TextLabel {
-            screen: Some(Ref::new(SCREEN)),
-            ..label(AssetId(3), "menu")
-        });
-        w.push(TextInput {
-            screen: Some(Ref::new(SCREEN)),
-            ..text_input(AssetId(4))
-        });
+        w.push_as(AssetId(1), label("hud"));
+        w.push_as(
+            AssetId(2),
+            Sprite {
+                screen: Some(Ref::new(SCREEN)),
+                ..sprite()
+            },
+        );
+        w.push_as(
+            AssetId(3),
+            TextLabel {
+                screen: Some(Ref::new(SCREEN)),
+                ..label("menu")
+            },
+        );
+        w.push_as(
+            AssetId(4),
+            TextInput {
+                screen: Some(Ref::new(SCREEN)),
+                ..text_input()
+            },
+        );
         w.resources.insert(screen_stack(7));
 
         let frame = w.build(0.0);
@@ -724,11 +724,14 @@ mod tests {
     #[test]
     fn elements_outside_the_active_stack_stay_at_layer_zero() {
         let mut w = TestWorld::new();
-        w.push(sprite(AssetId(1)));
-        w.push(Sprite {
-            screen: Some(Ref::new(AssetId(99))),
-            ..sprite(AssetId(2))
-        });
+        w.push_as(AssetId(1), sprite());
+        w.push_as(
+            AssetId(2),
+            Sprite {
+                screen: Some(Ref::new(AssetId(99))),
+                ..sprite()
+            },
+        );
         w.resources.insert(screen_stack(7));
         let frame = w.build(0.0);
         assert!(frame.calls.iter().all(|c| c.layer == 0));
@@ -740,11 +743,14 @@ mod tests {
     #[test]
     fn editor_layer_overrides_lift_elements_above_screen_layers() {
         let mut w = TestWorld::new();
-        w.push(Sprite {
-            screen: Some(Ref::new(SCREEN)),
-            ..sprite(AssetId(1))
-        });
-        w.push(sprite(AssetId(2)));
+        w.push_as(
+            AssetId(1),
+            Sprite {
+                screen: Some(Ref::new(SCREEN)),
+                ..sprite()
+            },
+        );
+        w.push_as(AssetId(2), sprite());
         w.resources.insert(screen_stack(7));
         w.resources
             .insert(HudLayers(std::collections::BTreeMap::from([(
@@ -765,7 +771,7 @@ mod tests {
     #[test]
     fn a_recycled_draw_list_backs_the_next_build() {
         let mut w = TestWorld::new();
-        w.push(sprite(AssetId(1)));
+        w.push_as(AssetId(1), sprite());
         let a = assets();
         let mut sys = OverlaySystem::new();
         let frame = sys.build_frame(&mut w.ctx(), &a, 0.0);
@@ -788,8 +794,8 @@ mod tests {
     #[test]
     fn draw_order_is_insertion_order_without_any_layers() {
         let mut w = TestWorld::new();
-        w.push(sprite(AssetId(1)));
-        w.push(label(AssetId(2), "hud"));
+        w.push_as(AssetId(1), sprite());
+        w.push_as(AssetId(2), label("hud"));
         let frame = w.build(0.0);
         assert!(frame.calls.iter().all(|c| c.layer == 0));
         // Sprites first, then text: the label's call follows the sprite's.
@@ -820,15 +826,21 @@ mod tests {
         let mut w = TestWorld::new();
         // The menu behind the list: an opaque full-canvas dim and a row card,
         // both owned by the active screen.
-        w.push(backdrop(AssetId(1)));
-        w.push(Sprite {
-            screen: Some(Ref::new(SCREEN)),
-            ..sprite(AssetId(2))
-        });
-        w.push(TextLabel {
-            screen: Some(Ref::new(SCREEN)),
-            ..label(AssetId(3), "Window Mode")
-        });
+        w.push_as(AssetId(1), backdrop());
+        w.push_as(
+            AssetId(2),
+            Sprite {
+                screen: Some(Ref::new(SCREEN)),
+                ..sprite()
+            },
+        );
+        w.push_as(
+            AssetId(3),
+            TextLabel {
+                screen: Some(Ref::new(SCREEN)),
+                ..label("Window Mode")
+            },
+        );
         w.resources.insert(screen_stack(7));
         let menu = w.build(0.0).calls.len();
 
@@ -856,7 +868,7 @@ mod tests {
     #[test]
     fn open_dropdown_sorts_above_the_editor_layer_band() {
         let mut w = TestWorld::new();
-        w.push(sprite(AssetId(2)));
+        w.push_as(AssetId(2), sprite());
         w.resources
             .insert(HudLayers(std::collections::BTreeMap::from([(
                 AssetId(2),
@@ -885,8 +897,8 @@ mod tests {
     #[test]
     fn text_input_calls_take_the_fields_own_layer() {
         let mut w = TestWorld::new();
-        w.push(text_input(AssetId(4)));
-        w.push(sprite(AssetId(1)));
+        w.push_as(AssetId(4), text_input());
+        w.push_as(AssetId(1), sprite());
         w.resources
             .insert(HudLayers(std::collections::BTreeMap::from([(
                 AssetId(4),
@@ -912,10 +924,13 @@ mod tests {
     #[test]
     fn the_caret_draws_only_on_the_visible_half_of_the_blink() {
         let mut w = TestWorld::new();
-        w.push(TextInput {
-            focused: true,
-            ..text_input(AssetId(4))
-        });
+        w.push_as(
+            AssetId(4),
+            TextInput {
+                focused: true,
+                ..text_input()
+            },
+        );
         let visible = w.build(0.0).calls.len();
         let dark = w.build(0.6).calls.len();
         assert_eq!(visible, dark + 1, "the caret is the one call that drops");
@@ -929,10 +944,13 @@ mod tests {
     #[test]
     fn the_step_blinks_the_caret_by_frame_time() {
         let mut w = TestWorld::new();
-        w.push(TextInput {
-            focused: true,
-            ..text_input(AssetId(4))
-        });
+        w.push_as(
+            AssetId(4),
+            TextInput {
+                focused: true,
+                ..text_input()
+            },
+        );
         w.resources.insert(assets());
         let mut sys = OverlaySystem::new();
         let mut step = |w: &mut TestWorld, dt: f32| {
@@ -949,11 +967,14 @@ mod tests {
     #[test]
     fn hidden_text_inputs_build_no_overlay() {
         let mut w = TestWorld::new();
-        w.push(TextInput {
-            visible: false,
-            focused: true,
-            ..text_input(AssetId(4))
-        });
+        w.push_as(
+            AssetId(4),
+            TextInput {
+                visible: false,
+                focused: true,
+                ..text_input()
+            },
+        );
         assert!(w.build(0.0).calls.is_empty());
     }
 
@@ -962,10 +983,13 @@ mod tests {
     #[test]
     fn an_opaque_follow_cursor_sprite_draws_the_ui_arrow() {
         let mut w = TestWorld::new();
-        w.push(Sprite {
-            follow_cursor: true,
-            ..sprite(AssetId(1))
-        });
+        w.push_as(
+            AssetId(1),
+            Sprite {
+                follow_cursor: true,
+                ..sprite()
+            },
+        );
         let frame = w.build(0.0);
         assert!(frame.want_ui_cursor);
         assert!(!frame.calls.is_empty(), "the arrow was shaped");
@@ -977,12 +1001,15 @@ mod tests {
     #[test]
     fn the_ui_arrow_sorts_above_screen_editor_and_dropdown_layers() {
         let mut w = TestWorld::new();
-        w.push(backdrop(AssetId(1)));
-        w.push(sprite(AssetId(2)));
-        w.push(Sprite {
-            follow_cursor: true,
-            ..sprite(AssetId(3))
-        });
+        w.push_as(AssetId(1), backdrop());
+        w.push_as(AssetId(2), sprite());
+        w.push_as(
+            AssetId(3),
+            Sprite {
+                follow_cursor: true,
+                ..sprite()
+            },
+        );
         w.resources.insert(screen_stack(7));
         w.resources.insert(OpenDropdown(Some(dropdown_view())));
         w.resources
@@ -1005,16 +1032,22 @@ mod tests {
     #[test]
     fn a_transparent_or_hidden_cursor_sprite_draws_no_arrow() {
         let mut w = TestWorld::new();
-        w.push(Sprite {
-            follow_cursor: true,
-            tint: [1.0, 1.0, 1.0, 0.0],
-            ..sprite(AssetId(1))
-        });
-        w.push(Sprite {
-            follow_cursor: true,
-            visible: false,
-            ..sprite(AssetId(2))
-        });
+        w.push_as(
+            AssetId(1),
+            Sprite {
+                follow_cursor: true,
+                tint: [1.0, 1.0, 1.0, 0.0],
+                ..sprite()
+            },
+        );
+        w.push_as(
+            AssetId(2),
+            Sprite {
+                follow_cursor: true,
+                visible: false,
+                ..sprite()
+            },
+        );
         let frame = w.build(0.0);
         assert!(!frame.want_ui_cursor);
         assert!(frame.calls.is_empty());
@@ -1025,10 +1058,13 @@ mod tests {
     #[test]
     fn the_ui_arrow_hides_when_the_real_cursor_leaves_the_window() {
         let mut w = TestWorld::new();
-        w.push(Sprite {
-            follow_cursor: true,
-            ..sprite(AssetId(1))
-        });
+        w.push_as(
+            AssetId(1),
+            Sprite {
+                follow_cursor: true,
+                ..sprite()
+            },
+        );
         w.resources.insert(CursorState {
             pos: (10.0, 10.0),
             outside_window: true,
@@ -1060,7 +1096,7 @@ mod tests {
     #[test]
     fn world_hidden_needs_a_paused_menu_behind_an_opaque_backdrop() {
         let mut w = TestWorld::new();
-        w.push(backdrop(AssetId(1)));
+        w.push_as(AssetId(1), backdrop());
         w.resources.insert(screen_stack(0));
         assert!(w.build(0.0).world_hidden);
     }
@@ -1070,18 +1106,24 @@ mod tests {
     #[test]
     fn a_translucent_or_partial_backdrop_keeps_the_world_rendering() {
         let mut w = TestWorld::new();
-        w.push(Sprite {
-            tint: [0.0, 0.0, 0.0, 0.5],
-            ..backdrop(AssetId(1))
-        });
+        w.push_as(
+            AssetId(1),
+            Sprite {
+                tint: [0.0, 0.0, 0.0, 0.5],
+                ..backdrop()
+            },
+        );
         w.resources.insert(screen_stack(0));
         assert!(!w.build(0.0).world_hidden);
 
         let mut w = TestWorld::new();
-        w.push(Sprite {
-            width: REF_W / 2.0,
-            ..backdrop(AssetId(1))
-        });
+        w.push_as(
+            AssetId(1),
+            Sprite {
+                width: REF_W / 2.0,
+                ..backdrop()
+            },
+        );
         w.resources.insert(screen_stack(0));
         assert!(!w.build(0.0).world_hidden);
     }
@@ -1091,7 +1133,7 @@ mod tests {
     #[test]
     fn an_opaque_backdrop_without_a_paused_menu_keeps_the_world_rendering() {
         let mut w = TestWorld::new();
-        w.push(backdrop(AssetId(1)));
+        w.push_as(AssetId(1), backdrop());
         assert!(!w.build(0.0).world_hidden);
     }
 }

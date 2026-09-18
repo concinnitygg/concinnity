@@ -13,7 +13,8 @@ use alloc::vec::Vec;
 /// One component record in the blob's def stream.
 pub struct BlobAssetDef {
     /// The asset's interned identity. `None` for unnamed runtime-only assets.
-    /// Injected into the component at load time via `Component::inject_name`.
+    /// The loader gives the entity it mints for the record this identity (see
+    /// [`EntityById`](crate::ecs::EntityById)).
     pub name: Option<AssetId>,
     /// The component type's registry tag.
     pub discriminant: u8,

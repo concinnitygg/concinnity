@@ -28,6 +28,14 @@ fn labels(world: &World) -> Vec<TextLabel> {
     world.query::<TextLabel>().cloned().collect()
 }
 
+// The asset ids of every `C` in the world, in column order.
+fn ids<C: crate::ecs::ComponentSlot>(world: &World) -> Vec<AssetId> {
+    world
+        .join2::<C, crate::components::Identity>()
+        .map(|(_, _, identity)| identity.id())
+        .collect()
+}
+
 #[test]
 fn a_rendering_world_gets_the_debug_hud_its_chips_and_a_font() {
     let mut world = rendering();
@@ -53,8 +61,10 @@ fn a_rendering_world_gets_the_debug_hud_its_chips_and_a_font() {
     );
     for chip in &chips {
         assert_eq!(chip.font, Some(crate::ecs::FontHandle(0)));
-        assert!(named.contains(&Some(Ref::new(chip.asset_id))));
-        assert!(chip.asset_id.is_minted());
+    }
+    for id in ids::<TextLabel>(&world) {
+        assert!(named.contains(&Some(Ref::new(id))));
+        assert!(id.is_minted());
     }
 }
 
@@ -146,7 +156,7 @@ fn an_environment_map_gets_the_sky() {
     let payloads = world
         .resource::<crate::resource::RuntimeMeshPayloads>()
         .expect("a baked payload");
-    assert!(payloads.get(mesh.asset_id).is_some());
+    assert!(payloads.get(ids::<ProceduralMesh>(&world)[0]).is_some());
 
     let prop = world.query::<Prop>().next().expect("the sky prop");
     assert_eq!(prop.mesh, Some(crate::ecs::MeshHandle(0)));
@@ -168,16 +178,18 @@ fn the_baked_sky_mesh_trails_every_build_assigned_handle() {
         ResourceEntry::default(),
         ResourceEntry::default(),
     ]));
-    world.add_component(ProceduralMesh {
-        asset_id: AssetId(1),
-        generator: "box".to_string(),
-        locator: Some(crate::ecs::PayloadLocator {
-            blob_index: 0,
-            offset: 0,
-            len: 1,
-        }),
-        ..Default::default()
-    });
+    world.push_identified(
+        AssetId(1),
+        ProceduralMesh {
+            generator: "box".to_string(),
+            locator: Some(crate::ecs::PayloadLocator {
+                blob_index: 0,
+                offset: 0,
+                len: 1,
+            }),
+            ..Default::default()
+        },
+    );
     complete(&mut world).unwrap();
 
     let prop = world.query::<Prop>().next().expect("the sky prop");
@@ -204,11 +216,13 @@ fn the_sky_mesh_tracks_the_camera_far_plane_and_caps() {
 fn a_world_with_its_own_skybox_geometry_gets_no_sky() {
     let mut world = rendering();
     world.insert_resource(EnvironmentMapTable(vec![ResourceEntry::default()]));
-    world.add_component(ProceduralMesh {
-        asset_id: AssetId(1),
-        generator: "skybox".to_string(),
-        ..Default::default()
-    });
+    world.push_identified(
+        AssetId(1),
+        ProceduralMesh {
+            generator: "skybox".to_string(),
+            ..Default::default()
+        },
+    );
     complete(&mut world).unwrap();
     assert!(world.query::<Prop>().next().is_none());
     assert_eq!(world.query::<ProceduralMesh>().count(), 1);
@@ -313,10 +327,7 @@ fn a_streamed_world_gets_the_loading_overlay_and_its_pieces() {
         .expect("an overlay");
     let screen = overlay.screen.expect("a screen");
     assert_eq!(world.query::<Screen>().count(), 1);
-    assert_eq!(
-        world.query::<Screen>().next().unwrap().asset_id,
-        screen.id()
-    );
+    assert_eq!(ids::<Screen>(&world), [screen.id()]);
 
     // Backdrop, track, and fill, each on the overlay's screen.
     let sprites: Vec<Sprite> = world.query::<Sprite>().cloned().collect();
@@ -324,15 +335,14 @@ fn a_streamed_world_gets_the_loading_overlay_and_its_pieces() {
     assert!(sprites.iter().all(|s| s.screen == Some(screen)));
     let named = [overlay.backdrop, overlay.track, overlay.fill];
     assert!(
-        sprites
+        ids::<Sprite>(&world)
             .iter()
-            .all(|s| named.contains(&Some(Ref::new(s.asset_id))))
+            .all(|id| named.contains(&Some(Ref::new(*id))))
     );
 
     let label = overlay.label.expect("a label");
-    let text = labels(&world)
-        .into_iter()
-        .find(|l| l.asset_id == label.id())
+    let text = world
+        .get_by_id::<TextLabel>(label.id())
         .expect("the label was injected");
     assert_eq!(text.content, "Loading");
     assert_eq!(text.screen, Some(screen));
@@ -391,16 +401,16 @@ fn minted_names_are_unique_and_out_of_the_declared_range() {
     world.add_component(StatHud::default());
     complete(&mut world).unwrap();
 
-    let mut ids: Vec<AssetId> = world.query::<TextLabel>().map(|l| l.asset_id).collect();
-    ids.extend(world.query::<Sprite>().map(|s| s.asset_id));
-    ids.extend(world.query::<Screen>().map(|s| s.asset_id));
-    ids.extend(world.query::<Prop>().map(|p| p.asset_id));
-    ids.extend(world.query::<ProceduralMesh>().map(|m| m.asset_id));
-    assert!(ids.iter().all(|id| id.is_minted()), "{ids:?}");
-    let mut sorted = ids.clone();
+    let mut all: Vec<AssetId> = ids::<TextLabel>(&world);
+    all.extend(ids::<Sprite>(&world));
+    all.extend(ids::<Screen>(&world));
+    all.extend(ids::<Prop>(&world));
+    all.extend(ids::<ProceduralMesh>(&world));
+    assert!(all.iter().all(|id| id.is_minted()), "{all:?}");
+    let mut sorted = all.clone();
     sorted.sort_unstable();
     sorted.dedup();
-    assert_eq!(sorted.len(), ids.len(), "minted names collide: {ids:?}");
+    assert_eq!(sorted.len(), all.len(), "minted names collide: {all:?}");
 }
 
 // Every default yields to what is already there, so a second run is a no-op.

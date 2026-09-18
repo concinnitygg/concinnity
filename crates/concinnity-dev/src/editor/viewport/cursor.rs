@@ -22,16 +22,16 @@ const CURSOR_PX: f32 = 20.0;
 const FILL: [f32; 4] = [0.95, 0.95, 0.97, 1.0];
 
 // The injected cursor sprite, hidden until the tick shows it.
-pub(crate) fn sprite() -> Sprite {
-    Sprite {
-        asset_id: CURSOR,
+pub(crate) fn sprite() -> (AssetId, Sprite) {
+    let cursor = Sprite {
         follow_cursor: true,
         width: CURSOR_PX,
         height: CURSOR_PX,
         tint: FILL,
         visible: false,
         ..Default::default()
-    }
+    };
+    (CURSOR, cursor)
 }
 
 // Show or hide the cursor sprite for this frame: shown while the editor owns the

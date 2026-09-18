@@ -222,7 +222,7 @@ impl System for AnimationSystem {
         // graph clip references onto bucket indices.
         let mut clip_slots: HashMap<AssetId, (SkinnedMeshHandle, usize)> = HashMap::new();
         let mut count = 0usize;
-        for anim in ctx.drain::<Animation>() {
+        for (id, anim) in ctx.drain_with_ids::<Animation>() {
             let Some(target) = anim.target else {
                 tracing::warn!("AnimationSystem: Animation has no target SkinnedMesh, ignored");
                 continue;
@@ -239,7 +239,9 @@ impl System for AnimationSystem {
                 declared_weight: weight,
                 fade_in_secs,
             });
-            clip_slots.insert(anim.asset_id, (target, clip_index));
+            if let Some(id) = id {
+                clip_slots.insert(id, (target, clip_index));
+            }
             // Each new clip starts at full declared weight unless it requests
             // a fade-in, in which case it begins at zero and ramps up.
             let initial = if fade_in_secs > 0.0 { 0.0 } else { weight };

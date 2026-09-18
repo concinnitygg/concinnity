@@ -2,7 +2,6 @@
 
 use crate::ecs::ShaderHandle;
 use crate::ecs::TextureHandle;
-use crate::ecs::asset_id::AssetId;
 use crate::ecs::de_opt_shader_handle;
 use crate::ecs::de_opt_texture_handle;
 
@@ -23,9 +22,6 @@ use crate::ecs::de_opt_texture_handle;
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct Material {
-    /// Asset identity; injected via `inject_name`. Not part of `args`.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// The [Texture](#texture) asset used as the base color (albedo) map.
     #[serde(deserialize_with = "de_opt_texture_handle")]
     pub albedo: Option<TextureHandle>,
@@ -97,7 +93,6 @@ pub struct Material {
 impl Default for Material {
     fn default() -> Self {
         Self {
-            asset_id: AssetId::default(),
             albedo: None,
             normal_map: None,
             emissive_map: None,
@@ -167,6 +162,5 @@ mod tests {
         assert_eq!(back.opacity, 0.3);
         assert!(back.transparent);
         assert!(back.see_through);
-        assert_eq!(back.asset_id, AssetId::default());
     }
 }

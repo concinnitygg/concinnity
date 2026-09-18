@@ -83,8 +83,7 @@ fn plus_picker_then_name_form_adds_the_entry() {
     assert_eq!(h.form.selected_type.as_deref(), Some(ty.as_str()));
     assert!((h.form.target == FormTarget::New));
     let name_field = world
-        .query::<TextInput>()
-        .find(|t| t.asset_id == form_panel::NAME_INPUT)
+        .get_by_id::<TextInput>(form_panel::NAME_INPUT)
         .unwrap();
     assert!(name_field.focused && !name_field.content.is_empty());
     // Edit the name, then confirm.
@@ -110,8 +109,7 @@ fn row_click_opens_the_edit_form_for_a_rename() {
     assert_eq!(h.form.selected_type.as_deref(), Some("PointLight"));
     assert!(h.row_menu.is_none());
     let name_field = world
-        .query::<TextInput>()
-        .find(|t| t.asset_id == form_panel::NAME_INPUT)
+        .get_by_id::<TextInput>(form_panel::NAME_INPUT)
         .unwrap();
     assert_eq!(name_field.content, "lamp", "name prefilled from the entry");
     // Rename and confirm: same entry, no new one.
@@ -1016,12 +1014,7 @@ fn a_hidden_assets_panel_hides_the_form_elements() {
     h.panel_open = true;
     let target = entry_target(&h, 0);
     h.open_form(&mut world, "PointLight".to_string(), target);
-    let form_shown = |w: &World| {
-        w.query::<Sprite>()
-            .find(|s| s.asset_id == form_panel::EDIT_BG)
-            .unwrap()
-            .visible
-    };
+    let form_shown = |w: &World| w.get_by_id::<Sprite>(form_panel::EDIT_BG).unwrap().visible;
     h.tick(&mut world);
     assert!(form_shown(&world), "form shown while the panel is open");
     // Toggle off: the form elements hide, but its state is retained.

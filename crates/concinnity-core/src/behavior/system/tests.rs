@@ -7,7 +7,6 @@
 // kept in. A host's own store (a file, say) covers the medium itself.
 
 use crate::ecs::Ref;
-use alloc::collections::BTreeMap;
 use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -282,9 +281,7 @@ fn distance_gates_a_condition() {
     }]);
     let near = spawn_prop(&mut world, [0.0; 3]);
     let far = spawn_prop(&mut world, [100.0, 0.0, 0.0]);
-    let mut index = BTreeMap::new();
-    index.insert(AssetId(7), far);
-    world.resources.insert(EntityByName(index));
+    world.ctx().identify(far, AssetId(7));
     let mut sys = system(&mut world);
 
     tick(&mut sys, &mut world, 0.016);
@@ -560,7 +557,6 @@ fn raycast_meets_a_querys_entity_and_never_the_caster() {
 #[test]
 fn an_edit_drops_a_deferral_of_the_body_it_replaced() {
     let deferring = |seconds: f32| Behavior {
-        asset_id: AssetId(1),
         on: BehaviorSource::Start,
         body: vec![BehaviorNode::After {
             seconds: BehaviorExpr::Float(seconds),
@@ -742,7 +738,6 @@ fn each_run_gets_back_exactly_the_effects_it_produced() {
     // on the other's instance.
     let mut world = world_with(vec![
         Behavior {
-            asset_id: AssetId(1),
             on: BehaviorSource::Tick,
             scope: vec!["Prop".into()],
             locals: vec![BehaviorLocal {
@@ -757,7 +752,6 @@ fn each_run_gets_back_exactly_the_effects_it_produced() {
             ..Default::default()
         },
         Behavior {
-            asset_id: AssetId(2),
             on: BehaviorSource::Tick,
             scope: vec!["Prop".into()],
             locals: vec![BehaviorLocal {
@@ -852,7 +846,6 @@ fn a_body_reads_positions_from_before_this_ticks_writes() {
     // two run in. Reads go straight to the world, and this is what makes that
     // safe.
     let mover = Behavior {
-        asset_id: AssetId(1),
         on: BehaviorSource::Tick,
         queries: vec![BehaviorQuery {
             name: "props".into(),
@@ -867,7 +860,6 @@ fn a_body_reads_positions_from_before_this_ticks_writes() {
         ..Default::default()
     };
     let reader = Behavior {
-        asset_id: AssetId(2),
         on: BehaviorSource::Tick,
         queries: vec![BehaviorQuery {
             name: "props".into(),
@@ -945,7 +937,6 @@ fn persisting_system(world: &mut TestWorld, store: &MemoryStore) -> BehaviorSyst
 
 fn counter_behavior() -> Behavior {
     Behavior {
-        asset_id: AssetId(1),
         body: vec![set_var("visits", 1, true), BehaviorNode::Save],
         once: true,
         ..Default::default()
@@ -1016,10 +1007,8 @@ fn enter_fires_on_matching_crossings_only() {
         body: vec![despawn_named(7)],
         ..Default::default()
     }]);
-    let mut index = BTreeMap::new();
     let entity = world.components.push_typed(PropInstance);
-    index.insert(AssetId(7), entity);
-    world.resources.insert(EntityByName(index));
+    world.ctx().identify(entity, AssetId(7));
     let mut sys = system(&mut world);
     let mut cursor = EventCursor::default();
 
@@ -1053,10 +1042,8 @@ fn crossings_survive_a_menu_pause() {
         body: vec![despawn_named(7)],
         ..Default::default()
     }]);
-    let mut index = BTreeMap::new();
     let entity = world.components.push_typed(PropInstance);
-    index.insert(AssetId(7), entity);
-    world.resources.insert(EntityByName(index));
+    world.ctx().identify(entity, AssetId(7));
     let mut sys = system(&mut world);
     let mut cursor = EventCursor::default();
 
@@ -1082,10 +1069,8 @@ fn interact_fires_on_matching_press_only() {
         body: vec![despawn_named(7)],
         ..Default::default()
     }]);
-    let mut index = BTreeMap::new();
     let entity = world.components.push_typed(PropInstance);
-    index.insert(AssetId(7), entity);
-    world.resources.insert(EntityByName(index));
+    world.ctx().identify(entity, AssetId(7));
     let mut sys = system(&mut world);
     let mut cursor = EventCursor::default();
 
@@ -1118,10 +1103,8 @@ fn show_and_hide_send_visibility_requests() {
         ],
         ..Default::default()
     }]);
-    let mut index = BTreeMap::new();
     let entity = world.components.push_typed(PropInstance);
-    index.insert(AssetId(3), entity);
-    world.resources.insert(EntityByName(index));
+    world.ctx().identify(entity, AssetId(3));
     let mut sys = system(&mut world);
 
     tick(&mut sys, &mut world, 0.016);
@@ -1193,7 +1176,6 @@ fn an_edited_behavior_loses_its_persisted_fired_flag() {
 
 fn branching_behavior() -> Behavior {
     Behavior {
-        asset_id: AssetId(7),
         body: vec![BehaviorNode::If {
             cond: BehaviorExpr::Bool(true),
             then: vec![set_var("n", 1, true)],
@@ -1225,7 +1207,7 @@ fn tracing_publishes_events_paths_and_values() {
     assert_eq!(trace.frame, 1);
     let ran = |node| {
         trace.events.contains(&TraceEvent {
-            behavior: AssetId(7),
+            behavior: AssetId(1),
             node,
         })
     };
@@ -1264,7 +1246,7 @@ fn a_breakpoint_reports_a_hit() {
     world.resources.insert(TraceRequest {
         entity: None,
         breakpoints: vec![TraceEvent {
-            behavior: AssetId(7),
+            behavior: AssetId(1),
             node: 1,
         }],
     });
@@ -1274,7 +1256,7 @@ fn a_breakpoint_reports_a_hit() {
     assert_eq!(
         trace.hit,
         Some(TraceEvent {
-            behavior: AssetId(7),
+            behavior: AssetId(1),
             node: 1,
         })
     );
@@ -1283,7 +1265,6 @@ fn a_breakpoint_reports_a_hit() {
 #[test]
 fn tracing_surfaces_the_requested_entitys_locals() {
     let scoped = Behavior {
-        asset_id: AssetId(9),
         on: BehaviorSource::Tick,
         scope: vec!["Prop".into()],
         locals: vec![BehaviorLocal {
@@ -1309,7 +1290,7 @@ fn tracing_surfaces_the_requested_entitys_locals() {
     let trace = world.resources.get::<ExecutionTrace>().unwrap();
     assert_eq!(
         trace.locals,
-        vec![(AssetId(9), "count".to_string(), TraceVal::Int(2))]
+        vec![(AssetId(1), "count".to_string(), TraceVal::Int(2))]
     );
 }
 
@@ -1376,7 +1357,6 @@ fn a_restored_variable_is_not_an_edge_for_variable_sources() {
     let mut world = world_with(vec![
         counter_behavior(),
         Behavior {
-            asset_id: AssetId(2),
             on: BehaviorSource::Variable("visits".into()),
             body: vec![set_var("echo", 1, true)],
             ..Default::default()
@@ -1390,7 +1370,6 @@ fn a_restored_variable_is_not_an_edge_for_variable_sources() {
     let mut world2 = world_with(vec![
         counter_behavior(),
         Behavior {
-            asset_id: AssetId(2),
             on: BehaviorSource::Variable("visits".into()),
             body: vec![set_var("echo", 1, true)],
             ..Default::default()
@@ -1445,7 +1424,6 @@ fn world_with_vars(behaviors: Vec<Behavior>, vars: Vec<(&str, BehaviorLiteral)>)
                 value,
             })
             .collect(),
-        ..Default::default()
     });
     world
 }
@@ -1534,7 +1512,6 @@ fn an_undeclared_variable_is_still_an_integer() {
 fn a_typed_variable_survives_a_save_and_restore() {
     let store = MemoryStore::default();
     let author = || Behavior {
-        asset_id: AssetId(1),
         on: BehaviorSource::Start,
         body: vec![
             BehaviorNode::Set {
@@ -1571,7 +1548,6 @@ fn a_typed_variable_survives_a_save_and_restore() {
 fn a_retyped_variable_ignores_its_stale_save() {
     let store = MemoryStore::default();
     let saver = Behavior {
-        asset_id: AssetId(1),
         on: BehaviorSource::Start,
         body: vec![
             BehaviorNode::Set {
@@ -1591,7 +1567,6 @@ fn a_retyped_variable_ignores_its_stale_save() {
     // the declared starting value stands.
     let mut world2 = world_with_vars(
         vec![Behavior {
-            asset_id: AssetId(1),
             body: vec![BehaviorNode::Save],
             ..Default::default()
         }],
@@ -1696,9 +1671,8 @@ fn step(sys: &mut BehaviorSystem, world: &mut TestWorld) {
     sys.step(&mut world.ctx());
 }
 
-fn counter(id: u32, var: &str, value: i32) -> Behavior {
+fn counter(var: &str, value: i32) -> Behavior {
     Behavior {
-        asset_id: AssetId(id),
         on: BehaviorSource::Tick,
         body: vec![set_var(var, value, false)],
         ..Default::default()
@@ -1713,19 +1687,19 @@ fn edit_behavior(world: &mut TestWorld, at: usize, def: Behavior) {
 
 #[test]
 fn an_edited_body_runs_without_a_reload() {
-    let mut world = world_with(vec![counter(1, "n", 1)]);
+    let mut world = world_with(vec![counter("n", 1)]);
     let mut sys = system(&mut world);
     step(&mut sys, &mut world);
     assert_eq!(var(&sys, "n"), 1);
 
-    edit_behavior(&mut world, 0, counter(1, "n", 9));
+    edit_behavior(&mut world, 0, counter("n", 9));
     step(&mut sys, &mut world);
     assert_eq!(var(&sys, "n"), 9, "the edited body is what ran");
 }
 
 #[test]
 fn an_untouched_column_never_recompiles() {
-    let mut world = world_with(vec![counter(1, "n", 1)]);
+    let mut world = world_with(vec![counter("n", 1)]);
     let mut sys = system(&mut world);
     step(&mut sys, &mut world);
     let before = sys.sources;
@@ -1739,19 +1713,18 @@ fn an_untouched_column_never_recompiles() {
 #[test]
 fn an_edit_leaves_another_behaviors_clocks_alone() {
     let once = Behavior {
-        asset_id: AssetId(1),
         on: BehaviorSource::Tick,
         once: true,
         body: vec![set_var("fired", 1, true)],
         ..Default::default()
     };
-    let mut world = world_with(vec![once, counter(2, "n", 1)]);
+    let mut world = world_with(vec![once, counter("n", 1)]);
     let mut sys = system(&mut world);
     step(&mut sys, &mut world);
     step(&mut sys, &mut world);
     assert_eq!(var(&sys, "fired"), 1, "`once` fired exactly once");
 
-    edit_behavior(&mut world, 1, counter(2, "n", 2));
+    edit_behavior(&mut world, 1, counter("n", 2));
     step(&mut sys, &mut world);
     assert_eq!(var(&sys, "fired"), 1, "and did not fire again");
     assert_eq!(var(&sys, "n"), 2, "while the edited one took effect");
@@ -1762,7 +1735,6 @@ fn an_edit_leaves_another_behaviors_clocks_alone() {
 #[test]
 fn the_edited_behavior_starts_fresh() {
     let body = |value| Behavior {
-        asset_id: AssetId(1),
         on: BehaviorSource::Tick,
         once: true,
         body: vec![set_var("n", value, true)],
@@ -1785,7 +1757,6 @@ fn the_edited_behavior_starts_fresh() {
 fn an_edited_declaration_reaches_a_running_world() {
     let mut world = world_with_vars(
         vec![Behavior {
-            asset_id: AssetId(1),
             on: BehaviorSource::Tick,
             body: vec![set_var("other", 1, false)],
             ..Default::default()
@@ -1801,7 +1772,6 @@ fn an_edited_declaration_reaches_a_running_world() {
             name: "score".to_string(),
             value: BehaviorLiteral::Int(12),
         }],
-        ..Default::default()
     };
     step(&mut sys, &mut world);
     assert_eq!(var(&sys, "score"), 12);
@@ -1813,7 +1783,6 @@ fn an_edited_declaration_reaches_a_running_world() {
 fn an_untouched_declaration_keeps_its_running_value() {
     let mut world = world_with_vars(
         vec![Behavior {
-            asset_id: AssetId(1),
             on: BehaviorSource::Tick,
             body: vec![set_var("score", 1, true)],
             ..Default::default()
@@ -1839,7 +1808,6 @@ fn an_untouched_declaration_keeps_its_running_value() {
                 value: BehaviorLiteral::Int(5),
             },
         ],
-        ..Default::default()
     };
     step(&mut sys, &mut world);
     assert_eq!(
@@ -1856,7 +1824,6 @@ fn an_untouched_declaration_keeps_its_running_value() {
 #[test]
 fn the_trace_path_table_is_republished_after_an_edit() {
     let one = Behavior {
-        asset_id: AssetId(1),
         on: BehaviorSource::Tick,
         body: vec![set_var("n", 1, false)],
         ..Default::default()
@@ -1885,15 +1852,14 @@ fn the_trace_path_table_is_republished_after_an_edit() {
 // follows its program to wherever the new list holds it.
 #[test]
 fn a_pending_run_follows_its_program_or_goes_with_it() {
-    let delayed = |id, var| Behavior {
-        asset_id: AssetId(id),
+    let delayed = |var| Behavior {
         on: BehaviorSource::Tick,
         once: true,
         delay: 1.0,
         body: vec![set_var(var, 1, true)],
         ..Default::default()
     };
-    let mut world = world_with(vec![delayed(1, "gone"), delayed(2, "kept")]);
+    let mut world = world_with(vec![delayed("gone"), delayed("kept")]);
     let mut sys = system(&mut world);
     step(&mut sys, &mut world);
     assert_eq!(
@@ -1902,7 +1868,7 @@ fn a_pending_run_follows_its_program_or_goes_with_it() {
         "both firings are waiting out their delay"
     );
 
-    edit_behavior(&mut world, 0, delayed(1, "edited"));
+    edit_behavior(&mut world, 0, delayed("edited"));
     step(&mut sys, &mut world);
     assert_eq!(
         sys.pending.iter().map(|p| p.program).collect::<Vec<_>>(),
@@ -1916,10 +1882,10 @@ fn a_pending_run_follows_its_program_or_goes_with_it() {
 // was built with.
 #[test]
 fn a_frozen_world_adopts_an_edit_before_it_resumes() {
-    let mut world = world_with(vec![counter(1, "n", 1)]);
+    let mut world = world_with(vec![counter("n", 1)]);
     let mut sys = system(&mut world);
     world.resources.insert(MenuActive(true));
-    edit_behavior(&mut world, 0, counter(1, "n", 9));
+    edit_behavior(&mut world, 0, counter("n", 9));
     step(&mut sys, &mut world);
     assert_eq!(var(&sys, "n"), 0, "a frozen world still fires nothing");
 

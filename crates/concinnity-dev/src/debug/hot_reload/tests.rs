@@ -2482,7 +2482,6 @@ fn apply_effects_splices_the_matching_skeleton_pose_only() {
 fn apply_effects_sends_a_story_reload_event() {
     let mut world = World::new();
     let story = Story {
-        asset_id: Default::default(),
         title: "Tale".to_string(),
         nodes: Vec::new(),
         text_speed: 0.0,

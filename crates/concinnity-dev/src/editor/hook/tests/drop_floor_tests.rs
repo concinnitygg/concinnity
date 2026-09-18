@@ -35,10 +35,8 @@ fn drop_to_floor_lands_the_selection_on_the_surface_below() {
         rotation_deg: [0.0; 3],
         scale: [1.0; 3],
     });
-    let mut by_name = std::collections::BTreeMap::new();
-    by_name.insert(a, box_e);
-    by_name.insert(lamp_id, lamp_e);
-    world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
+    world.identify(box_e, a);
+    world.identify(lamp_e, lamp_id);
 
     let mut h = hook(vec![
         serde_json::json!({

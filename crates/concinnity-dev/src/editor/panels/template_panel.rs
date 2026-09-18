@@ -337,15 +337,13 @@ mod tests {
 
     fn sprite(world: &World, id: AssetId) -> Sprite {
         world
-            .query::<Sprite>()
-            .find(|s| s.asset_id == id)
+            .get_by_id::<Sprite>(id)
             .cloned()
             .expect("sprite present")
     }
     fn label(world: &World, id: AssetId) -> TextLabel {
         world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == id)
+            .get_by_id::<TextLabel>(id)
             .cloned()
             .expect("label present")
     }

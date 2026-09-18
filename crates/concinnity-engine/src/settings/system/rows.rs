@@ -4,7 +4,7 @@
 // SettingsState it resolves.
 
 use concinnity_core::components::{
-    HitRegion, ScrollPanel, SettingVerb, Sprite, TextLabel, UiAction, WindowMode,
+    HitRegion, Identity, ScrollPanel, SettingVerb, Sprite, TextLabel, UiAction, WindowMode,
 };
 use concinnity_core::ecs::PipelineContext;
 use concinnity_core::ecs::asset_id::AssetId;
@@ -51,12 +51,7 @@ pub(crate) fn set_rows_grayed(
 ) {
     for &(id, orig) in rows {
         let color = if grayed { DISABLED_ROW_COLOR } else { orig };
-        for l in ctx.query_mut::<TextLabel>() {
-            if l.asset_id == id {
-                l.color = color;
-                break;
-            }
-        }
+        crate::ecs::by_asset_id::update::<TextLabel>(ctx, Some(id), |l| l.color = color);
     }
 }
 
@@ -91,9 +86,9 @@ pub(crate) fn capture_row_labels(
         })
         .collect();
     let dim = expand_dim_set(&anchors, &rows);
-    ctx.query::<TextLabel>()
-        .filter(|l| dim.contains(&l.asset_id))
-        .map(|l| (l.asset_id, l.color))
+    ctx.join2::<TextLabel, Identity>()
+        .filter(|(_, _, identity)| dim.contains(&identity.id()))
+        .map(|(_, l, identity)| (identity.id(), l.color))
         .collect()
 }
 
@@ -135,10 +130,6 @@ impl SettingsState {
         ctx: &mut PipelineContext,
         persisted: &crate::config::Settings,
     ) {
-        let sprite_w: std::collections::HashMap<AssetId, f32> = ctx
-            .query::<Sprite>()
-            .map(|s| (s.asset_id, s.width))
-            .collect();
         let mut sliders: Vec<SliderViz> = Vec::new();
         for r in ctx.query::<HitRegion>() {
             let Some(UiAction::Setting {
@@ -151,7 +142,9 @@ impl SettingsState {
             let (Some(handle_id), Some(value_id)) = (r.drag_handle, r.label) else {
                 continue;
             };
-            let handle_w = sprite_w.get(&handle_id.id()).copied().unwrap_or(0.0);
+            let handle_w = ctx
+                .get_by_id::<Sprite>(handle_id.id())
+                .map_or(0.0, |s| s.width);
             sliders.push(SliderViz {
                 key,
                 track_x: r.x,
@@ -348,6 +341,10 @@ mod tests {
             self.components.push_typed(c);
         }
 
+        fn push_identified<C: ComponentSlot>(&mut self, id: AssetId, c: C) {
+            self.ctx().push_identified(id, c);
+        }
+
         fn ctx(&mut self) -> PipelineContext<'_> {
             PipelineContext {
                 components: &mut self.components,
@@ -359,9 +356,8 @@ mod tests {
         }
     }
 
-    fn label(id: u32, color: [f32; 3]) -> TextLabel {
+    fn label(color: [f32; 3]) -> TextLabel {
         TextLabel {
-            asset_id: AssetId(id),
             color,
             ..Default::default()
         }
@@ -380,8 +376,8 @@ mod tests {
     #[test]
     fn set_label_content_writes_only_the_matching_label() {
         let mut world = TestWorld::new();
-        world.push(label(1, [1.0; 3]));
-        world.push(label(2, [1.0; 3]));
+        world.push_identified(AssetId(1), label([1.0; 3]));
+        world.push_identified(AssetId(2), label([1.0; 3]));
         let mut ctx = world.ctx();
 
         set_label_content(&mut ctx, AssetId(2), "High");
@@ -404,16 +400,20 @@ mod tests {
     #[test]
     fn set_sprite_x_moves_only_the_matching_sprite() {
         let mut world = TestWorld::new();
-        world.push(Sprite {
-            asset_id: AssetId(1),
-            x: 0.0,
-            ..Default::default()
-        });
-        world.push(Sprite {
-            asset_id: AssetId(2),
-            x: 0.0,
-            ..Default::default()
-        });
+        world.push_identified(
+            AssetId(1),
+            Sprite {
+                x: 0.0,
+                ..Default::default()
+            },
+        );
+        world.push_identified(
+            AssetId(2),
+            Sprite {
+                x: 0.0,
+                ..Default::default()
+            },
+        );
         let mut ctx = world.ctx();
 
         set_sprite_x(&mut ctx, AssetId(2), 42.0);
@@ -436,8 +436,8 @@ mod tests {
     fn set_rows_grayed_grays_then_restores_authored_colors() {
         let authored = [[0.9, 0.9, 0.9], [0.2, 0.6, 1.0]];
         let mut world = TestWorld::new();
-        world.push(label(1, authored[0]));
-        world.push(label(2, authored[1]));
+        world.push_identified(AssetId(1), label(authored[0]));
+        world.push_identified(AssetId(2), label(authored[1]));
         let rows = [(AssetId(1), authored[0]), (AssetId(2), authored[1])];
         let mut ctx = world.ctx();
 
@@ -463,7 +463,7 @@ mod tests {
     fn capture_row_labels_returns_a_matching_rows_labels_and_colors() {
         let mut world = TestWorld::new();
         for id in [1, 2, 3, 4, 5, 20] {
-            world.push(label(id, [id as f32 / 100.0; 3]));
+            world.push_identified(AssetId(id), label([id as f32 / 100.0; 3]));
         }
         world.push(region("setting:shadow_map_size:next", Some(3)));
         world.push(region("setting:vsync:next", Some(20)));
@@ -503,7 +503,7 @@ mod tests {
     #[test]
     fn capture_row_labels_without_a_matching_key_captures_nothing() {
         let mut world = TestWorld::new();
-        world.push(label(1, [1.0; 3]));
+        world.push_identified(AssetId(1), label([1.0; 3]));
         world.push(region("setting:shadow_map_size:next", Some(1)));
         let mut ctx = world.ctx();
 
@@ -517,7 +517,7 @@ mod tests {
         let authored = [0.8, 0.8, 0.8];
         for (perf_stats, expected) in [(false, DISABLED_ROW_COLOR), (true, authored)] {
             let mut world = TestWorld::new();
-            world.push(label(1, authored));
+            world.push_identified(AssetId(1), label(authored));
             world.push(region("setting:show_fps:next", Some(1)));
             let mut state = SettingsState::for_tests();
             state.perf_stats = perf_stats;
@@ -539,7 +539,7 @@ mod tests {
             (WindowMode::Fullscreen, authored),
         ] {
             let mut world = TestWorld::new();
-            world.push(label(1, authored));
+            world.push_identified(AssetId(1), label(authored));
             world.push(region("setting:resolution:next", Some(1)));
             let mut state = SettingsState::for_tests();
             state.window_args.mode = mode;

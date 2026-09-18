@@ -219,22 +219,13 @@ mod tests {
     fn world_with_elements() -> World {
         let mut world = World::new();
         for id in all_sprite_ids() {
-            world.add_component(Sprite {
-                asset_id: id,
-                ..Default::default()
-            });
+            world.push_identified(id, Sprite::default());
         }
         for id in all_label_ids() {
-            world.add_component(TextLabel {
-                asset_id: id,
-                ..Default::default()
-            });
+            world.push_identified(id, TextLabel::default());
         }
         for id in all_field_ids() {
-            world.add_component(TextInput {
-                asset_id: id,
-                ..Default::default()
-            });
+            world.push_identified(id, TextInput::default());
         }
         world
     }
@@ -256,19 +247,11 @@ mod tests {
     }
 
     fn sprite(world: &World, id: AssetId) -> Sprite {
-        world
-            .query::<Sprite>()
-            .find(|s| s.asset_id == id)
-            .cloned()
-            .unwrap()
+        world.get_by_id::<Sprite>(id).cloned().unwrap()
     }
 
     fn label(world: &World, id: AssetId) -> TextLabel {
-        world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == id)
-            .cloned()
-            .unwrap()
+        world.get_by_id::<TextLabel>(id).cloned().unwrap()
     }
 
     #[test]
@@ -449,11 +432,7 @@ mod tests {
             true,
             [0.0, 0.0],
         );
-        let field = world
-            .query::<TextInput>()
-            .find(|t| t.asset_id == NAME_INPUT)
-            .cloned()
-            .unwrap();
+        let field = world.get_by_id::<TextInput>(NAME_INPUT).cloned().unwrap();
         assert!(field.visible && field.focused);
         let p = panel_rect(VP, true);
         let m = label(&world, MESSAGE);

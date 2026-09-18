@@ -4,6 +4,7 @@ use concinnity_core::components::{
     Decal, GlassPanel, ParticleEmitter, SdfVolume, VolumetricFog, WaterSurface,
 };
 use concinnity_core::ecs::PipelineContext;
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::render::backend_init::{SdfVolumeSource, WorldFx};
 use concinnity_core::render::{decal, particles, volumetric_fog};
 use concinnity_host::thread::asset_id;
@@ -41,11 +42,12 @@ pub(super) fn drain_world_fx(ctx: &mut PipelineContext, texture_count: usize) ->
 // no payload, or one whose payload cannot be read, is skipped with a warning
 // rather than failing the world build.
 pub(super) fn drain_sdf_volumes(ctx: &mut PipelineContext) -> Vec<SdfVolumeSource> {
-    let raw: Vec<SdfVolume> = ctx.drain::<SdfVolume>();
+    let raw: Vec<(Option<AssetId>, SdfVolume)> = ctx.drain_with_ids::<SdfVolume>();
     let mut out = Vec::with_capacity(raw.len());
-    for volume in raw {
-        let label = asset_id::name_of(volume.asset_id)
-            .unwrap_or_else(|| format!("sdf_volume_{}", volume.asset_id.0));
+    for (i, (id, volume)) in raw.into_iter().enumerate() {
+        let label = id
+            .and_then(asset_id::name_of)
+            .unwrap_or_else(|| format!("sdf_volume_{i}"));
         let Some(locator) = volume.locator.clone() else {
             tracing::warn!(
                 "SdfVolume '{}': no payload locator (fragment shader never compiled); skipping",

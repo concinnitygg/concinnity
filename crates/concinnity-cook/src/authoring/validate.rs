@@ -345,11 +345,9 @@ mod tests {
     mod instanced_prop {
         use super::*;
         use concinnity_core::components::InstanceTransform;
-        use concinnity_core::ecs::asset_id::AssetId;
 
         fn empty() -> InstancedProp {
             InstancedProp {
-                asset_id: AssetId::default(),
                 mesh: None,
                 material: None,
                 instances: Vec::new(),

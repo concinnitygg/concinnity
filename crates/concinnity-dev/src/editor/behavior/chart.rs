@@ -518,19 +518,11 @@ mod tests {
     const BAND: [f32; 4] = [100.0, 200.0, 600.0, 300.0];
 
     fn label(world: &World, id: AssetId) -> TextLabel {
-        world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == id)
-            .cloned()
-            .unwrap()
+        world.get_by_id::<TextLabel>(id).cloned().unwrap()
     }
 
     fn sprite(world: &World, id: AssetId) -> Sprite {
-        world
-            .query::<Sprite>()
-            .find(|s| s.asset_id == id)
-            .cloned()
-            .unwrap()
+        world.get_by_id::<Sprite>(id).cloned().unwrap()
     }
 
     #[test]

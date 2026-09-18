@@ -2,7 +2,6 @@
 
 use crate::components::Prop;
 use crate::components::{vocabulary, vocabulary_synonyms};
-use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Ref, de_opt_ref};
 
 /// The constraint shape a `PhysicsJoint` declares.
@@ -95,9 +94,6 @@ impl PhysicsJointKind {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct PhysicsJoint {
-    /// Asset identity; injected via `inject_name`. Not part of `args`.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// Constraint shape; defaults to `fixed`. See [PhysicsJointKind].
     pub kind: PhysicsJointKind,
     /// First body: a [Prop](#prop) name. Required.
@@ -129,7 +125,6 @@ pub struct PhysicsJoint {
 impl Default for PhysicsJoint {
     fn default() -> Self {
         Self {
-            asset_id: AssetId::default(),
             kind: PhysicsJointKind::Fixed,
             body_a: None,
             body_b: None,
@@ -235,7 +230,5 @@ mod tests {
         assert_eq!(back.kind, PhysicsJointKind::Revolute);
         assert_eq!(back.limits, [-90.0, 0.0]);
         assert_eq!(back.motor_max_force, 12.5);
-        // `asset_id` is injected, never authored, so it does not ride the wire.
-        assert_eq!(back.asset_id, crate::ecs::asset_id::AssetId::default());
     }
 }

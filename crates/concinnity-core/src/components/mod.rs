@@ -130,6 +130,7 @@ mod collider;
 mod global_transform;
 mod held;
 mod hidden;
+mod identity;
 mod interactable;
 mod mesh_renderer;
 mod model_renderer;
@@ -328,6 +329,7 @@ pub use collider::Collider;
 pub use global_transform::GlobalTransform;
 pub use held::Held;
 pub use hidden::Hidden;
+pub use identity::Identity;
 pub use interactable::Interactable;
 pub use mesh_renderer::MeshRenderer;
 pub use model_renderer::ModelRenderer;
@@ -366,16 +368,14 @@ mod tests {
     // source_path branches, and cross-reference declarations. Kept in one place
     // because the checks are identical in shape across many one-file components.
     use super::*;
-    use crate::ecs::asset_id::AssetId;
     use crate::ecs::{Component, PayloadLocator};
 
     // Round-trip an asset's defaults through its baked form and the Component
     // hooks. One call executes the type's Default, serialization, `from_baked`,
-    // `inject_name`, `inject_locator`, and the frame-exactness check.
+    // `inject_locator`, and the frame-exactness check.
     fn exercise<C: Component + Default + serde::Serialize>() {
         let bytes = postcard::to_allocvec(&C::default()).expect("default serializes");
         let mut comp = C::from_baked(&bytes).expect("baked bytes deserialize");
-        comp.inject_name(AssetId::default());
         comp.inject_locator(PayloadLocator {
             blob_index: 0,
             offset: 0,

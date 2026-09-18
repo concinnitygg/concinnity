@@ -34,12 +34,9 @@ pub(super) fn plan(
     if !is_expressible(ct, keys) || !lighting_preview::is_available(world) {
         return None;
     }
-    let id = asset_id::intern(name);
-    match component::bake(ct, id, args).ok()? {
+    match component::bake(ct, args).ok()? {
         ComponentAsset::DirectionalLight(light) => {
-            let entity = world
-                .resource::<concinnity_core::ecs::EntityByName>()?
-                .get(id)?;
+            let entity = world.entity_of(asset_id::lookup(name)?)?;
             Some(Apply::Sun { entity, light })
         }
         ComponentAsset::VolumetricFog(fog) => {

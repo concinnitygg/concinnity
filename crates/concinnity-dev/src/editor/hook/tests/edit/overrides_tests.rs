@@ -669,10 +669,7 @@ fn unapplied_markers_follow_edit_and_apply() {
     // Story: a changed line marks on commit; loading clears.
     h.story.lines = vec!["hello".to_string()];
     h.story.line = 0;
-    world.add_component(TextInput {
-        asset_id: story_panel::LINE_INPUT,
-        ..Default::default()
-    });
+    world.push_identified(story_panel::LINE_INPUT, TextInput::default());
     set_field(&mut world, story_panel::LINE_INPUT, "hello edited");
     h.commit_story_line(&world);
     assert!(h.story.touched, "a changed line marks the story");

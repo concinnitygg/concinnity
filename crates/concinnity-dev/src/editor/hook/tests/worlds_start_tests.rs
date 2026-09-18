@@ -138,22 +138,15 @@ fn the_loading_cover_takes_the_render_and_leaves_the_listing() {
     h.viewport = VP;
     let mut world = World::new();
     for id in worlds::loading::all_sprite_ids() {
-        world.add_component(Sprite {
-            asset_id: id,
-            ..Default::default()
-        });
+        world.push_identified(id, Sprite::default());
     }
     for id in worlds::loading::all_label_ids() {
-        world.add_component(TextLabel {
-            asset_id: id,
-            ..Default::default()
-        });
+        world.push_identified(id, TextLabel::default());
     }
     h.drive_loading_draw(&mut world, true);
 
     let cover = world
-        .query::<Sprite>()
-        .find(|s| s.asset_id == worlds::loading::COVER)
+        .get_by_id::<Sprite>(worlds::loading::COVER)
         .expect("the cover");
     assert!(cover.visible);
     let sidebar = h.worlds_layout().size()[0];
@@ -161,8 +154,7 @@ fn the_loading_cover_takes_the_render_and_leaves_the_listing() {
     assert_eq!(cover.width, VP[0] - sidebar);
     assert_eq!(cover.height, VP[1], "and runs the window's full height");
     let caption = world
-        .query::<TextLabel>()
-        .find(|l| l.asset_id == worlds::loading::CAPTION)
+        .get_by_id::<TextLabel>(worlds::loading::CAPTION)
         .expect("the caption");
     assert_eq!(caption.content, "Loading lobby", "naming what is compiling");
 
@@ -181,8 +173,7 @@ fn the_loading_cover_takes_the_render_and_leaves_the_listing() {
     h.drive_loading_draw(&mut world, true);
     assert!(
         !world
-            .query::<Sprite>()
-            .find(|s| s.asset_id == worlds::loading::COVER)
+            .get_by_id::<Sprite>(worlds::loading::COVER)
             .unwrap()
             .visible
     );

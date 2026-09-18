@@ -14,7 +14,6 @@ use concinnity_core::ecs::FontHandle;
 use concinnity_core::input::snapshot::InputSnapshot;
 use concinnity_core::render::backend::{FrameParams, RenderBackend};
 use concinnity_core::render::backend_init::BackendInit;
-use concinnity_core::render::overlay_maps;
 use concinnity_core::render::text::{FontSet, build_text_calls};
 
 // The single atlas slot the embedded face occupies: this screen uploads it
@@ -85,13 +84,7 @@ fn run_loop(backend: &mut dyn RenderBackend, message: &str, fonts: &FontSet) {
 
         let (win_w, win_h) = backend.logical_size();
         let screen = layout::build(message, win_w, win_h, fonts, FONT_HANDLE, hovered);
-        let text_calls = build_text_calls(
-            &screen.labels,
-            fonts,
-            [win_w, win_h],
-            &overlay_maps::ClipRects::new(),
-            &overlay_maps::OverlayLayers::new(),
-        );
+        let text_calls = build_text_calls(&screen.labels, fonts, [win_w, win_h]);
 
         backend.update_view(IDENTITY_VIEW);
         // Metal pumps its window events inside `draw_frame`, so the draw comes

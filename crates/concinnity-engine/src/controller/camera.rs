@@ -72,13 +72,12 @@ impl Camera3DSystem {
 impl System for Camera3DSystem {
     fn access(&self) -> Access {
         Access::new()
-            .reads_components(crate::component_mask![FrameInput])
-            .writes_components(crate::component_mask![Camera3D, Transform])
-            .reads_resources(crate::resource_mask![
-                concinnity_core::ecs::EntityByName,
-                ControlsCommand,
-                FrameTime,
+            .reads_components(crate::component_mask![
+                FrameInput,
+                concinnity_core::components::Identity
             ])
+            .writes_components(crate::component_mask![Camera3D, Transform])
+            .reads_resources(crate::resource_mask![ControlsCommand, FrameTime,])
             .writes_resources(crate::resource_mask![InteractEvent])
     }
 
@@ -288,12 +287,8 @@ impl System for Camera3DSystem {
                 // sources); an unnamed entity has no addressable identity to
                 // announce.
                 let target = ctx
-                    .resource::<concinnity_core::ecs::EntityByName>()
-                    .and_then(|n| {
-                        n.0.iter()
-                            .find(|(_, e)| **e == entity)
-                            .map(|(&name, _)| name)
-                    });
+                    .get::<concinnity_core::components::Identity>(entity)
+                    .map(|identity| identity.id());
                 if let Some(target) = target {
                     ctx.events_mut::<InteractEvent>()
                         .send(InteractEvent { target });
@@ -454,12 +449,14 @@ mod tests {
 
         let mut world = World::new();
         world.add_component(camera(Some(CameraController::default())));
-        world.add_component(Screen {
-            asset_id: AssetId(50),
-            initial: false,
-            fade_in_secs: 0.0,
-            ..Default::default()
-        });
+        world.push_identified(
+            AssetId(50),
+            Screen {
+                initial: false,
+                fade_in_secs: 0.0,
+                ..Default::default()
+            },
+        );
         world.add_component(KeyBinding {
             key: "Escape".to_string(),
             action: Some(concinnity_core::components::UiAction::Screen(
@@ -502,12 +499,14 @@ mod tests {
             ..CameraController::default()
         };
         world.add_component(camera(Some(ctrl)));
-        world.add_component(Prop {
-            asset_id: AssetId(1),
-            position: [0.0, 0.0, -2.0],
-            interactable: true,
-            ..Default::default()
-        });
+        world.push_identified(
+            AssetId(1),
+            Prop {
+                position: [0.0, 0.0, -2.0],
+                interactable: true,
+                ..Default::default()
+            },
+        );
         world
     }
 

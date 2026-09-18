@@ -209,17 +209,13 @@ mod tests {
 
     fn label_of(world: &World, id: AssetId) -> String {
         world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == id)
+            .get_by_id::<TextLabel>(id)
             .map(|l| l.content.clone())
             .unwrap_or_default()
     }
 
     fn sprite_visible(world: &World, id: AssetId) -> bool {
-        world
-            .query::<Sprite>()
-            .find(|s| s.asset_id == id)
-            .is_some_and(|s| s.visible)
+        world.get_by_id::<Sprite>(id).is_some_and(|s| s.visible)
     }
 
     // The draw labels every row from `rows()`: mode rows read as plain

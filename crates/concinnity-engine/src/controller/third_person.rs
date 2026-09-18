@@ -583,18 +583,20 @@ mod tests {
         world.add_component(PhysicsConfig::default());
         // A wall crossing the camera's line at z = +2 (the camera orbits to
         // z = +4 at yaw 0, the pivot sits at z = 0).
-        world.add_component(Prop {
-            asset_id: intern("wall"),
-            position: [0.0, 1.5, 2.0],
-            collider: Some(PropCollider {
-                shape: concinnity_core::components::PropColliderShape::Cuboid,
-                half_extents: [3.0, 1.5, 0.2],
-                radius: 0.0,
-                half_height: 0.0,
-                layer: String::new(),
-            }),
-            ..Default::default()
-        });
+        world.push_identified(
+            intern("wall"),
+            Prop {
+                position: [0.0, 1.5, 2.0],
+                collider: Some(PropCollider {
+                    shape: concinnity_core::components::PropColliderShape::Cuboid,
+                    half_extents: [3.0, 1.5, 0.2],
+                    radius: 0.0,
+                    half_height: 0.0,
+                    layer: String::new(),
+                }),
+                ..Default::default()
+            },
+        );
         world.start(SYSTEMS).unwrap();
         step_held(&mut world, FrameInput::default(), 6);
 

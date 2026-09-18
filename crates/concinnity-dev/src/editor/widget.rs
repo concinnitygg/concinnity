@@ -218,16 +218,16 @@ pub(crate) fn clamp_origin(
 // `None` if it was not injected -- a caller then simply no-ops, which is how a
 // hidden / absent element is handled.
 pub(crate) fn sprite_mut(world: &mut World, id: AssetId) -> Option<&mut Sprite> {
-    world.query_mut::<Sprite>().find(|s| s.asset_id == id)
+    world.get_mut_by_id::<Sprite>(id)
 }
 pub(crate) fn label_mut(world: &mut World, id: AssetId) -> Option<&mut TextLabel> {
-    world.query_mut::<TextLabel>().find(|l| l.asset_id == id)
+    world.get_mut_by_id::<TextLabel>(id)
 }
 pub(crate) fn input_mut(world: &mut World, id: AssetId) -> Option<&mut TextInput> {
-    world.query_mut::<TextInput>().find(|t| t.asset_id == id)
+    world.get_mut_by_id::<TextInput>(id)
 }
 pub(crate) fn input(world: &World, id: AssetId) -> Option<&TextInput> {
-    world.query::<TextInput>().find(|t| t.asset_id == id)
+    world.get_by_id::<TextInput>(id)
 }
 
 // Move + resize the Sprite with `id` to `rect` ([x, y, w, h]), set its tint +
@@ -388,18 +388,9 @@ mod tests {
     fn world_with(ids: &[AssetId]) -> World {
         let mut world = World::new();
         for &id in ids {
-            world.add_component(Sprite {
-                asset_id: id,
-                ..Default::default()
-            });
-            world.add_component(TextLabel {
-                asset_id: id,
-                ..Default::default()
-            });
-            world.add_component(TextInput {
-                asset_id: id,
-                ..Default::default()
-            });
+            let element = world.push_identified(id, Sprite::default());
+            world.insert(element, TextLabel::default());
+            world.insert(element, TextInput::default());
         }
         world
     }
@@ -408,10 +399,7 @@ mod tests {
     fn place_message_bounds_text_to_the_box_that_holds_it() {
         let mut world = World::new();
         let id = AssetId(1);
-        world.add_component(TextLabel {
-            asset_id: id,
-            ..Default::default()
-        });
+        world.push_identified(id, TextLabel::default());
         // Two lines tall, so a long message wraps once and then stops.
         place_message(
             &mut world,
@@ -421,10 +409,7 @@ mod tests {
             [1.0; 3],
             true,
         );
-        let l = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == id)
-            .unwrap();
+        let l = world.get_by_id::<TextLabel>(id).unwrap();
         assert_eq!((l.x, l.y), (10.0, 20.0));
         assert_eq!(l.wrap_width, 300.0);
         assert_eq!(l.max_lines, 2);
@@ -465,10 +450,7 @@ mod tests {
             [1.0, 0.0, 0.0, 1.0],
             true,
         );
-        let s = world
-            .query::<Sprite>()
-            .find(|s| s.asset_id == AssetId(1))
-            .unwrap();
+        let s = world.get_by_id::<Sprite>(AssetId(1)).unwrap();
         assert_eq!((s.x, s.y, s.width, s.height), (5.0, 6.0, 7.0, 8.0));
         assert_eq!(s.tint, [1.0, 0.0, 0.0, 1.0]);
         assert!(s.visible);
@@ -490,10 +472,7 @@ mod tests {
     fn place_panel_draws_a_rounded_chrome_surface() {
         let mut world = world_with(&[AssetId(1)]);
         place_panel(&mut world, AssetId(1), [40.0, 60.0, 320.0, 400.0]);
-        let bg = world
-            .query::<Sprite>()
-            .find(|s| s.asset_id == AssetId(1))
-            .unwrap();
+        let bg = world.get_by_id::<Sprite>(AssetId(1)).unwrap();
         assert!(bg.visible);
         assert_eq!(
             (bg.x, bg.y, bg.width, bg.height),
@@ -514,10 +493,7 @@ mod tests {
             [40.0, 60.0, 320.0, TITLE_H],
             "Assets",
         );
-        let l = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == AssetId(2))
-            .unwrap();
+        let l = world.get_by_id::<TextLabel>(AssetId(2)).unwrap();
         assert!(l.visible);
         assert_eq!(l.content, "Assets");
         assert_eq!(l.align, TextAlign::Left);
@@ -540,17 +516,9 @@ mod tests {
         );
         // Not hovered: no background at all (the panel surface shows through).
         place_close(&mut world, AssetId(1), AssetId(2), title, false);
-        let bg = |w: &World| {
-            w.query::<Sprite>()
-                .find(|s| s.asset_id == AssetId(1))
-                .cloned()
-                .unwrap()
-        };
+        let bg = |w: &World| w.get_by_id::<Sprite>(AssetId(1)).cloned().unwrap();
         assert!(!bg(&world).visible, "no square while idle");
-        let glyph = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == AssetId(2))
-            .unwrap();
+        let glyph = world.get_by_id::<TextLabel>(AssetId(2)).unwrap();
         assert!(
             glyph.visible && glyph.content == "X",
             "the X glyph always shows"

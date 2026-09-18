@@ -1,7 +1,6 @@
 // Projected-decal schema.
 
 use crate::ecs::TextureHandle;
-use crate::ecs::asset_id::AssetId;
 use crate::ecs::de_opt_texture_handle;
 
 /// A projected texture stamped onto whatever scene geometry sits inside the
@@ -32,9 +31,6 @@ use crate::ecs::de_opt_texture_handle;
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct Decal {
-    /// Asset identity; injected via `inject_name`. Not part of `args`.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// The [Texture](#texture) asset projected onto the scene.
     #[serde(deserialize_with = "de_opt_texture_handle")]
     pub texture: Option<TextureHandle>,
@@ -57,7 +53,6 @@ pub struct Decal {
 impl Default for Decal {
     fn default() -> Self {
         Self {
-            asset_id: AssetId::default(),
             texture: None,
             position: [0.0, 0.0, 0.0],
             rotation_deg: [0.0, 0.0, 0.0],
@@ -100,6 +95,5 @@ mod tests {
         assert_eq!(back.position, [3.0, 1.6, -2.0]);
         assert_eq!(back.size, [0.4, 0.2, 0.4]);
         assert_eq!(back.tint, [1.0, 1.0, 1.0, 0.5]);
-        assert_eq!(back.asset_id, AssetId::default());
     }
 }

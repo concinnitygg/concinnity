@@ -19,7 +19,6 @@ use concinnity_cook::authoring::world::WorldJsonlAsset;
 use concinnity_core::blob::BlobAssetDef;
 use concinnity_core::ecs::ComponentAsset;
 use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_host::thread::asset_id;
 use serde_json::{Map, Value};
 
@@ -38,10 +37,8 @@ pub(super) fn plan(
         return None;
     }
     let id = asset_id::lookup(name)?;
-    let entity = world
-        .resource::<concinnity_core::ecs::EntityByName>()?
-        .get(id)?;
-    let asset = bake(ct, id, args).ok()?;
+    let entity = world.entity_of(id)?;
+    let asset = bake(ct, args).ok()?;
     Some(Apply::Component {
         entity,
         asset: Box::new(asset),
@@ -73,7 +70,6 @@ fn names(ct: RegisteredType, name: &str, args: &Map<String, Value>) -> Vec<Strin
 // args schema (which is the component).
 pub(super) fn bake(
     ct: RegisteredType,
-    id: AssetId,
     args: &Map<String, Value>,
 ) -> Result<ComponentAsset, Box<dyn std::error::Error + Send + Sync>> {
     let value = Value::Object(args.clone());
@@ -82,7 +78,7 @@ pub(super) fn bake(
         None => ct.reserialize_args(&value)?,
     };
     let def = BlobAssetDef {
-        name: Some(id),
+        name: None,
         discriminant: ct
             .discriminant()
             .ok_or(AuthoringError::NotAComponent { asset: ct.as_str() })?,
@@ -106,21 +102,15 @@ mod tests {
     fn world_with(ct: RegisteredType, name: &str) -> World {
         let mut world = World::new();
         let id = asset_id::intern(name);
-        let entity = world.add(bake(ct, id, &Map::new()).expect("default args bake"));
-        let mut by_name = std::collections::BTreeMap::new();
-        by_name.insert(id, entity);
-        world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
+        world.add(bake(ct, &Map::new()).expect("default args bake"), Some(id));
         world
     }
 
-    // A live type bakes to the component its args describe, under the edited
-    // asset's own identity.
+    // A live type bakes to the component its args describe.
     #[test]
     fn a_live_type_bakes_its_component() {
-        let id = asset_id::intern("hud_dot");
         let asset = bake(
             RegisteredType::Sprite,
-            id,
             &args(json!({ "width": 8.0, "height": 4.0 })),
         )
         .expect("Sprite args bake");
@@ -128,17 +118,14 @@ mod tests {
             panic!("baked the wrong variant");
         };
         assert_eq!((sprite.width, sprite.height), (8.0, 4.0));
-        assert_eq!(sprite.asset_id, id, "the asset keeps its identity");
     }
 
     // A type whose authored schema diverges from its component routes through
     // the same `bake` translation the cook uses.
     #[test]
     fn a_divergent_type_bakes_through_its_translation() {
-        let id = asset_id::intern("cam");
         let asset = bake(
             RegisteredType::Camera3D,
-            id,
             &args(json!({ "position": [0.0, 2.0, 5.0] })),
         )
         .expect("Camera3D args bake");

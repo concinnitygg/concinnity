@@ -159,17 +159,11 @@ impl Runtime {
         // The manifest's per-type counts size each column once up front, so
         // the bulk load below never reallocates mid-push.
         world.reserve_components(&manifest.component_counts);
-        // Index every named component's entity as it is minted, so name
-        // references resolve for any type (the decompose pass merges the
-        // Prop-derived entries into this same map).
-        let mut by_name = std::collections::BTreeMap::new();
-        for (name, asset) in assets {
-            let entity = world.add(asset);
-            if let Some(id) = name {
-                by_name.insert(id, entity);
-            }
+        // Every entity is identified as it is minted, so any asset id resolves
+        // to its entity through `EntityById`.
+        for (id, asset) in assets {
+            world.add(asset, id);
         }
-        world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
         world.insert_resource(crate::ecs::BlobSceneGroups(scene_groups));
         world.insert_resource(crate::ecs::BlobMeshBounds(mesh_bounds));
         // Absent for a world with no physics content, which is also a world

@@ -38,16 +38,18 @@ pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
 
 // The injected pool: invisible until the tick places them, transparent fill,
 // accent border rings.
-pub(crate) fn outline_sprites() -> Vec<Sprite> {
+pub(crate) fn outline_sprites() -> Vec<(AssetId, Sprite)> {
     all_sprite_ids()
         .into_iter()
-        .map(|id| Sprite {
-            asset_id: id,
-            tint: [0.0, 0.0, 0.0, 0.0],
-            border_width: BORDER_W,
-            border_color: theme::ACCENT_TINT,
-            visible: false,
-            ..Default::default()
+        .map(|id| {
+            let ring = Sprite {
+                tint: [0.0, 0.0, 0.0, 0.0],
+                border_width: BORDER_W,
+                border_color: theme::ACCENT_TINT,
+                visible: false,
+                ..Default::default()
+            };
+            (id, ring)
         })
         .collect()
 }
@@ -156,7 +158,7 @@ pub(crate) fn hide(world: &mut World) {
 }
 
 fn sprite_mut(world: &mut World, id: AssetId) -> Option<&mut Sprite> {
-    world.query_mut::<Sprite>().find(|s| s.asset_id == id)
+    world.get_mut_by_id::<Sprite>(id)
 }
 
 #[cfg(test)]

@@ -47,12 +47,14 @@ pub(super) fn inject(ctx: &mut PipelineContext, minter: &mut Minter) -> Result<(
             }
         })?;
     let mesh = append_mesh(ctx, mesh_id, payload);
-    ctx.push(ProceduralMesh {
-        asset_id: mesh_id,
-        generator: "skybox".to_string(),
-        size: Some(size),
-        ..Default::default()
-    });
+    ctx.push_identified(
+        mesh_id,
+        ProceduralMesh {
+            generator: "skybox".to_string(),
+            size: Some(size),
+            ..Default::default()
+        },
+    );
 
     let material = append_material(
         ctx,
@@ -64,12 +66,14 @@ pub(super) fn inject(ctx: &mut PipelineContext, minter: &mut Minter) -> Result<(
         },
     );
 
-    ctx.push(Prop {
-        asset_id: minter.id()?,
-        mesh: Some(mesh),
-        material: Some(material),
-        position: [0.0, 0.0, 0.0],
-        ..Default::default()
-    });
+    ctx.push_identified(
+        minter.id()?,
+        Prop {
+            mesh: Some(mesh),
+            material: Some(material),
+            position: [0.0, 0.0, 0.0],
+            ..Default::default()
+        },
+    );
     Ok(())
 }

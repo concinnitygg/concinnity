@@ -69,14 +69,8 @@ mod tests {
 
     fn injected_world() -> World {
         let mut world = World::new();
-        world.add_component(Sprite {
-            asset_id: COVER,
-            ..Default::default()
-        });
-        world.add_component(TextLabel {
-            asset_id: CAPTION,
-            ..Default::default()
-        });
+        world.push_identified(COVER, Sprite::default());
+        world.push_identified(CAPTION, TextLabel::default());
         world
     }
 

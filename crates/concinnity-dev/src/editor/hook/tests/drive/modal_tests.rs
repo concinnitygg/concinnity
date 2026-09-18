@@ -183,16 +183,10 @@ fn draw_shows_while_open_and_hides_otherwise() {
     let mut h = hook();
     let mut world = World::new();
     for id in modal::all_sprite_ids() {
-        world.add_component(Sprite {
-            asset_id: id,
-            ..Default::default()
-        });
+        world.push_identified(id, Sprite::default());
     }
     for id in modal::all_label_ids() {
-        world.add_component(TextLabel {
-            asset_id: id,
-            ..Default::default()
-        });
+        world.push_identified(id, TextLabel::default());
     }
     h.drive_modal_draw(&mut world, VP, true, [0.0, 0.0]);
     assert!(

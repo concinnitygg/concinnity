@@ -160,10 +160,7 @@ impl SettingsState {
             .iter()
             .find(|s| s.key == cmd.setting)
             .and_then(|s| {
-                let hx = ctx
-                    .query::<Sprite>()
-                    .find(|sp| sp.asset_id == s.handle_id)
-                    .map(|sp| sp.x)?;
+                let hx = ctx.get_by_id::<Sprite>(s.handle_id).map(|sp| sp.x)?;
                 let travel = (s.track_w - s.handle_w).max(f32::EPSILON);
                 Some(((hx - s.track_x) / travel).clamp(0.0, 1.0))
             })

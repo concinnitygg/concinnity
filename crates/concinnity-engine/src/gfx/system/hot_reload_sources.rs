@@ -6,6 +6,7 @@
 //! out of the library. `init` fills these maps and parks them as one
 //! `HotReloadSources` world resource, which the dev drive takes once.
 
+use concinnity_core::components::Identity;
 use concinnity_core::components::ProceduralMesh;
 use concinnity_core::components::ShaderStage;
 use concinnity_core::ecs::PipelineContext;
@@ -388,8 +389,11 @@ impl HotReloadSources {
 pub(super) fn procedural_mesh_snapshot(
     ctx: &PipelineContext,
 ) -> HashMap<AssetId, (String, ProceduralMesh)> {
-    ctx.query::<ProceduralMesh>()
-        .filter_map(|pm| Some((pm.asset_id, (asset_id::name_of(pm.asset_id)?, pm.clone()))))
+    ctx.join2::<ProceduralMesh, Identity>()
+        .filter_map(|(_, pm, identity)| {
+            let id = identity.id();
+            Some((id, (asset_id::name_of(id)?, pm.clone())))
+        })
         .collect()
 }
 

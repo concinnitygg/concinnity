@@ -1097,7 +1097,8 @@ impl GraphicsSystem {
         streaming: bool,
         capture_sources: bool,
     ) -> Option<DecodedShaders> {
-        let world_shaders = ctx.drain::<Shader>();
+        let (shader_ids, world_shaders): (Vec<Option<AssetId>>, Vec<Shader>) =
+            ctx.drain_with_ids::<Shader>().into_iter().unzip();
         if world_shaders.is_empty() {
             return Some(DecodedShaders {
                 locators: Vec::new(),
@@ -1110,7 +1111,6 @@ impl GraphicsSystem {
         // pipeline build here; the streaming pump warms them when that scene
         // pins. The backend sees them flagged `deferred` and leaves the bucket's
         // pipeline unbuilt.
-        let shader_ids: Vec<AssetId> = world_shaders.iter().map(|s| s.asset_id).collect();
         self.deferred_shader_scenes =
             super::streaming::deferred_shader_buckets(ctx, streaming, &shader_ids)
                 .into_iter()
@@ -1621,9 +1621,9 @@ impl GraphicsSystem {
         // the runtime can resolve the VoxelWorld palette to chunk-mesh data.
         let voxel_world = ctx.drain::<VoxelWorld>().into_iter().next();
         let block_types: std::collections::HashMap<AssetId, BlockType> = ctx
-            .drain::<BlockType>()
+            .drain_with_ids::<BlockType>()
             .into_iter()
-            .map(|bt| (bt.asset_id, bt))
+            .filter_map(|(id, bt)| Some((id?, bt)))
             .collect();
 
         // Whether the blob payloads came from files on disk (`cn run`) rather
@@ -1657,9 +1657,11 @@ impl GraphicsSystem {
         let (skinned_geometry, skinned_blob_indices) = self.decode_skinned_geometry(ctx)?;
 
         // drain Model components into a name-keyed map for Prop lookup
-        let models = ctx.drain::<Model>();
-        let model_map: std::collections::HashMap<AssetId, Vec<SubMeshRef>> =
-            models.into_iter().map(|m| (m.asset_id, m.meshes)).collect();
+        let model_map: std::collections::HashMap<AssetId, Vec<SubMeshRef>> = ctx
+            .drain_with_ids::<Model>()
+            .into_iter()
+            .filter_map(|(id, m)| Some((id?, m.meshes)))
+            .collect();
 
         // decode Room payloads before shaders/textures are read; all payloads
         // live in the same blob and must be consumed before it is released
@@ -1974,12 +1976,7 @@ fn sync_setting_value_labels(
             continue;
         };
         if let Some(text) = opts.get(idx).copied() {
-            for l in ctx.query_mut::<TextLabel>() {
-                if l.asset_id == label_id {
-                    l.content = text.to_string();
-                    break;
-                }
-            }
+            crate::ecs::by_asset_id::set_text(ctx, label_id, text);
         }
     }
 }
@@ -1993,11 +1990,6 @@ fn set_setting_row_label(ctx: &mut PipelineContext, key: SettingKey, text: &str)
         _ => None,
     });
     if let Some(id) = label_id {
-        for l in ctx.query_mut::<TextLabel>() {
-            if l.asset_id == id.id() {
-                l.content = text.to_string();
-                break;
-            }
-        }
+        crate::ecs::by_asset_id::set_text(ctx, id.id(), text);
     }
 }

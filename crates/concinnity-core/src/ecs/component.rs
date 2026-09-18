@@ -6,7 +6,6 @@
 //! the build-side registry in concinnity-cook, derived from the
 //! `for_each_component!` metadata blocks in [`crate::ecs::registry`].
 
-use crate::ecs::asset_id::AssetId;
 use crate::ecs::{ComponentAsset, PayloadLocator};
 use crate::error::AssetError;
 
@@ -75,11 +74,6 @@ pub trait Component: Sized + Send + core::fmt::Debug + 'static {
     /// Only meaningful for components with a compiled payload.
     /// The default implementation does nothing (correct for most components).
     fn inject_locator(&mut self, _locator: PayloadLocator) {}
-
-    /// Called after construction to inject the asset's identity from the blob
-    /// def. Only meaningful for components that look themselves up by id at
-    /// runtime. The default implementation does nothing.
-    fn inject_name(&mut self, _id: AssetId) {}
 }
 
 /// Decode a component from its baked blob record, naming the component in the

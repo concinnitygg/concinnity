@@ -47,11 +47,9 @@ fn gizmo_drag_moves_the_prop_and_commits_one_undo_step() {
         rotation_deg: [0.0; 3],
         scale: [1.0; 3],
     });
-    let mut by_name = std::collections::BTreeMap::new();
-    by_name.insert(id, entity);
-    world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
-    for s in gizmo::sprites() {
-        world.add_component(s);
+    world.identify(entity, id);
+    for (id, s) in gizmo::sprites() {
+        world.push_identified(id, s);
     }
 
     let mut h = hook(vec![serde_json::json!({
@@ -118,7 +116,7 @@ fn gizmo_drag_moves_the_prop_and_commits_one_undo_step() {
 
 // Shared rig for the rotate / scale drag tests: a prop down-left of the
 // camera axis (panel-free screen region), its live Transform entity, and the
-// EntityByName map the gizmo resolves through.
+// `EntityById` index the gizmo resolves through.
 fn gizmo_rig(start: [f32; 3]) -> (World, Entity, EditorHook) {
     asset_id::reset_interner();
     let id = asset_id::intern("box_near");
@@ -135,11 +133,9 @@ fn gizmo_rig(start: [f32; 3]) -> (World, Entity, EditorHook) {
         rotation_deg: [0.0; 3],
         scale: [1.0; 3],
     });
-    let mut by_name = std::collections::BTreeMap::new();
-    by_name.insert(id, entity);
-    world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
-    for s in gizmo::sprites() {
-        world.add_component(s);
+    world.identify(entity, id);
+    for (id, s) in gizmo::sprites() {
+        world.push_identified(id, s);
     }
     let h = hook(vec![serde_json::json!({
         "type": "Prop", "args": { "$id": "box_near", "position": start }
@@ -507,11 +503,9 @@ fn gizmo_drag_moves_a_skinned_mesh_and_commits_its_position() {
         rotation_deg: [0.0; 3],
         scale: [1.0; 3],
     });
-    let mut by_name = std::collections::BTreeMap::new();
-    by_name.insert(id, entity);
-    world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
-    for s in gizmo::sprites() {
-        world.add_component(s);
+    world.identify(entity, id);
+    for (id, s) in gizmo::sprites() {
+        world.push_identified(id, s);
     }
     let mut h = hook(vec![serde_json::json!({
         "type": "SkinnedMesh",

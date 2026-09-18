@@ -28,9 +28,7 @@ pub(super) fn plan(
         return None;
     }
     let id = asset_id::lookup(name)?;
-    let entity = world
-        .resource::<concinnity_core::ecs::EntityByName>()?
-        .get(id)?;
+    let entity = world.entity_of(id)?;
     let mut transform = *world.get::<Transform>(entity)?;
     for key in keys {
         let value = vec3(args.get(key))?;
@@ -65,9 +63,7 @@ mod tests {
     fn world_with(name: &str, transform: Transform) -> World {
         let mut world = World::new();
         let entity = world.push(transform);
-        let mut by_name = std::collections::BTreeMap::new();
-        by_name.insert(asset_id::intern(name), entity);
-        world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
+        world.identify(entity, asset_id::intern(name));
         world
     }
 

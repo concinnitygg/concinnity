@@ -1,7 +1,5 @@
 // Voxel-chunk block-palette entry schema.
 
-use crate::ecs::asset_id::AssetId;
-
 /// Describes one entry in a [VoxelChunk](#voxelchunk) palette.
 ///
 /// Each BlockType represents either a solid block (with UVs into the chunk's atlas texture)
@@ -21,11 +19,6 @@ use crate::ecs::asset_id::AssetId;
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct BlockType {
-    /// Asset identity; injected via `inject_name`. Not part of `args`. Lets the
-    /// runtime resolve a `VoxelWorld` palette (a list of `BlockType` ids) back
-    /// to the block data the chunk generator needs.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// When false the block is treated as air -- no faces are emitted for it
     /// and it does not occlude neighboring faces.
     pub solid: bool,
@@ -44,7 +37,6 @@ pub struct BlockType {
 impl Default for BlockType {
     fn default() -> Self {
         Self {
-            asset_id: AssetId::default(),
             solid: true,
             uv_min: [0.0, 0.0],
             uv_max: [1.0, 1.0],
@@ -90,6 +82,5 @@ mod tests {
         assert_eq!(back.uv_top, Some([0.0, 0.0, 0.25, 0.25]));
         assert_eq!(back.uv_bottom, None);
         assert!(!back.solid);
-        assert_eq!(back.asset_id, AssetId::default());
     }
 }

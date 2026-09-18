@@ -24,17 +24,15 @@ use crate::editor::viewport::billboards;
 fn selected_trigger_volume_publishes_its_line_outline() {
     asset_id::reset_interner();
     let mut world = pick_world([0.0; 3], Vec::new());
-    for s in billboards::sprites() {
-        world.add_component(s);
+    for (id, s) in billboards::sprites() {
+        world.push_identified(id, s);
     }
     let entity = world.push(TriggerVolume {
         position: [0.0, 0.0, -6.0],
         ..Default::default()
     });
     let id = asset_id::intern("zone");
-    let mut by_name = std::collections::BTreeMap::new();
-    by_name.insert(id, entity);
-    world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
+    world.identify(entity, id);
     let mut h = hook(vec![serde_json::json!({
         "type": "TriggerVolume",
         "args": {"$id": "zone", "position": [0.0, 0.0, -6.0]}
@@ -54,8 +52,8 @@ fn selected_trigger_volume_publishes_its_line_outline() {
     let icons = billboards::MAX_BILLBOARDS;
     assert!(
         world
-            .query::<Sprite>()
-            .filter(|s| s.visible && ids.contains(&s.asset_id))
+            .join2::<Sprite, concinnity_core::components::Identity>()
+            .filter(|(_, s, identity)| s.visible && ids.contains(&identity.id()))
             .count()
             <= icons,
         "no dotted outline segments show; only the icon chips do"

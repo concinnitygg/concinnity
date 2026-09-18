@@ -109,9 +109,8 @@ fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
 
     let payload_sections: Vec<Option<Vec<u8>>> = result.payloads.into_iter().map(Some).collect();
     let mut world = concinnity_engine::blob::world_from(BlobData::new(payload_sections));
-    // Index every named component's entity as it is minted, matching the
-    // shipped runtime's `load_blob`, so name references resolve for any type.
-    let mut by_name = std::collections::BTreeMap::new();
+    // Identify every entity as it is minted, matching the shipped runtime's
+    // `load_blob`, so any asset id resolves to its entity.
     for def in &result.defs {
         let mut component = ComponentAsset::from_baked(def).map_err(|e| {
             std::io::Error::new(
@@ -122,12 +121,8 @@ fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
         if let Some(locator) = &def.payload {
             component.inject_locator(locator.clone());
         }
-        let entity = world.add(component);
-        if let Some(id) = def.name {
-            by_name.insert(id, entity);
-        }
+        world.add(component, def.name);
     }
-    world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
     // Load the compiled resource stream into its per-kind tables, exactly as the
     // shipped runtime's `load_blob` does, so the in-memory `cn debug` world reads
     // audio clips and textures by handle too.
@@ -383,15 +378,18 @@ mod tests {
         let loaded = prepare("{\"type\":\"PhysicsConfig\",\"args\":{\"$id\":\"phys\"}}\n").unwrap();
         let expanded = loaded.assets.len();
         let world = world_from_loaded(loaded).unwrap();
-        // Every expanded asset landed as a component; nothing was dropped on
-        // the way through compile + assembly.
-        assert_eq!(world.component_count(), expanded);
-        // Every named component's entity is indexed, so name references
-        // resolve for any type, not just decomposed Props.
+        // Every expanded asset landed as a component on an entity of its own,
+        // identified so its id resolves to it; nothing was dropped on the way
+        // through compile + assembly.
+        let identified = world
+            .query::<concinnity_core::components::Identity>()
+            .count();
+        assert_eq!(identified, expanded);
+        assert_eq!(world.component_count(), 2 * expanded);
         let index = world
-            .resource::<concinnity_core::ecs::EntityByName>()
-            .expect("assembly publishes the name -> entity index");
-        assert_eq!(index.0.len(), expanded);
+            .resource::<concinnity_core::ecs::EntityById>()
+            .expect("assembly identifies every entity");
+        assert_eq!(index.len(), expanded);
     }
 
     #[test]

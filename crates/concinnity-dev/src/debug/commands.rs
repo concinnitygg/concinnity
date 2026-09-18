@@ -1906,21 +1906,20 @@ mod tests {
     // can drain. Drive a real system built from a small world while the
     // handler blocks, exactly as the per-frame debug drive would.
 
-    fn anim_clip(name: &str, duration: f32) -> Animation {
+    fn anim_clip(name: &str, duration: f32) -> (AssetId, Animation) {
         asset_id::ensure_name_resolver();
-        let mut a: Animation = serde_json::from_value(serde_json::json!({
+        let a: Animation = serde_json::from_value(serde_json::json!({
             "target": "hero",
             "duration": duration,
             "looping": true,
         }))
         .unwrap();
-        a.asset_id = asset_id::intern(name);
-        a
+        (asset_id::intern(name), a)
     }
 
-    fn hero_graph() -> AnimationGraph {
+    fn hero_graph() -> (AssetId, AnimationGraph) {
         asset_id::ensure_name_resolver();
-        let mut g: AnimationGraph = serde_json::from_value(serde_json::json!({
+        let g: AnimationGraph = serde_json::from_value(serde_json::json!({
             "target": "hero",
             "parameters": [{"name": "speed", "default": 0.0}],
             "initial": "idle",
@@ -1936,23 +1935,26 @@ mod tests {
             ]
         }))
         .unwrap();
-        g.asset_id = asset_id::intern("hero_graph");
-        g
+        (asset_id::intern("hero_graph"), g)
+    }
+
+    fn add<C: concinnity_core::ecs::ComponentSlot>(world: &mut World, (id, c): (AssetId, C)) {
+        world.push_identified(id, c);
     }
 
     fn graph_world() -> World {
         let mut world = World::new();
-        world.add_component(anim_clip("idle_clip", 1.0));
-        world.add_component(anim_clip("run_clip", 0.8));
-        world.add_component(hero_graph());
+        add(&mut world, anim_clip("idle_clip", 1.0));
+        add(&mut world, anim_clip("run_clip", 0.8));
+        add(&mut world, hero_graph());
         world.start(concinnity_engine::ecs::SYSTEMS).unwrap();
         world
     }
 
     fn flat_world() -> World {
         let mut world = World::new();
-        world.add_component(anim_clip("wave_clip", 1.0));
-        world.add_component(anim_clip("bow_clip", 0.5));
+        add(&mut world, anim_clip("wave_clip", 1.0));
+        add(&mut world, anim_clip("bow_clip", 0.5));
         world.start(concinnity_engine::ecs::SYSTEMS).unwrap();
         world
     }

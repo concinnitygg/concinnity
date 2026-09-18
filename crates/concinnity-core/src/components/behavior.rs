@@ -8,7 +8,6 @@ use alloc::vec::Vec;
 use crate::components::StoryPlayback;
 use crate::components::{Scene, Screen, TriggerVolume};
 use crate::ecs::AudioClipHandle;
-use crate::ecs::asset_id::AssetId;
 use crate::ecs::de_opt_audio_clip_handle;
 use crate::ecs::{AnyAsset, Ref, de_opt_ref};
 
@@ -31,9 +30,6 @@ use crate::ecs::{AnyAsset, Ref, de_opt_ref};
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct Behavior {
-    /// Asset identity; injected via `inject_name`. Not part of `args`.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// The event that fires this behavior.
     pub on: BehaviorSource,
     /// Component names selecting the entities this behavior runs against. An

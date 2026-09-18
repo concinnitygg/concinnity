@@ -13,6 +13,7 @@ use alloc::vec::Vec;
 use crate::behavior::program::{CExpr, CNode, COp, Program, VarTable};
 use crate::behavior::value::{Arith, Cmp, Val};
 use crate::components::{Behavior, BehaviorExpr, BehaviorNode, BehaviorSource};
+use crate::ecs::asset_id::AssetId;
 use crate::ecs::{ComponentTag, TracePath, TraceStep};
 
 // Compile-time name scope, mirroring the world crate's checker.
@@ -61,9 +62,9 @@ fn surviving_tag(name: &str) -> Option<u8> {
         .map(|t| t as u8)
 }
 
-/// Compile one authored behavior against the world's shared variable table,
+/// Compile the behavior asset `id` against the world's shared variable table,
 /// interning any variable name it mentions that no `Variables` asset declared.
-pub fn compile(def: Behavior, vars: &mut VarTable) -> Program {
+pub fn compile(id: Option<AssetId>, def: Behavior, vars: &mut VarTable) -> Program {
     let scope: Vec<u8> = def.scope.iter().filter_map(|c| surviving_tag(c)).collect();
     let local_names: Vec<String> = def.locals.iter().map(|l| l.name.clone()).collect();
     let local_inits: Vec<Val> = def
@@ -101,6 +102,7 @@ pub fn compile(def: Behavior, vars: &mut VarTable) -> Program {
     let bindings = names.peak;
 
     Program {
+        id,
         def,
         scope,
         local_inits,
@@ -398,7 +400,7 @@ mod tests {
     }
 
     fn compiled(body: Vec<BehaviorNode>) -> Program {
-        compile(behavior(body), &mut VarTable::default())
+        compile(None, behavior(body), &mut VarTable::default())
     }
 
     // The single compiled op a one-node body produces.

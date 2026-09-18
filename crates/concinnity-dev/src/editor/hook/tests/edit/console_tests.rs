@@ -23,10 +23,7 @@ use std::sync::atomic::Ordering;
 fn console_world() -> World {
     let mut world = World::new();
     for id in console_panel::all_field_ids() {
-        world.add_component(TextInput {
-            asset_id: id,
-            ..Default::default()
-        });
+        world.push_identified(id, TextInput::default());
     }
     world
 }
@@ -494,12 +491,14 @@ fn backtick_toggles_the_console_with_a_one_frame_blur() {
 fn console_ghost_completes_del_names_and_tab_accepts() {
     let mut h = hook(vec![entry("cube_red", "Prop")]);
     let mut world = World::new();
-    world.add_component(TextInput {
-        asset_id: console_panel::INPUT,
-        content: "/del cu".to_string(),
-        caret: 7,
-        ..Default::default()
-    });
+    world.push_identified(
+        console_panel::INPUT,
+        TextInput {
+            content: "/del cu".to_string(),
+            caret: 7,
+            ..Default::default()
+        },
+    );
 
     assert_eq!(h.console_ghost(&world), "be_red");
     h.console.focus = true;
@@ -528,24 +527,15 @@ fn tick_opens_the_console_blurred_then_focuses() {
         viewport: [1280.0, 720.0],
         ..Default::default()
     });
-    world.add_component(TextInput {
-        asset_id: console_panel::INPUT,
-        ..Default::default()
-    });
+    world.push_identified(console_panel::INPUT, TextInput::default());
     for id in console_panel::all_label_ids() {
-        world.add_component(TextLabel {
-            asset_id: id,
-            ..Default::default()
-        });
+        world.push_identified(id, TextLabel::default());
     }
     let mut h = hook(Vec::new());
 
     h.tick(&mut world);
     assert!(h.console.open);
-    let input = world
-        .query::<TextInput>()
-        .find(|t| t.asset_id == console_panel::INPUT)
-        .unwrap();
+    let input = world.get_by_id::<TextInput>(console_panel::INPUT).unwrap();
     assert!(
         input.visible && !input.focused,
         "the opening frame leaves the field blurred"
@@ -556,9 +546,6 @@ fn tick_opens_the_console_blurred_then_focuses() {
         i.captured_key = None;
     }
     h.tick(&mut world);
-    let input = world
-        .query::<TextInput>()
-        .find(|t| t.asset_id == console_panel::INPUT)
-        .unwrap();
+    let input = world.get_by_id::<TextInput>(console_panel::INPUT).unwrap();
     assert!(input.visible && input.focused);
 }

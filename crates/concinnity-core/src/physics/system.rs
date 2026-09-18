@@ -13,13 +13,13 @@ use crate::physics::{
 };
 
 use crate::components::{
-    BodyDynamics, Camera3D, Collider, ContactEvent, Held, PhysicsConfig, PhysicsJoint, Pickup,
-    RigidBody, Transform, TriggerFilter, TriggerVolume, VolumeEvent,
+    BodyDynamics, Camera3D, Collider, ContactEvent, Held, Identity, PhysicsConfig, PhysicsJoint,
+    Pickup, RigidBody, Transform, TriggerFilter, TriggerVolume, VolumeEvent,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{
-    Entity, EntityByName, EventCursor, MenuActive, PipelineContext, Ref, ScheduleMode, SimTiming,
-    StepResult, System, WorldPhysicsBudget,
+    Entity, EventCursor, MenuActive, PipelineContext, Ref, ScheduleMode, SimTiming, StepResult,
+    System, WorldPhysicsBudget,
 };
 use crate::math::{cos, sin, sqrt};
 
@@ -238,7 +238,7 @@ impl PhysicsSystem {
 
     // Build one body per collider-bearing entity from its per-instance
     // components (Transform + Collider + optional BodyDynamics + the Pickup
-    // tag), keying `body_handles` by AssetId (via the name index's inverse)
+    // tag), keying `body_handles` by each entity's asset identity
     // so the joint wiring resolves.
     fn build_prop_bodies(
         &mut self,
@@ -246,10 +246,6 @@ impl PhysicsSystem {
         world: &mut Simulation,
         body_handles: &mut BTreeMap<AssetId, BodyHandle>,
     ) {
-        let entity_name: BTreeMap<Entity, AssetId> = ctx
-            .resource::<EntityByName>()
-            .map(|n| n.0.iter().map(|(&id, &e)| (e, id)).collect())
-            .unwrap_or_default();
         let pickup: BTreeSet<Entity> = ctx.query_with_entity::<Pickup>().map(|(e, _)| e).collect();
         let dynamics: BTreeMap<Entity, BodyDynamics> = ctx
             .query_with_entity::<BodyDynamics>()
@@ -276,8 +272,8 @@ impl PhysicsSystem {
             let Some(handle) = self.props.add(&self.layers, world, entity, snap) else {
                 continue;
             };
-            if let Some(&id) = entity_name.get(&entity) {
-                body_handles.insert(id, handle);
+            if let Some(identity) = ctx.get::<Identity>(entity) {
+                body_handles.insert(identity.id(), handle);
             }
         }
     }
@@ -315,8 +311,7 @@ impl System for PhysicsSystem {
         let mut floor_built = false;
         if let Some(mesh_id) = self.terrain_mesh {
             let mesh_snap = ctx
-                .query::<crate::components::ProceduralMesh>()
-                .find(|m| m.asset_id == mesh_id)
+                .get_by_id::<crate::components::ProceduralMesh>(mesh_id)
                 .cloned();
             // Anything else (missing asset, wrong generator, a collider that
             // fails to build) leaves `floor_built` false and falls through to
@@ -355,10 +350,13 @@ impl System for PhysicsSystem {
         // Sensor regions: one fixed sensor body per TriggerVolume, tagged with
         // the volume's AssetId so step's crossing drain maps back to it.
         let trigger_mask = self.layers.mask(LAYER_TRIGGER);
-        let volumes: Vec<TriggerVolume> = ctx.query::<TriggerVolume>().cloned().collect();
-        for volume in &volumes {
+        let volumes: Vec<(AssetId, TriggerVolume)> = ctx
+            .join2::<TriggerVolume, Identity>()
+            .map(|(_, volume, identity)| (identity.id(), volume.clone()))
+            .collect();
+        for (id, volume) in &volumes {
             let shape = collider_shape(&volume.collider, [1.0; 3]);
-            let tag = u64::from(volume.asset_id.0);
+            let tag = u64::from(id.0);
             if world
                 .add_sensor(
                     &shape,
@@ -371,8 +369,7 @@ impl System for PhysicsSystem {
             {
                 continue;
             }
-            self.sensor_filters
-                .insert(tag, (volume.asset_id, volume.detects));
+            self.sensor_filters.insert(tag, (*id, volume.detects));
         }
 
         // Prop name -> BodyHandle, populated alongside `self.prop_bodies`.
@@ -1444,17 +1441,19 @@ mod tests {
     fn a_trigger_volume_reports_a_prop_crossing_it() {
         let volume_id = AssetId(9);
         let mut world = TestWorld::new();
-        world.components.push_typed(TriggerVolume {
-            asset_id: volume_id,
-            position: [0.0, 3.0, 0.0],
-            rotation_deg: [0.0; 3],
-            collider: PropCollider {
-                shape: crate::components::PropColliderShape::Cuboid,
-                half_extents: [1.0, 0.5, 1.0],
-                ..Default::default()
+        world.ctx().push_identified(
+            volume_id,
+            TriggerVolume {
+                position: [0.0, 3.0, 0.0],
+                rotation_deg: [0.0; 3],
+                collider: PropCollider {
+                    shape: crate::components::PropColliderShape::Cuboid,
+                    half_extents: [1.0, 0.5, 1.0],
+                    ..Default::default()
+                },
+                detects: TriggerFilter::Props,
             },
-            detects: TriggerFilter::Props,
-        });
+        );
         let ball = world.spawn_prop(AssetId(1), [0.0, 6.0, 0.0], false);
         make_dynamic(&mut world, ball);
 
@@ -1486,7 +1485,6 @@ mod tests {
         let bob = world.spawn_prop(bob_id, [1.0, 4.0, 0.0], false);
         make_dynamic(&mut world, bob);
         world.components.push_typed(PhysicsJoint {
-            asset_id: AssetId(2),
             kind: crate::components::PhysicsJointKind::Spherical,
             body_a: Some(Ref::new(bob_id)),
             body_b: None,
@@ -1604,7 +1602,6 @@ mod tests {
             (
                 "wrong generator",
                 Some(ProceduralMesh {
-                    asset_id: AssetId(7),
                     generator: "box".to_string(),
                     ..ProceduralMesh::default()
                 }),
@@ -1612,7 +1609,6 @@ mod tests {
             (
                 "unreadable payload",
                 Some(ProceduralMesh {
-                    asset_id: AssetId(7),
                     generator: "heightfield".to_string(),
                     ..ProceduralMesh::default()
                 }),
@@ -1622,7 +1618,7 @@ mod tests {
         for (what, mesh) in cases {
             let mut world = TestWorld::new();
             if let Some(mesh) = mesh {
-                world.components.push_typed(mesh);
+                world.ctx().push_identified(AssetId(7), mesh);
             }
             let mut config = terrain_config();
             config.terrain_mesh = Some(Ref::new(AssetId(7)));
@@ -1723,17 +1719,19 @@ mod tests {
     fn crossings_through(detects: TriggerFilter, steps: usize) -> Vec<VolumeEvent> {
         let volume_id = AssetId(9);
         let mut world = TestWorld::new();
-        world.components.push_typed(TriggerVolume {
-            asset_id: volume_id,
-            position: [0.0, 3.0, 0.0],
-            rotation_deg: [0.0; 3],
-            collider: PropCollider {
-                shape: crate::components::PropColliderShape::Cuboid,
-                half_extents: [1.0, 0.5, 1.0],
-                ..Default::default()
+        world.ctx().push_identified(
+            volume_id,
+            TriggerVolume {
+                position: [0.0, 3.0, 0.0],
+                rotation_deg: [0.0; 3],
+                collider: PropCollider {
+                    shape: crate::components::PropColliderShape::Cuboid,
+                    half_extents: [1.0, 0.5, 1.0],
+                    ..Default::default()
+                },
+                detects,
             },
-            detects,
-        });
+        );
         let ball = world.spawn_prop(AssetId(1), [0.0, 6.0, 0.0], false);
         make_dynamic(&mut world, ball);
 

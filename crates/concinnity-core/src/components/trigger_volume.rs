@@ -2,7 +2,6 @@
 
 use crate::components::PropCollider;
 use crate::components::vocabulary;
-use crate::ecs::asset_id::AssetId;
 
 /// An invisible sensor region that reports when something enters or leaves it.
 ///
@@ -23,9 +22,6 @@ use crate::ecs::asset_id::AssetId;
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct TriggerVolume {
-    /// Asset identity; injected via `inject_name`. Not part of `args`.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// World-space position of the volume's center.
     pub position: [f32; 3],
     /// Euler rotation of the volume in degrees.

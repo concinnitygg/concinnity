@@ -305,9 +305,6 @@ pub struct AnimationTransition {
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct AnimationGraph {
-    /// Asset identity; injected via `inject_name`. Not part of `args`.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// The [SkinnedMesh](#skinnedmesh) asset this graph animates.
     #[serde(deserialize_with = "de_opt_skinned_mesh_handle")]
     pub target: Option<SkinnedMeshHandle>,
@@ -336,9 +333,8 @@ impl AnimationGraph {
         &self,
         resolve_clip: impl Fn(AssetId) -> Option<(usize, f32, bool)>,
     ) -> Result<CompiledGraph, String> {
-        let ctx = |detail: String| format!("AnimationGraph {}: {detail}", self.asset_id);
         if self.states.is_empty() {
-            return Err(ctx("graph has no states".into()));
+            return Err(String::from("graph has no states"));
         }
 
         let params: Vec<ParamSpec> = self
@@ -355,16 +351,16 @@ impl AnimationGraph {
         let mut states: Vec<CompiledState> = Vec::with_capacity(self.states.len());
         for s in &self.states {
             if s.rate <= 0.0 {
-                return Err(ctx(format!("state '{}': rate must be positive", s.name)));
+                return Err(format!("state '{}': rate must be positive", s.name));
             }
             // The member resolver: an Animation reference -> a ClipPlay,
             // shared by the single-clip and blendspace arms.
             let play_for = |clip_id: AssetId| -> Result<(ClipPlay, bool), String> {
                 let Some((clip, duration_secs, clip_looping)) = resolve_clip(clip_id) else {
-                    return Err(ctx(format!(
+                    return Err(format!(
                         "state '{}': clip {clip_id} is not a clip on the graph's target",
                         s.name
-                    )));
+                    ));
                 };
                 Ok((
                     ClipPlay {
@@ -376,13 +372,13 @@ impl AnimationGraph {
             };
             let (play, default_looping) = match (&s.clip, &s.blend) {
                 (Some(_), Some(_)) => {
-                    return Err(ctx(format!(
+                    return Err(format!(
                         "state '{}' sets both `clip` and `blend`; pick one",
                         s.name
-                    )));
+                    ));
                 }
                 (None, None) => {
-                    return Err(ctx(format!("state '{}' has no `clip` or `blend`", s.name)));
+                    return Err(format!("state '{}' has no `clip` or `blend`", s.name));
                 }
                 (Some(clip_id), None) => {
                     let (clip_play, clip_looping) = play_for(clip_id.id())?;
@@ -403,18 +399,18 @@ impl AnimationGraph {
 
         for t in &self.transitions {
             let Some(from) = state_index(&t.from) else {
-                return Err(ctx(format!("transition from unknown state '{}'", t.from)));
+                return Err(format!("transition from unknown state '{}'", t.from));
             };
             let Some(to) = state_index(&t.to) else {
-                return Err(ctx(format!("transition to unknown state '{}'", t.to)));
+                return Err(format!("transition to unknown state '{}'", t.to));
             };
             let mut conditions = Vec::with_capacity(t.conditions.len());
             for c in &t.conditions {
                 let Some(param) = param_index(&c.parameter) else {
-                    return Err(ctx(format!(
+                    return Err(format!(
                         "transition '{}' -> '{}' references undeclared parameter '{}'",
                         t.from, t.to, c.parameter
-                    )));
+                    ));
                 };
                 conditions.push(CompiledCondition {
                     param,
@@ -434,7 +430,7 @@ impl AnimationGraph {
             0
         } else {
             state_index(&self.initial)
-                .ok_or_else(|| ctx(format!("initial state '{}' not found", self.initial)))?
+                .ok_or_else(|| format!("initial state '{}' not found", self.initial))?
         };
 
         Ok(CompiledGraph {

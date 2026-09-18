@@ -9,18 +9,16 @@
 //! clears only the Prop component, so each entity survives on its Transform /
 //! renderer / tag components. A `PropInstance` marker among them keeps the
 //! entity identifiable as a prop, which is what a behavior scoped to "Prop"
-//! resolves against. Cross-references between placements (a Prop's
-//! parent) resolve through a name -> Entity index this pass also publishes as a
-//! resource.
+//! resolves against. Cross-references between placements (a Prop's parent, a
+//! PropBody's owner) resolve through `EntityById`, which the loader filled.
 
 use concinnity_core::components::PropBody;
 use concinnity_core::components::{
     BodyDynamics, Children, Collider, Held, Interactable, MeshRenderer, ModelRenderer, Parent,
-    Pickup, Prop, PropInstance, SceneMember, SkyRotation, Transform,
+    Pickup, Prop, PropInstance, SceneMember, Transform,
 };
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::ecs::{Entity, EntityByName, PipelineContext};
-use std::collections::{BTreeMap, HashMap};
+use concinnity_core::ecs::{Entity, PipelineContext};
+use std::collections::HashMap;
 
 // Decompose every loaded Prop into per-instance components on its own entity,
 // then drain the Prop column.
@@ -31,28 +29,6 @@ pub(crate) fn run(ctx: &mut PipelineContext) {
         .query_with_entity::<Prop>()
         .map(|(entity, prop)| (entity, prop.clone()))
         .collect();
-    // The celestial-sphere pivot is not a Prop (a behavior scoped to "Prop"
-    // would drive it), but a Prop may hang off it, so it is nameable here.
-    let pivots: Vec<(Entity, AssetId)> = ctx
-        .query_with_entity::<SkyRotation>()
-        .map(|(entity, sky)| (entity, sky.asset_id))
-        .collect();
-    if props.is_empty() && pivots.is_empty() {
-        return;
-    }
-
-    // Name -> entity, over the full set, so a parent declared after its child
-    // still resolves.
-    // Handed to `EntityByName` (a BTreeMap for a dependency-free, deterministic
-    // index); built here from the placement scan.
-    let mut by_name: BTreeMap<AssetId, Entity> = BTreeMap::new();
-    for (entity, prop) in &props {
-        by_name.insert(prop.asset_id, *entity);
-    }
-    for (entity, name) in &pivots {
-        by_name.insert(*name, *entity);
-    }
-
     // Per-entity components. A Prop's `model` takes precedence over `mesh`,
     // encoded structurally as ModelRenderer-xor-MeshRenderer on the entity.
     for (entity, prop) in &props {
@@ -105,7 +81,7 @@ pub(crate) fn run(ctx: &mut PipelineContext) {
     // per entity. The source column drains with it.
     for body in ctx.drain::<PropBody>() {
         let Some(name) = body.prop_name else { continue };
-        let Some(&entity) = by_name.get(&name.id()) else {
+        let Some(entity) = ctx.entity_of(name.id()) else {
             continue;
         };
         ctx.insert(
@@ -127,7 +103,7 @@ pub(crate) fn run(ctx: &mut PipelineContext) {
     let mut children: HashMap<Entity, concinnity_core::memory::InlineVec<Entity>> = HashMap::new();
     for (entity, prop) in &props {
         if let Some(parent_id) = prop.parent
-            && let Some(&parent) = by_name.get(&parent_id.id())
+            && let Some(parent) = ctx.entity_of(parent_id.id())
         {
             ctx.insert(*entity, Parent(parent));
             children.entry(parent).or_default().push(*entity);
@@ -137,20 +113,12 @@ pub(crate) fn run(ctx: &mut PipelineContext) {
         ctx.insert(parent, Children(kids));
     }
 
-    // The loaders publish a full name -> entity index before start; merge the
-    // Prop entries into it rather than replacing it, so non-Prop names stay
-    // resolvable. A world built without a loader still gets the Prop index.
-    if let Some(index) = ctx.resource_mut::<EntityByName>() {
-        index.0.extend(by_name);
-    } else {
-        ctx.insert_resource(EntityByName(by_name));
-    }
-
     // Drop the Prop column now that every consumer reads the decomposed
     // components. drain<Prop> clears only the Prop component, so each entity
     // survives on its Transform / renderer / tag components, PropInstance
-    // among them. Registered as `consumed: PropInstance`, which is what makes
-    // a behavior scoped to "Prop" resolve to the marker.
+    // among them, and keeps its Identity. Registered as `consumed:
+    // PropInstance`, which is what makes a behavior scoped to "Prop" resolve
+    // to the marker.
     ctx.drain::<Prop>();
 }
 
@@ -160,39 +128,28 @@ mod tests {
     use crate::ecs::SYSTEMS;
     use concinnity_core::components::{Prop, PropCollider};
     use concinnity_core::ecs::Ref;
+    use concinnity_core::ecs::asset_id::AssetId;
     use concinnity_core::ecs::{MaterialHandle, MeshHandle, World};
 
-    fn prop(id: u32) -> Prop {
-        Prop {
-            asset_id: AssetId(id),
-            ..Default::default()
-        }
+    fn prop() -> Prop {
+        Prop::default()
     }
 
     // A prop may orbit the celestial-sphere pivot, which is not itself a Prop:
-    // the name index has to carry it for the parent edge to resolve.
+    // the index has to carry it for the parent edge to resolve.
     #[test]
     fn a_prop_parents_onto_the_sky_rotation_pivot() {
         use concinnity_core::components::{Parent, SkyRotation};
 
         let mut world = World::new();
-        world.add_component(SkyRotation {
-            asset_id: AssetId(7),
-            ..Default::default()
-        });
-        let mut moon = prop(2);
+        world.push_identified(AssetId(7), SkyRotation::default());
+        let mut moon = prop();
         moon.parent = Some(Ref::new(AssetId(7)));
-        world.add_component(moon);
+        world.push_identified(AssetId(2), moon);
         world.start(SYSTEMS).unwrap();
 
         let ctx = world.context();
-        let pivot = ctx
-            .resource::<EntityByName>()
-            .expect("the index is published")
-            .0
-            .get(&AssetId(7))
-            .copied()
-            .expect("the pivot is nameable");
+        let pivot = ctx.entity_of(AssetId(7)).expect("the pivot is identified");
         let (_, parent) = ctx
             .query_with_entity::<Parent>()
             .next()
@@ -205,13 +162,13 @@ mod tests {
         let mut world = World::new();
 
         // A model-backed parent placement.
-        let mut frame = prop(1);
+        let mut frame = prop();
         frame.model = Some(Ref::new(AssetId(100)));
         frame.position = [1.0, 2.0, 3.0];
-        world.add_component(frame);
+        world.push_identified(AssetId(1), frame);
 
         // A mesh-backed child: material, collider, interactable, scene, parent.
-        let mut panel = prop(2);
+        let mut panel = prop();
         panel.mesh = Some(MeshHandle(101));
         panel.material = Some(MaterialHandle(102));
         panel.collider = Some(PropCollider::default());
@@ -220,7 +177,7 @@ mod tests {
         panel.parent = Some(Ref::new(AssetId(1)));
         panel.position = [4.0, 5.0, 6.0];
         panel.rotation_deg = [0.0, 90.0, 0.0];
-        world.add_component(panel);
+        world.push_identified(AssetId(2), panel);
 
         world.start(SYSTEMS).expect("start");
 
@@ -276,13 +233,13 @@ mod tests {
     fn forward_parent_reference_resolves() {
         // Child declared BEFORE its parent: the two-pass resolution still links.
         let mut world = World::new();
-        let mut child = prop(1);
+        let mut child = prop();
         child.mesh = Some(MeshHandle(10));
         child.parent = Some(Ref::new(AssetId(2)));
-        world.add_component(child);
-        let mut parent = prop(2);
+        world.push_identified(AssetId(1), child);
+        let mut parent = prop();
         parent.mesh = Some(MeshHandle(11));
-        world.add_component(parent);
+        world.push_identified(AssetId(2), parent);
 
         world.start(SYSTEMS).expect("start");
 
@@ -307,12 +264,12 @@ mod tests {
     #[test]
     fn decomposed_default_drains_prop_keeping_components() {
         let mut world = World::new();
-        let mut a = prop(1);
+        let mut a = prop();
         a.mesh = Some(MeshHandle(10));
-        world.add_component(a);
-        let mut b = prop(2);
+        world.push_identified(AssetId(1), a);
+        let mut b = prop();
         b.model = Some(Ref::new(AssetId(20)));
-        world.add_component(b);
+        world.push_identified(AssetId(2), b);
 
         world.start(SYSTEMS).expect("start");
 
@@ -329,14 +286,14 @@ mod tests {
     #[test]
     fn prop_body_decomposes_to_body_dynamics_on_the_owner() {
         let mut world = World::new();
-        let mut crate_prop = prop(1);
+        let mut crate_prop = prop();
         crate_prop.mesh = Some(MeshHandle(10));
         crate_prop.collider = Some(PropCollider::default());
-        world.add_component(crate_prop);
-        let mut wall = prop(2);
+        world.push_identified(AssetId(1), crate_prop);
+        let mut wall = prop();
         wall.mesh = Some(MeshHandle(11));
         wall.collider = Some(PropCollider::default());
-        world.add_component(wall);
+        world.push_identified(AssetId(2), wall);
         world.add_component(PropBody {
             prop_name: Some(Ref::new(AssetId(1))),
             mass: 4.0,

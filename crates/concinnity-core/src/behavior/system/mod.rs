@@ -44,9 +44,11 @@ pub use eval::{EvalBucket, EvalScheduler};
 pub use state::{BehaviorState, BehaviorStore, def_hash};
 
 use crate::behavior::{Effect, Program, Val, VarTable};
-use crate::components::{Behavior, BehaviorSource, InteractEvent, Variables, VolumeEvent};
+use crate::components::{
+    Behavior, BehaviorSource, Identity, InteractEvent, Variables, VolumeEvent,
+};
 use crate::ecs::{
-    Entity, EntityByName, EventCursor, FrameContext, MenuActive, PipelineContext, ScheduleMode,
+    Entity, EntityById, EventCursor, FrameContext, MenuActive, PipelineContext, ScheduleMode,
     SimTiming, StepResult, System, TraceRequest, TransientSaves,
 };
 
@@ -204,7 +206,8 @@ impl BehaviorSystem {
     fn reseed(&mut self, ctx: &PipelineContext) {
         let resolved = resolve::resolve(
             ctx.query::<Variables>().as_slice(),
-            ctx.query::<Behavior>().as_slice(),
+            ctx.query_with_entity::<Behavior>()
+                .map(|(entity, def)| (ctx.get::<Identity>(entity).map(|i| i.id()), def)),
         );
         self.sources = SourceTicks::of(ctx);
         self.adopt(resolved);
@@ -274,7 +277,7 @@ impl BehaviorSystem {
             if let Some(i) = self
                 .programs
                 .iter()
-                .position(|p| p.def.asset_id.0 == id && def_hash(&p.def) == hash)
+                .position(|p| p.id.map(|i| i.0) == Some(id) && def_hash(&p.def) == hash)
             {
                 // World-scoped `once` state restores onto the single instance;
                 // a scoped behavior's per-entity flags are not persisted,
@@ -451,7 +454,7 @@ impl BehaviorSystem {
         {
             let ec = EvalCtx {
                 components: ctx.components,
-                names: ctx.resource::<EntityByName>(),
+                names: ctx.resource::<EntityById>(),
                 snapshot: &snapshot,
                 programs: &self.programs,
                 instances: &self.instances,
@@ -564,7 +567,7 @@ impl BehaviorSystem {
                         && !p.is_scoped()
                         && self.instances[*i].iter().any(|inst| inst.fired_once)
                 })
-                .map(|(_, p)| (p.def.asset_id.0, def_hash(&p.def)))
+                .filter_map(|(_, p)| Some((p.id?.0, def_hash(&p.def))))
                 .collect(),
         });
     }

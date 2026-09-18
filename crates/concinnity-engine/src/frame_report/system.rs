@@ -196,7 +196,6 @@ mod tests {
             warmup_seconds: 4.5,
             budget_ms: 8.0,
             stop_when_complete: false,
-            ..Default::default()
         });
         assert_eq!(system.options.warmup_seconds, 4.5);
         assert_eq!(system.options.budget_us, 8_000);

@@ -475,16 +475,10 @@ mod tests {
     fn hud_world(vw: f32, mouse: (f32, f32)) -> World {
         let mut world = World::new();
         for id in all_sprite_ids() {
-            world.add_component(Sprite {
-                asset_id: id,
-                ..Default::default()
-            });
+            world.push_identified(id, Sprite::default());
         }
         for id in all_label_ids() {
-            world.add_component(TextLabel {
-                asset_id: id,
-                ..Default::default()
-            });
+            world.push_identified(id, TextLabel::default());
         }
         world.add_component(FrameInput {
             viewport: [vw, 720.0],
@@ -497,8 +491,7 @@ mod tests {
 
     fn sprite(world: &World, id: AssetId) -> Sprite {
         world
-            .query::<Sprite>()
-            .find(|s| s.asset_id == id)
+            .get_by_id::<Sprite>(id)
             .cloned()
             .expect("sprite present")
     }
@@ -651,8 +644,7 @@ mod tests {
         apply_layout(&mut world, state(false, false, true));
         let label = |world: &World, id: AssetId| {
             world
-                .query::<TextLabel>()
-                .find(|l| l.asset_id == id)
+                .get_by_id::<TextLabel>(id)
                 .cloned()
                 .expect("label present")
         };

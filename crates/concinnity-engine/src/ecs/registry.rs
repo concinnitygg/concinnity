@@ -415,7 +415,7 @@ mod tests {
         assert_eq!(world.component_count(), 0);
         assert_eq!(world.system_count(), 0);
 
-        world.add(ComponentAsset::from(TextLabel::default()));
+        world.add(ComponentAsset::from(TextLabel::default()), None);
         assert!(!world.is_empty());
         assert_eq!(world.component_count(), 1);
 

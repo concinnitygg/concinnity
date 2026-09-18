@@ -3,7 +3,6 @@
 use crate::components::BlockType;
 use crate::ecs::PayloadLocator;
 use crate::ecs::Ref;
-use crate::ecs::asset_id::AssetId;
 use alloc::vec::Vec;
 
 /// A voxel grid that compiles into a single mesh.
@@ -20,9 +19,6 @@ use alloc::vec::Vec;
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct VoxelChunk {
-    /// Asset identity; injected via `inject_name`. Not part of `args`.
-    #[serde(skip)]
-    pub asset_id: AssetId,
     /// [BlockType](#blocktype) asset names. `blocks[i]` is an index into this list.
     pub palette: Vec<Ref<BlockType>>,
     /// Chunk dimensions `[dx, dy, dz]` in blocks.
@@ -46,7 +42,6 @@ pub struct VoxelChunk {
 impl Default for VoxelChunk {
     fn default() -> Self {
         Self {
-            asset_id: AssetId::default(),
             palette: Vec::new(),
             dim: [0, 0, 0],
             block_size: 1.0,
@@ -61,6 +56,7 @@ impl Default for VoxelChunk {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ecs::asset_id::AssetId;
 
     #[test]
     fn a_blank_chunk_is_empty_with_meter_sized_blocks() {
@@ -91,6 +87,5 @@ mod tests {
         assert_eq!(back.blocks, [0, 1, 1, 0]);
         assert_eq!(back.lod_levels, 2);
         assert_eq!(back.lod_distances, [16.0]);
-        assert_eq!(back.asset_id, AssetId::default());
     }
 }

@@ -463,58 +463,39 @@ mod tests {
         let view = all_present_view(&rows, &fields);
         let o = [20.0, 20.0];
         place(&mut world, Some(&view), o, size(rows.len()));
-        let title = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == TITLE_LABEL)
-            .unwrap();
+        let title = world.get_by_id::<TextLabel>(TITLE_LABEL).unwrap();
         assert!(title.visible && title.content == "Lighting");
-        let header = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == row_label(0))
-            .unwrap();
+        let header = world.get_by_id::<TextLabel>(row_label(0)).unwrap();
         assert_eq!(header.content, "Sun");
         // The sun color binding shows a swatch tinted by its current value; the
         // fog toggle shows a checkbox; the intensity field shows a text input.
         let sun_color = 3;
         assert!(
             world
-                .query::<Sprite>()
-                .find(|s| s.asset_id == swatch(sun_color))
+                .get_by_id::<Sprite>(swatch(sun_color))
                 .unwrap()
                 .visible
         );
         let fog_enabled = lighting::section_base(1);
         assert!(
             world
-                .query::<Sprite>()
-                .find(|s| s.asset_id == check_bg(fog_enabled))
+                .get_by_id::<Sprite>(check_bg(fog_enabled))
                 .unwrap()
                 .visible
         );
         assert!(
-            world
-                .query::<TextInput>()
-                .find(|t| t.asset_id == input(4))
-                .unwrap()
-                .visible,
+            world.get_by_id::<TextInput>(input(4)).unwrap().visible,
             "sun intensity input shown"
         );
         assert!(
             !world
-                .query::<TextInput>()
-                .find(|t| t.asset_id == input(fog_enabled))
+                .get_by_id::<TextInput>(input(fog_enabled))
                 .unwrap()
                 .visible,
             "a bool binding has no text input"
         );
         // The status line is hidden until an Apply is rejected.
-        assert!(
-            !world
-                .query::<TextLabel>()
-                .find(|l| l.asset_id == STATUS_LABEL)
-                .unwrap()
-                .visible
-        );
+        assert!(!world.get_by_id::<TextLabel>(STATUS_LABEL).unwrap().visible);
     }
 
     #[test]
@@ -544,16 +525,12 @@ mod tests {
         let fog_enabled = lighting::section_base(1);
         assert!(
             !world
-                .query::<Sprite>()
-                .find(|s| s.asset_id == check_bg(fog_enabled))
+                .get_by_id::<Sprite>(check_bg(fog_enabled))
                 .unwrap()
                 .visible
         );
         let i = rows.iter().position(|r| *r == Row::Add(1)).unwrap();
-        let add = world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == row_label(i))
-            .unwrap();
+        let add = world.get_by_id::<TextLabel>(row_label(i)).unwrap();
         assert_eq!(add.content, "+ Add VolumetricFog");
     }
 

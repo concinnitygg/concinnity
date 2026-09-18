@@ -605,27 +605,15 @@ mod tests {
     }
 
     fn label(world: &World, id: AssetId) -> TextLabel {
-        world
-            .query::<TextLabel>()
-            .find(|l| l.asset_id == id)
-            .cloned()
-            .unwrap()
+        world.get_by_id::<TextLabel>(id).cloned().unwrap()
     }
 
     fn sprite(world: &World, id: AssetId) -> Sprite {
-        world
-            .query::<Sprite>()
-            .find(|s| s.asset_id == id)
-            .cloned()
-            .unwrap()
+        world.get_by_id::<Sprite>(id).cloned().unwrap()
     }
 
     fn field(world: &World, id: AssetId) -> TextInput {
-        world
-            .query::<TextInput>()
-            .find(|t| t.asset_id == id)
-            .cloned()
-            .unwrap()
+        world.get_by_id::<TextInput>(id).cloned().unwrap()
     }
 
     fn declared(name: &str, ty: &str, value: &str) -> Row {

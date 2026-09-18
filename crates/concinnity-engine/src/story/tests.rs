@@ -15,20 +15,6 @@ fn page(text: &str) -> StoryPage {
     }
 }
 
-fn label_named(name: &str) -> TextLabel {
-    TextLabel {
-        asset_id: intern(name),
-        ..Default::default()
-    }
-}
-
-fn sprite_named(name: &str) -> Sprite {
-    Sprite {
-        asset_id: intern(name),
-        ..Default::default()
-    }
-}
-
 // The build-resolved scaffold references for a story named "s".
 fn scaffold() -> StoryScaffold {
     StoryScaffold {
@@ -78,10 +64,13 @@ fn add_stage_furniture(world: &mut World) {
         "s_stage_dim",
         "s_stage_slot0_box",
     ] {
-        world.add_component(Sprite {
-            screen: Some(Ref::new(intern("s_stage"))),
-            ..sprite_named(sprite)
-        });
+        world.push_identified(
+            intern(sprite),
+            Sprite {
+                screen: Some(Ref::new(intern("s_stage"))),
+                ..Default::default()
+            },
+        );
     }
     for label in [
         "s_stage_name",
@@ -95,10 +84,13 @@ fn add_stage_furniture(world: &mut World) {
         "s_stage_slot_title",
         "s_stage_slot0_lbl",
     ] {
-        world.add_component(TextLabel {
-            screen: Some(Ref::new(intern("s_stage"))),
-            ..label_named(label)
-        });
+        world.push_identified(
+            intern(label),
+            TextLabel {
+                screen: Some(Ref::new(intern("s_stage"))),
+                ..Default::default()
+            },
+        );
     }
 }
 
@@ -107,16 +99,17 @@ fn add_stage_furniture(world: &mut World) {
 fn story_world(story: Story) -> World {
     let mut world = World::new();
     let mut story = story;
-    story.asset_id = intern("s");
     story.scaffold = scaffold();
-    world.add_component(story);
+    world.push_identified(intern("s"), story);
     for screen in ["s_stage", "s_ending"] {
-        world.add_component(Screen {
-            asset_id: intern(screen),
-            initial: screen == "s_stage",
-            fade_in_secs: 0.0,
-            ..Default::default()
-        });
+        world.push_identified(
+            intern(screen),
+            Screen {
+                initial: screen == "s_stage",
+                fade_in_secs: 0.0,
+                ..Default::default()
+            },
+        );
     }
     add_stage_furniture(&mut world);
     world
@@ -128,7 +121,6 @@ fn story_world(story: Story) -> World {
 fn multi_slot_world(story: Story, rows: usize) -> World {
     let mut world = World::new();
     let mut story = story;
-    story.asset_id = intern("s");
     let mut sc = scaffold();
     sc.slot_boxes = (0..rows)
         .map(|i| Ref::new(intern(&format!("s_stage_slot{i}_box"))))
@@ -137,26 +129,34 @@ fn multi_slot_world(story: Story, rows: usize) -> World {
         .map(|i| Ref::new(intern(&format!("s_stage_slot{i}_lbl"))))
         .collect();
     story.scaffold = sc;
-    world.add_component(story);
+    world.push_identified(intern("s"), story);
     for screen in ["s_stage", "s_ending"] {
-        world.add_component(Screen {
-            asset_id: intern(screen),
-            initial: screen == "s_stage",
-            fade_in_secs: 0.0,
-            ..Default::default()
-        });
+        world.push_identified(
+            intern(screen),
+            Screen {
+                initial: screen == "s_stage",
+                fade_in_secs: 0.0,
+                ..Default::default()
+            },
+        );
     }
     add_stage_furniture(&mut world);
     // Extra rows beyond slot0, which `add_stage_furniture` already provides.
     for i in 1..rows {
-        world.add_component(Sprite {
-            screen: Some(Ref::new(intern("s_stage"))),
-            ..sprite_named(&format!("s_stage_slot{i}_box"))
-        });
-        world.add_component(TextLabel {
-            screen: Some(Ref::new(intern("s_stage"))),
-            ..label_named(&format!("s_stage_slot{i}_lbl"))
-        });
+        world.push_identified(
+            intern(&format!("s_stage_slot{i}_box")),
+            Sprite {
+                screen: Some(Ref::new(intern("s_stage"))),
+                ..Default::default()
+            },
+        );
+        world.push_identified(
+            intern(&format!("s_stage_slot{i}_lbl")),
+            TextLabel {
+                screen: Some(Ref::new(intern("s_stage"))),
+                ..Default::default()
+            },
+        );
     }
     world
 }
@@ -168,7 +168,6 @@ fn multi_slot_world(story: Story, rows: usize) -> World {
 fn title_menu_world(story: Story) -> World {
     let mut world = World::new();
     let mut story = story;
-    story.asset_id = intern("s");
     let mut sc = scaffold();
     sc.title = Some(Ref::new(intern("s_title")));
     sc.start_label = Some(Ref::new(intern("s_title_start_lbl")));
@@ -176,15 +175,17 @@ fn title_menu_world(story: Story) -> World {
     sc.load_label = Some(Ref::new(intern("s_title_load_lbl")));
     sc.quit_label = Some(Ref::new(intern("s_title_quit_lbl")));
     story.scaffold = sc;
-    world.add_component(story);
+    world.push_identified(intern("s"), story);
     // The title menu is the initial screen; the stage and ending are inactive.
     for (screen, initial) in [("s_title", true), ("s_stage", false), ("s_ending", false)] {
-        world.add_component(Screen {
-            asset_id: intern(screen),
-            initial,
-            fade_in_secs: 0.0,
-            ..Default::default()
-        });
+        world.push_identified(
+            intern(screen),
+            Screen {
+                initial,
+                fade_in_secs: 0.0,
+                ..Default::default()
+            },
+        );
     }
     add_stage_furniture(&mut world);
     // The four title buttons at distinct emitted y's (any values that differ
@@ -195,12 +196,15 @@ fn title_menu_world(story: Story) -> World {
         ("s_title_load_lbl", 300.0, "Load"),
         ("s_title_quit_lbl", 400.0, "Quit"),
     ] {
-        world.add_component(TextLabel {
-            screen: Some(Ref::new(intern("s_title"))),
-            content: text.to_string(),
-            y,
-            ..label_named(name)
-        });
+        world.push_identified(
+            intern(name),
+            TextLabel {
+                screen: Some(Ref::new(intern("s_title"))),
+                content: text.to_string(),
+                y,
+                ..Default::default()
+            },
+        );
     }
     world
 }
@@ -212,7 +216,6 @@ fn title_menu_world(story: Story) -> World {
 fn story_world_with_pause(story: Story) -> World {
     let mut world = World::new();
     let mut story = story;
-    story.asset_id = intern("s");
     let mut sc = scaffold();
     sc.pause = Some(Ref::new(intern("s_pause")));
     sc.settings = Some(Ref::new(intern("s_settings")));
@@ -221,7 +224,7 @@ fn story_world_with_pause(story: Story) -> World {
     sc.quit_label = Some(Ref::new(intern("s_title_quit_lbl")));
     sc.settings_label = Some(Ref::new(intern("s_title_settings_lbl")));
     story.scaffold = sc;
-    world.add_component(story);
+    world.push_identified(intern("s"), story);
     for (screen, initial) in [
         ("s_stage", true),
         ("s_ending", false),
@@ -229,12 +232,14 @@ fn story_world_with_pause(story: Story) -> World {
         ("s_settings", false),
         ("s_title", false),
     ] {
-        world.add_component(Screen {
-            asset_id: intern(screen),
-            initial,
-            fade_in_secs: 0.0,
-            ..Default::default()
-        });
+        world.push_identified(
+            intern(screen),
+            Screen {
+                initial,
+                fade_in_secs: 0.0,
+                ..Default::default()
+            },
+        );
     }
     // One member sprite per menu screen, so its visibility tracks whether the
     // screen is the active screen.
@@ -243,20 +248,26 @@ fn story_world_with_pause(story: Story) -> World {
         ("s_settings_dim", "s_settings"),
         ("s_title_bg", "s_title"),
     ] {
-        world.add_component(Sprite {
-            screen: Some(Ref::new(intern(screen))),
-            ..sprite_named(name)
-        });
+        world.push_identified(
+            intern(name),
+            Sprite {
+                screen: Some(Ref::new(intern(screen))),
+                ..Default::default()
+            },
+        );
     }
     for lbl in [
         "s_title_start_lbl",
         "s_title_quit_lbl",
         "s_title_settings_lbl",
     ] {
-        world.add_component(TextLabel {
-            screen: Some(Ref::new(intern("s_title"))),
-            ..label_named(lbl)
-        });
+        world.push_identified(
+            intern(lbl),
+            TextLabel {
+                screen: Some(Ref::new(intern("s_title"))),
+                ..Default::default()
+            },
+        );
     }
     add_stage_furniture(&mut world);
     world
@@ -265,8 +276,7 @@ fn story_world_with_pause(story: Story) -> World {
 fn sprite_visible(world: &World, name: &str) -> bool {
     let id = intern(name);
     world
-        .query::<Sprite>()
-        .find(|s| s.asset_id == id)
+        .get_by_id::<Sprite>(id)
         .map(|s| s.visible)
         .unwrap_or(false)
 }
@@ -274,8 +284,7 @@ fn sprite_visible(world: &World, name: &str) -> bool {
 fn label_content(world: &World, name: &str) -> String {
     let id = intern(name);
     world
-        .query::<TextLabel>()
-        .find(|l| l.asset_id == id)
+        .get_by_id::<TextLabel>(id)
         .map(|l| l.content.clone())
         .unwrap_or_default()
 }
@@ -283,8 +292,7 @@ fn label_content(world: &World, name: &str) -> String {
 fn label_y(world: &World, name: &str) -> f32 {
     let id = intern(name);
     world
-        .query::<TextLabel>()
-        .find(|l| l.asset_id == id)
+        .get_by_id::<TextLabel>(id)
         .map(|l| l.y)
         .unwrap_or_default()
 }
@@ -292,8 +300,7 @@ fn label_y(world: &World, name: &str) -> f32 {
 fn label_color(world: &World, name: &str) -> [f32; 3] {
     let id = intern(name);
     world
-        .query::<TextLabel>()
-        .find(|l| l.asset_id == id)
+        .get_by_id::<TextLabel>(id)
         .map(|l| l.color)
         .unwrap_or_default()
 }
@@ -405,10 +412,7 @@ fn choices_fill_buttons_and_choose_jumps() {
     assert_eq!(label_content(&world, "s_stage_opt0_lbl"), "Go");
     assert_eq!(label_content(&world, "s_stage_text"), "");
     let opt_box = intern("s_stage_opt0_box");
-    let shown = world
-        .query::<Sprite>()
-        .find(|s| s.asset_id == opt_box)
-        .unwrap();
+    let shown = world.get_by_id::<Sprite>(opt_box).unwrap();
     assert!(shown.visible);
     assert!(shown.tint[3] > 0.0, "occupied slot's box is opaque");
 
@@ -427,11 +431,7 @@ fn choices_fill_buttons_and_choose_jumps() {
     assert_eq!(label_content(&world, "s_stage_text"), "Picked.");
     // Hidden furniture goes transparent (screen re-activation force-shows
     // members, so `visible` cannot carry menu state).
-    let alpha = world
-        .query::<Sprite>()
-        .find(|s| s.asset_id == opt_box)
-        .unwrap()
-        .tint[3];
+    let alpha = world.get_by_id::<Sprite>(opt_box).unwrap().tint[3];
     assert_eq!(alpha, 0.0);
 }
 
@@ -462,13 +462,10 @@ fn stage_dressing_applies_to_sprites() {
     world.step();
 
     let bg = intern("s_stage_bg");
-    let sprite = world.query::<Sprite>().find(|s| s.asset_id == bg).unwrap();
+    let sprite = world.get_by_id::<Sprite>(bg).unwrap();
     assert_eq!(sprite.texture, Some(TextureHandle(intern("s_img0").0)));
     let center = intern("s_stage_center");
-    let sprite = world
-        .query::<Sprite>()
-        .find(|s| s.asset_id == center)
-        .unwrap();
+    let sprite = world.get_by_id::<Sprite>(center).unwrap();
     assert!(sprite.visible);
     assert_eq!(sprite.width, 456.0);
     assert_eq!(sprite.y, 20.0);
@@ -479,12 +476,9 @@ fn stage_dressing_applies_to_sprites() {
         .events_mut::<StoryCommand>()
         .send(StoryCommand::Advance);
     world.step();
-    let sprite = world
-        .query::<Sprite>()
-        .find(|s| s.asset_id == center)
-        .unwrap();
+    let sprite = world.get_by_id::<Sprite>(center).unwrap();
     assert_eq!(sprite.tint[3], 0.0);
-    let sprite = world.query::<Sprite>().find(|s| s.asset_id == bg).unwrap();
+    let sprite = world.get_by_id::<Sprite>(bg).unwrap();
     assert_eq!(sprite.texture, None);
 }
 
@@ -980,11 +974,7 @@ fn quick_row_toggles_and_suppresses_the_same_click_advance() {
     world.step();
     assert_eq!(label_content(&world, "s_stage_text"), "First page.");
     let auto_id = intern("s_stage_qauto_lbl");
-    let color = world
-        .query::<TextLabel>()
-        .find(|l| l.asset_id == auto_id)
-        .unwrap()
-        .color;
+    let color = world.get_by_id::<TextLabel>(auto_id).unwrap().color;
     assert_eq!(color, QUICK_ACTIVE);
 }
 
@@ -1460,7 +1450,6 @@ fn point_saves(world: &mut World, dir: &std::path::Path) {
 fn two_option_world(story: Story) -> World {
     let mut world = World::new();
     let mut story = story;
-    story.asset_id = intern("s");
     let mut sc = scaffold();
     sc.option_boxes = vec![
         Ref::new(intern("s_stage_opt0_box")),
@@ -1471,25 +1460,33 @@ fn two_option_world(story: Story) -> World {
         Ref::new(intern("s_stage_opt1_lbl")),
     ];
     story.scaffold = sc;
-    world.add_component(story);
+    world.push_identified(intern("s"), story);
     for screen in ["s_stage", "s_ending"] {
-        world.add_component(Screen {
-            asset_id: intern(screen),
-            initial: screen == "s_stage",
-            fade_in_secs: 0.0,
-            ..Default::default()
-        });
+        world.push_identified(
+            intern(screen),
+            Screen {
+                initial: screen == "s_stage",
+                fade_in_secs: 0.0,
+                ..Default::default()
+            },
+        );
     }
     add_stage_furniture(&mut world);
     // The second option slot beyond slot0 that add_stage_furniture provides.
-    world.add_component(Sprite {
-        screen: Some(Ref::new(intern("s_stage"))),
-        ..sprite_named("s_stage_opt1_box")
-    });
-    world.add_component(TextLabel {
-        screen: Some(Ref::new(intern("s_stage"))),
-        ..label_named("s_stage_opt1_lbl")
-    });
+    world.push_identified(
+        intern("s_stage_opt1_box"),
+        Sprite {
+            screen: Some(Ref::new(intern("s_stage"))),
+            ..Default::default()
+        },
+    );
+    world.push_identified(
+        intern("s_stage_opt1_lbl"),
+        TextLabel {
+            screen: Some(Ref::new(intern("s_stage"))),
+            ..Default::default()
+        },
+    );
     world
 }
 
@@ -1881,13 +1878,11 @@ fn unoccupied_option_slots_blank_and_go_transparent() {
     assert_eq!(label_content(&world, "s_stage_opt0_lbl"), "Go");
     assert_eq!(label_content(&world, "s_stage_opt1_lbl"), "");
     let box1 = world
-        .query::<Sprite>()
-        .find(|s| s.asset_id == intern("s_stage_opt1_box"))
+        .get_by_id::<Sprite>(intern("s_stage_opt1_box"))
         .unwrap();
     assert_eq!(box1.tint[3], 0.0, "empty slot box is transparent");
     let box0 = world
-        .query::<Sprite>()
-        .find(|s| s.asset_id == intern("s_stage_opt0_box"))
+        .get_by_id::<Sprite>(intern("s_stage_opt0_box"))
         .unwrap();
     assert!(box0.tint[3] > 0.0, "occupied slot box is opaque");
 }

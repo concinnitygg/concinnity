@@ -94,6 +94,11 @@ macro_rules! define_component_storage {
                 self.entities.is_alive(entity)
             }
 
+            /// The component types an entity holds; empty for a dead one.
+            pub fn mask(&self, entity: $crate::ecs::Entity) -> $crate::ecs::ComponentMask {
+                self.join.mask(entity)
+            }
+
             /// Add component C to an existing entity. Unlike `push_typed` this does
             /// not mint an entity: it is how an entity comes to own more than one
             /// component. `false`, leaving the storage unchanged, when the entity

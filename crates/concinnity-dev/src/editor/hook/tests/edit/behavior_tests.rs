@@ -432,10 +432,7 @@ fn behavior_value_field_is_carried_across_a_preview_rebuild() {
     let snapshot = EditorHook::field_snapshot(&world);
     let mut fresh = World::new();
     for id in behavior::panel::all_field_ids() {
-        fresh.add_component(TextInput {
-            asset_id: id,
-            ..Default::default()
-        });
+        fresh.push_identified(id, TextInput::default());
     }
     EditorHook::restore_fields(&mut fresh, &snapshot);
     assert_eq!(

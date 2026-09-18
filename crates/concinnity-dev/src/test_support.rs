@@ -51,22 +51,13 @@ pub(crate) fn injected_world(sprites: &[AssetId], labels: &[AssetId], fields: &[
     use concinnity_core::components::{Sprite, TextInput, TextLabel};
     let mut world = World::new();
     for &id in sprites {
-        world.add_component(Sprite {
-            asset_id: id,
-            ..Default::default()
-        });
+        world.push_identified(id, Sprite::default());
     }
     for &id in labels {
-        world.add_component(TextLabel {
-            asset_id: id,
-            ..Default::default()
-        });
+        world.push_identified(id, TextLabel::default());
     }
     for &id in fields {
-        world.add_component(TextInput {
-            asset_id: id,
-            ..Default::default()
-        });
+        world.push_identified(id, TextInput::default());
     }
     world
 }
