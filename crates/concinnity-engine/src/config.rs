@@ -15,6 +15,7 @@
 use concinnity_core::components::AaMode;
 use concinnity_core::components::GamepadMap;
 use concinnity_core::components::ReflectionBlurResolution;
+use concinnity_core::components::RtReflectionResolution;
 use concinnity_core::components::ShadowUpdate;
 use concinnity_core::components::SsgiResolution;
 use concinnity_core::components::UpscaleQuality;
@@ -146,6 +147,10 @@ pub(crate) struct GraphicsSettings {
     // Hardware ray-traced reflections (`PostProcessConfig.ray_traced_reflections`).
     #[serde(default)]
     pub ray_traced_reflections: Option<bool>,
+    // Sun shadows inside ray-traced reflections
+    // (`PostProcessConfig.rt_reflection_shadows`).
+    #[serde(default)]
+    pub rt_reflection_shadows: Option<bool>,
     // Screen-space global illumination (`PostProcessConfig.indirect_lighting ==
     // ssgi`).
     #[serde(default)]
@@ -170,6 +175,11 @@ pub(crate) struct GraphicsSettings {
     // the SSGI sub-quality above (only bites when a reflection feature is on).
     #[serde(default)]
     pub(crate) reflection_blur_resolution: Option<ReflectionBlurResolution>,
+    // Ray-traced reflection trace resolution
+    // (`PostProcessConfig.rt_reflection_resolution`). `None` uses the world's
+    // value; governed by the quality preset ceiling.
+    #[serde(default)]
+    pub(crate) rt_reflection_resolution: Option<RtReflectionResolution>,
     // Per-feature sub-quality tunables (SSAO radius / intensity, SSR intensity /
     // distance, SSGI intensity / distance, auto-exposure EV bounds + speed). Each
     // `None` uses the world's `PostProcessConfig` value. Applied live on Metal via
@@ -351,12 +361,14 @@ mod tests {
                 ssao: Some(false),
                 ssr: Some(true),
                 ray_traced_reflections: Some(false),
+                rt_reflection_shadows: Some(false),
                 ssgi: Some(true),
                 auto_exposure: Some(false),
                 ssgi_resolution: Some(SsgiResolution::Quarter),
                 ssgi_rays: Some(16),
                 ssgi_steps: Some(24),
                 reflection_blur_resolution: Some(ReflectionBlurResolution::Full),
+                rt_reflection_resolution: Some(RtReflectionResolution::Quarter),
                 bloom_knee: Some(0.4),
                 ssao_radius: Some(0.6),
                 ssao_intensity: Some(1.2),

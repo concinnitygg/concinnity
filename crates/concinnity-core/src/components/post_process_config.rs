@@ -88,6 +88,17 @@ pub struct PostProcessConfig {
     /// to it where ray tracing isn't available. On by default; only the top
     /// quality tier permits it, so everything below falls back to `ssr`.
     pub ray_traced_reflections: bool,
+    /// Internal resolution the ray-traced reflection rays are cast at. `half`
+    /// (default) traces a quarter of the pixels and upsamples with a depth- and
+    /// normal-aware filter; `full` traces every pixel for the sharpest mirrors;
+    /// `quarter` is the cheapest. Only matters when `ray_traced_reflections` is
+    /// on.
+    pub rt_reflection_resolution: RtReflectionResolution,
+    /// Whether surfaces seen in a ray-traced reflection are shadowed from the
+    /// sun. Each reflected hit then casts a second ray toward the sun, which
+    /// roughly doubles the trace cost; off lights every reflected surface as if
+    /// the sun reached it. Only matters when `ray_traced_reflections` is on.
+    pub rt_reflection_shadows: bool,
     /// Internal resolution of the roughness-aware reflection blur the SSR /
     /// ray-traced reflection composite runs. `half` (default) blurs at a
     /// quarter of the pixels for a large saving and bilinearly upsamples;
@@ -358,6 +369,39 @@ impl SsgiResolution {
     }
 }
 
+/// Internal resolution of the ray-traced reflection trace (only meaningful when
+/// `ray_traced_reflections` is on). Tracing is the expensive part of ray-traced
+/// reflections, so `half` (the default) casts rays for a quarter of the pixels
+/// and the reflection composite upsamples them with a depth- and normal-aware
+/// filter that keeps edges from bleeding. `full` traces every pixel; `quarter`
+/// is the cheapest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[derive(Default, Vocabulary)]
+pub enum RtReflectionResolution {
+    /// Trace at native resolution.
+    #[vocab("full")]
+    Full,
+    /// Trace at half resolution per axis.
+    #[default]
+    #[vocab("half")]
+    Half,
+    /// Trace at quarter resolution per axis.
+    #[vocab("quarter")]
+    Quarter,
+}
+
+impl RtReflectionResolution {
+    /// Per-axis render-resolution divisor the trace target is scaled by.
+    pub fn scale_divisor(self) -> u32 {
+        match self {
+            RtReflectionResolution::Full => 1,
+            RtReflectionResolution::Half => 2,
+            RtReflectionResolution::Quarter => 4,
+        }
+    }
+}
+
 /// Internal render resolution of the roughness-aware reflection blur (only
 /// meaningful when `ssr` or `ray_traced_reflections` is on). The blur is the
 /// expensive multi-tap part of the reflection composite and is low-frequency
@@ -419,6 +463,8 @@ impl Default for PostProcessConfig {
             ssr_intensity: 0.7,
             ssr_max_distance: 40.0,
             ray_traced_reflections: true,
+            rt_reflection_resolution: RtReflectionResolution::default(),
+            rt_reflection_shadows: true,
             reflection_blur_resolution: ReflectionBlurResolution::default(),
             indirect_lighting: IndirectLighting::Ssgi,
             ambient_intensity: 1.0,
@@ -891,6 +937,29 @@ mod runtime_tests {
         assert_eq!(cfg.ssgi_resolution, SsgiResolution::Half);
         assert_eq!(cfg.ssgi_rays, 8);
         assert_eq!(cfg.ssgi_steps, 12);
+    }
+
+    #[test]
+    fn rt_reflection_scaling_defaults_to_half_with_shadows() {
+        let cfg = PostProcessConfig::default();
+        assert_eq!(cfg.rt_reflection_resolution, RtReflectionResolution::Half);
+        assert!(cfg.rt_reflection_shadows);
+        assert_eq!(RtReflectionResolution::Full.scale_divisor(), 1);
+        assert_eq!(RtReflectionResolution::Half.scale_divisor(), 2);
+        assert_eq!(RtReflectionResolution::Quarter.scale_divisor(), 4);
+    }
+
+    #[test]
+    fn rt_reflection_scaling_deserializes_from_jsonl_args() {
+        let cfg: PostProcessConfig = serde_json::from_str(
+            r#"{"ray_traced_reflections":true,"rt_reflection_resolution":"quarter","rt_reflection_shadows":false}"#,
+        )
+        .expect("parse");
+        assert_eq!(
+            cfg.rt_reflection_resolution,
+            RtReflectionResolution::Quarter
+        );
+        assert!(!cfg.rt_reflection_shadows);
     }
 
     #[test]

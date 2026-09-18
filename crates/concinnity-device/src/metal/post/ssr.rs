@@ -47,10 +47,19 @@ pub(crate) struct SsrState {
     // First half of the composite: the roughness blur, run at reduced resolution
     // into `SsrTargets::blur`. Built alongside `composite_pipeline`.
     pub blur_pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    // Per-axis divisor the reflection blur target is sized by, resolved from the
-    // world's `reflection_blur_resolution`. Held so a resize / live rebuild
-    // recreates the blur target at the same reduced resolution.
-    pub blur_scale: u32,
+    // Per-axis divisors the reflection and blur targets are sized by. Held so a
+    // resize recreates them at the same reduced resolutions.
+    pub scales: ReflectionScales,
+}
+
+// Per-axis render-resolution divisors for the reflection targets. `trace`
+// sizes the target the resolve writes (the ray-traced trace resolution when
+// RT reflections run, else 1); `blur` sizes the roughness blur target, from the
+// world's `reflection_blur_resolution`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ReflectionScales {
+    pub trace: u32,
+    pub blur: u32,
 }
 
 // Pipelines
@@ -98,47 +107,48 @@ pub(crate) fn build_reflection_blur_pipeline(
 pub(crate) struct SsrTargets {
     // Reflection target (`RGBA16Float`): the SSR / RT resolve writes reflected
     // radiance in `.rgb` and the Fresnel/gloss composite weight in `.a` here,
-    // and the reflection composite blurs + composites it into `output`.
+    // and the reflection composite blurs + composites it into `output`. Sized
+    // at render / `ReflectionScales::trace`.
     pub reflection: Retained<ProtocolObject<dyn MTLTexture>>,
     // Scene with reflections composited in. Becomes the scene color the TAA /
     // bloom / composite passes consume when SSR or RT reflections are on.
     pub output: Retained<ProtocolObject<dyn MTLTexture>>,
     // Reduced-resolution roughness blur of `reflection` (the blur pass writes it,
-    // the composite pass upsamples it). Sized at render / REFLECTION_BLUR_SCALE.
+    // the composite pass upsamples it). Sized at render / `ReflectionScales::blur`.
     pub blur: Retained<ProtocolObject<dyn MTLTexture>>,
 }
 
 // Create or recreate the reflection + resolve-output targets at `width`x`height`,
-// plus the reduced-resolution blur target. `blur_scale` is the per-axis
-// render-resolution divisor for the roughness blur pass (resolved from the
-// world's `reflection_blur_resolution`): the blur is low-frequency (a widening
-// glossy cone), so running it reduced and bilinear-upsampling in the composite
-// is visually free; mirrors stay sharp because the composite lerps in the
-// FULL-RES reflection for low roughness (see reflection_composite.metal).
+// with the reflection and blur targets reduced by `scales`. The blur is
+// low-frequency (a widening glossy cone), so running it reduced and
+// bilinear-upsampling in the composite is visually free; a reduced reflection
+// target is upsampled depth- and normal-aware by the composite.
 pub(crate) fn create_ssr_targets(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     width: u32,
     height: u32,
-    blur_scale: u32,
+    scales: ReflectionScales,
 ) -> RenderResult<SsrTargets> {
-    let blur_scale = blur_scale.max(1);
-    let make_at = |w: usize, h: usize| -> Option<Retained<ProtocolObject<dyn MTLTexture>>> {
+    let make_at = |w: u32, h: u32| -> Option<Retained<ProtocolObject<dyn MTLTexture>>> {
         let desc = TextureDesc {
             format: MTLPixelFormat::RGBA16Float,
-            width: w,
-            height: h,
+            width: w as usize,
+            height: h as usize,
             usage: MTLTextureUsage(MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0),
             ..Default::default()
         }
         .build();
         device.newTextureWithDescriptor(&desc)
     };
-    let w = width.max(1) as usize;
-    let h = height.max(1) as usize;
-    let bw = (width / blur_scale).max(1) as usize;
-    let bh = (height / blur_scale).max(1) as usize;
-    let reflection = make_at(w, h).ok_or_else(|| allocation_failed("reflection texture"))?;
-    let output = make_at(w, h).ok_or_else(|| allocation_failed("SSR output texture"))?;
+    let reduced = |scale: u32| {
+        let s = scale.max(1);
+        ((width / s).max(1), (height / s).max(1))
+    };
+    let (rw, rh) = reduced(scales.trace);
+    let (bw, bh) = reduced(scales.blur);
+    let reflection = make_at(rw, rh).ok_or_else(|| allocation_failed("reflection texture"))?;
+    let output = make_at(width.max(1), height.max(1))
+        .ok_or_else(|| allocation_failed("SSR output texture"))?;
     let blur = make_at(bw, bh).ok_or_else(|| allocation_failed("reflection blur texture"))?;
     Ok(SsrTargets {
         reflection,

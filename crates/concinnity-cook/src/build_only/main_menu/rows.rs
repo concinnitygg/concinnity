@@ -95,11 +95,16 @@ const VIDEO_ADVANCED_SLIDERS: [(SettingKey, &str); 8] = [
 // client (`concinnity_engine::settings` + its system) knows each setting's options and
 // applies it live by rebuilding the affected render resources; on backends
 // without a live path the choice persists and applies at the next launch.
-const VIDEO_QUALITY_ROWS: [(SettingKey, &str); 15] = [
+const VIDEO_QUALITY_ROWS: [(SettingKey, &str); 17] = [
     (SettingKey::AaMode, "Anti-Aliasing"),
     (SettingKey::Ssao, "Ambient Occlusion"),
     (SettingKey::Ssr, "Screen-Space Reflections"),
     (SettingKey::RayTracedReflections, "Ray-Traced Reflections"),
+    (
+        SettingKey::RtReflectionResolution,
+        "RT Reflection Resolution",
+    ),
+    (SettingKey::RtReflectionShadows, "RT Reflection Shadows"),
     // Reflection blur resolution dropdown, grouped under the reflection toggles
     // it governs (SSR + ray-traced).
     (SettingKey::ReflectionBlurResolution, "Reflection Blur"),

@@ -26,8 +26,8 @@ use crate::metal::context::{CompositeState, MtlSceneAssets};
 use crate::metal::error::allocation_failed;
 use crate::metal::post::post_device::MtlPostDevice;
 use crate::metal::post::{
-    GBufferState, MetalFXUpscaler, SsaoState, SsgiState, SsrState, TaaState, UpscaleState,
-    build_gbuffer_bindless_pipeline, build_reflection_blur_pipeline,
+    GBufferState, MetalFXUpscaler, ReflectionScales, SsaoState, SsgiState, SsrState, TaaState,
+    UpscaleState, build_gbuffer_bindless_pipeline, build_reflection_blur_pipeline,
     build_reflection_composite_pipeline, build_ssao_pipeline, build_taa_pass,
     create_gbuffer_targets, create_ssao_targets, create_ssr_targets, temporal_scaler_supported,
 };
@@ -222,6 +222,15 @@ pub(in crate::metal) fn build_ssr(
     render: (u32, u32),
 ) -> RenderResult<SsrState> {
     let (device, hot_reload) = (post_device.device, post_device.hot_reload);
+    // The reflection target is reduced only when the ray-traced resolve is what
+    // fills it; the SSR resolve keeps it at render resolution.
+    let scales = ReflectionScales {
+        trace: settings
+            .rt_reflection
+            .filter(|_| crate::metal::raytrace::raytracing_supported(device))
+            .map_or(1, |rt| rt.divisor.max(1)),
+        blur: settings.reflection_blur_scale.max(1),
+    };
     let (ssr_targets, ssr_resolve, ssr_composite_pipeline, ssr_blur_pipeline) =
         if settings.reflections() {
             let ssr_resolve = if settings.ssr.is_some() {
@@ -242,12 +251,7 @@ pub(in crate::metal) fn build_ssr(
                 (None, None)
             };
             (
-                Some(create_ssr_targets(
-                    device,
-                    render.0,
-                    render.1,
-                    settings.reflection_blur_scale,
-                )?),
+                Some(create_ssr_targets(device, render.0, render.1, scales)?),
                 ssr_resolve,
                 composite,
                 blur,
@@ -261,7 +265,7 @@ pub(in crate::metal) fn build_ssr(
         resolve: ssr_resolve,
         composite_pipeline: ssr_composite_pipeline,
         blur_pipeline: ssr_blur_pipeline,
-        blur_scale: settings.reflection_blur_scale.max(1),
+        scales,
     })
 }
 

@@ -7,7 +7,8 @@ use concinnity_core::components::{IndirectLighting, PostProcessConfig};
 use super::{Lens, SettingKey};
 use crate::config::GraphicsSettings;
 use crate::gfx::quality_preset::{
-    QualityCeiling, clamp_aa_mode, coarser_reflection_blur, coarser_ssgi_resolution,
+    QualityCeiling, clamp_aa_mode, coarser_reflection_blur, coarser_rt_reflection_resolution,
+    coarser_ssgi_resolution,
 };
 
 // An Off/On quality feature. `allowed` is whether the ceiling permits it on.
@@ -72,10 +73,11 @@ macro_rules! cycle {
 }
 
 // In `SettingKey::QUALITY_TOGGLES` order.
-pub(crate) static QUALITY_TOGGLES: [QualityToggle; 5] = [
+pub(crate) static QUALITY_TOGGLES: [QualityToggle; 6] = [
     toggle!(Ssao, ssao),
     toggle!(Ssr, ssr),
     toggle!(RayTracedReflections, ray_traced_reflections),
+    toggle!(RtReflectionShadows, rt_reflection_shadows),
     toggle!(
         Ssgi,
         ssgi,
@@ -91,7 +93,7 @@ pub(crate) static QUALITY_TOGGLES: [QualityToggle; 5] = [
     toggle!(AutoExposure, auto_exposure),
 ];
 
-pub(crate) static QUALITY_CYCLES: [QualityCycle; 5] = [
+pub(crate) static QUALITY_CYCLES: [QualityCycle; 6] = [
     cycle!(
         AaMode,
         aa_mode,
@@ -122,6 +124,18 @@ pub(crate) static QUALITY_CYCLES: [QualityCycle; 5] = [
         super::ssgi_steps_index,
         super::ssgi_steps_at,
         |cfg, ceiling| cfg.ssgi_steps = cfg.ssgi_steps.min(ceiling.ssgi_steps)
+    ),
+    cycle!(
+        RtReflectionResolution,
+        rt_reflection_resolution,
+        super::rt_reflection_resolution_index,
+        super::rt_reflection_resolution_at,
+        |cfg, ceiling| {
+            cfg.rt_reflection_resolution = coarser_rt_reflection_resolution(
+                cfg.rt_reflection_resolution,
+                ceiling.rt_reflection_resolution,
+            )
+        }
     ),
     cycle!(
         ReflectionBlurResolution,

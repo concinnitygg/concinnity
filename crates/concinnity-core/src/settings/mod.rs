@@ -34,6 +34,9 @@ pub(crate) const FPS_CAP_OPTIONS: [&str; 6] = ["Unlimited", "30", "60", "120", "
 pub const SSGI_RESOLUTION_OPTIONS: [&str; 3] = ["Full", "Half", "Quarter"];
 pub(crate) const SSGI_RAYS_OPTIONS: [&str; 4] = ["4", "8", "16", "32"];
 pub(crate) const SSGI_STEPS_OPTIONS: [&str; 4] = ["8", "12", "24", "48"];
+/// Ray-traced reflection trace resolution options, finest-first (matches the
+/// enum).
+pub const RT_REFLECTION_RESOLUTION_OPTIONS: [&str; 3] = ["Full", "Half", "Quarter"];
 /// Reflection blur resolution options, finest-first (matches the enum).
 pub const REFLECTION_BLUR_OPTIONS: [&str; 3] = ["Full", "Half", "Quarter"];
 
@@ -96,6 +99,7 @@ pub fn options(key: SettingKey) -> Option<&'static [&'static str]> {
         K::SsgiResolution => Some(&SSGI_RESOLUTION_OPTIONS),
         K::SsgiRays => Some(&SSGI_RAYS_OPTIONS),
         K::SsgiSteps => Some(&SSGI_STEPS_OPTIONS),
+        K::RtReflectionResolution => Some(&RT_REFLECTION_RESOLUTION_OPTIONS),
         K::ReflectionBlurResolution => Some(&REFLECTION_BLUR_OPTIONS),
         K::ShadowMapSize => Some(&SHADOW_RESOLUTION_OPTIONS),
         K::ShadowUpdate => Some(&SHADOW_UPDATE_OPTIONS),
@@ -110,9 +114,12 @@ pub fn options(key: SettingKey) -> Option<&'static [&'static str]> {
         }
         // Stats-HUD display toggles: a master and one per readout (Off/On).
         K::PerfStats | K::ShowFps | K::ShowVram => Some(&OFF_ON_OPTIONS),
-        K::Ssao | K::Ssr | K::RayTracedReflections | K::Ssgi | K::AutoExposure => {
-            Some(&OFF_ON_OPTIONS)
-        }
+        K::Ssao
+        | K::Ssr
+        | K::RayTracedReflections
+        | K::RtReflectionShadows
+        | K::Ssgi
+        | K::AutoExposure => Some(&OFF_ON_OPTIONS),
         K::Resolution
         | K::Exposure
         | K::BloomIntensity

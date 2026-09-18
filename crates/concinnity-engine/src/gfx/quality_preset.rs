@@ -11,7 +11,8 @@
 //! only thing persisted is the one preset marker, not a bake of every field.
 
 use concinnity_core::components::{
-    AaMode, ReflectionBlurResolution, ShadowUpdate, SsgiResolution, UpscaleQuality,
+    AaMode, ReflectionBlurResolution, RtReflectionResolution, ShadowUpdate, SsgiResolution,
+    UpscaleQuality,
 };
 use concinnity_core::render::backend::{GpuProfile, GpuTier};
 use concinnity_core::render::planar_reflection;
@@ -53,6 +54,8 @@ pub(crate) struct QualityCeiling {
     pub ssao: bool,
     pub ssr: bool,
     pub ray_traced_reflections: bool,
+    // Whether ray-traced reflections may cast sun-shadow rays from their hits.
+    pub rt_reflection_shadows: bool,
     pub ssgi: bool,
     pub auto_exposure: bool,
     // The minimum upscaling the ceiling forces: the effective render scale is the
@@ -74,6 +77,10 @@ pub(crate) struct QualityCeiling {
     // allows, clamping the world's choice coarser. The no-ceiling value is `Full`
     // (finest), so a world's authored value always stands under it.
     pub(crate) reflection_blur_resolution: ReflectionBlurResolution,
+    // Cap on the ray-traced reflection trace resolution (only bites where
+    // `ray_traced_reflections` is permitted), clamping the world's choice
+    // coarser. The no-ceiling value is `Full`.
+    pub(crate) rt_reflection_resolution: RtReflectionResolution,
     // Cap on the shadow-map cascade resolution in texels (restart-required): the
     // effective size is the smaller of the world's choice and this cap. The
     // no-ceiling value is `u32::MAX`, so a world's authored size always stands.
@@ -144,6 +151,18 @@ pub(crate) fn coarser_reflection_blur(
     }
 }
 
+// The coarser of two ray-traced reflection trace resolutions.
+pub(crate) fn coarser_rt_reflection_resolution(
+    a: RtReflectionResolution,
+    b: RtReflectionResolution,
+) -> RtReflectionResolution {
+    if a.scale_divisor() >= b.scale_divisor() {
+        a
+    } else {
+        b
+    }
+}
+
 // No ceiling: everything permitted, no forced upscaling. The resolved ceiling
 // for `Custom` alone -- every `Auto` tier, unclassified hardware included,
 // resolves to a named tier.
@@ -194,6 +213,7 @@ const NONE: QualityCeiling = QualityCeiling {
     ssao: true,
     ssr: true,
     ray_traced_reflections: true,
+    rt_reflection_shadows: true,
     ssgi: true,
     auto_exposure: true,
     min_upscale: UpscaleQuality::Quality,
@@ -201,6 +221,7 @@ const NONE: QualityCeiling = QualityCeiling {
     ssgi_rays: SSGI_RAYS_MAX,
     ssgi_steps: SSGI_STEPS_MAX,
     reflection_blur_resolution: REFLECTION_BLUR_MAX,
+    rt_reflection_resolution: RtReflectionResolution::Full,
     shadow_map_size: SHADOW_SIZE_MAX,
     allow_every_frame_shadows: true,
     anisotropy: ANISO_MAX,
@@ -213,6 +234,7 @@ const LOW: QualityCeiling = QualityCeiling {
     ssao: false,
     ssr: false,
     ray_traced_reflections: false,
+    rt_reflection_shadows: false,
     ssgi: false,
     auto_exposure: true,
     min_upscale: UpscaleQuality::Performance,
@@ -220,6 +242,7 @@ const LOW: QualityCeiling = QualityCeiling {
     ssgi_rays: 4,
     ssgi_steps: 8,
     reflection_blur_resolution: ReflectionBlurResolution::Quarter,
+    rt_reflection_resolution: RtReflectionResolution::Quarter,
     shadow_map_size: 1024,
     allow_every_frame_shadows: false,
     anisotropy: 4,
@@ -234,6 +257,7 @@ const MEDIUM: QualityCeiling = QualityCeiling {
     ssao: true,
     ssr: false,
     ray_traced_reflections: false,
+    rt_reflection_shadows: false,
     ssgi: false,
     auto_exposure: true,
     min_upscale: UpscaleQuality::Balanced,
@@ -241,6 +265,7 @@ const MEDIUM: QualityCeiling = QualityCeiling {
     ssgi_rays: 8,
     ssgi_steps: 12,
     reflection_blur_resolution: ReflectionBlurResolution::Half,
+    rt_reflection_resolution: RtReflectionResolution::Half,
     shadow_map_size: 2048,
     allow_every_frame_shadows: false,
     anisotropy: 8,
@@ -254,6 +279,7 @@ const HIGH: QualityCeiling = QualityCeiling {
     ssao: true,
     ssr: true,
     ray_traced_reflections: false,
+    rt_reflection_shadows: true,
     ssgi: true,
     auto_exposure: true,
     min_upscale: UpscaleQuality::Quality,
@@ -261,6 +287,7 @@ const HIGH: QualityCeiling = QualityCeiling {
     ssgi_rays: 8,
     ssgi_steps: 12,
     reflection_blur_resolution: ReflectionBlurResolution::Half,
+    rt_reflection_resolution: RtReflectionResolution::Half,
     shadow_map_size: 4096,
     allow_every_frame_shadows: false,
     anisotropy: 16,
@@ -275,6 +302,7 @@ const ULTRA: QualityCeiling = QualityCeiling {
     ssao: true,
     ssr: true,
     ray_traced_reflections: true,
+    rt_reflection_shadows: true,
     ssgi: true,
     auto_exposure: true,
     min_upscale: UpscaleQuality::Quality,
@@ -282,6 +310,7 @@ const ULTRA: QualityCeiling = QualityCeiling {
     ssgi_rays: SSGI_RAYS_MAX,
     ssgi_steps: SSGI_STEPS_MAX,
     reflection_blur_resolution: REFLECTION_BLUR_MAX,
+    rt_reflection_resolution: RtReflectionResolution::Full,
     shadow_map_size: SHADOW_SIZE_MAX,
     allow_every_frame_shadows: true,
     anisotropy: ANISO_MAX,
@@ -474,6 +503,7 @@ mod tests {
                 (lo.ssao, hi.ssao),
                 (lo.ssr, hi.ssr),
                 (lo.ray_traced_reflections, hi.ray_traced_reflections),
+                (lo.rt_reflection_shadows, hi.rt_reflection_shadows),
                 (lo.ssgi, hi.ssgi),
                 (lo.auto_exposure, hi.auto_exposure),
             ] {
@@ -507,6 +537,14 @@ mod tests {
                 ),
                 lo.reflection_blur_resolution,
                 "a higher tier permitted a coarser reflection blur"
+            );
+            assert_eq!(
+                coarser_rt_reflection_resolution(
+                    lo.rt_reflection_resolution,
+                    hi.rt_reflection_resolution
+                ),
+                lo.rt_reflection_resolution,
+                "a higher tier permitted a coarser ray-traced reflection trace"
             );
             // The shadow caps rise (or hold) with the tier: a higher tier never
             // permits a smaller shadow map or forbids a cadence a lower tier

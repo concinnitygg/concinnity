@@ -800,8 +800,9 @@ pub struct RtParams {
     /// IBL prefilter cubemap mip count. 0 when no EnvironmentMap is bound: the
     /// kernel then keeps the base shading for missed rays instead of a cube tap.
     pub prefilter_mip_count: f32,
-    /// Padding so the field layout matches the shader-side struct.
-    pub _pad0: f32,
+    /// 1.0 when a reflected hit casts a sun-shadow ray, 0.0 when it is lit
+    /// unshadowed.
+    pub sun_shadows: f32,
     /// Padding so the field layout matches the shader-side struct.
     pub _pad1: f32,
     /// Padding so the field layout matches the shader-side struct.
@@ -1828,7 +1829,7 @@ mod tests {
         assert_eq!(offset_of!(RtParams, tan_half_fov_y), 8);
         assert_eq!(offset_of!(RtParams, aspect), 12);
         assert_eq!(offset_of!(RtParams, prefilter_mip_count), 16);
-        assert_eq!(offset_of!(RtParams, _pad0), 20);
+        assert_eq!(offset_of!(RtParams, sun_shadows), 20);
         assert_eq!(offset_of!(RtParams, _pad1), 24);
         assert_eq!(offset_of!(RtParams, _pad2), 28);
         assert_eq!(offset_of!(RtParams, cam_pos), 32);

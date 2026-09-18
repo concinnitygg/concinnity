@@ -15,8 +15,8 @@ pub(crate) mod quality_rows;
 // field) lives in SettingsSystem's drain, keyed by the same `SettingKey`.
 
 use concinnity_core::components::{
-    AaMode, ControlsCommand, PostProcessConfig, ReflectionBlurResolution, SettingOp, ShadowUpdate,
-    SsgiResolution, UpscaleQuality, UpscalerBackend, WindowMode,
+    AaMode, ControlsCommand, PostProcessConfig, ReflectionBlurResolution, RtReflectionResolution,
+    SettingOp, ShadowUpdate, SsgiResolution, UpscaleQuality, UpscalerBackend, WindowMode,
 };
 use concinnity_core::gfx::render_types::PostProcessTunables;
 use concinnity_core::render::backend;
@@ -37,7 +37,9 @@ pub(crate) use concinnity_core::settings::{SettingKey, options};
 // capability-dependent toggle.
 pub(crate) fn setting_available(key: SettingKey, caps: &backend::DeviceCapabilities) -> bool {
     match key {
-        SettingKey::RayTracedReflections => caps.ray_tracing,
+        SettingKey::RayTracedReflections
+        | SettingKey::RtReflectionResolution
+        | SettingKey::RtReflectionShadows => caps.ray_tracing,
         // The upscaler selector (FSR3 / DLSS / XeSS) grays out on a device whose
         // upscaler is fixed, rather than offering a dead selection.
         SettingKey::UpscaleBackend => caps.selectable_upscaler,
@@ -215,6 +217,24 @@ fn nearest_count_index(levels: &[u32], count: u32) -> usize {
         .min_by_key(|&(_, &v)| v.abs_diff(count))
         .map(|(i, _)| i)
         .unwrap_or(0)
+}
+
+// Ray-traced reflection trace resolution for an option index, and the index
+// for a resolution. Order matches RT_REFLECTION_RESOLUTION_OPTIONS (finest
+// first).
+pub(crate) fn rt_reflection_resolution_at(index: usize) -> RtReflectionResolution {
+    match index {
+        0 => RtReflectionResolution::Full,
+        2 => RtReflectionResolution::Quarter,
+        _ => RtReflectionResolution::Half,
+    }
+}
+pub(crate) fn rt_reflection_resolution_index(res: RtReflectionResolution) -> usize {
+    match res {
+        RtReflectionResolution::Full => 0,
+        RtReflectionResolution::Half => 1,
+        RtReflectionResolution::Quarter => 2,
+    }
 }
 
 // Reflection blur resolution for an option index, and the index for a
@@ -865,15 +885,16 @@ mod tests {
             ray_tracing: false,
             ..DeviceCapabilities::ALL
         };
-        // RT reflections follow the device's ray-tracing capability.
-        assert!(setting_available(
+        // RT reflections and their sub-settings follow the device's
+        // ray-tracing capability.
+        for key in [
             SettingKey::RayTracedReflections,
-            &capable
-        ));
-        assert!(!setting_available(
-            SettingKey::RayTracedReflections,
-            &incapable
-        ));
+            SettingKey::RtReflectionResolution,
+            SettingKey::RtReflectionShadows,
+        ] {
+            assert!(setting_available(key, &capable));
+            assert!(!setting_available(key, &incapable));
+        }
         // Every other setting is always available, regardless of capability.
         for key in [
             SettingKey::Vsync,
@@ -1065,6 +1086,26 @@ mod tests {
             assert!(options(key).is_some(), "{key:?} should be a cycle row");
             assert!(slider(key).is_none(), "{key:?} should not be a slider");
         }
+    }
+
+    #[test]
+    fn rt_reflection_resolution_round_trips() {
+        for r in [
+            RtReflectionResolution::Full,
+            RtReflectionResolution::Half,
+            RtReflectionResolution::Quarter,
+        ] {
+            assert_eq!(
+                rt_reflection_resolution_at(rt_reflection_resolution_index(r)),
+                r
+            );
+        }
+        assert_eq!(
+            options(SettingKey::RtReflectionResolution).map(|o| o.len()),
+            Some(3)
+        );
+        assert!(quality_rows::quality_cycle(SettingKey::RtReflectionResolution).is_some());
+        assert!(quality_rows::quality_toggle(SettingKey::RtReflectionShadows).is_some());
     }
 
     #[test]

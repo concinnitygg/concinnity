@@ -88,11 +88,12 @@ pub(in crate::vulkan) struct RtReflectionsResources {
     // Resolved authored tunables; turned into a per-frame `RtParams` push.
     pub(in crate::vulkan) settings: RtReflectionSettings,
 
-    // Reflection output: the HDR scene with reflections composited in. Becomes
-    // the scene image the bloom / composite / TAA passes consume (a single
-    // shared image, like the SSR resolve output). Owns its own slot because RT
-    // can be authored with the SSR resolve off.
+    // Reflection output: reflected radiance + composite weight, at the trace
+    // resolution, which the reflection composite upsamples over the scene. Owns
+    // its own slot because RT can be authored with the SSR resolve off.
     pub(in crate::vulkan) output: GpuImage,
+    // The trace resolution: render resolution reduced by `settings.divisor`.
+    extent: vk::Extent2D,
     render_pass: OwnedRenderPass,
     framebuffer: OwnedFramebuffer,
 
@@ -540,6 +541,7 @@ impl RtReflectionsResources {
         let mut me = Self {
             settings,
             output: GpuImage::null(),
+            extent: vk::Extent2D::default(),
             render_pass,
             framebuffer: OwnedFramebuffer::null(),
             _set_layout: set_layout,
@@ -585,7 +587,8 @@ impl RtReflectionsResources {
         Ok(me)
     }
 
-    // Allocate / re-allocate the resolution-dependent output target + framebuffer.
+    // Allocate / re-allocate the output target + framebuffer at the trace
+    // resolution for a `width` x `height` render.
     fn build_targets(
         &mut self,
         alloc: &DeviceAllocator,
@@ -593,8 +596,11 @@ impl RtReflectionsResources {
         width: u32,
         height: u32,
     ) -> RenderResult<()> {
-        let w = width.max(1);
-        let h = height.max(1);
+        let (w, h) = self.settings.trace_extent(width, height);
+        self.extent = vk::Extent2D {
+            width: w,
+            height: h,
+        };
         let pooled = create_image(
             alloc,
             &ImageSpec {
@@ -1083,7 +1089,7 @@ impl VkContext {
             None => return,
         };
         let device = &self.hw.device;
-        let extent = self.targets.render_extent;
+        let extent = rt.extent;
 
         // The view->world rotation is the transpose of the view matrix's
         // orthonormal 3x3; `params` fills in the camera-position translation

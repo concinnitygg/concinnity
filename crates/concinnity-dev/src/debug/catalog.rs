@@ -153,7 +153,7 @@ pub(crate) fn verb_list() -> String {
 }
 
 /// The `setting` values `quality-set` accepts.
-pub(crate) const QUALITY_TOGGLE_NAMES: [&str; 5] = SettingKey::names(SettingKey::QUALITY_TOGGLES);
+pub(crate) const QUALITY_TOGGLE_NAMES: [&str; 6] = SettingKey::names(SettingKey::QUALITY_TOGGLES);
 
 const COMMANDS: &[Command] = &[
     Command {

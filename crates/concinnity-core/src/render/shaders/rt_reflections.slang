@@ -37,6 +37,8 @@
 #define MAX_PROBES 8
 #endif
 
+{POST_COMMON}
+
 {PROBE_TYPES}
 
 {RT_TYPES}
@@ -73,6 +75,12 @@ uint index_at(uint o) { return indices.Load(o * 4u); }
 uint skinned_index_word(uint w) { return sidx.Load(w * 4u); }
 
 float4 screen_sample(Texture2D<float4> t, float2 uv) { return t.Sample(screen_sampler, uv); }
+float2 gbuffer_size()
+{
+    uint w, h;
+    gbuffer.GetDimensions(w, h);
+    return float2(float(w), float(h));
+}
 float3 prefilter_level(float3 dir, float lod)
 {
     return prefilter.SampleLevel(cube_sampler, SKY_DIR(dir), lod).rgb;
@@ -107,6 +115,7 @@ uint index_at(uint o) { return indices[o]; }
 uint skinned_index_word(uint w) { return sidx[w]; }
 
 float4 screen_sample(Sampler2D<float4> t, float2 uv) { return t.Sample(uv); }
+float2 gbuffer_size() { return combined_size(gbuffer); }
 float3 prefilter_level(float3 dir, float lod) { return prefilter.SampleLevel(SKY_DIR(dir), lod).rgb; }
 
 #endif
@@ -224,6 +233,10 @@ float3 rt_view_pos(float2 uv, float depth, float tan_y, float aspect)
 [shader("fragment")]
 float4 rt_reflections_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target
 {
+    // At a reduced trace resolution each output texel stands for a block of
+    // G-buffer pixels; trace from exactly one of them so the surface point is
+    // real rather than a blend across an edge.
+    uv = reflection_source_uv(uv, gbuffer_size());
     float3 base = screen_sample(scene_tex, uv).rgb;
     float4 g = screen_sample(gbuffer, uv);
     float depth = g.a;

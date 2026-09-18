@@ -74,7 +74,8 @@ float3 decode_normal_map(float2 encoded)
 }
 
 // Sun visibility at a hit: 0 where a second ray toward the sun is occluded (a
-// cast shadow inside the reflection), 1 where the sun is visible.
+// cast shadow inside the reflection), 1 where the sun is visible or the
+// shadow ray is switched off.
 //
 // RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH is what an occlusion query wants and
 // is what the Vulkan and DirectX legs get; the Metal target drops it (slangc
@@ -83,6 +84,10 @@ float3 decode_normal_map(float2 encoded)
 // more traversal.
 float rt_shadow(float3 hp, float3 n)
 {
+    if (rt_params.sun_shadows < 0.5)
+    {
+        return 1.0;
+    }
     RayDesc sr;
     sr.Origin = hp + n * 0.02;
     sr.Direction = normalize(rt_params.sun_dir.xyz);

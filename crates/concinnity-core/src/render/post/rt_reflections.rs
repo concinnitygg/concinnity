@@ -35,6 +35,10 @@ pub struct RtReflectionSettings {
     pub intensity: f32,
     /// World-space distance the reflection ray travels before it misses.
     pub max_distance: f32,
+    /// Per-axis render-resolution divisor the trace target is sized by.
+    pub divisor: u32,
+    /// Whether a reflected hit casts a sun-shadow ray.
+    pub sun_shadows: bool,
 }
 
 /// Per-frame camera + sun inputs for building the RT-reflection GPU uniform.
@@ -74,16 +78,29 @@ impl RtReflectionSettings {
     /// support. Not gated on the intensity, for the same specular-handover
     /// reason as [`SsrSettings::from_config`](super::ssr::settings::SsrSettings::from_config).
     pub fn from_config(cfg: &PostProcessConfig) -> Option<Self> {
-        cfg.ray_traced_reflections
-            .then(|| Self::resolve(cfg.ssr_intensity, cfg.ssr_max_distance))
+        cfg.ray_traced_reflections.then(|| Self {
+            divisor: cfg.rt_reflection_resolution.scale_divisor(),
+            sun_shadows: cfg.rt_reflection_shadows,
+            ..Self::resolve(cfg.ssr_intensity, cfg.ssr_max_distance)
+        })
     }
 
-    /// Clamp the authored intensity / distance into a safe range.
+    /// Clamp the authored intensity / distance into a safe range, tracing at
+    /// full resolution with sun shadows.
     pub fn resolve(intensity: f32, max_distance: f32) -> Self {
         Self {
             intensity: intensity.clamp(0.0, MAX_INTENSITY),
             max_distance: max_distance.clamp(MIN_DISTANCE, MAX_DISTANCE),
+            divisor: 1,
+            sun_shadows: true,
         }
+    }
+
+    /// The trace target's extent for a `width` x `height` render, never below
+    /// one texel per axis.
+    pub fn trace_extent(&self, width: u32, height: u32) -> (u32, u32) {
+        let d = self.divisor.max(1);
+        ((width / d).max(1), (height / d).max(1))
     }
 
     /// Build the per-frame GPU uniform from these settings, the active camera,
@@ -107,7 +124,7 @@ impl RtReflectionSettings {
             tan_half_fov_y,
             aspect,
             prefilter_mip_count,
-            _pad0: 0.0,
+            sun_shadows: if self.sun_shadows { 1.0 } else { 0.0 },
             _pad1: 0.0,
             _pad2: 0.0,
             cam_pos: [cam_pos[0], cam_pos[1], cam_pos[2], 0.0],
@@ -158,6 +175,52 @@ mod tests {
         // Reuses the SSR intensity / distance fields, clamped by the RT resolve.
         assert_eq!(s.intensity, 1.0);
         assert!(s.max_distance > 0.0 && s.max_distance.is_finite());
+    }
+
+    #[test]
+    fn from_config_carries_trace_resolution_and_shadows() {
+        use crate::components::RtReflectionResolution;
+        let cfg = PostProcessConfig {
+            rt_reflection_resolution: RtReflectionResolution::Quarter,
+            rt_reflection_shadows: false,
+            ..Default::default()
+        };
+        let s = RtReflectionSettings::from_config(&cfg).expect("rt on");
+        assert_eq!(s.divisor, 4);
+        assert!(!s.sun_shadows);
+    }
+
+    #[test]
+    fn trace_extent_divides_and_floors_at_one_texel() {
+        let s = RtReflectionSettings {
+            divisor: 2,
+            ..RtReflectionSettings::resolve(0.7, 40.0)
+        };
+        assert_eq!(s.trace_extent(1921, 1080), (960, 540));
+        assert_eq!(s.trace_extent(1, 1), (1, 1));
+        let full = RtReflectionSettings::resolve(0.7, 40.0);
+        assert_eq!(full.trace_extent(1921, 1080), (1921, 1080));
+    }
+
+    #[test]
+    fn params_flag_sun_shadows() {
+        let inputs = RtParamsInputs {
+            fov_y_radians: 1.0,
+            aspect: 1.0,
+            inv_view_rot: IDENTITY,
+            cam_pos: [0.0; 3],
+            sun_dir: [0.0, 1.0, 0.0],
+            sun_color: [1.0; 3],
+            prefilter_mip_count: 0.0,
+            sky_rot: SkyOrientation::IDENTITY_ROWS,
+        };
+        let on = RtReflectionSettings::resolve(0.7, 40.0);
+        assert_eq!(on.params(inputs).sun_shadows, 1.0);
+        let off = RtReflectionSettings {
+            sun_shadows: false,
+            ..on
+        };
+        assert_eq!(off.params(inputs).sun_shadows, 0.0);
     }
 
     #[test]

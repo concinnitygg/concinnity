@@ -110,7 +110,7 @@ pub(in crate::shader_layout) fn rt_reflections() -> Vec<Case> {
             tan_half_fov_y,
             aspect,
             prefilter_mip_count,
-            _pad0,
+            sun_shadows,
             _pad1,
             _pad2,
             cam_pos,

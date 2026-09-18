@@ -177,7 +177,31 @@ impl DxContext {
         // (`gbuffer_needed` folds in `desired_rt`). Turning off drops both
         // (their COM resources release on drop); `scene_srv_for_post` falls back
         // to the SSR resolve / HDR dynamically next frame, so no rewire is needed.
-        if desired_rt && self.rt_reflections.is_none() {
+        if let (true, Some(settings), Some(rt)) =
+            (desired_rt, q.rt_reflections, self.rt_reflections.as_mut())
+        {
+            // Already live: take the new trace resolution / shadow choice and
+            // resize the output target to it (the device is idle).
+            let resized = settings.divisor != rt.settings.divisor;
+            rt.settings = settings;
+            if resized {
+                let heap = &self.descriptors.srv_heap;
+                // SAFETY: property queries on a live descriptor heap; they only read.
+                let (srv_cpu_base, srv_gpu_base) = unsafe {
+                    (
+                        heap.GetCPUDescriptorHandleForHeapStart(),
+                        heap.GetGPUDescriptorHandleForHeapStart(),
+                    )
+                };
+                rt.resize_to(
+                    &self.hw.device,
+                    render_w,
+                    render_h,
+                    srv_cpu_base,
+                    srv_gpu_base,
+                )?;
+            }
+        } else if desired_rt && self.rt_reflections.is_none() {
             self.build_rt_runtime(q.rt_reflections.expect("desired_rt implies settings"))?;
         } else if !desired_rt && self.rt_reflections.is_some() {
             self.rt_reflections = None;

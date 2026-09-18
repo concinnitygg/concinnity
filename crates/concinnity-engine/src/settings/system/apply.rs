@@ -260,14 +260,18 @@ impl SettingsState {
             K::UpscaleBackend => {
                 Some(self.apply_display_row(ctx, ops, cfg, DisplayRow::UpscaleBackend, opts, op))
             }
-            key @ (K::Ssao | K::Ssr | K::RayTracedReflections | K::Ssgi | K::AutoExposure) => {
-                quality_toggle(key)
-                    .map(|row| self.apply_quality_toggle(ctx, ops, cfg, row, opts, op))
-            }
+            key @ (K::Ssao
+            | K::Ssr
+            | K::RayTracedReflections
+            | K::RtReflectionShadows
+            | K::Ssgi
+            | K::AutoExposure) => quality_toggle(key)
+                .map(|row| self.apply_quality_toggle(ctx, ops, cfg, row, opts, op)),
             key @ (K::AaMode
             | K::SsgiResolution
             | K::SsgiRays
             | K::SsgiSteps
+            | K::RtReflectionResolution
             | K::ReflectionBlurResolution) => {
                 quality_cycle(key).map(|row| self.apply_quality_cycle(ctx, ops, cfg, row, opts, op))
             }

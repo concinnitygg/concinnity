@@ -30,3 +30,14 @@ float2 combined_size(Sampler2D<float4> s)
     combined_dims(s, w, h);
     return float2(float(w), float(h));
 }
+
+// The G-buffer pixel a reflection texel at `uv` traces from, as the UV of that
+// pixel's center. At a reduced trace resolution a texel covers a block of
+// pixels; this picks one real pixel of the block, and addressing its center
+// makes a linear sampler return it unblended. At full resolution it is the
+// pixel itself.
+float2 reflection_source_uv(float2 uv, float2 gbuffer_size)
+{
+    float2 px = floor(uv * gbuffer_size - 0.25);
+    return (px + 0.5) / gbuffer_size;
+}

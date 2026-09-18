@@ -242,6 +242,7 @@ pub use post_process_config::HDR_MULTISAMPLE_COUNT;
 pub use post_process_config::IndirectLighting;
 pub use post_process_config::PostProcessConfig;
 pub use post_process_config::ReflectionBlurResolution;
+pub use post_process_config::RtReflectionResolution;
 pub use post_process_config::SsgiResolution;
 pub use post_process_config::UpscaleQuality;
 pub use post_process_config::UpscalerBackend;

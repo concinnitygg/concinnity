@@ -193,11 +193,13 @@ pub(in crate::directx) struct RtReflectionsResources {
     // Resolved authored tunables; turned into a per-frame `RtParams` push.
     pub(in crate::directx) settings: RtReflectionSettings,
 
-    // Reflection output: the HDR scene with reflections composited in. Becomes
-    // the "scene" SRV the TAA / bloom / composite passes consume (it owns its
-    // own slot rather than reusing the optional SSR resolve output, because RT
-    // can be authored with SSR resolve off).
+    // Reflection output: reflected radiance + composite weight at the trace
+    // resolution, which the reflection composite upsamples over the scene (it
+    // owns its own slot rather than reusing the optional SSR resolve output,
+    // because RT can be authored with SSR resolve off).
     pub(in crate::directx) output: ID3D12Resource,
+    // The trace resolution: render resolution reduced by `settings.divisor`.
+    extent: (u32, u32),
     output_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
     pub(in crate::directx) output_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
 
@@ -211,7 +213,8 @@ pub(in crate::directx) struct RtReflectionsResources {
     textured_pso: ID3D12PipelineState,
 }
 
-// Device + output target extent for building the RT-reflection resources.
+// Device + render extent for building the RT-reflection resources; the output
+// target is that extent reduced to the trace resolution.
 pub(in crate::directx) struct RtBuildContext<'a> {
     pub alloc: &'a DeviceAllocator,
     pub width: u32,
@@ -256,7 +259,8 @@ impl RtReflectionsResources {
             info_queue,
             hot_reload,
         } = init;
-        let output = create_rt_target(device, width, height, HDR_FORMAT)?;
+        let extent = settings.trace_extent(width, height);
+        let output = create_rt_target(device, extent.0, extent.1, HDR_FORMAT)?;
         write_format_rtv(device, &output, output_rtv, HDR_FORMAT);
         write_format_srv(device, &output, output_srv.0, HDR_FORMAT);
 
@@ -308,6 +312,7 @@ impl RtReflectionsResources {
         Ok(Self {
             settings,
             output,
+            extent,
             output_rtv,
             output_srv_gpu: output_srv.1,
             params_ubo_resources,
@@ -318,9 +323,10 @@ impl RtReflectionsResources {
         })
     }
 
-    // Rebuild the output target at a new resolution. The descriptor *slot* stays
-    // put; only the backing resource changes, so the post stack's scene binding
-    // (which points at the SRV slot's GPU handle) stays valid.
+    // Rebuild the output target for a new render resolution, at the trace
+    // resolution `settings` names. The descriptor *slot* stays put; only the
+    // backing resource changes, so the composite's binding (which points at the
+    // SRV slot's GPU handle) stays valid.
     pub(in crate::directx) fn resize_to(
         &mut self,
         device: &ID3D12Device,
@@ -332,7 +338,8 @@ impl RtReflectionsResources {
         let srv_cpu = D3D12_CPU_DESCRIPTOR_HANDLE {
             ptr: srv_cpu_base.ptr + (self.output_srv_gpu.ptr - srv_gpu_base.ptr) as usize,
         };
-        self.output = create_rt_target(device, width, height, HDR_FORMAT)?;
+        self.extent = self.settings.trace_extent(width, height);
+        self.output = create_rt_target(device, self.extent.0, self.extent.1, HDR_FORMAT)?;
         write_format_rtv(device, &self.output, self.output_rtv, HDR_FORMAT);
         write_format_srv(device, &self.output, srv_cpu, HDR_FORMAT);
         Ok(())
@@ -400,8 +407,8 @@ pub(in crate::directx) fn swap_rt_reflections_pipelines(
 impl DxContext {
     // Encode the RT-reflection resolve: a fullscreen triangle that traces each
     // glossy pixel's reflection ray against the scene TLAS and composites the
-    // reflected color into `rt_reflections.output`. The output then becomes the
-    // "scene" the TAA / bloom / composite passes consume via `scene_srv_for_post`.
+    // reflected radiance + weight into `rt_reflections.output`, which the
+    // reflection composite then upsamples over the scene.
     // No-op when any required resource is missing (the graph only schedules this
     // pass when RT is live, so the guards are defensive).
     pub(in crate::directx) fn encode_rt_reflections(
@@ -472,8 +479,7 @@ impl DxContext {
         // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&[out_to_rt]) };
 
-        let w = self.targets.extent.render_width;
-        let h = self.targets.extent.render_height;
+        let (w, h) = rt.extent;
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {

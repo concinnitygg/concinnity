@@ -31,8 +31,8 @@ pub(super) use rt_reflections::build_rt_reflection_pipeline;
 pub(super) use ssao::{SsaoState, build_ssao_pipeline, create_ssao_targets};
 pub(super) use ssgi::SsgiState;
 pub(super) use ssr::{
-    SsrState, build_reflection_blur_pipeline, build_reflection_composite_pipeline,
-    create_ssr_targets,
+    ReflectionScales, SsrState, build_reflection_blur_pipeline,
+    build_reflection_composite_pipeline, create_ssr_targets,
 };
 pub(super) use taa::{TaaState, build_taa_pass};
 pub(super) use upscale::{MetalFXUpscaler, UpscaleState, temporal_scaler_supported};

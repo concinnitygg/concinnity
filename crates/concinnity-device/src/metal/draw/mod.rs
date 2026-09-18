@@ -805,7 +805,7 @@ impl MtlContext {
                 &self.hw.device,
                 render_w,
                 render_h,
-                self.ssr.blur_scale,
+                self.ssr.scales,
             )?);
         }
         // The pre-pass's depth attachment is render-resolution and stays

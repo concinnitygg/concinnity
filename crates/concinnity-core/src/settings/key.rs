@@ -37,7 +37,7 @@ macro_rules! setting_keys {
 
         impl SettingKey {
             /// Every setting: the cycle rows, the sliders, then the rebinds.
-            pub const ALL: [SettingKey; 65] = [
+            pub const ALL: [SettingKey; 67] = [
                 $(SettingKey::$cycle,)*
                 $(SettingKey::$slider,)*
                 SettingKey::KeyRebind(Bindable::Forward),
@@ -107,6 +107,8 @@ setting_keys! {
         SsgiRays => "ssgi_rays",
         /// The SSGI march steps per ray.
         SsgiSteps => "ssgi_steps",
+        /// The ray-traced reflection trace resolution.
+        RtReflectionResolution => "rt_reflection_resolution",
         /// The reflection blur resolution.
         ReflectionBlurResolution => "reflection_blur_resolution",
         /// The shadow-map cascade resolution, or shadows off.
@@ -143,6 +145,8 @@ setting_keys! {
         Ssr => "ssr",
         /// Hardware ray-traced reflections.
         RayTracedReflections => "ray_traced_reflections",
+        /// Sun shadows inside ray-traced reflections.
+        RtReflectionShadows => "rt_reflection_shadows",
         /// Screen-space global illumination.
         Ssgi => "ssgi",
         /// Automatic exposure adaptation.
@@ -193,12 +197,13 @@ setting_keys! {
 }
 
 impl SettingKey {
-    /// The quality-feature toggles (Video "Quality" group). Each gates a render
-    /// pass whose GPU resources are built at init, so a change rebuilds them.
-    pub const QUALITY_TOGGLES: [SettingKey; 5] = [
+    /// The quality-feature toggles (Video "Quality" group). Each gates render
+    /// work the backend sets up when effects are built, so a change rebuilds them.
+    pub const QUALITY_TOGGLES: [SettingKey; 6] = [
         SettingKey::Ssao,
         SettingKey::Ssr,
         SettingKey::RayTracedReflections,
+        SettingKey::RtReflectionShadows,
         SettingKey::Ssgi,
         SettingKey::AutoExposure,
     ];
@@ -255,7 +260,7 @@ mod tests {
     #[test]
     fn kind_classifies_sliders_rebinds_and_cycles() {
         let count = |kind| SettingKey::ALL.iter().filter(|k| k.kind() == kind).count();
-        assert_eq!(count(SettingKind::Cycle), 35);
+        assert_eq!(count(SettingKind::Cycle), 37);
         assert_eq!(count(SettingKind::Slider), 20);
         assert_eq!(count(SettingKind::KeyRebind), Bindable::ALL.len());
         assert_eq!(count(SettingKind::PadRebind), GamepadAction::ALL.len());
@@ -289,6 +294,7 @@ mod tests {
                 "ssao",
                 "ssr",
                 "ray_traced_reflections",
+                "rt_reflection_shadows",
                 "ssgi",
                 "auto_exposure"
             ]

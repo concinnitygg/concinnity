@@ -258,7 +258,13 @@ impl VkContext {
         // `rebuild_swapchain` below then rebuilds the RT output target; the
         // per-frame TLAS / geometry descriptors are wired by the next
         // `rt_dynamic_update`.
-        if desired_rt && self.rt_reflections.is_none() {
+        if let (true, Some(settings), Some(rt)) =
+            (desired_rt, q.rt_reflections, self.rt_reflections.as_mut())
+        {
+            // Already live: take the new trace resolution / shadow choice, which
+            // `rebuild_swapchain` below sizes the output target from.
+            rt.settings = settings;
+        } else if desired_rt && self.rt_reflections.is_none() {
             self.build_rt_runtime(q.rt_reflections.expect("desired_rt implies settings"))?;
         } else if !desired_rt && self.rt_reflections.is_some() {
             if let Some(mut rt) = self.rt_reflections.take() {

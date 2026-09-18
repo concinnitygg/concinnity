@@ -13,7 +13,9 @@ struct RtParams
     float aspect;
     // IBL prefilter cubemap mip count; 0 means no EnvironmentMap is bound.
     float prefilter_mip_count;
-    float _pad0;
+    // 1.0 when a reflected hit casts a sun-shadow ray, 0.0 when it is lit
+    // unshadowed.
+    float sun_shadows;
     float _pad1;
     float _pad2;
     // float4 rather than float3 + scalar: MSL sizes a constant-buffer float3 at
