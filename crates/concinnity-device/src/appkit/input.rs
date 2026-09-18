@@ -74,7 +74,7 @@ pub(super) struct KeyState {
     // produced before CGAssociateMouseAndMouseCursorPosition(0) took
     // effect, often during init) can't snap the camera.
     pub(super) discard_next_motion: bool,
-    // Whether the real cursor has left the window content area while the cursor
+    // Whether the real cursor has left the window client area while the cursor
     // is free (windowed / borderless). Recomputed each frame by
     // `update_ui_cursor_confinement`; the renderer hides the in-engine cursor
     // when set. False while captured or in fullscreen (which confines instead).

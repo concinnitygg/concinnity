@@ -19,7 +19,8 @@ use objc2_app_kit::{
 use objc2_foundation::{NSDate, NSPoint, NSSize};
 
 use super::chrome::{
-    apply_title_bar, set_window_buttons_hidden, window_buttons_hidden, windowed_style_mask,
+    apply_title_bar, cursor_in_client_area, set_window_buttons_hidden, window_buttons_hidden,
+    windowed_style_mask,
 };
 use super::display_mode::{self, FullscreenDisplayMode};
 use super::input::{KeyState, key_from_mac, printable_char};
@@ -312,13 +313,10 @@ impl AppKitWindow {
             return;
         }
         // Windowed / borderless: the in-engine cursor shows only while the real
-        // cursor is over the content area.
-        let content = window.contentRectForFrameRect(window.frame());
-        let inside = cursor.x >= content.origin.x
-            && cursor.x < content.origin.x + content.size.width
-            && cursor.y >= content.origin.y
-            && cursor.y < content.origin.y + content.size.height;
-        self.keys.cursor_outside_window = !inside;
+        // cursor is over the client area. The title bar strip hands back to the
+        // OS cursor, which tracks a window drag that the rendered one lags.
+        self.keys.cursor_outside_window =
+            !cursor_in_client_area(cursor, window.frame(), window.contentLayoutRect());
     }
 
     // Show the cursor and stop accumulating mouse deltas.

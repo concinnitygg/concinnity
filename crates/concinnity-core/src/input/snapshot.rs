@@ -83,7 +83,8 @@ pub struct InputSnapshot {
 pub struct InputPacket {
     /// The raw sampled input state.
     pub raw: InputSnapshot,
-    /// Whether the cursor has left the window.
+    /// Whether the cursor has left the window's client area (off the window or
+    /// over its title bar).
     pub cursor_outside_window: bool,
     /// Logical window size, for UI hit-testing and overlay layout.
     pub viewport: (f32, f32),

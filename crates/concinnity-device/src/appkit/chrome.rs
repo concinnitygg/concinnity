@@ -105,6 +105,19 @@ pub(crate) fn create_window(
     Ok(window)
 }
 
+// Whether a screen-space cursor sits over the window's client area: the
+// content minus any title bar strip, whether an opaque one above the content or
+// a transparent one floating over it. `frame` is the window frame in screen
+// coordinates and `layout` its `contentLayoutRect` in window coordinates.
+pub(crate) fn cursor_in_client_area(cursor: NSPoint, frame: NSRect, layout: NSRect) -> bool {
+    let min_x = frame.origin.x + layout.origin.x;
+    let min_y = frame.origin.y + layout.origin.y;
+    cursor.x >= min_x
+        && cursor.x < min_x + layout.size.width
+        && cursor.y >= min_y
+        && cursor.y < min_y + layout.size.height
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,5 +150,63 @@ mod tests {
             windowed_style_mask(false).contains(NSWindowStyleMask::FullSizeContentView),
             "a title-bar-less window must fill the frame"
         );
+    }
+
+    fn rect(x: f64, y: f64, w: f64, h: f64) -> NSRect {
+        NSRect::new(NSPoint::new(x, y), NSSize::new(w, h))
+    }
+
+    // A full-size-content window: the layout rect stops 28 points short of the
+    // frame top, where the transparent title bar strip floats over the content.
+    #[test]
+    fn a_transparent_title_bar_strip_is_outside_the_client_area() {
+        let frame = rect(100.0, 200.0, 800.0, 600.0);
+        let layout = rect(0.0, 0.0, 800.0, 572.0);
+        assert!(cursor_in_client_area(
+            NSPoint::new(500.0, 400.0),
+            frame,
+            layout
+        ));
+        assert!(cursor_in_client_area(
+            NSPoint::new(500.0, 771.0),
+            frame,
+            layout
+        ));
+        assert!(!cursor_in_client_area(
+            NSPoint::new(500.0, 772.0),
+            frame,
+            layout
+        ));
+        assert!(!cursor_in_client_area(
+            NSPoint::new(500.0, 799.0),
+            frame,
+            layout
+        ));
+    }
+
+    #[test]
+    fn a_cursor_beside_the_frame_is_outside_the_client_area() {
+        let frame = rect(100.0, 200.0, 800.0, 600.0);
+        let layout = rect(0.0, 0.0, 800.0, 572.0);
+        assert!(cursor_in_client_area(
+            NSPoint::new(100.0, 200.0),
+            frame,
+            layout
+        ));
+        assert!(!cursor_in_client_area(
+            NSPoint::new(99.0, 400.0),
+            frame,
+            layout
+        ));
+        assert!(!cursor_in_client_area(
+            NSPoint::new(900.0, 400.0),
+            frame,
+            layout
+        ));
+        assert!(!cursor_in_client_area(
+            NSPoint::new(500.0, 199.0),
+            frame,
+            layout
+        ));
     }
 }
