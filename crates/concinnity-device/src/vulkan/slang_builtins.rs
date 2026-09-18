@@ -232,6 +232,7 @@ mod tests {
                 "glass_mesh_vert.slang",
                 "glass_vert.slang",
                 "line_frag.slang",
+                "particle_frag.slang",
                 "water_frag.slang",
                 "water_frag_rt.slang",
                 "water_frag_rt_textured.slang",

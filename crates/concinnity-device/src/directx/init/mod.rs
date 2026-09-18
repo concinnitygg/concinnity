@@ -328,7 +328,8 @@ impl DxContext {
             fx.fog,
             &uniforms.light_uniforms,
         )?;
-        let particle = effects::build_particles(&gpu, &descriptors, &scene, fx.particles)?;
+        let particle =
+            effects::build_particles(&gpu, &descriptors, &targets, &scene, fx.particles)?;
         let commands = commands::build_commands(&gpu)?;
         let frame_sync = commands::build_frame_sync(&gpu)?;
         let timestamps = commands::build_timestamps(&gpu);

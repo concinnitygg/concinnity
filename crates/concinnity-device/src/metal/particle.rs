@@ -15,7 +15,8 @@
 //!
 //! The render pass alpha-blends into `hdr_resolve` after the volumetric fog
 //! pass and before SSR, so particles appear in screen-space reflections and
-//! are temporally stabilized by TAA.
+//! are temporally stabilized by TAA. It attaches no depth buffer; the fragment
+//! tests the resolved scene depth itself, so opaque geometry hides a sprite.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::frustum::Frustum;
@@ -348,6 +349,8 @@ impl MtlContext {
         enc.set_pipeline(&pipelines.render);
         enc.set_vertex_value(&view, 1);
         enc.set_fragment_sampler(&pipelines.sampler, 0);
+        // Resolved scene depth at texture(2) for the manual depth test.
+        enc.set_fragment_texture(self.targets.hdr.depth_resolve.as_ref(), 2);
 
         let mut draw_calls: u32 = 0;
         for (i, (rec_slot, gpu_slot)) in self

@@ -15,7 +15,9 @@
 //!
 //! The render pass alpha-blends into the resolved HDR target after the
 //! volumetric-fog pass and before SSR / TAA so particles appear in screen-
-//! space reflections and are temporally stabilized by TAA history. Mirrors
+//! space reflections and are temporally stabilized by TAA history. It binds no
+//! depth target; the fragment tests the main depth itself, so opaque geometry
+//! hides a sprite behind it. Mirrors
 //! src/metal/particle.rs.
 
 use concinnity_core::gfx::frustum::Frustum;
@@ -71,17 +73,24 @@ pub(in crate::directx) const MAX_EMITTERS: usize = 256;
 pub(in crate::directx) use concinnity_core::render::uniforms::GpuParticle;
 pub(in crate::directx) use concinnity_core::render::uniforms::ParticleView;
 
-// Compile the particle compute + vertex + fragment shaders. Used by
-// [`ParticleResources::new`] at init and (in the future) by shader hot-reload.
 // Compiled particle kernels: simulate cs, vertex vs, fragment ps bytecode.
 type ParticleShaders = (Vec<u8>, Vec<u8>, Vec<u8>);
 
+// Compile the particle compute + vertex + fragment shaders; the MSAA variant
+// keeps the fragment's depth SRV declaration in sync with the resource's sample
+// count. Used by [`ParticleResources::new`].
 pub(in crate::directx) fn compile_particle_shaders(
+    msaa_samples: u32,
     hot_reload: bool,
 ) -> RenderResult<ParticleShaders> {
+    let frag = if msaa_samples > 1 {
+        &slang_builtins::PARTICLE_FRAG_MSAA
+    } else {
+        &slang_builtins::PARTICLE_FRAG
+    };
     let cs = slang_builtins::PARTICLE_SIMULATE.compile(hot_reload)?;
     let vs = slang_builtins::PARTICLE_VERT.compile(hot_reload)?;
-    let ps = slang_builtins::PARTICLE_FRAG.compile(hot_reload)?;
+    let ps = frag.compile(hot_reload)?;
     Ok((cs, vs, ps))
 }
 
@@ -160,12 +169,20 @@ fn create_simulate_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12R
 //   [1] root CBV b1   : ParticleParams (per-emitter)
 //   [2] root SRV t0   : pool           (structured-buffer SRV)
 //   [3] descriptor table SRV t1 : emitter albedo texture
+//   [4] descriptor table SRV t2 : main depth (Texture2D[MS]<float>)
 //   static sampler s0 : linear clamp
 fn create_render_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     let albedo_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
         NumDescriptors: 1,
         BaseShaderRegister: 1, // t1
+        RegisterSpace: 0,
+        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
+    };
+    let depth_range = D3D12_DESCRIPTOR_RANGE {
+        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
+        NumDescriptors: 1,
+        BaseShaderRegister: 2, // t2
         RegisterSpace: 0,
         OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
     };
@@ -206,6 +223,16 @@ fn create_render_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12Roo
                 DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
                     NumDescriptorRanges: 1,
                     pDescriptorRanges: &albedo_range,
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+        },
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
+                    NumDescriptorRanges: 1,
+                    pDescriptorRanges: &depth_range,
                 },
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
@@ -354,6 +381,9 @@ pub(in crate::directx) struct ParticleResources {
     // Heap slot of the first per-emitter albedo SRV; slot `i` is the SRV for
     // emitter id `i`. Written by `add_emitter`.
     pub(in crate::directx) emitter_srv_base_slot: usize,
+
+    // Heap slot of the main-depth SRV, bound at t2 for the fragment's depth test.
+    depth_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
 }
 
 impl ParticleResources {
@@ -363,11 +393,13 @@ impl ParticleResources {
     pub(in crate::directx) fn new(
         alloc: &DeviceAllocator,
         emitter_srv_base_slot: usize,
+        msaa_samples: u32,
+        depth_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
         info_queue: Option<&ID3D12InfoQueue>,
         hot_reload: bool,
     ) -> RenderResult<Self> {
         let device = alloc.device();
-        let (cs, vs, ps) = compile_particle_shaders(hot_reload)?;
+        let (cs, vs, ps) = compile_particle_shaders(msaa_samples, hot_reload)?;
 
         let simulate_root_sig = dump_on_err(info_queue, create_simulate_root_signature(device))?;
         let simulate_pso = dump_on_err(
@@ -456,6 +488,7 @@ impl ParticleResources {
             budget_upload_ptrs,
             budget_stride,
             emitter_srv_base_slot,
+            depth_srv_gpu,
         })
     }
 }
@@ -926,6 +959,9 @@ impl DxContext {
                 cmd.SetGraphicsRootSignature(&resources.render_root_sig);
                 cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
                 cmd.SetGraphicsRootConstantBufferView(0, view_gva);
+                // Main depth is already in a shader-resource state: the graph
+                // declares this pass's depth read and emits the transition.
+                cmd.SetGraphicsRootDescriptorTable(4, resources.depth_srv_gpu);
             }
 
             for (i, data) in frame_data.iter().enumerate() {
@@ -969,6 +1005,8 @@ impl DxContext {
             let resources = ParticleResources::new(
                 &self.hw.alloc,
                 self.particle.srv_base_slot,
+                self.targets.hdr.msaa_samples,
+                self.targets.main_depth_srv_gpu,
                 self.hw.info_queue.as_ref(),
                 self.hot_reload.enabled,
             )?;

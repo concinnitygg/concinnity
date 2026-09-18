@@ -411,6 +411,7 @@ pub(super) fn build_fog(
 pub(super) fn build_particles(
     gpu: &InitGpu<'_>,
     descriptors: &DxDescriptors,
+    targets: &DxTargets,
     scene: &DxSceneAssets,
     particles: Vec<ParticleEmitterRecord>,
 ) -> RenderResult<ParticleState> {
@@ -427,6 +428,8 @@ pub(super) fn build_particles(
         let resources = crate::directx::particle::ParticleResources::new(
             &hw.alloc,
             particle_srv_base_slot,
+            targets.hdr.msaa_samples,
+            targets.main_depth_srv_gpu,
             hw.info_queue.as_ref(),
             gpu.hot_reload,
         )?;

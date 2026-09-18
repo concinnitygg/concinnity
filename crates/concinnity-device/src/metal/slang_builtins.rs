@@ -306,7 +306,7 @@ pub(super) static PARTICLE_SIMULATE: SlangLib = SlangLib {
 // The remaining raster families: the particle billboard pair, the projected
 // decal, world-space lines and the text / sprite overlay. Each has real vertex
 // geometry, so unlike the post passes they keep their own vertex entry rather
-// than pairing with `fullscreen.slang`. The two depth-reading fragments always
+// than pairing with `fullscreen.slang`. The three depth-reading fragments always
 // compile against the resolved single-sample depth here, the way the fog
 // fragment does; only Vulkan reads the multisampled original.
 pub(super) static PARTICLE_VERT: SlangLib = SlangLib {
@@ -319,7 +319,7 @@ pub(super) static PARTICLE_FRAG: SlangLib = SlangLib {
     name: "particle_frag.slang",
     file: "particle.slang",
     entries: &["particle_fragment"],
-    defines: &[("METAL_BINDINGS", "1")],
+    defines: &[("METAL_BINDINGS", "1"), ("USE_MSAA", "0")],
 };
 pub(super) static DECAL_VERT: SlangLib = SlangLib {
     name: "decal_vert.slang",

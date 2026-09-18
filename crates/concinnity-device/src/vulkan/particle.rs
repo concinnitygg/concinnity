@@ -18,7 +18,8 @@
 //!
 //! Runs after the volumetric-fog pass and before SSR / TAA so particles
 //! appear in screen-space reflections and are temporally stabilized by the
-//! TAA history. Mirrors src/directx/particle.rs and src/metal/particle.rs.
+//! TAA history. The pass attaches no depth buffer; the fragment tests the main
+//! depth itself, so opaque geometry hides a sprite behind it. Mirrors src/directx/particle.rs and src/metal/particle.rs.
 
 use ash::vk;
 use concinnity_core::gfx::frustum::Frustum;
@@ -58,8 +59,12 @@ type ParticleShaderSpirv = (Vec<u8>, Vec<u8>, Vec<u8>);
 // the two pipelines against the existing layouts.
 pub(in crate::vulkan) fn compile_particle_shaders(
     hot_reload: bool,
+    msaa: bool,
 ) -> RenderResult<ParticleShaderSpirv> {
-    let ctx = super::slang_builtins::Ctx::plain(hot_reload);
+    let ctx = super::slang_builtins::Ctx {
+        msaa,
+        ..super::slang_builtins::Ctx::plain(hot_reload)
+    };
     let cs = super::slang_builtins::PARTICLE_SIMULATE.compile(&ctx)?;
     let vs = super::slang_builtins::PARTICLE_VERT.compile(&ctx)?;
     let fs = super::slang_builtins::PARTICLE_FRAG.compile(&ctx)?;
@@ -117,7 +122,7 @@ pub(in crate::vulkan) struct ParticleResources {
     pub(in crate::vulkan) render_pass: OwnedRenderPass,
     pub(in crate::vulkan) render_pipeline: OwnedPipeline,
     pub(in crate::vulkan) render_pipeline_layout: OwnedPipelineLayout,
-    // set 0: per-frame ParticleView UBO. Single binding (binding 0).
+    // set 0: per-frame (ParticleView UBO, main depth).
     pub(in crate::vulkan) _view_set_layout: OwnedSetLayout,
     // set 1: per-emitter (pool SSBO, albedo). Allocated for each
     // `ParticleEmitterGpuState` from `descriptor_pool` and written by
@@ -131,7 +136,7 @@ pub(in crate::vulkan) struct ParticleResources {
 
     // Per-frame view UBO (single 96-byte block), persistently mapped.
     pub(in crate::vulkan) view_ubos: Vec<PooledBuffer>,
-    // Per-frame view set (binding 0 = view UBO). One per frame slot.
+    // Per-frame view set (binding 0 view UBO, 1 main depth). One per frame slot.
     pub(in crate::vulkan) view_sets: Vec<vk::DescriptorSet>,
 
     // One framebuffer per frame-in-flight slot, each binding its frame
@@ -140,6 +145,23 @@ pub(in crate::vulkan) struct ParticleResources {
 
     // Linear-clamp sampler shared by every emitter's albedo binding.
     pub(in crate::vulkan) sampler: OwnedSampler,
+
+    // Sampler the depth binding carries; the fragment only `Load`s through it.
+    depth_sampler: vk::Sampler,
+
+    // Whether the main depth is multisampled; picks the fragment variant.
+    msaa: bool,
+}
+
+// Render-target inputs the particle pass writes into / samples from: the
+// per-frame resolved HDR color views, the per-frame main depth views, the
+// sampler the depth binding carries, and the framebuffer extent.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct ParticlePassTargets<'a> {
+    pub(in crate::vulkan) hdr_resolve_views: &'a [vk::ImageView],
+    pub(in crate::vulkan) depth_views: &'a [vk::ImageView],
+    pub(in crate::vulkan) depth_sampler: vk::Sampler,
+    pub(in crate::vulkan) extent: vk::Extent2D,
 }
 
 impl ParticleResources {
@@ -151,11 +173,17 @@ impl ParticleResources {
     pub(in crate::vulkan) fn new(
         gpu: &GpuUploadContext,
         frames: usize,
-        hdr_resolve_views: &[vk::ImageView],
-        extent: vk::Extent2D,
+        targets: ParticlePassTargets,
+        msaa: bool,
         hot_reload: bool,
     ) -> RenderResult<Self> {
         let &GpuUploadContext { alloc, device, .. } = gpu;
+        let ParticlePassTargets {
+            hdr_resolve_views,
+            depth_views,
+            depth_sampler,
+            extent,
+        } = targets;
         let render_pass = create_render_pass(device, HDR_FORMAT)?;
         let compute_set_layout = create_compute_set_layout(device)?;
         let (view_set_layout, emitter_set_layout) = create_render_set_layouts(device)?;
@@ -167,7 +195,7 @@ impl ParticleResources {
             emitter_set_layout.handle(),
         )?;
 
-        let (cs_spv, vs_spv, fs_spv) = compile_particle_shaders(hot_reload)?;
+        let (cs_spv, vs_spv, fs_spv) = compile_particle_shaders(hot_reload, msaa)?;
         let compute_pipeline =
             create_compute_pipeline(device, compute_pipeline_layout.handle(), &cs_spv)?;
         let render_pipeline = create_render_pipeline(
@@ -199,6 +227,7 @@ impl ParticleResources {
         let view_sets = alloc_descriptor_sets(device, descriptor_pool.handle(), &view_layouts)?;
         for (i, &set) in view_sets.iter().enumerate() {
             write_view_set(device, set, view_ubos[i].buffer());
+            write_depth_binding(device, set, frame_view(depth_views, i), depth_sampler);
         }
 
         // Per-frame framebuffers (one per frame slot binding that slot's
@@ -232,19 +261,25 @@ impl ParticleResources {
             view_sets,
             framebuffers,
             sampler,
+            depth_sampler,
+            msaa,
         })
     }
 
-    // Rebuild the framebuffers after a swapchain resize. Called from
-    // `VkContext::rebuild_swapchain`; same pattern as `FogResources` /
-    // `DecalResources`. The pipelines, layouts, buffers, sampler, and
-    // per-emitter descriptor sets all survive.
+    // Rebuild the framebuffers + re-point the per-frame depth binding after a
+    // swapchain resize. Called from `VkContext::rebuild_swapchain`; same
+    // pattern as `FogResources` / `DecalResources`. The pipelines, layouts,
+    // buffers, sampler, and per-emitter descriptor sets all survive.
     pub(in crate::vulkan) fn rebuild(
         &mut self,
         device: &VkDevice,
         hdr_resolve_views: &[vk::ImageView],
+        depth_views: &[vk::ImageView],
         extent: vk::Extent2D,
     ) -> RenderResult<()> {
+        for (i, &set) in self.view_sets.iter().enumerate() {
+            write_depth_binding(device, set, frame_view(depth_views, i), self.depth_sampler);
+        }
         self.framebuffers.clear();
         for &view in hdr_resolve_views.iter().take(self.view_ubos.len()) {
             let attachments = [view];
@@ -269,7 +304,7 @@ impl ParticleResources {
         device: &VkDevice,
         hot_reload: bool,
     ) -> RenderResult<(OwnedPipeline, OwnedPipeline)> {
-        let (cs_spv, vs_spv, fs_spv) = compile_particle_shaders(hot_reload)?;
+        let (cs_spv, vs_spv, fs_spv) = compile_particle_shaders(hot_reload, self.msaa)?;
         let cp = create_compute_pipeline(device, self.compute_pipeline_layout.handle(), &cs_spv)?;
         let rp = create_render_pipeline(
             device,
@@ -443,12 +478,19 @@ fn create_compute_set_layout(device: &VkDevice) -> RenderResult<OwnedSetLayout> 
 }
 
 fn create_render_set_layouts(device: &VkDevice) -> RenderResult<(OwnedSetLayout, OwnedSetLayout)> {
-    // set 0: per-frame ParticleView UBO. Vertex stage only.
-    let view_bindings = [vk::DescriptorSetLayoutBinding::default()
-        .binding(0)
-        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-        .descriptor_count(1)
-        .stage_flags(vk::ShaderStageFlags::VERTEX)];
+    // set 0: per-frame ParticleView UBO (vertex) + main depth (fragment).
+    let view_bindings = [
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(0)
+            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::VERTEX),
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(1)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+    ];
     let view_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&view_bindings);
     let view_set_layout = device
         .create_descriptor_set_layout(&view_info)
@@ -524,6 +566,7 @@ fn create_descriptor_pool(device: &VkDevice, frames: usize) -> RenderResult<Owne
     //   - STORAGE_BUFFER: `2 * MAX_EMITTERS` for compute (pool + counter)
     //                     + `MAX_EMITTERS` for render (pool, read-only)
     //   - COMBINED_IMAGE_SAMPLER: `MAX_EMITTERS` (one albedo per emitter)
+    //                             + `frames` (one main depth per frame slot)
     let sizes = [
         vk::DescriptorPoolSize {
             ty: vk::DescriptorType::UNIFORM_BUFFER,
@@ -535,7 +578,7 @@ fn create_descriptor_pool(device: &VkDevice, frames: usize) -> RenderResult<Owne
         },
         vk::DescriptorPoolSize {
             ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-            descriptor_count: max_emitters,
+            descriptor_count: max_emitters + frames,
         },
     ];
     let info = vk::DescriptorPoolCreateInfo::default()
@@ -572,6 +615,32 @@ fn write_view_set(device: &VkDevice, set: vk::DescriptorSet, view_ubo: vk::Buffe
         .buffer_info(std::slice::from_ref(&info));
     // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
     // and resource it names belongs to this device.
+    unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
+}
+
+// The main depth view for frame slot `i`, clamped to the last one when there
+// are fewer depth images than frame slots.
+fn frame_view(views: &[vk::ImageView], i: usize) -> vk::ImageView {
+    views[i.min(views.len().saturating_sub(1))]
+}
+
+fn write_depth_binding(
+    device: &VkDevice,
+    set: vk::DescriptorSet,
+    depth_view: vk::ImageView,
+    sampler: vk::Sampler,
+) {
+    let info = vk::DescriptorImageInfo::default()
+        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+        .image_view(depth_view)
+        .sampler(sampler);
+    let write = vk::WriteDescriptorSet::default()
+        .dst_set(set)
+        .dst_binding(1)
+        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+        .image_info(std::slice::from_ref(&info));
+    // SAFETY: `write` and the image info it borrows are live for the call, and every set and
+    // resource it names belongs to this device.
     unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
 }
 
@@ -1136,6 +1205,12 @@ impl VkContext {
                 .iter()
                 .map(|img| img.view)
                 .collect();
+            let depth_views: Vec<vk::ImageView> = self
+                .targets
+                .depth_images
+                .iter()
+                .map(|img| img.view)
+                .collect();
             let resources = ParticleResources::new(
                 &GpuUploadContext {
                     alloc: &self.hw.alloc,
@@ -1144,8 +1219,13 @@ impl VkContext {
                     queue: self.hw.graphics_queue,
                 },
                 self.frames_in_flight,
-                &hdr_resolve_views,
-                self.targets.render_extent,
+                ParticlePassTargets {
+                    hdr_resolve_views: &hdr_resolve_views,
+                    depth_views: &depth_views,
+                    depth_sampler: self.scene.linear_sampler.handle(),
+                    extent: self.targets.render_extent,
+                },
+                self.targets.msaa_samples != vk::SampleCountFlags::TYPE_1,
                 self.hot_reload.enabled,
             )?;
             self.particle.resources = Some(resources);

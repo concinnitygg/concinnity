@@ -321,7 +321,11 @@ const SLANG_DXIL_ENTRY_ABI: &[DxilAbi] = &[
         gates: &[],
         entry: "particle_fragment",
         profile: "ps_6_0",
-        registers: &[("albedo_texture", "t1"), ("albedo_sampler", "s0")],
+        registers: &[
+            ("albedo_texture", "t1"),
+            ("albedo_sampler", "s0"),
+            ("scene_depth", "t2"),
+        ],
     },
     DxilAbi {
         file: "decal.slang",
@@ -721,7 +725,7 @@ const SLANG_METAL_LIBS: &[SlangLibSpec] = &[
         name: "particle_frag.slang",
         file: "particle.slang",
         entries: &["particle_fragment"],
-        defines: &[("METAL_BINDINGS", "1")],
+        defines: &[("METAL_BINDINGS", "1"), ("USE_MSAA", "0")],
     },
     SlangLibSpec {
         name: "decal_vert.slang",

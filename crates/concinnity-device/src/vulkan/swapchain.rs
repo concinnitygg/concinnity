@@ -659,10 +659,9 @@ impl VkContext {
             bake.rewrite_hiz_view(&self.hw.device, view, sampler);
         }
 
-        // Rebuild the particle framebuffers at the new resolution. The
-        // pipelines, layouts, view UBOs, per-emitter pools, and
-        // descriptor sets all survive: only the framebuffers reference
-        // the moved hdr_resolve targets.
+        // Rebuild the particle framebuffers + re-point the per-frame depth
+        // descriptor at the new resolution. The pipelines, layouts, view UBOs,
+        // per-emitter pools, and per-emitter descriptor sets all survive.
         if let Some(mut p) = self.particle.resources.take() {
             let hdr_views: Vec<vk::ImageView> = self
                 .targets
@@ -670,7 +669,13 @@ impl VkContext {
                 .iter()
                 .map(|img| img.view)
                 .collect();
-            p.rebuild(&self.hw.device, &hdr_views, render_ext)?;
+            let depth_views: Vec<vk::ImageView> = self
+                .targets
+                .depth_images
+                .iter()
+                .map(|img| img.view)
+                .collect();
+            p.rebuild(&self.hw.device, &hdr_views, &depth_views, render_ext)?;
             self.particle.resources = Some(p);
         }
 

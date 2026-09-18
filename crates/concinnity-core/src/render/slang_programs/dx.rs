@@ -709,11 +709,10 @@ pub static WATER_RT_FRAG_TEXTURED_MSAA: SlangProgram = SlangProgram {
 // the register its root signature declares, which the rows in build.rs's
 // `SLANG_DXIL_ENTRY_ABI` pin so a slangc release cannot move one silently.
 //
-// The two depth-reading fragments come as MSAA pairs the way the fog and glass
+// The three depth-reading fragments come as MSAA pairs the way the fog and glass
 // fragments do: the sample count is a host difference, so the caller picks by
 // MSAA state and the export-time precompile leaves a bundle warm for either.
 // Their vertex stages never name the depth source and take neither.
-const PARTICLE_ABI: &[(&str, &str)] = &[("DXIL_ABI", "1")];
 
 /// `particle_vertex` from `particle.slang`.
 pub static PARTICLE_VERT: SlangProgram = SlangProgram {
@@ -721,7 +720,7 @@ pub static PARTICLE_VERT: SlangProgram = SlangProgram {
     entry: "particle_vertex",
     profile: "vs_6_0",
     label: "particle_vert.slang",
-    defines: PARTICLE_ABI,
+    defines: &[("DXIL_ABI", "1")],
 };
 /// `particle_fragment` from `particle.slang`.
 pub static PARTICLE_FRAG: SlangProgram = SlangProgram {
@@ -729,7 +728,15 @@ pub static PARTICLE_FRAG: SlangProgram = SlangProgram {
     entry: "particle_fragment",
     profile: "ps_6_0",
     label: "particle_frag.slang",
-    defines: PARTICLE_ABI,
+    defines: &[("DXIL_ABI", "1"), ("USE_MSAA", "0")],
+};
+/// `particle_fragment` from `particle.slang`.
+pub static PARTICLE_FRAG_MSAA: SlangProgram = SlangProgram {
+    file: "particle.slang",
+    entry: "particle_fragment",
+    profile: "ps_6_0",
+    label: "particle_frag_msaa.slang",
+    defines: &[("DXIL_ABI", "1"), ("USE_MSAA", "1")],
 };
 /// `decal_vertex` from `decal.slang`.
 pub static DECAL_VERT: SlangProgram = SlangProgram {
@@ -864,6 +871,7 @@ pub static ALL: &[&SlangProgram] = &[
     &WATER_RT_FRAG_TEXTURED_MSAA,
     &PARTICLE_VERT,
     &PARTICLE_FRAG,
+    &PARTICLE_FRAG_MSAA,
     &DECAL_VERT,
     &DECAL_FRAG,
     &DECAL_FRAG_MSAA,

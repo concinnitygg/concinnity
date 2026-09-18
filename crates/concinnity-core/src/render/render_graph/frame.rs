@@ -754,6 +754,9 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         // the derived transition a vertex-visible one on both explicit backends.
         let mut particles = b.add_pass(PassId::ParticlesDraw, PassKind::Render);
         particles.read_buffer_in_stage(pools, ReadStages::VERTEX);
+        // The fragment tests scene depth itself, so opaque geometry hides a
+        // sprite behind it.
+        particles.read_texture(depth_cur);
         h = particles.write_texture(h);
     }
     if inputs.lines_enabled {
@@ -1718,6 +1721,13 @@ mod tests {
             .find(|r| g.resources[r.resource_index()].label == "particle_pool")
             .expect("the draw declares the pool read");
         assert_eq!(pool_read.stage(), ReadStages::VERTEX);
+        assert!(
+            at(PassId::ParticlesDraw)
+                .reads
+                .iter()
+                .any(|r| g.resources[r.resource_index()].label == "hdr_depth"),
+            "the draw declares the scene depth read its fragment tests against"
+        );
     }
 
     #[test]

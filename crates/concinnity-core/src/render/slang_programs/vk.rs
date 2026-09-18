@@ -404,7 +404,7 @@ pub static PARTICLE_SIMULATE: SlangProgram = SlangProgram {
 // The remaining raster families: the particle billboard pair, the projected
 // decal, world-space lines and the text / sprite overlay. Each has real vertex
 // geometry, so unlike the post passes they keep their own vertex entry rather
-// than pairing with `fullscreen.slang`. Only the two depth-reading fragments
+// than pairing with `fullscreen.slang`. Only the three depth-reading fragments
 // take the host's sample count; their vertex stages never name the depth source.
 /// `particle_vertex` from `particle.slang`.
 pub static PARTICLE_VERT: SlangProgram = SlangProgram {
@@ -422,7 +422,7 @@ pub static PARTICLE_FRAG: SlangProgram = SlangProgram {
     label: "particle_frag.slang",
     gates: &[],
     sizes: Sizes::None,
-    msaa: false,
+    msaa: true,
 };
 /// `decal_vertex` from `decal.slang`.
 pub static DECAL_VERT: SlangProgram = SlangProgram {
