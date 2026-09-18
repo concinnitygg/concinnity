@@ -227,10 +227,10 @@ mod tests {
     fn read_entries_parses_reports_and_tolerates_an_absent_file() {
         let tree = concinnity_testing::TempTree::new();
         let path = tree.path().join("arena.jsonl");
-        std::fs::write(&path, "{\"name\":\"a\",\"type\":\"Prop\",\"args\":{}}").unwrap();
+        std::fs::write(&path, "{\"type\":\"Prop\",\"args\":{\"$id\":\"a\"}}").unwrap();
         let entries = read_entries(&path).unwrap();
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0]["name"], "a");
+        assert_eq!(entries[0]["args"]["$id"], "a");
 
         std::fs::write(&path, "{not json").unwrap();
         assert!(read_entries(&path).is_err());

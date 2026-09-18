@@ -13,6 +13,7 @@ use super::fixtures::{
 };
 use crate::debug_hook::DebugHook;
 use crate::editor::hook::EditorHook;
+use crate::editor::hook::tests::fixtures::selected;
 use crate::editor::hud;
 use crate::editor::live;
 use crate::editor::modal;
@@ -57,7 +58,7 @@ fn settle_rebuild(h: &mut EditorHook) {
 fn entry_names(h: &EditorHook) -> Vec<String> {
     h.entries
         .iter()
-        .map(|e| e["name"].as_str().unwrap_or_default().to_string())
+        .map(|e| e["args"]["$id"].as_str().unwrap_or_default().to_string())
         .collect()
 }
 
@@ -669,7 +670,7 @@ fn start_mode_routing_reaches_the_panel_and_nothing_else() {
     click_at(&mut h, &mut world, VP[0] - 4.0, VP[1] - 4.0);
     assert_eq!(h.make_worlds_view([0.0, 0.0]).selected, Some(0));
     assert!(!h.rebuild_preview);
-    assert_eq!(h.selection.iter().count(), 0);
+    assert_eq!(selected(&h).len(), 0);
 
     // Where the top bar would be: it is not drawn, so its chips resolve nothing.
     click_at(&mut h, &mut world, VP[0] - 20.0, hud::BAR_H * 0.5);

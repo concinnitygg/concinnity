@@ -81,9 +81,8 @@ pub(super) fn emit_stage(names: &StoryNames) -> Vec<serde_json::Value> {
     // is its own KeyBinding; the UI fires whichever key was pressed.
     for (name, key) in stage.advance_keys.iter().zip(["Space", "Enter"]) {
         out.push(serde_json::json!({
-            "name": name,
             "type": "KeyBinding",
-            "args": { "key": key, "action": ui_action::story(StoryCommand::Advance) }
+            "args": { "$id": name, "key": key, "action": ui_action::story(StoryCommand::Advance) }
         }));
     }
     // The advance marker: a small rounded square at the dialog box's lower
@@ -111,7 +110,7 @@ mod tests {
     #[test]
     fn the_stage_is_initial_only_without_a_title_screen() {
         let with_title = emit_stage(&StoryNames::new("s", true, 0));
-        assert_eq!(with_title[0]["name"], "s_stage");
+        assert_eq!(with_title[0]["args"]["$id"], "s_stage");
         assert_eq!(with_title[0]["args"]["initial"], false);
         let without = emit_stage(&StoryNames::new("s", false, 0));
         assert_eq!(without[0]["args"]["initial"], true);
@@ -122,10 +121,10 @@ mod tests {
         let out = emit_stage(&StoryNames::new("s", true, 0));
         let keys: Vec<_> = out.iter().filter(|e| e["type"] == "KeyBinding").collect();
         assert_eq!(keys.len(), 2);
-        assert_eq!(keys[0]["name"], "s_advance_key");
+        assert_eq!(keys[0]["args"]["$id"], "s_advance_key");
         assert_eq!(keys[0]["args"]["key"], "Space");
         assert_eq!(keys[1]["args"]["key"], "Enter");
         assert!(keys.iter().all(|k| k["args"]["action"] == "story:advance"));
-        assert_eq!(out.last().unwrap()["name"], "s_stage_marker");
+        assert_eq!(out.last().unwrap()["args"]["$id"], "s_stage_marker");
     }
 }

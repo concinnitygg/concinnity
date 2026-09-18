@@ -6,14 +6,16 @@
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_core::ecs::World;
 
+use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::{
     click_row, entry, expandable_hook, generated_group, hook, seed_tree, set_field,
     world_with_fields,
 };
-use crate::editor::hook::{EditorHook, FormTarget};
 
 use crate::editor::panels::asset_tree::{self, TreeRow};
 
+use crate::editor::hook::tests::fixtures::entry_target;
+use crate::editor::hook::tests::fixtures::{active, selected};
 use crate::editor::panels::assets_panel::{self, PanelAction};
 
 // The tree lists the world's own lines under `World` and each expansion's
@@ -122,25 +124,17 @@ fn tree_row_click_selects_and_opens_the_form() {
     h.panel_open = true;
     seed_tree(&mut h, Vec::new());
     click_row(&mut h, "box", &mut world);
-    assert_eq!(h.selection.active(), Some("box"));
+    assert_eq!(active(&h).as_deref(), Some("box"));
     assert!(h.panel_open, "the assets UI comes up around the form");
     assert_eq!(
         h.form.target,
-        FormTarget::Entry(0),
+        entry_target(&h, 0),
         "the form targets the clicked entry"
     );
 
     h.shift_held = true;
     click_row(&mut h, "cam", &mut world);
-    assert_eq!(
-        h.selection.iter().collect::<Vec<_>>(),
-        ["box", "cam"],
-        "a shift click adds"
-    );
+    assert_eq!(selected(&h), ["box", "cam"], "a shift click adds");
     click_row(&mut h, "cam", &mut world);
-    assert_eq!(
-        h.selection.iter().collect::<Vec<_>>(),
-        ["box"],
-        "a second shift click removes"
-    );
+    assert_eq!(selected(&h), ["box"], "a second shift click removes");
 }

@@ -179,7 +179,7 @@ impl CrossReferenced for Prop {
             kind: RefKind::MeshSource,
             target: mesh_ref.to_string(),
             error: format!(
-                "Prop '{}': mesh '{}' not found, add a Mesh, ProceduralMesh, or File (obj) asset with that name",
+                "Prop '{}': mesh '{}' not found, add a Mesh, ProceduralMesh, or File (obj) asset with that `$id`",
                 name, mesh_ref
             ),
         }]
@@ -203,7 +203,7 @@ impl CrossReferenced for Model {
                         kind: RefKind::MeshSource,
                         target: sub_mesh.to_string(),
                         error: format!(
-                            "Model '{}': submesh[{}] mesh '{}' not found, add a Mesh, ProceduralMesh, or File (obj) asset with that name",
+                            "Model '{}': submesh[{}] mesh '{}' not found, add a Mesh, ProceduralMesh, or File (obj) asset with that `$id`",
                             name, i, sub_mesh
                         ),
                     });
@@ -215,7 +215,7 @@ impl CrossReferenced for Model {
                         kind: RefKind::Material,
                         target: sub_mat.to_string(),
                         error: format!(
-                            "Model '{}': submesh[{}] material '{}' not found, add a Material asset with that name",
+                            "Model '{}': submesh[{}] material '{}' not found, add a Material asset with that `$id`",
                             name, i, sub_mat
                         ),
                     });
@@ -243,7 +243,7 @@ impl CrossReferenced for InstancedProp {
             kind: RefKind::MeshSource,
             target: mesh_ref.to_string(),
             error: format!(
-                "InstancedProp '{}': mesh '{}' not found, add a Mesh, ProceduralMesh, VoxelChunk, or File (obj) asset with that name",
+                "InstancedProp '{}': mesh '{}' not found, add a Mesh, ProceduralMesh, VoxelChunk, or File (obj) asset with that `$id`",
                 name, mesh_ref
             ),
         }]
@@ -271,7 +271,7 @@ impl CrossReferenced for VoxelChunk {
                     kind: RefKind::BlockType,
                     target: bt_name.to_string(),
                     error: format!(
-                        "VoxelChunk '{}': palette[{}] BlockType '{}' not found, add a BlockType asset with that name",
+                        "VoxelChunk '{}': palette[{}] BlockType '{}' not found, add a BlockType asset with that `$id`",
                         name, i, bt_name
                     ),
                 });
@@ -303,7 +303,7 @@ impl CrossReferenced for VoxelWorld {
                     kind: RefKind::BlockType,
                     target: bt_name.to_string(),
                     error: format!(
-                        "VoxelWorld '{}': palette[{}] BlockType '{}' not found, add a BlockType asset with that name",
+                        "VoxelWorld '{}': palette[{}] BlockType '{}' not found, add a BlockType asset with that `$id`",
                         name, i, bt_name
                     ),
                 });
@@ -361,7 +361,7 @@ impl CrossReferenced for Behavior {
                             target: target.clone(),
                             error: format!(
                                 "Behavior '{name}': `{verb}` volume '{target}' not found, \
-                                 add a TriggerVolume asset with that name"
+                                 add a TriggerVolume asset with that `$id`"
                             ),
                         });
                     }

@@ -7,12 +7,13 @@
 //! the Display menu's state. The palette closes on commit, on Escape, and on a
 //! click outside it.
 
+use concinnity_cook::authoring::world::find_entry;
 use concinnity_core::components::FrameInput;
 use concinnity_core::components::InputKey;
 use concinnity_core::ecs::World;
 
 use crate::editor::behavior::navigate;
-use crate::editor::hook::{EditorHook, entry_name, scroll_step};
+use crate::editor::hook::{EditorHook, scroll_step};
 use crate::editor::palette::panel::{PaletteHit, PaletteView};
 use crate::editor::palette::providers;
 use crate::editor::palette::{self, PaletteAction};
@@ -207,7 +208,7 @@ impl EditorHook {
             }
             PaletteAction::SelectEntity(name) => {
                 self.close_palette();
-                self.selection.replace(name.clone());
+                self.select_named(&name);
                 self.pick_last = None;
                 self.focus_ui_on(&name, world);
                 self.frame_selection(self.viewport, world);
@@ -252,12 +253,13 @@ impl EditorHook {
     // entries do not carry (a generated behavior) has no ordinal to open, so
     // it falls back to the edit form like any other asset.
     fn open_behavior_named(&mut self, name: &str, world: &mut World) {
+        let target = find_entry(&self.entries, name);
         let ordinal = self
             .behavior_entries()
             .iter()
-            .position(|&i| entry_name(&self.entries[i]) == Some(name));
+            .position(|&i| Some(i) == target);
         let Some(ordinal) = ordinal else {
-            self.selection.replace(name.to_string());
+            self.select_named(name);
             self.focus_ui_on(name, world);
             return;
         };

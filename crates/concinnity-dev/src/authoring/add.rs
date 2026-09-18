@@ -16,17 +16,21 @@
 
 use concinnity_cook::asset_api::{AssetRequest, create_asset_def};
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_cook::authoring::world::{WORLD_JSONL, patch_world_jsonl_to};
+use concinnity_cook::authoring::world::{
+    WORLD_JSONL, args_with_id, entry_errors, entry_handle, entry_id, patch_world_jsonl_to,
+    set_entry_id, take_entry_id,
+};
 
 /// Add an asset to `world_path` and rebuild. See module docs.
 ///
 /// `template` selects a named scaffold preset when scaffolding fires
 /// (target is `.glb`, world has no renderer trigger). `None` uses the
 /// default scaffold; `Some("minimal-3d-world")` layers that template's
-/// entries. Unknown names error out before touching the world file.
+/// entries. Unknown names error out before touching the world file. `id`
+/// declares the `$id` written into the world (see [`apply_id_override`]).
 pub(crate) fn add_to_path(
     world_path: &str,
-    name: Option<&str>,
+    id: Option<&str>,
     target: &str,
     template: Option<&str>,
 ) -> std::io::Result<()> {
@@ -35,24 +39,15 @@ pub(crate) fn add_to_path(
 
     let mut entries = resolve_add_target(target)?;
 
-    if let Some(n) = name {
-        apply_name_override(&mut entries, n);
+    if let Some(id) = id {
+        apply_id_override(&mut entries, id);
     }
 
     let entry_names: Vec<String> = entries
         .iter()
-        .map(|e| {
-            e.get("name")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "resolved asset entry has no `name` field",
-                    )
-                })
-                .map(str::to_string)
-        })
-        .collect::<Result<_, _>>()?;
+        .filter_map(entry_id)
+        .map(str::to_string)
+        .collect();
 
     let tmp_path = format!("{}.tmp", world_path);
 
@@ -81,13 +76,13 @@ pub(crate) fn add_to_path(
         for entry_name in &entry_names {
             if let Some(existing) = assets
                 .iter()
-                .find(|a| a.get("name").and_then(|v| v.as_str()) == Some(entry_name.as_str()))
+                .find(|a| entry_id(a) == Some(entry_name.as_str()))
             {
                 let existing_type = existing.get("type").and_then(|v| v.as_str()).unwrap_or("?");
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::AlreadyExists,
                     format!(
-                        "an asset named '{}' (type: {}) already exists in {}; \
+                        "an asset with `$id` '{}' (type: {}) already exists in {}; \
                          remove it first with `concinnity rm {}`",
                         entry_name, existing_type, WORLD_JSONL, entry_name
                     ),
@@ -96,14 +91,12 @@ pub(crate) fn add_to_path(
         }
         // Append template entries first so the new asset's own systems (e.g.
         // a glTF's Camera3D) run alongside the template's setup. Any template
-        // entry whose name already exists in the world is skipped to avoid
-        // clobbering user-authored assets that happen to share the name.
+        // entry whose id already exists in the world is skipped to avoid
+        // clobbering user-authored assets that happen to share it.
         for entry in scaffold {
-            let n = entry.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            if !assets
-                .iter()
-                .any(|a| a.get("name").and_then(|v| v.as_str()) == Some(n))
-            {
+            let taken =
+                entry_id(&entry).is_some_and(|n| assets.iter().any(|a| entry_id(a) == Some(n)));
+            if !taken {
                 assets.push(entry);
             }
         }
@@ -122,22 +115,21 @@ pub(crate) fn add_to_path(
     }
 }
 
-// Apply a caller-supplied name to freshly resolved entries: a single entry is
-// renamed outright; a multi-entry target (e.g. a .metal file with both vertex
-// and fragment stages) uses the supplied name as a prefix, keeping each
-// entry's existing `_vert` / `_frag` style suffix.
-pub(crate) fn apply_name_override(entries: &mut [serde_json::Value], name: &str) {
+// Apply a caller-supplied `$id` to freshly resolved entries: a single entry
+// takes it outright; a multi-entry target (e.g. a .metal file with both vertex
+// and fragment stages) uses it as a prefix, keeping each entry's existing
+// `_vert` / `_frag` style suffix.
+pub(crate) fn apply_id_override(entries: &mut [serde_json::Value], id: &str) {
     if let [only] = entries {
-        only["name"] = serde_json::Value::String(name.to_string());
+        set_entry_id(only, id);
         return;
     }
     for entry in entries {
-        let existing = entry.get("name").and_then(|v| v.as_str()).unwrap_or("");
-        let suffix = existing
-            .rsplit_once('_')
+        let suffix = entry_id(entry)
+            .and_then(|existing| existing.rsplit_once('_'))
             .map(|(_, s)| format!("_{s}"))
             .unwrap_or_default();
-        entry["name"] = serde_json::Value::String(format!("{name}{suffix}"));
+        set_entry_id(entry, &format!("{id}{suffix}"));
     }
 }
 
@@ -164,11 +156,11 @@ fn try_refresh_text_label(
     if new.get("type").and_then(|v| v.as_str()) != Some("TextLabel") {
         return None;
     }
-    let new_name = new.get("name").and_then(|v| v.as_str())?.to_string();
+    let new_name = entry_id(new)?.to_string();
     let new_content = new.get("args").and_then(|a| a.get("content")).cloned()?;
 
     let existing = assets.iter_mut().find(|a| {
-        a.get("name").and_then(|v| v.as_str()) == Some(new_name.as_str())
+        entry_id(a) == Some(new_name.as_str())
             && a.get("type").and_then(|v| v.as_str()) == Some("TextLabel")
     })?;
     let args = existing.get_mut("args")?.as_object_mut()?;
@@ -177,7 +169,7 @@ fn try_refresh_text_label(
 }
 
 // If `entries` is a single EnvironmentMap and `assets` already declares one,
-// point that existing entry at the new source and return its name plus the
+// point that existing entry at the new source and return its handle plus the
 // source. Returns `None` otherwise: the caller falls back to the normal
 // "append, error on duplicate" flow.
 //
@@ -198,11 +190,11 @@ pub(crate) fn try_retarget_environment_map(
     }
     let new_source = new.get("args")?.get("source")?.as_str()?.to_string();
 
-    let existing = assets
-        .iter_mut()
-        .find(|a| a.get("type").and_then(|v| v.as_str()) == Some("EnvironmentMap"))?;
-    let name = existing.get("name").and_then(|v| v.as_str())?.to_string();
-    let args = existing.get_mut("args")?.as_object_mut()?;
+    let index = assets
+        .iter()
+        .position(|a| a.get("type").and_then(|v| v.as_str()) == Some("EnvironmentMap"))?;
+    let name = entry_handle(assets, index)?;
+    let args = assets[index].get_mut("args")?.as_object_mut()?;
     args.insert(
         "source".to_string(),
         serde_json::Value::String(new_source.clone()),
@@ -407,9 +399,8 @@ fn validated_entry(
             }
         }
         return Ok(serde_json::json!({
-            "name": name,
             "type": asset_type,
-            "args": resolved,
+            "args": args_with_id(resolved, name),
         }));
     }
 
@@ -422,9 +413,8 @@ fn validated_entry(
     let resolved_args = normalized_args_value(asset_type, &args);
 
     Ok(serde_json::json!({
-        "name": name,
         "type": asset_type,
-        "args": resolved_args,
+        "args": args_with_id(resolved_args, name),
     }))
 }
 
@@ -467,9 +457,8 @@ fn import_entry(asset_type: &str, name: &str, source: &str) -> std::io::Result<s
         );
     }
     Ok(serde_json::json!({
-        "name": name,
         "type": asset_type,
-        "args": args,
+        "args": args_with_id(args, name),
     }))
 }
 
@@ -775,18 +764,8 @@ fn entry_from_json_file(
         ));
     }
 
-    let args = json
-        .get("args")
-        .cloned()
-        .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
-
-    let name = json
-        .get("name")
-        .and_then(|v| v.as_str())
-        .unwrap_or(stem_name)
-        .to_string();
-
-    validated_entry(&name, asset_type, args)
+    let (id, args) = split_entry(&json, &path.display().to_string())?;
+    validated_entry(id.as_deref().unwrap_or(stem_name), asset_type, args)
 }
 
 fn entry_from_inline_json(raw: &str) -> std::io::Result<serde_json::Value> {
@@ -821,16 +800,7 @@ fn entry_from_inline_json(raw: &str) -> std::io::Result<serde_json::Value> {
         ));
     }
 
-    let name = json
-        .get("name")
-        .and_then(|v| v.as_str())
-        .map(str::to_string)
-        .unwrap_or_else(|| asset_type.to_lowercase());
-
-    let args = json
-        .get("args")
-        .cloned()
-        .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
+    let (id, args) = split_entry(&json, "inline JSON")?;
 
     let req = AssetRequest {
         asset_type: asset_type.to_string(),
@@ -838,13 +808,38 @@ fn entry_from_inline_json(raw: &str) -> std::io::Result<serde_json::Value> {
     };
     create_asset_def(&req)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
-    let resolved_args = normalized_args_value(asset_type, &args);
-
-    Ok(serde_json::json!({
-        "name": name,
+    let mut entry = serde_json::json!({
         "type": asset_type,
-        "args": resolved_args,
-    }))
+        "args": normalized_args_value(asset_type, &args),
+    });
+    if let Some(id) = id {
+        set_entry_id(&mut entry, &id);
+    }
+    Ok(entry)
+}
+
+// A JSON entry's `$id` (when it declares one) and its args without it, after
+// the same structural checks a world line gets. `source` names the entry in an
+// error.
+fn split_entry(
+    json: &serde_json::Value,
+    source: &str,
+) -> std::io::Result<(Option<String>, serde_json::Value)> {
+    let errors = entry_errors(json, 0);
+    if !errors.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("{source}: {}", errors.join("; ")),
+        ));
+    }
+    let mut entry = json.clone();
+    let id = take_entry_id(&mut entry);
+    let args = entry
+        .get("args")
+        .filter(|a| !a.is_null())
+        .cloned()
+        .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
+    Ok((id, args))
 }
 
 // Resolve an add target -- a file path, a known asset type name, or inline
@@ -904,13 +899,7 @@ fn entry_from_type_name(type_str: &str) -> std::io::Result<serde_json::Value> {
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
     let args = normalized_args_value(type_str, &serde_json::Value::Object(Default::default()));
 
-    let name = type_str.to_lowercase();
-
-    Ok(serde_json::json!({
-        "name": name,
-        "type": type_str,
-        "args": args,
-    }))
+    Ok(serde_json::json!({ "type": type_str, "args": args }))
 }
 
 #[cfg(test)]
@@ -928,7 +917,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0]["name"], "water_shader");
+        assert_eq!(entries[0]["args"]["$id"], "water_shader");
         assert_eq!(entries[0]["type"], "Shader");
         assert_eq!(entries[0]["args"]["fragment"], "shaders/water.slang");
         assert!(entries[0]["args"].get("vertex").is_none_or(|v| v.is_null()));
@@ -945,7 +934,7 @@ mod tests {
             "float4 shade(VertexOut in, GpuObjectData od)"
         ));
         let entries = slang_entry("blob", "shaders/blob.slang", src).unwrap();
-        assert_eq!(entries[0]["name"], "blob_volume");
+        assert_eq!(entries[0]["args"]["$id"], "blob_volume");
         assert_eq!(entries[0]["type"], "SdfVolume");
         assert_eq!(entries[0]["args"]["fragment_shader"], "shaders/blob.slang");
     }
@@ -1022,13 +1011,13 @@ mod tests {
 
     #[test]
     fn renderer_trigger_matches_graphics_config() {
-        let jsonl = r#"{"name":"gc","type":"GraphicsConfig","args":{}}"#;
+        let jsonl = r#"{"type":"GraphicsConfig","args":{"$id":"gc"}}"#;
         assert!(jsonl_has_renderer_trigger(jsonl));
     }
 
     #[test]
     fn renderer_trigger_matches_text_label() {
-        let jsonl = r#"{"name":"lbl","type":"TextLabel","args":{}}"#;
+        let jsonl = r#"{"type":"TextLabel","args":{"$id":"lbl"}}"#;
         assert!(jsonl_has_renderer_trigger(jsonl));
     }
 
@@ -1036,7 +1025,7 @@ mod tests {
     // for it, so no scaffold is needed.
     #[test]
     fn renderer_trigger_matches_prop() {
-        let jsonl = r#"{"name":"crate","type":"Prop","args":{}}"#;
+        let jsonl = r#"{"type":"Prop","args":{"$id":"crate"}}"#;
         assert!(jsonl_has_renderer_trigger(jsonl));
     }
 
@@ -1044,7 +1033,7 @@ mod tests {
     // for it), so it is not a trigger.
     #[test]
     fn renderer_trigger_ignores_window() {
-        let jsonl = r#"{"name":"win","type":"Window","args":{}}"#;
+        let jsonl = r#"{"type":"Window","args":{"$id":"win"}}"#;
         assert!(!jsonl_has_renderer_trigger(jsonl));
     }
 
@@ -1053,15 +1042,15 @@ mod tests {
         // Exactly the shape that produced the no-window bug: textures /
         // materials / meshes / models / camera but no renderer-trigger.
         let jsonl = concat!(
-            r#"{"name":"tex","type":"Texture","args":{}}"#,
+            r#"{"type":"Texture","args":{"$id":"tex"}}"#,
             "\n",
-            r#"{"name":"mat","type":"Material","args":{}}"#,
+            r#"{"type":"Material","args":{"$id":"mat"}}"#,
             "\n",
-            r#"{"name":"mesh","type":"Mesh","args":{}}"#,
+            r#"{"type":"Mesh","args":{"$id":"mesh"}}"#,
             "\n",
-            r#"{"name":"model","type":"Model","args":{}}"#,
+            r#"{"type":"Model","args":{"$id":"model"}}"#,
             "\n",
-            r#"{"name":"cam","type":"Camera3D","args":{}}"#,
+            r#"{"type":"Camera3D","args":{"$id":"cam"}}"#,
             "\n",
         );
         assert!(!jsonl_has_renderer_trigger(jsonl));
@@ -1071,7 +1060,7 @@ mod tests {
     fn renderer_trigger_skips_malformed_lines() {
         let jsonl = concat!(
             "garbage line\n",
-            r#"{"name":"tex","type":"Texture","args":{}}"#,
+            r#"{"type":"Texture","args":{"$id":"tex"}}"#,
             "\n",
         );
         assert!(!jsonl_has_renderer_trigger(jsonl));
@@ -1093,9 +1082,9 @@ mod tests {
         std::fs::write(
             &world,
             concat!(
-                r#"{"name":"tex","type":"Texture","args":{}}"#,
+                r#"{"type":"Texture","args":{"$id":"tex"}}"#,
                 "\n",
-                r#"{"name":"cam","type":"Camera3D","args":{}}"#,
+                r#"{"type":"Camera3D","args":{"$id":"cam"}}"#,
                 "\n",
             ),
         )
@@ -1109,11 +1098,7 @@ mod tests {
     fn scaffold_to_inject_returns_empty_when_world_has_graphics_config() {
         let dir = concinnity_testing::TempTree::new();
         let world = dir.join("world.jsonl");
-        std::fs::write(
-            &world,
-            r#"{"name":"gfx","type":"GraphicsConfig","args":{}}"#,
-        )
-        .unwrap();
+        std::fs::write(&world, r#"{"type":"GraphicsConfig","args":{"$id":"gfx"}}"#).unwrap();
 
         let scaffold = scaffold_to_inject(world.to_str().unwrap(), "scene.glb", None).unwrap();
         assert!(scaffold.is_empty());
@@ -1184,7 +1169,7 @@ mod tests {
             assert!(!entries.is_empty(), "template '{}' is empty", t.name);
             for entry in entries {
                 let ty = entry["type"].as_str().expect("entry has a type");
-                let name = entry["name"].as_str().expect("entry has a name");
+                let name = entry["args"]["$id"].as_str().expect("entry has a name");
                 let args = entry
                     .get("args")
                     .cloned()
@@ -1221,11 +1206,7 @@ mod tests {
         let dir = concinnity_testing::TempTree::new();
         let world = dir.join("world.jsonl");
         // Existing world with a renderer trigger: scaffolding wouldn't fire.
-        std::fs::write(
-            &world,
-            r#"{"name":"gfx","type":"GraphicsConfig","args":{}}"#,
-        )
-        .unwrap();
+        std::fs::write(&world, r#"{"type":"GraphicsConfig","args":{"$id":"gfx"}}"#).unwrap();
 
         let err = scaffold_to_inject(world.to_str().unwrap(), "scene.glb", Some("nope"))
             .expect_err("unknown template should fail fast regardless of scaffold path");
@@ -1244,7 +1225,7 @@ mod tests {
         assert_eq!(entries.len(), 1);
         let entry = &entries[0];
         assert_eq!(entry["type"], "TextLabel");
-        assert_eq!(entry["name"], "greeting");
+        assert_eq!(entry["args"]["$id"], "greeting");
         assert_eq!(entry["args"]["content"], "Hello, world!");
         // Mirrors `cn init`: short labels render centered by default.
         assert_eq!(entry["args"]["centered"], serde_json::json!(true));
@@ -1274,7 +1255,7 @@ mod tests {
         assert_eq!(entries.len(), 1);
         let entry = &entries[0];
         assert_eq!(entry["type"], "AudioClip");
-        assert_eq!(entry["name"], "door_creak");
+        assert_eq!(entry["args"]["$id"], "door_creak");
         assert_eq!(entry["args"]["source"], path.to_str().unwrap());
     }
 
@@ -1288,7 +1269,7 @@ mod tests {
         assert_eq!(entries.len(), 1);
         let entry = &entries[0];
         assert_eq!(entry["type"], "EnvironmentMap");
-        assert_eq!(entry["name"], "san_giuseppe_4k");
+        assert_eq!(entry["args"]["$id"], "san_giuseppe_4k");
         assert_eq!(entry["args"]["source"], path.to_str().unwrap());
         // `source` and `generator` are mutually exclusive: the file source wins,
         // so the schema default leaves `generator` blank.
@@ -1318,9 +1299,9 @@ mod tests {
     #[test]
     fn try_retarget_environment_map_repoints_the_existing_map() {
         let mut assets = vec![serde_json::json!({
-            "name": "env_sky",
             "type": "EnvironmentMap",
             "args": {
+                "$id": "env_sky",
                 "source": "assets/hdri/old.hdr",
                 "generator": "",
                 "prefilter_face_size": 1024,
@@ -1328,9 +1309,8 @@ mod tests {
             }
         })];
         let entries = vec![serde_json::json!({
-            "name": "studio",
             "type": "EnvironmentMap",
-            "args": {"source": "assets/hdri/studio.hdr", "generator": ""}
+            "args": {"$id": "studio", "source": "assets/hdri/studio.hdr", "generator": ""}
         })];
 
         let out = try_retarget_environment_map(&mut assets, &entries);
@@ -1345,7 +1325,7 @@ mod tests {
         assert_eq!(args["prefilter_face_size"], 1024);
         assert_eq!(args["prefilter_clamp"], 4.0);
         // The name is untouched, so anything referring to it still resolves.
-        assert_eq!(assets[0]["name"], "env_sky");
+        assert_eq!(assets[0]["args"]["$id"], "env_sky");
     }
 
     // Retargeting a procedural map clears its generator: the two are mutually
@@ -1353,14 +1333,12 @@ mod tests {
     #[test]
     fn try_retarget_environment_map_clears_a_generator() {
         let mut assets = vec![serde_json::json!({
-            "name": "env",
             "type": "EnvironmentMap",
-            "args": {"source": "", "generator": "sky"}
+            "args": {"$id": "env", "source": "", "generator": "sky"}
         })];
         let entries = vec![serde_json::json!({
-            "name": "dusk",
             "type": "EnvironmentMap",
-            "args": {"source": "dusk.hdr", "generator": ""}
+            "args": {"$id": "dusk", "source": "dusk.hdr", "generator": ""}
         })];
 
         assert!(try_retarget_environment_map(&mut assets, &entries).is_some());
@@ -1373,11 +1351,11 @@ mod tests {
     #[test]
     fn try_retarget_environment_map_takes_the_first_of_several() {
         let mut assets = vec![
-            serde_json::json!({"name": "a", "type": "EnvironmentMap", "args": {"source": "a.hdr"}}),
-            serde_json::json!({"name": "b", "type": "EnvironmentMap", "args": {"source": "b.hdr"}}),
+            serde_json::json!({"type": "EnvironmentMap", "args": {"$id": "a", "source": "a.hdr"}}),
+            serde_json::json!({"type": "EnvironmentMap", "args": {"$id": "b", "source": "b.hdr"}}),
         ];
         let entries = vec![
-            serde_json::json!({"name": "c", "type": "EnvironmentMap", "args": {"source": "c.hdr"}}),
+            serde_json::json!({"type": "EnvironmentMap", "args": {"$id": "c", "source": "c.hdr"}}),
         ];
 
         let (name, _) = try_retarget_environment_map(&mut assets, &entries).unwrap();
@@ -1393,10 +1371,10 @@ mod tests {
     #[test]
     fn try_retarget_environment_map_skips_a_world_without_one() {
         let mut assets = vec![serde_json::json!({
-            "name": "lamp", "type": "PointLight", "args": {}
+            "type": "PointLight", "args": {"$id": "lamp"}
         })];
         let entries = vec![
-            serde_json::json!({"name": "env", "type": "EnvironmentMap", "args": {"source": "e.hdr"}}),
+            serde_json::json!({"type": "EnvironmentMap", "args": {"$id": "env", "source": "e.hdr"}}),
         ];
         assert!(try_retarget_environment_map(&mut assets, &entries).is_none());
     }
@@ -1404,10 +1382,10 @@ mod tests {
     #[test]
     fn try_retarget_environment_map_skips_other_types() {
         let mut assets = vec![serde_json::json!({
-            "name": "env", "type": "EnvironmentMap", "args": {"source": "e.hdr"}
+            "type": "EnvironmentMap", "args": {"$id": "env", "source": "e.hdr"}
         })];
         let entries =
-            vec![serde_json::json!({"name": "face", "type": "Font", "args": {"path": "face.ttf"}})];
+            vec![serde_json::json!({"type": "Font", "args": {"$id": "face", "path": "face.ttf"}})];
         assert!(try_retarget_environment_map(&mut assets, &entries).is_none());
         assert_eq!(assets[0]["args"]["source"], "e.hdr");
     }
@@ -1416,11 +1394,11 @@ mod tests {
     #[test]
     fn try_retarget_environment_map_skips_multi_entry() {
         let mut assets = vec![serde_json::json!({
-            "name": "env", "type": "EnvironmentMap", "args": {"source": "e.hdr"}
+            "type": "EnvironmentMap", "args": {"$id": "env", "source": "e.hdr"}
         })];
         let entries = vec![
-            serde_json::json!({"name": "a", "type": "EnvironmentMap", "args": {"source": "a.hdr"}}),
-            serde_json::json!({"name": "b", "type": "EnvironmentMap", "args": {"source": "b.hdr"}}),
+            serde_json::json!({"type": "EnvironmentMap", "args": {"$id": "a", "source": "a.hdr"}}),
+            serde_json::json!({"type": "EnvironmentMap", "args": {"$id": "b", "source": "b.hdr"}}),
         ];
         assert!(try_retarget_environment_map(&mut assets, &entries).is_none());
     }
@@ -1435,7 +1413,7 @@ mod tests {
         assert_eq!(entries.len(), 1);
         let entry = &entries[0];
         assert_eq!(entry["type"], "StoryImport");
-        assert_eq!(entry["name"], "crossroads");
+        assert_eq!(entry["args"]["$id"], "crossroads");
         assert_eq!(entry["args"]["source"], path.to_str().unwrap());
         // Registration defaults are materialized alongside the source.
         assert_eq!(entry["args"]["title_screen"], serde_json::json!(true));
@@ -1480,7 +1458,7 @@ mod tests {
     fn scaffold_to_inject_empty_for_renderer_less_world_with_text_target() {
         let dir = concinnity_testing::TempTree::new();
         let world = dir.join("world.jsonl");
-        std::fs::write(&world, r#"{"name":"tex","type":"Texture","args":{}}"#).unwrap();
+        std::fs::write(&world, r#"{"type":"Texture","args":{"$id":"tex"}}"#).unwrap();
 
         let scaffold = scaffold_to_inject(world.to_str().unwrap(), "notes.md", None).unwrap();
         assert!(
@@ -1496,9 +1474,9 @@ mod tests {
         // Existing TextLabel was hand-edited: y, color, scale, centered all
         // diverged from defaults. A refresh should touch only `content`.
         let mut assets = vec![serde_json::json!({
-            "name": "greeting",
             "type": "TextLabel",
             "args": {
+                "$id": "greeting",
                 "content": "Old text",
                 "font": "Questrial-Regular",
                 "x": 10.0,
@@ -1513,9 +1491,9 @@ mod tests {
             }
         })];
         let entries = vec![serde_json::json!({
-            "name": "greeting",
             "type": "TextLabel",
             "args": {
+                "$id": "greeting",
                 "content": "New text",
                 "centered": true,
             }
@@ -1535,14 +1513,12 @@ mod tests {
     #[test]
     fn try_refresh_text_label_skips_non_textlabel_new_entry() {
         let mut assets = vec![serde_json::json!({
-            "name": "thing",
             "type": "TextLabel",
-            "args": {"content": "old"}
+            "args": {"$id": "thing", "content": "old"}
         })];
         let entries = vec![serde_json::json!({
-            "name": "thing",
             "type": "Font",
-            "args": {"path": "x.ttf"}
+            "args": {"$id": "thing", "path": "x.ttf"}
         })];
         assert!(try_refresh_text_label(&mut assets, &entries).is_none());
     }
@@ -1550,14 +1526,12 @@ mod tests {
     #[test]
     fn try_refresh_text_label_skips_when_existing_is_different_type() {
         let mut assets = vec![serde_json::json!({
-            "name": "thing",
             "type": "Font",
-            "args": {"path": "x.ttf"}
+            "args": {"$id": "thing", "path": "x.ttf"}
         })];
         let entries = vec![serde_json::json!({
-            "name": "thing",
             "type": "TextLabel",
-            "args": {"content": "hi"}
+            "args": {"$id": "thing", "content": "hi"}
         })];
         // Same name, different existing type: refresh shouldn't fire; caller
         // falls through to the duplicate-name error.
@@ -1567,14 +1541,12 @@ mod tests {
     #[test]
     fn try_refresh_text_label_skips_when_name_misses() {
         let mut assets = vec![serde_json::json!({
-            "name": "greeting",
             "type": "TextLabel",
-            "args": {"content": "old"}
+            "args": {"$id": "greeting", "content": "old"}
         })];
         let entries = vec![serde_json::json!({
-            "name": "caption",
             "type": "TextLabel",
-            "args": {"content": "new"}
+            "args": {"$id": "caption", "content": "new"}
         })];
         assert!(try_refresh_text_label(&mut assets, &entries).is_none());
     }
@@ -1584,13 +1556,12 @@ mod tests {
         // A fan-out target (e.g. a metal shader producing vert+frag) must
         // never trigger the in-place refresh path.
         let mut assets = vec![serde_json::json!({
-            "name": "label",
             "type": "TextLabel",
-            "args": {"content": "old"}
+            "args": {"$id": "label", "content": "old"}
         })];
         let entries = vec![
-            serde_json::json!({"name": "label", "type": "TextLabel", "args": {"content": "new"}}),
-            serde_json::json!({"name": "other", "type": "TextLabel", "args": {"content": "other"}}),
+            serde_json::json!({"type": "TextLabel", "args": {"$id": "label", "content": "new"}}),
+            serde_json::json!({"type": "TextLabel", "args": {"$id": "other", "content": "other"}}),
         ];
         assert!(try_refresh_text_label(&mut assets, &entries).is_none());
     }
@@ -1638,26 +1609,41 @@ mod tests {
     }
 
     #[test]
-    fn inline_json_defaults_the_name_to_the_lowercased_type() {
+    fn inline_json_without_an_id_is_anonymous() {
         let entry = entry_from_inline_json(r#"{"type":"Window"}"#).unwrap();
-        assert_eq!(entry["name"], "window");
+        assert_eq!(entry_id(&entry), None);
         assert_eq!(entry["type"], "Window");
         // Default args are materialized as an object.
         assert!(entry["args"].is_object());
     }
 
     #[test]
-    fn inline_json_keeps_an_explicit_name() {
-        let entry = entry_from_inline_json(r#"{"type":"Window","name":"main"}"#).unwrap();
-        assert_eq!(entry["name"], "main");
+    fn inline_json_keeps_an_explicit_id() {
+        let entry =
+            entry_from_inline_json(r#"{"type":"Window","args":{"$id":"main","title":"T"}}"#)
+                .unwrap();
+        assert_eq!(entry["args"]["$id"], "main");
+        assert_eq!(entry["args"]["title"], "T");
+    }
+
+    // The entry gets the checks a world line does, so the old top-level name
+    // is refused rather than dropped.
+    #[test]
+    fn inline_json_refuses_a_top_level_name() {
+        let err = entry_from_inline_json(r#"{"type":"Window","name":"main"}"#).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(
+            err.to_string().contains("`name` is not an entry key"),
+            "{err}"
+        );
     }
 
     // entry_from_type_name
 
     #[test]
-    fn type_name_builds_a_default_entry() {
+    fn type_name_builds_an_anonymous_default_entry() {
         let entry = entry_from_type_name("Window").unwrap();
-        assert_eq!(entry["name"], "window");
+        assert_eq!(entry_id(&entry), None);
         assert_eq!(entry["type"], "Window");
         assert!(entry["args"].is_object());
     }
@@ -1679,7 +1665,7 @@ mod tests {
     fn json_file_requires_a_type_field() {
         let dir = concinnity_testing::TempTree::new();
         let path = dir.join("thing.json");
-        std::fs::write(&path, r#"{"name":"thing"}"#).unwrap();
+        std::fs::write(&path, r#"{"args":{"$id":"thing"}}"#).unwrap();
 
         let err = entry_from_json_file(&path, "thing").unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
@@ -1703,8 +1689,18 @@ mod tests {
         std::fs::write(&path, r#"{"type":"Window","args":{}}"#).unwrap();
 
         let entry = entry_from_json_file(&path, "main_window").unwrap();
-        assert_eq!(entry["name"], "main_window");
+        assert_eq!(entry["args"]["$id"], "main_window");
         assert_eq!(entry["type"], "Window");
+    }
+
+    #[test]
+    fn json_file_keeps_its_declared_id_over_the_stem() {
+        let dir = concinnity_testing::TempTree::new();
+        let path = dir.join("main_window.json");
+        std::fs::write(&path, r#"{"type":"Window","args":{"$id":"hud"}}"#).unwrap();
+
+        let entry = entry_from_json_file(&path, "main_window").unwrap();
+        assert_eq!(entry["args"]["$id"], "hud");
     }
 
     #[test]
@@ -1728,9 +1724,9 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0]["type"], "Window");
 
-        let entries = resolve_add_target(r#"{"type":"Window","name":"main"}"#).unwrap();
+        let entries = resolve_add_target(r#"{"type":"Window","args":{"$id":"main"}}"#).unwrap();
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0]["name"], "main");
+        assert_eq!(entries[0]["args"]["$id"], "main");
     }
 
     #[test]
@@ -1783,7 +1779,7 @@ mod tests {
     #[test]
     fn import_entry_sets_the_source_on_registration_defaults() {
         let entry = import_entry("SceneImport", "bistro", "scenes/bistro.fbx").unwrap();
-        assert_eq!(entry["name"], "bistro");
+        assert_eq!(entry["args"]["$id"], "bistro");
         assert_eq!(entry["type"], "SceneImport");
         assert_eq!(entry["args"]["source"], "scenes/bistro.fbx");
     }
@@ -1814,7 +1810,7 @@ mod tests {
     #[test]
     fn a_panorama_becomes_an_environment_map_naming_its_source() {
         let entry = environment_map_entry("galaxy", "assets/hdri/galaxy.glb").unwrap();
-        assert_eq!(entry["name"], "galaxy");
+        assert_eq!(entry["args"]["$id"], "galaxy");
         assert_eq!(entry["type"], "EnvironmentMap");
         assert_eq!(entry["args"]["source"], "assets/hdri/galaxy.glb");
     }

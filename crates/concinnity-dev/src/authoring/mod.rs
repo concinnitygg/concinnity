@@ -21,6 +21,6 @@ pub(crate) use template_spec::{spec_args, world_template_entries};
 // the editor's Import panel (its Add path and its file picker's filters) and
 // the editor console's /add (the full target resolution).
 pub(crate) use add::{
-    IMPORT_EXTENSION_GROUPS, apply_name_override, entry_from_path, is_path_like,
-    resolve_add_target, try_retarget_environment_map,
+    IMPORT_EXTENSION_GROUPS, apply_id_override, entry_from_path, is_path_like, resolve_add_target,
+    try_retarget_environment_map,
 };

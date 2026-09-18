@@ -10,10 +10,11 @@ use concinnity_host::thread::asset_id;
 use crate::debug_hook::DebugHook;
 
 use crate::editor::hook::tests::fixtures::{click_at, hook, pick_world, set_input};
-use crate::editor::hook::{EditorHook, entry_name, entry_type};
+use crate::editor::hook::{EditorHook, declared_id, entry_type};
 
 use crate::editor::panels::registry::PanelKey;
 
+use crate::editor::hook::tests::fixtures::active;
 use crate::editor::sim;
 
 // A right-press tick at `pos` (the create-menu opener).
@@ -59,8 +60,8 @@ fn right_click_creates_a_positioned_type_at_the_surface_point() {
         vec![(ground, [-20.0, -1.0, -20.0], [20.0, 0.0, 20.0])],
     );
     let mut h = hook(vec![serde_json::json!({
-        "name": "ground", "type": "Prop",
-        "args": { "mesh": "demo", "position": [0.0, -0.5, 0.0] }
+        "type": "Prop",
+        "args": { "$id": "ground", "mesh": "demo", "position": [0.0, -0.5, 0.0] }
     })]);
 
     right_click_at(&mut world, &mut h, [640.0, 500.0]);
@@ -85,7 +86,8 @@ fn right_click_creates_a_positioned_type_at_the_surface_point() {
         created["args"]["position"][1].as_f64().unwrap().abs() < 1e-3,
         "{created}"
     );
-    assert_eq!(h.selection.active(), entry_name(created));
+    assert_eq!(declared_id(created), None, "a placed asset is anonymous");
+    assert_eq!(active(&h).as_deref(), Some("PointLight#0"));
     assert!(h.dirty);
     h.undo(&mut world);
     assert_eq!(h.entries.len(), before, "one undo removes the creation");
@@ -98,7 +100,7 @@ fn prefab_rows_create_a_prop_instance() {
     asset_id::reset_interner();
     let mut world = pick_world([0.0; 3], vec![]);
     let mut h = hook(vec![serde_json::json!({
-        "name": "door_set", "type": "Prefab", "args": {}
+        "type": "Prefab", "args": {"$id": "door_set"}
     })]);
 
     right_click_at(&mut world, &mut h, [640.0, 500.0]);
@@ -121,7 +123,8 @@ fn prefab_rows_create_a_prop_instance() {
     let created = h.entries.last().unwrap();
     assert_eq!(entry_type(created), Some("Prop"));
     assert_eq!(created["args"]["prefab"], "door_set");
-    assert_eq!(h.selection.active(), entry_name(created));
+    assert_eq!(declared_id(created), None, "a placed instance is anonymous");
+    assert_eq!(active(&h).as_deref(), Some("Prop#0"));
 }
 
 // A left press outside the open menu dismisses it without creating anything

@@ -14,7 +14,10 @@ use concinnity_core::ecs::Entity;
 use concinnity_core::ecs::World;
 use concinnity_core::gfx::lines::Line;
 
-use crate::editor::hook::{EditorHook, entry_name, entry_type};
+use concinnity_cook::authoring::world::entry_handles;
+
+use crate::editor::asset_handle::AssetHandle;
+use crate::editor::hook::{EditorHook, entry_type};
 use crate::editor::outlines;
 use crate::editor::outlines::shapes::{self, Stroke};
 use crate::editor::panels::form;
@@ -59,7 +62,7 @@ impl EditorHook {
         if !self.hud_visible || self.sim.playing() {
             return;
         }
-        if self.selection.iter().next().is_none() && !self.extent_show.any() {
+        if self.selection.is_empty() && !self.extent_show.any() {
             return;
         }
         let mut budget = outlines::MAX_OUTLINED;
@@ -77,14 +80,20 @@ impl EditorHook {
         budget: &mut usize,
     ) {
         let colliders_on = self.extent_show.contains(outlines::Category::Colliders);
-        for e in &self.entries {
+        let selected = self.selected_names();
+        let handles = entry_handles(&self.entries);
+        for (i, (e, name)) in self.entries.iter().zip(&handles).enumerate() {
             if *budget == 0 {
                 return;
             }
-            let (Some(name), Some(ty)) = (entry_name(e), entry_type(e)) else {
+            let (Some(name), Some(ty), Some(key)) =
+                (name.as_deref(), entry_type(e), self.entries.key_at(i))
+            else {
                 continue;
             };
-            if self.name_hidden(name) || self.selection.contains(name) != selected_pass {
+            if self.handle_hidden(&AssetHandle::Entry(key))
+                || selected.contains(name) != selected_pass
+            {
                 continue;
             }
             let extent = EXTENTS
@@ -308,7 +317,7 @@ mod tests {
     }
 
     fn entry(name: &str, ty: &str) -> serde_json::Value {
-        serde_json::json!({"name": name, "type": ty, "args": {}})
+        serde_json::json!({"type": ty, "args": {"$id": name}})
     }
 
     // A world holding one named entity carrying `component`, resolvable
@@ -346,7 +355,7 @@ mod tests {
             "nothing selected, nothing drawn"
         );
 
-        h.selection.replace("lamp".to_string());
+        h.select_named("lamp");
         let lines = lines_of(&h, &world);
         assert_eq!(lines.len(), 3 * shapes::CIRCLE_SEGMENTS);
         // Every point sits on the range sphere around the light.
@@ -371,7 +380,7 @@ mod tests {
         let layer = lines_of(&h, &world);
         assert_eq!(layer.len(), 3 * shapes::CIRCLE_SEGMENTS);
 
-        h.selection.replace("lamp".to_string());
+        h.select_named("lamp");
         let selected = lines_of(&h, &world);
         assert_eq!(selected.len(), layer.len());
         assert!(selected[0].start_color[3] > layer[0].start_color[3]);
@@ -392,7 +401,7 @@ mod tests {
             },
         );
         let mut h = hook(vec![entry("spot", "SpotLight")]);
-        h.selection.replace("spot".to_string());
+        h.select_named("spot");
         let lines = lines_of(&h, &world);
         assert_eq!(
             lines.len(),
@@ -422,7 +431,7 @@ mod tests {
             },
         );
         let mut h = hook(vec![entry("zone", "TriggerVolume")]);
-        h.selection.replace("zone".to_string());
+        h.select_named("zone");
 
         // A gizmo-dragged Transform moves the outline off the authored spot.
         let e = world
@@ -473,7 +482,7 @@ mod tests {
 
         // Selection alone never draws a collider (props carry the highlight
         // rect instead).
-        h.selection.replace("crate".to_string());
+        h.select_named("crate");
         assert!(lines_of(&h, &world).is_empty());
 
         h.extent_show = h.extent_show.toggled(outlines::Category::Colliders);
@@ -490,10 +499,10 @@ mod tests {
             },
         );
         let mut h = hook(vec![entry("lamp", "PointLight")]);
-        h.selection.replace("lamp".to_string());
+        h.select_named("lamp");
         assert!(!lines_of(&h, &world).is_empty());
 
-        h.hidden_assets.insert("lamp".to_string());
+        h.hidden_assets.insert(h.handle_for("lamp"));
         assert!(
             lines_of(&h, &world).is_empty(),
             "editor-hidden entries skip"
@@ -540,13 +549,13 @@ mod tests {
         // Rect: 4 edges + the normal ray.
         let world = world_with("panel", RectAreaLight::default());
         let mut h = hook(vec![entry("panel", "RectAreaLight")]);
-        h.selection.replace("panel".to_string());
+        h.select_named("panel");
         assert_eq!(lines_of(&h, &world).len(), 5);
 
         // Probe: its bounds box.
         let world = world_with("probe", ReflectionProbe::default());
         let mut h = hook(vec![entry("probe", "ReflectionProbe")]);
-        h.selection.replace("probe".to_string());
+        h.select_named("probe");
         assert_eq!(lines_of(&h, &world).len(), shapes::BOX_EDGES);
 
         // Camera: a frustum from the schema-default args (also guards that
@@ -568,16 +577,16 @@ mod tests {
             },
         );
         let mut h = hook(vec![entry("shot", "Camera3D")]);
-        h.selection.replace("shot".to_string());
+        h.select_named("shot");
         assert_eq!(lines_of(&h, &world).len(), shapes::BOX_EDGES);
 
         // A hand-authored projection key that is not a number falls back to
         // the shipping default rather than collapsing the frustum away.
         let mut h = hook(vec![serde_json::json!({
-            "name": "shot", "type": "Camera3D",
-            "args": {"near": "0.05", "far": null}
+            "type": "Camera3D",
+            "args": {"$id": "shot", "near": "0.05", "far": null}
         })]);
-        h.selection.replace("shot".to_string());
+        h.select_named("shot");
         assert_eq!(lines_of(&h, &world).len(), shapes::BOX_EDGES);
     }
 }

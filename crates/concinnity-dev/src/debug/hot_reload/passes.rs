@@ -4,6 +4,7 @@
 //! logs.
 
 use concinnity_cook::authoring::registry::RegisteredType;
+use concinnity_cook::authoring::world::take_entry_id;
 use concinnity_core::components::ProceduralMesh;
 use concinnity_core::components::Story;
 use concinnity_core::components::VolumetricFog;
@@ -181,7 +182,8 @@ pub(super) fn reload_procedural_meshes(
         if entry_type(entry) != Some(RegisteredType::ProceduralMesh) {
             continue;
         }
-        let Some(name) = entry.get("name").and_then(|v| v.as_str()) else {
+        let mut entry = entry.clone();
+        let Some(name) = take_entry_id(&mut entry) else {
             continue;
         };
         let raw_args = entry
@@ -405,14 +407,15 @@ pub(super) fn reload_stories(
         if entry.get("type").and_then(|t| t.as_str()) != Some("Story") {
             continue;
         }
-        let Some(name) = entry.get("name").and_then(|n| n.as_str()) else {
+        let mut entry = entry.clone();
+        let Some(name) = take_entry_id(&mut entry) else {
             continue;
         };
         let args = entry
             .get("args")
             .cloned()
             .unwrap_or(serde_json::Value::Null);
-        if snapshots.get(name) == Some(&args) {
+        if snapshots.get(&name) == Some(&args) {
             continue;
         }
         match serde_json::from_value::<Story>(args.clone()) {

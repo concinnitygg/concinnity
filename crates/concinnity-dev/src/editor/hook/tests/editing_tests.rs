@@ -12,7 +12,7 @@ use concinnity_core::ecs::World;
 
 use super::fixtures::{click_row, entry, hook, row_of, seed_tree, set_field, world_with_fields};
 use crate::debug_hook::DebugHook;
-use crate::editor::hook::{EditorHook, FormTarget, visible_slot};
+use crate::editor::hook::{EditorHook, FormTarget, declared_id, visible_slot};
 
 use crate::editor::inject;
 
@@ -22,6 +22,7 @@ use crate::editor::panels::form_panel::{self, FormAction};
 use crate::editor::panels::assets_panel::{self, PanelAction};
 use crate::editor::panels::registry::PanelKey;
 
+use crate::editor::hook::tests::fixtures::{active, entry_target, select, selected};
 use crate::editor::widget;
 
 // A live rebuild re-injects a fresh (blank) HUD; the field snapshot carries the
@@ -92,7 +93,7 @@ fn plus_picker_then_name_form_adds_the_entry() {
     assert!(!h.form_open());
     assert!(h.dirty);
     assert_eq!(h.entries.len(), 1);
-    assert_eq!(h.entries[0]["name"], "my_light");
+    assert_eq!(h.entries[0]["args"]["$id"], "my_light");
     assert_eq!(h.entries[0]["type"], ty.as_str());
 }
 
@@ -105,7 +106,7 @@ fn row_click_opens_the_edit_form_for_a_rename() {
     // Clicking the name row opens the edit form prefilled for a rename.
     click_row(&mut h, "lamp", &mut world);
     assert!(h.form_open());
-    assert_eq!(h.form.target, FormTarget::Entry(0));
+    assert_eq!(h.form.target, entry_target(&h, 0));
     assert_eq!(h.form.selected_type.as_deref(), Some("PointLight"));
     assert!(h.row_menu.is_none());
     let name_field = world
@@ -117,9 +118,49 @@ fn row_click_opens_the_edit_form_for_a_rename() {
     set_field(&mut world, form_panel::NAME_INPUT, "streetlamp");
     h.apply_form(FormAction::Confirm, &mut world);
     assert_eq!(h.entries.len(), 1, "edited in place, not appended");
-    assert_eq!(h.entries[0]["name"], "streetlamp");
+    assert_eq!(h.entries[0]["args"]["$id"], "streetlamp");
     assert_eq!(h.entries[0]["type"], "PointLight");
     assert!(h.dirty);
+}
+
+// The selection holds each member's session key, not its name, so renaming an
+// asset through the form leaves it selected (it used to drop out of the set).
+#[test]
+fn renaming_an_asset_through_the_form_keeps_it_selected() {
+    let mut h = hook(vec![entry("floor", "Decal"), entry("lamp", "PointLight")]);
+    let mut world = world_with_fields();
+    h.panel_open = true;
+    seed_tree(&mut h, Vec::new());
+    click_row(&mut h, "lamp", &mut world);
+    assert_eq!(active(&h).as_deref(), Some("lamp"));
+
+    set_field(&mut world, form_panel::NAME_INPUT, "streetlamp");
+    h.apply_form(FormAction::Confirm, &mut world);
+    assert_eq!(h.entries[1]["args"]["$id"], "streetlamp");
+    assert_eq!(
+        active(&h).as_deref(),
+        Some("streetlamp"),
+        "the member follows its entry through the rename"
+    );
+    assert_eq!(selected(&h).len(), 1, "and it is still the only member");
+}
+
+// The other way a name-keyed set went wrong: a member sitting after a deleted
+// line. Keys do not shift, so the surviving member stays selected and no
+// selection lands on the entry that took its place.
+#[test]
+fn deleting_an_earlier_entry_leaves_the_selection_on_its_own_member() {
+    let mut h = hook(vec![entry("a", "Decal"), entry("b", "Decal")]);
+    let mut world = world_with_fields();
+    h.panel_open = true;
+    seed_tree(&mut h, Vec::new());
+    select(&mut h, &["b"]);
+
+    let (g, i) = row_of(&h, "a");
+    h.apply_panel(PanelAction::OpenRowMenu(g, i), &mut world);
+    h.apply_panel(PanelAction::RowDelete, &mut world);
+    assert_eq!(selected(&h), vec!["b"]);
+    assert_eq!(h.handle_index(h.selection.active().unwrap()), Some(0));
 }
 
 #[test]
@@ -132,7 +173,7 @@ fn row_menu_delete_removes_the_entry() {
     h.apply_panel(PanelAction::OpenRowMenu(g, i), &mut world);
     h.apply_panel(PanelAction::RowDelete, &mut world);
     assert_eq!(h.entries.len(), 1);
-    assert_eq!(h.entries[0]["name"], "b");
+    assert_eq!(h.entries[0]["args"]["$id"], "b");
     assert!(h.dirty && h.row_menu.is_none());
 }
 
@@ -140,23 +181,24 @@ fn row_menu_delete_removes_the_entry() {
 fn edit_rename_to_a_duplicate_is_suffixed() {
     let mut h = hook(vec![entry("a", "Decal"), entry("b", "Decal")]);
     let mut world = world_with_fields();
-    h.form.target = FormTarget::Entry(1);
+    let target = entry_target(&h, 1);
+    h.form.target = target;
     h.form.selected_type = Some("Decal".to_string());
     // Rename "b" to "a": collides with the other entry -> suffixed.
     set_field(&mut world, form_panel::NAME_INPUT, "a");
     h.apply_form(FormAction::Confirm, &mut world);
-    assert_eq!(h.entries[1]["name"], "a_1");
+    assert_eq!(h.entries[1]["args"]["$id"], "a_1");
 }
 
 #[test]
-fn confirm_add_with_blank_name_uses_a_generated_one() {
+fn confirm_add_with_a_blank_id_adds_it_anonymous() {
     let mut h = hook(Vec::new());
     let mut world = world_with_fields();
     h.form.selected_type = Some("PointLight".to_string());
     // Field left blank.
     h.apply_form(FormAction::Confirm, &mut world);
     assert_eq!(h.entries.len(), 1);
-    assert_eq!(h.entries[0]["name"], "editor_pointlight");
+    assert_eq!(declared_id(&h.entries[0]), None);
 }
 
 #[test]
@@ -166,7 +208,10 @@ fn confirm_add_makes_a_duplicate_name_unique() {
     h.form.selected_type = Some("PointLight".to_string());
     set_field(&mut world, form_panel::NAME_INPUT, "lamp");
     h.apply_form(FormAction::Confirm, &mut world);
-    assert_eq!(h.entries[1]["name"], "lamp_1", "collision is suffixed");
+    assert_eq!(
+        h.entries[1]["args"]["$id"], "lamp_1",
+        "collision is suffixed"
+    );
 }
 
 // Picking a config singleton from the "+" picker edits the world's existing
@@ -175,7 +220,7 @@ fn confirm_add_makes_a_duplicate_name_unique() {
 fn config_singleton_picker_edits_existing_else_adds() {
     // A world that already has a GraphicsConfig: picking it opens an EDIT.
     let mut h = hook(vec![serde_json::json!({
-        "name": "gfx", "type": "GraphicsConfig", "args": {}
+        "type": "GraphicsConfig", "args": {"$id": "gfx"}
     })]);
     let mut world = world_with_fields();
     h.panel_open = true;
@@ -190,7 +235,7 @@ fn config_singleton_picker_edits_existing_else_adds() {
     assert!(h.form_open());
     assert_eq!(
         h.form.target,
-        FormTarget::Entry(0),
+        entry_target(&h, 0),
         "picking a present singleton edits it, not a new add"
     );
     h.apply_form(FormAction::Confirm, &mut world);
@@ -265,7 +310,7 @@ fn close_overlays_dismisses_the_picker_and_row_menu() {
     let mut h = hook(vec![entry("a", "Decal")]);
     let mut world = world_with_fields();
     h.picker_open = true;
-    h.row_menu = Some("a".to_string());
+    h.row_menu = Some(h.handle_for("a"));
     h.apply_panel(PanelAction::CloseOverlays, &mut world);
     assert!(!h.picker_open);
     assert!(h.row_menu.is_none());
@@ -295,7 +340,7 @@ fn clicking_a_list_row_opens_its_edit_form() {
     });
     h.tick(&mut world);
     assert!(h.form_open(), "the row click opened the form");
-    assert_eq!(h.form.target, FormTarget::Entry(0));
+    assert_eq!(h.form.target, entry_target(&h, 0));
     assert_eq!(h.form.selected_type.as_deref(), Some("PointLight"));
     assert_eq!(
         widget::field_text(&world, form_panel::NAME_INPUT),
@@ -304,37 +349,41 @@ fn clicking_a_list_row_opens_its_edit_form() {
     );
 }
 
-// Deleting an entry while a form is open keeps the form's entry index valid:
-// deleting the edited entry closes it; deleting an earlier one shifts it.
+// The open form holds its entry's session key, so an unrelated delete leaves it
+// on the same entry however far that entry moves; deleting the edited entry
+// itself is what closes the form.
 #[test]
-fn deleting_entries_fixes_up_the_open_form_index() {
+fn deleting_an_unrelated_entry_leaves_the_open_form_on_its_own() {
     let mut h = hook(vec![entry("a", "Decal"), entry("b", "Decal")]);
     let mut world = world_with_fields();
     h.panel_open = true;
-    // Edit "b" (index 1), then delete "a" (index 0): the form now edits 0.
+    // Edit "b" (index 1), then delete "a" (index 0): "b" slides to 0 and the
+    // form is still on it.
     seed_tree(&mut h, Vec::new());
-    h.open_form(&mut world, "Decal".to_string(), FormTarget::Entry(1));
+    let target = entry_target(&h, 1);
+    h.open_form(&mut world, "Decal".to_string(), target);
     let (g, i) = row_of(&h, "a");
     h.apply_panel(PanelAction::OpenRowMenu(g, i), &mut world);
     h.apply_panel(PanelAction::RowDelete, &mut world);
     assert!(h.form_open(), "the form survives an unrelated delete");
     assert_eq!(
         h.form.target,
-        FormTarget::Entry(0),
-        "the edited index shifted down"
+        entry_target(&h, 0),
+        "the same entry, now at 0"
     );
-    // Confirm still updates the right (renamed-index) entry.
+    // Confirm still updates that entry and no other.
     set_field(&mut world, form_panel::NAME_INPUT, "b2");
     h.apply_form(FormAction::Confirm, &mut world);
     assert_eq!(h.entries.len(), 1);
-    assert_eq!(h.entries[0]["name"], "b2");
+    assert_eq!(h.entries[0]["args"]["$id"], "b2");
 
     // Deleting the edited entry itself closes the form.
     let mut h2 = hook(vec![entry("a", "Decal")]);
     let mut world2 = world_with_fields();
     h2.panel_open = true;
     seed_tree(&mut h2, Vec::new());
-    h2.open_form(&mut world2, "Decal".to_string(), FormTarget::Entry(0));
+    let target = entry_target(&h2, 0);
+    h2.open_form(&mut world2, "Decal".to_string(), target);
     let (g2, i2) = row_of(&h2, "a");
     h2.apply_panel(PanelAction::OpenRowMenu(g2, i2), &mut world2);
     h2.apply_panel(PanelAction::RowDelete, &mut world2);
@@ -372,7 +421,7 @@ fn add_form_writes_edited_arg_values() {
     h.apply_form(FormAction::Confirm, &mut world);
     assert!(!h.form_open());
     assert_eq!(h.entries.len(), 1);
-    assert_eq!(h.entries[0]["name"], "lamp");
+    assert_eq!(h.entries[0]["args"]["$id"], "lamp");
     assert_eq!(h.entries[0]["type"], ty.as_str());
     assert_eq!(
         h.entries[0]["args"][&key].as_f64(),
@@ -428,7 +477,7 @@ fn add_form_writes_a_nested_object_field() {
     let cam = h
         .entries
         .iter()
-        .find(|e| e["name"] == "cam")
+        .find(|e| e["args"]["$id"] == "cam")
         .expect("the camera was added");
     assert_eq!(cam["type"], "Camera3D");
     assert_eq!(
@@ -532,7 +581,7 @@ fn add_form_ref_field_offers_and_persists_an_existing_asset() {
     let decal = h
         .entries
         .iter()
-        .find(|e| e["name"] == "splat")
+        .find(|e| e["args"]["$id"] == "splat")
         .expect("the decal was added");
     assert_eq!(decal["type"], "Decal");
     assert_eq!(
@@ -574,7 +623,11 @@ fn add_form_ref_field_dropdown_picks_and_persists() {
     assert_eq!(h.form.fields[idx].variant_idx, 3, "the option was selected");
     set_field(&mut world, form_panel::NAME_INPUT, "splat");
     h.apply_form(FormAction::Confirm, &mut world);
-    let decal = h.entries.iter().find(|e| e["name"] == "splat").unwrap();
+    let decal = h
+        .entries
+        .iter()
+        .find(|e| e["args"]["$id"] == "splat")
+        .unwrap();
     assert_eq!(
         decal["args"]["texture"], picked,
         "the dropdown-picked reference persisted as the asset's name"
@@ -678,7 +731,7 @@ fn add_form_grows_an_array_and_edits_the_new_element() {
     let ws = h
         .entries
         .iter()
-        .find(|e| e["name"] == "sea")
+        .find(|e| e["args"]["$id"] == "sea")
         .expect("the water surface was added");
     assert_eq!(ws["type"], "WaterSurface");
     assert_eq!(
@@ -709,7 +762,11 @@ fn add_form_removes_an_array_element() {
     assert_eq!(h.form.fields[hj].variant_idx, 1, "shrank back to one wave");
     set_field(&mut world, form_panel::NAME_INPUT, "pond");
     h.apply_form(FormAction::Confirm, &mut world);
-    let ws = h.entries.iter().find(|e| e["name"] == "pond").unwrap();
+    let ws = h
+        .entries
+        .iter()
+        .find(|e| e["args"]["$id"] == "pond")
+        .unwrap();
     assert_eq!(ws["args"]["waves"].as_array().map(Vec::len), Some(1));
 }
 
@@ -748,7 +805,11 @@ fn form_discloses_a_vector_and_edits_one_element() {
     set_field(&mut world, form_panel::form_input(slot), "4.5");
     set_field(&mut world, form_panel::NAME_INPUT, "lamp");
     h.apply_form(FormAction::Confirm, &mut world);
-    let lamp = h.entries.iter().find(|e| e["name"] == "lamp").unwrap();
+    let lamp = h
+        .entries
+        .iter()
+        .find(|e| e["args"]["$id"] == "lamp")
+        .unwrap();
     assert_eq!(
         lamp["args"]["position"].as_array().map(Vec::len),
         Some(3),
@@ -796,7 +857,11 @@ fn collapsing_a_vector_keeps_its_element_edits() {
     );
     set_field(&mut world, form_panel::NAME_INPUT, "lamp");
     h.apply_form(FormAction::Confirm, &mut world);
-    let lamp = h.entries.iter().find(|e| e["name"] == "lamp").unwrap();
+    let lamp = h
+        .entries
+        .iter()
+        .find(|e| e["args"]["$id"] == "lamp")
+        .unwrap();
     assert_eq!(lamp["args"]["position"][0].as_f64(), Some(2.0));
 }
 
@@ -836,7 +901,7 @@ fn add_form_scrolls_to_and_edits_an_off_window_field() {
     let ws = h
         .entries
         .iter()
-        .find(|e| e["name"] == "sea")
+        .find(|e| e["args"]["$id"] == "sea")
         .expect("the water surface was added");
     assert_eq!(
         ws["args"]["roughness"].as_f64(),
@@ -859,7 +924,11 @@ fn add_form_ref_field_defaults_to_none() {
     h.open_form(&mut world, "Decal".to_string(), FormTarget::New);
     set_field(&mut world, form_panel::NAME_INPUT, "bare");
     h.apply_form(FormAction::Confirm, &mut world);
-    let decal = h.entries.iter().find(|e| e["name"] == "bare").unwrap();
+    let decal = h
+        .entries
+        .iter()
+        .find(|e| e["args"]["$id"] == "bare")
+        .unwrap();
     assert_eq!(decal["args"]["texture"], serde_json::Value::Null);
 }
 
@@ -892,8 +961,9 @@ fn toggling_the_assets_panel_keeps_the_open_form_state() {
     let mut h = hook(vec![entry("lamp", "PointLight")]);
     let mut world = world_with_fields();
     h.panel_open = true;
-    h.open_form(&mut world, "PointLight".to_string(), FormTarget::Entry(0));
-    assert!(h.form_open() && h.form.target == FormTarget::Entry(0));
+    let target = entry_target(&h, 0);
+    h.open_form(&mut world, "PointLight".to_string(), target);
+    assert!(h.form_open() && h.form.target == entry_target(&h, 0));
     // Toggle the assets UI off: the form + selection are kept, not discarded.
     h.toggle_view_row(0, &mut world);
     assert!(!h.panel_open);
@@ -903,13 +973,13 @@ fn toggling_the_assets_panel_keeps_the_open_form_state() {
     );
     assert_eq!(
         h.form.target,
-        FormTarget::Entry(0),
+        entry_target(&h, 0),
         "the browse selection is kept"
     );
     // Toggle back on: the same form and selection are restored.
     h.toggle_view_row(0, &mut world);
     assert!(h.panel_open && h.form_open());
-    assert_eq!(h.form.target, FormTarget::Entry(0));
+    assert_eq!(h.form.target, entry_target(&h, 0));
 }
 
 // Hiding the assets UI hides the form's elements (but keeps its state); showing
@@ -924,7 +994,8 @@ fn a_hidden_assets_panel_hides_the_form_elements() {
     });
     let mut h = hook(vec![entry("lamp", "PointLight")]);
     h.panel_open = true;
-    h.open_form(&mut world, "PointLight".to_string(), FormTarget::Entry(0));
+    let target = entry_target(&h, 0);
+    h.open_form(&mut world, "PointLight".to_string(), target);
     let form_shown = |w: &World| {
         w.query::<Sprite>()
             .find(|s| s.asset_id == form_panel::EDIT_BG)
@@ -947,13 +1018,13 @@ fn a_hidden_assets_panel_hides_the_form_elements() {
 #[test]
 fn edit_form_seeds_and_updates_existing_args() {
     let mut h = hook(vec![serde_json::json!({
-        "name": "lamp", "type": "PointLight", "args": {}
+        "type": "PointLight", "args": {"$id": "lamp"}
     })]);
     let mut world = world_with_fields();
     h.panel_open = true;
     seed_tree(&mut h, Vec::new());
     click_row(&mut h, "lamp", &mut world);
-    assert_eq!(h.form.target, FormTarget::Entry(0));
+    assert_eq!(h.form.target, entry_target(&h, 0));
     assert!(!h.form.fields.is_empty());
     // The name field was seeded from the entry.
     assert_eq!(widget::field_text(&world, form_panel::NAME_INPUT), "lamp");

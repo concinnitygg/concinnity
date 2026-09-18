@@ -3,7 +3,8 @@
 
 use concinnity_core::ecs::World;
 
-use super::{EditorHook, FormOverridesData, PanelData, TemplateDetailData, entry_name};
+use super::{EditorHook, FormOverridesData, PanelData, TemplateDetailData, declared_id};
+use crate::editor::asset_handle::AssetHandle;
 use crate::editor::hud::HudAction;
 use crate::editor::overrides;
 use crate::editor::panels::form_panel::{self, FormView};
@@ -23,7 +24,7 @@ impl EditorHook {
         let entries = crate::authoring::world_template_entries(t);
         let mut added = 0;
         for entry in entries {
-            if entry_name(&entry).is_some_and(|n| self.name_taken(n)) {
+            if declared_id(&entry).is_some_and(|n| self.name_taken(n)) {
                 continue;
             }
             self.entries.push(entry);
@@ -48,8 +49,14 @@ impl EditorHook {
         if self.form.touched {
             form_title.push_str(" *");
         }
+        let names = |set: &std::collections::BTreeSet<AssetHandle>| {
+            set.iter().filter_map(|h| self.handle_name(h)).collect()
+        };
         PanelData {
             rows: self.tree_rows(world),
+            hidden: names(&self.hidden_assets),
+            locked: names(&self.locked_assets),
+            row_menu: self.row_menu.as_ref().and_then(|h| self.handle_name(h)),
             picker_options: self.picker_options(world),
             form_title,
             form_overrides: self.form_overrides_data(),

@@ -29,7 +29,7 @@ fn every_scaffold_name_resolves_to_an_emitted_entry() {
         assert!(names.len() > 20, "{names:?}");
         for name in names {
             assert!(
-                entries.iter().any(|e| e["name"] == name),
+                entries.iter().any(|e| e["args"]["$id"] == name),
                 "scaffold names '{name}', which no entry declares"
             );
         }
@@ -47,7 +47,7 @@ fn every_overlay_element_names_its_screen() {
     let screens: Vec<&str> = entries
         .iter()
         .filter(|e| e["type"] == "Screen")
-        .filter_map(|e| e["name"].as_str())
+        .filter_map(|e| e["args"]["$id"].as_str())
         .collect();
     assert_eq!(screens.len(), 3, "title, stage and ending: {screens:?}");
 
@@ -63,7 +63,7 @@ fn every_overlay_element_names_its_screen() {
         assert!(
             screens.contains(&screen),
             "{} names screen {screen:?}, which the story does not emit",
-            entry["name"]
+            entry["args"]["$id"]
         );
     }
 }

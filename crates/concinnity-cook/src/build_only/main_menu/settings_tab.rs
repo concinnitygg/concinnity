@@ -381,9 +381,9 @@ pub(super) fn emit_settings_tab(
         })
         .collect();
     out.push(serde_json::json!({
-        "name": format!("{}_scroll", screen),
         "type": "ScrollPanel",
         "args": {
+            "$id": format!("{}_scroll", screen),
             "x": row_x, "y": band_top, "width": row_width, "height": band_h,
             "rows": scroll_rows,
             "groups": scroll_groups,

@@ -20,7 +20,7 @@ use crate::editor::widget;
 // Story panel
 
 fn story_import(source: &str) -> serde_json::Value {
-    serde_json::json!({"name": "tale", "type": "StoryImport", "args": {"source": source}})
+    serde_json::json!({"type": "StoryImport", "args": {"$id": "tale", "source": source}})
 }
 
 // A hook + injected world with the story loaded from `lines` (no file IO: the

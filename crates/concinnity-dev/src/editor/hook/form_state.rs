@@ -4,6 +4,7 @@
 
 use std::collections::HashSet;
 
+use crate::editor::entry_list::EntryId;
 use crate::editor::panels::form::FormField;
 use crate::editor::panels::form_panel::FormFocus;
 
@@ -107,8 +108,10 @@ pub(in crate::editor::hook) enum FormTarget {
     // A new asset: confirming appends it under a unique name.
     #[default]
     New,
-    // Working-entry `idx`: confirming updates that line in place.
-    Entry(usize),
+    // The authored entry with this session key: confirming updates that line
+    // in place. A key rather than a position, so a line added or removed
+    // elsewhere in the list cannot retarget the open form onto another entry.
+    Entry(EntryId),
     // An asset the build generates, which has no world.jsonl line of its own.
     // The form is seeded from the entry the expansion produced, and confirming
     // appends that line -- which then overrides the expansion, since the cook
@@ -119,10 +122,10 @@ pub(in crate::editor::hook) enum FormTarget {
 }
 
 impl FormTarget {
-    // The working-entry index the form updates in place, if any.
-    pub(in crate::editor::hook) fn entry(&self) -> Option<usize> {
+    // The authored entry the form updates in place, if any.
+    pub(in crate::editor::hook) fn entry(&self) -> Option<EntryId> {
         match self {
-            FormTarget::Entry(i) => Some(*i),
+            FormTarget::Entry(key) => Some(*key),
             _ => None,
         }
     }
@@ -137,6 +140,7 @@ impl FormTarget {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::editor::entry_list::EntryList;
     use crate::editor::panels::form::FieldKind;
 
     #[test]
@@ -145,7 +149,11 @@ mod tests {
         args.insert("radius".into(), serde_json::json!(2.0));
         let mut s = FormState {
             selected_type: Some("Sphere".into()),
-            target: FormTarget::Entry(4),
+            target: FormTarget::Entry(
+                EntryList::new(vec![serde_json::json!({})])
+                    .key_at(0)
+                    .unwrap(),
+            ),
             fields: vec![FormField {
                 key: "radius".into(),
                 kind: FieldKind::Float,

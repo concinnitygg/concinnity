@@ -71,6 +71,7 @@ impl EditorHook {
     ) -> (Vec<content_panel::CellView>, usize) {
         let items = self.content_items(world);
         let thumbs = thumbs::injected();
+        let selected = self.selected_names();
         let first = self.content_scroll * content_panel::COLS;
         let cells = items
             .iter()
@@ -78,7 +79,7 @@ impl EditorHook {
             .take(content_panel::CELLS)
             .map(|(name, ty)| content_panel::CellView {
                 thumb: thumbs.get(name),
-                selected: self.selection.contains(name),
+                selected: selected.contains(name),
                 name: name.clone(),
                 asset_type: *ty,
             })
@@ -115,9 +116,9 @@ impl EditorHook {
                 let index = self.content_scroll * content_panel::COLS + slot;
                 if let Some((name, ty)) = items.get(index) {
                     if self.shift_held {
-                        self.selection.toggle(name.clone());
+                        self.toggle_named(name);
                     } else {
-                        self.selection.replace(name.clone());
+                        self.select_named(name);
                         // A plain press may also become a drag-out placement.
                         self.arm_content_drag(name.clone(), *ty, at);
                     }

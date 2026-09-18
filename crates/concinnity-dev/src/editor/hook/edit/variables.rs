@@ -12,6 +12,7 @@
 //! Escape gives it up. There is no navigation to add, because the panel is one
 //! list and the arrows are already what the text fields use.
 
+use concinnity_cook::authoring::world::replace_args;
 use concinnity_core::components::FrameInput;
 use concinnity_core::components::InputKey;
 use concinnity_core::ecs::World;
@@ -20,7 +21,7 @@ use serde_json::Value;
 use crate::editor::behavior::edit;
 use crate::editor::behavior::palette;
 use crate::editor::behavior::relations;
-use crate::editor::hook::{EditorHook, entry_name, entry_type, scroll_step};
+use crate::editor::hook::{EditorHook, declared_id, entry_type, scroll_step};
 use crate::editor::panels::registry::{self, PanelKey};
 use crate::editor::panels::variables::{self, Row};
 use crate::editor::panels::variables_panel::{self, VariablesAction, VariablesView};
@@ -101,7 +102,7 @@ impl EditorHook {
     // error the panel can fix.
     fn variables_status(&self, rows: &[Row]) -> Option<String> {
         if let Some(idx) = self.variables_entry() {
-            let name = entry_name(&self.entries[idx]).unwrap_or("");
+            let name = declared_id(&self.entries[idx]).unwrap_or("");
             let args = self.variables_args().unwrap_or(Value::Null);
             if let Err(e) = concinnity_cook::check::behavior::check_variables(name, &args) {
                 return Some(e.lines().next().unwrap_or(&e).to_string());
@@ -255,7 +256,7 @@ impl EditorHook {
             None => {
                 let asset = self.unique_name("world_vars");
                 self.entries.push(serde_json::json!({
-                    "name": asset, "type": "Variables", "args": {"vars": [decl]},
+                    "type": "Variables", "args": {"$id": asset, "vars": [decl]},
                 }));
                 self.mark_changed();
                 self.after_variables_change();
@@ -403,10 +404,7 @@ impl EditorHook {
     }
 
     fn write_variables(&mut self, idx: usize, args: Value) {
-        let Some(entry) = self.entries[idx].as_object_mut() else {
-            return;
-        };
-        entry.insert("args".to_string(), args);
+        replace_args(&mut self.entries[idx], args);
         self.mark_changed();
         self.after_variables_change();
     }

@@ -11,6 +11,7 @@ use concinnity_host::thread::asset_id;
 
 use crate::editor::hook::tests::fixtures::{click_at, entry, hook, pick_world};
 
+use crate::editor::hook::tests::fixtures::active;
 use crate::editor::viewport::billboards;
 
 // Billboard test rig: the pick rig plus a PointLight entity indexed by name
@@ -33,7 +34,7 @@ fn billboard_world(light_pos: [f32; 3], picks: Vec<(AssetId, [f32; 3], [f32; 3])
 }
 
 fn lamp_entry(pos: [f32; 3]) -> serde_json::Value {
-    serde_json::json!({"name": "lamp", "type": "PointLight", "args": {"position": pos}})
+    serde_json::json!({"type": "PointLight", "args": {"$id": "lamp", "position": pos}})
 }
 
 // Clicking a light's billboard selects it by name through the normal pick
@@ -46,7 +47,11 @@ fn billboard_click_selects_the_light_and_seeds_its_transform() {
 
     // The light projects to the viewport center (camera at origin facing -Z).
     click_at(&mut world, &mut h, [640.0, 360.0]);
-    assert_eq!(h.selection.active(), Some("lamp"), "the icon press selects");
+    assert_eq!(
+        active(&h).as_deref(),
+        Some("lamp"),
+        "the icon press selects"
+    );
     assert!(!h.panel_open && !h.form_open(), "an icon press opens no UI");
 
     // The seeded Transform mirrors the authored position, so the gizmo's
@@ -80,7 +85,7 @@ fn billboard_and_mesh_overlap_prefers_the_nearer_hit() {
     );
     let mut h = hook(vec![entry("wall", "Sprite"), lamp_entry([0.0, 0.0, -5.0])]);
     click_at(&mut world, &mut h, [640.0, 360.0]);
-    assert_eq!(h.selection.active(), Some("wall"), "the nearer mesh wins");
+    assert_eq!(active(&h).as_deref(), Some("wall"), "the nearer mesh wins");
 
     // Wall at depth 9..10, light at depth 5: the icon is nearer.
     asset_id::reset_interner();
@@ -91,7 +96,7 @@ fn billboard_and_mesh_overlap_prefers_the_nearer_hit() {
     );
     let mut h = hook(vec![entry("wall", "Sprite"), lamp_entry([0.0, 0.0, -5.0])]);
     click_at(&mut world, &mut h, [640.0, 360.0]);
-    assert_eq!(h.selection.active(), Some("lamp"), "the nearer icon wins");
+    assert_eq!(active(&h).as_deref(), Some("lamp"), "the nearer icon wins");
 }
 
 // Editor-hidden billboards neither draw nor pick; locked ones stay visible
@@ -101,16 +106,16 @@ fn hidden_and_locked_billboards_follow_the_pick_rules() {
     asset_id::reset_interner();
     let mut world = billboard_world([0.0, 0.0, -5.0], Vec::new());
     let mut h = hook(vec![lamp_entry([0.0, 0.0, -5.0])]);
-    h.locked_assets.insert("lamp".to_string());
+    h.locked_assets.insert(h.handle_for("lamp"));
     click_at(&mut world, &mut h, [640.0, 360.0]);
-    assert_eq!(h.selection.active(), None, "a locked icon is pick-through");
+    assert_eq!(active(&h).as_deref(), None, "a locked icon is pick-through");
     assert!(h.marquee.is_some(), "the click fell through to empty space");
 
     asset_id::reset_interner();
     let mut world = billboard_world([0.0, 0.0, -5.0], Vec::new());
     let mut h = hook(vec![lamp_entry([0.0, 0.0, -5.0])]);
-    h.hidden_assets.insert("lamp".to_string());
+    h.hidden_assets.insert(h.handle_for("lamp"));
     click_at(&mut world, &mut h, [640.0, 360.0]);
-    assert_eq!(h.selection.active(), None, "a hidden asset draws no icon");
+    assert_eq!(active(&h).as_deref(), None, "a hidden asset draws no icon");
     assert!(h.marquee.is_some(), "the click fell through to empty space");
 }

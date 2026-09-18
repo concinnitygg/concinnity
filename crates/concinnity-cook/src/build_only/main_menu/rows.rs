@@ -346,9 +346,9 @@ pub(super) fn option_select_row(row: &SettingsRow) -> serde_json::Value {
         style,
     } = row;
     serde_json::json!({
-        "name": name,
         "type": "OptionSelect",
         "args": {
+            "$id": name,
             "setting": setting.as_str(),
             "label": label,
             "x": x,
@@ -383,9 +383,9 @@ pub(super) fn slider_row(row: &SettingsRow) -> serde_json::Value {
         style,
     } = row;
     serde_json::json!({
-        "name": name,
         "type": "Slider",
         "args": {
+            "$id": name,
             "setting": setting.as_str(),
             "label": label,
             "x": x,

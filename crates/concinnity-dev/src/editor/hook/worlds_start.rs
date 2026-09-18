@@ -10,6 +10,7 @@ use concinnity_core::ecs::World;
 use std::path::Path;
 
 use super::{EditorHook, short_status};
+use crate::editor::entry_list::EntryList;
 use crate::editor::history::History;
 use crate::editor::panels::registry::PanelKey;
 use crate::editor::session_store;
@@ -139,7 +140,7 @@ impl EditorHook {
             Ok(entries) => {
                 self.worlds.status = None;
                 self.worlds.preview = Some(path.to_string());
-                self.stage_preview(entries);
+                self.stage_preview(EntryList::new(entries));
             }
             // A world that will not parse cannot be shown: the screen says so
             // and keeps whatever was already behind it.
@@ -159,13 +160,13 @@ impl EditorHook {
     // session with no world to show opens on.
     fn clear_preview(&mut self) {
         self.worlds.preview = None;
-        self.stage_preview(Vec::new());
+        self.stage_preview(EntryList::default());
     }
 
     // Hold `entries` as the world the session is showing. Nothing here is an
     // edit: the list reads as saved and carries no history, so the start screen
     // can never present a world as having unsaved changes.
-    fn stage_preview(&mut self, entries: Vec<serde_json::Value>) {
+    fn stage_preview(&mut self, entries: EntryList) {
         // The world these entries replace is the one the attract camera was
         // framing, so the cycle starts again (on its first shot, from black)
         // over whatever the rebuild brings up.
@@ -204,7 +205,7 @@ impl EditorHook {
                 // The world showing gets its own camera back before it goes:
                 // should the compile fail, it is the world the session keeps.
                 self.stop_cinematic(world);
-                self.retarget(path, entries, Adopt::No);
+                self.retarget(path, EntryList::new(entries), Adopt::No);
             }
             // A file that will not parse leaves the screen as it stands.
             Err(e) => self.worlds.status = Some(e),

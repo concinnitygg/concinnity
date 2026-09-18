@@ -6,8 +6,8 @@
 use concinnity_core::components::InputKey;
 use concinnity_core::ecs::World;
 
+use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::{entry, hook, story_key_input};
-use crate::editor::hook::{EditorHook, FormTarget};
 
 use crate::editor::inject;
 
@@ -16,6 +16,8 @@ use crate::editor::panels::import_panel::{self, ImportAction};
 use crate::editor::panels::registry::PanelKey;
 use crate::editor::panels::story;
 
+use crate::editor::entry_list::EntryList;
+use crate::editor::hook::tests::fixtures::entry_target;
 use crate::editor::widget;
 
 // Import panel
@@ -46,7 +48,7 @@ fn import_add_resolves_a_scene_file() {
     assert_eq!(h.import_status, None);
     assert_eq!(h.entries.len(), 1);
     assert_eq!(h.entries[0]["type"], "SceneImport");
-    assert_eq!(h.entries[0]["name"], "crate_stack");
+    assert_eq!(h.entries[0]["args"]["$id"], "crate_stack");
     assert_eq!(
         h.entries[0]["args"]["source"],
         serde_json::Value::String(glb.to_string_lossy().to_string())
@@ -72,7 +74,10 @@ fn import_add_uniquifies_a_colliding_name() {
     assert_eq!(h.import_status, None);
     assert_eq!(h.entries.len(), 2);
     assert_eq!(h.entries[1]["type"], "StoryImport");
-    assert_eq!(h.entries[1]["name"], "tale_1", "renamed past the collision");
+    assert_eq!(
+        h.entries[1]["args"]["$id"], "tale_1",
+        "renamed past the collision"
+    );
 }
 
 // Failures land on the status line and commit nothing: a missing file, and an
@@ -110,7 +115,7 @@ fn import_add_resolves_an_hdr_to_an_environment_map() {
     assert_eq!(h.import_status, None);
     assert_eq!(h.entries.len(), 1);
     assert_eq!(h.entries[0]["type"], "EnvironmentMap");
-    assert_eq!(h.entries[0]["name"], "studio");
+    assert_eq!(h.entries[0]["args"]["$id"], "studio");
     assert_eq!(
         h.entries[0]["args"]["source"],
         serde_json::Value::String(hdr.to_string_lossy().to_string())
@@ -123,7 +128,7 @@ fn import_add_resolves_an_hdr_to_an_environment_map() {
 fn import_add_retargets_an_existing_environment_map() {
     let (mut h, mut world, dir) = import_session();
     h.entries.push(serde_json::json!({
-        "name": "env", "type": "EnvironmentMap", "args": {"source": "", "generator": "sky"}
+        "type": "EnvironmentMap", "args": {"$id": "env", "source": "", "generator": "sky"}
     }));
     let hdr = dir.join("dusk.hdr");
     std::fs::write(&hdr, b"radiance").unwrap();
@@ -131,7 +136,10 @@ fn import_add_retargets_an_existing_environment_map() {
     h.add_import(&mut world);
 
     assert_eq!(h.entries.len(), 1, "no second map appended");
-    assert_eq!(h.entries[0]["name"], "env", "the existing map is reused");
+    assert_eq!(
+        h.entries[0]["args"]["$id"], "env",
+        "the existing map is reused"
+    );
     assert_eq!(
         h.entries[0]["args"]["source"],
         serde_json::Value::String(hdr.to_string_lossy().to_string())
@@ -166,12 +174,12 @@ fn import_enter_key_adds() {
 #[test]
 fn import_rows_list_and_open_in_the_edit_form() {
     let (mut h, mut world, _dir) = import_session();
-    h.entries = vec![
+    h.entries = EntryList::new(vec![
         entry("lamp", "PointLight"),
-        serde_json::json!({"name": "town", "type": "SceneImport", "args": {"source": "town.glb"}}),
-        serde_json::json!({"name": "face", "type": "Font", "args": {"path": "face.ttf"}}),
-        serde_json::json!({"name": "env", "type": "EnvironmentMap", "args": {"source": "sky.hdr"}}),
-    ];
+        serde_json::json!({"type": "SceneImport", "args": {"$id": "town", "source": "town.glb"}}),
+        serde_json::json!({"type": "Font", "args": {"$id": "face", "path": "face.ttf"}}),
+        serde_json::json!({"type": "EnvironmentMap", "args": {"$id": "env", "source": "sky.hdr"}}),
+    ]);
     let rows = h.import_rows();
     assert_eq!(rows.len(), 3, "only file-backed types list");
     assert_eq!(rows[0].entry, 1);
@@ -184,7 +192,7 @@ fn import_rows_list_and_open_in_the_edit_form() {
     assert!(h.form_open());
     assert_eq!(
         h.form.target,
-        FormTarget::Entry(1),
+        entry_target(&h, 1),
         "the clicked entry is being edited"
     );
 }

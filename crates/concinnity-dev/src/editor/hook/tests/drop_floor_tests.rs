@@ -5,6 +5,7 @@ use concinnity_core::components::Transform;
 use concinnity_host::thread::asset_id;
 
 use super::fixtures::{hook, pick_world};
+use crate::editor::hook::tests::fixtures::select;
 
 // Drop-to-floor lands an indexed member's bounds on the surface below it,
 // rests a bounds-less member's origin on the ground-plane fallback, and
@@ -41,17 +42,16 @@ fn drop_to_floor_lands_the_selection_on_the_surface_below() {
 
     let mut h = hook(vec![
         serde_json::json!({
-            "name": "box_a", "type": "Prop", "args": { "position": [0.0, 5.0, -5.0] }
+            "type": "Prop", "args": { "$id": "box_a", "position": [0.0, 5.0, -5.0] }
         }),
         serde_json::json!({
-            "name": "ground", "type": "Prop", "args": { "position": [0.0, 0.0, 0.0] }
+            "type": "Prop", "args": { "$id": "ground", "position": [0.0, 0.0, 0.0] }
         }),
         serde_json::json!({
-            "name": "lamp", "type": "PointLight", "args": { "position": [100.0, 3.0, 0.0] }
+            "type": "PointLight", "args": { "$id": "lamp", "position": [100.0, 3.0, 0.0] }
         }),
     ]);
-    h.selection
-        .set(vec!["box_a".to_string(), "lamp".to_string()]);
+    select(&mut h, &["box_a", "lamp"]);
 
     h.run_console_line(&mut world, "/floor");
     assert_eq!(
@@ -82,7 +82,7 @@ fn drop_to_floor_lands_the_selection_on_the_surface_below() {
 
     // A selection with no eligible member (no live entity) drops nothing and
     // records no undo step.
-    h.selection.set(vec!["ground".to_string()]);
+    select(&mut h, &["ground"]);
     h.run_console_line(&mut world, "/floor");
     assert!(!h.can_undo(), "a no-op drop records nothing");
 }

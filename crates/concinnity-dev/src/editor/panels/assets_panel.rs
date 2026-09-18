@@ -36,7 +36,7 @@ use std::sync::OnceLock;
 use super::asset_tree::{Badge, TreeRow};
 use super::registry::{self, PanelKey};
 use crate::editor::hud;
-use crate::editor::selection::Selection;
+use crate::editor::selection::SelectedNames;
 use crate::editor::theme;
 use crate::editor::widget::{self, place_rounded, place_sprite, point_in};
 
@@ -439,8 +439,9 @@ pub(crate) struct PanelView<'a> {
     // `None` while the picker is closed.
     pub picker_options: Option<&'a [String]>,
     pub picker_scroll: usize,
-    // The viewport selection the rows mirror, and the session hide / lock sets.
-    pub selection: &'a Selection,
+    // The viewport selection the rows mirror, resolved to this frame's names,
+    // and the session hide / lock sets.
+    pub selected: &'a SelectedNames,
     pub hidden: &'a BTreeSet<String>,
     pub locked: &'a BTreeSet<String>,
     // The name whose Delete menu is open, if any.
@@ -760,7 +761,7 @@ fn layout_asset_row(
         hovered,
     } = *asset;
     let r = row_rect(o, w, slot);
-    let selected = view.selection.contains(name);
+    let selected = view.selected.contains(name);
     let tint = if hovered {
         ROW_TINT_HOVER
     } else if selected {
@@ -1238,7 +1239,7 @@ mod tests {
     struct Fixture {
         rows: Vec<TreeRow>,
         picker_options: Vec<String>,
-        selection: Selection,
+        selected: SelectedNames,
         hidden: BTreeSet<String>,
         locked: BTreeSet<String>,
     }
@@ -1253,7 +1254,7 @@ mod tests {
                     header(1, "fox", 1, false),
                 ],
                 picker_options: Vec::new(),
-                selection: Selection::default(),
+                selected: SelectedNames::default(),
                 hidden: BTreeSet::new(),
                 locked: BTreeSet::new(),
             }
@@ -1266,7 +1267,7 @@ mod tests {
                 search_focus: false,
                 picker_options: None,
                 picker_scroll: 0,
-                selection: &self.selection,
+                selected: &self.selected,
                 hidden: &self.hidden,
                 locked: &self.locked,
                 row_menu: None,
@@ -1537,7 +1538,7 @@ mod tests {
     fn place_draws_headers_types_and_toggle_states() {
         let mut world = injected_world();
         let mut f = Fixture::new();
-        f.selection.replace("cam".to_string());
+        f.selected = SelectedNames::new(["cam".to_string()].into(), Some("cam".to_string()));
         f.hidden.insert("lamp".to_string());
         f.locked.insert("cam".to_string());
         let o = test_origin();
@@ -1910,11 +1911,11 @@ mod tests {
     // non-rendering world when it is not itself the renderer config).
     fn cook_blank(ty: &str) -> std::io::Result<()> {
         let world = if is_singleton(ty) {
-            format!("{{\"name\":\"probe\",\"type\":\"{ty}\",\"args\":{{}}}}\n")
+            format!("{{\"type\":\"{ty}\",\"args\":{{\"$id\":\"probe\"}}}}\n")
         } else {
             format!(
-                "{{\"name\":\"gfx\",\"type\":\"GraphicsConfig\",\"args\":{{}}}}\n\
-                 {{\"name\":\"probe\",\"type\":\"{ty}\",\"args\":{{}}}}\n"
+                "{{\"type\":\"GraphicsConfig\",\"args\":{{\"$id\":\"gfx\"}}}}\n\
+                 {{\"type\":\"{ty}\",\"args\":{{\"$id\":\"probe\"}}}}\n"
             )
         };
         concinnity_cook::build_pipeline_from_str(

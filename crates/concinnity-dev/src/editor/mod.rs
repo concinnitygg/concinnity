@@ -24,11 +24,16 @@
 //! directory (`behavior/`, `palette/`, `worlds/`). What each module holds is on
 //! the line above its declaration.
 
+// How the editor addresses one asset of the world it is editing: the currency
+// of the selection, the open form, and every panel that follows it.
+mod asset_handle;
 // The Behavior panel's model half: one behavior's authored args as an editable
 // node graph, plus the palette, outline and chart views over it.
 mod behavior;
 // The viewport's right-click "Create here" menu, anchored at the cursor.
 mod create_menu;
+// The authored entry list, with the session key every entry is addressed by.
+mod entry_list;
 // The native file picker behind Import's Browse, and the project-relative
 // rewrite its result needs.
 mod file_dialog;
@@ -67,7 +72,7 @@ mod palette;
 mod panels;
 // Pure resolution for the /select console command.
 mod select_related;
-// The viewport selection, held by name so a preview rebuild cannot stale it.
+// The viewport selection, an ordered set of `AssetHandle`s.
 mod selection;
 // Per-project session state, persisted as one small CBOR file.
 mod session_store;
@@ -114,7 +119,7 @@ use crate::debug_hook::DebugHook;
 // added to the authored entry list, so it can never leak into the user's
 // world.jsonl on SAVE.
 const SEED_GRAPHICS_CONFIG: &str =
-    "{\"name\":\"editor_default_gfx\",\"type\":\"GraphicsConfig\",\"args\":{}}";
+    "{\"type\":\"GraphicsConfig\",\"args\":{\"$id\":\"editor_default_gfx\"}}";
 
 /// Editor entry point (`cn editor`). Compiles the authored world in memory,
 /// injects the editor HUD, and runs the world loop driven by the editor hook
@@ -308,11 +313,11 @@ mod tests {
     // line, so the combined string still parses as one asset per line.
     #[test]
     fn seeded_content_appends_marker_to_authored_content() {
-        let base = "{\"name\":\"phys\",\"type\":\"PhysicsConfig\",\"args\":{}}";
+        let base = "{\"type\":\"PhysicsConfig\",\"args\":{\"$id\":\"phys\"}}";
         let seeded = seeded_content(base);
         let parsed = parse_world_jsonl(&seeded).unwrap();
         assert_eq!(parsed.len(), 2, "authored entry plus the seed marker");
-        assert_eq!(parsed[0]["name"], "phys");
+        assert_eq!(parsed[0]["args"]["$id"], "phys");
         assert_eq!(parsed[1]["type"], "GraphicsConfig");
     }
 
@@ -339,7 +344,7 @@ mod tests {
     }
 
     fn entry(name: &str, ty: &str, args: serde_json::Value) -> serde_json::Value {
-        serde_json::json!({"name": name, "type": ty, "args": args})
+        serde_json::json!({"type": ty, "args": concinnity_cook::authoring::world::args_with_id(args, name)})
     }
 
     // A renderable authored world, plus a label whose content identifies which

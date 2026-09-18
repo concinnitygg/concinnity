@@ -24,13 +24,15 @@ use crate::editor::widget;
 // Lighting panel
 
 fn sun_entry() -> serde_json::Value {
-    serde_json::json!({"name": "sun", "type": "DirectionalLight", "args": {
+    serde_json::json!({"type": "DirectionalLight", "args": {
+        "$id": "sun",
         "direction": [-0.35, 0.85, 0.35], "color": [1.0, 0.96, 0.86], "intensity": 2.2
     }})
 }
 
 fn fog_entry(enabled: bool) -> serde_json::Value {
-    serde_json::json!({"name": "fog", "type": "VolumetricFog", "args": {
+    serde_json::json!({"type": "VolumetricFog", "args": {
+        "$id": "fog",
         "enabled": enabled, "density": 0.02
     }})
 }

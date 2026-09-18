@@ -9,6 +9,7 @@ use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_core::components::FrameInput;
 use concinnity_core::ecs::World;
 
+use crate::editor::asset_handle::AssetHandle;
 use crate::editor::create_menu;
 use crate::editor::hook::drag;
 use crate::editor::hook::{EditorHook, names_of_type};
@@ -117,20 +118,21 @@ impl EditorHook {
         true
     }
 
-    // Create one entry of `ty` at `pos`: default args with the position
-    // overridden, a unique generated name, one undo step, selected.
+    // Create one anonymous entry of `ty` at `pos`: default args with the
+    // position overridden, one undo step, selected. A placed asset is addressed
+    // by its label until the user gives it a `$id`.
     fn create_type_at(&mut self, ty: &str, pos: [f32; 3]) {
-        let name = self.unique_name(ty);
-        let key = create_menu::position_key(ty);
-        let args = serde_json::json!({ key: pos.map(drag::gizmo::round3) });
-        self.entries.push(serde_json::json!({
-            "name": name, "type": ty, "args": args
-        }));
+        let arg = create_menu::position_key(ty);
+        let args = serde_json::json!({ arg: pos.map(drag::gizmo::round3) });
+        let key = self
+            .entries
+            .push(serde_json::json!({ "type": ty, "args": args }));
         self.mark_changed();
-        self.selection.replace(name);
+        self.selection.replace(AssetHandle::Entry(key));
     }
 
-    // Create a Prop instancing `prefab` at `pos` (the drag-out mapping).
+    // Create an anonymous Prop instancing `prefab` at `pos` (the drag-out
+    // mapping).
     fn create_prefab_at(&mut self, prefab: &str, pos: [f32; 3]) {
         let Some(args) = drag::content::placement_args(
             RegisteredType::Prefab,
@@ -139,12 +141,11 @@ impl EditorHook {
         ) else {
             return;
         };
-        let name = self.unique_from(prefab);
-        self.entries.push(serde_json::json!({
-            "name": name, "type": "Prop", "args": args
-        }));
+        let key = self
+            .entries
+            .push(serde_json::json!({ "type": "Prop", "args": args }));
         self.mark_changed();
-        self.selection.replace(name);
+        self.selection.replace(AssetHandle::Entry(key));
     }
 
     // Lay out (or hide) the menu this frame.

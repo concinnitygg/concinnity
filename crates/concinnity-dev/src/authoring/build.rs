@@ -253,15 +253,14 @@ mod tests {
 
     #[test]
     fn prepare_accepts_a_valid_world() {
-        let loaded =
-            prepare("{\"name\":\"phys\",\"type\":\"PhysicsConfig\",\"args\":{}}\n").unwrap();
-        assert!(loaded.assets.iter().any(|a| a.name == "phys"));
+        let loaded = prepare("{\"type\":\"PhysicsConfig\",\"args\":{\"$id\":\"phys\"}}\n").unwrap();
+        assert!(loaded.assets.iter().any(|a| a.id == "phys"));
         assert!(loaded.authored.contains(&"phys".to_string()));
     }
 
     #[test]
     fn prepare_rejects_an_invalid_world() {
-        assert!(prepare("{\"name\":\"odd\",\"type\":\"NotARealAssetType\"}\n").is_err());
+        assert!(prepare("{\"type\":\"NotARealAssetType\",\"args\":{\"$id\":\"odd\"}}\n").is_err());
         assert!(prepare("{ not json\n").is_err());
     }
 
@@ -272,7 +271,7 @@ mod tests {
     #[test]
     fn the_lut_scan_takes_the_first_source() {
         let assets = [asset(
-            serde_json::json!({"name":"grade","type":"ColorLut","args":{"source":"luts/warm.cube"}}),
+            serde_json::json!({"type":"ColorLut","args":{"$id":"grade","source":"luts/warm.cube"}}),
         )];
         assert_eq!(
             scan_color_lut_source(&assets),
@@ -281,10 +280,8 @@ mod tests {
 
         // Only the first is used: the runtime binds handle 0.
         let assets = [
-            asset(serde_json::json!({"name":"a","type":"ColorLut","args":{"source":"first.cube"}})),
-            asset(
-                serde_json::json!({"name":"b","type":"ColorLut","args":{"source":"second.cube"}}),
-            ),
+            asset(serde_json::json!({"type":"ColorLut","args":{"$id":"a","source":"first.cube"}})),
+            asset(serde_json::json!({"type":"ColorLut","args":{"$id":"b","source":"second.cube"}})),
         ];
         assert_eq!(
             scan_color_lut_source(&assets),
@@ -297,15 +294,15 @@ mod tests {
     fn the_lut_scan_yields_nothing_without_a_source() {
         assert_eq!(scan_color_lut_source(&[]), None);
         let no_source = [asset(
-            serde_json::json!({"name":"grade","type":"ColorLut","args":{}}),
+            serde_json::json!({"type":"ColorLut","args":{"$id":"grade"}}),
         )];
         assert_eq!(scan_color_lut_source(&no_source), None);
         let empty = [asset(
-            serde_json::json!({"name":"grade","type":"ColorLut","args":{"source":""}}),
+            serde_json::json!({"type":"ColorLut","args":{"$id":"grade","source":""}}),
         )];
         assert_eq!(scan_color_lut_source(&empty), None);
         let other_kind = [asset(
-            serde_json::json!({"name":"sky","type":"EnvironmentMap","args":{"source":"x.hdr"}}),
+            serde_json::json!({"type":"EnvironmentMap","args":{"$id":"sky","source":"x.hdr"}}),
         )];
         assert_eq!(scan_color_lut_source(&other_kind), None);
     }
@@ -316,7 +313,7 @@ mod tests {
     #[test]
     fn the_environment_map_scan_defaults_the_unset_bake_inputs() {
         let assets = [asset(
-            serde_json::json!({"name":"sky","type":"EnvironmentMap","args":{"source":"studio.hdr"}}),
+            serde_json::json!({"type":"EnvironmentMap","args":{"$id":"sky","source":"studio.hdr"}}),
         )];
         let info = scan_environment_map_source(&assets).expect("a file-backed map");
         assert_eq!(info.source, "studio.hdr");
@@ -329,7 +326,8 @@ mod tests {
     #[test]
     fn the_environment_map_scan_carries_the_authored_bake_inputs() {
         let assets = [asset(serde_json::json!({
-            "name":"sky","type":"EnvironmentMap","args":{
+            "type":"EnvironmentMap","args":{
+                "$id":"sky",
                 "source":"studio.hdr",
                 "prefilter_face_size": 256,
                 "irradiance_face_size": 16,
@@ -349,18 +347,18 @@ mod tests {
     #[test]
     fn the_environment_map_scan_skips_a_procedural_map() {
         let generated = [asset(serde_json::json!({
-            "name":"sky","type":"EnvironmentMap","args":{"generator":"sky"}
+            "type":"EnvironmentMap","args":{"$id":"sky","generator":"sky"}
         }))];
         assert!(scan_environment_map_source(&generated).is_none());
 
         let both = [asset(serde_json::json!({
-            "name":"sky","type":"EnvironmentMap","args":{"generator":"sky","source":"studio.hdr"}
+            "type":"EnvironmentMap","args":{"$id":"sky","generator":"sky","source":"studio.hdr"}
         }))];
         assert!(scan_environment_map_source(&both).is_none());
 
         assert!(scan_environment_map_source(&[]).is_none());
         let no_source = [asset(
-            serde_json::json!({"name":"sky","type":"EnvironmentMap","args":{}}),
+            serde_json::json!({"type":"EnvironmentMap","args":{"$id":"sky"}}),
         )];
         assert!(scan_environment_map_source(&no_source).is_none());
     }
@@ -369,8 +367,7 @@ mod tests {
     // what seeds the hot-reload watcher.
     #[test]
     fn the_assembled_world_publishes_the_watcher_source_catalogs() {
-        let loaded =
-            prepare("{\"name\":\"phys\",\"type\":\"PhysicsConfig\",\"args\":{}}\n").unwrap();
+        let loaded = prepare("{\"type\":\"PhysicsConfig\",\"args\":{\"$id\":\"phys\"}}\n").unwrap();
         let world = world_from_loaded(loaded).unwrap();
         assert!(
             world
@@ -383,8 +380,7 @@ mod tests {
 
     #[test]
     fn world_from_loaded_assembles_an_in_memory_world() {
-        let loaded =
-            prepare("{\"name\":\"phys\",\"type\":\"PhysicsConfig\",\"args\":{}}\n").unwrap();
+        let loaded = prepare("{\"type\":\"PhysicsConfig\",\"args\":{\"$id\":\"phys\"}}\n").unwrap();
         let expanded = loaded.assets.len();
         let world = world_from_loaded(loaded).unwrap();
         // Every expanded asset landed as a component; nothing was dropped on
@@ -403,7 +399,7 @@ mod tests {
         // The string path is what the editor uses to seed an empty world; it
         // must produce the same assembled world as the file-backed path.
         let world =
-            build_world_from_str("{\"name\":\"phys\",\"type\":\"PhysicsConfig\",\"args\":{}}\n")
+            build_world_from_str("{\"type\":\"PhysicsConfig\",\"args\":{\"$id\":\"phys\"}}\n")
                 .unwrap();
         assert!(world.component_count() >= 1);
     }
@@ -431,8 +427,8 @@ mod tests {
         let _guard = crate::test_support::lock();
         crate::test_support::isolate_state_dir();
         let world = build_world_from_str(concat!(
-            "{\"name\":\"steel\",\"type\":\"Material\",\"args\":{\"roughness\":0.4}}\n",
-            "{\"name\":\"glass\",\"type\":\"Material\",\"args\":{\"transparent\":true}}\n",
+            "{\"type\":\"Material\",\"args\":{\"$id\":\"steel\",\"roughness\":0.4}}\n",
+            "{\"type\":\"Material\",\"args\":{\"$id\":\"glass\",\"transparent\":true}}\n",
         ))
         .expect("a material-only world compiles");
         let names = world
@@ -464,7 +460,7 @@ mod tests {
         std::fs::create_dir_all(world.parent().unwrap()).unwrap();
         std::fs::write(
             &world,
-            "{\"name\":\"phys\",\"type\":\"PhysicsConfig\",\"args\":{}}\n",
+            "{\"type\":\"PhysicsConfig\",\"args\":{\"$id\":\"phys\"}}\n",
         )
         .unwrap();
 

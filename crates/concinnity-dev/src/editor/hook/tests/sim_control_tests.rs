@@ -4,6 +4,7 @@
 //! running, one that moves a reference rebuilds and stops it. Also the fly
 //! camera's exchange with play, and the trace request the live panels ask for.
 
+use concinnity_cook::authoring::world::replace_args;
 use concinnity_core::components::Behavior;
 use concinnity_core::components::BehaviorLiteral;
 use concinnity_core::components::FrameInput;
@@ -148,7 +149,10 @@ fn a_behavior_body_edit_is_written_into_the_running_world() {
         ComponentAsset::Behavior(Behavior::default()),
     )]);
 
-    h.entries[0]["args"] = behavior_args(serde_json::json!([set_node("n"), set_node("m")]));
+    replace_args(
+        &mut h.entries[0],
+        behavior_args(serde_json::json!([set_node("n"), set_node("m")])),
+    );
     h.mark_changed();
     assert!(
         !h.refresh_preview(&mut world),
@@ -183,7 +187,7 @@ fn a_behavior_edit_that_moves_a_reference_rebuilds() {
         ComponentAsset::Behavior(Behavior::default()),
     )]);
 
-    h.entries[0]["args"] = spawning("barrel");
+    replace_args(&mut h.entries[0], spawning("barrel"));
     h.mark_changed();
     assert!(
         h.refresh_preview(&mut world),
@@ -201,7 +205,7 @@ fn a_variables_edit_is_written_into_the_running_world() {
         ComponentAsset::Variables(Variables::default()),
     )]);
 
-    h.entries[0]["args"] = table(7);
+    replace_args(&mut h.entries[0], table(7));
     h.mark_changed();
     assert!(
         !h.refresh_preview(&mut world),

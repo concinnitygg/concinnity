@@ -10,7 +10,7 @@ impl crate::asset::BuildAsset for VoxelChunk {
         let palette_lookup = |bt_name: &str| {
             ctx.all_assets
                 .iter()
-                .find(|a| a.asset_type == RegisteredType::BlockType && a.name == bt_name)
+                .find(|a| a.asset_type == RegisteredType::BlockType && a.id == bt_name)
                 .map(|a| a.args.clone())
         };
         crate::compile::geometry::compile_voxel_chunk_payload(args, palette_lookup)
@@ -26,7 +26,7 @@ mod tests {
 
     fn block_type(name: &str) -> WorldJsonlAsset {
         WorldJsonlAsset {
-            name: name.to_string(),
+            id: name.to_string(),
             asset_type: RegisteredType::BlockType,
             args: serde_json::json!({"solid": true}),
         }

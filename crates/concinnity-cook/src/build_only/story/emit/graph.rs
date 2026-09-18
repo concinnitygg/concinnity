@@ -104,9 +104,9 @@ pub(super) fn story_entry(
     text_speed: f32,
 ) -> serde_json::Value {
     serde_json::json!({
-        "name": names.prefix,
         "type": "Story",
         "args": {
+            "$id": names.prefix,
             "title": story.title,
             "nodes": nodes,
             "text_speed": text_speed,

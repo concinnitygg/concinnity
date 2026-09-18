@@ -19,6 +19,7 @@ use crate::editor::hook::tests::fixtures::{
     set_input, two_prop_rig, world_with_input,
 };
 
+use crate::editor::hook::tests::fixtures::{active, selected};
 use crate::editor::viewport::gizmo;
 use crate::editor::viewport::snap;
 
@@ -54,12 +55,12 @@ fn gizmo_drag_moves_the_prop_and_commits_one_undo_step() {
     }
 
     let mut h = hook(vec![serde_json::json!({
-        "name": "box_near", "type": "Prop", "args": { "position": start }
+        "type": "Prop", "args": { "$id": "box_near", "position": start }
     })]);
 
     // Pick the prop (projects to ~[200, 600] for this camera).
     click_at(&mut world, &mut h, [200.0, 600.0]);
-    assert_eq!(h.selection.active(), Some("box_near"));
+    assert_eq!(active(&h).as_deref(), Some("box_near"));
     let layout = h
         .gizmo_layout(&world, [1280.0, 720.0])
         .expect("movable selection shows the gizmo");
@@ -141,7 +142,7 @@ fn gizmo_rig(start: [f32; 3]) -> (World, Entity, EditorHook) {
         world.add_component(s);
     }
     let h = hook(vec![serde_json::json!({
-        "name": "box_near", "type": "Prop", "args": { "position": start }
+        "type": "Prop", "args": { "$id": "box_near", "position": start }
     })]);
     (world, entity, h)
 }
@@ -382,9 +383,9 @@ fn multi_rotate_orbits_members_about_the_centroid() {
     let (mut world, e1, e2, mut h) = two_prop_rig(s1, s2, 0.8);
     h.gizmo_mode = gizmo::GizmoMode::Rotate;
     click_at(&mut world, &mut h, [200.0, 526.0]);
-    assert_eq!(h.selection.active(), Some("box_a"));
+    assert_eq!(active(&h).as_deref(), Some("box_a"));
     click_at_mod(&mut world, &mut h, [200.0, 670.0], true);
-    assert_eq!(h.selection.iter().count(), 2);
+    assert_eq!(selected(&h).len(), 2);
 
     let layout = h.gizmo_layout(&world, [1280.0, 720.0]).expect("gizmo up");
     // Grab the X tip and swing a quarter circle to straight below the origin:
@@ -513,12 +514,12 @@ fn gizmo_drag_moves_a_skinned_mesh_and_commits_its_position() {
         world.add_component(s);
     }
     let mut h = hook(vec![serde_json::json!({
-        "name": "body", "type": "SkinnedMesh",
-        "args": { "source": "hero.glb", "position": start }
+        "type": "SkinnedMesh",
+        "args": { "$id": "body", "source": "hero.glb", "position": start }
     })]);
 
     click_at(&mut world, &mut h, [200.0, 600.0]);
-    assert_eq!(h.selection.active(), Some("body"));
+    assert_eq!(active(&h).as_deref(), Some("body"));
     assert!(!h.form_open(), "selecting the body opens no form");
     let layout = h
         .gizmo_layout(&world, [1280.0, 720.0])

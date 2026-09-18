@@ -150,7 +150,7 @@ mod tests {
         let err = CharacterModelArg::resolve("body", bad, &[]).unwrap_err();
         assert!(err.contains("'mine' is not a CharacterSchema"), "{err}");
         let assets = vec![WorldJsonlAsset {
-            name: "mine".into(),
+            id: "mine".into(),
             asset_type: RegisteredType::CharacterSchema,
             args: serde_json::json!({"regions": [{"name": "r", "joints": ["ghost"]}]}),
         }];

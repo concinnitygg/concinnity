@@ -1,46 +1,42 @@
 //! Pure composition of the editor's two hide mechanisms: the manual per-asset
 //! hide set (outliner eye, H) and an active isolate (Shift+H), which keeps a
-//! snapshot of names visible and hides everything else. The manual set is
+//! snapshot of assets visible and hides everything else. The manual set is
 //! never mutated by isolate, so leaving isolate restores exactly the
 //! manually-hidden state, and a name in both stays hidden.
 
 use std::collections::BTreeSet;
 
-// The set of names to hide this frame. With no isolate active this is the
+// The set of assets to hide this frame. With no isolate active this is the
 // manual set; with one active it is the manual set plus everything outside
 // the kept snapshot.
-pub(crate) fn effective_hidden<'a>(
-    manual: &BTreeSet<String>,
-    isolate: Option<&BTreeSet<String>>,
-    all: impl IntoIterator<Item = &'a str>,
-) -> BTreeSet<String> {
+pub(crate) fn effective_hidden<K: Ord + Clone>(
+    manual: &BTreeSet<K>,
+    isolate: Option<&BTreeSet<K>>,
+    all: impl IntoIterator<Item = K>,
+) -> BTreeSet<K> {
     let mut hidden = manual.clone();
     if let Some(keep) = isolate {
-        hidden.extend(
-            all.into_iter()
-                .filter(|n| !keep.contains(*n))
-                .map(str::to_string),
-        );
+        hidden.extend(all.into_iter().filter(|k| !keep.contains(k)));
     }
     hidden
 }
 
-// Whether one name is hidden under the same rule, for per-entry filters that
+// Whether one asset is hidden under the same rule, for per-entry filters that
 // never materialize the full set.
-pub(crate) fn is_hidden(
-    name: &str,
-    manual: &BTreeSet<String>,
-    isolate: Option<&BTreeSet<String>>,
+pub(crate) fn is_hidden<K: Ord>(
+    key: &K,
+    manual: &BTreeSet<K>,
+    isolate: Option<&BTreeSet<K>>,
 ) -> bool {
-    manual.contains(name) || isolate.is_some_and(|keep| !keep.contains(name))
+    manual.contains(key) || isolate.is_some_and(|keep| !keep.contains(key))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn set(names: &[&str]) -> BTreeSet<String> {
-        names.iter().map(|s| s.to_string()).collect()
+    fn set(names: &[&'static str]) -> BTreeSet<&'static str> {
+        names.iter().copied().collect()
     }
 
     #[test]
@@ -65,8 +61,8 @@ mod tests {
         let keep = set(&["a", "b"]);
         let hidden = effective_hidden(&manual, Some(&keep), ["a", "b", "c"]);
         assert_eq!(hidden, set(&["b", "c"]));
-        assert!(is_hidden("b", &manual, Some(&keep)));
-        assert!(!is_hidden("a", &manual, Some(&keep)));
+        assert!(is_hidden(&"b", &manual, Some(&keep)));
+        assert!(!is_hidden(&"a", &manual, Some(&keep)));
     }
 
     #[test]
@@ -87,7 +83,7 @@ mod tests {
         let keep = set(&["b"]);
         for n in ["a", "b", "c"] {
             let in_set = effective_hidden(&manual, Some(&keep), ["a", "b", "c"]).contains(n);
-            assert_eq!(is_hidden(n, &manual, Some(&keep)), in_set, "{n}");
+            assert_eq!(is_hidden(&n, &manual, Some(&keep)), in_set, "{n}");
         }
     }
 }

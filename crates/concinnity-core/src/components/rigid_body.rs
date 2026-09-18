@@ -10,7 +10,7 @@
 /// too.
 ///
 /// ```json
-/// { "name": "player_body", "type": "RigidBody", "args": { "jump_height": 1.4 } }
+/// { "type": "RigidBody", "args": { "jump_height": 1.4 } }
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]

@@ -42,9 +42,8 @@ impl MediaAssets {
             .chain(images)
             .map(|(path, name, ty)| {
                 serde_json::json!({
-                    "name": name,
                     "type": ty,
-                    "args": { "source": path }
+                    "args": { "$id": name, "source": path }
                 })
             })
             .collect()

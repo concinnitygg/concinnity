@@ -30,16 +30,23 @@ pub fn spec_args(spec: &AssetSpec) -> Value {
     Value::Object(object_map(&spec.fields))
 }
 
-/// A spec as a full world-line value: `{"name", "type", "args"}`, the shape
-/// `parse_world_jsonl` yields and the cook pipeline validates.
+/// A spec as a full world-line value: `{"type", "args"}` with the spec's name
+/// declared as the `$id` in its args, the shape `parse_world_jsonl` yields and
+/// the cook pipeline validates. A spec with an empty name is anonymous.
 pub fn spec_to_value(spec: &AssetSpec) -> Value {
+    let mut args = object_map(&spec.fields);
+    if !spec.name.is_empty() {
+        args.insert(
+            crate::authoring::world::ID_KEY.to_string(),
+            Value::String(spec.name.clone()),
+        );
+    }
     let mut obj = Map::new();
-    obj.insert("name".to_string(), Value::String(spec.name.clone()));
     obj.insert(
         "type".to_string(),
         Value::String(spec.asset_type.to_string()),
     );
-    obj.insert("args".to_string(), spec_args(spec));
+    obj.insert("args".to_string(), Value::Object(args));
     Value::Object(obj)
 }
 
@@ -79,7 +86,7 @@ mod tests {
     fn spec_to_value_wraps_name_type_args() {
         let spec = AssetSpec::new("lamp", "PointLight").set("intensity", 8.0f32);
         let v = spec_to_value(&spec);
-        assert_eq!(v["name"], "lamp");
+        assert_eq!(v["args"]["$id"], "lamp");
         assert_eq!(v["type"], "PointLight");
         assert_eq!(v["args"]["intensity"], 8.0);
     }

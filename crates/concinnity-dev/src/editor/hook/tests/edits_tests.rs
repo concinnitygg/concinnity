@@ -19,6 +19,7 @@ use crate::editor::panels::form_panel::{self, FormAction};
 
 use crate::editor::panels::template_panel::TemplateAction;
 
+use crate::editor::hook::tests::fixtures::entry_target;
 use crate::editor::sim;
 use crate::test_support::isolate_state_dir;
 
@@ -51,8 +52,8 @@ fn build_preview_world_renders_from_in_memory_entries() {
     isolate_state_dir();
     // Authored renderable entries (a Room + camera) build a rendering world.
     let h = hook(vec![
-        serde_json::json!({"name":"cam","type":"Camera3D","args":{}}),
-        serde_json::json!({"name":"room","type":"Room","args":{}}),
+        serde_json::json!({"type":"Camera3D","args":{"$id":"cam"}}),
+        serde_json::json!({"type":"Room","args":{"$id":"room"}}),
     ]);
     assert!(
         concinnity_engine::ecs::renders(
@@ -77,9 +78,9 @@ fn a_live_edit_reaches_a_really_cooked_world() {
     let _guard = crate::test_support::lock();
     isolate_state_dir();
     let mut h = hook(vec![
-        serde_json::json!({"name":"cam","type":"Camera3D","args":{}}),
-        serde_json::json!({"name":"room","type":"Room","args":{}}),
-        serde_json::json!({"name":"hint","type":"TextLabel","args":{"content":"before"}}),
+        serde_json::json!({"type":"Camera3D","args":{"$id":"cam"}}),
+        serde_json::json!({"type":"Room","args":{"$id":"room"}}),
+        serde_json::json!({"type":"TextLabel","args":{"$id":"hint","content":"before"}}),
     ]);
     let (mut world, shadows) = h.build_preview_world().expect("the world builds");
     h.world_shadows = Some(shadows);
@@ -106,7 +107,7 @@ fn a_live_edit_reaches_a_really_cooked_world() {
 
     // Adding a line changes what the expansion produces, so it still rebuilds.
     h.entries.push(serde_json::json!({
-        "name":"hint2","type":"TextLabel","args":{"content":"new"}
+        "type":"TextLabel","args":{"$id":"hint2","content":"new"}
     }));
     h.mark_changed();
     assert!(h.refresh_preview(&mut world), "a new line rebuilds");
@@ -119,7 +120,7 @@ fn write_jsonl_persists_entries_atomically() {
     let path_str = path.to_str().unwrap().to_string();
 
     let mut h = hook(vec![serde_json::json!({
-        "name": "scene", "type": "GraphicsConfig", "args": {}
+        "type": "GraphicsConfig", "args": {"$id": "scene"}
     })]);
     h.world_path = path_str.clone();
     let mut world = world_with_fields();
@@ -131,7 +132,7 @@ fn write_jsonl_persists_entries_atomically() {
     let content = std::fs::read_to_string(&path).unwrap();
     let parsed = parse_world_jsonl(&content).unwrap();
     assert_eq!(parsed.len(), 2, "both entries written, one line each");
-    assert_eq!(parsed[1]["name"], "lamp");
+    assert_eq!(parsed[1]["args"]["$id"], "lamp");
     assert!(!std::path::Path::new(&format!("{path_str}.tmp")).exists());
 
     let _ = std::fs::remove_file(&path);
@@ -145,7 +146,7 @@ fn write_jsonl_creates_the_worlds_directory() {
     let path = tree.join("worlds").join("world.jsonl");
 
     let mut h = hook(vec![serde_json::json!({
-        "name": "scene", "type": "GraphicsConfig", "args": {}
+        "type": "GraphicsConfig", "args": {"$id": "scene"}
     })]);
     h.world_path = path.to_str().unwrap().to_string();
     h.write_jsonl().expect("the write creates its directory");
@@ -160,7 +161,7 @@ fn a_broken_world_reports_its_error_in_the_status_line() {
     let _guard = crate::test_support::lock();
     isolate_state_dir();
     let mut h = hook(vec![serde_json::json!({
-        "name": "oops", "type": "NotARealAssetType", "args": {}
+        "type": "NotARealAssetType", "args": {"$id": "oops"}
     })]);
     h.panel_open = true;
     h.refresh_tree_if_needed();
@@ -182,7 +183,7 @@ fn undo_reverts_a_committed_edit_and_redo_replays_it() {
     assert!(h.dirty && h.hud_state().undo);
 
     h.undo(&mut world);
-    assert_eq!(h.entries, vec![entry("a", "Sprite")]);
+    assert_eq!(*h.entries, [entry("a", "Sprite")]);
     assert!(!h.dirty, "back at the on-disk list: Save chip clears");
     assert!(
         h.rebuild_preview,
@@ -191,7 +192,7 @@ fn undo_reverts_a_committed_edit_and_redo_replays_it() {
     assert!(h.hud_state().redo);
 
     h.redo(&mut world);
-    assert_eq!(h.entries, vec![entry("a", "Sprite"), entry("b", "Sprite")]);
+    assert_eq!(*h.entries, [entry("a", "Sprite"), entry("b", "Sprite")]);
     assert!(h.dirty, "the replayed edit is unsaved again");
 }
 
@@ -230,8 +231,9 @@ fn undo_drops_entry_indexed_ui_state() {
     h.entries.push(entry("b", "Sprite"));
     h.mark_changed();
     h.form.selected_type = Some("Sprite".to_string());
-    h.form.target = FormTarget::Entry(1);
-    h.row_menu = Some("b".to_string());
+    let target = entry_target(&h, 1);
+    h.form.target = target;
+    h.row_menu = Some(h.handle_for("b"));
 
     h.undo(&mut world);
     assert_eq!(
@@ -295,17 +297,17 @@ fn save_writes_the_world_file_and_no_build_output() {
     );
 
     let world_path = dir.path().join("worlds").join("world.jsonl");
-    let entries = vec![serde_json::json!({"name":"phys","type":"PhysicsConfig","args":{}})];
+    let entries = vec![serde_json::json!({"type":"PhysicsConfig","args":{"$id":"phys"}})];
     let mut h = EditorHook::new(world_path.to_string_lossy().into_owned(), entries.clone());
     h.entries
-        .push(serde_json::json!({"name":"hint","type":"TextLabel","args":{}}));
+        .push(serde_json::json!({"type":"TextLabel","args":{"$id":"hint"}}));
     h.mark_changed();
     h.save();
 
     let written = std::fs::read_to_string(&world_path).expect("the world file was created");
     assert_eq!(
         parse_world_jsonl(&written).unwrap(),
-        h.entries,
+        *h.entries,
         "the working entries are what landed on disk"
     );
     assert!(!h.dirty, "a written save clears the unsaved chip");
@@ -329,7 +331,7 @@ fn a_failed_save_leaves_the_world_dirty() {
 
     let mut h = EditorHook::new(world_path.to_string_lossy().into_owned(), Vec::new());
     h.entries
-        .push(serde_json::json!({"name":"hint","type":"TextLabel","args":{}}));
+        .push(serde_json::json!({"type":"TextLabel","args":{"$id":"hint"}}));
     h.mark_changed();
     h.save();
 

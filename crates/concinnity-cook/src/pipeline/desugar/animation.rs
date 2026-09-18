@@ -17,7 +17,7 @@ fn skin_index_by_target(assets: &[WorldJsonlAsset]) -> std::collections::HashMap
     assets
         .iter()
         .filter(|a| a.asset_type == RegisteredType::SkinnedMesh)
-        .map(|a| (a.name.clone(), skin_index_arg(a)))
+        .map(|a| (a.id.clone(), skin_index_arg(a)))
         .collect()
 }
 
@@ -83,7 +83,7 @@ pub(in crate::pipeline) fn desugar_animation_imports(
             .map_err(|e| {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    format!("Asset '{}': FBX import failed: {}", asset.name, e),
+                    format!("Asset '{}': FBX import failed: {}", asset.id, e),
                 )
             })?
         } else {
@@ -93,7 +93,7 @@ pub(in crate::pipeline) fn desugar_animation_imports(
                     crate::import::gltf::glb_animation_names(&source, assets_dir).map_err(|e| {
                         std::io::Error::new(
                             std::io::ErrorKind::InvalidData,
-                            format!("Asset '{}': glTF import failed: {}", asset.name, e),
+                            format!("Asset '{}': glTF import failed: {}", asset.id, e),
                         )
                     })?;
                 names
@@ -105,7 +105,7 @@ pub(in crate::pipeline) fn desugar_animation_imports(
                             format!(
                                 "Asset '{}': glTF '{}' has no animation named '{}' \
                                  (file contains: {:?})",
-                                asset.name, source, animation_name, names
+                                asset.id, source, animation_name, names
                             ),
                         )
                     })?
@@ -122,7 +122,7 @@ pub(in crate::pipeline) fn desugar_animation_imports(
             .map_err(|e| {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    format!("Asset '{}': glTF import failed: {}", asset.name, e),
+                    format!("Asset '{}': glTF import failed: {}", asset.id, e),
                 )
             })?
         };
@@ -151,7 +151,7 @@ pub(in crate::pipeline) fn desugar_animation_imports(
             })
             .collect();
 
-        let name = asset.name.clone();
+        let name = asset.id.clone();
         let obj = asset.args.as_object_mut().ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -173,7 +173,7 @@ pub(in crate::pipeline) fn desugar_animation_imports(
         }
         tracing::info!(
             "Asset '{}': imported '{}' animation '{}': {:.3} s, {} track(s), {} morph key(s)",
-            asset.name,
+            asset.id,
             source,
             imported.name,
             imported.duration,
@@ -212,7 +212,7 @@ pub(in crate::pipeline) fn desugar_root_motion(
                 std::io::ErrorKind::InvalidData,
                 format!(
                     "Asset '{}': root-motion bake failed to parse args: {}",
-                    asset.name, e
+                    asset.id, e
                 ),
             )
         })?;
@@ -221,10 +221,10 @@ pub(in crate::pipeline) fn desugar_root_motion(
             tracing::warn!(
                 "Asset '{}': root_motion is set but the clip has no track on the root \
                  joint; the character will not move",
-                asset.name
+                asset.id
             );
         }
-        let name = asset.name.clone();
+        let name = asset.id.clone();
         let obj = asset.args.as_object_mut().ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -241,7 +241,7 @@ pub(in crate::pipeline) fn desugar_root_motion(
         );
         tracing::info!(
             "Asset '{}': baked root motion ({} key(s){})",
-            asset.name,
+            asset.id,
             anim.root_track.len(),
             if anim.root_motion_y { ", incl. Y" } else { "" },
         );
@@ -265,7 +265,7 @@ mod tests {
             "tracks": [{"joint": 0, "keyframes": [{"time": 0.0, "rotation_deg": [0,0,0]}]}],
         });
         let mut assets = vec![crate::authoring::world::WorldJsonlAsset {
-            name: "wave".to_string(),
+            id: "wave".to_string(),
             asset_type: RegisteredType::Animation,
             args: original.clone(),
         }];
@@ -296,12 +296,12 @@ mod tests {
         });
         let mut assets = vec![
             crate::authoring::world::WorldJsonlAsset {
-                name: "walk".to_string(),
+                id: "walk".to_string(),
                 asset_type: RegisteredType::Animation,
                 args: walk,
             },
             crate::authoring::world::WorldJsonlAsset {
-                name: "plain".to_string(),
+                id: "plain".to_string(),
                 asset_type: RegisteredType::Animation,
                 args: plain.clone(),
             },

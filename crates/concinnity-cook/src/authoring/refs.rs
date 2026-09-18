@@ -38,7 +38,7 @@ pub fn referenced_names(asset: &WorldJsonlAsset) -> Vec<String> {
         }
     }
 
-    for cross_ref in cross_refs_for(asset.asset_type, &asset.name, &asset.args) {
+    for cross_ref in cross_refs_for(asset.asset_type, &asset.id, &asset.args) {
         if let CrossRef::Resolve { target, .. } = cross_ref {
             names.push(target);
         }
@@ -53,7 +53,7 @@ mod tests {
 
     fn asset(name: &str, asset_type: RegisteredType, args: serde_json::Value) -> WorldJsonlAsset {
         WorldJsonlAsset {
-            name: name.to_string(),
+            id: name.to_string(),
             asset_type,
             args,
         }

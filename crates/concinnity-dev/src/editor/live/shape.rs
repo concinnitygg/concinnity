@@ -67,9 +67,7 @@ fn shape_of(args: &Map<String, Value>, target: SkinnedMeshHandle) -> Option<Char
 // The authored capsule of the shape's target: the base dimensions the new
 // proportions scale. Absent for a mesh that declares none.
 fn capsule_of(entries: &[Value], mesh: &str) -> Option<CharacterCapsule> {
-    let entry = entries
-        .iter()
-        .find(|e| e.get("name").and_then(|v| v.as_str()) == Some(mesh))?;
+    let entry = &entries[concinnity_cook::authoring::world::find_entry(entries, mesh)?];
     serde_json::from_value(entry.pointer("/args/capsule")?.clone()).ok()
 }
 
@@ -125,11 +123,10 @@ mod tests {
     #[test]
     fn the_capsule_comes_from_the_target_mesh() {
         let entries = vec![
-            json!({ "name": "plain_mesh", "type": "SkinnedMesh", "args": {} }),
+            json!({ "type": "SkinnedMesh", "args": {"$id": "plain_mesh"} }),
             json!({
-                "name": "hero_mesh",
                 "type": "SkinnedMesh",
-                "args": { "capsule": { "half_height": 0.8, "radius": 0.3 } },
+                "args": { "$id": "hero_mesh", "capsule": { "half_height": 0.8, "radius": 0.3 } },
             }),
         ];
         assert_eq!(

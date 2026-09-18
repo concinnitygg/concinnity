@@ -41,11 +41,11 @@ pub(super) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
             crate::run_editor(launch, args.file.as_deref(), args.debug_port)
         }
         Commands::Add(args) => {
-            command::add(args.name.as_deref(), &args.target, args.template.as_deref())
+            command::add(args.id.as_deref(), &args.target, args.template.as_deref())
         }
-        Commands::Rm(args) => command::rm(&args.name),
+        Commands::Rm(args) => command::rm(&args.id),
         Commands::List(args) => command::list(args.file.as_deref(), args.expanded, args.systems),
-        Commands::Explain(args) => command::explain(&args.name, args.file.as_deref()),
+        Commands::Explain(args) => command::explain(&args.id, args.file.as_deref()),
         Commands::Docs(args) => crate::docs::docs(args.root.as_deref()),
         Commands::Test(args) => {
             let path = args.file.as_deref().unwrap_or("");

@@ -181,7 +181,7 @@ mod tests {
 
     #[test]
     fn passes_through_without_sliders() {
-        let mut assets = vec![serde_json::json!({"name":"x","type":"Window","args":{}})];
+        let mut assets = vec![serde_json::json!({"type":"Window","args":{"$id":"x"}})];
         expand_sliders(&mut assets).unwrap();
         assert_eq!(assets.len(), 1);
     }
@@ -189,9 +189,9 @@ mod tests {
     #[test]
     fn expands_to_label_value_track_handle_and_drag_region() {
         let mut assets = vec![serde_json::json!({
-            "name": "sld_exposure",
             "type": "Slider",
             "args": {
+                "$id": "sld_exposure",
                 "setting": "exposure", "label": "Exposure",
                 "x": 100.0, "y": 200.0, "width": 400.0, "height": 48.0
             }
@@ -244,7 +244,7 @@ mod tests {
             ("vsync", "'vsync' is a Cycle setting"),
         ] {
             let mut assets = vec![serde_json::json!({
-                "name": "sld", "type": "Slider", "args": {"setting": setting}
+                "type": "Slider", "args": {"$id": "sld", "setting": setting}
             })];
             let err = expand_sliders(&mut assets).unwrap_err();
             assert!(err.contains("Slider 'sld'"), "{err}");
@@ -255,7 +255,7 @@ mod tests {
     #[test]
     fn invalid_args_name_the_slider() {
         let mut assets = vec![serde_json::json!({
-            "name": "sld", "type": "Slider", "args": {"width": "wide"}
+            "type": "Slider", "args": {"$id": "sld", "width": "wide"}
         })];
         let err = expand_sliders(&mut assets).unwrap_err();
         assert!(err.contains("Slider 'sld'"), "{err}");
@@ -267,7 +267,7 @@ mod tests {
     #[test]
     fn slider_without_args_uses_type_defaults() {
         let mut assets = vec![serde_json::json!({
-            "name": "sld", "type": "Slider", "args": {"setting": "exposure"}
+            "type": "Slider", "args": {"$id": "sld", "setting": "exposure"}
         })];
         expand_sliders(&mut assets).unwrap();
         let defaults = Slider::default();
@@ -283,8 +283,8 @@ mod tests {
     #[test]
     fn element_names_match_expansion() {
         let mut assets = vec![serde_json::json!({
-            "name": "sld", "type": "Slider",
-            "args": { "setting": "exposure", "label": "Exposure" }
+            "type": "Slider",
+            "args": { "$id": "sld", "setting": "exposure", "label": "Exposure" }
         })];
         expand_sliders(&mut assets).unwrap();
         let emitted: std::collections::HashSet<String> = assets
@@ -306,7 +306,7 @@ mod tests {
     fn generated_elements_join_the_sliders_screen() {
         let row = |args: serde_json::Value| {
             let mut assets = vec![serde_json::json!({
-                "name": "sld", "type": "Slider", "args": args
+                "type": "Slider", "args": crate::authoring::world::args_with_id(args, "sld")
             })];
             expand_sliders(&mut assets).unwrap();
             assets

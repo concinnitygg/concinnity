@@ -6,7 +6,6 @@ Declares the application window.
 
 ```json
 {
-  "name": "main_window",
   "type": "Window",
   "args": {
     "title": "Game",

@@ -3,6 +3,7 @@
 //! references, then compile and pack.
 
 use concinnity_core::ecs::BlobAssetDef;
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::platform::Platform;
 use concinnity_host::thread::asset_id;
 use std::path::Path;
@@ -225,10 +226,7 @@ pub fn build_compiled_with_progress(
             })
     })?;
 
-    // Intern every asset name to a dense AssetId in declaration order.
-    asset_id::reset_interner();
-    let names: Vec<&str> = assets.iter().map(|a| a.name.as_str()).collect();
-    asset_id::intern_all(&names);
+    assign_asset_ids(&assets);
 
     // Assign each resource its dense per-kind handle in declaration order and
     // install the map so resource references resolve during the reserialize pass
@@ -240,9 +238,9 @@ pub fn build_compiled_with_progress(
     // runtime encounters it (a texture's albedo pool slot, an audio clip's drain
     // index / resource-table slot).
     crate::resource_handles::reset_resource_handles();
-    let resource_assets = assets.iter().filter_map(|a| {
+    let resource_assets = assets.iter().enumerate().filter_map(|(i, a)| {
         crate::authoring::resource_type::asset_resource_kind(a.asset_type)
-            .map(|kind| (asset_id::intern(&a.name), kind))
+            .map(|kind| (AssetId(i as u32), kind))
     });
     let mut resource_handles =
         concinnity_core::resource::ResourceHandles::from_assets(resource_assets);
@@ -331,6 +329,22 @@ pub fn build_compiled_with_progress(
     })
 }
 
+// Give every asset its dense id: its position in the expanded list, whether it
+// declares a `$id` or not. The interner is the side table beside it, recording
+// each position's handle so a name-string reference resolves to the position
+// and a dev tool can print one. An anonymous asset's handle is its label,
+// which no reference can name: validation resolves references against the
+// declared ids.
+fn assign_asset_ids(assets: &[WorldJsonlAsset]) {
+    asset_id::reset_interner();
+    let handles: Vec<(u32, String)> = assets
+        .iter()
+        .enumerate()
+        .map(|(i, a)| (i as u32, a.id.clone()))
+        .collect();
+    asset_id::prime_name_table(&handles);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -347,11 +361,11 @@ mod tests {
     fn build_pipeline_interns_names_and_resolves_refs() {
         // box=0, day=1, day_crate=2 in declaration order.
         let world = concat!(
-            r#"{"name":"box","type":"ProceduralMesh","args":{"generator":"box","half_extents":[1,1,1]}}"#,
+            r#"{"type":"ProceduralMesh","args":{"$id":"box","generator":"box","half_extents":[1,1,1]}}"#,
             "\n",
-            r#"{"name":"day","type":"Scene","args":{}}"#,
+            r#"{"type":"Scene","args":{"$id":"day"}}"#,
             "\n",
-            r#"{"name":"day_crate","type":"Prop","args":{"mesh":"box","scene":"day"}}"#,
+            r#"{"type":"Prop","args":{"$id":"day_crate","mesh":"box","scene":"day"}}"#,
             "\n",
         );
         let result =
@@ -371,17 +385,79 @@ mod tests {
         assert_eq!(baked.scene, Some(AssetId(1)));
     }
 
+    // An anonymous asset still gets the id of its position, and the name table
+    // records its label there so a tool can print and type it.
+    #[test]
+    fn an_anonymous_asset_takes_its_position_and_is_labeled() {
+        let world = concat!(
+            r#"{"type":"ProceduralMesh","args":{"$id":"box","generator":"box","half_extents":[1,1,1]}}"#,
+            "\n",
+            r#"{"type":"Prop","args":{"mesh":"box"}}"#,
+            "\n",
+            r#"{"type":"Prop","args":{"$id":"named","mesh":"box"}}"#,
+            "\n",
+            r#"{"type":"Prop","args":{"mesh":"box"}}"#,
+            "\n",
+        );
+        let result =
+            build_pipeline_from_str(world, None, None, Platform::Metal).expect("build pipeline");
+        assert_eq!(result.names[..4], ["box", "Prop#0", "named", "Prop#1"]);
+        let ids: Vec<Option<AssetId>> = result.defs[..4].iter().map(|d| d.name).collect();
+        let positions: Vec<Option<AssetId>> = (0..4).map(|i| Some(AssetId(i))).collect();
+        assert_eq!(ids, positions);
+        assert_eq!(asset_id::name_of(AssetId(3)).as_deref(), Some("Prop#1"));
+        assert_eq!(asset_id::lookup("Prop#0"), Some(AssetId(1)));
+    }
+
+    // A label addresses an anonymous asset from a tool, never from another
+    // entry: a reference resolves against declared ids only.
+    #[test]
+    fn a_reference_cannot_name_an_anonymous_asset() {
+        let world = concat!(
+            r#"{"type":"ProceduralMesh","args":{"generator":"box","half_extents":[1,1,1]}}"#,
+            "\n",
+            r#"{"type":"Prop","args":{"mesh":"ProceduralMesh#0"}}"#,
+            "\n",
+        );
+        let err = build_pipeline_from_str(world, None, None, Platform::Metal)
+            .err()
+            .expect("the reference does not resolve");
+        assert!(
+            err.to_string().contains("'ProceduralMesh#0' not found"),
+            "{err}"
+        );
+    }
+
+    // An anonymous macro entry expands under its label, so its generated
+    // assets carry identities that reference each other.
+    #[test]
+    fn an_anonymous_main_menu_expands_under_its_label() {
+        let world = r#"{"type":"MainMenu","args":{"toggle_key":""}}"#;
+        let result =
+            build_pipeline_from_str(world, None, None, Platform::Metal).expect("build pipeline");
+        assert!(
+            result.names.iter().any(|n| n == "MainMenu#0"),
+            "{:?}",
+            result.names
+        );
+        assert!(
+            result.names.iter().any(|n| n.starts_with("MainMenu#0_")),
+            "{:?}",
+            result.names
+        );
+    }
+
     // A world with physics content but no PhysicsConfig receives one at world
     // start rather than in the build, so the blob carries none and the shipped
     // budget is derived from the same defaults either way.
     #[test]
     fn a_physics_world_carries_no_config_into_the_blob() {
         let world = concat!(
-            r#"{"name":"box","type":"ProceduralMesh","args":{"generator":"box","half_extents":[1,1,1]}}"#,
+            r#"{"type":"ProceduralMesh","args":{"$id":"box","generator":"box","half_extents":[1,1,1]}}"#,
             "\n",
-            r#"{"name":"crate_a","type":"Prop","args":{"mesh":"box","collider":{"shape":"cuboid"}}}"#,
+            r#"{"type":"Prop","args":{"$id":"crate_a","mesh":"box","collider":{"shape":"cuboid"}}}"#,
             "\n",
-            r#"{"name":"crate_body","type":"PropBody","args":{"prop_name":"crate_a"}}"#,
+            r#"{"type":"PropBody","args":{"$id":"crate_body","prop_name":"crate_a"}}"#,
             "\n",
         );
         let result =
@@ -404,9 +480,9 @@ mod tests {
     #[test]
     fn engine_defaults_reach_the_blob_as_a_component() {
         let world = concat!(
-            r#"{"name":"gfx","type":"GraphicsConfig","args":{}}"#,
+            r#"{"type":"GraphicsConfig","args":{"$id":"gfx"}}"#,
             "\n",
-            r#"{"name":"defaults","type":"EngineDefaults","args":{"sky":false}}"#,
+            r#"{"type":"EngineDefaults","args":{"$id":"defaults","sky":false}}"#,
             "\n",
         );
         let result =
@@ -429,9 +505,9 @@ mod tests {
     #[test]
     fn build_pipeline_records_resource_lock_provenance() {
         let world = concat!(
-            r#"{"name":"f","type":"Font","args":{"size_px":20}}"#,
+            r#"{"type":"Font","args":{"$id":"f","size_px":20}}"#,
             "\n",
-            r#"{"name":"pause","type":"Screen","args":{}}"#,
+            r#"{"type":"Screen","args":{"$id":"pause"}}"#,
             "\n",
         );
         let result = build_pipeline_from_str(world, None, None, Platform::Metal).expect("build");
@@ -476,9 +552,9 @@ mod tests {
         std::fs::write(
             &world,
             concat!(
-                r#"{"name":"bad_prop","type":"Prop","args":{}}"#,
+                r#"{"type":"Prop","args":{"$id":"bad_prop"}}"#,
                 "\n",
-                r#"{"name":"bad_mat","type":"Material","args":{"albedo":"ghost"}}"#,
+                r#"{"type":"Material","args":{"$id":"bad_mat","albedo":"ghost"}}"#,
                 "\n",
             ),
         )
@@ -532,11 +608,11 @@ mod tests {
         std::fs::write(
             &world_path,
             concat!(
-                r#"{"name":"gfx","type":"GraphicsConfig","args":{}}"#,
+                r#"{"type":"GraphicsConfig","args":{"$id":"gfx"}}"#,
                 "\n",
-                r#"{"name":"f","type":"Font","args":{"size_px":20}}"#,
+                r#"{"type":"Font","args":{"$id":"f","size_px":20}}"#,
                 "\n",
-                r#"{"name":"pause","type":"Screen","args":{}}"#,
+                r#"{"type":"Screen","args":{"$id":"pause"}}"#,
                 "\n",
             ),
         )
@@ -581,7 +657,7 @@ mod tests {
 
     #[test]
     fn build_pipeline_from_str_reports_unknown_asset_types() {
-        let world = r#"{"name":"mystery","type":"NotAType","args":{}}"#;
+        let world = r#"{"type":"NotAType","args":{"$id":"mystery"}}"#;
         let Err(err) = build_pipeline_from_str(world, None, None, Platform::Metal) else {
             panic!("unknown type must not build");
         };
@@ -808,11 +884,11 @@ mod tests {
     #[test]
     fn build_pipeline_resolves_screen_action_refs() {
         let world = concat!(
-            r#"{"name":"pause_menu","type":"Screen","args":{}}"#,
+            r#"{"type":"Screen","args":{"$id":"pause_menu"}}"#,
             "\n",
-            r#"{"name":"btn","type":"HitRegion","args":{"x":0,"y":0,"width":10,"height":10,"action":"screen:toggle:pause_menu"}}"#,
+            r#"{"type":"HitRegion","args":{"$id":"btn","x":0,"y":0,"width":10,"height":10,"action":"screen:toggle:pause_menu"}}"#,
             "\n",
-            r#"{"name":"esc","type":"KeyBinding","args":{"key":"Escape","action":"screen:toggle:pause_menu"}}"#,
+            r#"{"type":"KeyBinding","args":{"$id":"esc","key":"Escape","action":"screen:toggle:pause_menu"}}"#,
             "\n",
         );
         let result = build_pipeline_from_str(world, None, None, Platform::Metal).expect("build");
@@ -840,15 +916,15 @@ mod tests {
     #[test]
     fn build_pipeline_resolves_the_screen_an_overlay_element_names() {
         let world = concat!(
-            r#"{"name":"pause_menu","type":"Screen","args":{}}"#,
+            r#"{"type":"Screen","args":{"$id":"pause_menu"}}"#,
             "\n",
-            r#"{"name":"dim","type":"Sprite","args":{"x":0,"y":0,"width":10,"height":10,"screen":"pause_menu"}}"#,
+            r#"{"type":"Sprite","args":{"$id":"dim","x":0,"y":0,"width":10,"height":10,"screen":"pause_menu"}}"#,
             "\n",
-            r#"{"name":"title","type":"TextLabel","args":{"font":"f","content":"x","x":0,"y":0,"screen":"pause_menu"}}"#,
+            r#"{"type":"TextLabel","args":{"$id":"title","font":"f","content":"x","x":0,"y":0,"screen":"pause_menu"}}"#,
             "\n",
-            r#"{"name":"btn","type":"HitRegion","args":{"x":0,"y":0,"width":10,"height":10,"action":"screen:hide","screen":"pause_menu"}}"#,
+            r#"{"type":"HitRegion","args":{"$id":"btn","x":0,"y":0,"width":10,"height":10,"action":"screen:hide","screen":"pause_menu"}}"#,
             "\n",
-            r#"{"name":"f","type":"Font","args":{"size_px":16}}"#,
+            r#"{"type":"Font","args":{"$id":"f","size_px":16}}"#,
             "\n",
         );
         let result = build_pipeline_from_str(world, None, None, Platform::Metal).expect("build");
@@ -885,9 +961,9 @@ mod tests {
     #[test]
     fn an_unscoped_overlay_element_belongs_to_no_screen() {
         let world = concat!(
-            r#"{"name":"pause_menu","type":"Screen","args":{}}"#,
+            r#"{"type":"Screen","args":{"$id":"pause_menu"}}"#,
             "\n",
-            r#"{"name":"pause_menu_dim","type":"Sprite","args":{"x":0,"y":0,"width":10,"height":10}}"#,
+            r#"{"type":"Sprite","args":{"$id":"pause_menu_dim","x":0,"y":0,"width":10,"height":10}}"#,
             "\n",
         );
         let result = build_pipeline_from_str(world, None, None, Platform::Metal).expect("build");
@@ -908,11 +984,11 @@ mod tests {
     #[test]
     fn an_unscoped_prop_belongs_to_no_scene() {
         let world = concat!(
-            r#"{"name":"box","type":"ProceduralMesh","args":{"generator":"box","half_extents":[1,1,1]}}"#,
+            r#"{"type":"ProceduralMesh","args":{"$id":"box","generator":"box","half_extents":[1,1,1]}}"#,
             "\n",
-            r#"{"name":"day","type":"Scene","args":{}}"#,
+            r#"{"type":"Scene","args":{"$id":"day"}}"#,
             "\n",
-            r#"{"name":"day_crate","type":"Prop","args":{"mesh":"box"}}"#,
+            r#"{"type":"Prop","args":{"$id":"day_crate","mesh":"box"}}"#,
             "\n",
         );
         let result = build_pipeline_from_str(world, None, None, Platform::Metal).expect("build");

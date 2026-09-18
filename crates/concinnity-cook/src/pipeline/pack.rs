@@ -72,7 +72,7 @@ pub(in crate::pipeline) fn probe_mesh_payload_cache(
             _ => continue,
         };
         let ctx = crate::asset::BuildCtx {
-            name: asset.name.as_str(),
+            name: asset.id.as_str(),
             platform,
             assets_dir,
             artifacts_dir,
@@ -82,7 +82,7 @@ pub(in crate::pipeline) fn probe_mesh_payload_cache(
         let inputs = crate::asset::CacheInputs::extra(rt.source_files(&asset.args, assets_dir));
         // A shape baked into the mesh changes its payload as much as the
         // source does, so its args join the key.
-        let shape = crate::compile::character::bake::baking_shape_args(assets, &asset.name);
+        let shape = crate::compile::character::bake::baking_shape_args(assets, &asset.id);
         let keyed = match &shape {
             Some(shape) => serde_json::json!({"mesh": asset.args, "baked_shape": shape}),
             None => asset.args.clone(),
@@ -101,7 +101,7 @@ pub(in crate::pipeline) fn probe_mesh_payload_cache(
             bytes = None;
         }
         out.insert(
-            asset.name.clone(),
+            asset.id.clone(),
             MeshCacheEntry {
                 key,
                 bytes,
@@ -322,19 +322,17 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
     for (asset_idx, rt, handle) in resource_jobs {
         let asset = &assets[*asset_idx];
         let ctx = crate::asset::BuildCtx {
-            name: asset.name.as_str(),
+            name: asset.id.as_str(),
             platform,
             assets_dir,
             artifacts_dir,
             all_assets: assets,
         };
-        let extra_data = rt
-            .compile_data(&asset.name, &asset.args)?
-            .unwrap_or_default();
+        let extra_data = rt.compile_data(&asset.id, &asset.args)?.unwrap_or_default();
         // A glTF/FBX-sourced mesh was probed before desugar; honor that result so
         // the source parse really is skipped on a hit and the pre-desugar key is
         // reused at store time (same contract as the component gltf-cache path).
-        let bytes = if let Some(entry) = mesh_cache.get(&asset.name) {
+        let bytes = if let Some(entry) = mesh_cache.get(&asset.id) {
             match &entry.bytes {
                 Some(bytes) => {
                     resource_hits += 1;
@@ -390,7 +388,7 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
         .collect();
     let res_owners: Vec<Owner> = resource_jobs
         .iter()
-        .map(|(asset_idx, _, _)| partition.owner(&assets[*asset_idx].name))
+        .map(|(asset_idx, _, _)| partition.owner(&assets[*asset_idx].id))
         .collect();
 
     // Baked AABB + counts for every static mesh payload, resource-stream Mesh
@@ -410,14 +408,14 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
         if !crate::authoring::resource_type::is_mesh_source(asset.asset_type, &asset.args) {
             continue;
         }
-        let id = asset_id::intern(&asset.name);
+        let id = asset_id::intern(&asset.id);
         if let Some(handle) = mesh_source_handles.get(concinnity_core::blob::ResourceKind::Mesh, id)
         {
             // Handle -> asset name for mesh payloads riding component defs,
             // so a consumer can find any sub-mesh payload by unified handle
             // (resource-stream Mesh handles lead the space and resolve
             // through the resource records instead).
-            mesh_component_names.push((handle, asset.name.clone()));
+            mesh_component_names.push((handle, asset.id.clone()));
             if let Some(record) = mesh_bounds_record(handle, bytes) {
                 mesh_bounds.push(record);
             }

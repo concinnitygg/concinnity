@@ -1,19 +1,17 @@
-//! Remove an asset from a world JSONL by its unique `name` field and rebuild.
+//! Remove an asset from a world JSONL by its handle and rebuild.
 
-use concinnity_cook::authoring::world::{WORLD_JSONL, known_names, patch_world_jsonl};
+use concinnity_cook::authoring::world::{WORLD_JSONL, find_entry, known_names, patch_world_jsonl};
 
-/// Remove the asset named `name` from `world_path` and rebuild.
+/// Remove the asset `name` addresses from `world_path` and rebuild: the entry
+/// declaring it as its `$id`, or the anonymous entry it labels (`Prop#3`).
 ///
 /// Errors if `name` is not present. When it isn't, the error message includes
-/// the known asset names from the world so the caller can suggest a fix.
+/// the known handles from the world so the caller can suggest a fix.
 pub(crate) fn rm_at_path(world_path: &str, name: &str) -> std::io::Result<()> {
     let mut removed = false;
 
     patch_world_jsonl(world_path, |assets| {
-        if let Some(i) = assets
-            .iter()
-            .position(|a| a.get("name").and_then(|v| v.as_str()) == Some(name))
-        {
+        if let Some(i) = find_entry(assets, name) {
             let asset = assets.remove(i);
             tracing::info!(
                 "Removed '{}' (type: {})",
@@ -70,8 +68,8 @@ mod tests {
         std::fs::write(
             &path,
             concat!(
-                "{\"name\":\"log\",\"type\":\"Logger\",\"args\":{}}\n",
-                "{\"name\":\"log2\",\"type\":\"Logger\",\"args\":{}}\n",
+                "{\"type\":\"Logger\",\"args\":{\"$id\":\"log\"}}\n",
+                "{\"type\":\"Logger\",\"args\":{\"$id\":\"log2\"}}\n",
             ),
         )
         .unwrap();

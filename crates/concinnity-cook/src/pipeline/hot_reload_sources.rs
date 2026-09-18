@@ -69,7 +69,7 @@ fn texture_source(asset: &WorldJsonlAsset) -> TextureSourceInfo {
         )
     };
     TextureSourceInfo {
-        name_id: asset_id::intern(&asset.name).0,
+        name_id: asset_id::intern(&asset.id).0,
         source,
         image_index,
     }

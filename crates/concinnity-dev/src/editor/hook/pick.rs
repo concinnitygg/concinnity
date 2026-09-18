@@ -1,8 +1,9 @@
 //! EditorHook: viewport click-to-select. A press that missed the top bar and
 //! every floating panel is offered to the 3D view: the mouse ray (built from
 //! the live Camera3D) is tested against the engine-published PickIndex, and the
-//! nearest hit resolves through the interner's name table into the selection
-//! set (`editor/selection.rs`). A plain click replaces the selection; a
+//! nearest hit resolves into the handle its asset is addressed by
+//! (`hook/handles.rs`) and then into the selection set
+//! (`editor/selection.rs`). A plain click replaces the selection; a
 //! shift-click toggles the hit's membership; a press over empty space arms the
 //! marquee (`hook/drag/marquee.rs`), whose still release clears. A repeat plain
 //! click on the same spot cycles through overlapping hits near-to-far, which is
@@ -31,7 +32,9 @@ pub(super) struct PickLast {
     index: usize,
 }
 
-// The interned name behind a pick hit, if the id still resolves.
+// The interned name behind a pick hit, if the id still resolves. Only for the
+// name-keyed session sets (the hide and lock sets); a hit that becomes a
+// selection member goes through `handle_of_asset_id`.
 pub(super) fn resolve_name(id: AssetId) -> Option<String> {
     asset_id::name_of(id)
 }
@@ -44,7 +47,7 @@ impl EditorHook {
         let Some(ray) = camera_ray(world, input.viewport, mouse) else {
             return;
         };
-        let hits = ray_hits(world, &ray, &self.locked_assets);
+        let hits = ray_hits(world, &ray, &self.locked_ids());
         if hits.is_empty() {
             // Empty space arms the marquee; its release decides between a box
             // select (moved) and a clearing click (still).
@@ -59,7 +62,7 @@ impl EditorHook {
             let Some(name) = resolve_name(hits[0]) else {
                 return;
             };
-            if self.selection.toggle(name.clone()) {
+            if self.toggle_named(&name) {
                 self.select_in_viewport(&name, world);
             } else {
                 self.follow_active(world);
@@ -89,7 +92,7 @@ impl EditorHook {
             self.selection.clear();
             return;
         };
-        self.selection.replace(name.clone());
+        self.select_named(&name);
         self.select_in_viewport(&name, world);
     }
 
@@ -123,7 +126,7 @@ impl EditorHook {
         if !self.form_open() {
             return;
         }
-        let Some(name) = self.selection.active().map(String::from) else {
+        let Some(name) = self.selection.active().and_then(|h| self.handle_name(h)) else {
             return;
         };
         // Through the by-name path so a template-derived asset (an authored
@@ -146,8 +149,9 @@ impl EditorHook {
         let rects: Vec<([f32; 4], bool)> = self
             .selection
             .iter()
-            .filter_map(|name| {
-                Self::member_rect(world, vp, name).map(|r| (r, Some(name) == active))
+            .filter_map(|handle| {
+                let name = self.handle_name(handle)?;
+                Self::member_rect(world, vp, &name).map(|r| (r, Some(handle) == active))
             })
             .take(highlight::MAX_RINGS)
             .collect();
@@ -189,7 +193,7 @@ pub(super) fn camera_ray(world: &World, viewport: [f32; 2], mouse: [f32; 2]) -> 
 pub(super) fn ray_hits(
     world: &World,
     ray: &PickRay,
-    locked: &std::collections::BTreeSet<String>,
+    locked: &std::collections::BTreeSet<AssetId>,
 ) -> Vec<AssetId> {
     let Some(index) = world.resource::<PickIndex>() else {
         return Vec::new();
@@ -197,7 +201,7 @@ pub(super) fn ray_hits(
     let mut hits: Vec<(f32, AssetId)> = index
         .entries
         .iter()
-        .filter(|e| !resolve_name(e.asset_id).is_some_and(|n| locked.contains(&n)))
+        .filter(|e| !locked.contains(&e.asset_id))
         .filter_map(|e| ray_aabb(ray, e.bb_min, e.bb_max).map(|t| (t, e.asset_id)))
         .collect();
     hits.sort_by(|a, b| a.0.total_cmp(&b.0));

@@ -7,7 +7,7 @@ pub(super) fn wja(
     args: serde_json::Value,
 ) -> crate::authoring::world::WorldJsonlAsset {
     crate::authoring::world::WorldJsonlAsset {
-        name: name.to_string(),
+        id: name.to_string(),
         asset_type,
         args,
     }

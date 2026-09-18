@@ -19,6 +19,8 @@ use crate::editor::panels::asset_tree::{self, TreeGroup};
 
 use crate::editor::panels::assets_panel;
 
+use crate::editor::hook::tests::fixtures::entry_target;
+use crate::editor::hook::tests::fixtures::{active, selected};
 use crate::editor::sim;
 use crate::editor::viewport::highlight;
 use crate::test_support::isolate_state_dir;
@@ -45,18 +47,18 @@ fn viewport_click_picks_the_nearest_prop_without_opening_a_form() {
     ]);
 
     click_at(&mut world, &mut h, [640.0, 360.0]);
-    assert_eq!(h.selection.active(), Some("box_near"), "nearest hit wins");
+    assert_eq!(active(&h).as_deref(), Some("box_near"), "nearest hit wins");
     assert!(!h.panel_open, "a viewport click opens no panel");
     assert!(!h.form_open(), "a viewport click opens no form");
 
     // An already-open form follows the pick instead.
     h.open_asset_form("box_far", &mut world);
-    assert_eq!(h.form.target, FormTarget::Entry(1));
+    assert_eq!(h.form.target, entry_target(&h, 1));
     // Off the repeat-click slop, so this is a fresh pick and not a cycle.
     click_at(&mut world, &mut h, [650.0, 370.0]);
     assert_eq!(
         h.form.target,
-        FormTarget::Entry(0),
+        entry_target(&h, 0),
         "the open form retargets to the picked entry"
     );
     assert_eq!(h.form.selected_type.as_deref(), Some("Sprite"));
@@ -86,21 +88,21 @@ fn repeat_viewport_clicks_cycle_and_empty_space_clears() {
     ]);
 
     click_at(&mut world, &mut h, [200.0, 600.0]);
-    assert_eq!(h.selection.active(), Some("box_near"));
+    assert_eq!(active(&h).as_deref(), Some("box_near"));
     click_at(&mut world, &mut h, [201.0, 601.0]);
     assert_eq!(
-        h.selection.active(),
+        active(&h).as_deref(),
         Some("box_far"),
         "a repeat click reaches the occluded box"
     );
     assert_eq!(
-        h.selection.iter().count(),
+        selected(&h).len(),
         1,
         "a plain click replaces, never accumulates"
     );
     click_at(&mut world, &mut h, [200.0, 600.0]);
     assert_eq!(
-        h.selection.active(),
+        active(&h).as_deref(),
         Some("box_near"),
         "the cycle wraps back to the front"
     );
@@ -110,13 +112,13 @@ fn repeat_viewport_clicks_cycle_and_empty_space_clears() {
     // clears.
     click_at(&mut world, &mut h, [250.0, 450.0]);
     assert_eq!(
-        h.selection.active(),
+        active(&h).as_deref(),
         Some("box_near"),
         "the selection survives until the release decides click vs marquee"
     );
     release_at(&mut world, &mut h, [250.0, 450.0]);
     assert_eq!(
-        h.selection.active(),
+        active(&h).as_deref(),
         None,
         "empty space clears the selection"
     );
@@ -137,29 +139,54 @@ fn viewport_click_on_an_unknown_asset_selects_without_a_form() {
     let mut h = hook(vec![entry("box_near", "Sprite")]);
 
     click_at(&mut world, &mut h, [640.0, 360.0]);
-    assert_eq!(h.selection.active(), Some("some_generated_asset"));
+    assert_eq!(active(&h).as_deref(), Some("some_generated_asset"));
     assert!(!h.panel_open, "no panel opens on a viewport click");
     assert_eq!(h.form.target, FormTarget::New);
     assert!(!h.form_open());
 }
 
-// Undo/redo invalidates the pick state along with the other entry-indexed UI.
+// A history snapshot carries the entries' session keys, so a jump restores the
+// very entries the selection addresses and the selection comes with it. The
+// pick cycle does not: its hit list was sampled against the pre-jump world.
 #[test]
-fn history_jumps_clear_the_pick_selection() {
+fn a_history_jump_keeps_a_selection_its_entries_survive() {
     asset_id::reset_interner();
     let id = asset_id::intern("box_near");
     let mut world = pick_world([0.0; 3], vec![(id, [-1.0, -1.0, -6.0], [1.0, 1.0, -4.0])]);
     let mut h = hook(vec![entry("box_near", "Sprite")]);
     click_at(&mut world, &mut h, [640.0, 360.0]);
-    assert_eq!(h.selection.active(), Some("box_near"));
+    assert_eq!(active(&h).as_deref(), Some("box_near"));
 
     h.entries.push(entry("b", "Sprite"));
     h.mark_changed();
     h.undo(&mut world);
     assert_eq!(
-        h.selection.active(),
+        active(&h).as_deref(),
+        Some("box_near"),
+        "undoing an unrelated add leaves the selected entry standing"
+    );
+    assert!(h.pick_last.is_none(), "the repeat-click cycle is dropped");
+}
+
+// The other half of the same rule: a jump that takes the selected entry away
+// leaves nothing addressed, rather than sliding the selection onto whatever
+// entry took its place.
+#[test]
+fn a_history_jump_drops_a_member_whose_entry_it_removes() {
+    asset_id::reset_interner();
+    let id = asset_id::intern("added");
+    let mut world = pick_world([0.0; 3], vec![(id, [-1.0, -1.0, -6.0], [1.0, 1.0, -4.0])]);
+    let mut h = hook(vec![entry("box_near", "Sprite")]);
+    h.entries.push(entry("added", "Sprite"));
+    h.mark_changed();
+    click_at(&mut world, &mut h, [640.0, 360.0]);
+    assert_eq!(active(&h).as_deref(), Some("added"));
+
+    h.undo(&mut world);
+    assert_eq!(
+        active(&h).as_deref(),
         None,
-        "a history jump drops the selection"
+        "the entry the selection addressed is gone"
     );
 }
 
@@ -213,10 +240,10 @@ fn locked_assets_are_skipped_by_viewport_picking() {
     let near = asset_id::intern("box_near");
     let mut world = pick_world([0.0; 3], vec![(near, [-1.0, -1.0, -6.0], [1.0, 1.0, -4.0])]);
     let mut h = hook(vec![entry("box_near", "Sprite")]);
-    h.locked_assets.insert("box_near".to_string());
+    h.locked_assets.insert(h.handle_for("box_near"));
 
     click_at(&mut world, &mut h, [640.0, 360.0]);
-    assert_eq!(h.selection.active(), None, "the locked box is not picked");
+    assert_eq!(active(&h).as_deref(), None, "the locked box is not picked");
     assert!(h.marquee.is_some(), "the click fell through to empty space");
 }
 
@@ -261,7 +288,7 @@ fn ray_hits_orders_near_before_far_regardless_of_index_order() {
 }
 
 #[test]
-fn ray_hits_skips_locked_names() {
+fn ray_hits_skips_locked_ids() {
     asset_id::reset_interner();
     let near = asset_id::intern("box_near");
     let far = asset_id::intern("box_far");
@@ -273,7 +300,7 @@ fn ray_hits_skips_locked_names() {
         ],
     );
     let ray = camera_ray(&world, PICK_VIEWPORT, CENTER_PIXEL).unwrap();
-    let locked = BTreeSet::from(["box_near".to_string()]);
+    let locked = BTreeSet::from([near]);
     assert_eq!(ray_hits(&world, &ray, &locked), vec![far]);
 }
 

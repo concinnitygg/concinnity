@@ -98,7 +98,7 @@ mod tests {
     #[test]
     fn label_value_pins_font_scale_and_uncentered() {
         let v = label_value("row", "Vsync", "m_font", 100.0, 200.0, [1.0, 1.0, 1.0], 0.5);
-        assert_eq!(v["name"], "row");
+        assert_eq!(v["args"]["$id"], "row");
         assert_eq!(v["type"], "TextLabel");
         assert_eq!(v["args"]["content"], "Vsync");
         assert_eq!(v["args"]["font"], "m_font");
@@ -130,8 +130,8 @@ mod tests {
     #[test]
     fn font_sizes_reads_declared_sizes_and_defaults_unknown() {
         let assets = vec![
-            serde_json::json!({"name":"a","type":"Font","args":{"size_px":32}}),
-            serde_json::json!({"name":"b","type":"Font","args":{}}),
+            serde_json::json!({"type":"Font","args":{"$id":"a","size_px":32}}),
+            serde_json::json!({"type":"Font","args":{"$id":"b"}}),
         ];
         let map = font_sizes(&assets);
         assert_eq!(map["a"], 32.0);
@@ -144,7 +144,7 @@ mod tests {
     fn font_sizes_skips_nameless_fonts_and_other_types() {
         let assets = vec![
             serde_json::json!({"type":"Font","args":{"size_px":32}}),
-            serde_json::json!({"name":"sprite","type":"Sprite","args":{"size_px":32}}),
+            serde_json::json!({"type":"Sprite","args":{"$id":"sprite","size_px":32}}),
         ];
         assert!(font_sizes(&assets).is_empty());
     }

@@ -26,7 +26,7 @@ mod tests {
         let entries = world_template_entries(template);
         assert!(!entries.is_empty());
         for entry in &entries {
-            assert!(entry.get("name").is_some());
+            assert!(concinnity_cook::authoring::world::entry_id(entry).is_some());
             assert!(entry.get("type").is_some());
             assert!(entry.get("args").is_some());
         }

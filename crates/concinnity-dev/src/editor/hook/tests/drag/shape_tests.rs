@@ -14,6 +14,7 @@ use crate::editor::inject;
 
 use crate::editor::panels::registry::PanelKey;
 
+use crate::editor::hook::tests::fixtures::select;
 use crate::editor::widget_slider;
 
 // The full slider loop: select the mesh, press a slider, drag, release. No
@@ -36,7 +37,7 @@ fn shape_slider_drag_commits_one_undo_step() {
     let mut h = hook(shape_world_entries());
     h.shape_open = true;
     h.focus_panel(PanelKey::CharacterShape);
-    h.selection.set(vec!["body".to_string()]);
+    select(&mut h, &["body"]);
     h.tick(&mut world);
     let data = h.shape_data(&world);
     assert_eq!(

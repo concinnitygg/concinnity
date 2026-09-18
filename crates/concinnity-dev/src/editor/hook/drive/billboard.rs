@@ -4,7 +4,7 @@
 //! Transform onto every eligible entity (the gizmo's edit surface -- these
 //! types otherwise never get one), projects each position to a screen-space
 //! icon, and offers the icons to the click router ahead of the mesh pick.
-//! Selecting an icon goes through the same name-keyed selection the mesh pick
+//! Selecting an icon goes through the same handle-keyed selection the mesh pick
 //! uses, so the form, tree, and gizmo all follow for free.
 
 use concinnity_core::components::{Camera3D, FrameInput, Transform};
@@ -15,7 +15,10 @@ use concinnity_core::math::pick::ray_aabb;
 use concinnity_host::thread::asset_id;
 
 use crate::editor::hook::pick;
-use crate::editor::hook::{EditorHook, entry_name, entry_type};
+use concinnity_cook::authoring::world::{entry_handle, entry_handles};
+
+use crate::editor::asset_handle::AssetHandle;
+use crate::editor::hook::{EditorHook, entry_type};
 use crate::editor::panels::form;
 use crate::editor::viewport::billboards;
 
@@ -45,8 +48,9 @@ impl EditorHook {
     // preview rebuild, and an existing Transform (including one mid-gizmo-
     // drag) is left alone.
     pub(in crate::editor::hook) fn seed_billboard_transforms(&self, world: &mut World) {
-        for e in &self.entries {
-            let (Some(name), Some(ty)) = (entry_name(e), entry_type(e)) else {
+        let handles = entry_handles(&self.entries);
+        for (e, name) in self.entries.iter().zip(&handles) {
+            let (Some(name), Some(ty)) = (name, entry_type(e)) else {
                 continue;
             };
             if !billboards::eligible(ty) {
@@ -85,13 +89,19 @@ impl EditorHook {
             cam.fov_y_degrees.to_radians(),
             cam.position,
         );
+        let handles = entry_handles(&self.entries);
         self.entries
             .iter()
             .enumerate()
             .filter(|(_, e)| entry_type(e).is_some_and(billboards::eligible))
-            .filter(|(_, e)| !entry_name(e).is_some_and(|n| self.name_hidden(n)))
-            .filter_map(|(i, e)| {
-                let entity = entity_by_name(world, entry_name(e)?)?;
+            .filter(|(i, _)| {
+                !self
+                    .entries
+                    .key_at(*i)
+                    .is_some_and(|key| self.handle_hidden(&AssetHandle::Entry(key)))
+            })
+            .filter_map(|(i, _)| {
+                let entity = entity_by_name(world, handles[i].as_deref()?)?;
                 let p = world.get::<Transform>(entity)?.position;
                 let (screen, _) = billboards::project(&view, fov, vp, p)?;
                 let d = [p[0] - cam_pos[0], p[1] - cam_pos[1], p[2] - cam_pos[2]];
@@ -118,18 +128,19 @@ impl EditorHook {
             billboards::hide(world);
             return;
         }
+        let selected = self.selected_names();
         let icons: Vec<billboards::Icon> = self
             .billboard_spots(world, vp)
             .into_iter()
             .filter_map(|s| {
                 let e = self.entries.get(s.entry)?;
-                let (name, ty) = (entry_name(e)?, entry_type(e)?);
+                let (name, ty) = (entry_handle(&self.entries, s.entry)?, entry_type(e)?);
                 Some(billboards::Icon {
                     screen: s.screen,
                     tint: billboards::tint(ty),
                     glyph: billboards::glyph(ty),
-                    selected: self.selection.contains(name),
-                    active: self.selection.active() == Some(name),
+                    selected: selected.contains(&name),
+                    active: selected.is_active(&name),
                 })
             })
             .collect();
@@ -165,9 +176,8 @@ impl EditorHook {
             .filter(|s| {
                 !self
                     .entries
-                    .get(s.entry)
-                    .and_then(|e| entry_name(e))
-                    .is_some_and(|n| self.locked_assets.contains(n))
+                    .key_at(s.entry)
+                    .is_some_and(|key| self.locked_assets.contains(&AssetHandle::Entry(key)))
             })
             .collect();
         let xy: Vec<([f32; 2], f32)> = spots.iter().map(|s| (s.screen, s.dist)).collect();
@@ -177,25 +187,20 @@ impl EditorHook {
         if !billboards::beats_mesh(spots[i].dist, self.nearest_mesh_t(world, vp, mouse)) {
             return false;
         }
-        let Some(name) = self
-            .entries
-            .get(spots[i].entry)
-            .and_then(|e| entry_name(e))
-            .map(String::from)
-        else {
+        let Some(name) = entry_handle(&self.entries, spots[i].entry) else {
             return false;
         };
         // Same selection semantics as the mesh pick (no cycling: icons have
         // no occlusion stack of their own).
         self.pick_last = None;
         if input.shift {
-            if self.selection.toggle(name.clone()) {
+            if self.toggle_named(&name) {
                 self.select_in_viewport(&name, world);
             } else {
                 self.follow_active(world);
             }
         } else {
-            self.selection.replace(name.clone());
+            self.select_named(&name);
             self.select_in_viewport(&name, world);
         }
         true
@@ -207,12 +212,11 @@ impl EditorHook {
     fn nearest_mesh_t(&self, world: &World, vp: [f32; 2], mouse: [f32; 2]) -> Option<f32> {
         let ray = pick::camera_ray(world, vp, mouse)?;
         let index = world.resource::<PickIndex>()?;
+        let locked = self.locked_ids();
         index
             .entries
             .iter()
-            .filter(|e| {
-                !pick::resolve_name(e.asset_id).is_some_and(|n| self.locked_assets.contains(&n))
-            })
+            .filter(|e| !locked.contains(&e.asset_id))
             .filter_map(|e| ray_aabb(&ray, e.bb_min, e.bb_max))
             .min_by(f32::total_cmp)
     }

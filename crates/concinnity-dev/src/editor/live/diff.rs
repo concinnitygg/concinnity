@@ -1,8 +1,8 @@
 //! What changed between the entry list the live preview world was built from
 //! and the working one. Only an args-only change on entries that kept their
-//! place, name, and type can be applied to a running world; a line added,
+//! place, `$id`, and type can be applied to a running world; a line added,
 //! removed, renamed, retyped, or reordered changes what the expansion produces
-//! and needs the world rebuilt.
+//! (and an anonymous entry's label) and needs the world rebuilt.
 //!
 //! Both sides are compared as EFFECTIVE args -- the authored line merged over
 //! its template baseline, over the type's defaults -- not as written. An
@@ -11,6 +11,7 @@
 //! amounts to keeps those out of the change set, and lets a key going away
 //! register as the move back to the value it uncovers.
 
+use concinnity_cook::authoring::world::{entry_handles, entry_id};
 use serde_json::{Map, Value};
 
 use super::ShadowBaselines;
@@ -18,7 +19,7 @@ use crate::editor::panels::form;
 
 /// One entry whose args changed in place.
 pub(crate) struct ArgsChange {
-    /// The entry's authored name.
+    /// The entry's handle: its `$id`, or its label when anonymous.
     pub(crate) name: String,
     /// The entry's registry type name.
     pub(crate) ty: String,
@@ -48,9 +49,8 @@ fn args_of(entry: &Value) -> Map<String, Value> {
 pub(crate) fn same_assets(before: &[Value], after: &[Value]) -> bool {
     before.len() == after.len()
         && before.iter().zip(after).all(|(old, new)| {
-            field(old, "name") == field(new, "name")
+            entry_id(old) == entry_id(new)
                 && field(old, "type") == field(new, "type")
-                && field(new, "name").is_some()
                 && field(new, "type").is_some()
         })
 }
@@ -66,8 +66,9 @@ pub(crate) fn args_changes(
         return None;
     }
     let mut out = Vec::new();
-    for (old, new) in before.iter().zip(after) {
-        let (name, ty) = (field(new, "name")?, field(new, "type")?);
+    let handles = entry_handles(after);
+    for ((old, new), name) in before.iter().zip(after).zip(&handles) {
+        let (name, ty) = (name.as_deref()?, field(new, "type")?);
         let old_args = effective(ty, name, &args_of(old), shadows);
         let new_args = effective(ty, name, &args_of(new), shadows);
         let keys: Vec<String> = new_args
@@ -117,7 +118,7 @@ mod tests {
     use serde_json::json;
 
     fn entry(name: &str, ty: &str, args: Value) -> Value {
-        json!({ "name": name, "type": ty, "args": args })
+        json!({ "type": ty, "args": concinnity_cook::authoring::world::args_with_id(args, name) })
     }
 
     fn changes(before: &[Value], after: &[Value]) -> Option<Vec<ArgsChange>> {

@@ -15,7 +15,9 @@ use concinnity_core::ecs::{
 use crate::editor::behavior::path::Path;
 use crate::editor::behavior::pulse::{self, NodePulse};
 use crate::editor::behavior::trace;
-use crate::editor::hook::{EditorHook, entry_name};
+use concinnity_cook::authoring::world::entry_handle;
+
+use crate::editor::hook::EditorHook;
 use crate::editor::sim;
 
 impl EditorHook {
@@ -44,9 +46,8 @@ impl EditorHook {
     // pulses and locals address places inside one body.
     fn open_behavior_name(&self) -> String {
         self.behavior_entry()
-            .and_then(|i| entry_name(&self.entries[i]))
-            .unwrap_or("")
-            .to_string()
+            .and_then(|i| entry_handle(&self.entries, i))
+            .unwrap_or_default()
     }
 
     // The open behavior's node paths in the editor's path type, indexed by
@@ -66,7 +67,8 @@ impl EditorHook {
         let entity = self
             .selection
             .active()
-            .and_then(trace::id_of)
+            .and_then(|h| self.handle_name(h))
+            .and_then(|name| trace::id_of(&name))
             .and_then(|id| {
                 world
                     .resource::<concinnity_core::ecs::EntityByName>()

@@ -1,7 +1,7 @@
 use super::*;
 
 fn gfx() -> serde_json::Value {
-    serde_json::json!({"name":"gfx","type":"GraphicsConfig","args":{}})
+    serde_json::json!({"type":"GraphicsConfig","args":{"$id":"gfx"}})
 }
 
 fn names_of_type(assets: &[serde_json::Value], t: RegisteredType) -> Vec<String> {
@@ -22,7 +22,7 @@ fn inject(assets: &mut Vec<serde_json::Value>) -> Result<ExpandReport, String> {
 fn a_menu_world_gets_the_stats_strip() {
     let mut assets = vec![
         gfx(),
-        serde_json::json!({"name":"pause","type":"MainMenu","args":{}}),
+        serde_json::json!({"type":"MainMenu","args":{"$id":"pause"}}),
     ];
     let report = inject(&mut assets).unwrap();
     assert_eq!(
@@ -47,8 +47,8 @@ fn a_world_without_a_menu_gets_no_stats_strip() {
 fn an_authored_stat_hud_is_left_alone() {
     let mut assets = vec![
         gfx(),
-        serde_json::json!({"name":"pause","type":"MainMenu","args":{}}),
-        serde_json::json!({"name":"hud","type":"StatHud","args":{"fps_label":"my_fps"}}),
+        serde_json::json!({"type":"MainMenu","args":{"$id":"pause"}}),
+        serde_json::json!({"type":"StatHud","args":{"$id":"hud","fps_label":"my_fps"}}),
     ];
     inject(&mut assets).unwrap();
     assert_eq!(names_of_type(&assets, RegisteredType::StatHud), vec!["hud"]);
@@ -58,8 +58,8 @@ fn an_authored_stat_hud_is_left_alone() {
 fn the_hud_toggle_opts_out() {
     let mut assets = vec![
         gfx(),
-        serde_json::json!({"name":"pause","type":"MainMenu","args":{}}),
-        serde_json::json!({"name":"d","type":"EngineDefaults","args":{"hud": false}}),
+        serde_json::json!({"type":"MainMenu","args":{"$id":"pause"}}),
+        serde_json::json!({"type":"EngineDefaults","args":{"$id":"d","hud": false}}),
     ];
     inject(&mut assets).unwrap();
     assert!(names_of_type(&assets, RegisteredType::StatHud).is_empty());
@@ -71,7 +71,7 @@ fn the_hud_toggle_opts_out() {
 fn the_directive_survives_the_build() {
     let mut assets = vec![
         gfx(),
-        serde_json::json!({"name":"d","type":"EngineDefaults","args":{"sky": false}}),
+        serde_json::json!({"type":"EngineDefaults","args":{"$id":"d","sky": false}}),
     ];
     inject(&mut assets).unwrap();
     assert_eq!(
@@ -83,8 +83,8 @@ fn the_directive_survives_the_build() {
 #[test]
 fn a_second_directive_is_an_error() {
     let mut assets = vec![
-        serde_json::json!({"name":"a","type":"EngineDefaults","args":{}}),
-        serde_json::json!({"name":"b","type":"EngineDefaults","args":{}}),
+        serde_json::json!({"type":"EngineDefaults","args":{"$id":"a"}}),
+        serde_json::json!({"type":"EngineDefaults","args":{"$id":"b"}}),
     ];
     let err = inject(&mut assets).unwrap_err();
     assert!(err.contains("at most one"), "{err}");
@@ -93,7 +93,7 @@ fn a_second_directive_is_an_error() {
 #[test]
 fn malformed_directive_args_are_an_error() {
     let mut assets = vec![serde_json::json!({
-        "name":"d","type":"EngineDefaults","args":{"hud":"yes"}
+        "type":"EngineDefaults","args":{"$id":"d","hud":"yes"}
     })];
     let err = inject(&mut assets).unwrap_err();
     assert!(err.contains("EngineDefaults 'd'"), "{err}");
@@ -104,8 +104,8 @@ fn malformed_directive_args_are_an_error() {
 fn a_directive_without_args_keeps_every_default_on() {
     let mut assets = vec![
         gfx(),
-        serde_json::json!({"name":"pause","type":"MainMenu","args":{}}),
-        serde_json::json!({"name":"d","type":"EngineDefaults"}),
+        serde_json::json!({"type":"MainMenu","args":{"$id":"pause"}}),
+        serde_json::json!({"type":"EngineDefaults","args":{"$id":"d"}}),
     ];
     inject(&mut assets).unwrap();
     assert_eq!(
@@ -118,8 +118,8 @@ fn a_directive_without_args_keeps_every_default_on() {
 fn a_story_world_gets_a_pause_menu() {
     let mut assets = vec![
         gfx(),
-        serde_json::json!({"name":"tale","type":"Story","args":{}}),
-        serde_json::json!({"name":"tale_title","type":"Screen","args":{}}),
+        serde_json::json!({"type":"Story","args":{"$id":"tale"}}),
+        serde_json::json!({"type":"Screen","args":{"$id":"tale_title"}}),
     ];
     inject(&mut assets).unwrap();
 
@@ -192,7 +192,7 @@ fn a_story_world_gets_a_pause_menu() {
 fn a_story_without_a_title_screen_quits_to_desktop() {
     let mut assets = vec![
         gfx(),
-        serde_json::json!({"name":"tale","type":"Story","args":{}}),
+        serde_json::json!({"type":"Story","args":{"$id":"tale"}}),
     ];
     inject(&mut assets).unwrap();
     let menu = assets
@@ -212,9 +212,9 @@ fn a_story_without_a_title_screen_quits_to_desktop() {
 fn an_authored_menu_suppresses_the_story_pause_menu() {
     let mut assets = vec![
         gfx(),
-        serde_json::json!({"name":"tale","type":"Story","args":{}}),
-        serde_json::json!({"name":"tale_title","type":"Screen","args":{}}),
-        serde_json::json!({"name":"my_menu","type":"MainMenu","args":{}}),
+        serde_json::json!({"type":"Story","args":{"$id":"tale"}}),
+        serde_json::json!({"type":"Screen","args":{"$id":"tale_title"}}),
+        serde_json::json!({"type":"MainMenu","args":{"$id":"my_menu"}}),
     ];
     inject(&mut assets).unwrap();
     assert_eq!(
@@ -227,9 +227,10 @@ fn an_authored_menu_suppresses_the_story_pause_menu() {
 fn the_story_pause_toggle_opts_out() {
     let mut assets = vec![
         gfx(),
-        serde_json::json!({"name":"tale","type":"Story","args":{}}),
-        serde_json::json!({"name":"tale_title","type":"Screen","args":{}}),
-        serde_json::json!({"name":"d","type":"EngineDefaults","args":{
+        serde_json::json!({"type":"Story","args":{"$id":"tale"}}),
+        serde_json::json!({"type":"Screen","args":{"$id":"tale_title"}}),
+        serde_json::json!({"type":"EngineDefaults","args":{
+            "$id":"d",
             "story_pause_menu": false
         }}),
     ];
@@ -239,17 +240,17 @@ fn the_story_pause_toggle_opts_out() {
 
 #[test]
 fn malformed_story_args_do_not_panic_the_pause_injection() {
-    // A hand-authored Story with a non-object args is malformed, but the pause
-    // injection must skip the scaffold patch gracefully rather than panic; the
-    // malformed Story surfaces its own error later.
+    // A hand-authored Story with a non-object args is malformed: it cannot
+    // carry the `$id` a pause menu is named after, so the injection skips it
+    // rather than panic, and the malformed Story surfaces its own error later.
     let mut assets = vec![
         gfx(),
-        serde_json::json!({"name":"tale","type":"Story","args":[]}),
-        serde_json::json!({"name":"tale_title","type":"Screen","args":{}}),
+        serde_json::json!({"type":"Story","args":[]}),
+        serde_json::json!({"type":"Screen","args":{"$id":"tale_title"}}),
     ];
     inject(&mut assets).unwrap();
     assert!(
-        assets
+        !assets
             .iter()
             .any(|v| registered_type(v) == Some(RegisteredType::MainMenu))
     );
@@ -268,8 +269,8 @@ fn a_non_story_world_gets_no_pause_menu() {
 fn a_default_name_held_by_another_type_is_an_error() {
     let mut assets = vec![
         gfx(),
-        serde_json::json!({"name":"tale","type":"Story","args":{}}),
-        serde_json::json!({"name":"tale_pause","type":"Window","args":{}}),
+        serde_json::json!({"type":"Story","args":{"$id":"tale"}}),
+        serde_json::json!({"type":"Window","args":{"$id":"tale_pause"}}),
     ];
     let err = inject(&mut assets).unwrap_err();
     assert!(err.contains("tale_pause"), "{err}");
@@ -277,8 +278,8 @@ fn a_default_name_held_by_another_type_is_an_error() {
 
     let mut assets = vec![
         gfx(),
-        serde_json::json!({"name":"pause","type":"MainMenu","args":{}}),
-        serde_json::json!({"name":"stat_hud","type":"Window","args":{}}),
+        serde_json::json!({"type":"MainMenu","args":{"$id":"pause"}}),
+        serde_json::json!({"type":"Window","args":{"$id":"stat_hud"}}),
     ];
     let err = inject(&mut assets).unwrap_err();
     assert!(err.contains("stat_hud"), "{err}");
@@ -289,7 +290,7 @@ fn a_default_name_held_by_another_type_is_an_error() {
 #[test]
 fn a_non_object_scaffold_is_left_alone() {
     let mut assets = vec![serde_json::json!({
-        "name":"tale","type":"Story","args":{"scaffold": 7}
+        "type":"Story","args":{"$id":"tale","scaffold": 7}
     })];
     patch_story_scaffold(&mut assets, "tale", "tale_pause");
     assert_eq!(assets[0]["args"]["scaffold"], 7);
@@ -301,7 +302,7 @@ fn a_non_object_scaffold_is_left_alone() {
 fn injecting_twice_yields_one_stat_hud() {
     let mut assets = vec![
         gfx(),
-        serde_json::json!({"name":"pause","type":"MainMenu","args":{}}),
+        serde_json::json!({"type":"MainMenu","args":{"$id":"pause"}}),
     ];
     inject(&mut assets).unwrap();
     inject(&mut assets).unwrap();

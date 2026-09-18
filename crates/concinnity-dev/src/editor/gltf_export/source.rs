@@ -23,7 +23,7 @@ pub(crate) fn export_world_mesh(content: &str, mesh: &str, bake: bool) -> Result
     let mut assets = loaded.assets;
     let entry = assets
         .iter()
-        .find(|a| a.name == mesh)
+        .find(|a| a.id == mesh)
         .ok_or_else(|| format!("no asset named '{mesh}' in the world"))?;
     if entry.asset_type != RegisteredType::SkinnedMesh {
         return Err(format!(
@@ -124,8 +124,9 @@ mod tests {
         })
         .collect();
         let mesh = serde_json::json!({
-            "name": "prism", "type": "SkinnedMesh",
+            "type": "SkinnedMesh",
             "args": {
+                "$id": "prism",
                 "vertices": vertices,
                 "indices": [0, 1, 2],
                 "skeleton": [
@@ -142,8 +143,8 @@ mod tests {
             }
         });
         let shape = serde_json::json!({
-            "name": "shape", "type": "CharacterShape",
-            "args": {"target": "prism", "bake": baking,
+            "type": "CharacterShape",
+            "args": {"$id": "shape", "target": "prism", "bake": baking,
                 "sliders": [{"name": "wide", "value": 0.5}]}
         });
         format!("{mesh}\n{shape}\n")

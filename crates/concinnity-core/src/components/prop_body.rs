@@ -14,7 +14,6 @@ use crate::ecs::de_opt_audio_clip_handle;
 ///
 /// ```json
 /// {
-///   "name": "crate_a_body",
 ///   "type": "PropBody",
 ///   "args": { "prop_name": "crate_a", "mass": 4.0, "friction": 0.6 }
 /// }

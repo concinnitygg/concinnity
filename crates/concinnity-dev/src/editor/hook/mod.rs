@@ -41,7 +41,9 @@ use concinnity_core::ecs::{
 use concinnity_engine::app::runtime::Runtime;
 use concinnity_engine::ecs::PendingBackend;
 
+use super::asset_handle::AssetHandle;
 use super::behavior;
+use super::entry_list::{EntryId, EntryList};
 use super::history::History;
 use super::hud;
 use super::live;
@@ -93,16 +95,17 @@ pub(crate) struct EditorHook {
     world_path: String,
     // The same path, shared with the hot-reload driver that watches it.
     world_path_handle: WorldPathHandle,
-    // The authored entry list (names live here, unlike the compiled blob). Edits
-    // mutate this; SAVE serializes it back to `world_path`.
-    entries: Vec<serde_json::Value>,
+    // The authored entry list (names live here, unlike the compiled blob), each
+    // entry beside the session key the editor addresses it by. Edits mutate
+    // this; SAVE serializes it back to `world_path`.
+    entries: EntryList,
     // Undo/redo stacks over `entries`. `baseline` mirrors `entries` as of the
     // last committed edit (or undo/redo), so when `mark_changed` runs after a
     // mutation it still holds the pre-edit list -- the undo snapshot. `saved`
     // mirrors the on-disk state, so a history jump can recompute `dirty`.
     history: History,
-    baseline: Vec<serde_json::Value>,
-    saved: Vec<serde_json::Value>,
+    baseline: EntryList,
+    saved: EntryList,
     // Whether `entries` has changes not yet written to disk.
     dirty: bool,
     // The simulation transport (Play / Pause / Step / Stop). Starts Stopped:
@@ -127,7 +130,7 @@ pub(crate) struct EditorHook {
     // both. The baselines are seeded on demand (the first edit that could be
     // applied live expands the list once to find them), and an edit cannot be
     // applied live until they are.
-    world_entries: Vec<serde_json::Value>,
+    world_entries: EntryList,
     world_shadows: Option<live::ShadowBaselines>,
     // Whether the Templates panel is shown (toggled from the View panel).
     templates_open: bool,
@@ -186,15 +189,16 @@ pub(crate) struct EditorHook {
     // resolve without direct input access (a Ctrl+click on a chart card
     // toggles its breakpoint).
     ctrl_held: bool,
-    // Editor-session hide / lock sets, by NAME (ids drift across preview
-    // rebuilds). Hidden assets skip rendering (via the published
-    // `HiddenAssets` resource); locked ones are skipped by viewport picking.
-    // Neither touches the authored entries.
-    hidden_assets: std::collections::BTreeSet<String>,
-    locked_assets: std::collections::BTreeSet<String>,
-    // An active isolate (`hook/hide.rs`): the names kept visible, hiding
+    // Editor-session hide / lock sets, by handle, like the selection (an id
+    // drifts across preview rebuilds, and a label follows its entry). Hidden
+    // assets skip rendering (via the published `HiddenAssets` resource);
+    // locked ones are skipped by viewport picking. Neither touches the
+    // authored entries.
+    hidden_assets: std::collections::BTreeSet<AssetHandle>,
+    locked_assets: std::collections::BTreeSet<AssetHandle>,
+    // An active isolate (`hook/hide.rs`): the assets kept visible, hiding
     // everything else. Composes with (and never mutates) `hidden_assets`.
-    isolate: Option<std::collections::BTreeSet<String>>,
+    isolate: Option<std::collections::BTreeSet<AssetHandle>>,
     // Shift state sampled from this frame's input, for the panel presses that
     // resolve without direct input access (the Assets tree's additive select).
     shift_held: bool,
@@ -211,7 +215,7 @@ pub(crate) struct EditorHook {
     // grouped by origin. `tree_groups` is the cooked model (it costs a world
     // expansion, so it is recomputed only when `tree_stale` and the panel is
     // up), `tree_unfolded` holds the groups the user unfolded, `row_menu` the
-    // name whose Delete menu is open, and `tree_status` carries a cook failure
+    // asset whose Delete menu is open, and `tree_status` carries a cook failure
     // to the status line.
     tree_groups: Vec<TreeGroup>,
     tree_unfolded: Vec<usize>,
@@ -219,7 +223,7 @@ pub(crate) struct EditorHook {
     tree_stale: bool,
     tree_status: Option<String>,
     search_focus: bool,
-    row_menu: Option<String>,
+    row_menu: Option<AssetHandle>,
     // The header "+" type picker: whether its option list is open and how far it
     // is scrolled. While open the search field narrows those options instead of
     // the tree.
@@ -290,11 +294,12 @@ pub(crate) struct EditorHook {
     // Template baselines for every template-derived asset, derived from the
     // working entries. Invalidated by every edit, rebuilt on demand.
     template_index: Option<overrides::TemplateIndex>,
-    // The viewport selection set (`editor/selection.rs`), held by NAME: every
-    // live-preview rebuild resets the interner and re-interns names, so a
-    // stored AssetId could silently drift to a different asset. Members are
-    // re-resolved each frame (`hook/pick.rs`). `pick_last` is the transient
-    // repeat-click cycle; `marquee` an in-flight box select.
+    // The viewport selection set (`editor/selection.rs`), held as
+    // `AssetHandle`s and re-resolved against the entry list every frame
+    // (`hook/handles.rs`): a live-preview rebuild resets the interner, so a
+    // stored AssetId would drift onto another asset, and a name is content the
+    // user renames. `pick_last` is the transient repeat-click cycle;
+    // `marquee` an in-flight box select.
     selection: Selection,
     pick_last: Option<pick::PickLast>,
     marquee: Option<drag::marquee::MarqueeDrag>,
@@ -354,6 +359,11 @@ pub(crate) struct EditorHook {
 // live search field, then borrowed for both hit-testing and layout).
 struct PanelData {
     rows: Vec<TreeRow>,
+    // The hide / lock sets and the open row menu, projected onto the names the
+    // tree rows are drawn under.
+    hidden: std::collections::BTreeSet<String>,
+    locked: std::collections::BTreeSet<String>,
+    row_menu: Option<String>,
     picker_options: Option<Vec<String>>,
     form_title: String,
     form_overrides: Option<FormOverridesData>,
@@ -411,21 +421,23 @@ fn short_status(e: &str) -> String {
     }
 }
 
-// The `name` string of an entry, if present.
-fn entry_name(e: &serde_json::Value) -> Option<&str> {
-    e.get("name").and_then(|v| v.as_str())
+// The `$id` an entry declares, if any. An anonymous entry has none; the name
+// the world knows it by is its handle (`EditorHook::handle_name`).
+fn declared_id(e: &serde_json::Value) -> Option<&str> {
+    concinnity_cook::authoring::world::entry_id(e)
 }
 fn entry_type(e: &serde_json::Value) -> Option<&str> {
     e.get("type").and_then(|v| v.as_str())
 }
 
-// The names of the working entries whose type is `ty` (the reference options a
-// field targeting that type can pick from).
+// The ids of the working entries whose type is `ty` (the reference options a
+// field targeting that type can pick from). An anonymous entry cannot be
+// referenced, so it is not offered.
 fn names_of_type(entries: &[serde_json::Value], ty: &str) -> Vec<String> {
     entries
         .iter()
         .filter(|e| entry_type(e) == Some(ty))
-        .filter_map(|e| entry_name(e).map(String::from))
+        .filter_map(|e| declared_id(e).map(String::from))
         .collect()
 }
 
@@ -448,6 +460,7 @@ mod editing;
 mod edits;
 mod fly;
 mod form_state;
+mod handles;
 mod hide;
 mod layout;
 // The per-panel `Panel` impls, reachable by the registry (`editor/panels/registry.rs`).
@@ -472,6 +485,9 @@ impl EditorHook {
                     .map(|w| w.bookmarks)
             })
             .unwrap_or_default();
+        // The three mirrors clone the keys along with the values, so a snapshot
+        // restored by undo addresses the same entries the selection does.
+        let entries = EntryList::new(entries);
         Self {
             world_path_handle: WorldPathHandle::new(world_path.as_str()),
             world_path,

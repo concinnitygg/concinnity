@@ -216,7 +216,7 @@ fn a_press_outside_dismisses_without_reaching_the_world() {
 #[test]
 fn world_assets_become_rows_routed_by_type() {
     let entries = vec![
-        serde_json::json!({"name": "greeter", "type": "Behavior", "args": {"on": "tick", "do": []}}),
+        serde_json::json!({"type": "Behavior", "args": {"$id": "greeter", "on": "tick", "do": []}}),
     ];
     let mut h = hook(entries);
     let mut world = palette_world();

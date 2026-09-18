@@ -11,6 +11,7 @@
 use concinnity_core::ecs::World;
 use std::path::Path;
 
+use crate::editor::entry_list::EntryList;
 use crate::editor::history::History;
 use crate::editor::hook::worlds_start::Adopt;
 use crate::editor::hook::{EditorHook, scroll_step};
@@ -173,7 +174,11 @@ impl EditorHook {
     // would onto any other world, so the top bar and the panels come straight
     // up on it; only the naming is deferred, to the first SAVE.
     fn new_untitled_world(&mut self) {
-        self.retarget(crate::editor::unsaved_world_path(), Vec::new(), Adopt::No);
+        self.retarget(
+            crate::editor::unsaved_world_path(),
+            EntryList::default(),
+            Adopt::No,
+        );
         self.untitled = true;
     }
 
@@ -182,7 +187,7 @@ impl EditorHook {
     // it has.
     fn open_world(&mut self, path: String) {
         match worlds::files::read_entries(Path::new(&path)) {
-            Ok(entries) => self.retarget(path, entries, Adopt::No),
+            Ok(entries) => self.retarget(path, EntryList::new(entries), Adopt::No),
             Err(e) => self.worlds.status = Some(e),
         }
     }
@@ -283,7 +288,7 @@ impl EditorHook {
         // Where the selection lands once the row is gone.
         let was_at = self.worlds.rows.iter().position(|r| r.path == path);
         if !self.start_mode && path == self.world_path {
-            self.saved = Vec::new();
+            self.saved = EntryList::default();
             self.dirty = !self.entries.is_empty();
         }
         self.refresh_worlds();
@@ -301,7 +306,7 @@ impl EditorHook {
     pub(in crate::editor::hook) fn retarget(
         &mut self,
         path: String,
-        entries: Vec<serde_json::Value>,
+        entries: EntryList,
         adopt: Adopt,
     ) {
         self.world_path_handle.set(path.as_str());

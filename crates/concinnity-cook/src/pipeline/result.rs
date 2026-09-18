@@ -130,7 +130,7 @@ mod tests {
     #[test]
     fn resource_payload_slices_the_named_resource() {
         let world = concat!(
-            r#"{"name":"prism","type":"SkinnedMesh","args":{"#,
+            r#"{"type":"SkinnedMesh","args":{"$id":"prism","#,
             r#""vertices":[{"pos":[0,0,0]},{"pos":[1,0,0]},{"pos":[0,1,0]}],"#,
             r#""indices":[0,1,2],"skeleton":[{"name":"root","parent":-1}],"#,
             r#""scale":[1,1,1]}}"#,

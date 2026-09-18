@@ -44,6 +44,12 @@ pub(crate) fn cross_refs_for(
     }
 }
 
+// The assets a reference can name: those with a `$id`. An anonymous asset's
+// label addresses it in tools, never from another entry.
+fn referenceable(assets: &[WorldJsonlAsset]) -> impl Iterator<Item = &WorldJsonlAsset> {
+    assets.iter().filter(|a| !a.is_anonymous())
+}
+
 // One registry entry's declared flat references: its type and the
 // (field, target type) pairs.
 type DeclaredRefs = (RegisteredType, &'static [(&'static str, &'static str)]);
@@ -66,10 +72,9 @@ fn validate_registry_refs(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) 
             let target = RegisteredType::parse(target)
                 .expect("ref_fields_name_real_target_types guards every target");
             scopes.entry(target).or_insert_with(|| {
-                assets
-                    .iter()
+                referenceable(assets)
                     .filter(|a| a.asset_type == target)
-                    .map(|a| a.name.as_str())
+                    .map(|a| a.id.as_str())
                     .collect()
             });
         }
@@ -101,9 +106,9 @@ fn validate_registry_refs(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) 
                     continue;
                 }
                 errors.push(format!(
-                    "{} '{}': {} '{}' not found, add {} asset with that name",
+                    "{} '{}': {} '{}' not found, add {} asset with that `$id`",
                     list_type.as_str(),
-                    asset.name,
+                    asset.id,
                     field,
                     referenced,
                     one_of(&targets)
@@ -156,10 +161,9 @@ impl<'a> RefScope<'a> {
     fn build(assets: &'a [WorldJsonlAsset]) -> Self {
         // Names of every asset of the given type.
         let by_type = |asset_type: RegisteredType| -> HashSet<&'a str> {
-            assets
-                .iter()
+            referenceable(assets)
                 .filter(|a| a.asset_type == asset_type)
-                .map(|a| a.name.as_str())
+                .map(|a| a.id.as_str())
                 .collect()
         };
 
@@ -167,10 +171,9 @@ impl<'a> RefScope<'a> {
         // mesh sources; the same classifier the build's mesh-source handle
         // assignment uses, so the two never disagree on what a `.mesh` name may
         // resolve to.
-        let mesh_sources = assets
-            .iter()
+        let mesh_sources = referenceable(assets)
             .filter(|a| crate::authoring::resource_type::is_mesh_source(a.asset_type, &a.args))
-            .map(|a| a.name.as_str())
+            .map(|a| a.id.as_str())
             .collect();
 
         RefScope {
@@ -183,7 +186,7 @@ impl<'a> RefScope<'a> {
             audio_clips: by_type(RegisteredType::AudioClip),
             screens: by_type(RegisteredType::Screen),
             trigger_volumes: by_type(RegisteredType::TriggerVolume),
-            all_names: assets.iter().map(|a| a.name.as_str()).collect(),
+            all_names: referenceable(assets).map(|a| a.id.as_str()).collect(),
         }
     }
 
@@ -212,7 +215,7 @@ pub(crate) fn validate_cross_references(assets: &[WorldJsonlAsset]) -> Result<()
     validate_registry_refs(assets, &mut errors);
 
     for asset in assets {
-        for cross_ref in cross_refs_for(asset.asset_type, &asset.name, &asset.args) {
+        for cross_ref in cross_refs_for(asset.asset_type, &asset.id, &asset.args) {
             match cross_ref {
                 CrossRef::Resolve {
                     kind,
@@ -239,7 +242,7 @@ pub(crate) fn validate_cross_references(assets: &[WorldJsonlAsset]) -> Result<()
                 .get("parent")
                 .and_then(|v| v.as_str())
                 .filter(|s| !s.is_empty())?;
-            Some((a.name.as_str(), parent))
+            Some((a.id.as_str(), parent))
         })
         .collect();
 
@@ -290,7 +293,7 @@ fn check_graph_ownership(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
         .filter(|a| a.asset_type == RegisteredType::Animation)
         .map(|a| {
             let target = a.args.get("target").and_then(|v| v.as_str()).unwrap_or("");
-            (a.name.as_str(), target)
+            (a.id.as_str(), target)
         })
         .collect();
 
@@ -304,11 +307,11 @@ fn check_graph_ownership(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
         if mesh.is_empty() {
             continue; // missing target already reported by cross_refs
         }
-        if let Some(other) = owner_by_mesh.insert(mesh, graph.name.as_str()) {
+        if let Some(other) = owner_by_mesh.insert(mesh, graph.id.as_str()) {
             errors.push(format!(
                 "AnimationGraph '{}': SkinnedMesh '{}' is already driven by AnimationGraph '{}'; \
                  a mesh can have at most one graph",
-                graph.name, mesh, other
+                graph.id, mesh, other
             ));
         }
 
@@ -329,7 +332,7 @@ fn check_graph_ownership(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
                     errors.push(format!(
                         "AnimationGraph '{}': clip '{}' targets SkinnedMesh '{}', not the graph's \
                          target '{}'",
-                        graph.name, clip, clip_target, mesh
+                        graph.id, clip, clip_target, mesh
                     ));
                 }
                 referenced.insert(clip);
@@ -341,7 +344,7 @@ fn check_graph_ownership(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
                 errors.push(format!(
                     "Animation '{}': targets SkinnedMesh '{}', which AnimationGraph '{}' drives, \
                      but no graph state references it; add a state for it or remove the clip",
-                    clip, mesh, graph.name
+                    clip, mesh, graph.id
                 ));
             }
         }
@@ -375,14 +378,14 @@ fn check_follow_targets(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
 
         let has_capsule = assets.iter().any(|a| {
             a.asset_type == RegisteredType::SkinnedMesh
-                && a.name == target
+                && a.id == target
                 && a.args.get("capsule").is_some_and(|c| !c.is_null())
         });
         if !has_capsule {
             errors.push(format!(
                 "Camera3D '{}': follow target SkinnedMesh '{}' has no `capsule`; the \
                  third-person controller needs a character capsule to move",
-                camera.name, target
+                camera.id, target
             ));
         }
 
@@ -405,7 +408,7 @@ fn check_follow_targets(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
                 errors.push(format!(
                     "Camera3D '{}': no AnimationGraph on follow target '{}' declares the speed \
                      parameter '{}'",
-                    camera.name, target, param
+                    camera.id, target, param
                 ));
             }
         }
@@ -418,7 +421,7 @@ mod tests {
 
     fn asset(name: &str, asset_type: RegisteredType, args: serde_json::Value) -> WorldJsonlAsset {
         WorldJsonlAsset {
-            name: name.to_string(),
+            id: name.to_string(),
             asset_type,
             args,
         }

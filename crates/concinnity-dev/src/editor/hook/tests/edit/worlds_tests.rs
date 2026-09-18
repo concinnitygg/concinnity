@@ -11,6 +11,7 @@ use crate::editor::hook::tests::fixtures::{
     VP, button_index, hook_at, open_project, press_modal, prop_entry, set_world_name, world_names,
     world_row_index, world_with_name_field, write_world,
 };
+use crate::editor::hook::tests::fixtures::{select, selected};
 use crate::editor::modal;
 use crate::editor::panels::registry::{self, PanelKey};
 use crate::editor::session_store;
@@ -62,8 +63,8 @@ fn opening_a_world_retargets_the_whole_session() {
     h.mark_changed();
     h.saved = h.entries.clone();
     h.dirty = false;
-    h.selection.replace("crate_a".to_string());
-    h.hidden_assets.insert("crate_b".to_string());
+    select(&mut h, &["crate_a"]);
+    h.hidden_assets.insert(h.handle_for("crate_b"));
     h.rebuild_preview = false;
     assert!(h.can_undo());
 
@@ -76,7 +77,7 @@ fn opening_a_world_retargets_the_whole_session() {
         worlds_dir.join("lobby.jsonl").to_string_lossy()
     );
     assert_eq!(h.entries.len(), 2);
-    assert_eq!(h.entries[0]["name"], "desk");
+    assert_eq!(h.entries[0]["args"]["$id"], "desk");
     assert_eq!(h.saved, h.entries, "the loaded list is what is on disk");
     assert_eq!(h.baseline, h.entries);
     assert!(!h.dirty);
@@ -90,7 +91,7 @@ fn opening_a_world_retargets_the_whole_session() {
     );
     assert!(h.world_shadows.is_none());
     assert!(h.tree_stale && h.tree_groups.is_empty());
-    assert_eq!(h.selection.iter().count(), 0);
+    assert_eq!(selected(&h).len(), 0);
     assert!(h.hidden_assets.is_empty());
     assert!(!h.worlds.open, "the panel has done its job");
     assert!(h.worlds.rows[world_row_index(&h, "lobby")].open);

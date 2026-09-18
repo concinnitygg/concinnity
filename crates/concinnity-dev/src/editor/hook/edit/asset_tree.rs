@@ -10,12 +10,14 @@ use concinnity_core::components::FrameInput;
 use concinnity_core::components::InputKey;
 use concinnity_core::ecs::World;
 
+use crate::editor::asset_handle::AssetHandle;
 use crate::editor::hook::{
-    EditorHook, FormTarget, PanelData, entry_name, entry_type, scroll_step, short_status,
+    EditorHook, FormTarget, PanelData, entry_type, scroll_step, short_status,
 };
 use crate::editor::panels::asset_tree::{self, TreeRow};
 use crate::editor::panels::assets_panel::{self, PanelAction, PanelView};
 use crate::editor::panels::registry::PanelKey;
+use crate::editor::selection::SelectedNames;
 use crate::editor::widget;
 
 impl EditorHook {
@@ -104,9 +106,15 @@ impl EditorHook {
         self.tree_groups.get(group)?.assets.get(index)
     }
 
+    // The handle of the asset behind a resolved row click.
+    fn tree_handle(&self, group: usize, index: usize) -> Option<AssetHandle> {
+        Some(self.handle_for(&self.tree_asset(group, index)?.name))
+    }
+
     pub(in crate::editor::hook) fn make_view<'a>(
         &'a self,
         d: &'a PanelData,
+        selected: &'a SelectedNames,
         mouse: [f32; 2],
     ) -> PanelView<'a> {
         PanelView {
@@ -117,10 +125,10 @@ impl EditorHook {
             search_focus: self.search_focus && self.panel_order.last() == Some(&PanelKey::Assets),
             picker_options: d.picker_options.as_deref(),
             picker_scroll: self.picker_scroll,
-            selection: &self.selection,
-            hidden: &self.hidden_assets,
-            locked: &self.locked_assets,
-            row_menu: self.row_menu.as_deref(),
+            selected,
+            hidden: &d.hidden,
+            locked: &d.locked,
+            row_menu: d.row_menu.as_deref(),
             total: self.tree_groups.iter().map(|g| g.assets.len()).sum(),
             status: self.tree_status.as_deref(),
             mouse,
@@ -185,13 +193,15 @@ impl EditorHook {
                     // asset always adds a new one.
                     let existing = assets_panel::is_singleton(&ty)
                         .then(|| {
-                            self.entries
+                            let idx = self
+                                .entries
                                 .iter()
-                                .position(|e| entry_type(e) == Some(ty.as_str()))
+                                .position(|e| entry_type(e) == Some(ty.as_str()))?;
+                            self.entries.key_at(idx)
                         })
                         .flatten();
                     let target = match existing {
-                        Some(idx) => FormTarget::Entry(idx),
+                        Some(key) => FormTarget::Entry(key),
                         None => FormTarget::New,
                     };
                     self.picker_open = false;
@@ -217,45 +227,48 @@ impl EditorHook {
                 };
                 self.row_menu = None;
                 if self.shift_held {
-                    if self.selection.toggle(name.clone()) {
+                    if self.toggle_named(&name) {
                         self.open_asset_form(&name, world);
                     } else {
                         self.follow_active(world);
                     }
                 } else {
-                    self.selection.replace(name.clone());
+                    self.select_named(&name);
                     self.open_asset_form(&name, world);
                 }
                 self.pick_last = None;
             }
             PanelAction::ToggleHide(group, index) => {
-                if let Some(name) = self.tree_asset(group, index).map(|a| a.name.clone())
-                    && !self.hidden_assets.remove(&name)
+                if let Some(handle) = self.tree_handle(group, index)
+                    && !self.hidden_assets.remove(&handle)
                 {
-                    self.hidden_assets.insert(name);
+                    self.hidden_assets.insert(handle);
                 }
             }
             // The lock is per-session, so it flips the set without touching the
             // entries (unlike Delete, which is an authored edit).
             PanelAction::ToggleLock(group, index) => {
-                if let Some(name) = self.tree_asset(group, index).map(|a| a.name.clone())
-                    && !self.locked_assets.remove(&name)
+                if let Some(handle) = self.tree_handle(group, index)
+                    && !self.locked_assets.remove(&handle)
                 {
-                    self.locked_assets.insert(name);
+                    self.locked_assets.insert(handle);
                 }
             }
             PanelAction::OpenRowMenu(group, index) => {
-                self.row_menu = self.tree_asset(group, index).map(|a| a.name.clone());
+                self.row_menu = self.tree_handle(group, index);
             }
+            // Generated assets have no line to delete: they are removed by
+            // editing whatever produced them.
             PanelAction::RowDelete => {
-                if let Some(name) = self.row_menu.take() {
-                    self.delete_entry_named(&name);
+                if let Some(idx) = self.row_menu.take().and_then(|h| self.handle_index(&h)) {
+                    self.remove_entry_at(idx);
                 }
                 self.clamp_tree_scroll(world);
             }
             PanelAction::RowExport => {
-                if let Some(name) = self.row_menu.take() {
-                    self.console_export(Some(&name), false);
+                let name = self.row_menu.take().and_then(|h| self.handle_name(&h));
+                if let Some(name) = name {
+                    self.console_export(Some(name.as_str()), false);
                 }
             }
             PanelAction::CloseOverlays => {
@@ -274,47 +287,31 @@ impl EditorHook {
     // closed rather than left pointing at the previous asset.
     pub(in crate::editor::hook) fn open_asset_form(&mut self, name: &str, world: &mut World) {
         if let Some(template) = self.form_template_for(name) {
-            let target = match self
-                .entries
-                .iter()
-                .position(|e| entry_name(e) == Some(name))
-            {
-                Some(idx) => FormTarget::Entry(idx),
+            let target = match self.entry_key_named(name) {
+                Some(key) => FormTarget::Entry(key),
                 // Pristine: nothing authored yet. The carried entry is unused
                 // (the seed comes from the template), but Promote keeps the
                 // commit path honest about appending.
                 None => FormTarget::Promote(serde_json::json!({
-                    "name": name, "type": template.0, "args": {},
+                    "type": template.0, "args": {"$id": name},
                 })),
             };
             let (ty, template) = template;
             self.open_form_with(world, ty, target, Some(template));
             return;
         }
-        if let Some(idx) = self
-            .entries
-            .iter()
-            .position(|e| entry_name(e) == Some(name))
-        {
-            if let Some(ty) = self.entries.get(idx).and_then(entry_type).map(String::from) {
-                self.open_form(world, ty, FormTarget::Entry(idx));
+        if let Some(key) = self.entry_key_named(name) {
+            if let Some(ty) = self
+                .entries
+                .by_key(key)
+                .and_then(entry_type)
+                .map(String::from)
+            {
+                self.open_form(world, ty, FormTarget::Entry(key));
             }
             return;
         }
         self.form.close();
-    }
-
-    // Remove the authored line called `name`, if the world has one. Generated
-    // assets have no line to delete: they are removed by editing whatever
-    // produced them.
-    fn delete_entry_named(&mut self, name: &str) {
-        if let Some(idx) = self
-            .entries
-            .iter()
-            .position(|e| entry_name(e) == Some(name))
-        {
-            self.remove_entry_at(idx);
-        }
     }
 
     // Enter blurs the search field (the filter applies live while typing).

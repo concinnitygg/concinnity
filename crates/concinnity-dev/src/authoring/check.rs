@@ -53,7 +53,7 @@ mod tests {
     #[test]
     fn check_from_str_accepts_a_valid_world() {
         check_from_str(
-            "{\"name\":\"phys\",\"type\":\"PhysicsConfig\",\"args\":{}}\n",
+            "{\"type\":\"PhysicsConfig\",\"args\":{\"$id\":\"phys\"}}\n",
             "test",
         )
         .unwrap();
@@ -62,7 +62,7 @@ mod tests {
     #[test]
     fn check_from_str_rejects_an_unknown_type() {
         let err = check_from_str(
-            "{\"name\":\"odd\",\"type\":\"NotARealAssetType\",\"args\":{}}\n",
+            "{\"type\":\"NotARealAssetType\",\"args\":{\"$id\":\"odd\"}}\n",
             "test",
         )
         .unwrap_err();
@@ -82,7 +82,7 @@ mod tests {
         let path = dir.path().join("world.jsonl");
         std::fs::write(
             &path,
-            "{\"name\":\"phys\",\"type\":\"PhysicsConfig\",\"args\":{}}\n",
+            "{\"type\":\"PhysicsConfig\",\"args\":{\"$id\":\"phys\"}}\n",
         )
         .unwrap();
         check_at_path(path.to_str().unwrap()).unwrap();

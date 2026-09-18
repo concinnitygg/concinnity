@@ -49,7 +49,7 @@ mod tests {
     fn back_action(title_screen: bool) -> String {
         let out = emit_ending_screen(&StoryNames::new("s", title_screen, 0));
         let back = out.last().unwrap();
-        assert_eq!(back["name"], "s_ending_back_btn");
+        assert_eq!(back["args"]["$id"], "s_ending_back_btn");
         back["args"]["action"].as_str().unwrap().to_string()
     }
 

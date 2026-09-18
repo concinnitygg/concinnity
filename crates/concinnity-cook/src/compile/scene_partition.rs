@@ -64,7 +64,7 @@ pub(crate) fn partition_scenes(assets: &[WorldJsonlAsset]) -> ScenePartition {
     let scenes: Vec<String> = assets
         .iter()
         .filter(|a| a.asset_type == RegisteredType::Scene)
-        .map(|a| a.name.clone())
+        .map(|a| a.id.clone())
         .collect();
     let scene_index: HashMap<&str, usize> = scenes
         .iter()
@@ -75,7 +75,7 @@ pub(crate) fn partition_scenes(assets: &[WorldJsonlAsset]) -> ScenePartition {
     let index_of: HashMap<&str, usize> = assets
         .iter()
         .enumerate()
-        .map(|(i, a)| (a.name.as_str(), i))
+        .map(|(i, a)| (a.id.as_str(), i))
         .collect();
     let edges: Vec<Vec<usize>> = assets
         .iter()
@@ -135,7 +135,7 @@ pub(crate) fn partition_scenes(assets: &[WorldJsonlAsset]) -> ScenePartition {
     let owner_of = assets
         .iter()
         .zip(&labels)
-        .filter_map(|(a, l)| l.map(|owner| (a.name.clone(), owner)))
+        .filter_map(|(a, l)| l.map(|owner| (a.id.clone(), owner)))
         .collect();
 
     ScenePartition { scenes, owner_of }
@@ -178,7 +178,7 @@ mod tests {
 
     fn asset(name: &str, asset_type: RegisteredType, args: serde_json::Value) -> WorldJsonlAsset {
         WorldJsonlAsset {
-            name: name.to_string(),
+            id: name.to_string(),
             asset_type,
             args,
         }

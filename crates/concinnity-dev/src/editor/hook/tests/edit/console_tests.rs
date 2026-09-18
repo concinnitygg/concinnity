@@ -10,8 +10,9 @@ use concinnity_core::components::{FrameInput, InputKey, TextInput, TextLabel};
 use concinnity_core::ecs::World;
 
 use crate::debug_hook::DebugHook;
+use crate::editor::hook::tests::fixtures::select;
 use crate::editor::hook::tests::fixtures::{entry, hook, world_with_fields, world_with_input};
-use crate::editor::hook::{EditorHook, entry_name, entry_type};
+use crate::editor::hook::{EditorHook, declared_id, entry_type};
 use crate::editor::panels::console;
 use crate::editor::panels::console_panel::{self, ConsoleAction};
 use crate::editor::panels::registry::PanelKey;
@@ -175,7 +176,7 @@ fn the_keys_are_ignored_while_the_command_line_is_unfocused() {
 #[test]
 fn tab_accepts_the_del_ghost() {
     let mut h = hook(vec![
-        serde_json::json!({"name":"lantern_post","type":"PointLight","args":{}}),
+        serde_json::json!({"type":"PointLight","args":{"$id":"lantern_post"}}),
     ]);
     let mut world = console_world();
     h.console.focus = true;
@@ -199,7 +200,7 @@ fn tab_accepts_the_del_ghost() {
 // ordinary caret move the text system owns.
 #[test]
 fn right_accepts_the_ghost_only_at_the_end_of_the_line() {
-    let entries = vec![serde_json::json!({"name":"lantern_post","type":"PointLight","args":{}})];
+    let entries = vec![serde_json::json!({"type":"PointLight","args":{"$id":"lantern_post"}})];
     let key = FrameInput {
         captured_key: Some(InputKey::Right),
         ..Default::default()
@@ -257,7 +258,7 @@ fn the_accept_keys_are_inert_without_a_ghost() {
 #[test]
 fn a_second_build_is_refused_while_one_is_running() {
     let mut h = hook(vec![
-        serde_json::json!({"name":"phys","type":"PhysicsConfig","args":{}}),
+        serde_json::json!({"type":"PhysicsConfig","args":{"$id":"phys"}}),
     ]);
     h.console_build_running.store(true, Ordering::SeqCst);
 
@@ -283,7 +284,7 @@ fn the_build_command_runs_on_a_worker_and_reports_back() {
     std::env::set_current_dir(dir.path()).expect("enter temp cwd");
 
     let mut h = hook(vec![
-        serde_json::json!({"name":"phys","type":"PhysicsConfig","args":{}}),
+        serde_json::json!({"type":"PhysicsConfig","args":{"$id":"phys"}}),
     ]);
     let mut world = console_world();
     h.run_console_line(&mut world, "/cook");
@@ -309,7 +310,8 @@ fn the_build_command_runs_on_a_worker_and_reports_back() {
 // mesh with one morph target and a live shape.
 fn export_entries() -> Vec<serde_json::Value> {
     vec![
-        serde_json::json!({"name":"prism","type":"SkinnedMesh","args":{
+        serde_json::json!({"type":"SkinnedMesh","args":{
+            "$id":"prism",
             "vertices":[
                 {"pos":[0.0,0.0,0.0],"joints":[0,0,0,0],"weights":[1.0,0.0,0.0,0.0]},
                 {"pos":[1.0,0.0,0.0],"joints":[0,0,0,0],"weights":[1.0,0.0,0.0,0.0]},
@@ -321,7 +323,8 @@ fn export_entries() -> Vec<serde_json::Value> {
             "morph_deltas":[{"position":[1.0,0.0,0.0]},{"position":[1.0,0.0,0.0]},
                             {"position":[1.0,0.0,0.0]}],
             "scale":[1.0,1.0,1.0]}}),
-        serde_json::json!({"name":"shape","type":"CharacterShape","args":{
+        serde_json::json!({"type":"CharacterShape","args":{
+            "$id":"shape",
             "target":"prism","sliders":[{"name":"wide","value":0.5}]}}),
     ]
 }
@@ -364,7 +367,7 @@ fn the_export_command_runs_on_a_worker_and_writes_the_file() {
     let world_path = dir.path().join("world.jsonl");
 
     let mut h = EditorHook::new(world_path.to_string_lossy().into_owned(), export_entries());
-    h.selection.set(vec!["prism".to_string()]);
+    select(&mut h, &["prism"]);
     let mut world = console_world();
     h.run_console_line(&mut world, "/export");
     assert!(log_text(&h).contains("export of 'prism' started"));
@@ -416,7 +419,7 @@ fn console_commands_edit_the_working_entries() {
 
     h.run_console_line(&mut world, "/add PhysicsConfig phys");
     assert_eq!(h.entries.len(), 1);
-    assert_eq!(entry_name(&h.entries[0]), Some("phys"));
+    assert_eq!(declared_id(&h.entries[0]), Some("phys"));
     assert_eq!(entry_type(&h.entries[0]), Some("PhysicsConfig"));
     assert!(h.dirty, "an added entry marks the world dirty");
 

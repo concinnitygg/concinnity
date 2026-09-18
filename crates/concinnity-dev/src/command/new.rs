@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 // The label names no Font, so it draws with the engine's built-in face. It asks
 // for `centered` itself rather than leaning on a default: unset, the greeting
 // lands at the label's default x/y, under the HUD chips in the top-left corner.
-const INIT_WORLD_JSONL: &str = r#"{"name":"hello_world","type":"TextLabel","args":{"content":"Hello, world!","centered":true}}
+const INIT_WORLD_JSONL: &str = r#"{"type":"TextLabel","args":{"$id":"hello_world","content":"Hello, world!","centered":true}}
 "#;
 
 /// Create a new project in a new directory at `path`.
@@ -99,7 +99,7 @@ mod tests {
         std::fs::create_dir_all(world.parent().unwrap()).unwrap();
         std::fs::write(
             &world,
-            "{\"name\":\"keep\",\"type\":\"Logger\",\"args\":{}}\n",
+            "{\"type\":\"Logger\",\"args\":{\"$id\":\"keep\"}}\n",
         )
         .unwrap();
 
@@ -115,7 +115,7 @@ mod tests {
         let world = dir.path().join(WORLD_JSONL);
         std::fs::write(
             &world,
-            "{\"name\":\"keep\",\"type\":\"Logger\",\"args\":{}}\n",
+            "{\"type\":\"Logger\",\"args\":{\"$id\":\"keep\"}}\n",
         )
         .unwrap();
 

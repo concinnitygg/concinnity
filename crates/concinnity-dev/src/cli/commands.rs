@@ -58,10 +58,10 @@ pub(crate) enum Commands {
     #[command(name = "add")]
     Add(AddArgs),
 
-    /// Remove an asset from the active world by its unique name
+    /// Remove an asset from the active world by its id
     //
-    // NAME is the value of the `name` field in world.jsonl
-    // (e.g. "my_llm", "pbr_vert", "tool_agent").
+    // ID is the `$id` an entry declares in its args (e.g. "pbr_vert"), or the
+    // `<Type>#<ordinal>` handle of an anonymous one (e.g. "Prop#3").
     #[command(name = "rm")]
     Rm(RmArgs),
 
@@ -71,7 +71,7 @@ pub(crate) enum Commands {
 
     /// Print an asset's effective entry from the expanded world
     //
-    // Prints the full JSONL line for NAME as the build sees it, including
+    // Prints the full JSONL line for ID as the build sees it, including
     // assets that only exist through build-time expansion or injection. The
     // output can be pasted into world.jsonl verbatim to override a default.
     #[command(name = "explain")]
@@ -232,10 +232,11 @@ pub(crate) struct AddArgs {
     /// Path to an asset file or type name
     pub(crate) target: String,
 
-    /// Override the asset name written into the world
-    // If omitted, the name is derived from the filename (including extension).
+    /// The `$id` written into the world
+    // If omitted, a file target's id is derived from the filename, and a type
+    // name or inline JSON without one is added anonymous.
     #[arg(short, long)]
-    pub(crate) name: Option<String>,
+    pub(crate) id: Option<String>,
 
     /// Named scaffold preset used when bootstrapping a new world
     // Currently only "minimal-3d-world" (a camera, sun, room, and sky on top of
@@ -246,8 +247,8 @@ pub(crate) struct AddArgs {
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct RmArgs {
-    /// The `name` field of the asset to remove
-    pub(crate) name: String,
+    /// The asset's `$id`, or the `<Type>#<ordinal>` of an anonymous one
+    pub(crate) id: String,
 }
 
 #[derive(Debug, clap::Args)]
@@ -278,8 +279,8 @@ pub(crate) struct ListArgs {
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct ExplainArgs {
-    /// The `name` field of the asset to print
-    pub(crate) name: String,
+    /// The asset's `$id`, or the `<Type>#<ordinal>` of an anonymous one
+    pub(crate) id: String,
 
     /// Path to a world JSONL file (default: discover from worlds/)
     #[arg(short = 'f', long)]
@@ -487,12 +488,12 @@ mod tests {
     #[test]
     fn add_requires_a_target() {
         assert!(Cli::try_parse_from(["concinnity", "add"]).is_err());
-        let cli = Cli::try_parse_from(["concinnity", "add", "Logger", "--name", "log"]).unwrap();
+        let cli = Cli::try_parse_from(["concinnity", "add", "Logger", "--id", "log"]).unwrap();
         let Commands::Add(a) = cli.resolved_command() else {
             panic!("expected add");
         };
         assert_eq!(a.target, "Logger");
-        assert_eq!(a.name.as_deref(), Some("log"));
+        assert_eq!(a.id.as_deref(), Some("log"));
     }
 
     #[test]
@@ -552,24 +553,24 @@ mod tests {
     }
 
     #[test]
-    fn explain_requires_a_name() {
+    fn explain_requires_an_id() {
         assert!(Cli::try_parse_from(["concinnity", "explain"]).is_err());
         let cli = Cli::try_parse_from(["concinnity", "explain", "gfx", "-f", "w.jsonl"]).unwrap();
         let Commands::Explain(a) = cli.resolved_command() else {
             panic!("expected explain");
         };
-        assert_eq!(a.name, "gfx");
+        assert_eq!(a.id, "gfx");
         assert_eq!(a.file.as_deref(), Some("w.jsonl"));
     }
 
     #[test]
-    fn rm_requires_a_name() {
+    fn rm_requires_an_id() {
         assert!(Cli::try_parse_from(["concinnity", "rm"]).is_err());
-        let cli = Cli::try_parse_from(["concinnity", "rm", "my_llm"]).unwrap();
+        let cli = Cli::try_parse_from(["concinnity", "rm", "Prop#3"]).unwrap();
         let Commands::Rm(a) = cli.resolved_command() else {
             panic!("expected rm");
         };
-        assert_eq!(a.name, "my_llm");
+        assert_eq!(a.id, "Prop#3");
     }
 
     #[test]

@@ -42,7 +42,7 @@ pub(in crate::pipeline) fn desugar_gltf_skinned_meshes(
         // directly. Leave the args un-desugared so they keep matching the
         // pre-desugar cache key on the next build.
         if matches!(
-            mesh_cache.get(&asset.name),
+            mesh_cache.get(&asset.id),
             Some(MeshCacheEntry { bytes: Some(_), .. })
         ) {
             continue;
@@ -53,10 +53,10 @@ pub(in crate::pipeline) fn desugar_gltf_skinned_meshes(
             Some(arg) => {
                 let arg: crate::compile::character::import::CharacterModelArg =
                     serde_json::from_value(arg).map_err(|e| {
-                        invalid(format!("Asset '{}': character_model: {e}", asset.name))
+                        invalid(format!("Asset '{}': character_model: {e}", asset.id))
                     })?;
                 crate::compile::character::import::import_model(
-                    &asset.name,
+                    &asset.id,
                     &arg.schema,
                     &arg.model,
                     assets_dir,
@@ -66,12 +66,12 @@ pub(in crate::pipeline) fn desugar_gltf_skinned_meshes(
             None => {
                 crate::import::gltf::import_skinned_glb(&source, skin_index_arg(asset), assets_dir)
                     .map_err(|e| {
-                        invalid(format!("Asset '{}': glTF import failed: {}", asset.name, e))
+                        invalid(format!("Asset '{}': glTF import failed: {}", asset.id, e))
                     })?
             }
         };
 
-        let name = asset.name.clone();
+        let name = asset.id.clone();
         let obj = asset.args.as_object_mut().ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -117,7 +117,7 @@ pub(in crate::pipeline) fn desugar_gltf_skinned_meshes(
         obj.remove("character_model");
         tracing::info!(
             "Asset '{}': imported glTF '{}': {} vertices, {} indices, {} joints, {} morph target(s)",
-            asset.name,
+            asset.id,
             if source.is_empty() {
                 "character model"
             } else {
@@ -176,7 +176,7 @@ pub(in crate::pipeline) fn desugar_gltf_meshes(
         // for this asset (see `desugar_gltf_skinned_meshes` for the same
         // pattern). Args stay pre-desugar so the next build's probe hits.
         if matches!(
-            mesh_cache.get(&asset.name),
+            mesh_cache.get(&asset.id),
             Some(MeshCacheEntry { bytes: Some(_), .. })
         ) {
             continue;
@@ -196,7 +196,7 @@ pub(in crate::pipeline) fn desugar_gltf_meshes(
             let doc = crate::import::glb::parse_glb(&source, assets_dir).map_err(|e| {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    format!("Asset '{}': glTF import failed: {}", asset.name, e),
+                    format!("Asset '{}': glTF import failed: {}", asset.id, e),
                 )
             })?;
             parsed_cache.insert(source.clone(), doc);
@@ -211,7 +211,7 @@ pub(in crate::pipeline) fn desugar_gltf_meshes(
                         .map_err(|e| {
                             std::io::Error::new(
                                 std::io::ErrorKind::InvalidData,
-                                format!("Asset '{}': glTF import failed: {}", asset.name, e),
+                                format!("Asset '{}': glTF import failed: {}", asset.id, e),
                             )
                         })?;
                 let chunks = crate::import::glb::split_into_u16_chunks(&verts, &indices32);
@@ -224,7 +224,7 @@ pub(in crate::pipeline) fn desugar_gltf_meshes(
                     format!(
                         "Asset '{}': chunk_index {} out of range, '{}' primitive {} \
                          splits into {} chunk(s)",
-                        asset.name,
+                        asset.id,
                         chunk_idx,
                         source,
                         primitive_index,
@@ -238,12 +238,12 @@ pub(in crate::pipeline) fn desugar_gltf_meshes(
                 .map_err(|e| {
                     std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
-                        format!("Asset '{}': glTF import failed: {}", asset.name, e),
+                        format!("Asset '{}': glTF import failed: {}", asset.id, e),
                     )
                 })?
         };
 
-        let name = asset.name.clone();
+        let name = asset.id.clone();
         let obj = asset.args.as_object_mut().ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -274,7 +274,7 @@ pub(in crate::pipeline) fn desugar_gltf_meshes(
         match chunk_index {
             Some(c) => tracing::info!(
                 "Asset '{}': imported glTF '{}' primitive {} chunk {}: {} vertices, {} indices",
-                asset.name,
+                asset.id,
                 source,
                 primitive_index,
                 c,
@@ -283,7 +283,7 @@ pub(in crate::pipeline) fn desugar_gltf_meshes(
             ),
             None => tracing::info!(
                 "Asset '{}': imported glTF '{}' primitive {}: {} vertices, {} indices",
-                asset.name,
+                asset.id,
                 source,
                 primitive_index,
                 vlen,

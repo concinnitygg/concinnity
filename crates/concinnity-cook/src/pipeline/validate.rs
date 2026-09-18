@@ -80,7 +80,7 @@ pub fn validate_world_jsonl(content: &str, assets_dir: Option<&Path>) -> std::io
             args: Some(asset.args.clone()),
         };
         if let Err(e) = asset_api::create_asset_def(&req) {
-            errors.push(format!("Asset '{}': {}", asset.name, e));
+            errors.push(format!("Asset '{}': {}", asset.id, e));
         }
     }
 
@@ -105,18 +105,18 @@ mod tests {
         // a Sprite under that screen's prefix, a TextLabel under it, a
         // HitRegion firing screen:show on another Screen, and a KeyBinding to
         // toggle a third (modal) Screen.
-        let world = r#"{"name":"gfx","type":"GraphicsConfig","args":{}}
-{"name":"f","type":"Font","args":{"size_px":20}}
-{"name":"title_menu","type":"Screen","args":{"initial":true}}
-{"name":"title_menu_bg","type":"Sprite","args":{"x":0,"y":0,"width":640,"height":360,"tint":[0.1,0.1,0.1,1]}}
-{"name":"title_menu_lbl","type":"TextLabel","args":{"font":"f","content":"Start","x":260,"y":160}}
-{"name":"title_menu_btn","type":"HitRegion","args":{"x":260,"y":156,"width":120,"height":40,"label":"title_menu_lbl","action":"screen:show:vn_page_1"}}
-{"name":"vn_page_1","type":"Screen","args":{}}
-{"name":"vn_page_1_text","type":"TextLabel","args":{"font":"f","content":"hello","x":40,"y":40}}
-{"name":"vn_page_1_next","type":"HitRegion","args":{"x":0,"y":0,"width":640,"height":360,"action":"screen:show:title_menu"}}
-{"name":"pause_menu","type":"Screen","args":{}}
-{"name":"pause_menu_dim","type":"Sprite","args":{"x":0,"y":0,"width":640,"height":360,"tint":[0,0,0,0.6]}}
-{"name":"esc","type":"KeyBinding","args":{"key":"Escape","action":"screen:toggle:pause_menu"}}
+        let world = r#"{"type":"GraphicsConfig","args":{"$id":"gfx"}}
+{"type":"Font","args":{"$id":"f","size_px":20}}
+{"type":"Screen","args":{"$id":"title_menu","initial":true}}
+{"type":"Sprite","args":{"$id":"title_menu_bg","x":0,"y":0,"width":640,"height":360,"tint":[0.1,0.1,0.1,1]}}
+{"type":"TextLabel","args":{"$id":"title_menu_lbl","font":"f","content":"Start","x":260,"y":160}}
+{"type":"HitRegion","args":{"$id":"title_menu_btn","x":260,"y":156,"width":120,"height":40,"label":"title_menu_lbl","action":"screen:show:vn_page_1"}}
+{"type":"Screen","args":{"$id":"vn_page_1"}}
+{"type":"TextLabel","args":{"$id":"vn_page_1_text","font":"f","content":"hello","x":40,"y":40}}
+{"type":"HitRegion","args":{"$id":"vn_page_1_next","x":0,"y":0,"width":640,"height":360,"action":"screen:show:title_menu"}}
+{"type":"Screen","args":{"$id":"pause_menu"}}
+{"type":"Sprite","args":{"$id":"pause_menu_dim","x":0,"y":0,"width":640,"height":360,"tint":[0,0,0,0.6]}}
+{"type":"KeyBinding","args":{"$id":"esc","key":"Escape","action":"screen:toggle:pause_menu"}}
 "#;
         validate_world_jsonl(world, None).expect("visual_novel-shaped world should validate");
     }
@@ -184,9 +184,9 @@ mod tests {
     #[test]
     fn validate_world_jsonl_collects_every_resolution_failure() {
         let world = concat!(
-            r#"{"name":"first","type":"ProceduralMesh","args":{"generator":"box"}}"#,
+            r#"{"type":"ProceduralMesh","args":{"$id":"first","generator":"box"}}"#,
             "\n",
-            r#"{"name":"clip","type":"AudioClip","args":{"source":"a.wav"}}"#,
+            r#"{"type":"AudioClip","args":{"$id":"clip","source":"a.wav"}}"#,
             "\n",
         );
         validate_world_jsonl(world, None).expect("a resolvable world validates");
@@ -194,9 +194,9 @@ mod tests {
         // Args of the wrong shape survive the structural world checks and are
         // rejected when the def is built.
         let bad = concat!(
-            r#"{"name":"t1","type":"PointLight","args":{"intensity":"soon"}}"#,
+            r#"{"type":"PointLight","args":{"$id":"t1","intensity":"soon"}}"#,
             "\n",
-            r#"{"name":"t2","type":"PointLight","args":{"intensity":"later"}}"#,
+            r#"{"type":"PointLight","args":{"$id":"t2","intensity":"later"}}"#,
             "\n",
         );
         let err = validate_world_jsonl(bad, None).expect_err("mistyped args do not resolve");
@@ -226,7 +226,7 @@ mod tests {
     // is the asset the failure names.
     #[test]
     fn validate_world_jsonl_reports_a_bad_menu_item_on_its_region() {
-        let world = r#"{"name":"m","type":"MainMenu","args":{"items":[{"label":"Go","action":"story:dance"}]}}"#;
+        let world = r#"{"type":"MainMenu","args":{"$id":"m","items":[{"label":"Go","action":"story:dance"}]}}"#;
         let msg = validate_world_jsonl(world, None)
             .expect_err("unknown story verb")
             .to_string();

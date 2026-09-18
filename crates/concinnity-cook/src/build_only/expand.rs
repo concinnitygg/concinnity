@@ -19,7 +19,7 @@ use super::scene_import::expand::expand_scene_imports;
 use super::slider::expand::expand_sliders;
 use super::story::expand_stories;
 use crate::authoring::registry::RegisteredType;
-use crate::authoring::world::load_world;
+use crate::authoring::world::{ID_KEY, args_without_id, entry_id, load_world};
 
 // Shared helpers used across expansion submodules.
 
@@ -30,13 +30,16 @@ pub(crate) fn registered_type(v: &serde_json::Value) -> Option<RegisteredType> {
         .and_then(RegisteredType::parse)
 }
 
+// The entry's `$id`, or "" when it has none. A loaded world gives every
+// authored entry one (an anonymous entry's label), so "" marks an entry a pass
+// built without one.
 pub(crate) fn asset_name(v: &serde_json::Value) -> String {
     asset_name_str(v).to_string()
 }
 
 // Borrowing form of `asset_name`, for scans that only compare.
 pub(crate) fn asset_name_str(v: &serde_json::Value) -> &str {
-    v.get("name").and_then(|n| n.as_str()).unwrap_or("")
+    entry_id(v).unwrap_or("")
 }
 
 // Deserialize the `args` of the `ty` asset `name` into its schema struct, a
@@ -47,10 +50,13 @@ pub(crate) fn schema_args<T: serde::de::DeserializeOwned>(
     name: &str,
     args: Option<&serde_json::Value>,
 ) -> Result<T, String> {
-    let args = match args {
+    let mut args = match args {
         None | Some(serde_json::Value::Null) => serde_json::json!({}),
         Some(a) => a.clone(),
     };
+    if let Some(obj) = args.as_object_mut() {
+        obj.remove(ID_KEY);
+    }
     serde_path_to_error::deserialize(args).map_err(|e| {
         format!(
             "{} '{}': invalid args: `{}`: {}",
@@ -104,8 +110,9 @@ pub struct ShadowedAsset {
     pub asset_type: String,
     /// The authored asset whose expansion it patches.
     pub generated_by: String,
-    /// The args the expansion produced before the authored patch was merged:
-    /// the template baseline a per-field override is measured against.
+    /// The args the expansion produced before the authored patch was merged,
+    /// without the `$id`: the template baseline a per-field override is
+    /// measured against.
     pub args: serde_json::Value,
 }
 
@@ -128,7 +135,7 @@ impl ExpandReport {
         self.injected.push(InjectedAsset {
             name: name.to_string(),
             asset_type: asset_type.to_string(),
-            args,
+            args: args_without_id(args),
             injected_by,
         });
     }
@@ -158,7 +165,7 @@ impl ExpandReport {
             name: name.to_string(),
             asset_type: asset_type.to_string(),
             generated_by: generated_by.to_string(),
-            args,
+            args: args_without_id(args),
         });
     }
 }
@@ -288,7 +295,7 @@ mod tests {
 
     #[test]
     fn asset_name_extracts_name() {
-        let v = serde_json::json!({"name": "my_asset", "type": "Logger"});
+        let v = serde_json::json!({"type": "Logger", "args": {"$id": "my_asset"}});
         assert_eq!(asset_name(&v), "my_asset");
     }
 
@@ -341,15 +348,15 @@ mod tests {
     fn a_failing_pass_aborts_the_whole_expansion() {
         for (asset, needle) in [
             (
-                serde_json::json!({"name":"s","type":"SceneImport","args":{}}),
+                serde_json::json!({"type":"SceneImport","args":{"$id":"s"}}),
                 "SceneImport 's': missing `source`",
             ),
             (
-                serde_json::json!({"name":"t","type":"StoryImport","args":{}}),
+                serde_json::json!({"type":"StoryImport","args":{"$id":"t"}}),
                 "StoryImport 't': missing `source`",
             ),
             (
-                serde_json::json!({"name":"p","type":"Prop","args":{"prefab":"ghost"}}),
+                serde_json::json!({"type":"Prop","args":{"$id":"p","prefab":"ghost"}}),
                 "prefab 'ghost' not found",
             ),
             (
@@ -378,8 +385,8 @@ mod tests {
     #[test]
     fn a_second_engine_defaults_entry_aborts_the_expansion() {
         let mut assets = vec![
-            serde_json::json!({"name":"a","type":"EngineDefaults","args":{}}),
-            serde_json::json!({"name":"b","type":"EngineDefaults","args":{}}),
+            serde_json::json!({"type":"EngineDefaults","args":{"$id":"a"}}),
+            serde_json::json!({"type":"EngineDefaults","args":{"$id":"b"}}),
         ];
         let err = expand_world(&mut assets, None).unwrap_err();
         assert!(err.contains("at most one"), "{err}");
@@ -388,11 +395,11 @@ mod tests {
     #[test]
     fn a_window_that_cannot_take_the_app_config_title_aborts_the_expansion() {
         let mut assets = vec![
-            serde_json::json!({"name":"app","type":"AppConfig","args":{"name":"My Game"}}),
-            serde_json::json!({"name":"win","type":"Window","args":[]}),
+            serde_json::json!({"type":"AppConfig","args":{"$id":"app","name":"My Game"}}),
+            serde_json::json!({"type":"Window","args":[]}),
         ];
         let err = expand_world(&mut assets, None).unwrap_err();
-        assert!(err.contains("Window 'win'"), "{err}");
+        assert!(err.contains("Window"), "{err}");
         assert!(err.contains("args must be an object"), "{err}");
     }
 
@@ -404,7 +411,7 @@ mod tests {
         assert_eq!(malformed.kind(), std::io::ErrorKind::InvalidData);
         assert!(!malformed.to_string().is_empty());
 
-        let broken = r#"{"name":"p","type":"Prop","args":{"prefab":"ghost"}}"#;
+        let broken = r#"{"type":"Prop","args":{"$id":"p","prefab":"ghost"}}"#;
         let err = expand_world_from_str(broken, None).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("ghost"), "{err}");
@@ -439,30 +446,31 @@ mod tests {
         let story = story.to_str().unwrap();
 
         let full = vec![
-            serde_json::json!({"name":"box_mesh","type":"ProceduralMesh","args":{"generator":"box"}}),
-            serde_json::json!({"name":"stone","type":"Material","args":{}}),
-            serde_json::json!({"name":"rig","type":"LightRig","args":{"preset":"rig_outdoor_sun_fill"}}),
-            serde_json::json!({"name":"palette","type":"MaterialPalette","args":{"entries":[{"alias":"rock"}]}}),
-            serde_json::json!({"name":"shot","type":"CameraShot","args":{"position":[0,2,6]}}),
-            serde_json::json!({"name":"crate_prefab","type":"Prefab","args":{"props":[
+            serde_json::json!({"type":"ProceduralMesh","args":{"$id":"box_mesh","generator":"box"}}),
+            serde_json::json!({"type":"Material","args":{"$id":"stone"}}),
+            serde_json::json!({"type":"LightRig","args":{"$id":"rig","preset":"rig_outdoor_sun_fill"}}),
+            serde_json::json!({"type":"MaterialPalette","args":{"$id":"palette","entries":[{"alias":"rock"}]}}),
+            serde_json::json!({"type":"CameraShot","args":{"$id":"shot","position":[0,2,6]}}),
+            serde_json::json!({"type":"Prefab","args":{"$id":"crate_prefab","props":[
                 {"kind":"prop","name":"body","mesh":"box_mesh","material":"stone"},
                 {"kind":"point_light","name":"lamp","position":[0,1,0]}]}}),
-            serde_json::json!({"name":"crate_a","type":"Prop","args":{"prefab":"crate_prefab"}}),
-            serde_json::json!({"name":"imported","type":"SceneImport","args":{"source":scene}}),
-            serde_json::json!({"name":"pause","type":"MainMenu","args":{}}),
-            serde_json::json!({"name":"settings","type":"Panel","args":{"title":"Settings"}}),
-            serde_json::json!({"name":"exposure","type":"Slider","args":{"setting":"exposure","label":"Exposure"}}),
-            serde_json::json!({"name":"vsync","type":"OptionSelect","args":{"setting":"vsync","label":"Vsync"}}),
-            serde_json::json!({"name":"tale","type":"StoryImport","args":{"source":story}}),
-            serde_json::json!({"name":"sk","type":"CharacterSchema","args":{
+            serde_json::json!({"type":"Prop","args":{"$id":"crate_a","prefab":"crate_prefab"}}),
+            serde_json::json!({"type":"SceneImport","args":{"$id":"imported","source":scene}}),
+            serde_json::json!({"type":"MainMenu","args":{"$id":"pause"}}),
+            serde_json::json!({"type":"Panel","args":{"$id":"settings","title":"Settings"}}),
+            serde_json::json!({"type":"Slider","args":{"$id":"exposure","setting":"exposure","label":"Exposure"}}),
+            serde_json::json!({"type":"OptionSelect","args":{"$id":"vsync","setting":"vsync","label":"Vsync"}}),
+            serde_json::json!({"type":"StoryImport","args":{"$id":"tale","source":story}}),
+            serde_json::json!({"type":"CharacterSchema","args":{
+                "$id":"sk",
                 "joints":[{"name":"root"}],"regions":[{"name":"all","joints":["root"]}]}}),
-            serde_json::json!({"name":"body_model","type":"CharacterModel","args":{"schema":"sk","source":"hero.glb"}}),
-            serde_json::json!({"name":"hall","type":"Room","args":{"wall_texture":"brick"}}),
-            serde_json::json!({"name":"app","type":"AppConfig","args":{"name":"Typed"}}),
-            serde_json::json!({"name":"defaults","type":"EngineDefaults","args":{}}),
+            serde_json::json!({"type":"CharacterModel","args":{"$id":"body_model","schema":"sk","source":"hero.glb"}}),
+            serde_json::json!({"type":"Room","args":{"$id":"hall","wall_texture":"brick"}}),
+            serde_json::json!({"type":"AppConfig","args":{"$id":"app","name":"Typed"}}),
+            serde_json::json!({"type":"EngineDefaults","args":{"$id":"defaults"}}),
         ];
         let story_only =
-            vec![serde_json::json!({"name":"tale","type":"StoryImport","args":{"source":story}})];
+            vec![serde_json::json!({"type":"StoryImport","args":{"$id":"tale","source":story}})];
 
         for world in [full, story_only] {
             let mut assets = world;
@@ -485,7 +493,7 @@ mod tests {
 
     #[test]
     fn expand_world_from_str_injects_companions() {
-        let content = r#"{"name":"gfx","type":"GraphicsConfig","args":{}}"#;
+        let content = r#"{"type":"GraphicsConfig","args":{"$id":"gfx"}}"#;
         let assets = expand_world_from_str(content, None).unwrap();
         assert!(
             assets
@@ -502,7 +510,7 @@ mod tests {
 
     #[test]
     fn bare_main_menu_world_expands_and_pulls_companions() {
-        let content = r#"{"name":"main_menu","type":"MainMenu"}"#;
+        let content = r#"{"type":"MainMenu","args":{"$id":"main_menu"}}"#;
         let assets = expand_world_from_str(content, None).unwrap();
         // The MainMenu is gone, replaced by its UI assets.
         assert!(

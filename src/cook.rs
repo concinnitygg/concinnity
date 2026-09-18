@@ -139,21 +139,23 @@ impl WorldBuilder {
         self.0.assets_dir()
     }
 
-    /// Declare `value` under `name`. The asset type comes from the value's
-    /// own [`Authored`] impl, so it cannot disagree with the fields.
-    pub fn add<T: Authored>(&mut self, name: impl Into<String>, value: T) -> &mut Self {
-        self.0.add(name, value);
+    /// Declare `value` under the `$id` `id`, the name a reference to it uses.
+    /// The asset type comes from the value's own [`Authored`] impl, so it
+    /// cannot disagree with the fields.
+    pub fn add<T: Authored>(&mut self, id: impl Into<String>, value: T) -> &mut Self {
+        self.0.add(id, value);
         self
     }
 
-    /// The assets declared so far, as `(name, type)` pairs in declaration
+    /// The assets declared so far, as `(id, type)` pairs in declaration
     /// order. Declaration order is load-bearing for scenes: the first `Scene`
     /// is the one active at world start.
     pub fn declared(&self) -> impl Iterator<Item = (&str, &str)> {
         self.0.declared()
     }
 
-    /// Point a reference field of the asset just added at `target`, by name.
+    /// Point a reference field of the asset just added at `target`, by its
+    /// `$id`.
     ///
     /// A reference on an authored struct holds a resolved handle (a dense
     /// index the compile assigns in declaration order), so the typed value

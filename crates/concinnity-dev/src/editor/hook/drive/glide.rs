@@ -32,12 +32,13 @@ impl EditorHook {
         world: &World,
     ) -> Option<([f32; 3], [f32; 3])> {
         let index = world.resource::<PickIndex>();
-        let boxes = self.selection.iter().filter_map(|name| {
-            let id = asset_id::lookup(name)?;
+        let boxes = self.selection.iter().filter_map(|handle| {
+            let name = self.handle_name(handle)?;
+            let id = asset_id::lookup(&name)?;
             if let Some(e) = index.and_then(|i| i.entries.iter().find(|e| e.asset_id == id)) {
                 return Some((e.bb_min, e.bb_max));
             }
-            let entity = super::billboard::entity_by_name(world, name)?;
+            let entity = super::billboard::entity_by_name(world, &name)?;
             Some(framing::pad_point(world.get::<Transform>(entity)?.position))
         });
         framing::union_bounds(boxes)

@@ -2,10 +2,11 @@
 //! args, capture the live controls, and validate / commit on confirm.
 
 use concinnity_cook::authoring::registry::RegisteredType;
+use concinnity_cook::authoring::world::{args_with_id, replace_args};
 use concinnity_core::ecs::World;
 
 use super::{
-    EditorHook, FormTarget, FormTemplate, entry_name, names_of_type, short_status, visible_slot,
+    EditorHook, FormTarget, FormTemplate, declared_id, names_of_type, short_status, visible_slot,
 };
 use crate::editor::overrides;
 use crate::editor::panels::form;
@@ -35,7 +36,7 @@ impl EditorHook {
     ) {
         // Cloned rather than borrowed: `unique_name` below reads `self` too.
         let existing: Option<serde_json::Value> = match &target {
-            FormTarget::Entry(idx) => self.entries.get(*idx).cloned(),
+            FormTarget::Entry(key) => self.entries.by_key(*key).cloned(),
             FormTarget::Promote(entry) => Some(entry.clone()),
             FormTarget::New => None,
         };
@@ -60,7 +61,7 @@ impl EditorHook {
         };
         let name = match (&template, &existing) {
             (Some(t), _) => t.name.clone(),
-            (None, Some(e)) => entry_name(e).unwrap_or_default().to_string(),
+            (None, Some(e)) => declared_id(e).unwrap_or_default().to_string(),
             (None, None) => self.unique_name(&ty),
         };
         self.form.template = template;
@@ -334,19 +335,23 @@ impl EditorHook {
             let baseline = serde_json::Value::Object(t.baseline);
             let patch = overrides::minimal_patch(&baseline, &args_val);
             match (self.form.target.entry(), patch) {
-                (Some(idx), Some(p)) => {
-                    if let Some(obj) = self.entries.get_mut(idx).and_then(|e| e.as_object_mut()) {
-                        obj.insert("args".to_string(), p);
+                (Some(key), Some(p)) => {
+                    if let Some(entry) = self.entries.by_key_mut(key) {
+                        replace_args(entry, p);
                     }
                     self.mark_changed();
                 }
                 // Every field matches the template again: the patch line has
                 // nothing left to say, so it goes away and the asset returns
                 // to pristine. `remove_entry_at` records the undo step.
-                (Some(idx), None) => self.remove_entry_at(idx),
+                (Some(key), None) => {
+                    if let Some(idx) = self.entries.index_of(key) {
+                        self.remove_entry_at(idx);
+                    }
+                }
                 (None, Some(p)) => {
                     self.entries.push(serde_json::json!({
-                        "name": t.name, "type": ty, "args": p,
+                        "type": ty, "args": args_with_id(p, &t.name),
                     }));
                     self.mark_changed();
                 }
@@ -357,11 +362,13 @@ impl EditorHook {
             return;
         }
         match self.form.target.entry() {
-            Some(idx) => {
-                let name = self.finalize_rename(&typed, idx, &ty);
-                if let Some(obj) = self.entries.get_mut(idx).and_then(|e| e.as_object_mut()) {
-                    obj.insert("name".to_string(), serde_json::Value::String(name));
-                    obj.insert("args".to_string(), args_val);
+            Some(key) => {
+                let id = self.finalize_rename(&typed, key);
+                if let Some(obj) = self.entries.by_key_mut(key).and_then(|e| e.as_object_mut()) {
+                    obj.insert(
+                        "args".to_string(),
+                        with_optional_id(args_val, id.as_deref()),
+                    );
                 }
             }
             // A new asset, or the promotion of a generated one: both append. A
@@ -369,13 +376,21 @@ impl EditorHook {
             // so `finalize_name` leaves it alone), and that identity is what
             // makes the new line override the expansion.
             None => {
-                let name = self.finalize_name(&typed, &ty);
+                let id = self.finalize_name(&typed);
                 self.entries.push(serde_json::json!({
-                    "name": name, "type": ty, "args": args_val,
+                    "type": ty, "args": with_optional_id(args_val, id.as_deref()),
                 }));
             }
         }
         self.mark_changed();
         self.form.close();
+    }
+}
+
+// `args` declaring `id` as the `$id`, or anonymous when there is none.
+fn with_optional_id(args: serde_json::Value, id: Option<&str>) -> serde_json::Value {
+    match id {
+        Some(id) => args_with_id(args, id),
+        None => args,
     }
 }

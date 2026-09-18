@@ -73,11 +73,11 @@ mod tests {
         let out = emit_choice_furniture(&StoryNames::new("s", true, 3));
         assert_eq!(out.len(), 9);
         for (ci, row) in out.chunks(3).enumerate() {
-            assert_eq!(row[0]["name"], format!("s_stage_opt{}_box", ci));
+            assert_eq!(row[0]["args"]["$id"], format!("s_stage_opt{}_box", ci));
             assert_eq!(row[0]["args"]["corner_radius"], CHOICE_BOX_RADIUS);
-            assert_eq!(row[1]["name"], format!("s_stage_opt{}_lbl", ci));
+            assert_eq!(row[1]["args"]["$id"], format!("s_stage_opt{}_lbl", ci));
             assert_eq!(row[2]["args"]["action"], format!("story:choose:{}", ci));
-            assert_eq!(row[2]["args"]["label"], row[1]["name"]);
+            assert_eq!(row[2]["args"]["label"], row[1]["args"]["$id"]);
         }
     }
 }

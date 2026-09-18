@@ -155,8 +155,9 @@ flowchart LR
 
 Three vocabularies exist and are easy to confuse:
 
-**Asset** — what an author declares in `world.jsonl`. A named, typed JSON
-object. This is the public schema.
+**Asset** — what an author declares in `world.jsonl`. A typed JSON object,
+optionally carrying a `$id` other entries can name it by. This is the public
+schema.
 
 **Component** — the runtime form of an asset that lives on an entity. Every
 component type is registered once, in a single macro list, paired with a stable
@@ -193,8 +194,8 @@ so the convention is to glob `components` and path-qualify `cook`.
 
 | Type                               | Meaning                                                                                            |
 | ---------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `AssetId`                          | Interned name. The cook interns every authored name into a dense `u32`; the runtime never interns. |
-| `AssetRef<T>`                      | A typed reference to another asset by name, resolved during the cook.                              |
+| `AssetId`                          | An asset's position in the expanded world, as a dense `u32`. The cook records each position's handle (its `$id`, or `<Type>#<ordinal>` when anonymous) beside it; the runtime never interns. |
+| `AssetRef<T>`                      | A typed reference to another asset by its `$id`, resolved during the cook.                         |
 | `MeshHandle`, `TextureHandle`, ... | Dense index into the matching per-kind resource table.                                             |
 | `Entity`                           | Generational id minted by the entity allocator when a component row is pushed.                     |
 | `PayloadLocator`                   | `{ blob_index: u32, offset: u64, len: u64 }` — where a compiled payload lives.                     |
@@ -262,19 +263,34 @@ system couplings order-robust rather than order-critical.
 A world is a JSONL file: one JSON object per line, each declaring one asset.
 
 ```json
-{"name":"gfx","type":"GraphicsConfig","args":{"clear_color":[0.5,0.75,1.0,1.0],"shadow_map_size":2048}}
-{"name":"main_camera","type":"Camera3D","args":{"fov_y_degrees":75.0,"position":[0.0,4.0,22.0]}}
-{"name":"tex_stone","type":"Texture","args":{"generator":"stone","resolution":256}}
-{"name":"mat_stone","type":"Material","args":{"albedo":"tex_stone","roughness":0.88}}
+{"type":"GraphicsConfig","args":{"clear_color":[0.5,0.75,1.0,1.0],"shadow_map_size":2048}}
+{"type":"Camera3D","args":{"fov_y_degrees":75.0,"position":[0.0,4.0,22.0]}}
+{"type":"Texture","args":{"$id":"tex_stone","generator":"stone","resolution":256}}
+{"type":"Material","args":{"$id":"mat_stone","albedo":"tex_stone","roughness":0.88}}
 ```
 
-Three fields:
+Two fields, and nothing else at the top level:
 
 | Field  | Required | Meaning                                                                      |
 | ------ | :------: | ---------------------------------------------------------------------------- |
-| `name` |   yes    | Unique identifier within the world. Becomes the interned `AssetId`.          |
 | `type` |   yes    | Registered asset type name.                                                  |
-| `args` |    no    | The asset's public JSON schema. Missing fields take their declared defaults. |
+| `args` |    no    | The asset's public JSON schema, an object. Missing fields take their declared defaults. |
+
+Identity is declared inside `args` as `"$id"`: a non-empty string, unique within
+the world, and not shaped like an anonymous handle (`<Type>#<digits>`). The `$` keeps it apart from every schema field (a
+bare `name` or `id` already means something to `AppConfig`), and it marks the
+entry as one other entries are expected to reference. It is the only `$` key an
+`args` object accepts, and it is checked before any schema reads the args, so a
+misspelled key is an error rather than an asset that silently has no identity.
+
+An entry without a `$id` is anonymous, which is the common case: nothing can
+reference it, and wherever a handle has to be printed or typed (`cn explain`,
+`cn rm`, `cn list`, the lock file, the debug `names` verb, the editor) it is
+addressed as `<Type>#<ordinal>`, its position among the anonymous entries of
+its type (`Prop#3`). A label is stable within a build and moves when an
+anonymous entry of the same type is added or removed before it, which is the
+trade an anonymous asset opts into. An anonymous build-only entry expands under
+its label, so its generated assets are named `MainMenu#0_title` and so on.
 
 Line-oriented JSON is deliberate: it diffs cleanly, appends cheaply, and makes
 tooling (`cn add`, `cn rm`, the editor's save-back) a line edit rather than a
@@ -294,11 +310,13 @@ so an included asset is indistinguishable from an inline one thereafter.
 
 ### 4.3 References
 
-An asset refers to another by name, as a plain string. The registry records
-which fields are references and what type they must resolve to, so a dangling or
-mistyped reference is a cook error with the field named. References are
-resolved to dense handles during the cook; no name lookup happens at runtime
-except through the explicit runtime spawn-by-name path.
+An asset refers to another by its `$id`, as a plain string. The registry
+records which fields are references and what type they must resolve to, so a
+dangling or mistyped reference is a cook error with the field named. A
+reference resolves against declared ids only: an anonymous asset's label names
+it to a tool, never to another entry. References are resolved to dense handles
+during the cook; no name lookup happens at runtime except through the explicit
+runtime spawn-by-name path.
 
 ### 4.4 Typed authoring
 
@@ -333,9 +351,11 @@ flowchart TD
 
 ### 5.1 Front half
 
-**Parse and structural validation.** Every line must be valid JSON with a
-`name` and a known `type`. Duplicate names are rejected. The result is a list of
-untyped JSON values.
+**Parse and structural validation.** Every line must be valid JSON with a known
+`type`, an object `args`, and at most a well-formed `$id`. Duplicate ids are
+rejected. The result is a list of untyped JSON values, each anonymous entry
+carrying its `<Type>#<ordinal>` label as its `$id` so every later pass
+addresses entries one way.
 
 **Expansion.** A fixed, ordered sequence of passes rewrites the world. Order
 matters because later passes must see what earlier passes produced:
@@ -363,9 +383,9 @@ Two properties govern expansion:
 - **Injection is visible.** Every asset the cook adds without a `world.jsonl`
   line is recorded in `world-lock.json` with its full args, so it can be copied
   into the world verbatim as an override.
-- **Authored wins.** If the world declares an asset with the same name as one a
-  pass would generate, the authored entry shadows it. Same name and same type is
-  a patch-merge with the author's fields winning; same name and different type is
+- **Authored wins.** If the world declares an asset with the same `$id` as one a
+  pass would generate, the authored entry shadows it. Same id and same type is
+  a patch-merge with the author's fields winning; same id and different type is
   a hard error. Shadowing is recorded in the lock file rather than being silent.
 
 **Semantic validation.** Runs on the expanded world. Checks cross-references
@@ -376,8 +396,8 @@ than failing at the first.
 ### 5.2 Back half
 
 **Asset resolution.** Each expanded asset becomes a `BlobAssetDef`: the
-serialized runtime component, its discriminant, its interned name, and a payload
-locator if it has one. The asset-to-component translation happens here, so the
+serialized runtime component, its discriminant, its `AssetId` (its position in
+the expanded world, anonymous or not), and a payload locator if it has one. The asset-to-component translation happens here, so the
 runtime never performs it.
 
 **Payload compilation.** Assets that carry compiled binary data get it produced
@@ -454,14 +474,14 @@ Written beside the blobs. Provenance metadata, not part of the container format.
 | ---------------- | ------------------------------------------------------------------------------------ |
 | `engine_version` | Injected defaults come from the engine, so their content can change across versions. |
 | `blobs`          | Per-blob path, SHA-256, and payload byte count.                                      |
-| `assets`         | Every asset under its real name, with its interned id, discriminant, and args hash.  |
+| `assets`         | Every asset under its handle, with its id, discriminant, and args hash.              |
 | `resources`      | Assets compiled into the resource stream rather than the def table.                  |
 | `injected`       | Everything the cook added with no authored line, with full args.                     |
 | `shadowed`       | Generated assets the world declared its own copy of, with the pre-merge args.        |
 
 The recorded ids let a process that loads pre-cooked blobs without an in-process
-cook (the editor booting cold) rebuild the name table exactly as the cook
-interned it.
+cook (the editor booting cold) rebuild the handle table exactly as the cook
+recorded it.
 
 ---
 
@@ -2098,8 +2118,8 @@ so the list is append-only.
 
 ## Appendix B: glossary
 
-**Asset** — a named, typed declaration in `world.jsonl`. The public authoring
-unit.
+**Asset** — a typed declaration in `world.jsonl`, optionally identified by a
+`$id`. The public authoring unit.
 
 **Baked record** — a blob def whose bytes are the serialized runtime component,
 not the authored args. Every record in a blob is baked.

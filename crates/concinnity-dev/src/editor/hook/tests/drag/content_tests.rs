@@ -11,8 +11,9 @@ use crate::debug_hook::DebugHook;
 
 use crate::editor::hook::drag::content::{drag_has_effect, placement_args};
 use crate::editor::hook::tests::fixtures::{click_at, drag_input, hook, pick_world, set_input};
-use crate::editor::hook::{entry_name, entry_type};
+use crate::editor::hook::{declared_id, entry_type};
 
+use crate::editor::hook::tests::fixtures::active;
 use crate::editor::panels::registry::PanelKey;
 
 // Dragging a mesh out of the Content grid places a Prop where the ghost
@@ -28,12 +29,12 @@ fn drag_out_places_a_prop_where_the_ghost_lands() {
     );
     let mut h = hook(vec![
         serde_json::json!({
-            "name": "demo_ball", "type": "ProceduralMesh",
-            "args": { "generator": "sphere" }
+            "type": "ProceduralMesh",
+            "args": { "$id": "demo_ball", "generator": "sphere" }
         }),
         serde_json::json!({
-            "name": "ground", "type": "Prop",
-            "args": { "mesh": "demo_ball", "position": [0.0, -0.5, 0.0] }
+            "type": "Prop",
+            "args": { "$id": "ground", "mesh": "demo_ball", "position": [0.0, -0.5, 0.0] }
         }),
     ]);
     h.content_open = true;
@@ -45,7 +46,7 @@ fn drag_out_places_a_prop_where_the_ghost_lands() {
     let cell = crate::editor::panels::content_panel::cell_rect(o, 0);
     click_at(&mut world, &mut h, [cell[0] + 10.0, cell[1] + 10.0]);
     assert!(h.content_drag.is_some(), "the cell press arms a drag");
-    assert_eq!(h.selection.active(), Some("demo_ball"));
+    assert_eq!(active(&h).as_deref(), Some("demo_ball"));
     let before = h.entries.len();
 
     // Pull into the viewport: the ghost lands on the ground box below.
@@ -71,7 +72,8 @@ fn drag_out_places_a_prop_where_the_ghost_lands() {
         placed["args"]["position"][1].as_f64().unwrap().abs() < 1e-3,
         "{placed}"
     );
-    assert_eq!(h.selection.active(), entry_name(placed));
+    assert_eq!(declared_id(placed), None, "a placed prop is anonymous");
+    assert_eq!(active(&h).as_deref(), Some("Prop#0"));
     assert!(h.dirty);
     h.undo(&mut world);
     assert_eq!(h.entries.len(), before, "one undo removes the placement");
@@ -119,12 +121,12 @@ fn aligned_drag_out_orients_the_drop_to_the_struck_face() {
     let mut world = pick_world([0.0; 3], vec![(wall, [-2.0, -2.0, -6.0], [2.0, 2.0, -4.0])]);
     let mut h = hook(vec![
         serde_json::json!({
-            "name": "demo_ball", "type": "ProceduralMesh",
-            "args": { "generator": "sphere" }
+            "type": "ProceduralMesh",
+            "args": { "$id": "demo_ball", "generator": "sphere" }
         }),
         serde_json::json!({
-            "name": "wall", "type": "Prop",
-            "args": { "mesh": "demo_ball", "position": [0.0, 0.0, -5.0] }
+            "type": "Prop",
+            "args": { "$id": "wall", "mesh": "demo_ball", "position": [0.0, 0.0, -5.0] }
         }),
     ]);
     h.content_open = true;
@@ -178,7 +180,7 @@ fn a_still_cell_press_places_nothing() {
     asset_id::reset_interner();
     let mut world = pick_world([0.0; 3], vec![]);
     let mut h = hook(vec![serde_json::json!({
-        "name": "demo_ball", "type": "ProceduralMesh", "args": { "generator": "box" }
+        "type": "ProceduralMesh", "args": { "$id": "demo_ball", "generator": "box" }
     })]);
     h.content_open = true;
     h.tree_stale = true;
@@ -192,7 +194,7 @@ fn a_still_cell_press_places_nothing() {
     assert!(h.content_drag.is_none());
     assert_eq!(h.entries.len(), 1, "no placement from a plain click");
     assert!(!h.dirty);
-    assert_eq!(h.selection.active(), Some("demo_ball"), "still selected");
+    assert_eq!(active(&h).as_deref(), Some("demo_ball"), "still selected");
 }
 
 // Dragging a Material onto a Prop assigns it instead of placing anything.
@@ -206,11 +208,11 @@ fn material_drag_assigns_to_the_prop_under_the_cursor() {
     );
     let mut h = hook(vec![
         serde_json::json!({
-            "name": "wood", "type": "Material", "args": { "roughness": 0.7 }
+            "type": "Material", "args": { "$id": "wood", "roughness": 0.7 }
         }),
         serde_json::json!({
-            "name": "crate_prop", "type": "Prop",
-            "args": { "mesh": "demo", "position": [0.0, 0.0, -5.0] }
+            "type": "Prop",
+            "args": { "$id": "crate_prop", "mesh": "demo", "position": [0.0, 0.0, -5.0] }
         }),
     ]);
     h.content_open = true;

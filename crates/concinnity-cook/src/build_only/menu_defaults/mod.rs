@@ -11,6 +11,7 @@
 // An `EngineDefaults` entry turns either one off. It is read rather than
 // consumed: it is a stored component now, and the runtime pass drains it.
 
+use crate::authoring::world::args_with_id;
 use concinnity_core::components::{EngineDefaults, StoryCommand};
 
 use super::expand::{ExpandReport, asset_name, registered_type};
@@ -269,9 +270,8 @@ fn inject(
     args: serde_json::Value,
 ) {
     assets.push(serde_json::json!({
-        "name": name,
         "type": asset_type,
-        "args": args.clone(),
+        "args": args_with_id(args.clone(), name),
     }));
     report.record(name, asset_type, args, injected_by);
 }

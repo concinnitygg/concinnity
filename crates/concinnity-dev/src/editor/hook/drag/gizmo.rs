@@ -10,17 +10,17 @@
 //! authored entries as ONE undo step (`mark_changed` snapshots the pre-drag
 //! entry list once); Escape cancels and restores the start state.
 
-use concinnity_core::components::{Camera3D, FrameInput, GlobalTransform, Parent, Transform};
-use concinnity_core::ecs::Entity;
-use concinnity_core::ecs::World;
-use concinnity_host::thread::asset_id;
-
+use crate::editor::asset_handle::AssetHandle;
+use crate::editor::entry_list::{EntryId, EntryList};
 use crate::editor::hook::pick;
-use crate::editor::hook::{EditorHook, entry_name, entry_type};
+use crate::editor::hook::{EditorHook, declared_id, entry_type};
 use crate::editor::panels::form;
 use crate::editor::viewport::gizmo::{self, GizmoMode};
 use crate::editor::viewport::group_transform;
 use crate::editor::viewport::snap;
+use concinnity_core::components::{Camera3D, FrameInput, GlobalTransform, Parent, Transform};
+use concinnity_core::ecs::Entity;
+use concinnity_core::ecs::World;
 
 // Committed values are rounded so world.jsonl stays readable: positions and
 // scales to 3 decimals, angles to 1.
@@ -40,12 +40,12 @@ const MIN_ROTATE_ARM_PX: f32 = 15.0;
 const SCALE_FACTOR_RANGE: (f32, f32) = (0.01, 100.0);
 
 // One selection member the gizmo can edit this frame, resolved fresh every
-// use (rebuilds re-mint entities): the authored entry index and its live
+// use (rebuilds re-mint entities): the authored entry's key and its live
 // entity. Members without the mode's editable arg, generated assets (no entry
 // to write back), parented entities (the drag works in world axes; a rotated
 // parent would skew it), and entities without a Transform are skipped.
 pub(in crate::editor::hook) struct GizmoTarget {
-    pub(in crate::editor::hook) idx: usize,
+    pub(in crate::editor::hook) key: EntryId,
     pub(in crate::editor::hook) entity: Entity,
     // Whether the entry takes a written-back `position`: rotate and scale
     // move members about the pivot, and a type without the arg must only
@@ -54,9 +54,10 @@ pub(in crate::editor::hook) struct GizmoTarget {
 }
 
 // A member's `Transform` fields at the press: the drag base and the cancel
-// target, keyed by name so each frame re-resolves the live entity.
+// target, keyed by the member's handle so each frame re-resolves the live
+// entity.
 struct MemberStart {
-    name: String,
+    handle: AssetHandle,
     position: [f32; 3],
     rotation: [f32; 3],
     scale: [f32; 3],
@@ -86,19 +87,17 @@ impl EditorHook {
         &self,
         world: &World,
         mode: GizmoMode,
-        name: &str,
+        handle: &AssetHandle,
     ) -> Option<GizmoTarget> {
-        let idx = self
-            .entries
-            .iter()
-            .position(|e| entry_name(e) == Some(name))?;
+        let idx = self.handle_index(handle)?;
+        let key = self.entries.key_at(idx)?;
         let ty = entry_type(self.entries.get(idx)?)?;
         let merged = form::working_args(ty, Some(&self.entry_args(idx)));
         if !merged.get(mode.arg_key()).is_some_and(|p| p.is_array()) {
             return None;
         }
         let has_position = merged.get("position").is_some_and(|p| p.is_array());
-        let id = asset_id::lookup(name)?;
+        let id = self.handle_asset_id(handle)?;
         let entity = world
             .resource::<concinnity_core::ecs::EntityByName>()?
             .get(id)?;
@@ -107,7 +106,7 @@ impl EditorHook {
         }
         world.get::<Transform>(entity)?;
         Some(GizmoTarget {
-            idx,
+            key,
             entity,
             has_position,
         })
@@ -117,7 +116,7 @@ impl EditorHook {
     fn gizmo_targets(&self, world: &World, mode: GizmoMode) -> Vec<GizmoTarget> {
         self.selection
             .iter()
-            .filter_map(|name| self.member_target(world, mode, name))
+            .filter_map(|handle| self.member_target(world, mode, handle))
             .collect()
     }
 
@@ -178,7 +177,7 @@ impl EditorHook {
             .filter_map(|t| {
                 let tr = world.get::<Transform>(t.entity)?;
                 Some(MemberStart {
-                    name: entry_name(self.entries.get(t.idx)?)?.to_string(),
+                    handle: AssetHandle::Entry(t.key),
                     position: tr.position,
                     rotation: tr.rotation_deg,
                     scale: tr.scale,
@@ -239,7 +238,7 @@ impl EditorHook {
                 return;
             };
             for s in &drag.starts {
-                if let Some(t) = self.member_target(world, drag.mode, &s.name)
+                if let Some(t) = self.member_target(world, drag.mode, &s.handle)
                     && let Some(tr) = world.get_mut::<Transform>(t.entity)
                 {
                     tr.position = s.position;
@@ -338,7 +337,7 @@ impl EditorHook {
                     None => t - drag.grab_t,
                 };
                 for s in &drag.starts {
-                    let Some(target) = self.member_target(world, mode, &s.name) else {
+                    let Some(target) = self.member_target(world, mode, &s.handle) else {
                         continue;
                     };
                     let Some(tr) = world.get_mut::<Transform>(target.entity) else {
@@ -361,7 +360,7 @@ impl EditorHook {
             }
             GizmoMode::Rotate => {
                 for s in &drag.starts {
-                    let Some(target) = self.member_target(world, mode, &s.name) else {
+                    let Some(target) = self.member_target(world, mode, &s.handle) else {
                         continue;
                     };
                     let Some(tr) = world.get_mut::<Transform>(target.entity) else {
@@ -387,9 +386,9 @@ impl EditorHook {
         let Some(drag) = self.gizmo_drag.take() else {
             return;
         };
-        let mut changed = Vec::new();
+        let mut changed: Vec<EntryId> = Vec::new();
         for s in &drag.starts {
-            let Some(target) = self.member_target(world, drag.mode, &s.name) else {
+            let Some(target) = self.member_target(world, drag.mode, &s.handle) else {
                 continue;
             };
             let Some(tr) = world.get::<Transform>(target.entity).cloned() else {
@@ -402,7 +401,7 @@ impl EditorHook {
             };
             let mut wrote = false;
             if value != start {
-                Self::write_arg(&mut self.entries, target.idx, drag.mode.arg_key(), value);
+                Self::write_arg(&mut self.entries, target.key, drag.mode.arg_key(), value);
                 wrote = true;
             }
             // Rotate and scale also move members about the pivot: persist the
@@ -410,12 +409,12 @@ impl EditorHook {
             if drag.mode != GizmoMode::Translate && s.has_position {
                 let pos = tr.position.map(round3);
                 if pos != s.position.map(round3) {
-                    Self::write_arg(&mut self.entries, target.idx, "position", pos);
+                    Self::write_arg(&mut self.entries, target.key, "position", pos);
                     wrote = true;
                 }
             }
             if wrote {
-                changed.push(target.idx);
+                changed.push(target.key);
             }
         }
         if changed.is_empty() {
@@ -426,26 +425,30 @@ impl EditorHook {
         // re-derive it from the committed args. (Dragging and typing cannot
         // overlap, so no in-progress field edit is lost.) Through the by-name
         // path so a template-derived asset keeps its override state.
-        if let Some(idx) = self.form.target.entry()
-            && changed.contains(&idx)
-            && let Some(name) = self.entries.get(idx).and_then(entry_name).map(String::from)
+        if let Some(key) = self.form.target.entry()
+            && changed.contains(&key)
+            && let Some(name) = self
+                .entries
+                .by_key(key)
+                .and_then(declared_id)
+                .map(String::from)
         {
             self.open_asset_form(&name, world);
         }
     }
 
     pub(in crate::editor::hook) fn write_arg(
-        entries: &mut [serde_json::Value],
-        idx: usize,
-        key: &str,
+        entries: &mut EntryList,
+        entry: EntryId,
+        arg: &str,
         value: [f32; 3],
     ) {
-        if let Some(obj) = entries.get_mut(idx).and_then(|e| e.as_object_mut()) {
+        if let Some(obj) = entries.by_key_mut(entry).and_then(|e| e.as_object_mut()) {
             let args = obj
                 .entry("args".to_string())
                 .or_insert_with(|| serde_json::Value::Object(Default::default()));
             if let Some(a) = args.as_object_mut() {
-                a.insert(key.to_string(), serde_json::json!(value));
+                a.insert(arg.to_string(), serde_json::json!(value));
             }
         }
     }

@@ -63,18 +63,18 @@ pub(crate) fn check_layers(assets: &[WorldJsonlAsset], errors: &mut Vec<String>)
         if declared.len() > MAX_USER_LAYERS {
             errors.push(format!(
                 "PhysicsConfig '{}': {} extra layers declared; at most {} fit the 32-bit group space",
-                config.name,
+                config.id,
                 declared.len(),
                 MAX_USER_LAYERS
             ));
         }
         for layer in declared {
             if layer.is_empty() {
-                errors.push(format!("PhysicsConfig '{}': empty layer name", config.name));
+                errors.push(format!("PhysicsConfig '{}': empty layer name", config.id));
             } else if known.iter().any(|k| k == layer) {
                 errors.push(format!(
                     "PhysicsConfig '{}': layer '{}' is already defined",
-                    config.name, layer
+                    config.id, layer
                 ));
             } else {
                 known.push(layer.to_string());
@@ -88,7 +88,7 @@ pub(crate) fn check_layers(assets: &[WorldJsonlAsset], errors: &mut Vec<String>)
                 let Some(names) = names.filter(|n| n.len() == 2) else {
                     errors.push(format!(
                         "PhysicsConfig '{}': no_collide entries are [\"layer_a\", \"layer_b\"] pairs",
-                        config.name
+                        config.id
                     ));
                     continue;
                 };
@@ -96,7 +96,7 @@ pub(crate) fn check_layers(assets: &[WorldJsonlAsset], errors: &mut Vec<String>)
                     if !known.iter().any(|k| k == layer) {
                         errors.push(format!(
                             "PhysicsConfig '{}': no_collide names unknown layer '{}'",
-                            config.name, layer
+                            config.id, layer
                         ));
                     }
                 }
@@ -110,7 +110,7 @@ pub(crate) fn check_layers(assets: &[WorldJsonlAsset], errors: &mut Vec<String>)
         {
             errors.push(format!(
                 "PhysicsConfig '{}': contact_min_impulse must not be negative",
-                config.name
+                config.id
             ));
         }
     }
@@ -131,7 +131,7 @@ pub(crate) fn check_layers(assets: &[WorldJsonlAsset], errors: &mut Vec<String>)
         if !known.iter().any(|k| k == layer) {
             errors.push(format!(
                 "Prop '{}': collider layer '{}' is not a built-in layer or declared in PhysicsConfig `layers`",
-                asset.name, layer
+                asset.id, layer
             ));
         }
     }
@@ -175,7 +175,7 @@ pub(crate) fn collider_spawn_sources(assets: &[WorldJsonlAsset]) -> ColliderSpaw
         .iter()
         .filter(|a| a.asset_type == RegisteredType::Prop)
         .filter(|a| a.args.get("collider").is_some_and(|c| !c.is_null()))
-        .map(|a| a.name.as_str())
+        .map(|a| a.id.as_str())
         .collect();
     let mut sources = ColliderSpawnSources::default();
     if collider_props.is_empty() {
@@ -196,7 +196,7 @@ pub(crate) fn collider_spawn_sources(assets: &[WorldJsonlAsset]) -> ColliderSpaw
                         .map_or(fallback, |v| v as f32)
                 };
                 sources.spawners.push(ColliderSpawner {
-                    name: &asset.name,
+                    name: &asset.id,
                     interval: secs("interval", defaults.interval),
                     lifetime: secs("lifetime", defaults.lifetime),
                 });
@@ -206,7 +206,7 @@ pub(crate) fn collider_spawn_sources(assets: &[WorldJsonlAsset]) -> ColliderSpaw
                     .iter()
                     .any(|t| is_collider_prop(t)) =>
             {
-                sources.behaviors.push(&asset.name);
+                sources.behaviors.push(&asset.id);
             }
             _ => {}
         }
@@ -245,7 +245,7 @@ mod tests {
 
     fn asset(name: &str, asset_type: RegisteredType, args: serde_json::Value) -> WorldJsonlAsset {
         WorldJsonlAsset {
-            name: name.to_string(),
+            id: name.to_string(),
             asset_type,
             args,
         }

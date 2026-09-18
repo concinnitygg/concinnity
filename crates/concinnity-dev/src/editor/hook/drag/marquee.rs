@@ -11,9 +11,10 @@ use concinnity_core::components::Camera3D;
 use concinnity_core::components::FrameInput;
 use concinnity_core::ecs::PickIndex;
 use concinnity_core::ecs::World;
+use concinnity_core::ecs::asset_id::AssetId;
 
+use crate::editor::asset_handle::AssetHandle;
 use crate::editor::hook::EditorHook;
-use crate::editor::hook::pick;
 use crate::editor::viewport::highlight;
 use crate::editor::viewport::marquee;
 
@@ -75,11 +76,14 @@ impl EditorHook {
             return;
         }
         let rect = marquee::rect_from_corners(m.anchor, m.current);
-        let names = marquee_hits(world, vp, rect, &self.locked_assets);
+        let hits: Vec<AssetHandle> = marquee_hits(world, vp, rect, &self.locked_ids())
+            .into_iter()
+            .filter_map(|id| self.handle_of_asset_id(id))
+            .collect();
         if m.additive {
-            self.selection.extend(names);
+            self.selection.extend(hits);
         } else {
-            self.selection.set(names);
+            self.selection.set(hits);
         }
         self.pick_last = None;
         self.follow_active(world);
@@ -96,16 +100,15 @@ impl EditorHook {
     }
 }
 
-// The names of every PickIndex entry whose projected AABB intersects `rect`,
-// in index order. Entries whose projection fails (behind the camera, off
-// screen), whose id no longer resolves, or which are locked against picking
-// (the tree's lock) are skipped.
+// The id of every PickIndex entry whose projected AABB intersects `rect`, in
+// index order. Entries whose projection fails (behind the camera, off screen)
+// or which are locked against picking (the tree's lock) are skipped.
 fn marquee_hits(
     world: &World,
     vp: [f32; 2],
     rect: [f32; 4],
-    locked: &std::collections::BTreeSet<String>,
-) -> Vec<String> {
+    locked: &std::collections::BTreeSet<AssetId>,
+) -> Vec<AssetId> {
     let Some(index) = world.resource::<PickIndex>() else {
         return Vec::new();
     };
@@ -121,7 +124,7 @@ fn marquee_hits(
             if !marquee::rects_intersect(rect, r) {
                 return None;
             }
-            pick::resolve_name(e.asset_id).filter(|n| !locked.contains(n))
+            (!locked.contains(&e.asset_id)).then_some(e.asset_id)
         })
         .collect()
 }

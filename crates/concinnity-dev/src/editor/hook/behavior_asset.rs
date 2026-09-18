@@ -10,9 +10,8 @@
 //! indefinite. Arming the chip keeps a stray press from needing it at all.
 
 use concinnity_core::ecs::World;
-use serde_json::Value;
 
-use super::{EditorHook, entry_name};
+use super::{EditorHook, declared_id};
 use crate::editor::behavior;
 use crate::editor::behavior::panel::Status;
 use crate::editor::widget;
@@ -59,7 +58,7 @@ impl EditorHook {
     pub(super) fn seed_behavior_name(&mut self, world: &mut World) {
         let name = self
             .behavior_entry()
-            .and_then(|i| entry_name(&self.entries[i]))
+            .and_then(|i| declared_id(&self.entries[i]))
             .unwrap_or("")
             .to_string();
         widget::seed_field(world, behavior::panel::NAME_INPUT, &name);
@@ -80,10 +79,13 @@ impl EditorHook {
             self.blur_behavior_name(world);
             return;
         }
-        let name = self.finalize_rename(&typed, idx, "Behavior");
-        if let Some(entry) = self.entries[idx].as_object_mut() {
-            entry.insert("name".to_string(), Value::String(name));
-        }
+        let Some(key) = self.entries.key_at(idx) else {
+            return;
+        };
+        let Some(name) = self.finalize_rename(&typed, key) else {
+            return;
+        };
+        concinnity_cook::authoring::world::set_entry_id(&mut self.entries[idx], &name);
         self.mark_changed();
         self.behavior.name_focus = false;
         // The checker's messages carry the behavior's name, so its verdict is

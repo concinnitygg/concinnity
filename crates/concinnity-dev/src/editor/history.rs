@@ -3,7 +3,12 @@
 //! (`mark_changed`) and swaps whole lists back in on undo/redo. Worlds are a
 //! few dozen JSON lines, so whole-list snapshots stay cheap.
 
-type Snapshot = Vec<serde_json::Value>;
+use crate::editor::entry_list::EntryList;
+
+// A snapshot carries the session keys as well as the values, so restoring one
+// restores the entries the selection and the open form address, not just their
+// content.
+type Snapshot = EntryList;
 
 // Oldest snapshots are dropped past this depth, bounding a long session.
 const MAX_DEPTH: usize = 64;
@@ -55,7 +60,7 @@ mod tests {
     use super::*;
 
     fn snap(tag: &str) -> Snapshot {
-        vec![serde_json::json!({ "name": tag })]
+        EntryList::new(vec![serde_json::json!({ "name": tag })])
     }
 
     #[test]

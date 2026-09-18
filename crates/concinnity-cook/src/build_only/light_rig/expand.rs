@@ -55,9 +55,9 @@ fn expand_light_rig_preset(
             let expanded = format!("{}_{}", rig_name, lname);
             match kind {
                 "point" => serde_json::json!({
-                    "name": expanded,
                     "type": "PointLight",
                     "args": {
+                        "$id": expanded,
                         "position": light.get("position").cloned().unwrap_or(serde_json::json!([0.0, 2.5, 0.0])),
                         "color":    light.get("color").cloned().unwrap_or(serde_json::json!([1.0, 1.0, 1.0])),
                         "intensity": light.get("intensity").and_then(|v| v.as_f64()).unwrap_or(8.0),
@@ -65,9 +65,9 @@ fn expand_light_rig_preset(
                     }
                 }),
                 _ => serde_json::json!({
-                    "name": expanded,
                     "type": "DirectionalLight",
                     "args": {
+                        "$id": expanded,
                         "direction": light.get("direction").cloned().unwrap_or(serde_json::json!([-0.3, 0.85, 0.4])),
                         "color":     light.get("color").cloned().unwrap_or(serde_json::json!([1.0, 1.0, 1.0])),
                         "intensity": light.get("intensity").and_then(|v| v.as_f64()).unwrap_or(1.0)
@@ -112,36 +112,34 @@ mod tests {
     #[test]
     fn named_lights_consumed_leaves_lights_intact() {
         let mut assets = vec![
-            serde_json::json!({"name":"sun","type":"DirectionalLight","args":{"direction":[-0.4,0.7,0.3]}}),
-            serde_json::json!({"name":"torch","type":"PointLight","args":{"position":[3.0,2.0,-5.0]}}),
-            serde_json::json!({"name":"rig","type":"LightRig","args":{"lights":["sun","torch"]}}),
+            serde_json::json!({"type":"DirectionalLight","args":{"$id":"sun","direction":[-0.4,0.7,0.3]}}),
+            serde_json::json!({"type":"PointLight","args":{"$id":"torch","position":[3.0,2.0,-5.0]}}),
+            serde_json::json!({"type":"LightRig","args":{"$id":"rig","lights":["sun","torch"]}}),
         ];
         expand_light_rigs(&mut assets, None).unwrap();
         assert_eq!(assets.len(), 2);
-        assert_eq!(assets[0]["name"], "sun");
-        assert_eq!(assets[1]["name"], "torch");
+        assert_eq!(assets[0]["args"]["$id"], "sun");
+        assert_eq!(assets[1]["args"]["$id"], "torch");
     }
 
     #[test]
     fn preset_sun_fill_expands_to_two_lights() {
         let mut assets = vec![serde_json::json!({
-            "name": "rig",
             "type": "LightRig",
-            "args": {"preset": "rig_outdoor_sun_fill"}
+            "args": {"$id": "rig", "preset": "rig_outdoor_sun_fill"}
         })];
         expand_light_rigs(&mut assets, None).unwrap();
         assert_eq!(assets.len(), 2);
-        assert_eq!(assets[0]["name"], "rig_sun");
-        assert_eq!(assets[1]["name"], "rig_fill");
+        assert_eq!(assets[0]["args"]["$id"], "rig_sun");
+        assert_eq!(assets[1]["args"]["$id"], "rig_fill");
         assert_eq!(assets[0]["type"], "DirectionalLight");
     }
 
     #[test]
     fn preset_interior_candles_includes_point_lights() {
         let mut assets = vec![serde_json::json!({
-            "name": "rig",
             "type": "LightRig",
-            "args": {"preset": "rig_interior_candles"}
+            "args": {"$id": "rig", "preset": "rig_interior_candles"}
         })];
         expand_light_rigs(&mut assets, None).unwrap();
         assert_eq!(assets.len(), 4);
@@ -152,9 +150,8 @@ mod tests {
     #[test]
     fn preset_studio_three_point_expands_to_three() {
         let mut assets = vec![serde_json::json!({
-            "name": "rig",
             "type": "LightRig",
-            "args": {"preset": "rig_studio_three_point"}
+            "args": {"$id": "rig", "preset": "rig_studio_three_point"}
         })];
         expand_light_rigs(&mut assets, None).unwrap();
         assert_eq!(assets.len(), 3);
@@ -162,16 +159,15 @@ mod tests {
 
     #[test]
     fn non_rig_assets_pass_through() {
-        let mut assets = vec![serde_json::json!({"name":"x","type":"Logger","args":{}})];
+        let mut assets = vec![serde_json::json!({"type":"Logger","args":{"$id":"x"}})];
         expand_light_rigs(&mut assets, None).unwrap();
         assert_eq!(assets[0]["type"], "Logger");
     }
 
     fn expand_preset(preset: &str) -> Vec<serde_json::Value> {
         let mut assets = vec![serde_json::json!({
-            "name": "rig",
             "type": "LightRig",
-            "args": {"preset": preset}
+            "args": {"$id": "rig", "preset": preset}
         })];
         expand_light_rigs(&mut assets, None).unwrap();
         assets
@@ -181,7 +177,7 @@ mod tests {
     fn preset_outdoor_sun_expands_to_one_warm_directional() {
         let lights = expand_preset("rig_outdoor_sun");
         assert_eq!(lights.len(), 1);
-        assert_eq!(lights[0]["name"], "rig_sun");
+        assert_eq!(lights[0]["args"]["$id"], "rig_sun");
         assert_eq!(lights[0]["type"], "DirectionalLight");
         assert_eq!(
             lights[0]["args"]["direction"],
@@ -198,7 +194,7 @@ mod tests {
     fn preset_night_moon_expands_to_one_cool_directional() {
         let lights = expand_preset("rig_night_moon");
         assert_eq!(lights.len(), 1);
-        assert_eq!(lights[0]["name"], "rig_moon");
+        assert_eq!(lights[0]["args"]["$id"], "rig_moon");
         assert_eq!(
             lights[0]["args"]["color"],
             serde_json::json!([0.7, 0.8, 1.0])
@@ -213,7 +209,7 @@ mod tests {
         let lights = expand_preset("rig_interior_candles");
         let candle = lights
             .iter()
-            .find(|v| v["name"] == "rig_candle_a")
+            .find(|v| v["args"]["$id"] == "rig_candle_a")
             .expect("candle_a light");
         assert_eq!(candle["type"], "PointLight");
         assert_eq!(
@@ -235,7 +231,7 @@ mod tests {
     // A rig with no preset and no lights list is consumed and adds nothing.
     #[test]
     fn rig_without_a_preset_expands_to_nothing() {
-        let mut assets = vec![serde_json::json!({"name":"rig","type":"LightRig"})];
+        let mut assets = vec![serde_json::json!({"type":"LightRig","args":{"$id":"rig"}})];
         expand_light_rigs(&mut assets, None).unwrap();
         assert!(assets.is_empty());
     }
@@ -244,8 +240,8 @@ mod tests {
     #[test]
     fn a_preset_rig_ignores_its_light_list() {
         let mut assets = vec![serde_json::json!({
-            "name": "rig", "type": "LightRig",
-            "args": {"preset": "rig_night_moon", "lights": ["torch"]}
+            "type": "LightRig",
+            "args": {"$id": "rig", "preset": "rig_night_moon", "lights": ["torch"]}
         })];
         expand_light_rigs(&mut assets, None).unwrap();
         let names: Vec<String> = assets.iter().map(asset_name).collect();
@@ -259,8 +255,9 @@ mod tests {
             (serde_json::json!({"lights": "sun"}), "`lights`"),
             (serde_json::json!({"lights": ["sun", 2]}), "`lights[1]`"),
         ] {
-            let mut assets =
-                vec![serde_json::json!({"name": "rig", "type": "LightRig", "args": args})];
+            let mut assets = vec![
+                serde_json::json!({"type": "LightRig", "args": crate::authoring::world::args_with_id(args, "rig")}),
+            ];
             let err = expand_light_rigs(&mut assets, None).unwrap_err();
             assert!(err.starts_with("LightRig 'rig': invalid args: "), "{err}");
             assert!(err.contains(field), "{err}");

@@ -84,12 +84,12 @@ mod tests {
     #[test]
     fn five_slot_rows_carry_their_row_index() {
         let out = emit_overlay(&StoryNames::new("s", true, 0));
-        assert_eq!(out[0]["name"], "s_stage_dim");
+        assert_eq!(out[0]["args"]["$id"], "s_stage_dim");
         assert_eq!(out[0]["args"]["tint"][3], 0.0);
         let regions: Vec<_> = out.iter().filter(|e| e["type"] == "HitRegion").collect();
         assert_eq!(regions.len(), VISIBLE_SLOTS);
         for (i, region) in regions.iter().enumerate() {
-            assert_eq!(region["name"], format!("s_stage_slot{}_btn", i));
+            assert_eq!(region["args"]["$id"], format!("s_stage_slot{}_btn", i));
             assert_eq!(region["args"]["action"], format!("story:slot:{}", i));
         }
     }

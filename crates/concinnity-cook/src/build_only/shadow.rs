@@ -107,22 +107,25 @@ mod tests {
     #[test]
     fn merge_into_authored_patches_the_named_line_only() {
         let mut assets = vec![
-            json!({"name": "other", "type": "Prop", "args": {"scale": [2, 2, 2]}}),
-            json!({"name": "inst_table", "type": "Prop", "args": {"position": [5, 0, 0]}}),
+            json!({"type": "Prop", "args": {"$id": "other", "scale": [2, 2, 2]}}),
+            json!({"type": "Prop", "args": {"$id": "inst_table", "position": [5, 0, 0]}}),
         ];
         let template = json!({"position": [1, 0, 0], "mesh": "box"});
         merge_into_authored(&mut assets, "inst_table", &template);
         assert_eq!(
             assets[1]["args"],
-            json!({"position": [5, 0, 0], "mesh": "box"})
+            json!({"$id": "inst_table", "position": [5, 0, 0], "mesh": "box"})
         );
-        assert_eq!(assets[0]["args"], json!({"scale": [2, 2, 2]}));
+        assert_eq!(
+            assets[0]["args"],
+            json!({"$id": "other", "scale": [2, 2, 2]})
+        );
     }
 
     #[test]
-    fn merge_into_authored_tolerates_a_line_without_args() {
-        let mut assets = vec![json!({"name": "x", "type": "Font"})];
+    fn merge_into_authored_fills_a_line_that_patches_nothing() {
+        let mut assets = vec![json!({"type": "Font", "args": {"$id": "x"}})];
         merge_into_authored(&mut assets, "x", &json!({"size_px": 48}));
-        assert_eq!(assets[0]["args"], json!({"size_px": 48}));
+        assert_eq!(assets[0]["args"], json!({"$id": "x", "size_px": 48}));
     }
 }

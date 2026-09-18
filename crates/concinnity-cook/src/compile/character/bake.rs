@@ -223,7 +223,7 @@ pub(crate) fn bake_shapes(
         .map(|(i, _)| i)
         .collect();
     for &i in baked.iter().rev() {
-        let name = assets[i].name.clone();
+        let name = assets[i].id.clone();
         let shape = CharacterShape {
             sliders: serde_json::from_value(
                 assets[i].args.get("sliders").cloned().unwrap_or_default(),
@@ -245,7 +245,7 @@ pub(crate) fn bake_shapes(
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let Some(t) = assets.iter().position(|a| a.name == target) else {
+        let Some(t) = assets.iter().position(|a| a.id == target) else {
             return Err(invalid(format!(
                 "Asset '{name}': bake target '{target}' is not in the world"
             )));
@@ -463,31 +463,31 @@ mod tests {
         args["skeleton"] = serde_json::to_value(&joints).unwrap();
         let mut assets = vec![
             WorldJsonlAsset {
-                name: "body".into(),
+                id: "body".into(),
                 asset_type: RegisteredType::SkinnedMesh,
                 args,
             },
             WorldJsonlAsset {
-                name: "shape".into(),
+                id: "shape".into(),
                 asset_type: RegisteredType::CharacterShape,
                 args: serde_json::json!({"target": "body", "bake": true,
                     "sliders": [{"name": "wide", "value": 1.0}]}),
             },
             WorldJsonlAsset {
-                name: "live".into(),
+                id: "live".into(),
                 asset_type: RegisteredType::CharacterShape,
                 args: serde_json::json!({"target": "body"}),
             },
         ];
         bake_shapes(&mut assets, |_| None).expect("bake");
         assert_eq!(assets.len(), 2);
-        assert!(assets.iter().all(|a| a.name != "shape"));
+        assert!(assets.iter().all(|a| a.id != "shape"));
         let body = &assets[0].args;
         assert!(body.get("morph_deltas").is_none());
         assert_eq!(body["vertices"][0]["pos"][0], 1.0);
         assert_eq!(body["skeleton"].as_array().unwrap().len(), 3);
         let mut missing = vec![WorldJsonlAsset {
-            name: "shape".into(),
+            id: "shape".into(),
             asset_type: RegisteredType::CharacterShape,
             args: serde_json::json!({"target": "ghost", "bake": true}),
         }];
@@ -532,13 +532,13 @@ mod tests {
             "proportions": proportions});
         let mut assets = vec![
             WorldJsonlAsset {
-                name: "body".into(),
+                id: "body".into(),
                 asset_type: RegisteredType::SkinnedMesh,
                 args: serde_json::json!({"source": "hero.glb",
                     "capsule": {"half_height": 1.0, "radius": 0.5}}),
             },
             WorldJsonlAsset {
-                name: "shape".into(),
+                id: "shape".into(),
                 asset_type: RegisteredType::CharacterShape,
                 args: shape_args.clone(),
             },
@@ -567,12 +567,12 @@ mod tests {
     fn a_target_with_neither_geometry_nor_a_recorded_scaling_errors() {
         let mut assets = vec![
             WorldJsonlAsset {
-                name: "body".into(),
+                id: "body".into(),
                 asset_type: RegisteredType::SkinnedMesh,
                 args: serde_json::json!({"source": "hero.glb"}),
             },
             WorldJsonlAsset {
-                name: "shape".into(),
+                id: "shape".into(),
                 asset_type: RegisteredType::CharacterShape,
                 args: serde_json::json!({"target": "body", "bake": true}),
             },

@@ -28,6 +28,7 @@ const AUTHORED: CameraPose = CameraPose {
     yaw: 0.0,
     pitch: 0.0,
 };
+use crate::editor::entry_list::EntryList;
 
 // A start-screen hook with no project behind it: everything under test here is
 // driven directly, so the listing it would read is not needed.
@@ -160,7 +161,7 @@ fn a_cycle_opens_on_its_first_moment_whatever_the_frame_dt() {
 #[test]
 fn a_shot_never_reaches_the_authored_world() {
     let mut h = start_hook();
-    h.entries = vec![prop_entry("desk")];
+    h.entries = EntryList::new(vec![prop_entry("desk")]);
     h.saved = h.entries.clone();
     let before = h.entries.clone();
     let bookmarks = h.bookmarks;
@@ -394,7 +395,7 @@ fn opening_the_preview_hands_the_world_its_own_camera_back() {
     h.refresh_worlds();
     h.worlds.selected = Some(path.clone());
     h.worlds.preview = Some(path.clone());
-    h.entries = vec![prop_entry("desk")];
+    h.entries = EntryList::new(vec![prop_entry("desk")]);
     h.world_entries = h.entries.clone();
     let mut world = preview_world(None, true);
     for _ in 0..30 {

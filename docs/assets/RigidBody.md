@@ -12,7 +12,7 @@ slides off steep slopes, and can jump. The capsule size is configured here
 too.
 
 ```json
-{ "name": "player_body", "type": "RigidBody", "args": { "jump_height": 1.4 } }
+{ "type": "RigidBody", "args": { "jump_height": 1.4 } }
 ```
 
 ## Parameters

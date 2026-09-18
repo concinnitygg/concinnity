@@ -35,6 +35,7 @@
 mod gltf_material;
 mod rig;
 
+use crate::authoring::world::args_with_id;
 use concinnity_core::transform::{IDENTITY, Mat4, decompose, euler_yxz_from_quat, mat4_mul};
 use rig::{SkinnedPart, rig_entries};
 use std::collections::{HashMap, HashSet};
@@ -124,9 +125,8 @@ fn entries_from_fbx(path: &str, opts: &ImportOptions) -> std::io::Result<Vec<ser
     let mut tex_names: HashMap<String, String> = HashMap::new();
     let default_mat = format!("{prefix}_mat_default");
     entries.push(serde_json::json!({
-        "name": default_mat,
         "type": "Material",
-        "args": { "roughness": 0.8, "metallic": 0.0 }
+        "args": { "$id": default_mat, "roughness": 0.8, "metallic": 0.0 }
     }));
 
     let mut material_names: Vec<String> = Vec::with_capacity(scene.materials.len());
@@ -215,9 +215,8 @@ fn entries_from_fbx(path: &str, opts: &ImportOptions) -> std::io::Result<Vec<ser
         }
 
         entries.push(serde_json::json!({
-            "name": name,
             "type": "Material",
-            "args": serde_json::Value::Object(args),
+            "args": args_with_id(serde_json::Value::Object(args), &name),
         }));
         material_names.push(name);
     }
@@ -243,9 +242,8 @@ fn entries_from_fbx(path: &str, opts: &ImportOptions) -> std::io::Result<Vec<ser
         if prim.vertices.len() <= U16_CAPACITY {
             let mesh_name = format!("{prefix}_prim_{i}");
             entries.push(serde_json::json!({
-                "name": mesh_name,
                 "type": "Mesh",
-                "args": { "source": path, "primitive_index": i }
+                "args": { "$id": mesh_name, "source": path, "primitive_index": i }
             }));
             primitive_meshes[i].push(mesh_name);
             continue;
@@ -258,9 +256,13 @@ fn entries_from_fbx(path: &str, opts: &ImportOptions) -> std::io::Result<Vec<ser
         for chunk_idx in 0..chunk_count {
             let mesh_name = format!("{prefix}_prim_{i}_chunk_{chunk_idx}");
             entries.push(serde_json::json!({
-                "name": mesh_name,
                 "type": "Mesh",
-                "args": { "source": path, "primitive_index": i, "chunk_index": chunk_idx }
+                "args": {
+                    "$id": mesh_name,
+                    "source": path,
+                    "primitive_index": i,
+                    "chunk_index": chunk_idx
+                }
             }));
             primitive_meshes[i].push(mesh_name);
         }
@@ -287,9 +289,8 @@ fn entries_from_fbx(path: &str, opts: &ImportOptions) -> std::io::Result<Vec<ser
 
         let model_name = format!("{prefix}_model_{pi}");
         entries.push(serde_json::json!({
-            "name": model_name,
             "type": "Model",
-            "args": { "meshes": submeshes }
+            "args": { "$id": model_name, "meshes": submeshes }
         }));
 
         // Prop name: descriptive when the node is named, always suffixed with
@@ -300,9 +301,9 @@ fn entries_from_fbx(path: &str, opts: &ImportOptions) -> std::io::Result<Vec<ser
             format!("{prefix}_{}_{pi}", sanitize_name(&prop.name))
         };
         entries.push(serde_json::json!({
-            "name": prop_name,
             "type": "Prop",
             "args": {
+                "$id": prop_name,
                 "model": model_name,
                 "position": prop.position,
                 "rotation_deg": prop.rotation_deg,
@@ -372,9 +373,8 @@ fn entries_from_glb(
             args.insert("max_size".into(), serde_json::json!(opts.texture_max_size));
         }
         entries.push(serde_json::json!({
-            "name": name,
             "type": "Texture",
-            "args": serde_json::Value::Object(args),
+            "args": args_with_id(serde_json::Value::Object(args), &name),
         }));
     }
 
@@ -384,9 +384,9 @@ fn entries_from_glb(
     // back to.
     let default_mat_name = format!("{prefix}_mat_default");
     entries.push(serde_json::json!({
-        "name": default_mat_name,
         "type": "Material",
         "args": {
+            "$id": default_mat_name,
             "roughness": 0.8,
             "metallic": 0.0,
         }
@@ -407,9 +407,8 @@ fn entries_from_glb(
                 );
             }
             entries.push(serde_json::json!({
-                "name": name,
                 "type": "Material",
-                "args": serde_json::Value::Object(mapped.args),
+                "args": args_with_id(serde_json::Value::Object(mapped.args), &name),
             }));
             name
         })
@@ -477,9 +476,9 @@ fn entries_from_glb(
             if vert_count <= U16_CAPACITY {
                 let mesh_name = format!("{prefix}_prim_{prim_idx}");
                 entries.push(serde_json::json!({
-                    "name": mesh_name,
                     "type": "Mesh",
                     "args": {
+                        "$id": mesh_name,
                         "source": path,
                         "primitive_index": prim_idx,
                     }
@@ -502,9 +501,9 @@ fn entries_from_glb(
             for chunk_idx in 0..chunk_count {
                 let mesh_name = format!("{prefix}_prim_{prim_idx}_chunk_{chunk_idx}");
                 entries.push(serde_json::json!({
-                    "name": mesh_name,
                     "type": "Mesh",
                     "args": {
+                        "$id": mesh_name,
                         "source": path,
                         "primitive_index": prim_idx,
                         "chunk_index": chunk_idx,
@@ -533,9 +532,8 @@ fn entries_from_glb(
             }
             let name = format!("{prefix}_model_{i}");
             entries.push(serde_json::json!({
-                "name": name,
                 "type": "Model",
-                "args": { "meshes": submeshes }
+                "args": { "$id": name, "meshes": submeshes }
             }));
             Some(name)
         })
@@ -620,9 +618,8 @@ fn intern_texture(
         args.insert("max_size".into(), serde_json::json!(max_size));
     }
     entries.push(serde_json::json!({
-        "name": name,
         "type": "Texture",
-        "args": serde_json::Value::Object(args),
+        "args": args_with_id(serde_json::Value::Object(args), &name),
     }));
     tex_names.insert(path.to_string(), name.clone());
     name
@@ -673,9 +670,9 @@ impl SceneWalk<'_> {
                     .map(|n| format!("{prefix}_{}", sanitize_name(n)))
                     .unwrap_or_else(|| format!("{prefix}_node_{idx}"));
                 self.entries.push(serde_json::json!({
-                    "name": prop_name,
                     "type": "Prop",
                     "args": {
+                        "$id": prop_name,
                         "model": model_name,
                         "position": [t[0], t[1], t[2]],
                         "rotation_deg": [rotation_deg[0], rotation_deg[1], rotation_deg[2]],
@@ -777,9 +774,9 @@ fn framed_camera_entry(
     let far = (distance + radius) * 4.0;
 
     Some(serde_json::json!({
-        "name": format!("{prefix}_cam"),
         "type": "Camera3D",
         "args": {
+            "$id": format!("{prefix}_cam"),
             "fov_y_degrees": fov_y_degrees,
             "near": near,
             "far": far,
@@ -840,7 +837,7 @@ mod tests {
     fn framed_camera_frames_a_box() {
         let cam = framed_camera_entry("scene", Some(([-1.0; 3], [1.0; 3]))).unwrap();
         assert_eq!(cam["type"], "Camera3D");
-        assert_eq!(cam["name"], "scene_cam");
+        assert_eq!(cam["args"]["$id"], "scene_cam");
     }
 
     #[test]
@@ -991,7 +988,7 @@ mod tests {
     fn find<'a>(entries: &'a [serde_json::Value], name: &str, ty: &str) -> &'a serde_json::Value {
         entries
             .iter()
-            .find(|e| e["name"] == name && e["type"] == ty)
+            .find(|e| e["args"]["$id"] == name && e["type"] == ty)
             .unwrap_or_else(|| panic!("expected entry {name} of type {ty} in {entries:#?}"))
     }
 
@@ -1041,7 +1038,7 @@ mod tests {
         let prop = find(&entries, "scn_crate_box", "Prop");
         assert_eq!(prop["args"]["model"], "scn_model_0");
         assert_eq!(prop["args"]["position"], serde_json::json!([1.0, 2.0, 4.0]));
-        assert!(entries.iter().all(|e| e["name"] != "scn_pivot"));
+        assert!(entries.iter().all(|e| e["args"]["$id"] != "scn_pivot"));
 
         // A camera is framed to the world-space AABB.
         let cam = find(&entries, "scn_cam", "Camera3D");
@@ -1126,8 +1123,8 @@ mod tests {
         // ...while mesh 0, drawn only by the skinned body, drops them. Its
         // primitive index is still 0, so `mix_prim_1` addresses the file's
         // second primitive as it always did.
-        assert!(entries.iter().all(|e| e["name"] != "mix_prim_0"));
-        assert!(entries.iter().all(|e| e["name"] != "mix_model_0"));
+        assert!(entries.iter().all(|e| e["args"]["$id"] != "mix_prim_0"));
+        assert!(entries.iter().all(|e| e["args"]["$id"] != "mix_model_0"));
         // Both skinned parts still expand.
         find(&entries, "mix_skin_0", "SkinnedMesh");
         find(&entries, "mix_skin_1", "SkinnedMesh");
@@ -1197,7 +1194,7 @@ mod tests {
         // carries the chunk index and there is no unchunked mesh entry.
         let mesh = find(&entries, "big_prim_0_chunk_0", "Mesh");
         assert_eq!(mesh["args"]["chunk_index"], serde_json::json!(0));
-        assert!(entries.iter().all(|e| e["name"] != "big_prim_0"));
+        assert!(entries.iter().all(|e| e["args"]["$id"] != "big_prim_0"));
 
         let model = find(&entries, "big_model_0", "Model");
         assert_eq!(model["args"]["meshes"][0]["mesh"], "big_prim_0_chunk_0");
@@ -1661,7 +1658,7 @@ mod tests {
             assert_eq!(mesh["args"]["primitive_index"], serde_json::json!(i));
             assert!(mesh["args"].get("chunk_index").is_none());
         }
-        assert!(entries.iter().all(|e| e["name"] != "scn_prim_3"));
+        assert!(entries.iter().all(|e| e["args"]["$id"] != "scn_prim_3"));
 
         // The first model groups both of its material slots.
         let model = find(&entries, "scn_model_0", "Model");
@@ -1750,7 +1747,7 @@ mod tests {
             assert_eq!(mesh["args"]["primitive_index"], serde_json::json!(0));
             assert_eq!(mesh["args"]["chunk_index"], serde_json::json!(chunk));
         }
-        assert!(entries.iter().all(|e| e["name"] != "big_prim_0"));
+        assert!(entries.iter().all(|e| e["args"]["$id"] != "big_prim_0"));
 
         let model = find(&entries, "big_model_0", "Model");
         assert_eq!(model["args"]["meshes"][0]["mesh"], "big_prim_0_chunk_0");

@@ -8,6 +8,7 @@
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::registry::build_only::CharacterModel;
 use crate::authoring::world::WorldJsonlAsset;
+use crate::authoring::world::args_with_id;
 use crate::build_only::expand::{asset_name, registered_type};
 use crate::compile::character::import::CharacterModelArg;
 
@@ -60,9 +61,8 @@ pub(crate) fn expand_character_models(
             serde_json::to_value(&arg).map_err(|e| format!("CharacterModel '{name}': {e}"))?,
         );
         result.push(serde_json::json!({
-            "name": name,
             "type": "SkinnedMesh",
-            "args": serde_json::Value::Object(mesh),
+            "args": args_with_id(serde_json::Value::Object(mesh), &name),
         }));
     }
     *asset_values = result;
@@ -76,18 +76,19 @@ mod tests {
     #[test]
     fn a_model_becomes_a_same_named_skinned_mesh_with_its_schema_inlined() {
         let mut assets = vec![
-            serde_json::json!({"name": "sk", "type": "CharacterSchema",
-                "args": {"joints": [{"name": "root"}], "regions": [{"name": "all", "joints": ["root"]}]}}),
-            serde_json::json!({"name": "body", "type": "CharacterModel", "args": {
+            serde_json::json!({"type": "CharacterSchema",
+                "args": {"$id": "sk", "joints": [{"name": "root"}], "regions": [{"name": "all", "joints": ["root"]}]}}),
+            serde_json::json!({"type": "CharacterModel", "args": {
+                "$id": "body",
                 "schema": "sk", "material": "skin", "position": [0, 1, 0],
                 "source": "hero.glb", "lod_levels": 2,
                 "capsule": {"half_height": 0.8, "radius": 0.3}, "max_instances": 2}}),
-            serde_json::json!({"name": "other", "type": "Prop", "args": {}}),
+            serde_json::json!({"type": "Prop", "args": {"$id": "other"}}),
         ];
         expand_character_models(&mut assets).expect("expand");
         assert_eq!(assets.len(), 3);
         let mesh = &assets[1];
-        assert_eq!(mesh["name"], "body");
+        assert_eq!(mesh["args"]["$id"], "body");
         assert_eq!(mesh["type"], "SkinnedMesh");
         let args = &mesh["args"];
         assert_eq!(args["material"], "skin");
@@ -105,12 +106,12 @@ mod tests {
 
     #[test]
     fn an_unknown_schema_or_bad_args_fail_the_expansion() {
-        let mut assets = vec![serde_json::json!({"name": "body", "type": "CharacterModel",
-            "args": {"schema": "ghost", "source": "a.glb"}})];
+        let mut assets = vec![serde_json::json!({"type": "CharacterModel",
+            "args": {"$id": "body", "schema": "ghost", "source": "a.glb"}})];
         let err = expand_character_models(&mut assets).unwrap_err();
         assert!(err.contains("'ghost' is not a CharacterSchema"), "{err}");
-        let mut assets = vec![serde_json::json!({"name": "body", "type": "CharacterModel",
-            "args": {"source": 7}})];
+        let mut assets = vec![serde_json::json!({"type": "CharacterModel",
+            "args": {"$id": "body", "source": 7}})];
         let err = expand_character_models(&mut assets).unwrap_err();
         assert!(err.starts_with("CharacterModel 'body':"), "{err}");
     }

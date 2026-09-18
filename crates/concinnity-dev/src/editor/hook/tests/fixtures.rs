@@ -21,7 +21,7 @@ use concinnity_host::thread::asset_id;
 use crate::debug_hook::DebugHook;
 use crate::editor::behavior;
 use crate::editor::behavior::panel::BehaviorAction;
-use crate::editor::hook::{EditorHook, entry_name, entry_type};
+use crate::editor::hook::{EditorHook, FormTarget, declared_id, entry_type};
 
 use crate::editor::panels::asset_tree::{self, TreeGroup};
 
@@ -37,6 +37,32 @@ use crate::editor::widget;
 
 pub(in crate::editor::hook) fn hook(entries: Vec<serde_json::Value>) -> EditorHook {
     EditorHook::new("unused.jsonl".to_string(), entries)
+}
+
+// Select the assets the world knows by these names, as a click or a marquee
+// release would: each is resolved to the handle addressing it.
+pub(in crate::editor::hook) fn select(h: &mut EditorHook, names: &[&str]) {
+    let handles = names.iter().map(|n| h.handle_for(n)).collect();
+    h.selection.set(handles);
+}
+
+// The selection resolved to names, in selection order, for the assertions.
+pub(in crate::editor::hook) fn selected(h: &EditorHook) -> Vec<String> {
+    h.selection
+        .iter()
+        .filter_map(|m| h.handle_name(m))
+        .collect()
+}
+
+// The active member's name.
+pub(in crate::editor::hook) fn active(h: &EditorHook) -> Option<String> {
+    h.selection.active().and_then(|m| h.handle_name(m))
+}
+
+// The form target addressing working entry `idx`: the form holds the entry's
+// session key, which only the list can hand out.
+pub(in crate::editor::hook) fn entry_target(h: &EditorHook, idx: usize) -> FormTarget {
+    FormTarget::Entry(h.entries.key_at(idx).expect("an entry at idx"))
 }
 
 // The shared title-bar / close-button rects the routing derives for a panel
@@ -93,7 +119,7 @@ pub(in crate::editor::hook) fn set_field(world: &mut World, id: AssetId, text: &
 }
 
 pub(in crate::editor::hook) fn entry(name: &str, ty: &str) -> serde_json::Value {
-    serde_json::json!({"name": name, "type": ty, "args": {}})
+    serde_json::json!({"type": ty, "args": {"$id": name}})
 }
 
 pub(in crate::editor::hook) fn entry_with_args(
@@ -101,7 +127,7 @@ pub(in crate::editor::hook) fn entry_with_args(
     ty: &str,
     args: serde_json::Value,
 ) -> serde_json::Value {
-    serde_json::json!({"name": name, "type": ty, "args": args})
+    serde_json::json!({"type": ty, "args": concinnity_cook::authoring::world::args_with_id(args, name)})
 }
 
 // Seed the cooked tree the panel rows come from, without paying for a real
@@ -115,7 +141,7 @@ pub(in crate::editor::hook) fn seed_tree(h: &mut EditorHook, extra: Vec<TreeGrou
             .entries
             .iter()
             .map(|e| asset_tree::TreeAsset {
-                name: entry_name(e).unwrap_or_default().to_string(),
+                name: declared_id(e).unwrap_or_default().to_string(),
                 asset_type: entry_type(e)
                     .and_then(RegisteredType::parse)
                     .expect("a registered entry type"),
@@ -144,7 +170,7 @@ pub(in crate::editor::hook) fn generated_group(
                 asset_type: *ty,
                 badge: asset_tree::Badge::Imported,
                 promote: Some(serde_json::json!({
-                    "name": name, "type": ty.as_str(), "args": {},
+                    "type": ty.as_str(), "args": {"$id": name},
                 })),
             })
             .collect(),
@@ -283,7 +309,7 @@ pub(in crate::editor::hook) fn drag_input(pos: [f32; 2], held: bool) -> FrameInp
 }
 
 pub(in crate::editor::hook) fn behavior(name: &str, args: serde_json::Value) -> serde_json::Value {
-    serde_json::json!({"name": name, "type": "Behavior", "args": args})
+    serde_json::json!({"type": "Behavior", "args": concinnity_cook::authoring::world::args_with_id(args, name)})
 }
 
 // An open Behavior panel over `entries`, with its value field injected.
@@ -364,7 +390,7 @@ pub(in crate::editor::hook) fn two_prop_rig(
     for s in gizmo::sprites() {
         world.add_component(s);
     }
-    let entry = |name: &str, p: [f32; 3]| serde_json::json!({ "name": name, "type": "Prop", "args": { "position": p } });
+    let entry = |name: &str, p: [f32; 3]| serde_json::json!({ "type": "Prop", "args": { "$id": name, "position": p } });
     let h = hook(vec![entry("box_a", s1), entry("box_b", s2)]);
     (world, e1, e2, h)
 }
@@ -384,11 +410,13 @@ pub(in crate::editor::hook) fn playing_hook(entries: Vec<serde_json::Value>) -> 
 
 pub(in crate::editor::hook) fn shape_world_entries() -> Vec<serde_json::Value> {
     vec![
-        serde_json::json!({"name": "body", "type": "SkinnedMesh", "args": {
+        serde_json::json!({"type": "SkinnedMesh", "args": {
+            "$id": "body",
             "morph_target_names": ["jaw+", "jaw-", "muscle"],
             "skeleton": [{"name": "root", "parent": -1}, {"name": "thigh_l", "parent": 0}]
         }}),
-        serde_json::json!({"name": "body_shape", "type": "CharacterShape", "args": {
+        serde_json::json!({"type": "CharacterShape", "args": {
+            "$id": "body_shape",
             "target": "body", "sliders": [{"name": "muscle", "value": 0.3}]
         }}),
     ]
@@ -399,7 +427,7 @@ pub(in crate::editor::hook) fn shape_world_entries() -> Vec<serde_json::Value> {
 pub(in crate::editor::hook) fn expandable_hook() -> EditorHook {
     isolate_state_dir();
     let mut h = hook(vec![serde_json::json!({
-        "name": "gfx", "type": "GraphicsConfig", "args": {}
+        "type": "GraphicsConfig", "args": {"$id": "gfx"}
     })]);
     h.panel_open = true;
     h
@@ -456,7 +484,7 @@ pub(in crate::editor::hook) fn open_project(dir: &std::path::Path) {
 }
 
 pub(in crate::editor::hook) fn prop_entry(name: &str) -> serde_json::Value {
-    serde_json::json!({"name": name, "type": "Prop", "args": {}})
+    serde_json::json!({"type": "Prop", "args": {"$id": name}})
 }
 
 // Write a world file with `entries` and pin its mtime, so a listing's order is

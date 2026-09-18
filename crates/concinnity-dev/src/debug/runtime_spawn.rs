@@ -24,6 +24,7 @@ use concinnity_core::components::SpawnRequest;
 use concinnity_core::components::StoryCommand;
 use concinnity_core::components::Transform;
 use concinnity_core::ecs::World;
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::gfx::camera;
 use concinnity_core::input::keymap::Bindable;
 use concinnity_core::render::backend;
@@ -520,23 +521,21 @@ pub(crate) fn dispatch_world_command(
             lifetime,
             reply,
         } => {
-            let result = asset_id::lookup(&template)
-                .ok_or_else(|| format!("spawn: template '{template}' not found"))
-                .map(|template_id| {
-                    // A zero scale (the array default when the request omits it)
-                    // would make the instance invisible; treat it as unit scale.
-                    let scale = if scale == [0.0; 3] { [1.0; 3] } else { scale };
-                    world.events_mut::<SpawnRequest>().send(SpawnRequest {
-                        template: template_id,
-                        name: Some(asset_id::intern(&name)),
-                        transform: Transform {
-                            position,
-                            rotation_deg,
-                            scale,
-                        },
-                        lifetime_secs: lifetime,
-                    });
+            let result = spawn_ids(&template, &name).map(|template_id| {
+                // A zero scale (the array default when the request omits it)
+                // would make the instance invisible; treat it as unit scale.
+                let scale = if scale == [0.0; 3] { [1.0; 3] } else { scale };
+                world.events_mut::<SpawnRequest>().send(SpawnRequest {
+                    template: template_id,
+                    name: Some(asset_id::intern(&name)),
+                    transform: Transform {
+                        position,
+                        rotation_deg,
+                        scale,
+                    },
+                    lifetime_secs: lifetime,
                 });
+            });
             let _ = reply.send(result);
         }
         WorldCommand::Story { command, reply } => {
@@ -544,6 +543,17 @@ pub(crate) fn dispatch_world_command(
             let _ = reply.send(Ok(()));
         }
     }
+}
+
+// Resolve a spawn's template to its id, refusing a new-instance name some
+// asset is already known by: interning it would hand back that asset's id.
+fn spawn_ids(template: &str, name: &str) -> Result<AssetId, String> {
+    let template_id = asset_id::lookup(template)
+        .ok_or_else(|| format!("spawn: template '{template}' not found"))?;
+    if asset_id::lookup(name).is_some() {
+        return Err(format!("spawn: '{name}' already names an asset"));
+    }
+    Ok(template_id)
 }
 
 // Send the `SettingCommand` the settings menu emits. `GraphicsSystem` applies it
@@ -650,6 +660,22 @@ fn resolve_texture_slot(
 
 #[cfg(test)]
 mod tests {
+
+    // A spawn resolves its template by handle, labels included, and refuses a
+    // new name that an asset is already known by.
+    #[test]
+    fn spawn_ids_resolve_the_template_and_refuse_a_taken_name() {
+        asset_id::reset_interner();
+        asset_id::prime_name_table(&[(0, "crate".to_string()), (1, "Prop#0".to_string())]);
+        assert_eq!(spawn_ids("Prop#0", "crate_copy"), Ok(AssetId(1)));
+        assert!(spawn_ids("ghost", "x").unwrap_err().contains("not found"));
+        assert!(
+            spawn_ids("crate", "Prop#0")
+                .unwrap_err()
+                .contains("already names")
+        );
+    }
+
     use super::*;
     use crate::debug::test_backend::StubBackend;
     use crate::test_support;

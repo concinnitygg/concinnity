@@ -202,7 +202,7 @@ mod tests {
     // A world with no SceneImport is left untouched.
     #[test]
     fn passes_through_without_imports() {
-        let mut assets = vec![serde_json::json!({"name":"x","type":"Logger","args":{}})];
+        let mut assets = vec![serde_json::json!({"type":"Logger","args":{"$id":"x"}})];
         let mut report = ExpandReport::default();
         expand_scene_imports(&mut assets, &mut report, None).unwrap();
         assert_eq!(assets.len(), 1);
@@ -212,7 +212,7 @@ mod tests {
     #[test]
     fn missing_source_is_an_error() {
         let mut assets = vec![serde_json::json!({
-            "name": "scene", "type": "SceneImport", "args": {}
+            "type": "SceneImport", "args": {"$id": "scene"}
         })];
         let mut report = ExpandReport::default();
         let err = expand_scene_imports(&mut assets, &mut report, None).unwrap_err();
@@ -222,7 +222,7 @@ mod tests {
     // An import with no args at all is the same missing-source failure.
     #[test]
     fn an_import_without_args_is_a_missing_source() {
-        let mut assets = vec![serde_json::json!({"name":"scene","type":"SceneImport"})];
+        let mut assets = vec![serde_json::json!({"type":"SceneImport","args":{"$id":"scene"}})];
         let mut report = ExpandReport::default();
         let err = expand_scene_imports(&mut assets, &mut report, None).unwrap_err();
         assert!(
@@ -250,8 +250,9 @@ mod tests {
                 "`emissive_map_strength`",
             ),
         ] {
-            let mut assets =
-                vec![serde_json::json!({"name": "scene", "type": "SceneImport", "args": args})];
+            let mut assets = vec![
+                serde_json::json!({"type": "SceneImport", "args": crate::authoring::world::args_with_id(args, "scene")}),
+            ];
             let mut report = ExpandReport::default();
             let err = expand_scene_imports(&mut assets, &mut report, None).unwrap_err();
             assert!(
@@ -265,7 +266,7 @@ mod tests {
     #[test]
     fn unsupported_source_format_is_an_error() {
         let mut assets = vec![serde_json::json!({
-            "name": "scene", "type": "SceneImport", "args": {"source": "thing.txt"}
+            "type": "SceneImport", "args": {"$id": "scene", "source": "thing.txt"}
         })];
         let mut report = ExpandReport::default();
         let err = expand_scene_imports(&mut assets, &mut report, None).unwrap_err();
@@ -294,7 +295,7 @@ mod tests {
         for (k, v) in extra.as_object().cloned().unwrap_or_default() {
             args[k] = v;
         }
-        serde_json::json!({"name": name, "type": "SceneImport", "args": args})
+        serde_json::json!({"type": "SceneImport", "args": crate::authoring::world::args_with_id(args, name)})
     }
 
     // The import is replaced by its generated entries, every one prefixed with
@@ -305,13 +306,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let source = triangle_gltf(dir.path());
         let mut assets = vec![
-            serde_json::json!({"name":"gfx","type":"GraphicsConfig","args":{}}),
+            serde_json::json!({"type":"GraphicsConfig","args":{"$id":"gfx"}}),
             scene_import("bistro", &source, serde_json::json!({})),
         ];
         let mut report = ExpandReport::default();
         expand_scene_imports(&mut assets, &mut report, None).unwrap();
 
-        assert_eq!(assets[0]["name"], "gfx");
+        assert_eq!(assets[0]["args"]["$id"], "gfx");
         assert!(
             !assets
                 .iter()
@@ -363,7 +364,7 @@ mod tests {
         // A CameraShot has not expanded to its Camera3D yet, but still counts
         // as the world's own camera.
         let mut authored = vec![
-            serde_json::json!({"name":"cam","type":"CameraShot","args":{}}),
+            serde_json::json!({"type":"CameraShot","args":{"$id":"cam"}}),
             scene_import("a", &source, serde_json::json!({})),
         ];
         expand_scene_imports(&mut authored, &mut ExpandReport::default(), None).unwrap();
@@ -420,7 +421,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let source = triangle_gltf(dir.path());
         let mut assets = vec![
-            serde_json::json!({"name":"bistro_mat_default","type":"Sprite","args":{}}),
+            serde_json::json!({"type":"Sprite","args":{"$id":"bistro_mat_default"}}),
             scene_import("bistro", &source, serde_json::json!({})),
         ];
         let mut report = ExpandReport::default();
@@ -449,7 +450,7 @@ mod tests {
         let source = triangle_gltf(dir.path());
         let mut assets = vec![
             serde_json::json!({
-                "name":"bistro_mat_default","type":"Material","args":{"roughness":0.1}
+                "type":"Material","args":{"$id":"bistro_mat_default","roughness":0.1}
             }),
             scene_import("bistro", &source, serde_json::json!({})),
         ];
@@ -483,7 +484,7 @@ mod tests {
     // recorded against the import that produced it.
     #[test]
     fn a_generated_entry_is_emitted_and_recorded() {
-        let entry = serde_json::json!({"name": "bistro_mat_wood", "type": "Material"});
+        let entry = serde_json::json!({"type": "Material", "args": {"$id": "bistro_mat_wood"}});
         let mut report = ExpandReport::default();
         assert!(resolve(&entry, &authored_map(&[]), &mut report).unwrap());
         assert!(report.shadowed.is_empty());
@@ -498,7 +499,7 @@ mod tests {
     // asset is still accounted for.
     #[test]
     fn an_authored_copy_shadows_the_generated_entry() {
-        let entry = serde_json::json!({"name": "bistro_mat_wood", "type": "Material"});
+        let entry = serde_json::json!({"type": "Material", "args": {"$id": "bistro_mat_wood"}});
         let authored = authored_map(&[("bistro_mat_wood", RegisteredType::Material)]);
         let mut report = ExpandReport::default();
         assert!(!resolve(&entry, &authored, &mut report).unwrap());
@@ -513,14 +514,14 @@ mod tests {
     // while an entry whose type does not parse cannot be.
     #[test]
     fn shadowing_matches_the_exact_type() {
-        let entry = serde_json::json!({"name": "bistro_cam", "type": "Camera3D"});
+        let entry = serde_json::json!({"type": "Camera3D", "args": {"$id": "bistro_cam"}});
         let authored = authored_map(&[("bistro_cam", RegisteredType::Camera3D)]);
         let mut report = ExpandReport::default();
         assert!(!resolve(&entry, &authored, &mut report).unwrap());
         assert_eq!(report.shadowed.len(), 1);
         assert_eq!(report.shadowed[0].asset_type, "Camera3D");
 
-        let inexact = serde_json::json!({"name": "bistro_cam", "type": "camera_3d"});
+        let inexact = serde_json::json!({"type": "camera_3d", "args": {"$id": "bistro_cam"}});
         let mut report = ExpandReport::default();
         assert!(resolve(&inexact, &authored, &mut report).is_err());
         assert!(report.shadowed.is_empty());
@@ -530,7 +531,7 @@ mod tests {
     // entry, so it is an accident worth reporting rather than an override.
     #[test]
     fn a_same_name_different_type_asset_is_an_error() {
-        let entry = serde_json::json!({"name": "bistro_mat_wood", "type": "Material"});
+        let entry = serde_json::json!({"type": "Material", "args": {"$id": "bistro_mat_wood"}});
         let authored = authored_map(&[("bistro_mat_wood", RegisteredType::Sprite)]);
         let mut report = ExpandReport::default();
         let err = resolve(&entry, &authored, &mut report).unwrap_err();
@@ -547,7 +548,7 @@ mod tests {
     // user override, so it stays a hard error.
     #[test]
     fn two_imports_generating_the_same_name_is_an_error() {
-        let entry = serde_json::json!({"name": "shared_mat", "type": "Material"});
+        let entry = serde_json::json!({"type": "Material", "args": {"$id": "shared_mat"}});
         let authored = authored_map(&[]);
         let mut report = ExpandReport::default();
         let mut taken = HashSet::new();
@@ -559,7 +560,7 @@ mod tests {
 
     #[test]
     fn type_of_reads_the_declared_type_as_written() {
-        let v = serde_json::json!({"name": "m", "type": "Material"});
+        let v = serde_json::json!({"type": "Material", "args": {"$id": "m"}});
         assert_eq!(type_of(&v), "Material");
         assert_eq!(type_of(&serde_json::json!({"name": "m"})), "?");
         let c = serde_json::json!({"type": "Camera_3D"});

@@ -17,7 +17,7 @@ use crate::editor::hook::tests::fixtures::{
     behavior, behavior_escape_input, behavior_row, behavior_session, entry, open_args,
     press_behavior_key, press_remove, select_behavior, story_key_input, type_name,
 };
-use crate::editor::hook::{EditorHook, entry_name};
+use crate::editor::hook::{EditorHook, declared_id};
 
 use crate::editor::panels::registry::PanelKey;
 
@@ -81,8 +81,8 @@ fn behavior_status_reports_the_checkers_message() {
 // authoritative and a misspelled name is caught in the panel.
 #[test]
 fn behavior_status_enforces_the_declared_variable_table() {
-    let vars = serde_json::json!({"name": "world_vars", "type": "Variables",
-        "args": {"vars": [{"name": "health", "value": {"float": 100.0}}]}});
+    let vars = serde_json::json!({"type": "Variables",
+        "args": {"$id": "world_vars", "vars": [{"name": "health", "value": {"float": 100.0}}]}});
     let (h, _) = behavior_session(vec![
         vars,
         behavior(
@@ -231,7 +231,7 @@ fn behavior_remove_takes_the_open_behavior_not_a_node() {
     assert_eq!(open_args(&h), body, "the survivor's body is untouched");
     assert!(h.dirty && h.rebuild_preview, "removing one is a world edit");
     assert!(
-        h.entries.iter().all(|e| entry_name(e) != Some("greet")),
+        h.entries.iter().all(|e| declared_id(e) != Some("greet")),
         "the authored line is gone"
     );
 }

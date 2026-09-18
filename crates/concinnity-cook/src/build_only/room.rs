@@ -14,7 +14,7 @@ const GENERATORS: &[&str] = &[
 pub(crate) fn expand_room_textures(asset_values: &mut Vec<serde_json::Value>) {
     let existing: std::collections::HashSet<String> = asset_values
         .iter()
-        .filter_map(|v| v.get("name").and_then(|n| n.as_str()).map(str::to_string))
+        .filter_map(|v| crate::authoring::world::entry_id(v).map(str::to_string))
         .collect();
 
     let mut auto: Vec<serde_json::Value> = Vec::new();
@@ -40,9 +40,8 @@ pub(crate) fn expand_room_textures(asset_values: &mut Vec<serde_json::Value>) {
                     && GENERATORS.contains(&name)
                 {
                     auto.push(serde_json::json!({
-                        "name": name,
                         "type": "Texture",
-                        "args": {"generator": name}
+                        "args": {"$id": name, "generator": name}
                     }));
                     seen.insert(name.to_string());
                     tracing::debug!("build: auto-created Texture '{}' for Room reference", name);
@@ -65,10 +64,10 @@ mod tests {
     #[test]
     fn auto_creates_known_generator() {
         let mut assets =
-            vec![serde_json::json!({"name":"r","type":"Room","args":{"wall_texture":"brick"}})];
+            vec![serde_json::json!({"type":"Room","args":{"$id":"r","wall_texture":"brick"}})];
         expand_room_textures(&mut assets);
         assert_eq!(assets.len(), 2);
-        assert_eq!(assets[0]["name"], "brick");
+        assert_eq!(assets[0]["args"]["$id"], "brick");
         assert_eq!(assets[0]["type"], "Texture");
         assert_eq!(assets[0]["args"]["generator"], "brick");
     }
@@ -76,17 +75,23 @@ mod tests {
     #[test]
     fn no_duplicate_if_already_declared() {
         let mut assets = vec![
-            serde_json::json!({"name":"brick","type":"Texture","args":{"generator":"brick"}}),
-            serde_json::json!({"name":"r","type":"Room","args":{"wall_texture":"brick"}}),
+            serde_json::json!({"type":"Texture","args":{"$id":"brick","generator":"brick"}}),
+            serde_json::json!({"type":"Room","args":{"$id":"r","wall_texture":"brick"}}),
         ];
         expand_room_textures(&mut assets);
-        assert_eq!(assets.iter().filter(|v| v["name"] == "brick").count(), 1);
+        assert_eq!(
+            assets
+                .iter()
+                .filter(|v| v["args"]["$id"] == "brick")
+                .count(),
+            1
+        );
     }
 
     #[test]
     fn unknown_generator_not_created() {
         let mut assets = vec![
-            serde_json::json!({"name":"r","type":"Room","args":{"wall_texture":"unknown_gen"}}),
+            serde_json::json!({"type":"Room","args":{"$id":"r","wall_texture":"unknown_gen"}}),
         ];
         expand_room_textures(&mut assets);
         assert_eq!(assets.len(), 1);
@@ -95,9 +100,9 @@ mod tests {
     #[test]
     fn multiple_fields_all_auto_created() {
         let mut assets = vec![serde_json::json!({
-            "name": "r",
             "type": "Room",
             "args": {
+                "$id": "r",
                 "wall_texture": "brick",
                 "floor_texture": "wood",
                 "ceiling_texture": "concrete"
@@ -107,7 +112,7 @@ mod tests {
         let tex_names: Vec<&str> = assets
             .iter()
             .filter(|v| v["type"] == "Texture")
-            .filter_map(|v| v["name"].as_str())
+            .filter_map(|v| v["args"]["$id"].as_str())
             .collect();
         assert!(tex_names.contains(&"brick"));
         assert!(tex_names.contains(&"wood"));
@@ -117,17 +122,22 @@ mod tests {
     #[test]
     fn same_generator_used_twice_only_created_once() {
         let mut assets = vec![serde_json::json!({
-            "name": "r",
             "type": "Room",
-            "args": {"wall_texture": "brick", "floor_texture": "brick"}
+            "args": {"$id": "r", "wall_texture": "brick", "floor_texture": "brick"}
         })];
         expand_room_textures(&mut assets);
-        assert_eq!(assets.iter().filter(|v| v["name"] == "brick").count(), 1);
+        assert_eq!(
+            assets
+                .iter()
+                .filter(|v| v["args"]["$id"] == "brick")
+                .count(),
+            1
+        );
     }
 
     #[test]
     fn room_without_args_creates_nothing() {
-        let mut assets = vec![serde_json::json!({"name":"r","type":"Room"})];
+        let mut assets = vec![serde_json::json!({"type":"Room","args":{"$id":"r"}})];
         expand_room_textures(&mut assets);
         assert_eq!(assets.len(), 1);
     }
@@ -136,14 +146,14 @@ mod tests {
     #[test]
     fn empty_texture_field_creates_nothing() {
         let mut assets =
-            vec![serde_json::json!({"name":"r","type":"Room","args":{"wall_texture":""}})];
+            vec![serde_json::json!({"type":"Room","args":{"$id":"r","wall_texture":""}})];
         expand_room_textures(&mut assets);
         assert_eq!(assets.len(), 1);
     }
 
     #[test]
     fn non_room_assets_unchanged() {
-        let mut assets = vec![serde_json::json!({"name":"x","type":"Logger","args":{}})];
+        let mut assets = vec![serde_json::json!({"type":"Logger","args":{"$id":"x"}})];
         expand_room_textures(&mut assets);
         assert_eq!(assets.len(), 1);
         assert_eq!(assets[0]["type"], "Logger");

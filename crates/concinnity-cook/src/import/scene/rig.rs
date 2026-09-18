@@ -32,9 +32,9 @@ pub(super) fn rig_entries(
     for part in parts {
         let mesh_name = skinned_mesh_name(prefix, part.skin_index);
         entries.push(serde_json::json!({
-            "name": mesh_name,
             "type": "SkinnedMesh",
             "args": {
+                "$id": mesh_name,
                 "source": source,
                 "skin_index": part.skin_index,
                 "material": part.material,
@@ -44,9 +44,9 @@ pub(super) fn rig_entries(
         }));
         for (clip_index, clip) in clips.iter().enumerate() {
             entries.push(serde_json::json!({
-                "name": animation_name(prefix, part.skin_index, clip, clip_index),
                 "type": "Animation",
                 "args": {
+                    "$id": animation_name(prefix, part.skin_index, clip, clip_index),
                     "target": mesh_name,
                     "source": source,
                     "animation_index": clip_index,
@@ -95,7 +95,7 @@ mod tests {
     fn a_rig_without_clips_generates_only_the_mesh() {
         let entries = rig_entries("hero", "hero.glb", &[part(0, "hero_mat_0")], &[]);
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0]["name"], "hero_skin_0");
+        assert_eq!(entries[0]["args"]["$id"], "hero_skin_0");
         assert_eq!(entries[0]["type"], "SkinnedMesh");
         assert_eq!(entries[0]["args"]["source"], "hero.glb");
         assert_eq!(entries[0]["args"]["skin_index"], serde_json::json!(0));
@@ -117,7 +117,7 @@ mod tests {
         );
         let names: Vec<&str> = entries
             .iter()
-            .map(|e| e["name"].as_str().unwrap())
+            .map(|e| e["args"]["$id"].as_str().unwrap())
             .collect();
         assert_eq!(
             names,
@@ -148,7 +148,7 @@ mod tests {
             &[part(0, "hero_mat_default")],
             &[String::new()],
         );
-        assert_eq!(entries[1]["name"], "hero_anim_0_clip_0");
+        assert_eq!(entries[1]["args"]["$id"], "hero_anim_0_clip_0");
     }
 
     #[test]
@@ -159,6 +159,6 @@ mod tests {
             &[part(0, "m")],
             &["Idle-Loop.02".to_string()],
         );
-        assert_eq!(entries[1]["name"], "hero_anim_0_idle_loop_02_0");
+        assert_eq!(entries[1]["args"]["$id"], "hero_anim_0_idle_loop_02_0");
     }
 }

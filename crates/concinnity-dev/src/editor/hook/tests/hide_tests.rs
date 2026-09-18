@@ -10,6 +10,7 @@ use super::fixtures::{entry, hook, row_of, seed_tree, world_with_input};
 
 use crate::debug_hook::DebugHook;
 
+use crate::editor::hook::tests::fixtures::select;
 use crate::editor::panels::assets_panel::PanelAction;
 
 // The row eye and lock are editor-session state: they flip the hook's sets (the
@@ -26,8 +27,8 @@ fn hide_and_lock_are_session_state_not_edits() {
 
     h.apply_panel(PanelAction::ToggleHide(g, i), &mut world);
     h.apply_panel(PanelAction::ToggleLock(g, i), &mut world);
-    assert!(h.hidden_assets.contains("box"));
-    assert!(h.locked_assets.contains("box"));
+    assert!(h.hidden_assets.contains(&h.handle_for("box")));
+    assert!(h.locked_assets.contains(&h.handle_for("box")));
     assert!(!h.dirty, "session toggles are not authored edits");
 
     h.tick(&mut world);
@@ -46,24 +47,46 @@ fn hide_and_lock_are_session_state_not_edits() {
 #[test]
 fn hide_isolate_and_unhide_compose() {
     let mut h = hook(vec![entry("a", "Sprite"), entry("b", "Sprite")]);
-    h.selection.replace("a".to_string());
+    select(&mut h, &["a"]);
     h.hide_selected();
-    assert!(h.hidden_assets.contains("a"));
+    assert!(h.hidden_assets.contains(&h.handle_for("a")));
 
-    h.selection.replace("b".to_string());
+    select(&mut h, &["b"]);
     h.toggle_isolate();
     assert!(h.isolate.is_some());
-    assert!(h.name_hidden("a"), "manual hide survives isolate");
-    assert!(!h.name_hidden("b"), "the isolated selection stays visible");
+    assert!(
+        h.handle_hidden(&h.handle_for("a")),
+        "manual hide survives isolate"
+    );
+    assert!(
+        !h.handle_hidden(&h.handle_for("b")),
+        "the isolated selection stays visible"
+    );
 
     h.toggle_isolate();
     assert!(h.isolate.is_none());
     assert!(
-        h.name_hidden("a"),
+        h.handle_hidden(&h.handle_for("a")),
         "leaving isolate restores the manual set"
     );
-    assert!(!h.name_hidden("b"));
+    assert!(!h.handle_hidden(&h.handle_for("b")));
 
     h.unhide_all();
     assert!(h.hidden_assets.is_empty() && h.isolate.is_none());
+}
+
+// The hide set holds handles, so hiding an anonymous entry follows that entry
+// when another removal relabels it, rather than staying on the label.
+#[test]
+fn a_hidden_anonymous_entry_stays_hidden_through_a_relabel() {
+    let anon = || serde_json::json!({"type": "Sprite", "args": {}});
+    let mut h = hook(vec![anon(), anon()]);
+    select(&mut h, &["Sprite#1"]);
+    h.hide_selected();
+    h.entries.remove(0);
+    assert!(
+        h.handle_hidden(&h.handle_for("Sprite#0")),
+        "the same entry, relabeled"
+    );
+    assert_eq!(h.hidden_assets.len(), 1);
 }

@@ -43,10 +43,7 @@ pub(crate) struct ListRow {
     pub entry: Option<usize>,
 }
 
-// The `name` / `type` string of a world-line entry, if present.
-fn entry_name(e: &serde_json::Value) -> Option<&str> {
-    e.get("name").and_then(|v| v.as_str())
-}
+// The `type` string of a world-line entry, if present.
 fn entry_type(e: &serde_json::Value) -> Option<&str> {
     e.get("type").and_then(|v| v.as_str())
 }
@@ -73,6 +70,7 @@ pub(crate) fn grouped_rows(
     type_filter: Option<&str>,
 ) -> Vec<ListRow> {
     let mut rows = Vec::new();
+    let handles = concinnity_cook::authoring::world::entry_handles(entries);
     for ty in distinct_types(entries) {
         if let Some(f) = type_filter
             && ty != f
@@ -81,9 +79,10 @@ pub(crate) fn grouped_rows(
         }
         let mut named: Vec<(usize, String)> = entries
             .iter()
+            .zip(&handles)
             .enumerate()
-            .filter_map(|(i, e)| {
-                let name = entry_name(e)?;
+            .filter_map(|(i, (e, name))| {
+                let name = name.as_deref()?;
                 (entry_type(e) == Some(ty.as_str())).then(|| (i, name.to_string()))
             })
             .collect();
@@ -203,7 +202,7 @@ mod tests {
     use concinnity_core::components::{Sprite, TextLabel};
 
     fn entry(name: &str, ty: &str) -> serde_json::Value {
-        serde_json::json!({"name": name, "type": ty, "args": {}})
+        serde_json::json!({"type": ty, "args": {"$id": name}})
     }
 
     // Types sort alphabetically; names sort alphabetically within their type; name

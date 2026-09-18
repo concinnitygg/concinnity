@@ -8,12 +8,14 @@
 //! that already selected the cell.
 
 use concinnity_cook::authoring::registry::RegisteredType;
+use concinnity_cook::authoring::world::find_entry;
 use concinnity_core::components::{Camera3D, FrameInput, Transform};
 use concinnity_core::ecs::PickIndex;
 use concinnity_core::ecs::World;
 
+use crate::editor::asset_handle::AssetHandle;
 use crate::editor::hook::pick;
-use crate::editor::hook::{EditorHook, entry_name, entry_type};
+use crate::editor::hook::{EditorHook, entry_type};
 use crate::editor::panels::content_panel;
 use crate::editor::panels::registry::PanelKey;
 use crate::editor::theme;
@@ -160,12 +162,11 @@ impl EditorHook {
                 serde_json::json!(pose.rotation_deg),
             );
         }
-        let name = self.unique_from(&drag.name);
-        self.entries.push(serde_json::json!({
-            "name": name, "type": "Prop", "args": args
-        }));
+        let key = self
+            .entries
+            .push(serde_json::json!({ "type": "Prop", "args": args }));
         self.mark_changed();
-        self.selection.replace(name);
+        self.selection.replace(AssetHandle::Entry(key));
     }
 
     // The landing position under the cursor. Shared with the create menu,
@@ -247,10 +248,7 @@ impl EditorHook {
             .ray_hit_names(world, &ray)
             .into_iter()
             .find_map(|name| {
-                let idx = self
-                    .entries
-                    .iter()
-                    .position(|e| entry_name(e) == Some(&name))?;
+                let idx = find_entry(&self.entries, &name)?;
                 (entry_type(&self.entries[idx]) == Some("Prop")).then_some(idx)
             });
         let Some(idx) = hit else {

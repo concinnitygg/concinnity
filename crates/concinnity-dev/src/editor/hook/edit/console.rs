@@ -7,13 +7,15 @@
 //! this editor's name table empty), and everything reports through the shared
 //! log sink.
 
-use concinnity_cook::authoring::world::write_world_jsonl;
+use concinnity_cook::authoring::world::{
+    entry_handle, find_entry, set_entry_id, write_world_jsonl,
+};
 use concinnity_core::components::FrameInput;
 use concinnity_core::components::InputKey;
 use concinnity_core::ecs::World;
 use std::sync::atomic::Ordering;
 
-use crate::editor::hook::{EditorHook, FormTarget, entry_name, entry_type, scroll_step};
+use crate::editor::hook::{EditorHook, declared_id, entry_type, scroll_step};
 use crate::editor::notify;
 use crate::editor::panels::console;
 use crate::editor::panels::console_panel::{self, ConsoleAction, ConsoleView};
@@ -108,7 +110,7 @@ impl EditorHook {
     // text, matched against the authored entry names.
     pub(in crate::editor::hook) fn console_ghost(&self, world: &World) -> String {
         let text = widget::field_text(world, console_panel::INPUT);
-        console::del_ghost(&text, self.entries.iter().filter_map(entry_name)).unwrap_or_default()
+        console::del_ghost(&text, self.entries.iter().filter_map(declared_id)).unwrap_or_default()
     }
 
     // Step the log window; landing on the last line re-pins it to the tail.
@@ -167,7 +169,8 @@ impl EditorHook {
 
     fn accept_console_ghost(&mut self, world: &mut World) {
         let text = widget::field_text(world, console_panel::INPUT);
-        if let Some(ghost) = console::del_ghost(&text, self.entries.iter().filter_map(entry_name)) {
+        if let Some(ghost) = console::del_ghost(&text, self.entries.iter().filter_map(declared_id))
+        {
             widget::focus_field_with(world, console_panel::INPUT, &format!("{text}{ghost}"));
         }
     }
@@ -225,7 +228,7 @@ impl EditorHook {
             }
         };
         if let Some(n) = name {
-            crate::authoring::apply_name_override(&mut new_entries, n);
+            crate::authoring::apply_id_override(&mut new_entries, n);
         }
         // An `.hdr` into a world that already has a lighting environment
         // retargets it rather than appending a second one the runtime would
@@ -238,36 +241,28 @@ impl EditorHook {
             return;
         }
         for entry in &mut new_entries {
-            let base = entry_name(entry).unwrap_or("asset").to_string();
-            let unique = self.unique_from(&base);
-            entry["name"] = serde_json::Value::String(unique.clone());
+            if let Some(base) = declared_id(entry).map(str::to_string) {
+                set_entry_id(entry, &self.unique_from(&base));
+            }
             let ty = entry_type(entry).unwrap_or("?").to_string();
             self.entries.push(entry.clone());
-            self.console_sink.info(&format!("added '{unique}' ({ty})"));
+            let handle = entry_handle(&self.entries, self.entries.len() - 1).unwrap_or_default();
+            self.console_sink.info(&format!("added '{handle}' ({ty})"));
         }
         self.mark_changed();
     }
 
-    // /del: remove the authored entry by name, with the same open-form index
-    // fixups as the browse list's Delete.
+    // /del: remove the authored entry by its handle (a `$id`, or the label of
+    // an anonymous entry), with the same open-form index fixups as the browse
+    // list's Delete.
     fn console_del(&mut self, name: &str) {
-        let Some(idx) = self
-            .entries
-            .iter()
-            .position(|e| entry_name(e) == Some(name))
-        else {
+        let Some(idx) = find_entry(&self.entries, name) else {
             self.console_sink
                 .error(&format!("no authored asset named '{name}'"));
             return;
         };
         let ty = entry_type(&self.entries[idx]).unwrap_or("?").to_string();
-        self.entries.remove(idx);
-        self.mark_changed();
-        match self.form.target {
-            FormTarget::Entry(e) if e == idx => self.form.close(),
-            FormTarget::Entry(e) if e > idx => self.form.target = FormTarget::Entry(e - 1),
-            _ => {}
-        }
+        self.remove_entry_at(idx);
         self.row_menu = None;
         self.console_sink.info(&format!("removed '{name}' ({ty})"));
     }

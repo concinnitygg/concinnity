@@ -6,6 +6,7 @@
 //! same field from a native picker, so both routes end at the same Add. Listed
 //! imports open in the standard edit form for full arg editing.
 
+use concinnity_cook::authoring::world::{entry_handle, entry_handles, set_entry_id};
 use concinnity_core::components::FrameInput;
 use concinnity_core::components::InputKey;
 use concinnity_core::ecs::World;
@@ -13,7 +14,7 @@ use std::path::Path;
 
 use crate::editor::file_dialog;
 use crate::editor::hook::{
-    EditorHook, FormTarget, entry_name, entry_type, scroll_step, short_status,
+    EditorHook, FormTarget, declared_id, entry_type, scroll_step, short_status,
 };
 use crate::editor::notify;
 use crate::editor::panels::import_panel::{
@@ -25,6 +26,7 @@ use crate::editor::widget;
 impl EditorHook {
     // The world's file-backed entries, in entry order.
     pub(in crate::editor::hook) fn import_rows(&self) -> Vec<ImportRow> {
+        let handles = entry_handles(&self.entries);
         self.entries
             .iter()
             .enumerate()
@@ -33,7 +35,7 @@ impl EditorHook {
                 if !import_panel::IMPORT_TYPES.contains(&ty) {
                     return None;
                 }
-                let name = entry_name(e).unwrap_or("?");
+                let name = handles[i].as_deref().unwrap_or("?");
                 let source = e
                     .get("args")
                     .map(import_panel::source_of)
@@ -162,13 +164,14 @@ impl EditorHook {
         }
         let mut first_name = String::new();
         for entry in &mut new_entries {
-            let base = entry_name(entry).unwrap_or("import").to_string();
-            let unique = self.unique_from(&base);
-            entry["name"] = serde_json::Value::String(unique.clone());
-            if first_name.is_empty() {
-                first_name = unique;
+            if let Some(base) = declared_id(entry).map(str::to_string) {
+                set_entry_id(entry, &self.unique_from(&base));
             }
             self.entries.push(entry.clone());
+            if first_name.is_empty() {
+                first_name =
+                    entry_handle(&self.entries, self.entries.len() - 1).unwrap_or_default();
+            }
         }
         match new_entries.len() {
             0 => {}
@@ -182,11 +185,14 @@ impl EditorHook {
     // Open import entry `idx` in the standard add / edit form (part of the
     // Assets UI, so the browse panel comes up alongside it).
     pub(super) fn open_import(&mut self, idx: usize, world: &mut World) {
+        let Some(key) = self.entries.key_at(idx) else {
+            return;
+        };
         let Some(ty) = self.entries.get(idx).and_then(entry_type).map(String::from) else {
             return;
         };
         self.panel_open = true;
-        self.open_form(world, ty, FormTarget::Entry(idx));
+        self.open_form(world, ty, FormTarget::Entry(key));
     }
 
     // Enter in the focused path field adds, like clicking the Add button.

@@ -95,7 +95,8 @@ impl Panel for AssetsPanel {
         let s = hook.effective_size(PanelKey::Assets);
         let action = {
             let data = hook.panel_data(world);
-            let view = hook.make_view(&data, [mx, my]);
+            let selected = hook.selected_names();
+            let view = hook.make_view(&data, &selected, [mx, my]);
             assets_panel::hit_test(&view, mx, my, o, s)
         };
         match action {
@@ -119,7 +120,8 @@ impl Panel for AssetsPanel {
     fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
         let s = hook.effective_size(PanelKey::Assets);
         let data = hook.panel_data(world);
-        let view = hook.make_view(&data, mouse);
+        let selected = hook.selected_names();
+        let view = hook.make_view(&data, &selected, mouse);
         assets_panel::place(world, Some(&view), o, s);
     }
     fn hide(&self, world: &mut World) {

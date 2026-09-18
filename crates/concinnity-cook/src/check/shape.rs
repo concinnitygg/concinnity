@@ -29,12 +29,12 @@ fn str_arg<'a>(asset: &'a WorldJsonlAsset, field: &str) -> Option<&'a str> {
         .filter(|s| !s.is_empty())
 }
 
-// Names of every asset of the given type.
+// The `$id` of every asset of the given type that declares one.
 fn names_of_type(assets: &[WorldJsonlAsset], asset_type: RegisteredType) -> HashSet<&str> {
     assets
         .iter()
-        .filter(|a| a.asset_type == asset_type)
-        .map(|a| a.name.as_str())
+        .filter(|a| a.asset_type == asset_type && !a.is_anonymous())
+        .map(|a| a.id.as_str())
         .collect()
 }
 
@@ -67,7 +67,7 @@ fn check_singletons(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
         let names: Vec<&str> = assets
             .iter()
             .filter(|a| a.asset_type == *ty)
-            .map(|a| a.name.as_str())
+            .map(|a| a.id.as_str())
             .collect();
         if names.len() > 1 {
             errors.push(format!(
@@ -88,7 +88,7 @@ fn check_initial_screens(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
         .iter()
         .filter(|a| a.asset_type == RegisteredType::Screen)
         .filter(|a| a.args.get("initial").and_then(|v| v.as_bool()) == Some(true))
-        .map(|a| a.name.as_str())
+        .map(|a| a.id.as_str())
         .collect();
     if initial.len() > 1 {
         errors.push(format!(
@@ -116,17 +116,17 @@ fn check_focus_ownership(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
         };
         let Some(input) = assets
             .iter()
-            .find(|a| a.asset_type == RegisteredType::TextInput && a.name == focus)
+            .find(|a| a.asset_type == RegisteredType::TextInput && a.id == focus)
         else {
             continue;
         };
         let owner = owning_screen(input, &screens);
         if let Some(owner) = owner
-            && owner != screen.name
+            && owner != screen.id
         {
             errors.push(format!(
                 "Screen '{}': focus '{}' belongs to screen '{}'; a screen can only focus its own TextInput",
-                screen.name, focus, owner
+                screen.id, focus, owner
             ));
         }
     }
@@ -189,7 +189,7 @@ fn check_material_shader_consumers(assets: &[WorldJsonlAsset], errors: &mut Vec<
     let shaded: HashSet<&str> = assets
         .iter()
         .filter(|a| a.asset_type == RegisteredType::Material && str_arg(a, "shader").is_some())
-        .map(|a| a.name.as_str())
+        .map(|a| a.id.as_str())
         .collect();
     if shaded.is_empty() {
         return;
@@ -207,10 +207,10 @@ fn check_material_shader_consumers(assets: &[WorldJsonlAsset], errors: &mut Vec<
                  world's default Shader; drop the Shader from that material or give '{}' a \
                  material without one",
                 consumer.asset_type.as_str(),
-                consumer.name,
+                consumer.id,
                 material,
                 draws,
-                consumer.name
+                consumer.id
             ));
         }
     }
@@ -222,7 +222,7 @@ mod tests {
 
     fn asset(name: &str, asset_type: RegisteredType, args: serde_json::Value) -> WorldJsonlAsset {
         WorldJsonlAsset {
-            name: name.to_string(),
+            id: name.to_string(),
             asset_type,
             args,
         }

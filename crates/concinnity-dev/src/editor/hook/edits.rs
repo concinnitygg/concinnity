@@ -5,7 +5,7 @@ use concinnity_cook::authoring::world::write_world_jsonl;
 use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
 
-use super::{EditorHook, FormTarget, entry_name};
+use super::{EditorHook, EntryId, EntryList, FormTarget, declared_id};
 use crate::editor::behavior;
 use crate::editor::build_renderable;
 use crate::editor::live;
@@ -16,17 +16,19 @@ use crate::editor::panels::form_panel;
 use crate::editor::widget;
 
 impl EditorHook {
-    // Whether an entry with this name already exists.
+    // Whether an entry already declares this `$id`.
     pub(super) fn name_taken(&self, n: &str) -> bool {
-        self.entries.iter().any(|e| entry_name(e) == Some(n))
+        self.entries.iter().any(|e| declared_id(e) == Some(n))
     }
 
-    // Whether an entry other than `skip` already has this name (for renames).
-    pub(super) fn name_taken_except(&self, n: &str, skip: usize) -> bool {
+    // Whether an entry other than `skip`'s already declares this `$id` (for
+    // renames).
+    pub(super) fn name_taken_except(&self, n: &str, skip: EntryId) -> bool {
+        let skip = self.entries.index_of(skip);
         self.entries
             .iter()
             .enumerate()
-            .any(|(i, e)| i != skip && entry_name(e) == Some(n))
+            .any(|(i, e)| Some(i) != skip && declared_id(e) == Some(n))
     }
 
     // A world-unique name derived from the asset type: `editor_<kind>` plus a
@@ -51,52 +53,46 @@ impl EditorHook {
         }
     }
 
-    // The final name for a new-asset submission: the typed name (trimmed) made
-    // unique, or a generated unique name when the field was left blank.
-    pub(super) fn finalize_name(&self, typed: &str, kind: &str) -> String {
+    // The `$id` for a new-asset submission: the typed id (trimmed) made
+    // unique, or `None` when the field was left blank and the asset is added
+    // anonymous.
+    pub(super) fn finalize_name(&self, typed: &str) -> Option<String> {
         let t = typed.trim();
-        if t.is_empty() {
-            self.unique_name(kind)
-        } else {
-            self.unique_from(t)
-        }
+        (!t.is_empty()).then(|| self.unique_from(t))
     }
 
-    // The final name for a rename of entry `idx`: the typed name (trimmed), or a
-    // generated one when blank, made unique against the *other* entries.
-    pub(super) fn finalize_rename(&self, typed: &str, idx: usize, kind: &str) -> String {
-        let t = typed.trim();
-        let base = if t.is_empty() {
-            format!("editor_{}", kind.to_ascii_lowercase())
-        } else {
-            t.to_string()
-        };
-        if !self.name_taken_except(&base, idx) {
-            return base;
+    // The `$id` for a rename of `key`'s entry: the typed id (trimmed) made
+    // unique against the *other* entries, or `None` when blank, which leaves
+    // the entry anonymous.
+    pub(super) fn finalize_rename(&self, typed: &str, key: EntryId) -> Option<String> {
+        let base = typed.trim();
+        if base.is_empty() {
+            return None;
+        }
+        if !self.name_taken_except(base, key) {
+            return Some(base.to_string());
         }
         let mut i = 1;
         loop {
             let candidate = format!("{base}_{i}");
-            if !self.name_taken_except(&candidate, idx) {
-                return candidate;
+            if !self.name_taken_except(&candidate, key) {
+                return Some(candidate);
             }
             i += 1;
         }
     }
 
-    // Drop the authored line at `idx` and record the edit. The open form indexes
-    // into `entries`, so removing the edited entry closes it and removing an
-    // earlier one shifts it.
+    // Drop the authored line at `idx` and record the edit. A form open on that
+    // entry closes; one open on any other entry keeps its target, which is the
+    // key rather than the position the removal shifted.
     pub(super) fn remove_entry_at(&mut self, idx: usize) {
-        if idx >= self.entries.len() {
+        let Some(key) = self.entries.key_at(idx) else {
             return;
-        }
+        };
         self.entries.remove(idx);
         self.mark_changed();
-        match self.form.target {
-            FormTarget::Entry(e) if e == idx => self.form.close(),
-            FormTarget::Entry(e) if e > idx => self.form.target = FormTarget::Entry(e - 1),
-            _ => {}
+        if self.form.target == FormTarget::Entry(key) {
+            self.form.close();
         }
     }
 
@@ -151,11 +147,15 @@ impl EditorHook {
         self.history.can_redo()
     }
 
-    // Install a history snapshot as the working entry list. Everything indexing
-    // into `entries` (the open form, the row menu) may point at removed or
-    // shifted rows after a jump, so it is dropped; `dirty` is recomputed against
-    // the on-disk state so unwinding back to the saved list clears the Save chip.
-    fn apply_history_jump(&mut self, snap: Vec<serde_json::Value>, world: &mut World) {
+    // Install a history snapshot as the working entry list. A snapshot carries
+    // the session keys, so the jump restores the very entries the selection
+    // addresses and it survives; a member the restored list does not hold goes
+    // undrawn rather than addressing something else. The open form's controls
+    // hold text derived from the pre-jump args, and the pointer gestures were
+    // sampled against the pre-jump list, so both are dropped. `dirty` is
+    // recomputed against the on-disk state so unwinding back to the saved list
+    // clears the Save chip.
+    fn apply_history_jump(&mut self, snap: EntryList, world: &mut World) {
         self.entries = snap;
         self.baseline = self.entries.clone();
         self.dirty = self.entries != self.saved;
@@ -165,7 +165,6 @@ impl EditorHook {
         self.form.close();
         self.row_menu = None;
         self.picker_open = false;
-        self.selection.clear();
         self.pick_last = None;
         self.marquee = None;
         self.gizmo_drag = None;

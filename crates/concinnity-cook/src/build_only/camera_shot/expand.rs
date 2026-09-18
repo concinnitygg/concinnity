@@ -20,9 +20,9 @@ pub(crate) fn expand_camera_shots(
         let shot_name = asset_name(&value);
         let shot = resolve_shot(&shot_name, value.get("args"), assets_dir)?;
         result.push(serde_json::json!({
-            "name": shot_name,
             "type": "Camera3D",
             "args": {
+                "$id": shot_name,
                 "fov_y_degrees": shot.fov_y_degrees,
                 "near": shot.near,
                 "far": shot.far,
@@ -90,13 +90,12 @@ mod tests {
     #[test]
     fn expands_to_camera3d() {
         let mut assets = vec![serde_json::json!({
-            "name": "wide",
             "type": "CameraShot",
-            "args": {"fov_y_degrees": 80.0, "position": [0.0, 1.75, 8.0], "yaw": std::f64::consts::PI}
+            "args": {"$id": "wide", "fov_y_degrees": 80.0, "position": [0.0, 1.75, 8.0], "yaw": std::f64::consts::PI}
         })];
         expand_camera_shots(&mut assets, None).unwrap();
         assert_eq!(assets.len(), 1);
-        assert_eq!(assets[0]["name"], "wide");
+        assert_eq!(assets[0]["args"]["$id"], "wide");
         assert_eq!(assets[0]["type"], "Camera3D");
         assert_eq!(assets[0]["args"]["fov_y_degrees"], 80.0);
     }
@@ -104,9 +103,8 @@ mod tests {
     #[test]
     fn preset_eye_level_expands() {
         let mut assets = vec![serde_json::json!({
-            "name": "cam",
             "type": "CameraShot",
-            "args": {"preset": "shot_eye_level"}
+            "args": {"$id": "cam", "preset": "shot_eye_level"}
         })];
         expand_camera_shots(&mut assets, None).unwrap();
         assert_eq!(assets[0]["type"], "Camera3D");
@@ -117,9 +115,8 @@ mod tests {
     #[test]
     fn inline_args_override_preset() {
         let mut assets = vec![serde_json::json!({
-            "name": "cam",
             "type": "CameraShot",
-            "args": {"preset": "shot_eye_level", "fov_y_degrees": 90.0}
+            "args": {"$id": "cam", "preset": "shot_eye_level", "fov_y_degrees": 90.0}
         })];
         expand_camera_shots(&mut assets, None).unwrap();
         let fov = assets[0]["args"]["fov_y_degrees"].as_f64().unwrap();
@@ -128,7 +125,7 @@ mod tests {
 
     #[test]
     fn non_camera_shot_assets_pass_through() {
-        let mut assets = vec![serde_json::json!({"name":"x","type":"Logger","args":{}})];
+        let mut assets = vec![serde_json::json!({"type":"Logger","args":{"$id":"x"}})];
         expand_camera_shots(&mut assets, None).unwrap();
         assert_eq!(assets[0]["type"], "Logger");
     }
@@ -136,9 +133,8 @@ mod tests {
     // Expand a single CameraShot built from `args` and return the Camera3D args.
     fn expand_args(args: serde_json::Value) -> serde_json::Value {
         let mut assets = vec![serde_json::json!({
-            "name": "cam",
             "type": "CameraShot",
-            "args": args
+            "args": crate::authoring::world::args_with_id(args, "cam")
         })];
         expand_camera_shots(&mut assets, None).unwrap();
         assert_eq!(assets.len(), 1);
@@ -204,8 +200,9 @@ mod tests {
             ),
             (serde_json::json!({"preset": 3}), "`preset`"),
         ] {
-            let mut assets =
-                vec![serde_json::json!({"name": "cam", "type": "CameraShot", "args": args})];
+            let mut assets = vec![
+                serde_json::json!({"type": "CameraShot", "args": crate::authoring::world::args_with_id(args, "cam")}),
+            ];
             let err = expand_camera_shots(&mut assets, None).unwrap_err();
             assert!(err.starts_with("CameraShot 'cam': invalid args: "), "{err}");
             assert!(err.contains(field), "{err}");
@@ -215,9 +212,8 @@ mod tests {
     #[test]
     fn defaults_applied_when_no_args() {
         let mut assets = vec![serde_json::json!({
-            "name": "cam",
             "type": "CameraShot",
-            "args": {}
+            "args": {"$id": "cam"}
         })];
         expand_camera_shots(&mut assets, None).unwrap();
         assert_eq!(assets[0]["type"], "Camera3D");

@@ -28,6 +28,7 @@ use crate::editor::panels::assets_panel;
 use crate::editor::panels::preview;
 use crate::editor::panels::registry::PanelKey;
 
+use crate::editor::hook::tests::fixtures::entry_target;
 use crate::editor::widget;
 
 // Holding a panel's title bar drags it; the origin follows the cursor by the
@@ -141,7 +142,8 @@ fn edit_panel_drags_by_its_title_bar() {
     let mut world = World::new();
     inject::editor_hud(&mut world);
     h.panel_open = true;
-    h.open_form(&mut world, "PointLight".to_string(), FormTarget::Entry(0));
+    let target = entry_target(&h, 0);
+    h.open_form(&mut world, "PointLight".to_string(), target);
     let vp = [1280.0, 720.0];
     let fo = h.origin(PanelKey::Edit, vp);
     world.add_component(FrameInput {
@@ -246,7 +248,8 @@ fn edit_form_title_bar_x_closes_the_form() {
     let mut h = hook(vec![entry("lamp", "PointLight")]);
     let mut world = world_with_fields();
     h.panel_open = true;
-    h.open_form(&mut world, "PointLight".to_string(), FormTarget::Entry(0));
+    let target = entry_target(&h, 0);
+    h.open_form(&mut world, "PointLight".to_string(), target);
     assert!(h.form_open());
     let vp = [1280.0, 720.0];
     let x = form_panel::close_rect(h.origin(PanelKey::Edit, vp), form_panel::EDIT_W);
@@ -445,7 +448,7 @@ fn tick_lays_out_the_open_panel_in_every_state() {
 
     // Row menu: the Delete popup shows over the "a" row.
     h.picker_open = false;
-    h.row_menu = Some("a".to_string());
+    h.row_menu = Some(h.handle_for("a"));
     h.tick(&mut world);
     assert!(
         sprite_visible(&world, assets_panel::MENU_BG),
@@ -507,7 +510,7 @@ fn scroll_moves_each_regions_offset() {
             .collect(),
     );
     seed_tree(&mut h, Vec::new());
-    h.row_menu = Some("log0".to_string());
+    h.row_menu = Some(h.handle_for("log0"));
     h.scroll_tree(1.0, &world);
     assert!(h.tree_scroll > 0, "a closed picker scrolls the tree");
     assert!(h.row_menu.is_none(), "scrolling dismisses an open row menu");

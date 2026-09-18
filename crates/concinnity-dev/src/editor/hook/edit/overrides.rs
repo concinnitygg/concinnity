@@ -5,9 +5,12 @@
 //! bulk -- each as a single undo step.
 
 use concinnity_cook::authoring::registry::RegisteredType;
+use concinnity_cook::authoring::world::{
+    ID_KEY, args_with_id, args_without_id, find_entry, replace_args,
+};
 use concinnity_core::ecs::World;
 
-use crate::editor::hook::{EditorHook, FormTemplate, entry_name, entry_type, short_status};
+use crate::editor::hook::{EditorHook, FormTemplate, declared_id, entry_type, short_status};
 use crate::editor::overrides;
 use crate::editor::overrides::prefab_map;
 use crate::editor::panels::form;
@@ -63,11 +66,12 @@ impl EditorHook {
     // patch yet, so the marks reflect what is actually authored.
     pub(super) fn committed_patch(&self) -> serde_json::Value {
         match self.form.target.entry() {
-            Some(idx) => self
+            Some(key) => self
                 .entries
-                .get(idx)
+                .by_key(key)
                 .and_then(|e| e.get("args"))
                 .cloned()
+                .map(args_without_id)
                 .unwrap_or(serde_json::json!({})),
             None => serde_json::json!({}),
         }
@@ -141,7 +145,7 @@ impl EditorHook {
             let authored = self
                 .entries
                 .iter()
-                .any(|e| entry_name(e) == Some(prefab_ref.as_str()) && is_prefab(e));
+                .any(|e| declared_id(e) == Some(prefab_ref.as_str()) && is_prefab(e));
             if authored && has_patch {
                 let n = overrides::instance_count(&self.entries, &prefab_ref);
                 options.push((
@@ -304,9 +308,7 @@ impl EditorHook {
         let effective = concinnity_cook::build_only::merge_args(&baseline, &patch);
         match overrides::minimal_patch(&baseline, &effective) {
             Some(p) => {
-                if let Some(obj) = self.entries[idx].as_object_mut() {
-                    obj.insert("args".to_string(), p);
-                }
+                replace_args(&mut self.entries[idx], p);
                 self.mark_changed();
             }
             None => self.remove_entry_at(idx),
@@ -321,7 +323,7 @@ impl EditorHook {
         if self
             .entries
             .iter()
-            .any(|e| entry_name(e) == Some(name) && is_prefab(e))
+            .any(|e| declared_id(e) == Some(name) && is_prefab(e))
         {
             return Ok(());
         }
@@ -335,7 +337,7 @@ impl EditorHook {
         }
         let args = preset.get("args").cloned().unwrap_or(serde_json::json!({}));
         self.entries
-            .push(serde_json::json!({ "name": name, "type": "Prefab", "args": args }));
+            .push(serde_json::json!({ "type": "Prefab", "args": args_with_id(args, name) }));
         self.mark_changed();
         Ok(())
     }
@@ -370,15 +372,14 @@ impl EditorHook {
     // Helpers
 
     fn patch_index(&self, name: &str) -> Option<usize> {
-        self.entries
-            .iter()
-            .position(|e| entry_name(e) == Some(name))
+        find_entry(&self.entries, name)
     }
 
     fn committed_patch_of(&self, idx: usize) -> serde_json::Value {
         self.entries[idx]
             .get("args")
             .cloned()
+            .map(args_without_id)
             .unwrap_or(serde_json::json!({}))
     }
 
@@ -418,14 +419,15 @@ impl EditorHook {
         prefab_map::write_field(entry, slot, map, covered, value)
     }
 
-    // After a patch mutation: an emptied patch line is removed outright
-    // (`remove_entry_at` records the undo step), else the shrink itself is the
-    // recorded edit. Either way, exactly one history step.
+    // After a patch mutation: an emptied patch line (nothing left but the
+    // `$id` naming what it patches) is removed outright (`remove_entry_at`
+    // records the undo step), else the shrink itself is the recorded edit.
+    // Either way, exactly one history step.
     fn drop_patch_if_empty_or_mark(&mut self, idx: usize) {
         let empty = self.entries[idx]
             .get("args")
             .and_then(|a| a.as_object())
-            .is_none_or(|o| o.is_empty());
+            .is_none_or(|o| o.keys().all(|k| k == ID_KEY));
         if empty {
             self.remove_entry_at(idx);
         } else {
@@ -434,10 +436,8 @@ impl EditorHook {
     }
 
     fn instance_prefab_ref(&self, generated_by: &str) -> Option<String> {
-        self.entries
-            .iter()
-            .find(|e| entry_name(e) == Some(generated_by))
-            .and_then(|e| e.get("args"))
+        self.entries[find_entry(&self.entries, generated_by)?]
+            .get("args")
             .and_then(|a| a.get("prefab"))
             .and_then(|v| v.as_str())
             .filter(|r| !r.is_empty())

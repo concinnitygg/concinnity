@@ -27,7 +27,7 @@ pub(in crate::pipeline) fn desugar_fbx_skinned_meshes(
             continue;
         }
         if matches!(
-            mesh_cache.get(&asset.name),
+            mesh_cache.get(&asset.id),
             Some(MeshCacheEntry { bytes: Some(_), .. })
         ) {
             continue;
@@ -37,11 +37,11 @@ pub(in crate::pipeline) fn desugar_fbx_skinned_meshes(
             .map_err(|e| {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    format!("Asset '{}': FBX import failed: {}", asset.name, e),
+                    format!("Asset '{}': FBX import failed: {}", asset.id, e),
                 )
             })?;
 
-        let name = asset.name.clone();
+        let name = asset.id.clone();
         let obj = asset.args.as_object_mut().ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -73,7 +73,7 @@ pub(in crate::pipeline) fn desugar_fbx_skinned_meshes(
         );
         tracing::info!(
             "Asset '{}': imported FBX '{}': {} vertices, {} indices, {} joints",
-            asset.name,
+            asset.id,
             source,
             imported.vertices.len(),
             imported.indices.len(),
@@ -118,7 +118,7 @@ pub(in crate::pipeline) fn desugar_fbx_meshes(
         // Honor the same content-addressed cache the glTF pass uses: a probe
         // hit means the compiled payload is already in hand, so skip the parse.
         if matches!(
-            mesh_cache.get(&asset.name),
+            mesh_cache.get(&asset.id),
             Some(MeshCacheEntry { bytes: Some(_), .. })
         ) {
             continue;
@@ -139,7 +139,7 @@ pub(in crate::pipeline) fn desugar_fbx_meshes(
             let scene = crate::import::fbx::parse_fbx(&source).map_err(|e| {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    format!("Asset '{}': FBX import failed: {}", asset.name, e),
+                    format!("Asset '{}': FBX import failed: {}", asset.id, e),
                 )
             })?;
             parsed_cache.insert(source.clone(), scene);
@@ -153,7 +153,7 @@ pub(in crate::pipeline) fn desugar_fbx_meshes(
                     |e| {
                         std::io::Error::new(
                             std::io::ErrorKind::InvalidData,
-                            format!("Asset '{}': FBX import failed: {}", asset.name, e),
+                            format!("Asset '{}': FBX import failed: {}", asset.id, e),
                         )
                     },
                 )?;
@@ -166,7 +166,7 @@ pub(in crate::pipeline) fn desugar_fbx_meshes(
                 std::io::ErrorKind::InvalidData,
                 format!(
                     "Asset '{}': chunk_index {} out of range, '{}' primitive {} splits into {} chunk(s)",
-                    asset.name,
+                    asset.id,
                     chunk_index,
                     source,
                     primitive_index,
@@ -176,7 +176,7 @@ pub(in crate::pipeline) fn desugar_fbx_meshes(
         })?;
         let (vertices, indices) = chunk.clone();
 
-        let name = asset.name.clone();
+        let name = asset.id.clone();
         let obj = asset.args.as_object_mut().ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -208,7 +208,7 @@ pub(in crate::pipeline) fn desugar_fbx_meshes(
         );
         tracing::info!(
             "Asset '{}': imported FBX '{}' primitive {} chunk {}: {} vertices, {} indices",
-            asset.name,
+            asset.id,
             source,
             primitive_index,
             chunk_index,

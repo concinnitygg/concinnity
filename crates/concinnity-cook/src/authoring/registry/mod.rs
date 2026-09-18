@@ -598,13 +598,15 @@ macro_rules! __authored_component {
 
 for_each_authored_type!(__authored_component);
 
-/// Serialize one authored asset into the world line that declares it, newline
-/// included. The caller never names a JSON type: the line is finished text.
-pub fn asset_line<T: Authored>(name: &str, value: &T) -> std::io::Result<String> {
+/// Serialize one authored asset into the world line that declares it under the
+/// `$id` `id`, newline included. The caller never names a JSON type: the line
+/// is finished text.
+pub fn asset_line<T: Authored>(id: &str, value: &T) -> std::io::Result<String> {
     let bad =
         |e: serde_json::Error| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string());
     let args = serde_json::to_value(value).map_err(bad)?;
-    let line = serde_json::json!({ "name": name, "type": T::TYPE, "args": args });
+    let mut line = serde_json::json!({ "type": T::TYPE, "args": args });
+    crate::authoring::world::set_entry_id(&mut line, id);
     let mut out = serde_json::to_string(&line).map_err(bad)?;
     out.push('\n');
     Ok(out)
@@ -643,7 +645,7 @@ mod authored_tests {
         assert!(patched.ends_with('\n'));
         let value: serde_json::Value = serde_json::from_str(&patched).expect("parses");
         assert_eq!(value["args"]["target"], "hero");
-        assert_eq!(value["name"], "hero_shape");
+        assert_eq!(value["args"]["$id"], "hero_shape");
         assert_eq!(value["type"], "CharacterShape");
         // A line that is not an asset declaration is refused, not mangled.
         let err = set_reference("7", "target", "hero").expect_err("not an asset line");

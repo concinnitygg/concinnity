@@ -4,17 +4,21 @@
 //! this -- expansion passes, injection, and `prepare_world` -- is
 //! `crate::build_only`; the shipped runtime plays compiled blobs and never sees
 //! any of this.
+mod entry_check;
 mod find;
+mod identity;
 mod io;
 
-use concinnity_core::ecs::AssetOrigin;
+pub use entry_check::entry_errors;
 pub use find::{WORLD_JSONL, find_world_jsonl};
+pub use identity::{
+    ID_KEY, anonymous_label, args_with_id, args_without_id, entry_handle, entry_handles, entry_id,
+    find_entry, is_label_of, replace_args, set_entry_id, take_entry_id,
+};
 pub use io::{
     WorldJsonlAsset, known_names, parse_world_jsonl, patch_world_jsonl, patch_world_jsonl_to,
     write_world_jsonl,
 };
-
-use crate::authoring::registry::RegisteredType;
 
 /// Asset name derived from a file path: the file stem with dots replaced by
 /// underscores. Companion injection and `cn add` share this so a generated asset
@@ -88,67 +92,46 @@ pub fn resolve_includes(assets: Vec<serde_json::Value>) -> std::io::Result<Vec<s
 /// caller (e.g. the infra agentic loop) gets all feedback in a single pass.
 ///
 /// Structural validation covers what must hold before a world can be expanded
-/// or built: each entry has a string `name` and `type`, the type is registered,
-/// the type is not RuntimeOnly (those are pushed by a system at runtime and
-/// cannot be authored), and names are unique. Semantic validation of the
-/// expanded world (cross-references, per-asset args) is a separate stage; see
-/// crate::check.
+/// or built: each entry is `{"type", "args"}` with an object (or absent)
+/// `args`, the type is registered, the type is not RuntimeOnly (those are
+/// pushed by a system at runtime and cannot be authored), and every `$id`
+/// declared is a well-formed string no other entry declares. The `$id` is
+/// checked here, before any schema reads the args: no schema rejects an
+/// unknown field, so a misspelled key would otherwise pass as an anonymous
+/// asset. Semantic validation of the expanded world (cross-references,
+/// per-asset args) is a separate stage; see crate::check.
+///
+/// Every anonymous entry leaves here carrying its `<Type>#<ordinal>` label as
+/// its `$id`, so the passes after it address every entry the same way.
 pub(crate) fn load_world(content: &str) -> Result<Vec<serde_json::Value>, Vec<String>> {
     let parsed = parse_world_jsonl(content).map_err(|e| vec![format!("syntax error: {e}")])?;
-    let raw = resolve_includes(parsed).map_err(|e| vec![e.to_string()])?;
+    let mut raw = resolve_includes(parsed).map_err(|e| vec![e.to_string()])?;
 
     let mut errors: Vec<String> = Vec::new();
-    let mut seen_names: std::collections::HashMap<&str, usize> = Default::default();
-
+    let mut seen_ids: std::collections::HashMap<&str, usize> = Default::default();
     for (i, value) in raw.iter().enumerate() {
-        let name = value.get("name").and_then(|v| v.as_str());
-        let type_str = value.get("type").and_then(|v| v.as_str());
-
-        let label = name
-            .map(|n| format!("'{}'", n))
-            .unwrap_or_else(|| format!("asset[{}]", i));
-
-        if name.is_none() {
-            errors.push(format!("{}: missing `name` field", label));
-        }
-
-        let Some(type_str) = type_str else {
-            errors.push(format!("{}: missing `type` field", label));
-            continue;
-        };
-
-        let origin = if let Some(ct) = RegisteredType::parse(type_str) {
-            Some(ct.registration().origin)
-        } else {
-            errors.push(format!("{}: unknown type '{}'", label, type_str));
-            None
-        };
-
-        if matches!(origin, Some(AssetOrigin::RuntimeOnly)) {
-            errors.push(format!(
-                "{}: '{}' is RuntimeOnly: it is pushed by a system at runtime \
-                 and cannot be declared in {}",
-                label, type_str, WORLD_JSONL
-            ));
-        }
-
-        if let Some(n) = name {
-            let count = seen_names.entry(n).or_insert(0);
+        errors.extend(entry_errors(value, i));
+        if let Some(id) = entry_id(value) {
+            let count = seen_ids.entry(id).or_insert(0);
             *count += 1;
             if *count == 2 {
                 errors.push(format!(
-                    "duplicate name '{}': asset names must be unique",
-                    n
+                    "duplicate `{ID_KEY}` '{id}': an id names one asset"
                 ));
             }
         }
     }
 
-    if errors.is_empty() {
-        Ok(raw)
-    } else {
-        Err(errors)
+    if !errors.is_empty() {
+        return Err(errors);
     }
+    let handles = entry_handles(&raw);
+    for (value, handle) in raw.iter_mut().zip(handles) {
+        if let Some(handle) = handle.filter(|_| entry_id(value).is_none()) {
+            set_entry_id(value, &handle);
+        }
+    }
+    Ok(raw)
 }
 
 #[cfg(test)]
@@ -157,8 +140,8 @@ mod tests {
 
     #[test]
     fn load_world_accepts_valid_world() {
-        let content = r#"{"name":"a","type":"Window"}
-{"name":"b","type":"Window"}
+        let content = r#"{"type":"Window","args":{"$id":"a"}}
+{"type":"Window","args":{"$id":"b"}}
 "#;
         let raw = load_world(content).unwrap();
         assert_eq!(raw.len(), 2);
@@ -166,35 +149,103 @@ mod tests {
 
     #[test]
     fn load_world_collects_all_errors() {
-        let content = r#"{"name":"a"}
-{"type":"Window"}
+        let content = r#"{"args":{"$id":"a"}}
+{"type":"Window","args":{"$id":7}}
+{"type":"Nope"}
 "#;
         let errs = load_world(content).unwrap_err();
-        assert!(errs.iter().any(|e| e.contains("missing `type`")));
-        assert!(errs.iter().any(|e| e.contains("missing `name`")));
+        assert_eq!(errs.len(), 3, "{errs:?}");
+        assert!(errs[0].contains("'a'") && errs[0].contains("missing `type`"));
+        assert!(errs[1].contains("must be a string"));
+        assert!(errs[2].contains("asset[2]") && errs[2].contains("unknown type"));
+    }
+
+    // An anonymous entry is the common case: it loads carrying its label as its
+    // `$id`, counted among the anonymous entries of its type only.
+    #[test]
+    fn load_world_labels_every_anonymous_entry() {
+        let content = r#"{"type":"Prop","args":{"mesh":"m"}}
+{"type":"Prop","args":{"$id":"hero"}}
+{"type":"Window"}
+{"type":"Prop","args":null}
+"#;
+        let raw = load_world(content).unwrap();
+        let ids: Vec<Option<&str>> = raw.iter().map(entry_id).collect();
+        assert_eq!(
+            ids,
+            [
+                Some("Prop#0"),
+                Some("hero"),
+                Some("Window#0"),
+                Some("Prop#1")
+            ]
+        );
+        assert_eq!(raw[0]["args"]["mesh"], "m");
     }
 
     #[test]
-    fn load_world_rejects_duplicate_names() {
-        let content = r#"{"name":"a","type":"Window"}
-{"name":"a","type":"Window"}
+    fn load_world_rejects_duplicate_ids() {
+        let content = r#"{"type":"Window","args":{"$id":"a"}}
+{"type":"Scene","args":{"$id":"a"}}
 "#;
         let errs = load_world(content).unwrap_err();
-        assert!(errs.iter().any(|e| e.contains("duplicate name")));
+        assert!(
+            errs.iter().any(|e| e.contains("duplicate `$id` 'a'")),
+            "{errs:?}"
+        );
+    }
+
+    // The old top-level `name` is refused with the move spelled out, as is a
+    // `$id` placed beside `args` rather than in it.
+    #[test]
+    fn load_world_rejects_identity_outside_args() {
+        let content = r#"{"name":"a","type":"Window"}
+{"$id":"b","type":"Window"}
+{"type":"Window","label":"c"}
+"#;
+        let errs = load_world(content).unwrap_err();
+        assert_eq!(errs.len(), 3, "{errs:?}");
+        assert!(
+            errs[0].contains("`name` is not an entry key") && errs[0].contains("inside `args`")
+        );
+        assert!(errs[1].contains("`$id` belongs inside `args`"));
+        assert!(errs[2].contains("unknown entry key `label`"));
+    }
+
+    // No schema rejects an unknown field, so a misspelled `$id` is caught here
+    // or it would pass as an anonymous asset.
+    #[test]
+    fn load_world_rejects_a_misspelled_id_key() {
+        let errs = load_world(r#"{"type":"Window","args":{"$ID":"w"}}"#).unwrap_err();
+        assert!(errs[0].contains("unknown key `$ID`"), "{errs:?}");
+    }
+
+    #[test]
+    fn load_world_rejects_a_label_shaped_or_empty_id() {
+        let errs = load_world(r#"{"type":"Prop","args":{"$id":"Prop#0"}}"#).unwrap_err();
+        assert!(errs[0].contains("reserved"), "{errs:?}");
+        let errs = load_world(r#"{"type":"Prop","args":{"$id":""}}"#).unwrap_err();
+        assert!(errs[0].contains("must not be empty"), "{errs:?}");
+    }
+
+    #[test]
+    fn load_world_rejects_non_object_args() {
+        let errs = load_world(r#"{"type":"Window","args":[]}"#).unwrap_err();
+        assert!(errs[0].contains("`args` must be an object"), "{errs:?}");
     }
 
     #[test]
     fn load_world_rejects_runtime_only_type() {
         // Transform is pushed by a system at runtime (RuntimeOnly), so it may
         // not be authored in the world file.
-        let content = r#"{"name":"t","type":"Transform"}"#;
+        let content = r#"{"type":"Transform","args":{"$id":"t"}}"#;
         let errs = load_world(content).unwrap_err();
         assert!(errs.iter().any(|e| e.contains("RuntimeOnly")));
     }
 
     #[test]
     fn load_world_rejects_unknown_type() {
-        let content = r#"{"name":"x","type":"NotARealType"}"#;
+        let content = r#"{"type":"NotARealType","args":{"$id":"x"}}"#;
         let errs = load_world(content).unwrap_err();
         assert!(errs.iter().any(|e| e.contains("unknown type")));
     }
@@ -223,10 +274,10 @@ mod tests {
 
     #[test]
     fn resolve_includes_passes_through_non_include_entries() {
-        let entries = vec![serde_json::json!({"name": "a", "type": "Window"})];
+        let entries = vec![serde_json::json!({"type": "Window", "args": {"$id": "a"}})];
         let out = resolve_includes(entries).unwrap();
         assert_eq!(out.len(), 1);
-        assert_eq!(out[0]["name"], "a");
+        assert_eq!(out[0]["args"]["$id"], "a");
     }
 
     #[test]
@@ -235,24 +286,31 @@ mod tests {
         let path = write_temp(
             &dir,
             "chunk.json",
-            r#"[{"name":"a","type":"Window"},{"name":"b","type":"Window"}]"#,
+            r#"[{"type":"Window","args":{"$id":"a"}},{"type":"Window","args":{"$id":"b"}}]"#,
         );
         let entries = vec![
             serde_json::json!({"$include": path}),
-            serde_json::json!({"name": "c", "type": "Window"}),
+            serde_json::json!({"type": "Window", "args": {"$id": "c"}}),
         ];
         let out = resolve_includes(entries).unwrap();
-        let names: Vec<&str> = out.iter().filter_map(|v| v["name"].as_str()).collect();
+        let names: Vec<&str> = out
+            .iter()
+            .filter_map(|v| v["args"]["$id"].as_str())
+            .collect();
         assert_eq!(names, ["a", "b", "c"]);
     }
 
     #[test]
     fn resolve_includes_inlines_a_single_object_file() {
         let dir = tempfile::tempdir().unwrap();
-        let path = write_temp(&dir, "one.json", r#"{"name":"solo","type":"Window"}"#);
+        let path = write_temp(
+            &dir,
+            "one.json",
+            r#"{"type":"Window","args":{"$id":"solo"}}"#,
+        );
         let out = resolve_includes(vec![serde_json::json!({"$include": path})]).unwrap();
         assert_eq!(out.len(), 1);
-        assert_eq!(out[0]["name"], "solo");
+        assert_eq!(out[0]["args"]["$id"], "solo");
     }
 
     #[test]

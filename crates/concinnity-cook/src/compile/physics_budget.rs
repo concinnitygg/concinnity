@@ -49,7 +49,7 @@ fn collider_props(assets: &[WorldJsonlAsset]) -> HashSet<&str> {
         .iter()
         .filter(|a| a.asset_type == RegisteredType::Prop)
         .filter(|a| a.args.get("collider").is_some_and(|c| !c.is_null()))
-        .map(|a| a.name.as_str())
+        .map(|a| a.id.as_str())
         .collect()
 }
 
@@ -236,7 +236,7 @@ mod tests {
 
     fn asset(name: &str, asset_type: RegisteredType, args: serde_json::Value) -> WorldJsonlAsset {
         WorldJsonlAsset {
-            name: name.to_string(),
+            id: name.to_string(),
             asset_type,
             args,
         }
@@ -643,13 +643,13 @@ mod tests {
     #[test]
     fn the_config_injected_at_start_leaves_the_budget_and_the_warning_alone() {
         let world = concat!(
-            r#"{"name":"box","type":"ProceduralMesh","args":{"generator":"box","half_extents":[1,1,1]}}"#,
+            r#"{"type":"ProceduralMesh","args":{"$id":"box","generator":"box","half_extents":[1,1,1]}}"#,
             "\n",
-            r#"{"name":"crate_a","type":"Prop","args":{"mesh":"box","collider":{"shape":"cuboid"}}}"#,
+            r#"{"type":"Prop","args":{"$id":"crate_a","mesh":"box","collider":{"shape":"cuboid"}}}"#,
             "\n",
-            r#"{"name":"crate_body","type":"PropBody","args":{"prop_name":"crate_a"}}"#,
+            r#"{"type":"PropBody","args":{"$id":"crate_body","prop_name":"crate_a"}}"#,
             "\n",
-            r#"{"name":"drop","type":"Spawner","args":{"template":"crate_a"}}"#,
+            r#"{"type":"Spawner","args":{"$id":"drop","template":"crate_a"}}"#,
             "\n",
         );
         let expanded = crate::build_only::prepare_world(world, None)

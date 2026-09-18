@@ -52,7 +52,7 @@ fn action(entry: &serde_json::Value) -> &str {
 
 #[test]
 fn passes_through_without_imports() {
-    let mut assets = vec![serde_json::json!({"name":"x","type":"Logger","args":{}})];
+    let mut assets = vec![serde_json::json!({"type":"Logger","args":{"$id":"x"}})];
     expand_stories(&mut assets).unwrap();
     assert_eq!(assets.len(), 1);
     assert_eq!(assets[0]["type"], "Logger");
@@ -61,7 +61,7 @@ fn passes_through_without_imports() {
 #[test]
 fn missing_source_is_an_error() {
     let mut assets = vec![serde_json::json!({
-        "name": "story", "type": "StoryImport", "args": {}
+        "type": "StoryImport", "args": {"$id": "story"}
     })];
     let err = expand_stories(&mut assets).unwrap_err();
     assert!(err.contains("missing `source`"));
@@ -70,7 +70,7 @@ fn missing_source_is_an_error() {
 // An import with no args at all is the same missing-source failure.
 #[test]
 fn an_import_without_args_is_a_missing_source() {
-    let mut assets = vec![serde_json::json!({"name":"story","type":"StoryImport"})];
+    let mut assets = vec![serde_json::json!({"type":"StoryImport","args":{"$id":"story"}})];
     let err = expand_stories(&mut assets).unwrap_err();
     assert_eq!(err, "StoryImport 'story': missing `source`");
 }
@@ -78,8 +78,8 @@ fn an_import_without_args_is_a_missing_source() {
 #[test]
 fn unreadable_source_file_is_an_error() {
     let mut assets = vec![serde_json::json!({
-        "name": "story", "type": "StoryImport",
-        "args": {"source": "/no/such/story.md"}
+        "type": "StoryImport",
+        "args": {"$id": "story", "source": "/no/such/story.md"}
     })];
     let err = expand_stories(&mut assets).unwrap_err();
     assert!(err.contains("cannot read"), "{err}");
@@ -93,8 +93,8 @@ fn parse_failure_is_wrapped_with_import_context() {
     // Frontmatter with no `title` fails story parsing.
     std::fs::write(&path, "---\ncharacters:\n---\n\n# a\n\nhi\n").unwrap();
     let mut assets = vec![serde_json::json!({
-        "name": "story", "type": "StoryImport",
-        "args": {"source": path.to_str().unwrap()}
+        "type": "StoryImport",
+        "args": {"$id": "story", "source": path.to_str().unwrap()}
     })];
     let err = expand_stories(&mut assets).unwrap_err();
     assert!(err.contains("StoryImport 'story'"), "{err}");
@@ -370,8 +370,8 @@ fn expands_from_file_and_replaces_the_import() {
     let path = dir.path().join("story.md");
     std::fs::write(&path, CROSSROADS).unwrap();
     let mut assets = vec![serde_json::json!({
-        "name": "story", "type": "StoryImport",
-        "args": {"source": path.to_str().unwrap()}
+        "type": "StoryImport",
+        "args": {"$id": "story", "source": path.to_str().unwrap()}
     })];
     expand_stories(&mut assets).unwrap();
     assert!(
@@ -411,8 +411,9 @@ fn malformed_import_fields_name_the_import_and_the_field() {
             "`text_speed`",
         ),
     ] {
-        let mut assets =
-            vec![serde_json::json!({"name": "tale", "type": "StoryImport", "args": args})];
+        let mut assets = vec![
+            serde_json::json!({"type": "StoryImport", "args": crate::authoring::world::args_with_id(args, "tale")}),
+        ];
         let err = expand_stories(&mut assets).unwrap_err();
         assert!(
             err.starts_with("StoryImport 'tale': invalid args: "),
@@ -429,10 +430,10 @@ fn generated_name_collision_is_an_error() {
     std::fs::write(&path, CROSSROADS).unwrap();
     let mut assets = vec![
         serde_json::json!({
-            "name": "story", "type": "StoryImport",
-            "args": {"source": path.to_str().unwrap()}
+            "type": "StoryImport",
+            "args": {"$id": "story", "source": path.to_str().unwrap()}
         }),
-        serde_json::json!({"name":"story_title","type":"Screen","args":{}}),
+        serde_json::json!({"type":"Screen","args":{"$id":"story_title"}}),
     ];
     let err = expand_stories(&mut assets).unwrap_err();
     assert!(err.contains("collides"));
@@ -494,15 +495,15 @@ fn media_directives_compile_to_deduped_clip_names() {
 
     // Pages carry the deduplicated clip names in the compiled graph.
     let nodes = &find(&entries, "s")["args"]["nodes"];
-    assert_eq!(nodes[0]["pages"][0]["music"], clips[0]["name"]);
-    assert_eq!(nodes[0]["pages"][1]["music"], clips[0]["name"]);
+    assert_eq!(nodes[0]["pages"][0]["music"], clips[0]["args"]["$id"]);
+    assert_eq!(nodes[0]["pages"][1]["music"], clips[0]["args"]["$id"]);
 
     // The one-shot lands on its page only.
-    assert_eq!(nodes[0]["pages"][2]["sounds"][0], clips[1]["name"]);
+    assert_eq!(nodes[0]["pages"][2]["sounds"][0], clips[1]["args"]["$id"]);
     assert_eq!(nodes[0]["pages"][1]["sounds"].as_array().unwrap().len(), 0);
 
     // The choice menu carries the tense track.
-    assert_eq!(nodes[1]["choice_music"], clips[2]["name"]);
+    assert_eq!(nodes[1]["choice_music"], clips[2]["args"]["$id"]);
 }
 
 #[test]
@@ -537,15 +538,15 @@ fn bg_directive_parses_propagates_and_emits_textured_backdrops() {
     // compiled graph; a full-canvas rectangle places the backdrop.
     let nodes = &find(&entries, "s")["args"]["nodes"];
     let bg = &nodes[0]["pages"][0]["stage"]["bg"];
-    assert_eq!(bg["texture"], textures[0]["name"]);
+    assert_eq!(bg["texture"], textures[0]["args"]["$id"]);
     assert_eq!(bg["width"], 1280.0);
     assert_eq!(
         nodes[0]["pages"][1]["stage"]["bg"]["texture"],
-        textures[0]["name"]
+        textures[0]["args"]["$id"]
     );
     assert_eq!(
         nodes[1]["choice_stage"]["bg"]["texture"],
-        textures[1]["name"]
+        textures[1]["args"]["$id"]
     );
 
     // The title screen keeps its flat fill (no texture key at all).
@@ -609,7 +610,7 @@ fn portraits_compile_at_native_size_and_bottom_anchor() {
     let x = p["x"].as_f64().unwrap() as f32;
     assert!((x - (320.0 - 456.0 / 2.0)).abs() < 1e-3);
     // The portrait image becomes a Texture entry like a backdrop.
-    assert_eq!(p["texture"], find(&entries, "s_img0")["name"]);
+    assert_eq!(p["texture"], find(&entries, "s_img0")["args"]["$id"]);
 }
 
 #[test]
@@ -965,14 +966,14 @@ fn other_assets_survive_a_story_expansion() {
     let path = dir.path().join("s.md");
     std::fs::write(&path, "---\ntitle: T\n---\n\n# a\n\nhi\n").unwrap();
     let mut assets = vec![
-        serde_json::json!({"name":"win","type":"Window","args":{}}),
+        serde_json::json!({"type":"Window","args":{"$id":"win"}}),
         serde_json::json!({
-            "name": "tale", "type": "StoryImport",
-            "args": {"source": path.to_str().unwrap()}
+            "type": "StoryImport",
+            "args": {"$id": "tale", "source": path.to_str().unwrap()}
         }),
     ];
     expand_stories(&mut assets).unwrap();
-    assert_eq!(assets[0]["name"], "win");
+    assert_eq!(assets[0]["args"]["$id"], "win");
     assert!(
         !assets
             .iter()
@@ -989,8 +990,8 @@ fn import_args_reach_the_compiled_graph() {
     let path = dir.path().join("s.md");
     std::fs::write(&path, "---\ntitle: T\n---\n\n# a\n\nhi\n").unwrap();
     let mut assets = vec![serde_json::json!({
-        "name": "tale", "type": "StoryImport",
-        "args": {"source": path.to_str().unwrap(), "title_screen": false, "text_speed": 12.0}
+        "type": "StoryImport",
+        "args": {"$id": "tale", "source": path.to_str().unwrap(), "title_screen": false, "text_speed": 12.0}
     })];
     expand_stories(&mut assets).unwrap();
     assert_eq!(find(&assets, "tale")["args"]["text_speed"], 12.0);
@@ -1011,8 +1012,8 @@ fn an_emission_failure_is_wrapped_with_import_context() {
     )
     .unwrap();
     let mut assets = vec![serde_json::json!({
-        "name": "tale", "type": "StoryImport",
-        "args": {"source": path.to_str().unwrap()}
+        "type": "StoryImport",
+        "args": {"$id": "tale", "source": path.to_str().unwrap()}
     })];
     let err = expand_stories(&mut assets).unwrap_err();
     assert!(err.contains("StoryImport 'tale'"), "{err}");

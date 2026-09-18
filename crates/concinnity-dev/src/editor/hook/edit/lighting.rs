@@ -6,9 +6,10 @@
 //! on the click); text fields commit together on Apply, all-or-nothing across
 //! the touched assets.
 
+use concinnity_cook::authoring::world::replace_args;
 use concinnity_core::ecs::World;
 
-use crate::editor::hook::{EditorHook, LightingData, entry_name, entry_type, short_status};
+use crate::editor::hook::{EditorHook, LightingData, declared_id, entry_type, short_status};
 use crate::editor::panels::form::{self, FormField};
 use crate::editor::panels::lighting;
 use crate::editor::panels::lighting_panel::{self, LightingAction, LightingView};
@@ -145,7 +146,7 @@ impl EditorHook {
                 })
                 .collect();
             let args = form::assemble(s.ty, Some(&existing), &fields, &texts);
-            let name = self.entries.get(idx).and_then(entry_name).unwrap_or(s.ty);
+            let name = self.entries.get(idx).and_then(declared_id).unwrap_or(s.ty);
             if let Err(e) = form::validate(s.ty, name, &args) {
                 self.lighting_status = Some(short_status(&format!("{}: {e}", s.title)));
                 return;
@@ -153,8 +154,8 @@ impl EditorHook {
             staged.push((idx, args));
         }
         for (idx, args) in staged {
-            if let Some(obj) = self.entries.get_mut(idx).and_then(|e| e.as_object_mut()) {
-                obj.insert("args".to_string(), serde_json::Value::Object(args));
+            if let Some(entry) = self.entries.get_mut(idx) {
+                replace_args(entry, serde_json::Value::Object(args));
             }
         }
         self.mark_changed();
@@ -181,13 +182,13 @@ impl EditorHook {
             .map(|f| form::current_text(&merged, &f.key))
             .collect();
         let args = form::assemble(s.ty, Some(&existing), &fields, &texts);
-        let name = self.entries.get(idx).and_then(entry_name).unwrap_or(s.ty);
+        let name = self.entries.get(idx).and_then(declared_id).unwrap_or(s.ty);
         if let Err(e) = form::validate(s.ty, name, &args) {
             self.lighting_status = Some(short_status(&format!("{}: {e}", s.title)));
             return;
         }
-        if let Some(obj) = self.entries.get_mut(idx).and_then(|e| e.as_object_mut()) {
-            obj.insert("args".to_string(), serde_json::Value::Object(args));
+        if let Some(entry) = self.entries.get_mut(idx) {
+            replace_args(entry, serde_json::Value::Object(args));
         }
         self.mark_changed();
     }
@@ -203,7 +204,7 @@ impl EditorHook {
         }
         let name = self.unique_name(s.ty);
         self.entries.push(serde_json::json!({
-            "name": name, "type": s.ty, "args": {},
+            "type": s.ty, "args": {"$id": name},
         }));
         self.mark_changed();
         self.seed_lighting(world);

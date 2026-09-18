@@ -93,11 +93,11 @@ pub(crate) fn check_world(assets: &[WorldJsonlAsset]) -> Result<(), Vec<String>>
     // authored world's uniqueness was already checked before expansion).
     let mut seen_names: std::collections::HashSet<&str> = Default::default();
     for asset in assets {
-        if !seen_names.insert(asset.name.as_str()) {
+        if !seen_names.insert(asset.id.as_str()) {
             errors.push(format!(
                 "duplicate name '{}' after build-time expansion: a generated or \
                  injected asset collides with another; rename one of them",
-                asset.name
+                asset.id
             ));
         }
     }
@@ -113,14 +113,14 @@ pub(crate) fn check_world(assets: &[WorldJsonlAsset]) -> Result<(), Vec<String>>
 
     for asset in assets {
         let checked = if asset.asset_type == RegisteredType::Behavior {
-            behavior::check_with_vars(&asset.name, &asset.args, &declared_vars)
+            behavior::check_with_vars(&asset.id, &asset.args, &declared_vars)
         } else {
-            check_authored_asset(asset.asset_type, &asset.name, &asset.args)
+            check_authored_asset(asset.asset_type, &asset.id, &asset.args)
         };
         if let Err(e) = checked {
             errors.push(e);
         }
-        if let Err(e) = check_compiled_asset(asset.asset_type, &asset.name, &asset.args) {
+        if let Err(e) = check_compiled_asset(asset.asset_type, &asset.id, &asset.args) {
             errors.push(e);
         }
     }
@@ -144,7 +144,7 @@ mod tests {
 
     fn asset(name: &str, asset_type: RegisteredType, args: serde_json::Value) -> WorldJsonlAsset {
         WorldJsonlAsset {
-            name: name.to_string(),
+            id: name.to_string(),
             asset_type,
             args,
         }

@@ -17,6 +17,7 @@ use concinnity_host::thread::asset_id;
 use super::fixtures::VP;
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::bookmarks;
+use crate::editor::hook::tests::fixtures::select;
 use crate::editor::hud;
 use crate::test_support::isolate_state_dir;
 
@@ -101,7 +102,7 @@ fn drag_to(mouse: [f32; 2]) -> FrameInput {
 fn alt_drag_tumbles_the_camera_around_the_selection() {
     let (mut world, _) = camera_world([0.0, 0.0, 10.0]);
     let mut h = hook();
-    h.selection.set(vec!["box".to_string()]);
+    select(&mut h, &["box"]);
 
     assert!(h.try_begin_orbit(&alt_press([600.0, 400.0]), VP, &world));
     assert!(h.orbit.is_some(), "the tumble is armed");
@@ -130,7 +131,7 @@ fn alt_drag_tumbles_the_camera_around_the_selection() {
 fn releasing_the_button_ends_the_tumble() {
     let (mut world, _) = camera_world([0.0, 0.0, 10.0]);
     let mut h = hook();
-    h.selection.set(vec!["box".to_string()]);
+    select(&mut h, &["box"]);
     assert!(h.try_begin_orbit(&alt_press([600.0, 400.0]), VP, &world));
 
     let released = FrameInput {
@@ -157,14 +158,14 @@ fn a_tumble_is_declined_without_a_viewport_press_and_a_pivot() {
     assert!(empty.orbit.is_none());
 
     let mut h = hook();
-    h.selection.set(vec!["box".to_string()]);
+    select(&mut h, &["box"]);
     assert!(
         !h.try_begin_orbit(&alt_press([600.0, hud::BAR_H - 1.0]), VP, &world),
         "a press on the top bar is the bar's"
     );
 
     let mut playing = hook();
-    playing.selection.set(vec!["box".to_string()]);
+    select(&mut playing, &["box"]);
     playing.sim_toggle_play();
     assert!(
         !playing.try_begin_orbit(&alt_press([600.0, 400.0]), VP, &world),
@@ -177,7 +178,7 @@ fn a_tumble_is_declined_without_a_viewport_press_and_a_pivot() {
 fn a_camera_on_the_pivot_declines_the_tumble() {
     let (world, _) = camera_world([0.0, 0.0, 0.0]);
     let mut h = hook();
-    h.selection.set(vec!["box".to_string()]);
+    select(&mut h, &["box"]);
     assert!(!h.try_begin_orbit(&alt_press([600.0, 400.0]), VP, &world));
 }
 
@@ -187,7 +188,7 @@ fn a_camera_on_the_pivot_declines_the_tumble() {
 fn framing_the_selection_glides_the_camera_to_fit_it() {
     let (mut world, _) = camera_world([0.0, 0.0, 100.0]);
     let mut h = hook();
-    h.selection.set(vec!["box".to_string()]);
+    select(&mut h, &["box"]);
     let input = FrameInput {
         viewport: VP,
         ..Default::default()
@@ -253,7 +254,7 @@ fn steering_during_a_glide_hands_the_camera_back() {
     ] {
         let (mut world, _) = camera_world([0.0, 0.0, 100.0]);
         let mut h = hook();
-        h.selection.set(vec!["box".to_string()]);
+        select(&mut h, &["box"]);
         h.frame_selection(VP, &world);
         assert!(h.glide.is_some());
 
@@ -330,7 +331,7 @@ fn a_recall_cancels_an_in_flight_tumble() {
     let _guard = crate::test_support::lock();
     let (world, _) = camera_world([0.0, 0.0, 10.0]);
     let mut h = hook();
-    h.selection.set(vec!["box".to_string()]);
+    select(&mut h, &["box"]);
     h.save_bookmark(2, &world);
     assert!(h.try_begin_orbit(&alt_press([600.0, 400.0]), VP, &world));
 
@@ -358,7 +359,7 @@ fn selection_bounds_fall_back_to_a_billboards_transform() {
     world.insert_resource(PickIndex::default());
 
     let mut h = hook();
-    h.selection.set(vec!["lamp".to_string()]);
+    select(&mut h, &["lamp"]);
     let (mn, mx) = h
         .selection_bounds(&world)
         .expect("bounds from the transform");

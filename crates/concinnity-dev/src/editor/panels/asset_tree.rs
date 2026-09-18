@@ -63,7 +63,7 @@ pub(crate) struct TreeGroup {
 pub(crate) fn groups_from(loaded: &LoadedWorld) -> Vec<TreeGroup> {
     let mut groups: Vec<TreeGroup> = Vec::new();
     for asset in &loaded.assets {
-        let prov = loaded.provenance(&asset.name);
+        let prov = loaded.provenance(&asset.id);
         let (label, badge) = match &prov {
             concinnity_cook::build_only::Provenance::AuthoredShadowing { generated_by } => {
                 (generated_by.as_str(), Badge::Overridden)
@@ -78,7 +78,7 @@ pub(crate) fn groups_from(loaded: &LoadedWorld) -> Vec<TreeGroup> {
             },
         };
         let entry = TreeAsset {
-            name: asset.name.clone(),
+            name: asset.id.clone(),
             asset_type: asset.asset_type,
             badge,
             promote: prov.is_overridable().then(|| promote_entry(loaded, asset)),
@@ -120,17 +120,11 @@ fn promote_entry(
     loaded: &LoadedWorld,
     asset: &concinnity_cook::authoring::world::WorldJsonlAsset,
 ) -> serde_json::Value {
-    let args = loaded
-        .injected
-        .iter()
-        .find(|i| i.name == asset.name)
-        .map(|i| i.args.clone())
-        .unwrap_or_else(|| asset.args.clone());
-    serde_json::json!({
-        "name": asset.name,
-        "type": asset.asset_type.as_str(),
-        "args": args,
-    })
+    let mut entry = asset.to_entry();
+    if let Some(injected) = loaded.injected.iter().find(|i| i.name == asset.id) {
+        concinnity_cook::authoring::world::replace_args(&mut entry, injected.args.clone());
+    }
+    entry
 }
 
 // Whether an asset passes the search filter: a case-insensitive substring
@@ -217,7 +211,7 @@ mod tests {
 
     fn asset(name: &str, asset_type: RegisteredType) -> WorldJsonlAsset {
         WorldJsonlAsset {
-            name: name.to_string(),
+            id: name.to_string(),
             asset_type,
             args: serde_json::json!({"k": 1}),
         }
@@ -322,7 +316,7 @@ mod tests {
             .find(|a| a.name == "fox_mat_a")
             .unwrap();
         let entry = mat.promote.as_ref().expect("generated assets promote");
-        assert_eq!(entry["name"], "fox_mat_a");
+        assert_eq!(entry["args"]["$id"], "fox_mat_a");
         assert_eq!(entry["type"], "Material");
         assert_eq!(entry["args"]["k"], 1);
     }

@@ -1,5 +1,7 @@
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_cook::authoring::world::{find_world_jsonl, parse_world_jsonl, resolve_includes};
+use concinnity_cook::authoring::world::{
+    entry_handles, find_world_jsonl, parse_world_jsonl, resolve_includes,
+};
 
 // Authoring metadata for a type name, whichever group of the registry it is in.
 fn registration_for(type_str: &str) -> Option<concinnity_cook::authoring::registry::Registration> {
@@ -62,14 +64,12 @@ pub fn list(json_path: Option<&str>, expanded: bool, systems: bool) -> std::io::
         payload: String,
     }
 
+    let handles = entry_handles(&raw);
     let rows: Vec<Row> = raw
         .iter()
-        .map(|v| {
-            let name = v
-                .get("name")
-                .and_then(|n| n.as_str())
-                .unwrap_or("(unnamed)")
-                .to_string();
+        .zip(handles)
+        .map(|(v, handle)| {
+            let name = handle.unwrap_or_else(|| "(untyped)".to_string());
             let type_str = v
                 .get("type")
                 .and_then(|t| t.as_str())
@@ -107,7 +107,7 @@ pub fn list(json_path: Option<&str>, expanded: bool, systems: bool) -> std::io::
 
     println!(
         "{:<w_name$}  {:<w_type$}  {:<w_origin$}  PAYLOAD",
-        "NAME",
+        "ID",
         "TYPE",
         "ORIGIN",
         w_name = w_name,
@@ -150,9 +150,9 @@ fn list_expanded(content: &str, json_path: &str) -> std::io::Result<()> {
         .iter()
         .map(|a| {
             (
-                a.name.clone(),
+                a.id.clone(),
                 a.asset_type.as_str().to_string(),
-                provenance(&loaded, &a.name),
+                provenance(&loaded, &a.id),
             )
         })
         .collect();
@@ -162,7 +162,7 @@ fn list_expanded(content: &str, json_path: &str) -> std::io::Result<()> {
 
     println!(
         "{:<w_name$}  {:<w_type$}  PROVENANCE",
-        "NAME",
+        "ID",
         "TYPE",
         w_name = w_name,
         w_type = w_type,
@@ -187,7 +187,7 @@ fn list_expanded(content: &str, json_path: &str) -> std::io::Result<()> {
         injected,
         json_path
     );
-    println!("Use `cn explain <name>` to print an entry for overriding.");
+    println!("Use `cn explain <id>` to print an entry for overriding.");
     Ok(())
 }
 
@@ -273,8 +273,8 @@ mod tests {
     #[test]
     fn manifest_lines_report_the_world_schedule_with_reasons() {
         let world = crate::authoring::build_world_from_str(
-            "{\"name\":\"gfx\",\"type\":\"GraphicsConfig\",\"args\":{}}\n\
-             {\"name\":\"cam\",\"type\":\"Camera3D\",\"args\":{\"controller\":{\"free_fly\":true}}}\n",
+            "{\"type\":\"GraphicsConfig\",\"args\":{\"$id\":\"gfx\"}}\n\
+             {\"type\":\"Camera3D\",\"args\":{\"$id\":\"cam\",\"controller\":{\"free_fly\":true}}}\n",
         )
         .unwrap();
         let lines = manifest_lines(&world);
@@ -294,7 +294,7 @@ mod tests {
     #[test]
     fn the_manifest_reports_systems_the_engine_defaults_turn_on() {
         let mut world = crate::authoring::build_world_from_str(
-            "{\"name\":\"gfx\",\"type\":\"GraphicsConfig\",\"args\":{}}\n",
+            "{\"type\":\"GraphicsConfig\",\"args\":{\"$id\":\"gfx\"}}\n",
         )
         .unwrap();
         assert!(
@@ -312,7 +312,7 @@ mod tests {
     #[test]
     fn list_with_systems_flag_is_ok() {
         let (_dir, path) =
-            write_world("{\"name\":\"gfx\",\"type\":\"GraphicsConfig\",\"args\":{}}\n");
+            write_world("{\"type\":\"GraphicsConfig\",\"args\":{\"$id\":\"gfx\"}}\n");
         list(Some(&path), false, true).unwrap();
     }
 
@@ -390,9 +390,9 @@ mod tests {
         // through the resource-asset registry; the made-up type falls back
         // to "?" origin / payload without erroring.
         let (_dir, path) = write_world(concat!(
-            "{\"name\":\"gfx\",\"type\":\"GraphicsConfig\",\"args\":{}}\n",
-            "{\"name\":\"clip\",\"type\":\"AudioClip\",\"args\":{}}\n",
-            "{\"name\":\"odd\",\"type\":\"NotARealAssetType\",\"args\":{}}\n",
+            "{\"type\":\"GraphicsConfig\",\"args\":{\"$id\":\"gfx\"}}\n",
+            "{\"type\":\"AudioClip\",\"args\":{\"$id\":\"clip\"}}\n",
+            "{\"type\":\"NotARealAssetType\",\"args\":{\"$id\":\"odd\"}}\n",
             "{\"type\":\"GraphicsConfig\",\"args\":{}}\n",
         ));
         list(Some(&path), false, false).unwrap();
@@ -437,14 +437,14 @@ mod tests {
     #[test]
     fn list_expanded_runs_the_build_front_half() {
         let (_dir, path) =
-            write_world("{\"name\":\"gfx\",\"type\":\"GraphicsConfig\",\"args\":{}}\n");
+            write_world("{\"type\":\"GraphicsConfig\",\"args\":{\"$id\":\"gfx\"}}\n");
         list(Some(&path), true, false).unwrap();
     }
 
     #[test]
     fn list_expanded_rejects_an_unknown_asset_type() {
         let (_dir, path) =
-            write_world("{\"name\":\"odd\",\"type\":\"NotARealAssetType\",\"args\":{}}\n");
+            write_world("{\"type\":\"NotARealAssetType\",\"args\":{\"$id\":\"odd\"}}\n");
         assert!(list(Some(&path), true, false).is_err());
     }
 

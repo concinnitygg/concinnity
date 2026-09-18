@@ -299,7 +299,7 @@ mod tests {
 
     #[test]
     fn passes_through_without_selects() {
-        let mut assets = vec![serde_json::json!({"name":"x","type":"Window","args":{}})];
+        let mut assets = vec![serde_json::json!({"type":"Window","args":{"$id":"x"}})];
         expand_option_selects(&mut assets).unwrap();
         assert_eq!(assets.len(), 1);
     }
@@ -307,9 +307,9 @@ mod tests {
     #[test]
     fn expands_to_name_value_glyphs_and_two_stepper_regions() {
         let mut assets = vec![serde_json::json!({
-            "name": "opt_vsync",
             "type": "OptionSelect",
             "args": {
+                "$id": "opt_vsync",
                 "setting": "vsync", "label": "Vsync",
                 "x": 100.0, "y": 200.0, "width": 300.0, "stepper_width": 40.0
             }
@@ -375,7 +375,7 @@ mod tests {
             ("exposure", "'exposure' is a Slider setting"),
         ] {
             let mut assets = vec![serde_json::json!({
-                "name": "opt", "type": "OptionSelect", "args": {"setting": setting}
+                "type": "OptionSelect", "args": {"$id": "opt", "setting": setting}
             })];
             let err = expand_option_selects(&mut assets).unwrap_err();
             assert!(err.contains("OptionSelect 'opt'"), "{err}");
@@ -386,7 +386,7 @@ mod tests {
     #[test]
     fn invalid_args_name_the_select() {
         let mut assets = vec![serde_json::json!({
-            "name": "opt", "type": "OptionSelect", "args": {"width": "wide"}
+            "type": "OptionSelect", "args": {"$id": "opt", "width": "wide"}
         })];
         let err = expand_option_selects(&mut assets).unwrap_err();
         assert!(err.contains("OptionSelect 'opt'"), "{err}");
@@ -398,7 +398,7 @@ mod tests {
     #[test]
     fn select_without_args_uses_type_defaults() {
         let mut assets = vec![serde_json::json!({
-            "name": "opt", "type": "OptionSelect", "args": {"setting": "vsync"}
+            "type": "OptionSelect", "args": {"$id": "opt", "setting": "vsync"}
         })];
         expand_option_selects(&mut assets).unwrap();
         let defaults = OptionSelect::default();
@@ -414,9 +414,9 @@ mod tests {
     #[test]
     fn expands_to_dropdown_with_open_region() {
         let mut assets = vec![serde_json::json!({
-            "name": "opt_wm",
             "type": "OptionSelect",
             "args": {
+                "$id": "opt_wm",
                 "setting": "window_mode", "label": "Window Mode",
                 "x": 100.0, "y": 200.0, "width": 300.0
             }
@@ -450,9 +450,9 @@ mod tests {
     #[test]
     fn dynamic_setting_expands_to_dropdown() {
         let mut assets = vec![serde_json::json!({
-            "name": "opt_res",
             "type": "OptionSelect",
             "args": {
+                "$id": "opt_res",
                 "setting": "resolution", "label": "Resolution",
                 "x": 100.0, "y": 200.0, "width": 300.0
             }
@@ -472,8 +472,8 @@ mod tests {
     fn element_names_match_expansion() {
         for (setting, label) in [("vsync", "Vsync"), ("window_mode", "Window Mode")] {
             let mut assets = vec![serde_json::json!({
-                "name": "opt", "type": "OptionSelect",
-                "args": { "setting": setting, "label": label }
+                "type": "OptionSelect",
+                "args": { "$id": "opt", "setting": setting, "label": label }
             })];
             expand_option_selects(&mut assets).unwrap();
             let emitted: std::collections::HashSet<String> = assets
@@ -499,7 +499,7 @@ mod tests {
     fn generated_elements_join_the_selects_screen() {
         let row = |args: serde_json::Value| {
             let mut assets = vec![serde_json::json!({
-                "name": "opt", "type": "OptionSelect", "args": args
+                "type": "OptionSelect", "args": crate::authoring::world::args_with_id(args, "opt")
             })];
             expand_option_selects(&mut assets).unwrap();
             assets

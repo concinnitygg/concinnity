@@ -26,9 +26,9 @@ pub(super) fn lock_provenance(
         .map(|((asset_idx, rt, handle), record)| {
             let asset = &assets[*asset_idx];
             LockedResource {
-                name: asset.name.clone(),
+                name: asset.id.clone(),
                 // Already interned by the build, so this looks up its id.
-                id: Some(asset_id::intern(&asset.name).0),
+                id: Some(asset_id::intern(&asset.id).0),
                 kind: rt.as_str().to_string(),
                 handle: *handle,
                 args_hash: crate::blob::checksum(asset.args.to_string().as_bytes()),
@@ -94,7 +94,7 @@ mod tests {
                 serde_json::json!({"source": "c.ogg"}),
             ),
         ];
-        let names: Vec<&str> = assets.iter().map(|a| a.name.as_str()).collect();
+        let names: Vec<&str> = assets.iter().map(|a| a.id.as_str()).collect();
         asset_id::intern_all(&names);
         let jobs = [
             (0, RegisteredType::Texture, 0),

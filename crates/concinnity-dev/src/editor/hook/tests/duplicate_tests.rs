@@ -10,8 +10,9 @@ use concinnity_core::ecs::World;
 use super::fixtures::{entry, hook, world_with_input};
 use crate::debug_hook::DebugHook;
 use crate::editor::behavior;
-use crate::editor::hook::entry_name;
+use crate::editor::hook::declared_id;
 
+use crate::editor::hook::tests::fixtures::{select, selected};
 use crate::editor::panels::registry::{self, PanelKey};
 
 // Duplicating the selection clones each authored entry (args included) under
@@ -21,22 +22,22 @@ fn duplicate_selection_clones_entries_and_selects_the_copies() {
     let mut world = World::new();
     let mut h = hook(vec![
         serde_json::json!({
-            "name": "box", "type": "Prop", "args": { "position": [1.0, 2.0, 3.0] }
+            "type": "Prop", "args": { "$id": "box", "position": [1.0, 2.0, 3.0] }
         }),
         entry("phys", "PhysicsConfig"),
     ]);
-    h.selection.set(vec!["box".to_string(), "phys".to_string()]);
+    select(&mut h, &["box", "phys"]);
 
     h.run_console_line(&mut world, "/dup");
     assert_eq!(h.entries.len(), 3, "the singleton is skipped");
-    assert_eq!(entry_name(&h.entries[2]), Some("box_1"));
+    assert_eq!(declared_id(&h.entries[2]), Some("box_1"));
     assert_eq!(
         h.entries[2]["args"]["position"],
         serde_json::json!([1.0, 2.0, 3.0]),
         "the copy keeps the original's args"
     );
     assert_eq!(
-        h.selection.iter().collect::<Vec<_>>(),
+        selected(&h),
         vec!["box_1"],
         "the copies become the selection"
     );
@@ -66,12 +67,12 @@ fn ctrl_d_duplicates_unless_the_behavior_panel_owns_it() {
         });
     }
     let mut h = hook(vec![entry("box", "Sprite")]);
-    h.selection.replace("box".to_string());
+    select(&mut h, &["box"]);
     h.tick(&mut world);
     assert_eq!(h.entries.len(), 2, "Ctrl+D duplicates the selection");
 
     registry::panel(PanelKey::Behavior).toggle(&mut h, &mut world);
-    h.selection.replace("box".to_string());
+    select(&mut h, &["box"]);
     let before = h.entries.len();
     h.tick(&mut world);
     assert_eq!(

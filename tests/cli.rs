@@ -72,7 +72,7 @@ fn run(args: &[&str]) -> Output {
 // The starter world the authoring tests operate on. A lone TextLabel, which the
 // build expands into a runnable world by injecting the renderer stack.
 const HELLO_WORLD: &str =
-    "{\"name\":\"hello_world\",\"type\":\"TextLabel\",\"args\":{\"content\":\"Hello, world!\"}}\n";
+    "{\"type\":\"TextLabel\",\"args\":{\"$id\":\"hello_world\",\"content\":\"Hello, world!\"}}\n";
 
 // An isolated project for one test: a temp directory the spawned binary runs
 // in, so the project it anchors to its working directory -- authored `worlds/`
@@ -305,7 +305,7 @@ fn a_world_in_worlds_outranks_the_root_one() {
     let project = Project::with_world(HELLO_WORLD);
     std::fs::write(
         project.path().join("world.jsonl"),
-        "{\"name\":\"root_only\",\"type\":\"Logger\",\"args\":{}}\n",
+        "{\"type\":\"Logger\",\"args\":{\"$id\":\"root_only\"}}\n",
     )
     .expect("write root world");
 
@@ -383,7 +383,7 @@ fn test_validates_the_discovered_world() {
 #[test]
 fn test_reports_an_invalid_world() {
     let project =
-        Project::with_world("{\"name\":\"x\",\"type\":\"NotARealAssetType\",\"args\":{}}\n");
+        Project::with_world("{\"type\":\"NotARealAssetType\",\"args\":{\"$id\":\"x\"}}\n");
     let out = project.cn(&["test"]);
     assert!(!out.status.success(), "an unknown asset type should fail");
 }
@@ -707,13 +707,13 @@ fn skinned_morph_glb() -> Vec<u8> {
 // args on a miss and not on a hit; `npc` is claimed by a baking CharacterShape,
 // whose proportions scale a capsule that rides the args rather than the payload.
 const SKINNED_WORLD: &str = concat!(
-    r#"{"name":"skin_mat","type":"Material","args":{"roughness":0.55,"tint":[0.85,0.62,0.5]}}"#,
+    r#"{"type":"Material","args":{"$id":"skin_mat","roughness":0.55,"tint":[0.85,0.62,0.5]}}"#,
     "\n",
-    r#"{"name":"body","type":"SkinnedMesh","args":{"source":"body.glb","material":"skin_mat","position":[0,0,0],"scale":[1,1,1]}}"#,
+    r#"{"type":"SkinnedMesh","args":{"$id":"body","source":"body.glb","material":"skin_mat","position":[0,0,0],"scale":[1,1,1]}}"#,
     "\n",
-    r#"{"name":"npc","type":"SkinnedMesh","args":{"source":"body.glb","material":"skin_mat","position":[2,0,0],"scale":[1,1,1],"capsule":{"half_height":0.9,"radius":0.35}}}"#,
+    r#"{"type":"SkinnedMesh","args":{"$id":"npc","source":"body.glb","material":"skin_mat","position":[2,0,0],"scale":[1,1,1],"capsule":{"half_height":0.9,"radius":0.35}}}"#,
     "\n",
-    r#"{"name":"npc_shape","type":"CharacterShape","args":{"target":"npc","bake":true,"sliders":[{"name":"wide","value":0.5}],"proportions":[{"joint":"root","scale":1.2},{"joint":"tip","length":0.25}]}}"#,
+    r#"{"type":"CharacterShape","args":{"$id":"npc_shape","target":"npc","bake":true,"sliders":[{"name":"wide","value":0.5}],"proportions":[{"joint":"root","scale":1.2},{"joint":"tip","length":0.25}]}}"#,
     "\n",
 );
 
@@ -723,17 +723,17 @@ const SKINNED_WORLD: &str = concat!(
 // blob is reached through an expansion pass whose output rides on the args the
 // cache keys on.
 const GENERATED_WORLD: &str = concat!(
-    r#"{"name":"ibl","type":"EnvironmentMap","args":{"generator":"sky","prefilter_face_size":32,"irradiance_face_size":16,"prefilter_samples":32}}"#,
+    r#"{"type":"EnvironmentMap","args":{"$id":"ibl","generator":"sky","prefilter_face_size":32,"irradiance_face_size":16,"prefilter_samples":32}}"#,
     "\n",
-    r#"{"name":"ground_tex","type":"Texture","args":{"generator":"checker","resolution":64}}"#,
+    r#"{"type":"Texture","args":{"$id":"ground_tex","generator":"checker","resolution":64}}"#,
     "\n",
-    r#"{"name":"ground_mat","type":"Material","args":{"albedo":"ground_tex","roughness":0.8}}"#,
+    r#"{"type":"Material","args":{"$id":"ground_mat","albedo":"ground_tex","roughness":0.8}}"#,
     "\n",
-    r#"{"name":"ball","type":"ProceduralMesh","args":{"generator":"sphere","radius":1.0,"segments":16}}"#,
+    r#"{"type":"ProceduralMesh","args":{"$id":"ball","generator":"sphere","radius":1.0,"segments":16}}"#,
     "\n",
-    r#"{"name":"ball_prop","type":"Prop","args":{"mesh":"ball","material":"ground_mat","position":[0,1,0]}}"#,
+    r#"{"type":"Prop","args":{"$id":"ball_prop","mesh":"ball","material":"ground_mat","position":[0,1,0]}}"#,
     "\n",
-    r#"{"name":"rig","type":"LightRig","args":{"preset":"studio"}}"#,
+    r#"{"type":"LightRig","args":{"$id":"rig","preset":"studio"}}"#,
     "\n",
 );
 

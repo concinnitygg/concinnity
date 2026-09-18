@@ -23,6 +23,7 @@
 //! validated by the caller via `RegisteredType::reserialize_args`.
 
 use concinnity_cook::authoring::registry::RegisteredType;
+use concinnity_cook::authoring::world::ID_KEY;
 use serde_json::{Map, Value};
 
 // The form's default (and minimum) scrolling window: the number of field rows the
@@ -606,10 +607,11 @@ pub(crate) fn assemble(
 
 // The initial working args for a form: the type defaults with an edited entry's
 // args merged over them (the structure add / remove and the controls then mutate).
+// The `$id` is not a field: the form's name input carries it.
 pub(crate) fn working_args(ty: &str, editing: Option<&Map<String, Value>>) -> Map<String, Value> {
     let mut out = base_args(ty);
     if let Some(e) = editing {
-        for (k, v) in e {
+        for (k, v) in e.iter().filter(|(k, _)| k.as_str() != ID_KEY) {
             out.insert(k.clone(), v.clone());
         }
     }
@@ -865,10 +867,13 @@ mod tests {
         use serde_json::json;
         let mut editing = Map::new();
         editing.insert("intensity".to_string(), json!(42.0));
+        editing.insert("$id".to_string(), json!("lamp"));
         let out = working_args("PointLight", Some(&editing));
         // The edited value overrides the type default while other defaults remain.
         assert_eq!(out.get("intensity"), Some(&json!(42.0)));
         assert!(out.contains_key("color"));
+        // The id is the name input's, never a field.
+        assert!(!out.contains_key("$id"));
     }
 
     #[test]

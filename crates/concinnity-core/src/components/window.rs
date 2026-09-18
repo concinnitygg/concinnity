@@ -28,7 +28,6 @@ vocabulary!(WindowMode {
 ///
 /// ```json
 /// {
-///   "name": "main_window",
 ///   "type": "Window",
 ///   "args": {
 ///     "title": "Game",

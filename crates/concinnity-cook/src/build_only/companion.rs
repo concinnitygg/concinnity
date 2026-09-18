@@ -56,7 +56,7 @@ pub(crate) fn inject_companions(assets: &mut Vec<serde_json::Value>, report: &mu
             assets.iter().filter_map(registered_type).collect();
         let claimed_names: HashSet<String> = assets
             .iter()
-            .filter_map(|v| v.get("name").and_then(|n| n.as_str()))
+            .filter_map(crate::authoring::world::entry_id)
             .map(str::to_string)
             .collect();
 
@@ -89,11 +89,12 @@ pub(crate) fn inject_companions(assets: &mut Vec<serde_json::Value>, report: &mu
             break;
         }
         for spec in to_inject {
-            assets.push(serde_json::json!({
-                "name": spec.name,
+            let mut entry = serde_json::json!({
                 "type": spec.asset_type.as_str(),
                 "args": spec.args.clone(),
-            }));
+            });
+            crate::authoring::world::set_entry_id(&mut entry, spec.name);
+            assets.push(entry);
             report.record(spec.name, spec.asset_type.as_str(), spec.args, "companion");
         }
     }
@@ -116,9 +117,9 @@ mod tests {
     #[test]
     fn a_world_supplied_companion_is_recorded_as_an_override() {
         let mut assets = vec![
-            serde_json::json!({"name":"gfx","type":"GraphicsConfig","args":{}}),
+            serde_json::json!({"type":"GraphicsConfig","args":{"$id":"gfx"}}),
             // "Window" is the name the Window companion injects under.
-            serde_json::json!({"name":"Window","type":"Window","args":{}}),
+            serde_json::json!({"type":"Window","args":{"$id":"Window"}}),
         ];
         let mut report = ExpandReport::default();
         inject_companions(&mut assets, &mut report);
@@ -143,7 +144,7 @@ mod tests {
     // rounds see it in the world and skip the spec.
     #[test]
     fn an_injected_companion_is_not_recorded_as_an_override() {
-        let mut assets = vec![serde_json::json!({"name":"gfx","type":"GraphicsConfig","args":{}})];
+        let mut assets = vec![serde_json::json!({"type":"GraphicsConfig","args":{"$id":"gfx"}})];
         let mut report = ExpandReport::default();
         inject_companions(&mut assets, &mut report);
         assert!(
@@ -163,8 +164,8 @@ mod tests {
     #[test]
     fn a_differently_named_asset_of_the_same_type_is_not_an_override() {
         let mut assets = vec![
-            serde_json::json!({"name":"gfx","type":"GraphicsConfig","args":{}}),
-            serde_json::json!({"name":"main_window","type":"Window","args":{}}),
+            serde_json::json!({"type":"GraphicsConfig","args":{"$id":"gfx"}}),
+            serde_json::json!({"type":"Window","args":{"$id":"main_window"}}),
         ];
         let mut report = ExpandReport::default();
         inject_companions(&mut assets, &mut report);
@@ -184,7 +185,7 @@ mod tests {
 
     #[test]
     fn no_injection_without_trigger() {
-        let mut assets = vec![serde_json::json!({"name":"w","type":"Window","args":{}})];
+        let mut assets = vec![serde_json::json!({"type":"Window","args":{"$id":"w"}})];
         inject(&mut assets);
         assert!(
             !assets
@@ -196,7 +197,7 @@ mod tests {
     #[test]
     fn text_injects_graphics_config() {
         let mut assets =
-            vec![serde_json::json!({"name":"t","type":"TextLabel","args":{"content":"hi"}})];
+            vec![serde_json::json!({"type":"TextLabel","args":{"$id":"t","content":"hi"}})];
         inject(&mut assets);
         assert!(
             assets
@@ -208,8 +209,8 @@ mod tests {
     #[test]
     fn text_does_not_inject_duplicate_graphics_config() {
         let mut assets = vec![
-            serde_json::json!({"name":"t","type":"TextLabel","args":{"content":"hi"}}),
-            serde_json::json!({"name":"gfx","type":"GraphicsConfig","args":{}}),
+            serde_json::json!({"type":"TextLabel","args":{"$id":"t","content":"hi"}}),
+            serde_json::json!({"type":"GraphicsConfig","args":{"$id":"gfx"}}),
         ];
         inject(&mut assets);
         let gfx_count = assets
@@ -225,7 +226,7 @@ mod tests {
     #[test]
     fn text_naming_no_font_injects_none() {
         let mut assets =
-            vec![serde_json::json!({"name":"t","type":"TextLabel","args":{"content":"hi"}})];
+            vec![serde_json::json!({"type":"TextLabel","args":{"$id":"t","content":"hi"}})];
         inject(&mut assets);
         assert!(
             !assets
@@ -240,9 +241,8 @@ mod tests {
     #[test]
     fn a_font_less_label_is_left_exactly_as_authored() {
         let authored = serde_json::json!({
-            "name": "t",
             "type": "TextLabel",
-            "args": {"content": "hi", "x": 40.0, "y": 80.0}
+            "args": {"$id": "t", "content": "hi", "x": 40.0, "y": 80.0}
         });
         let mut assets = vec![authored.clone()];
         inject(&mut assets);
@@ -256,8 +256,8 @@ mod tests {
     #[test]
     fn a_declared_font_is_not_duplicated() {
         let mut assets = vec![
-            serde_json::json!({"name":"t","type":"TextLabel","args":{"content":"hi"}}),
-            serde_json::json!({"name":"f","type":"Font","args":{"path":"my.ttf","size_px":20}}),
+            serde_json::json!({"type":"TextLabel","args":{"$id":"t","content":"hi"}}),
+            serde_json::json!({"type":"Font","args":{"$id":"f","path":"my.ttf","size_px":20}}),
         ];
         inject(&mut assets);
         let font_count = assets
@@ -270,9 +270,8 @@ mod tests {
     #[test]
     fn text_does_not_override_explicit_font_on_label() {
         let mut assets = vec![serde_json::json!({
-            "name": "t",
             "type": "TextLabel",
-            "args": {"content": "hi", "font": "myfont"}
+            "args": {"$id": "t", "content": "hi", "font": "myfont"}
         })];
         inject(&mut assets);
         let label = assets
@@ -284,7 +283,7 @@ mod tests {
 
     #[test]
     fn graphics_config_injects_window() {
-        let mut assets = vec![serde_json::json!({"name":"gfx","type":"GraphicsConfig","args":{}})];
+        let mut assets = vec![serde_json::json!({"type":"GraphicsConfig","args":{"$id":"gfx"}})];
         inject(&mut assets);
         assert!(
             assets
@@ -298,8 +297,8 @@ mod tests {
     #[test]
     fn a_typeless_entry_is_skipped() {
         let mut assets = vec![
-            serde_json::json!({"name":"junk","args":{}}),
-            serde_json::json!({"name":"gfx","type":"GraphicsConfig","args":{}}),
+            serde_json::json!({"args":{"$id":"junk"}}),
+            serde_json::json!({"type":"GraphicsConfig","args":{"$id":"gfx"}}),
         ];
         inject(&mut assets);
         assert!(
@@ -307,14 +306,14 @@ mod tests {
                 .iter()
                 .any(|v| registered_type(v) == Some(RegisteredType::Window))
         );
-        assert!(assets.iter().any(|v| v["name"] == "junk"));
+        assert!(assets.iter().any(|v| v["args"]["$id"] == "junk"));
     }
 
     #[test]
     fn camera3d_injects_no_companions() {
         // The camera controller is now a field on Camera3D, not an injected
         // system, so a bare Camera3D pulls in nothing.
-        let mut assets = vec![serde_json::json!({"name":"c","type":"Camera3D","args":{}})];
+        let mut assets = vec![serde_json::json!({"type":"Camera3D","args":{"$id":"c"}})];
         inject(&mut assets);
         assert_eq!(assets.len(), 1);
         assert_eq!(registered_type(&assets[0]), Some(RegisteredType::Camera3D));

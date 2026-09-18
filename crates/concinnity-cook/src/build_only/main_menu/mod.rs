@@ -174,9 +174,12 @@ fn expand_one(
 
     if !menu.toggle_key.is_empty() {
         out.push(serde_json::json!({
-            "name": format!("{}_toggle", menu_name),
             "type": "KeyBinding",
-            "args": { "key": menu.toggle_key, "action": ui_action::screen_toggle(menu_name) }
+            "args": {
+                "$id": format!("{}_toggle", menu_name),
+                "key": menu.toggle_key,
+                "action": ui_action::screen_toggle(menu_name)
+            }
         }));
     }
 

@@ -48,9 +48,9 @@ fn resolve_palette_entries(
 
 fn material_value(palette_name: &str, entry: &PaletteEntry) -> serde_json::Value {
     serde_json::json!({
-        "name": format!("{}_{}", palette_name, entry.alias),
         "type": "Material",
         "args": {
+            "$id": format!("{}_{}", palette_name, entry.alias),
             "albedo":          entry.albedo,
             "normal_map":      entry.normal_map,
             "roughness":       entry.roughness,
@@ -109,31 +109,32 @@ mod tests {
     #[test]
     fn inline_entries_expand_to_materials() {
         let mut assets = vec![serde_json::json!({
-            "name": "pal",
             "type": "MaterialPalette",
-            "args": {"entries": [
+            "args": {"$id": "pal", "entries": [
                 {"alias":"floor","albedo":"tex_stone","roughness":0.9,"metallic":0.0},
                 {"alias":"wall","albedo":"tex_brick","roughness":0.85,"metallic":0.0}
             ]}
         })];
         expand_material_palettes(&mut assets, None).unwrap();
         assert_eq!(assets.len(), 2);
-        assert_eq!(assets[0]["name"], "pal_floor");
+        assert_eq!(assets[0]["args"]["$id"], "pal_floor");
         assert_eq!(assets[0]["type"], "Material");
-        assert_eq!(assets[1]["name"], "pal_wall");
+        assert_eq!(assets[1]["args"]["$id"], "pal_wall");
         assert_eq!(assets[0]["args"]["albedo"], "tex_stone");
     }
 
     #[test]
     fn preset_stone_dungeon_expands_four_materials() {
         let mut assets = vec![serde_json::json!({
-            "name": "pal",
             "type": "MaterialPalette",
-            "args": {"preset": "pal_stone_dungeon"}
+            "args": {"$id": "pal", "preset": "pal_stone_dungeon"}
         })];
         expand_material_palettes(&mut assets, None).unwrap();
         assert_eq!(assets.len(), 4);
-        let names: Vec<&str> = assets.iter().filter_map(|v| v["name"].as_str()).collect();
+        let names: Vec<&str> = assets
+            .iter()
+            .filter_map(|v| v["args"]["$id"].as_str())
+            .collect();
         assert!(names.contains(&"pal_floor"));
         assert!(names.contains(&"pal_wall"));
         assert!(names.contains(&"pal_ceiling"));
@@ -143,10 +144,10 @@ mod tests {
     #[test]
     fn material_palette_consumed_from_list() {
         let mut assets = vec![
-            serde_json::json!({"name":"pal","type":"MaterialPalette","args":{"entries":[
+            serde_json::json!({"type":"MaterialPalette","args":{"$id":"pal","entries":[
                 {"alias":"x","roughness":0.5}
             ]}}),
-            serde_json::json!({"name":"other","type":"Logger","args":{}}),
+            serde_json::json!({"type":"Logger","args":{"$id":"other"}}),
         ];
         expand_material_palettes(&mut assets, None).unwrap();
         assert!(!assets.iter().any(|v| v["type"] == "MaterialPalette"));
@@ -156,9 +157,8 @@ mod tests {
     #[test]
     fn material_defaults_applied() {
         let mut assets = vec![serde_json::json!({
-            "name": "pal",
             "type": "MaterialPalette",
-            "args": {"entries": [{"alias":"base"}]}
+            "args": {"$id": "pal", "entries": [{"alias":"base"}]}
         })];
         expand_material_palettes(&mut assets, None).unwrap();
         assert_eq!(assets[0]["args"]["roughness"], serde_json::json!(0.8f32));
@@ -169,14 +169,13 @@ mod tests {
     // generated Material (the part after the "pal_" prefix).
     fn expand_preset(preset: &str) -> Vec<String> {
         let mut assets = vec![serde_json::json!({
-            "name": "pal",
             "type": "MaterialPalette",
-            "args": {"preset": preset}
+            "args": {"$id": "pal", "preset": preset}
         })];
         expand_material_palettes(&mut assets, None).unwrap();
         assets
             .iter()
-            .filter_map(|v| v["name"].as_str())
+            .filter_map(|v| v["args"]["$id"].as_str())
             .map(|n| n.trim_start_matches("pal_").to_string())
             .collect()
     }
@@ -190,15 +189,20 @@ mod tests {
     #[test]
     fn preset_metal_industrial_expands_its_surfaces() {
         let mut assets = vec![serde_json::json!({
-            "name": "pal",
             "type": "MaterialPalette",
-            "args": {"preset": "pal_metal_industrial"}
+            "args": {"$id": "pal", "preset": "pal_metal_industrial"}
         })];
         expand_material_palettes(&mut assets, None).unwrap();
-        let names: Vec<&str> = assets.iter().filter_map(|v| v["name"].as_str()).collect();
+        let names: Vec<&str> = assets
+            .iter()
+            .filter_map(|v| v["args"]["$id"].as_str())
+            .collect();
         assert_eq!(names, ["pal_floor", "pal_wall", "pal_pipe", "pal_grate"]);
         // The pipe surface is fully metallic per the preset table.
-        let pipe = assets.iter().find(|v| v["name"] == "pal_pipe").unwrap();
+        let pipe = assets
+            .iter()
+            .find(|v| v["args"]["$id"] == "pal_pipe")
+            .unwrap();
         assert_eq!(pipe["args"]["metallic"], 1.0);
     }
 
@@ -219,18 +223,17 @@ mod tests {
     #[test]
     fn entry_without_an_alias_falls_back_to_surface() {
         let mut assets = vec![serde_json::json!({
-            "name": "pal",
             "type": "MaterialPalette",
-            "args": {"entries": [{"albedo": "tex_x"}]}
+            "args": {"$id": "pal", "entries": [{"albedo": "tex_x"}]}
         })];
         expand_material_palettes(&mut assets, None).unwrap();
-        assert_eq!(assets[0]["name"], "pal_surface");
+        assert_eq!(assets[0]["args"]["$id"], "pal_surface");
     }
 
     // A palette with neither preset nor entries is consumed and adds nothing.
     #[test]
     fn palette_without_entries_expands_to_nothing() {
-        let mut assets = vec![serde_json::json!({"name":"pal","type":"MaterialPalette"})];
+        let mut assets = vec![serde_json::json!({"type":"MaterialPalette","args":{"$id":"pal"}})];
         expand_material_palettes(&mut assets, None).unwrap();
         assert!(assets.is_empty());
     }
@@ -238,9 +241,8 @@ mod tests {
     #[test]
     fn entry_fields_override_material_defaults() {
         let mut assets = vec![serde_json::json!({
-            "name": "pal",
             "type": "MaterialPalette",
-            "args": {"entries": [{
+            "args": {"$id": "pal", "entries": [{
                 "alias": "hero",
                 "albedo": "tex_gold",
                 "normal_map": "tex_gold_n",
@@ -267,8 +269,8 @@ mod tests {
     #[test]
     fn a_preset_palette_ignores_its_inline_entries() {
         let mut assets = vec![serde_json::json!({
-            "name": "pal", "type": "MaterialPalette",
-            "args": {"preset": "pal_wood_cabin", "entries": [{"alias": "extra"}]}
+            "type": "MaterialPalette",
+            "args": {"$id": "pal", "preset": "pal_wood_cabin", "entries": [{"alias": "extra"}]}
         })];
         expand_material_palettes(&mut assets, None).unwrap();
         let names: Vec<String> = assets.iter().map(asset_name).collect();
@@ -301,8 +303,9 @@ mod tests {
                 "`entries[0].tint`",
             ),
         ] {
-            let mut assets =
-                vec![serde_json::json!({"name": "pal", "type": "MaterialPalette", "args": args})];
+            let mut assets = vec![
+                serde_json::json!({"type": "MaterialPalette", "args": crate::authoring::world::args_with_id(args, "pal")}),
+            ];
             let err = expand_material_palettes(&mut assets, None).unwrap_err();
             assert!(
                 err.starts_with("MaterialPalette 'pal': invalid args: "),

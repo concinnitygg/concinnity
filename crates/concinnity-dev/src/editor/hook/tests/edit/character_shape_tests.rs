@@ -5,11 +5,12 @@
 
 use concinnity_core::ecs::World;
 
-use crate::editor::hook::entry_name;
+use crate::editor::hook::declared_id;
 use crate::editor::hook::tests::fixtures::{hook, shape_world_entries};
 
 use crate::editor::inject;
 
+use crate::editor::hook::tests::fixtures::select;
 use crate::editor::panels::character_shape;
 use crate::editor::panels::character_shape_panel;
 
@@ -21,7 +22,7 @@ fn shape_reset_and_randomize_commit_once_each() {
     inject::editor_hud(&mut world);
     let mut h = hook(shape_world_entries());
     h.shape_open = true;
-    h.selection.set(vec!["body".to_string()]);
+    select(&mut h, &["body"]);
     let data = h.shape_data(&world);
     h.apply_shape_action(
         character_shape_panel::ShapeAction::Randomize,
@@ -47,7 +48,7 @@ fn shape_reset_and_randomize_commit_once_each() {
     assert!(!h.can_undo(), "randomize was one step");
 
     // A history jump drops the selection; pick the mesh again.
-    h.selection.set(vec!["body".to_string()]);
+    select(&mut h, &["body"]);
     let data = h.shape_data(&world);
     h.apply_shape_action(
         character_shape_panel::ShapeAction::Reset,
@@ -76,7 +77,7 @@ fn shape_add_row_creates_a_shape_for_the_selected_mesh() {
     entries.pop();
     let mut h = hook(entries);
     h.shape_open = true;
-    h.selection.set(vec!["body".to_string()]);
+    select(&mut h, &["body"]);
     let data = h.shape_data(&world);
     assert_eq!(data.rows, [character_shape::Row::Add]);
     h.apply_shape_action(
@@ -87,8 +88,8 @@ fn shape_add_row_creates_a_shape_for_the_selected_mesh() {
     );
     assert_eq!(h.entries.len(), 2);
     assert_eq!(h.entries[1]["args"]["target"], "body");
-    let name = entry_name(&h.entries[1]).unwrap().to_string();
-    h.selection.set(vec![name]);
+    let name = declared_id(&h.entries[1]).unwrap().to_string();
+    select(&mut h, &[&name]);
     let data = h.shape_data(&world);
     let b = data.binding.expect("a selected shape binds");
     assert_eq!((b.mesh.as_str(), b.shape_idx), ("body", Some(1)));
@@ -107,7 +108,8 @@ fn shape_panel_reads_a_character_models_schema_and_applies_presets() {
     let mut world = World::new();
     inject::editor_hud(&mut world);
     let entries = vec![
-        serde_json::json!({"name": "sk", "type": "CharacterSchema", "args": {
+        serde_json::json!({"type": "CharacterSchema", "args": {
+            "$id": "sk",
             "joints": [{"name": "root"}, {"name": "tail", "parent": "root"}],
             "keys": [{"name": "fluff", "caption": "Fluffiness", "region": "tail"}],
             "regions": [{"name": "tail", "joints": ["tail"]}],
@@ -117,16 +119,18 @@ fn shape_panel_reads_a_character_models_schema_and_applies_presets() {
             "presets": [{"name": "bushy", "sliders": [{"name": "fluff", "value": 0.9}],
                 "proportions": [{"joint": "tail", "length": 0.05}]}]
         }}),
-        serde_json::json!({"name": "body", "type": "CharacterModel", "args": {
+        serde_json::json!({"type": "CharacterModel", "args": {
+            "$id": "body",
             "schema": "sk", "sources": [{"source": "fox.glb"}]
         }}),
-        serde_json::json!({"name": "body_shape", "type": "CharacterShape", "args": {
+        serde_json::json!({"type": "CharacterShape", "args": {
+            "$id": "body_shape",
             "target": "body", "sliders": [{"name": "nose", "value": 0.3}]
         }}),
     ];
     let mut h = hook(entries);
     h.shape_open = true;
-    h.selection.set(vec!["body".to_string()]);
+    select(&mut h, &["body"]);
     // Nothing is inline on a model entry, so the rows are what the live
     // world exposes; publish a pose-free target through the entry fallback
     // by checking the schema half alone.

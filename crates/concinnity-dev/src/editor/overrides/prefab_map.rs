@@ -3,6 +3,7 @@
 //! composition the expansion applies. Pure: the hook owns the entry mutations.
 
 use concinnity_cook::authoring::registry::RegisteredType;
+use concinnity_cook::authoring::world::{entry_id, find_entry};
 use concinnity_core::math::vec3::add;
 use serde_json::Value;
 
@@ -48,9 +49,9 @@ pub(crate) fn resolve(
     generated_by: &str,
     asset_name: &str,
 ) -> Result<TemplateSlot, String> {
-    let instance = entries
-        .iter()
-        .find(|e| entry_name(e) == generated_by && entry_type(e) == Some(RegisteredType::Prop))
+    let instance = find_entry(entries, generated_by)
+        .map(|i| &entries[i])
+        .filter(|e| entry_type(e) == Some(RegisteredType::Prop))
         .ok_or_else(|| format!("no Prop instance named '{generated_by}'"))?;
     let args = instance.get("args").cloned().unwrap_or(Value::Null);
     let prefab_ref = args
@@ -336,7 +337,7 @@ fn entry_type(v: &Value) -> Option<RegisteredType> {
 }
 
 fn entry_name(v: &Value) -> &str {
-    v.get("name").and_then(|n| n.as_str()).unwrap_or("")
+    entry_id(v).unwrap_or("")
 }
 
 #[cfg(test)]
@@ -346,12 +347,13 @@ mod tests {
 
     fn table_world() -> Vec<Value> {
         vec![
-            json!({"name":"leaf","type":"Prefab","args":{"props":[
+            json!({"type":"Prefab","args":{"$id":"leaf","props":[
                 {"name":"cup","kind":"prop","mesh":"box","position":[1,0,0],"scale":[2,2,2]}]}}),
-            json!({"name":"table","type":"Prefab","args":{"props":[
+            json!({"type":"Prefab","args":{"$id":"table","props":[
                 {"name":"top","kind":"prop","mesh":"box"},
                 {"name":"set","kind":"prefab","prefab":"leaf","position":[0,1,0]}]}}),
-            json!({"name":"inst","type":"Prop","args":{
+            json!({"type":"Prop","args":{
+                "$id":"inst",
                 "prefab":"table","position":[10,0,0],"scale":[3,3,3]}}),
         ]
     }
@@ -380,7 +382,7 @@ mod tests {
 
     #[test]
     fn resolve_rejects_a_preset_backed_chain() {
-        let entries = vec![json!({"name":"inst","type":"Prop","args":{"prefab":"ghost"}})];
+        let entries = vec![json!({"type":"Prop","args":{"$id":"inst","prefab":"ghost"}})];
         let err = resolve(&entries, "inst", "inst_x").unwrap_err();
         assert!(err.contains("preset"), "{err}");
     }

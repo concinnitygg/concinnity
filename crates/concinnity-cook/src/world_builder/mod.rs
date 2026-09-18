@@ -31,7 +31,7 @@ pub struct WorldBuilder {
     // The search root a bare `source` filename resolves under, when the
     // embedder named one.
     assets_dir: Option<PathBuf>,
-    // Name and type per line, so the declaration order can be inspected
+    // Id and type per line, so the declaration order can be inspected
     // without re-reading the lines.
     declared: Vec<(String, &'static str)>,
     // The first declaration failure, held as the kind and message a
@@ -65,14 +65,15 @@ impl WorldBuilder {
         self.assets_dir.as_deref()
     }
 
-    /// Declare `value` under `name`. The asset type comes from the value's
-    /// own [`Authored`] impl, so it cannot disagree with the fields.
-    pub fn add<T: Authored>(&mut self, name: impl Into<String>, value: T) -> &mut Self {
-        let name = name.into();
-        match asset_line(&name, &value) {
+    /// Declare `value` under the `$id` `id`, the name a reference to it uses.
+    /// The asset type comes from the value's own [`Authored`] impl, so it
+    /// cannot disagree with the fields.
+    pub fn add<T: Authored>(&mut self, id: impl Into<String>, value: T) -> &mut Self {
+        let id = id.into();
+        match asset_line(&id, &value) {
             Ok(line) => {
                 self.lines.push(line);
-                self.declared.push((name, T::TYPE));
+                self.declared.push((id, T::TYPE));
             }
             Err(e) => {
                 self.error.get_or_insert((e.kind(), e.to_string()));
@@ -81,14 +82,15 @@ impl WorldBuilder {
         self
     }
 
-    /// The assets declared so far, as `(name, type)` pairs in declaration
+    /// The assets declared so far, as `(id, type)` pairs in declaration
     /// order. Declaration order is load-bearing for scenes: the first `Scene`
     /// is the one active at world start.
     pub fn declared(&self) -> impl Iterator<Item = (&str, &str)> {
         self.declared.iter().map(|(n, t)| (n.as_str(), *t))
     }
 
-    /// Point a reference field of the asset just added at `target`, by name.
+    /// Point a reference field of the asset just added at `target`, by its
+    /// `$id`.
     ///
     /// A reference on an authored struct holds a resolved handle (a dense
     /// index the compile assigns in declaration order), so the typed value

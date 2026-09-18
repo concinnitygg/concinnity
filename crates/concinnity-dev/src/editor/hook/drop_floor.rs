@@ -11,7 +11,6 @@ use concinnity_core::ecs::PickIndex;
 use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::math::pick::{PickRay, ray_aabb};
-use concinnity_host::thread::asset_id;
 
 use super::EditorHook;
 use super::drag;
@@ -26,19 +25,20 @@ impl EditorHook {
     // Eligibility matches the translate gizmo: an authored entry with a
     // `position` arg, a live unparented Transform.
     pub(super) fn drop_selection_to_floor(&mut self, world: &mut World) -> usize {
-        let names: Vec<String> = self.selection.iter().map(String::from).collect();
-        let selected_ids: std::collections::BTreeSet<AssetId> =
-            names.iter().filter_map(|n| asset_id::lookup(n)).collect();
+        let members = self.selected();
+        let selected_ids: std::collections::BTreeSet<AssetId> = members
+            .iter()
+            .filter_map(|h| self.handle_asset_id(h))
+            .collect();
         let mut changed = Vec::new();
-        for name in &names {
-            let Some(target) = self.member_target(world, GizmoMode::Translate, name) else {
+        for handle in &members {
+            let Some(target) = self.member_target(world, GizmoMode::Translate, handle) else {
                 continue;
             };
             let Some(position) = world.get::<Transform>(target.entity).map(|t| t.position) else {
                 continue;
             };
-            let id = asset_id::lookup(name);
-            let bounds = id.and_then(|id| {
+            let bounds = self.handle_asset_id(handle).and_then(|id| {
                 world
                     .resource::<PickIndex>()?
                     .entries
@@ -64,11 +64,11 @@ impl EditorHook {
             }
             Self::write_arg(
                 &mut self.entries,
-                target.idx,
+                target.key,
                 "position",
                 landed.map(drag::gizmo::round3),
             );
-            changed.push(target.idx);
+            changed.push(target.key);
         }
         if changed.is_empty() {
             return 0;

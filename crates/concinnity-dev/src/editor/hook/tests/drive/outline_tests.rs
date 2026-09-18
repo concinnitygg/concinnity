@@ -12,6 +12,7 @@ use crate::editor::hook::tests::fixtures::{click_at, hook, pick_world, release_a
 
 use crate::editor::outlines;
 
+use crate::editor::hook::tests::fixtures::{active, select};
 use crate::editor::view_menu;
 use crate::editor::viewport::billboards;
 
@@ -35,14 +36,14 @@ fn selected_trigger_volume_publishes_its_line_outline() {
     by_name.insert(id, entity);
     world.insert_resource(concinnity_core::ecs::EntityByName(by_name));
     let mut h = hook(vec![serde_json::json!({
-        "name": "zone", "type": "TriggerVolume",
-        "args": {"position": [0.0, 0.0, -6.0]}
+        "type": "TriggerVolume",
+        "args": {"$id": "zone", "position": [0.0, 0.0, -6.0]}
     })]);
 
     // Click the volume's projected icon (viewport center): it selects and its
     // outline comes up in the published line buffer.
     click_at(&mut world, &mut h, [640.0, 360.0]);
-    assert_eq!(h.selection.active(), Some("zone"));
+    assert_eq!(active(&h).as_deref(), Some("zone"));
     let published = world.resource::<WorldLines>().unwrap().0.len();
     assert_eq!(
         published,
@@ -70,7 +71,7 @@ fn selected_trigger_volume_publishes_its_line_outline() {
 
     // Clearing the Lines show flag publishes nothing at all, selection and
     // axes included: the pass it would feed is masked for the frame anyway.
-    h.selection.replace("zone".to_string());
+    select(&mut h, &["zone"]);
     h.show_flags = h.show_flags.toggled(view_menu::ShowFlags::LINES);
     h.tick(&mut world);
     let published = world.resource::<WorldLines>().unwrap().0.len();

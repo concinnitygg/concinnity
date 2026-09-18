@@ -108,7 +108,7 @@ mod tests {
         let mut media = MediaAssets::new("s");
         let out = emit_title_screen(&names, &story(None), &mut media);
         let bg = &out[1]["args"];
-        assert_eq!(out[1]["name"], "s_title_bg");
+        assert_eq!(out[1]["args"]["$id"], "s_title_bg");
         assert!(bg.get("texture").is_none());
         assert_eq!(bg["tint"][3], 1.0);
         assert!(media.entries().is_empty());
@@ -135,7 +135,7 @@ mod tests {
         for region in &regions {
             assert_eq!(region["args"]["follow_label"], true);
         }
-        assert_eq!(regions[1]["name"], "s_title_continue_btn");
+        assert_eq!(regions[1]["args"]["$id"], "s_title_continue_btn");
         assert_eq!(regions[1]["args"]["action"], "story:continue");
         assert_eq!(regions[4]["args"]["action"], "quit");
     }

@@ -8,13 +8,14 @@
 
 use concinnity_cook::authoring::registry::build_only::CharacterSchema;
 use concinnity_cook::authoring::registry::build_only::ShapePreset;
+use concinnity_cook::authoring::world::replace_args;
 use concinnity_cook::compile::character::builtin_schema;
 use concinnity_core::components::CharacterCapsule;
 use concinnity_core::ecs::World;
 use concinnity_engine::gfx::shape_preview::{self, ShapeTarget};
 use concinnity_host::thread::asset_id;
 
-use crate::editor::hook::{EditorHook, entry_name, entry_type, scroll_step, short_status};
+use crate::editor::hook::{EditorHook, declared_id, entry_type, scroll_step, short_status};
 use crate::editor::panels::character_shape::{self, Row, Rows, ShapeValues};
 use crate::editor::panels::character_shape_panel::{self, ShapeAction, ShapeView};
 use crate::editor::panels::form;
@@ -45,19 +46,17 @@ impl EditorHook {
     // CharacterModel and the first shape targeting it, or a selected
     // CharacterShape and its target.
     pub(super) fn shape_binding(&self) -> Option<ShapeBinding> {
-        let name = self.selection.active()?;
-        let idx = self
-            .entries
-            .iter()
-            .position(|e| entry_name(e) == Some(name))?;
+        let active = self.selection.active()?;
+        let idx = self.handle_index(active)?;
+        let name = self.handle_name(active)?;
         let entry = &self.entries[idx];
         match entry_type(entry)? {
             "SkinnedMesh" | "CharacterModel" => Some(ShapeBinding {
-                mesh: name.to_string(),
                 shape_idx: self.entries.iter().position(|e| {
                     entry_type(e) == Some("CharacterShape")
-                        && e.pointer("/args/target").and_then(|t| t.as_str()) == Some(name)
+                        && e.pointer("/args/target").and_then(|t| t.as_str()) == Some(&name)
                 }),
+                mesh: name,
             }),
             "CharacterShape" => {
                 let mesh = entry.pointer("/args/target")?.as_str()?.to_string();
@@ -108,9 +107,7 @@ impl EditorHook {
     }
 
     fn entry_index_named(&self, name: &str) -> Option<usize> {
-        self.entries
-            .iter()
-            .position(|e| entry_name(e) == Some(name))
+        concinnity_cook::authoring::world::find_entry(&self.entries, name)
     }
 
     // The schema that lays out `mesh`'s panel: a CharacterModel's named
@@ -206,7 +203,7 @@ impl EditorHook {
             .as_ref()
             .and_then(|b| b.shape_idx)
             .and_then(|i| self.entries.get(i))
-            .and_then(entry_name);
+            .and_then(declared_id);
         ShapeView {
             rows: &d.rows,
             sections: &d.derived.sections,
@@ -311,14 +308,14 @@ impl EditorHook {
         let name = self
             .entries
             .get(idx)
-            .and_then(entry_name)
+            .and_then(declared_id)
             .unwrap_or("CharacterShape");
         if let Err(e) = form::validate("CharacterShape", name, &args) {
             self.shape_status = Some(short_status(&e));
             return;
         }
-        if let Some(obj) = self.entries.get_mut(idx).and_then(|e| e.as_object_mut()) {
-            obj.insert("args".to_string(), serde_json::Value::Object(args));
+        if let Some(entry) = self.entries.get_mut(idx) {
+            replace_args(entry, serde_json::Value::Object(args));
         }
         self.mark_changed();
     }
@@ -327,7 +324,7 @@ impl EditorHook {
     pub(super) fn add_shape(&mut self, mesh: &str) {
         let name = self.unique_name("CharacterShape");
         self.entries.push(serde_json::json!({
-            "name": name, "type": "CharacterShape", "args": { "target": mesh },
+            "type": "CharacterShape", "args": { "$id": name, "target": mesh },
         }));
         self.mark_changed();
     }

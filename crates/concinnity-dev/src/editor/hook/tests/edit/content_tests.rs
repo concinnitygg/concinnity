@@ -9,6 +9,7 @@ use concinnity_core::ecs::World;
 use crate::editor::hook::edit::content::VISUAL_TYPES;
 use crate::editor::hook::tests::fixtures::{entry, hook};
 
+use crate::editor::hook::tests::fixtures::active;
 use crate::editor::panels::content_panel;
 
 // The Content grid over a world with visual assets: cells list them with
@@ -19,11 +20,11 @@ fn content_grid_lists_filters_and_selects_visual_assets() {
     let mut world = World::new();
     let mut h = hook(vec![
         serde_json::json!({
-            "name": "brick_tex", "type": "Texture",
-            "args": { "generator": "brick", "resolution": 32 }
+            "type": "Texture",
+            "args": { "$id": "brick_tex", "generator": "brick", "resolution": 32 }
         }),
         serde_json::json!({
-            "name": "brick_mat", "type": "Material", "args": { "roughness": 0.5 }
+            "type": "Material", "args": { "$id": "brick_mat", "roughness": 0.5 }
         }),
         entry("note", "TextLabel"),
     ]);
@@ -68,7 +69,7 @@ fn content_grid_lists_filters_and_selects_visual_assets() {
         &mut world,
         [0.0, 0.0],
     );
-    assert_eq!(h.selection.active(), Some("brick_tex"));
+    assert_eq!(active(&h).as_deref(), Some("brick_tex"));
     let (cells, _) = h.content_cells(&world);
     assert!(cells[0].selected, "the grid highlights the selection");
 }

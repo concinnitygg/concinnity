@@ -22,11 +22,13 @@ use crate::editor::widget;
 use concinnity_core::components::TextInput;
 use concinnity_core::ecs::World;
 
+use crate::editor::hook::tests::fixtures::entry_target;
+use crate::editor::hook::tests::fixtures::selected;
 use crate::editor::hook::tests::fixtures::{
     a_promotable_asset, click_row, entry, expandable_hook, hook, row_of, seed_tree, set_field,
     world_with_fields,
 };
-use crate::editor::hook::{EditorHook, entry_name};
+use crate::editor::hook::{EditorHook, declared_id};
 use crate::editor::overrides;
 use crate::editor::panels::form_panel::{self, FormAction};
 use crate::test_support::isolate_state_dir;
@@ -34,11 +36,11 @@ use crate::test_support::isolate_state_dir;
 fn prefab_hook(patch: serde_json::Value) -> EditorHook {
     isolate_state_dir();
     let mut h = hook(vec![
-        serde_json::json!({"name":"box","type":"ProceduralMesh","args":{"generator":"box"}}),
-        serde_json::json!({"name":"pair","type":"Prefab","args":{"props":[
+        serde_json::json!({"type":"ProceduralMesh","args":{"$id":"box","generator":"box"}}),
+        serde_json::json!({"type":"Prefab","args":{"$id":"pair","props":[
             {"name":"a","kind":"prop","mesh":"box","position":[1.0,0.0,0.0]}]}}),
-        serde_json::json!({"name":"i1","type":"Prop","args":{"prefab":"pair","position":[10.0,0.0,0.0]}}),
-        serde_json::json!({"name":"i1_a","type":"Prop","args": patch}),
+        serde_json::json!({"type":"Prop","args":{"$id":"i1","prefab":"pair","position":[10.0,0.0,0.0]}}),
+        serde_json::json!({"type":"Prop","args": concinnity_cook::authoring::world::args_with_id(patch, "i1_a")}),
     ]);
     h.panel_open = true;
     h
@@ -57,7 +59,7 @@ fn entity_option(h: &EditorHook, label_prefix: &str) -> usize {
 }
 
 fn entry_of<'a>(h: &'a EditorHook, name: &str) -> Option<&'a serde_json::Value> {
-    h.entries.iter().find(|e| entry_name(e) == Some(name))
+    h.entries.iter().find(|e| declared_id(e) == Some(name))
 }
 
 // Apply-all writes every path the prefab entry carries back into the
@@ -218,9 +220,9 @@ fn materializing_a_preset_prefab_authors_it_as_a_world_line() {
     .expect("preset file");
 
     let mut h = hook(vec![
-        serde_json::json!({"name":"box","type":"ProceduralMesh","args":{"generator":"box"}}),
-        serde_json::json!({"name":"i1","type":"Prop","args":{"prefab":"cn_test_prefab","position":[10.0,0.0,0.0]}}),
-        serde_json::json!({"name":"i1_a","type":"Prop","args":{"position":[5.0,0.0,0.0]}}),
+        serde_json::json!({"type":"ProceduralMesh","args":{"$id":"box","generator":"box"}}),
+        serde_json::json!({"type":"Prop","args":{"$id":"i1","prefab":"cn_test_prefab","position":[10.0,0.0,0.0]}}),
+        serde_json::json!({"type":"Prop","args":{"$id":"i1_a","position":[5.0,0.0,0.0]}}),
     ]);
     h.panel_open = true;
     let mut world = world_with_fields();
@@ -357,7 +359,7 @@ fn editing_a_generated_asset_writes_a_minimal_patch_on_confirm() {
         name,
         "the name heading carries the generated name"
     );
-    assert!(h.selection.contains(&name), "and the row selects");
+    assert!(selected(&h).contains(&name), "and the row selects");
 
     h.apply_form(FormAction::Confirm, &mut world);
     assert_eq!(
@@ -372,14 +374,14 @@ fn editing_a_generated_asset_writes_a_minimal_patch_on_confirm() {
     assert_eq!(h.entries.len(), before + 1, "a divergence appends the line");
     let added = h.entries.last().unwrap();
     assert_eq!(
-        entry_name(added),
+        declared_id(added),
         Some(name.as_str()),
         "the patch line keeps the generated name, so it patches it"
     );
     let root = key.split('.').next().unwrap().to_string();
     let args = added.get("args").and_then(|a| a.as_object()).unwrap();
     assert_eq!(
-        args.keys().collect::<Vec<_>>(),
+        args.keys().filter(|k| *k != "$id").collect::<Vec<_>>(),
         vec![&root],
         "only the diverged field is authored"
     );
@@ -436,12 +438,12 @@ fn a_patched_asset_relists_under_its_origin_as_overridden() {
 fn two_instance_prefab_hook() -> EditorHook {
     isolate_state_dir();
     let mut h = hook(vec![
-        serde_json::json!({"name":"box","type":"ProceduralMesh","args":{"generator":"box"}}),
-        serde_json::json!({"name":"pair","type":"Prefab","args":{"props":[
+        serde_json::json!({"type":"ProceduralMesh","args":{"$id":"box","generator":"box"}}),
+        serde_json::json!({"type":"Prefab","args":{"$id":"pair","props":[
             {"name":"a","kind":"prop","mesh":"box","position":[1.0,0.0,0.0]}]}}),
-        serde_json::json!({"name":"i1","type":"Prop","args":{"prefab":"pair","position":[10.0,0.0,0.0]}}),
-        serde_json::json!({"name":"i2","type":"Prop","args":{"prefab":"pair"}}),
-        serde_json::json!({"name":"i1_a","type":"Prop","args":{"position":[5.0,0.0,0.0]}}),
+        serde_json::json!({"type":"Prop","args":{"$id":"i1","prefab":"pair","position":[10.0,0.0,0.0]}}),
+        serde_json::json!({"type":"Prop","args":{"$id":"i2","prefab":"pair"}}),
+        serde_json::json!({"type":"Prop","args":{"$id":"i1_a","position":[5.0,0.0,0.0]}}),
     ]);
     h.panel_open = true;
     h
@@ -500,7 +502,7 @@ fn reverting_the_only_override_removes_the_patch_line_and_undoes_in_one_step() {
     h.apply_form(FormAction::PickOverrideOption(0), &mut world);
     assert_eq!(h.entries.len(), before - 1, "the patch line is gone");
     assert!(
-        !h.entries.iter().any(|e| entry_name(e) == Some("i1_a")),
+        !h.entries.iter().any(|e| declared_id(e) == Some("i1_a")),
         "the asset is pristine again"
     );
     assert!(h.form_open(), "the form re-derives instead of closing");
@@ -513,7 +515,7 @@ fn reverting_the_only_override_removes_the_patch_line_and_undoes_in_one_step() {
 
     h.undo(&mut world);
     assert_eq!(h.entries.len(), before, "one undo restores the patch line");
-    assert!(h.entries.iter().any(|e| entry_name(e) == Some("i1_a")));
+    assert!(h.entries.iter().any(|e| declared_id(e) == Some("i1_a")));
 }
 
 // Applying the override writes the value back into the Prefab definition
@@ -539,7 +541,7 @@ fn applying_an_override_updates_the_prefab_entry_and_drops_the_patch() {
     let def = h
         .entries
         .iter()
-        .find(|e| entry_name(e) == Some("pair"))
+        .find(|e| declared_id(e) == Some("pair"))
         .unwrap();
     // World (5,0,0) under instance position (10,0,0) is local (-5,0,0).
     assert_eq!(
@@ -556,7 +558,7 @@ fn applying_an_override_updates_the_prefab_entry_and_drops_the_patch() {
     let def = h
         .entries
         .iter()
-        .find(|e| entry_name(e) == Some("pair"))
+        .find(|e| declared_id(e) == Some("pair"))
         .unwrap();
     assert_eq!(
         def["args"]["props"][0]["position"],
@@ -600,7 +602,7 @@ fn the_entity_menu_reverts_all_overrides() {
         .unwrap();
     h.apply_form(FormAction::PickEntityOption(k), &mut world);
     assert_eq!(h.entries.len(), before - 1);
-    assert!(!h.entries.iter().any(|e| entry_name(e) == Some("i1_a")));
+    assert!(!h.entries.iter().any(|e| declared_id(e) == Some("i1_a")));
 
     h.undo(&mut world);
     assert_eq!(h.entries.len(), before, "revert-all is one undo step");
@@ -632,7 +634,7 @@ fn an_unconditional_expansion_selects_but_does_not_edit() {
     click_row(&mut h, "menu_tab_0", &mut world);
     assert!(!h.form_open(), "a fixed expansion has nothing to edit");
     assert!(
-        h.selection.contains("menu_tab_0"),
+        selected(&h).iter().any(|n| n == "menu_tab_0"),
         "but it still selects in the viewport"
     );
     assert!(h.entries.len() == 1, "and nothing was appended");
@@ -645,14 +647,16 @@ fn unapplied_markers_follow_edit_and_apply() {
     let mut h = hook(vec![entry("cube", "PointLight")]);
     let mut world = world_with_fields();
     // The Edit form: opening starts clean, a control edit marks, closing clears.
-    h.open_form(&mut world, "PointLight".to_string(), FormTarget::Entry(0));
+    let target = entry_target(&h, 0);
+    h.open_form(&mut world, "PointLight".to_string(), target);
     assert!(!h.form.touched);
     assert!(!h.panel_data(&world).form_title.ends_with('*'));
     h.apply_form(FormAction::CycleField(0), &mut world);
     assert!(h.form.touched, "a control edit marks the form");
     assert!(h.panel_data(&world).form_title.ends_with('*'));
     // Focus moves alone do not mark.
-    h.open_form(&mut world, "PointLight".to_string(), FormTarget::Entry(0));
+    let target = entry_target(&h, 0);
+    h.open_form(&mut world, "PointLight".to_string(), target);
     h.apply_form(FormAction::FocusName, &mut world);
     assert!(!h.form.touched, "focus is not an edit");
     h.form.touched = true;

@@ -2,8 +2,8 @@
 //! and resource assets, each queued for the resource stream.
 
 use concinnity_core::ecs::BlobAssetDef;
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::resource::ResourceHandles;
-use concinnity_host::thread::asset_id;
 
 use crate::asset_api::{self, AssetRequest};
 use crate::authoring::registry::RegisteredType;
@@ -35,7 +35,7 @@ pub(super) fn partition_components(
     };
     for (i, asset) in assets.iter().enumerate() {
         if let Some(kind) = asset.asset_type.resource_kind() {
-            let id = asset_id::intern(&asset.name);
+            let id = AssetId(i as u32);
             let handle = handles
                 .get(kind, id)
                 .expect("resource asset was assigned a handle");
@@ -49,11 +49,11 @@ pub(super) fn partition_components(
         let mut def = asset_api::create_asset_def(&req).map_err(|e| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("Asset '{}': {}", asset.name, e),
+                format!("Asset '{}': {}", asset.id, e),
             )
         })?;
-        def.name = Some(asset_id::intern(&asset.name));
-        out.named.push((asset.name.clone(), def));
+        def.name = Some(AssetId(i as u32));
+        out.named.push((asset.id.clone(), def));
         out.named_src.push(i);
     }
     Ok(out)
@@ -64,14 +64,15 @@ mod tests {
     use super::*;
     use crate::pipeline::fixtures::wja;
     use concinnity_core::blob::ResourceKind;
+    use concinnity_host::thread::asset_id;
 
     fn handles_for(assets: &[WorldJsonlAsset]) -> ResourceHandles {
         asset_id::reset_interner();
-        let names: Vec<&str> = assets.iter().map(|a| a.name.as_str()).collect();
+        let names: Vec<&str> = assets.iter().map(|a| a.id.as_str()).collect();
         asset_id::intern_all(&names);
         ResourceHandles::from_assets(assets.iter().filter_map(|a| {
             crate::authoring::resource_type::asset_resource_kind(a.asset_type)
-                .map(|kind| (asset_id::intern(&a.name), kind))
+                .map(|kind| (asset_id::intern(&a.id), kind))
         }))
     }
 

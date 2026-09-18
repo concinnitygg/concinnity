@@ -21,21 +21,21 @@ const SIZES: [(usize, &str); 2] = [(1_000, "1k"), (10_000, "10k")];
 fn world_jsonl(props: usize) -> String {
     let mut out = String::with_capacity(props * 128 + 512);
     out.push_str(concat!(
-        "{\"name\":\"cam\",\"type\":\"Camera3D\",\"args\":{\"position\":[0,2,12]}}\n",
-        "{\"name\":\"gfx\",\"type\":\"GraphicsConfig\",\"args\":",
-        "{\"vsync\":false,\"shadow_map_size\":0}}\n",
-        "{\"name\":\"bench_mesh\",\"type\":\"ProceduralMesh\",\"args\":",
-        "{\"generator\":\"box\",\"half_extents\":[0.4,0.4,0.4]}}\n",
-        "{\"name\":\"bench_tex\",\"type\":\"Texture\",\"args\":",
-        "{\"generator\":\"checker\",\"resolution\":64}}\n",
-        "{\"name\":\"bench_mat\",\"type\":\"Material\",\"args\":",
-        "{\"albedo\":\"bench_tex\",\"roughness\":0.6}}\n",
+        "{\"type\":\"Camera3D\",\"args\":{\"$id\":\"cam\",\"position\":[0,2,12]}}\n",
+        "{\"type\":\"GraphicsConfig\",\"args\":",
+        "{\"$id\":\"gfx\",\"vsync\":false,\"shadow_map_size\":0}}\n",
+        "{\"type\":\"ProceduralMesh\",\"args\":",
+        "{\"$id\":\"bench_mesh\",\"generator\":\"box\",\"half_extents\":[0.4,0.4,0.4]}}\n",
+        "{\"type\":\"Texture\",\"args\":",
+        "{\"$id\":\"bench_tex\",\"generator\":\"checker\",\"resolution\":64}}\n",
+        "{\"type\":\"Material\",\"args\":",
+        "{\"$id\":\"bench_mat\",\"albedo\":\"bench_tex\",\"roughness\":0.6}}\n",
     ));
     for i in 0..props {
         let x = (i % 100) as f32 * 1.2;
         let z = (i / 100) as f32 * 1.2;
         out.push_str(&format!(
-            "{{\"name\":\"p{i}\",\"type\":\"Prop\",\"args\":{{\"mesh\":\"bench_mesh\",\
+            "{{\"type\":\"Prop\",\"args\":{{\"mesh\":\"bench_mesh\",\
              \"material\":\"bench_mat\",\"position\":[{x},0.45,{z}]}}}}\n"
         ));
     }

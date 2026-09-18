@@ -3,43 +3,72 @@
 // rewrite world.jsonl through here. The shipped runtime plays compiled blobs
 // and never touches world.jsonl, so this lives in the build crate, not core.
 
+use super::identity::{ID_KEY, entry_handles, is_label_of};
 use crate::authoring::registry::RegisteredType;
 
 /// An asset entry after $include resolution and type parsing.
 #[derive(Clone, Debug)]
 pub struct WorldJsonlAsset {
-    /// The asset's declared name.
-    pub name: String,
+    /// The asset's handle: the `$id` it declares, or the `<Type>#<ordinal>`
+    /// label a loaded world gives an anonymous entry.
+    pub id: String,
     /// The asset's registered type.
     pub asset_type: RegisteredType,
-    /// The asset's authored args.
+    /// The asset's authored args, without the `$id`.
     pub args: serde_json::Value,
 }
 
 impl WorldJsonlAsset {
-    /// Build a typed entry from a raw JSON asset object. Fails, naming the
-    /// asset, when `name` is missing or `type` is not an exact registered name.
+    /// Build a typed entry from a loaded JSON asset object, moving its `$id`
+    /// out of the args. Fails, naming the asset, when it carries no `$id` or
+    /// `type` is not an exact registered name.
     pub fn from_value(v: &serde_json::Value) -> Result<Self, String> {
         let type_str = v.get("type").and_then(|t| t.as_str());
-        let Some(name) = v.get("name").and_then(|n| n.as_str()) else {
+        let mut args = v
+            .get("args")
+            .cloned()
+            .filter(|a| !a.is_null())
+            .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
+        let Some(id) = take_entry_id_from_args(&mut args) else {
             return Err(format!(
-                "asset of type '{}': missing `name` field",
+                "asset of type '{}': missing `{ID_KEY}`",
                 type_str.unwrap_or("")
             ));
         };
         let Some(type_str) = type_str else {
-            return Err(format!("'{name}': missing `type` field"));
+            return Err(format!("'{id}': missing `type` field"));
         };
         let asset_type = RegisteredType::parse(type_str)
-            .ok_or_else(|| format!("'{name}': unknown type '{type_str}'"))?;
+            .ok_or_else(|| format!("'{id}': unknown type '{type_str}'"))?;
         Ok(WorldJsonlAsset {
-            name: name.to_string(),
+            id,
             asset_type,
-            args: v
-                .get("args")
-                .cloned()
-                .unwrap_or_else(|| serde_json::Value::Object(Default::default())),
+            args,
         })
+    }
+
+    /// The asset as a world line: its args with the `$id` declared, or none
+    /// for an anonymous asset, whose label is not something a line can declare.
+    pub fn to_entry(&self) -> serde_json::Value {
+        let args = if self.is_anonymous() {
+            self.args.clone()
+        } else {
+            super::identity::args_with_id(self.args.clone(), &self.id)
+        };
+        serde_json::json!({"type": self.asset_type.as_str(), "args": args})
+    }
+
+    /// Whether the asset declares no `$id` of its own, so its handle is the
+    /// label it was loaded under and nothing can reference it.
+    pub fn is_anonymous(&self) -> bool {
+        is_label_of(&self.id, self.asset_type.as_str())
+    }
+}
+
+fn take_entry_id_from_args(args: &mut serde_json::Value) -> Option<String> {
+    match args.as_object_mut()?.remove(ID_KEY)? {
+        serde_json::Value::String(id) => Some(id),
+        _ => None,
     }
 }
 
@@ -108,15 +137,13 @@ where
     })
 }
 
-/// Read asset names from world.jsonl without a full parse, for error messages.
+/// Read every entry's handle from world.jsonl without a full parse, for error
+/// messages: its `$id`, else its `<Type>#<ordinal>` label.
 pub fn known_names(json_path: &str) -> std::io::Result<Vec<String>> {
     let content = std::fs::read_to_string(json_path)?;
     let assets = parse_world_jsonl(&content)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
-    Ok(assets
-        .iter()
-        .filter_map(|v| v.get("name").and_then(|n| n.as_str()).map(str::to_string))
-        .collect())
+    Ok(entry_handles(&assets).into_iter().flatten().collect())
 }
 
 #[cfg(test)]
@@ -126,31 +153,73 @@ mod tests {
     #[test]
     fn from_value_parses_an_exact_type() {
         let asset = WorldJsonlAsset::from_value(
-            &serde_json::json!({"name": "p", "type": "Prop", "args": {"mesh": "m"}}),
+            &serde_json::json!({"type": "Prop", "args": {"$id": "p", "mesh": "m"}}),
         )
         .unwrap();
-        assert_eq!(asset.name, "p");
+        assert_eq!(asset.id, "p");
         assert_eq!(asset.asset_type, RegisteredType::Prop);
         assert_eq!(asset.args["mesh"], "m");
     }
 
     #[test]
     fn from_value_defaults_missing_args_to_an_empty_object() {
-        let asset =
-            WorldJsonlAsset::from_value(&serde_json::json!({"name": "w", "type": "Window"}))
-                .unwrap();
+        let asset = WorldJsonlAsset::from_value(
+            &serde_json::json!({"type": "Window", "args": {"$id": "w"}}),
+        )
+        .unwrap();
         assert_eq!(asset.args, serde_json::json!({}));
     }
 
+    // A loaded world gives every entry a `$id`, so one without is not loaded.
     #[test]
-    fn from_value_rejects_a_missing_name() {
+    fn from_value_rejects_a_missing_id() {
         let err = WorldJsonlAsset::from_value(&serde_json::json!({"type": "Prop"})).unwrap_err();
-        assert!(err.contains("missing `name`"), "{err}");
+        assert!(err.contains("missing `$id`"), "{err}");
+    }
+
+    #[test]
+    fn from_value_moves_the_id_out_of_the_args() {
+        let asset = WorldJsonlAsset::from_value(
+            &serde_json::json!({"type": "Prop", "args": {"$id": "p", "mesh": "m"}}),
+        )
+        .unwrap();
+        assert_eq!(asset.args, serde_json::json!({"mesh": "m"}));
+        assert!(!asset.is_anonymous());
+    }
+
+    #[test]
+    fn a_label_of_its_own_type_marks_the_asset_anonymous() {
+        let labeled = |ty: &str, id: &str| {
+            WorldJsonlAsset::from_value(&serde_json::json!({"type": ty, "args": {"$id": id}}))
+                .unwrap()
+        };
+        assert!(labeled("Prop", "Prop#3").is_anonymous());
+        assert!(!labeled("Screen", "MainMenu#0").is_anonymous());
+        assert!(!labeled("Prop", "Prop#3_body").is_anonymous());
+    }
+
+    #[test]
+    fn to_entry_declares_the_id_unless_anonymous() {
+        let asset = |id: &str| {
+            WorldJsonlAsset::from_value(
+                &serde_json::json!({"type": "Prop", "args": {"$id": id, "mesh": "m"}}),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            asset("crate").to_entry(),
+            serde_json::json!({"type": "Prop", "args": {"$id": "crate", "mesh": "m"}})
+        );
+        assert_eq!(
+            asset("Prop#2").to_entry(),
+            serde_json::json!({"type": "Prop", "args": {"mesh": "m"}})
+        );
     }
 
     #[test]
     fn from_value_rejects_a_missing_type() {
-        let err = WorldJsonlAsset::from_value(&serde_json::json!({"name": "p"})).unwrap_err();
+        let err =
+            WorldJsonlAsset::from_value(&serde_json::json!({"args": {"$id": "p"}})).unwrap_err();
         assert!(
             err.contains("'p'") && err.contains("missing `type`"),
             "{err}"
@@ -159,16 +228,19 @@ mod tests {
 
     #[test]
     fn from_value_rejects_an_unknown_type() {
-        let err = WorldJsonlAsset::from_value(&serde_json::json!({"name": "p", "type": "Gizmo"}))
-            .unwrap_err();
+        let err = WorldJsonlAsset::from_value(
+            &serde_json::json!({"type": "Gizmo", "args": {"$id": "p"}}),
+        )
+        .unwrap_err();
         assert!(err.contains("'p'") && err.contains("'Gizmo'"), "{err}");
     }
 
     #[test]
     fn from_value_rejects_inexact_spellings() {
         for ty in ["prop", "PROP", "color_lut", "Color_Lut", "colorlut"] {
-            let err = WorldJsonlAsset::from_value(&serde_json::json!({"name": "a", "type": ty}))
-                .unwrap_err();
+            let err =
+                WorldJsonlAsset::from_value(&serde_json::json!({"type": ty, "args": {"$id": "a"}}))
+                    .unwrap_err();
             assert!(err.contains("'a'") && err.contains(ty), "{ty}: {err}");
         }
     }
@@ -188,13 +260,13 @@ mod tests {
 
     #[test]
     fn parse_world_jsonl_returns_entries_in_order() {
-        let content = r#"{"name":"a","type":"Logger"}
-{"name":"b","type":"Window"}
+        let content = r#"{"type":"Logger","args":{"$id":"a"}}
+{"type":"Window","args":{"$id":"b"}}
 "#;
         let assets = parse_world_jsonl(content).unwrap();
         assert_eq!(assets.len(), 2);
-        assert_eq!(assets[0]["name"], "a");
-        assert_eq!(assets[1]["name"], "b");
+        assert_eq!(assets[0]["args"]["$id"], "a");
+        assert_eq!(assets[1]["args"]["$id"], "b");
     }
 
     #[test]
@@ -206,8 +278,8 @@ mod tests {
     #[test]
     fn write_world_jsonl_one_line_per_entry() {
         let assets = vec![
-            serde_json::json!({"name": "a", "type": "Logger"}),
-            serde_json::json!({"name": "b", "type": "Window"}),
+            serde_json::json!({"type": "Logger", "args": {"$id": "a"}}),
+            serde_json::json!({"type": "Window", "args": {"$id": "b"}}),
         ];
         let out = write_world_jsonl(&assets).unwrap();
         let lines: Vec<&str> = out.lines().collect();
@@ -218,11 +290,11 @@ mod tests {
 
     #[test]
     fn write_world_jsonl_round_trips_through_parse() {
-        let assets = vec![serde_json::json!({"name": "x", "type": "Logger", "args": {}})];
+        let assets = vec![serde_json::json!({"type": "Logger", "args": {"$id": "x"}})];
         let out = write_world_jsonl(&assets).unwrap();
         let parsed = parse_world_jsonl(&out).unwrap();
         assert_eq!(parsed.len(), 1);
-        assert_eq!(parsed[0]["name"], "x");
+        assert_eq!(parsed[0]["args"]["$id"], "x");
     }
 
     #[test]
@@ -230,10 +302,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let src = dir.path().join("world.jsonl");
         let dst = dir.path().join("out.jsonl");
-        std::fs::write(&src, "{\"name\":\"a\",\"type\":\"Logger\"}\n").unwrap();
+        std::fs::write(&src, "{\"type\":\"Logger\",\"args\":{\"$id\":\"a\"}}\n").unwrap();
 
         patch_world_jsonl_to(src.to_str().unwrap(), dst.to_str().unwrap(), |assets| {
-            assets.push(serde_json::json!({"name":"b","type":"Window"}));
+            assets.push(serde_json::json!({"type":"Window","args":{"$id":"b"}}));
             Ok(())
         })
         .unwrap();
@@ -241,14 +313,14 @@ mod tests {
         let content = std::fs::read_to_string(&dst).unwrap();
         let parsed = parse_world_jsonl(&content).unwrap();
         assert_eq!(parsed.len(), 2);
-        assert_eq!(parsed[1]["name"], "b");
+        assert_eq!(parsed[1]["args"]["$id"], "b");
     }
 
     #[test]
     fn patch_world_jsonl_to_propagates_mutation_error() {
         let dir = tempfile::tempdir().unwrap();
         let src = dir.path().join("world.jsonl");
-        std::fs::write(&src, "{\"name\":\"a\",\"type\":\"Logger\"}\n").unwrap();
+        std::fs::write(&src, "{\"type\":\"Logger\",\"args\":{\"$id\":\"a\"}}\n").unwrap();
 
         let result =
             patch_world_jsonl_to(src.to_str().unwrap(), src.to_str().unwrap(), |_assets| {
@@ -258,16 +330,16 @@ mod tests {
     }
 
     #[test]
-    fn known_names_extracts_names() {
+    fn known_names_lists_ids_and_labels() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("world.jsonl");
         std::fs::write(
             &path,
-            "{\"name\":\"a\",\"type\":\"Logger\"}\n{\"name\":\"b\",\"type\":\"Window\"}\n",
+            "{\"type\":\"Logger\",\"args\":{\"$id\":\"a\"}}\n{\"type\":\"Window\"}\n",
         )
         .unwrap();
         let names = known_names(path.to_str().unwrap()).unwrap();
-        assert_eq!(names, vec!["a", "b"]);
+        assert_eq!(names, vec!["a", "Window#0"]);
     }
 
     #[test]

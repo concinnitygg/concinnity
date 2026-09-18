@@ -75,7 +75,7 @@ mod tests {
 
     #[test]
     fn passes_through_without_panels() {
-        let mut assets = vec![serde_json::json!({"name":"x","type":"Window","args":{}})];
+        let mut assets = vec![serde_json::json!({"type":"Window","args":{"$id":"x"}})];
         expand_panels(&mut assets).unwrap();
         assert_eq!(assets.len(), 1);
     }
@@ -83,9 +83,8 @@ mod tests {
     #[test]
     fn titled_panel_expands_to_bg_and_title() {
         let mut assets = vec![serde_json::json!({
-            "name": "pause_card",
             "type": "Panel",
-            "args": { "screen": "pause", "title": "Paused", "x": 440.0, "y": 220.0,
+            "args": { "$id": "pause_card", "screen": "pause", "title": "Paused", "x": 440.0, "y": 220.0,
                       "width": 400.0, "height": 280.0 }
         })];
         expand_panels(&mut assets).unwrap();
@@ -114,7 +113,7 @@ mod tests {
     #[test]
     fn a_screenless_panel_leaves_its_children_unbound() {
         let mut assets = vec![serde_json::json!({
-            "name": "card", "type": "Panel", "args": { "title": "Stats" }
+            "type": "Panel", "args": { "$id": "card", "title": "Stats" }
         })];
         expand_panels(&mut assets).unwrap();
         assert!(by_name(&assets, "card_bg")["args"].get("screen").is_none());
@@ -128,7 +127,7 @@ mod tests {
     #[test]
     fn untitled_panel_emits_only_bg() {
         let mut assets = vec![serde_json::json!({
-            "name": "card", "type": "Panel", "args": { "width": 200.0, "height": 120.0 }
+            "type": "Panel", "args": { "$id": "card", "width": 200.0, "height": 120.0 }
         })];
         expand_panels(&mut assets).unwrap();
         assert_eq!(by_name(&assets, "card_bg")["type"], "Sprite");
@@ -146,18 +145,18 @@ mod tests {
     #[test]
     fn other_assets_survive_a_panel_expansion() {
         let mut assets = vec![
-            serde_json::json!({"name":"win","type":"Window","args":{}}),
-            serde_json::json!({"name":"card","type":"Panel","args":{"width":10.0}}),
+            serde_json::json!({"type":"Window","args":{"$id":"win"}}),
+            serde_json::json!({"type":"Panel","args":{"$id":"card","width":10.0}}),
         ];
         expand_panels(&mut assets).unwrap();
-        assert_eq!(assets[0]["name"], "win");
-        assert_eq!(assets[1]["name"], "card_bg");
+        assert_eq!(assets[0]["args"]["$id"], "win");
+        assert_eq!(assets[1]["args"]["$id"], "card_bg");
     }
 
     // A Panel with no args at all is the fully defaulted panel, not an error.
     #[test]
     fn panel_without_args_uses_type_defaults() {
-        let mut assets = vec![serde_json::json!({"name":"card","type":"Panel"})];
+        let mut assets = vec![serde_json::json!({"type":"Panel","args":{"$id":"card"}})];
         expand_panels(&mut assets).unwrap();
         let defaults = Panel::default();
         assert_eq!(assets.len(), 1);
@@ -167,7 +166,7 @@ mod tests {
     #[test]
     fn invalid_args_name_the_panel_and_the_field() {
         let mut assets = vec![serde_json::json!({
-            "name": "card", "type": "Panel", "args": {"width": "wide"}
+            "type": "Panel", "args": {"$id": "card", "width": "wide"}
         })];
         let err = expand_panels(&mut assets).unwrap_err();
         assert!(err.contains("Panel 'card'"), "{err}");

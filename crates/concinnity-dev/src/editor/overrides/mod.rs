@@ -60,7 +60,7 @@ impl TemplateIndex {
             loaded
                 .assets
                 .iter()
-                .find(|a| a.name == name)
+                .find(|a| a.id == name)
                 .map(|a| a.args.clone())
         };
         for g in &loaded.generated {
@@ -296,8 +296,7 @@ fn entry_type(v: &Value) -> Option<RegisteredType> {
 }
 
 fn entry_name(v: &Value) -> String {
-    v.get("name")
-        .and_then(|n| n.as_str())
+    concinnity_cook::authoring::world::entry_id(v)
         .unwrap_or("")
         .to_string()
 }
@@ -424,13 +423,13 @@ mod tests {
     #[test]
     fn instance_count_follows_nested_prefab_chains() {
         let entries = vec![
-            json!({"name":"leaf","type":"Prefab","args":{"props":[
+            json!({"type":"Prefab","args":{"$id":"leaf","props":[
                 {"name":"cup","kind":"prop","mesh":"box"}]}}),
-            json!({"name":"table","type":"Prefab","args":{"props":[
+            json!({"type":"Prefab","args":{"$id":"table","props":[
                 {"name":"set","kind":"prefab","prefab":"leaf"}]}}),
-            json!({"name":"i1","type":"Prop","args":{"prefab":"table"}}),
-            json!({"name":"i2","type":"Prop","args":{"prefab":"leaf"}}),
-            json!({"name":"plain","type":"Prop","args":{"mesh":"box"}}),
+            json!({"type":"Prop","args":{"$id":"i1","prefab":"table"}}),
+            json!({"type":"Prop","args":{"$id":"i2","prefab":"leaf"}}),
+            json!({"type":"Prop","args":{"$id":"plain","mesh":"box"}}),
         ];
         assert_eq!(instance_count(&entries, "leaf"), 2);
         assert_eq!(instance_count(&entries, "table"), 1);
@@ -444,7 +443,7 @@ mod tests {
         };
         let loaded = LoadedWorld {
             assets: vec![WorldJsonlAsset {
-                name: "i1_a".into(),
+                id: "i1_a".into(),
                 asset_type: concinnity_cook::authoring::registry::RegisteredType::Prop,
                 args: json!({"mesh": "box"}),
             }],

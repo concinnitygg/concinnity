@@ -15,6 +15,7 @@
 //! a clip) resolve against the whole world, so those stay a build-time check.
 
 use concinnity_cook::authoring::registry::RegisteredType;
+use concinnity_cook::authoring::world::{args_without_id, entry_handle, replace_args};
 use concinnity_core::components::FrameInput;
 use concinnity_core::ecs::World;
 use serde_json::Value;
@@ -32,7 +33,7 @@ use crate::editor::behavior::outline::{self, Row};
 use crate::editor::behavior::panel::{BehaviorAction, BehaviorView, Status, ViewMode};
 use crate::editor::behavior::pulse;
 use crate::editor::behavior::relations;
-use crate::editor::hook::{EditorHook, entry_name, entry_type, scroll_step};
+use crate::editor::hook::{EditorHook, declared_id, entry_type, scroll_step};
 use crate::editor::panels::registry::PanelKey;
 use crate::editor::widget;
 
@@ -106,6 +107,7 @@ impl EditorHook {
             .and_then(|i| self.entries[i].get("args"))
             .filter(|a| a.is_object())
             .cloned()
+            .map(args_without_id)
             .unwrap_or_else(|| Value::Object(serde_json::Map::new()))
     }
 
@@ -123,6 +125,7 @@ impl EditorHook {
             .find(|e| entry_type(e) == Some("Variables"))
             .and_then(|e| e.get("args"))
             .cloned()
+            .map(args_without_id)
     }
 
     pub(in crate::editor::hook) fn behavior_data(&self) -> BehaviorData {
@@ -137,9 +140,8 @@ impl EditorHook {
         let picks = selected.map_or_else(Vec::new, |r| edit::picks(&r.kind, component_names()));
         let name = self
             .behavior_entry()
-            .and_then(|i| entry_name(&self.entries[i]))
-            .unwrap_or("")
-            .to_string();
+            .and_then(|i| entry_handle(&self.entries, i))
+            .unwrap_or_default();
         let mut pulse_cards = Vec::new();
         let mut pulse_rows = Vec::new();
         for p in &self.behavior.pulses {
@@ -193,10 +195,9 @@ impl EditorHook {
         self.behavior_entries()
             .into_iter()
             .map(|i| {
-                let e = &self.entries[i];
                 (
-                    entry_name(e).unwrap_or("").to_string(),
-                    e.get("args").cloned().unwrap_or(Value::Null),
+                    entry_handle(&self.entries, i).unwrap_or_default(),
+                    self.entries[i].get("args").cloned().unwrap_or(Value::Null),
                 )
             })
             .collect()
@@ -208,7 +209,7 @@ impl EditorHook {
     fn declared_assets(&self) -> Vec<(&str, RegisteredType)> {
         self.entries
             .iter()
-            .filter_map(|e| Some((entry_name(e)?, RegisteredType::parse(entry_type(e)?)?)))
+            .filter_map(|e| Some((declared_id(e)?, RegisteredType::parse(entry_type(e)?)?)))
             .collect()
     }
 
@@ -285,7 +286,7 @@ impl EditorHook {
             self.behavior.status = None;
             return;
         };
-        let name = entry_name(&self.entries[idx]).unwrap_or("").to_string();
+        let name = entry_handle(&self.entries, idx).unwrap_or_default();
         let args = self.behavior_args();
         let vars = self.variables_args();
         self.behavior.status = Some(
@@ -325,10 +326,7 @@ impl EditorHook {
         let Some(idx) = self.behavior_entry() else {
             return;
         };
-        let Some(entry) = self.entries[idx].as_object_mut() else {
-            return;
-        };
-        entry.insert("args".to_string(), args);
+        replace_args(&mut self.entries[idx], args);
         self.mark_changed();
         let prev_fault = self.behavior_fault_message();
         self.refresh_behavior_status();
@@ -401,7 +399,7 @@ impl EditorHook {
     fn add_behavior(&mut self, world: &mut World) {
         let name = self.unique_name("behavior");
         self.entries.push(serde_json::json!({
-            "name": name, "type": "Behavior", "args": {"on": "start", "do": []},
+            "type": "Behavior", "args": {"$id": name, "on": "start", "do": []},
         }));
         self.mark_changed();
         self.behavior.index = self.behavior_entries().len().saturating_sub(1);

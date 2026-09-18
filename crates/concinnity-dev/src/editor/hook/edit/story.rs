@@ -250,7 +250,7 @@ impl EditorHook {
         }
         let name = self.unique_name("story");
         self.entries.push(serde_json::json!({
-            "name": name, "type": "StoryImport", "args": { "source": path },
+            "type": "StoryImport", "args": { "$id": name, "source": path },
         }));
         self.mark_changed();
         self.load_story(world);

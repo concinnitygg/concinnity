@@ -245,7 +245,7 @@ pub(crate) fn assign_shader_handles(
         .iter()
         .filter(|a| a.asset_type == RegisteredType::Shader)
     {
-        handles.assign_shader(asset_id::intern(&asset.name));
+        handles.assign_shader(asset_id::intern(&asset.id));
     }
 }
 
@@ -259,7 +259,7 @@ pub(crate) fn assign_mesh_source_handles(
 ) {
     handles.assign_mesh_sources(assets.iter().filter_map(|a| {
         crate::authoring::resource_type::mesh_source_block(a.asset_type, &a.args)
-            .map(|block| (asset_id::intern(&a.name), block))
+            .map(|block| (asset_id::intern(&a.id), block))
     }));
 }
 
@@ -352,7 +352,7 @@ mod tests {
         use concinnity_host::thread::asset_id;
 
         let a = |name: &str, asset_type: RegisteredType, args: serde_json::Value| WorldJsonlAsset {
-            name: name.to_string(),
+            id: name.to_string(),
             asset_type,
             args,
         };
@@ -388,7 +388,7 @@ mod tests {
 
         // Intern in declaration order, mirroring the pipeline.
         asset_id::reset_interner();
-        let names: Vec<&str> = assets.iter().map(|x| x.name.as_str()).collect();
+        let names: Vec<&str> = assets.iter().map(|x| x.id.as_str()).collect();
         asset_id::intern_all(&names);
 
         let mut handles = ResourceHandles::default();
@@ -468,7 +468,7 @@ mod tests {
 
         asset_id::reset_interner();
         let world_asset = |name: &str, asset_type: RegisteredType| WorldJsonlAsset {
-            name: name.to_string(),
+            id: name.to_string(),
             asset_type,
             args: serde_json::json!({}),
         };

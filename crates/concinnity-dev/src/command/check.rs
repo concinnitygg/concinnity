@@ -34,7 +34,7 @@ mod tests {
         let path = dir.path().join("world.jsonl");
         std::fs::write(
             &path,
-            "{\"name\":\"phys\",\"type\":\"PhysicsConfig\",\"args\":{}}\n",
+            "{\"type\":\"PhysicsConfig\",\"args\":{\"$id\":\"phys\"}}\n",
         )
         .unwrap();
         check(path.to_str().unwrap()).unwrap();
@@ -46,7 +46,7 @@ mod tests {
         let path = dir.path().join("world.jsonl");
         std::fs::write(
             &path,
-            "{\"name\":\"x\",\"type\":\"NotARealAssetType\",\"args\":{}}\n",
+            "{\"type\":\"NotARealAssetType\",\"args\":{\"$id\":\"x\"}}\n",
         )
         .unwrap();
         assert!(check(path.to_str().unwrap()).is_err());

@@ -84,11 +84,11 @@ mod tests {
     use super::*;
 
     fn app(name: &str) -> serde_json::Value {
-        serde_json::json!({"name":"app","type":"AppConfig","args":{"name": name}})
+        serde_json::json!({"type":"AppConfig","args":{"$id":"app","name": name}})
     }
 
     fn window(args: serde_json::Value) -> serde_json::Value {
-        serde_json::json!({"name":"w","type":"Window","args": args})
+        serde_json::json!({"type":"Window","args": crate::authoring::world::args_with_id(args, "w")})
     }
 
     fn title_of(assets: &[serde_json::Value]) -> Option<String> {
@@ -136,8 +136,8 @@ mod tests {
     #[test]
     fn duplicate_app_config_is_an_error() {
         let mut assets = vec![
-            serde_json::json!({"name":"a","type":"AppConfig","args":{"name":"A"}}),
-            serde_json::json!({"name":"b","type":"AppConfig","args":{"name":"B"}}),
+            serde_json::json!({"type":"AppConfig","args":{"$id":"a","name":"A"}}),
+            serde_json::json!({"type":"AppConfig","args":{"$id":"b","name":"B"}}),
         ];
         let mut report = ExpandReport::default();
         let err = apply_app_config(&mut assets, &mut report).unwrap_err();
@@ -151,7 +151,7 @@ mod tests {
         let mut assets = vec![app("My Game"), window(serde_json::json!("wide"))];
         let mut report = ExpandReport::default();
         let err = apply_app_config(&mut assets, &mut report).unwrap_err();
-        assert!(err.contains("Window 'w'"), "{err}");
+        assert!(err.contains("Window"), "{err}");
         assert!(err.contains("args must be an object"), "{err}");
     }
 
@@ -160,7 +160,7 @@ mod tests {
     fn non_window_assets_are_untouched() {
         let mut assets = vec![
             app("My Game"),
-            serde_json::json!({"name":"gfx","type":"GraphicsConfig","args":{}}),
+            serde_json::json!({"type":"GraphicsConfig","args":{"$id":"gfx"}}),
         ];
         let mut report = ExpandReport::default();
         apply_app_config(&mut assets, &mut report).unwrap();

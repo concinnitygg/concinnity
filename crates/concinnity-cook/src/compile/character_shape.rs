@@ -62,7 +62,7 @@ pub(crate) fn warn_unresolved(assets: &[WorldJsonlAsset]) {
             .get("target")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let Some(mesh) = assets.iter().find(|a| a.name == target) else {
+        let Some(mesh) = assets.iter().find(|a| a.id == target) else {
             continue;
         };
         // A target served from the payload cache keeps its pre-import args,
@@ -74,7 +74,7 @@ pub(crate) fn warn_unresolved(assets: &[WorldJsonlAsset]) {
         for name in sliders {
             tracing::warn!(
                 "Asset '{}': slider '{}' matches no morph target of SkinnedMesh '{}'",
-                asset.name,
+                asset.id,
                 name,
                 target
             );
@@ -82,7 +82,7 @@ pub(crate) fn warn_unresolved(assets: &[WorldJsonlAsset]) {
         for name in joints {
             tracing::warn!(
                 "Asset '{}': joint '{}' is not in the skeleton of SkinnedMesh '{}'",
-                asset.name,
+                asset.id,
                 name,
                 target
             );

@@ -9,6 +9,7 @@ use crate::editor::hook::tests::fixtures::{
     SIDE_A, SIDE_B, click_at, click_at_mod, drag_to, release_at, two_prop_rig,
 };
 
+use crate::editor::hook::tests::fixtures::{active, selected};
 use crate::editor::viewport::highlight;
 use crate::editor::viewport::marquee;
 
@@ -18,19 +19,19 @@ fn shift_click_toggles_selection_membership() {
     let (mut world, _, _, mut h) = two_prop_rig(SIDE_A, SIDE_B, 1.0);
 
     click_at(&mut world, &mut h, [200.0, 600.0]);
-    assert_eq!(h.selection.active(), Some("box_a"));
+    assert_eq!(active(&h).as_deref(), Some("box_a"));
     click_at_mod(&mut world, &mut h, [424.0, 598.0], true);
     assert_eq!(
-        h.selection.iter().collect::<Vec<_>>(),
+        selected(&h),
         ["box_a", "box_b"],
         "shift-click adds the second box"
     );
-    assert_eq!(h.selection.active(), Some("box_b"), "the newest is active");
+    assert_eq!(active(&h).as_deref(), Some("box_b"), "the newest is active");
     assert!(!h.form_open(), "a closed form stays closed");
 
     click_at_mod(&mut world, &mut h, [424.0, 598.0], true);
     assert_eq!(
-        h.selection.iter().collect::<Vec<_>>(),
+        selected(&h),
         ["box_a"],
         "a second shift-click removes it again"
     );
@@ -59,7 +60,7 @@ fn marquee_drag_selects_the_boxed_assets() {
     );
     release_at(&mut world, &mut h, [560.0, 700.0]);
     assert_eq!(
-        h.selection.iter().collect::<Vec<_>>(),
+        selected(&h),
         ["box_a", "box_b"],
         "both boxed props are selected"
     );
@@ -76,7 +77,7 @@ fn marquee_drag_selects_the_boxed_assets() {
     // A fresh plain click on box_a, then a shift-drag over box_b only: added.
     click_at(&mut world, &mut h, [200.0, 600.0]);
     release_at(&mut world, &mut h, [200.0, 600.0]);
-    assert_eq!(h.selection.iter().collect::<Vec<_>>(), ["box_a"]);
+    assert_eq!(selected(&h), ["box_a"]);
     // Starts in the Preview / edit-form gutter, right of box_a's projection so
     // the box encloses box_b alone.
     click_at_mod(&mut world, &mut h, [250.0, 450.0], true);
@@ -84,7 +85,7 @@ fn marquee_drag_selects_the_boxed_assets() {
     drag_to(&mut world, &mut h, [560.0, 700.0]);
     release_at(&mut world, &mut h, [560.0, 700.0]);
     assert_eq!(
-        h.selection.iter().collect::<Vec<_>>(),
+        selected(&h),
         ["box_a", "box_b"],
         "shift-drag adds without replacing"
     );
@@ -92,10 +93,10 @@ fn marquee_drag_selects_the_boxed_assets() {
     // A still empty-space click clears; a still shift-click does not.
     click_at_mod(&mut world, &mut h, [80.0, 450.0], true);
     release_at(&mut world, &mut h, [81.0, 450.0]);
-    assert_eq!(h.selection.iter().count(), 2, "shift keeps the selection");
+    assert_eq!(selected(&h).len(), 2, "shift keeps the selection");
     click_at(&mut world, &mut h, [80.0, 450.0]);
     release_at(&mut world, &mut h, [81.0, 450.0]);
-    assert_eq!(h.selection.active(), None, "plain still release clears");
+    assert_eq!(active(&h).as_deref(), None, "plain still release clears");
 }
 
 // Every selection member gets a ring; the active member's is brighter.

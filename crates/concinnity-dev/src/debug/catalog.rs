@@ -176,7 +176,7 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "names",
-        description: "Report the build interner's asset id to name table, indexed by id.",
+        description: "Report the build's asset id to handle table, indexed by id: each asset's `$id`, or `<Type>#<ordinal>` for an anonymous one.",
         access: Access::ReadOnly,
         params: &[],
     },
@@ -496,14 +496,22 @@ const COMMANDS: &[Command] = &[
         name: "despawn",
         description: "Remove an authored placement and its descendants from the running world.",
         access: Access::Mutating,
-        params: &[required("target", Kind::Text, "Placement name to remove.")],
+        params: &[required(
+            "target",
+            Kind::Text,
+            "Placement to remove, by `$id` or `<Type>#<ordinal>`.",
+        )],
     },
     Command {
         name: "reparent",
         description: "Move an authored placement under a new parent, or detach it to a root.",
         access: Access::Mutating,
         params: &[
-            required("target", Kind::Text, "Placement name to move."),
+            required(
+                "target",
+                Kind::Text,
+                "Placement to move, by `$id` or `<Type>#<ordinal>`.",
+            ),
             optional(
                 "parent",
                 Kind::TextOrNull,
@@ -516,8 +524,16 @@ const COMMANDS: &[Command] = &[
         description: "Instantiate a runtime copy of an authored placement at a given pose.",
         access: Access::Mutating,
         params: &[
-            required("template", Kind::Text, "Existing placement name to copy."),
-            required("name", Kind::Text, "Name for the new instance."),
+            required(
+                "template",
+                Kind::Text,
+                "Placement to copy, by `$id` or `<Type>#<ordinal>`.",
+            ),
+            required(
+                "name",
+                Kind::Text,
+                "Name for the new instance; one no asset is known by.",
+            ),
             optional(
                 "position",
                 Kind::Vec3,

@@ -34,9 +34,9 @@ fn dump_settings_tab_probe_world() {
         serde_json::json!({"title": "Probe", "settings_profile": profile})
     };
     let mut assets = vec![
-        serde_json::json!({"name":"win","type":"Window","args":{"width":1280,"height":720}}),
-        serde_json::json!({"name":"gfx","type":"GraphicsConfig","args":{}}),
-        serde_json::json!({"name":"main_menu","type":"MainMenu","args": menu_args}),
+        serde_json::json!({"type":"Window","args":{"$id":"win","width":1280,"height":720}}),
+        serde_json::json!({"type":"GraphicsConfig","args":{"$id":"gfx"}}),
+        serde_json::json!({"type":"MainMenu","args": crate::authoring::world::args_with_id(menu_args, "main_menu")}),
     ];
     expand_main_menus(&mut assets).unwrap();
     // Show the chosen screen at launch (the menu screen for `menu`, else the
@@ -72,7 +72,7 @@ fn by_name<'a>(assets: &'a [serde_json::Value], name: &str) -> &'a serde_json::V
 
 #[test]
 fn passes_through_without_menus() {
-    let mut assets = vec![serde_json::json!({"name":"x","type":"Window","args":{}})];
+    let mut assets = vec![serde_json::json!({"type":"Window","args":{"$id":"x"}})];
     expand_main_menus(&mut assets).unwrap();
     assert_eq!(assets.len(), 1);
     assert_eq!(assets[0]["type"], "Window");
@@ -80,7 +80,7 @@ fn passes_through_without_menus() {
 
 #[test]
 fn bare_menu_expands_to_default_layout() {
-    let mut assets = vec![serde_json::json!({"name":"main_menu","type":"MainMenu"})];
+    let mut assets = vec![serde_json::json!({"type":"MainMenu","args":{"$id":"main_menu"}})];
     expand_main_menus(&mut assets).unwrap();
 
     // No MainMenu survives.
@@ -164,7 +164,7 @@ fn missing_name_is_an_error() {
 #[test]
 fn invalid_args_name_the_menu() {
     let mut assets = vec![serde_json::json!({
-        "name":"m","type":"MainMenu","args":{"button_width":"wide"}
+        "type":"MainMenu","args":{"$id":"m","button_width":"wide"}
     })];
     let err = expand_main_menus(&mut assets).unwrap_err();
     assert!(err.contains("MainMenu 'm'"), "{err}");
@@ -176,8 +176,8 @@ fn invalid_args_name_the_menu() {
 #[test]
 fn a_non_centered_menu_anchors_its_column_at_x_and_y() {
     let mut assets = vec![serde_json::json!({
-        "name":"m","type":"MainMenu",
-        "args":{"centered":false,"x":200.0,"y":80.0,"button_width":300.0}
+        "type":"MainMenu",
+        "args":{"$id":"m","centered":false,"x":200.0,"y":80.0,"button_width":300.0}
     })];
     expand_main_menus(&mut assets).unwrap();
     // The first button is centered on x, starting at y.
@@ -192,8 +192,8 @@ fn a_non_centered_menu_anchors_its_column_at_x_and_y() {
 #[test]
 fn a_non_centered_settings_tab_keeps_the_column_row_width() {
     let mut assets = vec![serde_json::json!({
-        "name":"m","type":"MainMenu",
-        "args":{"centered":false,"x":300.0,"y":100.0,"button_width":300.0}
+        "type":"MainMenu",
+        "args":{"$id":"m","centered":false,"x":300.0,"y":100.0,"button_width":300.0}
     })];
     expand_main_menus(&mut assets).unwrap();
     // 300 * 1.85 = 555, centered on x -> left edge at 300 - 555/2.
@@ -210,7 +210,7 @@ fn a_non_centered_settings_tab_keeps_the_column_row_width() {
 
 #[test]
 fn video_tab_emits_a_row_per_setting() {
-    let mut assets = vec![serde_json::json!({"name":"m","type":"MainMenu"})];
+    let mut assets = vec![serde_json::json!({"type":"MainMenu","args":{"$id":"m"}})];
     expand_main_menus(&mut assets).unwrap();
     for (setting, label) in [
         ("vsync", "Vsync"),
@@ -229,7 +229,7 @@ fn video_tab_emits_a_row_per_setting() {
 
 #[test]
 fn video_tab_leads_with_the_master_quality_row() {
-    let mut assets = vec![serde_json::json!({"name":"m","type":"MainMenu"})];
+    let mut assets = vec![serde_json::json!({"type":"MainMenu","args":{"$id":"m"}})];
     expand_main_menus(&mut assets).unwrap();
     // The master preset row is an ungrouped OptionSelect bound to the
     // graphics_quality setting (the runtime knows its options + how to apply).
@@ -254,7 +254,7 @@ fn video_tab_leads_with_the_master_quality_row() {
 
 #[test]
 fn video_tab_emits_an_exposure_slider() {
-    let mut assets = vec![serde_json::json!({"name":"m","type":"MainMenu"})];
+    let mut assets = vec![serde_json::json!({"type":"MainMenu","args":{"$id":"m"}})];
     expand_main_menus(&mut assets).unwrap();
     let sld = by_name(&assets, "m_settings_video_sld_exposure");
     assert_eq!(sld["type"], "Slider");
@@ -272,7 +272,7 @@ fn video_tab_emits_an_exposure_slider() {
 
 #[test]
 fn settings_emits_a_screen_per_tab() {
-    let mut assets = vec![serde_json::json!({"name":"m","type":"MainMenu"})];
+    let mut assets = vec![serde_json::json!({"type":"MainMenu","args":{"$id":"m"}})];
     expand_main_menus(&mut assets).unwrap();
     for suffix in ["video", "audio", "controls"] {
         let screen = by_name(&assets, &format!("m_settings_{suffix}"));
@@ -288,7 +288,7 @@ fn settings_emits_a_screen_per_tab() {
 
 #[test]
 fn audio_and_controls_tabs_carry_their_rows() {
-    let mut assets = vec![serde_json::json!({"name":"m","type":"MainMenu"})];
+    let mut assets = vec![serde_json::json!({"type":"MainMenu","args":{"$id":"m"}})];
     expand_main_menus(&mut assets).unwrap();
     // Audio: a master-volume row.
     let vol = by_name(&assets, "m_settings_audio_opt_master_volume");
@@ -319,7 +319,7 @@ fn audio_and_controls_tabs_carry_their_rows() {
 // its `setting:<key>:rebind` capture action; Pause stays display-only.
 #[test]
 fn controls_tab_emits_rebind_rows() {
-    let mut assets = vec![serde_json::json!({"name":"m","type":"MainMenu"})];
+    let mut assets = vec![serde_json::json!({"type":"MainMenu","args":{"$id":"m"}})];
     expand_main_menus(&mut assets).unwrap();
     for (i, (label, setting)) in [
         ("Move Forward", "key_forward"),
@@ -377,7 +377,7 @@ fn controls_tab_emits_rebind_rows() {
 
 #[test]
 fn tab_bar_switches_between_tabs() {
-    let mut assets = vec![serde_json::json!({"name":"m","type":"MainMenu"})];
+    let mut assets = vec![serde_json::json!({"type":"MainMenu","args":{"$id":"m"}})];
     expand_main_menus(&mut assets).unwrap();
     // The active tab gets an accent label + underline marker and NO button;
     // the other tabs are buttons that switch to their screen.
@@ -407,7 +407,7 @@ fn tab_bar_switches_between_tabs() {
 
 #[test]
 fn labels_are_not_centered_so_layout_wins() {
-    let mut assets = vec![serde_json::json!({"name":"m","type":"MainMenu"})];
+    let mut assets = vec![serde_json::json!({"type":"MainMenu","args":{"$id":"m"}})];
     expand_main_menus(&mut assets).unwrap();
     assert_eq!(by_name(&assets, "m_label_0")["args"]["centered"], false);
 }
@@ -415,9 +415,8 @@ fn labels_are_not_centered_so_layout_wins() {
 #[test]
 fn custom_items_pass_actions_through_verbatim() {
     let mut assets = vec![serde_json::json!({
-        "name": "title",
         "type": "MainMenu",
-        "args": { "items": [
+        "args": { "$id": "title", "items": [
             {"label":"New Game","action":"scene:level_1"},
             {"label":"Quit","action":"quit"}
         ]}
@@ -435,7 +434,7 @@ fn custom_items_pass_actions_through_verbatim() {
 #[test]
 fn toggle_key_empty_emits_no_binding() {
     let mut assets = vec![serde_json::json!({
-        "name": "m", "type": "MainMenu", "args": { "toggle_key": "" }
+        "type": "MainMenu", "args": { "$id": "m", "toggle_key": "" }
     })];
     expand_main_menus(&mut assets).unwrap();
     assert!(
@@ -448,7 +447,7 @@ fn toggle_key_empty_emits_no_binding() {
 #[test]
 fn cursor_disabled_emits_no_cursor_sprite() {
     let mut assets = vec![serde_json::json!({
-        "name": "m", "type": "MainMenu", "args": { "cursor": false }
+        "type": "MainMenu", "args": { "$id": "m", "cursor": false }
     })];
     expand_main_menus(&mut assets).unwrap();
     assert!(!assets.iter().any(|v| asset_name(v) == "m_cursor"));
@@ -457,7 +456,7 @@ fn cursor_disabled_emits_no_cursor_sprite() {
 #[test]
 fn dim_alpha_zero_emits_no_backdrop() {
     let mut assets = vec![serde_json::json!({
-        "name": "m", "type": "MainMenu", "args": { "dim": [0.0, 0.0, 0.0, 0.0] }
+        "type": "MainMenu", "args": { "$id": "m", "dim": [0.0, 0.0, 0.0, 0.0] }
     })];
     expand_main_menus(&mut assets).unwrap();
     assert!(!assets.iter().any(|v| asset_name(v) == "m_dim"));
@@ -469,8 +468,8 @@ fn dim_alpha_zero_emits_no_backdrop() {
 #[test]
 fn default_menu_emits_opaque_backdrop() {
     let mut assets = vec![serde_json::json!({
-        "name": "main_menu", "type": "MainMenu",
-        "args": { "title": "Bistro_v5_2", "initial": false }
+        "type": "MainMenu",
+        "args": { "$id": "main_menu", "title": "Bistro_v5_2", "initial": false }
     })];
     expand_main_menus(&mut assets).unwrap();
     let tint = &by_name(&assets, "main_menu_dim")["args"]["tint"];
@@ -484,8 +483,8 @@ fn default_menu_emits_opaque_backdrop() {
 #[test]
 fn generated_name_collision_is_an_error() {
     let mut assets = vec![
-        serde_json::json!({"name":"m","type":"MainMenu","args":{"toggle_key":""}}),
-        serde_json::json!({"name":"m_btn_0","type":"Sprite","args":{}}),
+        serde_json::json!({"type":"MainMenu","args":{"$id":"m","toggle_key":""}}),
+        serde_json::json!({"type":"Sprite","args":{"$id":"m_btn_0"}}),
     ];
     let err = expand_main_menus(&mut assets).unwrap_err();
     assert!(err.contains("m_btn_0"));
@@ -495,7 +494,7 @@ fn generated_name_collision_is_an_error() {
 #[test]
 fn title_emits_a_heading_label() {
     let mut assets = vec![serde_json::json!({
-        "name": "m", "type": "MainMenu", "args": { "title": "Paused" }
+        "type": "MainMenu", "args": { "$id": "m", "title": "Paused" }
     })];
     expand_main_menus(&mut assets).unwrap();
     assert_eq!(by_name(&assets, "m_title")["args"]["content"], "Paused");
@@ -508,7 +507,7 @@ fn title_emits_a_heading_label() {
 #[test]
 fn emits_own_font_and_labels_reference_it() {
     let mut assets =
-        vec![serde_json::json!({"name":"m","type":"MainMenu","args":{"toggle_key":""}})];
+        vec![serde_json::json!({"type":"MainMenu","args":{"$id":"m","toggle_key":""}})];
     expand_main_menus(&mut assets).unwrap();
     let font = by_name(&assets, "m_font");
     assert_eq!(font["type"], "Font");
@@ -532,16 +531,15 @@ fn emits_own_font_and_labels_reference_it() {
 fn emitted_font_size_follows_font_px() {
     // With no override the emitted font uses the MainMenu `font_px` default.
     let mut assets =
-        vec![serde_json::json!({"name":"m","type":"MainMenu","args":{"toggle_key":""}})];
+        vec![serde_json::json!({"type":"MainMenu","args":{"$id":"m","toggle_key":""}})];
     expand_main_menus(&mut assets).unwrap();
     assert_eq!(by_name(&assets, "m_font")["args"]["size_px"], 48);
 
     // An explicit `font_px` is the size the build leans on for the font it
     // emits when the menu declares none.
     let mut assets = vec![serde_json::json!({
-        "name": "m",
         "type": "MainMenu",
-        "args": { "toggle_key": "", "font_px": 32 }
+        "args": { "$id": "m", "toggle_key": "", "font_px": 32 }
     })];
     expand_main_menus(&mut assets).unwrap();
     assert_eq!(by_name(&assets, "m_font")["args"]["size_px"], 32);
@@ -550,8 +548,8 @@ fn emitted_font_size_follows_font_px() {
 #[test]
 fn custom_font_is_used_and_none_emitted() {
     let mut assets = vec![
-        serde_json::json!({"name":"f","type":"Font","args":{"path":"my.ttf","size_px":32}}),
-        serde_json::json!({"name":"m","type":"MainMenu","args":{"font":"f","toggle_key":""}}),
+        serde_json::json!({"type":"Font","args":{"$id":"f","path":"my.ttf","size_px":32}}),
+        serde_json::json!({"type":"MainMenu","args":{"$id":"m","font":"f","toggle_key":""}}),
     ];
     expand_main_menus(&mut assets).unwrap();
     assert!(!assets.iter().any(|v| asset_name(v) == "m_font"));
@@ -565,7 +563,7 @@ fn custom_font_is_used_and_none_emitted() {
 #[test]
 fn settings_chrome_and_band_fit_on_screen() {
     let [ref_w, ref_h] = UI_REFERENCE_SIZE;
-    let mut assets = vec![serde_json::json!({"name":"m","type":"MainMenu"})];
+    let mut assets = vec![serde_json::json!({"type":"MainMenu","args":{"$id":"m"}})];
     expand_main_menus(&mut assets).unwrap();
     // The Controls tab is the tallest chrome (it carries the most rows under
     // the band); its band + Back must clear the canvas.
@@ -600,7 +598,7 @@ fn settings_chrome_and_band_fit_on_screen() {
 // and one row per body element pointing at that element's expanded children.
 #[test]
 fn settings_tab_emits_a_scroll_panel() {
-    let mut assets = vec![serde_json::json!({"name":"m","type":"MainMenu"})];
+    let mut assets = vec![serde_json::json!({"type":"MainMenu","args":{"$id":"m"}})];
     expand_main_menus(&mut assets).unwrap();
     let panel = by_name(&assets, "m_settings_video_scroll");
     assert_eq!(panel["type"], "ScrollPanel");
@@ -631,7 +629,7 @@ fn settings_tab_emits_a_scroll_panel() {
 // that starts collapsed.
 #[test]
 fn video_advanced_group_collapses_render_scale_and_exposure() {
-    let mut assets = vec![serde_json::json!({"name":"m","type":"MainMenu"})];
+    let mut assets = vec![serde_json::json!({"type":"MainMenu","args":{"$id":"m"}})];
     expand_main_menus(&mut assets).unwrap();
     // Header label + toggle region.
     assert_eq!(
@@ -707,7 +705,7 @@ fn video_advanced_group_collapses_render_scale_and_exposure() {
 // 0, the panel declaring it collapsed.
 #[test]
 fn video_quality_group_holds_render_feature_toggles() {
-    let mut assets = vec![serde_json::json!({"name":"m","type":"MainMenu"})];
+    let mut assets = vec![serde_json::json!({"type":"MainMenu","args":{"$id":"m"}})];
     expand_main_menus(&mut assets).unwrap();
     assert_eq!(
         by_name(&assets, "m_settings_video_grphdr_0")["args"]["content"],
@@ -780,7 +778,7 @@ fn video_quality_group_holds_render_feature_toggles() {
 // wrong group (clicking "Quality" flipped "Advanced" and vice versa).
 #[test]
 fn group_toggle_gid_indexes_its_own_group() {
-    let mut assets = vec![serde_json::json!({"name":"m","type":"MainMenu"})];
+    let mut assets = vec![serde_json::json!({"type":"MainMenu","args":{"$id":"m"}})];
     expand_main_menus(&mut assets).unwrap();
     let panel = by_name(&assets, "m_settings_video_scroll");
     let groups = panel["args"]["groups"].as_array().unwrap();
@@ -811,7 +809,7 @@ fn group_toggle_gid_indexes_its_own_group() {
 // so it reflows / clips / hides with the row.
 #[test]
 fn settings_rows_have_card_backgrounds() {
-    let mut assets = vec![serde_json::json!({"name":"m","type":"MainMenu"})];
+    let mut assets = vec![serde_json::json!({"type":"MainMenu","args":{"$id":"m"}})];
     expand_main_menus(&mut assets).unwrap();
     let panel = by_name(&assets, "m_settings_video_scroll");
     let rows = panel["args"]["rows"].as_array().unwrap();
@@ -854,7 +852,7 @@ fn settings_rows_have_card_backgrounds() {
 #[test]
 fn default_menu_hover_is_color_only() {
     let mut assets =
-        vec![serde_json::json!({"name":"m","type":"MainMenu","args":{"title":"Paused"}})];
+        vec![serde_json::json!({"type":"MainMenu","args":{"$id":"m","title":"Paused"}})];
     expand_main_menus(&mut assets).unwrap();
 
     let label_scale = |name: &str| by_name(&assets, name)["args"]["scale"].as_f64().unwrap();
@@ -903,7 +901,7 @@ fn default_menu_hover_is_color_only() {
 #[test]
 fn hover_scale_multiplies_label_scale() {
     let mut assets = vec![serde_json::json!({
-        "name":"m","type":"MainMenu","args":{"hover_scale":2.0,"toggle_key":""}
+        "type":"MainMenu","args":{"$id":"m","hover_scale":2.0,"toggle_key":""}
     })];
     expand_main_menus(&mut assets).unwrap();
     let label_scale = by_name(&assets, "m_label_0")["args"]["scale"]
@@ -923,7 +921,7 @@ fn hover_scale_multiplies_label_scale() {
 // padding on the left and right, so the name does not touch the card edge.
 #[test]
 fn settings_row_content_is_inset_evenly_within_card() {
-    let mut assets = vec![serde_json::json!({"name":"m","type":"MainMenu"})];
+    let mut assets = vec![serde_json::json!({"type":"MainMenu","args":{"$id":"m"}})];
     expand_main_menus(&mut assets).unwrap();
     let card = by_name(&assets, "m_settings_video_bg_0");
     let opt = by_name(&assets, "m_settings_video_opt_vsync");
@@ -945,7 +943,7 @@ fn settings_row_content_is_inset_evenly_within_card() {
 #[test]
 fn minimal_profile_emits_only_video_and_audio_tabs() {
     let mut assets = vec![serde_json::json!({
-        "name": "m", "type": "MainMenu", "args": { "settings_profile": "minimal" }
+        "type": "MainMenu", "args": { "$id": "m", "settings_profile": "minimal" }
     })];
     expand_main_menus(&mut assets).unwrap();
 
@@ -976,7 +974,7 @@ fn minimal_profile_emits_only_video_and_audio_tabs() {
 #[test]
 fn minimal_video_tab_is_trimmed_to_output_basics() {
     let mut assets = vec![serde_json::json!({
-        "name": "m", "type": "MainMenu", "args": { "settings_profile": "minimal" }
+        "type": "MainMenu", "args": { "$id": "m", "settings_profile": "minimal" }
     })];
     expand_main_menus(&mut assets).unwrap();
 
@@ -1009,7 +1007,7 @@ fn minimal_video_tab_is_trimmed_to_output_basics() {
 #[test]
 fn minimal_audio_tab_keeps_master_volume() {
     let mut assets = vec![serde_json::json!({
-        "name": "m", "type": "MainMenu", "args": { "settings_profile": "minimal" }
+        "type": "MainMenu", "args": { "$id": "m", "settings_profile": "minimal" }
     })];
     expand_main_menus(&mut assets).unwrap();
     let vol = by_name(&assets, "m_settings_audio_opt_master_volume");
@@ -1023,9 +1021,9 @@ fn minimal_audio_tab_keeps_master_volume() {
 #[test]
 fn settings_back_action_generates_screen_and_overrides_back() {
     let mut assets = vec![serde_json::json!({
-        "name": "m",
         "type": "MainMenu",
         "args": {
+            "$id": "m",
             "settings_profile": "minimal",
             "settings_back_action": "story:settings_back",
             "items": [{"label": "Settings", "action": "story:settings"}]
@@ -1049,7 +1047,7 @@ fn settings_back_action_generates_screen_and_overrides_back() {
 #[test]
 fn menu_labels_center_with_real_metrics() {
     let mut assets =
-        vec![serde_json::json!({"name":"m","type":"MainMenu","args":{"title":"Paused"}})];
+        vec![serde_json::json!({"type":"MainMenu","args":{"$id":"m","title":"Paused"}})];
     expand_main_menus(&mut assets).unwrap();
     assert_eq!(by_name(&assets, "m_title")["args"]["align"], "center");
     assert_eq!(by_name(&assets, "m_label_0")["args"]["align"], "center");
@@ -1063,7 +1061,7 @@ fn menu_labels_center_with_real_metrics() {
 // and the graphics-quality preset the trimmed profile drops.
 #[test]
 fn full_profile_still_emits_controls_and_quality() {
-    let mut assets = vec![serde_json::json!({"name": "m", "type": "MainMenu"})];
+    let mut assets = vec![serde_json::json!({"type": "MainMenu", "args": {"$id": "m"}})];
     expand_main_menus(&mut assets).unwrap();
     assert_eq!(by_name(&assets, "m_settings_controls")["type"], "Screen");
     assert_eq!(
@@ -1077,8 +1075,8 @@ fn full_profile_still_emits_controls_and_quality() {
 #[test]
 fn generated_elements_name_their_screen() {
     let mut assets = vec![serde_json::json!({
-        "name": "m", "type": "MainMenu",
-        "args": {"title": "Menu", "items": [{"label": "Settings", "action": "settings"}]}
+        "type": "MainMenu",
+        "args": {"$id": "m", "title": "Menu", "items": [{"label": "Settings", "action": "settings"}]}
     })];
     expand_main_menus(&mut assets).unwrap();
 
@@ -1112,8 +1110,8 @@ fn generated_elements_name_their_screen() {
 #[test]
 fn settings_rows_carry_their_tab_screen() {
     let mut assets = vec![serde_json::json!({
-        "name": "m", "type": "MainMenu",
-        "args": {"items": [{"label": "Settings", "action": "settings"}]}
+        "type": "MainMenu",
+        "args": {"$id": "m", "items": [{"label": "Settings", "action": "settings"}]}
     })];
     expand_main_menus(&mut assets).unwrap();
 

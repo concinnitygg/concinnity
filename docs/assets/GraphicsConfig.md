@@ -14,7 +14,6 @@ quality tier, so no preset touches it.
 
 ```json
 {
-  "name": "gfx",
   "type": "GraphicsConfig",
   "args": { "clear_color": [0.1, 0.1, 0.15, 1.0], "frames_in_flight": 2 }
 }

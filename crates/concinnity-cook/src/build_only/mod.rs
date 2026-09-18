@@ -51,8 +51,8 @@ pub struct LoadedWorld {
     /// Generated assets the world declares a patch of; the merged result is in
     /// `assets` and each record carries the pre-merge generated args.
     pub shadowed: Vec<ShadowedAsset>,
-    /// Names declared in the world file itself (pre-expansion), for
-    /// provenance listings.
+    /// The handles of the entries in the world file itself (pre-expansion),
+    /// for provenance listings: each `$id`, else the entry's label.
     pub authored: Vec<String>,
 }
 
@@ -71,7 +71,7 @@ pub fn prepare_world(
     let mut expanded = load_world(content)?;
     let authored: Vec<String> = expanded
         .iter()
-        .filter_map(|v| v.get("name").and_then(|n| n.as_str()))
+        .filter_map(crate::authoring::world::entry_id)
         .map(str::to_string)
         .collect();
     let report = expand_world(&mut expanded, assets_dir).map_err(|e| vec![e])?;
@@ -120,9 +120,9 @@ mod tests {
     #[test]
     fn typed_assets_reports_every_generated_entry_with_a_bad_type() {
         let expanded = [
-            serde_json::json!({"name": "ok", "type": "Prop", "args": {}}),
-            serde_json::json!({"name": "gen_a", "type": "pointlight", "args": {}}),
-            serde_json::json!({"name": "gen_b", "type": "Point_Light", "args": {}}),
+            serde_json::json!({"type": "Prop", "args": {"$id": "ok"}}),
+            serde_json::json!({"type": "pointlight", "args": {"$id": "gen_a"}}),
+            serde_json::json!({"type": "Point_Light", "args": {"$id": "gen_b"}}),
         ];
         let errs = typed_assets(&expanded).err().unwrap_or_default();
         assert_eq!(errs.len(), 2, "{errs:?}");
@@ -135,7 +135,7 @@ mod tests {
     // front-half orchestration on top of it.
     #[test]
     fn prepare_world_expands_and_validates() {
-        let content = r#"{"name":"gfx","type":"GraphicsConfig","args":{}}"#;
+        let content = r#"{"type":"GraphicsConfig","args":{"$id":"gfx"}}"#;
         let loaded = prepare_world(content, None).unwrap();
         // GraphicsConfig pulls in its companions, so the prepared world holds
         // more than the single declared asset.
@@ -155,7 +155,7 @@ mod tests {
     // being swallowed on the way to semantic validation.
     #[test]
     fn prepare_world_reports_an_expansion_failure() {
-        let content = r#"{"name":"p","type":"Prop","args":{"prefab":"ghost"}}"#;
+        let content = r#"{"type":"Prop","args":{"$id":"p","prefab":"ghost"}}"#;
         let errs = prepare_world(content, None).err().unwrap_or_default();
         assert_eq!(errs.len(), 1);
         assert!(errs[0].contains("ghost"), "{errs:?}");
@@ -165,7 +165,7 @@ mod tests {
     // that survives expansion still fails the build.
     #[test]
     fn prepare_world_reports_semantic_errors() {
-        let content = r#"{"name":"prop","type":"Prop","args":{"mesh":"nope"}}"#;
+        let content = r#"{"type":"Prop","args":{"$id":"prop","mesh":"nope"}}"#;
         let errs = prepare_world(content, None).err().unwrap_or_default();
         assert!(!errs.is_empty());
         assert!(errs.iter().any(|e| e.contains("nope")), "{errs:?}");
@@ -195,13 +195,13 @@ mod tests {
             loaded
                 .assets
                 .iter()
-                .find(|a| a.name == "rig_key")?
+                .find(|a| a.id == "rig_key")?
                 .args
                 .get("intensity")?
                 .as_f64()
         }
 
-        let content = r#"{"name":"rig","type":"LightRig","args":{"preset":"dusk"}}"#;
+        let content = r#"{"type":"LightRig","args":{"$id":"rig","preset":"dusk"}}"#;
         let bright = rig_root(3.5);
         let dim = rig_root(0.25);
 

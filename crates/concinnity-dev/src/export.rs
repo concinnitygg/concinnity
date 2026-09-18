@@ -963,7 +963,7 @@ mod tests {
 
     fn asset(name: &str, asset_type: RegisteredType, args: serde_json::Value) -> WorldJsonlAsset {
         WorldJsonlAsset {
-            name: name.to_string(),
+            id: name.to_string(),
             asset_type,
             args,
         }
@@ -1028,14 +1028,14 @@ mod tests {
 
     #[test]
     fn menu_title_names_an_app_after_the_menu_expands() {
-        let world = r#"{"name":"pause","type":"MainMenu","args":{"title":"Menu Title"}}"#;
+        let world = r#"{"type":"MainMenu","args":{"$id":"pause","title":"Menu Title"}}"#;
         let meta = world_app_meta(world, None, None, None).unwrap();
         assert_eq!(meta.display_name, "Menu Title");
         assert_eq!(meta.identifier, "gg.concinnity.menu-title");
 
         let world = format!(
             "{world}\n{}",
-            r#"{"name":"app","type":"AppConfig","args":{"name":"App Name"}}"#
+            r#"{"type":"AppConfig","args":{"$id":"app","name":"App Name"}}"#
         );
         let meta = world_app_meta(&world, None, None, None).unwrap();
         assert_eq!(meta.display_name, "App Name");
