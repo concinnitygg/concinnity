@@ -297,10 +297,7 @@ fn reload_stories_re_expands_and_dedupes_by_snapshot() {
         &world,
         format!(
             "{}\n",
-            serde_json::json!({
-                "type": "StoryImport",
-                "args": {"$id": "tale", "source": md.to_str().unwrap()}
-            })
+            serde_json::json!(["StoryImport", {"$id": "tale", "source": md.to_str().unwrap()}])
         ),
     )
     .unwrap();
@@ -1721,7 +1718,7 @@ fn reload_volumetric_fog_pushes_an_enabled_fog_once() {
     let dir = tempfile::tempdir().unwrap();
     let path = write_world_line(
         dir.path(),
-        r#"{"type":"VolumetricFog","args":{"$id":"fog","enabled":true,"density":0.5}}"#,
+        r#"["VolumetricFog",{"$id":"fog","enabled":true,"density":0.5}]"#,
     );
     let mut last = None;
     let mut backend = RecordingBackend::default();
@@ -1741,7 +1738,7 @@ fn reload_volumetric_fog_disabling_pushes_none() {
     let dir = tempfile::tempdir().unwrap();
     let path = write_world_line(
         dir.path(),
-        r#"{"type":"VolumetricFog","args":{"$id":"fog","enabled":true}}"#,
+        r#"["VolumetricFog",{"$id":"fog","enabled":true}]"#,
     );
     let mut last = None;
     let mut backend = RecordingBackend::default();
@@ -1750,7 +1747,7 @@ fn reload_volumetric_fog_disabling_pushes_none() {
 
     let path = write_world_line(
         dir.path(),
-        r#"{"type":"VolumetricFog","args":{"$id":"fog","enabled":false}}"#,
+        r#"["VolumetricFog",{"$id":"fog","enabled":false}]"#,
     );
     assert!(reload_volumetric_fog(&path, &mut last, &mut backend).updated);
     assert!(last.is_none());
@@ -1762,17 +1759,14 @@ fn reload_volumetric_fog_removed_asset_pushes_none() {
     let dir = tempfile::tempdir().unwrap();
     let path = write_world_line(
         dir.path(),
-        r#"{"type":"VolumetricFog","args":{"$id":"fog","enabled":true}}"#,
+        r#"["VolumetricFog",{"$id":"fog","enabled":true}]"#,
     );
     let mut last = None;
     let mut backend = RecordingBackend::default();
     assert!(reload_volumetric_fog(&path, &mut last, &mut backend).updated);
 
     // The fog line disappears from the world entirely.
-    let path = write_world_line(
-        dir.path(),
-        r#"{"type":"GraphicsConfig","args":{"$id":"gfx"}}"#,
-    );
+    let path = write_world_line(dir.path(), r#"["GraphicsConfig",{"$id":"gfx"}]"#);
     assert!(reload_volumetric_fog(&path, &mut last, &mut backend).updated);
     assert!(last.is_none());
 }
@@ -1782,7 +1776,7 @@ fn reload_volumetric_fog_bad_args_keep_the_previous_state() {
     let dir = tempfile::tempdir().unwrap();
     let path = write_world_line(
         dir.path(),
-        r#"{"type":"VolumetricFog","args":{"$id":"fog","density":"oops"}}"#,
+        r#"["VolumetricFog",{"$id":"fog","density":"oops"}]"#,
     );
     let mut last = None;
     let mut backend = RecordingBackend::default();
@@ -1814,7 +1808,7 @@ fn one_proc_mesh_map(name: &str, args: ProceduralMesh) -> ProceduralMeshSourceMa
 
 fn box_world_line(name: &str, half: f32) -> String {
     format!(
-        r#"{{"type":"ProceduralMesh","args":{{"$id":"{name}","generator":"box","half_extents":[{half},{half},{half}]}}}}"#,
+        r#"["ProceduralMesh",{{"$id":"{name}","generator":"box","half_extents":[{half},{half},{half}]}}]"#,
     )
 }
 
@@ -1854,10 +1848,7 @@ fn reload_procedural_meshes_skips_unchanged_args() {
 #[test]
 fn reload_procedural_meshes_treats_a_missing_jsonl_entry_as_unchanged() {
     let dir = tempfile::tempdir().unwrap();
-    let path = write_world_line(
-        dir.path(),
-        r#"{"type":"GraphicsConfig","args":{"$id":"gfx"}}"#,
-    );
+    let path = write_world_line(dir.path(), r#"["GraphicsConfig",{"$id":"gfx"}]"#);
     let mut map = one_proc_mesh_map("box_mesh", normalized_box_args(0.5));
     let mut backend = RecordingBackend::default();
     let r = reload_procedural_meshes(&path, &mut map, &mut backend);
@@ -1872,7 +1863,7 @@ fn reload_procedural_meshes_treats_unparseable_args_as_unchanged() {
     let dir = tempfile::tempdir().unwrap();
     let path = write_world_line(
         dir.path(),
-        r#"{"type":"ProceduralMesh","args":{"$id":"box_mesh","generator":42}}"#,
+        r#"["ProceduralMesh",{"$id":"box_mesh","generator":42}]"#,
     );
     let mut map = one_proc_mesh_map("box_mesh", normalized_box_args(0.5));
     let mut backend = RecordingBackend::default();
@@ -1957,10 +1948,7 @@ fn reload_stories_missing_world_file_returns_nothing() {
 #[test]
 fn reload_stories_ignores_worlds_without_stories() {
     let dir = tempfile::tempdir().unwrap();
-    let path = write_world_line(
-        dir.path(),
-        r#"{"type":"GraphicsConfig","args":{"$id":"gfx"}}"#,
-    );
+    let path = write_world_line(dir.path(), r#"["GraphicsConfig",{"$id":"gfx"}]"#);
     let mut snapshots = std::collections::HashMap::new();
     assert!(reload_stories(&path, &mut snapshots).is_empty());
     assert!(snapshots.is_empty());
@@ -2117,11 +2105,11 @@ fn story_source_dirs_collects_unique_parents_from_story_imports() {
     let dir = tempfile::tempdir().unwrap();
     let world = dir.path().join("world.jsonl");
     let lines = [
-        r#"{"type":"StoryImport","args":{"$id":"s1","source":"stories/tale.md"}}"#,
-        r#"{"type":"StoryImport","args":{"$id":"s2","source":"bare.md"}}"#,
-        r#"{"type":"StoryImport","args":{"$id":"s3","source":"stories/other.md"}}"#,
-        r#"{"type":"GraphicsConfig","args":{"$id":"gfx"}}"#,
-        r#"{"type":"StoryImport","args":{"$id":"s4"}}"#,
+        r#"["StoryImport",{"$id":"s1","source":"stories/tale.md"}]"#,
+        r#"["StoryImport",{"$id":"s2","source":"bare.md"}]"#,
+        r#"["StoryImport",{"$id":"s3","source":"stories/other.md"}]"#,
+        r#"["GraphicsConfig",{"$id":"gfx"}]"#,
+        r#"["StoryImport",{"$id":"s4"}]"#,
         "not json at all",
     ];
     std::fs::write(&world, lines.join("\n")).unwrap();
@@ -2311,10 +2299,7 @@ fn run_frame_reloads_stories_when_the_story_flag_is_set() {
         &world,
         format!(
             "{}\n",
-            serde_json::json!({
-                "type": "StoryImport",
-                "args": {"$id": "tale", "source": md.to_str().unwrap()}
-            })
+            serde_json::json!(["StoryImport", {"$id": "tale", "source": md.to_str().unwrap()}])
         ),
     )
     .unwrap();
@@ -2337,7 +2322,7 @@ fn run_frame_reloads_world_assets_when_the_world_flag_is_set() {
     let dir = tempfile::tempdir().unwrap();
     let world = write_world_line(
         dir.path(),
-        r#"{"type":"VolumetricFog","args":{"$id":"fog","enabled":true,"density":0.5}}"#,
+        r#"["VolumetricFog",{"$id":"fog","enabled":true,"density":0.5}]"#,
     );
     let mut state = AssetHotReloadState::from_sources(HotReloadSources::default(), Some(world));
     super::pending::set_pending_world();

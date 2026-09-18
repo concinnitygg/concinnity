@@ -54,7 +54,7 @@ pub(super) fn reload_volumetric_fog(
         }
     };
     let entries = match concinnity_cook::build_only::expand_world_from_str(
-        &content,
+        concinnity_cook::WorldSource::file(&content, std::path::Path::new(path)),
         crate::project::assets_dir().as_deref(),
     ) {
         Ok(v) => v,
@@ -156,7 +156,7 @@ pub(super) fn reload_procedural_meshes(
     // init-time captured set; otherwise an unchanged entry shows up as
     // "missing from JSONL" every reload.
     let entries = match concinnity_cook::build_only::expand_world_from_str(
-        &content,
+        concinnity_cook::WorldSource::file(&content, std::path::Path::new(path)),
         crate::project::assets_dir().as_deref(),
     ) {
         Ok(v) => v,
@@ -389,7 +389,7 @@ pub(super) fn reload_stories(
         }
     };
     let entries = match concinnity_cook::build_only::expand_world_from_str(
-        &content,
+        concinnity_cook::WorldSource::file(&content, std::path::Path::new(path)),
         crate::project::assets_dir().as_deref(),
     ) {
         Ok(v) => v,

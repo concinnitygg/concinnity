@@ -13,10 +13,7 @@ use crate::ecs::{Ref, de_opt_ref};
 /// obstacle.
 ///
 /// ```json
-/// {
-///   "type": "PropBody",
-///   "args": { "prop_name": "crate_a", "mass": 4.0, "friction": 0.6 }
-/// }
+/// ["PropBody", { "prop_name": "crate_a", "mass": 4.0, "friction": 0.6 }]
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]

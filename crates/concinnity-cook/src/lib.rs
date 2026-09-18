@@ -69,6 +69,7 @@ pub mod world_builder;
 
 // Public build API: the entry points the CLI, the editor FFI, and the infra
 // server call. The runtime-side decode API stays in concinnity-core.
+pub use authoring::world::WorldSource;
 pub use build_only::prepare_world;
 pub use pipeline::{
     BuildProgress, PipelineResult, build_compiled, build_compiled_with_progress, build_from_path,

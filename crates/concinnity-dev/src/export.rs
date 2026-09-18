@@ -12,7 +12,7 @@
 //! built for (host-only for now; see the --platform check).
 
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_cook::authoring::world::{WorldJsonlAsset, parse_world_jsonl, resolve_includes};
+use concinnity_cook::authoring::world::{WorldJsonlAsset, WorldSource, load_world};
 use concinnity_cook::build_only::prepare_world;
 use concinnity_cook::paths::StateTree;
 use concinnity_host::scratch;
@@ -101,7 +101,7 @@ pub fn export(options: &ExportOptions) -> io::Result<()> {
 
     let content = fs::read_to_string(&world_path)?;
     let meta = world_app_meta(
-        &content,
+        WorldSource::file(&content, Path::new(&world_path)),
         crate::project::assets_dir().as_deref(),
         name,
         version,
@@ -530,19 +530,19 @@ fn make_executable(_path: &Path) -> io::Result<()> {
 // Read the app metadata a world file declares. The build already validated the
 // world, so an error here is mapped plainly rather than reported per asset.
 fn world_app_meta(
-    content: &str,
+    source: WorldSource<'_>,
     assets_dir: Option<&Path>,
     cli_name: Option<&str>,
     cli_version: Option<&str>,
 ) -> io::Result<AppMeta> {
     let invalid = |msg: String| io::Error::new(io::ErrorKind::InvalidData, msg);
-    let loaded = prepare_world(content, assets_dir).map_err(|errs| invalid(errs.join("\n")))?;
-    let authored =
-        resolve_includes(parse_world_jsonl(content).map_err(|e| invalid(e.to_string()))?)?
-            .iter()
-            .map(WorldJsonlAsset::from_value)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(invalid)?;
+    let loaded = prepare_world(source, assets_dir).map_err(|errs| invalid(errs.join("\n")))?;
+    let authored = load_world(source)
+        .map_err(|errs| invalid(errs.join("\n")))?
+        .iter()
+        .map(WorldJsonlAsset::from_value)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(invalid)?;
     Ok(read_app_meta(
         cli_name,
         cli_version,
@@ -1028,16 +1028,16 @@ mod tests {
 
     #[test]
     fn menu_title_names_an_app_after_the_menu_expands() {
-        let world = r#"{"type":"MainMenu","args":{"$id":"pause","title":"Menu Title"}}"#;
-        let meta = world_app_meta(world, None, None, None).unwrap();
+        let world = r#"["MainMenu",{"$id":"pause","title":"Menu Title"}]"#;
+        let meta = world_app_meta(world.into(), None, None, None).unwrap();
         assert_eq!(meta.display_name, "Menu Title");
         assert_eq!(meta.identifier, "gg.concinnity.menu-title");
 
         let world = format!(
             "{world}\n{}",
-            r#"{"type":"AppConfig","args":{"$id":"app","name":"App Name"}}"#
+            r#"["AppConfig",{"$id":"app","name":"App Name"}]"#
         );
-        let meta = world_app_meta(&world, None, None, None).unwrap();
+        let meta = world_app_meta((&world).into(), None, None, None).unwrap();
         assert_eq!(meta.display_name, "App Name");
     }
 

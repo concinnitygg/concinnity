@@ -10,10 +10,7 @@ thrown. A Prop with a `collider` but no PropBody is a static, immovable
 obstacle.
 
 ```json
-{
-  "type": "PropBody",
-  "args": { "prop_name": "crate_a", "mass": 4.0, "friction": 0.6 }
-}
+["PropBody",{"prop_name":"crate_a","mass":4.0,"friction":0.6}]
 ```
 
 ## Parameters

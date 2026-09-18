@@ -7,7 +7,10 @@
 
 use concinnity_cook::authoring::world::WORLD_JSONL;
 use concinnity_cook::authoring::world::parse_world_jsonl;
+use concinnity_cook::build_only::include::with_includes;
 use std::path::{Path, PathBuf};
+
+use crate::editor::entry_list::EntryList;
 use std::time::SystemTime;
 
 // The extension every world file carries.
@@ -80,16 +83,18 @@ pub(crate) fn newest(worlds_dir: Option<&Path>, content_root: Option<&Path>) -> 
     list(worlds_dir, content_root).into_iter().next()
 }
 
-// Read a world file's authored entries, or the reason it could not be read
-// (shown on the panel's status line). A file that vanished under the listing
-// reads as empty rather than as a failure: the panel stays usable, and the next
-// SAVE writes it back.
-pub(crate) fn read_entries(path: &Path) -> Result<Vec<serde_json::Value>, String> {
-    match std::fs::read_to_string(path) {
-        Ok(content) => parse_world_jsonl(&content).map_err(|e| format!("{e}")),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(e) => Err(format!("Open failed: {e}")),
-    }
+// Read a world file's authored entries with its includes resolved in place, or
+// the reason it could not be read (shown on the panel's status line). A file
+// that vanished under the listing reads as empty rather than as a failure: the
+// panel stays usable, and the next SAVE writes it back.
+pub(crate) fn read_entries(path: &Path) -> Result<EntryList, String> {
+    let content = match std::fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(EntryList::default()),
+        Err(e) => return Err(format!("Open failed: {e}")),
+    };
+    let lines = parse_world_jsonl(&content).map_err(|e| format!("{e}"))?;
+    with_includes(lines, Some(path)).map(EntryList::with_includes)
 }
 
 // Check a typed world name, returning the name to create or the reason it was
@@ -227,7 +232,7 @@ mod tests {
     fn read_entries_parses_reports_and_tolerates_an_absent_file() {
         let tree = concinnity_testing::TempTree::new();
         let path = tree.path().join("arena.jsonl");
-        std::fs::write(&path, "{\"type\":\"Prop\",\"args\":{\"$id\":\"a\"}}").unwrap();
+        std::fs::write(&path, "[\"Prop\",{\"$id\":\"a\"}]").unwrap();
         let entries = read_entries(&path).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0]["args"]["$id"], "a");
@@ -237,8 +242,34 @@ mod tests {
 
         assert_eq!(
             read_entries(&tree.path().join("gone.jsonl")),
-            Ok(Vec::new())
+            Ok(EntryList::default())
         );
+    }
+
+    // An included file's entries are read in place, each tagged with the file,
+    // and a broken include is reported like a file that will not parse.
+    #[test]
+    fn read_entries_resolves_includes_beside_the_world() {
+        let tree = concinnity_testing::TempTree::new();
+        let path = tree.path().join("arena.jsonl");
+        std::fs::write(
+            &path,
+            "[\"Prop\"]\n[\"Include\",{\"path\":\"parts/lights.jsonl\"}]\n[\"Prop\"]\n",
+        )
+        .unwrap();
+        let lights = tree.write("parts/lights.jsonl", "[\"PointLight\"]\n");
+        let entries = read_entries(&path).unwrap();
+        let types: Vec<&str> = entries
+            .iter()
+            .map(|e| e["type"].as_str().unwrap())
+            .collect();
+        assert_eq!(types, ["Prop", "Include", "PointLight", "Prop"]);
+        assert_eq!(entries.included_from(2), Some(lights.as_path()));
+        assert_eq!(entries.included_from(1), None);
+
+        std::fs::remove_file(&lights).unwrap();
+        let err = read_entries(&path).unwrap_err();
+        assert!(err.contains("lights.jsonl"), "{err}");
     }
 
     #[test]

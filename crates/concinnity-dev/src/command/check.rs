@@ -32,11 +32,7 @@ mod tests {
     fn check_validates_an_explicit_existing_world() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("world.jsonl");
-        std::fs::write(
-            &path,
-            "{\"type\":\"PhysicsConfig\",\"args\":{\"$id\":\"phys\"}}\n",
-        )
-        .unwrap();
+        std::fs::write(&path, "[\"PhysicsConfig\",{\"$id\":\"phys\"}]\n").unwrap();
         check(path.to_str().unwrap()).unwrap();
     }
 
@@ -44,11 +40,7 @@ mod tests {
     fn check_reports_an_invalid_explicit_world() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("world.jsonl");
-        std::fs::write(
-            &path,
-            "{\"type\":\"NotARealAssetType\",\"args\":{\"$id\":\"x\"}}\n",
-        )
-        .unwrap();
+        std::fs::write(&path, "[\"NotARealAssetType\",{\"$id\":\"x\"}]\n").unwrap();
         assert!(check(path.to_str().unwrap()).is_err());
     }
 }

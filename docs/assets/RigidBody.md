@@ -12,7 +12,7 @@ slides off steep slopes, and can jump. The capsule size is configured here
 too.
 
 ```json
-{ "type": "RigidBody", "args": { "jump_height": 1.4 } }
+["RigidBody",{"jump_height":1.4}]
 ```
 
 ## Parameters

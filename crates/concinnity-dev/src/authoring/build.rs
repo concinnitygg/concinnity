@@ -1,5 +1,8 @@
 //! Shared in-memory build orchestration
 
+use std::path::Path;
+
+use concinnity_cook::WorldSource;
 use concinnity_cook::authoring::registry::RegisteredType;
 pub(crate) use concinnity_cook::build_compiled;
 use concinnity_cook::build_only::LoadedWorld;
@@ -25,8 +28,8 @@ use concinnity_host::store::blob::BlobData;
 // (the interpreted `cn debug` run) funnels through here so
 // validation and asset fetching behave identically. The `cn build` blob path
 // prepares through concinnity_cook directly and does not use this.
-pub(crate) fn prepare(content: &str) -> std::io::Result<LoadedWorld> {
-    let loaded = concinnity_cook::prepare_world(content, crate::project::assets_dir().as_deref())
+pub(crate) fn prepare(source: WorldSource<'_>) -> std::io::Result<LoadedWorld> {
+    let loaded = concinnity_cook::prepare_world(source, crate::project::assets_dir().as_deref())
         .map_err(|errs| crate::authoring::report_validation_errors(&errs))?;
 
     Ok(loaded)
@@ -173,18 +176,20 @@ fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
 /// ready-to-run World without touching any blob files on disk. The editor uses
 /// this to boot an empty (or otherwise non-renderable) world from a seeded
 /// GraphicsConfig so a window still opens.
-pub(crate) fn build_world_from_str(content: &str) -> std::io::Result<World> {
-    Ok(build_world_and_shadows(content)?.0)
+pub(crate) fn build_world_from_str<'a>(
+    source: impl Into<WorldSource<'a>>,
+) -> std::io::Result<World> {
+    Ok(build_world_and_shadows(source)?.0)
 }
 
 /// `build_world_from_str`, plus the pre-merge args of every generated asset the
 /// world patches. An authored line over a generated asset is a sparse patch, so
 /// a tool that re-derives one asset's effective args from its line alone needs
 /// the baseline the patch merges over.
-pub(crate) fn build_world_and_shadows(
-    content: &str,
+pub(crate) fn build_world_and_shadows<'a>(
+    source: impl Into<WorldSource<'a>>,
 ) -> std::io::Result<(World, Vec<concinnity_cook::build_only::ShadowedAsset>)> {
-    let loaded = prepare(content)?;
+    let loaded = prepare(source.into())?;
     let shadowed = loaded.shadowed.clone();
     Ok((world_from_loaded(loaded)?, shadowed))
 }
@@ -195,7 +200,7 @@ pub(crate) fn build_world_and_shadows(
 /// + `world_from_loaded`.
 pub(crate) fn build_world_from_path(world_path: &str) -> std::io::Result<World> {
     let content = std::fs::read_to_string(world_path)?;
-    build_world_from_str(&content)
+    build_world_from_str(WorldSource::file(&content, Path::new(world_path)))
 }
 
 // Compile the world file at `json_path` into the project's state tree, printing
@@ -204,7 +209,8 @@ pub(crate) fn build_world_from_path(world_path: &str) -> std::io::Result<World> 
 pub(crate) fn build_world_file(json_path: &str) -> std::io::Result<()> {
     let tree = crate::project::require()?;
     let content = std::fs::read_to_string(json_path)?;
-    let loaded = concinnity_cook::prepare_world(&content, Some(&tree.assets_dir()))
+    let source = WorldSource::file(&content, Path::new(json_path));
+    let loaded = concinnity_cook::prepare_world(source, Some(&tree.assets_dir()))
         .map_err(|errs| crate::authoring::report_validation_errors(&errs))?;
     concinnity_cook::build_loaded(&tree, loaded, crate::cook_platform())
 }
@@ -217,7 +223,7 @@ pub(crate) fn build_world_str_to_disk(
     content: &str,
     progress: Option<&(dyn Fn(concinnity_cook::BuildProgress) + Sync)>,
 ) -> std::io::Result<()> {
-    let loaded = prepare(content)?;
+    let loaded = prepare(content.into())?;
     let result = concinnity_cook::build_compiled_with_progress(
         loaded.assets,
         crate::project::assets_dir().as_deref(),
@@ -248,15 +254,15 @@ mod tests {
 
     #[test]
     fn prepare_accepts_a_valid_world() {
-        let loaded = prepare("{\"type\":\"PhysicsConfig\",\"args\":{\"$id\":\"phys\"}}\n").unwrap();
+        let loaded = prepare("[\"PhysicsConfig\",{\"$id\":\"phys\"}]\n".into()).unwrap();
         assert!(loaded.assets.iter().any(|a| a.id == "phys"));
         assert!(loaded.authored.contains(&"phys".to_string()));
     }
 
     #[test]
     fn prepare_rejects_an_invalid_world() {
-        assert!(prepare("{\"type\":\"NotARealAssetType\",\"args\":{\"$id\":\"odd\"}}\n").is_err());
-        assert!(prepare("{ not json\n").is_err());
+        assert!(prepare("[\"NotARealAssetType\",{\"$id\":\"odd\"}]\n".into()).is_err());
+        assert!(prepare("{ not json\n".into()).is_err());
     }
 
     fn asset(json: serde_json::Value) -> concinnity_cook::authoring::world::WorldJsonlAsset {
@@ -362,7 +368,7 @@ mod tests {
     // what seeds the hot-reload watcher.
     #[test]
     fn the_assembled_world_publishes_the_watcher_source_catalogs() {
-        let loaded = prepare("{\"type\":\"PhysicsConfig\",\"args\":{\"$id\":\"phys\"}}\n").unwrap();
+        let loaded = prepare("[\"PhysicsConfig\",{\"$id\":\"phys\"}]\n".into()).unwrap();
         let world = world_from_loaded(loaded).unwrap();
         assert!(
             world
@@ -375,7 +381,7 @@ mod tests {
 
     #[test]
     fn world_from_loaded_assembles_an_in_memory_world() {
-        let loaded = prepare("{\"type\":\"PhysicsConfig\",\"args\":{\"$id\":\"phys\"}}\n").unwrap();
+        let loaded = prepare("[\"PhysicsConfig\",{\"$id\":\"phys\"}]\n".into()).unwrap();
         let expanded = loaded.assets.len();
         let world = world_from_loaded(loaded).unwrap();
         // Every expanded asset landed as a component on an entity of its own,
@@ -396,9 +402,7 @@ mod tests {
     fn build_world_from_str_assembles_an_in_memory_world() {
         // The string path is what the editor uses to seed an empty world; it
         // must produce the same assembled world as the file-backed path.
-        let world =
-            build_world_from_str("{\"type\":\"PhysicsConfig\",\"args\":{\"$id\":\"phys\"}}\n")
-                .unwrap();
+        let world = build_world_from_str("[\"PhysicsConfig\",{\"$id\":\"phys\"}]\n").unwrap();
         assert!(world.component_count() >= 1);
     }
 
@@ -425,8 +429,8 @@ mod tests {
         let _guard = crate::test_support::lock();
         crate::test_support::isolate_state_dir();
         let world = build_world_from_str(concat!(
-            "{\"type\":\"Material\",\"args\":{\"$id\":\"steel\",\"roughness\":0.4}}\n",
-            "{\"type\":\"Material\",\"args\":{\"$id\":\"glass\",\"transparent\":true}}\n",
+            "[\"Material\",{\"$id\":\"steel\",\"roughness\":0.4}]\n",
+            "[\"Material\",{\"$id\":\"glass\",\"transparent\":true}]\n",
         ))
         .expect("a material-only world compiles");
         let names = world
@@ -456,11 +460,7 @@ mod tests {
 
         let world = dir.path().join("worlds").join("world.jsonl");
         std::fs::create_dir_all(world.parent().unwrap()).unwrap();
-        std::fs::write(
-            &world,
-            "{\"type\":\"PhysicsConfig\",\"args\":{\"$id\":\"phys\"}}\n",
-        )
-        .unwrap();
+        std::fs::write(&world, "[\"PhysicsConfig\",{\"$id\":\"phys\"}]\n").unwrap();
 
         let content = std::fs::read_to_string(&world).unwrap();
         build_world_str_to_disk(&content, None).expect("compile + write should succeed");

@@ -18,6 +18,7 @@ pub use crate::build_only::character_model::character_schema::{
     SchemaRegion, ShapePreset, SynthParams, SynthesizedTarget,
 };
 pub use crate::build_only::character_model::schema::CharacterModel;
+pub use crate::build_only::include::schema::Include;
 pub use crate::build_only::light_rig::schema::LightRig;
 pub use crate::build_only::main_menu::schema::{MainMenu, MainMenuItem, SettingsProfile};
 pub use crate::build_only::material_palette::schema::{MaterialPalette, PaletteEntry};
@@ -64,6 +65,7 @@ macro_rules! for_each_build_only_type {
                 Panel             => $crate::authoring::registry::build_only::Panel { },
                 CharacterSchema   => $crate::authoring::registry::build_only::CharacterSchema { },
                 CharacterModel    => $crate::authoring::registry::build_only::CharacterModel { },
+                Include           => $crate::authoring::registry::build_only::Include { },
             },
         }
     };

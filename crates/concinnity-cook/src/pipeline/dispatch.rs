@@ -57,10 +57,10 @@ mod tests {
 
     #[test]
     fn voxel_chunk_payload_compiles_end_to_end() {
-        let world = r#"{"type":"Shader","args":{"$id":"scene_shader","fragment":"x.slang"}}
-{"type":"BlockType","args":{"$id":"air","solid":false}}
-{"type":"BlockType","args":{"$id":"stone","uv_min":[0,0],"uv_max":[1,1]}}
-{"type":"VoxelChunk","args":{"$id":"chunk","palette":["air","stone"],"dim":[2,1,1],"blocks":[1,1]}}
+        let world = r#"["Shader",{"$id":"scene_shader","fragment":"x.slang"}]
+["BlockType",{"$id":"air","solid":false}]
+["BlockType",{"$id":"stone","uv_min":[0,0],"uv_max":[1,1]}]
+["VoxelChunk",{"$id":"chunk","palette":["air","stone"],"dim":[2,1,1],"blocks":[1,1]}]
 "#;
         // We can't easily compile shaders here, so go through the geometry
         // entry point directly to verify the voxel chunk produces a non-empty

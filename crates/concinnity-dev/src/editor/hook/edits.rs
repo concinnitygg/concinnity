@@ -1,13 +1,14 @@
 //! EditorHook: unique-name generation and edit persistence (SAVE, the atomic
 //! world.jsonl write, and the in-memory live-preview world rebuild).
 
-use concinnity_cook::authoring::world::write_world_jsonl;
+use concinnity_cook::authoring::world::entry_handle;
 use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
 
 use super::{EditorHook, EntryId, EntryList, FormTarget, declared_id};
 use crate::editor::behavior;
 use crate::editor::build_renderable;
+use crate::editor::entry_list::build_text;
 use crate::editor::live;
 use crate::editor::modal;
 use crate::editor::notify;
@@ -102,7 +103,15 @@ impl EditorHook {
     // not yet on disk (SAVE clears `dirty`). The pre-edit list still sits in
     // `baseline` (only committed edits move it), so it becomes the undo
     // snapshot; a call that changed nothing records no step.
+    //
+    // An edit that reached an included entry or an `Include` line is undone
+    // whole: those lines belong to another file, or decide what that file
+    // brings in, so the editor never writes them.
     pub(super) fn mark_changed(&mut self) {
+        if let Some(i) = self.entries.changed_read_only(&self.baseline) {
+            self.refuse_read_only_edit(i);
+            return;
+        }
         if self.baseline != self.entries {
             let before = std::mem::replace(&mut self.baseline, self.entries.clone());
             self.history.record(before);
@@ -115,6 +124,26 @@ impl EditorHook {
         self.tree_stale = true;
         // Template baselines follow the entries too; rebuilt on demand.
         self.template_index = None;
+    }
+
+    // Put the entries back as they were before an edit that changed the
+    // read-only baseline entry at `index`, and say where that entry lives. The
+    // preview is rebuilt, since a drag may already have moved what it shows.
+    fn refuse_read_only_edit(&mut self, index: usize) {
+        let name = entry_handle(&self.baseline, index).unwrap_or_default();
+        let message = match self.baseline.included_from(index) {
+            Some(file) => format!(
+                "'{name}' is included from {}; edit it there",
+                file.display()
+            ),
+            None => format!(
+                "'{name}' is an Include line; edit it in {}",
+                self.world_path
+            ),
+        };
+        self.entries = self.baseline.clone();
+        self.require_rebuild();
+        self.notifier.push(notify::Level::Error, &message);
     }
 
     // Ask for a full preview rebuild: the running world holds state no authored
@@ -191,7 +220,7 @@ impl EditorHook {
             self.prompt_world_name(None);
             return;
         }
-        let content = match write_world_jsonl(&self.entries) {
+        let content = match self.entries.file_text() {
             Ok(c) => c,
             Err(e) => {
                 self.save_failed(e);
@@ -221,8 +250,7 @@ impl EditorHook {
     // baselines the expansion merged authored patches over come back with it, so a
     // later edit can re-derive one asset's effective args without cooking again.
     pub(super) fn build_preview_world(&self) -> std::io::Result<(World, live::ShadowBaselines)> {
-        let jsonl =
-            write_world_jsonl(&self.entries).map_err(|e| std::io::Error::other(e.to_string()))?;
+        let jsonl = build_text(&self.entries)?;
         let (world, shadowed) = build_renderable(&jsonl)?;
         let baselines = shadowed
             .into_iter()
@@ -256,8 +284,7 @@ impl EditorHook {
     // serialization; this remains the test seam for the write itself.
     #[cfg(test)]
     pub(super) fn write_jsonl(&self) -> std::io::Result<()> {
-        let out =
-            write_world_jsonl(&self.entries).map_err(|e| std::io::Error::other(e.to_string()))?;
+        let out = self.entries.file_text()?;
         self.write_jsonl_content(&out)
     }
 

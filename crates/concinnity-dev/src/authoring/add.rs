@@ -7,8 +7,8 @@
 //!     companions, so no scaffold lines are written,
 //!   - appends a named content template's entries (`--template minimal-3d-world`)
 //!     when one is requested for a `.glb` landing in a renderer-less world,
-//!   - resolves `target` as a file path, a known asset type name, or inline
-//!     JSON, building one or more asset entries,
+//!   - resolves `target` as a file path, a known asset type name, or an
+//!     inline `["Type", {args}]` entry, building one or more asset entries,
 //!   - patches the world JSONL atomically (via a tmp file) and reruns the
 //!     build pipeline so blobs and the lock file stay in sync. Only the
 //!     requested entries are written; injected companions and engine defaults
@@ -17,8 +17,8 @@
 use concinnity_cook::asset_api::{AssetRequest, create_asset_def};
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::{
-    WORLD_JSONL, args_with_id, entry_errors, entry_handle, entry_id, patch_world_jsonl_to,
-    set_entry_id, take_entry_id,
+    WORLD_JSONL, args_with_id, entry_errors, entry_handle, entry_id, parse_entry,
+    patch_world_jsonl_to, set_entry_id, take_entry_id,
 };
 
 /// Add an asset to `world_path` and rebuild. See module docs.
@@ -307,13 +307,8 @@ fn has_renderer_trigger(world_path: &str) -> std::io::Result<bool> {
 // Pure-string variant of `has_renderer_trigger`, exposed for unit tests.
 fn jsonl_has_renderer_trigger(content: &str) -> bool {
     for line in content.lines() {
-        let line = line.trim();
-        if line.is_empty() {
+        let Ok(value) = parse_entry(line.trim()) else {
             continue;
-        }
-        let value: serde_json::Value = match serde_json::from_str(line) {
-            Ok(v) => v,
-            Err(_) => continue,
         };
         if let Some(t) = value.get("type").and_then(|v| v.as_str())
             && concinnity_cook::authoring::registry::RegisteredType::parse(t)
@@ -687,7 +682,7 @@ fn read_text_content(path_str: &str) -> std::io::Result<String> {
             std::io::ErrorKind::InvalidInput,
             format!(
                 "'{}' is {} bytes; TextLabel content is capped at {} bytes: \
-                 trim the file or add it as a `File` asset via inline JSON instead",
+                 trim the file or add it as a `File` asset via an inline entry instead",
                 path_str,
                 metadata.len(),
                 TEXT_LABEL_MAX_BYTES
@@ -740,67 +735,30 @@ fn entry_from_json_file(
             format!("could not read '{}': {}", path.display(), e),
         )
     })?;
-    let json: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
+    let json = parse_entry(content.trim()).map_err(|e| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             format!("could not parse '{}': {}", path.display(), e),
         )
     })?;
-
-    let asset_type = json.get("type").and_then(|v| v.as_str()).ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("'{}' has no `type` field", path.display()),
-        )
-    })?;
-
-    if asset_type.to_lowercase().replace('_', "") == "buildconfig" {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!(
-                "BuildConfig cannot be added via `concinnity add`; edit {} directly",
-                WORLD_JSONL
-            ),
-        ));
-    }
+    let asset_type = entry_type(&json);
+    refuse_build_config(asset_type)?;
 
     let (id, args) = split_entry(&json, &path.display().to_string())?;
     validated_entry(id.as_deref().unwrap_or(stem_name), asset_type, args)
 }
 
 fn entry_from_inline_json(raw: &str) -> std::io::Result<serde_json::Value> {
-    let json: serde_json::Value = serde_json::from_str(raw).map_err(|e| {
+    let json = parse_entry(raw.trim()).map_err(|e| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!("could not parse inline JSON: {}", e),
+            format!("could not parse inline entry: {e}"),
         )
     })?;
+    let asset_type = entry_type(&json);
+    refuse_build_config(asset_type)?;
 
-    if !json.is_object() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "inline JSON must be an object (e.g. '{\"type\": \"Window\"}')",
-        ));
-    }
-
-    let asset_type = json.get("type").and_then(|v| v.as_str()).ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "inline JSON must contain a `type` field",
-        )
-    })?;
-
-    if asset_type.to_lowercase().replace('_', "") == "buildconfig" {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!(
-                "BuildConfig cannot be added via `concinnity add`; edit {} directly",
-                WORLD_JSONL
-            ),
-        ));
-    }
-
-    let (id, args) = split_entry(&json, "inline JSON")?;
+    let (id, args) = split_entry(&json, "inline entry")?;
 
     let req = AssetRequest {
         asset_type: asset_type.to_string(),
@@ -816,6 +774,27 @@ fn entry_from_inline_json(raw: &str) -> std::io::Result<serde_json::Value> {
         set_entry_id(&mut entry, &id);
     }
     Ok(entry)
+}
+
+// The type a parsed entry declares; `parse_entry` guarantees one.
+fn entry_type(entry: &serde_json::Value) -> &str {
+    entry
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+}
+
+fn refuse_build_config(asset_type: &str) -> std::io::Result<()> {
+    if asset_type.to_lowercase().replace('_', "") == "buildconfig" {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "BuildConfig cannot be added via `concinnity add`; edit {} directly",
+                WORLD_JSONL
+            ),
+        ));
+    }
+    Ok(())
 }
 
 // A JSON entry's `$id` (when it declares one) and its args without it, after
@@ -864,7 +843,7 @@ pub(crate) fn resolve_add_target(target: &str) -> std::io::Result<Vec<serde_json
         return entry_from_json_file(as_path, &name).map(|e| vec![e]);
     }
 
-    if target.trim_start().starts_with('{') {
+    if target.trim_start().starts_with('[') {
         return entry_from_inline_json(target).map(|e| vec![e]);
     }
 
@@ -874,22 +853,14 @@ pub(crate) fn resolve_add_target(target: &str) -> std::io::Result<Vec<serde_json
             "could not resolve '{}' as any of:\n  \
              - a file path (no such file found)\n  \
              - a known asset type (use `concinnity list` to see available types)\n  \
-             - an inline JSON object (must start with '{{' and contain a `type` field)",
+             - an inline entry, a world line such as '[\"Window\", {{}}]'",
             target
         ),
     ))
 }
 
 fn entry_from_type_name(type_str: &str) -> std::io::Result<serde_json::Value> {
-    if type_str.to_lowercase().replace('_', "") == "buildconfig" {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!(
-                "BuildConfig cannot be added via `concinnity add`; edit {} directly",
-                WORLD_JSONL
-            ),
-        ));
-    }
+    refuse_build_config(type_str)?;
 
     let req = AssetRequest {
         asset_type: type_str.to_string(),
@@ -1011,13 +982,13 @@ mod tests {
 
     #[test]
     fn renderer_trigger_matches_graphics_config() {
-        let jsonl = r#"{"type":"GraphicsConfig","args":{"$id":"gc"}}"#;
+        let jsonl = r#"["GraphicsConfig",{"$id":"gc"}]"#;
         assert!(jsonl_has_renderer_trigger(jsonl));
     }
 
     #[test]
     fn renderer_trigger_matches_text_label() {
-        let jsonl = r#"{"type":"TextLabel","args":{"$id":"lbl"}}"#;
+        let jsonl = r#"["TextLabel",{"$id":"lbl"}]"#;
         assert!(jsonl_has_renderer_trigger(jsonl));
     }
 
@@ -1025,7 +996,7 @@ mod tests {
     // for it, so no scaffold is needed.
     #[test]
     fn renderer_trigger_matches_prop() {
-        let jsonl = r#"{"type":"Prop","args":{"$id":"crate"}}"#;
+        let jsonl = r#"["Prop",{"$id":"crate"}]"#;
         assert!(jsonl_has_renderer_trigger(jsonl));
     }
 
@@ -1033,7 +1004,7 @@ mod tests {
     // for it), so it is not a trigger.
     #[test]
     fn renderer_trigger_ignores_window() {
-        let jsonl = r#"{"type":"Window","args":{"$id":"win"}}"#;
+        let jsonl = r#"["Window",{"$id":"win"}]"#;
         assert!(!jsonl_has_renderer_trigger(jsonl));
     }
 
@@ -1042,15 +1013,15 @@ mod tests {
         // Exactly the shape that produced the no-window bug: textures /
         // materials / meshes / models / camera but no renderer-trigger.
         let jsonl = concat!(
-            r#"{"type":"Texture","args":{"$id":"tex"}}"#,
+            r#"["Texture",{"$id":"tex"}]"#,
             "\n",
-            r#"{"type":"Material","args":{"$id":"mat"}}"#,
+            r#"["Material",{"$id":"mat"}]"#,
             "\n",
-            r#"{"type":"Mesh","args":{"$id":"mesh"}}"#,
+            r#"["Mesh",{"$id":"mesh"}]"#,
             "\n",
-            r#"{"type":"Model","args":{"$id":"model"}}"#,
+            r#"["Model",{"$id":"model"}]"#,
             "\n",
-            r#"{"type":"Camera3D","args":{"$id":"cam"}}"#,
+            r#"["Camera3D",{"$id":"cam"}]"#,
             "\n",
         );
         assert!(!jsonl_has_renderer_trigger(jsonl));
@@ -1058,11 +1029,7 @@ mod tests {
 
     #[test]
     fn renderer_trigger_skips_malformed_lines() {
-        let jsonl = concat!(
-            "garbage line\n",
-            r#"{"type":"Texture","args":{"$id":"tex"}}"#,
-            "\n",
-        );
+        let jsonl = concat!("garbage line\n", r#"["Texture",{"$id":"tex"}]"#, "\n",);
         assert!(!jsonl_has_renderer_trigger(jsonl));
     }
 
@@ -1082,9 +1049,9 @@ mod tests {
         std::fs::write(
             &world,
             concat!(
-                r#"{"type":"Texture","args":{"$id":"tex"}}"#,
+                r#"["Texture",{"$id":"tex"}]"#,
                 "\n",
-                r#"{"type":"Camera3D","args":{"$id":"cam"}}"#,
+                r#"["Camera3D",{"$id":"cam"}]"#,
                 "\n",
             ),
         )
@@ -1098,7 +1065,7 @@ mod tests {
     fn scaffold_to_inject_returns_empty_when_world_has_graphics_config() {
         let dir = concinnity_testing::TempTree::new();
         let world = dir.join("world.jsonl");
-        std::fs::write(&world, r#"{"type":"GraphicsConfig","args":{"$id":"gfx"}}"#).unwrap();
+        std::fs::write(&world, r#"["GraphicsConfig",{"$id":"gfx"}]"#).unwrap();
 
         let scaffold = scaffold_to_inject(world.to_str().unwrap(), "scene.glb", None).unwrap();
         assert!(scaffold.is_empty());
@@ -1206,7 +1173,7 @@ mod tests {
         let dir = concinnity_testing::TempTree::new();
         let world = dir.join("world.jsonl");
         // Existing world with a renderer trigger: scaffolding wouldn't fire.
-        std::fs::write(&world, r#"{"type":"GraphicsConfig","args":{"$id":"gfx"}}"#).unwrap();
+        std::fs::write(&world, r#"["GraphicsConfig",{"$id":"gfx"}]"#).unwrap();
 
         let err = scaffold_to_inject(world.to_str().unwrap(), "scene.glb", Some("nope"))
             .expect_err("unknown template should fail fast regardless of scaffold path");
@@ -1458,7 +1425,7 @@ mod tests {
     fn scaffold_to_inject_empty_for_renderer_less_world_with_text_target() {
         let dir = concinnity_testing::TempTree::new();
         let world = dir.join("world.jsonl");
-        std::fs::write(&world, r#"{"type":"Texture","args":{"$id":"tex"}}"#).unwrap();
+        std::fs::write(&world, r#"["Texture",{"$id":"tex"}]"#).unwrap();
 
         let scaffold = scaffold_to_inject(world.to_str().unwrap(), "notes.md", None).unwrap();
         assert!(
@@ -1580,17 +1547,21 @@ mod tests {
     // entry_from_inline_json
 
     #[test]
-    fn inline_json_must_be_an_object() {
+    fn inline_json_must_be_an_entry_line() {
         let err = entry_from_inline_json("[1, 2]").unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
-        assert!(err.to_string().contains("must be an object"), "got: {err}");
+        assert!(
+            err.to_string().contains("type name, a string"),
+            "got: {err}"
+        );
     }
 
+    // The object form an entry used to take is refused with the line form named.
     #[test]
-    fn inline_json_requires_a_type_field() {
-        let err = entry_from_inline_json(r#"{"name":"thing"}"#).unwrap_err();
+    fn inline_json_refuses_the_object_form() {
+        let err = entry_from_inline_json(r#"{"type":"Window","name":"main"}"#).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
-        assert!(err.to_string().contains("`type` field"), "got: {err}");
+        assert!(err.to_string().contains("[\"Type\", {args}]"), "got: {err}");
     }
 
     #[test]
@@ -1601,16 +1572,16 @@ mod tests {
 
     #[test]
     fn inline_json_rejects_build_config() {
-        let err = entry_from_inline_json(r#"{"type":"BuildConfig"}"#).unwrap_err();
+        let err = entry_from_inline_json(r#"["BuildConfig"]"#).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
         // The underscore spelling is caught by the same normalization.
-        let err = entry_from_inline_json(r#"{"type":"build_config"}"#).unwrap_err();
+        let err = entry_from_inline_json(r#"["build_config"]"#).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     }
 
     #[test]
     fn inline_json_without_an_id_is_anonymous() {
-        let entry = entry_from_inline_json(r#"{"type":"Window"}"#).unwrap();
+        let entry = entry_from_inline_json(r#"["Window"]"#).unwrap();
         assert_eq!(entry_id(&entry), None);
         assert_eq!(entry["type"], "Window");
         // Default args are materialized as an object.
@@ -1619,23 +1590,18 @@ mod tests {
 
     #[test]
     fn inline_json_keeps_an_explicit_id() {
-        let entry =
-            entry_from_inline_json(r#"{"type":"Window","args":{"$id":"main","title":"T"}}"#)
-                .unwrap();
+        let entry = entry_from_inline_json(r#"["Window",{"$id":"main","title":"T"}]"#).unwrap();
         assert_eq!(entry["args"]["$id"], "main");
         assert_eq!(entry["args"]["title"], "T");
     }
 
-    // The entry gets the checks a world line does, so the old top-level name
-    // is refused rather than dropped.
+    // The entry gets the checks a world line does, so a misspelled `$id` is
+    // refused rather than added anonymous.
     #[test]
-    fn inline_json_refuses_a_top_level_name() {
-        let err = entry_from_inline_json(r#"{"type":"Window","name":"main"}"#).unwrap_err();
+    fn inline_json_refuses_a_misspelled_id() {
+        let err = entry_from_inline_json(r#"["Window",{"$ID":"main"}]"#).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
-        assert!(
-            err.to_string().contains("`name` is not an entry key"),
-            "{err}"
-        );
+        assert!(err.to_string().contains("unknown key `$ID`"), "{err}");
     }
 
     // entry_from_type_name
@@ -1662,21 +1628,21 @@ mod tests {
     // entry_from_json_file
 
     #[test]
-    fn json_file_requires_a_type_field() {
+    fn json_file_must_hold_an_entry_line() {
         let dir = concinnity_testing::TempTree::new();
         let path = dir.join("thing.json");
-        std::fs::write(&path, r#"{"args":{"$id":"thing"}}"#).unwrap();
+        std::fs::write(&path, r#"{"type":"Window","args":{"$id":"thing"}}"#).unwrap();
 
         let err = entry_from_json_file(&path, "thing").unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
-        assert!(err.to_string().contains("no `type` field"), "got: {err}");
+        assert!(err.to_string().contains("not an object"), "got: {err}");
     }
 
     #[test]
     fn json_file_rejects_build_config() {
         let dir = concinnity_testing::TempTree::new();
         let path = dir.join("cfg.json");
-        std::fs::write(&path, r#"{"type":"BuildConfig"}"#).unwrap();
+        std::fs::write(&path, r#"["BuildConfig"]"#).unwrap();
 
         let err = entry_from_json_file(&path, "cfg").unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
@@ -1686,7 +1652,7 @@ mod tests {
     fn json_file_uses_the_stem_when_unnamed() {
         let dir = concinnity_testing::TempTree::new();
         let path = dir.join("main_window.json");
-        std::fs::write(&path, r#"{"type":"Window","args":{}}"#).unwrap();
+        std::fs::write(&path, r#"["Window",{}]"#).unwrap();
 
         let entry = entry_from_json_file(&path, "main_window").unwrap();
         assert_eq!(entry["args"]["$id"], "main_window");
@@ -1697,7 +1663,7 @@ mod tests {
     fn json_file_keeps_its_declared_id_over_the_stem() {
         let dir = concinnity_testing::TempTree::new();
         let path = dir.join("main_window.json");
-        std::fs::write(&path, r#"{"type":"Window","args":{"$id":"hud"}}"#).unwrap();
+        std::fs::write(&path, r#"["Window",{"$id":"hud"}]"#).unwrap();
 
         let entry = entry_from_json_file(&path, "main_window").unwrap();
         assert_eq!(entry["args"]["$id"], "hud");
@@ -1724,7 +1690,7 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0]["type"], "Window");
 
-        let entries = resolve_add_target(r#"{"type":"Window","args":{"$id":"main"}}"#).unwrap();
+        let entries = resolve_add_target(r#"["Window",{"$id":"main"}]"#).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0]["args"]["$id"], "main");
     }

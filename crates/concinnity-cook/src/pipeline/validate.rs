@@ -105,18 +105,18 @@ mod tests {
         // a Sprite under that screen's prefix, a TextLabel under it, a
         // HitRegion firing screen:show on another Screen, and a KeyBinding to
         // toggle a third (modal) Screen.
-        let world = r#"{"type":"GraphicsConfig","args":{"$id":"gfx"}}
-{"type":"Font","args":{"$id":"f","size_px":20}}
-{"type":"Screen","args":{"$id":"title_menu","initial":true}}
-{"type":"Sprite","args":{"$id":"title_menu_bg","x":0,"y":0,"width":640,"height":360,"tint":[0.1,0.1,0.1,1]}}
-{"type":"TextLabel","args":{"$id":"title_menu_lbl","font":"f","content":"Start","x":260,"y":160}}
-{"type":"HitRegion","args":{"$id":"title_menu_btn","x":260,"y":156,"width":120,"height":40,"label":"title_menu_lbl","action":"screen:show:vn_page_1"}}
-{"type":"Screen","args":{"$id":"vn_page_1"}}
-{"type":"TextLabel","args":{"$id":"vn_page_1_text","font":"f","content":"hello","x":40,"y":40}}
-{"type":"HitRegion","args":{"$id":"vn_page_1_next","x":0,"y":0,"width":640,"height":360,"action":"screen:show:title_menu"}}
-{"type":"Screen","args":{"$id":"pause_menu"}}
-{"type":"Sprite","args":{"$id":"pause_menu_dim","x":0,"y":0,"width":640,"height":360,"tint":[0,0,0,0.6]}}
-{"type":"KeyBinding","args":{"$id":"esc","key":"Escape","action":"screen:toggle:pause_menu"}}
+        let world = r#"["GraphicsConfig",{"$id":"gfx"}]
+["Font",{"$id":"f","size_px":20}]
+["Screen",{"$id":"title_menu","initial":true}]
+["Sprite",{"$id":"title_menu_bg","x":0,"y":0,"width":640,"height":360,"tint":[0.1,0.1,0.1,1]}]
+["TextLabel",{"$id":"title_menu_lbl","font":"f","content":"Start","x":260,"y":160}]
+["HitRegion",{"$id":"title_menu_btn","x":260,"y":156,"width":120,"height":40,"label":"title_menu_lbl","action":"screen:show:vn_page_1"}]
+["Screen",{"$id":"vn_page_1"}]
+["TextLabel",{"$id":"vn_page_1_text","font":"f","content":"hello","x":40,"y":40}]
+["HitRegion",{"$id":"vn_page_1_next","x":0,"y":0,"width":640,"height":360,"action":"screen:show:title_menu"}]
+["Screen",{"$id":"pause_menu"}]
+["Sprite",{"$id":"pause_menu_dim","x":0,"y":0,"width":640,"height":360,"tint":[0,0,0,0.6]}]
+["KeyBinding",{"$id":"esc","key":"Escape","action":"screen:toggle:pause_menu"}]
 "#;
         validate_world_jsonl(world, None).expect("visual_novel-shaped world should validate");
     }
@@ -184,9 +184,9 @@ mod tests {
     #[test]
     fn validate_world_jsonl_collects_every_resolution_failure() {
         let world = concat!(
-            r#"{"type":"ProceduralMesh","args":{"$id":"first","generator":"box"}}"#,
+            r#"["ProceduralMesh",{"$id":"first","generator":"box"}]"#,
             "\n",
-            r#"{"type":"AudioClip","args":{"$id":"clip","source":"a.wav"}}"#,
+            r#"["AudioClip",{"$id":"clip","source":"a.wav"}]"#,
             "\n",
         );
         validate_world_jsonl(world, None).expect("a resolvable world validates");
@@ -194,9 +194,9 @@ mod tests {
         // Args of the wrong shape survive the structural world checks and are
         // rejected when the def is built.
         let bad = concat!(
-            r#"{"type":"PointLight","args":{"$id":"t1","intensity":"soon"}}"#,
+            r#"["PointLight",{"$id":"t1","intensity":"soon"}]"#,
             "\n",
-            r#"{"type":"PointLight","args":{"$id":"t2","intensity":"later"}}"#,
+            r#"["PointLight",{"$id":"t2","intensity":"later"}]"#,
             "\n",
         );
         let err = validate_world_jsonl(bad, None).expect_err("mistyped args do not resolve");
@@ -226,7 +226,7 @@ mod tests {
     // is the asset the failure names.
     #[test]
     fn validate_world_jsonl_reports_a_bad_menu_item_on_its_region() {
-        let world = r#"{"type":"MainMenu","args":{"$id":"m","items":[{"label":"Go","action":"story:dance"}]}}"#;
+        let world = r#"["MainMenu",{"$id":"m","items":[{"label":"Go","action":"story:dance"}]}]"#;
         let msg = validate_world_jsonl(world, None)
             .expect_err("unknown story verb")
             .to_string();

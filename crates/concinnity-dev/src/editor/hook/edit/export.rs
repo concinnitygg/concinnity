@@ -3,10 +3,10 @@
 //! named skinned mesh as `<name>.glb` beside the project's world file, and
 //! reports through the log sink and a toast.
 
-use concinnity_cook::authoring::world::write_world_jsonl;
 use concinnity_host::thread::jobs::pool;
 use std::sync::atomic::Ordering;
 
+use crate::editor::entry_list::build_text;
 use crate::editor::gltf_export;
 use crate::editor::hook::EditorHook;
 use crate::editor::notify;
@@ -30,7 +30,7 @@ impl EditorHook {
             self.console_sink.warn("cook already running");
             return;
         }
-        let content = match write_world_jsonl(&self.entries) {
+        let content = match build_text(&self.entries) {
             Ok(c) => c,
             Err(e) => {
                 self.console_build_running.store(false, Ordering::SeqCst);

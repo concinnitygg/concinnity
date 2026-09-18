@@ -4,9 +4,10 @@
 // and never touches world.jsonl, so this lives in the build crate, not core.
 
 use super::identity::{ID_KEY, entry_handles, is_label_of};
+use super::line::{parse_world_jsonl, write_world_jsonl};
 use crate::authoring::registry::RegisteredType;
 
-/// An asset entry after $include resolution and type parsing.
+/// An asset entry after include resolution and type parsing.
 #[derive(Clone, Debug)]
 pub struct WorldJsonlAsset {
     /// The asset's handle: the `$id` it declares, or the `<Type>#<ordinal>`
@@ -72,36 +73,6 @@ fn take_entry_id_from_args(args: &mut serde_json::Value) -> Option<String> {
     }
 }
 
-/// Parse a world.jsonl string into a flat list of raw asset objects.
-///
-/// Each non-blank, non-comment line must be a valid JSON object. The order
-/// of entries is preserved. Returns an error on the first malformed line.
-pub fn parse_world_jsonl(content: &str) -> Result<Vec<serde_json::Value>, serde_json::Error> {
-    let mut assets = Vec::new();
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with("//") {
-            continue;
-        }
-        let value: serde_json::Value = serde_json::from_str(trimmed)?;
-        assets.push(value);
-    }
-    Ok(assets)
-}
-
-/// Serialize a list of asset objects back to world.jsonl format.
-///
-/// Each entry is written as a compact single-line JSON object followed by a
-/// newline. The result is a valid world.jsonl file.
-pub fn write_world_jsonl(assets: &[serde_json::Value]) -> serde_json::Result<String> {
-    let mut out = String::new();
-    for asset in assets {
-        out.push_str(&serde_json::to_string(asset)?);
-        out.push('\n');
-    }
-    Ok(out)
-}
-
 /// Read src_path, apply a fallible mutation to the asset list, and write
 /// the result to dst_path. src and dst may be the same path or different.
 pub fn patch_world_jsonl_to<F>(src_path: &str, dst_path: &str, f: F) -> std::io::Result<()>
@@ -122,8 +93,7 @@ where
 
     f(&mut assets)?;
 
-    let out = write_world_jsonl(&assets).map_err(|e| std::io::Error::other(e.to_string()))?;
-    std::fs::write(dst_path, out)
+    std::fs::write(dst_path, write_world_jsonl(&assets)?)
 }
 
 /// Read world.jsonl at json_path, mutate the asset list in-place, write back.
@@ -138,11 +108,15 @@ where
 }
 
 /// Read every entry's handle from world.jsonl without a full parse, for error
-/// messages: its `$id`, else its `<Type>#<ordinal>` label.
+/// messages: its `$id`, else its `<Type>#<ordinal>` label, counted over the
+/// world with its includes resolved.
 pub fn known_names(json_path: &str) -> std::io::Result<Vec<String>> {
+    let invalid = |e: String| std::io::Error::new(std::io::ErrorKind::InvalidData, e);
     let content = std::fs::read_to_string(json_path)?;
-    let assets = parse_world_jsonl(&content)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+    let assets = parse_world_jsonl(&content).map_err(|e| invalid(e.to_string()))?;
+    let assets =
+        crate::build_only::include::resolve_includes(assets, Some(std::path::Path::new(json_path)))
+            .map_err(invalid)?;
     Ok(entry_handles(&assets).into_iter().flatten().collect())
 }
 
@@ -246,63 +220,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_world_jsonl_empty_string_returns_empty() {
-        let assets = parse_world_jsonl("").unwrap();
-        assert!(assets.is_empty());
-    }
-
-    #[test]
-    fn parse_world_jsonl_skips_blank_and_comment_lines() {
-        let content = "\n  \n// this is a comment\n";
-        let assets = parse_world_jsonl(content).unwrap();
-        assert!(assets.is_empty());
-    }
-
-    #[test]
-    fn parse_world_jsonl_returns_entries_in_order() {
-        let content = r#"{"type":"Logger","args":{"$id":"a"}}
-{"type":"Window","args":{"$id":"b"}}
-"#;
-        let assets = parse_world_jsonl(content).unwrap();
-        assert_eq!(assets.len(), 2);
-        assert_eq!(assets[0]["args"]["$id"], "a");
-        assert_eq!(assets[1]["args"]["$id"], "b");
-    }
-
-    #[test]
-    fn parse_world_jsonl_errors_on_invalid_json() {
-        let result = parse_world_jsonl("{not valid json}");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn write_world_jsonl_one_line_per_entry() {
-        let assets = vec![
-            serde_json::json!({"type": "Logger", "args": {"$id": "a"}}),
-            serde_json::json!({"type": "Window", "args": {"$id": "b"}}),
-        ];
-        let out = write_world_jsonl(&assets).unwrap();
-        let lines: Vec<&str> = out.lines().collect();
-        assert_eq!(lines.len(), 2);
-        assert!(lines[0].contains("\"a\""));
-        assert!(lines[1].contains("\"b\""));
-    }
-
-    #[test]
-    fn write_world_jsonl_round_trips_through_parse() {
-        let assets = vec![serde_json::json!({"type": "Logger", "args": {"$id": "x"}})];
-        let out = write_world_jsonl(&assets).unwrap();
-        let parsed = parse_world_jsonl(&out).unwrap();
-        assert_eq!(parsed.len(), 1);
-        assert_eq!(parsed[0]["args"]["$id"], "x");
-    }
-
-    #[test]
     fn patch_world_jsonl_to_applies_mutation() {
         let dir = tempfile::tempdir().unwrap();
         let src = dir.path().join("world.jsonl");
         let dst = dir.path().join("out.jsonl");
-        std::fs::write(&src, "{\"type\":\"Logger\",\"args\":{\"$id\":\"a\"}}\n").unwrap();
+        std::fs::write(&src, "[\"Logger\",{\"$id\":\"a\"}]\n").unwrap();
 
         patch_world_jsonl_to(src.to_str().unwrap(), dst.to_str().unwrap(), |assets| {
             assets.push(serde_json::json!({"type":"Window","args":{"$id":"b"}}));
@@ -320,7 +242,7 @@ mod tests {
     fn patch_world_jsonl_to_propagates_mutation_error() {
         let dir = tempfile::tempdir().unwrap();
         let src = dir.path().join("world.jsonl");
-        std::fs::write(&src, "{\"type\":\"Logger\",\"args\":{\"$id\":\"a\"}}\n").unwrap();
+        std::fs::write(&src, "[\"Logger\",{\"$id\":\"a\"}]\n").unwrap();
 
         let result =
             patch_world_jsonl_to(src.to_str().unwrap(), src.to_str().unwrap(), |_assets| {
@@ -333,11 +255,7 @@ mod tests {
     fn known_names_lists_ids_and_labels() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("world.jsonl");
-        std::fs::write(
-            &path,
-            "{\"type\":\"Logger\",\"args\":{\"$id\":\"a\"}}\n{\"type\":\"Window\"}\n",
-        )
-        .unwrap();
+        std::fs::write(&path, "[\"Logger\",{\"$id\":\"a\"}]\n[\"Window\"]\n").unwrap();
         let names = known_names(path.to_str().unwrap()).unwrap();
         assert_eq!(names, vec!["a", "Window#0"]);
     }

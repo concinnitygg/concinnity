@@ -4,6 +4,8 @@
 //! in the authored file to copy from. An anonymous asset is named by its
 //! `<Type>#<ordinal>` label, and its line declares no `$id`.
 
+use concinnity_cook::authoring::world::entry_line;
+
 use crate::command::{provenance, resolve_world_path};
 
 /// Print one asset's effective entry from the expanded world, with where
@@ -11,8 +13,9 @@ use crate::command::{provenance, resolve_world_path};
 pub fn explain(name: &str, json_path: Option<&str>) -> std::io::Result<()> {
     let json_path = resolve_world_path(json_path)?;
     let content = std::fs::read_to_string(&json_path)?;
+    let source = concinnity_cook::WorldSource::file(&content, std::path::Path::new(&json_path));
 
-    let loaded = concinnity_cook::prepare_world(&content, crate::project::assets_dir().as_deref())
+    let loaded = concinnity_cook::prepare_world(source, crate::project::assets_dir().as_deref())
         .map_err(|errs| crate::authoring::report_validation_errors(&errs))?;
 
     let Some(asset) = loaded.assets.iter().find(|a| a.id == name) else {
@@ -35,10 +38,10 @@ pub fn explain(name: &str, json_path: Option<&str>) -> std::io::Result<()> {
         ));
     };
 
-    let line = asset.to_entry();
+    let line = entry_line(&asset.to_entry())?;
 
     println!("// {}", provenance(&loaded, &asset.id));
-    println!("{}", serde_json::to_string(&line)?);
+    println!("{line}");
     Ok(())
 }
 
@@ -55,23 +58,20 @@ mod tests {
 
     #[test]
     fn explain_prints_a_known_asset() {
-        let (_dir, path) =
-            write_world("{\"type\":\"GraphicsConfig\",\"args\":{\"$id\":\"gfx\"}}\n");
+        let (_dir, path) = write_world("[\"GraphicsConfig\",{\"$id\":\"gfx\"}]\n");
         explain("gfx", Some(&path)).unwrap();
     }
 
     #[test]
     fn explain_resolves_an_anonymous_label() {
-        let (_dir, path) =
-            write_world("{\"type\":\"GraphicsConfig\",\"args\":{}}\n{\"type\":\"Scene\"}\n");
+        let (_dir, path) = write_world("[\"GraphicsConfig\",{}]\n[\"Scene\"]\n");
         explain("Scene#0", Some(&path)).unwrap();
         assert!(explain("Scene#1", Some(&path)).is_err());
     }
 
     #[test]
     fn explain_of_an_unknown_name_offers_close_matches() {
-        let (_dir, path) =
-            write_world("{\"type\":\"GraphicsConfig\",\"args\":{\"$id\":\"gfx\"}}\n");
+        let (_dir, path) = write_world("[\"GraphicsConfig\",{\"$id\":\"gfx\"}]\n");
         let err = explain("gf", Some(&path)).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
         let msg = err.to_string();
@@ -81,8 +81,7 @@ mod tests {
 
     #[test]
     fn explain_of_an_unknown_name_without_matches_has_no_hint() {
-        let (_dir, path) =
-            write_world("{\"type\":\"GraphicsConfig\",\"args\":{\"$id\":\"gfx\"}}\n");
+        let (_dir, path) = write_world("[\"GraphicsConfig\",{\"$id\":\"gfx\"}]\n");
         let err = explain("zzz_nothing", Some(&path)).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
         assert!(!err.to_string().contains("close matches"), "got: {err}");
@@ -90,8 +89,7 @@ mod tests {
 
     #[test]
     fn explain_surfaces_validation_failures() {
-        let (_dir, path) =
-            write_world("{\"type\":\"NotARealAssetType\",\"args\":{\"$id\":\"odd\"}}\n");
+        let (_dir, path) = write_world("[\"NotARealAssetType\",{\"$id\":\"odd\"}]\n");
         assert!(explain("odd", Some(&path)).is_err());
     }
 }

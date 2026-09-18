@@ -7,14 +7,13 @@
 //! this editor's name table empty), and everything reports through the shared
 //! log sink.
 
-use concinnity_cook::authoring::world::{
-    entry_handle, find_entry, set_entry_id, write_world_jsonl,
-};
+use concinnity_cook::authoring::world::{entry_handle, find_entry, set_entry_id};
 use concinnity_core::components::FrameInput;
 use concinnity_core::components::InputKey;
 use concinnity_core::ecs::World;
 use std::sync::atomic::Ordering;
 
+use crate::editor::entry_list::build_text;
 use crate::editor::hook::{EditorHook, declared_id, entry_type, scroll_step};
 use crate::editor::notify;
 use crate::editor::panels::console;
@@ -301,7 +300,7 @@ impl EditorHook {
             self.console_sink.warn("cook already running");
             return;
         }
-        let content = match write_world_jsonl(&self.entries) {
+        let content = match build_text(&self.entries) {
             Ok(c) => c,
             Err(e) => {
                 self.console_build_running.store(false, Ordering::SeqCst);

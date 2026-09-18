@@ -1,17 +1,17 @@
 /// The build-time world surface: the expansion passes, preset loading, and the
 /// build front-half orchestrator (prepare_world = load + expand + validate).
 /// The authored world model it works on -- world.jsonl I/O, `WorldJsonlAsset`,
-/// $include resolution, and structural validation (`load_world`) -- is
-/// `crate::authoring::world`.
+/// and structural validation (`load_world`) -- is `crate::authoring::world`.
 pub mod preset;
 
-use crate::authoring::world::{WorldJsonlAsset, load_world};
+use crate::authoring::world::{WorldJsonlAsset, WorldSource, load_world};
 
 pub(crate) mod app_config;
 pub(crate) mod camera_shot;
 pub(crate) mod character_model;
 pub(crate) mod companion;
 pub(crate) mod companion_specs;
+pub mod include;
 
 pub(crate) mod light_rig;
 pub(crate) mod main_menu;
@@ -62,13 +62,15 @@ pub struct LoadedWorld {
 /// compile stage needs, computed exactly once. Errors from every stage are
 /// collected, so the caller gets the full picture in a single pass.
 ///
-/// `assets_dir` is the asset search root the expansion passes resolve bare
-/// source filenames and preset names against; `None` leaves them unresolved.
-pub fn prepare_world(
-    content: &str,
+/// `source` is the world text, with the file it was read from when an
+/// `Include` in it should resolve beside that file. `assets_dir` is the asset
+/// search root the expansion passes resolve bare source filenames and preset
+/// names against; `None` leaves them unresolved.
+pub fn prepare_world<'a>(
+    source: impl Into<WorldSource<'a>>,
     assets_dir: Option<&std::path::Path>,
 ) -> Result<LoadedWorld, Vec<String>> {
-    let mut expanded = load_world(content)?;
+    let mut expanded = load_world(source.into())?;
     let authored: Vec<String> = expanded
         .iter()
         .filter_map(crate::authoring::world::entry_id)
@@ -135,7 +137,7 @@ mod tests {
     // front-half orchestration on top of it.
     #[test]
     fn prepare_world_expands_and_validates() {
-        let content = r#"{"type":"GraphicsConfig","args":{"$id":"gfx"}}"#;
+        let content = r#"["GraphicsConfig",{"$id":"gfx"}]"#;
         let loaded = prepare_world(content, None).unwrap();
         // GraphicsConfig pulls in its companions, so the prepared world holds
         // more than the single declared asset.
@@ -155,7 +157,7 @@ mod tests {
     // being swallowed on the way to semantic validation.
     #[test]
     fn prepare_world_reports_an_expansion_failure() {
-        let content = r#"{"type":"Prop","args":{"$id":"p","prefab":"ghost"}}"#;
+        let content = r#"["Prop",{"$id":"p","prefab":"ghost"}]"#;
         let errs = prepare_world(content, None).err().unwrap_or_default();
         assert_eq!(errs.len(), 1);
         assert!(errs[0].contains("ghost"), "{errs:?}");
@@ -165,7 +167,7 @@ mod tests {
     // that survives expansion still fails the build.
     #[test]
     fn prepare_world_reports_semantic_errors() {
-        let content = r#"{"type":"Prop","args":{"$id":"prop","mesh":"nope"}}"#;
+        let content = r#"["Prop",{"$id":"prop","mesh":"nope"}]"#;
         let errs = prepare_world(content, None).err().unwrap_or_default();
         assert!(!errs.is_empty());
         assert!(errs.iter().any(|e| e.contains("nope")), "{errs:?}");
@@ -201,7 +203,7 @@ mod tests {
                 .as_f64()
         }
 
-        let content = r#"{"type":"LightRig","args":{"$id":"rig","preset":"dusk"}}"#;
+        let content = r#"["LightRig",{"$id":"rig","preset":"dusk"}]"#;
         let bright = rig_root(3.5);
         let dim = rig_root(0.25);
 

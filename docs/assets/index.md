@@ -30,6 +30,7 @@
 - [GlassPanel](GlassPanel.md) - A flat translucent panel of colored glass. A fixed-orientation rectangular quad that refracts and tints the scene behind it and brightens the grazing-angle rim with a Fresnel highlight.
 - [GraphicsConfig](GraphicsConfig.md) - Rendering settings for the world: frame pacing, shadows, and clear color. One per world. The GPU backend is chosen by the engine for the platform and is not user-configurable.
 - [HitRegion](HitRegion.md) - A responsive invisible rectangular region in screen space.
+- [Include](Include.md) - Inlines the entries of another world file at this line.
 - [InstancedProp](InstancedProp.md) - A single mesh + material drawn at many world-space transforms.
 - [KeyBinding](KeyBinding.md) - Maps a keyboard key to an action.
 - [LayoutContainer](LayoutContainer.md) - Positions a set of [TextLabel](TextLabel.md)s as a stack of rows, so a HUD does not have to hand-place every chip. Each row lays its labels out left to right; rows stack top to bottom. The container owns the labels' on-screen position: the labels keep their own styling (font, color, background, padding) but their `x`/`y` are overwritten each frame.

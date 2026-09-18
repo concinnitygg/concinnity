@@ -643,13 +643,13 @@ mod tests {
     #[test]
     fn the_config_injected_at_start_leaves_the_budget_and_the_warning_alone() {
         let world = concat!(
-            r#"{"type":"ProceduralMesh","args":{"$id":"box","generator":"box","half_extents":[1,1,1]}}"#,
+            r#"["ProceduralMesh",{"$id":"box","generator":"box","half_extents":[1,1,1]}]"#,
             "\n",
-            r#"{"type":"Prop","args":{"$id":"crate_a","mesh":"box","collider":{"shape":"cuboid"}}}"#,
+            r#"["Prop",{"$id":"crate_a","mesh":"box","collider":{"shape":"cuboid"}}]"#,
             "\n",
-            r#"{"type":"PropBody","args":{"$id":"crate_body","prop_name":"crate_a"}}"#,
+            r#"["PropBody",{"$id":"crate_body","prop_name":"crate_a"}]"#,
             "\n",
-            r#"{"type":"Spawner","args":{"$id":"drop","template":"crate_a"}}"#,
+            r#"["Spawner",{"$id":"drop","template":"crate_a"}]"#,
             "\n",
         );
         let expanded = crate::build_only::prepare_world(world, None)

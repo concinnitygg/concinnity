@@ -2,6 +2,8 @@
 //! source path and flips the shared atomic on a relevant change. Mirrors the
 //! per-backend shader watcher.
 
+use concinnity_cook::authoring::world::parse_entry;
+use concinnity_cook::build_only::include::resolve_includes;
 use concinnity_engine::gfx::system::hot_reload_sources::*;
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use std::collections::BTreeSet;
@@ -194,18 +196,20 @@ fn signal(kind: ReloadKind, flag: &AtomicBool) {
 }
 
 // The parent directories of every StoryImport source declared in the world
-// file, so the watcher hears `.md` saves. Read from the raw JSONL (one asset
-// declaration per line); a malformed line is skipped like the build would
-// reject it later.
+// file or a file it includes, so the watcher hears `.md` saves. A malformed
+// line is skipped like the build would reject it later.
 pub(super) fn story_source_dirs(world_jsonl_path: &str) -> BTreeSet<PathBuf> {
     let mut dirs = BTreeSet::new();
     let Ok(content) = std::fs::read_to_string(world_jsonl_path) else {
         return dirs;
     };
-    for line in content.lines() {
-        let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) else {
-            continue;
-        };
+    let lines: Vec<serde_json::Value> = content
+        .lines()
+        .filter_map(|line| parse_entry(line.trim()).ok())
+        .collect();
+    let world_file = Some(Path::new(world_jsonl_path));
+    let entries = resolve_includes(lines.clone(), world_file).unwrap_or(lines);
+    for entry in entries {
         if entry.get("type").and_then(|t| t.as_str()) != Some("StoryImport") {
             continue;
         }

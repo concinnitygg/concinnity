@@ -30,7 +30,7 @@ pub fn spec_args(spec: &AssetSpec) -> Value {
     Value::Object(object_map(&spec.fields))
 }
 
-/// A spec as a full world-line value: `{"type", "args"}` with the spec's name
+/// A spec as a full world entry: `{"type", "args"}` with the spec's name
 /// declared as the `$id` in its args, the shape `parse_world_jsonl` yields and
 /// the cook pipeline validates. A spec with an empty name is anonymous.
 pub fn spec_to_value(spec: &AssetSpec) -> Value {

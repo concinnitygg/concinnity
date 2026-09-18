@@ -229,12 +229,12 @@ pub(crate) struct RunArgs {
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct AddArgs {
-    /// Path to an asset file or type name
+    /// Path to an asset file, a type name, or an entry like '["Window", {}]'
     pub(crate) target: String,
 
     /// The `$id` written into the world
     // If omitted, a file target's id is derived from the filename, and a type
-    // name or inline JSON without one is added anonymous.
+    // name or inline entry without one is added anonymous.
     #[arg(short, long)]
     pub(crate) id: Option<String>,
 

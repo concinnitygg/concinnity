@@ -477,7 +477,7 @@ mod worlds_start;
 mod tests;
 
 impl EditorHook {
-    pub(crate) fn new(world_path: String, entries: Vec<serde_json::Value>) -> Self {
+    pub(crate) fn new(world_path: String, entries: impl Into<EntryList>) -> Self {
         let bookmarks = session_store::default_path()
             .and_then(|path| {
                 session_store::load(&path)
@@ -488,7 +488,7 @@ impl EditorHook {
             .unwrap_or_default();
         // The three mirrors clone the keys along with the values, so a snapshot
         // restored by undo addresses the same entries the selection does.
-        let entries = EntryList::new(entries);
+        let entries = entries.into();
         Self {
             world_path_handle: WorldPathHandle::new(world_path.as_str()),
             world_path,

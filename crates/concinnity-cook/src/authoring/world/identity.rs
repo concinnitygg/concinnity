@@ -89,7 +89,7 @@ pub fn is_label_of(handle: &str, ty: &str) -> bool {
 }
 
 /// Every entry's handle, in order: its `$id`, else its anonymous label. An
-/// entry with no type string (an `$include`, a malformed line) has none.
+/// entry with no type string has none.
 pub fn entry_handles(entries: &[Value]) -> Vec<Option<String>> {
     let mut ordinals: std::collections::HashMap<&str, usize> = Default::default();
     entries
@@ -227,7 +227,7 @@ mod tests {
             json!({"type": "Prop", "args": {"$id": "named"}}),
             json!({"type": "PointLight"}),
             json!({"type": "Prop", "args": {}}),
-            json!({"$include": "x.json"}),
+            json!({"args": {}}),
         ];
         let handles = entry_handles(&entries);
         assert_eq!(

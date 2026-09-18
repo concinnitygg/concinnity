@@ -140,7 +140,7 @@ impl EditorHook {
             Ok(entries) => {
                 self.worlds.status = None;
                 self.worlds.preview = Some(path.to_string());
-                self.stage_preview(EntryList::new(entries));
+                self.stage_preview(entries);
             }
             // A world that will not parse cannot be shown: the screen says so
             // and keeps whatever was already behind it.
@@ -205,7 +205,7 @@ impl EditorHook {
                 // The world showing gets its own camera back before it goes:
                 // should the compile fail, it is the world the session keeps.
                 self.stop_cinematic(world);
-                self.retarget(path, EntryList::new(entries), Adopt::No);
+                self.retarget(path, entries, Adopt::No);
             }
             // A file that will not parse leaves the screen as it stands.
             Err(e) => self.worlds.status = Some(e),

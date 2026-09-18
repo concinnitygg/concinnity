@@ -356,3 +356,94 @@ fn dirty_tracks_the_saved_list_across_history_jumps() {
     h.redo(&mut world);
     assert!(!h.dirty, "redo back to the saved list clears the chip");
 }
+
+// A world whose middle line includes `lights.jsonl` beside it, opened the way
+// the editor opens any world: the included entries sit in place of the line
+// that brings them in, after it.
+fn hook_with_an_include(tree: &concinnity_testing::TempTree) -> EditorHook {
+    tree.write(
+        "lights.jsonl",
+        "[\"PointLight\",{\"$id\":\"lamp\"}]\n[\"PointLight\"]\n",
+    );
+    let world = tree.write(
+        "world.jsonl",
+        "[\"PointLight\"]\n[\"Include\",{\"path\":\"lights.jsonl\"}]\n[\"Camera3D\",{\"$id\":\"mine\"}]\n",
+    );
+    let entries = crate::editor::worlds::files::read_entries(&world).expect("the world reads");
+    EditorHook::new(world.to_str().unwrap().to_string(), entries)
+}
+
+// Labels count the included entries where they land, as the build does.
+#[test]
+fn included_entries_take_the_labels_the_build_gives_them() {
+    let tree = concinnity_testing::TempTree::new();
+    let h = hook_with_an_include(&tree);
+    let handles = concinnity_cook::authoring::world::entry_handles(&h.entries);
+    assert_eq!(
+        handles.into_iter().flatten().collect::<Vec<_>>(),
+        ["PointLight#0", "Include#0", "lamp", "PointLight#1", "mine"]
+    );
+}
+
+// An included entry belongs to its own file, and an `Include` line decides what
+// that file brings in, so an edit that reaches either is undone and the world
+// stays clean.
+#[test]
+fn an_edit_to_an_included_entry_or_include_line_is_refused() {
+    let tree = concinnity_testing::TempTree::new();
+    let mut h = hook_with_an_include(&tree);
+    let before = h.entries.clone();
+
+    h.entries[2]["args"]["intensity"] = serde_json::json!(5.0);
+    h.mark_changed();
+    assert_eq!(h.entries, before, "the included light is put back");
+    assert!(!h.dirty && !h.can_undo(), "nothing was recorded");
+    assert!(
+        h.rebuild_required,
+        "the preview is rebuilt from the kept list"
+    );
+
+    h.remove_entry_at(1);
+    assert_eq!(h.entries, before, "the Include line stays");
+    assert!(!h.dirty);
+}
+
+// A save writes the world file's own lines, the `Include` line among them, and
+// never what the include brought in.
+#[test]
+fn a_save_writes_only_the_world_file_and_keeps_the_include_line() {
+    let tree = concinnity_testing::TempTree::new();
+    let mut h = hook_with_an_include(&tree);
+    h.entries[4]["args"]["fov_y_degrees"] = serde_json::json!(60.0);
+    h.mark_changed();
+    assert!(h.dirty);
+    h.write_jsonl().unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(tree.join("world.jsonl")).unwrap(),
+        "[\"PointLight\",{}]\n[\"Include\",{\"path\":\"lights.jsonl\"}]\n[\"Camera3D\",{\"$id\":\"mine\",\"fov_y_degrees\":60.0}]\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(tree.join("lights.jsonl")).unwrap(),
+        "[\"PointLight\",{\"$id\":\"lamp\"}]\n[\"PointLight\"]\n",
+        "the included file is not the editor's to write"
+    );
+}
+
+// The preview compiles the included entries from the list, without reading the
+// included file again.
+#[test]
+fn the_preview_builds_the_included_entries() {
+    let _guard = crate::test_support::lock();
+    isolate_state_dir();
+    let tree = concinnity_testing::TempTree::new();
+    let h = hook_with_an_include(&tree);
+    std::fs::remove_file(tree.join("lights.jsonl")).unwrap();
+    let (world, _) = h.build_preview_world().expect("the world builds");
+    assert_eq!(
+        world
+            .query::<concinnity_core::components::PointLight>()
+            .count(),
+        3
+    );
+}

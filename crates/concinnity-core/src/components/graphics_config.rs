@@ -41,10 +41,7 @@ vocabulary!(ShadowUpdate {
 /// quality tier, so no preset touches it.
 ///
 /// ```json
-/// {
-///   "type": "GraphicsConfig",
-///   "args": { "clear_color": [0.1, 0.1, 0.15, 1.0], "frames_in_flight": 2 }
-/// }
+/// ["GraphicsConfig", { "clear_color": [0.1, 0.1, 0.15, 1.0], "frames_in_flight": 2 }]
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]

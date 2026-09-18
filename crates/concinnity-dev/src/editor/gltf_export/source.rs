@@ -147,7 +147,7 @@ mod tests {
             "args": {"$id": "shape", "target": "prism", "bake": baking,
                 "sliders": [{"name": "wide", "value": 0.5}]}
         });
-        format!("{mesh}\n{shape}\n")
+        concinnity_cook::authoring::world::write_world_jsonl(&[mesh, shape]).unwrap()
     }
 
     fn json_chunk(glb: &[u8]) -> serde_json::Value {

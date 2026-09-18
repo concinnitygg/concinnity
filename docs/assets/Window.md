@@ -5,17 +5,7 @@
 Declares the application window.
 
 ```json
-{
-  "type": "Window",
-  "args": {
-    "title": "Game",
-    "width": 1280,
-    "height": 720,
-    "mode": "windowed",
-    "resizable": true,
-    "title_bar": true
-  }
-}
+["Window",{"title":"Game","width":1280,"height":720,"mode":"windowed","resizable":true,"title_bar":true}]
 ```
 
 ## Parameters

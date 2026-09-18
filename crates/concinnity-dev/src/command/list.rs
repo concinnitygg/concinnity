@@ -1,7 +1,9 @@
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_cook::authoring::world::{
-    entry_handles, find_world_jsonl, parse_world_jsonl, resolve_includes,
-};
+use std::path::Path;
+
+use concinnity_cook::WorldSource;
+use concinnity_cook::authoring::world::{entry_handles, find_world_jsonl, parse_world_jsonl};
+use concinnity_cook::build_only::include::resolve_includes;
 
 // Authoring metadata for a type name, whichever group of the registry it is in.
 fn registration_for(type_str: &str) -> Option<concinnity_cook::authoring::registry::Registration> {
@@ -35,11 +37,12 @@ pub fn list(json_path: Option<&str>, expanded: bool, systems: bool) -> std::io::
         e
     })?;
 
+    let source = WorldSource::file(&content, Path::new(&json_path));
     if systems {
-        return list_systems(&content, &json_path);
+        return list_systems(source, &json_path);
     }
     if expanded {
-        return list_expanded(&content, &json_path);
+        return list_expanded(source, &json_path);
     }
 
     let assets = parse_world_jsonl(&content).map_err(|e| {
@@ -49,7 +52,8 @@ pub fn list(json_path: Option<&str>, expanded: bool, systems: bool) -> std::io::
         )
     })?;
 
-    let raw = resolve_includes(assets)?;
+    let raw = resolve_includes(assets, source.file)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
     if raw.is_empty() {
         println!("{} has no assets.", json_path);
@@ -136,8 +140,8 @@ pub fn list(json_path: Option<&str>, expanded: bool, systems: bool) -> std::io::
 // The expanded world: every asset the build produces, with its provenance.
 // Runs the same front half as `cn build` (expansion passes, injection,
 // semantic validation), so the listing is exactly what lands in the blob.
-fn list_expanded(content: &str, json_path: &str) -> std::io::Result<()> {
-    let loaded = concinnity_cook::prepare_world(content, crate::project::assets_dir().as_deref())
+fn list_expanded(source: WorldSource<'_>, json_path: &str) -> std::io::Result<()> {
+    let loaded = concinnity_cook::prepare_world(source, crate::project::assets_dir().as_deref())
         .map_err(|errs| crate::authoring::report_validation_errors(&errs))?;
 
     if loaded.assets.is_empty() {
@@ -195,8 +199,8 @@ fn list_expanded(content: &str, json_path: &str) -> std::io::Result<()> {
 // `World::start` runs) applied to the built world, each system paired with the
 // condition from its registry entry. The world is built exactly as the runtime
 // would, so the reported schedule cannot drift from what actually runs.
-fn list_systems(content: &str, json_path: &str) -> std::io::Result<()> {
-    let mut world = crate::authoring::build_world_from_str(content)?;
+fn list_systems(source: WorldSource<'_>, json_path: &str) -> std::io::Result<()> {
+    let mut world = crate::authoring::build_world_from_str(source)?;
     complete(&mut world)?;
     let lines = manifest_lines(&world);
 
@@ -273,8 +277,8 @@ mod tests {
     #[test]
     fn manifest_lines_report_the_world_schedule_with_reasons() {
         let world = crate::authoring::build_world_from_str(
-            "{\"type\":\"GraphicsConfig\",\"args\":{\"$id\":\"gfx\"}}\n\
-             {\"type\":\"Camera3D\",\"args\":{\"$id\":\"cam\",\"controller\":{\"free_fly\":true}}}\n",
+            "[\"GraphicsConfig\",{\"$id\":\"gfx\"}]\n\
+             [\"Camera3D\",{\"$id\":\"cam\",\"controller\":{\"free_fly\":true}}]\n",
         )
         .unwrap();
         let lines = manifest_lines(&world);
@@ -293,10 +297,9 @@ mod tests {
     // listing completes the world first, exactly as `World::start` does.
     #[test]
     fn the_manifest_reports_systems_the_engine_defaults_turn_on() {
-        let mut world = crate::authoring::build_world_from_str(
-            "{\"type\":\"GraphicsConfig\",\"args\":{\"$id\":\"gfx\"}}\n",
-        )
-        .unwrap();
+        let mut world =
+            crate::authoring::build_world_from_str("[\"GraphicsConfig\",{\"$id\":\"gfx\"}]\n")
+                .unwrap();
         assert!(
             !manifest_lines(&world).join("\n").contains("DebugHud"),
             "the world declares no DebugHud of its own"
@@ -311,8 +314,7 @@ mod tests {
     // The `--systems` path drives end to end on a valid world.
     #[test]
     fn list_with_systems_flag_is_ok() {
-        let (_dir, path) =
-            write_world("{\"type\":\"GraphicsConfig\",\"args\":{\"$id\":\"gfx\"}}\n");
+        let (_dir, path) = write_world("[\"GraphicsConfig\",{\"$id\":\"gfx\"}]\n");
         list(Some(&path), false, true).unwrap();
     }
 
@@ -390,10 +392,10 @@ mod tests {
         // through the resource-asset registry; the made-up type falls back
         // to "?" origin / payload without erroring.
         let (_dir, path) = write_world(concat!(
-            "{\"type\":\"GraphicsConfig\",\"args\":{\"$id\":\"gfx\"}}\n",
-            "{\"type\":\"AudioClip\",\"args\":{\"$id\":\"clip\"}}\n",
-            "{\"type\":\"NotARealAssetType\",\"args\":{\"$id\":\"odd\"}}\n",
-            "{\"type\":\"GraphicsConfig\",\"args\":{}}\n",
+            "[\"GraphicsConfig\",{\"$id\":\"gfx\"}]\n",
+            "[\"AudioClip\",{\"$id\":\"clip\"}]\n",
+            "[\"NotARealAssetType\",{\"$id\":\"odd\"}]\n",
+            "[\"GraphicsConfig\",{}]\n",
         ));
         list(Some(&path), false, false).unwrap();
     }
@@ -436,15 +438,13 @@ mod tests {
 
     #[test]
     fn list_expanded_runs_the_build_front_half() {
-        let (_dir, path) =
-            write_world("{\"type\":\"GraphicsConfig\",\"args\":{\"$id\":\"gfx\"}}\n");
+        let (_dir, path) = write_world("[\"GraphicsConfig\",{\"$id\":\"gfx\"}]\n");
         list(Some(&path), true, false).unwrap();
     }
 
     #[test]
     fn list_expanded_rejects_an_unknown_asset_type() {
-        let (_dir, path) =
-            write_world("{\"type\":\"NotARealAssetType\",\"args\":{\"$id\":\"odd\"}}\n");
+        let (_dir, path) = write_world("[\"NotARealAssetType\",{\"$id\":\"odd\"}]\n");
         assert!(list(Some(&path), true, false).is_err());
     }
 

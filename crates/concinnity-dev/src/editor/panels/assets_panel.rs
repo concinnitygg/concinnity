@@ -1904,11 +1904,11 @@ mod tests {
     // non-rendering world when it is not itself the renderer config).
     fn cook_blank(ty: &str) -> std::io::Result<()> {
         let world = if is_singleton(ty) {
-            format!("{{\"type\":\"{ty}\",\"args\":{{\"$id\":\"probe\"}}}}\n")
+            format!("[\"{ty}\",{{\"$id\":\"probe\"}}]\n")
         } else {
             format!(
-                "{{\"type\":\"GraphicsConfig\",\"args\":{{\"$id\":\"gfx\"}}}}\n\
-                 {{\"type\":\"{ty}\",\"args\":{{\"$id\":\"probe\"}}}}\n"
+                "[\"GraphicsConfig\",{{\"$id\":\"gfx\"}}]\n\
+                 [\"{ty}\",{{\"$id\":\"probe\"}}]\n"
             )
         };
         concinnity_cook::build_pipeline_from_str(

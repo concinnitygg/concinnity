@@ -9,13 +9,14 @@
 /// summary of every failure (one per asset).
 pub(crate) fn check_at_path(world_path: &str) -> std::io::Result<()> {
     let content = std::fs::read_to_string(world_path)?;
-    check_from_str(&content, world_path)
+    let source = concinnity_cook::WorldSource::file(&content, std::path::Path::new(world_path));
+    check_source(source, world_path)
 }
 
-/// Run validation against an in-memory world JSONL string. `label` is the
-/// origin used in messages (typically the source path).
-fn check_from_str(content: &str, label: &str) -> std::io::Result<()> {
-    match concinnity_cook::prepare_world(content, crate::project::assets_dir().as_deref()) {
+/// Run validation against world text. `label` is the origin used in messages
+/// (typically the source path).
+fn check_source(source: concinnity_cook::WorldSource<'_>, label: &str) -> std::io::Result<()> {
+    match concinnity_cook::prepare_world(source, crate::project::assets_dir().as_deref()) {
         Ok(loaded) => {
             println!("ok: {} asset(s) passed in {}", loaded.assets.len(), label);
             Ok(())
@@ -51,21 +52,14 @@ mod tests {
     }
 
     #[test]
-    fn check_from_str_accepts_a_valid_world() {
-        check_from_str(
-            "{\"type\":\"PhysicsConfig\",\"args\":{\"$id\":\"phys\"}}\n",
-            "test",
-        )
-        .unwrap();
+    fn check_source_accepts_a_valid_world() {
+        check_source("[\"PhysicsConfig\",{\"$id\":\"phys\"}]\n".into(), "test").unwrap();
     }
 
     #[test]
-    fn check_from_str_rejects_an_unknown_type() {
-        let err = check_from_str(
-            "{\"type\":\"NotARealAssetType\",\"args\":{\"$id\":\"odd\"}}\n",
-            "test",
-        )
-        .unwrap_err();
+    fn check_source_rejects_an_unknown_type() {
+        let err =
+            check_source("[\"NotARealAssetType\",{\"$id\":\"odd\"}]\n".into(), "test").unwrap_err();
         assert!(!err.to_string().is_empty());
     }
 
@@ -80,11 +74,7 @@ mod tests {
     fn check_at_path_accepts_a_valid_world_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("world.jsonl");
-        std::fs::write(
-            &path,
-            "{\"type\":\"PhysicsConfig\",\"args\":{\"$id\":\"phys\"}}\n",
-        )
-        .unwrap();
+        std::fs::write(&path, "[\"PhysicsConfig\",{\"$id\":\"phys\"}]\n").unwrap();
         check_at_path(path.to_str().unwrap()).unwrap();
     }
 }

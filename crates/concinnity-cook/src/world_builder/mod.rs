@@ -11,7 +11,8 @@ use concinnity_core::ecs::{ComponentAsset, ResourceRecord, World};
 use concinnity_core::platform::Platform;
 use concinnity_host::store::blob::BlobData;
 
-use crate::authoring::registry::{Authored, asset_line, set_reference};
+use crate::authoring::registry::{Authored, asset_entry, set_reference};
+use crate::authoring::world::write_world_jsonl;
 use crate::build_only::{LoadedWorld, prepare_world};
 use crate::pipeline::{PipelineResult, build_compiled, write_blobs_to};
 
@@ -26,13 +27,13 @@ pub struct WorldBuilder {
     // The backend shaders are compiled for. Named by the caller, since nothing
     // here resolves a backend of its own.
     platform: Platform,
-    // Finished world lines, serialized as each asset is added.
-    lines: Vec<String>,
+    // The declared entries, built as each asset is added.
+    entries: Vec<serde_json::Value>,
     // The search root a bare `source` filename resolves under, when the
     // embedder named one.
     assets_dir: Option<PathBuf>,
-    // Id and type per line, so the declaration order can be inspected
-    // without re-reading the lines.
+    // Id and type per entry, so the declaration order can be inspected
+    // without re-reading the entries.
     declared: Vec<(String, &'static str)>,
     // The first declaration failure, held as the kind and message a
     // [`WorldBuildError::Build`] is rebuilt from at the compile, so the call
@@ -44,7 +45,7 @@ pub struct WorldBuilder {
 pub fn world(platform: Platform) -> WorldBuilder {
     WorldBuilder {
         platform,
-        lines: Vec::new(),
+        entries: Vec::new(),
         assets_dir: None,
         declared: Vec::new(),
         error: None,
@@ -70,9 +71,9 @@ impl WorldBuilder {
     /// cannot disagree with the fields.
     pub fn add<T: Authored>(&mut self, id: impl Into<String>, value: T) -> &mut Self {
         let id = id.into();
-        match asset_line(&id, &value) {
-            Ok(line) => {
-                self.lines.push(line);
+        match asset_entry(&id, &value) {
+            Ok(entry) => {
+                self.entries.push(entry);
                 self.declared.push((id, T::TYPE));
             }
             Err(e) => {
@@ -97,18 +98,15 @@ impl WorldBuilder {
     /// cannot carry the name it points at. This writes the name into the
     /// pending declaration, where the compile resolves it.
     pub fn reference(&mut self, field: &str, target: impl Into<String>) -> &mut Self {
-        let Some(line) = self.lines.pop() else {
+        let Some(entry) = self.entries.last_mut() else {
             self.error.get_or_insert((
                 std::io::ErrorKind::InvalidInput,
                 format!("reference(\"{field}\") before any asset was added"),
             ));
             return self;
         };
-        match set_reference(&line, field, &target.into()) {
-            Ok(patched) => self.lines.push(patched),
-            Err(e) => {
-                self.error.get_or_insert((e.kind(), e.to_string()));
-            }
+        if let Err(e) = set_reference(entry, field, &target.into()) {
+            self.error.get_or_insert((e.kind(), e.to_string()));
         }
         self
     }
@@ -167,8 +165,9 @@ impl WorldBuilder {
         // (`assets_in`). Without one there is no tree to search, so only paths
         // that stand on their own resolve.
         let assets_dir = self.assets_dir.clone();
-        let loaded: LoadedWorld = prepare_world(&self.lines.concat(), assets_dir.as_deref())
-            .map_err(WorldBuildError::Validation)?;
+        let text = write_world_jsonl(&self.entries).map_err(from_io)?;
+        let loaded: LoadedWorld =
+            prepare_world(&text, assets_dir.as_deref()).map_err(WorldBuildError::Validation)?;
         build_compiled(loaded.assets, assets_dir.as_deref(), None, self.platform).map_err(from_io)
     }
 }

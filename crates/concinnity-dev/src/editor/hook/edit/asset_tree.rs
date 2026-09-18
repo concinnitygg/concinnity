@@ -5,12 +5,12 @@
 //! sync with the viewport (a row click drives the same selection set
 //! `hook/pick.rs` fills; a viewport pick unfolds and scrolls to its row).
 
-use concinnity_cook::authoring::world::write_world_jsonl;
 use concinnity_core::components::FrameInput;
 use concinnity_core::components::InputKey;
 use concinnity_core::ecs::World;
 
 use crate::editor::asset_handle::AssetHandle;
+use crate::editor::entry_list::build_text;
 use crate::editor::hook::{
     EditorHook, FormTarget, PanelData, entry_type, scroll_step, short_status,
 };
@@ -64,7 +64,7 @@ impl EditorHook {
     pub(in crate::editor::hook) fn cook_entries(
         entries: &[serde_json::Value],
     ) -> Result<concinnity_cook::build_only::LoadedWorld, String> {
-        let content = write_world_jsonl(entries).map_err(|e| e.to_string())?;
+        let content = build_text(entries).map_err(|e| e.to_string())?;
         concinnity_cook::prepare_world(&content, crate::project::assets_dir().as_deref()).map_err(
             |errs| {
                 errs.first()

@@ -118,13 +118,13 @@ fn edr_text(max_edr: Option<f32>) -> String {
 // stays blank on SDR or when the HDR request fell back.
 //
 // ```jsonl
-// {"type":"Font","name":"hud_font","args":{"size_px":20}}
-// {"type":"TextLabel","name":"fps_chip","args":{"font":"hud_font","x":10,"y":10,"scale":0.7,"color":[1,1,1],"background":[0,0.22,0.08,0.85],"padding":5}}
-// {"type":"TextLabel","name":"gpu_wait_chip","args":{"font":"hud_font","x":92,"y":10,"scale":0.7,"color":[1,1,1],"background":[0,0.22,0.08,0.85],"padding":5}}
-// {"type":"TextLabel","name":"vram_chip","args":{"font":"hud_font","x":232,"y":10,"scale":0.7,"color":[1,1,1],"background":[0,0.22,0.08,0.85],"padding":5}}
-// {"type":"TextLabel","name":"ev_chip","args":{"font":"hud_font","x":332,"y":10,"scale":0.7,"color":[1,1,1],"background":[0,0.22,0.08,0.85],"padding":5}}
-// {"type":"TextLabel","name":"edr_chip","args":{"font":"hud_font","x":412,"y":10,"scale":0.7,"color":[1,1,1],"background":[0,0.22,0.08,0.85],"padding":5}}
-// {"type":"StatHud","name":"hud","args":{"fps_label":"fps_chip","gpu_wait_label":"gpu_wait_chip","vram_label":"vram_chip","ev_label":"ev_chip","edr_label":"edr_chip"}}
+// ["Font",{"$id":"hud_font","size_px":20}]
+// ["TextLabel",{"$id":"fps_chip","font":"hud_font","x":10,"y":10,"scale":0.7,"color":[1,1,1],"background":[0,0.22,0.08,0.85],"padding":5}]
+// ["TextLabel",{"$id":"gpu_wait_chip","font":"hud_font","x":92,"y":10,"scale":0.7,"color":[1,1,1],"background":[0,0.22,0.08,0.85],"padding":5}]
+// ["TextLabel",{"$id":"vram_chip","font":"hud_font","x":232,"y":10,"scale":0.7,"color":[1,1,1],"background":[0,0.22,0.08,0.85],"padding":5}]
+// ["TextLabel",{"$id":"ev_chip","font":"hud_font","x":332,"y":10,"scale":0.7,"color":[1,1,1],"background":[0,0.22,0.08,0.85],"padding":5}]
+// ["TextLabel",{"$id":"edr_chip","font":"hud_font","x":412,"y":10,"scale":0.7,"color":[1,1,1],"background":[0,0.22,0.08,0.85],"padding":5}]
+// ["StatHud",{"$id":"hud","fps_label":"fps_chip","gpu_wait_label":"gpu_wait_chip","vram_label":"vram_chip","ev_label":"ev_chip","edr_label":"edr_chip"}]
 // ```
 #[derive(Debug)]
 pub(crate) struct StatHudSystem {

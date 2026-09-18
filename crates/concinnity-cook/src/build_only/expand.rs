@@ -19,7 +19,7 @@ use super::scene_import::expand::expand_scene_imports;
 use super::slider::expand::expand_sliders;
 use super::story::expand_stories;
 use crate::authoring::registry::RegisteredType;
-use crate::authoring::world::{ID_KEY, args_without_id, entry_id, load_world};
+use crate::authoring::world::{ID_KEY, WorldSource, args_without_id, entry_id, load_world};
 
 // Shared helpers used across expansion submodules.
 
@@ -241,15 +241,15 @@ pub(crate) fn expand_world(
     Ok(report)
 }
 
-/// Load and structurally validate a world.jsonl string, then run all
-/// expansion passes, resolving bare source filenames under `assets_dir`.
-/// Returns the fully expanded asset list. Does not run semantic validation;
-/// see `crate::build_only::prepare_world` for the full build-pipeline front half.
-pub fn expand_world_from_str(
-    content: &str,
+/// Load and structurally validate world text, then run all expansion passes,
+/// resolving bare source filenames under `assets_dir`. Returns the fully
+/// expanded asset list. Does not run semantic validation; see
+/// `crate::build_only::prepare_world` for the full build-pipeline front half.
+pub fn expand_world_from_str<'a>(
+    source: impl Into<WorldSource<'a>>,
     assets_dir: Option<&Path>,
 ) -> std::io::Result<Vec<serde_json::Value>> {
-    let mut assets = load_world(content)
+    let mut assets = load_world(source.into())
         .map_err(|errs| std::io::Error::new(std::io::ErrorKind::InvalidData, errs.join("\n")))?;
 
     let _ = expand_world(&mut assets, assets_dir)
@@ -411,7 +411,7 @@ mod tests {
         assert_eq!(malformed.kind(), std::io::ErrorKind::InvalidData);
         assert!(!malformed.to_string().is_empty());
 
-        let broken = r#"{"type":"Prop","args":{"$id":"p","prefab":"ghost"}}"#;
+        let broken = r#"["Prop",{"$id":"p","prefab":"ghost"}]"#;
         let err = expand_world_from_str(broken, None).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("ghost"), "{err}");
@@ -493,7 +493,7 @@ mod tests {
 
     #[test]
     fn expand_world_from_str_injects_companions() {
-        let content = r#"{"type":"GraphicsConfig","args":{"$id":"gfx"}}"#;
+        let content = r#"["GraphicsConfig",{"$id":"gfx"}]"#;
         let assets = expand_world_from_str(content, None).unwrap();
         assert!(
             assets
@@ -510,7 +510,7 @@ mod tests {
 
     #[test]
     fn bare_main_menu_world_expands_and_pulls_companions() {
-        let content = r#"{"type":"MainMenu","args":{"$id":"main_menu"}}"#;
+        let content = r#"["MainMenu",{"$id":"main_menu"}]"#;
         let assets = expand_world_from_str(content, None).unwrap();
         // The MainMenu is gone, replaced by its UI assets.
         assert!(

@@ -47,8 +47,8 @@ pub struct BlobLock {
     #[serde(default)]
     pub resources: Vec<LockedResource>,
     /// Assets the build added that have no world.jsonl line (companions and
-    /// engine defaults). Each entry carries its full args so it can be copied
-    /// into world.jsonl verbatim as an override.
+    /// engine defaults). Each record carries the asset's world line so it can
+    /// be copied into world.jsonl verbatim as an override.
     pub injected: Vec<LockedInjection>,
     /// Generated assets the world declares its own copy of. The copy won and the
     /// generated entry was dropped, so the source file no longer drives these;
@@ -82,13 +82,28 @@ pub struct LockedAsset {
 pub struct LockedInjection {
     /// The injected asset's name.
     pub name: String,
-    #[serde(rename = "type")]
-    /// The asset's registry type name.
-    pub asset_type: String,
-    /// The args the injection supplied.
-    pub args: serde_json::Value,
+    /// The asset's world line, `["Type", {args}]`, kept compact in the lock
+    /// so it copies into world.jsonl as it stands.
+    pub entry: Box<serde_json::value::RawValue>,
     /// Which expander injected it.
     pub injected_by: String,
+}
+
+impl LockedInjection {
+    fn new(injected: &crate::build_only::InjectedAsset) -> std::io::Result<Self> {
+        use crate::authoring::world::{args_with_id, entry_line, is_label_of};
+        let args = if is_label_of(&injected.name, &injected.asset_type) {
+            injected.args.clone()
+        } else {
+            args_with_id(injected.args.clone(), &injected.name)
+        };
+        let line = entry_line(&serde_json::json!({"type": injected.asset_type, "args": args}))?;
+        Ok(Self {
+            name: injected.name.clone(),
+            entry: serde_json::value::RawValue::from_string(line)?,
+            injected_by: injected.injected_by.to_string(),
+        })
+    }
 }
 
 /// One generated asset the world overrides with its own copy. Carries no args:
@@ -350,13 +365,8 @@ pub(crate) fn write_lock(
         resources: resources.to_vec(),
         injected: injected
             .iter()
-            .map(|i| LockedInjection {
-                name: i.name.clone(),
-                asset_type: i.asset_type.clone(),
-                args: i.args.clone(),
-                injected_by: i.injected_by.to_string(),
-            })
-            .collect(),
+            .map(LockedInjection::new)
+            .collect::<std::io::Result<_>>()?,
         shadowed: shadowed
             .iter()
             .map(|s| LockedShadow {
@@ -696,7 +706,14 @@ mod tests {
         assert_eq!(lock.resources[0].name, "clip");
         assert_eq!(lock.resources[0].handle, 2);
         assert_eq!(lock.injected[0].name, "debug_hud");
-        assert_eq!(lock.injected[0].args["enabled"], true);
+        assert_eq!(
+            lock.injected[0].entry.get(),
+            r#"["DebugHud",{"enabled":true,"$id":"debug_hud"}]"#
+        );
+        assert!(
+            written.contains(r#""entry": ["DebugHud",{"enabled":true,"$id":"debug_hud"}]"#),
+            "the pretty lock keeps the line compact: {written}"
+        );
         assert_eq!(lock.injected[0].injected_by, "engine");
         assert_eq!(lock.shadowed[0].generated_by, "bistro");
     }
@@ -833,9 +850,9 @@ mod tests {
     }
 
     #[test]
-    fn blob_lock_serializes_injected_type_field_as_type() {
-        // The lock file is read by humans and tools; the serde rename on
-        // LockedInjection keeps the JSON key `type`, matching world.jsonl.
+    fn blob_lock_serializes_the_injected_entry_and_shadow_type() {
+        // The lock file is read by humans and tools: an injection carries its
+        // world line, and the serde rename on LockedShadow keeps the key `type`.
         let lock = BlobLock {
             engine_version: "0.0.0".to_string(),
             built_at: "2026-01-01T00:00:00Z".to_string(),
@@ -869,12 +886,15 @@ mod tests {
                     ..Default::default()
                 },
             ],
-            injected: vec![LockedInjection {
-                name: "debug_hud".to_string(),
-                asset_type: "DebugHud".to_string(),
-                args: serde_json::json!({}),
-                injected_by: "engine".to_string(),
-            }],
+            injected: vec![
+                LockedInjection::new(&crate::build_only::InjectedAsset {
+                    name: "DebugHud#0".to_string(),
+                    asset_type: "DebugHud".to_string(),
+                    args: serde_json::json!({}),
+                    injected_by: "engine",
+                })
+                .unwrap(),
+            ],
             shadowed: vec![LockedShadow {
                 name: "bistro_mat_wood".to_string(),
                 asset_type: "Material".to_string(),
@@ -882,9 +902,12 @@ mod tests {
             }],
         };
         let json = serde_json::to_value(&lock).unwrap();
-        assert_eq!(json["injected"][0]["type"], "DebugHud");
-        assert!(json["injected"][0].get("asset_type").is_none());
-        // LockedShadow carries the same rename, and names what it overrides.
+        // An anonymous injection's line declares no `$id`.
+        assert_eq!(
+            json["injected"][0]["entry"],
+            serde_json::json!(["DebugHud", {}])
+        );
+        // LockedShadow keeps the key `type`, and names what it overrides.
         assert_eq!(json["shadowed"][0]["type"], "Material");
         assert_eq!(json["shadowed"][0]["generated_by"], "bistro");
 
@@ -893,8 +916,8 @@ mod tests {
         assert!(json["resources"][0].get("mesh_source").is_none());
         assert_eq!(json["resources"][1]["texture_source"]["source"], "wall.png");
 
-        let back: BlobLock = serde_json::from_value(json).unwrap();
-        assert_eq!(back.injected[0].asset_type, "DebugHud");
+        let back: BlobLock = serde_json::from_str(&serde_json::to_string(&lock).unwrap()).unwrap();
+        assert_eq!(back.injected[0].entry.get(), r#"["DebugHud",{}]"#);
         assert_eq!(back.blobs[0].payload_bytes, 4);
         assert_eq!(back.resources[0].kind, "AudioClip");
         assert!(back.resources[0].texture_source.is_none());

@@ -10,7 +10,7 @@
 /// too.
 ///
 /// ```json
-/// { "type": "RigidBody", "args": { "jump_height": 1.4 } }
+/// ["RigidBody", { "jump_height": 1.4 }]
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]

@@ -33,6 +33,8 @@ use std::collections::{BTreeSet, HashMap};
 use std::io;
 use std::path::{Path, PathBuf};
 
+use concinnity_cook::authoring::world::{entry_line, parse_entry};
+
 use super::render::{
     EnumValue, FieldEntry, FieldType, render_parameters, render_values, rewrite_doc_links, slug,
 };
@@ -72,6 +74,10 @@ const BUILD_ONLY_SCHEMA_MODULES: &[(&str, &str)] = &[
     (
         "CharacterSchema",
         "crates/concinnity-cook/src/build_only/character_model/character_schema.rs",
+    ),
+    (
+        "Include",
+        "crates/concinnity-cook/src/build_only/include/schema.rs",
     ),
     (
         "LightRig",
@@ -443,7 +449,7 @@ fn render_doc_entry(
     ctx: &Ctx,
     refs: &mut Refs,
 ) -> (String, String) {
-    let doc = strip_rust_blocks(ctx.struct_doc(doc_ident));
+    let doc = entry_examples_as_lines(&strip_rust_blocks(ctx.struct_doc(doc_ident)));
     let cleaned = strip_table_lines(&doc);
     let fields = build_fields(args_ident, ctx, refs);
     let params = render_parameters(&fields);
@@ -566,6 +572,39 @@ fn strip_rust_blocks(doc: &str) -> String {
     out
 }
 
+// Rewrite each ```json block that holds a world entry as the line the world
+// file takes, so an example copies into world.jsonl as it stands. The source
+// may spread the entry over several lines for rustdoc; the page shows the
+// writer's compact form. A block that is not an entry is left as written.
+fn entry_examples_as_lines(doc: &str) -> String {
+    let mut out = String::new();
+    let mut block: Option<Vec<&str>> = None;
+    for line in doc.lines() {
+        let trimmed = line.trim();
+        match &mut block {
+            None if trimmed == "```json" => block = Some(Vec::new()),
+            None => {
+                out.push_str(line);
+                out.push('\n');
+            }
+            Some(body) if trimmed == "```" => {
+                let body = std::mem::take(body).join("\n");
+                let entry = parse_entry(&body).ok();
+                let text = entry.and_then(|e| entry_line(&e).ok()).unwrap_or(body);
+                out.push_str(&format!("```json\n{text}\n```\n"));
+                block = None;
+            }
+            Some(body) => body.push(line),
+        }
+    }
+    if let Some(body) = block {
+        out.push_str("```json\n");
+        out.push_str(&body.join("\n"));
+        out.push('\n');
+    }
+    out
+}
+
 // Remove markdown table lines (starting with '|') from a doc string.
 // Collapses the resulting double-blank lines left behind.
 fn strip_table_lines(doc: &str) -> String {
@@ -599,6 +638,21 @@ mod tests {
         let modules = build_only_schema_modules(&components, BUILD_ONLY_SCHEMA_MODULES)
             .expect("every build-only asset has a schema module");
         assert_eq!(modules.len(), BUILD_ONLY_SCHEMA_MODULES.len());
+    }
+
+    #[test]
+    fn an_entry_example_renders_as_its_world_line() {
+        let doc = "Declares it.\n\n```json\n[\"Window\", {\n  \"title\": \"Game\",\n  \"width\": 1280\n}]\n```\n\nAfter.";
+        assert_eq!(
+            entry_examples_as_lines(doc),
+            "Declares it.\n\n```json\n[\"Window\",{\"title\":\"Game\",\"width\":1280}]\n```\n\nAfter.\n"
+        );
+    }
+
+    #[test]
+    fn a_json_block_that_is_not_an_entry_is_left_as_written() {
+        let doc = "```json\n{\n  \"a\": 1\n}\n```\n";
+        assert_eq!(entry_examples_as_lines(doc), doc);
     }
 
     #[test]

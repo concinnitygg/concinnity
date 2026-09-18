@@ -72,7 +72,7 @@ fn run(args: &[&str]) -> Output {
 // The starter world the authoring tests operate on. A lone TextLabel, which the
 // build expands into a runnable world by injecting the renderer stack.
 const HELLO_WORLD: &str =
-    "{\"type\":\"TextLabel\",\"args\":{\"$id\":\"hello_world\",\"content\":\"Hello, world!\"}}\n";
+    "[\"TextLabel\",{\"$id\":\"hello_world\",\"content\":\"Hello, world!\"}]\n";
 
 // An isolated project for one test: a temp directory the spawned binary runs
 // in, so the project it anchors to its working directory -- authored `worlds/`
@@ -305,7 +305,7 @@ fn a_world_in_worlds_outranks_the_root_one() {
     let project = Project::with_world(HELLO_WORLD);
     std::fs::write(
         project.path().join("world.jsonl"),
-        "{\"type\":\"Logger\",\"args\":{\"$id\":\"root_only\"}}\n",
+        "[\"Logger\",{\"$id\":\"root_only\"}]\n",
     )
     .expect("write root world");
 
@@ -358,7 +358,7 @@ fn explain_prints_an_injected_asset_as_a_pasteable_line() {
     let printed = stdout(&out);
     assert!(printed.contains("injected:companion"), "got: {printed}");
     assert!(
-        printed.contains("\"type\":\"GraphicsConfig\""),
+        printed.contains("\n[\"GraphicsConfig\",{\"$id\":\"GraphicsConfig\""),
         "got: {printed}"
     );
 }
@@ -382,8 +382,7 @@ fn test_validates_the_discovered_world() {
 
 #[test]
 fn test_reports_an_invalid_world() {
-    let project =
-        Project::with_world("{\"type\":\"NotARealAssetType\",\"args\":{\"$id\":\"x\"}}\n");
+    let project = Project::with_world("[\"NotARealAssetType\",{\"$id\":\"x\"}]\n");
     let out = project.cn(&["test"]);
     assert!(!out.status.success(), "an unknown asset type should fail");
 }
@@ -483,6 +482,7 @@ fn docs_writes_the_asset_reference_pages() {
         "camera_shot/schema.rs",
         "character_model/schema.rs",
         "character_model/character_schema.rs",
+        "include/schema.rs",
         "light_rig/schema.rs",
         "main_menu/schema.rs",
         "material_palette/schema.rs",
@@ -707,13 +707,13 @@ fn skinned_morph_glb() -> Vec<u8> {
 // args on a miss and not on a hit; `npc` is claimed by a baking CharacterShape,
 // whose proportions scale a capsule that rides the args rather than the payload.
 const SKINNED_WORLD: &str = concat!(
-    r#"{"type":"Material","args":{"$id":"skin_mat","roughness":0.55,"tint":[0.85,0.62,0.5]}}"#,
+    r#"["Material",{"$id":"skin_mat","roughness":0.55,"tint":[0.85,0.62,0.5]}]"#,
     "\n",
-    r#"{"type":"SkinnedMesh","args":{"$id":"body","source":"body.glb","material":"skin_mat","position":[0,0,0],"scale":[1,1,1]}}"#,
+    r#"["SkinnedMesh",{"$id":"body","source":"body.glb","material":"skin_mat","position":[0,0,0],"scale":[1,1,1]}]"#,
     "\n",
-    r#"{"type":"SkinnedMesh","args":{"$id":"npc","source":"body.glb","material":"skin_mat","position":[2,0,0],"scale":[1,1,1],"capsule":{"half_height":0.9,"radius":0.35}}}"#,
+    r#"["SkinnedMesh",{"$id":"npc","source":"body.glb","material":"skin_mat","position":[2,0,0],"scale":[1,1,1],"capsule":{"half_height":0.9,"radius":0.35}}]"#,
     "\n",
-    r#"{"type":"CharacterShape","args":{"$id":"npc_shape","target":"npc","bake":true,"sliders":[{"name":"wide","value":0.5}],"proportions":[{"joint":"root","scale":1.2},{"joint":"tip","length":0.25}]}}"#,
+    r#"["CharacterShape",{"$id":"npc_shape","target":"npc","bake":true,"sliders":[{"name":"wide","value":0.5}],"proportions":[{"joint":"root","scale":1.2},{"joint":"tip","length":0.25}]}]"#,
     "\n",
 );
 
@@ -723,17 +723,17 @@ const SKINNED_WORLD: &str = concat!(
 // blob is reached through an expansion pass whose output rides on the args the
 // cache keys on.
 const GENERATED_WORLD: &str = concat!(
-    r#"{"type":"EnvironmentMap","args":{"$id":"ibl","generator":"sky","prefilter_face_size":32,"irradiance_face_size":16,"prefilter_samples":32}}"#,
+    r#"["EnvironmentMap",{"$id":"ibl","generator":"sky","prefilter_face_size":32,"irradiance_face_size":16,"prefilter_samples":32}]"#,
     "\n",
-    r#"{"type":"Texture","args":{"$id":"ground_tex","generator":"checker","resolution":64}}"#,
+    r#"["Texture",{"$id":"ground_tex","generator":"checker","resolution":64}]"#,
     "\n",
-    r#"{"type":"Material","args":{"$id":"ground_mat","albedo":"ground_tex","roughness":0.8}}"#,
+    r#"["Material",{"$id":"ground_mat","albedo":"ground_tex","roughness":0.8}]"#,
     "\n",
-    r#"{"type":"ProceduralMesh","args":{"$id":"ball","generator":"sphere","radius":1.0,"segments":16}}"#,
+    r#"["ProceduralMesh",{"$id":"ball","generator":"sphere","radius":1.0,"segments":16}]"#,
     "\n",
-    r#"{"type":"Prop","args":{"$id":"ball_prop","mesh":"ball","material":"ground_mat","position":[0,1,0]}}"#,
+    r#"["Prop",{"$id":"ball_prop","mesh":"ball","material":"ground_mat","position":[0,1,0]}]"#,
     "\n",
-    r#"{"type":"LightRig","args":{"$id":"rig","preset":"studio"}}"#,
+    r#"["LightRig",{"$id":"rig","preset":"studio"}]"#,
     "\n",
 );
 

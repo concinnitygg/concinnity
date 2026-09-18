@@ -103,9 +103,9 @@ pub use concinnity_cook::authoring::registry::Authored;
 // compiled resources and the five diverging args schemas from the runtime
 // crate, the build-only assets from the authoring one.
 pub use concinnity_cook::authoring::registry::build_only::{
-    CameraShot, CharacterModel, CharacterSchema, KeyPolarity, LightRig, MainMenu, MainMenuItem,
-    MaterialPalette, OptionSelect, PaletteEntry, Panel, PanelSection, Prefab, PrefabEntry,
-    PrefabKind, ProportionGroup, SceneImport, SchemaJoint, SchemaKey, SchemaRegion,
+    CameraShot, CharacterModel, CharacterSchema, Include, KeyPolarity, LightRig, MainMenu,
+    MainMenuItem, MaterialPalette, OptionSelect, PaletteEntry, Panel, PanelSection, Prefab,
+    PrefabEntry, PrefabKind, ProportionGroup, SceneImport, SchemaJoint, SchemaKey, SchemaRegion,
     SettingsProfile, ShapePreset, Slider, StoryImport, SynthParams, SynthesizedTarget,
 };
 pub use concinnity_core::components::cook::*;

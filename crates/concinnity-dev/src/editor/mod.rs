@@ -101,8 +101,6 @@ mod widget_slider;
 mod worlds;
 
 use concinnity_cook::authoring::world::WORLD_JSONL;
-use concinnity_cook::authoring::world::parse_world_jsonl;
-use concinnity_cook::authoring::world::write_world_jsonl;
 use concinnity_core::ecs::World;
 use concinnity_engine::app::run::LaunchRequest;
 use concinnity_engine::app::runtime::Runtime;
@@ -118,8 +116,7 @@ use crate::debug_hook::DebugHook;
 // distinctively so it never collides with an authored asset, and it is never
 // added to the authored entry list, so it can never leak into the user's
 // world.jsonl on SAVE.
-const SEED_GRAPHICS_CONFIG: &str =
-    "{\"type\":\"GraphicsConfig\",\"args\":{\"$id\":\"editor_default_gfx\"}}";
+const SEED_GRAPHICS_CONFIG: &str = "[\"GraphicsConfig\",{\"$id\":\"editor_default_gfx\"}]";
 
 /// Editor entry point (`cn editor`). Compiles the authored world in memory,
 /// injects the editor HUD, and runs the world loop driven by the editor hook
@@ -148,14 +145,11 @@ pub fn run_editor(
     // compile is then waited out on a screen that is up and usable rather than
     // in front of no window at all.
     let (entries, previewing) = if pick_a_world {
-        (Vec::new(), start_screen_pick())
-    } else if std::path::Path::new(&world_path).exists() {
-        let content = std::fs::read_to_string(&world_path)?;
-        let entries = parse_world_jsonl(&content)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
-        (entries, None)
+        (entry_list::EntryList::default(), start_screen_pick())
     } else {
-        (Vec::new(), None)
+        let entries = worlds::files::read_entries(std::path::Path::new(&world_path))
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        (entries, None)
     };
 
     // Bring up a renderable world by compiling those entries, seeding a render
@@ -232,7 +226,7 @@ pub(crate) fn unsaved_world_path() -> String {
 // there are refreshed only by an explicit build, so they may lag the world file
 // the editor is opening.
 fn boot_world(runtime: &mut Runtime, entries: &[serde_json::Value]) -> std::io::Result<()> {
-    let jsonl = write_world_jsonl(entries).map_err(|e| std::io::Error::other(e.to_string()))?;
+    let jsonl = entry_list::build_text(entries)?;
     let (world, _) = build_renderable(&jsonl)?;
     runtime.load_world(world);
     Ok(())
@@ -299,6 +293,7 @@ impl DebugHook for MultiHook {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_cook::authoring::world::{parse_world_jsonl, write_world_jsonl};
     use concinnity_core::components::TextLabel;
 
     // An empty (or whitespace-only) world seeds to just the render marker, so an
@@ -313,7 +308,7 @@ mod tests {
     // line, so the combined string still parses as one asset per line.
     #[test]
     fn seeded_content_appends_marker_to_authored_content() {
-        let base = "{\"type\":\"PhysicsConfig\",\"args\":{\"$id\":\"phys\"}}";
+        let base = "[\"PhysicsConfig\",{\"$id\":\"phys\"}]";
         let seeded = seeded_content(base);
         let parsed = parse_world_jsonl(&seeded).unwrap();
         assert_eq!(parsed.len(), 2, "authored entry plus the seed marker");

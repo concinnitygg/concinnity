@@ -31,8 +31,9 @@ pub fn build_from_path(
     platform: Platform,
 ) -> std::io::Result<()> {
     let content = std::fs::read_to_string(json_path)?;
-    let loaded = crate::build_only::prepare_world(&content, Some(&tree.assets_dir()))
-        .map_err(errors_to_io)?;
+    let source = crate::authoring::world::WorldSource::file(&content, Path::new(json_path));
+    let loaded =
+        crate::build_only::prepare_world(source, Some(&tree.assets_dir())).map_err(errors_to_io)?;
     build_loaded(tree, loaded, platform)
 }
 
@@ -362,11 +363,11 @@ mod tests {
     fn build_pipeline_interns_names_and_resolves_refs() {
         // box=0, day=1, day_crate=2 in declaration order.
         let world = concat!(
-            r#"{"type":"ProceduralMesh","args":{"$id":"box","generator":"box","half_extents":[1,1,1]}}"#,
+            r#"["ProceduralMesh",{"$id":"box","generator":"box","half_extents":[1,1,1]}]"#,
             "\n",
-            r#"{"type":"Scene","args":{"$id":"day"}}"#,
+            r#"["Scene",{"$id":"day"}]"#,
             "\n",
-            r#"{"type":"Prop","args":{"$id":"day_crate","mesh":"box","scene":"day"}}"#,
+            r#"["Prop",{"$id":"day_crate","mesh":"box","scene":"day"}]"#,
             "\n",
         );
         let result =
@@ -391,13 +392,13 @@ mod tests {
     #[test]
     fn an_anonymous_asset_takes_its_position_and_is_labeled() {
         let world = concat!(
-            r#"{"type":"ProceduralMesh","args":{"$id":"box","generator":"box","half_extents":[1,1,1]}}"#,
+            r#"["ProceduralMesh",{"$id":"box","generator":"box","half_extents":[1,1,1]}]"#,
             "\n",
-            r#"{"type":"Prop","args":{"mesh":"box"}}"#,
+            r#"["Prop",{"mesh":"box"}]"#,
             "\n",
-            r#"{"type":"Prop","args":{"$id":"named","mesh":"box"}}"#,
+            r#"["Prop",{"$id":"named","mesh":"box"}]"#,
             "\n",
-            r#"{"type":"Prop","args":{"mesh":"box"}}"#,
+            r#"["Prop",{"mesh":"box"}]"#,
             "\n",
         );
         let result =
@@ -415,9 +416,9 @@ mod tests {
     #[test]
     fn a_reference_cannot_name_an_anonymous_asset() {
         let world = concat!(
-            r#"{"type":"ProceduralMesh","args":{"generator":"box","half_extents":[1,1,1]}}"#,
+            r#"["ProceduralMesh",{"generator":"box","half_extents":[1,1,1]}]"#,
             "\n",
-            r#"{"type":"Prop","args":{"mesh":"ProceduralMesh#0"}}"#,
+            r#"["Prop",{"mesh":"ProceduralMesh#0"}]"#,
             "\n",
         );
         let err = build_pipeline_from_str(world, None, None, Platform::Metal)
@@ -433,7 +434,7 @@ mod tests {
     // assets carry identities that reference each other.
     #[test]
     fn an_anonymous_main_menu_expands_under_its_label() {
-        let world = r#"{"type":"MainMenu","args":{"toggle_key":""}}"#;
+        let world = r#"["MainMenu",{"toggle_key":""}]"#;
         let result =
             build_pipeline_from_str(world, None, None, Platform::Metal).expect("build pipeline");
         assert!(
@@ -454,11 +455,11 @@ mod tests {
     #[test]
     fn a_physics_world_carries_no_config_into_the_blob() {
         let world = concat!(
-            r#"{"type":"ProceduralMesh","args":{"$id":"box","generator":"box","half_extents":[1,1,1]}}"#,
+            r#"["ProceduralMesh",{"$id":"box","generator":"box","half_extents":[1,1,1]}]"#,
             "\n",
-            r#"{"type":"Prop","args":{"$id":"crate_a","mesh":"box","collider":{"shape":"cuboid"}}}"#,
+            r#"["Prop",{"$id":"crate_a","mesh":"box","collider":{"shape":"cuboid"}}]"#,
             "\n",
-            r#"{"type":"PropBody","args":{"$id":"crate_body","prop_name":"crate_a"}}"#,
+            r#"["PropBody",{"$id":"crate_body","prop_name":"crate_a"}]"#,
             "\n",
         );
         let result =
@@ -481,9 +482,9 @@ mod tests {
     #[test]
     fn engine_defaults_reach_the_blob_as_a_component() {
         let world = concat!(
-            r#"{"type":"GraphicsConfig","args":{"$id":"gfx"}}"#,
+            r#"["GraphicsConfig",{"$id":"gfx"}]"#,
             "\n",
-            r#"{"type":"EngineDefaults","args":{"$id":"defaults","sky":false}}"#,
+            r#"["EngineDefaults",{"$id":"defaults","sky":false}]"#,
             "\n",
         );
         let result =
@@ -506,9 +507,9 @@ mod tests {
     #[test]
     fn build_pipeline_records_resource_lock_provenance() {
         let world = concat!(
-            r#"{"type":"Font","args":{"$id":"f","size_px":20}}"#,
+            r#"["Font",{"$id":"f","size_px":20}]"#,
             "\n",
-            r#"{"type":"Screen","args":{"$id":"pause"}}"#,
+            r#"["Screen",{"$id":"pause"}]"#,
             "\n",
         );
         let result = build_pipeline_from_str(world, None, None, Platform::Metal).expect("build");
@@ -553,9 +554,9 @@ mod tests {
         std::fs::write(
             &world,
             concat!(
-                r#"{"type":"Prop","args":{"$id":"bad_prop"}}"#,
+                r#"["Prop",{"$id":"bad_prop"}]"#,
                 "\n",
-                r#"{"type":"Material","args":{"$id":"bad_mat","albedo":"ghost"}}"#,
+                r#"["Material",{"$id":"bad_mat","albedo":"ghost"}]"#,
                 "\n",
             ),
         )
@@ -609,11 +610,11 @@ mod tests {
         std::fs::write(
             &world_path,
             concat!(
-                r#"{"type":"GraphicsConfig","args":{"$id":"gfx"}}"#,
+                r#"["GraphicsConfig",{"$id":"gfx"}]"#,
                 "\n",
-                r#"{"type":"Font","args":{"$id":"f","size_px":20}}"#,
+                r#"["Font",{"$id":"f","size_px":20}]"#,
                 "\n",
-                r#"{"type":"Screen","args":{"$id":"pause"}}"#,
+                r#"["Screen",{"$id":"pause"}]"#,
                 "\n",
             ),
         )
@@ -658,7 +659,7 @@ mod tests {
 
     #[test]
     fn build_pipeline_from_str_reports_unknown_asset_types() {
-        let world = r#"{"type":"NotAType","args":{"$id":"mystery"}}"#;
+        let world = r#"["NotAType",{"$id":"mystery"}]"#;
         let Err(err) = build_pipeline_from_str(world, None, None, Platform::Metal) else {
             panic!("unknown type must not build");
         };
@@ -885,11 +886,11 @@ mod tests {
     #[test]
     fn build_pipeline_resolves_screen_action_refs() {
         let world = concat!(
-            r#"{"type":"Screen","args":{"$id":"pause_menu"}}"#,
+            r#"["Screen",{"$id":"pause_menu"}]"#,
             "\n",
-            r#"{"type":"HitRegion","args":{"$id":"btn","x":0,"y":0,"width":10,"height":10,"action":"screen:toggle:pause_menu"}}"#,
+            r#"["HitRegion",{"$id":"btn","x":0,"y":0,"width":10,"height":10,"action":"screen:toggle:pause_menu"}]"#,
             "\n",
-            r#"{"type":"KeyBinding","args":{"$id":"esc","key":"Escape","action":"screen:toggle:pause_menu"}}"#,
+            r#"["KeyBinding",{"$id":"esc","key":"Escape","action":"screen:toggle:pause_menu"}]"#,
             "\n",
         );
         let result = build_pipeline_from_str(world, None, None, Platform::Metal).expect("build");
@@ -917,15 +918,15 @@ mod tests {
     #[test]
     fn build_pipeline_resolves_the_screen_an_overlay_element_names() {
         let world = concat!(
-            r#"{"type":"Screen","args":{"$id":"pause_menu"}}"#,
+            r#"["Screen",{"$id":"pause_menu"}]"#,
             "\n",
-            r#"{"type":"Sprite","args":{"$id":"dim","x":0,"y":0,"width":10,"height":10,"screen":"pause_menu"}}"#,
+            r#"["Sprite",{"$id":"dim","x":0,"y":0,"width":10,"height":10,"screen":"pause_menu"}]"#,
             "\n",
-            r#"{"type":"TextLabel","args":{"$id":"title","font":"f","content":"x","x":0,"y":0,"screen":"pause_menu"}}"#,
+            r#"["TextLabel",{"$id":"title","font":"f","content":"x","x":0,"y":0,"screen":"pause_menu"}]"#,
             "\n",
-            r#"{"type":"HitRegion","args":{"$id":"btn","x":0,"y":0,"width":10,"height":10,"action":"screen:hide","screen":"pause_menu"}}"#,
+            r#"["HitRegion",{"$id":"btn","x":0,"y":0,"width":10,"height":10,"action":"screen:hide","screen":"pause_menu"}]"#,
             "\n",
-            r#"{"type":"Font","args":{"$id":"f","size_px":16}}"#,
+            r#"["Font",{"$id":"f","size_px":16}]"#,
             "\n",
         );
         let result = build_pipeline_from_str(world, None, None, Platform::Metal).expect("build");
@@ -962,9 +963,9 @@ mod tests {
     #[test]
     fn an_unscoped_overlay_element_belongs_to_no_screen() {
         let world = concat!(
-            r#"{"type":"Screen","args":{"$id":"pause_menu"}}"#,
+            r#"["Screen",{"$id":"pause_menu"}]"#,
             "\n",
-            r#"{"type":"Sprite","args":{"$id":"pause_menu_dim","x":0,"y":0,"width":10,"height":10}}"#,
+            r#"["Sprite",{"$id":"pause_menu_dim","x":0,"y":0,"width":10,"height":10}]"#,
             "\n",
         );
         let result = build_pipeline_from_str(world, None, None, Platform::Metal).expect("build");
@@ -985,11 +986,11 @@ mod tests {
     #[test]
     fn an_unscoped_prop_belongs_to_no_scene() {
         let world = concat!(
-            r#"{"type":"ProceduralMesh","args":{"$id":"box","generator":"box","half_extents":[1,1,1]}}"#,
+            r#"["ProceduralMesh",{"$id":"box","generator":"box","half_extents":[1,1,1]}]"#,
             "\n",
-            r#"{"type":"Scene","args":{"$id":"day"}}"#,
+            r#"["Scene",{"$id":"day"}]"#,
             "\n",
-            r#"{"type":"Prop","args":{"$id":"day_crate","mesh":"box"}}"#,
+            r#"["Prop",{"$id":"day_crate","mesh":"box"}]"#,
             "\n",
         );
         let result = build_pipeline_from_str(world, None, None, Platform::Metal).expect("build");

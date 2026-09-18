@@ -187,7 +187,7 @@ impl EditorHook {
     // it has.
     fn open_world(&mut self, path: String) {
         match worlds::files::read_entries(Path::new(&path)) {
-            Ok(entries) => self.retarget(path, EntryList::new(entries), Adopt::No),
+            Ok(entries) => self.retarget(path, entries, Adopt::No),
             Err(e) => self.worlds.status = Some(e),
         }
     }

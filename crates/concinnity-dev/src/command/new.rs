@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 // The label names no Font, so it draws with the engine's built-in face. It asks
 // for `centered` itself rather than leaning on a default: unset, the greeting
 // lands at the label's default x/y, under the HUD chips in the top-left corner.
-const INIT_WORLD_JSONL: &str = r#"{"type":"TextLabel","args":{"$id":"hello_world","content":"Hello, world!","centered":true}}
+const INIT_WORLD_JSONL: &str = r#"["TextLabel",{"$id":"hello_world","content":"Hello, world!","centered":true}]
 "#;
 
 /// Create a new project in a new directory at `path`.
@@ -97,11 +97,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let world = worlds_dir(dir.path()).join(WORLD_JSONL);
         std::fs::create_dir_all(world.parent().unwrap()).unwrap();
-        std::fs::write(
-            &world,
-            "{\"type\":\"Logger\",\"args\":{\"$id\":\"keep\"}}\n",
-        )
-        .unwrap();
+        std::fs::write(&world, "[\"Logger\",{\"$id\":\"keep\"}]\n").unwrap();
 
         init_in_dir(dir.path().to_str().unwrap()).unwrap();
         // The existing world is untouched, not overwritten by the starter.
@@ -113,11 +109,7 @@ mod tests {
     fn init_in_dir_skips_a_root_world() {
         let dir = tempfile::tempdir().unwrap();
         let world = dir.path().join(WORLD_JSONL);
-        std::fs::write(
-            &world,
-            "{\"type\":\"Logger\",\"args\":{\"$id\":\"keep\"}}\n",
-        )
-        .unwrap();
+        std::fs::write(&world, "[\"Logger\",{\"$id\":\"keep\"}]\n").unwrap();
 
         init_in_dir(dir.path().to_str().unwrap()).unwrap();
         assert!(

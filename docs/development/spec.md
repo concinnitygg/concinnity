@@ -156,8 +156,8 @@ flowchart LR
 
 Three vocabularies exist and are easy to confuse:
 
-**Asset** — what an author declares in `world.jsonl`. A typed JSON object,
-optionally carrying a `$id` other entries can name it by. This is the public
+**Asset** — what an author declares in `world.jsonl`. A `["Type", {args}]`
+entry whose args may carry a `$id` other entries can name it by. This is the public
 schema.
 
 **Component** — the runtime form of an asset that lives on an entity. Every
@@ -261,21 +261,25 @@ system couplings order-robust rather than order-critical.
 
 ### 4.1 world.jsonl
 
-A world is a JSONL file: one JSON object per line, each declaring one asset.
+A world is a JSONL file: one entry per line, each declaring one asset. An entry
+is a JSON array of two columns, the asset's type and its args.
 
 ```json
-{"type":"GraphicsConfig","args":{"clear_color":[0.5,0.75,1.0,1.0],"shadow_map_size":2048}}
-{"type":"Camera3D","args":{"fov_y_degrees":75.0,"position":[0.0,4.0,22.0]}}
-{"type":"Texture","args":{"$id":"tex_stone","generator":"stone","resolution":256}}
-{"type":"Material","args":{"$id":"mat_stone","albedo":"tex_stone","roughness":0.88}}
+["GraphicsConfig",{"clear_color":[0.5,0.75,1.0,1.0],"shadow_map_size":2048}]
+["Camera3D",{"fov_y_degrees":75.0,"position":[0.0,4.0,22.0]}]
+["Texture",{"$id":"tex_stone","generator":"stone","resolution":256}]
+["Material",{"$id":"mat_stone","albedo":"tex_stone","roughness":0.88}]
+["Scene",{}]
 ```
 
-Two fields, and nothing else at the top level:
+| Column | Required | Meaning                                                                                  |
+| ------ | :------: | ---------------------------------------------------------------------------------------- |
+| type   |   yes    | Registered asset type name, a string.                                                    |
+| args   |    no    | The asset's public JSON schema, an object. Missing fields take their declared defaults. |
 
-| Field  | Required | Meaning                                                                      |
-| ------ | :------: | ---------------------------------------------------------------------------- |
-| `type` |   yes    | Registered asset type name.                                                  |
-| `args` |    no    | The asset's public JSON schema, an object. Missing fields take their declared defaults. |
+`["Scene"]` reads as `["Scene",{}]`; the tools always write both columns, one
+compact entry per line. A line that is a JSON object, or any other shape, is an
+error naming the line. Blank lines and lines starting with `//` are skipped.
 
 Identity is declared inside `args` as `"$id"`: a non-empty string, unique within
 the world, and not shaped like an anonymous handle (`<Type>#<digits>`). The `$` keeps it apart from every schema field (a
@@ -299,15 +303,24 @@ document rewrite.
 
 ### 4.2 Includes
 
-A line may be a directive instead of an asset:
+`Include` is an asset type whose entry stands for the entries of another world
+file:
 
 ```json
-{ "$include": "worlds/lighting.json" }
+["Include",{"path":"lighting.jsonl"}]
 ```
 
-The referenced file is read and spliced in place. An array splices all its
-entries; a single object splices as one. Includes resolve before any validation,
-so an included asset is indistinguishable from an inline one thereafter.
+The included file is written like a world file and may include others in turn.
+`path` resolves relative to the file the `Include` line is in, and a file that
+includes itself, directly or through another, is an error. Includes resolve
+straight after parsing, before labeling, validation and expansion, so an
+included entry is indistinguishable from an inline one thereafter: it counts
+toward the `<Type>#<ordinal>` labels where it lands, and its `$id` must be
+unique across the whole world. `Include` is the one build-only type resolved
+there rather than by an expansion pass. It takes no `$id`.
+
+The editor shows included entries in place and read-only, and a save writes
+only the world file itself, `Include` line included.
 
 ### 4.3 References
 
@@ -336,7 +349,7 @@ front half (load, expand, validate) and a back half (compile, pack, write).
 
 ```mermaid
 flowchart TD
-    A["world.jsonl"] --> B["parse + resolve $include"]
+    A["world.jsonl"] --> B["parse + resolve Include"]
     B --> C["structural validation"]
     C --> D["expansion passes"]
     D --> E["semantic validation"]
