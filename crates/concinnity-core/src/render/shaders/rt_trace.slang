@@ -73,34 +73,51 @@ float3 decode_normal_map(float2 encoded)
     return float3(nxy, sqrt(saturate(1.0 - dot(nxy, nxy))));
 }
 
+// True when anything lies along the ray. slangc does not map
+// RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH onto Metal's intersection params, so
+// the Metal leg drives an intersector with `accept_any_intersection` directly.
+bool rt_occluded(RaytracingAccelerationStructure tlas, float3 origin, float3 dir, float tmin, float tmax)
+{
+    __target_switch
+    {
+    case metal:
+        __requirePrelude(R"(
+            bool _cn_rt_occluded(raytracing::acceleration_structure<raytracing::instancing> tlas, float3 o, float3 d, float tmin, float tmax)
+            {
+                raytracing::intersector<raytracing::triangle_data, raytracing::instancing> i;
+                i.force_opacity(raytracing::forced_opacity::opaque);
+                i.accept_any_intersection(true);
+                return i.intersect(raytracing::ray(o, d, tmin, tmax), tlas, 0xFFu).type != raytracing::intersection_type::none;
+            }
+        )");
+        __intrinsic_asm "_cn_rt_occluded($0, $1, $2, $3, $4)";
+    default:
+        RayDesc r;
+        r.Origin = origin;
+        r.Direction = dir;
+        r.TMin = tmin;
+        r.TMax = tmax;
+        RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q;
+        q.TraceRayInline(tlas, RAY_FLAG_NONE, 0xFFu, r);
+        // Drained rather than stepped once: with the opacity forced there is no
+        // non-opaque candidate to resolve.
+        while (q.Proceed()) {}
+        return q.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
+    }
+}
+
 // Sun visibility at a hit: 0 where a second ray toward the sun is occluded (a
 // cast shadow inside the reflection), 1 where the sun is visible or the
 // shadow ray is switched off.
-//
-// RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH is what an occlusion query wants and
-// is what the Vulkan and DirectX legs get; the Metal target drops it (slangc
-// does not map the flag to `intersection_params::accept_any_intersection`), so
-// there the query commits the closest hit instead of the first. Same answer,
-// more traversal.
 float rt_shadow(float3 hp, float3 n)
 {
     if (rt_params.sun_shadows < 0.5)
     {
         return 1.0;
     }
-    RayDesc sr;
-    sr.Origin = hp + n * 0.02;
-    sr.Direction = normalize(rt_params.sun_dir.xyz);
-    sr.TMin = 0.001;
-    sr.TMax = rt_params.max_distance;
-
-    RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> sq;
-    sq.TraceRayInline(scene_tlas, RAY_FLAG_NONE, 0xFFu, sr);
-    // Drained rather than stepped once: with the opacity forced there is no
-    // non-opaque candidate to resolve, and discarding the step's result trips an
-    // unused-value warning out of the Metal compiler on slangc's emitted call.
-    while (sq.Proceed()) {}
-    return (sq.CommittedStatus() == COMMITTED_TRIANGLE_HIT) ? 0.0 : 1.0;
+    float3 origin = hp + n * 0.02;
+    float3 dir = normalize(rt_params.sun_dir.xyz);
+    return rt_occluded(scene_tlas, origin, dir, 0.001, rt_params.max_distance) ? 0.0 : 1.0;
 }
 
 // Metallic/roughness hit shading: a sun diffuse term (dielectric only, masked
