@@ -1571,7 +1571,7 @@ impl VkContext {
         self.view.show = show;
         self.view.far = far;
         self.view.sky_rot = sky_rot;
-        self.apply_pending_rebuilds();
+        self.apply_pending_rebuilds()?;
 
         // Minimized window: the client area is 0x0. Vulkan rejects every
         // zero-extent operation (swapchain, render area, viewport, image copy),

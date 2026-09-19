@@ -68,6 +68,16 @@ pub enum RenderError {
 pub type RenderResult<T> = Result<T, RenderError>;
 
 impl RenderError {
+    /// Whether the device failed rather than the step that reported it: loss or
+    /// memory exhaustion. A caller that tolerates a failed step must still
+    /// propagate these so the frame loop's recovery policy sees them.
+    pub fn is_device_failure(&self) -> bool {
+        matches!(
+            self,
+            RenderError::DeviceLost { .. } | RenderError::OutOfDeviceMemory(_)
+        )
+    }
+
     /// Prefix the message with `what` (the resource or step that failed),
     /// keeping the class so recovery policy still sees it.
     pub fn context(self, what: impl core::fmt::Display) -> Self {
@@ -104,6 +114,20 @@ mod tests {
     fn unsupported_display_names_the_operation() {
         let e = RenderError::Unsupported { op: "add_decal" };
         assert_eq!(e.to_string(), "add_decal: not supported on this backend");
+    }
+
+    #[test]
+    fn device_failure_covers_loss_and_memory_only() {
+        let lost = RenderError::DeviceLost {
+            reason: DeviceLostReason::Removed,
+            detail: String::new(),
+        };
+        assert!(lost.is_device_failure());
+        assert!(RenderError::OutOfDeviceMemory(String::new()).is_device_failure());
+        assert!(!RenderError::ShaderCompile(String::new()).is_device_failure());
+        assert!(!RenderError::Other(String::new()).is_device_failure());
+        assert!(!RenderError::SwapchainOutOfDate.is_device_failure());
+        assert!(!RenderError::Unsupported { op: "x" }.is_device_failure());
     }
 
     #[test]

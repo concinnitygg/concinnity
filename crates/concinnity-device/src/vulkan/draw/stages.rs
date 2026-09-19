@@ -18,7 +18,7 @@ use crate::vulkan::error::map_vk_result;
 
 impl VkContext {
     // Rebuilds requested since last frame: wireframe pipelines and hot-reloaded shaders.
-    pub(in crate::vulkan) fn apply_pending_rebuilds(&mut self) {
+    pub(in crate::vulkan) fn apply_pending_rebuilds(&mut self) -> RenderResult<()> {
         // Vulkan polygon mode is pipeline state, so the wireframe view needs its
         // own main-pass pipelines; built here on the first wireframe frame.
         self.ensure_wireframe_pipelines();
@@ -27,18 +27,20 @@ impl VkContext {
         // pipeline from disk-resident source before this frame's passes
         // start using them. The flag is cleared regardless of outcome so a
         // failed rebuild (typo in a shader edit) doesn't loop, and the
-        // previous pipelines stay live so the session keeps rendering.
-        // Wait for the GPU to drain first so swapping pipelines out from
-        // under in-flight command buffers is safe. Mirrors the DirectX
-        // `apply_pending_rebuilds`.
+        // previous pipelines stay live so the session keeps rendering; only a
+        // device failure propagates. Wait for the GPU to drain first so
+        // swapping pipelines out from under in-flight command buffers is safe.
+        // Mirrors the DirectX `apply_pending_rebuilds`.
         if self.shader_reload_requested() {
             self.clear_shader_reload_flag();
             self.wait_idle();
             match self.reload_shaders() {
                 Ok(()) => tracing::info!("hot-reload: shader pipelines rebuilt"),
+                Err(e) if e.is_device_failure() => return Err(e),
                 Err(e) => tracing::error!("hot-reload: shader rebuild failed: {}", e),
             }
         }
+        Ok(())
     }
 
     // Blocks on this frame slot's previous submission, then runs the ticks it gates.

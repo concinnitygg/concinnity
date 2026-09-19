@@ -32,7 +32,7 @@ pub(super) struct FrameProjection {
 
 impl DxContext {
     // Rebuilds requested since last frame: wireframe PSOs, hot-reloaded shaders, resize.
-    pub(in crate::directx) fn apply_pending_rebuilds(&mut self) {
+    pub(in crate::directx) fn apply_pending_rebuilds(&mut self) -> RenderResult<()> {
         // D3D12 fill mode is pipeline state, so the wireframe view needs its own
         // main-pass PSOs; built here on the first wireframe frame so the `&self`
         // pass encoders can just read them.
@@ -42,14 +42,15 @@ impl DxContext {
         // from disk-resident source before the frame's passes start using
         // them. The flag is cleared regardless of outcome so a failed rebuild
         // (typo in a shader edit) doesn't loop, and the previous pipelines
-        // stay live so the session keeps rendering. Wait for the GPU to
-        // drain first so swapping PSOs out from under in-flight command
-        // lists is safe.
+        // stay live so the session keeps rendering; only a device failure
+        // propagates. Wait for the GPU to drain first so swapping PSOs out
+        // from under in-flight command lists is safe.
         if self.shader_reload_requested() {
             self.clear_shader_reload_flag();
             self.wait_idle();
             match self.reload_shaders() {
                 Ok(()) => tracing::info!("hot-reload: shader pipelines rebuilt"),
+                Err(e) if e.is_device_failure() => return Err(e),
                 Err(e) => tracing::error!("hot-reload: shader rebuild failed: {}", e),
             }
         }
@@ -58,10 +59,15 @@ impl DxContext {
         // scene targets, the bloom mip chain, and the TAA / SSAO / SSR
         // resource sets at the new size. A no-op when the size hasn't
         // changed; skips the rebuild (and the frame) when the window is
-        // minimized so we never present 0×0. Failures are logged but not
-        // fatal; the client keeps trying on subsequent frames.
-        if let Err(e) = self.maybe_handle_resize() {
-            tracing::error!("D3D12 resize failed: {e}");
+        // minimized so we never present 0×0. Failures other than a device
+        // failure are logged; the client keeps trying on subsequent frames.
+        match self.maybe_handle_resize() {
+            Ok(()) => Ok(()),
+            Err(e) if e.is_device_failure() => Err(e),
+            Err(e) => {
+                tracing::error!("D3D12 resize failed: {e}");
+                Ok(())
+            }
         }
     }
 

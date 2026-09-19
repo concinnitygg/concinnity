@@ -80,6 +80,7 @@ impl MtlContext {
         self.view.mode = view_mode;
         self.view.far = far;
         self.view.sky_rot = sky_rot;
+        self.apply_pending_rebuilds()?;
 
         let pass_timing_slot = self.begin_frame_stats();
         if !self.pump_window_events(mtm) {

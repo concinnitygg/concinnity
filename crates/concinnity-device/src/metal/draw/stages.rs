@@ -205,21 +205,28 @@ impl MtlContext {
         })
     }
 
-    pub(super) fn service_background_work(&mut self, elapsed: f32, ring_slot: usize) {
+    // Rebuilds requested since last frame: hot-reloaded shaders.
+    pub(super) fn apply_pending_rebuilds(&mut self) -> error::RenderResult<()> {
         // Shader hot-reload: if either the filesystem watcher or the debug
         // `reload-shaders` command set the flag, rebuild every built-in
         // pipeline from disk-resident source before the frame's passes start
         // using them. The flag is cleared regardless of outcome so a failed
         // rebuild (typo in a shader edit) doesn't loop, and the previous
-        // pipelines stay live so the session keeps rendering.
+        // pipelines stay live so the session keeps rendering; only a device
+        // failure propagates. In-flight command buffers retain the pipelines
+        // they encoded, so no GPU drain is needed.
         if self.shader_reload_requested() {
             self.clear_shader_reload_flag();
             match self.reload_shaders() {
                 Ok(()) => tracing::info!("hot-reload: shader pipelines rebuilt"),
+                Err(e) if e.is_device_failure() => return Err(e),
                 Err(e) => tracing::error!("hot-reload: shader rebuild failed: {}", e),
             }
         }
+        Ok(())
+    }
 
+    pub(super) fn service_background_work(&mut self, elapsed: f32, ring_slot: usize) {
         // Update auto-exposure from the previous frame's GPU-measured average
         // log-luminance, *before* any pass reads `self.post_process.exposure`
         // (the bloom prefilter and composite both consume it). A no-op when

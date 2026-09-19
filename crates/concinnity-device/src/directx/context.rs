@@ -1063,7 +1063,7 @@ impl DxContext {
         self.view.show = show;
         self.view.far = far;
         self.view.sky_rot = sky_rot;
-        self.apply_pending_rebuilds();
+        self.apply_pending_rebuilds()?;
 
         let frame = self.current_frame;
 
