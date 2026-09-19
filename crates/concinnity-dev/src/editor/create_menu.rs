@@ -27,12 +27,24 @@ const fn row_bg(i: usize) -> AssetId {
 const fn row_label(i: usize) -> AssetId {
     AssetId(BASE + 0x60 + i as u32)
 }
+const fn row_summary(i: usize) -> AssetId {
+    AssetId(BASE + 0xA0 + i as u32)
+}
 
 // Row pool bound; items past it are clipped (a world with that many Prefabs
 // still creates them through the Content panel or the console).
 pub(crate) const MAX_ROWS: usize = 24;
 
-const MENU_W: f32 = 190.0;
+// Wide enough for the name column plus a useful run of each type's summary,
+// the same two columns the assets panel's picker shows.
+const MENU_W: f32 = 420.0;
+// Body-font advance, for the character budgets the two columns clip to.
+const CHAR_W: f32 = 8.5;
+const NAME_CHARS: usize = 18;
+const SUMMARY_X: f32 = NAME_CHARS as f32 * CHAR_W;
+// What the row has left for the summary once the name column and the row's own
+// margins are taken.
+const SUMMARY_CHARS: usize = ((MENU_W - PAD * 2.0 - 6.0 - SUMMARY_X) / CHAR_W) as usize;
 const ROW_H: f32 = 24.0;
 const PAD: f32 = 4.0;
 const HEADING_H: f32 = 22.0;
@@ -56,6 +68,18 @@ impl MenuItem {
             MenuItem::PrefabHeader { open: false } => "Prefab instance >".to_string(),
             MenuItem::PrefabHeader { open: true } => "Prefab instance v".to_string(),
             MenuItem::Prefab(name) => name.clone(),
+        }
+    }
+
+    // The type's one-line summary. A Prefab row names a world asset rather than
+    // a type, so it has none and leaves the column blank.
+    fn summary(&self) -> &'static str {
+        match self {
+            MenuItem::Type(ty) => crate::docs::type_summaries()
+                .get(*ty)
+                .map(String::as_str)
+                .unwrap_or_default(),
+            MenuItem::PrefabHeader { .. } | MenuItem::Prefab(_) => "",
         }
     }
 
@@ -158,18 +182,28 @@ pub(crate) fn place(world: &mut World, o: [f32; 2], items: &[MenuItem], mouse: [
                     hovered,
                 );
                 let indent = if item.indented() { INDENT } else { 0.0 };
+                let baseline = r[1] + (ROW_H - widget::LINE_H) * 0.5;
                 widget::place_left_label(
                     world,
                     row_label(slot),
-                    [r[0] + 6.0 + indent, r[1] + (ROW_H - widget::LINE_H) * 0.5],
-                    &widget::clip_text(&item.caption(), 24),
+                    [r[0] + 6.0 + indent, baseline],
+                    &widget::clip_text(&item.caption(), NAME_CHARS),
                     theme::LABEL,
+                    true,
+                );
+                widget::place_left_label(
+                    world,
+                    row_summary(slot),
+                    [r[0] + 6.0 + SUMMARY_X, baseline],
+                    &widget::clip_text(item.summary(), SUMMARY_CHARS),
+                    theme::LABEL_DIM,
                     true,
                 );
             }
             None => {
                 widget::set_sprite_visible(world, row_bg(slot), false);
                 widget::set_label_visible(world, row_label(slot), false);
+                widget::set_label_visible(world, row_summary(slot), false);
             }
         }
     }
@@ -181,6 +215,7 @@ pub(crate) fn hide(world: &mut World) {
     for slot in 0..MAX_ROWS {
         widget::set_sprite_visible(world, row_bg(slot), false);
         widget::set_label_visible(world, row_label(slot), false);
+        widget::set_label_visible(world, row_summary(slot), false);
     }
 }
 
@@ -193,6 +228,7 @@ pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
 pub(crate) fn all_label_ids() -> Vec<AssetId> {
     std::iter::once(HEADING)
         .chain((0..MAX_ROWS).map(row_label))
+        .chain((0..MAX_ROWS).map(row_summary))
         .collect()
 }
 
@@ -254,6 +290,55 @@ mod tests {
             2,
             "open section lists the world's prefabs"
         );
+    }
+
+    #[test]
+    fn a_type_row_carries_its_summary_and_a_prefab_row_none() {
+        let mut world =
+            crate::test_support::injected_world(&all_sprite_ids(), &all_label_ids(), &[]);
+        let rows = vec![
+            MenuItem::Type("PointLight"),
+            MenuItem::PrefabHeader { open: true },
+            MenuItem::Prefab("door".to_string()),
+        ];
+        place(&mut world, [100.0, 100.0], &rows, [0.0, 0.0]);
+
+        let text = |id| {
+            world
+                .get_by_id::<concinnity_core::components::TextLabel>(id)
+                .expect("label present")
+                .content
+                .clone()
+        };
+        assert_eq!(text(row_label(0)), "PointLight");
+        assert_eq!(
+            text(row_summary(0)),
+            widget::clip_text(MenuItem::Type("PointLight").summary(), SUMMARY_CHARS),
+            "a type row documents itself"
+        );
+        assert!(!text(row_summary(0)).is_empty());
+        assert!(
+            text(row_summary(1)).is_empty() && text(row_summary(2)).is_empty(),
+            "the prefab rows name world assets, which have no summary"
+        );
+    }
+
+    // The menu is wide enough that a summary column is worth having.
+    #[test]
+    fn the_row_has_room_for_both_columns() {
+        const {
+            assert!(SUMMARY_CHARS > 0);
+            assert!(
+                SUMMARY_X + SUMMARY_CHARS as f32 * CHAR_W <= MENU_W - PAD * 2.0,
+                "the summary column stays inside the row"
+            );
+        }
+        for ty in placeable_types() {
+            assert!(
+                ty.chars().count() <= NAME_CHARS,
+                "{ty} is wider than the menu's name column"
+            );
+        }
     }
 
     #[test]

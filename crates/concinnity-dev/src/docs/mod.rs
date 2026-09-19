@@ -17,6 +17,9 @@ mod page;
 mod prose;
 mod reference;
 mod render;
+mod summary;
+
+pub(crate) use summary::type_summaries;
 
 use page::{AUTOGEN_MARKER, IndexEntry, render_index, render_page};
 use reference::AssetDoc;

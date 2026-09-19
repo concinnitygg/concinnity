@@ -88,16 +88,19 @@ impl EditorHook {
 
     // The "+" picker's option list, narrowed by the search field and sorted
     // ascending. `None` while the picker is closed.
-    pub(in crate::editor::hook) fn picker_options(&self, world: &World) -> Option<Vec<String>> {
+    pub(in crate::editor::hook) fn picker_options(
+        &self,
+        world: &World,
+    ) -> Option<Vec<assets_panel::PickerOption>> {
         if !self.picker_open {
             return None;
         }
         let filter = widget::field_text(world, assets_panel::SEARCH_INPUT).to_lowercase();
-        let mut opts: Vec<String> = assets_panel::picker_types()
+        let mut opts: Vec<assets_panel::PickerOption> = assets_panel::picker_types()
             .filter(|t| filter.is_empty() || t.to_lowercase().contains(&filter))
-            .map(|t| t.to_string())
+            .map(assets_panel::PickerOption::new)
             .collect();
-        opts.sort();
+        opts.sort_by(|a, b| a.name.cmp(&b.name));
         Some(opts)
     }
 
@@ -186,7 +189,9 @@ impl EditorHook {
                 }
             }
             PanelAction::PickOption(i) => {
-                let picked = self.picker_options(world).and_then(|o| o.get(i).cloned());
+                let picked = self
+                    .picker_options(world)
+                    .and_then(|o| o.get(i).map(|p| p.name.clone()));
                 if let Some(ty) = picked {
                     // A config singleton edits the world's existing instance if
                     // it has one, else adds it (edit-or-add); a multi-instance

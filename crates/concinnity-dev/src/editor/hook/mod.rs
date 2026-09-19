@@ -364,7 +364,7 @@ struct PanelData {
     hidden: std::collections::BTreeSet<String>,
     locked: std::collections::BTreeSet<String>,
     row_menu: Option<String>,
-    picker_options: Option<Vec<String>>,
+    picker_options: Option<Vec<crate::editor::panels::assets_panel::PickerOption>>,
     form_title: String,
     form_overrides: Option<FormOverridesData>,
 }

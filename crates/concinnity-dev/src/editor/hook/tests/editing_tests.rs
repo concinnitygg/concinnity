@@ -59,7 +59,8 @@ fn the_search_field_narrows_the_picker_while_it_is_open() {
     h.apply_panel(PanelAction::TogglePicker, &mut world);
     set_field(&mut world, assets_panel::SEARCH_INPUT, "pointlight");
     let opts = h.picker_options(&world).unwrap();
-    assert_eq!(opts, ["PointLight"], "case-insensitive type narrowing");
+    let names: Vec<&str> = opts.iter().map(|o| o.name.as_str()).collect();
+    assert_eq!(names, ["PointLight"], "case-insensitive type narrowing");
     assert!(
         h.tree_rows(&world).is_empty(),
         "the tree is not filtered by the picker's text"
@@ -76,7 +77,7 @@ fn plus_picker_then_name_form_adds_the_entry() {
     h.apply_panel(PanelAction::TogglePicker, &mut world);
     assert!(h.picker_open && h.search_focus);
     // Pick the first offered type -> AddForm, name field prefilled + focused.
-    let ty = h.picker_options(&world).unwrap()[0].clone();
+    let ty = h.picker_options(&world).unwrap()[0].name.clone();
     h.apply_panel(PanelAction::PickOption(0), &mut world);
     assert!(h.form_open());
     assert!(!h.picker_open);
@@ -227,7 +228,7 @@ fn config_singleton_picker_edits_existing_else_adds() {
         .picker_options(&world)
         .unwrap()
         .iter()
-        .position(|o| o == "GraphicsConfig")
+        .position(|o| o.name == "GraphicsConfig")
         .expect("GraphicsConfig is offered in the picker");
     h.apply_panel(PanelAction::PickOption(gi), &mut world);
     assert!(h.form_open());
@@ -255,7 +256,7 @@ fn config_singleton_picker_edits_existing_else_adds() {
         .picker_options(&world2)
         .unwrap()
         .iter()
-        .position(|o| o == "Window")
+        .position(|o| o.name == "Window")
         .expect("Window is offered in the picker");
     h2.apply_panel(PanelAction::PickOption(wi), &mut world2);
     assert!(h2.form_open());
@@ -288,9 +289,10 @@ fn picker_lists_types_alphabetically() {
     let world = world_with_fields();
     h.picker_open = true;
     let opts = h.picker_options(&world).unwrap();
-    let mut sorted = opts.clone();
+    let names: Vec<&str> = opts.iter().map(|o| o.name.as_str()).collect();
+    let mut sorted = names.clone();
     sorted.sort();
-    assert_eq!(opts, sorted, "the picker is alphabetized ascending");
+    assert_eq!(names, sorted, "the picker is alphabetized ascending");
     assert_eq!(
         opts.len(),
         assets_panel::picker_types().count(),
@@ -298,7 +300,7 @@ fn picker_lists_types_alphabetically() {
     );
     // Concretely: AudioCue sorts before Sprite, and a config singleton is mixed
     // in alphabetically (AppConfig sorts before AudioCue).
-    let pos = |t: &str| opts.iter().position(|o| o == t).unwrap();
+    let pos = |t: &str| opts.iter().position(|o| o.name == t).unwrap();
     assert!(pos("AudioCue") < pos("Sprite"));
     assert!(pos("AppConfig") < pos("AudioCue"));
 }
@@ -400,7 +402,7 @@ fn add_form_writes_edited_arg_values() {
         .picker_options(&world)
         .unwrap()
         .iter()
-        .position(|o| o == &ty)
+        .position(|o| o.name == ty)
         .expect("PointLight is offered");
     h.apply_panel(PanelAction::PickOption(idx), &mut world);
     assert!(h.form_open());

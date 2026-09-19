@@ -104,6 +104,27 @@ pub(crate) fn picker_types() -> impl Iterator<Item = &'static str> {
     add_types().chain(config_types())
 }
 
+/// One row of the "+" picker: the type to add, and the one-line summary from
+/// its own documentation. The summary is empty for a type whose rustdoc opens
+/// with something other than prose.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PickerOption {
+    pub name: String,
+    pub summary: String,
+}
+
+impl PickerOption {
+    pub(crate) fn new(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            summary: crate::docs::type_summaries()
+                .get(name)
+                .cloned()
+                .unwrap_or_default(),
+        }
+    }
+}
+
 // Reserved asset-id family for the panel. The asset-id VALUE does not affect
 // draw order (the overlay draws in component-insertion order, not by id);
 // z-order is set by the sequence in `all_sprite_ids` / `all_label_ids`, which
@@ -167,6 +188,9 @@ pub(crate) fn picker_row_bg(slot: usize) -> AssetId {
 pub(crate) fn picker_row_label(slot: usize) -> AssetId {
     AssetId(PANEL + 0x120 + slot as u32)
 }
+pub(crate) fn picker_row_summary(slot: usize) -> AssetId {
+    AssetId(PANEL + 0x140 + slot as u32)
+}
 
 // Geometry, in window pixels. Every rect derives from the panel's origin `o`
 // (its title bar's top-left corner), so dragging the title bar moves the whole
@@ -214,6 +238,17 @@ pub(crate) fn visible_rows(h: f32) -> usize {
 // The asset-name character budget at width `w` (grows past the default with width).
 fn name_budget(w: f32) -> usize {
     (MAX_NAME_CHARS as f32 + (w - PANEL_W) / CHAR_W).max(6.0) as usize
+}
+
+// The picker's name column: wide enough for the longest type name the picker
+// offers, with the summary column starting after it.
+const PICKER_NAME_CHARS: usize = 18;
+const PICKER_SUMMARY_X: f32 = PICKER_NAME_CHARS as f32 * CHAR_W + PAD;
+
+// The summary character budget at width `w`: what the row has left once the
+// name column and both margins are taken.
+fn picker_summary_budget(w: f32) -> usize {
+    ((w - 2.0 * PAD - PICKER_SUMMARY_X) / CHAR_W).max(0.0) as usize
 }
 
 // The tallest the panel resizes to: the injected row pool shown in full (width
@@ -437,7 +472,7 @@ pub(crate) struct PanelView<'a> {
     pub search_focus: bool,
     // The floating type-picker options, already narrowed by the search field;
     // `None` while the picker is closed.
-    pub picker_options: Option<&'a [String]>,
+    pub picker_options: Option<&'a [PickerOption]>,
     pub picker_scroll: usize,
     // The viewport selection the rows mirror, resolved to this frame's names,
     // and the session hide / lock sets.
@@ -907,7 +942,7 @@ fn place_lock(world: &mut World, region: [f32; 4], slot: usize, locked: bool, ho
 fn layout_picker(
     world: &mut World,
     view: &PanelView,
-    options: &[String],
+    options: &[PickerOption],
     o: [f32; 2],
     s: [f32; 2],
 ) {
@@ -949,12 +984,21 @@ fn layout_picker(
             theme::CONTROL_RADIUS,
             true,
         );
+        let baseline = rect[1] + ROW_H * 0.5 - theme::TEXT_HALF;
         widget::place_left_label(
             world,
             picker_row_label(slot),
-            [rect[0] + PAD, rect[1] + ROW_H * 0.5 - theme::TEXT_HALF],
-            &options[idx],
+            [rect[0] + PAD, baseline],
+            &widget::clip_text(&options[idx].name, PICKER_NAME_CHARS),
             LABEL,
+            true,
+        );
+        widget::place_left_label(
+            world,
+            picker_row_summary(slot),
+            [rect[0] + PAD + PICKER_SUMMARY_X, baseline],
+            &widget::clip_text(&options[idx].summary, picker_summary_budget(w)),
+            LABEL_DIM,
             true,
         );
     }
@@ -1157,6 +1201,7 @@ pub(crate) fn all_label_ids() -> Vec<AssetId> {
     ids.extend((0..ROW_POOL_MAX).map(name_label));
     ids.extend((0..ROW_POOL_MAX).map(type_label));
     ids.extend((0..ROW_POOL_MAX).map(picker_row_label));
+    ids.extend((0..ROW_POOL_MAX).map(picker_row_summary));
     ids.push(MENU_DELETE_LABEL);
     ids.push(MENU_EXPORT_LABEL);
     ids
@@ -1238,7 +1283,7 @@ mod tests {
 
     struct Fixture {
         rows: Vec<TreeRow>,
-        picker_options: Vec<String>,
+        picker_options: Vec<PickerOption>,
         selected: SelectedNames,
         hidden: BTreeSet<String>,
         locked: BTreeSet<String>,
@@ -1392,7 +1437,7 @@ mod tests {
     #[test]
     fn plus_renders_as_an_x_while_picker_is_open() {
         let mut f = Fixture::new();
-        f.picker_options = vec!["PointLight".to_string()];
+        f.picker_options = vec![PickerOption::new("PointLight")];
         let mut world = injected_world();
         let o = test_origin();
         place(&mut world, Some(&f.view()), o, size());
@@ -1580,7 +1625,7 @@ mod tests {
     fn the_search_field_shows_always_and_the_picker_focuses_it() {
         let mut world = injected_world();
         let mut f = Fixture::new();
-        f.picker_options = vec!["PointLight".to_string()];
+        f.picker_options = vec![PickerOption::new("PointLight")];
         let o = test_origin();
         let field = |w: &World| w.get_by_id::<TextInput>(SEARCH_INPUT).cloned().unwrap();
         place(&mut world, Some(&f.view()), o, size());
@@ -1775,7 +1820,7 @@ mod tests {
     #[test]
     fn picker_options_pick_and_dismiss() {
         let mut f = Fixture::new();
-        f.picker_options = vec!["Decal".to_string(), "PointLight".to_string()];
+        f.picker_options = vec![PickerOption::new("Decal"), PickerOption::new("PointLight")];
         let o = test_origin();
         let v = f.picker_view();
         let r1 = picker_option_rect(o, PANEL_W, 1);
@@ -1794,6 +1839,62 @@ mod tests {
             hit_test(&v, r13[0] + 5.0, r13[1] + 5.0, o, size()),
             Some(PanelAction::CloseOverlays)
         );
+    }
+
+    #[test]
+    fn picker_rows_show_each_type_summary_beside_its_name() {
+        let mut f = Fixture::new();
+        f.picker_options = vec![PickerOption::new("PointLight")];
+        let mut world = injected_world();
+        let o = test_origin();
+        place(&mut world, Some(&f.picker_view()), o, size());
+
+        let name = label(&world, picker_row_label(0));
+        let summary = label(&world, picker_row_summary(0));
+        assert_eq!(name.content, "PointLight");
+        assert!(summary.visible);
+        let full = &f.picker_options[0].summary;
+        assert!(!full.is_empty(), "PointLight documents itself");
+        assert_eq!(
+            summary.content,
+            widget::clip_text(full, picker_summary_budget(size()[0])),
+            "the row carries the type's own one-line summary"
+        );
+        assert_ne!(summary.color, name.color, "the summary reads as secondary");
+        assert!(
+            summary.x > name.x,
+            "the summary sits in a column right of the name"
+        );
+        assert_eq!(summary.y, name.y, "both columns share the row's baseline");
+    }
+
+    #[test]
+    fn a_long_summary_is_clipped_to_the_row() {
+        let mut f = Fixture::new();
+        f.picker_options = vec![PickerOption {
+            name: "PointLight".to_string(),
+            summary: "x".repeat(400),
+        }];
+        let mut world = injected_world();
+        place(&mut world, Some(&f.picker_view()), test_origin(), size());
+
+        let summary = label(&world, picker_row_summary(0));
+        let budget = picker_summary_budget(size()[0]);
+        assert!(budget > 0, "the default width leaves room for a summary");
+        assert_eq!(summary.content.chars().count(), budget);
+        assert!(summary.content.ends_with("..."), "clipped, not cut");
+    }
+
+    // Every offered type is narrower than the name column, so no real row
+    // clips its own name away.
+    #[test]
+    fn the_name_column_fits_every_offered_type() {
+        for ty in picker_types() {
+            assert!(
+                ty.chars().count() <= PICKER_NAME_CHARS,
+                "{ty} is wider than the picker's name column"
+            );
+        }
     }
 
     #[test]
