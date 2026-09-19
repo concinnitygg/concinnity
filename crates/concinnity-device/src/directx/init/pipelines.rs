@@ -17,8 +17,10 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::directx::com;
 use crate::directx::context::dump_on_err;
+use crate::directx::draw::shadow::ShadowPush;
 use crate::directx::error::map_pso_hresult;
 use crate::directx::pipeline::{main_input_layout, serialize_and_create_root_sig};
+use crate::directx::root_constants::root_dwords;
 use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::HDR_FORMAT;
@@ -374,14 +376,14 @@ pub(in crate::directx) fn create_shadow_root_signature(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12RootSignature> {
     let params = [
-        // [0] Root constants: model mat4 (16) + cascade_idx + 3 pad = 20 DWORDs at b0
+        // [0] Root constants: `ShadowPush` at b0
         D3D12_ROOT_PARAMETER {
             ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
             Anonymous: D3D12_ROOT_PARAMETER_0 {
                 Constants: D3D12_ROOT_CONSTANTS {
                     ShaderRegister: 0,
                     RegisterSpace: 0,
-                    Num32BitValues: 20,
+                    Num32BitValues: root_dwords::<ShadowPush>(),
                 },
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,

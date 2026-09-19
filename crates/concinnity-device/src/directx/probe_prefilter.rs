@@ -33,6 +33,7 @@ use super::context::DxContext;
 use super::error::{map_hresult, map_pso_hresult};
 use super::pipeline::serialize_desc_and_create;
 use super::slang_builtins::SlangCompile;
+use crate::directx::root_constants::{RootConstants, root_dwords};
 
 /// Color format of both cubes.
 pub(in crate::directx) const PROBE_CUBE_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R16G16B16A16_FLOAT;
@@ -45,9 +46,6 @@ pub(in crate::directx) const PROBE_MAX_MIPS: usize = 12;
 // Threadgroup tile, matching the kernels' `[numthreads(8, 8, 1)]`. The third
 // dispatch dimension is the six cube faces, one invocation deep.
 const PREFILTER_TILE: u32 = 8;
-
-// `ProbePrefilterParams` as 32-bit root constants at b0.
-const PREFILTER_PARAM_DWORDS: u32 = (size_of::<ProbePrefilterParams>() / 4) as u32;
 
 /// The convolution PSOs and the two root signatures they bind. Built once at init
 /// and reused by every bake.
@@ -334,12 +332,7 @@ impl DxContext {
         // signature's, both derived from `ProbePrefilterParams`.
         unsafe {
             cmd.SetPipelineState(pso);
-            cmd.SetComputeRoot32BitConstants(
-                0,
-                PREFILTER_PARAM_DWORDS,
-                params as *const ProbePrefilterParams as *const std::ffi::c_void,
-                0,
-            );
+            cmd.set_compute_root_constants(0, params);
             match srv_table {
                 Some(srv) => {
                     cmd.SetComputeRootDescriptorTable(1, srv);
@@ -431,7 +424,7 @@ fn root_constants() -> D3D12_ROOT_PARAMETER {
             Constants: D3D12_ROOT_CONSTANTS {
                 ShaderRegister: 0,
                 RegisterSpace: 0,
-                Num32BitValues: PREFILTER_PARAM_DWORDS,
+                Num32BitValues: root_dwords::<ProbePrefilterParams>(),
             },
         },
         ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,

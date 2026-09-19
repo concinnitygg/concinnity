@@ -53,6 +53,7 @@ use super::com;
 use super::context::FRAMES;
 use super::error::{map_hresult, map_pso_hresult};
 use super::texture::{create_uav_buffer, transition_barrier};
+use crate::directx::root_constants::{RootConstants, root_dwords};
 use crate::directx::slang_builtins::SlangCompile;
 
 // Byte stride of a `Vertex` in the shared vertex buffer (pos + normal + tangent
@@ -409,10 +410,6 @@ pub(super) struct SkinPipeline {
     pub(super) pso: ID3D12PipelineState,
 }
 
-// DWORD count of the `SkinParams` root-constant block (vertex_base, vertex_count,
-// joint_count, target_count).
-const SKIN_PARAMS_DWORDS: u32 = 4;
-
 // Root signature for the `rt_skin` compute kernel: `SkinParams` root constants at
 // b0, the skinned vertex buffer as a root SRV (t0), the joint palette as a root
 // SRV (t1), the deformed output as a root UAV (u0), the morph deltas as a root
@@ -426,7 +423,7 @@ fn create_skin_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootS
                 Constants: D3D12_ROOT_CONSTANTS {
                     ShaderRegister: 0,
                     RegisterSpace: 0,
-                    Num32BitValues: SKIN_PARAMS_DWORDS,
+                    Num32BitValues: root_dwords::<SkinParams>(),
                 },
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
@@ -1844,12 +1841,7 @@ impl RtAccelData {
             // SAFETY: the command list is in the recording state, and every resource, descriptor
             // and slice these commands name is live for the call.
             unsafe {
-                cmd.SetComputeRoot32BitConstants(
-                    0,
-                    SKIN_PARAMS_DWORDS,
-                    &params as *const SkinParams as *const std::ffi::c_void,
-                    0,
-                );
+                cmd.set_compute_root_constants(0, &params);
                 cmd.SetComputeRootShaderResourceView(1, skinned.vertex_gva);
                 cmd.SetComputeRootShaderResourceView(2, joint_gva);
                 cmd.SetComputeRootUnorderedAccessView(3, deformed_gva);
@@ -2110,12 +2102,7 @@ impl super::context::DxContext {
             // SAFETY: the command list is in the recording state, and every resource, descriptor
             // and slice these commands name is live for the call.
             unsafe {
-                cmd.SetComputeRoot32BitConstants(
-                    0,
-                    SKIN_PARAMS_DWORDS,
-                    &params as *const SkinParams as *const std::ffi::c_void,
-                    0,
-                );
+                cmd.set_compute_root_constants(0, &params);
                 cmd.SetComputeRootShaderResourceView(1, src_gva);
                 cmd.SetComputeRootShaderResourceView(2, joint_gva);
                 cmd.SetComputeRootUnorderedAccessView(3, dst_gva);
@@ -2391,16 +2378,5 @@ mod tests {
         assert_eq!(d._bitfield1 >> 24, 0xFF);
         assert_eq!(d._bitfield2, 0);
         assert_eq!(d.AccelerationStructure, 0xDEAD_BEEF);
-    }
-
-    // The `SkinParams` layout test lives with the struct in
-    // `concinnity_core::render::uniforms::directx`. The root-constant DWORD-count
-    // cross-check stays here, where `SKIN_PARAMS_DWORDS` is defined.
-    #[test]
-    fn skin_params_dwords_matches_size() {
-        assert_eq!(
-            SKIN_PARAMS_DWORDS as usize,
-            std::mem::size_of::<super::SkinParams>() / 4
-        );
     }
 }

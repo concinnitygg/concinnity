@@ -61,6 +61,7 @@ use crate::directx::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::{main_input_layout, serialize_desc_and_create};
+use crate::directx::root_constants::RootConstants;
 use crate::directx::texture::{
     HDR_FORMAT, create_fallback_white_resource, create_hdr_resolve_target, transition_barrier,
 };
@@ -1497,12 +1498,7 @@ impl DxContext {
             unsafe {
                 cmd.OMSetRenderTargets(0, None, false, Some(&dsv));
                 let constants = [cascade_idx as u32, 0u32, 0u32, 0u32];
-                cmd.SetGraphicsRoot32BitConstants(
-                    4,
-                    4,
-                    constants.as_ptr() as *const std::ffi::c_void,
-                    0,
-                );
+                cmd.set_graphics_root_constants(4, &constants);
             }
             for vol in &rm.volumes {
                 if !vol.visible || !vol.cast_shadows {

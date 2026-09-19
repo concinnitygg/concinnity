@@ -14,6 +14,7 @@
 //! contaminates motion. Mirrors src/metal/post/gbuffer.rs.
 
 use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::uniforms::ModelHistoryParams;
 use concinnity_core::transform::IDENTITY;
 use std::cell::RefCell;
 use windows::Win32::Foundation::RECT;
@@ -25,6 +26,7 @@ use crate::directx::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::serialize_and_create_root_sig;
+use crate::directx::root_constants::{RootConstants, root_dwords};
 use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::{create_main_depth_texture, write_format_rtv, write_format_srv};
@@ -286,7 +288,7 @@ fn create_model_history_root_signature(device: &ID3D12Device) -> RenderResult<ID
                 Constants: D3D12_ROOT_CONSTANTS {
                     ShaderRegister: 0,
                     RegisterSpace: 0,
-                    Num32BitValues: 4,
+                    Num32BitValues: root_dwords::<ModelHistoryParams>(),
                 },
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
@@ -714,7 +716,7 @@ impl DxContext {
             true => 0..self.cull.prev_model_buffers.len(),
             false => frame_idx..frame_idx + 1,
         };
-        let params = concinnity_core::render::uniforms::ModelHistoryParams {
+        let params = ModelHistoryParams {
             record_count: records as u32,
             _pad: [0; 3],
         };
@@ -724,12 +726,7 @@ impl DxContext {
         unsafe {
             cmd.SetPipelineState(pso);
             cmd.SetComputeRootSignature(root_sig);
-            cmd.SetComputeRoot32BitConstants(
-                0,
-                4,
-                &params as *const _ as *const std::ffi::c_void,
-                0,
-            );
+            cmd.set_compute_root_constants(0, &params);
             cmd.SetComputeRootShaderResourceView(1, object_gva);
             for slot in slots {
                 let history = &self.cull.prev_model_buffers[slot];

@@ -16,7 +16,7 @@ use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R16_UINT;
 
 use crate::directx::context::DxContext;
 use crate::directx::graph_exec::{CompositeRenderTarget, CompositeResolution};
-use crate::directx::pipeline::COMPOSITE_ROOT_CONSTANTS;
+use crate::directx::root_constants::RootConstants;
 use crate::directx::texture::transition_barrier;
 use crate::directx::upload_ring::UPLOAD_ALIGN;
 
@@ -104,12 +104,7 @@ impl fullscreen::CompositeEncoder for DxContext {
                 view_mode: args.channel_view,
                 far: self.view.far,
             };
-            cmd.SetGraphicsRoot32BitConstants(
-                2,
-                COMPOSITE_ROOT_CONSTANTS,
-                &composite as *const CompositeParams as *const std::ffi::c_void,
-                0,
-            );
+            cmd.set_graphics_root_constants(2, &composite);
             // Root param [3]: 3D color-grading LUT SRV (t2).
             cmd.SetGraphicsRootDescriptorTable(3, self.scene.color_lut.srv_gpu);
             // Root params [4..6]: the G-buffer channel sources the debug view
@@ -152,12 +147,7 @@ impl fullscreen::CompositeEncoder for DxContext {
         unsafe {
             cmd.SetPipelineState(text_pso);
             cmd.SetGraphicsRootSignature(&self.text.root_sig);
-            cmd.SetGraphicsRoot32BitConstants(
-                0,
-                4,
-                &text_push as *const TextUniforms as *const std::ffi::c_void,
-                0,
-            );
+            cmd.set_graphics_root_constants(0, &text_push);
             cmd.SetGraphicsRootDescriptorTable(2, self.descriptors.text_sampler_gpu);
         }
         true

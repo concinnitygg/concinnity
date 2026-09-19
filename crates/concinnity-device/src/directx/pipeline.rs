@@ -20,6 +20,7 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::com;
 use crate::directx::error::{map_hresult, map_pso_hresult};
+use crate::directx::root_constants::root_dwords;
 use crate::directx::slang_builtins::SlangCompile;
 
 // Shared shader-compile + root-sig helpers
@@ -233,15 +234,10 @@ pub(super) fn compile_composite_shaders(hot_reload: bool) -> RenderResult<(Vec<u
     Ok((vs, ps))
 }
 
-// Number of 32-bit root constants the composite pass declares at b0: one per
-// `CompositeParams` float, so the shader's cbuffer is fully backed.
-pub(super) const COMPOSITE_ROOT_CONSTANTS: u32 =
-    (std::mem::size_of::<render_types::CompositeParams>() / 4) as u32;
-
 // Root signature for the composite pass: a 1-SRV descriptor table at t0 (the
 // scene target: the HDR resolve, or the TAA output when TAA is on), a 1-SRV
-// table at t1 (bloom mip 0), `COMPOSITE_ROOT_CONSTANTS` 32-bit root constants
-// at b0 (`CompositeParams`), a 1-SRV descriptor table at t2 (the 3D
+// table at t1 (bloom mip 0), `CompositeParams` as 32-bit root constants
+// at b0, a 1-SRV descriptor table at t2 (the 3D
 // color-grading LUT), one each at t3 / t4 / t5 (the G-buffer normal+depth,
 // roughness, and SSAO channels the debug view modes visualize), and static
 // linear-clamp samplers at s0..s5 -- one per source, because slangc splits each
@@ -322,7 +318,7 @@ pub(super) fn create_composite_root_signature(
                 Constants: D3D12_ROOT_CONSTANTS {
                     ShaderRegister: 0,
                     RegisterSpace: 0,
-                    Num32BitValues: COMPOSITE_ROOT_CONSTANTS,
+                    Num32BitValues: root_dwords::<render_types::CompositeParams>(),
                 },
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
@@ -549,14 +545,14 @@ pub(super) fn create_text_root_signature(
     };
 
     let params = [
-        // [0] Root constants: win_width, win_height, pad, pad = 4 DWORDs at b0
+        // [0] Root constants: `TextUniforms` at b0
         D3D12_ROOT_PARAMETER {
             ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
             Anonymous: D3D12_ROOT_PARAMETER_0 {
                 Constants: D3D12_ROOT_CONSTANTS {
                     ShaderRegister: 0,
                     RegisterSpace: 0,
-                    Num32BitValues: 4,
+                    Num32BitValues: root_dwords::<render_types::TextUniforms>(),
                 },
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,

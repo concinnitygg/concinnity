@@ -35,6 +35,7 @@ mod raymarch;
 mod raytrace;
 mod resize;
 mod resources;
+mod root_constants;
 mod screenshot;
 pub(crate) mod slang_builtins;
 mod texture;

@@ -17,6 +17,7 @@ use super::com;
 use crate::directx::context::{DxContext, FRAMES};
 use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::serialize_desc_and_create;
+use crate::directx::root_constants::{RootConstants, root_dwords};
 use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::{create_uav_buffer, transition_barrier, uav_barrier};
@@ -46,15 +47,10 @@ pub(in crate::directx) fn compile_auto_exposure_shaders(
     Ok((build_cs, average_cs))
 }
 
-// DWORD count of the `AutoExposureParams` root-constant block. Must match the
-// `AutoExposureParams` declaration in `shaders/auto_exposure.slang`, which
-// reaches DXIL as a `b0` cbuffer through its push-constant declaration.
-const AUTO_EXPOSURE_PARAMS_DWORDS: u32 = 4;
-
 // Inputs to the auto-exposure compute kernels (root constants at b0).
 // Mirrors `concinnity_core::render::uniforms::AutoExposureParams` and the `cbuffer` in the HLSL.
 // 16 bytes.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 struct AutoExposureParams {
     lum_log2_min: f32,
@@ -205,7 +201,7 @@ fn create_build_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12Root
                 Constants: D3D12_ROOT_CONSTANTS {
                     ShaderRegister: 0,
                     RegisterSpace: 0,
-                    Num32BitValues: AUTO_EXPOSURE_PARAMS_DWORDS,
+                    Num32BitValues: root_dwords::<AutoExposureParams>(),
                 },
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
@@ -252,7 +248,7 @@ fn create_average_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12Ro
                 Constants: D3D12_ROOT_CONSTANTS {
                     ShaderRegister: 0,
                     RegisterSpace: 0,
-                    Num32BitValues: AUTO_EXPOSURE_PARAMS_DWORDS,
+                    Num32BitValues: root_dwords::<AutoExposureParams>(),
                 },
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
@@ -427,12 +423,7 @@ impl DxContext {
             cmd.SetComputeRootSignature(&resources.build_root_sig);
             cmd.SetPipelineState(&resources.build_pso);
             cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
-            cmd.SetComputeRoot32BitConstants(
-                0,
-                AUTO_EXPOSURE_PARAMS_DWORDS,
-                &params as *const AutoExposureParams as *const std::ffi::c_void,
-                0,
-            );
+            cmd.set_compute_root_constants(0, &params);
             cmd.SetComputeRootDescriptorTable(1, self.targets.hdr.srv_gpu);
             cmd.SetComputeRootUnorderedAccessView(2, histogram_gva);
 
@@ -453,12 +444,7 @@ impl DxContext {
         unsafe {
             cmd.SetComputeRootSignature(&resources.average_root_sig);
             cmd.SetPipelineState(&resources.average_pso);
-            cmd.SetComputeRoot32BitConstants(
-                0,
-                AUTO_EXPOSURE_PARAMS_DWORDS,
-                &params as *const AutoExposureParams as *const std::ffi::c_void,
-                0,
-            );
+            cmd.set_compute_root_constants(0, &params);
             cmd.SetComputeRootUnorderedAccessView(1, histogram_gva);
             cmd.SetComputeRootUnorderedAccessView(2, output_gva);
             cmd.Dispatch(1, 1, 1);

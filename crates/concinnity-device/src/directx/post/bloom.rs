@@ -17,6 +17,7 @@ use crate::directx::com;
 use crate::directx::context::DxContext;
 use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::serialize_desc_and_create;
+use crate::directx::root_constants::{RootConstants, root_dwords};
 use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::{HDR_FORMAT, transition_barrier};
@@ -85,14 +86,14 @@ pub(in crate::directx) fn create_bloom_root_signature(
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
         },
-        // [1] Root constants: PostProcessParams (6 floats) at b0
+        // [1] Root constants: PostProcessParams at b0
         D3D12_ROOT_PARAMETER {
             ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
             Anonymous: D3D12_ROOT_PARAMETER_0 {
                 Constants: D3D12_ROOT_CONSTANTS {
                     ShaderRegister: 0,
                     RegisterSpace: 0,
-                    Num32BitValues: 6,
+                    Num32BitValues: root_dwords::<PostProcessParams>(),
                 },
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
@@ -353,12 +354,7 @@ impl fullscreen::BloomEncoder for DxContext {
             // Root arguments survive the PSO switches between sub-passes, and
             // the root signature bound just above is the chain's only one, so
             // the tunables are pushed once here rather than per sub-pass.
-            cmd.SetGraphicsRoot32BitConstants(
-                1,
-                6,
-                &post as *const PostProcessParams as *const std::ffi::c_void,
-                0,
-            );
+            cmd.set_graphics_root_constants(1, &post);
         }
         Ok(())
     }

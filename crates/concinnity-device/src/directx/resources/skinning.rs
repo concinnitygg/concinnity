@@ -21,6 +21,8 @@ use super::super::error::{map_hresult, map_pso_hresult};
 use super::super::pipeline::{serialize_and_create_root_sig, skinned_input_layout};
 use super::super::slang_builtins;
 use super::super::texture::*;
+use crate::directx::draw::shadow::ShadowPush;
+use crate::directx::root_constants::root_dwords;
 use crate::directx::slang_builtins::SlangCompile;
 
 // Skinned (skeletally animated) mesh rendering. All `None` / empty until
@@ -124,14 +126,14 @@ fn create_skinned_shadow_root_signature(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12RootSignature> {
     let params = [
-        // [0] Root constants: model mat4 (16) + cascade_idx + 3 pad = 20 DWORDs at b0
+        // [0] Root constants: `ShadowPush` at b0
         D3D12_ROOT_PARAMETER {
             ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
             Anonymous: D3D12_ROOT_PARAMETER_0 {
                 Constants: D3D12_ROOT_CONSTANTS {
                     ShaderRegister: 0,
                     RegisterSpace: 0,
-                    Num32BitValues: 20,
+                    Num32BitValues: root_dwords::<ShadowPush>(),
                 },
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,

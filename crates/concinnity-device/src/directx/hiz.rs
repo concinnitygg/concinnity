@@ -34,12 +34,10 @@ use crate::directx::com;
 use crate::directx::context::dump_on_err;
 use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::serialize_desc_and_create;
+use crate::directx::root_constants::{RootConstants, root_dwords};
 use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::uav_barrier;
-
-// DWORD count of the `HizSpdParams` cbuffer.
-const HIZ_PARAMS_DWORDS: u32 = (std::mem::size_of::<HizSpdParams>() / 4) as u32;
 
 // UAV descriptors one SPD dispatch binds, one per level it can write.
 const HIZ_SPD_UAVS: u32 = hiz_spd::LEVELS;
@@ -119,7 +117,7 @@ fn hiz_root_params(
             Constants: D3D12_ROOT_CONSTANTS {
                 ShaderRegister: 0,
                 RegisterSpace: 0,
-                Num32BitValues: HIZ_PARAMS_DWORDS,
+                Num32BitValues: root_dwords::<HizSpdParams>(),
             },
         },
         ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
@@ -460,7 +458,7 @@ impl crate::directx::context::DxContext {
             cmd.SetComputeRootSignature(&hiz.root_sig);
             cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
             cmd.SetPipelineState(pso);
-            set_hiz_constants(cmd, &plan.phase1.params);
+            cmd.set_compute_root_constants(0, &plan.phase1.params);
             cmd.SetComputeRootDescriptorTable(1, hiz.depth_srv_gpu);
             cmd.SetComputeRootDescriptorTable(2, hiz.mip_uav_gpus[0]);
             cmd.Dispatch(plan.phase1.groups.0, plan.phase1.groups.1, 1);
@@ -480,25 +478,9 @@ impl crate::directx::context::DxContext {
         unsafe {
             cmd.SetComputeRootSignature(&hiz.tail_root_sig);
             cmd.SetPipelineState(&hiz.spd_tail_pso);
-            set_hiz_constants(cmd, &tail.params);
+            cmd.set_compute_root_constants(0, &tail.params);
             cmd.SetComputeRootDescriptorTable(1, hiz.mip_uav_gpus[tail.base_mip as usize]);
             cmd.Dispatch(tail.groups.0, tail.groups.1, 1);
         }
     }
-}
-
-// Push one dispatch's params into the root constants at b0.
-//
-// SAFETY: the caller holds a command list in the recording state whose bound root signature
-// declares `HIZ_PARAMS_DWORDS` 32-bit constants at parameter 0, and `params` outlives the call.
-unsafe fn set_hiz_constants(cmd: &ID3D12GraphicsCommandList, params: &HizSpdParams) {
-    // SAFETY: forwarded from this function's own contract.
-    unsafe {
-        cmd.SetComputeRoot32BitConstants(
-            0,
-            HIZ_PARAMS_DWORDS,
-            params as *const HizSpdParams as *const std::ffi::c_void,
-            0,
-        )
-    };
 }

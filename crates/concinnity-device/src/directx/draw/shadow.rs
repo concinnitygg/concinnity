@@ -23,6 +23,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::com;
 use crate::directx::context::DxContext;
+use crate::directx::root_constants::RootConstants;
 use crate::directx::texture::GpuResource;
 
 // Shadow map resources. `resource` / `dsvs` are `None` / empty when the shadow
@@ -68,9 +69,9 @@ pub(in crate::directx) struct ShadowState {
 // + cascade_idx + padding. cascade_idx selects which `ShadowUniforms.light_vps[i]`
 // the shadow vertex shader projects through; every spot slice carries its own
 // matrix in slot 0.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
-struct ShadowPush {
+pub(in crate::directx) struct ShadowPush {
     model: [[f32; 4]; 4],
     cascade_idx: u32,
     _pad: [u32; 3],
@@ -253,12 +254,7 @@ impl DxContext {
             unsafe {
                 cmd.OMSetRenderTargets(0, None, false, Some(&dsv));
                 // [2] cascade index, constant across this cascade's ExecuteIndirect.
-                cmd.SetGraphicsRoot32BitConstants(
-                    2,
-                    1,
-                    &c as *const u32 as *const std::ffi::c_void,
-                    0,
-                );
+                cmd.set_graphics_root_constants(2, &c);
                 let byte_off = ((cascade_idx * n_cull) * stride) as u64;
                 cmd.ExecuteIndirect(
                     sb_sig,
@@ -294,12 +290,7 @@ impl DxContext {
                 // descriptor and slice these commands name is live for the call.
                 unsafe {
                     cmd.OMSetRenderTargets(0, None, false, Some(&dsv));
-                    cmd.SetGraphicsRoot32BitConstants(
-                        2,
-                        1,
-                        &c as *const u32 as *const std::ffi::c_void,
-                        0,
-                    );
+                    cmd.set_graphics_root_constants(2, &c);
                     let byte_off = ((cascade_idx * n_cull + prefix) * stride) as u64;
                     cmd.ExecuteIndirect(
                         sb_sig,
@@ -359,12 +350,7 @@ impl DxContext {
                 // swaps to a coarser LOD.
                 let d = lod::camera_distance(obj, cam_pos);
                 let (index_offset, index_count) = obj.active_lod(d);
-                cmd.SetGraphicsRoot32BitConstants(
-                    0,
-                    20,
-                    &push as *const ShadowPush as *const std::ffi::c_void,
-                    0,
-                );
+                cmd.set_graphics_root_constants(0, &push);
                 cmd.DrawIndexedInstanced(
                     index_count as u32,
                     1,
@@ -390,12 +376,7 @@ impl DxContext {
                             cascade_idx: SPOT_SLICE_IDX,
                             _pad: [0; 3],
                         };
-                        cmd.SetGraphicsRoot32BitConstants(
-                            0,
-                            20,
-                            &push as *const ShadowPush as *const std::ffi::c_void,
-                            0,
-                        );
+                        cmd.set_graphics_root_constants(0, &push);
                         cmd.DrawIndexedInstanced(
                             bucket.index_count as u32,
                             1,
@@ -459,12 +440,7 @@ impl DxContext {
                     cascade_idx: SPOT_SLICE_IDX,
                     _pad: [0; 3],
                 };
-                cmd.SetGraphicsRoot32BitConstants(
-                    0,
-                    20,
-                    &push as *const ShadowPush as *const std::ffi::c_void,
-                    0,
-                );
+                cmd.set_graphics_root_constants(0, &push);
                 cmd.SetGraphicsRootShaderResourceView(2, self.skinned_joint_gva(frame_idx, i));
                 cmd.DrawIndexedInstanced(index_count as u32, 1, index_offset as u32, 0, 0);
                 self.inc_draw_calls(1);

@@ -15,8 +15,8 @@
 [[vk::binding(0, 0)]] Sampler2D<float4> src;
 
 #ifdef BLOOM_PREFILTER
-// Layout must match `PostProcessParams` in render_types.rs (24 B); the
-// prefilter reads only the threshold, knee and exposure.
+// A prefix of `PostProcessParams` in render_types.rs; the prefilter reads only
+// the threshold, knee and exposure.
 struct PostProcessParams
 {
     float bloom_intensity;

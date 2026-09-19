@@ -30,6 +30,7 @@ use crate::directx::context::dump_on_err;
 use crate::directx::pipeline::{create_blended_composite_pso, serialize_desc_and_create};
 use crate::directx::post::descriptors::{PostDescriptors, PostTargetDescriptors};
 use crate::directx::post::fullscreen::FullscreenExtent;
+use crate::directx::root_constants::RootConstants;
 use crate::directx::slang_builtins::{self, SlangCompile};
 use crate::directx::texture::{
     create_rt_target, transition_barrier, write_format_rtv, write_format_srv,
@@ -343,12 +344,7 @@ impl PostPassDevice for DxPostDevice<'_> {
                 cmd.SetGraphicsRootDescriptorTable(slot as u32, bind.texture);
             }
             if !draw.constants.is_empty() {
-                cmd.SetGraphicsRoot32BitConstants(
-                    pipe.constants_parameter(),
-                    draw.constants.len().div_ceil(4) as u32,
-                    draw.constants.as_ptr() as *const std::ffi::c_void,
-                    0,
-                );
+                cmd.set_graphics_root_constant_bytes(pipe.constants_parameter(), draw.constants);
             }
             if let Some(probes) = probes {
                 cmd.SetGraphicsRootDescriptorTable(pipe.probes_parameter(), probes.cube_table);

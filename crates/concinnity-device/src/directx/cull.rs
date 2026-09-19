@@ -27,6 +27,7 @@ use crate::directx::com;
 use crate::directx::context::DxContext;
 use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::serialize_desc_and_create;
+use crate::directx::root_constants::{RootConstants, root_dwords};
 use crate::directx::slang_builtins::{self, SlangCompile as _};
 use crate::directx::texture::transition_barrier;
 
@@ -135,13 +136,6 @@ pub(in crate::directx) struct CullState {
     pub hiz_valid: std::cell::Cell<bool>,
 }
 
-// DWORD count of the cull kernel's `CullParams` cbuffer: `float4 planes[6]`
-// (24) + `float3 cam_pos` + `uint object_count` (4) + `float4x4
-// prev_view_proj` (16) + `float2 hiz_size` + `uint hiz_mip_count` + `uint
-// hiz_enabled` (4) + `uint bucket_count` + `uint bucket_stride` + 2 pad (4)
-// = 52 DWORDs. Pushed inline as a root-constant block.
-pub(in crate::directx) const CULL_PARAMS_DWORDS: u32 = 52;
-
 // Byte stride of one `IndirectCommand` in the cull kernel's output buffer: a
 // 1-DWORD object-id root constant + `D3D12_DRAW_INDEXED_ARGUMENTS` (5 DWORDs).
 pub(in crate::directx) const INDIRECT_COMMAND_STRIDE: u32 = 24;
@@ -194,7 +188,7 @@ pub(in crate::directx) fn create_cull_root_signature(
                 Constants: D3D12_ROOT_CONSTANTS {
                     ShaderRegister: 0,
                     RegisterSpace: 0,
-                    Num32BitValues: CULL_PARAMS_DWORDS,
+                    Num32BitValues: root_dwords::<CullParams>(),
                 },
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
@@ -714,12 +708,7 @@ impl DxContext {
             // sampling, but the descriptor table still has to point at a
             // valid (live) descriptor.
             cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
-            cmd.SetComputeRoot32BitConstants(
-                0,
-                CULL_PARAMS_DWORDS,
-                &cull_params as *const CullParams as *const std::ffi::c_void,
-                0,
-            );
+            cmd.set_compute_root_constants(0, &cull_params);
             cmd.SetComputeRootShaderResourceView(1, object_gva);
             cmd.SetComputeRootShaderResourceView(2, draw_args_gva);
             if let Some(srv) = hiz_srv {
@@ -799,12 +788,7 @@ impl DxContext {
             cmd.SetComputeRootSignature(cull_root);
             cmd.SetPipelineState(cull_pso);
             cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
-            cmd.SetComputeRoot32BitConstants(
-                0,
-                CULL_PARAMS_DWORDS,
-                &cull_params as *const CullParams as *const std::ffi::c_void,
-                0,
-            );
+            cmd.set_compute_root_constants(0, &cull_params);
             cmd.SetComputeRootShaderResourceView(1, object_gva);
             cmd.SetComputeRootShaderResourceView(2, draw_args_gva);
             if let Some(srv) = hiz_srv {
@@ -919,12 +903,7 @@ impl DxContext {
                 for (i, p) in frustum.planes.iter().enumerate() {
                     cull_params.planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];
                 }
-                cmd.SetComputeRoot32BitConstants(
-                    0,
-                    CULL_PARAMS_DWORDS,
-                    &cull_params as *const CullParams as *const std::ffi::c_void,
-                    0,
-                );
+                cmd.set_compute_root_constants(0, &cull_params);
                 // Cascade `c`'s output region: offset the indirect UAV's GPU address
                 // by `c * n_cull` commands so the kernel's `commands[i]` write lands
                 // in this cascade's slice. Root UAV GPU addresses only need element
@@ -1040,12 +1019,7 @@ impl DxContext {
                 for (i, p) in frustum.planes.iter().enumerate() {
                     cull_params.planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];
                 }
-                cmd.SetComputeRoot32BitConstants(
-                    0,
-                    CULL_PARAMS_DWORDS,
-                    &cull_params as *const CullParams as *const std::ffi::c_void,
-                    0,
-                );
+                cmd.set_compute_root_constants(0, &cull_params);
                 // Plane `plane_idx`'s output region: offset the indirect UAV's GPU
                 // address by `plane_idx * region_count` commands so the kernel's
                 // `commands[i]` write lands in this plane's slice (strided by the
@@ -1128,12 +1102,7 @@ impl DxContext {
             cmd.SetComputeRootSignature(cull_root);
             cmd.SetPipelineState(cull_pso2);
             cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
-            cmd.SetComputeRoot32BitConstants(
-                0,
-                CULL_PARAMS_DWORDS,
-                &cull_params as *const CullParams as *const std::ffi::c_void,
-                0,
-            );
+            cmd.set_compute_root_constants(0, &cull_params);
             cmd.SetComputeRootShaderResourceView(1, object_gva);
             cmd.SetComputeRootShaderResourceView(2, draw_args_gva);
             // The rebuilt Hi-Z pyramid (same all-mips SRV phase 1 sampled; the

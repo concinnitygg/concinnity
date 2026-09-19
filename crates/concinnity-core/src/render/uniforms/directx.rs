@@ -6,7 +6,7 @@
 /// previous frame's view-projection, the Hi-Z metadata (dims, mip count, enable
 /// flag), then the shader-bucket routing. DirectX fuses the cull + Hi-Z uniforms
 /// into one cbuffer.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct CullParams {
     /// Frustum planes, each `(normal.xyz, d)`.

@@ -19,6 +19,7 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use crate::directx::allocator::PooledTexture;
 use crate::directx::context::{DxContext, dump_on_err};
 use crate::directx::pipeline::{create_blended_composite_pso, serialize_desc_and_create};
+use crate::directx::root_constants::{RootConstants, root_dwords};
 use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::{
@@ -86,7 +87,7 @@ fn create_ssao_kernel_root_signature(device: &ID3D12Device) -> RenderResult<ID3D
                 Constants: D3D12_ROOT_CONSTANTS {
                     ShaderRegister: 0,
                     RegisterSpace: 0,
-                    Num32BitValues: 4,
+                    Num32BitValues: root_dwords::<SsaoParams>(),
                 },
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
@@ -486,12 +487,7 @@ impl DxContext {
             cmd.OMSetRenderTargets(1, Some(&ssao.ao_raw_rtv), false, None);
             cmd.SetPipelineState(&ssao.kernel_pso);
             cmd.SetGraphicsRootSignature(&ssao.kernel_root_sig);
-            cmd.SetGraphicsRoot32BitConstants(
-                0,
-                4,
-                &params as *const SsaoParams as *const std::ffi::c_void,
-                0,
-            );
+            cmd.set_graphics_root_constants(0, &params);
             cmd.SetGraphicsRootDescriptorTable(1, gbuffer_srv);
             cmd.IASetVertexBuffers(0, None);
             cmd.IASetIndexBuffer(None);
