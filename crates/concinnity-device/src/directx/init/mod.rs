@@ -355,6 +355,8 @@ impl DxContext {
             effects::TransparentInputs {
                 descriptors: &descriptors,
                 targets: &targets,
+                reflection_slots: quality_slots.glass_reflection,
+                reflection_divisor: post.rt_reflections.map_or(1, |rt| rt.divisor),
                 planar: &planar,
                 glass_panels: &fx.glass_panels,
                 water_surfaces: &fx.water_surfaces,

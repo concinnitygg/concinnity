@@ -22,8 +22,9 @@ pub(in crate::vulkan) use concinnity_core::render::uniforms::GlassParams;
 use super::allocator::DeviceAllocator;
 use crate::vulkan::slang_builtins::SlangCompile;
 use crate::vulkan::transparent::{
-    GlassMeshProducer, ProducerCtx, RecordUpload, TransparentProducer, TransparentRecord,
-    TransparentVertexInput, create_transparent_pipeline,
+    GlassMeshProducer, ProducerCtx, RecordUpload, TracedGlassPipelines, TransparentProducer,
+    TransparentRecord, TransparentVertexInput, create_glass_reflection_pipeline,
+    create_transparent_pipeline,
 };
 
 // Build the per-panel `GlassParams` from an authored panel. `planar` is 1.0 when
@@ -69,6 +70,9 @@ struct GlassRtShaders {
     vs: Vec<u8>,
     flat_fs: Vec<u8>,
     textured_fs: Option<Vec<u8>>,
+    // The reflection pre-pass fragments, paired the same way.
+    reflection_flat_fs: Vec<u8>,
+    reflection_textured_fs: Option<Vec<u8>>,
 }
 
 // Compile the glass vertex shader + the ray-traced glass fragment (flat, plus
@@ -88,15 +92,21 @@ fn compile_glass_rt_shaders(
     };
     let vs = super::slang_builtins::GLASS_VERT.compile(&ctx)?;
     let flat_fs = super::slang_builtins::GLASS_FRAG_RT.compile(&ctx)?;
-    let textured_fs = if pool_size > 0 {
-        Some(super::slang_builtins::GLASS_FRAG_RT_TEXTURED.compile(&ctx)?)
+    let reflection_flat_fs = super::slang_builtins::GLASS_REFLECTION_FRAG.compile(&ctx)?;
+    let (textured_fs, reflection_textured_fs) = if pool_size > 0 {
+        (
+            Some(super::slang_builtins::GLASS_FRAG_RT_TEXTURED.compile(&ctx)?),
+            Some(super::slang_builtins::GLASS_REFLECTION_FRAG_TEXTURED.compile(&ctx)?),
+        )
     } else {
-        None
+        (None, None)
     };
     Ok(GlassRtShaders {
         vs,
         flat_fs,
         textured_fs,
+        reflection_flat_fs,
+        reflection_textured_fs,
     })
 }
 
@@ -162,17 +172,27 @@ pub(in crate::vulkan) fn build_glass_producer(
         TransparentVertexInput::Position,
     )?;
 
-    let (flat_rt_pso, textured_rt_pso) = match ctx.rt_layout_flat {
+    let traced = match ctx.rt_layout_flat {
         Some(flat_layout) => match build_glass_rt_pipelines(&ctx, flat_layout) {
-            Ok(pair) => pair,
+            Ok(p) => Some(p),
             Err(e) => {
                 tracing::warn!(
                     "glass RT pipelines failed to build ({e}); using the probe / planar glass path"
                 );
-                (None, None)
+                None
             }
         },
-        None => (None, None),
+        None => None,
+    };
+    let (flat_rt_pso, textured_rt_pso, reflection_flat_pso, reflection_textured_pso) = match traced
+    {
+        Some(p) => (
+            Some(p.shade_flat),
+            p.shade_textured,
+            Some(p.reflection_flat),
+            p.reflection_textured,
+        ),
+        None => (None, None, None, None),
     };
 
     let mut records = Vec::with_capacity(panels.len());
@@ -185,48 +205,72 @@ pub(in crate::vulkan) fn build_glass_producer(
         pipeline,
         flat_rt_pso,
         textured_rt_pso,
+        reflection_flat_pso,
+        reflection_textured_pso,
         records,
     })
 }
 
-// The flat + textured RT glass pipelines. The textured one is skipped when the
-// bindless pool is absent or the device could not spare a fifth descriptor set,
-// leaving the flat trace.
-type GlassRtPipelines = (
-    Option<super::owned::OwnedPipeline>,
-    Option<super::owned::OwnedPipeline>,
-);
-
+// The traced RT glass pipelines. The textured pair is skipped when the bindless
+// pool is absent or the device could not spare a fifth descriptor set, leaving
+// the flat trace.
 fn build_glass_rt_pipelines(
     ctx: &ProducerCtx,
     flat_layout: vk::PipelineLayout,
-) -> RenderResult<GlassRtPipelines> {
+) -> RenderResult<TracedGlassPipelines> {
     let shaders = compile_glass_rt_shaders(
         ctx.hot_reload,
         ctx.msaa,
         ctx.bindless_pool_size,
         ctx.probe_cube_count,
     )?;
-    let flat = create_transparent_pipeline(
-        ctx.device,
-        ctx.render_pass,
-        flat_layout,
-        &shaders.vs,
-        &shaders.flat_fs,
-        TransparentVertexInput::Position,
-    )?;
-    let textured = match (ctx.rt_layout_textured, &shaders.textured_fs) {
-        (Some(layout), Some(fs)) => Some(create_transparent_pipeline(
+    build_traced_pipelines(ctx, flat_layout, &shaders, TransparentVertexInput::Position)
+}
+
+// Both traced pairs over one vertex stage: the shading pipelines target the
+// transparent pass, the reflection ones the glass reflection pre-pass.
+fn build_traced_pipelines(
+    ctx: &ProducerCtx,
+    flat_layout: vk::PipelineLayout,
+    shaders: &GlassRtShaders,
+    vertex_input: TransparentVertexInput,
+) -> RenderResult<TracedGlassPipelines> {
+    let shade = |layout, fs: &[u8]| {
+        create_transparent_pipeline(
             ctx.device,
             ctx.render_pass,
             layout,
             &shaders.vs,
             fs,
-            TransparentVertexInput::Position,
-        )?),
-        _ => None,
+            vertex_input,
+        )
     };
-    Ok((Some(flat), textured))
+    let reflection = |layout, fs: &[u8]| {
+        create_glass_reflection_pipeline(
+            ctx.device,
+            ctx.reflection_render_pass,
+            layout,
+            &shaders.vs,
+            fs,
+            vertex_input,
+        )
+    };
+    let (shade_textured, reflection_textured) = match (
+        ctx.rt_layout_textured,
+        &shaders.textured_fs,
+        &shaders.reflection_textured_fs,
+    ) {
+        (Some(layout), Some(fs), Some(rfs)) => {
+            (Some(shade(layout, fs)?), Some(reflection(layout, rfs)?))
+        }
+        _ => (None, None),
+    };
+    Ok(TracedGlassPipelines {
+        shade_flat: shade(flat_layout, &shaders.flat_fs)?,
+        shade_textured,
+        reflection_flat: reflection(flat_layout, &shaders.reflection_flat_fs)?,
+        reflection_textured,
+    })
 }
 
 // Compile the see-through mesh vertex stage + its ray-traced fragments (flat,
@@ -245,15 +289,21 @@ fn compile_glass_mesh_shaders(
     };
     let vs = super::slang_builtins::GLASS_MESH_VERT.compile(&ctx)?;
     let flat_fs = super::slang_builtins::GLASS_MESH_FRAG_RT.compile(&ctx)?;
-    let textured_fs = if pool_size > 0 {
-        Some(super::slang_builtins::GLASS_MESH_FRAG_RT_TEXTURED.compile(&ctx)?)
+    let reflection_flat_fs = super::slang_builtins::GLASS_MESH_REFLECTION_FRAG.compile(&ctx)?;
+    let (textured_fs, reflection_textured_fs) = if pool_size > 0 {
+        (
+            Some(super::slang_builtins::GLASS_MESH_FRAG_RT_TEXTURED.compile(&ctx)?),
+            Some(super::slang_builtins::GLASS_MESH_REFLECTION_FRAG_TEXTURED.compile(&ctx)?),
+        )
     } else {
-        None
+        (None, None)
     };
     Ok(GlassRtShaders {
         vs,
         flat_fs,
         textured_fs,
+        reflection_flat_fs,
+        reflection_textured_fs,
     })
 }
 
@@ -273,31 +323,13 @@ pub(in crate::vulkan) fn build_glass_mesh_producer(
         ctx.bindless_pool_size,
         ctx.probe_cube_count,
     )?;
-    let pipeline_flat = create_transparent_pipeline(
-        ctx.device,
-        ctx.render_pass,
+    let pipelines = build_traced_pipelines(
+        &ctx,
         flat_layout,
-        &shaders.vs,
-        &shaders.flat_fs,
+        &shaders,
         TransparentVertexInput::PositionAndNormal,
     )?;
-    let pipeline_textured = match (ctx.rt_layout_textured, &shaders.textured_fs) {
-        (Some(layout), Some(fs)) => Some(create_transparent_pipeline(
-            ctx.device,
-            ctx.render_pass,
-            layout,
-            &shaders.vs,
-            fs,
-            TransparentVertexInput::PositionAndNormal,
-        )?),
-        _ => None,
-    };
-    GlassMeshProducer::new(
-        &ctx,
-        pipeline_flat,
-        pipeline_textured,
-        object_indices.to_vec(),
-    )
+    GlassMeshProducer::new(&ctx, pipelines, object_indices.to_vec())
 }
 
 #[cfg(test)]

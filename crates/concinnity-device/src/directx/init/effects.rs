@@ -16,7 +16,7 @@ use concinnity_core::render::post::ssao::SsaoSettings;
 use concinnity_core::render::volumetric_fog::FogSettings;
 use windows::Win32::Graphics::Direct3D12::*;
 
-use super::heap_layout::{DSV_GBUFFER_DEPTH_SLOT, RtvHeapLayout};
+use super::heap_layout::{DSV_GBUFFER_DEPTH_SLOT, DSV_GLASS_REFLECTION_DEPTH_SLOT, RtvHeapLayout};
 use super::{Features, InitGpu, heaps};
 use crate::directx::auto_exposure::AutoExposureState;
 use crate::directx::context::{
@@ -136,6 +136,22 @@ pub(super) fn build_quality_slots(
                 dsv_descriptor_size,
                 DSV_GBUFFER_DEPTH_SLOT,
             ),
+        },
+        glass_reflection: {
+            let base = layout.glass_reflection_srv_base_slot;
+            crate::directx::transparent::GlassReflectionSlots {
+                rtv: [
+                    swapchain.rtv(rtv.glass_reflection_base_slot),
+                    swapchain.rtv(rtv.glass_reflection_base_slot + 1),
+                ],
+                dsv: heaps::cpu_handle(
+                    &targets.depth.heap,
+                    dsv_descriptor_size,
+                    DSV_GLASS_REFLECTION_DEPTH_SLOT,
+                ),
+                srv_cpu: std::array::from_fn(|i| descriptors.slot_cpu(base + i)),
+                windows: std::array::from_fn(|w| descriptors.slot_gpu(base + 2 * w)),
+            }
         },
     }
 }
@@ -624,6 +640,9 @@ pub(super) fn build_planar_reflection(
 pub(super) struct TransparentInputs<'a> {
     pub(super) descriptors: &'a DxDescriptors,
     pub(super) targets: &'a DxTargets,
+    pub(super) reflection_slots: crate::directx::transparent::GlassReflectionSlots,
+    // Per-axis divisor of the glass reflection pre-pass; 1 traces in place.
+    pub(super) reflection_divisor: u32,
     pub(super) planar: &'a PlanarAssignment,
     pub(super) glass_panels: &'a [GlassPanel],
     pub(super) water_surfaces: &'a [WaterSurface],
@@ -646,6 +665,8 @@ pub(super) fn build_transparent(
     let TransparentInputs {
         descriptors,
         targets,
+        reflection_slots,
+        reflection_divisor,
         planar,
         glass_panels,
         water_surfaces,
@@ -680,11 +701,13 @@ pub(super) fn build_transparent(
                     width: targets.extent.render_width,
                     height: targets.extent.render_height,
                     hot_reload: gpu.hot_reload,
+                    reflection_divisor,
                 },
                 crate::directx::transparent::TransparentSceneTargets {
                     scene_copy_srv_cpu: descriptors.slot_cpu(scene_copy_slot),
                     scene_copy_srv_gpu: descriptors.slot_gpu(scene_copy_slot),
                     depth_srv_gpu: targets.main_depth_srv_gpu,
+                    reflection_slots,
                 },
                 crate::directx::transparent::TransparentContent {
                     glass_panels,

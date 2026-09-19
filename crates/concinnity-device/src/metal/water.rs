@@ -251,6 +251,7 @@ impl MtlContext {
             let sort_distance = transparent::sort_distance(c, [cam[0], cam[1], cam[2]]);
             out.push(TransparentDraw {
                 pipeline: pipeline.clone(),
+                reflection_pipeline: None,
                 vertex_buffer: surface.vertex_buffer.clone(),
                 index_buffer: surface.index_buffer.clone(),
                 index_count: surface.index_count,

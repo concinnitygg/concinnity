@@ -437,6 +437,18 @@ pub(super) static GLASS_FRAG_RT_TEXTURED: SlangLib = SlangLib {
     entries: &["glass_rt_fragment"],
     defines: GLASS_RT_TEXTURED_DEFINES,
 };
+pub(super) static GLASS_REFLECTION_FRAG: SlangLib = SlangLib {
+    name: "glass_reflection_frag.slang",
+    file: "glass.slang",
+    entries: &["glass_rt_reflection_fragment"],
+    defines: GLASS_RT_DEFINES,
+};
+pub(super) static GLASS_REFLECTION_FRAG_TEXTURED: SlangLib = SlangLib {
+    name: "glass_reflection_frag_textured.slang",
+    file: "glass.slang",
+    entries: &["glass_rt_reflection_fragment"],
+    defines: GLASS_RT_TEXTURED_DEFINES,
+};
 
 pub(super) static GLASS_MESH_VERT: SlangLib = SlangLib {
     name: "glass_mesh_vert.slang",
@@ -454,6 +466,18 @@ pub(super) static GLASS_MESH_FRAG_RT_TEXTURED: SlangLib = SlangLib {
     name: "glass_mesh_frag_rt_textured.slang",
     file: "glass_mesh.slang",
     entries: &["glass_mesh_rt_fragment"],
+    defines: GLASS_MESH_TEXTURED_DEFINES,
+};
+pub(super) static GLASS_MESH_REFLECTION_FRAG: SlangLib = SlangLib {
+    name: "glass_mesh_reflection_frag.slang",
+    file: "glass_mesh.slang",
+    entries: &["glass_mesh_reflection_fragment"],
+    defines: GLASS_MESH_DEFINES,
+};
+pub(super) static GLASS_MESH_REFLECTION_FRAG_TEXTURED: SlangLib = SlangLib {
+    name: "glass_mesh_reflection_frag_textured.slang",
+    file: "glass_mesh.slang",
+    entries: &["glass_mesh_reflection_fragment"],
     defines: GLASS_MESH_TEXTURED_DEFINES,
 };
 
@@ -536,9 +560,13 @@ pub(super) static ALL: &[&SlangLib] = &[
     &GLASS_FRAG,
     &GLASS_FRAG_RT,
     &GLASS_FRAG_RT_TEXTURED,
+    &GLASS_REFLECTION_FRAG,
+    &GLASS_REFLECTION_FRAG_TEXTURED,
     &GLASS_MESH_VERT,
     &GLASS_MESH_FRAG_RT,
     &GLASS_MESH_FRAG_RT_TEXTURED,
+    &GLASS_MESH_REFLECTION_FRAG,
+    &GLASS_MESH_REFLECTION_FRAG_TEXTURED,
     &WATER_VERT,
     &WATER_FRAG,
     &WATER_FRAG_RT,

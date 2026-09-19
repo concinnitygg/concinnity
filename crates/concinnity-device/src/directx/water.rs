@@ -238,6 +238,8 @@ pub(in crate::directx) fn build_water_producer(
         pso,
         flat_rt_pso,
         textured_rt_pso,
+        reflection_flat_pso: None,
+        reflection_textured_pso: None,
         records,
     })
 }

@@ -19,6 +19,7 @@ pub const SOURCES: &[(&str, &str)] = &[
     ("gbuffer_prepass.slang", GBUFFER_PREPASS),
     ("glass.slang", GLASS),
     ("glass_mesh.slang", GLASS_MESH),
+    ("glass_reflection.slang", GLASS_REFLECTION),
     ("hiz_build.slang", HIZ_BUILD),
     ("light_cull.slang", LIGHT_CULL),
     ("light_types.slang", LIGHT_TYPES),
@@ -82,6 +83,8 @@ pub const GBUFFER_PREPASS: &str = include_str!("shaders/gbuffer_prepass.slang");
 pub const GLASS: &str = include_str!("shaders/glass.slang");
 /// `glass_mesh.slang`.
 pub const GLASS_MESH: &str = include_str!("shaders/glass_mesh.slang");
+/// `glass_reflection.slang`.
+pub const GLASS_REFLECTION: &str = include_str!("shaders/glass_reflection.slang");
 /// `hiz_build.slang`.
 pub const HIZ_BUILD: &str = include_str!("shaders/hiz_build.slang");
 /// `light_cull.slang`.

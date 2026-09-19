@@ -664,6 +664,7 @@ pub(super) fn build_world_effects(
                 global_set_layout: descriptors.global_set_layout.handle(),
                 probe_cube_count: descriptors.probe_cube_count,
                 hot_reload,
+                reflection_divisor: post.rt_reflections.map_or(1, |rt| rt.divisor),
             },
             crate::vulkan::transparent::TransparentSceneTargets {
                 scene_views: &scene_views,

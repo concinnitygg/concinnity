@@ -44,8 +44,8 @@ use super::context::{HDR_FORMAT, VkContext};
 use super::pipeline::GraphicsStages;
 use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::texture::{
-    GpuImage, ImageSpec, LayoutTransition, SubresourceRange, create_image, create_image_view,
-    one_shot_submit, transition_image_layout_range,
+    GpuImage, GpuUploadContext, ImageSpec, LayoutTransition, SubresourceRange, create_image,
+    create_image_view, one_shot_submit, transition_image_layout_range, upload_texture,
 };
 use super::wire_cache::WireCache;
 use crate::vulkan::owned::{
@@ -189,6 +189,10 @@ pub(in crate::vulkan) struct TransparentProducer {
     pub pipeline: OwnedPipeline,
     pub flat_rt_pso: Option<OwnedPipeline>,
     pub textured_rt_pso: Option<OwnedPipeline>,
+    // The glass reflection pre-pass pair, built beside the RT pair for glass
+    // panes; `None` for water, which traces in place.
+    pub reflection_flat_pso: Option<OwnedPipeline>,
+    pub reflection_textured_pso: Option<OwnedPipeline>,
     pub records: Vec<TransparentRecord>,
 }
 
@@ -217,6 +221,15 @@ impl TransparentProducer {
             _ => &self.pipeline,
         }
     }
+
+    // This producer's reflection pre-pass pipeline, or `None` when it traces in
+    // place.
+    fn reflection_pipeline(&self, textured: bool) -> Option<&OwnedPipeline> {
+        match textured {
+            true => self.reflection_textured_pso.as_ref(),
+            false => self.reflection_flat_pso.as_ref(),
+        }
+    }
 }
 
 // The see-through glass MESH producer. Ray-traced only: what makes the mesh
@@ -232,6 +245,9 @@ pub(in crate::vulkan) struct GlassMeshProducer {
     pipeline_flat: OwnedPipeline,
     // `Some` only when the bindless pool is live, matching the other producers.
     pipeline_textured: Option<OwnedPipeline>,
+    // The glass reflection pre-pass pair, gated the same way.
+    reflection_flat: OwnedPipeline,
+    reflection_textured: Option<OwnedPipeline>,
     // Indices into `VkContext::draw.objects` of every see-through mesh,
     // precomputed at init. The objects stay IN `draw.objects` -- a slot is a key
     // into the cull / prev-model / RT parallel arrays -- this only marks which to
@@ -270,8 +286,7 @@ impl GlassMeshProducer {
     // the binding.
     pub(in crate::vulkan) fn new(
         ctx: &ProducerCtx,
-        pipeline_flat: OwnedPipeline,
-        pipeline_textured: Option<OwnedPipeline>,
+        pipelines: TracedGlassPipelines,
         object_indices: Vec<usize>,
     ) -> RenderResult<Self> {
         let device = ctx.device;
@@ -325,9 +340,17 @@ impl GlassMeshProducer {
             }
         }
 
+        let TracedGlassPipelines {
+            shade_flat: pipeline_flat,
+            shade_textured: pipeline_textured,
+            reflection_flat,
+            reflection_textured,
+        } = pipelines;
         Ok(Self {
             pipeline_flat,
             pipeline_textured,
+            reflection_flat,
+            reflection_textured,
             object_indices,
             params_buffers,
             params_stride,
@@ -348,6 +371,26 @@ impl GlassMeshProducer {
             false => &self.pipeline_flat,
         }
     }
+
+    // The reflection pre-pass pipeline, under the same gate as `pipeline`.
+    fn reflection_pipeline(&self, textured: bool) -> &OwnedPipeline {
+        match textured {
+            true => self
+                .reflection_textured
+                .as_ref()
+                .expect("rt_textured_ready gated the frame on every producer's textured pipeline"),
+            false => &self.reflection_flat,
+        }
+    }
+}
+
+// A traced glass producer's pipelines: the shading pair and the reflection
+// pre-pass pair, each textured variant `Some` only with the bindless pool.
+pub(in crate::vulkan) struct TracedGlassPipelines {
+    pub shade_flat: OwnedPipeline,
+    pub shade_textured: Option<OwnedPipeline>,
+    pub reflection_flat: OwnedPipeline,
+    pub reflection_textured: Option<OwnedPipeline>,
 }
 
 // Per-pixel ray-traced reflection state shared by both producers: the two
@@ -399,7 +442,7 @@ pub(in crate::vulkan) struct TransparentResources {
     // Per-frame `TransparentView` UBO ring. Host-mapped; the encoder writes this
     // frame's view before binding.
     view_ubos: Vec<PooledBuffer>,
-    view_sets: Vec<vk::DescriptorSet>,
+    view_sets: Vec<FrameViewSets>,
 
     // Per-frame scene target the pass blends into: `SsrResources::output`
     // (repeated for every frame slot) when SSR is on, else this slot's
@@ -423,6 +466,13 @@ pub(in crate::vulkan) struct TransparentResources {
     glass_mesh: Option<GlassMeshProducer>,
 
     rt: Option<TransparentRt>,
+
+    // The glass reflection pre-pass: its render pass (the reflection pipelines
+    // are built against it whenever glass can trace), the reduced layers while the
+    // trace divisor is above 1, and the 1x1 empty layer the first one peels behind.
+    reflection_render_pass: OwnedRenderPass,
+    reflection: Option<GlassReflectionLayers>,
+    empty_layer: GpuImage,
 }
 
 use concinnity_core::render::transparent::ordered_visible;
@@ -763,8 +813,170 @@ fn create_transparent_render_pass(
         .map_err(|e| super::error::map_vk_result(e, "transparent render pass"))
 }
 
-// Set 0: the per-frame view UBO (0), the scene snapshot (1) and this frame's
-// main depth (2). The view UBO is visible to the vertex stage as well: both
+// The glass reflection pre-pass: one reduced layer (CLEAR, left
+// SHADER_READ_ONLY for the next layer and the scene pass to read) over a depth
+// attachment the pass clears and tests against. The incoming dependency orders
+// the clears after the previous layer's depth writes and after the prior frame's
+// reads of the layer; the outgoing one publishes the layer to fragment reads.
+fn create_reflection_render_pass(device: &VkDevice) -> RenderResult<OwnedRenderPass> {
+    let color = vk::AttachmentDescription::default()
+        .format(HDR_FORMAT)
+        .samples(vk::SampleCountFlags::TYPE_1)
+        .load_op(vk::AttachmentLoadOp::CLEAR)
+        .store_op(vk::AttachmentStoreOp::STORE)
+        .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+        .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+        .initial_layout(vk::ImageLayout::UNDEFINED)
+        .final_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+    let depth = vk::AttachmentDescription::default()
+        .format(REFLECTION_DEPTH_FORMAT)
+        .samples(vk::SampleCountFlags::TYPE_1)
+        .load_op(vk::AttachmentLoadOp::CLEAR)
+        .store_op(vk::AttachmentStoreOp::DONT_CARE)
+        .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+        .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+        .initial_layout(vk::ImageLayout::UNDEFINED)
+        .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+    let color_ref = vk::AttachmentReference::default()
+        .attachment(0)
+        .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+    let depth_ref = vk::AttachmentReference::default()
+        .attachment(1)
+        .layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+    let subpass = vk::SubpassDescription::default()
+        .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
+        .color_attachments(std::slice::from_ref(&color_ref))
+        .depth_stencil_attachment(&depth_ref);
+    let fragment_tests =
+        vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS;
+    let dependencies = [
+        vk::SubpassDependency::default()
+            .src_subpass(vk::SUBPASS_EXTERNAL)
+            .dst_subpass(0)
+            .src_stage_mask(
+                fragment_tests
+                    | vk::PipelineStageFlags::FRAGMENT_SHADER
+                    | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            )
+            .src_access_mask(
+                vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE
+                    | vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+            )
+            .dst_stage_mask(
+                fragment_tests
+                    | vk::PipelineStageFlags::FRAGMENT_SHADER
+                    | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            )
+            .dst_access_mask(
+                vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_READ
+                    | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE
+                    | vk::AccessFlags::COLOR_ATTACHMENT_WRITE
+                    | vk::AccessFlags::SHADER_READ,
+            ),
+        vk::SubpassDependency::default()
+            .src_subpass(0)
+            .dst_subpass(vk::SUBPASS_EXTERNAL)
+            .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
+            .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
+            .dst_stage_mask(vk::PipelineStageFlags::FRAGMENT_SHADER)
+            .dst_access_mask(vk::AccessFlags::SHADER_READ),
+    ];
+    let attachments = [color, depth];
+    let info = vk::RenderPassCreateInfo::default()
+        .attachments(&attachments)
+        .subpasses(std::slice::from_ref(&subpass))
+        .dependencies(&dependencies);
+    device
+        .create_render_pass(&info)
+        .map_err(|e| super::error::map_vk_result(e, "glass reflection render pass"))
+}
+
+const REFLECTION_DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
+
+// The reduced glass reflection pre-pass targets: two layers (rgb the traced
+// reflection, a the surface's distance from the camera) over one depth
+// attachment, with a framebuffer per layer.
+struct GlassReflectionLayers {
+    layers: [GpuImage; 2],
+    _depth: GpuImage,
+    framebuffers: [OwnedFramebuffer; 2],
+    extent: vk::Extent2D,
+}
+
+impl GlassReflectionLayers {
+    fn new(
+        alloc: &DeviceAllocator,
+        device: &VkDevice,
+        render_pass: vk::RenderPass,
+        extent: vk::Extent2D,
+    ) -> RenderResult<Self> {
+        let image = |format: vk::Format, usage: vk::ImageUsageFlags, aspect| -> RenderResult<_> {
+            let pooled = create_image(
+                alloc,
+                &ImageSpec {
+                    width: extent.width,
+                    height: extent.height,
+                    format,
+                    tiling: vk::ImageTiling::OPTIMAL,
+                    usage,
+                    mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                    samples: vk::SampleCountFlags::TYPE_1,
+                },
+            )?;
+            let view = create_image_view(device, pooled.image(), format, aspect)?;
+            Ok(GpuImage::from_pooled(pooled, view))
+        };
+        let layer = || {
+            image(
+                HDR_FORMAT,
+                vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+                vk::ImageAspectFlags::COLOR,
+            )
+        };
+        let layers = [layer()?, layer()?];
+        let depth = image(
+            REFLECTION_DEPTH_FORMAT,
+            vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+            vk::ImageAspectFlags::DEPTH,
+        )?;
+        let framebuffer = |color: &GpuImage| {
+            let attachments = [color.view, depth.view];
+            device
+                .create_framebuffer(
+                    &vk::FramebufferCreateInfo::default()
+                        .render_pass(render_pass)
+                        .attachments(&attachments)
+                        .width(extent.width)
+                        .height(extent.height)
+                        .layers(1),
+                )
+                .map_err(|e| super::error::map_vk_result(e, "glass reflection framebuffer"))
+        };
+        let framebuffers = [framebuffer(&layers[0])?, framebuffer(&layers[1])?];
+        Ok(Self {
+            layers,
+            _depth: depth,
+            framebuffers,
+            extent,
+        })
+    }
+}
+
+// One frame's set-0 variants, differing only in the reflection layers bound at
+// 3 / 4: the scene pass reads both layers, and each pre-pass layer reads the
+// layer it peels behind (the empty layer for the first).
+#[derive(Clone, Copy)]
+struct FrameViewSets {
+    scene: vk::DescriptorSet,
+    layers: [vk::DescriptorSet; 2],
+}
+
+impl FrameViewSets {
+    const COUNT: usize = 3;
+}
+
+// Set 0: the per-frame view UBO (0), the scene snapshot (1), this frame's main
+// depth (2) and the two glass reflection layers (3, 4). The view UBO is visible to the vertex stage as well: both
 // producers project through `vp`, and water reads `time` there for its wave
 // phase.
 fn create_view_set_layout(device: &VkDevice) -> RenderResult<OwnedSetLayout> {
@@ -783,6 +995,16 @@ fn create_view_set_layout(device: &VkDevice) -> RenderResult<OwnedSetLayout> {
         vk::DescriptorSetLayoutBinding::default()
             .binding(2)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_count(1)
+            .stage_flags(frag),
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(3)
+            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+            .descriptor_count(1)
+            .stage_flags(frag),
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(4)
+            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
             .descriptor_count(1)
             .stage_flags(frag),
     ];
@@ -819,66 +1041,86 @@ fn create_descriptor_pool(
     frames: usize,
     records: usize,
 ) -> RenderResult<OwnedDescriptorPool> {
-    let f = frames as u32;
+    // One view set per frame per `FrameViewSets` slot.
+    let v = (frames * FrameViewSets::COUNT) as u32;
     let r = records as u32;
     let sizes = [
-        // view UBO per frame + params UBO per record.
+        // view UBO per view set + params UBO per record.
         vk::DescriptorPoolSize {
             ty: vk::DescriptorType::UNIFORM_BUFFER,
-            descriptor_count: f + r,
+            descriptor_count: v + r,
         },
-        // snapshot + depth per per-frame view set, plus one planar target per record.
+        // snapshot + depth per view set, plus one planar target per record.
         vk::DescriptorPoolSize {
             ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-            descriptor_count: 2 * f + r,
+            descriptor_count: 2 * v + r,
+        },
+        // The two reflection layers per view set.
+        vk::DescriptorPoolSize {
+            ty: vk::DescriptorType::SAMPLED_IMAGE,
+            descriptor_count: 2 * v,
         },
     ];
     let info = vk::DescriptorPoolCreateInfo::default()
-        .max_sets(f + r)
+        .max_sets(v + r)
         .pool_sizes(&sizes);
     device
         .create_descriptor_pool(&info)
         .map_err(|e| super::error::map_vk_result(e, "transparent descriptor pool"))
 }
 
-// Write one per-frame view set: the view UBO (binding 0), the shared scene
-// snapshot (binding 1), and this frame's main-depth view (binding 2).
-fn write_view_set(
-    device: &VkDevice,
-    set: vk::DescriptorSet,
+// What one view set points at: the view UBO (binding 0), the shared scene
+// snapshot (1), this frame's main depth (2) and the two reflection layers (3, 4).
+#[derive(Clone, Copy)]
+struct ViewSetInputs {
     view_ubo: vk::Buffer,
     snapshot_view: vk::ImageView,
     depth_view: vk::ImageView,
+    reflection: [vk::ImageView; 2],
     sampler: vk::Sampler,
-) {
+}
+
+fn write_view_set(device: &VkDevice, set: vk::DescriptorSet, inputs: ViewSetInputs) {
     let view_info = vk::DescriptorBufferInfo::default()
-        .buffer(view_ubo)
+        .buffer(inputs.view_ubo)
         .offset(0)
         .range(std::mem::size_of::<TransparentView>() as u64);
     let img = |view: vk::ImageView| {
         vk::DescriptorImageInfo::default()
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             .image_view(view)
-            .sampler(sampler)
+            .sampler(inputs.sampler)
     };
-    let snapshot_info = img(snapshot_view);
-    let depth_info = img(depth_view);
+    let sampled = |view: vk::ImageView| {
+        vk::DescriptorImageInfo::default()
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .image_view(view)
+    };
+    let snapshot_info = img(inputs.snapshot_view);
+    let depth_info = img(inputs.depth_view);
+    let front_info = sampled(inputs.reflection[0]);
+    let back_info = sampled(inputs.reflection[1]);
+    let image_write = |binding: u32, ty: vk::DescriptorType, info| {
+        vk::WriteDescriptorSet::default()
+            .dst_set(set)
+            .dst_binding(binding)
+            .descriptor_type(ty)
+            .image_info(std::slice::from_ref(info))
+    };
     let writes = [
         vk::WriteDescriptorSet::default()
             .dst_set(set)
             .dst_binding(0)
             .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
             .buffer_info(std::slice::from_ref(&view_info)),
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(1)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .image_info(std::slice::from_ref(&snapshot_info)),
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(2)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .image_info(std::slice::from_ref(&depth_info)),
+        image_write(
+            1,
+            vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+            &snapshot_info,
+        ),
+        image_write(2, vk::DescriptorType::COMBINED_IMAGE_SAMPLER, &depth_info),
+        image_write(3, vk::DescriptorType::SAMPLED_IMAGE, &front_info),
+        image_write(4, vk::DescriptorType::SAMPLED_IMAGE, &back_info),
     ];
     // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
     // and resource it names belongs to this device.
@@ -966,6 +1208,76 @@ pub(in crate::vulkan) fn create_transparent_pipeline(
     frag_spv: &[u8],
     vertex_input: TransparentVertexInput,
 ) -> RenderResult<OwnedPipeline> {
+    let shaders = TransparentShaders {
+        vert_spv,
+        frag_spv,
+        vertex_input,
+    };
+    transparent_pipeline(
+        device,
+        render_pass,
+        layout,
+        shaders,
+        TransparentOutput::Scene,
+    )
+}
+
+// Build one glass reflection pre-pass pipeline: the transparent pipeline's
+// stages, overwriting a reflection layer and depth-tested (LESS, writing) against
+// the layer's depth attachment, so each layer keeps the nearest surface it
+// accepts. `render_pass` is the pre-pass's own.
+pub(in crate::vulkan) fn create_glass_reflection_pipeline(
+    device: &VkDevice,
+    render_pass: vk::RenderPass,
+    layout: vk::PipelineLayout,
+    vert_spv: &[u8],
+    frag_spv: &[u8],
+    vertex_input: TransparentVertexInput,
+) -> RenderResult<OwnedPipeline> {
+    let shaders = TransparentShaders {
+        vert_spv,
+        frag_spv,
+        vertex_input,
+    };
+    transparent_pipeline(
+        device,
+        render_pass,
+        layout,
+        shaders,
+        TransparentOutput::ReflectionLayer,
+    )
+}
+
+// A transparent pipeline's two stages and the vertex attributes its vertex
+// stage fetches.
+struct TransparentShaders<'a> {
+    vert_spv: &'a [u8],
+    frag_spv: &'a [u8],
+    vertex_input: TransparentVertexInput,
+}
+
+// What a transparent pipeline draws into.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TransparentOutput {
+    // Straight-alpha blended over the scene, with no depth attachment.
+    Scene,
+    // Overwriting a glass reflection layer, depth-tested against its attachment.
+    ReflectionLayer,
+}
+
+fn transparent_pipeline(
+    device: &VkDevice,
+    render_pass: vk::RenderPass,
+    layout: vk::PipelineLayout,
+    shaders: TransparentShaders,
+    output: TransparentOutput,
+) -> RenderResult<OwnedPipeline> {
+    let TransparentShaders {
+        vert_spv,
+        frag_spv,
+        vertex_input,
+    } = shaders;
+    let blend = output == TransparentOutput::Scene;
     let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
     let stages = modules.infos();
 
@@ -1002,12 +1314,14 @@ pub(in crate::vulkan) fn create_transparent_pipeline(
     // The scene target is single-sample regardless of the main pass's MSAA.
     let multisample = vk::PipelineMultisampleStateCreateInfo::default()
         .rasterization_samples(vk::SampleCountFlags::TYPE_1);
-    // No depth attachment: the fragment shader does the manual occlusion test.
+    // The scene pass has no depth attachment (the fragment shader does the manual
+    // occlusion test); a reflection layer keeps its nearest surface.
     let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
-        .depth_test_enable(false)
-        .depth_write_enable(false);
+        .depth_test_enable(!blend)
+        .depth_write_enable(!blend)
+        .depth_compare_op(vk::CompareOp::LESS);
     let blend_attachment = vk::PipelineColorBlendAttachmentState::default()
-        .blend_enable(true)
+        .blend_enable(blend)
         .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
         .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
         .color_blend_op(vk::BlendOp::ADD)
@@ -1116,6 +1430,8 @@ pub(in crate::vulkan) struct TransparentBuildConfig {
     pub global_set_layout: vk::DescriptorSetLayout,
     pub probe_cube_count: u32,
     pub hot_reload: bool,
+    // Per-axis divisor of the glass reflection pre-pass; 1 traces in place.
+    pub reflection_divisor: u32,
 }
 
 // The post-SSR scene target per frame slot plus the per-frame main-depth views.
@@ -1183,6 +1499,8 @@ pub(in crate::vulkan) struct ProducerCtx<'a> {
     pub alloc: &'a DeviceAllocator,
     pub device: &'a VkDevice,
     pub render_pass: vk::RenderPass,
+    // The glass reflection pre-pass render pass the reflection pipelines target.
+    pub reflection_render_pass: vk::RenderPass,
     pub layout: vk::PipelineLayout,
     pub rt_layout_flat: Option<vk::PipelineLayout>,
     pub rt_layout_textured: Option<vk::PipelineLayout>,
@@ -1232,6 +1550,8 @@ pub(in crate::vulkan) struct TransparentRebuildTargets<'a> {
     pub scene_images: &'a [vk::Image],
     pub depth_views: &'a [vk::ImageView],
     pub planar_target_views: &'a [vk::ImageView],
+    // Per-axis divisor of the glass reflection pre-pass; 1 traces in place.
+    pub reflection_divisor: u32,
 }
 
 impl TransparentResources {
@@ -1262,6 +1582,7 @@ impl TransparentResources {
             global_set_layout,
             probe_cube_count,
             hot_reload,
+            reflection_divisor,
         } = config;
         let TransparentSceneTargets {
             scene_views,
@@ -1279,6 +1600,7 @@ impl TransparentResources {
         } = rt_setup;
         let msaa = msaa_samples != vk::SampleCountFlags::TYPE_1;
         let render_pass = create_transparent_render_pass(device, HDR_FORMAT)?;
+        let reflection_render_pass = create_reflection_render_pass(device)?;
         let view_set_layout = create_view_set_layout(device)?;
         let params_set_layout = create_params_set_layout(device)?;
         let set_layouts = [
@@ -1342,18 +1664,28 @@ impl TransparentResources {
 
         let records = content.glass_panels.len() + content.water_surfaces.len();
         let descriptor_pool = create_descriptor_pool(device, frames, records)?;
-        let view_layouts: Vec<_> = (0..frames).map(|_| view_set_layout.handle()).collect();
-        let view_sets = alloc_descriptor_sets(device, descriptor_pool.handle(), &view_layouts)?;
-        for (i, &set) in view_sets.iter().enumerate() {
-            write_view_set(
+        let view_layouts: Vec<_> = (0..frames * FrameViewSets::COUNT)
+            .map(|_| view_set_layout.handle())
+            .collect();
+        let view_sets: Vec<FrameViewSets> =
+            alloc_descriptor_sets(device, descriptor_pool.handle(), &view_layouts)?
+                .chunks_exact(FrameViewSets::COUNT)
+                .map(|sets| FrameViewSets {
+                    scene: sets[0],
+                    layers: [sets[1], sets[2]],
+                })
+                .collect();
+        let empty_layer = upload_texture(
+            &GpuUploadContext {
+                alloc,
                 device,
-                set,
-                view_ubos[i].buffer(),
-                snapshot.view,
-                depth_views[i.min(depth_views.len().saturating_sub(1))],
-                sampler,
-            );
-        }
+                command_pool,
+                queue,
+            },
+            1,
+            1,
+            &[0u8; 4],
+        )?;
 
         // Per-frame framebuffers targeting the scene image for that slot.
         let framebuffers =
@@ -1363,6 +1695,7 @@ impl TransparentResources {
             alloc,
             device,
             render_pass: render_pass.handle(),
+            reflection_render_pass: reflection_render_pass.handle(),
             layout: pipeline_layout.handle(),
             rt_layout_flat: rt.as_ref().map(|r| r.layout_flat.handle()),
             rt_layout_textured: rt
@@ -1430,7 +1763,7 @@ impl TransparentResources {
             _ => None,
         };
 
-        Ok(Self {
+        let mut me = Self {
             render_pass,
             pipeline_layout,
             _view_set_layout: view_set_layout,
@@ -1446,7 +1779,65 @@ impl TransparentResources {
             water,
             glass_mesh,
             rt,
-        })
+            reflection_render_pass,
+            reflection: None,
+            empty_layer,
+        };
+        me.reflection =
+            me.build_reflection_layers(alloc, device, width, height, reflection_divisor)?;
+        me.write_view_sets(device, depth_views);
+        Ok(me)
+    }
+
+    // The reduced reflection layers for a `width` x `height` render at
+    // `divisor`, or `None` when glass traces in place: a divisor of 1, or no
+    // glass producer that can trace.
+    fn build_reflection_layers(
+        &self,
+        alloc: &DeviceAllocator,
+        device: &VkDevice,
+        width: u32,
+        height: u32,
+        divisor: u32,
+    ) -> RenderResult<Option<GlassReflectionLayers>> {
+        let traced = self
+            .glass
+            .as_ref()
+            .is_some_and(|p| p.reflection_flat_pso.is_some())
+            || self.glass_mesh.is_some();
+        if divisor <= 1 || !traced {
+            return Ok(None);
+        }
+        let extent = vk::Extent2D {
+            width: (width / divisor).max(1),
+            height: (height / divisor).max(1),
+        };
+        GlassReflectionLayers::new(alloc, device, self.reflection_render_pass.handle(), extent)
+            .map(Some)
+    }
+
+    // Write every frame's set-0 variants. The scene pass reads both reflection
+    // layers (the snapshot stands in while there are none, which the shaders
+    // never read then); the first pre-pass layer peels behind the empty layer and
+    // the second behind the first.
+    fn write_view_sets(&self, device: &VkDevice, depth_views: &[vk::ImageView]) {
+        let empty = self.empty_layer.view;
+        let (scene, first) = match &self.reflection {
+            Some(r) => ([r.layers[0].view, r.layers[1].view], r.layers[0].view),
+            None => ([self.snapshot.view; 2], empty),
+        };
+        for (i, sets) in self.view_sets.iter().enumerate() {
+            let inputs = |reflection| ViewSetInputs {
+                view_ubo: self.view_ubos[i].buffer(),
+                snapshot_view: self.snapshot.view,
+                depth_view: depth_views[i.min(depth_views.len().saturating_sub(1))],
+                reflection,
+                sampler: self.sampler,
+            };
+            write_view_set(device, sets.scene, inputs(scene));
+            write_view_set(device, sets.layers[0], inputs([empty; 2]));
+            write_view_set(device, sets.layers[1], inputs([first, empty]));
+        }
     }
 
     // True when the per-pixel RT pipelines are built (RT-capable device + the
@@ -1605,6 +1996,7 @@ impl TransparentResources {
             scene_images,
             depth_views,
             planar_target_views,
+            reflection_divisor,
         } = targets;
         let old = std::mem::replace(
             &mut self.snapshot,
@@ -1621,16 +2013,10 @@ impl TransparentResources {
         )?;
         self.scene_images = scene_images.to_vec();
 
-        for (i, &set) in self.view_sets.iter().enumerate() {
-            write_view_set(
-                device,
-                set,
-                self.view_ubos[i].buffer(),
-                self.snapshot.view,
-                depth_views[i.min(depth_views.len().saturating_sub(1))],
-                self.sampler,
-            );
-        }
+        self.reflection = None;
+        self.reflection =
+            self.build_reflection_layers(alloc, device, width, height, reflection_divisor)?;
+        self.write_view_sets(device, depth_views);
 
         // Re-point each record's planar binding (binding 1) at its slot's resized
         // target, or the new snapshot for a slotless record (the moved snapshot
@@ -1667,6 +2053,8 @@ impl TransparentResources {
         self.glass = None;
         self.water = None;
         self.glass_mesh = None;
+        self.reflection = None;
+        self.empty_layer = GpuImage::null();
         self.view_ubos.clear();
         self.snapshot = GpuImage::null();
         self.framebuffers.clear();
@@ -1881,6 +2269,15 @@ impl VkContext {
             return Ok(());
         }
 
+        // The glass reflection pre-pass runs when RT is live, the reduced layers
+        // exist, and a traced glass surface draws this frame.
+        let reflection_layers = transparent.reflection.as_ref().filter(|_| {
+            rt_live
+                && order
+                    .iter()
+                    .any(|&(kind, _)| matches!(kind, Producer::Glass | Producer::GlassMesh))
+        });
+
         let device = &self.hw.device;
         let extent = self.targets.render_extent;
         let scene_image = *transparent
@@ -1923,6 +2320,16 @@ impl VkContext {
                 prefilter_mip_count: self.scene.prefilter_mip_count as f32,
                 sky_rot: self.view.sky_rot,
             });
+            // Traced glass reads the reduced layers back only when the pre-pass
+            // below fills them this frame; otherwise it traces in place.
+            let params = RtParams {
+                trace_divisor: if reflection_layers.is_some() {
+                    params.trace_divisor
+                } else {
+                    1.0
+                },
+                ..params
+            };
             rt.params_buffers[frame_idx].write_val(0, &params);
         }
 
@@ -2041,24 +2448,6 @@ impl VkContext {
             );
         }
 
-        // 3) The render pass: LOAD the scene color, draw each visible record
-        // back-to-front, STORE. The negative-height viewport matches the main
-        // pass so the manual depth test + refraction taps line up at pixel
-        // coordinates.
-        let rp_begin = vk::RenderPassBeginInfo::default()
-            .render_pass(transparent.render_pass.handle())
-            .framebuffer(transparent.framebuffers[frame_idx].handle())
-            .render_area(vk::Rect2D::default().extent(extent));
-        let vp = vk::Viewport {
-            x: 0.0,
-            y: extent.height as f32,
-            width: extent.width as f32,
-            height: -(extent.height as f32),
-            min_depth: 0.0,
-            max_depth: 1.0,
-        };
-        let scissor = vk::Rect2D::default().extent(extent);
-
         // Every producer shares every set layout, so one pipeline layout binds the
         // view / global / RT sets for the whole pass and only the pipeline changes
         // across the draw loop.
@@ -2071,123 +2460,223 @@ impl VkContext {
             (true, Some(r)) => r.layout_flat.handle(),
             _ => transparent.pipeline_layout.handle(),
         };
+        let frame = TransparentFrame {
+            cmd,
+            frame_idx,
+            layout,
+            rt_live,
+            textured,
+            order: &order,
+            mesh_draws: &mesh_draws,
+        };
+
+        if let Some(layers) = reflection_layers {
+            self.encode_glass_reflection_layers(transparent, layers, &frame);
+        }
+
+        // 3) The render pass: LOAD the scene color, draw each visible record
+        // back-to-front, STORE. The negative-height viewport matches the main
+        // pass so the manual depth test + refraction taps line up at pixel
+        // coordinates.
+        let rp_begin = vk::RenderPassBeginInfo::default()
+            .render_pass(transparent.render_pass.handle())
+            .framebuffer(transparent.framebuffers[frame_idx].handle())
+            .render_area(vk::Rect2D::default().extent(extent));
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
             device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
-            device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp));
-            device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                layout,
-                0,
-                std::slice::from_ref(&transparent.view_sets[frame_idx]),
-                &[],
-            );
-            // The per-frame global set (set 2): the fragment shaders reflect its
-            // probe set / cube array (bindings 7 / 8) + sky prefilter cube
-            // (binding 5). Bound once per frame; stable across the draw loop.
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                layout,
-                2,
-                std::slice::from_ref(&self.descriptors.global_sets[frame_idx]),
-                &[],
-            );
-            if rt_live {
-                let r = transparent
-                    .rt
-                    .as_ref()
-                    .expect("rt_live implies the RT pipelines");
-                // set 3: this frame's RT geometry (TLAS + geom table + the static +
-                // skinned vertex/index buffers). Bound once; stable across the loop.
-                device.cmd_bind_descriptor_sets(
-                    cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    layout,
-                    3,
-                    std::slice::from_ref(&r.sets[frame_idx]),
-                    &[],
-                );
-                if textured {
-                    // set 4: the bindless albedo/normal pool for textured hit shading
-                    // (the same set the main bindless pass binds).
-                    device.cmd_bind_descriptor_sets(
-                        cmd,
-                        vk::PipelineBindPoint::GRAPHICS,
-                        layout,
-                        4,
-                        std::slice::from_ref(&self.cull.bindless_sets[frame_idx]),
-                        &[],
-                    );
-                }
-            }
-            let mut bound: Option<Producer> = None;
-            for &(kind, i) in &order {
-                if kind == Producer::GlassMesh {
-                    let mesh = transparent
+            set_flipped_viewport(device, cmd, extent);
+        }
+        self.bind_transparent_sets(transparent, &frame, transparent.view_sets[frame_idx].scene);
+        let mut bound: Option<Producer> = None;
+        for &(kind, i) in &order {
+            if bound != Some(kind) {
+                let pipeline = match kind {
+                    Producer::GlassMesh => transparent
                         .glass_mesh
                         .as_ref()
-                        .expect("the draw order only names live producers");
-                    if bound != Some(kind) {
-                        device.cmd_bind_pipeline(
-                            cmd,
-                            vk::PipelineBindPoint::GRAPHICS,
-                            mesh.pipeline(textured).handle(),
-                        );
-                        bound = Some(kind);
-                    }
-                    // A mesh draws its DrawObject slice of the shared scene
-                    // buffers, so the bound buffers are the scene ones rather than
-                    // a record own pair and the slice rides the draw arguments.
-                    let d = &mesh_draws[i];
-                    device.cmd_bind_descriptor_sets(
-                        cmd,
-                        vk::PipelineBindPoint::GRAPHICS,
-                        layout,
-                        1,
-                        std::slice::from_ref(&d.params_set),
-                        &[],
-                    );
-                    device.cmd_bind_vertex_buffers(
-                        cmd,
-                        0,
-                        &[self.geometry.vertex_buffer.buffer()],
-                        &[0],
-                    );
-                    device.cmd_bind_index_buffer(
-                        cmd,
-                        self.geometry.index_buffer.buffer(),
-                        0,
-                        vk::IndexType::UINT32,
-                    );
-                    device.cmd_draw_indexed(
-                        cmd,
-                        d.index_count,
-                        1,
-                        d.index_offset,
-                        d.base_vertex,
-                        0,
-                    );
-                    self.inc_draw_calls(1);
-                    continue;
-                }
-                let producer = transparent.producer(kind);
-                if bound != Some(kind) {
+                        .expect("the draw order only names live producers")
+                        .pipeline(textured),
+                    _ => transparent.producer(kind).pipeline(rt_live, textured),
+                };
+                // SAFETY: `cmd` is a command buffer in the recording state, and the pipeline is
+                // live for the call.
+                unsafe {
                     device.cmd_bind_pipeline(
                         cmd,
                         vk::PipelineBindPoint::GRAPHICS,
-                        producer.pipeline(rt_live, textured).handle(),
+                        pipeline.handle(),
                     );
-                    bound = Some(kind);
                 }
-                let r = &producer.records[i];
+                bound = Some(kind);
+            }
+            self.draw_transparent_entry(transparent, &frame, kind, i);
+        }
+        // SAFETY: `cmd` is a command buffer in the recording state inside the render pass begun
+        // above.
+        unsafe { device.cmd_end_render_pass(cmd) };
+
+        Ok(())
+    }
+
+    // Draw the traced glass into the two reduced reflection layers: each layer
+    // clears its color and the shared depth, then draws every glass surface
+    // behind the layer bound at set-0 binding 3, keeping the nearest. Water
+    // traces in place and is skipped.
+    fn encode_glass_reflection_layers(
+        &self,
+        transparent: &TransparentResources,
+        layers: &GlassReflectionLayers,
+        frame: &TransparentFrame,
+    ) {
+        let device = &self.hw.device;
+        let clears = [
+            vk::ClearValue {
+                color: vk::ClearColorValue { float32: [0.0; 4] },
+            },
+            vk::ClearValue {
+                depth_stencil: vk::ClearDepthStencilValue {
+                    depth: 1.0,
+                    stencil: 0,
+                },
+            },
+        ];
+        for layer in 0..2 {
+            let rp_begin = vk::RenderPassBeginInfo::default()
+                .render_pass(transparent.reflection_render_pass.handle())
+                .framebuffer(layers.framebuffers[layer].handle())
+                .render_area(vk::Rect2D::default().extent(layers.extent))
+                .clear_values(&clears);
+            // SAFETY: `frame.cmd` is a command buffer in the recording state, and every handle
+            // and slice these commands name is live for the call.
+            unsafe {
+                device.cmd_begin_render_pass(frame.cmd, &rp_begin, vk::SubpassContents::INLINE);
+                set_flipped_viewport(device, frame.cmd, layers.extent);
+            }
+            self.bind_transparent_sets(
+                transparent,
+                frame,
+                transparent.view_sets[frame.frame_idx].layers[layer],
+            );
+            for &(kind, i) in frame.order {
+                let pipeline = match kind {
+                    Producer::GlassMesh => transparent
+                        .glass_mesh
+                        .as_ref()
+                        .map(|m| m.reflection_pipeline(frame.textured)),
+                    _ => transparent
+                        .producer(kind)
+                        .reflection_pipeline(frame.textured),
+                };
+                let Some(pipeline) = pipeline else {
+                    continue;
+                };
+                // SAFETY: `frame.cmd` is a command buffer in the recording state, and the
+                // pipeline is live for the call.
+                unsafe {
+                    device.cmd_bind_pipeline(
+                        frame.cmd,
+                        vk::PipelineBindPoint::GRAPHICS,
+                        pipeline.handle(),
+                    );
+                }
+                self.draw_transparent_entry(transparent, frame, kind, i);
+            }
+            // SAFETY: `frame.cmd` is a command buffer in the recording state inside the render
+            // pass begun above.
+            unsafe { device.cmd_end_render_pass(frame.cmd) };
+        }
+    }
+
+    // Bind the sets every transparent draw shares: `view_set` at 0, the frame's
+    // global set at 2, and while RT is live the RT geometry at 3 and (textured)
+    // the bindless pool at 4.
+    fn bind_transparent_sets(
+        &self,
+        transparent: &TransparentResources,
+        frame: &TransparentFrame,
+        view_set: vk::DescriptorSet,
+    ) {
+        let device = &self.hw.device;
+        let bind = |index: u32, set: vk::DescriptorSet| {
+            // SAFETY: `frame.cmd` is a command buffer in the recording state, and the set and
+            // layout are live for the call.
+            unsafe {
+                device.cmd_bind_descriptor_sets(
+                    frame.cmd,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    frame.layout,
+                    index,
+                    std::slice::from_ref(&set),
+                    &[],
+                );
+            }
+        };
+        bind(0, view_set);
+        // The per-frame global set (set 2): the fragment shaders reflect its probe
+        // set / cube array (bindings 7 / 8) + sky prefilter cube (binding 5).
+        bind(2, self.descriptors.global_sets[frame.frame_idx]);
+        if frame.rt_live {
+            let r = transparent
+                .rt
+                .as_ref()
+                .expect("rt_live implies the RT pipelines");
+            // set 3: this frame's RT geometry (TLAS + geom table + the static +
+            // skinned vertex/index buffers).
+            bind(3, r.sets[frame.frame_idx]);
+            if frame.textured {
+                // set 4: the bindless albedo/normal pool for textured hit shading
+                // (the same set the main bindless pass binds).
+                bind(4, self.cull.bindless_sets[frame.frame_idx]);
+            }
+        }
+    }
+
+    // Bind one draw-order entry's params set and geometry and draw it under the
+    // bound pipeline. A mesh draws its DrawObject slice of the shared scene
+    // buffers; a pane or water surface draws its record's own pair.
+    fn draw_transparent_entry(
+        &self,
+        transparent: &TransparentResources,
+        frame: &TransparentFrame,
+        kind: Producer,
+        i: usize,
+    ) {
+        let device = &self.hw.device;
+        let cmd = frame.cmd;
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
+        unsafe {
+            if kind == Producer::GlassMesh {
+                let d = &frame.mesh_draws[i];
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::GRAPHICS,
-                    layout,
+                    frame.layout,
+                    1,
+                    std::slice::from_ref(&d.params_set),
+                    &[],
+                );
+                device.cmd_bind_vertex_buffers(
+                    cmd,
+                    0,
+                    &[self.geometry.vertex_buffer.buffer()],
+                    &[0],
+                );
+                device.cmd_bind_index_buffer(
+                    cmd,
+                    self.geometry.index_buffer.buffer(),
+                    0,
+                    vk::IndexType::UINT32,
+                );
+                device.cmd_draw_indexed(cmd, d.index_count, 1, d.index_offset, d.base_vertex, 0);
+            } else {
+                let r = &transparent.producer(kind).records[i];
+                device.cmd_bind_descriptor_sets(
+                    cmd,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    frame.layout,
                     1,
                     std::slice::from_ref(&r.params_set),
                     &[],
@@ -2200,11 +2689,41 @@ impl VkContext {
                     vk::IndexType::UINT16,
                 );
                 device.cmd_draw_indexed(cmd, r.index_count, 1, 0, 0, 0);
-                self.inc_draw_calls(1);
             }
-            device.cmd_end_render_pass(cmd);
         }
+        self.inc_draw_calls(1);
+    }
+}
 
-        Ok(())
+// One frame's transparent recording state, shared by the reflection pre-pass
+// and the scene pass.
+struct TransparentFrame<'a> {
+    cmd: vk::CommandBuffer,
+    frame_idx: usize,
+    layout: vk::PipelineLayout,
+    rt_live: bool,
+    textured: bool,
+    order: &'a [(Producer, usize)],
+    mesh_draws: &'a [GlassMeshDraw],
+}
+
+// Set the negative-height viewport the main pass rasterizes with over `extent`,
+// so the fragment positions and the manual depth test line up at pixel
+// coordinates, plus a matching scissor.
+fn set_flipped_viewport(device: &VkDevice, cmd: vk::CommandBuffer, extent: vk::Extent2D) {
+    let vp = vk::Viewport {
+        x: 0.0,
+        y: extent.height as f32,
+        width: extent.width as f32,
+        height: -(extent.height as f32),
+        min_depth: 0.0,
+        max_depth: 1.0,
+    };
+    let scissor = vk::Rect2D::default().extent(extent);
+    // SAFETY: `cmd` is a command buffer in the recording state, and the viewport and scissor
+    // slices are live for the call.
+    unsafe {
+        device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp));
+        device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
     }
 }

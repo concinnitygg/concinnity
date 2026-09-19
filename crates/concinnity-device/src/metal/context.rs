@@ -325,8 +325,8 @@ pub(super) struct GlassState {
     // Shared pipeline for the `GlassPanel` transparent producer. `Some` only
     // when the world declared >=1 `GlassPanel`.
     pub pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    pub pipeline_rt: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    pub pipeline_rt_textured: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+    pub pipeline_rt: Option<super::glass::TracedGlassPipelines>,
+    pub pipeline_rt_textured: Option<super::glass::TracedGlassPipelines>,
     // Ray-traced see-through glass MESH pipelines (`glass_mesh.slang`): an
     // imported `Material` with `transparent: true` routed through the transparent
     // pass with a per-pixel RT trace off the interpolated mesh normal, instead of
@@ -336,8 +336,8 @@ pub(super) struct GlassState {
     // the whole transparent-mesh path: when live (RT on) transparent meshes are
     // skipped in the opaque pass + the RT BLAS and drawn here; otherwise they
     // render opaque (Layer 1).
-    pub mesh_pipeline_rt: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    pub mesh_pipeline_rt_textured: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+    pub mesh_pipeline_rt: Option<super::glass::TracedGlassPipelines>,
+    pub mesh_pipeline_rt_textured: Option<super::glass::TracedGlassPipelines>,
     // Indices into `draw.objects` of every see-through glass mesh (its material
     // has both `transparent` and `see_through` set), precomputed at init so the
     // per-frame Layer 2 producer does not rescan all objects. Empty on non-RT
@@ -353,6 +353,9 @@ pub(super) struct GlassState {
     // One GPU record per `GlassPanel` asset: the static world-space quad VB+IB
     // plus the per-panel uniforms. Contributes to the transparent pass.
     pub panels: Vec<super::glass::GlassPanelRecord>,
+    // The reduced targets the traced glass pre-pass writes, sized at render /
+    // the RT trace divisor. `None` while glass traces in place.
+    pub reflection_targets: Option<super::glass::GlassReflectionTargets>,
 }
 
 // Raymarched SDF volumes and the unit-cube proxy geometry the pass rasterizes.

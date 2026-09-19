@@ -16,14 +16,18 @@ use concinnity_core::render::uniforms::{GlassMeshParams, GlassParams, Transparen
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTLBlendFactor, MTLBuffer, MTLDevice, MTLPixelFormat, MTLRenderPipelineDescriptor,
-    MTLRenderPipelineState, MTLResourceOptions, MTLVertexFormat, MTLVertexStepFunction,
+    MTLBlendFactor, MTLBuffer, MTLDepthStencilState, MTLDevice, MTLPixelFormat,
+    MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLResourceOptions, MTLTexture,
+    MTLTextureUsage, MTLVertexFormat, MTLVertexStepFunction,
 };
 
+use super::allocator::{DeviceAllocator, PooledTexture};
 use super::context::MtlContext;
-use super::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
+use super::descriptors::{TextureDesc, VertexAttr, VertexLayout, vertex_descriptor};
 use super::error::allocation_failed;
+use super::init::pipelines::make_depth_state;
 use super::slang_builtins;
+use super::texture::upload_texture;
 use super::transparent::{TransparentDraw, bytes_of};
 
 // Refraction offset + Fresnel falloff for a transparent glass MESH. A `Material`
@@ -133,7 +137,15 @@ pub(super) fn build_glass_pipeline(
     build_glass_pipeline_slang(device, hot_reload, &slang_builtins::GLASS_FRAG)
 }
 
-// Build the ray-traced glass pipeline: the same vertex layout + blend, but the
+// A ray-traced glass pipeline and its reduced reflection pre-pass: `shade`
+// draws the glass into the scene, and `reflection` traces into the reduced
+// target `shade` reads its reflection back from when the trace is scaled down.
+pub(in crate::metal) struct TracedGlassPipelines {
+    pub(in crate::metal) shade: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
+    pub(in crate::metal) reflection: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
+}
+
+// Build the ray-traced glass pipelines: the same vertex layout + blend, but the
 // `glass_rt_fragment` variant traces a sharp reflection ray against the scene
 // acceleration structure instead of sampling a probe cube. Built only on
 // RT-capable devices (its metallib carries a real ray query); selected
@@ -141,11 +153,34 @@ pub(super) fn build_glass_pipeline(
 pub(super) fn build_glass_pipeline_rt(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
-) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    build_glass_pipeline_slang(device, hot_reload, &slang_builtins::GLASS_FRAG_RT)
+) -> RenderResult<TracedGlassPipelines> {
+    build_traced_glass_pipelines(
+        device,
+        hot_reload,
+        &slang_builtins::GLASS_VERT,
+        &slang_builtins::GLASS_FRAG_RT,
+        &slang_builtins::GLASS_REFLECTION_FRAG,
+    )
 }
 
-// Build the ray-traced see-through glass MESH pipeline: the same 5-attribute
+// Build the textured ray-traced glass pipelines: the same trace as the flat RT
+// variant, but the reflected hit's albedo / normal / emissive are sampled from
+// the bindless texture pool (buffer 10) instead of a flat per-object tint.
+// Selected over the flat variant only in a bindless world.
+pub(super) fn build_glass_pipeline_rt_textured(
+    device: &ProtocolObject<dyn MTLDevice>,
+    hot_reload: bool,
+) -> RenderResult<TracedGlassPipelines> {
+    build_traced_glass_pipelines(
+        device,
+        hot_reload,
+        &slang_builtins::GLASS_VERT,
+        &slang_builtins::GLASS_FRAG_RT_TEXTURED,
+        &slang_builtins::GLASS_REFLECTION_FRAG_TEXTURED,
+    )
+}
+
+// Build the ray-traced see-through glass MESH pipelines: the same 5-attribute
 // vertex layout + blend as the pane pipelines, but the `glass_mesh_vertex` stage
 // applies a per-draw model matrix and the fragment shades off the interpolated
 // mesh normal. Compiled only on RT-capable devices. Drives the FLAT trace
@@ -153,8 +188,14 @@ pub(super) fn build_glass_pipeline_rt(
 pub(super) fn build_glass_mesh_pipeline_rt(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
-) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    build_glass_mesh_pipeline_slang(device, hot_reload, &slang_builtins::GLASS_MESH_FRAG_RT)
+) -> RenderResult<TracedGlassPipelines> {
+    build_traced_glass_pipelines(
+        device,
+        hot_reload,
+        &slang_builtins::GLASS_MESH_VERT,
+        &slang_builtins::GLASS_MESH_FRAG_RT,
+        &slang_builtins::GLASS_MESH_REFLECTION_FRAG,
+    )
 }
 
 // The textured see-through glass MESH variant: reflected hits sample the bindless
@@ -162,28 +203,19 @@ pub(super) fn build_glass_mesh_pipeline_rt(
 pub(super) fn build_glass_mesh_pipeline_rt_textured(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
-) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    build_glass_mesh_pipeline_slang(
+) -> RenderResult<TracedGlassPipelines> {
+    build_traced_glass_pipelines(
         device,
         hot_reload,
+        &slang_builtins::GLASS_MESH_VERT,
         &slang_builtins::GLASS_MESH_FRAG_RT_TEXTURED,
+        &slang_builtins::GLASS_MESH_REFLECTION_FRAG_TEXTURED,
     )
 }
 
-// Build the textured ray-traced glass pipeline: the same trace as the flat RT
-// variant, but the reflected hit's albedo / normal / emissive are sampled from
-// the bindless texture pool (buffer 10) instead of a flat per-object tint.
-// Selected over the flat variant only in a bindless world.
-pub(super) fn build_glass_pipeline_rt_textured(
-    device: &ProtocolObject<dyn MTLDevice>,
-    hot_reload: bool,
-) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    build_glass_pipeline_slang(device, hot_reload, &slang_builtins::GLASS_FRAG_RT_TEXTURED)
-}
-
-// The pane pipelines, whose stages come from the single-source `glass.slang`.
-// Each fragment variant declares only the resources it binds, so each is its own
-// metallib while the vertex is compiled once for all of them.
+// The probe-path pane pipeline, whose stages come from the single-source
+// `glass.slang`. Each fragment variant declares only the resources it binds, so
+// each is its own metallib while the vertex is compiled once for all of them.
 fn build_glass_pipeline_slang(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
@@ -194,18 +226,76 @@ fn build_glass_pipeline_slang(
     build_transparent_pipeline_stages(device, &vert_fn, &frag_fn)
 }
 
-// The glass MESH pipelines, from `glass_mesh.slang`. A separate vertex stage
-// from the pane one: it applies the per-draw model matrix and forwards the
-// interpolated world normal the fragment shades off.
-fn build_glass_mesh_pipeline_slang(
+// A traced pair over one vertex stage: `shade` blends into the scene, and
+// `reflection` overwrites the reduced reflection target.
+fn build_traced_glass_pipelines(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
-    fragment: &slang_builtins::SlangLib,
-) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    let vert_fn =
-        slang_builtins::entry_function(device, &slang_builtins::GLASS_MESH_VERT, hot_reload)?;
-    let frag_fn = slang_builtins::entry_function(device, fragment, hot_reload)?;
-    build_transparent_pipeline_stages(device, &vert_fn, &frag_fn)
+    vertex: &slang_builtins::SlangLib,
+    shade: &slang_builtins::SlangLib,
+    reflection: &slang_builtins::SlangLib,
+) -> RenderResult<TracedGlassPipelines> {
+    let vert_fn = slang_builtins::entry_function(device, vertex, hot_reload)?;
+    let shade_fn = slang_builtins::entry_function(device, shade, hot_reload)?;
+    let reflection_fn = slang_builtins::entry_function(device, reflection, hot_reload)?;
+    Ok(TracedGlassPipelines {
+        shade: build_transparent_pipeline_stages(device, &vert_fn, &shade_fn)?,
+        reflection: transparent_pipeline(
+            device,
+            &vert_fn,
+            &reflection_fn,
+            TransparentOutput::ReflectionLayer,
+        )?,
+    })
+}
+
+// The reduced glass reflection pre-pass targets: two layers (rgb the traced
+// reflection, a the surface's distance from the camera) over one depth
+// attachment each layer clears and tests against, plus the empty layer the
+// first one peels behind.
+pub(in crate::metal) struct GlassReflectionTargets {
+    pub(in crate::metal) layers: [Retained<ProtocolObject<dyn MTLTexture>>; 2],
+    pub(in crate::metal) depth: Retained<ProtocolObject<dyn MTLTexture>>,
+    pub(in crate::metal) empty: PooledTexture,
+    pub(in crate::metal) depth_state: Retained<ProtocolObject<dyn MTLDepthStencilState>>,
+}
+
+impl GlassReflectionTargets {
+    fn new(alloc: &DeviceAllocator, width: u32, height: u32) -> RenderResult<Self> {
+        let device = alloc.device();
+        let layer = || {
+            reduced_target(device, MTLPixelFormat::RGBA16Float, width, height)
+                .ok_or_else(|| allocation_failed("a glass reflection layer"))
+        };
+        Ok(Self {
+            layers: [layer()?, layer()?],
+            depth: reduced_target(device, MTLPixelFormat::Depth32Float, width, height)
+                .ok_or_else(|| allocation_failed("the glass reflection depth"))?,
+            empty: upload_texture(alloc, 1, 1, &[0u8; 4])?,
+            depth_state: make_depth_state(device)?,
+        })
+    }
+
+    fn extent(&self) -> (u32, u32) {
+        (self.depth.width() as u32, self.depth.height() as u32)
+    }
+}
+
+fn reduced_target(
+    device: &ProtocolObject<dyn MTLDevice>,
+    format: MTLPixelFormat,
+    width: u32,
+    height: u32,
+) -> Option<Retained<ProtocolObject<dyn MTLTexture>>> {
+    let desc = TextureDesc {
+        format,
+        width: width as usize,
+        height: height as usize,
+        usage: MTLTextureUsage(MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0),
+        ..Default::default()
+    }
+    .build();
+    device.newTextureWithDescriptor(&desc)
 }
 
 // Shared descriptor for every transparent-pass pipeline (glass panes, glass
@@ -216,6 +306,26 @@ pub(in crate::metal) fn build_transparent_pipeline_stages(
     device: &ProtocolObject<dyn MTLDevice>,
     vert_fn: &ProtocolObject<dyn objc2_metal::MTLFunction>,
     frag_fn: &ProtocolObject<dyn objc2_metal::MTLFunction>,
+) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
+    transparent_pipeline(device, vert_fn, frag_fn, TransparentOutput::Scene)
+}
+
+// What a transparent-pass pipeline draws into.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TransparentOutput {
+    // Straight-alpha blended over the scene, with no depth attachment.
+    Scene,
+    // Overwriting a glass reflection layer, depth-tested against its
+    // `Depth32Float` attachment.
+    ReflectionLayer,
+}
+
+// The transparent-pass pipeline over the shared vertex layout.
+fn transparent_pipeline(
+    device: &ProtocolObject<dyn MTLDevice>,
+    vert_fn: &ProtocolObject<dyn objc2_metal::MTLFunction>,
+    frag_fn: &ProtocolObject<dyn objc2_metal::MTLFunction>,
+    output: TransparentOutput,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     let vert_desc = vertex_descriptor(
         &[
@@ -262,12 +372,16 @@ pub(in crate::metal) fn build_transparent_pipeline_stages(
     desc.setVertexFunction(Some(vert_fn));
     desc.setFragmentFunction(Some(frag_fn));
     desc.setRasterSampleCount(1);
+    let blend = output == TransparentOutput::Scene;
+    if !blend {
+        desc.setDepthAttachmentPixelFormat(MTLPixelFormat::Depth32Float);
+    }
     // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
     // declares.
     unsafe {
         let ca = desc.colorAttachments().objectAtIndexedSubscript(0);
         ca.setPixelFormat(MTLPixelFormat::RGBA16Float);
-        ca.setBlendingEnabled(true);
+        ca.setBlendingEnabled(blend);
         ca.setSourceRGBBlendFactor(MTLBlendFactor::SourceAlpha);
         ca.setDestinationRGBBlendFactor(MTLBlendFactor::OneMinusSourceAlpha);
         ca.setSourceAlphaBlendFactor(MTLBlendFactor::SourceAlpha);
@@ -301,16 +415,20 @@ impl MtlContext {
         // `rt.accel` live means RT is on; `bindless` means the texture pool
         // exists. Falls back through to the probe pipeline.
         let rt_on = self.rt.accel.is_some();
-        let pipeline = match (
+        let traced = match (
             rt_on && bindless,
             &self.glass.pipeline_rt_textured,
             rt_on,
             &self.glass.pipeline_rt,
         ) {
-            (true, Some(p), _, _) => p,
-            (_, _, true, Some(p)) => p,
-            _ => match &self.glass.pipeline {
-                Some(p) => p,
+            (true, Some(p), _, _) => Some(p),
+            (_, _, true, Some(p)) => Some(p),
+            _ => None,
+        };
+        let (pipeline, reflection_pipeline) = match traced {
+            Some(t) => (&t.shade, self.glass_reflection_pipeline(t)),
+            None => match &self.glass.pipeline {
+                Some(p) => (p, None),
                 None => return,
             },
         };
@@ -347,6 +465,7 @@ impl MtlContext {
             let sort_distance = transparent::sort_distance(c, [cam[0], cam[1], cam[2]]);
             out.push(TransparentDraw {
                 pipeline: pipeline.clone(),
+                reflection_pipeline: reflection_pipeline.clone(),
                 vertex_buffer: panel.vertex_buffer.clone(),
                 index_buffer: panel.index_buffer.clone(),
                 index_count: panel.index_count,
@@ -359,6 +478,49 @@ impl MtlContext {
                 sort_distance,
             });
         }
+    }
+
+    // Keep the reduced glass reflection targets matched to the RT trace divisor
+    // and the render size: present only while glass can trace (RT live, a
+    // traced glass pipeline built) at a divisor above 1. Cheap when nothing
+    // changed, so it runs every frame and follows resizes and live quality
+    // changes alike.
+    pub(in crate::metal) fn sync_glass_reflection_target(
+        &mut self,
+        render_w: u32,
+        render_h: u32,
+    ) -> RenderResult<()> {
+        let traced = self.glass.pipeline_rt.is_some() || self.glass.mesh_pipeline_rt.is_some();
+        let extent = self
+            .rt
+            .settings
+            .filter(|s| s.divisor > 1 && traced && self.rt.accel.is_some())
+            .map(|s| s.trace_extent(render_w, render_h));
+        let current = self
+            .glass
+            .reflection_targets
+            .as_ref()
+            .map(GlassReflectionTargets::extent);
+        if extent == current {
+            return Ok(());
+        }
+        self.glass.reflection_targets = match extent {
+            Some((w, h)) => Some(GlassReflectionTargets::new(&self.hw.allocator, w, h)?),
+            None => None,
+        };
+        Ok(())
+    }
+
+    // The reduced reflection pre-pass pipeline for a traced glass draw, or
+    // `None` while glass traces in place (no reduced targets this frame).
+    fn glass_reflection_pipeline(
+        &self,
+        traced: &TracedGlassPipelines,
+    ) -> Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
+        self.glass
+            .reflection_targets
+            .as_ref()
+            .map(|_| traced.reflection.clone())
     }
 
     // Whether any material opted into Layer 2 see-through glass AND the device can
@@ -417,13 +579,14 @@ impl MtlContext {
         // Textured trace in a bindless world (reflected hits carry their textures),
         // else the flat trace (reflected-hit material tint). `mesh_glass_active`
         // guarantees the flat pipeline exists.
-        let pipeline = match (bindless, &self.glass.mesh_pipeline_rt_textured) {
+        let traced = match (bindless, &self.glass.mesh_pipeline_rt_textured) {
             (true, Some(p)) => p,
             _ => match &self.glass.mesh_pipeline_rt {
                 Some(p) => p,
                 None => return,
             },
         };
+        let reflection_pipeline = self.glass_reflection_pipeline(traced);
         let prefilter_mip_count = self.scene.env_map.prefilter_mip_count as f32;
         let cam = view.camera_pos;
         for &idx in &self.glass.seethrough_mesh_indices {
@@ -453,7 +616,8 @@ impl MtlContext {
                 prefilter_mip_count,
             };
             out.push(TransparentDraw {
-                pipeline: pipeline.clone(),
+                pipeline: traced.shade.clone(),
+                reflection_pipeline: reflection_pipeline.clone(),
                 vertex_buffer: self.scene.vertex_buffer.retained(),
                 index_buffer: self.scene.index_buffer.retained(),
                 index_count: index_count as u32,

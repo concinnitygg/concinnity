@@ -34,6 +34,7 @@
 //!   [probe_cube_uav_base_slot..]   PROBE_MAX_MIPS probe-cube per-mip UAVs
 //!   [probe_mip0_pair_slot..+2]     the mirror copy's (capture mip 0, probe mip 0)
 //!   [transparent_scene_copy_srv_slot] pre-transparent scene snapshot SRV
+//!   [glass_reflection_srv_base_slot..] GLASS_REFLECTION_SRV_SLOTS glass reflection layer windows
 //!   [gbuffer_srv_base_slot..]      (G-buffer) normal+depth, roughness, velocity
 //!   [rt_output_srv_slot]           (RT) reflection output
 //!   [refl_composite_srv_base_slot..] (reflections) composited output + blur
@@ -124,6 +125,9 @@ pub(in crate::directx) struct SrvHeapLayout {
     pub probe_cube_uav_base_slot: usize,
     pub probe_mip0_pair_slot: usize,
     pub transparent_scene_copy_srv_slot: usize,
+    // The glass reflection pre-pass's three two-descriptor windows over its
+    // layers (see `GLASS_REFLECTION_SRV_SLOTS`).
+    pub glass_reflection_srv_base_slot: usize,
     pub gbuffer_srv_base_slot: usize,
     pub rt_output_srv_slot: usize,
     // Reflection-composite SRVs: [0] composited output, [1] reduced-res blur.
@@ -188,9 +192,10 @@ impl SrvHeapLayout {
         let probe_cube_uav_base_slot = probe_capture_uav_base_slot + PROBE_MAX_MIPS;
         let probe_mip0_pair_slot = probe_cube_uav_base_slot + PROBE_MAX_MIPS;
         let transparent_scene_copy_srv_slot = probe_mip0_pair_slot + 2;
+        let glass_reflection_srv_base_slot = transparent_scene_copy_srv_slot + 1;
         // Unified G-buffer SRVs (normal+depth, roughness, velocity). 3 slots
         // when any screen-space consumer drives the pre-pass, else 0.
-        let gbuffer_srv_base_slot = transparent_scene_copy_srv_slot + 1;
+        let gbuffer_srv_base_slot = glass_reflection_srv_base_slot + GLASS_REFLECTION_SRV_SLOTS;
         // RT-reflection output SRV: one slot at the heap tail when RT is on.
         let rt_output_srv_slot = gbuffer_srv_base_slot + p.gbuffer_srv_extra;
         // Reflection-composite SRVs (composited output + reduced-res blur): 2 slots
@@ -240,6 +245,7 @@ impl SrvHeapLayout {
             probe_cube_uav_base_slot,
             probe_mip0_pair_slot,
             transparent_scene_copy_srv_slot,
+            glass_reflection_srv_base_slot,
             gbuffer_srv_base_slot,
             rt_output_srv_slot,
             refl_composite_srv_base_slot,
@@ -274,15 +280,23 @@ pub(super) const GBUFFER_TARGETS: usize = 3;
 pub(super) const RT_OUTPUT_TARGETS: usize = 1;
 // Reflection composite: composited output + reduced-res blur.
 pub(super) const REFL_COMPOSITE_TARGETS: usize = 2;
+// The glass reflection pre-pass's two layers. Its SRVs are three contiguous
+// two-descriptor windows the RT transparent signature's t11..t12 table points
+// at: the first layer's pass (both null), the second layer's (the first layer,
+// null) and the scene pass's (both layers). A null SRV reads as zero, which is
+// the empty layer the first one peels behind.
+pub(in crate::directx) const GLASS_REFLECTION_TARGETS: usize = 2;
+pub(in crate::directx) const GLASS_REFLECTION_SRV_SLOTS: usize = 6;
 
 // DSV heap slots: the main depth, one per shadow cascade (a slice each into the
-// shadow map array), one per shadowed spot slice, then the unified G-buffer
-// pre-pass's private depth buffer.
+// shadow map array), one per shadowed spot slice, the unified G-buffer
+// pre-pass's private depth buffer, then the glass reflection pre-pass's.
 pub(super) const DSV_MAIN_DEPTH_SLOT: usize = 0;
 pub(super) const DSV_SHADOW_BASE_SLOT: usize = DSV_MAIN_DEPTH_SLOT + 1;
 pub(super) const DSV_SPOT_SHADOW_BASE_SLOT: usize = DSV_SHADOW_BASE_SLOT + NUM_SHADOW_CASCADES;
 pub(super) const DSV_GBUFFER_DEPTH_SLOT: usize = DSV_SPOT_SHADOW_BASE_SLOT + MAX_SHADOWED_SPOTS;
-pub(super) const DSV_SLOTS: usize = DSV_GBUFFER_DEPTH_SLOT + 1;
+pub(super) const DSV_GLASS_REFLECTION_DEPTH_SLOT: usize = DSV_GBUFFER_DEPTH_SLOT + 1;
+pub(super) const DSV_SLOTS: usize = DSV_GLASS_REFLECTION_DEPTH_SLOT + 1;
 
 // Resolved slot indices into the RTV heap, after the back-buffer views at
 // `[0, FRAMES)`. `rtv_slots` is the total descriptor count the heap is created
@@ -302,6 +316,7 @@ pub(super) struct RtvHeapLayout {
     pub gbuffer_base_slot: usize,
     pub rt_output_slot: usize,
     pub refl_composite_base_slot: usize,
+    pub glass_reflection_base_slot: usize,
     pub rtv_slots: usize,
 }
 
@@ -315,7 +330,8 @@ impl RtvHeapLayout {
         let gbuffer_base_slot = decal_resolve_slot + usize::from(msaa_samples > 1);
         let rt_output_slot = gbuffer_base_slot + GBUFFER_TARGETS;
         let refl_composite_base_slot = rt_output_slot + RT_OUTPUT_TARGETS;
-        let rtv_slots = refl_composite_base_slot + REFL_COMPOSITE_TARGETS;
+        let glass_reflection_base_slot = refl_composite_base_slot + REFL_COMPOSITE_TARGETS;
+        let rtv_slots = glass_reflection_base_slot + GLASS_REFLECTION_TARGETS;
         Self {
             hdr_slot,
             bloom_base_slot,
@@ -325,6 +341,7 @@ impl RtvHeapLayout {
             gbuffer_base_slot,
             rt_output_slot,
             refl_composite_base_slot,
+            glass_reflection_base_slot,
             rtv_slots,
         }
     }
@@ -345,7 +362,7 @@ mod tests {
     // with the running total and fails the assert.
     fn assert_gap_free(p: &SrvHeapParams) {
         let l = SrvHeapLayout::compute(p);
-        let blocks: [(usize, usize); 30] = [
+        let blocks: [(usize, usize); 31] = [
             (l.atlas_base_slot, p.n_atlases.max(1)),
             (l.hdr_srv_slot, 1),
             (l.bloom_srv_base_slot, p.bloom_count),
@@ -368,6 +385,7 @@ mod tests {
             (l.probe_cube_uav_base_slot, PROBE_MAX_MIPS),
             (l.probe_mip0_pair_slot, 2),
             (l.transparent_scene_copy_srv_slot, 1),
+            (l.glass_reflection_srv_base_slot, 6),
             (l.gbuffer_srv_base_slot, p.gbuffer_srv_extra),
             (l.rt_output_srv_slot, p.rt_output_srv_extra),
             (l.refl_composite_srv_base_slot, p.refl_composite_srv_extra),
@@ -466,7 +484,7 @@ mod tests {
     fn assert_rtv_gap_free(bloom_count: usize, msaa_samples: u32) {
         let l = RtvHeapLayout::compute(bloom_count, msaa_samples);
         let decal_resolve = if msaa_samples > 1 { 1 } else { 0 };
-        let blocks: [(usize, usize); 8] = [
+        let blocks: [(usize, usize); 9] = [
             (l.hdr_slot, 1),
             (l.bloom_base_slot, bloom_count),
             (l.post_base_slot, POST_TARGET_SLOTS),
@@ -475,6 +493,7 @@ mod tests {
             (l.gbuffer_base_slot, 3),
             (l.rt_output_slot, 1),
             (l.refl_composite_base_slot, 2),
+            (l.glass_reflection_base_slot, 2),
         ];
         let mut expected_base = FRAMES;
         for (i, (base, count)) in blocks.iter().enumerate() {
@@ -505,7 +524,8 @@ mod tests {
     }
 
     // Main depth first, then a view per cascade and per shadowed spot slice,
-    // then the G-buffer depth, with the heap sized to cover the last one.
+    // then the G-buffer and glass reflection depths, with the heap sized to cover
+    // the last one.
     #[test]
     fn dsv_layout_covers_every_depth_view() {
         assert_eq!(DSV_MAIN_DEPTH_SLOT, 0);
@@ -517,6 +537,7 @@ mod tests {
             DSV_GBUFFER_DEPTH_SLOT - DSV_SPOT_SHADOW_BASE_SLOT,
             MAX_SHADOWED_SPOTS
         );
-        assert_eq!(DSV_SLOTS, 2 + NUM_SHADOW_CASCADES + MAX_SHADOWED_SPOTS);
+        assert_eq!(DSV_GLASS_REFLECTION_DEPTH_SLOT, DSV_GBUFFER_DEPTH_SLOT + 1);
+        assert_eq!(DSV_SLOTS, 3 + NUM_SHADOW_CASCADES + MAX_SHADOWED_SPOTS);
     }
 }

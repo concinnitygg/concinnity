@@ -607,6 +607,10 @@ impl VkContext {
                     scene_images: &scene_images,
                     depth_views: &depth_views,
                     planar_target_views: &planar_target_views,
+                    reflection_divisor: self
+                        .rt_reflections
+                        .as_ref()
+                        .map_or(1, |rt| rt.settings.divisor),
                 },
             )?;
             self.transparent = Some(transparent);

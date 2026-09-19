@@ -177,10 +177,12 @@ const AUDITS: &[BackendAudit] = &[
             ),
             ("decal.rs", ".final_layout(", 1, Reason::AttachmentLayout),
             ("fog.rs", ".final_layout(", 1, Reason::AttachmentLayout),
+            // The scene attachment's round trip, and the glass reflection
+            // pre-pass's layer + depth, private to the transparent node.
             (
                 "transparent.rs",
                 ".final_layout(",
-                1,
+                3,
                 Reason::AttachmentLayout,
             ),
             ("line.rs", ".final_layout(", 1, Reason::AttachmentLayout),
@@ -243,8 +245,10 @@ const AUDITS: &[BackendAudit] = &[
             ("raymarch.rs", ".ResourceBarrier(", 4, Reason::IntraPass),
             // The refraction snapshot: a fragment cannot sample the attachment
             // it is blending into, so the pass copies the scene into a private
-            // target and restores the scene to the state it was handed.
-            ("transparent.rs", ".ResourceBarrier(", 2, Reason::IntraPass),
+            // target and restores the scene to the state it was handed. The
+            // glass reflection layers, private to the node, open for their
+            // pre-pass and close for the scene pass to read.
+            ("transparent.rs", ".ResourceBarrier(", 4, Reason::IntraPass),
             // The SSGI gather samples the scene the composite then blends into,
             // so this node reads and writes one resource; the graph models that
             // as a single write and the gather borrows the read state. One site,

@@ -52,6 +52,7 @@ pub(in crate::directx) struct QualitySlotHandles {
     pub rt_output_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE),
     pub refl_composite: ReflectionCompositeSlots,
     pub gbuffer: GbufferSlots,
+    pub glass_reflection: super::transparent::GlassReflectionSlots,
 }
 
 impl DxContext {
@@ -206,6 +207,15 @@ impl DxContext {
         } else if !desired_rt && self.rt_reflections.is_some() {
             self.rt_reflections = None;
             self.rt.accel = None;
+        }
+
+        // The glass reflection pre-pass follows the live RT trace divisor.
+        let divisor = self
+            .rt_reflections
+            .as_ref()
+            .map_or(1, |rt| rt.settings.divisor);
+        if let Some(t) = self.transparent.as_mut() {
+            t.set_reflection_divisor(&self.hw.device, (render_w, render_h), divisor)?;
         }
 
         // Reflection composite: the on-screen target the SSR/RT resolve writes its

@@ -803,8 +803,9 @@ pub struct RtParams {
     /// 1.0 when a reflected hit casts a sun-shadow ray, 0.0 when it is lit
     /// unshadowed.
     pub sun_shadows: f32,
-    /// Padding so the field layout matches the shader-side struct.
-    pub _pad1: f32,
+    /// Per-axis divisor of the reduced glass reflection pre-pass; 1.0 when
+    /// glass traces its reflection in place.
+    pub trace_divisor: f32,
     /// Padding so the field layout matches the shader-side struct.
     pub _pad2: f32,
     /// World-space camera position (`xyz`); the reflection ray origin. `w` unused.
@@ -1830,7 +1831,7 @@ mod tests {
         assert_eq!(offset_of!(RtParams, aspect), 12);
         assert_eq!(offset_of!(RtParams, prefilter_mip_count), 16);
         assert_eq!(offset_of!(RtParams, sun_shadows), 20);
-        assert_eq!(offset_of!(RtParams, _pad1), 24);
+        assert_eq!(offset_of!(RtParams, trace_divisor), 24);
         assert_eq!(offset_of!(RtParams, _pad2), 28);
         assert_eq!(offset_of!(RtParams, cam_pos), 32);
         assert_eq!(offset_of!(RtParams, sun_dir), 48);

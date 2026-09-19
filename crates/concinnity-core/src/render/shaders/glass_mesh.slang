@@ -13,12 +13,17 @@
 // than the opaque low-roughness glass of Layer 1 is a real per-pixel reflection
 // ray, so there is no probe-only variant to fall back to. When RT is off the
 // host leaves these meshes in the opaque pass instead of drawing them here.
-// Two fragment entries, differing only in where a reflected hit's surface
-// parameters come from:
+// Two compiles, differing only in where a reflected hit's surface parameters
+// come from:
 //
 //   default      - the reflected hit takes its flat per-object material tint.
 //   RT_TEXTURED  - the same trace, with reflected hits taking their albedo /
 //                  normal / emissive maps from the bindless pool.
+//
+// Each carries two fragment entries: `glass_mesh_rt_fragment` shades the mesh,
+// and `glass_mesh_reflection_fragment` is the reduced reflection pre-pass that
+// shading reads back when `rt_params.trace_divisor` is above 1 (see
+// glass_reflection.slang).
 //
 // USE_MSAA is a HOST difference rather than a target one: Vulkan reads the
 // multisampled main depth while Metal and DirectX read the resolved copy.
@@ -198,6 +203,9 @@ ByteAddressBuffer indices : register(t6);
 ByteAddressBuffer sverts : register(t8);
 ByteAddressBuffer sidx : register(t9);
 StructuredBuffer<RtGeomEntry> geom : register(t10);
+// The reduced glass reflection layers (GLASS_REFLECTION), read with Load.
+Texture2D<float4> glass_reflection : register(t11);
+Texture2D<float4> glass_reflection_back : register(t12);
 
 float vert_float(uint i) { return asfloat(verts.Load(i * 4u)); }
 float svert_float(uint i) { return asfloat(sverts.Load(i * 4u)); }
@@ -213,6 +221,11 @@ uint skinned_index_word(uint w) { return sidx.Load(w * 4u); }
 [[vk::binding(4, 3)]] StructuredBuffer<uint> indices : register(t2);
 [[vk::binding(5, 3)]] StructuredBuffer<float> sverts : register(t8);
 [[vk::binding(6, 3)]] StructuredBuffer<uint> sidx : register(t9);
+// The reduced glass reflection layers (GLASS_REFLECTION), read with Load.
+// Pinned to Metal texture(4) and (5), past the pass's shared scene / depth / sky
+// / planar slots.
+[[vk::binding(3, 0)]] Texture2D<float4> glass_reflection : register(t4);
+[[vk::binding(4, 0)]] Texture2D<float4> glass_reflection_back : register(t5);
 
 float vert_float(uint i) { return verts[i]; }
 float svert_float(uint i) { return sverts[i]; }
@@ -268,6 +281,8 @@ float3 pool_sample_level0(uint idx, float2 uv)
 {PROBE_COMMON}
 
 {RT_TRACE}
+
+{GLASS_REFLECTION}
 
 // ---- Stage interface ----
 
@@ -348,37 +363,76 @@ float4 glass_mesh_resolve(GlassMeshSurface s, float3 view_dir, float3 reflection
     return float4(color, alpha);
 }
 
-[shader("fragment")]
-float4 glass_mesh_rt_fragment(GlassMeshVertexOut i) : SV_Target
+// The mesh's reflection at `world_pos`: a ray off the interpolated world-space
+// surface point, so a curved facade mirrors real off-screen geometry across its
+// whole span. The mesh is excluded from the BLAS (glass does not reflect glass),
+// so the trace never self-hits. Glass is smooth, so the trace is sharp and the
+// miss falls back to the probe / sky chain.
+float3 glass_mesh_reflection(float3 world_pos, float3 view_dir, float3 normal)
 {
-    float3 view_dir = normalize(view.camera_pos.xyz - i.world_pos);
-    GlassMeshSurface s = glass_mesh_surface(i, view_dir);
-
-    int2 pixel = min(int2(i.position.xy), int2(max(view.viewport, float2(1.0))) - int2(1, 1));
-    if (glass_mesh_scene_depth(pixel) < i.position.z)
-    {
-        discard;
-    }
-
-    // A per-pixel reflection ray off the interpolated world-space surface point,
-    // so a curved facade mirrors real off-screen geometry across its whole span.
-    // The mesh is excluded from the BLAS (glass does not reflect glass), so the
-    // trace never self-hits. Glass is smooth, so the trace is sharp and the miss
-    // falls back to the probe / sky chain.
     bool ibl = params.prefilter_mip_count > 0.5;
-    float3 r = reflect(-view_dir, s.normal);
+    float3 r = reflect(-view_dir, normal);
     float3 reflection;
-    if (!rt_trace_reflection(i.world_pos + s.normal * 0.02, r, ibl,
+    if (!rt_trace_reflection(world_pos + normal * 0.02, r, ibl,
                              params.prefilter_mip_count - 1.0, reflection))
     {
-        if (probe_set.count > 0u && probe_set_covers(i.world_pos))
+        if (probe_set.count > 0u && probe_set_covers(world_pos))
         {
-            reflection = probe_set_specular(i.world_pos, r, 0.0);
+            reflection = probe_set_specular(world_pos, r, 0.0);
         }
         else
         {
             reflection = ibl ? prefilter_level(r, 0.0) : float3(1.0);
         }
     }
+    return reflection;
+}
+
+// Whether nearer opaque geometry covers the mesh at full-resolution pixel
+// position `full_position`.
+bool glass_mesh_occluded(float2 full_position, float depth)
+{
+    int2 pixel = min(int2(full_position), int2(max(view.viewport, float2(1.0))) - int2(1, 1));
+    return glass_mesh_scene_depth(pixel) < depth;
+}
+
+[shader("fragment")]
+float4 glass_mesh_rt_fragment(GlassMeshVertexOut i) : SV_Target
+{
+    float3 view_dir = normalize(view.camera_pos.xyz - i.world_pos);
+    GlassMeshSurface s = glass_mesh_surface(i, view_dir);
+    if (glass_mesh_occluded(i.position.xy, i.position.z))
+    {
+        discard;
+    }
+
+    float3 reflection;
+    if (!glass_reflection_lookup(s.frag_uv, distance(view.camera_pos.xyz, i.world_pos),
+                                 reflection))
+    {
+        reflection = glass_mesh_reflection(i.world_pos, view_dir, s.normal);
+    }
     return glass_mesh_resolve(s, view_dir, reflection);
+}
+
+// The reduced reflection pre-pass: the traced reflection and this surface's
+// distance from the camera, for `glass_reflection_lookup` to upsample. Drawn
+// once per layer; a fragment on or in front of the layer `glass_reflection`
+// holds is left to that layer.
+[shader("fragment")]
+float4 glass_mesh_reflection_fragment(GlassMeshVertexOut i) : SV_Target
+{
+    float dist = distance(view.camera_pos.xyz, i.world_pos);
+    if (glass_mesh_occluded(glass_reflection_full_position(i.position.xy), i.position.z)
+        || glass_reflection_in_front_layer(i.position.xy, dist))
+    {
+        discard;
+    }
+    float3 view_dir = normalize(view.camera_pos.xyz - i.world_pos);
+    float3 normal = normalize(i.world_normal);
+    if (dot(normal, view_dir) < 0.0)
+    {
+        normal = -normal;
+    }
+    return float4(glass_mesh_reflection(i.world_pos, view_dir, normal), dist);
 }

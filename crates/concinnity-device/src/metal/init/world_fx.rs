@@ -371,6 +371,7 @@ pub(super) fn build_glass(
         mesh_pipeline_rt_textured,
         seethrough_mesh_indices,
         panels,
+        reflection_targets: None,
     })
 }
 

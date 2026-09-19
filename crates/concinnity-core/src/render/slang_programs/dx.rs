@@ -545,6 +545,61 @@ pub static GLASS_RT_FRAG_TEXTURED_MSAA: SlangProgram = SlangProgram {
     ],
 };
 
+/// `glass_rt_reflection_fragment` from `glass.slang`.
+pub static GLASS_REFLECTION_FRAG: SlangProgram = SlangProgram {
+    file: "glass.slang",
+    entry: "glass_rt_reflection_fragment",
+    profile: "ps_6_5",
+    label: "glass_reflection_frag.slang",
+    defines: &[
+        ("DXIL_ABI", "1"),
+        ("GLASS_RT", "1"),
+        ("MAX_PROBES", "8"),
+        ("USE_MSAA", "0"),
+    ],
+};
+/// `glass_rt_reflection_fragment` from `glass.slang`.
+pub static GLASS_REFLECTION_FRAG_MSAA: SlangProgram = SlangProgram {
+    file: "glass.slang",
+    entry: "glass_rt_reflection_fragment",
+    profile: "ps_6_5",
+    label: "glass_reflection_frag_msaa.slang",
+    defines: &[
+        ("DXIL_ABI", "1"),
+        ("GLASS_RT", "1"),
+        ("MAX_PROBES", "8"),
+        ("USE_MSAA", "1"),
+    ],
+};
+/// `glass_rt_reflection_fragment` from `glass.slang`.
+pub static GLASS_REFLECTION_FRAG_TEXTURED: SlangProgram = SlangProgram {
+    file: "glass.slang",
+    entry: "glass_rt_reflection_fragment",
+    profile: "ps_6_5",
+    label: "glass_reflection_frag_textured.slang",
+    defines: &[
+        ("DXIL_ABI", "1"),
+        ("GLASS_RT", "1"),
+        ("RT_TEXTURED", "1"),
+        ("MAX_PROBES", "8"),
+        ("USE_MSAA", "0"),
+    ],
+};
+/// `glass_rt_reflection_fragment` from `glass.slang`.
+pub static GLASS_REFLECTION_FRAG_TEXTURED_MSAA: SlangProgram = SlangProgram {
+    file: "glass.slang",
+    entry: "glass_rt_reflection_fragment",
+    profile: "ps_6_5",
+    label: "glass_reflection_frag_textured_msaa.slang",
+    defines: &[
+        ("DXIL_ABI", "1"),
+        ("GLASS_RT", "1"),
+        ("RT_TEXTURED", "1"),
+        ("MAX_PROBES", "8"),
+        ("USE_MSAA", "1"),
+    ],
+};
+
 const GLASS_MESH_DEFINES: &[(&str, &str)] =
     &[("DXIL_ABI", "1"), ("MAX_PROBES", "8"), ("USE_MSAA", "0")];
 const GLASS_MESH_MSAA_DEFINES: &[(&str, &str)] =
@@ -610,6 +665,42 @@ pub static GLASS_MESH_RT_FRAG_TEXTURED_MSAA: SlangProgram = SlangProgram {
     entry: "glass_mesh_rt_fragment",
     profile: "ps_6_5",
     label: "glass_mesh_frag_rt_textured_msaa.slang",
+    defines: GLASS_MESH_TEXTURED_MSAA_DEFINES,
+};
+
+/// `glass_mesh_reflection_fragment` from `glass_mesh.slang`.
+pub static GLASS_MESH_REFLECTION_FRAG: SlangProgram = SlangProgram {
+    file: "glass_mesh.slang",
+    entry: "glass_mesh_reflection_fragment",
+    profile: "ps_6_5",
+    label: "glass_mesh_reflection_frag.slang",
+    defines: GLASS_MESH_DEFINES,
+};
+
+/// `glass_mesh_reflection_fragment` from `glass_mesh.slang`.
+pub static GLASS_MESH_REFLECTION_FRAG_MSAA: SlangProgram = SlangProgram {
+    file: "glass_mesh.slang",
+    entry: "glass_mesh_reflection_fragment",
+    profile: "ps_6_5",
+    label: "glass_mesh_reflection_frag_msaa.slang",
+    defines: GLASS_MESH_MSAA_DEFINES,
+};
+
+/// `glass_mesh_reflection_fragment` from `glass_mesh.slang`.
+pub static GLASS_MESH_REFLECTION_FRAG_TEXTURED: SlangProgram = SlangProgram {
+    file: "glass_mesh.slang",
+    entry: "glass_mesh_reflection_fragment",
+    profile: "ps_6_5",
+    label: "glass_mesh_reflection_frag_textured.slang",
+    defines: GLASS_MESH_TEXTURED_DEFINES,
+};
+
+/// `glass_mesh_reflection_fragment` from `glass_mesh.slang`.
+pub static GLASS_MESH_REFLECTION_FRAG_TEXTURED_MSAA: SlangProgram = SlangProgram {
+    file: "glass_mesh.slang",
+    entry: "glass_mesh_reflection_fragment",
+    profile: "ps_6_5",
+    label: "glass_mesh_reflection_frag_textured_msaa.slang",
     defines: GLASS_MESH_TEXTURED_MSAA_DEFINES,
 };
 
@@ -857,11 +948,19 @@ pub static ALL: &[&SlangProgram] = &[
     &GLASS_RT_FRAG_MSAA,
     &GLASS_RT_FRAG_TEXTURED,
     &GLASS_RT_FRAG_TEXTURED_MSAA,
+    &GLASS_REFLECTION_FRAG,
+    &GLASS_REFLECTION_FRAG_MSAA,
+    &GLASS_REFLECTION_FRAG_TEXTURED,
+    &GLASS_REFLECTION_FRAG_TEXTURED_MSAA,
     &GLASS_MESH_VERT,
     &GLASS_MESH_RT_FRAG,
     &GLASS_MESH_RT_FRAG_MSAA,
     &GLASS_MESH_RT_FRAG_TEXTURED,
     &GLASS_MESH_RT_FRAG_TEXTURED_MSAA,
+    &GLASS_MESH_REFLECTION_FRAG,
+    &GLASS_MESH_REFLECTION_FRAG_MSAA,
+    &GLASS_MESH_REFLECTION_FRAG_TEXTURED,
+    &GLASS_MESH_REFLECTION_FRAG_TEXTURED_MSAA,
     &WATER_VERT,
     &WATER_FRAG,
     &WATER_FRAG_MSAA,

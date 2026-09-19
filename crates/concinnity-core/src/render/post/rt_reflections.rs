@@ -125,7 +125,7 @@ impl RtReflectionSettings {
             aspect,
             prefilter_mip_count,
             sun_shadows: if self.sun_shadows { 1.0 } else { 0.0 },
-            _pad1: 0.0,
+            trace_divisor: self.divisor.max(1) as f32,
             _pad2: 0.0,
             cam_pos: [cam_pos[0], cam_pos[1], cam_pos[2], 0.0],
             sun_dir: [sun_dir[0], sun_dir[1], sun_dir[2], 0.0],
@@ -221,6 +221,24 @@ mod tests {
             ..on
         };
         assert_eq!(off.params(inputs).sun_shadows, 0.0);
+    }
+
+    #[test]
+    fn params_carry_the_trace_divisor() {
+        let inputs = RtParamsInputs {
+            fov_y_radians: 1.0,
+            aspect: 1.0,
+            inv_view_rot: IDENTITY,
+            cam_pos: [0.0; 3],
+            sun_dir: [0.0, 1.0, 0.0],
+            sun_color: [1.0; 3],
+            prefilter_mip_count: 0.0,
+            sky_rot: SkyOrientation::IDENTITY_ROWS,
+        };
+        let full = RtReflectionSettings::resolve(0.7, 40.0);
+        assert_eq!(full.params(inputs).trace_divisor, 1.0);
+        let quarter = RtReflectionSettings { divisor: 4, ..full };
+        assert_eq!(quarter.params(inputs).trace_divisor, 4.0);
     }
 
     #[test]

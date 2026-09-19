@@ -539,6 +539,24 @@ pub static GLASS_FRAG_RT_TEXTURED: SlangProgram = SlangProgram {
     sizes: Sizes::Probes,
     msaa: true,
 };
+/// `glass_rt_reflection_fragment` from `glass.slang`.
+pub static GLASS_REFLECTION_FRAG: SlangProgram = SlangProgram {
+    file: "glass.slang",
+    entry: "glass_rt_reflection_fragment",
+    label: "glass_reflection_frag.slang",
+    gates: &["GLASS_RT"],
+    sizes: Sizes::Probes,
+    msaa: true,
+};
+/// `glass_rt_reflection_fragment` from `glass.slang`.
+pub static GLASS_REFLECTION_FRAG_TEXTURED: SlangProgram = SlangProgram {
+    file: "glass.slang",
+    entry: "glass_rt_reflection_fragment",
+    label: "glass_reflection_frag_textured.slang",
+    gates: &["GLASS_RT", "RT_TEXTURED"],
+    sizes: Sizes::Probes,
+    msaa: true,
+};
 
 // The see-through glass MESH family, the transparent pass's third producer.
 // Ray-traced only -- the per-pixel trace is what makes the mesh see-through
@@ -568,6 +586,24 @@ pub static GLASS_MESH_FRAG_RT_TEXTURED: SlangProgram = SlangProgram {
     file: "glass_mesh.slang",
     entry: "glass_mesh_rt_fragment",
     label: "glass_mesh_frag_rt_textured.slang",
+    gates: &["RT_TEXTURED"],
+    sizes: Sizes::Probes,
+    msaa: true,
+};
+/// `glass_mesh_reflection_fragment` from `glass_mesh.slang`.
+pub static GLASS_MESH_REFLECTION_FRAG: SlangProgram = SlangProgram {
+    file: "glass_mesh.slang",
+    entry: "glass_mesh_reflection_fragment",
+    label: "glass_mesh_reflection_frag.slang",
+    gates: &[],
+    sizes: Sizes::Probes,
+    msaa: true,
+};
+/// `glass_mesh_reflection_fragment` from `glass_mesh.slang`.
+pub static GLASS_MESH_REFLECTION_FRAG_TEXTURED: SlangProgram = SlangProgram {
+    file: "glass_mesh.slang",
+    entry: "glass_mesh_reflection_fragment",
+    label: "glass_mesh_reflection_frag_textured.slang",
     gates: &["RT_TEXTURED"],
     sizes: Sizes::Probes,
     msaa: true,
@@ -669,9 +705,13 @@ pub static ALL: &[&SlangProgram] = &[
     &GLASS_FRAG,
     &GLASS_FRAG_RT,
     &GLASS_FRAG_RT_TEXTURED,
+    &GLASS_REFLECTION_FRAG,
+    &GLASS_REFLECTION_FRAG_TEXTURED,
     &GLASS_MESH_VERT,
     &GLASS_MESH_FRAG_RT,
     &GLASS_MESH_FRAG_RT_TEXTURED,
+    &GLASS_MESH_REFLECTION_FRAG,
+    &GLASS_MESH_REFLECTION_FRAG_TEXTURED,
     &WATER_VERT,
     &WATER_FRAG,
     &WATER_FRAG_RT,

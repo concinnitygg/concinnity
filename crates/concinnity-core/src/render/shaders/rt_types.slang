@@ -16,7 +16,9 @@ struct RtParams
     // 1.0 when a reflected hit casts a sun-shadow ray, 0.0 when it is lit
     // unshadowed.
     float sun_shadows;
-    float _pad1;
+    // Per-axis divisor of the reduced glass reflection pre-pass; 1.0 when glass
+    // traces its reflection in place.
+    float trace_divisor;
     float _pad2;
     // float4 rather than float3 + scalar: MSL sizes a constant-buffer float3 at
     // 16 bytes, so only the padded form matches the CPU layout on every target.

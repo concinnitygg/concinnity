@@ -50,6 +50,7 @@ pub const FRAGMENTS: &[(&str, &str)] = &[
     ("{PROBE_COMMON}", "probe_common.slang"),
     ("{RT_TYPES}", "rt_types.slang"),
     ("{RT_TRACE}", "rt_trace.slang"),
+    ("{GLASS_REFLECTION}", "glass_reflection.slang"),
     ("{PARTICLE_TYPES}", "particle_types.slang"),
     // RAYMARCH_TYPES leads LIGHT_TYPES for the reason MAIN_TYPES leads
     // OBJECT_COMMON: it carries that marker itself, and the main pass's own

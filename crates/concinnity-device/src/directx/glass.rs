@@ -30,7 +30,8 @@ use crate::directx::context::dump_on_err;
 use crate::directx::slang_builtins;
 use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::transparent::{
-    GlassMeshProducer, RecordUpload, TransparentProducer, TransparentRecord, create_transparent_pso,
+    GlassMeshProducer, RecordUpload, TracedGlassPsos, TransparentProducer, TransparentRecord,
+    create_glass_reflection_pso, create_transparent_pso,
 };
 
 // Build the per-panel `GlassParams` from an authored panel. Pure; unit
@@ -88,6 +89,18 @@ struct GlassRtShaders {
     vs: Vec<u8>,
     flat_ps: Vec<u8>,
     textured_ps: Vec<u8>,
+    // The reflection pre-pass fragments, paired the same way.
+    reflection_flat_ps: Vec<u8>,
+    reflection_textured_ps: Vec<u8>,
+}
+
+// Pick the MSAA or single-sample twin of a fragment program.
+fn by_msaa<'a>(
+    msaa: bool,
+    single: &'a slang_builtins::SlangProgram,
+    multi: &'a slang_builtins::SlangProgram,
+) -> &'a slang_builtins::SlangProgram {
+    if msaa { multi } else { single }
 }
 
 // Compile the flat + textured ray-traced fragments (SM 6.5, for the inline ray
@@ -96,21 +109,29 @@ struct GlassRtShaders {
 // None RT pipeline + the base path) when slangc is unavailable or the shader
 // fails to compile.
 fn compile_glass_rt_shaders(msaa_samples: u32, hot_reload: bool) -> RenderResult<GlassRtShaders> {
+    use slang_builtins as sb;
     let msaa = msaa_samples > 1;
-    let flat = if msaa {
-        &slang_builtins::GLASS_RT_FRAG_MSAA
-    } else {
-        &slang_builtins::GLASS_RT_FRAG
-    };
-    let textured = if msaa {
-        &slang_builtins::GLASS_RT_FRAG_TEXTURED_MSAA
-    } else {
-        &slang_builtins::GLASS_RT_FRAG_TEXTURED
-    };
     Ok(GlassRtShaders {
-        vs: slang_builtins::GLASS_VERT.compile(hot_reload)?,
-        flat_ps: flat.compile(hot_reload)?,
-        textured_ps: textured.compile(hot_reload)?,
+        vs: sb::GLASS_VERT.compile(hot_reload)?,
+        flat_ps: by_msaa(msaa, &sb::GLASS_RT_FRAG, &sb::GLASS_RT_FRAG_MSAA).compile(hot_reload)?,
+        textured_ps: by_msaa(
+            msaa,
+            &sb::GLASS_RT_FRAG_TEXTURED,
+            &sb::GLASS_RT_FRAG_TEXTURED_MSAA,
+        )
+        .compile(hot_reload)?,
+        reflection_flat_ps: by_msaa(
+            msaa,
+            &sb::GLASS_REFLECTION_FRAG,
+            &sb::GLASS_REFLECTION_FRAG_MSAA,
+        )
+        .compile(hot_reload)?,
+        reflection_textured_ps: by_msaa(
+            msaa,
+            &sb::GLASS_REFLECTION_FRAG_TEXTURED,
+            &sb::GLASS_REFLECTION_FRAG_TEXTURED_MSAA,
+        )
+        .compile(hot_reload)?,
     })
 }
 
@@ -154,20 +175,20 @@ pub(in crate::directx) fn build_glass_producer(
         create_transparent_pso(device, root_sig, &vs, &ps),
     )?;
 
-    let (flat_rt_pso, textured_rt_pso) = match rt_root_sig {
+    let traced = match rt_root_sig {
         Some(sig) => {
             match build_glass_rt_pipelines(device, sig, msaa_samples, hot_reload, info_queue) {
-                Ok(pair) => (Some(pair.0), Some(pair.1)),
+                Ok(psos) => Some(psos),
                 Err(e) => {
                     tracing::warn!(
                         "glass RT reflection pipeline build failed ({e}); \
                      using the probe/planar glass path"
                     );
-                    (None, None)
+                    None
                 }
             }
         }
-        None => (None, None),
+        None => None,
     };
 
     let mut records = Vec::with_capacity(panels.len());
@@ -205,33 +226,65 @@ pub(in crate::directx) fn build_glass_producer(
         )?);
     }
 
+    let (flat_rt_pso, textured_rt_pso, reflection_flat_pso, reflection_textured_pso) = match traced
+    {
+        Some(p) => (
+            Some(p.shade_flat),
+            Some(p.shade_textured),
+            Some(p.reflection_flat),
+            Some(p.reflection_textured),
+        ),
+        None => (None, None, None, None),
+    };
     Ok(TransparentProducer {
         pso,
         flat_rt_pso,
         textured_rt_pso,
+        reflection_flat_pso,
+        reflection_textured_pso,
         records,
     })
 }
 
-// Compile and build the flat + textured RT glass PSOs against the pass's RT root
-// signature. Both use the same render state as the base PSO.
+// Compile and build the traced RT glass PSOs against the pass's RT root
+// signature: the shading pair with the base PSO's render state, and the
+// reflection pre-pass pair.
 fn build_glass_rt_pipelines(
     device: &ID3D12Device,
     rt_root_sig: &ID3D12RootSignature,
     msaa_samples: u32,
     hot_reload: bool,
     info_queue: Option<&ID3D12InfoQueue>,
-) -> RenderResult<(ID3D12PipelineState, ID3D12PipelineState)> {
+) -> RenderResult<TracedGlassPsos> {
     let shaders = compile_glass_rt_shaders(msaa_samples, hot_reload)?;
-    let flat = dump_on_err(
-        info_queue,
-        create_transparent_pso(device, rt_root_sig, &shaders.vs, &shaders.flat_ps),
-    )?;
-    let textured = dump_on_err(
-        info_queue,
-        create_transparent_pso(device, rt_root_sig, &shaders.vs, &shaders.textured_ps),
-    )?;
-    Ok((flat, textured))
+    build_traced_psos(device, rt_root_sig, &shaders, info_queue)
+}
+
+// Both traced pairs over one vertex stage.
+fn build_traced_psos(
+    device: &ID3D12Device,
+    rt_root_sig: &ID3D12RootSignature,
+    shaders: &GlassRtShaders,
+    info_queue: Option<&ID3D12InfoQueue>,
+) -> RenderResult<TracedGlassPsos> {
+    let shade = |ps: &[u8]| {
+        dump_on_err(
+            info_queue,
+            create_transparent_pso(device, rt_root_sig, &shaders.vs, ps),
+        )
+    };
+    let reflection = |ps: &[u8]| {
+        dump_on_err(
+            info_queue,
+            create_glass_reflection_pso(device, rt_root_sig, &shaders.vs, ps),
+        )
+    };
+    Ok(TracedGlassPsos {
+        shade_flat: shade(&shaders.flat_ps)?,
+        shade_textured: shade(&shaders.textured_ps)?,
+        reflection_flat: reflection(&shaders.reflection_flat_ps)?,
+        reflection_textured: reflection(&shaders.reflection_textured_ps)?,
+    })
 }
 
 // What building the see-through mesh producer needs. There is no base root
@@ -250,21 +303,30 @@ pub(in crate::directx) struct GlassMeshBuild<'a> {
 // ray query) and the vertex stage they share. Unlike the pane family there is no
 // non-RT pair: the trace is what makes the mesh see-through.
 fn compile_glass_mesh_shaders(msaa_samples: u32, hot_reload: bool) -> RenderResult<GlassRtShaders> {
+    use slang_builtins as sb;
     let msaa = msaa_samples > 1;
-    let flat = if msaa {
-        &slang_builtins::GLASS_MESH_RT_FRAG_MSAA
-    } else {
-        &slang_builtins::GLASS_MESH_RT_FRAG
-    };
-    let textured = if msaa {
-        &slang_builtins::GLASS_MESH_RT_FRAG_TEXTURED_MSAA
-    } else {
-        &slang_builtins::GLASS_MESH_RT_FRAG_TEXTURED
-    };
     Ok(GlassRtShaders {
-        vs: slang_builtins::GLASS_MESH_VERT.compile(hot_reload)?,
-        flat_ps: flat.compile(hot_reload)?,
-        textured_ps: textured.compile(hot_reload)?,
+        vs: sb::GLASS_MESH_VERT.compile(hot_reload)?,
+        flat_ps: by_msaa(msaa, &sb::GLASS_MESH_RT_FRAG, &sb::GLASS_MESH_RT_FRAG_MSAA)
+            .compile(hot_reload)?,
+        textured_ps: by_msaa(
+            msaa,
+            &sb::GLASS_MESH_RT_FRAG_TEXTURED,
+            &sb::GLASS_MESH_RT_FRAG_TEXTURED_MSAA,
+        )
+        .compile(hot_reload)?,
+        reflection_flat_ps: by_msaa(
+            msaa,
+            &sb::GLASS_MESH_REFLECTION_FRAG,
+            &sb::GLASS_MESH_REFLECTION_FRAG_MSAA,
+        )
+        .compile(hot_reload)?,
+        reflection_textured_ps: by_msaa(
+            msaa,
+            &sb::GLASS_MESH_REFLECTION_FRAG_TEXTURED,
+            &sb::GLASS_MESH_REFLECTION_FRAG_TEXTURED_MSAA,
+        )
+        .compile(hot_reload)?,
     })
 }
 
@@ -285,20 +347,8 @@ pub(in crate::directx) fn build_glass_mesh_producer(
     } = build;
     let device = alloc.device();
     let shaders = compile_glass_mesh_shaders(msaa_samples, hot_reload)?;
-    let flat_rt_pso = dump_on_err(
-        info_queue,
-        create_transparent_pso(device, rt_root_sig, &shaders.vs, &shaders.flat_ps),
-    )?;
-    let textured_rt_pso = dump_on_err(
-        info_queue,
-        create_transparent_pso(device, rt_root_sig, &shaders.vs, &shaders.textured_ps),
-    )?;
-    GlassMeshProducer::new(
-        alloc,
-        flat_rt_pso,
-        Some(textured_rt_pso),
-        object_indices.to_vec(),
-    )
+    let psos = build_traced_psos(device, rt_root_sig, &shaders, info_queue)?;
+    GlassMeshProducer::new(alloc, psos, object_indices.to_vec())
 }
 
 #[cfg(test)]

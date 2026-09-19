@@ -840,6 +840,6 @@ impl MtlContext {
             hiz.resize_to(&self.hw.device, render_w, render_h)?;
             self.cull.hiz_valid = false;
         }
-        Ok(())
+        self.sync_glass_reflection_target(render_w, render_h)
     }
 }

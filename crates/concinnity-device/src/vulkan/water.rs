@@ -220,6 +220,8 @@ pub(in crate::vulkan) fn build_water_producer(
         pipeline,
         flat_rt_pso,
         textured_rt_pso,
+        reflection_flat_pso: None,
+        reflection_textured_pso: None,
         records,
     })
 }

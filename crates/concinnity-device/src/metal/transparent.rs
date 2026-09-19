@@ -29,8 +29,8 @@ use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_foundation::ns_string;
 use objc2_metal::{
-    MTLBlitCommandEncoder as _, MTLBuffer, MTLCommandBuffer as _, MTLCommandEncoder as _,
-    MTLIndexType, MTLLoadAction, MTLPrimitiveType, MTLRenderCommandEncoder as _,
+    MTLBlitCommandEncoder as _, MTLBuffer, MTLClearColor, MTLCommandBuffer as _,
+    MTLCommandEncoder as _, MTLIndexType, MTLLoadAction, MTLPrimitiveType, MTLRenderCommandEncoder,
     MTLRenderPassDescriptor, MTLRenderPipelineState, MTLSamplerState, MTLStoreAction, MTLTexture,
 };
 
@@ -45,6 +45,11 @@ use super::scoped_encoder::ScopedEncoder;
 // argument layout.
 pub(in crate::metal) struct TransparentDraw {
     pub(in crate::metal) pipeline: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
+    // The reduced reflection pre-pass pipeline for traced glass, drawn into
+    // `GlassState::reflection_targets` ahead of the pass. `None` for every other
+    // draw, and for traced glass tracing in place.
+    pub(in crate::metal) reflection_pipeline:
+        Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     pub(in crate::metal) vertex_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
     pub(in crate::metal) index_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
     pub(in crate::metal) index_count: u32,
@@ -87,6 +92,55 @@ const GLASS_PLANAR_SAMPLER_INDEX: usize = 3;
 // Fragment sampler index the textured RT variants read the bindless pool
 // through, past the planar resolve's.
 const GLASS_POOL_SAMPLER_INDEX: usize = 4;
+// The reduced glass reflection layers, pinned by `register(t4)` / `(t5)` in the
+// glass shaders.
+const GLASS_REFLECTION_TEXTURE_INDEX: usize = 4;
+const GLASS_REFLECTION_BACK_TEXTURE_INDEX: usize = 5;
+
+// The per-frame inputs every transparent encoder binds before its draws.
+struct TransparentInputs<'a> {
+    view: &'a TransparentView,
+    rt_params: Option<&'a render_types::RtParams>,
+    bindless_tex_args: Option<&'a Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
+}
+
+// Issue one transparent draw with `pipeline`: its vertex buffer at buffer(1), its
+// params blob at vertex + fragment buffer(6), its own textures and samplers.
+fn encode_transparent_draw(
+    enc: &ProtocolObject<dyn MTLRenderCommandEncoder>,
+    d: &TransparentDraw,
+    pipeline: &ProtocolObject<dyn MTLRenderPipelineState>,
+) -> RenderResult<()> {
+    enc.set_pipeline(pipeline);
+    // SAFETY: `params_ptr`/`d.params.len()` describe the record own parameter blob, and the
+    // index range is that record own slice of `d.index_buffer`.
+    unsafe {
+        enc.set_vertex_buffer(&d.vertex_buffer, 0, 1);
+        let params_ptr = std::ptr::NonNull::new(d.params.as_ptr() as *mut std::ffi::c_void)
+            .ok_or_else(|| {
+                RenderError::Other("transparent draw params blob is null".to_string())
+            })?;
+        enc.setVertexBytes_length_atIndex(params_ptr, d.params.len(), 6);
+        enc.setFragmentBytes_length_atIndex(params_ptr, d.params.len(), 6);
+        for (slot, tex) in &d.fragment_textures {
+            enc.set_fragment_texture(tex.as_ref(), *slot);
+        }
+        for (slot, samp) in &d.fragment_samplers {
+            enc.set_fragment_sampler(samp.as_ref(), *slot);
+        }
+        enc.drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset_instanceCount_baseVertex_baseInstance(
+            MTLPrimitiveType::Triangle,
+            d.index_count as usize,
+            d.index_type,
+            &d.index_buffer,
+            d.index_offset_bytes,
+            1,
+            d.base_vertex as isize,
+            0,
+        );
+    }
+    Ok(())
+}
 
 impl MtlContext {
     // True when the transparent pass traces a per-pixel RT reflection this frame:
@@ -105,72 +159,19 @@ impl MtlContext {
         self.rt.accel.is_some() && water_ready && glass_ready
     }
 
-    // Encode the transparent pass: snapshot the scene for refraction, then
-    // draw every contributed translucent surface back-to-front into
-    // `scene_pre_taa`. Returns the number of draws issued (0 short-circuits
-    // before allocating the encoder).
-    pub(in crate::metal) fn encode_transparent(
+    // Bind what every transparent draw reads and no draw overrides: the shared
+    // view, the reflection sources, and the ray-tracing inputs.
+    fn bind_transparent_inputs(
         &self,
-        cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
-        view: &TransparentView,
-        scene_pre_taa: &Retained<ProtocolObject<dyn objc2_metal::MTLTexture>>,
-        draws: &[TransparentDraw],
-        rt_params: Option<&render_types::RtParams>,
-        bindless_tex_args: Option<&Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
-    ) -> RenderResult<u32> {
-        if draws.is_empty() {
-            return Ok(0);
-        }
-
-        // Snapshot the pre-transparent scene so refraction taps read a stable
-        // copy instead of the attachment being written.
-        let blit = cmd_buf.blitCommandEncoder().ok_or_else(|| {
-            RenderError::Other("failed to get transparent scene-copy blit encoder".to_string())
-        })?;
-        blit.pushDebugGroup(&NSString::from_str("transparent_scene_copy"));
-        // SAFETY: both textures are HDR scene targets created with the same format and dimensions,
-        // which is what a whole-texture blit copy requires.
-        unsafe {
-            blit.copyFromTexture_toTexture(
-                scene_pre_taa.as_ref(),
-                self.targets.hdr.transparent_scene_copy.as_ref(),
-            );
-        }
-        blit.popDebugGroup();
-        blit.endEncoding();
-
-        let pass_desc = MTLRenderPassDescriptor::new();
-        // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
-        // declares.
-        unsafe {
-            let ca = pass_desc.colorAttachments().objectAtIndexedSubscript(0);
-            ca.setTexture(Some(scene_pre_taa.as_ref()));
-            ca.setLoadAction(MTLLoadAction::Load);
-            ca.setStoreAction(MTLStoreAction::Store);
-        }
-        if let Some(t) = &self.diagnostics.pass_timing {
-            t.attach_render(&pass_desc, super::pass_timing::PassId::Transparent);
-        }
-
-        // The blit above is ended explicitly (it must close before this render
-        // encoder opens). This render pass spans to the end of the function and
-        // has a `?` mid-encode (the per-draw params blob below), so the guard
-        // ensures it can't leak an open encoder on an early return.
-        let enc = ScopedEncoder::new(
-            cmd_buf
-                .renderCommandEncoderWithDescriptor(&pass_desc)
-                .ok_or_else(|| {
-                    RenderError::Other("failed to get transparent render encoder".to_string())
-                })?,
-            ns_string!("transparent"),
-        );
-
+        enc: &ProtocolObject<dyn MTLRenderCommandEncoder>,
+        inputs: &TransparentInputs,
+    ) {
         // Shared per-frame view at buffer(5) for both stages. The pass has no
         // depth attachment (translucents are not hardware depth-tested;
         // depth-aware effects sample `depth_resolve` instead), so no
         // depth-stencil state is bound.
-        enc.set_vertex_value(view, 5);
-        enc.set_fragment_value(view, 5);
+        enc.set_vertex_value(inputs.view, 5);
+        enc.set_fragment_value(inputs.view, 5);
 
         // Reflection sources shared by every transparent shader that samples
         // them (glass + water): the sky prefilter cube at texture(2), the local
@@ -178,27 +179,27 @@ impl MtlContext {
         // sampler at sampler(1), and the probe set (parallax boxes + count) at
         // fragment buffer(7). Frame-constant, so bound once before the draw
         // loop; a probe count of 0 keeps the sky-only fallback. The per-draw
-        // bindings below never touch these slots, so the state persists.
+        // bindings never touch these slots, so the state persists.
         enc.set_fragment_texture(self.scene.env_map.prefilter.as_ref(), 2);
-        self.bind_probe_cubes(&enc);
+        self.bind_probe_cubes(enc);
         // The cube sampler covers the prefilter cube's own sampler at 1 and the
         // probe block's at 2; the planar resolve takes the post sampler after
         // them, and the bindless pool the RT variants read takes the
         // repeat-address sampler after that.
         super::post::fullscreen::set_fragment_sampler_range(
-            &enc,
+            enc,
             self.scene.cube_sampler.as_ref(),
             1,
             2,
         );
         super::post::fullscreen::set_fragment_sampler_range(
-            &enc,
+            enc,
             &self.composite.sampler,
             GLASS_PLANAR_SAMPLER_INDEX,
             1,
         );
         super::post::fullscreen::set_fragment_sampler_range(
-            &enc,
+            enc,
             self.scene.sampler.as_ref(),
             GLASS_POOL_SAMPLER_INDEX,
             1,
@@ -235,7 +236,7 @@ impl MtlContext {
                     || self.water.pipeline_rt.is_some()
                     || self.glass.mesh_pipeline_rt.is_some()
             }),
-            rt_params,
+            inputs.rt_params,
         ) {
             enc.set_fragment_value(rt_params, 0);
             enc.set_fragment_buffer(self.scene.vertex_buffer.as_ref(), 0, 1);
@@ -244,52 +245,172 @@ impl MtlContext {
             enc.set_fragment_acceleration_structure(accel.tlas.as_ref(), 4);
             enc.set_fragment_buffer(accel.deformed_verts.as_ref(), 0, 8);
             enc.set_fragment_buffer(accel.skinned_indices.as_ref(), 0, 9);
-            super::raytrace::use_blas_resident_fragment(&enc, &accel.blas);
+            super::raytrace::use_blas_resident_fragment(enc, &accel.blas);
             // Textured variants (bindless world): the albedo / normal /
             // emissive pool at buffer(10) + its textures declared resident.
-            if let Some(tex_args) = bindless_tex_args.filter(|_| {
+            if let Some(tex_args) = inputs.bindless_tex_args.filter(|_| {
                 self.glass.pipeline_rt_textured.is_some()
                     || self.water.pipeline_rt_textured.is_some()
                     || self.glass.mesh_pipeline_rt_textured.is_some()
             }) {
                 enc.set_fragment_buffer(tex_args.as_ref(), 0, 10);
-                self.use_bindless_textures(&enc);
+                self.use_bindless_textures(enc);
             }
         }
+    }
+
+    // Encode the transparent pass: snapshot the scene for refraction, then
+    // draw every contributed translucent surface back-to-front into
+    // `scene_pre_taa`. Returns the number of draws issued (0 short-circuits
+    // before allocating the encoder).
+    pub(in crate::metal) fn encode_transparent(
+        &self,
+        cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
+        view: &TransparentView,
+        scene_pre_taa: &Retained<ProtocolObject<dyn objc2_metal::MTLTexture>>,
+        draws: &[TransparentDraw],
+        rt_params: Option<&render_types::RtParams>,
+        bindless_tex_args: Option<&Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
+    ) -> RenderResult<u32> {
+        if draws.is_empty() {
+            return Ok(0);
+        }
+
+        // Snapshot the pre-transparent scene so refraction taps read a stable
+        // copy instead of the attachment being written.
+        let blit = cmd_buf.blitCommandEncoder().ok_or_else(|| {
+            RenderError::Other("failed to get transparent scene-copy blit encoder".to_string())
+        })?;
+        blit.pushDebugGroup(&NSString::from_str("transparent_scene_copy"));
+        // SAFETY: both textures are HDR scene targets created with the same format and dimensions,
+        // which is what a whole-texture blit copy requires.
+        unsafe {
+            blit.copyFromTexture_toTexture(
+                scene_pre_taa.as_ref(),
+                self.targets.hdr.transparent_scene_copy.as_ref(),
+            );
+        }
+        blit.popDebugGroup();
+        blit.endEncoding();
 
         let distances: Vec<f32> = draws.iter().map(|d| d.sort_distance).collect();
         let order = transparent::back_to_front_order(&distances);
 
-        for &i in &order {
-            let d = &draws[i];
-            enc.set_pipeline(&d.pipeline);
-            // SAFETY: `params_ptr`/`d.params.len()` describe the record own parameter blob, and the
-            // index range is that record own slice of `d.index_buffer`.
-            unsafe {
-                enc.set_vertex_buffer(&d.vertex_buffer, 0, 1);
-                let params_ptr = std::ptr::NonNull::new(d.params.as_ptr() as *mut std::ffi::c_void)
-                    .ok_or_else(|| {
-                        RenderError::Other("transparent draw params blob is null".to_string())
-                    })?;
-                enc.setVertexBytes_length_atIndex(params_ptr, d.params.len(), 6);
-                enc.setFragmentBytes_length_atIndex(params_ptr, d.params.len(), 6);
-                for (slot, tex) in &d.fragment_textures {
-                    enc.set_fragment_texture(tex.as_ref(), *slot);
+        // Traced glass reads its reflection back from the reduced layers only
+        // when the pre-pass below filled them this frame; otherwise it traces
+        // in place, whatever the configured divisor.
+        let reflection = self
+            .glass
+            .reflection_targets
+            .as_ref()
+            .filter(|_| rt_params.is_some())
+            .filter(|_| draws.iter().any(|d| d.reflection_pipeline.is_some()));
+        let rt_params = rt_params.map(|p| render_types::RtParams {
+            trace_divisor: if reflection.is_some() {
+                p.trace_divisor
+            } else {
+                1.0
+            },
+            ..*p
+        });
+        let inputs = TransparentInputs {
+            view,
+            rt_params: rt_params.as_ref(),
+            bindless_tex_args,
+        };
+        let timing = self.diagnostics.pass_timing.as_ref();
+
+        if let Some(targets) = reflection {
+            // Layer 0 peels behind the empty layer, so it keeps the nearest
+            // glass; layer 1 peels behind layer 0.
+            let fronts: [&ProtocolObject<dyn MTLTexture>; 2] =
+                [targets.empty.as_ref(), targets.layers[0].as_ref()];
+            for (layer, front) in fronts.into_iter().enumerate() {
+                let desc = MTLRenderPassDescriptor::new();
+                // SAFETY: plain descriptor property setters; the subscripted slots are ones
+                // this descriptor declares.
+                unsafe {
+                    let ca = desc.colorAttachments().objectAtIndexedSubscript(0);
+                    ca.setTexture(Some(targets.layers[layer].as_ref()));
+                    ca.setLoadAction(MTLLoadAction::Clear);
+                    ca.setClearColor(MTLClearColor {
+                        red: 0.0,
+                        green: 0.0,
+                        blue: 0.0,
+                        alpha: 0.0,
+                    });
+                    ca.setStoreAction(MTLStoreAction::Store);
+                    let da = desc.depthAttachment();
+                    da.setTexture(Some(targets.depth.as_ref()));
+                    da.setLoadAction(MTLLoadAction::Clear);
+                    da.setClearDepth(1.0);
+                    da.setStoreAction(MTLStoreAction::DontCare);
                 }
-                for (slot, samp) in &d.fragment_samplers {
-                    enc.set_fragment_sampler(samp.as_ref(), *slot);
+                if layer == 0
+                    && let Some(t) = timing
+                {
+                    t.attach_render_first(&desc, super::pass_timing::PassId::Transparent);
                 }
-                enc.drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset_instanceCount_baseVertex_baseInstance(
-                    MTLPrimitiveType::Triangle,
-                    d.index_count as usize,
-                    d.index_type,
-                    &d.index_buffer,
-                    d.index_offset_bytes,
-                    1,
-                    d.base_vertex as isize,
-                    0,
+                let enc = ScopedEncoder::new(
+                    cmd_buf
+                        .renderCommandEncoderWithDescriptor(&desc)
+                        .ok_or_else(|| {
+                            RenderError::Other("failed to get glass reflection encoder".to_string())
+                        })?,
+                    ns_string!("glass reflection"),
                 );
+                self.bind_transparent_inputs(&enc, &inputs);
+                enc.setDepthStencilState(Some(&targets.depth_state));
+                enc.set_fragment_texture(front, GLASS_REFLECTION_TEXTURE_INDEX);
+                for &i in &order {
+                    if let Some(pipeline) = &draws[i].reflection_pipeline {
+                        encode_transparent_draw(&enc, &draws[i], pipeline)?;
+                    }
+                }
             }
+        }
+
+        let pass_desc = MTLRenderPassDescriptor::new();
+        // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
+        // declares.
+        unsafe {
+            let ca = pass_desc.colorAttachments().objectAtIndexedSubscript(0);
+            ca.setTexture(Some(scene_pre_taa.as_ref()));
+            ca.setLoadAction(MTLLoadAction::Load);
+            ca.setStoreAction(MTLStoreAction::Store);
+        }
+        if let Some(t) = timing {
+            if reflection.is_some() {
+                t.attach_render_last(&pass_desc, super::pass_timing::PassId::Transparent);
+            } else {
+                t.attach_render(&pass_desc, super::pass_timing::PassId::Transparent);
+            }
+        }
+
+        // The blit above is ended explicitly (it must close before this render
+        // encoder opens). This render pass spans to the end of the function and
+        // has a `?` mid-encode (the per-draw params blob below), so the guard
+        // ensures it can't leak an open encoder on an early return.
+        let enc = ScopedEncoder::new(
+            cmd_buf
+                .renderCommandEncoderWithDescriptor(&pass_desc)
+                .ok_or_else(|| {
+                    RenderError::Other("failed to get transparent render encoder".to_string())
+                })?,
+            ns_string!("transparent"),
+        );
+        self.bind_transparent_inputs(&enc, &inputs);
+        // The reduced reflection layers the traced glass reads back, or the scene
+        // snapshot as a stand-in so the slots are always bound: with no pre-pass
+        // the shaders see `trace_divisor` 1 and never read them.
+        let stand_in = &self.targets.hdr.transparent_scene_copy;
+        let (front, back) =
+            reflection.map_or((stand_in, stand_in), |t| (&t.layers[0], &t.layers[1]));
+        enc.set_fragment_texture(front.as_ref(), GLASS_REFLECTION_TEXTURE_INDEX);
+        enc.set_fragment_texture(back.as_ref(), GLASS_REFLECTION_BACK_TEXTURE_INDEX);
+
+        for &i in &order {
+            encode_transparent_draw(&enc, &draws[i], &draws[i].pipeline)?;
         }
 
         Ok(order.len() as u32)
