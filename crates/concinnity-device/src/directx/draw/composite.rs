@@ -15,6 +15,8 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R16_UINT;
 
 use crate::directx::context::DxContext;
+use crate::directx::descriptor_slot::DescriptorTables;
+use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::graph_exec::{CompositeRenderTarget, CompositeResolution};
 use crate::directx::root_constants::RootConstants;
 use crate::directx::texture::transition_barrier;
@@ -28,7 +30,7 @@ use crate::directx::upload_ring::UPLOAD_ALIGN;
 pub(crate) struct DxCompositeArgs {
     back_buffer: ID3D12Resource,
     back_buffer_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    scene_srv: D3D12_GPU_DESCRIPTOR_HANDLE,
+    scene_srv: SrvSlot,
     width: u32,
     height: u32,
     frame_idx: usize,
@@ -91,9 +93,9 @@ impl fullscreen::CompositeEncoder for DxContext {
             cmd.SetGraphicsRootSignature(&self.composite.root_sig);
             // Root param [0]: scene SRV (t0): the TAA output when TAA is on,
             // the HDR scene target otherwise.
-            cmd.SetGraphicsRootDescriptorTable(0, args.scene_srv);
+            cmd.set_graphics_srv_table(0, args.scene_srv);
             // Root param [1]: bloom mip 0 SRV (t1).
-            cmd.SetGraphicsRootDescriptorTable(1, self.bloom.mip_srv_gpus[0]);
+            cmd.set_graphics_srv_table(1, self.bloom.mip_srv_gpus[0]);
             // Root param [2]: CompositeParams (the post-process tunables plus
             // the scene-transition fade, matching the root-sig declaration).
             // Pushed verbatim so the HLSL cbuffer reads the same byte order as
@@ -106,7 +108,7 @@ impl fullscreen::CompositeEncoder for DxContext {
             };
             cmd.set_graphics_root_constants(2, &composite);
             // Root param [3]: 3D color-grading LUT SRV (t2).
-            cmd.SetGraphicsRootDescriptorTable(3, self.scene.color_lut.srv_gpu);
+            cmd.set_graphics_srv_table(3, self.scene.color_lut.srv_gpu);
             // Root params [4..6]: the G-buffer channel sources the debug view
             // modes visualize (t3 normal+depth, t4 roughness, t5 SSAO). The
             // fragment references all three statically, so they are bound on
@@ -115,9 +117,9 @@ impl fullscreen::CompositeEncoder for DxContext {
                 Some(g) => (g.normal_depth_srv_gpu, g.roughness_srv_gpu),
                 None => (self.ssao.white_srv_gpu, self.ssao.white_srv_gpu),
             };
-            cmd.SetGraphicsRootDescriptorTable(4, nd_srv);
-            cmd.SetGraphicsRootDescriptorTable(5, rough_srv);
-            cmd.SetGraphicsRootDescriptorTable(6, self.ssao_ao_srv_gpu());
+            cmd.set_graphics_srv_table(4, nd_srv);
+            cmd.set_graphics_srv_table(5, rough_srv);
+            cmd.set_graphics_srv_table(6, self.ssao_ao_srv_gpu());
             cmd.IASetPrimitiveTopology(
                 windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             );
@@ -148,7 +150,7 @@ impl fullscreen::CompositeEncoder for DxContext {
             cmd.SetPipelineState(text_pso);
             cmd.SetGraphicsRootSignature(&self.text.root_sig);
             cmd.set_graphics_root_constants(0, &text_push);
-            cmd.SetGraphicsRootDescriptorTable(2, self.descriptors.text_sampler_gpu);
+            cmd.set_graphics_sampler_table(2, self.descriptors.text_sampler_gpu);
         }
         true
     }
@@ -217,7 +219,7 @@ impl fullscreen::CompositeEncoder for DxContext {
                 }]);
             }
             if binds.atlas_changed(atlas_idx) {
-                cmd.SetGraphicsRootDescriptorTable(1, self.text.atlas_srv_gpus[atlas_idx]);
+                cmd.set_graphics_srv_table(1, self.text.atlas_srv_gpus[atlas_idx]);
             }
             cmd.IASetVertexBuffers(0, Some(&[vbv]));
             cmd.IASetIndexBuffer(Some(&ibv));
@@ -250,7 +252,7 @@ impl DxContext {
         frame_idx: usize,
         render_target: CompositeRenderTarget<'_>,
         text_calls: &[TextDrawCall],
-        scene_srv: D3D12_GPU_DESCRIPTOR_HANDLE,
+        scene_srv: SrvSlot,
         resolution: CompositeResolution,
     ) -> RenderResult<()> {
         let CompositeRenderTarget {

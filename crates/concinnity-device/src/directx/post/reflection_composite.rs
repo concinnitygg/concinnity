@@ -19,6 +19,8 @@ use concinnity_core::render::post::device::PostBlend;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::context::{DxContext, dump_on_err};
+use crate::directx::descriptor_slot::DescriptorTables;
+use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::pipeline::{create_blended_composite_pso, serialize_desc_and_create};
 use crate::directx::post::fullscreen::FullscreenExtent;
 use crate::directx::post::ssr::SSR_OUTPUT_FORMAT;
@@ -125,13 +127,13 @@ pub(in crate::directx) struct ReflectionCompositeResources {
     // scene. Becomes the scene color TAA / bloom / composite / glass consume.
     pub(in crate::directx) output: ID3D12Resource,
     pub(in crate::directx) output_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub(in crate::directx) output_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub(in crate::directx) output_srv_gpu: SrvSlot,
 
     // Reduced-resolution roughness blur of the reflection target (the blur pass
     // writes it, the composite upsamples it). Sized at render / `blur_scale`.
     blur: ID3D12Resource,
     blur_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    blur_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    blur_srv_gpu: SrvSlot,
     // `blur`'s own dimensions, the blur pass's viewport. Kept in step with `blur`
     // at create and resize so the pass does not query the resource for them.
     blur_extent: FullscreenExtent,
@@ -152,9 +154,9 @@ pub(in crate::directx) struct ReflectionCompositeResources {
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct ReflectionCompositeSlots {
     pub output_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub output_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE),
+    pub output_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, SrvSlot),
     pub blur_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub blur_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE),
+    pub blur_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, SrvSlot),
 }
 
 impl ReflectionCompositeResources {
@@ -244,11 +246,9 @@ impl ReflectionCompositeResources {
         width: u32,
         height: u32,
         srv_cpu_base: D3D12_CPU_DESCRIPTOR_HANDLE,
-        srv_gpu_base: D3D12_GPU_DESCRIPTOR_HANDLE,
+        srv_gpu_base: SrvSlot,
     ) -> RenderResult<()> {
-        let srv_cpu = |gpu: D3D12_GPU_DESCRIPTOR_HANDLE| D3D12_CPU_DESCRIPTOR_HANDLE {
-            ptr: srv_cpu_base.ptr + (gpu.ptr - srv_gpu_base.ptr) as usize,
-        };
+        let srv_cpu = |gpu: SrvSlot| gpu.cpu_in(srv_cpu_base, srv_gpu_base);
         self.output = create_rt_target(device, width, height, SSR_OUTPUT_FORMAT)?;
         write_format_rtv(device, &self.output, self.output_rtv, SSR_OUTPUT_FORMAT);
         write_format_srv(
@@ -338,7 +338,7 @@ impl DxContext {
     pub(in crate::directx) fn encode_reflection_composite(
         &self,
         cmd: &ID3D12GraphicsCommandList,
-        reflection_srv: D3D12_GPU_DESCRIPTOR_HANDLE,
+        reflection_srv: SrvSlot,
     ) {
         let Some(rc) = &self.reflection_composite else {
             return;
@@ -355,8 +355,8 @@ impl DxContext {
         unsafe {
             cmd.SetPipelineState(&rc.blur_pso);
             cmd.SetGraphicsRootSignature(&rc.blur_root_sig);
-            cmd.SetGraphicsRootDescriptorTable(0, reflection_srv);
-            cmd.SetGraphicsRootDescriptorTable(1, gbuffer.roughness_srv_gpu);
+            cmd.set_graphics_srv_table(0, reflection_srv);
+            cmd.set_graphics_srv_table(1, gbuffer.roughness_srv_gpu);
             cmd.IASetPrimitiveTopology(
                 windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             );
@@ -386,11 +386,11 @@ impl DxContext {
             cmd.SetGraphicsRootSignature(&rc.composite_root_sig);
             // t0 reflection, t1 scene, t2 G-buffer normal+depth, t3 roughness,
             // t4 blur -- the order `reflection.slang`'s composite declares them.
-            cmd.SetGraphicsRootDescriptorTable(0, reflection_srv);
-            cmd.SetGraphicsRootDescriptorTable(1, self.targets.hdr.srv_gpu);
-            cmd.SetGraphicsRootDescriptorTable(2, gbuffer.normal_depth_srv_gpu);
-            cmd.SetGraphicsRootDescriptorTable(3, gbuffer.roughness_srv_gpu);
-            cmd.SetGraphicsRootDescriptorTable(4, rc.blur_srv_gpu);
+            cmd.set_graphics_srv_table(0, reflection_srv);
+            cmd.set_graphics_srv_table(1, self.targets.hdr.srv_gpu);
+            cmd.set_graphics_srv_table(2, gbuffer.normal_depth_srv_gpu);
+            cmd.set_graphics_srv_table(3, gbuffer.roughness_srv_gpu);
+            cmd.set_graphics_srv_table(4, rc.blur_srv_gpu);
             cmd.IASetPrimitiveTopology(
                 windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             );

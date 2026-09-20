@@ -7,6 +7,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use super::InitGpu;
 use super::heap_layout::RtvHeapLayout;
 use crate::directx::context::{DxDescriptors, DxTargets, SwapchainState, dump_on_err};
+use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::post::bloom::{
     BloomState, compile_bloom_shaders, create_bloom_mips, create_bloom_pso,
     create_bloom_root_signature, write_color_rtv,
@@ -43,8 +44,7 @@ pub(super) fn build_bloom(gpu: &InitGpu<'_>, inputs: BloomInputs<'_>) -> RenderR
         .clone();
     let (bloom_mips, bloom_mip_extents) = create_bloom_mips(device, width, height, bloom_top)?;
     let mut bloom_mip_rtvs: Vec<D3D12_CPU_DESCRIPTOR_HANDLE> = Vec::with_capacity(bloom_mips.len());
-    let mut bloom_mip_srv_gpus: Vec<D3D12_GPU_DESCRIPTOR_HANDLE> =
-        Vec::with_capacity(bloom_mips.len());
+    let mut bloom_mip_srv_gpus: Vec<SrvSlot> = Vec::with_capacity(bloom_mips.len());
     for (i, mip) in bloom_mips.iter().enumerate() {
         let mip_rtv = swapchain.rtv(rtv.bloom_base_slot + i);
         write_color_rtv(device, mip, mip_rtv);

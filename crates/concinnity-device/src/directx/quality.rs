@@ -35,6 +35,7 @@ use super::post::bloom::{create_bloom_mips_at, write_color_rtv};
 use super::post::gbuffer::GbufferSlots;
 use super::post::reflection_composite::ReflectionCompositeSlots;
 use super::texture::write_hdr_srv;
+use crate::directx::descriptor_slot::SrvSlot;
 
 // The fixed descriptor-heap slots the live-toggleable effects build into. Minted
 // once at init (the slots are reserved unconditionally, independent of the
@@ -45,11 +46,11 @@ use super::texture::write_hdr_srv;
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct QualitySlotHandles {
     pub ssao_ao_raw_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub ssao_ao_raw_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE),
+    pub ssao_ao_raw_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, SrvSlot),
     pub ssao_ao_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub ssao_ao_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE),
+    pub ssao_ao_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, SrvSlot),
     pub rt_output_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub rt_output_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE),
+    pub rt_output_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, SrvSlot),
     pub refl_composite: ReflectionCompositeSlots,
     pub gbuffer: GbufferSlots,
     pub glass_reflection: super::transparent::GlassReflectionSlots,
@@ -187,13 +188,9 @@ impl DxContext {
             rt.settings = settings;
             if resized {
                 let heap = &self.descriptors.srv_heap;
-                // SAFETY: property queries on a live descriptor heap; they only read.
-                let (srv_cpu_base, srv_gpu_base) = unsafe {
-                    (
-                        heap.GetCPUDescriptorHandleForHeapStart(),
-                        heap.GetGPUDescriptorHandleForHeapStart(),
-                    )
-                };
+                // SAFETY: a property query on a live descriptor heap; it only reads.
+                let srv_cpu_base = unsafe { heap.GetCPUDescriptorHandleForHeapStart() };
+                let srv_gpu_base = SrvSlot::at(heap, self.descriptors.srv_descriptor_size, 0);
                 rt.resize_to(
                     &self.hw.device,
                     render_w,
@@ -416,12 +413,11 @@ impl DxContext {
                     .srv_heap
                     .GetCPUDescriptorHandleForHeapStart()
             };
-            // SAFETY: a property query on a live descriptor heap; it only reads.
-            let srv_gpu_base = unsafe {
-                self.descriptors
-                    .srv_heap
-                    .GetGPUDescriptorHandleForHeapStart()
-            };
+            let srv_gpu_base = SrvSlot::at(
+                &self.descriptors.srv_heap,
+                self.descriptors.srv_descriptor_size,
+                0,
+            );
             let device = self.hw.device.clone();
             if let Some(gbuffer) = self.gbuffer.as_mut() {
                 gbuffer.repoint_pooled(&device, srv_cpu_base, srv_gpu_base, &pooled);
@@ -455,15 +451,12 @@ impl DxContext {
                     .srv_heap
                     .GetCPUDescriptorHandleForHeapStart()
             };
-            // SAFETY: a property query on a live descriptor heap; it only reads.
-            let srv_gpu_base = unsafe {
-                self.descriptors
-                    .srv_heap
-                    .GetGPUDescriptorHandleForHeapStart()
-            };
-            let srv_cpu_of = |gpu: D3D12_GPU_DESCRIPTOR_HANDLE| D3D12_CPU_DESCRIPTOR_HANDLE {
-                ptr: srv_cpu_base.ptr + (gpu.ptr - srv_gpu_base.ptr) as usize,
-            };
+            let srv_gpu_base = SrvSlot::at(
+                &self.descriptors.srv_heap,
+                self.descriptors.srv_descriptor_size,
+                0,
+            );
+            let srv_cpu_of = |gpu: SrvSlot| gpu.cpu_in(srv_cpu_base, srv_gpu_base);
             for i in 0..bloom_count {
                 write_color_rtv(&self.hw.device, &self.bloom.mips[i], self.bloom.mip_rtvs[i]);
                 write_hdr_srv(

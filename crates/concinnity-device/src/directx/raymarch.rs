@@ -59,6 +59,8 @@ pub(in crate::directx) use concinnity_core::render::uniforms::{
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledTexture};
 use crate::directx::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
+use crate::directx::descriptor_slot::DescriptorTables;
+use crate::directx::descriptor_slot::{SamplerSlot, SrvSlot};
 use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::{main_input_layout, serialize_desc_and_create};
 use crate::directx::root_constants::RootConstants;
@@ -167,10 +169,10 @@ pub(in crate::directx) struct RaymarchResources {
     // table the pixel shader binds at t0..t4 (main_depth, shadow_map,
     // irradiance, prefilter, scene_color). Written at init by
     // `write_raymarch_srvs`; live for the renderer's lifetime.
-    pub(in crate::directx) srv_table_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub(in crate::directx) srv_table_gpu: SrvSlot,
     // GPU descriptor handle for the start of the 3-sampler descriptor
     // table at s0..s2 (shadow_samp, cube_samp, scene_samp).
-    pub(in crate::directx) sampler_table_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub(in crate::directx) sampler_table_gpu: SamplerSlot,
     // Per-volume records. Drained from the world's `SdfVolume`s at init.
     pub(in crate::directx) volumes: Vec<RaymarchVolumeRecord>,
 }
@@ -922,10 +924,10 @@ pub(in crate::directx) struct RaymarchSharedBindings<'a> {
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct RaymarchDescriptorHandles {
     pub srv_base_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub srv_base_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub srv_base_gpu: SrvSlot,
     pub srv_descriptor_size: usize,
     pub sampler_base_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub sampler_base_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub sampler_base_gpu: SamplerSlot,
     pub sampler_descriptor_size: usize,
 }
 
@@ -1310,8 +1312,8 @@ impl DxContext {
             cmd.SetGraphicsRootConstantBufferView(0, view_gva);
             cmd.SetGraphicsRootConstantBufferView(2, light_gva);
             cmd.SetGraphicsRootConstantBufferView(3, shadow_gva);
-            cmd.SetGraphicsRootDescriptorTable(4, rm.srv_table_gpu);
-            cmd.SetGraphicsRootDescriptorTable(5, rm.sampler_table_gpu);
+            cmd.set_graphics_srv_table(4, rm.srv_table_gpu);
+            cmd.set_graphics_sampler_table(5, rm.sampler_table_gpu);
         }
 
         for vol in &rm.volumes {

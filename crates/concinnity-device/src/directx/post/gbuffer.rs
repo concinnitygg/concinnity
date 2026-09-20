@@ -24,6 +24,7 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
 use crate::directx::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
+use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::serialize_and_create_root_sig;
 use crate::directx::root_constants::{RootConstants, root_dwords};
@@ -375,11 +376,11 @@ pub(in crate::directx) fn build_gbuffer_bindless(
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct GbufferSlots {
     pub normal_depth_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub normal_depth_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE),
+    pub normal_depth_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, SrvSlot),
     pub roughness_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub roughness_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE),
+    pub roughness_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, SrvSlot),
     pub velocity_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub velocity_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE),
+    pub velocity_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, SrvSlot),
     pub depth_dsv: D3D12_CPU_DESCRIPTOR_HANDLE,
 }
 
@@ -390,13 +391,13 @@ pub(in crate::directx) struct GbufferResources {
     // MRT targets + their private single-sample depth.
     pub(in crate::directx) normal_depth: ID3D12Resource,
     pub(in crate::directx) normal_depth_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub(in crate::directx) normal_depth_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub(in crate::directx) normal_depth_srv_gpu: SrvSlot,
     pub(in crate::directx) roughness: ID3D12Resource,
     pub(in crate::directx) roughness_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub(in crate::directx) roughness_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub(in crate::directx) roughness_srv_gpu: SrvSlot,
     pub(in crate::directx) velocity: ID3D12Resource,
     pub(in crate::directx) velocity_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub(in crate::directx) velocity_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub(in crate::directx) velocity_srv_gpu: SrvSlot,
     pub(in crate::directx) depth: ID3D12Resource,
     pub(in crate::directx) depth_dsv: D3D12_CPU_DESCRIPTOR_HANDLE,
 
@@ -544,7 +545,7 @@ impl GbufferResources {
         width: u32,
         height: u32,
         srv_cpu_base: D3D12_CPU_DESCRIPTOR_HANDLE,
-        srv_gpu_base: D3D12_GPU_DESCRIPTOR_HANDLE,
+        srv_gpu_base: SrvSlot,
         pooled: &GbufferPooled,
     ) -> RenderResult<()> {
         self.repoint_pooled(device, srv_cpu_base, srv_gpu_base, pooled);
@@ -559,12 +560,10 @@ impl GbufferResources {
         &mut self,
         device: &ID3D12Device,
         srv_cpu_base: D3D12_CPU_DESCRIPTOR_HANDLE,
-        srv_gpu_base: D3D12_GPU_DESCRIPTOR_HANDLE,
+        srv_gpu_base: SrvSlot,
         pooled: &GbufferPooled,
     ) {
-        let srv_cpu = |gpu: D3D12_GPU_DESCRIPTOR_HANDLE| D3D12_CPU_DESCRIPTOR_HANDLE {
-            ptr: srv_cpu_base.ptr + (gpu.ptr - srv_gpu_base.ptr) as usize,
-        };
+        let srv_cpu = |gpu: SrvSlot| gpu.cpu_in(srv_cpu_base, srv_gpu_base);
         let (normal_depth, roughness, velocity) = write_pooled_views(
             device,
             GbufferViewSlots {

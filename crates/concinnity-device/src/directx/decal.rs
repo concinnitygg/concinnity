@@ -20,6 +20,8 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
+use crate::directx::descriptor_slot::DescriptorTables;
+use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::slang_builtins;
@@ -316,7 +318,7 @@ pub(in crate::directx) struct DecalResources {
     pub(in crate::directx) decal_srv_base_slot: usize,
     // Heap slot of the main-depth SRV. Bound at decal pass t0; the resource
     // is transitioned to PIXEL_SHADER_RESOURCE around the pass.
-    pub(in crate::directx) depth_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub(in crate::directx) depth_srv_gpu: SrvSlot,
 }
 
 impl DecalResources {
@@ -328,7 +330,7 @@ impl DecalResources {
         alloc: &DeviceAllocator,
         msaa_samples: u32,
         decal_srv_base_slot: usize,
-        depth_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+        depth_srv_gpu: SrvSlot,
         info_queue: Option<&ID3D12InfoQueue>,
         hot_reload: bool,
     ) -> RenderResult<Self> {
@@ -552,21 +554,18 @@ impl DxContext {
             cmd.SetGraphicsRootSignature(&decals.root_sig);
             cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
             cmd.SetGraphicsRootConstantBufferView(0, view_gva);
-            cmd.SetGraphicsRootDescriptorTable(2, decals.depth_srv_gpu);
+            cmd.set_graphics_srv_table(2, decals.depth_srv_gpu);
         }
 
         // Base of this pass's per-decal albedo SRVs, written into the heap at
         // `decal_srv_base_slot + id` by `add_decal`. The heap start is fixed
-        // for the heap's lifetime, so the COM query is hoisted out of the draw
-        // loop and each decal's handle is a stride from here.
-        // SAFETY: a property query on a live descriptor heap; it only reads.
-        let srv_gpu_base = unsafe {
-            self.descriptors
-                .srv_heap
-                .GetGPUDescriptorHandleForHeapStart()
-        };
-        let albedo_base_ptr = srv_gpu_base.ptr
-            + (decals.decal_srv_base_slot * self.descriptors.srv_descriptor_size) as u64;
+        // for the heap's lifetime, so it is resolved out of the draw loop and
+        // each decal's slot is a stride from here.
+        let albedo_base = SrvSlot::at(
+            &self.descriptors.srv_heap,
+            self.descriptors.srv_descriptor_size,
+            decals.decal_srv_base_slot,
+        );
 
         for decal in visible {
             // This frame's ring slot keeps what an earlier frame wrote, so a
@@ -590,14 +589,12 @@ impl DxContext {
                 }
             }
             let params_gva = params_base_gva + decal.id as u64 * decals.params_stride;
-            let albedo_srv_gpu = D3D12_GPU_DESCRIPTOR_HANDLE {
-                ptr: albedo_base_ptr + (decal.id * self.descriptors.srv_descriptor_size) as u64,
-            };
+            let albedo_srv_gpu = albedo_base.offset(decal.id, self.descriptors.srv_descriptor_size);
             // SAFETY: the command list is in the recording state, and every resource, descriptor
             // and slice these commands name is live for the call.
             unsafe {
                 cmd.SetGraphicsRootConstantBufferView(1, params_gva);
-                cmd.SetGraphicsRootDescriptorTable(3, albedo_srv_gpu);
+                cmd.set_graphics_srv_table(3, albedo_srv_gpu);
                 cmd.DrawIndexedInstanced(36, 1, 0, 0, 0);
             }
             self.inc_draw_calls(1);

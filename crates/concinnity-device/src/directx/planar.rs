@@ -43,6 +43,7 @@ use super::texture::{
     HDR_FORMAT, create_hdr_color_target, create_hdr_sampled_target, create_uav_buffer,
     transition_barrier, write_format_rtv, write_hdr_srv,
 };
+use crate::directx::descriptor_slot::SrvSlot;
 
 // The engine capacity ceiling for distinct reflection planes: the count the
 // reserved planar targets + resolve SRVs are sized to. Single-sourced from
@@ -111,7 +112,7 @@ pub(in crate::directx) struct PlanarReflectionSet {
     // slots of the main shader-visible heap.
     resolves: Vec<ID3D12Resource>,
     resolve_srv_cpu: Vec<D3D12_CPU_DESCRIPTOR_HANDLE>,
-    resolve_srv_gpu: Vec<D3D12_GPU_DESCRIPTOR_HANDLE>,
+    resolve_srv_gpu: Vec<SrvSlot>,
 
     // Per-(plane, frame) reflected `ViewUniforms` CBV ring, persistently mapped.
     // Indexed `plane * FRAMES + frame_idx`, so each frame writes its own slot and
@@ -163,7 +164,7 @@ pub(in crate::directx) struct PlanarConfig {
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct PlanarTargets<'a> {
     pub resolve_srv_cpu: &'a [D3D12_CPU_DESCRIPTOR_HANDLE],
-    pub resolve_srv_gpu: &'a [D3D12_GPU_DESCRIPTOR_HANDLE],
+    pub resolve_srv_gpu: &'a [SrvSlot],
     pub clear_color: [f32; 4],
 }
 
@@ -331,7 +332,7 @@ impl PlanarReflectionSet {
 
     // GPU descriptor handle of plane `slot`'s resolve SRV (what the glass pass
     // binds for a pane assigned to this slot).
-    pub(in crate::directx) fn resolve_srv_gpu(&self, slot: usize) -> D3D12_GPU_DESCRIPTOR_HANDLE {
+    pub(in crate::directx) fn resolve_srv_gpu(&self, slot: usize) -> SrvSlot {
         self.resolve_srv_gpu[slot]
     }
 

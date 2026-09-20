@@ -14,6 +14,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::directx::context::DxContext;
+use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::post::post_device::{DxPostDevice, PostPipeline, PostTarget};
 
 // HDR-format reflection targets: the resolve's and the reflection composite's.
@@ -129,7 +130,7 @@ impl DxContext {
     // sample as the "scene": the upscaler's output when temporal upscaling is
     // on, the reflection composite's output when a reflection resolve ran,
     // otherwise the raw `hdr_resolve` SRV.
-    pub(in crate::directx) fn scene_srv_for_post(&self) -> D3D12_GPU_DESCRIPTOR_HANDLE {
+    pub(in crate::directx) fn scene_srv_for_post(&self) -> SrvSlot {
         if let Some(up) = &self.upscale.backend {
             return up.output_srv_gpu();
         }
@@ -149,16 +150,12 @@ impl DxContext {
     // slot 2; the SSR resolve and RT-reflection resolve both bind it as a miss
     // fallback. With no `EnvironmentMap` declared, the slot holds a 1x1 gray
     // fallback cube and `prefilter_mip_count == 0` tells the resolve to skip it.
-    pub(in crate::directx) fn prefilter_cube_srv_gpu(&self) -> D3D12_GPU_DESCRIPTOR_HANDLE {
-        // SAFETY: a property query on a live descriptor heap; it only reads.
-        let srv_gpu_base = unsafe {
-            self.descriptors
-                .srv_heap
-                .GetGPUDescriptorHandleForHeapStart()
-        };
-        D3D12_GPU_DESCRIPTOR_HANDLE {
-            ptr: srv_gpu_base.ptr + (2 * self.descriptors.srv_descriptor_size) as u64,
-        }
+    pub(in crate::directx) fn prefilter_cube_srv_gpu(&self) -> SrvSlot {
+        SrvSlot::at(
+            &self.descriptors.srv_heap,
+            self.descriptors.srv_descriptor_size,
+            2,
+        )
     }
 
     // Encode the SSR resolve into `ssr.resolve.output`, then blur it by

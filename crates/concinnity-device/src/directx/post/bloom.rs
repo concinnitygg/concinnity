@@ -15,6 +15,8 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::directx::com;
 use crate::directx::context::DxContext;
+use crate::directx::descriptor_slot::DescriptorTables;
+use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::root_constants::{RootConstants, root_dwords};
@@ -29,7 +31,7 @@ use crate::directx::texture::{HDR_FORMAT, transition_barrier};
 pub(in crate::directx) struct BloomState {
     pub mips: Vec<ID3D12Resource>,
     pub mip_rtvs: Vec<D3D12_CPU_DESCRIPTOR_HANDLE>,
-    pub mip_srv_gpus: Vec<D3D12_GPU_DESCRIPTOR_HANDLE>,
+    pub mip_srv_gpus: Vec<SrvSlot>,
     pub mip_extents: Vec<(u32, u32)>,
     pub root_sig: ID3D12RootSignature,
     pub pso_prefilter: ID3D12PipelineState,
@@ -332,7 +334,7 @@ pub(in crate::directx) fn write_color_rtv(
 // therefore ends the frame back in its created state.
 impl fullscreen::BloomEncoder for DxContext {
     type Rec = ID3D12GraphicsCommandList;
-    type Args = D3D12_GPU_DESCRIPTOR_HANDLE;
+    type Args = SrvSlot;
 
     fn bloom_mip_count(&self) -> usize {
         self.bloom.mips.len()
@@ -434,7 +436,7 @@ impl fullscreen::BloomEncoder for DxContext {
 // rest.
 struct BloomSubPass<'a> {
     dst: usize,
-    src_srv: D3D12_GPU_DESCRIPTOR_HANDLE,
+    src_srv: SrvSlot,
     pso: &'a ID3D12PipelineState,
     before: D3D12_RESOURCE_STATES,
     after: D3D12_RESOURCE_STATES,
@@ -449,7 +451,7 @@ impl DxContext {
     pub(in crate::directx) fn encode_bloom(
         &self,
         cmd: &ID3D12GraphicsCommandList,
-        scene_srv: D3D12_GPU_DESCRIPTOR_HANDLE,
+        scene_srv: SrvSlot,
     ) {
         // D3D12's sub-passes cannot fail (every mip, descriptor and PSO was
         // built at init), so the chain's Result is always Ok here.
@@ -500,7 +502,7 @@ impl DxContext {
             };
             cmd.RSSetScissorRects(&[scissor]);
             cmd.SetPipelineState(pso);
-            cmd.SetGraphicsRootDescriptorTable(0, src_srv);
+            cmd.set_graphics_srv_table(0, src_srv);
             cmd.DrawInstanced(3, 1, 0, 0);
         }
         if after != D3D12_RESOURCE_STATE_RENDER_TARGET {

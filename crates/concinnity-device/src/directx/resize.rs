@@ -20,6 +20,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::*;
 
 use crate::directx::context::{DxContext, FRAMES};
+use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::error::map_hresult;
 use crate::directx::post::bloom::{create_bloom_mips_at, write_color_rtv};
 use crate::directx::texture::{
@@ -239,15 +240,12 @@ impl DxContext {
                 .srv_heap
                 .GetCPUDescriptorHandleForHeapStart()
         };
-        // SAFETY: a property query on a live descriptor heap; it only reads.
-        let srv_gpu_base = unsafe {
-            self.descriptors
-                .srv_heap
-                .GetGPUDescriptorHandleForHeapStart()
-        };
-        let srv_cpu_of = |gpu: D3D12_GPU_DESCRIPTOR_HANDLE| D3D12_CPU_DESCRIPTOR_HANDLE {
-            ptr: srv_cpu_base.ptr + (gpu.ptr - srv_gpu_base.ptr) as usize,
-        };
+        let srv_gpu_base = SrvSlot::at(
+            &self.descriptors.srv_heap,
+            self.descriptors.srv_descriptor_size,
+            0,
+        );
+        let srv_cpu_of = |gpu: SrvSlot| gpu.cpu_in(srv_cpu_base, srv_gpu_base);
 
         // 3) Refresh SRVs that point at the recreated resources. The GPU
         //    handles stored on the various Resources structs already match

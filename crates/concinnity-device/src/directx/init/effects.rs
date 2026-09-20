@@ -23,6 +23,7 @@ use crate::directx::context::{
     DxDescriptors, DxSceneAssets, DxTargets, FRAMES, SwapchainState, dump_on_err,
 };
 use crate::directx::decal::DecalState;
+use crate::directx::descriptor_slot::SamplerSlot;
 use crate::directx::draw::shadow::ShadowState;
 use crate::directx::fog::FogState;
 use crate::directx::particle::ParticleState;
@@ -553,7 +554,7 @@ pub(super) fn build_raymarch(
                 sampler_descriptor_size,
                 heaps::RAYMARCH_SAMPLER_BASE_SLOT,
             ),
-            sampler_base_gpu: heaps::gpu_handle(
+            sampler_base_gpu: SamplerSlot::at(
                 &descriptors.sampler_heap,
                 sampler_descriptor_size,
                 heaps::RAYMARCH_SAMPLER_BASE_SLOT,

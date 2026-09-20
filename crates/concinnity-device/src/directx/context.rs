@@ -49,6 +49,7 @@ use super::resources::geometry::MeshStreamState;
 use super::resources::skinning::SkinnedState;
 use super::resources::streaming::ChunkStreamState;
 use super::texture::*;
+use crate::directx::descriptor_slot::{SamplerSlot, SrvSlot};
 use crate::win32::window;
 use crate::win32::window::{WindowState, frame_tick, take_input_snapshot};
 
@@ -164,7 +165,7 @@ pub(super) struct HdrState {
     pub color_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
     pub resolve: Option<ID3D12Resource>,
     pub resolve_rtv: Option<D3D12_CPU_DESCRIPTOR_HANDLE>,
-    pub srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub srv_gpu: SrvSlot,
     pub msaa_samples: u32,
 }
 
@@ -186,7 +187,7 @@ pub(super) struct AreaLightState {
     )]
     pub ltc_magnitude: GpuResource,
     // Base of the 2-descriptor LTC table (matrix, then magnitude).
-    pub ltc_table_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub ltc_table_gpu: SrvSlot,
 }
 
 // The main-pass constant buffers, grouped off the flat `DxContext`. Mirrors
@@ -371,9 +372,9 @@ pub(super) struct DxDescriptors {
     //   [0] shadow comparison (s0)   [1] linear repeat (s1)
     //   [2] cube linear-clamp + mip linear (s2)   [3] text linear-clamp
     pub sampler_heap: ID3D12DescriptorHeap,
-    pub shadow_sampler_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-    pub linear_sampler_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-    pub text_sampler_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub shadow_sampler_gpu: SamplerSlot,
+    pub linear_sampler_gpu: SamplerSlot,
+    pub text_sampler_gpu: SamplerSlot,
 }
 
 // The scene draw list plus the record counts that partition the GPU-driven
@@ -615,7 +616,7 @@ pub(super) struct TextState {
         reason = "held to keep the text atlases resident; the pass binds the SRV handles"
     )]
     pub atlas_textures: Vec<GpuResource>,
-    pub atlas_srv_gpus: Vec<D3D12_GPU_DESCRIPTOR_HANDLE>,
+    pub atlas_srv_gpus: Vec<SrvSlot>,
 }
 
 // Composite (post-process) pass: fullscreen-triangle tonemap of the HDR scene
@@ -651,7 +652,7 @@ pub(super) struct DxTargets {
     // GPU handle of the main-depth SRV. Written at init (and rewritten on
     // resize) into a single reserved heap slot every depth-sampling decoration
     // pass binds; the lazily-built line pass needs it past init.
-    pub main_depth_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub main_depth_srv_gpu: SrvSlot,
     pub extent: Extents,
     // Backing store for the render graph's transient render targets (the
     // resources the aliasing planner manages). Owns each managed transient as a

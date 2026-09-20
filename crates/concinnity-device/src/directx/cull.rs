@@ -25,6 +25,8 @@ use windows::Win32::Graphics::Direct3D12::*;
 use crate::directx::allocator::PooledBuffer;
 use crate::directx::com;
 use crate::directx::context::DxContext;
+use crate::directx::descriptor_slot::DescriptorTables;
+use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::root_constants::{RootConstants, root_dwords};
@@ -63,7 +65,7 @@ pub(in crate::directx) struct CullState {
     // copies exist so a streamed texture swap rewrites the copy whose frame
     // just fence-waited instead of draining the device (see
     // `apply_streamed_texture_rewrites`).
-    pub bindless_pool_gpu: Vec<D3D12_GPU_DESCRIPTOR_HANDLE>,
+    pub bindless_pool_gpu: Vec<SrvSlot>,
     // Cull compute pipeline; `cull_pso_phase2` is the two-pass-occlusion PSO
     // (same root signature as `cull_pso`).
     pub cull_root_sig: Option<ID3D12RootSignature>,
@@ -712,7 +714,7 @@ impl DxContext {
             cmd.SetComputeRootShaderResourceView(1, object_gva);
             cmd.SetComputeRootShaderResourceView(2, draw_args_gva);
             if let Some(srv) = hiz_srv {
-                cmd.SetComputeRootDescriptorTable(3, srv);
+                cmd.set_compute_srv_table(3, srv);
             }
             cmd.SetComputeRootUnorderedAccessView(4, com::gpu_va(indirect));
             cmd.SetComputeRootUnorderedAccessView(5, cull_status_gva);
@@ -792,7 +794,7 @@ impl DxContext {
             cmd.SetComputeRootShaderResourceView(1, object_gva);
             cmd.SetComputeRootShaderResourceView(2, draw_args_gva);
             if let Some(srv) = hiz_srv {
-                cmd.SetComputeRootDescriptorTable(3, srv);
+                cmd.set_compute_srv_table(3, srv);
             }
             cmd.SetComputeRootUnorderedAccessView(4, com::gpu_va(indirect));
             cmd.SetComputeRootUnorderedAccessView(5, cull_status_gva);
@@ -875,7 +877,7 @@ impl DxContext {
             cmd.SetComputeRootShaderResourceView(1, object_gva);
             cmd.SetComputeRootShaderResourceView(2, draw_args_gva);
             if let Some(srv) = hiz_srv {
-                cmd.SetComputeRootDescriptorTable(3, srv);
+                cmd.set_compute_srv_table(3, srv);
             }
             cmd.SetComputeRootUnorderedAccessView(5, status_gva);
 
@@ -995,7 +997,7 @@ impl DxContext {
             cmd.SetComputeRootShaderResourceView(1, object_gva);
             cmd.SetComputeRootShaderResourceView(2, draw_args_gva);
             if let Some(srv) = hiz_srv {
-                cmd.SetComputeRootDescriptorTable(3, srv);
+                cmd.set_compute_srv_table(3, srv);
             }
             cmd.SetComputeRootUnorderedAccessView(5, status_gva);
 
@@ -1107,7 +1109,7 @@ impl DxContext {
             cmd.SetComputeRootShaderResourceView(2, draw_args_gva);
             // The rebuilt Hi-Z pyramid (same all-mips SRV phase 1 sampled; the
             // HizBuild node rewrote the texels in place).
-            cmd.SetComputeRootDescriptorTable(3, hiz.srv_gpu);
+            cmd.set_compute_srv_table(3, hiz.srv_gpu);
             cmd.SetComputeRootUnorderedAccessView(4, com::gpu_va(indirect));
             cmd.SetComputeRootUnorderedAccessView(5, cull_status_gva);
             cmd.Dispatch((self.cull_count() as u32).div_ceil(64), 1, 1);

@@ -33,6 +33,8 @@ use super::context::DxContext;
 use super::error::{map_hresult, map_pso_hresult};
 use super::pipeline::serialize_desc_and_create;
 use super::slang_builtins::SlangCompile;
+use crate::directx::descriptor_slot::DescriptorTables;
+use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::root_constants::{RootConstants, root_dwords};
 
 /// Color format of both cubes.
@@ -321,8 +323,8 @@ impl DxContext {
         &self,
         cmd: &ID3D12GraphicsCommandList,
         pso: &ID3D12PipelineState,
-        uav_table: D3D12_GPU_DESCRIPTOR_HANDLE,
-        srv_table: Option<D3D12_GPU_DESCRIPTOR_HANDLE>,
+        uav_table: SrvSlot,
+        srv_table: Option<SrvSlot>,
         params: &ProbePrefilterParams,
         size: u32,
     ) {
@@ -335,10 +337,10 @@ impl DxContext {
             cmd.set_compute_root_constants(0, params);
             match srv_table {
                 Some(srv) => {
-                    cmd.SetComputeRootDescriptorTable(1, srv);
-                    cmd.SetComputeRootDescriptorTable(2, uav_table);
+                    cmd.set_compute_srv_table(1, srv);
+                    cmd.set_compute_srv_table(2, uav_table);
                 }
-                None => cmd.SetComputeRootDescriptorTable(1, uav_table),
+                None => cmd.set_compute_srv_table(1, uav_table),
             }
             cmd.Dispatch(groups, groups, 6);
         }
@@ -587,14 +589,10 @@ fn cpu_slot(ctx: &DxContext, slot: usize) -> D3D12_CPU_DESCRIPTOR_HANDLE {
     }
 }
 
-fn gpu_slot(ctx: &DxContext, slot: usize) -> D3D12_GPU_DESCRIPTOR_HANDLE {
-    // SAFETY: a property query on a live descriptor heap; it only reads.
-    let base = unsafe {
-        ctx.descriptors
-            .srv_heap
-            .GetGPUDescriptorHandleForHeapStart()
-    };
-    D3D12_GPU_DESCRIPTOR_HANDLE {
-        ptr: base.ptr + (slot * ctx.descriptors.srv_descriptor_size) as u64,
-    }
+fn gpu_slot(ctx: &DxContext, slot: usize) -> SrvSlot {
+    SrvSlot::at(
+        &ctx.descriptors.srv_heap,
+        ctx.descriptors.srv_descriptor_size,
+        slot,
+    )
 }

@@ -8,6 +8,7 @@ use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT;
 
 use super::InitGpu;
 use crate::directx::context::{DxDescriptors, FRAMES, TextState, dump_on_err};
+use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::pipeline::{compile_text_shaders, create_text_pso, create_text_root_signature};
 use crate::directx::texture::{GpuResource, upload_texture};
 use crate::directx::upload_ring::UploadRing;
@@ -21,7 +22,7 @@ pub(super) fn build_text(
     let hw = gpu.hw;
     // Text atlas textures
     let mut atlas_textures: Vec<GpuResource> = Vec::new();
-    let mut atlas_srv_gpus: Vec<D3D12_GPU_DESCRIPTOR_HANDLE> = Vec::new();
+    let mut atlas_srv_gpus: Vec<SrvSlot> = Vec::new();
     for (i, (w, h, px)) in media.text_atlases.iter().enumerate() {
         let s = descriptors.layout.atlas_base_slot + i;
         let res = upload_texture(

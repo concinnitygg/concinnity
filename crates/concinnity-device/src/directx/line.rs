@@ -21,6 +21,8 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
+use crate::directx::descriptor_slot::DescriptorTables;
+use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::slang_builtins;
@@ -70,14 +72,14 @@ pub(in crate::directx) struct LineResources {
 
     // Heap slot of the main-depth SRV, bound at t0; the resource is
     // transitioned to PIXEL_SHADER_RESOURCE around the pass.
-    depth_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    depth_srv_gpu: SrvSlot,
 }
 
 impl LineResources {
     fn new(
         alloc: &DeviceAllocator,
         msaa_samples: u32,
-        depth_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+        depth_srv_gpu: SrvSlot,
         info_queue: Option<&ID3D12InfoQueue>,
         hot_reload: bool,
     ) -> RenderResult<Self> {
@@ -418,7 +420,7 @@ impl DxContext {
             cmd.SetGraphicsRootSignature(&lines.root_sig);
             cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
             cmd.SetGraphicsRootConstantBufferView(0, view_gva);
-            cmd.SetGraphicsRootDescriptorTable(1, lines.depth_srv_gpu);
+            cmd.set_graphics_srv_table(1, lines.depth_srv_gpu);
             cmd.DrawInstanced(vertices.len() as u32, 1, 0, 0);
         }
         self.inc_draw_calls(1);

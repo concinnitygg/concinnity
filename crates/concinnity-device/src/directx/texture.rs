@@ -11,6 +11,7 @@ use windows::core::Interface;
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledTexture};
 use super::com;
 use super::error::map_hresult;
+use crate::directx::descriptor_slot::SrvSlot;
 
 // GPU resource handle
 
@@ -22,7 +23,7 @@ pub(super) struct GpuResource<R = PooledTexture> {
     // CPU descriptor handle for the SRV (zero/invalid for buffers that don't need one).
     pub srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     // GPU descriptor handle for the SRV.
-    pub srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub srv_gpu: SrvSlot,
 }
 
 // One-shot command list helper
@@ -559,7 +560,7 @@ pub(super) fn upload_texture(
     height: u32,
     pixels: &[u8],
     srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-    srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    srv_gpu: SrvSlot,
 ) -> RenderResult<GpuResource> {
     let texture = upload_texture_resource(alloc, width, height, pixels)?;
     write_texture_srv(alloc.device(), &texture, srv_cpu);
@@ -592,7 +593,7 @@ pub(super) fn create_fallback_flat_normal_resource(
 pub(super) fn create_fallback_shadow_array(
     alloc: &DeviceAllocator,
     srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-    srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    srv_gpu: SrvSlot,
 ) -> RenderResult<GpuResource<ID3D12Resource>> {
     let device = alloc.device();
     let heap_props = D3D12_HEAP_PROPERTIES {
@@ -800,7 +801,7 @@ pub(super) fn create_shadow_map_array(
     dsv_cpu_base: D3D12_CPU_DESCRIPTOR_HANDLE,
     dsv_stride: usize,
     srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-    srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    srv_gpu: SrvSlot,
 ) -> RenderResult<(
     GpuResource<ID3D12Resource>,
     Vec<D3D12_CPU_DESCRIPTOR_HANDLE>,
@@ -1325,7 +1326,7 @@ pub(super) fn create_fallback_cubemap(
     alloc: &DeviceAllocator,
     value: [f32; 4],
     srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-    srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    srv_gpu: SrvSlot,
 ) -> RenderResult<GpuResource> {
     let face_bytes = [value; 1]; // 16 bytes = one RGBA32F pixel per face
     let mut all_faces = Vec::with_capacity(6 * 16);
@@ -1371,9 +1372,9 @@ pub(super) struct EnvironmentMapPayload<'a> {
 #[derive(Clone, Copy)]
 pub(super) struct EnvironmentMapDescriptors {
     pub irr_srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub irr_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub irr_srv_gpu: SrvSlot,
     pub pre_srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub pre_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub pre_srv_gpu: SrvSlot,
 }
 
 pub(super) fn upload_environment_map(
@@ -1651,7 +1652,7 @@ pub(super) fn upload_color_lut(
     size: u32,
     data: &[u8],
     srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-    srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    srv_gpu: SrvSlot,
 ) -> RenderResult<GpuResource> {
     let device = alloc.device();
     let n = size as usize;
@@ -1785,7 +1786,7 @@ pub(super) fn upload_float_lut(
     components: u32,
     texels: &[f32],
     srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-    srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    srv_gpu: SrvSlot,
 ) -> RenderResult<GpuResource> {
     let device = alloc.device();
     let n = size as usize;
@@ -1929,7 +1930,7 @@ pub(super) fn upload_float_lut(
 pub(super) fn create_fallback_color_lut(
     alloc: &DeviceAllocator,
     srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-    srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    srv_gpu: SrvSlot,
 ) -> RenderResult<GpuResource> {
     // Red-fastest, then green, then blue, matching the payload texel order.
     let mut data = Vec::with_capacity(2 * 2 * 2 * 4);

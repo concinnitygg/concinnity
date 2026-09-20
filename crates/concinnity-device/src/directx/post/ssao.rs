@@ -18,6 +18,8 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::directx::allocator::PooledTexture;
 use crate::directx::context::{DxContext, dump_on_err};
+use crate::directx::descriptor_slot::DescriptorTables;
+use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::pipeline::{create_blended_composite_pso, serialize_desc_and_create};
 use crate::directx::root_constants::{RootConstants, root_dwords};
 use crate::directx::slang_builtins;
@@ -39,7 +41,7 @@ pub(in crate::directx) struct SsaoState {
         reason = "held to keep the fallback texture resident; the pass binds white_srv_gpu"
     )]
     pub white: PooledTexture,
-    pub white_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub white_srv_gpu: SrvSlot,
 }
 
 // Single-channel occlusion target format. 1.0 = unoccluded; the main pass
@@ -206,13 +208,13 @@ pub(in crate::directx) struct SsaoResources {
     // main pass samples.
     pub(in crate::directx) ao_raw: ID3D12Resource,
     pub(in crate::directx) ao_raw_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub(in crate::directx) ao_raw_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub(in crate::directx) ao_raw_srv_gpu: SrvSlot,
     // The blurred `ao_output` the main pass samples is the graph's transient and
     // is owned by `DxTargets::transient_pool` (a placed resource); SSAO holds
     // only its RTV (blur writes it) + SRV (main samples it), written from the
     // pooled resource at build / resize time.
     pub(in crate::directx) ao_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub(in crate::directx) ao_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub(in crate::directx) ao_srv_gpu: SrvSlot,
 
     // GTAO horizon-search kernel + depth-aware blur (fullscreen triangle).
     pub(in crate::directx) kernel_root_sig: ID3D12RootSignature,
@@ -234,9 +236,9 @@ pub(in crate::directx) struct SsaoDeviceCtx<'a> {
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct SsaoDescriptorHandles {
     pub ao_raw_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub ao_raw_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE),
+    pub ao_raw_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, SrvSlot),
     pub ao_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub ao_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE),
+    pub ao_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, SrvSlot),
 }
 
 impl SsaoResources {
@@ -332,13 +334,11 @@ impl SsaoResources {
         width: u32,
         height: u32,
         srv_cpu_base: D3D12_CPU_DESCRIPTOR_HANDLE,
-        srv_gpu_base: D3D12_GPU_DESCRIPTOR_HANDLE,
+        srv_gpu_base: SrvSlot,
         // The rebuilt pooled `ao_output` resource; SSAO rewrites its RTV + SRV.
         ao_resource: &ID3D12Resource,
     ) -> RenderResult<()> {
-        let srv_cpu = |gpu: D3D12_GPU_DESCRIPTOR_HANDLE| D3D12_CPU_DESCRIPTOR_HANDLE {
-            ptr: srv_cpu_base.ptr + (gpu.ptr - srv_gpu_base.ptr) as usize,
-        };
+        let srv_cpu = |gpu: SrvSlot| gpu.cpu_in(srv_cpu_base, srv_gpu_base);
 
         self.ao_raw = create_rt_target(device, width, height, SSAO_OCCLUSION_FORMAT)?;
         write_format_rtv(device, &self.ao_raw, self.ao_raw_rtv, SSAO_OCCLUSION_FORMAT);
@@ -407,7 +407,7 @@ impl DxContext {
     // GPU descriptor handle of the AO SRV the main pass should sample.
     // Returns the blurred SSAO output when SSAO is on, otherwise the 1x1
     // white fallback so the ambient multiplier is a constant 1.0.
-    pub(in crate::directx) fn ssao_ao_srv_gpu(&self) -> D3D12_GPU_DESCRIPTOR_HANDLE {
+    pub(in crate::directx) fn ssao_ao_srv_gpu(&self) -> SrvSlot {
         match &self.ssao.resources {
             Some(s) => s.ao_srv_gpu,
             None => self.ssao.white_srv_gpu,
@@ -488,7 +488,7 @@ impl DxContext {
             cmd.SetPipelineState(&ssao.kernel_pso);
             cmd.SetGraphicsRootSignature(&ssao.kernel_root_sig);
             cmd.set_graphics_root_constants(0, &params);
-            cmd.SetGraphicsRootDescriptorTable(1, gbuffer_srv);
+            cmd.set_graphics_srv_table(1, gbuffer_srv);
             cmd.IASetVertexBuffers(0, None);
             cmd.IASetIndexBuffer(None);
             cmd.DrawInstanced(3, 1, 0, 0);
@@ -514,8 +514,8 @@ impl DxContext {
             cmd.OMSetRenderTargets(1, Some(&ssao.ao_rtv), false, None);
             cmd.SetPipelineState(&ssao.blur_pso);
             cmd.SetGraphicsRootSignature(&ssao.blur_root_sig);
-            cmd.SetGraphicsRootDescriptorTable(0, ssao.ao_raw_srv_gpu);
-            cmd.SetGraphicsRootDescriptorTable(1, gbuffer_srv);
+            cmd.set_graphics_srv_table(0, ssao.ao_raw_srv_gpu);
+            cmd.set_graphics_srv_table(1, gbuffer_srv);
             cmd.IASetVertexBuffers(0, None);
             cmd.IASetIndexBuffer(None);
             cmd.DrawInstanced(3, 1, 0, 0);

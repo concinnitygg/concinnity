@@ -23,6 +23,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::com;
 use crate::directx::context::DxContext;
+use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::root_constants::RootConstants;
 use crate::directx::texture::GpuResource;
 
@@ -35,7 +36,7 @@ pub(in crate::directx) struct ShadowState {
     pub resource: Option<GpuResource<ID3D12Resource>>,
     pub dsvs: Vec<D3D12_CPU_DESCRIPTOR_HANDLE>,
     pub map_size: u32,
-    pub srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub srv_gpu: SrvSlot,
     pub light_dir: [f32; 3],
     // Cascade re-render policy from GraphicsConfig.shadow_update. Hybrid
     // refreshes the near cascade every frame and the far cascades round-robin.

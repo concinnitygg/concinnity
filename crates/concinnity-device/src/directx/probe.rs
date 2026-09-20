@@ -54,6 +54,8 @@ use super::probe_prefilter::PrefilterGpu;
 use super::texture::{
     HDR_FORMAT, create_hdr_color_target, create_hdr_resolve_target, transition_barrier,
 };
+use crate::directx::descriptor_slot::DescriptorTables;
+use crate::directx::descriptor_slot::SrvSlot;
 
 // What a runtime capture bakes: face size, mip count, GGX sample count and firefly
 // clamp, shared with the Metal and Vulkan backends (and with the build-time CPU
@@ -225,18 +227,12 @@ impl DxContext {
 
     // GPU descriptor handle of the reflection-probe cube array table base (root param
     // [10] of the bindless main pass). The MAX_PROBES contiguous cube SRVs start here.
-    pub(in crate::directx) fn probe_cube_table_gpu(&self) -> D3D12_GPU_DESCRIPTOR_HANDLE {
-        // SAFETY: a property query on a live descriptor heap; it only reads.
-        let base = unsafe {
-            self.descriptors
-                .srv_heap
-                .GetGPUDescriptorHandleForHeapStart()
-        };
-        D3D12_GPU_DESCRIPTOR_HANDLE {
-            ptr: base.ptr
-                + (self.descriptors.layout.probe_cube_base_slot
-                    * self.descriptors.srv_descriptor_size) as u64,
-        }
+    pub(in crate::directx) fn probe_cube_table_gpu(&self) -> SrvSlot {
+        SrvSlot::at(
+            &self.descriptors.srv_heap,
+            self.descriptors.srv_descriptor_size,
+            self.descriptors.layout.probe_cube_base_slot,
+        )
     }
 
     // CPU descriptor handle of probe cube array slot `i` (for writing a baked cube's
@@ -1046,10 +1042,10 @@ impl DxContext {
             cmd.SetGraphicsRootConstantBufferView(1, view_gva);
             cmd.SetGraphicsRootConstantBufferView(2, light_gva);
             cmd.SetGraphicsRootConstantBufferView(3, shadow_ubo_gva);
-            cmd.SetGraphicsRootDescriptorTable(4, self.shadow.srv_gpu);
-            cmd.SetGraphicsRootDescriptorTable(5, self.cull.bindless_pool_gpu[self.current_frame]);
-            cmd.SetGraphicsRootDescriptorTable(6, self.descriptors.shadow_sampler_gpu);
-            cmd.SetGraphicsRootDescriptorTable(7, self.descriptors.linear_sampler_gpu);
+            cmd.set_graphics_srv_table(4, self.shadow.srv_gpu);
+            cmd.set_graphics_srv_table(5, self.cull.bindless_pool_gpu[self.current_frame]);
+            cmd.set_graphics_sampler_table(6, self.descriptors.shadow_sampler_gpu);
+            cmd.set_graphics_sampler_table(7, self.descriptors.linear_sampler_gpu);
             cmd.SetGraphicsRootShaderResourceView(8, object_gva);
             // [12] per-scene GpuLight storage buffer (t1). Probe + planar faces
             // reuse the bindless main PSO, which references it unconditionally.
@@ -1067,11 +1063,11 @@ impl DxContext {
             // face: a shadowed spot occludes a probe capture, and an area light
             // lights it, exactly as they do for the main camera.
             self.bind_local_light_tables(cmd, super::draw::LocalLightParams::BINDLESS);
-            cmd.SetGraphicsRootDescriptorTable(9, self.ssao_ao_srv_gpu());
+            cmd.set_graphics_srv_table(9, self.ssao_ao_srv_gpu());
             // [10] probe cube array (valid -- filled with the sky) + [11] the EMPTY
             // ProbeSet (count 0), so a probe face samples only the sky, not other
             // probes, and never reads the live ProbeSet ring while it is rewritten.
-            cmd.SetGraphicsRootDescriptorTable(10, self.probe_cube_table_gpu());
+            cmd.set_graphics_srv_table(10, self.probe_cube_table_gpu());
             cmd.SetGraphicsRootConstantBufferView(
                 11,
                 com::gpu_va(&self.uniforms.probe_set_empty_cbv),

@@ -27,6 +27,8 @@ use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::com;
 use crate::directx::context::dump_on_err;
+use crate::directx::descriptor_slot::DescriptorTables;
+use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::pipeline::{create_blended_composite_pso, serialize_desc_and_create};
 use crate::directx::post::descriptors::{PostDescriptors, PostTargetDescriptors};
 use crate::directx::post::fullscreen::FullscreenExtent;
@@ -72,7 +74,7 @@ pub(in crate::directx) struct PostTarget {
 
 impl PostTarget {
     // The shader-visible handle a consumer samples this target through.
-    pub(in crate::directx) fn srv_gpu(&self) -> D3D12_GPU_DESCRIPTOR_HANDLE {
+    pub(in crate::directx) fn srv_gpu(&self) -> SrvSlot {
         self.descriptors.srv_gpu
     }
 }
@@ -90,7 +92,7 @@ pub(in crate::directx) struct DxAttachment<'a> {
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct DxPostProbes {
     // The `MAX_PROBES` contiguous cube SRVs.
-    pub cube_table: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub cube_table: SrvSlot,
     // This frame's ProbeSet constant buffer.
     pub set_cbv: u64,
 }
@@ -220,7 +222,7 @@ impl PostPassDevice for DxPostDevice<'_> {
     type Recorder = ID3D12GraphicsCommandList;
     type Pipeline = PostPipeline;
     type Target = PostTarget;
-    type TextureRef<'a> = D3D12_GPU_DESCRIPTOR_HANDLE;
+    type TextureRef<'a> = SrvSlot;
     type Attachment<'a> = DxAttachment<'a>;
 
     fn create_pipeline(
@@ -341,13 +343,13 @@ impl PostPassDevice for DxPostDevice<'_> {
             // Every source binds through a static sampler the root signature
             // declared at its own slot, so a bind is just its table.
             for (slot, bind) in draw.binds.iter().enumerate() {
-                cmd.SetGraphicsRootDescriptorTable(slot as u32, bind.texture);
+                cmd.set_graphics_srv_table(slot as u32, bind.texture);
             }
             if !draw.constants.is_empty() {
                 cmd.set_graphics_root_constant_bytes(pipe.constants_parameter(), draw.constants);
             }
             if let Some(probes) = probes {
-                cmd.SetGraphicsRootDescriptorTable(pipe.probes_parameter(), probes.cube_table);
+                cmd.set_graphics_srv_table(pipe.probes_parameter(), probes.cube_table);
                 cmd.SetGraphicsRootConstantBufferView(pipe.probes_parameter() + 1, probes.set_cbv);
             }
             cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);

@@ -11,6 +11,7 @@
     reason = "inline XeSS bindings keep the SDK's own C type names"
 )]
 
+use crate::directx::descriptor_slot::SrvSlot;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use std::ffi::{CStr, c_void};
 use std::ptr;
@@ -201,7 +202,7 @@ pub(in crate::directx) struct XessUpscaler {
     xess: XessApi,
     ctx: xess_context_handle_t,
     output: ID3D12Resource,
-    output_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    output_srv_gpu: SrvSlot,
     output_uav_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     output_srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     upscale_scale: f32,
@@ -232,7 +233,7 @@ impl XessUpscaler {
         upscale_scale: f32,
         output_uav_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
         output_srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-        output_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+        output_srv_gpu: SrvSlot,
     ) -> RenderResult<Option<Self>> {
         let xess = match XessApi::load() {
             Some(api) => api,
@@ -350,7 +351,7 @@ impl super::UpscaleBackend for XessUpscaler {
     fn upscale_scale(&self) -> f32 {
         self.upscale_scale
     }
-    fn output_srv_gpu(&self) -> D3D12_GPU_DESCRIPTOR_HANDLE {
+    fn output_srv_gpu(&self) -> SrvSlot {
         self.output_srv_gpu
     }
     fn output_descriptors(
@@ -358,7 +359,7 @@ impl super::UpscaleBackend for XessUpscaler {
     ) -> (
         D3D12_CPU_DESCRIPTOR_HANDLE,
         D3D12_CPU_DESCRIPTOR_HANDLE,
-        D3D12_GPU_DESCRIPTOR_HANDLE,
+        SrvSlot,
     ) {
         (
             self.output_uav_cpu,

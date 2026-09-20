@@ -31,6 +31,8 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use crate::directx::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
+use crate::directx::descriptor_slot::DescriptorTables;
+use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::slang_builtins;
@@ -383,7 +385,7 @@ pub(in crate::directx) struct ParticleResources {
     pub(in crate::directx) emitter_srv_base_slot: usize,
 
     // Heap slot of the main-depth SRV, bound at t2 for the fragment's depth test.
-    depth_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    depth_srv_gpu: SrvSlot,
 }
 
 impl ParticleResources {
@@ -394,7 +396,7 @@ impl ParticleResources {
         alloc: &DeviceAllocator,
         emitter_srv_base_slot: usize,
         msaa_samples: u32,
-        depth_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+        depth_srv_gpu: SrvSlot,
         info_queue: Option<&ID3D12InfoQueue>,
         hot_reload: bool,
     ) -> RenderResult<Self> {
@@ -644,25 +646,18 @@ pub(in crate::directx) struct ParticleFrame {
 
 impl DxContext {
     // GPU descriptor handle for emitter `i`'s albedo SRV.
-    pub(in crate::directx) fn emitter_albedo_srv_gpu(
-        &self,
-        i: usize,
-    ) -> D3D12_GPU_DESCRIPTOR_HANDLE {
+    pub(in crate::directx) fn emitter_albedo_srv_gpu(&self, i: usize) -> SrvSlot {
         let base = self
             .particle
             .resources
             .as_ref()
             .map(|s| s.emitter_srv_base_slot)
             .unwrap_or(0);
-        // SAFETY: a property query on a live descriptor heap; it only reads.
-        let srv_gpu_base = unsafe {
-            self.descriptors
-                .srv_heap
-                .GetGPUDescriptorHandleForHeapStart()
-        };
-        D3D12_GPU_DESCRIPTOR_HANDLE {
-            ptr: srv_gpu_base.ptr + ((base + i) * self.descriptors.srv_descriptor_size) as u64,
-        }
+        SrvSlot::at(
+            &self.descriptors.srv_heap,
+            self.descriptors.srv_descriptor_size,
+            base + i,
+        )
     }
 
     // Mutating prelude for the particle pass, run once on the main thread
@@ -961,7 +956,7 @@ impl DxContext {
                 cmd.SetGraphicsRootConstantBufferView(0, view_gva);
                 // Main depth is already in a shader-resource state: the graph
                 // declares this pass's depth read and emits the transition.
-                cmd.SetGraphicsRootDescriptorTable(4, resources.depth_srv_gpu);
+                cmd.set_graphics_srv_table(4, resources.depth_srv_gpu);
             }
 
             for (i, data) in frame_data.iter().enumerate() {
@@ -980,7 +975,7 @@ impl DxContext {
                 unsafe {
                     cmd.SetGraphicsRootConstantBufferView(1, data.params_gva);
                     cmd.SetGraphicsRootShaderResourceView(2, data.pool_gva);
-                    cmd.SetGraphicsRootDescriptorTable(3, albedo_srv_gpu);
+                    cmd.set_graphics_srv_table(3, albedo_srv_gpu);
                     cmd.DrawInstanced(4, rec.max_particles, 0, 0);
                 }
                 self.inc_draw_calls(1);

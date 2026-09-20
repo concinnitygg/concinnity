@@ -24,6 +24,8 @@ use windows::Win32::Graphics::Direct3D12::*;
 use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
 use crate::directx::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
+use crate::directx::descriptor_slot::DescriptorTables;
+use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::error::map_hresult;
 use crate::directx::pipeline::{create_blended_composite_pso, serialize_desc_and_create};
 use crate::directx::slang_builtins;
@@ -201,7 +203,7 @@ pub(in crate::directx) struct RtReflectionsResources {
     // The trace resolution: render resolution reduced by `settings.divisor`.
     extent: (u32, u32),
     output_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub(in crate::directx) output_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub(in crate::directx) output_srv_gpu: SrvSlot,
 
     // Per-frame `RtParams` UBO (144-byte), persistently mapped.
     params_ubo_resources: Vec<PooledBuffer>,
@@ -226,7 +228,7 @@ pub(in crate::directx) struct RtBuildContext<'a> {
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct RtOutputDescriptors {
     pub output_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub output_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE),
+    pub output_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, SrvSlot),
 }
 
 // Optional debug info queue plus the shader hot-reload toggle for the build.
@@ -333,11 +335,9 @@ impl RtReflectionsResources {
         width: u32,
         height: u32,
         srv_cpu_base: D3D12_CPU_DESCRIPTOR_HANDLE,
-        srv_gpu_base: D3D12_GPU_DESCRIPTOR_HANDLE,
+        srv_gpu_base: SrvSlot,
     ) -> RenderResult<()> {
-        let srv_cpu = D3D12_CPU_DESCRIPTOR_HANDLE {
-            ptr: srv_cpu_base.ptr + (self.output_srv_gpu.ptr - srv_gpu_base.ptr) as usize,
-        };
+        let srv_cpu = self.output_srv_gpu.cpu_in(srv_cpu_base, srv_gpu_base);
         self.extent = self.settings.trace_extent(width, height);
         self.output = create_rt_target(device, self.extent.0, self.extent.1, HDR_FORMAT)?;
         write_format_rtv(device, &self.output, self.output_rtv, HDR_FORMAT);
@@ -518,15 +518,12 @@ impl DxContext {
             );
             cmd.SetGraphicsRootShaderResourceView(4, accel.geom_table_gva());
             // Texture tables.
-            cmd.SetGraphicsRootDescriptorTable(5, self.targets.hdr.srv_gpu);
-            cmd.SetGraphicsRootDescriptorTable(6, gbuffer.normal_depth_srv_gpu);
-            cmd.SetGraphicsRootDescriptorTable(7, gbuffer.roughness_srv_gpu);
-            cmd.SetGraphicsRootDescriptorTable(8, self.prefilter_cube_srv_gpu());
+            cmd.set_graphics_srv_table(5, self.targets.hdr.srv_gpu);
+            cmd.set_graphics_srv_table(6, gbuffer.normal_depth_srv_gpu);
+            cmd.set_graphics_srv_table(7, gbuffer.roughness_srv_gpu);
+            cmd.set_graphics_srv_table(8, self.prefilter_cube_srv_gpu());
             if textured {
-                cmd.SetGraphicsRootDescriptorTable(
-                    9,
-                    self.cull.bindless_pool_gpu[self.current_frame],
-                );
+                cmd.set_graphics_srv_table(9, self.cull.bindless_pool_gpu[self.current_frame]);
             }
             // Skinned-geometry root SRVs: the deformed (posed) vertex buffer +
             // the skinned index buffer the trace fetches a skinned hit from.
@@ -537,7 +534,7 @@ impl DxContext {
             // Reflection-probe miss fallback: the cube array table at t10 + the
             // per-frame ProbeSet CBV at b4. count == 0 keeps the sky path,
             // so a probe-less world is byte-identical to before.
-            cmd.SetGraphicsRootDescriptorTable(12, self.probe_cube_table_gpu());
+            cmd.set_graphics_srv_table(12, self.probe_cube_table_gpu());
             cmd.SetGraphicsRootConstantBufferView(
                 13,
                 com::gpu_va(&self.uniforms.probe_set_cbvs[frame_idx]),

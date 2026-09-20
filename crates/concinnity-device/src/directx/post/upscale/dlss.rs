@@ -12,6 +12,7 @@
 //! (linked from the static lib), validated against NGX SDK 1.5.0 by the
 //! constant asserts in the tests.
 
+use crate::directx::descriptor_slot::SrvSlot;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use std::ffi::c_void;
 use std::ptr;
@@ -140,7 +141,7 @@ pub(in crate::directx) struct DlssUpscaler {
     params: *mut c_void,
     handle: *mut c_void,
     output: ID3D12Resource,
-    output_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    output_srv_gpu: SrvSlot,
     output_uav_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     output_srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     upscale_scale: f32,
@@ -179,7 +180,7 @@ pub(in crate::directx) struct DlssCreateParams<'a> {
 pub(in crate::directx) struct DlssOutputDescriptors {
     pub output_uav_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     pub output_srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub output_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub output_srv_gpu: SrvSlot,
 }
 
 impl DlssUpscaler {
@@ -355,7 +356,7 @@ impl super::UpscaleBackend for DlssUpscaler {
     fn upscale_scale(&self) -> f32 {
         self.upscale_scale
     }
-    fn output_srv_gpu(&self) -> D3D12_GPU_DESCRIPTOR_HANDLE {
+    fn output_srv_gpu(&self) -> SrvSlot {
         self.output_srv_gpu
     }
     fn output_descriptors(
@@ -363,7 +364,7 @@ impl super::UpscaleBackend for DlssUpscaler {
     ) -> (
         D3D12_CPU_DESCRIPTOR_HANDLE,
         D3D12_CPU_DESCRIPTOR_HANDLE,
-        D3D12_GPU_DESCRIPTOR_HANDLE,
+        SrvSlot,
     ) {
         (
             self.output_uav_cpu,

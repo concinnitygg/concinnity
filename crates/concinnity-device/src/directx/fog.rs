@@ -29,6 +29,8 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
+use crate::directx::descriptor_slot::DescriptorTables;
+use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::slang_builtins;
@@ -482,20 +484,20 @@ pub(in crate::directx) struct FogResources {
     // registry); the shader reads/writes go through the heap-stored UAV + SRV
     // descriptors.
     pub(in crate::directx) volume_resource: ID3D12Resource,
-    pub(in crate::directx) volume_uav_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-    pub(in crate::directx) volume_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub(in crate::directx) volume_uav_gpu: SrvSlot,
+    pub(in crate::directx) volume_srv_gpu: SrvSlot,
 
     // Heap GPU handle of the main-depth SRV. Bound at fog pass t0; the graph
     // declares the Fog pass's depth read, so the executor puts the resource in a
     // shader-resource state before this pass and restores DEPTH_WRITE at the end
     // of the frame.
-    pub(in crate::directx) depth_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub(in crate::directx) depth_srv_gpu: SrvSlot,
 
     // Heap GPU handle of the shadow map array SRV. Bound at the froxel
     // kernel's t0 so each slab can do a CSM tap. Shared with the rest of
     // the engine; the resource is transitioned to PIXEL_SHADER_RESOURCE
     // by `encode_shadow_pass` ahead of every later pass, including this one.
-    pub(in crate::directx) shadow_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub(in crate::directx) shadow_srv_gpu: SrvSlot,
 }
 
 // CPU + GPU descriptor handles for the froxel volume: the compute kernel's UAV
@@ -503,16 +505,16 @@ pub(in crate::directx) struct FogResources {
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct FogVolumeDescriptors {
     pub uav_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub uav_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub uav_gpu: SrvSlot,
     pub srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub srv_gpu: SrvSlot,
 }
 
 // GPU descriptor handles for the scene depth + shadow map the fog shaders sample.
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct FogShaderResourceHandles {
-    pub depth_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-    pub shadow_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub depth_srv_gpu: SrvSlot,
+    pub shadow_srv_gpu: SrvSlot,
 }
 
 // Device-level fog build config: MSAA sample count (compiled into the depth SRV
@@ -742,8 +744,8 @@ impl DxContext {
             cmd.SetComputeRootConstantBufferView(0, params_gva);
             cmd.SetComputeRootConstantBufferView(1, froxel_params_gva);
             cmd.SetComputeRootConstantBufferView(2, shadow_ubo_gva);
-            cmd.SetComputeRootDescriptorTable(3, fog.shadow_srv_gpu);
-            cmd.SetComputeRootDescriptorTable(4, fog.volume_uav_gpu);
+            cmd.set_compute_srv_table(3, fog.shadow_srv_gpu);
+            cmd.set_compute_srv_table(4, fog.volume_uav_gpu);
 
             // 8×8 threadgroups, one thread per (x, y) froxel.
             let groups_x = FOG_FROXEL_X.div_ceil(8);
@@ -823,8 +825,8 @@ impl DxContext {
             cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
             cmd.SetGraphicsRootConstantBufferView(0, params_gva);
             cmd.SetGraphicsRootConstantBufferView(1, froxel_params_gva);
-            cmd.SetGraphicsRootDescriptorTable(2, fog.depth_srv_gpu);
-            cmd.SetGraphicsRootDescriptorTable(3, fog.volume_srv_gpu);
+            cmd.set_graphics_srv_table(2, fog.depth_srv_gpu);
+            cmd.set_graphics_srv_table(3, fog.volume_srv_gpu);
             cmd.DrawInstanced(3, 1, 0, 0);
         }
 

@@ -60,6 +60,7 @@ use super::barrier_translate::{DxBarrier, d3d12_barrier, d3d12_restore};
 use super::context::DxContext;
 use super::parallel_encoder::{ParallelCtxRef, SendableCmdList, pool_index};
 use super::texture::{aliasing_barrier, transition_barrier, uav_barrier};
+use crate::directx::descriptor_slot::SrvSlot;
 
 // One resolved barrier target: the D3D12 resource a graph resource backs, its
 // class, and its resting state (created / cross-frame-restored). Built once per
@@ -521,7 +522,7 @@ pub(in crate::directx) struct GraphFrameParams<'a> {
     // after Composite, so reading `taa.output_index()` upfront points
     // at the same TAA history slot the TaaResolve encoder will write
     // into and the Composite encoder samples.
-    pub scene_srv: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub scene_srv: SrvSlot,
     // Off-screen scene render resolution. Every scene pass (Shadow, Main,
     // SSAO, SSR, Velocity, Fog, Raymarch, Decals, Particles) rasterizes at
     // this size, and the sub-pixel jitter is converted to NDC against it.

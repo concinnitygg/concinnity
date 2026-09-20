@@ -8,6 +8,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use super::heap_layout::{RtvHeapLayout, SrvHeapLayout, SrvHeapParams};
 use super::{InitGpu, heaps};
 use crate::directx::context::{DxDescriptors, SwapchainState};
+use crate::directx::descriptor_slot::{SamplerSlot, SrvSlot};
 use crate::directx::error::map_hresult;
 use crate::directx::post::descriptors::PostDescriptors;
 
@@ -42,7 +43,7 @@ pub(super) fn build_descriptors(
     let sampler_heap = heaps::create_sampler_heap(device, anisotropy)?;
     let sampler_descriptor_size =
         heaps::descriptor_size(device, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER);
-    let sampler_gpu = |slot| heaps::gpu_handle(&sampler_heap, sampler_descriptor_size, slot);
+    let sampler_gpu = |slot| SamplerSlot::at(&sampler_heap, sampler_descriptor_size, slot);
     Ok(DxDescriptors {
         shadow_sampler_gpu: sampler_gpu(heaps::SHADOW_SAMPLER_SLOT),
         linear_sampler_gpu: sampler_gpu(heaps::LINEAR_SAMPLER_SLOT),
@@ -62,8 +63,8 @@ impl DxDescriptors {
     }
 
     // GPU handle of SRV heap `slot`.
-    pub(super) fn slot_gpu(&self, slot: usize) -> D3D12_GPU_DESCRIPTOR_HANDLE {
-        heaps::gpu_handle(&self.srv_heap, self.srv_descriptor_size, slot)
+    pub(super) fn slot_gpu(&self, slot: usize) -> SrvSlot {
+        SrvSlot::at(&self.srv_heap, self.srv_descriptor_size, slot)
     }
 }
 

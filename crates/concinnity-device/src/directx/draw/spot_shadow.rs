@@ -18,6 +18,7 @@ use super::shadow::ShadowPassBinding;
 use crate::directx::allocator::PooledBuffer;
 use crate::directx::com;
 use crate::directx::context::DxContext;
+use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::texture::GpuResource;
 
 // Spot shadow map resources: one depth array slice per shadow-casting spot
@@ -30,7 +31,7 @@ pub(in crate::directx) struct SpotShadowState {
     pub resource: Option<GpuResource<ID3D12Resource>>,
     // One DSV per shadowed spot; empty when the world has none.
     pub dsvs: Vec<D3D12_CPU_DESCRIPTOR_HANDLE>,
-    pub srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub srv_gpu: SrvSlot,
     // `SpotShadowData` per slice, uploaded once at init.
     pub buffer: PooledBuffer,
     // One `ShadowUniforms` per slice, carrying that spot's matrix in

@@ -18,6 +18,7 @@ use concinnity_core::render::error::{RenderError, RenderResult};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
+use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::error::map_hresult;
 
 // Temporal upscaling (AMD FidelityFX FSR3 / DLSS / XeSS). `backend` is `Some`
@@ -52,7 +53,7 @@ pub(in crate::directx) trait UpscaleBackend: Send {
     // Per-axis render-to-output ratio resolved from the quality preset.
     fn upscale_scale(&self) -> f32;
     // SRV the bloom + composite stack samples as the scene.
-    fn output_srv_gpu(&self) -> D3D12_GPU_DESCRIPTOR_HANDLE;
+    fn output_srv_gpu(&self) -> SrvSlot;
     // The output texture's (uav_cpu, srv_cpu, srv_gpu) heap handles, so a
     // resize can rebuild the backend into the same pre-reserved slots.
     fn output_descriptors(
@@ -60,7 +61,7 @@ pub(in crate::directx) trait UpscaleBackend: Send {
     ) -> (
         D3D12_CPU_DESCRIPTOR_HANDLE,
         D3D12_CPU_DESCRIPTOR_HANDLE,
-        D3D12_GPU_DESCRIPTOR_HANDLE,
+        SrvSlot,
     );
     // The output texture (transitioned UAV <-> PSR around the dispatch).
     fn output_resource(&self) -> &ID3D12Resource;
@@ -113,7 +114,7 @@ pub(in crate::directx) struct UpscaleCamera {
 pub(in crate::directx) struct UpscalerDescriptors {
     pub uav_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     pub srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub srv_gpu: SrvSlot,
 }
 
 // Output texture helpers (shared by every backend): an output-resolution

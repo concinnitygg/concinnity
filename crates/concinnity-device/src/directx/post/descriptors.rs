@@ -10,6 +10,7 @@
 //! pass takes what it needs from here instead of adding a `<effect>_srv_extra`
 //! to the heap cascade.
 
+use crate::directx::descriptor_slot::SrvSlot;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -28,7 +29,7 @@ const _: () = assert!(POST_TARGET_SLOTS <= u32::BITS as usize);
 // block when this is dropped.
 pub(in crate::directx) struct PostTargetDescriptors {
     pub srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub srv_gpu: SrvSlot,
     pub rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
     _lease: SlotLease,
 }
@@ -48,7 +49,7 @@ impl Drop for SlotLease {
 // The reserved blocks and which of their slots are held.
 pub(in crate::directx) struct PostDescriptors {
     srv_cpu_base: D3D12_CPU_DESCRIPTOR_HANDLE,
-    srv_gpu_base: D3D12_GPU_DESCRIPTOR_HANDLE,
+    srv_gpu_base: SrvSlot,
     srv_size: usize,
     rtv_base: D3D12_CPU_DESCRIPTOR_HANDLE,
     rtv_size: usize,
@@ -59,7 +60,7 @@ impl PostDescriptors {
     // The block starting at the given heap slots.
     pub(in crate::directx) fn new(
         srv_cpu_base: D3D12_CPU_DESCRIPTOR_HANDLE,
-        srv_gpu_base: D3D12_GPU_DESCRIPTOR_HANDLE,
+        srv_gpu_base: SrvSlot,
         srv_size: usize,
         rtv_base: D3D12_CPU_DESCRIPTOR_HANDLE,
         rtv_size: usize,
@@ -98,9 +99,7 @@ impl PostDescriptors {
             srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE {
                 ptr: self.srv_cpu_base.ptr + i * self.srv_size,
             },
-            srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE {
-                ptr: self.srv_gpu_base.ptr + (i * self.srv_size) as u64,
-            },
+            srv_gpu: self.srv_gpu_base.offset(i, self.srv_size),
             rtv: D3D12_CPU_DESCRIPTOR_HANDLE {
                 ptr: self.rtv_base.ptr + i * self.rtv_size,
             },
@@ -119,7 +118,7 @@ mod tests {
     fn block() -> PostDescriptors {
         PostDescriptors::new(
             D3D12_CPU_DESCRIPTOR_HANDLE { ptr: 4096 },
-            D3D12_GPU_DESCRIPTOR_HANDLE { ptr: 8192 },
+            SrvSlot::for_test(8192),
             32,
             D3D12_CPU_DESCRIPTOR_HANDLE { ptr: 512 },
             16,
@@ -132,10 +131,10 @@ mod tests {
         let a = b.allocate().expect("first slot");
         let c = b.allocate().expect("second slot");
         assert_eq!(a.srv_cpu.ptr, 4096);
-        assert_eq!(a.srv_gpu.ptr, 8192);
+        assert_eq!(a.srv_gpu, SrvSlot::for_test(8192));
         assert_eq!(a.rtv.ptr, 512);
         assert_eq!(c.srv_cpu.ptr, 4096 + 32);
-        assert_eq!(c.srv_gpu.ptr, 8192 + 32);
+        assert_eq!(c.srv_gpu, SrvSlot::for_test(8192 + 32));
         assert_eq!(c.rtv.ptr, 512 + 16);
     }
 
@@ -145,13 +144,10 @@ mod tests {
         // where the old one was.
         let b = block();
         let first: Vec<_> = (0..3).map(|_| b.allocate().expect("slot")).collect();
-        let ptrs: Vec<_> = first.iter().map(|d| d.srv_gpu.ptr).collect();
+        let ptrs: Vec<_> = first.iter().map(|d| d.srv_gpu).collect();
         drop(first);
         let again: Vec<_> = (0..3).map(|_| b.allocate().expect("slot")).collect();
-        assert_eq!(
-            ptrs,
-            again.iter().map(|d| d.srv_gpu.ptr).collect::<Vec<_>>()
-        );
+        assert_eq!(ptrs, again.iter().map(|d| d.srv_gpu).collect::<Vec<_>>());
     }
 
     #[test]
@@ -161,11 +157,11 @@ mod tests {
         let b = block();
         let taa = [b.allocate().expect("slot"), b.allocate().expect("slot")];
         let ssr = b.allocate().expect("slot");
-        let ssr_slot = ssr.srv_gpu.ptr;
+        let ssr_slot = ssr.srv_gpu;
         drop(taa);
         let rebuilt = [b.allocate().expect("slot"), b.allocate().expect("slot")];
-        assert!(rebuilt.iter().all(|d| d.srv_gpu.ptr != ssr_slot));
-        assert_eq!(ssr.srv_gpu.ptr, ssr_slot);
+        assert!(rebuilt.iter().all(|d| d.srv_gpu != ssr_slot));
+        assert_eq!(ssr.srv_gpu, ssr_slot);
     }
 
     #[test]

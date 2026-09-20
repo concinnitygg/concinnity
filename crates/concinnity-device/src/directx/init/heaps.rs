@@ -38,20 +38,6 @@ pub(super) fn cpu_handle(
     }
 }
 
-// GPU handle of `slot` in a shader-visible heap whose descriptors sit `stride`
-// apart.
-pub(super) fn gpu_handle(
-    heap: &ID3D12DescriptorHeap,
-    stride: usize,
-    slot: usize,
-) -> D3D12_GPU_DESCRIPTOR_HANDLE {
-    // SAFETY: a property query on a live descriptor heap; it only reads.
-    let base = unsafe { heap.GetGPUDescriptorHandleForHeapStart() };
-    D3D12_GPU_DESCRIPTOR_HANDLE {
-        ptr: base.ptr + (slot * stride) as u64,
-    }
-}
-
 pub(super) fn descriptor_size(device: &ID3D12Device, kind: D3D12_DESCRIPTOR_HEAP_TYPE) -> usize {
     // SAFETY: a property query on a live device; it only reads.
     unsafe { device.GetDescriptorHandleIncrementSize(kind) as usize }

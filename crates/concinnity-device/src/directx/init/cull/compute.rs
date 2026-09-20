@@ -14,6 +14,7 @@ use crate::directx::cull::{
     INDIRECT_COMMAND_STRIDE, compile_cull_shader, create_cull_command_signature, create_cull_pso,
     create_cull_root_signature,
 };
+use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::error::map_hresult;
 use crate::directx::hiz::{HiZDeviceCtx, HiZResources, HiZTarget};
 use crate::directx::init::{HIZ_MAX_MIPS, InitGpu};
@@ -155,7 +156,7 @@ fn build_hiz(
 ) -> RenderResult<HiZResources> {
     let layout = &descriptors.layout;
     let mut mip_uav_cpus: Vec<D3D12_CPU_DESCRIPTOR_HANDLE> = Vec::with_capacity(HIZ_MAX_MIPS);
-    let mut mip_uav_gpus: Vec<D3D12_GPU_DESCRIPTOR_HANDLE> = Vec::with_capacity(HIZ_MAX_MIPS);
+    let mut mip_uav_gpus: Vec<SrvSlot> = Vec::with_capacity(HIZ_MAX_MIPS);
     for i in 0..HIZ_MAX_MIPS {
         mip_uav_cpus.push(descriptors.slot_cpu(layout.hiz_uav_base_slot + i));
         mip_uav_gpus.push(descriptors.slot_gpu(layout.hiz_uav_base_slot + i));

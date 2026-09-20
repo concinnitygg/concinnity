@@ -10,6 +10,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::com;
 use crate::directx::context::DxContext;
+use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::graph_exec::{FrameGpuBuffers, MainPassExtent};
 use crate::directx::texture::{HDR_FORMAT, transition_barrier};
 
@@ -47,15 +48,12 @@ impl DxContext {
                 params.spot_buffer,
                 com::gpu_va(&self.spot_shadow.buffer),
             );
-            cmd.SetGraphicsRootDescriptorTable(params.spot_table, self.spot_shadow.srv_gpu);
+            cmd.set_graphics_srv_table(params.spot_table, self.spot_shadow.srv_gpu);
             cmd.SetGraphicsRootShaderResourceView(
                 params.area_buffer,
                 com::gpu_va(&self.scene.area_light.buffer),
             );
-            cmd.SetGraphicsRootDescriptorTable(
-                params.ltc_table,
-                self.scene.area_light.ltc_table_gpu,
-            );
+            cmd.set_graphics_srv_table(params.ltc_table, self.scene.area_light.ltc_table_gpu);
         }
     }
 
@@ -335,23 +333,20 @@ impl DxContext {
                 cmd.SetGraphicsRootShaderResourceView(14, self.cluster_list_gva());
                 self.bind_local_light_tables(cmd, super::LocalLightParams::BINDLESS);
                 cmd.SetGraphicsRootConstantBufferView(3, shadow_ubo_gva);
-                cmd.SetGraphicsRootDescriptorTable(4, self.shadow.srv_gpu);
+                cmd.set_graphics_srv_table(4, self.shadow.srv_gpu);
                 // [5] is the bindless texture pool (per-object SRV region base).
-                cmd.SetGraphicsRootDescriptorTable(
-                    5,
-                    self.cull.bindless_pool_gpu[self.current_frame],
-                );
-                cmd.SetGraphicsRootDescriptorTable(6, self.descriptors.shadow_sampler_gpu);
-                cmd.SetGraphicsRootDescriptorTable(7, self.descriptors.linear_sampler_gpu);
+                cmd.set_graphics_srv_table(5, self.cull.bindless_pool_gpu[self.current_frame]);
+                cmd.set_graphics_sampler_table(6, self.descriptors.shadow_sampler_gpu);
+                cmd.set_graphics_sampler_table(7, self.descriptors.linear_sampler_gpu);
                 // [8] root SRV: this frame's StructuredBuffer<GpuObjectData>.
                 cmd.SetGraphicsRootShaderResourceView(8, object_gva);
                 // [9] descriptor table: blurred SSAO occlusion (or 1x1 white
                 // fallback when SSAO is disabled).
-                cmd.SetGraphicsRootDescriptorTable(9, self.ssao_ao_srv_gpu());
+                cmd.set_graphics_srv_table(9, self.ssao_ao_srv_gpu());
                 // [10] reflection-probe cube array + [11] the live ProbeSet (this
                 // frame's boxes + count). The forward shader box-projects + blends
                 // them for the specular reflection; count 0 keeps the sky.
-                cmd.SetGraphicsRootDescriptorTable(10, self.probe_cube_table_gpu());
+                cmd.set_graphics_srv_table(10, self.probe_cube_table_gpu());
                 cmd.SetGraphicsRootConstantBufferView(
                     11,
                     com::gpu_va(&self.uniforms.probe_set_cbvs[frame_idx]),
@@ -440,16 +435,13 @@ impl DxContext {
                 cmd.SetGraphicsRootShaderResourceView(14, self.cluster_list_gva());
                 self.bind_local_light_tables(cmd, super::LocalLightParams::BINDLESS);
                 cmd.SetGraphicsRootConstantBufferView(3, shadow_ubo_gva);
-                cmd.SetGraphicsRootDescriptorTable(4, self.shadow.srv_gpu);
-                cmd.SetGraphicsRootDescriptorTable(
-                    5,
-                    self.cull.bindless_pool_gpu[self.current_frame],
-                );
-                cmd.SetGraphicsRootDescriptorTable(6, self.descriptors.shadow_sampler_gpu);
-                cmd.SetGraphicsRootDescriptorTable(7, self.descriptors.linear_sampler_gpu);
+                cmd.set_graphics_srv_table(4, self.shadow.srv_gpu);
+                cmd.set_graphics_srv_table(5, self.cull.bindless_pool_gpu[self.current_frame]);
+                cmd.set_graphics_sampler_table(6, self.descriptors.shadow_sampler_gpu);
+                cmd.set_graphics_sampler_table(7, self.descriptors.linear_sampler_gpu);
                 cmd.SetGraphicsRootShaderResourceView(8, object_gva);
-                cmd.SetGraphicsRootDescriptorTable(9, self.ssao_ao_srv_gpu());
-                cmd.SetGraphicsRootDescriptorTable(10, self.probe_cube_table_gpu());
+                cmd.set_graphics_srv_table(9, self.ssao_ao_srv_gpu());
+                cmd.set_graphics_srv_table(10, self.probe_cube_table_gpu());
                 cmd.SetGraphicsRootConstantBufferView(
                     11,
                     com::gpu_va(&self.uniforms.probe_set_cbvs[frame_idx]),
@@ -623,16 +615,13 @@ impl DxContext {
                 cmd.SetGraphicsRootShaderResourceView(14, self.cluster_list_gva());
                 self.bind_local_light_tables(cmd, super::LocalLightParams::BINDLESS);
                 cmd.SetGraphicsRootConstantBufferView(3, shadow_ubo_gva);
-                cmd.SetGraphicsRootDescriptorTable(4, self.shadow.srv_gpu);
-                cmd.SetGraphicsRootDescriptorTable(
-                    5,
-                    self.cull.bindless_pool_gpu[self.current_frame],
-                );
-                cmd.SetGraphicsRootDescriptorTable(6, self.descriptors.shadow_sampler_gpu);
-                cmd.SetGraphicsRootDescriptorTable(7, self.descriptors.linear_sampler_gpu);
+                cmd.set_graphics_srv_table(4, self.shadow.srv_gpu);
+                cmd.set_graphics_srv_table(5, self.cull.bindless_pool_gpu[self.current_frame]);
+                cmd.set_graphics_sampler_table(6, self.descriptors.shadow_sampler_gpu);
+                cmd.set_graphics_sampler_table(7, self.descriptors.linear_sampler_gpu);
                 cmd.SetGraphicsRootShaderResourceView(8, object_gva);
-                cmd.SetGraphicsRootDescriptorTable(9, self.ssao_ao_srv_gpu());
-                cmd.SetGraphicsRootDescriptorTable(10, self.probe_cube_table_gpu());
+                cmd.set_graphics_srv_table(9, self.ssao_ao_srv_gpu());
+                cmd.set_graphics_srv_table(10, self.probe_cube_table_gpu());
                 cmd.SetGraphicsRootConstantBufferView(
                     11,
                     com::gpu_va(&self.uniforms.probe_set_cbvs[frame_idx]),

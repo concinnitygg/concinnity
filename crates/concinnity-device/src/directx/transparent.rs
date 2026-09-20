@@ -47,6 +47,8 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
+use crate::directx::descriptor_slot::DescriptorTables;
+use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::init::heap_layout::GLASS_REFLECTION_SRV_SLOTS;
 use crate::directx::pipeline::{main_input_layout, serialize_desc_and_create};
@@ -350,10 +352,10 @@ pub(in crate::directx) struct TransparentResources {
     // copy instead of the attachment being written.
     scene_copy: ID3D12Resource,
     scene_copy_srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-    scene_copy_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    scene_copy_srv_gpu: SrvSlot,
     // Main-depth SRV (shared with the decal pass); bound at t1 for the manual
     // occlusion test.
-    depth_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    depth_srv_gpu: SrvSlot,
 
     // Ray-traced reflection state, present only when the GPU supports DXR AND
     // every RT pipeline compiled. One root signature shared by both producers'
@@ -829,7 +831,7 @@ pub(in crate::directx) struct GlassReflectionSlots {
     pub rtv: [D3D12_CPU_DESCRIPTOR_HANDLE; 2],
     pub dsv: D3D12_CPU_DESCRIPTOR_HANDLE,
     pub srv_cpu: [D3D12_CPU_DESCRIPTOR_HANDLE; GLASS_REFLECTION_SRV_SLOTS],
-    pub windows: [D3D12_GPU_DESCRIPTOR_HANDLE; 3],
+    pub windows: [SrvSlot; 3],
 }
 
 // The reduced glass reflection layers (rgb the traced reflection, a the
@@ -916,8 +918,8 @@ pub(in crate::directx) struct TransparentBuildConfig {
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct TransparentSceneTargets {
     pub scene_copy_srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub scene_copy_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-    pub depth_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub scene_copy_srv_gpu: SrvSlot,
+    pub depth_srv_gpu: SrvSlot,
     pub reflection_slots: GlassReflectionSlots,
 }
 
@@ -1561,10 +1563,10 @@ impl DxContext {
         unsafe {
             cmd.SetGraphicsRootSignature(root_sig);
             cmd.SetGraphicsRootConstantBufferView(0, view_gva);
-            cmd.SetGraphicsRootDescriptorTable(2, transparent.scene_copy_srv_gpu);
-            cmd.SetGraphicsRootDescriptorTable(3, transparent.depth_srv_gpu);
-            cmd.SetGraphicsRootDescriptorTable(4, prefilter_srv);
-            cmd.SetGraphicsRootDescriptorTable(5, probe_cube_srv);
+            cmd.set_graphics_srv_table(2, transparent.scene_copy_srv_gpu);
+            cmd.set_graphics_srv_table(3, transparent.depth_srv_gpu);
+            cmd.set_graphics_srv_table(4, prefilter_srv);
+            cmd.set_graphics_srv_table(5, probe_cube_srv);
             cmd.SetGraphicsRootConstantBufferView(6, probe_set_gva);
         }
         if rt_live {
@@ -1590,10 +1592,7 @@ impl DxContext {
                 cmd.SetGraphicsRootShaderResourceView(12, accel.deformed_verts_gva());
                 cmd.SetGraphicsRootShaderResourceView(13, accel.skinned_index_gva());
                 if textured {
-                    cmd.SetGraphicsRootDescriptorTable(
-                        14,
-                        self.cull.bindless_pool_gpu[self.current_frame],
-                    );
+                    cmd.set_graphics_srv_table(14, self.cull.bindless_pool_gpu[self.current_frame]);
                 }
             }
         }
@@ -1604,7 +1603,7 @@ impl DxContext {
         // table set for every PSO that runs under this signature.
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
-        unsafe { cmd.SetGraphicsRootDescriptorTable(planar_root, transparent.scene_copy_srv_gpu) };
+        unsafe { cmd.set_graphics_srv_table(planar_root, transparent.scene_copy_srv_gpu) };
 
         let frame = TransparentFrame {
             cmd,
@@ -1619,7 +1618,7 @@ impl DxContext {
             // SAFETY: the command list is in the recording state, and the table names this
             // context's own reserved descriptors.
             unsafe {
-                cmd.SetGraphicsRootDescriptorTable(
+                cmd.set_graphics_srv_table(
                     GLASS_REFLECTION_ROOT_RT,
                     transparent.reflection_slots.windows[2],
                 );
@@ -1683,7 +1682,7 @@ impl DxContext {
                 cmd.ClearRenderTargetView(slots.rtv[layer], &[0.0; 4], None);
                 cmd.ClearDepthStencilView(slots.dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0, 0, None);
                 set_viewport(cmd, layers.extent);
-                cmd.SetGraphicsRootDescriptorTable(GLASS_REFLECTION_ROOT_RT, slots.windows[layer]);
+                cmd.set_graphics_srv_table(GLASS_REFLECTION_ROOT_RT, slots.windows[layer]);
             }
             for &(kind, i) in order {
                 let pso = match kind {
@@ -1753,7 +1752,7 @@ impl DxContext {
                 cmd.IASetVertexBuffers(0, Some(&[r.vertex_buffer_view]));
                 cmd.IASetIndexBuffer(Some(&r.index_buffer_view));
                 cmd.SetGraphicsRootConstantBufferView(1, r.params_cbuffer_gva);
-                cmd.SetGraphicsRootDescriptorTable(frame.planar_root, planar_srv);
+                cmd.set_graphics_srv_table(frame.planar_root, planar_srv);
                 cmd.DrawIndexedInstanced(r.index_count, 1, 0, 0, 0);
             }
         }

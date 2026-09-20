@@ -15,6 +15,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
 use crate::directx::context::{DxContext, FRAMES};
+use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::root_constants::{RootConstants, root_dwords};
@@ -424,7 +425,7 @@ impl DxContext {
             cmd.SetPipelineState(&resources.build_pso);
             cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
             cmd.set_compute_root_constants(0, &params);
-            cmd.SetComputeRootDescriptorTable(1, self.targets.hdr.srv_gpu);
+            cmd.set_compute_srv_table(1, self.targets.hdr.srv_gpu);
             cmd.SetComputeRootUnorderedAccessView(2, histogram_gva);
 
             let groups_x = self.targets.extent.render_width.div_ceil(16);

@@ -32,6 +32,8 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::directx::com;
 use crate::directx::context::dump_on_err;
+use crate::directx::descriptor_slot::DescriptorTables;
+use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::root_constants::{RootConstants, root_dwords};
@@ -72,13 +74,13 @@ pub(super) struct HiZResources {
     // CPU descriptor handle for the SRV covering the whole mip chain. Used by
     // the GPU-cull kernel (4 corner Loads at a picked mip).
     pub(super) srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub(super) srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub(super) srv_gpu: SrvSlot,
     // GPU descriptor handle of the depth-source SRV the init kernel binds at
     // t0 (the main-depth SRV the decal/fog passes also share).
-    pub(super) depth_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub(super) depth_srv_gpu: SrvSlot,
     // Per-mip UAV CPU/GPU descriptor pairs. Length = `mip_count`.
     pub(super) mip_uav_cpus: Vec<D3D12_CPU_DESCRIPTOR_HANDLE>,
-    pub(super) mip_uav_gpus: Vec<D3D12_GPU_DESCRIPTOR_HANDLE>,
+    pub(super) mip_uav_gpus: Vec<SrvSlot>,
 }
 
 // Compiled Hi-Z kernels: spd_single, spd_msaa, spd_tail bytecode.
@@ -330,10 +332,10 @@ pub(super) struct HiZTarget {
     pub width: u32,
     pub height: u32,
     pub srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
-    pub depth_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub srv_gpu: SrvSlot,
+    pub depth_srv_gpu: SrvSlot,
     pub mip_uav_cpus: Vec<D3D12_CPU_DESCRIPTOR_HANDLE>,
-    pub mip_uav_gpus: Vec<D3D12_GPU_DESCRIPTOR_HANDLE>,
+    pub mip_uav_gpus: Vec<SrvSlot>,
 }
 
 impl HiZResources {
@@ -459,8 +461,8 @@ impl crate::directx::context::DxContext {
             cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
             cmd.SetPipelineState(pso);
             cmd.set_compute_root_constants(0, &plan.phase1.params);
-            cmd.SetComputeRootDescriptorTable(1, hiz.depth_srv_gpu);
-            cmd.SetComputeRootDescriptorTable(2, hiz.mip_uav_gpus[0]);
+            cmd.set_compute_srv_table(1, hiz.depth_srv_gpu);
+            cmd.set_compute_srv_table(2, hiz.mip_uav_gpus[0]);
             cmd.Dispatch(plan.phase1.groups.0, plan.phase1.groups.1, 1);
         }
 
@@ -479,7 +481,7 @@ impl crate::directx::context::DxContext {
             cmd.SetComputeRootSignature(&hiz.tail_root_sig);
             cmd.SetPipelineState(&hiz.spd_tail_pso);
             cmd.set_compute_root_constants(0, &tail.params);
-            cmd.SetComputeRootDescriptorTable(1, hiz.mip_uav_gpus[tail.base_mip as usize]);
+            cmd.set_compute_srv_table(1, hiz.mip_uav_gpus[tail.base_mip as usize]);
             cmd.Dispatch(tail.groups.0, tail.groups.1, 1);
         }
     }

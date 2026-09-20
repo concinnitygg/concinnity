@@ -26,6 +26,7 @@
     reason = "inline FFX bindings keep the SDK's own C type names"
 )]
 
+use crate::directx::descriptor_slot::SrvSlot;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use std::ffi::{CStr, c_void};
 use std::ptr;
@@ -336,7 +337,7 @@ pub(in crate::directx) struct FsrUpscaler {
     pub(in crate::directx) output: ID3D12Resource,
     // SRV gpu handle the post stack samples through (heap slot reserved
     // at init).
-    pub(in crate::directx) output_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub(in crate::directx) output_srv_gpu: SrvSlot,
     // CPU descriptor handles for the output texture's UAV + SRV. Held so a
     // window resize can recreate the output texture at the new drawable
     // size and rewrite both views into the same pre-reserved heap slots.
@@ -418,7 +419,7 @@ impl FsrUpscaler {
         upscale_scale: f32,
         output_uav_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
         output_srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-        output_srv_gpu: D3D12_GPU_DESCRIPTOR_HANDLE,
+        output_srv_gpu: SrvSlot,
     ) -> RenderResult<Option<Self>> {
         // FFX FSR3 needs the Agility SDK bundled at build time. Microsoft's
         // `d3d12.dll` reads `D3D12SDKVersion` + `D3D12SDKPath` exports from
@@ -629,7 +630,7 @@ impl super::UpscaleBackend for FsrUpscaler {
     fn upscale_scale(&self) -> f32 {
         self.upscale_scale
     }
-    fn output_srv_gpu(&self) -> D3D12_GPU_DESCRIPTOR_HANDLE {
+    fn output_srv_gpu(&self) -> SrvSlot {
         self.output_srv_gpu
     }
     fn output_descriptors(
@@ -637,7 +638,7 @@ impl super::UpscaleBackend for FsrUpscaler {
     ) -> (
         D3D12_CPU_DESCRIPTOR_HANDLE,
         D3D12_CPU_DESCRIPTOR_HANDLE,
-        D3D12_GPU_DESCRIPTOR_HANDLE,
+        SrvSlot,
     ) {
         (
             self.output_uav_cpu,
