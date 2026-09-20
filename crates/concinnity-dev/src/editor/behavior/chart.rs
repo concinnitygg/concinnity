@@ -1,8 +1,8 @@
-//! The Behavior panel's chart view: the open behavior's body as cards flowing
-//! left to right, wired parent to child. `behavior/graph.rs` decides where each
-//! card sits; this places them and resolves a click back to the card under the
-//! cursor. The panel's toolbar, palette, and value field are unchanged, because
-//! a card stands for the same path its outline row does.
+//! A chart view: a `Chart`'s cards flowing left to right, wired parent to
+//! child. Whoever builds the chart decides where each card sits; this places
+//! them and resolves a click back to the card under the cursor. The Behavior
+//! panel draws one behavior's body this way and the Map panel draws the world's
+//! places, so the ids are the drawing panel's rather than one family fixed here.
 //!
 //! Nothing scissors an editor element (clip bands are captured once at init from
 //! the authored ScrollPanels), so a card panned past the canvas edge is drawn as
@@ -12,39 +12,90 @@ use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
 
 use super::graph::{Card, CardKind, Chart};
-use super::panel::{CHAR_W, LIST_THUMB, LIST_TRACK};
+use super::panel::CHAR_W;
 use super::pulse;
 use crate::editor::panels::registry::{self, PanelKey};
 use crate::editor::theme;
 use crate::editor::widget::{self, place_rounded, point_in};
 
-const BASE: u32 = registry::base(PanelKey::Behavior);
-pub(crate) const HINT_LABEL: AssetId = AssetId(BASE + 0x1F0);
-
-// A body wider than this shows what it can and says so; the outline still
-// reaches every node.
+// More cards in the band than this shows what it can and says so; every chart
+// has a second view reaching the rest.
 pub(crate) const CARD_POOL: usize = 32;
 // Three segments per elbow, one wire per card past the first.
 const SEG_POOL: usize = 96;
 const WIRE_LABEL_POOL: usize = 32;
 
-pub(crate) fn card_bg(i: usize) -> AssetId {
-    AssetId(BASE + 0x200 + i as u32)
+// The id family a chart draws into. Two panels draw charts, and both writing
+// one family would leave them fighting over every element whenever both are
+// open, so the family comes from the panel doing the drawing.
+#[derive(Clone, Copy)]
+pub(crate) struct ChartIds {
+    base: u32,
 }
-pub(crate) fn card_title(i: usize) -> AssetId {
-    AssetId(BASE + 0x240 + i as u32)
-}
-pub(crate) fn card_detail(i: usize) -> AssetId {
-    AssetId(BASE + 0x280 + i as u32)
-}
-pub(crate) fn wire_label(i: usize) -> AssetId {
-    AssetId(BASE + 0x2C0 + i as u32)
-}
-pub(crate) fn segment(i: usize) -> AssetId {
-    AssetId(BASE + 0x300 + i as u32)
-}
-pub(crate) fn card_break(i: usize) -> AssetId {
-    AssetId(BASE + 0x360 + i as u32)
+
+impl ChartIds {
+    pub(crate) const fn of(key: PanelKey) -> Self {
+        Self {
+            base: registry::base(key),
+        }
+    }
+
+    const fn at(self, offset: u32) -> AssetId {
+        AssetId(self.base + offset)
+    }
+
+    pub(crate) const fn hint(self) -> AssetId {
+        self.at(0x1F0)
+    }
+
+    // The width indicator along the foot of the canvas.
+    const fn track(self) -> AssetId {
+        self.at(0x1F1)
+    }
+
+    const fn thumb(self) -> AssetId {
+        self.at(0x1F2)
+    }
+
+    pub(crate) const fn card_bg(self, i: usize) -> AssetId {
+        self.at(0x200 + i as u32)
+    }
+
+    pub(crate) const fn card_title(self, i: usize) -> AssetId {
+        self.at(0x240 + i as u32)
+    }
+
+    pub(crate) const fn card_detail(self, i: usize) -> AssetId {
+        self.at(0x280 + i as u32)
+    }
+
+    pub(crate) const fn wire_label(self, i: usize) -> AssetId {
+        self.at(0x2C0 + i as u32)
+    }
+
+    pub(crate) const fn segment(self, i: usize) -> AssetId {
+        self.at(0x300 + i as u32)
+    }
+
+    pub(crate) const fn card_break(self, i: usize) -> AssetId {
+        self.at(0x360 + i as u32)
+    }
+
+    pub(crate) fn all_sprite_ids(self) -> Vec<AssetId> {
+        let mut ids: Vec<AssetId> = (0..SEG_POOL).map(|i| self.segment(i)).collect();
+        ids.extend((0..CARD_POOL).map(|i| self.card_bg(i)));
+        ids.extend((0..CARD_POOL).map(|i| self.card_break(i)));
+        ids.extend([self.track(), self.thumb()]);
+        ids
+    }
+
+    pub(crate) fn all_label_ids(self) -> Vec<AssetId> {
+        let mut ids = vec![self.hint()];
+        ids.extend((0..WIRE_LABEL_POOL).map(|i| self.wire_label(i)));
+        ids.extend((0..CARD_POOL).map(|i| self.card_title(i)));
+        ids.extend((0..CARD_POOL).map(|i| self.card_detail(i)));
+        ids
+    }
 }
 
 // Narrow enough that a trigger, a node, and the card that appends after it all
@@ -54,9 +105,10 @@ pub(crate) fn card_break(i: usize) -> AssetId {
 const CARD_W: f32 = 184.0;
 const CARD_H: f32 = 46.0;
 // Wide enough for a wire's label to sit in the gap without reaching either card
-// it joins. The overview's labels name what carries a relation ("spawns",
-// "reads"), so the gap is sized for a word rather than for a branch's "then".
-const COL_GAP: f32 = 72.0;
+// it joins. A label names what carries a relation ("reads") or what kind of
+// move a wire is ("toggle"), so the gap is sized for an ordinary word rather
+// than for a branch's "then".
+const COL_GAP: f32 = 78.0;
 const ROW_GAP: f32 = 14.0;
 const PITCH_X: f32 = CARD_W + COL_GAP;
 const PITCH_Y: f32 = CARD_H + ROW_GAP;
@@ -100,6 +152,8 @@ const BREAK_R: f32 = 3.5;
 
 pub(crate) struct ChartView<'a> {
     pub chart: &'a Chart,
+    // The family this panel draws its chart into.
+    pub ids: ChartIds,
     // The card the panel's selection lights up, if any.
     pub selected: Option<usize>,
     // The card the checker's complaint is about, if any.
@@ -164,6 +218,11 @@ pub(crate) fn width_for(columns: usize) -> f32 {
     columns as f32 * PITCH_X - COL_GAP + MARGIN * 2.0 + 2.0
 }
 
+// The same for the height a canvas of `rows` stacked cards takes.
+pub(crate) fn height_for(rows: usize) -> f32 {
+    rows as f32 * PITCH_Y - ROW_GAP + MARGIN * 2.0 + 2.0
+}
+
 // The canvas: the panel's body band, inset off the border.
 pub(crate) fn band(o: [f32; 2], s: [f32; 2], body_top: f32) -> [f32; 4] {
     [
@@ -187,38 +246,53 @@ fn overlaps(a: [f32; 4], b: [f32; 4]) -> bool {
     a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3]
 }
 
-// The card under the cursor, if the cursor is over the canvas at all.
+// The cards the band is showing, in chart order, each with the part of it that
+// is on screen. A slot is spent only on a card that is on screen, so a chart of
+// more cards than the pool holds is reached by panning rather than cut off
+// after its first `CARD_POOL`.
+fn shown_cards(view: &ChartView, band: [f32; 4]) -> Vec<(usize, [f32; 4])> {
+    view.chart
+        .cards
+        .iter()
+        .enumerate()
+        .filter_map(|(i, card)| {
+            let part = visible_part(card_rect(card, band, view.pan), band)?;
+            Some((i, part))
+        })
+        .collect()
+}
+
+// The card under the cursor, if the cursor is over the canvas at all. Only a
+// card holding a slot answers, so the keyboard and the pointer reach the same
+// ones.
 pub(crate) fn hit_card(view: &ChartView, mx: f32, my: f32, band: [f32; 4]) -> Option<usize> {
     if !point_in(mx, my, band) {
         return None;
     }
-    view.chart
-        .cards
-        .iter()
+    shown_cards(view, band)
+        .into_iter()
         .take(CARD_POOL)
-        .position(|c| point_in(mx, my, card_rect(c, band, view.pan)))
+        .find(|&(_, part)| point_in(mx, my, part))
+        .map(|(i, _)| i)
 }
 
 pub(crate) fn place(world: &mut World, view: &ChartView, band: [f32; 4]) {
+    let shown = shown_cards(view, band);
     layout_wires(world, view, band);
-    layout_cards(world, view, band);
-    layout_hint(world, view, band);
+    layout_cards(world, view, band, &shown);
+    layout_hint(world, view, band, shown.len());
     layout_indicator(world, view, band);
 }
 
-fn layout_cards(world: &mut World, view: &ChartView, band: [f32; 4]) {
-    for slot in 0..CARD_POOL {
-        let Some(card) = view.chart.cards.get(slot) else {
-            hide_card(world, slot);
-            continue;
-        };
+fn layout_cards(world: &mut World, view: &ChartView, band: [f32; 4], shown: &[(usize, [f32; 4])]) {
+    for slot in shown.len().min(CARD_POOL)..CARD_POOL {
+        hide_card(world, view.ids, slot);
+    }
+    for (slot, &(index, part)) in shown.iter().take(CARD_POOL).enumerate() {
+        let card = &view.chart.cards[index];
         let rect = card_rect(card, band, view.pan);
-        let Some(part) = visible_part(rect, band) else {
-            hide_card(world, slot);
-            continue;
-        };
-        let selected = view.selected == Some(slot);
-        let faulted = view.faulted == Some(slot);
+        let selected = view.selected == Some(index);
+        let faulted = view.faulted == Some(index);
         let hovered = point_in(view.mouse[0], view.mouse[1], rect);
         // What is wrong outranks what is selected: the selection is legible from
         // the inspector beside the chart, a complaint is only legible here.
@@ -234,12 +308,12 @@ fn layout_cards(world: &mut World, view: &ChartView, band: [f32; 4]) {
         let pulse_alpha = view
             .pulses
             .iter()
-            .find(|(s, _)| *s == slot)
+            .find(|(c, _)| *c == index)
             .map(|(_, a)| *a)
             .unwrap_or(0.0);
         widget::place_bordered(
             world,
-            card_bg(slot),
+            view.ids.card_bg(slot),
             part,
             pulse::blend(fill(card.kind), pulse_alpha),
             border,
@@ -248,7 +322,7 @@ fn layout_cards(world: &mut World, view: &ChartView, band: [f32; 4]) {
         // The breakpoint dot sits inside the card's top-right corner.
         place_rounded(
             world,
-            card_break(slot),
+            view.ids.card_break(slot),
             [
                 part[0] + part[2] - BREAK_R * 2.0 - 5.0,
                 part[1] + 5.0,
@@ -257,7 +331,7 @@ fn layout_cards(world: &mut World, view: &ChartView, band: [f32; 4]) {
             ],
             BREAK_TINT,
             BREAK_R,
-            view.breakpoints.contains(&slot),
+            view.breakpoints.contains(&index),
         );
         // Text is placed only in a card still showing its left edge and its full
         // height, so a half-scrolled card truncates cleanly instead of drawing
@@ -265,13 +339,13 @@ fn layout_cards(world: &mut World, view: &ChartView, band: [f32; 4]) {
         let readable = part[0] <= rect[0] + 0.5 && part[3] >= CARD_H - 0.5;
         let budget = ((part[2] - CARD_PAD * 2.0) / CHAR_W).max(0.0) as usize;
         if !readable || budget < 4 {
-            widget::set_label_visible(world, card_title(slot), false);
-            widget::set_label_visible(world, card_detail(slot), false);
+            widget::set_label_visible(world, view.ids.card_title(slot), false);
+            widget::set_label_visible(world, view.ids.card_detail(slot), false);
             continue;
         }
         widget::place_left_label(
             world,
-            card_title(slot),
+            view.ids.card_title(slot),
             [part[0] + CARD_PAD, part[1] + 9.0],
             &widget::clip_text(&card.title, budget),
             title_color(card.kind),
@@ -279,7 +353,7 @@ fn layout_cards(world: &mut World, view: &ChartView, band: [f32; 4]) {
         );
         widget::place_left_label(
             world,
-            card_detail(slot),
+            view.ids.card_detail(slot),
             [part[0] + CARD_PAD, part[1] + 27.0],
             &widget::clip_text(&card.detail, budget),
             theme::LABEL_DIM,
@@ -307,11 +381,11 @@ fn title_color(kind: CardKind) -> [f32; 3] {
     }
 }
 
-fn hide_card(world: &mut World, slot: usize) {
-    widget::set_sprite_visible(world, card_bg(slot), false);
-    widget::set_sprite_visible(world, card_break(slot), false);
-    widget::set_label_visible(world, card_title(slot), false);
-    widget::set_label_visible(world, card_detail(slot), false);
+fn hide_card(world: &mut World, ids: ChartIds, slot: usize) {
+    widget::set_sprite_visible(world, ids.card_bg(slot), false);
+    widget::set_sprite_visible(world, ids.card_break(slot), false);
+    widget::set_label_visible(world, ids.card_title(slot), false);
+    widget::set_label_visible(world, ids.card_detail(slot), false);
 }
 
 // Each wire is an elbow of axis-aligned segments: out of the parent's right
@@ -326,14 +400,8 @@ fn layout_wires(world: &mut World, view: &ChartView, band: [f32; 4]) {
     let mut taken: Vec<[f32; 4]> = Vec::new();
     for wire in &view.chart.wires {
         let (Some(from), Some(to)) = (
-            view.chart
-                .cards
-                .get(wire.from)
-                .filter(|_| wire.from < CARD_POOL),
-            view.chart
-                .cards
-                .get(wire.to)
-                .filter(|_| wire.to < CARD_POOL),
+            view.chart.cards.get(wire.from),
+            view.chart.cards.get(wire.to),
         ) else {
             continue;
         };
@@ -347,7 +415,7 @@ fn layout_wires(world: &mut World, view: &ChartView, band: [f32; 4]) {
                 break;
             }
             if let Some(part) = visible_part(rect, band) {
-                place_rounded(world, segment(seg), part, WIRE_TINT, 0.0, true);
+                place_rounded(world, view.ids.segment(seg), part, WIRE_TINT, 0.0, true);
                 seg += 1;
             }
         }
@@ -370,7 +438,7 @@ fn layout_wires(world: &mut World, view: &ChartView, band: [f32; 4]) {
             if let Some(over) = free.filter(|over| point_in(over[0], over[1], band)) {
                 widget::place_left_label(
                     world,
-                    wire_label(label),
+                    view.ids.wire_label(label),
                     [over[0], over[1]],
                     &text,
                     theme::LABEL_DIM,
@@ -382,10 +450,10 @@ fn layout_wires(world: &mut World, view: &ChartView, band: [f32; 4]) {
         }
     }
     for i in seg..SEG_POOL {
-        widget::set_sprite_visible(world, segment(i), false);
+        widget::set_sprite_visible(world, view.ids.segment(i), false);
     }
     for i in label..WIRE_LABEL_POOL {
-        widget::set_label_visible(world, wire_label(i), false);
+        widget::set_label_visible(world, view.ids.wire_label(i), false);
     }
 }
 
@@ -406,14 +474,14 @@ fn elbow(ax: f32, ay: f32, bx: f32, by: f32, mid: f32) -> Vec<[f32; 4]> {
     ]
 }
 
-// A body past the card pool says how much is not drawn rather than trailing off
-// as though the chart were complete.
-fn layout_hint(world: &mut World, view: &ChartView, band: [f32; 4]) {
-    let total = view.chart.cards.len();
-    let hidden = total.saturating_sub(CARD_POOL);
+// More cards in the band than the pool holds says how many are not drawn rather
+// than trailing off as though the chart were complete. What is off the band is
+// not counted: panning reaches it.
+fn layout_hint(world: &mut World, view: &ChartView, band: [f32; 4], shown: usize) {
+    let hidden = shown.saturating_sub(CARD_POOL);
     widget::place_message(
         world,
-        HINT_LABEL,
+        view.ids.hint(),
         [
             band[0] + MARGIN,
             band[1] + band[3] - 18.0,
@@ -431,14 +499,14 @@ fn layout_hint(world: &mut World, view: &ChartView, band: [f32; 4]) {
 fn layout_indicator(world: &mut World, view: &ChartView, band: [f32; 4]) {
     let e = extent(view.chart);
     if e[0] <= band[2] {
-        widget::set_sprite_visible(world, LIST_TRACK, false);
-        widget::set_sprite_visible(world, LIST_THUMB, false);
+        widget::set_sprite_visible(world, view.ids.track(), false);
+        widget::set_sprite_visible(world, view.ids.thumb(), false);
         return;
     }
     let y = band[1] + band[3] - INDICATOR_H - 2.0;
     place_rounded(
         world,
-        LIST_TRACK,
+        view.ids.track(),
         [band[0] + MARGIN, y, band[2] - MARGIN * 2.0, INDICATOR_H],
         TRACK_TINT,
         INDICATOR_H * 0.5,
@@ -450,7 +518,7 @@ fn layout_indicator(world: &mut World, view: &ChartView, band: [f32; 4]) {
     let off = (track_w - thumb_w) * (view.pan[0] / max).clamp(0.0, 1.0);
     place_rounded(
         world,
-        LIST_THUMB,
+        view.ids.thumb(),
         [band[0] + MARGIN + off, y, thumb_w, INDICATOR_H],
         THUMB_TINT,
         INDICATOR_H * 0.5,
@@ -458,23 +526,8 @@ fn layout_indicator(world: &mut World, view: &ChartView, band: [f32; 4]) {
     );
 }
 
-pub(crate) fn hide_all(world: &mut World) {
-    widget::hide_all(world, &all_sprite_ids(), &all_label_ids(), &[]);
-}
-
-pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    let mut ids: Vec<AssetId> = (0..SEG_POOL).map(segment).collect();
-    ids.extend((0..CARD_POOL).map(card_bg));
-    ids.extend((0..CARD_POOL).map(card_break));
-    ids
-}
-
-pub(crate) fn all_label_ids() -> Vec<AssetId> {
-    let mut ids = vec![HINT_LABEL];
-    ids.extend((0..WIRE_LABEL_POOL).map(wire_label));
-    ids.extend((0..CARD_POOL).map(card_title));
-    ids.extend((0..CARD_POOL).map(card_detail));
-    ids
+pub(crate) fn hide_all(world: &mut World, ids: ChartIds) {
+    widget::hide_all(world, &ids.all_sprite_ids(), &ids.all_label_ids(), &[]);
 }
 
 #[cfg(test)]
@@ -484,8 +537,12 @@ mod tests {
     use concinnity_core::components::{Sprite, TextLabel};
     use serde_json::json;
 
+    // Any panel's family will do here: what the tests check is what is drawn,
+    // not which ids it lands in (`id_families_are_disjoint` holds that).
+    const IDS: ChartIds = ChartIds::of(PanelKey::Behavior);
+
     fn injected_world() -> World {
-        crate::test_support::injected_world(&all_sprite_ids(), &all_label_ids(), &[])
+        crate::test_support::injected_world(&IDS.all_sprite_ids(), &IDS.all_label_ids(), &[])
     }
 
     fn branching() -> Chart {
@@ -505,6 +562,7 @@ mod tests {
     fn view<'a>(chart: &'a Chart, pan: [f32; 2]) -> ChartView<'a> {
         ChartView {
             overflow: "nodes -- open the outline to reach them",
+            ids: IDS,
             chart,
             selected: None,
             faulted: None,
@@ -564,18 +622,28 @@ mod tests {
         let mut world = injected_world();
         // Pan so the trigger card is cut by the band's left edge.
         place(&mut world, &view(&chart, [MARGIN + 60.0, 0.0]), BAND);
-        let bg = sprite(&world, card_bg(0));
+        let bg = sprite(&world, IDS.card_bg(0));
         assert!(bg.visible);
         assert_eq!(bg.x, BAND[0]);
         assert_eq!(bg.width, CARD_W - 60.0);
-        assert!(!label(&world, card_title(0)).visible, "text left the card");
-        // A card entirely off the canvas is gone, not clamped to the edge.
+        assert!(
+            !label(&world, IDS.card_title(0)).visible,
+            "text left the card"
+        );
+        // A card entirely off the canvas is gone, not clamped to the edge, and
+        // the slot it held goes to a card that is on.
         place(
             &mut world,
             &view(&chart, [MARGIN + CARD_W + 40.0, 0.0]),
             BAND,
         );
-        assert!(!sprite(&world, card_bg(0)).visible);
+        let drawn: Vec<String> = (0..CARD_POOL)
+            .map(|i| label(&world, IDS.card_title(i)))
+            .filter(|l| l.visible)
+            .map(|l| l.content)
+            .collect();
+        assert!(!drawn.is_empty(), "the cards behind it are still drawn");
+        assert!(!drawn.contains(&chart.cards[0].title), "{drawn:?}");
     }
 
     // A wire label drawn over the card it points at or over its own wire is
@@ -608,7 +676,7 @@ mod tests {
             .map(|c| card_rect(c, band, [0.0, 0.0]))
             .collect();
         let verticals: Vec<[f32; 4]> = (0..SEG_POOL)
-            .map(|i| sprite(&world, segment(i)))
+            .map(|i| sprite(&world, IDS.segment(i)))
             .filter(|s| s.visible && s.width <= WIRE_W + 0.01)
             .map(|s| [s.x, s.y, s.width, s.height])
             .collect();
@@ -616,7 +684,7 @@ mod tests {
 
         let mut checked = 0;
         for i in 0..WIRE_LABEL_POOL {
-            let l = label(&world, wire_label(i));
+            let l = label(&world, IDS.wire_label(i));
             if !l.visible {
                 continue;
             }
@@ -678,7 +746,7 @@ mod tests {
     // measured at.
     fn label_rects(world: &World) -> Vec<[f32; 4]> {
         (0..WIRE_LABEL_POOL)
-            .map(|i| label(world, wire_label(i)))
+            .map(|i| label(world, IDS.wire_label(i)))
             .filter(|l| l.visible)
             .map(|l| {
                 [
@@ -741,7 +809,7 @@ mod tests {
         let mut world = injected_world();
         place(&mut world, &view(&chart, [0.0, 0.0]), BAND);
         let labels: Vec<String> = (0..WIRE_LABEL_POOL)
-            .map(|i| label(&world, wire_label(i)))
+            .map(|i| label(&world, IDS.wire_label(i)))
             .filter(|l| l.visible)
             .map(|l| l.content)
             .collect();
@@ -750,7 +818,7 @@ mod tests {
         // Every drawn segment is axis-aligned: one of its sides is the wire's
         // own thickness.
         let drawn: Vec<Sprite> = (0..SEG_POOL)
-            .map(|i| sprite(&world, segment(i)))
+            .map(|i| sprite(&world, IDS.segment(i)))
             .filter(|s| s.visible)
             .collect();
         // A wire between rows turns, and a turn means a vertical run.
@@ -802,15 +870,46 @@ mod tests {
         );
     }
 
+    // A chart of more cards than the pool holds is reached by panning rather
+    // than cut off after its first `CARD_POOL`: a slot belongs to whichever
+    // card is on the band.
     #[test]
-    fn a_body_past_the_pool_says_how_much_is_missing() {
-        let body: Vec<serde_json::Value> =
-            (0..CARD_POOL + 5).map(|_| json!({"save": {}})).collect();
-        let chart = graph::chart(&json!({"on": "start", "do": body}));
+    fn a_card_past_the_pool_is_drawn_once_it_is_panned_to() {
+        let places: Vec<(usize, usize)> = (0..CARD_POOL + 8).map(|i| (i, 0)).collect();
+        let chart = wired(&places, &[]);
+        let far = chart.cards.len() - 1;
+        let canvas = [BAND[2], BAND[3]];
+        let pan = pan_to(&chart.cards[far], canvas, [0.0, 0.0], &chart);
+        let v = view(&chart, pan);
         let mut world = injected_world();
-        place(&mut world, &view(&chart, [0.0, 0.0]), BAND);
-        let hint = label(&world, HINT_LABEL);
+        place(&mut world, &v, BAND);
+
+        let rect = card_rect(&chart.cards[far], BAND, pan);
+        assert_eq!(hit_card(&v, rect[0] + 4.0, rect[1] + 4.0, BAND), Some(far));
+        assert!(sprite(&world, IDS.card_bg(0)).visible, "a slot went to it");
+        // And nothing is missing: the band never held more than the pool.
+        assert!(!label(&world, IDS.hint()).visible);
+    }
+
+    // What a band holding more cards than the pool cannot draw is said rather
+    // than trailed off as though the chart were complete.
+    #[test]
+    fn a_band_of_more_cards_than_the_pool_says_how_many_are_missing() {
+        let places: Vec<(usize, usize)> = (0..CARD_POOL + 8).map(|i| (i % 4, i / 4)).collect();
+        let chart = wired(&places, &[]);
+        let mut world = injected_world();
+        let band = [100.0, 200.0, width_for(4), height_for(10)];
+        place(&mut world, &view(&chart, [0.0, 0.0]), band);
+
+        let hint = label(&world, IDS.hint());
         assert!(hint.visible);
-        assert!(hint.content.starts_with("7 more nodes"), "{}", hint.content);
+        assert!(hint.content.starts_with("8 more nodes"), "{}", hint.content);
+        let drawn = (0..CARD_POOL)
+            .filter(|&i| sprite(&world, IDS.card_bg(i)).visible)
+            .count();
+        assert_eq!(
+            drawn, CARD_POOL,
+            "every slot is spent on a card in the band"
+        );
     }
 }

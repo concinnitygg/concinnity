@@ -27,6 +27,8 @@ use crate::editor::theme;
 use crate::editor::widget::{self, place_rounded, point_in};
 
 const BASE: u32 = registry::base(PanelKey::Behavior);
+// The family the chart views draw into, which is this panel's own.
+const CHART_IDS: chart::ChartIds = chart::ChartIds::of(PanelKey::Behavior);
 pub(crate) const PANEL_BG: AssetId = AssetId(BASE);
 pub(crate) const TITLE_LABEL: AssetId = AssetId(BASE + 1);
 pub(crate) const CLOSE_BG: AssetId = AssetId(BASE + 2);
@@ -744,7 +746,7 @@ pub(crate) fn place(world: &mut World, view: Option<&BehaviorView>, o: [f32; 2],
         widget::set_sprite_visible(world, LIST_THUMB, false);
         chart::place(world, &chart_view(view), chart_band(o, s, view.mode));
     } else {
-        chart::hide_all(world);
+        chart::hide_all(world, CHART_IDS);
         hide_inspector(world, view);
         layout_rows(world, view, o, s, visible_rows(s[1]));
         layout_scrollbar(world, view, o, w, visible_rows(s[1]));
@@ -779,6 +781,7 @@ pub(crate) fn chart_canvas(s: [f32; 2], mode: ViewMode) -> [f32; 2] {
 
 fn chart_view<'a>(view: &'a BehaviorView<'a>) -> chart::ChartView<'a> {
     chart::ChartView {
+        ids: CHART_IDS,
         chart: view.shown_chart(),
         // The card the selection belongs to, so a node stays lit while its own
         // fields are picked through in the inspector. The overview keeps its
@@ -1361,7 +1364,7 @@ pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
     ];
     ids.push(INSPECT_BG);
     ids.extend((0..ROW_POOL_MAX).map(row_bg));
-    ids.extend(chart::all_sprite_ids());
+    ids.extend(CHART_IDS.all_sprite_ids());
     ids.extend([STATUS_BG, LIST_TRACK, LIST_THUMB, DROP_BG, DROP_FILTER_BG]);
     ids.extend((0..PICK_POOL).map(pick_bg));
     ids.extend([DROP_TRACK, DROP_THUMB]);
@@ -1388,7 +1391,7 @@ pub(crate) fn all_label_ids() -> Vec<AssetId> {
     ];
     ids.extend((0..ROW_POOL_MAX).map(row_label));
     ids.extend((0..ROW_POOL_MAX).map(row_value));
-    ids.extend(chart::all_label_ids());
+    ids.extend(CHART_IDS.all_label_ids());
     ids.extend((0..PICK_POOL).map(pick_label));
     ids.extend((0..PICK_POOL).map(pick_hint));
     ids
@@ -1846,7 +1849,7 @@ mod tests {
         let card = super::fields::owning_card(&sample_chart().cards, &rows[target].path)
             .expect("a card settles the target row");
         assert_eq!(
-            sprite(&world, chart::card_bg(card)).border_width,
+            sprite(&world, CHART_IDS.card_bg(card)).border_width,
             2.0,
             "nothing is selected, so only the fault can have widened it"
         );
@@ -1964,8 +1967,8 @@ mod tests {
             ..view(&rows, &[])
         };
         place(&mut world, Some(&v), [20.0, 20.0], overview_size());
-        assert_eq!(sprite(&world, chart::card_bg(1)).border_width, 2.0);
-        assert_eq!(sprite(&world, chart::card_bg(0)).border_width, 1.0);
+        assert_eq!(sprite(&world, CHART_IDS.card_bg(1)).border_width, 2.0);
+        assert_eq!(sprite(&world, CHART_IDS.card_bg(0)).border_width, 1.0);
     }
 
     // The field narrowing the palette sits inside it, so what is typed and what

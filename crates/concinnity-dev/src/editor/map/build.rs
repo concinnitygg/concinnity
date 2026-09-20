@@ -219,7 +219,8 @@ fn noun(kind: PlaceKind) -> &'static str {
 // The word a wire carries: what the author called the move where they named it,
 // as a menu item's button text names what its button does. A name wider than
 // the gap between two cards is drawn cut short, which says less than the move
-// itself does, so a name that wide falls back to the verb.
+// itself does, so a name that wide falls back to the verb, which always fits
+// (`every_verb_fits_the_gap_it_is_drawn_in`).
 fn label(edge: &FlowEdge) -> String {
     edge.label
         .as_deref()
@@ -488,6 +489,29 @@ mod tests {
             ])),
         ]);
         assert_eq!(chart.wires.len(), 2);
+    }
+
+    // A word wider than the gap is drawn clipped, and "to..." says nothing at
+    // all. The verbs are what a move falls back to, so the whole set is held to
+    // what the gap can draw rather than each one being eyeballed.
+    #[test]
+    fn every_verb_fits_the_gap_it_is_drawn_in() {
+        let moves = [
+            Move::Scene(String::new()),
+            Move::Show(String::new()),
+            Move::Push(String::new()),
+            Move::Toggle(String::new()),
+            Move::Back,
+            Move::Story,
+            Move::Quit,
+        ];
+        for action in moves {
+            let verb = action.verb();
+            assert!(
+                verb.chars().count() <= LABEL_CHARS,
+                "`{verb}` is too wide to draw on a wire",
+            );
+        }
     }
 
     // Every card sits somewhere, and two cards never sit in the same place.

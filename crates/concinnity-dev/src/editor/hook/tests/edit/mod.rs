@@ -7,6 +7,7 @@ mod console_tests;
 mod content_tests;
 mod import_tests;
 mod lighting_tests;
+mod map_tests;
 mod overrides_tests;
 mod palette_tests;
 mod select_tests;

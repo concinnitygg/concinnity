@@ -357,6 +357,7 @@ impl EditorHook {
         self.locked_assets.clear();
         self.isolate = None;
         self.behavior.reset_for_world();
+        self.map.reset_for_world();
         self.variables_row = None;
         self.variables_scroll = 0;
         self.lighting_focus = None;

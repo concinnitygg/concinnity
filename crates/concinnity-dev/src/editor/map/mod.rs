@@ -17,13 +17,9 @@
 //!
 //! The result is an ordinary [`Chart`], so the chart view draws it unchanged.
 
-#![allow(
-    dead_code,
-    reason = "the model stands on its own tests; drop this once a panel draws it"
-)]
-
 mod build;
 mod contents;
+pub(crate) mod panel;
 
 use concinnity_cook::authoring::flow::{Place, flow_graph};
 use concinnity_cook::authoring::world::WorldJsonlAsset;

@@ -51,8 +51,6 @@ use concinnity_core::ecs::World;
 
 use super::EditorHook;
 use crate::editor::behavior;
-use crate::editor::behavior::chart::CARD_POOL;
-use crate::editor::behavior::graph::Card;
 use crate::editor::behavior::navigate::{self, Dir};
 use crate::editor::behavior::panel::{BehaviorAction, ViewMode};
 
@@ -64,12 +62,6 @@ fn direction(key: InputKey) -> Option<Dir> {
         InputKey::Right => Dir::Right,
         _ => return None,
     })
-}
-
-// The cards a step can reach: the ones the chart draws, so the keyboard lands
-// only where a click could (`behavior::chart::hit_card`).
-fn reachable(cards: &[Card]) -> &[Card] {
-    &cards[..cards.len().min(CARD_POOL)]
 }
 
 impl EditorHook {
@@ -203,15 +195,16 @@ impl EditorHook {
             }
             ViewMode::Chart => {
                 let data = self.behavior_data();
-                let Some(card) = navigate::nearest(reachable(&data.chart.cards), data.card, dir)
-                else {
+                // Every card is reachable: the pan that follows brings the one
+                // stepped onto into the canvas, whether or not it was drawn.
+                let Some(card) = navigate::nearest(&data.chart.cards, data.card, dir) else {
                     return;
                 };
                 self.apply_behavior_action(BehaviorAction::SelectCard(card), world, [0.0, 0.0]);
             }
             ViewMode::Overview => {
                 let data = self.behavior_data();
-                let cards = reachable(&data.overview.cards);
+                let cards = &data.overview.cards;
                 let from = self.behavior.overview_card.filter(|&i| i < cards.len());
                 let Some(card) = navigate::nearest(cards, from, dir) else {
                     return;

@@ -35,6 +35,7 @@ pub(crate) enum PanelKey {
     Health,
     Console,
     Behavior,
+    Map,
     Variables,
     Content,
     CharacterShape,
@@ -49,7 +50,7 @@ pub(crate) enum PanelKey {
     Worlds,
 }
 
-pub(crate) const PANEL_COUNT: usize = 17;
+pub(crate) const PANEL_COUNT: usize = 18;
 
 impl PanelKey {
     pub(crate) const ALL: [PanelKey; PANEL_COUNT] = [
@@ -64,6 +65,7 @@ impl PanelKey {
         PanelKey::Health,
         PanelKey::Console,
         PanelKey::Behavior,
+        PanelKey::Map,
         PanelKey::Variables,
         PanelKey::Content,
         PanelKey::CharacterShape,
@@ -116,7 +118,10 @@ pub(crate) const fn base(key: PanelKey) -> u32 {
             PanelKey::Worlds => 0xC000,
             // 0xD000 and 0xE000 belong to the start screen's shot fade and its
             // loading cover (allocated in `worlds/cinematic.rs` and
-            // `worlds/loading.rs`).
+            // `worlds/loading.rs`). The map draws a chart of its own, so like
+            // the Behavior panel it takes a whole block: its pools run well
+            // past 0xF300.
+            PanelKey::Map => 0xF000,
         }
 }
 
@@ -216,6 +221,7 @@ static PANELS: [&dyn Panel; PANEL_COUNT] = [
     &panels::HealthPanel,
     &panels::ConsolePanel,
     &panels::BehaviorPanel,
+    &panels::MapPanel,
     &panels::VariablesPanel,
     &panels::ContentPanel,
     &panels::CharacterShapePanel,
@@ -357,6 +363,7 @@ mod tests {
                 "Health",
                 "Console",
                 "Behavior",
+                "Map",
                 "Variables",
                 "Content",
                 "Character Shape",

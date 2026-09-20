@@ -73,6 +73,7 @@ use crate::debug::hot_reload::WorldPathHandle;
 use crate::debug_hook::DebugHook;
 use edit::behavior_state::BehaviorState;
 use edit::console_state::ConsoleState;
+use edit::map_state::MapState;
 use edit::palette_state::PaletteState;
 use edit::story_state::StoryState;
 use edit::worlds_state::WorldsState;
@@ -174,6 +175,10 @@ pub(crate) struct EditorHook {
     notifier: notify::Notifier,
     toasts_hidden: bool,
     behavior: BehaviorState,
+    // The Map panel: the world's places and the moves between them
+    // (`editor/map/`). It reads the entry list and writes nothing, so its
+    // state is what is shown and where the canvas is looked at.
+    map: MapState,
     // The Variables panel: shown state, the selected row of the table, the row
     // window's scroll, and which of its two fields holds the keyboard.
     variables_open: bool,
@@ -527,6 +532,7 @@ impl EditorHook {
             notifier: notify::Notifier::default(),
             toasts_hidden: true,
             behavior: BehaviorState::default(),
+            map: MapState::default(),
             variables_open: false,
             variables_row: None,
             variables_scroll: 0,
