@@ -1116,8 +1116,13 @@ impl Panel for MapPanel {
     fn is_open(&self, hook: &EditorHook) -> bool {
         hook.map.open
     }
+    // Opening is a fresh look at the map, so the canvas is put back on where
+    // the world starts rather than on wherever it was last left.
     fn toggle(&self, hook: &mut EditorHook, _world: &mut World) {
         hook.map.open = !hook.map.open;
+        if hook.map.open {
+            hook.map.reroot();
+        }
     }
     fn close(&self, hook: &mut EditorHook, _world: &mut World) {
         hook.map.open = false;
@@ -1138,15 +1143,20 @@ impl Panel for MapPanel {
     fn press(
         &self,
         hook: &mut EditorHook,
-        _world: &mut World,
+        world: &mut World,
         mx: f32,
         my: f32,
         o: [f32; 2],
     ) -> bool {
         let s = hook.effective_size(PanelKey::Map);
-        match map::panel::hit_test(mx, my, o, s) {
+        let chart = hook.map_chart();
+        let action = {
+            let view = hook.make_map_view(&chart, [mx, my]);
+            map::panel::hit_test(&view, mx, my, o, s)
+        };
+        match action {
             Some(action) => {
-                hook.apply_map_action(action, [mx, my]);
+                hook.apply_map_action(action, [mx, my], world);
                 true
             }
             None => false,

@@ -69,6 +69,9 @@ impl EditorHook {
         // A chart pan does too, so the canvas tracks the cursor.
         self.drive_behavior_pan(input);
         self.drive_map_pan(input);
+        // And once it is not being dragged, the canvas follows what the rest of
+        // the editor is looking at.
+        self.drive_map();
         // An in-flight gizmo drag follows the cursor, cancels on
         // Escape, and commits on release, before any new press routes.
         if self.gizmo_drag.is_some() {

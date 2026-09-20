@@ -12,7 +12,7 @@ use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
 
 use crate::editor::behavior::chart::{self, ChartIds};
-use crate::editor::behavior::graph::Chart;
+use crate::editor::behavior::graph::{Card, Chart};
 use crate::editor::panels::registry::{self, PanelKey};
 use crate::editor::widget::{self, point_in};
 
@@ -38,6 +38,8 @@ const OVERFLOW: &str = "places in view -- pan to reach the rest";
 
 pub(crate) struct MapView<'a> {
     pub chart: &'a Chart,
+    // The card standing for what is selected, wherever the selection was made.
+    pub selected: Option<usize>,
     pub pan: [f32; 2],
     pub mouse: [f32; 2],
 }
@@ -45,6 +47,8 @@ pub(crate) struct MapView<'a> {
 // A resolved Map-panel press.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MapAction {
+    // A press on the card at this index: select the place it stands for.
+    Select(usize),
     // A press on the canvas: grab it, and the map follows the cursor.
     PanStart,
     // A press on the panel but off the canvas, swallowed so it cannot reach
@@ -91,11 +95,40 @@ pub(crate) fn cursor_over_body(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> bo
 // Resolve a press at `(mx, my)` against the panel at origin `o`, size `s`.
 // `None` means the press missed the panel, so it falls through to whatever is
 // behind. Title-bar presses never reach here: the shared routing takes them.
-pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> Option<MapAction> {
-    if point_in(mx, my, band(o, s)) {
-        return Some(MapAction::PanStart);
+pub(crate) fn hit_test(
+    view: &MapView,
+    mx: f32,
+    my: f32,
+    o: [f32; 2],
+    s: [f32; 2],
+) -> Option<MapAction> {
+    let band = band(o, s);
+    if point_in(mx, my, band) {
+        // A card addressing nothing -- the world outside its places, or a name
+        // a move leads to and no entry answers -- has nothing to select, and is
+        // still a card rather than canvas to grab.
+        return Some(match chart::hit_card(&chart_view(view), mx, my, band) {
+            Some(i) if view.chart.cards[i].handle.is_some() => MapAction::Select(i),
+            Some(_) => MapAction::Consume,
+            None => MapAction::PanStart,
+        });
     }
     point_in(mx, my, widget::outer_rect(o, s)).then_some(MapAction::Consume)
+}
+
+// The place the world starts in: the one `build` roots leftmost, which is the
+// topmost card of the first column once the rest have been relaxed rightward.
+fn root_card(chart: &Chart) -> Option<&Card> {
+    chart.cards.iter().min_by_key(|c| (c.column, c.row))
+}
+
+// The pan that opens the canvas on where the world starts, so the panel says
+// where the world begins rather than wherever it was last left.
+pub(crate) fn root_pan(chart: &Chart, canvas: [f32; 2]) -> [f32; 2] {
+    match root_card(chart) {
+        Some(card) => chart::pan_to(card, canvas, [0.0, 0.0], chart),
+        None => [0.0, 0.0],
+    }
 }
 
 // Position + show the panel (`Some(view)`) at effective size `s`, or blank
@@ -117,10 +150,10 @@ fn chart_view<'a>(view: &'a MapView<'a>) -> chart::ChartView<'a> {
     chart::ChartView {
         ids: CHART_IDS,
         chart: view.chart,
+        selected: view.selected,
         // A card stands for a place rather than for a node a session can stop
-        // in or a row a checker can complain about, so none of the marks the
-        // Behavior panel puts on its cards has anything to point at here.
-        selected: None,
+        // in or a row a checker can complain about, so the marks the Behavior
+        // panel puts on its cards for those have nothing to point at here.
         faulted: None,
         pulses: &[],
         breakpoints: &[],
@@ -184,6 +217,7 @@ mod tests {
     fn view<'a>(chart: &'a Chart, pan: [f32; 2]) -> MapView<'a> {
         MapView {
             chart,
+            selected: None,
             pan,
             mouse: [-1.0, -1.0],
         }
@@ -310,19 +344,128 @@ mod tests {
     // panel is not the panel's at all.
     #[test]
     fn the_canvas_pans_and_the_rest_of_the_panel_swallows_a_press() {
+        let chart = mapped(imported_scene());
+        let v = view(&chart, [0.0, 0.0]);
         let s = size();
         let b = band(O, s);
+        // Clear of the one card, which sits in the canvas's top-left corner.
         assert_eq!(
-            hit_test(b[0] + 10.0, b[1] + 10.0, O, s),
+            hit_test(&v, b[0] + b[2] - 10.0, b[1] + b[3] - 10.0, O, s),
             Some(MapAction::PanStart)
         );
         assert_eq!(
-            hit_test(O[0] + 4.0, O[1] + 2.0, O, s),
+            hit_test(&v, O[0] + 4.0, O[1] + 2.0, O, s),
             Some(MapAction::Consume),
             "the title bar is still the panel's"
         );
-        assert_eq!(hit_test(O[0] - 20.0, O[1] - 20.0, O, s), None);
-        assert_eq!(hit_test(O[0] + s[0] + 20.0, O[1] + 10.0, O, s), None);
+        assert_eq!(hit_test(&v, O[0] - 20.0, O[1] - 20.0, O, s), None);
+        assert_eq!(hit_test(&v, O[0] + s[0] + 20.0, O[1] + 10.0, O, s), None);
+    }
+
+    // A world of props and materials is nowhere to be, so its map is the one
+    // card summarizing it -- which stands for no asset and addresses none.
+    fn a_world_of_no_places() -> Vec<WorldJsonlAsset> {
+        vec![
+            asset(RegisteredType::Material, "mat_floor", json!({})),
+            asset(RegisteredType::Prop, "floor", json!({"mesh": "floor_mesh"})),
+        ]
+    }
+
+    // The middle of the card drawn for `title`, which is where a click on it
+    // lands.
+    fn center(chart: &Chart, title: &str, s: [f32; 2], pan: [f32; 2]) -> [f32; 2] {
+        let card = chart.cards.iter().find(|c| c.title == title).unwrap();
+        let r = chart::card_rect(card, band(O, s), pan);
+        [r[0] + r[2] * 0.5, r[1] + r[3] * 0.5]
+    }
+
+    fn index(chart: &Chart, title: &str) -> usize {
+        chart.cards.iter().position(|c| c.title == title).unwrap()
+    }
+
+    // The point of addressing every card: a press on one is the place it
+    // stands for, not a grab on the canvas under it.
+    #[test]
+    fn a_press_on_a_place_selects_it_rather_than_grabbing_the_canvas() {
+        let chart = mapped(imported_scene());
+        let s = size();
+        let v = view(&chart, [0.0, 0.0]);
+        let at = center(&chart, "bistro", s, [0.0, 0.0]);
+        assert_eq!(
+            hit_test(&v, at[0], at[1], O, s),
+            Some(MapAction::Select(index(&chart, "bistro")))
+        );
+    }
+
+    // A card standing for no asset has nothing to select, and is still a card:
+    // pressing it must not drag the canvas out from under the cursor either.
+    #[test]
+    fn a_press_on_a_card_addressing_nothing_is_swallowed() {
+        let chart = mapped(a_world_of_no_places());
+        assert_eq!(chart.cards[0].handle, None, "{:?}", chart.cards[0]);
+        let s = size();
+        let v = view(&chart, [0.0, 0.0]);
+        let at = center(&chart, &chart.cards[0].title.clone(), s, [0.0, 0.0]);
+        assert_eq!(hit_test(&v, at[0], at[1], O, s), Some(MapAction::Consume));
+    }
+
+    // What is selected anywhere in the editor is what the map lights up, so the
+    // two surfaces agree on where the session is looking.
+    #[test]
+    fn the_selected_place_is_drawn_lit_up() {
+        let chart = mapped(vec![
+            asset(RegisteredType::Scene, "bistro", json!({})),
+            asset(
+                RegisteredType::MainMenu,
+                "main",
+                json!({"initial": true, "items": [{"label": "Start", "action": "scene:bistro"}]}),
+            ),
+        ]);
+        let mut world = injected_world();
+        let mut v = view(&chart, [0.0, 0.0]);
+        v.selected = Some(index(&chart, "bistro"));
+        place(&mut world, Some(&v), O, size());
+
+        let lit = sprite(
+            &world,
+            CHART_IDS.card_bg(slot_of(&world, "bistro").unwrap()),
+        );
+        let plain = sprite(&world, CHART_IDS.card_bg(slot_of(&world, "main").unwrap()));
+        assert!(
+            lit.border_width > plain.border_width,
+            "{lit:?} is drawn no differently to {plain:?}",
+        );
+    }
+
+    // The canvas opens on where the world starts, which is the corner the map
+    // is laid out from.
+    #[test]
+    fn the_root_pan_opens_on_the_place_the_world_starts_in() {
+        let chart = mapped(imported_scene());
+        assert_eq!(root_pan(&chart, canvas(size())), [0.0, 0.0]);
+    }
+
+    // And it is the card that decides, not the corner: a map whose first place
+    // is laid out away from the origin is panned to rather than missed.
+    #[test]
+    fn the_root_pan_follows_the_card_rather_than_the_canvas_corner() {
+        let mut chart = mapped(imported_scene());
+        chart.cards[0].column = 4;
+        chart.cards[0].row = 6;
+        chart.columns = 5;
+        chart.rows = 7;
+        let pan = root_pan(&chart, canvas(size()));
+        assert!(
+            pan[0] > 0.0 && pan[1] > 0.0,
+            "{pan:?} left it off the canvas"
+        );
+
+        let mut world = injected_world();
+        place(&mut world, Some(&view(&chart, pan)), O, size());
+        assert!(
+            slot_of(&world, "bistro").is_some(),
+            "the root is not in view"
+        );
     }
 
     // Toggled off, the panel leaves nothing of the map behind.

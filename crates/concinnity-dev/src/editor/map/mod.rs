@@ -66,6 +66,17 @@ pub(crate) fn map(entries: &Entries) -> Chart {
     build::chart(entries, &flow_graph(entries.assets()))
 }
 
+/// The card standing for `handle`, so what is selected anywhere in the editor
+/// lights up here too. A selection naming no place at all -- a prop inside one,
+/// a material -- answers `None`, which is the honest picture: a map draws where
+/// a world can be, not everything in it.
+pub(crate) fn card_of(chart: &Chart, handle: &AssetHandle) -> Option<usize> {
+    chart
+        .cards
+        .iter()
+        .position(|card| card.handle.as_ref() == Some(handle))
+}
+
 #[cfg(test)]
 mod tests {
     use concinnity_cook::authoring::registry::RegisteredType;
