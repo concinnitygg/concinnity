@@ -1,5 +1,5 @@
-//! Shader source assembly, compilation caches, and export-time precompilation
-//! shared by the device backends.
+//! Shader source assembly and the compilation caches shared by the device
+//! backends.
 
 // The runtime cache segment both caches below write into, and the checkpoints
 // at which it reaches disk.
@@ -29,10 +29,3 @@ pub(crate) mod surface_source;
 // and the OS maintains the per-app pipeline binary cache.
 #[cfg(any(backend_dx, backend_vk))]
 pub(crate) mod pipeline_cache;
-
-// Export-time precompilation of the built-in shaders into the cache segment a
-// bundle ships. Backends whose shaders compile at renderer init (DX, VK)
-// declare their compile set as data; `cn export` compiles it here, in-process,
-// with no GPU device. Metal precompiles at build time and needs none of this.
-#[cfg(any(backend_dx, backend_vk))]
-pub mod precompile;

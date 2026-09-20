@@ -63,9 +63,8 @@ pub struct ExportOptions {
     pub dmg: bool,
 }
 
-/// Package a built world into a distributable bundle: the player binary, the
-/// blob, and a warmed runtime cache segment, written to `options.out` as a zip
-/// or a directory.
+/// Package a built world into a distributable bundle: the player binary and the
+/// blob, written to `options.out` as a zip or a directory.
 pub fn export(options: &ExportOptions) -> io::Result<()> {
     let ExportOptions {
         world,
@@ -153,10 +152,6 @@ fn export_portable(
     copy_runtime_sidecars(runtime, runtime_platform, &bundle_dir)?;
 
     let blobs = copy_blobs(data_dir, &StateTree::at(&bundle_dir).data_dir())?;
-    // Before archiving, so the warmed cache segment is inside the zip. The
-    // player resolves its state root to the bundle folder, so `cache/0` sits
-    // beside the exe.
-    precompile_shaders(&bundle_dir);
     report_export(&meta.display_name, &bundle_dir, blobs);
 
     if make_zip {
@@ -195,9 +190,6 @@ fn export_macos(
     make_executable(&exe_dst)?;
 
     let blobs = copy_blobs(data_dir, &StateTree::at(&resources).data_dir())?;
-    // The player resolves its state root to Contents/Resources; a no-op on
-    // Metal, whose shaders precompile at build time.
-    precompile_shaders(&resources);
 
     // Build the .icns from the AppConfig's icon, falling back to the bundled
     // engine default so every macOS bundle carries an icon.
@@ -227,48 +219,6 @@ fn export_macos(
     }
     Ok(())
 }
-
-// Compile the engine's built-in shaders into the bundle's `cache/0`, so a
-// player's first launch reuses every artifact instead of compiling (measured
-// ~1 s on a DirectX release build). The player reads that segment like any
-// other cache, so deleting it costs one slow launch and nothing more.
-// Compilation is pure CPU, so this runs in-process with no GPU device or
-// window: the compile set is enumerated from the same declarations renderer
-// init compiles through, and the pool-sized Vulkan shaders are compiled for the
-// world just built (its texture count). The artifacts are backend IR, not
-// machine code, so ones compiled here are valid on any machine.
-//
-// Best-effort by design: a failed program is reported and simply compiles at
-// the bundle's first launch, so failures warn rather than failing the export.
-#[cfg(any(backend_dx, backend_vk))]
-fn precompile_shaders(state_dir: &Path) {
-    // The suite asserts bundle layout, not shader output: skip so no test runs
-    // the shader compiler, reads the world data anchor, or writes into the
-    // developer's cache segment. Mirrors `shader_cache`'s own test opt-out,
-    // which does not apply here because concinnity-device is a dependency of
-    // this test binary rather than the crate under test.
-    if cfg!(test) {
-        return;
-    }
-    println!("Compiling built-in shaders...");
-    let report = concinnity_engine::precompile_builtin_shaders(state_dir);
-    println!(
-        "  cached {} shader binaries ({} compiled, {} reused)",
-        report.cached(),
-        report.compiled,
-        report.reused
-    );
-    for failure in &report.failed {
-        eprintln!(
-            "warning: shader precompile failed ({failure}); it will compile on \
-             the bundle's first launch"
-        );
-    }
-}
-
-// Metal precompiles its shaders at build time; the bundle needs no cache.
-#[cfg(not(any(backend_dx, backend_vk)))]
-fn precompile_shaders(_state_dir: &Path) {}
 
 // Announce the finished bundle. `copy_blobs` has already refused a build that
 // produced none, so the count here is always at least one.

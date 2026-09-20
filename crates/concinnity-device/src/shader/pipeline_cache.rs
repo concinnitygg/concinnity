@@ -1,13 +1,13 @@
 // Disk persistence for driver pipeline blobs: a serialized VkPipelineCache or
 // a D3D12 pipeline library, one entry per adapter in the runtime cache segment.
 //
-// These blobs are machine code tied to one GPU and driver, so unlike the
-// shader cache there is no bundled tier and no cross-machine reuse; the entry
-// key is the adapter the blob was built on, and the driver (or the backend's
-// own header check) rejects a stale blob so the launch falls back to building
-// pipelines cold. Every operation here is best-effort: an unreadable,
-// oversized, or rejected entry is dropped and treated as absent, never
-// surfaced as an init failure.
+// These blobs are machine code tied to one GPU and driver, so there is no
+// cross-machine reuse and nothing a package could ship: the entry key is the
+// adapter the blob was built on, and the driver (or the backend's own header
+// check) rejects a stale blob so the launch falls back to building pipelines
+// cold. Every operation here is best-effort: an unreadable, oversized, or
+// rejected entry is dropped and treated as absent, never surfaced as an init
+// failure.
 //
 // A store lands in the segment held in memory and reaches disk at the next
 // checkpoint, so the two serializations a session makes (end of init, then

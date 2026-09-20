@@ -1,7 +1,6 @@
 // The runtime cache segment (`cache/0`) as this crate sees it: the compiled
-// shader binaries and driver pipeline blobs a renderer init produces, the
-// moments they reach disk, and the read-only copy of the same segment a bundle
-// ships.
+// shader binaries and driver pipeline blobs a renderer init produces, and the
+// moments they reach disk.
 //
 // The segment is read once, on the first lookup, and written at a checkpoint.
 // Nothing here writes per entry: an init that compiles fifty shaders stores
@@ -25,13 +24,6 @@ pub(crate) fn enabled() -> bool {
 // The bytes stored for `key`, or `None` when the segment holds no such entry.
 pub(crate) fn load(kind: CacheEntryKind, key: &str) -> Option<Vec<u8>> {
     enabled().then(|| cache::load(kind, key))?
-}
-
-// The same lookup against the read-only segment a bundle ships, for a caller
-// `load` missed. Read once, like the writable one: a lookup here parses
-// nothing, so an init consulting it fifty times still costs one file read.
-pub(crate) fn load_bundled(kind: CacheEntryKind, key: &str) -> Option<Vec<u8>> {
-    enabled().then(|| cache::load_bundled(kind, key))?
 }
 
 // Hold `bytes` under `key` until the next checkpoint, reporting whether the

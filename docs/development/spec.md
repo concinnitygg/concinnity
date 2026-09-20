@@ -815,19 +815,15 @@ a budget and keeps its entries in memory; a build cache has no such ceiling, so
 way `data/` addresses a payload. Its write streams the entries it is carrying
 forward straight out of the file it replaces.
 
-`cn export` warms a `cache/0` of its own into the bundle, holding the shader
-artifacts a first launch would otherwise compile; those are backend IR (DXBC,
-SPIR-V) and so portable across machines with the same backend, which is what
-lets a bundle ship them. The player reads it like any other cache, so deleting
-it costs one slow launch and nothing more. A lookup therefore has two tiers: the
-segment under the writable root, then the one under the content root. They are
-one file in the portable layout -- the writable tier reads it, serves the
-shipped entries, and writes them back with whatever the launch added -- and
-diverge only for an install that cannot write beside its data, which is the case
-the second tier exists for. Both are read once, so neither tier costs I/O per
-lookup. The exported segment carries no toolchain stamp: a shipped artifact is a
-function of its source, not of the slangc that produced it, so a player whose
-own compiler differs keeps what the bundle shipped.
+A bundle ships no warmed `cache/0`: the build script compiles every declared
+shader into the binary, and renderer init takes the embedded artifact whenever
+the source digest matches, so an exported player compiles nothing at start-up
+and needs no shader compiler on the machine that runs it. What reaches the
+runtime cache is the source no build could have enumerated -- an edited shader
+under hot-reload, a program a device sizes below the build's ceiling, a world's
+own distance field -- which is a property of the machine running, not of the
+package, so there is nothing for a packager to warm. Deleting `cache/0` costs
+that much and nothing more.
 
 ---
 

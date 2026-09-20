@@ -1,15 +1,14 @@
 // Content-addressed cache for the shader binaries compiled after build time.
 //
-// The DirectX and Vulkan backends compile every built-in shader from embedded
-// source at renderer init, and that compile dominates startup: 993 ms of a
-// 1.58 s release init on DirectX (45 FXC invocations), and 369 ms on Vulkan (53
-// slangc invocations). Metal precompiles its built-ins into the binary but
-// assembles the raymarch libraries around world-authored SdfVolume fragments
-// at init, and caches those metallibs here (see `metal::msl_cache`). The
-// output is a pure function of the source text, the entry point, the compile
-// target, and the compiler options, none of which change between runs of an
-// unedited binary -- so the second run of a given build has no reason to
-// compile anything.
+// Every backend carries its built-in shaders in the binary and takes them
+// whenever the source digest matches, so what reaches this cache is the source
+// no build could have compiled ahead of time: an edited shader under
+// hot-reload, a program a device sizes differently from the build's ceiling,
+// and the Metal raymarch libraries assembled around world-authored SdfVolume
+// fragments (see `metal::msl_cache`). The output is a pure function of the
+// source text, the entry point, the compile target, and the compiler options,
+// none of which change between runs of an unedited binary -- so the second run
+// of a given build has no reason to compile any of them twice.
 //
 // Each artifact is stored under the hex digest of those inputs, which makes the
 // entry self-validating: a shader edit, a flag change, or a debug/release switch
@@ -21,9 +20,8 @@
 //
 // Artifacts live in the runtime cache segment, so an init that misses fifty
 // times writes one file at its checkpoint rather than fifty as it goes -- see
-// `crate::shader::runtime_cache`. A bundle ships a segment of the same kind, warmed by
-// `cn export` and read after the writable one; both tiers are read once, so a
-// lookup in either is a memory lookup.
+// `crate::shader::runtime_cache`. The segment is read once, so every lookup
+// after the first is a memory lookup.
 //
 // Every operation is best-effort: a miss, an unreadable entry, or a failed write
 // all fall back to compiling normally, so the cache can never break a run.
@@ -31,8 +29,6 @@
 // toolchain upgrade whose output differs for identical source wants.
 
 use concinnity_core::blob::CacheEntryKind;
-#[cfg(any(backend_dx, backend_vk))]
-use concinnity_host::store::cache::Segment;
 use sha2::{Digest, Sha256};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -107,73 +103,6 @@ pub(crate) fn cached<E>(
     Ok(bytes)
 }
 
-// How `ensure_in` satisfied a request: the artifact was already in the target
-// segment, was copied over from this machine's own cache tiers, or had to be
-// compiled fresh.
-#[cfg(any(backend_dx, backend_vk))]
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Ensured {
-    Present,
-    Copied,
-    Compiled,
-}
-
-// Why `ensure_in` left the artifact out of the bundle: the compile failed, or
-// it succeeded with nothing to store.
-#[cfg(any(backend_dx, backend_vk))]
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum EnsureError<E> {
-    Compile(E),
-    EmptyArtifact,
-}
-
-#[cfg(any(backend_dx, backend_vk))]
-impl<E: std::fmt::Display> std::fmt::Display for EnsureError<E> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            EnsureError::Compile(e) => e.fmt(f),
-            EnsureError::EmptyArtifact => f.write_str("compile produced an empty artifact"),
-        }
-    }
-}
-
-// Make sure the artifact for `key` is in `bundle` (the segment `cn export`
-// ships), compiling only when neither it nor this machine's own cache tiers
-// already hold it. A fresh compile is also stored locally, so repeated exports
-// stay warm. `bundle` accumulates in memory and its caller writes it once, so
-// warming a hundred artifacts costs one file write.
-//
-// Used by the export-time precompile; the runtime path stays on `cached`.
-#[cfg(any(backend_dx, backend_vk))]
-pub(crate) fn ensure_in<E>(
-    bundle: &mut Segment,
-    key: &Key<'_>,
-    compile: impl FnOnce() -> Result<Vec<u8>, E>,
-) -> Result<Ensured, EnsureError<E>> {
-    if enabled() {
-        verify_toolchain();
-    }
-    let digest = key.digest();
-    if bundle.get(KIND, &digest).is_some_and(|b| !b.is_empty()) {
-        return Ok(Ensured::Present);
-    }
-    if enabled()
-        && let Some(bytes) = load(&digest)
-    {
-        bundle.put(KIND, &digest, &bytes);
-        return Ok(Ensured::Copied);
-    }
-    let bytes = compile().map_err(EnsureError::Compile)?;
-    if bytes.is_empty() {
-        return Err(EnsureError::EmptyArtifact);
-    }
-    bundle.put(KIND, &digest, &bytes);
-    if enabled() {
-        store(&digest, &bytes);
-    }
-    Ok(Ensured::Compiled)
-}
-
 // Log what the cache did during a renderer init. Called once per backend init.
 // Shaders built lazily after it (the skinned-mesh pipelines on first upload, a
 // world shader bucket on scene pin) are cached the same way but land after this
@@ -204,12 +133,6 @@ fn enabled() -> bool {
 // external binary that can be upgraded -- or shadowed by another install
 // earlier on PATH -- without a byte of source moving; without this, that
 // upgrade never takes effect and the old compiler's output is replayed forever.
-// The bundled tier is deliberately left alone: a bundle ships it on purpose,
-// and it is what a host with no compiler of its own has to run from. `cn
-// export` leaves the segment it warms unstamped for the same reason -- on a
-// writable bundle that file is also the one this stamps, and a player whose
-// slangc differs from the exporter's must keep the shipped artifacts rather
-// than discard them on its first launch.
 //
 // Costs one `slangc -version` per process, which is why it is a `OnceLock`.
 fn verify_toolchain() {
@@ -222,19 +145,11 @@ fn verify_toolchain() {
     });
 }
 
-// The segment this process writes, then the read-only one a bundle ships. Both
-// are in memory by the time a second lookup arrives, so the tiering costs no
-// I/O per shader. They only diverge for a bundle: a dev checkout ships no
-// artifacts, and a read-only install cannot write beside the ones it has.
-//
 // A zero-length artifact is never a legitimate compile result, so a hand-edited
 // or truncated entry reads as a miss and recompiles rather than failing
 // pipeline creation with an empty bytecode blob.
 fn load(digest: &str) -> Option<Vec<u8>> {
-    let usable = |bytes: Vec<u8>| (!bytes.is_empty()).then_some(bytes);
-    crate::shader::runtime_cache::load(KIND, digest)
-        .and_then(usable)
-        .or_else(|| crate::shader::runtime_cache::load_bundled(KIND, digest).and_then(usable))
+    crate::shader::runtime_cache::load(KIND, digest).filter(|bytes| !bytes.is_empty())
 }
 
 fn store(digest: &str, bytes: &[u8]) {
@@ -284,54 +199,10 @@ mod tests {
         );
     }
 
-    // Under `cargo test` nothing reaches the state dir, in either direction,
-    // and that covers the bundled tier too.
+    // Under `cargo test` nothing reaches the state dir, in either direction.
     #[test]
     fn the_cache_is_off_under_test() {
         assert!(!enabled());
         assert_eq!(load("deadbeef"), None);
-    }
-
-    // The segment `cn export` ships: warmed in memory here, written by the
-    // precompile once, and read back the way a player's first launch reads it.
-    #[cfg(any(backend_dx, backend_vk))]
-    #[test]
-    fn ensure_in_compiles_once_then_finds_the_artifact_present() {
-        let tree = concinnity_testing::TempTree::new();
-        let path = concinnity_host::store::paths::StateTree::at(tree.path()).runtime_cache_path();
-        let mut bundle = Segment::read_from(&path);
-        let k = key("ensure src", "main", "ps_5_1", 3);
-
-        let first = ensure_in(&mut bundle, &k, || Ok::<_, String>(vec![7, 7, 7])).unwrap();
-        assert_eq!(first, Ensured::Compiled);
-
-        // The second request must be served from the segment without
-        // recompiling, and without having touched the filesystem yet.
-        let second = ensure_in(&mut bundle, &k, || -> Result<Vec<u8>, String> {
-            panic!("must not recompile")
-        })
-        .unwrap();
-        assert_eq!(second, Ensured::Present);
-        assert!(!path.exists(), "warming is memory until the caller writes");
-
-        assert!(bundle.write_to(&path, 1 << 20));
-        let mut shipped = Segment::read_from(&path);
-        assert_eq!(shipped.get(KIND, &k.digest()), Some(&[7, 7, 7][..]));
-    }
-
-    #[cfg(any(backend_dx, backend_vk))]
-    #[test]
-    fn ensure_in_propagates_a_compile_error_and_stores_nothing() {
-        let mut bundle = Segment::read_from(std::path::Path::new("/nonexistent/cache/0"));
-        let k = key("bad src", "main", "ps_5_1", 0);
-        assert_eq!(
-            ensure_in(&mut bundle, &k, || Err("boom".to_string())),
-            Err(EnsureError::Compile("boom".to_string()))
-        );
-        assert_eq!(
-            ensure_in(&mut bundle, &k, || Ok::<_, String>(Vec::new())),
-            Err(EnsureError::EmptyArtifact)
-        );
-        assert_eq!(bundle.get(KIND, &k.digest()), None);
     }
 }

@@ -47,13 +47,6 @@ pub use concinnity_host::store::paths::StateTree;
 /// resolving a backend of their own.
 pub mod platform;
 
-// Export-time compilation of the built-in shaders into the cache segment a
-// bundle ships, for backends that compile them at renderer init. Re-exported
-// so `cn export` reaches it without a direct device dependency.
-#[cfg(any(backend_dx, backend_vk))]
-pub use concinnity_device::shader::precompile::{
-    Report as ShaderPrecompileReport, precompile_builtin_shaders,
-};
 mod device;
 /// Whether this build links a rendering backend. A build with no backend
 /// feature has none, so the only loop that can run a world is a headless one.

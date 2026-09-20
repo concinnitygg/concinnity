@@ -27,8 +27,8 @@ impl SlangCompile for SlangProgram {
         slang::SlangTarget::Dxil(self.profile)
     }
 
-    // The shader-cache key for `source`. Shared by the runtime compile path
-    // and the export-time precompile so the two can never key differently.
+    // The shader-cache key for `source`, which is what a compile the embedded
+    // artifacts missed is stored under.
     fn cache_key<'a>(&self, source: &'a str) -> crate::shader::cache::Key<'a> {
         crate::shader::cache::Key {
             compiler: "slang",
@@ -84,22 +84,6 @@ pub(super) fn compile_uncached(program: &SlangProgram, source: &str) -> RenderRe
     };
     let work = crate::shader::compiler_work::dir().map_err(RenderError::Other)?;
     slang::compile(&job, work.path()).map_err(RenderError::ShaderCompile)
-}
-
-// Compile every declared program into `bundle`, reusing local cache artifacts
-// where present. Called by the export-time precompile alongside the HLSL table.
-pub(crate) fn precompile(
-    bundle: &mut concinnity_host::store::cache::Segment,
-    report: &mut crate::shader::precompile::Report,
-) {
-    for program in ALL {
-        let source = program.source(false);
-        let key = program.cache_key(&source);
-        report.record(
-            &format!("{} {}", program.entry, program.profile),
-            crate::shader::cache::ensure_in(bundle, &key, || compile_uncached(program, &source)),
-        );
-    }
 }
 
 #[cfg(test)]

@@ -57,8 +57,8 @@ impl SlangCompile for SlangProgram {
         crate::shader::slang_source::assemble(ctx.hot_reload, self.file, &defines, &[])
     }
 
-    // The shader-cache key for `source`. Shared by the runtime compile path
-    // and the export-time precompile so the two can never key differently.
+    // The shader-cache key for `source`, which is what a compile the embedded
+    // artifacts missed is stored under.
     fn cache_key<'a>(&self, source: &'a str) -> crate::shader::cache::Key<'a> {
         crate::shader::cache::Key {
             compiler: "slang",
@@ -123,44 +123,6 @@ pub(super) fn compile_uncached(program: &SlangProgram, source: &str) -> RenderRe
     slang::compile(&job, work.path()).map_err(RenderError::ShaderCompile)
 }
 
-// Compile every declared program into `bundle`, reusing local cache artifacts
-// where present.
-//
-// The probe cube-array length is a property of the device the bundle eventually
-// runs on rather than of the world, so it is baked at the ceiling every desktop
-// driver affords. A device that reports less headroom than that declares fewer
-// and compiles these at first launch.
-pub(crate) fn precompile(
-    bundle: &mut concinnity_host::store::cache::Segment,
-    report: &mut crate::shader::precompile::Report,
-) {
-    // A program whose source reads the main pass's sample count gets both
-    // variants: which one a device runs is a property of its MSAA mode, not of
-    // the bundle.
-    for program in ALL {
-        let msaa_variants: &[bool] = if program.msaa {
-            &[false, true]
-        } else {
-            &[false]
-        };
-        for &msaa in msaa_variants {
-            let ctx = Ctx {
-                hot_reload: false,
-                msaa,
-                probe_count: concinnity_core::render::uniforms::MAX_PROBES,
-            };
-            let source = program.source(&ctx);
-            let key = program.cache_key(&source);
-            report.record(
-                program.label,
-                crate::shader::cache::ensure_in(bundle, &key, || {
-                    compile_uncached(program, &source)
-                }),
-            );
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -212,9 +174,9 @@ mod tests {
     }
 
     // Reading the main pass's depth is what makes a program's assembly depend on
-    // the host's sample count, and the export-time precompile enumerates both
-    // variants for exactly those. A program that gained or lost the dependency
-    // silently would leave a bundle cold for one MSAA mode.
+    // the host's sample count, and the build script embeds both variants for
+    // exactly those. A program that gained or lost the dependency silently
+    // would leave one MSAA mode compiling at renderer init.
     #[test]
     fn only_the_depth_reading_programs_take_the_sample_count() {
         let mut sampled: Vec<&str> = ALL.iter().filter(|p| p.msaa).map(|p| p.label).collect();

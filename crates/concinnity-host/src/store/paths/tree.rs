@@ -170,22 +170,6 @@ impl StateTree {
             .join(RUNTIME_CACHE_SEGMENT)
     }
 
-    /// The runtime segment a bundle ships, read-only. `cn export` warms it with
-    /// the shader binaries a first launch would otherwise compile; because those
-    /// artifacts are backend IR (DXBC / SPIR-V) rather than machine code, one
-    /// warmed at package time is valid on any machine.
-    ///
-    /// Always resolves against the build root, so it ships with the blobs it
-    /// was warmed for and stays readable on a read-only install. That is also
-    /// the only thing separating it from
-    /// [`runtime_cache_path`](Self::runtime_cache_path): a bundle the player
-    /// can write to has one segment serving both roles.
-    pub fn bundled_runtime_cache_path(&self) -> PathBuf {
-        self.build_root()
-            .join(CACHE_DIR)
-            .join(RUNTIME_CACHE_SEGMENT)
-    }
-
     /// The segment a build writes: one container holding every payload,
     /// expansion, and baked thumbnail a cook produced, indexed by producer and
     /// key.
@@ -238,9 +222,6 @@ mod tests {
         assert_eq!(tree.editor_session_path(), root.join("editor"));
         assert_eq!(tree.runtime_cache_path(), root.join("cache").join("0"));
         assert_eq!(tree.build_cache_path(), root.join("cache").join("1"));
-        // One file in both runtime roles, which is what makes the bundled tier
-        // vacuous for a bundle the player can write to.
-        assert_eq!(tree.bundled_runtime_cache_path(), tree.runtime_cache_path());
     }
 
     // A read-only install: only what the application writes moves. The content
@@ -265,12 +246,6 @@ mod tests {
         assert_eq!(tree.assets_dir(), content.join("assets"));
         assert_eq!(tree.worlds_dir(), content.join("worlds"));
         assert_eq!(tree.build_cache_path(), content.join("cache").join("1"));
-        // The shipped segment stays with the content, which is what keeps a
-        // read-only install's warmed artifacts readable.
-        assert_eq!(
-            tree.bundled_runtime_cache_path(),
-            content.join("cache").join("0")
-        );
     }
 
     // A cache root moves both regenerable segments and nothing else: the point
@@ -284,11 +259,6 @@ mod tests {
 
         assert_eq!(tree.runtime_cache_path(), cache.join("cache").join("0"));
         assert_eq!(tree.build_cache_path(), cache.join("cache").join("1"));
-        // Still the shipped tier's own definition: beside the content.
-        assert_eq!(
-            tree.bundled_runtime_cache_path(),
-            content.join("cache").join("0")
-        );
         assert_eq!(tree.data_dir(), content.join("data"));
         assert_eq!(tree.saves_dir(), content.join("saves"));
     }
@@ -334,10 +304,6 @@ mod tests {
         // keeps a `cache/` out of the project root.
         assert_eq!(tree.runtime_cache_path(), hidden.join("cache").join("0"));
         assert_eq!(tree.build_cache_path(), hidden.join("cache").join("1"));
-        assert_eq!(
-            tree.bundled_runtime_cache_path(),
-            hidden.join("cache").join("0")
-        );
     }
 
     // A cache root still outranks the build root for the segment a build

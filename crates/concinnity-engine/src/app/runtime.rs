@@ -257,10 +257,7 @@ impl Runtime {
             concinnity_host::store::cache::clear_anchor();
             return;
         };
-        concinnity_host::store::cache::anchor(
-            concinnity_host::store::cache::CacheAnchor::new(tree.runtime_cache_path())
-                .with_bundled(tree.bundled_runtime_cache_path()),
-        );
+        concinnity_host::store::cache::anchor(tree.runtime_cache_path());
         self.world.insert_resource(tree);
     }
 
@@ -576,11 +573,11 @@ mod tests {
     // including the runtime cache a previous one anchored.
     #[test]
     fn an_app_without_a_tree_publishes_none() {
-        use concinnity_host::store::cache::{self, CacheAnchor, CacheEntryKind};
+        use concinnity_host::store::cache::{self, CacheEntryKind};
 
         let _guard = concinnity_testing::exclusive();
         let tmp = concinnity_testing::TempTree::new();
-        cache::anchor(CacheAnchor::new(tmp.join("cache")));
+        cache::anchor(tmp.join("cache"));
         assert!(cache::store(CacheEntryKind::Shader, "k", b"v"));
 
         let mut runtime = Runtime::new();
