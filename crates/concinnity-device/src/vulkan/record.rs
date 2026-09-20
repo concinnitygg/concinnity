@@ -239,6 +239,55 @@ impl<'a> Recorder<'a> {
         unsafe { self.device.cmd_dispatch(self.cmd, x, y, z) };
     }
 
+    // The full barrier form, for a pass that carries buffer or image barriers.
+    pub(in crate::vulkan) fn pipeline_barrier(
+        &self,
+        src_stage: vk::PipelineStageFlags,
+        dst_stage: vk::PipelineStageFlags,
+        memory: &[vk::MemoryBarrier],
+        buffers: &[vk::BufferMemoryBarrier],
+        images: &[vk::ImageMemoryBarrier],
+    ) {
+        // SAFETY: `self.cmd` is in the recording state by construction, and the barriers and the
+        // handles they name are live for the call.
+        unsafe {
+            self.device.cmd_pipeline_barrier(
+                self.cmd,
+                src_stage,
+                dst_stage,
+                vk::DependencyFlags::empty(),
+                memory,
+                buffers,
+                images,
+            )
+        };
+    }
+
+    pub(in crate::vulkan) fn bind_vertex_buffers(
+        &self,
+        first_binding: u32,
+        buffers: &[vk::Buffer],
+        offsets: &[vk::DeviceSize],
+    ) {
+        // SAFETY: `self.cmd` is in the recording state by construction, and the buffers and the
+        // slices naming them are live for the call.
+        unsafe {
+            self.device
+                .cmd_bind_vertex_buffers(self.cmd, first_binding, buffers, offsets)
+        };
+    }
+
+    pub(in crate::vulkan) fn copy_buffer(
+        &self,
+        src: vk::Buffer,
+        dst: vk::Buffer,
+        regions: &[vk::BufferCopy],
+    ) {
+        // SAFETY: `self.cmd` is in the recording state by construction, and the buffers and the
+        // region slice are live for the call.
+        unsafe { self.device.cmd_copy_buffer(self.cmd, src, dst, regions) };
+    }
+
     pub(in crate::vulkan) fn write_timestamp(
         &self,
         stage: vk::PipelineStageFlags,

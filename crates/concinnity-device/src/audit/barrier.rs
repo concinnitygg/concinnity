@@ -54,6 +54,11 @@ enum Reason {
     // yet. Each entry disappears as its resource joins the registry; a table with
     // no `Inline` rows means every modeled resource is graph-derived.
     Inline,
+    // The recording surface's own `cmd_pipeline_barrier` (`record.rs`). Not a
+    // barrier decision: it is the one place the call is spelled for every pass
+    // that records through `Recorder`, and each of those call sites is counted
+    // under `rec.pipeline_barrier(` with its own reason.
+    RecordingSurface,
     // A Vulkan render pass's attachment layout declaration. These are frame-path
     // transitions the driver performs at pass boundaries rather than calls the
     // encoder makes, which is why they need counting at all: the scene targets'
@@ -87,7 +92,11 @@ const AUDITS: &[BackendAudit] = &[
     BackendAudit {
         backend: "vulkan",
         root: VULKAN_ROOT,
-        calls: &["cmd_pipeline_barrier", ".final_layout("],
+        calls: &[
+            "cmd_pipeline_barrier",
+            "rec.pipeline_barrier(",
+            ".final_layout(",
+        ],
         sites: &[
             (
                 "graph_exec.rs",
@@ -95,7 +104,13 @@ const AUDITS: &[BackendAudit] = &[
                 4,
                 Reason::GraphDriven,
             ),
-            ("hiz.rs", "cmd_pipeline_barrier", 1, Reason::IntraPass),
+            ("hiz.rs", "rec.pipeline_barrier(", 1, Reason::IntraPass),
+            (
+                "record.rs",
+                "cmd_pipeline_barrier",
+                1,
+                Reason::RecordingSurface,
+            ),
             // Both are inside the ParticlesSim node, around the spawn-counter
             // reset: one orders the reset against the previous frame's reset
             // and dispatch (a counter is one buffer per emitter rather than one
@@ -125,7 +140,7 @@ const AUDITS: &[BackendAudit] = &[
             ),
             (
                 "auto_exposure.rs",
-                "cmd_pipeline_barrier",
+                "rec.pipeline_barrier(",
                 4,
                 Reason::Ungraphed,
             ),

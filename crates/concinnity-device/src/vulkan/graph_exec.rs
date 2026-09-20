@@ -1109,14 +1109,14 @@ impl VkContext {
                 self.encode_decals(cmd, params.frame_idx, params.vp_mat, params.frustum);
             }
             PassId::Lines => {
-                self.encode_lines(cmd, params.frame_idx, params.vp_mat, params.lines);
+                self.encode_lines(rec, params.frame_idx, params.vp_mat, params.lines);
             }
             PassId::FogFroxel => {
                 // Populate the screen-aligned 3D scatter/transmittance volume
                 // the `Fog` render pass samples. The shared graph seeds this
                 // before `Fog` (RAW edge on the froxel volume handle).
                 self.encode_fog_froxel(
-                    cmd,
+                    rec,
                     params.frame_idx,
                     params.near,
                     params.vp_mat,
@@ -1124,10 +1124,10 @@ impl VkContext {
                 );
             }
             PassId::Fog => {
-                self.encode_fog(cmd, params.frame_idx, params.vp_mat, params.cam_pos);
+                self.encode_fog(rec, params.frame_idx, params.vp_mat, params.cam_pos);
             }
             PassId::AutoExposure => {
-                self.encode_auto_exposure(cmd, params.frame_idx);
+                self.encode_auto_exposure(rec, params.frame_idx);
             }
             PassId::ParticlesSim => {
                 // Resets each live emitter's spawn counter and integrates its
@@ -1202,7 +1202,7 @@ impl VkContext {
                 // phase-1 occluded objects against up-to-date depth; `HizFinal`
                 // reduces the frame's final depth for the next frame's phase-1
                 // cull. Both read the depth the graph has already transitioned.
-                self.encode_hiz_build(cmd, params.frame_idx);
+                self.encode_hiz_build(rec, params.frame_idx);
             }
             PassId::Cull2 => {
                 self.encode_cull_phase2(

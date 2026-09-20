@@ -22,6 +22,7 @@ use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
     OwnedSetLayout, VkDevice,
 };
+use crate::vulkan::record::Recorder;
 use crate::vulkan::slang_builtins::SlangCompile;
 
 // How much of a line still shows where scene geometry is in front of it. A
@@ -622,7 +623,7 @@ impl VkContext {
     // line sits on the pixel its geometry did.
     pub(in crate::vulkan) fn encode_lines(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         vp: [[f32; 4]; 4],
         vertices: &[LineVertex],
@@ -641,7 +642,6 @@ impl VkContext {
             return;
         }
 
-        let device = &self.hw.device;
         let extent = self.targets.render_extent;
 
         let view_uni = LineView {
@@ -655,10 +655,6 @@ impl VkContext {
         // Main depth is already in SHADER_READ_ONLY for the fragment's occlusion
         // sample: the graph declares this pass's depth read and the executor emits
         // the transition ahead of this command buffer.
-        let rp_begin = vk::RenderPassBeginInfo::default()
-            .render_pass(lines.render_pass.handle())
-            .framebuffer(lines.framebuffers[frame_idx].handle())
-            .render_area(vk::Rect2D::default().extent(extent));
 
         // Negative-height viewport matches the main pass so the rasterized
         // pixel grid lines up with the depth attachment being sampled.
@@ -672,29 +668,26 @@ impl VkContext {
         };
         let scissor = vk::Rect2D::default().extent(extent);
 
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
-            device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp_state));
-            device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
-            device.cmd_bind_pipeline(
-                cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                lines.pipeline.handle(),
-            );
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                lines.pipeline_layout.handle(),
-                0,
-                std::slice::from_ref(&lines.view_sets[frame_idx]),
-                &[],
-            );
-            device.cmd_bind_vertex_buffers(cmd, 0, &[slot.buffer.buffer()], &[0]);
-            device.cmd_draw(cmd, vertices.len() as u32, 1, 0, 0);
-            device.cmd_end_render_pass(cmd);
-        }
+        rec.begin_render_pass(
+            &lines.render_pass,
+            &lines.framebuffers[frame_idx],
+            vk::Rect2D::default().extent(extent),
+            &[],
+        );
+        rec.set_viewport(&vp_state);
+        rec.set_scissor(&scissor);
+        rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, &lines.pipeline);
+        rec.bind_descriptor_sets(
+            vk::PipelineBindPoint::GRAPHICS,
+            &lines.pipeline_layout,
+            0,
+            std::slice::from_ref(&lines.view_sets[frame_idx]),
+            &[],
+        );
+        rec.bind_vertex_buffers(0, &[slot.buffer.buffer()], &[0]);
+        rec.draw(vertices.len() as u32, 1, 0, 0);
+        rec.end_render_pass();
+
         self.inc_draw_calls(1);
     }
 }

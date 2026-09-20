@@ -50,6 +50,7 @@ use super::texture::{
 use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSampler, OwnedSetLayout, VkDevice,
 };
+use crate::vulkan::record::Recorder;
 
 // Upper bound on the Hi-Z mip count, used to size the dedicated descriptor pool
 // for the tail's sets. `hiz_mip_count` caps at 32 - leading_zeros,
@@ -565,14 +566,13 @@ impl crate::vulkan::context::VkContext {
     // the executor has already put main depth in SHADER_READ_ONLY and the
     // pyramid in GENERAL; only the barrier between the two dispatches below is
     // this encoder's.
-    pub(in crate::vulkan) fn encode_hiz_build(&self, cmd: vk::CommandBuffer, frame_idx: usize) {
+    pub(in crate::vulkan) fn encode_hiz_build(&self, rec: &Recorder<'_>, frame_idx: usize) {
         let Some(hiz) = self.cull.hiz.as_ref() else {
             return;
         };
         if hiz.mip_count == 0 || hiz.mip_views.is_empty() {
             return;
         }
-        let device = &self.hw.device;
         let plan = Plan::new(
             hiz.width,
             hiz.height,
@@ -582,31 +582,21 @@ impl crate::vulkan::context::VkContext {
 
         // Phase 1: main depth into mips 0..6.
         let spd_set = hiz.spd_sets[frame_idx.min(hiz.spd_sets.len().saturating_sub(1))];
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_bind_pipeline(
-                cmd,
-                vk::PipelineBindPoint::COMPUTE,
-                hiz.spd_pipeline.handle(),
-            );
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::COMPUTE,
-                hiz.spd_pipeline_layout.handle(),
-                0,
-                std::slice::from_ref(&spd_set),
-                &[],
-            );
-            device.cmd_push_constants(
-                cmd,
-                hiz.spd_pipeline_layout.handle(),
-                vk::ShaderStageFlags::COMPUTE,
-                0,
-                as_bytes(&plan.phase1.params),
-            );
-            device.cmd_dispatch(cmd, plan.phase1.groups.0, plan.phase1.groups.1, 1);
-        }
+        rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, &hiz.spd_pipeline);
+        rec.bind_descriptor_sets(
+            vk::PipelineBindPoint::COMPUTE,
+            &hiz.spd_pipeline_layout,
+            0,
+            std::slice::from_ref(&spd_set),
+            &[],
+        );
+        rec.push_constant_bytes(
+            &hiz.spd_pipeline_layout,
+            vk::ShaderStageFlags::COMPUTE,
+            0,
+            as_bytes(&plan.phase1.params),
+        );
+        rec.dispatch(plan.phase1.groups.0, plan.phase1.groups.1, 1);
 
         let (Some(tail), Some(&tail_set)) = (plan.tail, hiz.spd_tail_sets.first()) else {
             return;
@@ -615,42 +605,30 @@ impl crate::vulkan::context::VkContext {
         // one write -> read barrier here. It is the only one the build takes;
         // the graph owns the dependencies on either side of the node, and every
         // mip stays in GENERAL throughout.
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::DependencyFlags::empty(),
-                &[vk::MemoryBarrier::default()
-                    .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-                    .dst_access_mask(vk::AccessFlags::SHADER_READ)],
-                &[],
-                &[],
-            );
-            device.cmd_bind_pipeline(
-                cmd,
-                vk::PipelineBindPoint::COMPUTE,
-                hiz.spd_tail_pipeline.handle(),
-            );
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::COMPUTE,
-                hiz.spd_tail_pipeline_layout.handle(),
-                0,
-                std::slice::from_ref(&tail_set),
-                &[],
-            );
-            device.cmd_push_constants(
-                cmd,
-                hiz.spd_tail_pipeline_layout.handle(),
-                vk::ShaderStageFlags::COMPUTE,
-                0,
-                as_bytes(&tail.params),
-            );
-            device.cmd_dispatch(cmd, tail.groups.0, tail.groups.1, 1);
-        }
+        rec.pipeline_barrier(
+            vk::PipelineStageFlags::COMPUTE_SHADER,
+            vk::PipelineStageFlags::COMPUTE_SHADER,
+            &[vk::MemoryBarrier::default()
+                .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                .dst_access_mask(vk::AccessFlags::SHADER_READ)],
+            &[],
+            &[],
+        );
+        rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, &hiz.spd_tail_pipeline);
+        rec.bind_descriptor_sets(
+            vk::PipelineBindPoint::COMPUTE,
+            &hiz.spd_tail_pipeline_layout,
+            0,
+            std::slice::from_ref(&tail_set),
+            &[],
+        );
+        rec.push_constant_bytes(
+            &hiz.spd_tail_pipeline_layout,
+            vk::ShaderStageFlags::COMPUTE,
+            0,
+            as_bytes(&tail.params),
+        );
+        rec.dispatch(tail.groups.0, tail.groups.1, 1);
     }
 }
 

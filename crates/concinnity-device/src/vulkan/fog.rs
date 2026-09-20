@@ -34,6 +34,7 @@ use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
     OwnedSampler, OwnedSetLayout, VkDevice,
 };
+use crate::vulkan::record::Recorder;
 use crate::vulkan::slang_builtins::SlangCompile;
 
 // Threadgroup tile for the froxel kernel (8x8, one thread per (x, y) froxel),
@@ -910,7 +911,7 @@ impl VkContext {
     // (`FogParams` + `FogFroxelParams`) so `encode_fog` only reads them.
     pub(in crate::vulkan) fn encode_fog_froxel(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         near: f32,
         vp: [[f32; 4]; 4],
@@ -924,8 +925,6 @@ impl VkContext {
             Some(f) => f,
             None => return,
         };
-
-        let device = &self.hw.device;
 
         // Per-frame FogParams (drives the volume integration + the fragment's
         // viewport / reconstruction). Uploaded here so `encode_fog` only reads.
@@ -961,29 +960,19 @@ impl VkContext {
         // fragment read before this write; the shadow map's cascade tap is a
         // declared read of this pass, so the Shadow consumer barrier's stage union
         // carries the compute stage.
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_bind_pipeline(
-                cmd,
-                vk::PipelineBindPoint::COMPUTE,
-                fog.froxel_pipeline.handle(),
-            );
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::COMPUTE,
-                fog.froxel_pipeline_layout.handle(),
-                0,
-                std::slice::from_ref(&fog.froxel_sets[frame_idx]),
-                &[],
-            );
-            device.cmd_dispatch(
-                cmd,
-                FOG_FROXEL_X.div_ceil(FROXEL_TILE),
-                FOG_FROXEL_Y.div_ceil(FROXEL_TILE),
-                1,
-            );
-        }
+        rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, &fog.froxel_pipeline);
+        rec.bind_descriptor_sets(
+            vk::PipelineBindPoint::COMPUTE,
+            &fog.froxel_pipeline_layout,
+            0,
+            std::slice::from_ref(&fog.froxel_sets[frame_idx]),
+            &[],
+        );
+        rec.dispatch(
+            FOG_FROXEL_X.div_ceil(FROXEL_TILE),
+            FOG_FROXEL_Y.div_ceil(FROXEL_TILE),
+            1,
+        );
 
         // The froxel volume's GENERAL -> SHADER_READ_ONLY close comes from the
         // Fog consumer barrier, and next frame's Shadow producer opens from a
@@ -1001,7 +990,7 @@ impl VkContext {
     // `encode_fog_froxel` for this frame's slot, so this pass only binds.
     pub(in crate::vulkan) fn encode_fog(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         _vp: [[f32; 4]; 4],
         _cam_pos: [f32; 3],
@@ -1014,16 +1003,11 @@ impl VkContext {
             None => return,
         };
 
-        let device = &self.hw.device;
         let extent = self.targets.render_extent;
 
         // Main depth is already in SHADER_READ_ONLY for the fragment's scene-depth
         // sample: the graph declares this pass's depth read and the executor emits
         // the transition ahead of this command buffer.
-        let rp_begin = vk::RenderPassBeginInfo::default()
-            .render_pass(fog.render_pass.handle())
-            .framebuffer(fog.framebuffers[frame_idx].handle())
-            .render_area(vk::Rect2D::default().extent(extent));
 
         // Standard positive-height viewport: the fullscreen triangle is
         // emitted in NDC and the fragment shader's reconstruction handles
@@ -1039,24 +1023,24 @@ impl VkContext {
         };
         let scissor = vk::Rect2D::default().extent(extent);
 
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
-            device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp_state));
-            device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, fog.pipeline.handle());
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                fog.pipeline_layout.handle(),
-                0,
-                std::slice::from_ref(&fog.view_sets[frame_idx]),
-                &[],
-            );
-            device.cmd_draw(cmd, 3, 1, 0, 0);
-            device.cmd_end_render_pass(cmd);
-        }
+        rec.begin_render_pass(
+            &fog.render_pass,
+            &fog.framebuffers[frame_idx],
+            vk::Rect2D::default().extent(extent),
+            &[],
+        );
+        rec.set_viewport(&vp_state);
+        rec.set_scissor(&scissor);
+        rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, &fog.pipeline);
+        rec.bind_descriptor_sets(
+            vk::PipelineBindPoint::GRAPHICS,
+            &fog.pipeline_layout,
+            0,
+            std::slice::from_ref(&fog.view_sets[frame_idx]),
+            &[],
+        );
+        rec.draw(3, 1, 0, 0);
+        rec.end_render_pass();
     }
 }
 

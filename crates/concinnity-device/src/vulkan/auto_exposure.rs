@@ -22,6 +22,7 @@ use super::pipeline::{SHADER_ENTRY, spv_module};
 use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout, VkDevice,
 };
+use crate::vulkan::record::Recorder;
 use crate::vulkan::slang_builtins::SlangCompile;
 use concinnity_core::render::uniforms::vulkan::AUTO_EXPOSURE_PUSH_BYTES;
 
@@ -472,165 +473,126 @@ impl VkContext {
     // then carries the value into this frame's readback buffer for the
     // CPU's EMA step at the top of a later frame. A no-op when
     // auto-exposure is disabled.
-    pub(in crate::vulkan) fn encode_auto_exposure(&self, cmd: vk::CommandBuffer, frame_idx: usize) {
+    pub(in crate::vulkan) fn encode_auto_exposure(&self, rec: &Recorder<'_>, frame_idx: usize) {
         let Some(resources) = self.auto_exposure.resources.as_ref() else {
             return;
         };
-        let device = &self.hw.device;
         let params = self.auto_exposure_params();
-        // SAFETY: `AutoExposureParams` is `repr(C)`, 16 bytes, push range matched.
-        let push_bytes = unsafe {
-            std::slice::from_raw_parts(
-                &params as *const AutoExposureParams as *const u8,
-                std::mem::size_of::<AutoExposureParams>(),
-            )
-        };
-
         let extent = self.targets.render_extent;
         if extent.width == 0 || extent.height == 0 {
             return;
         }
 
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            // Order Main pass's resolve color writes before our compute
-            // shader sample of the HDR resolve image. The render pass's
-            // exit-dep targets COLOR_ATTACHMENT_OUTPUT (for the next
-            // subpass-attachment consumer); compute-shader reads need a
-            // dedicated barrier.
-            let pre_barrier = vk::MemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-                .dst_access_mask(vk::AccessFlags::SHADER_READ);
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::DependencyFlags::empty(),
-                std::slice::from_ref(&pre_barrier),
-                &[],
-                &[],
-            );
+        // Order Main pass's resolve color writes before our compute
+        // shader sample of the HDR resolve image. The render pass's
+        // exit-dep targets COLOR_ATTACHMENT_OUTPUT (for the next
+        // subpass-attachment consumer); compute-shader reads need a
+        // dedicated barrier.
+        let pre_barrier = vk::MemoryBarrier::default()
+            .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
+            .dst_access_mask(vk::AccessFlags::SHADER_READ);
+        rec.pipeline_barrier(
+            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            vk::PipelineStageFlags::COMPUTE_SHADER,
+            std::slice::from_ref(&pre_barrier),
+            &[],
+            &[],
+        );
 
-            // Build dispatch: 16×16 threadgroups, one thread per HDR pixel.
-            let build_set = resources
-                .build_sets
-                .get(frame_idx)
-                .copied()
-                .unwrap_or_else(|| resources.build_sets[0]);
-            device.cmd_bind_pipeline(
-                cmd,
-                vk::PipelineBindPoint::COMPUTE,
-                resources.build_pipeline.handle(),
-            );
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::COMPUTE,
-                resources.build_pipeline_layout.handle(),
-                0,
-                std::slice::from_ref(&build_set),
-                &[],
-            );
-            device.cmd_push_constants(
-                cmd,
-                resources.build_pipeline_layout.handle(),
-                vk::ShaderStageFlags::COMPUTE,
-                0,
-                push_bytes,
-            );
-            device.cmd_dispatch(
-                cmd,
-                extent.width.div_ceil(16),
-                extent.height.div_ceil(16),
-                1,
-            );
+        // Build dispatch: 16×16 threadgroups, one thread per HDR pixel.
+        let build_set = resources
+            .build_sets
+            .get(frame_idx)
+            .copied()
+            .unwrap_or_else(|| resources.build_sets[0]);
+        rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, &resources.build_pipeline);
+        rec.bind_descriptor_sets(
+            vk::PipelineBindPoint::COMPUTE,
+            &resources.build_pipeline_layout,
+            0,
+            std::slice::from_ref(&build_set),
+            &[],
+        );
+        rec.push_constants(
+            &resources.build_pipeline_layout,
+            vk::ShaderStageFlags::COMPUTE,
+            0,
+            &params,
+        );
+        rec.dispatch(extent.width.div_ceil(16), extent.height.div_ceil(16), 1);
 
-            // Order build histogram writes before the average read+clear.
-            let hist_barrier = vk::MemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-                .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE);
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::DependencyFlags::empty(),
-                std::slice::from_ref(&hist_barrier),
-                &[],
-                &[],
-            );
+        // Order build histogram writes before the average read+clear.
+        let hist_barrier = vk::MemoryBarrier::default()
+            .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+            .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE);
+        rec.pipeline_barrier(
+            vk::PipelineStageFlags::COMPUTE_SHADER,
+            vk::PipelineStageFlags::COMPUTE_SHADER,
+            std::slice::from_ref(&hist_barrier),
+            &[],
+            &[],
+        );
 
-            // Average dispatch: one threadgroup of HISTOGRAM_BINS threads.
-            device.cmd_bind_pipeline(
-                cmd,
-                vk::PipelineBindPoint::COMPUTE,
-                resources.average_pipeline.handle(),
-            );
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::COMPUTE,
-                resources.average_pipeline_layout.handle(),
-                0,
-                std::slice::from_ref(&resources.average_set),
-                &[],
-            );
-            device.cmd_push_constants(
-                cmd,
-                resources.average_pipeline_layout.handle(),
-                vk::ShaderStageFlags::COMPUTE,
-                0,
-                push_bytes,
-            );
-            device.cmd_dispatch(cmd, 1, 1, 1);
+        // Average dispatch: one threadgroup of HISTOGRAM_BINS threads.
+        rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, &resources.average_pipeline);
+        rec.bind_descriptor_sets(
+            vk::PipelineBindPoint::COMPUTE,
+            &resources.average_pipeline_layout,
+            0,
+            std::slice::from_ref(&resources.average_set),
+            &[],
+        );
+        rec.push_constants(
+            &resources.average_pipeline_layout,
+            vk::ShaderStageFlags::COMPUTE,
+            0,
+            &params,
+        );
+        rec.dispatch(1, 1, 1);
 
-            // Order the average kernel's output_buf write before the copy
-            // into the readback buffer.
-            let out_barrier = vk::MemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-                .dst_access_mask(vk::AccessFlags::TRANSFER_READ);
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::DependencyFlags::empty(),
-                std::slice::from_ref(&out_barrier),
-                &[],
-                &[],
-            );
+        // Order the average kernel's output_buf write before the copy
+        // into the readback buffer.
+        let out_barrier = vk::MemoryBarrier::default()
+            .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+            .dst_access_mask(vk::AccessFlags::TRANSFER_READ);
+        rec.pipeline_barrier(
+            vk::PipelineStageFlags::COMPUTE_SHADER,
+            vk::PipelineStageFlags::TRANSFER,
+            std::slice::from_ref(&out_barrier),
+            &[],
+            &[],
+        );
 
-            // Copy the freshly-written average to this slot's readback buffer.
-            let readback = resources
-                .readback_buffers
-                .get(frame_idx)
-                .unwrap_or(&resources.readback_buffers[0]);
-            let copy = vk::BufferCopy {
-                src_offset: 0,
-                dst_offset: 0,
-                size: std::mem::size_of::<f32>() as vk::DeviceSize,
-            };
-            device.cmd_copy_buffer(
-                cmd,
-                resources.output_buffer.buffer(),
-                readback.buffer(),
-                std::slice::from_ref(&copy),
-            );
+        // Copy the freshly-written average to this slot's readback buffer.
+        let readback = resources
+            .readback_buffers
+            .get(frame_idx)
+            .unwrap_or(&resources.readback_buffers[0]);
+        let copy = vk::BufferCopy {
+            src_offset: 0,
+            dst_offset: 0,
+            size: std::mem::size_of::<f32>() as vk::DeviceSize,
+        };
+        rec.copy_buffer(
+            resources.output_buffer.buffer(),
+            readback.buffer(),
+            std::slice::from_ref(&copy),
+        );
 
-            // Order the transfer write to the host-visible buffer before the
-            // CPU read at the top of a later frame. The fence wait that
-            // gates this slot's next trip provides the host-side ordering;
-            // this barrier just makes the transfer write visible to the
-            // host.
-            let host_barrier = vk::MemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-                .dst_access_mask(vk::AccessFlags::HOST_READ);
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::PipelineStageFlags::HOST,
-                vk::DependencyFlags::empty(),
-                std::slice::from_ref(&host_barrier),
-                &[],
-                &[],
-            );
-        }
+        // Order the transfer write to the host-visible buffer before the
+        // CPU read at the top of a later frame. The fence wait that
+        // gates this slot's next trip provides the host-side ordering;
+        // this barrier just makes the transfer write visible to the
+        // host.
+        let host_barrier = vk::MemoryBarrier::default()
+            .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+            .dst_access_mask(vk::AccessFlags::HOST_READ);
+        rec.pipeline_barrier(
+            vk::PipelineStageFlags::TRANSFER,
+            vk::PipelineStageFlags::HOST,
+            std::slice::from_ref(&host_barrier),
+            &[],
+            &[],
+        );
     }
 }
