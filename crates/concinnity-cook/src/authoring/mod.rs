@@ -4,7 +4,8 @@
 //! (`world`), the authoring type vocabulary (`registry`, whose
 //! `RegisteredType` is instantiated from the shared registry list in
 //! concinnity-core), the asset cross-reference metadata (`refs`,
-//! `resource_type`), the typed authoring vocabulary (`spec`) and the world
+//! `resource_type`), the world's places and the moves between them (`flow`),
+//! the typed authoring vocabulary (`spec`) and the world
 //! templates built from it (`template`). Everything here operates on the
 //! authored input; the shipped runtime plays compiled blobs and never links
 //! this crate.
@@ -23,6 +24,7 @@ mod error;
 pub use error::AuthoringError;
 
 pub mod field_path;
+pub mod flow;
 pub mod refs;
 pub mod registry;
 pub(crate) mod resource_type;

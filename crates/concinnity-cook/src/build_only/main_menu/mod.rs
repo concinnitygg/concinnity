@@ -34,6 +34,38 @@ use asset::ui_action;
 // fixed position when switching between tabs with different row counts.
 const TOP_MARGIN_FRAC: f32 = 0.07;
 
+/// The settings tab a menu's `"settings"` item opens, and so the screen its
+/// other tabs are reached from.
+pub(crate) fn settings_entry_screen(menu_name: &str) -> String {
+    format!("{menu_name}_settings_video")
+}
+
+/// Whether an item's action opens the menu's generated settings screen.
+pub(crate) fn opens_settings(action: &str) -> bool {
+    action.trim().eq_ignore_ascii_case("settings")
+}
+
+/// The action an item fires, with this menu's conveniences resolved against it:
+/// `"return"` / `"close"` close the menu, `"settings"` opens the settings
+/// screen the menu generates. Anything else is already an action.
+pub(crate) fn item_action(menu_name: &str, action: &str) -> String {
+    match action.trim().to_lowercase().as_str() {
+        "return" | "close" => ui_action::screen_hide(),
+        "settings" => ui_action::screen_show(&settings_entry_screen(menu_name)),
+        _ => action.to_string(),
+    }
+}
+
+/// Whether a menu generates a settings screen: an item opens one, or a Back
+/// override is set for a caller that opens it by its own action (a story pause
+/// menu, say).
+pub(crate) fn generates_settings<'a>(
+    mut item_actions: impl Iterator<Item = &'a str>,
+    settings_back_action: &str,
+) -> bool {
+    item_actions.any(opens_settings) || !settings_back_action.is_empty()
+}
+
 // An RGB accent lifted to an opaque RGBA fill: the active-tab underline marker
 // and the scrollbar thumb draw the hover color at full alpha.
 fn opaque(rgb: [f32; 3]) -> [f32; 4] {
@@ -126,7 +158,10 @@ fn expand_one(
     font_px: f32,
 ) -> Vec<serde_json::Value> {
     let mut out = Vec::new();
-    let mut wants_settings = false;
+    let wants_settings = generates_settings(
+        menu.items.iter().map(|item| item.action.as_str()),
+        &menu.settings_back_action,
+    );
 
     // Resolve the font. Use the user's font when set; otherwise emit a font for
     // this menu at `font_px` and reference it explicitly, because the row
@@ -145,17 +180,7 @@ fn expand_one(
     let items: Vec<(String, String)> = menu
         .items
         .iter()
-        .map(|item| {
-            let action = match item.action.trim().to_lowercase().as_str() {
-                "return" | "close" => ui_action::screen_hide(),
-                "settings" => {
-                    wants_settings = true;
-                    ui_action::screen_show(&format!("{}_settings_video", menu_name))
-                }
-                _ => item.action.clone(),
-            };
-            (item.label.clone(), action)
-        })
+        .map(|item| (item.label.clone(), item_action(menu_name, &item.action)))
         .collect();
 
     out.extend(emit_menu_screen(
@@ -183,10 +208,7 @@ fn expand_one(
         }));
     }
 
-    // Generate the settings screen when an item opens it (the `"settings"`
-    // convenience) or when a Back-action override is set (a caller that opens
-    // settings by its own action, e.g. a story pause menu).
-    if wants_settings || !menu.settings_back_action.is_empty() {
+    if wants_settings {
         for (suffix, _) in settings_tabs(menu.settings_profile) {
             out.extend(emit_settings_tab(
                 menu_name, suffix, menu, &font_name, win_w, win_h, font_px,
