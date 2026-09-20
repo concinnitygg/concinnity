@@ -167,10 +167,19 @@ impl EditorHook {
             return;
         }
         let action = match self.behavior.mode {
-            ViewMode::Overview => match self.behavior.overview_card {
-                Some(card) => BehaviorAction::OpenCard(card),
-                None => return,
-            },
+            // Whatever the card stands for, reached the way a press on it
+            // reaches it.
+            ViewMode::Overview => {
+                let data = self.behavior_data();
+                let on = self
+                    .behavior
+                    .overview_card
+                    .and_then(|i| Some((i, data.overview.cards.get(i)?)));
+                let Some((i, card)) = on else {
+                    return;
+                };
+                behavior::panel::overview_action(card, i)
+            }
             // A row offering nothing has no palette to open, so the press is
             // left alone rather than toggling one that never shows.
             _ if self.behavior.row.is_some() && !self.behavior_data().picks.is_empty() => {

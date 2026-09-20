@@ -15,7 +15,9 @@
 //! a clip) resolve against the whole world, so those stay a build-time check.
 
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_cook::authoring::world::{args_without_id, entry_handle, replace_args};
+use concinnity_cook::authoring::world::{
+    args_without_id, entry_handle, entry_handles, find_entry, replace_args,
+};
 use concinnity_core::components::FrameInput;
 use concinnity_core::ecs::World;
 use serde_json::Value;
@@ -33,7 +35,7 @@ use crate::editor::behavior::outline::{self, Row};
 use crate::editor::behavior::panel::{BehaviorAction, BehaviorView, Status, ViewMode};
 use crate::editor::behavior::pulse;
 use crate::editor::behavior::relations;
-use crate::editor::hook::{EditorHook, declared_id, entry_type, scroll_step};
+use crate::editor::hook::{EditorHook, entry_type, scroll_step};
 use crate::editor::panels::registry::PanelKey;
 use crate::editor::widget;
 
@@ -203,13 +205,22 @@ impl EditorHook {
             .collect()
     }
 
-    // Every entry's name and type, so the overview can tell an asset a behavior
-    // reaches from a name the world never declares. Mapping the entry shape is
-    // the hook's job; the map itself only ever sees names and types.
-    fn declared_assets(&self) -> Vec<(&str, RegisteredType)> {
+    // Every entry the world declares, beside the key the editor addresses it
+    // by, so the overview can tell an asset a behavior reaches from a name the
+    // world never declares -- and select the one it does. Mapping the entry
+    // shape is the hook's job, as it is for the map.
+    fn declared_assets(&self) -> Vec<relations::Declared> {
+        let handles = entry_handles(&self.entries);
         self.entries
             .iter()
-            .filter_map(|e| Some((declared_id(e)?, RegisteredType::parse(entry_type(e)?)?)))
+            .enumerate()
+            .filter_map(|(i, entry)| {
+                Some(relations::Declared {
+                    name: handles.get(i)?.clone()?,
+                    asset_type: RegisteredType::parse(entry_type(entry)?)?,
+                    key: self.entries.key_at(i)?,
+                })
+            })
             .collect()
     }
 
@@ -373,6 +384,7 @@ impl EditorHook {
             BehaviorAction::SelectCard(i) => self.select_behavior_card(i, world),
             BehaviorAction::OpenCard(i) => self.open_behavior_card(i, world),
             BehaviorAction::OpenVariable(i) => self.open_overview_variable(i, world),
+            BehaviorAction::SelectAsset(i) => self.select_overview_asset(i, world),
             BehaviorAction::PanStart => self.start_behavior_pan(mouse),
             BehaviorAction::GoToFault => self.select_behavior_fault(world),
             BehaviorAction::Copy => self.copy_behavior_row(),
@@ -513,32 +525,84 @@ impl EditorHook {
         if self.behavior.mode == ViewMode::Overview {
             // The map opens on the behavior that was showing, so it says where
             // the panel already is rather than starting from nothing.
-            let data = self.behavior_data();
-            self.behavior.overview_card = data
-                .overview
-                .cards
-                .iter()
-                .position(|c| c.behavior == Some(data.index));
+            let at = self.behavior_data().index;
+            self.point_overview_at(at);
         }
         self.ensure_behavior_visible();
     }
 
-    // Open the behavior an overview card stands for, in the chart view, so
-    // clicking through the map lands on the body it named.
-    fn open_behavior_card(&mut self, i: usize, world: &mut World) {
-        let Some(at) = self
+    // Put the overview's own cursor on the card standing for behavior `at`,
+    // which is what the keyboard steps from and the canvas pans to.
+    fn point_overview_at(&mut self, at: usize) {
+        self.behavior.overview_card = self
             .behavior_data()
             .overview
             .cards
-            .get(i)
-            .and_then(|c| c.behavior)
-        else {
+            .iter()
+            .position(|c| c.behavior == Some(at));
+    }
+
+    // Open the behavior an overview card stands for, in the chart view, so
+    // clicking through the map lands on the body it named. The card stands for
+    // a world asset too, so it is selected like one on the way: the Assets tree
+    // and the places map then agree on what the panel is showing.
+    fn open_behavior_card(&mut self, i: usize, world: &mut World) {
+        let card = self.behavior_data().overview.cards.get(i).cloned();
+        let Some(at) = card.as_ref().and_then(|c| c.behavior) else {
             return;
         };
+        self.behavior.overview_card = Some(i);
+        if let Some(handle) = card.and_then(|c| c.handle) {
+            self.select_handle(&handle, world);
+        }
         self.behavior.index = at;
         self.behavior.mode = ViewMode::Chart;
         self.behavior.pan = [0.0, 0.0];
         self.open_behavior(world);
+    }
+
+    // Select the world asset an overview card stands for. The overview says
+    // which behaviors reach a scene or a screen; where that place sits in the
+    // world is the Map's question, and the shared selection is what carries it
+    // there.
+    fn select_overview_asset(&mut self, i: usize, world: &mut World) {
+        let Some(handle) = self
+            .behavior_data()
+            .overview
+            .cards
+            .get(i)
+            .and_then(|c| c.handle.clone())
+        else {
+            return;
+        };
+        self.behavior.overview_card = Some(i);
+        self.select_handle(&handle, world);
+    }
+
+    // Open the Behavior panel on the named behavior, in whatever view it is
+    // already in: a reader arriving from another panel is looking for this
+    // behavior, not for a different view of it. A name the authored entries do
+    // not carry (a generated behavior) has no ordinal to open, so it falls back
+    // to the edit form like any other asset.
+    pub(in crate::editor::hook) fn open_behavior_named(&mut self, name: &str, world: &mut World) {
+        let target = find_entry(&self.entries, name);
+        let ordinal = self
+            .behavior_entries()
+            .iter()
+            .position(|&i| Some(i) == target);
+        let Some(ordinal) = ordinal else {
+            self.select_named(name);
+            self.focus_ui_on(name, world);
+            return;
+        };
+        self.behavior.index = ordinal;
+        self.behavior.open = true;
+        self.open_behavior(world);
+        self.focus_panel(PanelKey::Behavior);
+        if self.behavior.mode == ViewMode::Overview {
+            self.point_overview_at(ordinal);
+        }
+        self.ensure_behavior_visible();
     }
 
     // Hold the selected member. Nothing is written, so this is not an edit and

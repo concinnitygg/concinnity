@@ -7,7 +7,6 @@
 //! the Display menu's state. The palette closes on commit, on Escape, and on a
 //! click outside it.
 
-use concinnity_cook::authoring::world::find_entry;
 use concinnity_core::components::FrameInput;
 use concinnity_core::components::InputKey;
 use concinnity_core::ecs::World;
@@ -247,25 +246,5 @@ impl EditorHook {
             self.toggle_console(world);
         }
         self.run_console_line(world, line);
-    }
-
-    // Open the Behavior panel on the named behavior. A name the authored
-    // entries do not carry (a generated behavior) has no ordinal to open, so
-    // it falls back to the edit form like any other asset.
-    fn open_behavior_named(&mut self, name: &str, world: &mut World) {
-        let target = find_entry(&self.entries, name);
-        let ordinal = self
-            .behavior_entries()
-            .iter()
-            .position(|&i| Some(i) == target);
-        let Some(ordinal) = ordinal else {
-            self.select_named(name);
-            self.focus_ui_on(name, world);
-            return;
-        };
-        self.behavior.index = ordinal;
-        self.behavior.open = true;
-        self.open_behavior(world);
-        self.focus_panel(PanelKey::Behavior);
     }
 }

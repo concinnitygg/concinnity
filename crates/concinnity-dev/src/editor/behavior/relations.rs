@@ -20,6 +20,11 @@
 //! drawn as its own kind of card rather than passed off as real: it is a build
 //! error waiting to happen, and two behaviors sharing a typo still share it.
 //!
+//! A card standing for a whole asset carries the handle the rest of the editor
+//! selects by, so reaching one is an ordinary selection: the Assets panel and
+//! the map of places follow what this view is pointing at, without a channel
+//! between them.
+//!
 //! The result is an ordinary `Chart`, so the chart view draws it unchanged.
 
 use concinnity_cook::authoring::registry::RegisteredType;
@@ -28,6 +33,8 @@ use serde_json::Value;
 use super::graph::{Card, CardKind, Chart, Wire};
 use super::outline;
 use super::palette;
+use crate::editor::asset_handle::AssetHandle;
+use crate::editor::entry_list::EntryId;
 
 // Far enough right for any chain worth reading, and a stop for the relaxation
 // below: variables can carry a cycle (two behaviors each firing on what the
@@ -97,12 +104,39 @@ impl Ref {
     }
 }
 
-// The world's behaviors, in the order the panel steps through them, against the
-// name and type of every entry the world declares -- which is what tells an
-// asset a behavior reaches from a name nothing answers to. Built in passes,
-// because a wire can only be drawn once both ends have a card: every behavior,
-// then what fires each of them, then what their bodies do.
-pub(crate) fn map(behaviors: &[(String, Value)], world: &[(&str, RegisteredType)]) -> Chart {
+// One entry the world declares: the name a behavior reaches it by, its type,
+// and the session key the editor addresses it by. The name tells an asset a
+// behavior reaches from one nothing answers to, and the key is what a card
+// standing for it is selected by.
+pub(crate) struct Declared {
+    pub name: String,
+    pub asset_type: RegisteredType,
+    pub key: EntryId,
+}
+
+impl Declared {
+    fn handle(&self) -> AssetHandle {
+        AssetHandle::Entry(self.key)
+    }
+}
+
+// The entry `world` declares under `name`, when its type is one `want` allows.
+fn declared<'a>(
+    world: &'a [Declared],
+    name: &str,
+    want: Option<RegisteredType>,
+) -> Option<&'a Declared> {
+    world
+        .iter()
+        .find(|entry| entry.name == name)
+        .filter(|entry| want.is_none_or(|wanted| wanted == entry.asset_type))
+}
+
+// The world's behaviors, in the order the panel steps through them, against
+// every entry the world declares. Built in passes, because a wire can only be
+// drawn once both ends have a card: every behavior, then what fires each of
+// them, then what their bodies do.
+pub(crate) fn map(behaviors: &[(String, Value)], world: &[Declared]) -> Chart {
     let mut build = Build {
         world,
         shared: shared_entities(behaviors),
@@ -189,15 +223,17 @@ struct Build<'a> {
     triggers: Vec<(String, usize)>,
     variables: Vec<(String, usize)>,
     assets: Vec<(String, usize)>,
-    // Every entry's name and type, and the entities more than one behavior
+    // Every entry the world declares, and the entities more than one behavior
     // reaches.
-    world: &'a [(&'a str, RegisteredType)],
+    world: &'a [Declared],
     shared: Vec<String>,
 }
 
 impl Build<'_> {
     fn behavior(&mut self, at: usize, name: &str, args: &Value) {
-        let mut card = card(name, scope_summary(args), CardKind::Behavior);
+        let handle =
+            declared(self.world, name, Some(RegisteredType::Behavior)).map(Declared::handle);
+        let mut card = card(name, scope_summary(args), CardKind::Behavior, handle);
         card.behavior = Some(at);
         let card = self.push(card);
         self.behaviors.push(card);
@@ -292,7 +328,12 @@ impl Build<'_> {
         if let Some(at) = self.find(&self.triggers, caption) {
             return at;
         }
-        let card = self.push(card(caption, "trigger".to_string(), CardKind::Trigger));
+        let card = self.push(card(
+            caption,
+            "trigger".to_string(),
+            CardKind::Trigger,
+            None,
+        ));
         self.triggers.push((caption.to_string(), card));
         card
     }
@@ -301,7 +342,7 @@ impl Build<'_> {
         if let Some(at) = self.find(&self.variables, name) {
             return at;
         }
-        let card = self.push(card(name, "variable".to_string(), CardKind::Variable));
+        let card = self.push(card(name, "variable".to_string(), CardKind::Variable, None));
         self.variables.push((name.to_string(), card));
         card
     }
@@ -312,15 +353,20 @@ impl Build<'_> {
         if let Some(at) = self.find(&self.assets, name) {
             return at;
         }
-        let declared = self
-            .world
-            .iter()
-            .find(|(n, _)| *n == name)
-            .map(|(_, ty)| *ty)
-            .filter(|ty| want.asset_type().is_none_or(|wanted| wanted == *ty));
-        let card = self.push(match declared {
-            Some(ty) => card(name, ty.as_str().to_string(), CardKind::Asset),
-            None => card(name, format!("missing {}", want.noun()), CardKind::Missing),
+        let found = declared(self.world, name, want.asset_type());
+        let card = self.push(match found {
+            Some(entry) => card(
+                name,
+                entry.asset_type.as_str().to_string(),
+                CardKind::Asset,
+                Some(entry.handle()),
+            ),
+            None => card(
+                name,
+                format!("missing {}", want.noun()),
+                CardKind::Missing,
+                None,
+            ),
         });
         self.assets.push((name.to_string(), card));
         card
@@ -330,18 +376,24 @@ impl Build<'_> {
     // only one, so every behavior driving it meets at the same card. An authored
     // world declares the import and a built one the story it expands to.
     fn story(&mut self) -> usize {
-        let declared = self
-            .world
-            .iter()
-            .find(|(_, ty)| matches!(ty, RegisteredType::Story | RegisteredType::StoryImport))
-            .map(|(name, _)| *name);
-        let name = declared.unwrap_or("story");
+        let told = self.world.iter().find(|entry| {
+            matches!(
+                entry.asset_type,
+                RegisteredType::Story | RegisteredType::StoryImport
+            )
+        });
+        let name = told.map_or("story", |entry| entry.name.as_str());
         if let Some(at) = self.find(&self.assets, name) {
             return at;
         }
-        let card = self.push(match declared {
-            Some(_) => card(name, "story".to_string(), CardKind::Asset),
-            None => card(name, "missing story".to_string(), CardKind::Missing),
+        let card = self.push(match told {
+            Some(entry) => card(
+                name,
+                "story".to_string(),
+                CardKind::Asset,
+                Some(entry.handle()),
+            ),
+            None => card(name, "missing story".to_string(), CardKind::Missing, None),
         });
         self.assets.push((name.to_string(), card));
         card
@@ -391,7 +443,9 @@ impl Build<'_> {
 }
 
 // A card of the map: one of the world's own things, placed by `place` below.
-fn card(title: &str, detail: String, kind: CardKind) -> Card {
+// `handle` is how the rest of the editor addresses what the card stands for,
+// which only the cards standing for a whole asset carry.
+fn card(title: &str, detail: String, kind: CardKind, handle: Option<AssetHandle>) -> Card {
     Card {
         column: 0,
         row: 0,
@@ -401,7 +455,7 @@ fn card(title: &str, detail: String, kind: CardKind) -> Card {
         path: Vec::new(),
         settles: Vec::new(),
         behavior: None,
-        handle: None,
+        handle,
     }
 }
 
@@ -577,11 +631,26 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::editor::entry_list::EntryList;
 
     fn behaviors(entries: &[(&str, Value)]) -> Vec<(String, Value)> {
         entries
             .iter()
             .map(|(n, a)| ((*n).to_string(), a.clone()))
+            .collect()
+    }
+
+    // The world's entries as the panel hands them over: each name and type
+    // beside the key a session minted for its entry.
+    fn declared_world(entries: &[(&str, RegisteredType)]) -> Vec<Declared> {
+        let mut list = EntryList::default();
+        entries
+            .iter()
+            .map(|(name, asset_type)| Declared {
+                name: (*name).to_string(),
+                asset_type: *asset_type,
+                key: list.push(Value::Null),
+            })
             .collect()
     }
 
@@ -646,6 +715,34 @@ mod tests {
         assert_eq!(titles(&chart).iter().filter(|t| **t == "start").count(), 1);
         let start = card(&chart, "start");
         assert_eq!(chart.wires.iter().filter(|w| w.from == start).count(), 2);
+    }
+
+    // A card standing for a whole asset addresses it the way the rest of the
+    // editor does, so clicking one is a selection rather than a search. The
+    // middlemen stand for no asset, and neither does a name nothing declares.
+    #[test]
+    fn a_card_standing_for_an_asset_carries_the_handle_it_is_selected_by() {
+        let world = declared_world(&[
+            ("watch", RegisteredType::Behavior),
+            ("hub", RegisteredType::Scene),
+        ]);
+        let chart = map(
+            &behaviors(&[(
+                "watch",
+                json!({"on": "start", "do": [
+                    {"set": {"var": "score", "value": {"int": 1}}},
+                    {"scene": {"scene": "hub"}},
+                    {"screen": {"screen": "gone"}},
+                ]}),
+            )]),
+            &world,
+        );
+        let handle = |title| chart.cards[card(&chart, title)].handle.clone();
+        assert_eq!(handle("watch"), Some(AssetHandle::Entry(world[0].key)));
+        assert_eq!(handle("hub"), Some(AssetHandle::Entry(world[1].key)));
+        assert_eq!(handle("gone"), None, "the world declares no such screen");
+        assert_eq!(handle("start"), None, "a trigger is not an asset");
+        assert_eq!(handle("score"), None, "a variable is not an asset either");
     }
 
     // A card stands for the behavior the panel opens, which is what makes the
@@ -766,7 +863,7 @@ mod tests {
                 ("arrive", json!({"on": {"enter": "door_zone"}, "do": []})),
                 ("leave", json!({"on": {"exit": "door_zone"}, "do": []})),
             ]),
-            &[("door_zone", RegisteredType::TriggerVolume)],
+            &declared_world(&[("door_zone", RegisteredType::TriggerVolume)]),
         );
         assert_eq!(
             titles(&chart),
@@ -806,10 +903,10 @@ mod tests {
                     ]}),
                 ),
             ]),
-            &[
+            &declared_world(&[
                 ("hub", RegisteredType::Scene),
                 ("pause", RegisteredType::Screen),
-            ],
+            ]),
         );
         assert_eq!(wire(&chart, "finish", "hub").label.as_deref(), Some(JUMPS));
         assert_eq!(wire(&chart, "quit", "hub").label.as_deref(), Some(JUMPS));
@@ -832,8 +929,14 @@ mod tests {
                 json!({"on": "tick", "do": [{"story": "continue"}]}),
             ),
         ]);
-        let chart = map(&driving, &[("tale", RegisteredType::StoryImport)]);
+        let world = declared_world(&[("tale", RegisteredType::StoryImport)]);
+        let chart = map(&driving, &world);
         assert_eq!(chart.cards[card(&chart, "tale")].detail, "story");
+        assert_eq!(
+            chart.cards[card(&chart, "tale")].handle,
+            Some(AssetHandle::Entry(world[0].key)),
+            "the story is selected like any other asset",
+        );
         assert_eq!(wire(&chart, "open", "tale").label.as_deref(), Some(PLAYS));
         assert_eq!(wire(&chart, "resume", "tale").label.as_deref(), Some(PLAYS));
         // A world with no story to drive says so rather than inventing one.
@@ -850,15 +953,16 @@ mod tests {
                 "escape",
                 json!({"on": {"enter": "porch"}, "do": [{"scene": {"scene": "hubb"}}]}),
             )]),
-            &[
+            &declared_world(&[
                 ("hub", RegisteredType::Scene),
                 ("porch", RegisteredType::Prop),
-            ],
+            ]),
         );
         for (name, detail) in [("hubb", "missing scene"), ("porch", "missing volume")] {
             let at = &chart.cards[card(&chart, name)];
             assert_eq!(at.kind, CardKind::Missing, "{name}");
             assert_eq!(at.detail, detail, "{name}");
+            assert_eq!(at.handle, None, "{name} addresses nothing");
         }
         // Wrong type or no declaration at all, the wire still reads the same.
         assert_eq!(wire(&chart, "escape", "hubb").label.as_deref(), Some(JUMPS));
@@ -874,7 +978,7 @@ mod tests {
         );
         let alone = map(
             &behaviors(std::slice::from_ref(&shut)),
-            &[("door", RegisteredType::Prop)],
+            &declared_world(&[("door", RegisteredType::Prop)]),
         );
         assert!(!titles(&alone).contains(&"door"), "{:?}", titles(&alone));
 
@@ -890,7 +994,7 @@ mod tests {
                     ]}),
                 ),
             ]),
-            &[("door", RegisteredType::Prop)],
+            &declared_world(&[("door", RegisteredType::Prop)]),
         );
         assert_eq!(both.cards[card(&both, "door")].detail, "Prop");
         assert_eq!(wire(&both, "shut", "door").label.as_deref(), Some(HIDES));
@@ -911,7 +1015,7 @@ mod tests {
                 "toggle",
                 json!({"on": {"interact": "lamp"}, "do": [{"hide": {"target": {"named": "lamp"}}}]}),
             )]),
-            &[("lamp", RegisteredType::Prop)],
+            &declared_world(&[("lamp", RegisteredType::Prop)]),
         );
         assert_eq!(
             wire(&chart, "lamp", "toggle").label.as_deref(),

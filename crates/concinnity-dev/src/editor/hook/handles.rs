@@ -12,6 +12,7 @@
 //! took its place.
 
 use concinnity_cook::authoring::world::{entry_handle, find_entry};
+use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_host::thread::asset_id;
 
@@ -74,6 +75,32 @@ impl EditorHook {
     pub(in crate::editor) fn select_named(&mut self, name: &str) {
         let handle = self.handle_for(name);
         self.selection.replace(handle);
+    }
+
+    // Select the asset a chart card stands for, the way that asset is selected
+    // anywhere else: plain replaces the selection and opens its editing
+    // surface, shift toggles membership, and the Assets tree reveals the row
+    // either way. A handle addressing nothing this frame selects nothing.
+    pub(in crate::editor::hook) fn select_handle(
+        &mut self,
+        handle: &AssetHandle,
+        world: &mut World,
+    ) {
+        let Some(name) = self.handle_name(handle) else {
+            return;
+        };
+        if self.shift_held {
+            if self.toggle_named(&name) {
+                self.open_asset_form(&name, world);
+            } else {
+                self.follow_active(world);
+            }
+        } else {
+            self.select_named(&name);
+            self.open_asset_form(&name, world);
+        }
+        self.reveal_in_tree(&name, world);
+        self.pick_last = None;
     }
 
     // Toggle that asset's membership, returning whether it is selected after.

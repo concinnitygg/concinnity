@@ -19,7 +19,7 @@ use concinnity_core::ecs::asset_id::AssetId;
 use super::chart;
 use super::edit::{self, Pick};
 use super::fields;
-use super::graph::{CardKind, Chart};
+use super::graph::{Card, CardKind, Chart};
 use super::outline::{Kind, Row};
 use super::path::{Path, Step};
 use crate::editor::panels::registry::{self, PanelKey};
@@ -383,6 +383,8 @@ pub(crate) enum BehaviorAction {
     OpenCard(usize),
     // Open the world's variable table on the variable card at `i`.
     OpenVariable(usize),
+    // Select the world asset the overview card at `i` stands for.
+    SelectAsset(usize),
     // Press on empty canvas: start panning the chart.
     PanStart,
     // Select whatever the checker is complaining about.
@@ -701,14 +703,7 @@ pub(crate) fn hit_test(
             let cv = chart_view(view);
             if let Some(i) = chart::hit_card(&cv, mx, my, band) {
                 return Some(match view.mode {
-                    // An overview card opens what it stands for: a behavior's
-                    // body, or the table declaring a variable. A trigger or an
-                    // asset card has neither.
-                    ViewMode::Overview => match &view.overview.cards[i] {
-                        c if c.behavior.is_some() => BehaviorAction::OpenCard(i),
-                        c if c.kind == CardKind::Variable => BehaviorAction::OpenVariable(i),
-                        _ => BehaviorAction::Consume,
-                    },
+                    ViewMode::Overview => overview_action(&view.overview.cards[i], i),
                     _ => BehaviorAction::SelectCard(i),
                 });
             }
@@ -718,6 +713,19 @@ pub(crate) fn hit_test(
         }
     }
     point_in(mx, my, widget::outer_rect(o, s)).then_some(BehaviorAction::Consume)
+}
+
+// What reaching the overview card at `i` does: open the behavior it stands
+// for, open the table declaring its variable, or select the world asset it
+// addresses -- which is how the map of places follows it. A trigger and a name
+// the world does not declare stand for nothing to reach.
+pub(crate) fn overview_action(card: &Card, i: usize) -> BehaviorAction {
+    match card {
+        c if c.behavior.is_some() => BehaviorAction::OpenCard(i),
+        c if c.kind == CardKind::Variable => BehaviorAction::OpenVariable(i),
+        c if c.handle.is_some() => BehaviorAction::SelectAsset(i),
+        _ => BehaviorAction::Consume,
+    }
 }
 
 // Position + show the panel (`Some(view)`) at effective size `s`, or blank every
@@ -1429,6 +1437,8 @@ pub(crate) fn all_field_ids() -> Vec<AssetId> {
 mod tests {
     use super::super::outline;
     use super::*;
+    use crate::editor::asset_handle::AssetHandle;
+    use crate::editor::entry_list::EntryList;
     use concinnity_core::components::{Sprite, TextInput, TextLabel};
 
     fn injected_world() -> World {
@@ -1969,6 +1979,47 @@ mod tests {
         place(&mut world, Some(&v), [20.0, 20.0], overview_size());
         assert_eq!(sprite(&world, CHART_IDS.card_bg(1)).border_width, 2.0);
         assert_eq!(sprite(&world, CHART_IDS.card_bg(0)).border_width, 1.0);
+    }
+
+    // Every kind of overview card reaches what it stands for: a behavior's
+    // body, the table declaring a variable, or the world asset the rest of the
+    // editor selects -- which is what lets the map of places follow it. A
+    // trigger and a name the world does not declare reach nothing, and a press
+    // on one is still the card's rather than the canvas's.
+    #[test]
+    fn an_overview_card_reaches_what_it_stands_for() {
+        let mut list = EntryList::default();
+        let handle = AssetHandle::Entry(list.push(serde_json::Value::Null));
+        let card = |kind, behavior, handle| Card {
+            column: 0,
+            row: 0,
+            title: String::new(),
+            detail: String::new(),
+            kind,
+            path: Vec::new(),
+            settles: Vec::new(),
+            behavior,
+            handle,
+        };
+        assert_eq!(
+            overview_action(&card(CardKind::Behavior, Some(3), Some(handle.clone())), 0),
+            BehaviorAction::OpenCard(0),
+        );
+        assert_eq!(
+            overview_action(&card(CardKind::Variable, None, None), 1),
+            BehaviorAction::OpenVariable(1),
+        );
+        assert_eq!(
+            overview_action(&card(CardKind::Asset, None, Some(handle)), 2),
+            BehaviorAction::SelectAsset(2),
+        );
+        for nothing in [CardKind::Trigger, CardKind::Missing] {
+            assert_eq!(
+                overview_action(&card(nothing, None, None), 3),
+                BehaviorAction::Consume,
+                "{nothing:?}",
+            );
+        }
     }
 
     // The field narrowing the palette sits inside it, so what is typed and what

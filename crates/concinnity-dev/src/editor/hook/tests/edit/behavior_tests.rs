@@ -15,13 +15,24 @@ use crate::editor::behavior::panel::{BehaviorAction, Status, ViewMode};
 use crate::editor::behavior::path;
 use crate::editor::hook::tests::fixtures::{
     behavior, behavior_escape_input, behavior_row, behavior_session, entry, open_args,
-    press_behavior_key, press_remove, select_behavior, story_key_input, type_name,
+    press_behavior_key, press_remove, select_behavior, selected, story_key_input, type_name,
 };
 use crate::editor::hook::{EditorHook, declared_id};
 
 use crate::editor::panels::registry::PanelKey;
 
 use crate::editor::widget;
+
+// The overview card titled `title`, which is how a test reaches one without
+// laying the canvas out.
+fn overview_card(h: &EditorHook, title: &str) -> usize {
+    h.behavior_data()
+        .overview
+        .cards
+        .iter()
+        .position(|c| c.title == title)
+        .unwrap_or_else(|| panic!("no `{title}` card on the overview"))
+}
 
 // Behavior panel
 
@@ -535,6 +546,74 @@ fn behavior_overview_opens_the_behavior_a_card_stands_for() {
         ViewMode::Chart,
         "and lands on the body it named"
     );
+}
+
+// A card standing for a scene or a screen stands for a place the Map draws, so
+// selecting it here is what carries a reader across to the other view. The
+// overview keeps its own cursor on the card as well, which is what the keyboard
+// steps from next.
+#[test]
+fn an_overview_asset_card_selects_the_place_it_stands_for() {
+    let (mut h, mut world) = behavior_session(vec![
+        entry("hub", "Scene"),
+        behavior(
+            "finish",
+            serde_json::json!({"on": "start", "do": [{"scene": {"scene": "hub"}}]}),
+        ),
+    ]);
+    for _ in 0..2 {
+        h.apply_behavior_action(BehaviorAction::ToggleView, &mut world, [0.0, 0.0]);
+    }
+    let card = overview_card(&h, "hub");
+
+    h.apply_behavior_action(BehaviorAction::SelectAsset(card), &mut world, [0.0, 0.0]);
+    assert_eq!(selected(&h), ["hub"]);
+    assert_eq!(h.behavior.overview_card, Some(card));
+    // And the map of places is then on the scene without a channel of its own.
+    let places = h.map_chart();
+    assert_eq!(
+        h.make_map_view(&places, [-1.0, -1.0]).selected,
+        places.cards.iter().position(|c| c.title == "hub"),
+    );
+}
+
+// A behavior card stands for a world asset too, so opening one is also
+// selecting it: the Assets tree and everything else following the selection
+// agree with the panel about what is open.
+#[test]
+fn opening_an_overview_behavior_selects_that_behavior() {
+    let (mut h, mut world) = behavior_session(vec![
+        behavior("first", serde_json::json!({"on": "start"})),
+        behavior("second", serde_json::json!({"on": "tick"})),
+    ]);
+    for _ in 0..2 {
+        h.apply_behavior_action(BehaviorAction::ToggleView, &mut world, [0.0, 0.0]);
+    }
+    let card = overview_card(&h, "second");
+
+    h.apply_behavior_action(BehaviorAction::OpenCard(card), &mut world, [0.0, 0.0]);
+    assert_eq!(h.behavior_data().name, "second");
+    assert_eq!(selected(&h), ["second"]);
+}
+
+// A name the world does not declare is drawn as its own kind of card precisely
+// because it is not an asset, so there is nothing to select behind it.
+#[test]
+fn an_overview_card_for_an_undeclared_name_selects_nothing() {
+    let (mut h, mut world) = behavior_session(vec![behavior(
+        "escape",
+        serde_json::json!({"on": "start", "do": [{"scene": {"scene": "typo"}}]}),
+    )]);
+    for _ in 0..2 {
+        h.apply_behavior_action(BehaviorAction::ToggleView, &mut world, [0.0, 0.0]);
+    }
+    let card = overview_card(&h, "typo");
+    let overview = h.behavior_data().overview;
+    assert_eq!(overview.cards[card].kind, CardKind::Missing);
+    assert_eq!(overview.cards[card].handle, None);
+
+    h.apply_behavior_action(BehaviorAction::SelectAsset(card), &mut world, [0.0, 0.0]);
+    assert!(h.selection.is_empty(), "{:?}", selected(&h));
 }
 
 // The map is only built while it is showing: it walks every behavior in the

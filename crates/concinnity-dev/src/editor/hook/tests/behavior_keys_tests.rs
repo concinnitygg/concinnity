@@ -135,9 +135,11 @@ fn behavior_arrows_step_the_overview_and_enter_opens_a_behavior() {
 
     press_behavior_key(&mut h, &mut world, InputKey::Right);
     assert_eq!(selected_overview_title(&h).as_deref(), Some("score"));
-    // A variable card stands for no behavior, so Enter leaves the map alone.
+    // Enter reaches what a card stands for, whatever that is: a variable card
+    // opens the table declaring it and leaves the map showing.
     press_behavior_key(&mut h, &mut world, InputKey::Enter);
     assert_eq!(h.behavior.mode, ViewMode::Overview);
+    assert!(h.variables_open, "the table the variable is declared in");
 
     press_behavior_key(&mut h, &mut world, InputKey::Right);
     assert_eq!(selected_overview_title(&h).as_deref(), Some("react"));
@@ -145,6 +147,34 @@ fn behavior_arrows_step_the_overview_and_enter_opens_a_behavior() {
     assert_eq!(h.behavior.index, 1);
     assert_eq!(h.behavior_data().name, "react");
     assert_eq!(h.behavior.mode, ViewMode::Chart);
+}
+
+// Reaching a card from the overview leaves the keyboard on it, so the arrows
+// step on from what was just reached rather than from nothing.
+#[test]
+fn the_overview_keyboard_steps_on_from_the_card_last_reached() {
+    let (mut h, mut world) = behavior_session(vec![
+        serde_json::json!({"type": "Scene", "args": {"$id": "hub"}}),
+        behavior(
+            "finish",
+            serde_json::json!({"on": "start", "do": [{"scene": {"scene": "hub"}}]}),
+        ),
+    ]);
+    for _ in 0..2 {
+        h.apply_behavior_action(BehaviorAction::ToggleView, &mut world, [0.0, 0.0]);
+    }
+    let hub = h
+        .behavior_data()
+        .overview
+        .cards
+        .iter()
+        .position(|c| c.title == "hub")
+        .expect("the scene the behavior sends the world to");
+    h.apply_behavior_action(BehaviorAction::SelectAsset(hub), &mut world, [0.0, 0.0]);
+    assert_eq!(selected_overview_title(&h).as_deref(), Some("hub"));
+
+    press_behavior_key(&mut h, &mut world, InputKey::Left);
+    assert_eq!(selected_overview_title(&h).as_deref(), Some("finish"));
 }
 
 // With no field focused, Enter opens the selected row's palette; the palette

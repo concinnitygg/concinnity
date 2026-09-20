@@ -66,6 +66,22 @@ pub(crate) fn map(entries: &Entries) -> Chart {
     build::chart(entries, &flow_graph(entries.assets()))
 }
 
+/// The behaviors that move the world into `place`, by the name each is
+/// declared under.
+///
+/// A menu item or a key draws its own arrow, from the place it sits on to the
+/// one it leads to. A behavior's move leaves from the world rather than from
+/// any place, so the map draws it as one arrow out of the world however many
+/// behaviors make it; which of them lead to a place is what that place is
+/// asked.
+pub(crate) fn behaviors_into(entries: &Entries, place: &str) -> Vec<String> {
+    flow_graph(entries.assets())
+        .behaviors_into(place)
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+}
+
 /// The card standing for `handle`, so what is selected anywhere in the editor
 /// lights up here too. A selection naming no place at all -- a prop inside one,
 /// a material -- answers `None`, which is the honest picture: a map draws where
@@ -219,6 +235,27 @@ mod tests {
             card(&chart, "bistro").handle,
             Some(AssetHandle::Entry(keys[1])),
         );
+    }
+
+    // A behavior's move leaves from the world rather than from a place, so the
+    // map draws one arrow out of the world however many behaviors make it. Which
+    // of them lead to a place is what that place is asked.
+    #[test]
+    fn a_place_answers_which_behaviors_send_the_world_to_it() {
+        let mut world = imported_scene();
+        world.push(asset(
+            RegisteredType::Behavior,
+            "opener",
+            json!({"do": [{"scene": {"scene": "bistro"}}]}),
+        ));
+        world.push(asset(
+            RegisteredType::Behavior,
+            "idler",
+            json!({"do": [{"hide": {"target": "self"}}]}),
+        ));
+        let (entries, _) = entries(world);
+        assert_eq!(behaviors_into(&entries, "bistro"), ["opener"]);
+        assert!(behaviors_into(&entries, "Camera3D#0").is_empty());
     }
 
     // The screen a menu opens has no authored line of its own, so it is

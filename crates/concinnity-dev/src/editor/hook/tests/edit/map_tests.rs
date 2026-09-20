@@ -291,6 +291,45 @@ fn a_click_on_a_place_the_build_generates_selects_it_under_that_identity() {
     );
 }
 
+// A behavior's move leaves from the world rather than from a place, so the map
+// draws one arrow out of the world however many behaviors make it. Which of
+// them lead here is asked of the place, and the panel that shows a behavior
+// opens on the first.
+#[test]
+fn a_ctrl_click_on_a_place_reaches_the_behaviors_that_send_the_world_to_it() {
+    let (mut h, mut world) = map_session(vec![
+        entry("bistro", "Scene"),
+        behavior(
+            "opener",
+            json!({"on": "start", "do": [{"scene": {"scene": "bistro"}}]}),
+        ),
+        behavior("idler", json!({"on": "tick", "do": []})),
+    ]);
+    h.ctrl_held = true;
+    assert!(click_card(&mut h, &mut world, "bistro"));
+
+    assert_eq!(
+        selected(&h),
+        ["opener"],
+        "the one that sends the world here"
+    );
+    assert!(h.behavior.open, "the panel showing one opened");
+    assert_eq!(h.behavior_data().name, "opener");
+}
+
+// A place nothing sends the world to has nothing to reach, and says so rather
+// than quietly emptying the selection.
+#[test]
+fn a_ctrl_click_on_a_place_no_behavior_reaches_leaves_the_selection_alone() {
+    let (mut h, mut world) = map_session(menu_world());
+    click_card(&mut h, &mut world, "main");
+    h.ctrl_held = true;
+    assert!(click_card(&mut h, &mut world, "bistro"));
+
+    assert_eq!(selected(&h), ["main"]);
+    assert!(!h.behavior.open, "nothing to open");
+}
+
 // The other direction: what the Assets panel or the viewport selected is what
 // the map lights up, so the two surfaces agree on where the session is.
 #[test]

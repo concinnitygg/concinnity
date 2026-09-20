@@ -20,6 +20,7 @@ pub use action::{Move, parse_action};
 pub use edges::{FlowEdge, flow_edges};
 pub use places::{Place, PlaceKind, places};
 
+use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::WorldJsonlAsset;
 
 /// A world's places and the moves between them.
@@ -39,6 +40,24 @@ impl FlowGraph {
     pub fn destination(&self, edge: &FlowEdge) -> Option<&Place> {
         let target = edge.action.target()?;
         self.places.iter().find(|place| place.id == target)
+    }
+
+    /// The behaviors that move the world into `place`, by handle, in
+    /// declaration order and without repeats.
+    ///
+    /// A menu item or a key says where it leads from the place it sits on; a
+    /// behavior moves the world from wherever it already is, so which ones lead
+    /// somewhere is a question the place has to be asked.
+    pub fn behaviors_into(&self, place: &str) -> Vec<&str> {
+        let mut found: Vec<&str> = Vec::new();
+        for edge in &self.edges {
+            let leads_here =
+                edge.declared_by == RegisteredType::Behavior && edge.action.target() == Some(place);
+            if leads_here && !found.contains(&edge.source.as_str()) {
+                found.push(&edge.source);
+            }
+        }
+        found
     }
 
     /// The places the world can start in: those declaring themselves an entry,
@@ -70,7 +89,6 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::authoring::registry::RegisteredType;
 
     fn asset(ty: RegisteredType, id: &str, args: serde_json::Value) -> WorldJsonlAsset {
         WorldJsonlAsset {
@@ -183,6 +201,39 @@ mod tests {
     fn a_world_with_nowhere_to_be_starts_nowhere() {
         let graph = flow_graph(&[asset(RegisteredType::Material, "mat", json!({}))]);
         assert!(graph.entries().is_empty());
+    }
+
+    // What sends the world into a place is not always drawable from it: a
+    // behavior's move leaves from no place, so the place is asked instead.
+    #[test]
+    fn a_place_answers_which_behaviors_send_the_world_to_it() {
+        let graph = flow_graph(&[
+            asset(RegisteredType::Scene, "level", json!({})),
+            asset(RegisteredType::Screen, "pause", json!({})),
+            asset(
+                RegisteredType::Behavior,
+                "start_level",
+                json!({"do": [
+                    {"scene": {"scene": "level"}},
+                    {"if": {"cond": true, "then": [{"scene": {"scene": "level"}}]}},
+                ]}),
+            ),
+            asset(
+                RegisteredType::Behavior,
+                "hold",
+                json!({"do": [{"screen": {"screen": "pause"}}]}),
+            ),
+            asset(
+                RegisteredType::HitRegion,
+                "play",
+                json!({"screen": "pause", "action": "scene:level"}),
+            ),
+        ]);
+        // Twice through one body is one behavior, and the region drawing its
+        // own arrow is not one of them.
+        assert_eq!(graph.behaviors_into("level"), ["start_level"]);
+        assert_eq!(graph.behaviors_into("pause"), ["hold"]);
+        assert!(graph.behaviors_into("nowhere").is_empty());
     }
 
     // Pause menu out to a scene and back is the ordinary case, so the graph has

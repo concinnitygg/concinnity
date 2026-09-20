@@ -1,7 +1,7 @@
 //! EditorHook: the Map panel's actions. The map shows where a world can be and
-//! how it moves between those places, and changes nothing, so the whole of the
-//! hook's job is turning the working entry list into what the map reads and
-//! carrying the canvas's pan.
+//! how it moves between those places, and changes nothing, so the hook's job is
+//! turning the working entry list into what the map reads, carrying the
+//! canvas's pan, and reaching what a place card stands for.
 //!
 //! The entry shape is the hook's to map, as it is for the behavior overview:
 //! `editor/map/` only ever sees typed assets and the keys they are addressed
@@ -14,6 +14,7 @@ use concinnity_core::components::FrameInput;
 use concinnity_core::ecs::World;
 use serde_json::Value;
 
+use crate::editor::asset_handle::AssetHandle;
 use crate::editor::behavior::chart;
 use crate::editor::behavior::graph::Chart;
 use crate::editor::hook::{EditorHook, entry_type};
@@ -80,32 +81,43 @@ impl EditorHook {
     // replaces the selection and opens the asset's editing surface, shift
     // toggles membership, and the Assets tree reveals the row either way. A
     // place the build generates has no authored line, so it opens seeded from
-    // what the expansion produced, exactly as its own row does.
+    // what the expansion produced, exactly as its own row does. Ctrl asks the
+    // place what sends the world to it instead.
     fn select_map_card(&mut self, card: usize, world: &mut World) {
         let chart = self.map_chart();
-        let Some(name) = chart
-            .cards
-            .get(card)
-            .and_then(|c| c.handle.as_ref())
-            .and_then(|handle| self.handle_name(handle))
-        else {
+        let Some(handle) = chart.cards.get(card).and_then(|c| c.handle.clone()) else {
             return;
         };
-        if self.shift_held {
-            if self.toggle_named(&name) {
-                self.open_asset_form(&name, world);
-            } else {
-                self.follow_active(world);
-            }
+        if self.ctrl_held {
+            self.select_movers_into(&handle, world);
         } else {
-            self.select_named(&name);
-            self.open_asset_form(&name, world);
+            self.select_handle(&handle, world);
         }
-        self.reveal_in_tree(&name, world);
-        self.pick_last = None;
-        // The card that was clicked is on the canvas already, so the follow
+        // The card that was acted on is on the canvas already, so the follow
         // below has nothing left to bring into view.
         self.map.shown = self.selection.active().cloned();
+    }
+
+    // Reach the behaviors that move the world to a place. A menu item or a key
+    // draws its own arrow from the place it sits on; a behavior's move leaves
+    // from the world itself, so the one arrow out of the world says that some
+    // behavior sends it here without saying which. Asking is the editor's own
+    // select-by-relationship, and the panel that shows a behavior opens on the
+    // first of them, as an overview card opens the table declaring a variable.
+    fn select_movers_into(&mut self, handle: &AssetHandle, world: &mut World) {
+        let Some(place) = self.handle_name(handle) else {
+            return;
+        };
+        let movers = map::behaviors_into(&self.map_entries(), &place);
+        let Some(first) = movers.first().cloned() else {
+            self.notifier
+                .info(&format!("no behavior sends the world to {place}"));
+            return;
+        };
+        let handles = movers.iter().map(|name| self.handle_for(name)).collect();
+        self.selection.set(handles);
+        self.follow_active(world);
+        self.open_behavior_named(&first, world);
     }
 
     // Keep the canvas on what it should be showing, once a frame: where the
