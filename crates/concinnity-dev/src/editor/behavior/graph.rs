@@ -9,6 +9,8 @@
 
 use serde_json::Value;
 
+use crate::editor::asset_handle::AssetHandle;
+
 use super::outline;
 use super::palette::{self, Shape};
 use super::path::{Path, Step, child, field};
@@ -56,6 +58,10 @@ pub(crate) struct Card {
     // containing it.
     pub settles: Path,
     pub behavior: Option<usize>,
+    // The world asset the card stands for, for the views whose cards are whole
+    // assets rather than places inside one behavior: selecting such a card is
+    // then the selection the rest of the editor already speaks.
+    pub handle: Option<AssetHandle>,
 }
 
 // A card-to-card link, labeled when the pair needs saying which way out of the
@@ -96,6 +102,7 @@ pub(crate) fn chart(args: &Value) -> Chart {
         // the cards below, which settle deeper.
         settles: Vec::new(),
         behavior: None,
+        handle: None,
     });
     let base = vec![field("do")];
     let (columns, rows) = build.chain(array(args.get("do")), &base, 1, 0, 0, None);
@@ -163,6 +170,7 @@ impl Build {
                 path: path.clone(),
                 settles: path.clone(),
                 behavior: None,
+                handle: None,
             });
             self.wires.push(Wire {
                 from: prev,
@@ -199,6 +207,7 @@ impl Build {
             path: base.clone(),
             settles: base.clone(),
             behavior: None,
+            handle: None,
         });
         self.wires.push(Wire {
             from: prev,

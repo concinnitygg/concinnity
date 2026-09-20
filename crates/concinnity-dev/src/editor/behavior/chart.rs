@@ -656,6 +656,7 @@ mod tests {
                     path: Vec::new(),
                     settles: Vec::new(),
                     behavior: None,
+                    handle: None,
                 })
                 .collect(),
             wires: wires

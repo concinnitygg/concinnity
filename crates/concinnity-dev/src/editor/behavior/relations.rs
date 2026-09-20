@@ -401,6 +401,7 @@ fn card(title: &str, detail: String, kind: CardKind) -> Card {
         path: Vec::new(),
         settles: Vec::new(),
         behavior: None,
+        handle: None,
     }
 }
 

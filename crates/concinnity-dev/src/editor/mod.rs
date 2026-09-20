@@ -54,6 +54,8 @@ mod hud;
 mod inject;
 // Applying an edit to the running preview world instead of rebuilding it.
 mod live;
+// The world map: its places and the moves between them, as a chart.
+mod map;
 // The confirmation dialog: message, optional name field, and its buttons.
 mod modal;
 // The toast queue the editor and its workers push into, and each message's
