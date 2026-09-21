@@ -30,6 +30,10 @@ mod asset_handle;
 // The Behavior panel's model half: one behavior's authored args as an editable
 // node graph, plus the palette, outline and chart views over it.
 mod behavior;
+// The macOS menu bar: the application menu, and a View menu offering the
+// Display chip's rows a second time.
+#[cfg(target_os = "macos")]
+mod app_menu;
 // The viewport's right-click "Create here" menu, anchored at the cursor.
 mod create_menu;
 // The authored entry list, with the session key every entry is addressed by.
@@ -169,7 +173,9 @@ pub fn run_editor(
     // tool call reaches its flag), without one the driver runs as its own hook.
     // Either way the session holds exactly one driver, so a reload is never
     // applied twice.
-    let mut editor_hook = EditorHook::new(world_path, entries).with_console_sink(console_sink);
+    let mut editor_hook = EditorHook::new(world_path, entries)
+        .with_console_sink(console_sink)
+        .with_app_menu();
     if pick_a_world {
         editor_hook = editor_hook.with_start_screen(previewing);
     }

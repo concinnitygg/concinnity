@@ -534,7 +534,11 @@ impl AppKitWindow {
             };
 
             match event.r#type() {
-                NSEventType::KeyDown => self.handle_key(&event, true),
+                NSEventType::KeyDown => {
+                    if !menu_claims_key(&ns_app, &event) {
+                        self.handle_key(&event, true);
+                    }
+                }
                 NSEventType::KeyUp => self.handle_key(&event, false),
                 NSEventType::FlagsChanged => {
                     // Fires immediately when a modifier key is pressed or
@@ -767,4 +771,20 @@ impl AppKitWindow {
             self.keys.typed_char = Some(c);
         }
     }
+}
+
+// Whether a main menu claims this press as one of its key equivalents. An
+// application that installs one (the editor's menu bar) owns its shortcuts;
+// a shipped runtime installs no menu, so this reads None and every press
+// reaches the world unchanged.
+fn menu_claims_key(ns_app: &NSApplication, event: &NSEvent) -> bool {
+    if !event
+        .modifierFlags()
+        .contains(NSEventModifierFlags::Command)
+    {
+        return false;
+    }
+    ns_app
+        .mainMenu()
+        .is_some_and(|menu| menu.performKeyEquivalent(event))
 }

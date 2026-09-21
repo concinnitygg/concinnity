@@ -40,6 +40,7 @@ use concinnity_core::ecs::{
 };
 use concinnity_engine::app::runtime::Runtime;
 use concinnity_engine::ecs::PendingBackend;
+use concinnity_engine::shutdown::ShutdownToken;
 
 use super::asset_handle::AssetHandle;
 use super::behavior;
@@ -294,6 +295,9 @@ pub(crate) struct EditorHook {
     // The Display menu's always-on extent-outline categories (selection
     // outlines regardless; `hook/drive/outline.rs`).
     extent_show: outlines::CategorySet,
+    // The runtime's shutdown token, handed over before the loop starts. The
+    // menu bar's Quit cancels it.
+    shutdown: Option<ShutdownToken>,
     // The add / edit form (`hook/editing.rs`).
     form: FormState,
     // Template baselines for every template-derived asset, derived from the
@@ -583,6 +587,7 @@ impl EditorHook {
             show_flags: view_menu::ShowFlags::default(),
             show_billboards: true,
             extent_show: outlines::CategorySet::default(),
+            shutdown: None,
             form: FormState::default(),
             template_index: None,
             selection: Selection::default(),
@@ -705,7 +710,15 @@ impl EditorHook {
 }
 
 impl DebugHook for EditorHook {
+    fn attach_shutdown(&mut self, shutdown: ShutdownToken) {
+        self.shutdown = Some(shutdown);
+    }
+
     fn tick(&mut self, world: &mut World) {
+        // Before anything this frame reads the panel state: a choice made in
+        // the macOS menu bar landed between frames and is applied here, so the
+        // rest of the frame sees one settled state.
+        self.drive_app_menu(world);
         // Bring the Assets tree up to date before anything reads it, so this
         // frame's hit test and draw agree on the rows.
         self.refresh_tree_if_needed();

@@ -7,6 +7,10 @@
 //! re-entered fresh each frame and commits through `hook/edits.rs` like any
 //! other edit.
 //!
+//! `app_menu` is the odd one out: its furniture is the macOS menu bar, which
+//! the system draws, so its frame is an exchange of choices and marks rather
+//! than a place-and-hit-test.
+//!
 //! `axes`, `billboard` and `outline` draw world-space furniture (the origin
 //! axes, the pickable billboards for assets with no mesh, the selection
 //! outlines); `modal`, `notify`, `create_menu` and `view_menu` drive the
@@ -14,6 +18,7 @@
 //! move the camera; `trace` exchanges the running world's behavior trace with
 //! the Behavior panel.
 
+pub(super) mod app_menu;
 pub(super) mod axes;
 pub(super) mod billboard;
 pub(super) mod cinematic;
