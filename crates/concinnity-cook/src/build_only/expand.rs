@@ -205,9 +205,9 @@ pub(crate) fn expand_world(
     expand_material_palettes(assets, assets_dir)?;
     expand_prefabs(assets, &authored, &mut report, assets_dir)?;
     expand_room_textures(assets);
-    // First companion round: materialize the GraphicsConfig render marker (and
-    // its Window / Shader stack) implied by everything authored or
-    // expanded above, so the defaults pass can key off "this world renders".
+    // First companion round: materialize the Window implied by everything
+    // authored or expanded above, so the defaults pass can key off "this world
+    // renders".
     inject_companions(assets, &mut report);
     // The AppConfig asset (at most one) names the world for distribution and,
     // when a Window authored no title, fills it so a running game shows its own
@@ -528,7 +528,7 @@ mod tests {
                 .iter()
                 .any(|v| registered_type(v) == Some(RegisteredType::HitRegion))
         );
-        // The generated TextLabels pull in GraphicsConfig + a Font companion.
+        // The generated TextLabels pull in the Window they draw into.
         assert!(
             assets
                 .iter()
@@ -537,7 +537,7 @@ mod tests {
         assert!(
             assets
                 .iter()
-                .any(|v| registered_type(v) == Some(RegisteredType::GraphicsConfig))
+                .any(|v| registered_type(v) == Some(RegisteredType::Window))
         );
         assert!(
             assets

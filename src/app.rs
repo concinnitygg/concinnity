@@ -98,9 +98,11 @@ impl App {
     }
 
     /// The same app on the headless loop: the simulation systems stepped on a
-    /// fixed virtual timestep, with no window and no renderer. A world that
-    /// declares a `GraphicsConfig` keeps it and draws nothing, which is what
-    /// lets a test or a simulation-only tool run a world authored to be seen.
+    /// fixed virtual timestep, with no window and no renderer. A world
+    /// authored to be seen keeps everything it holds and draws none of it,
+    /// which is what lets a test run one without a display. To ship that
+    /// choice with the world instead, set
+    /// [`AppConfig::headless`](crate::components::AppConfig::headless).
     ///
     /// The `no_std` build has no other loop to run, so there it changes
     /// nothing.
@@ -121,8 +123,12 @@ impl App {
     /// Run the app until its window closes, a system stops the world, its last
     /// system finishes, or the process is interrupted.
     ///
-    /// A headless run has no window to close and no clock to follow: the world
-    /// steps on a fixed virtual timestep, as fast as the host can step it.
+    /// A world with nothing to draw, or a machine that cannot render, has no
+    /// window to close and no clock to follow: the world steps on a fixed
+    /// virtual timestep, as fast as the host can step it.
+    ///
+    /// Returns an error when a world meant to be seen could not build its
+    /// renderer on a machine that has a GPU.
     pub fn run(self) -> Result<(), Error> {
         self.driver.run().map_err(Error::from)
     }

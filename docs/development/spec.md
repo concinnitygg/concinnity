@@ -248,7 +248,7 @@ moves the column's last row into the freed slot, so the moved row's owner needs
 its recorded row patched, or a later join probe reads the wrong row.
 
 **Resources** are singleton values keyed by type, used for per-frame protocol
-between systems (see [9.4](#94-inter-system-protocol)).
+between systems (see [9.5](#95-inter-system-protocol)).
 
 **Events** are double-buffered queues with per-reader cursors. An event stays
 readable for two update cycles, so every reader that runs after the writer sees
@@ -383,7 +383,7 @@ matters because later passes must see what earlier passes produced:
 | 5     | Material palettes    | Named material groups.                                                        |
 | 6     | Prefabs              | Instantiated prop templates.                                                  |
 | 7     | Room textures        | Per-surface texture assignment.                                               |
-| 8     | Companions (round 1) | The render marker and its window / shader stack, implied by everything above. |
+| 8     | Companions (round 1) | The window and shader stack implied by everything above.                     |
 | 9     | AppConfig            | World name and window title for distribution.                                 |
 | 10    | Engine defaults      | Main menu, HUDs, chips, font, sky mesh, for a rendering world.                |
 | 11    | Menus                | Screens, sprites, labels, hit regions, key bindings.                          |
@@ -1033,7 +1033,7 @@ re-reads payloads from their blob files on demand instead of holding RAM copies.
 ### 8.10 Schedule construction
 
 Access declarations are final only once every system has inited, so this is the
-earliest point the schedule can be derived. See [9.3](#93-the-execution-schedule).
+earliest point the schedule can be derived. See [9.4](#94-the-execution-schedule).
 
 Finally, the event queues declared systems can touch are pre-created, so a
 system's first `events_mut` never grows the store's map mid-tick.
@@ -1042,7 +1042,36 @@ system's first `events_mut` never grows the store's map mid-tick.
 
 ## 9. Runtime execution model
 
-### 9.1 The frame loop
+### 9.1 Windowed or headless
+
+Whether a run has a window is resolved once, before `World::start`, and
+published as the `RenderMode` resource every system in the render band is gated
+on. Four conditions resolve it, checked in order, so the GPU is only probed for
+a world that would otherwise open a window:
+
+| #   | Condition                                          | Result     |
+| --- | -------------------------------------------------- | ---------- |
+| 1   | The world declares `AppConfig.headless`.           | Headless   |
+| 2   | The world holds nothing flagged `renders`.         | Headless   |
+| 3   | The build compiles no render backend.              | Headless   |
+| 4   | The GPU probe finds no usable device.              | Headless   |
+| —   | Otherwise.                                         | Rendered   |
+
+The `renders` flag is the registry's, the same one the build's companion pass
+reads to inject a `Window`, so a cooked world and one assembled in process
+answer identically. It marks what draws: geometry, text, sprites, a screen, a
+window. A camera, a light, or an unplaced mesh draws nothing by itself. Several
+of the columns it reads are drained by `World::start`, so the resolution runs
+before it and its result is cached on the runtime.
+
+Condition 4 is narrow on purpose: no adapter or device at all. A GPU that is
+present and then fails to build a backend is a startup failure (§14.3), not
+consent to run blind.
+
+`cn list --systems` publishes condition 1-2 alone: the schedule a world implies
+must not change with the build host it runs on.
+
+### 9.2 The frame loop
 
 Two drivers exist.
 
@@ -1094,7 +1123,7 @@ receive timeout) so the run loop keeps draining while a long simulation frame
 runs; elsewhere the event pumps live inside the draw itself and a plain blocking
 receive is correct.
 
-### 9.2 Fixed timestep
+### 9.3 Fixed timestep
 
 Simulation runs at a fixed 60 Hz tick regardless of frame rate. The accumulator
 sits at the app level, after the frame pacer and before the world step.
@@ -1131,7 +1160,7 @@ When no `SimTiming` is published (a directly-stepped world with no app), the
 default is exactly one tick per step with no blending, which makes bare
 `World::step` loops deterministic.
 
-### 9.3 The execution schedule
+### 9.4 The execution schedule
 
 The schedule is built once per world start, after system init, and rebuilt only
 when the system set changes (a system that reports `Done` is removed).
@@ -1174,7 +1203,7 @@ Both modes must produce identical world state; a schedule-determinism test is th
 gate on that claim. The wave structure is derived and validated regardless,
 because it is also the proof that the declared accesses are consistent.
 
-### 9.4 Inter-system protocol
+### 9.5 Inter-system protocol
 
 Systems do not call each other. They communicate through three mechanisms.
 
@@ -1197,20 +1226,20 @@ commands).
 
 **Recorded ops** — the frame's backend effects. See [10.2](#102-op-recording).
 
-### 9.5 System table and ordering
+### 9.6 System table and ordering
 
 Table order is run order. The rationale for each ordering edge is part of the
 registry.
 
 | #   | System                 | Present when                                                                                                                    |
 | --- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | `OverlaySystem`        | The world declares a `GraphicsConfig`.                                                                                          |
+| 1   | `OverlaySystem`        | The world runs with a window.                                                                                                   |
 | 2   | `BehaviorSystem`       | The world declares any `Behavior`.                                                                                              |
-| 3   | `SpawnSystem`          | The world declares a `GraphicsConfig`.                                                                                          |
-| 4   | `SettingsSystem`       | The world declares a `GraphicsConfig`.                                                                                          |
-| 5   | `StreamingSystem`      | The world declares a `GraphicsConfig`.                                                                                          |
-| 6   | `GraphicsSystem`       | The world declares a `GraphicsConfig`.                                                                                          |
-| 7   | `InputSystem`          | The world declares a `GraphicsConfig`.                                                                                          |
+| 3   | `SpawnSystem`          | The world runs with a window.                                                                                                   |
+| 4   | `SettingsSystem`       | The world runs with a window.                                                                                                   |
+| 5   | `StreamingSystem`      | The world runs with a window.                                                                                                   |
+| 6   | `GraphicsSystem`       | The world runs with a window.                                                                                                   |
+| 7   | `InputSystem`          | The world runs with a window.                                                                                                   |
 | 8   | `StatHud`              | The world declares a `StatHud`.                                                                                                 |
 | 9   | `DebugHud`             | The world declares a `DebugHud` **and** the binary is a debug build or a dev session.                                           |
 | 10  | `LoadingOverlaySystem` | The world declares a `LoadingOverlay`.                                                                                          |
@@ -1247,7 +1276,7 @@ debug HUD into every rendering world), so the running binary is the one place
 its own profile is knowable: a debug build or a dev session activates the HUD, a
 release run leaves it inert.
 
-### 9.6 The step
+### 9.7 The step
 
 ```
 World::step():
@@ -1273,7 +1302,7 @@ frame pacing.
 The scratch arena reset happens with `&mut self` held, which is the proof that no
 allocation from the last frame survives.
 
-### 9.7 Frame pacing
+### 9.8 Frame pacing
 
 The FPS cap is applied at the app level, before the world steps, so no system
 pays the sleep inside its own step time and the cap applies whichever systems the
@@ -1870,6 +1899,13 @@ The developer path returns success after reporting (the run is over, not
 broken). The shipped player exits non-zero: the screen is how the user learns
 what happened, not a substitute for failing.
 
+A renderer that cannot be built is reported the same way. It reaches this point
+only when the run already resolved to a windowed one (§9.1), which means the
+machine has a GPU that refused rather than no GPU at all — so the message names
+the driver as the usual fix. `GraphicsSystem` leaves the `RenderError` where
+`Runtime::start` picks it up and returns `WorldError::RenderUnavailable`, rather
+than leaving the loop to spin over a renderer that draws nothing.
+
 ### 14.4 Frame failure policy
 
 Each `RenderError` class resolves to an action, and consecutive failures are
@@ -2138,7 +2174,7 @@ not the authored args. Every record in a blob is baked.
 primary blob and carries the metadata.
 
 **Companion** — an asset the cook injects because another asset implies it (a
-text label implies a render marker).
+text label implies a window to draw it in).
 
 **Component** — the runtime form of an asset, stored in a column and owned by an
 entity.

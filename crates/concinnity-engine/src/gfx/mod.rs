@@ -26,7 +26,7 @@ pub(crate) mod material_entry;
 /// for an editor previewing slider edits without a rebuild.
 pub mod shape_preview;
 /// The renderer driver. An internal system (not a declarable asset), constructed
-/// by `World::start` when the world declares a `GraphicsConfig`.
+/// by `World::start` when the run resolved to a windowed one.
 pub mod system;
 // 2D overlay draw-list build + menu-state publish. Internal system,
 // constructed alongside GraphicsSystem (same gate) and scheduled first.

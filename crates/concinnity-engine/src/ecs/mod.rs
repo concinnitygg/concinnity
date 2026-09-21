@@ -35,6 +35,8 @@ mod determinism_tests;
 #[cfg(test)]
 mod headless_drift_tests;
 mod registry;
+/// How a world runs -- windowed or headless -- resolved once before it starts.
+pub mod render_mode;
 pub mod schedule;
 mod world_queries;
 
@@ -66,6 +68,14 @@ pub use world_queries::{
 /// `init_backend`, so a save applies without recreating the OS window. A shipped
 /// runtime never publishes it; it exists only on the editor's live-update path.
 pub struct PendingBackend(pub Box<dyn backend::RenderBackend>);
+
+/// Why the renderer could not be built, left by GraphicsSystem's init for
+/// `Runtime::start` to pick up and report.
+///
+/// Only a world that already resolved to a windowed run can leave one, so this
+/// always means a GPU that refused. A machine with no GPU never builds the
+/// system that publishes it.
+pub struct RenderInitFailure(pub concinnity_core::render::error::RenderError);
 
 // The frame's sampled window input, deposited beside the backend right after
 // the draw (whose event pump produced it) and taken by InputSystem later the

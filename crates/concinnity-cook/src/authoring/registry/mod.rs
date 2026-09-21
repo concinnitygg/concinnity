@@ -1149,8 +1149,9 @@ mod tests {
     }
 
     // The structural flags mark the curated sets: the world-config singletons,
-    // the render-implying types (which must match the companion pass's
-    // GraphicsConfig triggers), and the blank-useful addables. Flag rules: a
+    // the render-implying types (which must match the companion pass's Window
+    // triggers, and the set the runtime resolves a windowed run from), and the
+    // blank-useful addables. Flag rules: a
     // flagged type must be declarable (singletons and blank-addables are
     // authored), and the two picker sets stay disjoint (a singleton uses the
     // edit-or-add flow, never the plain add).
@@ -1184,12 +1185,14 @@ mod tests {
         assert_eq!(
             flagged(RegisteredType::renders),
             [
+                "Window",
                 "GraphicsConfig",
                 "Prop",
                 "TextLabel",
                 "InstancedProp",
                 "VoxelWorld",
                 "Sprite",
+                "Screen",
                 "WaterSurface",
                 "SdfVolume",
                 "LayoutContainer",

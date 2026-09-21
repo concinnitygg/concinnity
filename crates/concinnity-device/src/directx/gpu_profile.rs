@@ -4,16 +4,16 @@
 //! auto-config quality ceiling can be resolved before the backend (and its render
 //! targets) are built. Mirrors `DxContext::gpu_profile` exactly (vendor id +
 //! dedicated VRAM) and the standalone `metal/gpu_profile.rs` pattern. Returns
-//! `UNKNOWN` on any failure (no factory, no suitable adapter, desc query fails),
-//! which the resolver treats as "no clamp".
+//! `None` on any failure (no factory, no suitable adapter, desc query fails),
+//! which resolves the run to headless.
 
 use concinnity_core::render::backend::{GpuClassInput, GpuProfile, GpuVendor, classify_tier};
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::*;
 
-pub(crate) fn probe_gpu_profile() -> GpuProfile {
-    probe_adapter().unwrap_or(GpuProfile::UNKNOWN)
+pub(crate) fn probe_gpu_profile() -> Option<GpuProfile> {
+    probe_adapter()
 }
 
 // Build a throwaway DXGI factory (no debug flag, so it never needs the

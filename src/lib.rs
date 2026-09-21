@@ -43,12 +43,9 @@
 //! carries `bake`; only an asset that has to be read from a file needs the
 //! `cook` importers.
 //!
-//! Adding a [`GraphicsConfig`](components::GraphicsConfig) is what opens a
-//! window. A world without one still runs, with everything but the rendering,
-//! which is how a test or a simulation-only tool drives one:
-//!
-//! [`App::into_headless`] is the other way to that: it runs any world on the
-//! headless loop, including one authored to be seen.
+//! A world with something to draw opens a window. One without draws nothing,
+//! so it runs headless: everything but the rendering, on a fixed virtual
+//! timestep. A machine with no GPU runs headless either way.
 //!
 //! ```no_run
 //! use concinnity::components::{PhysicsConfig, TriggerVolume};
@@ -65,6 +62,10 @@
 //!     App::from_world(world).run().expect("the app runs");
 //! }
 //! ```
+//!
+//! [`AppConfig::headless`](components::AppConfig::headless) keeps a world that
+//! could draw from opening a window; [`App::into_headless`] does the same for
+//! one run.
 //!
 //! # Composing vs Cooking
 //!
@@ -187,7 +188,7 @@ mod test_support;
 #[cfg(test)]
 mod tests {
     use super::World;
-    use super::components::TextLabel;
+    use super::components::{AppConfig, PhysicsConfig, TextLabel};
 
     // The starter world's first two lines, on whichever tier is built. Without
     // `std` this is the whole of what the facade offers, so it is also the
@@ -208,19 +209,38 @@ mod tests {
         );
     }
 
-    // The documented headless case, on whichever tier is built: the same
-    // starter world without a GraphicsConfig, which is what lets a test or a
-    // simulation-only tool drive a world with no window.
+    // The documented headless case, on whichever tier is built: a world with
+    // nothing to draw needs no window, which is what lets a simulation-only
+    // tool drive one. The starter world has text in it, so this declares its
+    // own content.
     #[test]
-    fn a_world_without_graphics_starts_headless() {
-        let mut app = super::App::from_world(starter_world());
+    fn a_world_with_nothing_to_draw_starts_headless() {
+        let mut world = World::new();
+        world.add_component(PhysicsConfig::default());
+
+        let mut app = super::App::from_world(world);
+        app.driver_mut().start().expect("the world starts");
+    }
+
+    // The opt-out, which is what a world authored to be seen uses to stay off
+    // the windowed loop: `start` here builds no renderer even though the world
+    // has text to draw.
+    #[test]
+    fn a_world_asking_for_headless_starts_headless() {
+        let mut world = starter_world();
+        world.add_component(AppConfig {
+            headless: true,
+            ..Default::default()
+        });
+
+        let mut app = super::App::from_world(world);
         app.driver_mut().start().expect("the world starts");
     }
 
     // Without `std` the same app runs to completion in process: the headless
     // loop steps the world it was handed until nothing is left to step. The
-    // std tier's `run` opens a window and waits for it, so it has no place in
-    // a test.
+    // std tier's `run` opens a window for this world and waits for it, so it
+    // has no place in a test.
     #[cfg(not(feature = "std"))]
     #[test]
     fn a_headless_app_runs_the_world_it_was_given() {

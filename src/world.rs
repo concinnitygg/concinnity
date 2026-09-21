@@ -58,6 +58,31 @@ impl World {
         self.inner.add_component(component);
     }
 
+    /// Whether the world holds anything to draw, which is what decides an
+    /// [`App`](crate::App) built from it opens a window.
+    ///
+    /// Geometry, text, a sprite, a screen and a window count; a camera,
+    /// lights and physics bodies draw nothing by themselves and do not.
+    ///
+    /// ```
+    /// # use concinnity::World;
+    /// # use concinnity::components::{PhysicsConfig, TextLabel};
+    /// let mut world = World::new();
+    /// assert!(!world.renders());
+    ///
+    /// world.add_component(PhysicsConfig::default());
+    /// assert!(!world.renders(), "a simulation draws nothing");
+    ///
+    /// world.add_component(TextLabel {
+    ///     content: "Hello, world!".to_string(),
+    ///     ..Default::default()
+    /// });
+    /// assert!(world.renders());
+    /// ```
+    pub fn renders(&self) -> bool {
+        self.inner.renders()
+    }
+
     /// Add one component on an entity identified as the asset `id`, so a
     /// reference to `id` (a [`Prop`](crate::components::Prop)'s `parent`, say)
     /// resolves to it. Returns the entity.

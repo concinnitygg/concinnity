@@ -151,6 +151,12 @@ pub enum WorldError {
     /// A compiled payload did not read.
     #[error(transparent)]
     Payload(#[from] PayloadError),
+
+    /// The world is meant to be seen and the machine has a GPU, but the
+    /// renderer could not be built on it. Distinct from a machine with no GPU
+    /// at all, which resolves to a headless run instead of failing.
+    #[error("the renderer could not start: {0}")]
+    RenderUnavailable(#[source] crate::render::error::RenderError),
 }
 
 #[cfg(test)]

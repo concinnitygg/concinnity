@@ -25,6 +25,18 @@ macro_rules! __cn_surviving_tag {
     ($variant:ident; $skip:tt $($rest:tt)*) => { $crate::__cn_surviving_tag!($variant; $($rest)*) };
 }
 
+// Internal helper. Resolves an entry's `renders` flag: whether holding one of
+// these means the world is meant to be seen. The same flag drives the build
+// side's Window companion injection, so a world cooked into a blob and a world
+// assembled in process answer the question identically.
+#[macro_export]
+#[doc(hidden)]
+macro_rules! __cn_renders {
+    () => { false };
+    (renders $($rest:tt)*) => { true };
+    ($skip:tt $($rest:tt)*) => { $crate::__cn_renders!($($rest)*) };
+}
+
 // Internal helper. Applies an entry's `validate: <fn>` clamp to a value of the
 // component's own type, or leaves it alone when the entry declares none. The
 // clamps live in `crate::components::validate`, the same ones the authored JSON
@@ -132,6 +144,20 @@ macro_rules! define_components {
             pub fn surviving_tag(self) -> Option<ComponentTag> {
                 match self {
                     $( ComponentTag::$variant => $crate::__cn_surviving_tag!($variant; $($meta)*) ),+
+                }
+            }
+
+            /// Whether holding a component of this type means the world is
+            /// meant to be seen.
+            ///
+            /// Geometry, text, sprites, a screen and a window all say so; a
+            /// camera, lights, physics bodies and behaviors do not -- none of
+            /// those draws anything by itself. A
+            /// world holding none of these has nothing to draw, so it runs
+            /// headless.
+            pub fn renders(self) -> bool {
+                match self {
+                    $( ComponentTag::$variant => $crate::__cn_renders!($($meta)*) ),+
                 }
             }
 
@@ -272,6 +298,22 @@ macro_rules! define_components {
                     }
                 )+
                 &[]
+            }
+
+            /// Whether any populated column holds a component that means the
+            /// world is meant to be seen (see
+            /// [`ComponentTag::renders`](crate::ecs::ComponentTag::renders)).
+            ///
+            /// Several of those columns are drained during `World::start`, so
+            /// this answers for the world as authored and must be read before
+            /// the world starts.
+            pub fn renders(&self) -> bool {
+                $(
+                    if !self.$variant.is_empty() && ComponentTag::$variant.renders() {
+                        return true;
+                    }
+                )+
+                false
             }
 
             /// How many components of each type are stored: one `(tag, count)`

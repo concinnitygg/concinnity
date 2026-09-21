@@ -115,14 +115,14 @@ use hook::EditorHook;
 
 use crate::debug_hook::DebugHook;
 
-// A minimal renderable world: a lone GraphicsConfig, which the cook pipeline
-// expands into a Window plus default shaders. Booted in memory when there is
-// nothing renderable to load (no world file, or an authored world with no
-// render marker), so the editor still opens a window over a black scene. Named
-// distinctively so it never collides with an authored asset, and it is never
-// added to the authored entry list, so it can never leak into the user's
-// world.jsonl on SAVE.
-const SEED_GRAPHICS_CONFIG: &str = "[\"GraphicsConfig\",{\"$id\":\"editor_default_gfx\"}]";
+// A minimal renderable world: a lone Window, which the cook pipeline expands
+// into default shaders around. Booted in memory when there is nothing
+// renderable to load (no world file, or an authored world that draws nothing),
+// so the editor still opens a window over a black scene. Named distinctively so
+// it never collides with an authored asset, and it is never added to the
+// authored entry list, so it can never leak into the user's world.jsonl on
+// SAVE.
+const SEED_WINDOW: &str = "[\"Window\",{\"$id\":\"editor_default_window\"}]";
 
 /// Editor entry point (`cn editor`). Compiles the authored world in memory,
 /// injects the editor HUD, and runs the world loop driven by the editor hook
@@ -242,27 +242,27 @@ fn boot_world(runtime: &mut Runtime, entries: &[serde_json::Value]) -> std::io::
 
 // Compile world.jsonl content into a ready-to-run world, plus the template
 // baselines its expansion merged authored patches over. Content that would not
-// render (an empty world, or authored entries with no render marker) is
-// recompiled with a seeded GraphicsConfig, so a session always opens a window.
-// Boot and every live-preview rebuild come through here, so what the editor
-// shows never depends on which of the two produced it.
+// render (an empty world, or authored entries that draw nothing) is recompiled
+// with a seeded Window, so a session always opens one. Boot and every
+// live-preview rebuild come through here, so what the editor shows never
+// depends on which of the two produced it.
 fn build_renderable(
     jsonl: &str,
 ) -> std::io::Result<(World, Vec<concinnity_cook::build_only::ShadowedAsset>)> {
     match crate::authoring::build_world_and_shadows(jsonl) {
-        Ok(built) if concinnity_engine::ecs::renders(&built.0) => Ok(built),
+        Ok(built) if built.0.renders() => Ok(built),
         _ => crate::authoring::build_world_and_shadows(&seeded_content(jsonl)),
     }
 }
 
-// Guarantee a render marker: append the seed GraphicsConfig to the authored
-// content (only reached when the world does not otherwise render, so there is
-// no existing GraphicsConfig to collide with).
+// Guarantee something to draw: append the seed Window to the authored content
+// (only reached when the world does not otherwise render, so there is no
+// existing Window to collide with).
 fn seeded_content(base: &str) -> String {
     if base.trim().is_empty() {
-        SEED_GRAPHICS_CONFIG.to_string()
+        SEED_WINDOW.to_string()
     } else {
-        format!("{base}\n{SEED_GRAPHICS_CONFIG}")
+        format!("{base}\n{SEED_WINDOW}")
     }
 }
 
@@ -308,8 +308,8 @@ mod tests {
     // empty session still opens a window.
     #[test]
     fn seeded_content_of_empty_is_the_render_marker() {
-        assert_eq!(seeded_content(""), SEED_GRAPHICS_CONFIG);
-        assert_eq!(seeded_content("   \n"), SEED_GRAPHICS_CONFIG);
+        assert_eq!(seeded_content(""), SEED_WINDOW);
+        assert_eq!(seeded_content("   \n"), SEED_WINDOW);
     }
 
     // Authored content keeps its entries and gains the render marker on its own
@@ -321,15 +321,15 @@ mod tests {
         let parsed = parse_world_jsonl(&seeded).unwrap();
         assert_eq!(parsed.len(), 2, "authored entry plus the seed marker");
         assert_eq!(parsed[0]["args"]["$id"], "phys");
-        assert_eq!(parsed[1]["type"], "GraphicsConfig");
+        assert_eq!(parsed[1]["type"], "Window");
     }
 
     // The seed marker is itself a well-formed, renderable asset line.
     #[test]
-    fn seed_marker_is_a_graphics_config() {
-        let parsed = parse_world_jsonl(SEED_GRAPHICS_CONFIG).unwrap();
+    fn seed_marker_is_a_window() {
+        let parsed = parse_world_jsonl(SEED_WINDOW).unwrap();
         assert_eq!(parsed.len(), 1);
-        assert_eq!(parsed[0]["type"], "GraphicsConfig");
+        assert_eq!(parsed[0]["type"], "Window");
     }
 
     // A project whose build root is a `.concinnity/` of its own, as `cn` opens
@@ -382,7 +382,7 @@ mod tests {
         let mut runtime = crate::project::runtime();
         boot_world(&mut runtime, &renderable_entries("authored")).expect("the world builds");
 
-        assert!(concinnity_engine::ecs::renders(runtime.world()));
+        assert!(runtime.world().renders());
         assert_eq!(booted_label(&runtime), "authored");
         assert!(
             !build_root.join("data").exists() && !build_root.join("world-lock.json").exists(),
@@ -440,7 +440,7 @@ mod tests {
 
         let mut runtime = crate::project::runtime();
         boot_world(&mut runtime, &[]).expect("an empty world seeds");
-        assert!(concinnity_engine::ecs::renders(runtime.world()));
+        assert!(runtime.world().renders());
     }
 
     // An explicit path is taken verbatim and loads directly, panel closed --

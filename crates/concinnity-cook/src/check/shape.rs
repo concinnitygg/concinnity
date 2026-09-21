@@ -132,28 +132,27 @@ fn check_focus_ownership(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
     }
 }
 
-// A rendering world (one with a GraphicsConfig) needs a Window.
-// Filled by companion injection: any `renders`-flagged type pulls in the
-// GraphicsConfig marker, which pulls in a Window. This fires only when the
-// world declares an incomplete render stack of its own. A Shader is not
-// required: a world that declares none renders through the engine's own
-// main-pass program.
+// A world with something to draw needs a Window to draw into. Filled by
+// companion injection: any `renders`-flagged type pulls one in. This fires only
+// when that injection could not run. A Shader is not required: a world that
+// declares none renders through the engine's own main-pass program.
 fn check_renderable_contract(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
-    let has_graphics = assets
+    let Some(reason) = assets
         .iter()
-        .any(|a| a.asset_type == RegisteredType::GraphicsConfig);
-    if !has_graphics {
+        .find(|a| a.asset_type.renders())
+        .map(|a| a.asset_type)
+    else {
         return;
-    }
+    };
     let has_window = assets
         .iter()
         .any(|a| a.asset_type == RegisteredType::Window);
     if !has_window {
-        errors.push(
-            "world renders (has a GraphicsConfig) but has no Window; declare one \
-             or remove the GraphicsConfig"
-                .to_string(),
-        );
+        errors.push(format!(
+            "world renders (it declares a {}) but has no Window; declare one \
+             or remove what renders",
+            reason.as_str()
+        ));
     }
 }
 

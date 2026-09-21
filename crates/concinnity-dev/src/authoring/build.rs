@@ -175,7 +175,7 @@ fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
 /// Run the full in-memory pipeline on a world.jsonl string, returning a
 /// ready-to-run World without touching any blob files on disk. The editor uses
 /// this to boot an empty (or otherwise non-renderable) world from a seeded
-/// GraphicsConfig so a window still opens.
+/// Window so one still opens.
 pub(crate) fn build_world_from_str<'a>(
     source: impl Into<WorldSource<'a>>,
 ) -> std::io::Result<World> {

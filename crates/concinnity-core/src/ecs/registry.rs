@@ -65,7 +65,7 @@ macro_rules! for_each_component {
             // world and survive into a blob; `runtime` entries are only ever
             // minted by a running world.
             stored: {
-                Window            => $crate::components::Window { gen, external, singleton, consumed },
+                Window            => $crate::components::Window { gen, external, singleton, renders, consumed },
                 GraphicsConfig    => $crate::components::GraphicsConfig { gen, external, singleton, renders, consumed },
                 Shader            => $crate::components::Shader { manual, external, compiled, consumed },
                 Camera3D          => $crate::components::Camera3D { manual, external, useful_blank, live, args: Camera3D },
@@ -96,7 +96,7 @@ macro_rules! for_each_component {
                 AudioEmitter      => $crate::components::AudioEmitter { gen, external, useful_blank },
                 Sprite            => $crate::components::Sprite { gen, external, useful_blank, renders, live },
                 KeyBinding        => $crate::components::KeyBinding { gen, external, useful_blank, consumed },
-                Screen            => $crate::components::Screen { gen, external, useful_blank, consumed },
+                Screen            => $crate::components::Screen { gen, external, useful_blank, renders, consumed },
                 Decal             => $crate::components::Decal { gen, external, useful_blank, validate: decal, consumed },
                 VolumetricFog     => $crate::components::VolumetricFog { gen, external, useful_blank, validate: volumetric_fog, consumed },
                 PhysicsJoint             => $crate::components::PhysicsJoint { gen, external, consumed },
@@ -195,8 +195,9 @@ crate::for_each_component!(define_components);
 //     useful_blank              -- meaningful when declared with only default
 //                                  args, so authoring tools offer a plain add
 //                                  (world-side only)
-//     renders                   -- presence implies the world renders; drives
-//                                  the GraphicsConfig companion injection at
+//     renders                   -- presence implies the world is meant to be
+//                                  seen: it resolves the run to a windowed
+//                                  one, and pulls in a Window companion at
 //                                  build time (world-side only)
 //     live                      -- the running world re-reads this column
 //                                  every frame, so overwriting a component in

@@ -69,7 +69,7 @@ crate::define_systems! {
 
     OverlaySystem => crate::gfx::overlay::OverlaySystem {
         gate: schedule::overlay,
-        present_when: "the world declares a GraphicsConfig",
+        present_when: "the world runs with a window",
         phase: Early,
         after: [],
         before: [BehaviorSystem, SpawnSystem, GraphicsSystem, InputSystem, PhysicsSystem, AnimationSystem],
@@ -90,35 +90,35 @@ crate::define_systems! {
     },
     SpawnSystem => crate::spawn::SpawnSystem {
         gate: schedule::spawn,
-        present_when: "the world declares a GraphicsConfig",
+        present_when: "the world runs with a window",
         phase: PreRender,
         after: [BehaviorSystem],
         before: [GraphicsSystem],
     },
     SettingsSystem => crate::settings::system::SettingsSystem {
         gate: schedule::settings,
-        present_when: "the world declares a GraphicsConfig",
+        present_when: "the world runs with a window",
         phase: PreRender,
         after: [],
         before: [GraphicsSystem],
     },
     StreamingSystem => crate::gfx::streaming::system::StreamingSystem {
         gate: schedule::streaming,
-        present_when: "the world declares a GraphicsConfig",
+        present_when: "the world runs with a window",
         phase: PreRender,
         after: [],
         before: [GraphicsSystem],
     },
     GraphicsSystem => crate::gfx::system::GraphicsSystem {
         gate: schedule::graphics,
-        present_when: "the world declares a GraphicsConfig",
+        present_when: "the world runs with a window",
         phase: Late,
         after: [SpawnSystem, SettingsSystem, StreamingSystem],
         before: [InputSystem],
     },
     InputSystem => crate::input::system::InputSystem {
         gate: schedule::input,
-        present_when: "the world declares a GraphicsConfig",
+        present_when: "the world runs with a window",
         phase: Late,
         after: [GraphicsSystem],
         before: [],
@@ -227,7 +227,6 @@ crate::define_systems! {
 mod tests {
     use super::SYSTEMS;
     use concinnity_core::components::AudioEmitter;
-    use concinnity_core::components::GraphicsConfig;
     use concinnity_core::components::Story;
     use concinnity_core::ecs::SystemEntry;
     use concinnity_core::ecs::{ComponentAsset, World};
@@ -336,23 +335,23 @@ mod tests {
         }
     }
 
-    // A GraphicsConfig world gates the whole render band, and StreamingSystem
-    // runs immediately before GraphicsSystem so its `CameraRelativeView` is
-    // ready for that frame's submit. (Manifest-only: gating a GraphicsConfig
-    // never builds a GPU, unlike `start()`.)
+    // A windowed run gates the whole render band, and StreamingSystem runs
+    // immediately before GraphicsSystem so its `CameraRelativeView` is ready
+    // for that frame's submit. (Manifest-only: gating never builds a GPU,
+    // unlike `start()`.)
     #[test]
     fn streaming_runs_immediately_before_graphics() {
         let mut world = World::new();
-        world.add_component(GraphicsConfig::default());
+        world.insert_resource(crate::ecs::render_mode::RenderMode::Rendered);
         let manifest = world.system_manifest(SYSTEMS);
         let s = manifest
             .iter()
             .position(|n| *n == "StreamingSystem")
-            .expect("StreamingSystem present for a GraphicsConfig world");
+            .expect("StreamingSystem present for a windowed run");
         let g = manifest
             .iter()
             .position(|n| *n == "GraphicsSystem")
-            .expect("GraphicsSystem present for a GraphicsConfig world");
+            .expect("GraphicsSystem present for a windowed run");
         assert_eq!(
             g,
             s + 1,

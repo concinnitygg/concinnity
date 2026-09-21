@@ -80,11 +80,11 @@ pub(crate) fn start_app(
         hook.attach_shutdown(shutdown.clone());
     }
 
-    // Resolved before `start()` (while the GraphicsConfig is still present),
-    // so the render-loop choice doesn't depend on the config component, which
-    // `start()` drains. Only the macOS path branches on it.
+    // Resolved before `start()`, which is where the columns the resolution
+    // reads are drained. The runtime caches it, so `start()` publishes this
+    // same answer. Only the macOS path branches on it.
     #[cfg(target_os = "macos")]
-    let renders = concinnity_engine::ecs::renders(runtime.world());
+    let renders = runtime.render_mode().renders();
 
     // On macOS, NSApplication is a per-process singleton. Activate it once
     // before the first NSWindow is created.

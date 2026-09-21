@@ -3,7 +3,6 @@
 //! no streaming pool; each of these reads one of the resources this crate's
 //! render band parks there, or the systems it built.
 
-use concinnity_core::components::GraphicsConfig;
 use concinnity_core::ecs::World;
 use concinnity_core::render::backend::{GpuProfile, RenderBackend};
 use concinnity_host::store::paths::StateTree;
@@ -16,12 +15,17 @@ use crate::gfx::streaming::system::{StreamingPressure, StreamingState, Streaming
 use crate::gfx::system::hot_reload_sources::HotReloadSources;
 use crate::gfx::system::parked::{PushedFogSettings, TextureNameSlots};
 
-/// Whether the world needs a renderer. True when it declares a
-/// `GraphicsConfig` (pre-`start`) or has a constructed `GraphicsSystem`
-/// (post-`start`, after the config component has been drained), so callers can
-/// decide on the render loop regardless of timing.
+/// Whether the world runs with a renderer: the run mode `Runtime::start`
+/// resolved and published, or a constructed `GraphicsSystem` for a world
+/// started some other way.
+///
+/// Answers the same either side of `start`, so a caller choosing a loop does
+/// not have to care about the timing. A runtime that has not resolved yet
+/// should ask `Runtime::render_mode` instead, which resolves on demand.
 pub fn renders(world: &World) -> bool {
-    world.query::<GraphicsConfig>().next().is_some()
+    world
+        .resource::<crate::ecs::render_mode::RenderMode>()
+        .is_some_and(|m| m.renders())
         || world.systems().iter().any(|s| {
             s.downcast_ref::<crate::gfx::system::GraphicsSystem>()
                 .is_some()
@@ -133,15 +137,20 @@ pub fn animation_system_mut(world: &mut World) -> Option<&mut AnimationSystem> {
 mod tests {
     use super::*;
 
-    // A GraphicsConfig marks a rendering world. `renders` reports it before
-    // `start` (while the component is present), the pre-start signal callers
-    // use to choose the render loop. (The post-start GraphicsSystem path can't
-    // be unit-tested here: its `init` builds the GPU backend.)
+    // The published run mode is what `renders` reports, which is the signal
+    // callers use to choose the loop. (The post-start GraphicsSystem path
+    // can't be unit-tested here: its `init` builds the GPU backend.)
     #[test]
-    fn graphics_config_makes_world_render() {
+    fn the_published_run_mode_is_what_renders_reports() {
+        use crate::ecs::render_mode::RenderMode;
+
         let mut world = World::new();
+        assert!(!renders(&world), "an unresolved world renders nothing");
+
+        world.insert_resource(RenderMode::Headless);
         assert!(!renders(&world));
-        world.add_component(GraphicsConfig::default());
+
+        world.insert_resource(RenderMode::Rendered);
         assert!(renders(&world));
     }
 

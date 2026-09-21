@@ -199,10 +199,13 @@ fn list_expanded(source: WorldSource<'_>, json_path: &str) -> std::io::Result<()
 // `World::start` runs) applied to the built world, each system paired with the
 // condition from its registry entry. The world is built exactly as the runtime
 // would, so the reported schedule cannot drift from what actually runs.
+//
+// The render band gates on the published run mode, which `manifest_lines`
+// supplies from the world's content alone.
 fn list_systems(source: WorldSource<'_>, json_path: &str) -> std::io::Result<()> {
     let mut world = crate::authoring::build_world_from_str(source)?;
     complete(&mut world)?;
-    let lines = manifest_lines(&world);
+    let lines = manifest_lines(&mut world);
 
     if lines.is_empty() {
         println!("{} runs no systems.", json_path);
@@ -232,7 +235,13 @@ fn complete(world: &mut concinnity_core::ecs::World) -> std::io::Result<()> {
 // capturing stdout. The phase and reason columns come from the static schedule
 // table (`ecs::SYSTEMS`), keyed by the manifest's system name; the phase is what
 // a system written outside the engine anchors to.
-fn manifest_lines(world: &concinnity_core::ecs::World) -> Vec<String> {
+//
+// Publishes the run mode the render band gates on before taking the manifest,
+// from the world's content rather than from a GPU probe: a listing describes
+// the world, so it must not change with the machine that runs `cn list`.
+fn manifest_lines(world: &mut concinnity_core::ecs::World) -> Vec<String> {
+    let mode = concinnity_engine::ecs::render_mode::from_content(world);
+    world.insert_resource(mode);
     let manifest = world.system_manifest(concinnity_engine::ecs::SYSTEMS);
     let width = manifest.iter().map(|n| n.len()).max().unwrap_or(0);
     let phase_width = concinnity_core::ecs::Phase::ALL
@@ -276,17 +285,17 @@ mod tests {
     // condition that includes it.
     #[test]
     fn manifest_lines_report_the_world_schedule_with_reasons() {
-        let world = crate::authoring::build_world_from_str(
+        let mut world = crate::authoring::build_world_from_str(
             "[\"GraphicsConfig\",{\"$id\":\"gfx\"}]\n\
              [\"Camera3D\",{\"$id\":\"cam\",\"controller\":{\"free_fly\":true}}]\n",
         )
         .unwrap();
-        let lines = manifest_lines(&world);
+        let lines = manifest_lines(&mut world);
         let joined = lines.join("\n");
         assert!(joined.contains("GraphicsSystem"), "{joined}");
         assert!(joined.contains("Camera3DSystem"), "{joined}");
-        // The reason column is present (GraphicsSystem gates on a GraphicsConfig).
-        assert!(joined.contains("GraphicsConfig"), "{joined}");
+        // The reason column is present.
+        assert!(joined.contains("the world runs with a window"), "{joined}");
         // And the phase column, which is what a system written outside the
         // engine names to place itself.
         assert!(joined.contains("PreRender"), "{joined}");
@@ -301,12 +310,12 @@ mod tests {
             crate::authoring::build_world_from_str("[\"GraphicsConfig\",{\"$id\":\"gfx\"}]\n")
                 .unwrap();
         assert!(
-            !manifest_lines(&world).join("\n").contains("DebugHud"),
+            !manifest_lines(&mut world).join("\n").contains("DebugHud"),
             "the world declares no DebugHud of its own"
         );
         complete(&mut world).unwrap();
         assert!(
-            manifest_lines(&world).join("\n").contains("DebugHud"),
+            manifest_lines(&mut world).join("\n").contains("DebugHud"),
             "the injected debug HUD brings its system with it"
         );
     }
@@ -475,7 +484,7 @@ mod tests {
 
     #[test]
     fn manifest_lines_of_an_empty_world_are_empty() {
-        let world = crate::authoring::build_world_from_str("").unwrap();
-        assert!(manifest_lines(&world).is_empty());
+        let mut world = crate::authoring::build_world_from_str("").unwrap();
+        assert!(manifest_lines(&mut world).is_empty());
     }
 }

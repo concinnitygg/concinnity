@@ -1865,6 +1865,11 @@ impl GraphicsSystem {
             Ok(backend) => self.backend = Some(backend),
             Err(e) => {
                 tracing::error!("GraphicsSystem: backend build failed: {e}");
+                // The run already resolved to a windowed one, so this machine
+                // has a GPU that refused rather than no GPU at all. Leave the
+                // cause where `Runtime::start` reads it, so the failure reaches
+                // the caller instead of a loop that draws nothing.
+                ctx.insert_resource(crate::ecs::RenderInitFailure(e));
                 return None;
             }
         }

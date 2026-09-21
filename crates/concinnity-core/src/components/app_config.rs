@@ -32,6 +32,9 @@ use alloc::string::{String, ToString};
 /// `max_memory_mb` and `job_threads` are `0` for "auto", where the engine sizes
 /// both from the host machine. A non-zero value overrides that choice, clamped
 /// to what the machine can safely give.
+///
+/// `headless` keeps a world that could draw from opening a window. A world
+/// that draws nothing runs that way already.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct AppConfigArgs {
@@ -61,6 +64,10 @@ pub struct AppConfigArgs {
     /// Worker threads for the shared job pool. `0` = auto (one per core, less
     /// one for the main thread). A non-zero value never exceeds the core count.
     pub job_threads: u32,
+    /// Run with no window and no renderer, whatever the world holds. `false`
+    /// (the default) lets the content decide: a world with something to draw
+    /// opens a window, one without runs headless either way.
+    pub headless: bool,
 }
 
 impl Default for AppConfigArgs {
@@ -74,6 +81,7 @@ impl Default for AppConfigArgs {
             home: String::new(),
             max_memory_mb: 0,
             job_threads: 0,
+            headless: false,
         }
     }
 }
@@ -95,6 +103,15 @@ mod tests {
         // Zero is "no budget declared", not "no memory and no threads".
         assert_eq!(a.max_memory_mb, 0);
         assert_eq!(a.job_threads, 0);
+        // Unset lets the world's content decide whether a window opens.
+        assert!(!a.headless);
+    }
+
+    #[test]
+    fn headless_parses_and_bakes_through_to_the_runtime_half() {
+        let a: AppConfigArgs = serde_json::from_str(r#"{"headless":true}"#).unwrap();
+        assert!(a.headless);
+        assert!(AppConfig::bake(a).headless);
     }
 
     #[test]
@@ -133,6 +150,8 @@ pub struct AppConfig {
     pub max_memory_mb: u32,
     /// Worker threads for the shared job pool. `0` = auto.
     pub job_threads: u32,
+    /// Run with no window and no renderer, whatever the world holds.
+    pub headless: bool,
 }
 
 impl AppConfig {
@@ -144,6 +163,7 @@ impl AppConfig {
             home: args.home,
             max_memory_mb: args.max_memory_mb,
             job_threads: args.job_threads,
+            headless: args.headless,
         }
     }
 }

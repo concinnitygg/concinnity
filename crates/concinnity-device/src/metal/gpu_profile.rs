@@ -12,12 +12,10 @@ use objc2_metal::{MTLCreateSystemDefaultDevice, MTLDevice, MTLGPUFamily};
 // Probe the system default GPU's profile without building the renderer, for the
 // auto-config quality ceiling that must be resolved before the backend (and its
 // render targets) are created. Creates only the cheap default-device handle,
-// which is dropped immediately. `UNKNOWN` when no Metal device is available.
-pub(crate) fn probe_gpu_profile() -> GpuProfile {
-    match MTLCreateSystemDefaultDevice() {
-        Some(device) => device_profile(&device),
-        None => GpuProfile::UNKNOWN,
-    }
+// which is dropped immediately. `None` when the machine exposes no Metal device
+// at all, which is what resolves a run to headless.
+pub(crate) fn probe_gpu_profile() -> Option<GpuProfile> {
+    MTLCreateSystemDefaultDevice().map(|device| device_profile(&device))
 }
 
 // Highest Apple GPU family the device supports, as a generation rank (7 = M1 ..

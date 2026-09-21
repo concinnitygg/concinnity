@@ -1,8 +1,8 @@
 // Companion-asset declarations. Some assets imply others must exist to
-// function: anything that renders needs a GraphicsConfig, and a GraphicsConfig
-// in turn needs a Window. Which types render is the registry's `renders` flag;
-// GraphicsConfig's own companions are declared here. The injection pass in
-// `companion.rs` applies the resulting specs to the world.
+// function: anything that renders needs a Window to render into. Which types
+// render is the registry's `renders` flag, the same one the runtime resolves a
+// windowed run from. The injection pass in `companion.rs` applies the
+// resulting specs to the world.
 //
 // This is build-time-only authoring logic; the asset data structs live in
 // concinnity-core alongside their runtime `Component` impls.
@@ -22,19 +22,9 @@ pub(crate) struct CompanionSpec {
     pub args: serde_json::Value,
 }
 
-// The lone GraphicsConfig companion shared by every renderable asset: its
-// presence is the marker that a world renders.
-fn graphics_config_marker() -> Vec<CompanionSpec> {
-    vec![CompanionSpec {
-        name: "GraphicsConfig",
-        asset_type: RegisteredType::GraphicsConfig,
-        args: serde_json::json!({}),
-    }]
-}
-
-// GraphicsConfig is the marker that a world renders: its presence gates the
-// internal GraphicsSystem at runtime and pulls in the Window that system needs.
-fn graphics_config_companions() -> Vec<CompanionSpec> {
+// The lone companion shared by every renderable asset: the window it draws
+// into.
+fn window_companion() -> Vec<CompanionSpec> {
     vec![CompanionSpec {
         name: "Window",
         asset_type: RegisteredType::Window,
@@ -42,14 +32,13 @@ fn graphics_config_companions() -> Vec<CompanionSpec> {
     }]
 }
 
-// Companion specs implied by one asset of the given type. GraphicsConfig
-// declares the render stack; every other type flagged `renders` in the registry
-// implies the GraphicsConfig marker. Remaining types imply none.
+// Companion specs implied by one asset of the given type. Every type flagged
+// `renders` in the registry implies a Window; the rest imply none. Window
+// itself is flagged, and implying itself is a no-op the injection pass skips
+// by type.
 pub(crate) fn companions_for(asset_type: RegisteredType) -> Vec<CompanionSpec> {
-    if asset_type == RegisteredType::GraphicsConfig {
-        graphics_config_companions()
-    } else if asset_type.renders() {
-        graphics_config_marker()
+    if asset_type.renders() {
+        window_companion()
     } else {
         Vec::new()
     }
@@ -60,7 +49,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn renderable_assets_imply_graphics_config() {
+    fn renderable_assets_imply_a_window() {
         for ty in [
             RegisteredType::Prop,
             RegisteredType::Sprite,
@@ -71,13 +60,17 @@ mod tests {
             RegisteredType::SkinnedMesh,
             RegisteredType::EnvironmentMap,
             RegisteredType::MainMenu,
+            RegisteredType::Screen,
         ] {
             let specs = companions_for(ty);
             assert!(
-                specs
-                    .iter()
-                    .any(|c| c.asset_type == RegisteredType::GraphicsConfig),
-                "{} should imply a GraphicsConfig companion",
+                specs.iter().any(|c| c.asset_type == RegisteredType::Window),
+                "{} should imply a Window companion",
+                ty.as_str()
+            );
+            assert!(
+                !specs.iter().any(|c| c.asset_type == RegisteredType::Shader),
+                "{} should not imply a Shader",
                 ty.as_str()
             );
         }
@@ -85,14 +78,17 @@ mod tests {
 
     #[test]
     fn a_non_rendering_type_implies_no_companions() {
-        assert!(companions_for(RegisteredType::Window).is_empty());
         assert!(companions_for(RegisteredType::Mesh).is_empty());
+        assert!(companions_for(RegisteredType::PhysicsConfig).is_empty());
     }
 
+    // A GraphicsConfig no longer marks a world as rendering -- content does --
+    // but declaring one still states the intent, so it keeps pulling in a
+    // Window. That is what leaves an authored world that tunes the renderer
+    // before it has any geometry still opening one.
     #[test]
-    fn graphics_config_injects_a_window() {
+    fn graphics_config_still_implies_a_window() {
         let specs = companions_for(RegisteredType::GraphicsConfig);
         assert!(specs.iter().any(|c| c.asset_type == RegisteredType::Window));
-        assert!(!specs.iter().any(|c| c.asset_type == RegisteredType::Shader));
     }
 }

@@ -253,10 +253,10 @@ pub(crate) fn start_runtime(mut runtime: Runtime, options: RunOptions) -> Result
     tracing::info!("Running app...");
     runloop::install_ctrlc_handler(&runtime);
 
-    // Resolved before `start()` (while the GraphicsConfig is still present) and
-    // reused after, so the post-start loop choice doesn't depend on the config
-    // component, which `start()` drains.
-    let renders = crate::ecs::renders(runtime.world());
+    // Resolved before `start()`, which is where the columns the resolution
+    // reads are drained. The runtime caches it, so `start()` publishes this
+    // same answer rather than probing the GPU twice.
+    let renders = runtime.render_mode().renders();
 
     if let Some(max) = options.max_frames {
         for config in runtime.world_mut().query_mut::<GraphicsConfig>() {
@@ -275,7 +275,12 @@ pub(crate) fn start_runtime(mut runtime: Runtime, options: RunOptions) -> Result
 
     if let Err(e) = runtime.start() {
         // Returned rather than exiting the process, so the world's systems
-        // (and the GPU resources they hold) still drop on the way out.
+        // (and the GPU resources they hold) still drop on the way out. A
+        // renderer that refused gets the error screen as well, since a
+        // double-clicked app has no console to print to.
+        if let WorldError::RenderUnavailable(cause) = &e {
+            report_render_failure(cause);
+        }
         tracing::error!("failed to start app: {e}");
         return Err(e);
     }
@@ -293,6 +298,22 @@ pub(crate) fn start_runtime(mut runtime: Runtime, options: RunOptions) -> Result
     }
 
     Ok(())
+}
+
+// Report a renderer that refused, on screen where one can be stood up. The
+// machine has a GPU (a machine without one runs headless instead of reaching
+// here), so what is actionable is the driver, not the hardware.
+//
+// The screen draws through the same backend that just failed, so it may well
+// fail too; that is the console fallback, matching the blob-load path.
+fn report_render_failure(cause: &concinnity_core::render::error::RenderError) {
+    let message = format!(
+        "This app could not start its renderer.\n\n{cause}\n\n\
+         Updating your graphics driver is the usual fix."
+    );
+    if !crate::error_screen::show("Concinnity", &message) {
+        eprintln!("{message}");
+    }
 }
 
 // Capture the last presented frame on the way out of a serial run, when

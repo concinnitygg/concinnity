@@ -21,12 +21,13 @@ pub(crate) fn select(world: Inner) -> Box<dyn Driver> {
     headless(world)
 }
 
-// The loop an already-loaded engine runtime runs on. A build with no backend
-// feature has no renderer for the windowed loop to drive, so the world comes
-// straight back off it onto the headless one.
+// The loop an already-loaded engine runtime runs on, which is the runtime's own
+// answer: it resolves a world with nothing to draw, a world that asked for
+// headless, a build with no backend, and a machine with no GPU all to the same
+// place. Anything else keeps the windowed loop.
 #[cfg(feature = "std")]
-pub(crate) fn adopt(runtime: concinnity_engine::Runtime) -> Box<dyn Driver> {
-    if concinnity_engine::HAS_RENDER_BACKEND {
+pub(crate) fn adopt(mut runtime: concinnity_engine::Runtime) -> Box<dyn Driver> {
+    if runtime.render_mode().renders() {
         Box::new(runtime)
     } else {
         headless(runtime.into_world())
@@ -43,7 +44,7 @@ pub(crate) fn headless(world: Inner) -> Box<dyn Driver> {
 
 #[cfg(test)]
 mod tests {
-    use crate::components::{GraphicsConfig, TextLabel};
+    use crate::components::{AppConfig, GraphicsConfig, PhysicsConfig, TextLabel};
     use crate::{App, World};
 
     // The whole point of the driver being a value: a `std` build can run a
@@ -63,17 +64,61 @@ mod tests {
             .expect("the run ends");
     }
 
-    // A world authored to be seen runs headless too: the GraphicsConfig that
-    // gates the render stack into a windowed run has no system to gate in here.
+    // A world authored to be seen runs headless too: what would gate the render
+    // stack into a windowed run has no system to gate in here.
     #[test]
     fn a_world_that_would_render_runs_headless_as_well() {
         let mut world = World::new();
         world.add_component(GraphicsConfig::default());
+        world.add_component(TextLabel {
+            content: "Hello, world!".into(),
+            ..Default::default()
+        });
 
         App::from_world(world)
             .into_headless()
             .run()
             .expect("the run ends");
+    }
+
+    // Start `world` on whatever loop the default selection picks, with windows
+    // banned first: a selection that regressed to the windowed loop panics
+    // naming the backend instead of blocking on an event loop the harness
+    // cannot end. Asserting on `start` rather than `run` because the headless
+    // loop runs until its last system finishes, which a world carrying a
+    // never-ending system never does.
+    fn assert_default_loop_is_headless(world: World) {
+        concinnity_testing::forbid_windows();
+        let mut app = App::from_world(world);
+        app.driver_mut().start().expect("the world starts");
+    }
+
+    // The opt-out, through the default selection rather than `into_headless`: a
+    // world with plenty to draw stays off the windowed loop because it asked
+    // to.
+    #[test]
+    fn a_world_asking_for_headless_takes_the_headless_loop_by_default() {
+        let mut world = World::new();
+        world.add_component(TextLabel {
+            content: "Hello, world!".into(),
+            ..Default::default()
+        });
+        world.add_component(AppConfig {
+            headless: true,
+            ..Default::default()
+        });
+
+        assert_default_loop_is_headless(world);
+    }
+
+    // A world holding nothing to draw takes the headless loop as well, which is
+    // what keeps a simulation-only world from opening an empty window.
+    #[test]
+    fn a_world_with_nothing_to_draw_takes_the_headless_loop_by_default() {
+        let mut world = World::new();
+        world.add_component(PhysicsConfig::default());
+
+        assert_default_loop_is_headless(world);
     }
 
     // With no backend feature there is no renderer to drive, so the loop a

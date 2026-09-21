@@ -13,7 +13,12 @@ use concinnity_core::render::error::RenderResult;
 /// sizes at init. Each backend creates only the cheap handle it needs and
 /// classifies it: Metal the default-device handle, DirectX the DXGI adapter (no
 /// device / swapchain), Vulkan a surface-free instance (destroyed immediately).
-pub fn probe_gpu_profile() -> backend::GpuProfile {
+///
+/// `None` means the machine exposes no usable GPU at all. That is a different
+/// answer from a GPU this code cannot classify (`Some(GpuProfile::UNKNOWN)`):
+/// the first can only run headless, the second renders at an unclamped
+/// quality.
+pub fn probe_gpu_profile() -> Option<backend::GpuProfile> {
     #[cfg(backend_dx)]
     {
         crate::directx::probe_gpu_profile()
@@ -28,7 +33,7 @@ pub fn probe_gpu_profile() -> backend::GpuProfile {
     }
     #[cfg(not(any(backend_dx, backend_vk, backend_metal)))]
     {
-        backend::GpuProfile::UNKNOWN
+        None
     }
 }
 

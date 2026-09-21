@@ -1,6 +1,6 @@
 //! GraphicsSystem: the 3D renderer driver. An internal system (not a declarable
-//! asset); `World::start` constructs one when the world declares a
-//! `GraphicsConfig`. Deliberately a directory rather than a single file; the
+//! asset); `World::start` constructs one when the run resolved to a windowed
+//! one. Deliberately a directory rather than a single file; the
 //! system is large enough that splitting it by responsibility is worth it:
 //!   mod.rs       struct + System/Debug trait impls (init/step delegate out)
 //!   init.rs      run_init: one-time backend + draw-list setup
@@ -286,7 +286,10 @@ impl GraphicsSystem {
         if let Some(hooks) = &self.test_hooks {
             return hooks.gpu_profile;
         }
-        crate::device::probe_gpu_profile()
+        // A GPU that classifies as nothing clamps nothing. A machine with no
+        // GPU at all never reaches here: the run resolved to headless and this
+        // system was left out of the schedule.
+        crate::device::probe_gpu_profile().unwrap_or(backend::GpuProfile::UNKNOWN)
     }
 
     // Seed and persist the first-launch `Auto` quality preset.

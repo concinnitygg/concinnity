@@ -49,6 +49,7 @@ mod tests {
             home: String::new(),
             max_memory_mb: 512,
             job_threads: 2,
+            headless: false,
         });
 
         let driver: Box<dyn Driver> = Box::new(runtime);

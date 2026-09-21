@@ -56,15 +56,19 @@ fn build_preview_world_renders_from_in_memory_entries() {
         serde_json::json!({"type":"Room","args":{"$id":"room"}}),
     ]);
     assert!(
-        concinnity_engine::ecs::renders(
-            &h.build_preview_world().expect("authored entries build").0
-        ),
+        h.build_preview_world()
+            .expect("authored entries build")
+            .0
+            .renders(),
         "authored renderable entries render without disk"
     );
     // Empty entries: the seed keeps the preview window from going blank.
     let h = hook(Vec::new());
     assert!(
-        concinnity_engine::ecs::renders(&h.build_preview_world().expect("empty world seeds").0),
+        h.build_preview_world()
+            .expect("empty world seeds")
+            .0
+            .renders(),
         "an empty world is seeded so it still renders"
     );
 }

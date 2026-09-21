@@ -294,11 +294,11 @@ fn available_templates() -> String {
 }
 
 // Whether the JSONL file at `world_path` already renders on its own: it
-// declares GraphicsConfig or a type whose presence implies it at build time
-// (the registry's `renders` flag, which drives cook's GraphicsConfig companion
-// injection). When true the world will start the GraphicsSystem without any
-// scaffold. Malformed lines are skipped silently: the regular load path will
-// surface any parse problems with full diagnostics.
+// declares a type flagged `renders` in the registry, the same flag the runtime
+// resolves a windowed run from. When true the world will start the
+// GraphicsSystem without any scaffold. Malformed lines are skipped silently:
+// the regular load path will surface any parse problems with full
+// diagnostics.
 fn has_renderer_trigger(world_path: &str) -> std::io::Result<bool> {
     let content = std::fs::read_to_string(world_path)?;
     Ok(jsonl_has_renderer_trigger(&content))
@@ -992,19 +992,26 @@ mod tests {
         assert!(jsonl_has_renderer_trigger(jsonl));
     }
 
-    // A Prop implies the world renders: cook injects the GraphicsConfig marker
-    // for it, so no scaffold is needed.
+    // A Prop is something to draw, so the world renders and no scaffold is
+    // needed.
     #[test]
     fn renderer_trigger_matches_prop() {
         let jsonl = r#"["Prop",{"$id":"crate"}]"#;
         assert!(jsonl_has_renderer_trigger(jsonl));
     }
 
-    // A bare Window does NOT start the renderer (cook injects no GraphicsConfig
-    // for it), so it is not a trigger.
+    // Declaring a window is itself a statement that the world is meant to be
+    // seen, so it needs no scaffold either.
     #[test]
-    fn renderer_trigger_ignores_window() {
+    fn renderer_trigger_matches_window() {
         let jsonl = r#"["Window",{"$id":"win"}]"#;
+        assert!(jsonl_has_renderer_trigger(jsonl));
+    }
+
+    // A simulation-only world draws nothing, so it does need the scaffold.
+    #[test]
+    fn renderer_trigger_ignores_a_world_that_draws_nothing() {
+        let jsonl = r#"["PhysicsConfig",{"$id":"phys"}]"#;
         assert!(!jsonl_has_renderer_trigger(jsonl));
     }
 

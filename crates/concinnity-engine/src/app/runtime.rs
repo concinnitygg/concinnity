@@ -10,7 +10,8 @@ use concinnity_host::thread::jobs::pool;
 use crate::app::run::LaunchRequest;
 use crate::app::startup_error::StartupError;
 use crate::blob;
-use crate::ecs::SYSTEMS;
+use crate::ecs::render_mode::{self, RenderMode};
+use crate::ecs::{RenderInitFailure, SYSTEMS};
 use crate::shutdown::ShutdownToken;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +40,11 @@ pub struct Runtime {
     // What the launch asked the engine to arm; published at every `start`, so a
     // world loaded later inherits it.
     launch: LaunchRequest,
+    // How this world runs, resolved on first ask. Cached because the resolution
+    // probes the GPU, and because the caller asks before `start` (a windowed
+    // macOS run must activate NSApplication ahead of the first window) while
+    // `start` itself needs the same answer once the columns it reads are gone.
+    render_mode: Option<RenderMode>,
 }
 
 impl Default for Runtime {
@@ -58,6 +64,7 @@ impl Runtime {
             pacer: Default::default(),
             clock: Default::default(),
             launch: LaunchRequest::default(),
+            render_mode: None,
         }
     }
 
@@ -208,9 +215,30 @@ impl Runtime {
         self.world
             .insert_resource(Clock(crate::app::clock::monotonic_micros));
         self.world.insert_resource(self.launch);
+        // Before `world.start`, which both drains the columns the resolution
+        // reads and runs the gates that read the result.
+        let mode = self.render_mode();
+        self.world.insert_resource(mode);
         self.world.start(SYSTEMS)?;
         self.status = RuntimeStatus::Started;
+        // A world that resolved to a windowed run and then could not build one
+        // has a GPU that refused, not a machine without one. Report it rather
+        // than leaving the loop to spin over a renderer that draws nothing.
+        if let Some(failure) = self.world.remove_resource::<RenderInitFailure>() {
+            return Err(WorldError::RenderUnavailable(failure.0));
+        }
         Ok(())
+    }
+
+    /// How this world runs: with a window and a renderer, or with neither.
+    ///
+    /// Resolved on the first call and cached, so the GPU is probed once. Ask
+    /// before [`start`](Runtime::start): several of the columns the resolution
+    /// reads are drained there.
+    pub fn render_mode(&mut self) -> RenderMode {
+        *self
+            .render_mode
+            .get_or_insert_with(|| render_mode::resolve_and_report(&self.world))
     }
 
     // Point the runtime-writable state (`settings`, `saves/`, `crashes/`, the
@@ -327,6 +355,8 @@ impl Runtime {
     pub fn load_world(&mut self, world: World) {
         self.world = world;
         self.status = RuntimeStatus::Created;
+        // The new world decides for itself whether it opens a window.
+        self.render_mode = None;
     }
 
     /// Advance the world one frame, for a caller that drives its own outer
@@ -398,6 +428,7 @@ mod tests {
             home: String::new(),
             max_memory_mb: 512,
             job_threads: 2,
+            headless: false,
         });
         runtime.start().unwrap();
 
@@ -450,6 +481,7 @@ mod tests {
             home: String::new(),
             max_memory_mb: 256,
             job_threads: 1,
+            headless: false,
         });
         runtime.load_world(world);
 
@@ -490,6 +522,7 @@ mod tests {
             home: String::new(),
             max_memory_mb: 128,
             job_threads: 1,
+            headless: false,
         });
 
         let mut runtime = Runtime::from_world(world);
@@ -547,6 +580,7 @@ mod tests {
             home: "state".to_string(),
             max_memory_mb: 0,
             job_threads: 0,
+            headless: false,
         });
         runtime.start().unwrap();
 

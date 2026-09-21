@@ -77,12 +77,11 @@ This launches an editor UI where you can create your first world.
 #### Library Usage
 
 ```rust
-use concinnity::components::{GraphicsConfig, TextLabel};
+use concinnity::components::TextLabel;
 use concinnity::{App, World};
 
 fn main() {
     let mut world = World::new();
-    world.add_component(GraphicsConfig::default());
     world.add_component(TextLabel {
         content: "Hello, world!".to_string(),
         centered: true,

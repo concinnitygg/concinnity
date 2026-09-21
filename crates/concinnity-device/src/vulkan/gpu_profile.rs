@@ -5,16 +5,16 @@
 //! auto-config quality ceiling can be resolved before the backend (and its render
 //! targets) are built. Mirrors `VkContext::gpu_profile` exactly (vendor id, device
 //! type, summed DEVICE_LOCAL heaps) and the standalone `metal/gpu_profile.rs`
-//! pattern. Returns `UNKNOWN` on any failure (no loader, instance-create fails, no
-//! physical device), which the resolver treats as "no clamp".
+//! pattern. Returns `None` on any failure (no loader, instance-create fails, no
+//! physical device), which resolves the run to headless.
 
 use ash::vk;
 use concinnity_core::render::backend::{
     GpuClassInput, GpuProfile, GpuVendor, apple_family_from_device_name, classify_tier,
 };
 
-pub(crate) fn probe_gpu_profile() -> GpuProfile {
-    probe_device().unwrap_or(GpuProfile::UNKNOWN)
+pub(crate) fn probe_gpu_profile() -> Option<GpuProfile> {
+    probe_device()
 }
 
 fn probe_device() -> Option<GpuProfile> {

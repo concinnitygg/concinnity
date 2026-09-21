@@ -342,23 +342,26 @@ fn list_systems_names_each_system_and_its_gate() {
     let printed = stdout(&out);
     assert!(printed.contains("system(s), in order"), "got: {printed}");
     assert!(printed.contains("GraphicsSystem"), "got: {printed}");
-    // The gate column names the asset that pulled the system in.
-    assert!(printed.contains("GraphicsConfig"), "got: {printed}");
+    // The gate column names the condition that pulled the system in.
+    assert!(
+        printed.contains("the world runs with a window"),
+        "got: {printed}"
+    );
 }
 
 // An injected asset has no line in the authored file, so `cn explain` printing a
-// pasteable one is the only way to override it. The label's render marker is
-// the companion every drawn world receives.
+// pasteable one is the only way to override it. The window a label is drawn in
+// is the companion every drawn world receives.
 #[test]
 fn explain_prints_an_injected_asset_as_a_pasteable_line() {
     let project = Project::with_world(HELLO_WORLD);
-    let out = project.cn(&["explain", "GraphicsConfig"]);
-    expect_ok(&out, "cn explain GraphicsConfig");
+    let out = project.cn(&["explain", "Window"]);
+    expect_ok(&out, "cn explain Window");
 
     let printed = stdout(&out);
     assert!(printed.contains("injected:companion"), "got: {printed}");
     assert!(
-        printed.contains("\n[\"GraphicsConfig\",{\"$id\":\"GraphicsConfig\""),
+        printed.contains("\n[\"Window\",{\"$id\":\"Window\""),
         "got: {printed}"
     );
 }

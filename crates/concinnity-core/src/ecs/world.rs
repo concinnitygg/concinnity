@@ -305,6 +305,17 @@ impl World {
         self.components.component_census()
     }
 
+    /// Whether the world holds anything to draw: geometry, text, a sprite, a
+    /// screen, or a window (see
+    /// [`ComponentTag::renders`](crate::ecs::ComponentTag::renders)).
+    ///
+    /// This is what decides a world runs windowed rather than headless. Some
+    /// of the columns it reads are drained during [`start`](World::start), so
+    /// ask before starting the world.
+    pub fn renders(&self) -> bool {
+        self.components.renders()
+    }
+
     /// Borrow the event queue for event type E, if any have been sent. Mirror of
     /// `PipelineContext::events`, for code holding a `World` directly (tests).
     pub fn events<E: 'static>(&self) -> Option<&Events<E>> {

@@ -183,9 +183,32 @@ mod tests {
         );
     }
 
+    // A world that draws nothing pulls in no window to draw it into.
     #[test]
     fn no_injection_without_trigger() {
-        let mut assets = vec![serde_json::json!({"type":"Window","args":{"$id":"w"}})];
+        let mut assets = vec![serde_json::json!({"type":"PhysicsConfig","args":{"$id":"p"}})];
+        inject(&mut assets);
+        assert_eq!(assets.len(), 1);
+    }
+
+    #[test]
+    fn text_injects_a_window() {
+        let mut assets =
+            vec![serde_json::json!({"type":"TextLabel","args":{"$id":"t","content":"hi"}})];
+        inject(&mut assets);
+        assert!(
+            assets
+                .iter()
+                .any(|v| registered_type(v) == Some(RegisteredType::Window))
+        );
+    }
+
+    // A world that draws nothing gains no renderer config either: the cook
+    // stopped injecting one once content, not a marker, decided the run mode.
+    #[test]
+    fn nothing_injects_a_graphics_config() {
+        let mut assets =
+            vec![serde_json::json!({"type":"TextLabel","args":{"$id":"t","content":"hi"}})];
         inject(&mut assets);
         assert!(
             !assets
@@ -195,29 +218,17 @@ mod tests {
     }
 
     #[test]
-    fn text_injects_graphics_config() {
-        let mut assets =
-            vec![serde_json::json!({"type":"TextLabel","args":{"$id":"t","content":"hi"}})];
-        inject(&mut assets);
-        assert!(
-            assets
-                .iter()
-                .any(|v| registered_type(v) == Some(RegisteredType::GraphicsConfig))
-        );
-    }
-
-    #[test]
-    fn text_does_not_inject_duplicate_graphics_config() {
+    fn text_does_not_inject_duplicate_windows() {
         let mut assets = vec![
             serde_json::json!({"type":"TextLabel","args":{"$id":"t","content":"hi"}}),
-            serde_json::json!({"type":"GraphicsConfig","args":{"$id":"gfx"}}),
+            serde_json::json!({"type":"Window","args":{"$id":"w"}}),
         ];
         inject(&mut assets);
-        let gfx_count = assets
+        let windows = assets
             .iter()
-            .filter(|v| registered_type(v) == Some(RegisteredType::GraphicsConfig))
+            .filter(|v| registered_type(v) == Some(RegisteredType::Window))
             .count();
-        assert_eq!(gfx_count, 1);
+        assert_eq!(windows, 1);
     }
 
     // A label naming no Font compiles no atlas for one: the renderer draws it
@@ -312,7 +323,9 @@ mod tests {
     #[test]
     fn camera3d_injects_no_companions() {
         // The camera controller is now a field on Camera3D, not an injected
-        // system, so a bare Camera3D pulls in nothing.
+        // system, so a bare Camera3D pulls in nothing. Nor is a camera by
+        // itself something to draw: it is a viewpoint onto content the world
+        // does not have yet.
         let mut assets = vec![serde_json::json!({"type":"Camera3D","args":{"$id":"c"}})];
         inject(&mut assets);
         assert_eq!(assets.len(), 1);

@@ -1,7 +1,8 @@
 //! Gate builders for the system table (`define_systems!` in `registry`). Each
-//! gate inspects the world's content and returns the constructed system when
-//! its gating components are present, or `None` to leave it out of the
-//! schedule. `World::start` and `World::system_manifest` both run these same
+//! gate inspects the world and returns the constructed system when what it
+//! gates on is there, or `None` to leave it out of the schedule. Most read the
+//! world's components; the render band reads the run mode `Runtime::start`
+//! resolved and published before any of them ran. `World::start` and `World::system_manifest` both run these same
 //! gates, so what the manifest reports and what `start` builds cannot drift.
 //!
 //! Gates construct their system, so every system constructor must stay cheap
@@ -19,7 +20,6 @@ use concinnity_core::components::CameraTrack;
 use concinnity_core::components::DebugHud;
 use concinnity_core::components::FpsCounter;
 use concinnity_core::components::FrameReport;
-use concinnity_core::components::GraphicsConfig;
 use concinnity_core::components::HitRegion;
 use concinnity_core::components::KeyBinding;
 use concinnity_core::components::LoadingOverlay;
@@ -35,14 +35,21 @@ use concinnity_core::components::TriggerVolume;
 use concinnity_core::ecs::World;
 use concinnity_core::resource::SkinnedMeshTable;
 
+// The render band's shared gate: the run mode `Runtime::start` resolved and
+// published before building any system. A world reaching here without one
+// never went through `Runtime::start` (the headless loop builds its own table),
+// so the absent case is headless.
+fn rendered(world: &World) -> bool {
+    world
+        .resource::<crate::ecs::render_mode::RenderMode>()
+        .is_some_and(|m| m.renders())
+}
+
 // OverlaySystem: paired with GraphicsSystem (same gate) -- it shapes the
 // overlay draw list graphics submits. Scheduled first so the menu state it
 // publishes gates every later system this same tick.
 pub(crate) fn overlay(world: &World) -> Option<crate::gfx::overlay::OverlaySystem> {
-    world
-        .query::<GraphicsConfig>()
-        .next()
-        .map(|_| crate::gfx::overlay::OverlaySystem::new())
+    rendered(world).then(crate::gfx::overlay::OverlaySystem::new)
 }
 
 // SkyRotationSystem: present whenever the world declares a `SkyRotation`.
@@ -72,10 +79,7 @@ pub(crate) fn behavior(world: &World) -> Option<concinnity_core::behavior::Behav
 // a despawn is applied before the transform push and a spawn reuses slots
 // freed this same frame.
 pub(crate) fn spawn(world: &World) -> Option<crate::spawn::SpawnSystem> {
-    world
-        .query::<GraphicsConfig>()
-        .next()
-        .map(|_| crate::spawn::SpawnSystem::new())
+    rendered(world).then(crate::spawn::SpawnSystem::new)
 }
 
 // SettingsSystem: paired with GraphicsSystem (same gate) -- it applies the
@@ -83,10 +87,7 @@ pub(crate) fn spawn(world: &World) -> Option<crate::spawn::SpawnSystem> {
 // the settings snapshot GraphicsSystem's init resolves. Scheduled just before
 // GraphicsSystem so a change lands for this frame's submit.
 pub(crate) fn settings(world: &World) -> Option<crate::settings::system::SettingsSystem> {
-    world
-        .query::<GraphicsConfig>()
-        .next()
-        .map(|_| crate::settings::system::SettingsSystem::new())
+    rendered(world).then(crate::settings::system::SettingsSystem::new)
 }
 
 // StreamingSystem: paired with GraphicsSystem (same gate) -- it drives the
@@ -94,19 +95,12 @@ pub(crate) fn settings(world: &World) -> Option<crate::settings::system::Setting
 // Scheduled immediately before GraphicsSystem so a chunk world's screen rebase is
 // ready for this frame's submit and any texture/mesh upload lands before it.
 pub(crate) fn streaming(world: &World) -> Option<crate::gfx::streaming::system::StreamingSystem> {
-    world
-        .query::<GraphicsConfig>()
-        .next()
-        .map(|_| crate::gfx::streaming::system::StreamingSystem::new())
+    rendered(world).then(crate::gfx::streaming::system::StreamingSystem::new)
 }
 
-// GraphicsSystem: present whenever the world declares a `GraphicsConfig`
-// (the render marker).
+// GraphicsSystem: present whenever the run resolved to a rendered one.
 pub(crate) fn graphics(world: &World) -> Option<crate::gfx::system::GraphicsSystem> {
-    world
-        .query::<GraphicsConfig>()
-        .next()
-        .map(|_| crate::gfx::system::GraphicsSystem::new(crate::ecs::state_tree(world)))
+    rendered(world).then(|| crate::gfx::system::GraphicsSystem::new(crate::ecs::state_tree(world)))
 }
 
 // InputSystem: paired with GraphicsSystem (same gate) -- it samples the window
@@ -114,10 +108,7 @@ pub(crate) fn graphics(world: &World) -> Option<crate::gfx::system::GraphicsSyst
 // taken right after the draw (the OS event pump on Metal runs inside
 // draw_frame) and is fresh for every consumer below.
 pub(crate) fn input(world: &World) -> Option<crate::input::system::InputSystem> {
-    world
-        .query::<GraphicsConfig>()
-        .next()
-        .map(|_| crate::input::system::InputSystem::new())
+    rendered(world).then(crate::input::system::InputSystem::new)
 }
 
 // StatHud: present whenever the world declares a `StatHud`; built from that
