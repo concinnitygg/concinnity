@@ -14,13 +14,13 @@ use windows::Win32::Graphics::Direct3D12::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
+use crate::directx::builtin_shaders;
+use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::context::{DxContext, FRAMES};
 use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::root_constants::{RootConstants, root_dwords};
-use crate::directx::slang_builtins;
-use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::{create_uav_buffer, transition_barrier, uav_barrier};
 
 // Auto-exposure (EV adaptation) state. `resources` is `Some` only when the
@@ -43,8 +43,8 @@ pub(in crate::directx) struct AutoExposureState {
 pub(in crate::directx) fn compile_auto_exposure_shaders(
     hot_reload: bool,
 ) -> RenderResult<(Vec<u8>, Vec<u8>)> {
-    let build_cs = slang_builtins::AUTO_EXPOSURE_BUILD.compile(hot_reload)?;
-    let average_cs = slang_builtins::AUTO_EXPOSURE_AVERAGE.compile(hot_reload)?;
+    let build_cs = builtin_shaders::AUTO_EXPOSURE_BUILD.compile(hot_reload)?;
+    let average_cs = builtin_shaders::AUTO_EXPOSURE_AVERAGE.compile(hot_reload)?;
     Ok((build_cs, average_cs))
 }
 

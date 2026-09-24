@@ -478,7 +478,7 @@ pub(super) fn reload_shader_stages(
     backend: &mut dyn backend::RenderBackend,
 ) -> ShaderStageReloadResult {
     use concinnity_core::components::ShaderStage;
-    use concinnity_core::render::slang_programs::surface::Sources;
+    use concinnity_core::render::shader_programs::surface::Sources;
 
     let mut result = ShaderStageReloadResult::default();
     if shader_stages.is_empty() {

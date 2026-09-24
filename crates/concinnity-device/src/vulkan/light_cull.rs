@@ -1,44 +1,50 @@
-//! Clustered light-binning compute pass. Once per frame, before the Main pass,
-//! bins the scene's local lights (the `GpuLight` SSBO at global set 0 binding 9)
-//! into per-cluster index lists over a screen-tiled, exponential-depth froxel
-//! grid. The forward pass then shades each fragment from only its cluster's
-//! lights instead of iterating every light. Mirrors src/metal/light_cull.rs.
+//! Clustered binning compute pass. Once per frame, before the Main pass, bins
+//! the scene's local lights (the `GpuLight` SSBO at global set 0 binding 9) into
+//! per-cluster light lists and the reflection probes' influence boxes into
+//! per-cluster probe masks, over a screen-tiled, exponential-depth froxel grid.
+//! The forward, SSR and transparent passes then shade from only a fragment's
+//! cluster's lights and blend only its cluster's probes. Mirrors
+//! src/metal/light_cull.rs.
 
 use ash::vk;
-use concinnity_core::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIGHT_LIST_STRIDE, ClusterParams};
+use concinnity_core::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIST_LEN, ClusterParams};
 use concinnity_core::render::error::RenderResult;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
+use super::descriptor_layout::{Binding, PoolSizes};
 use super::pipeline::{SHADER_ENTRY, spv_module};
+use super::resources::create_descriptor_set_layout;
+use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout, VkDevice,
 };
 use crate::vulkan::record::Recorder;
-use crate::vulkan::slang_builtins::SlangCompile;
 
-// Byte size of the per-cluster light-index buffer: CLUSTER_COUNT blocks of
-// CLUSTER_LIGHT_LIST_STRIDE u32 (slot 0 = count, slots 1.. = light indices).
+// Byte size of the per-cluster list buffer: CLUSTER_LIST_LEN u32, every
+// cluster's light list and then every cluster's probe mask.
 pub(in crate::vulkan) fn cluster_list_size() -> vk::DeviceSize {
-    (CLUSTER_COUNT * CLUSTER_LIGHT_LIST_STRIDE) as vk::DeviceSize
-        * std::mem::size_of::<u32>() as vk::DeviceSize
+    CLUSTER_LIST_LEN as vk::DeviceSize * std::mem::size_of::<u32>() as vk::DeviceSize
 }
 
+// Binding of the probe records in the kernel's set.
+const PROBE_RECORDS_BINDING: u32 = 3;
+
 // Clustered-lighting GPU state: the binning compute pipeline, the per-cluster
-// light-index buffer it writes / the forward pass reads, and the `ClusterParams`
-// uniform buffers. The buffers are always allocated (the forward shaders
-// reference bindings 10 + 11 unconditionally, guarded by `use_clusters`); the
-// pipeline and its descriptor set exist only when the world has local lights.
+// list buffer it writes / the forward pass reads, and the `ClusterParams`
+// uniform buffers. All of it always exists (the forward shaders reference
+// bindings 10 + 11 unconditionally, guarded by `use_clusters`); the kernel runs
+// only on frames with a light or a probe to bin.
 pub(in crate::vulkan) struct VkLightCull {
-    pub pipeline: Option<OwnedPipeline>,
-    pub pipeline_layout: Option<OwnedPipelineLayout>,
-    pub _set_layout: Option<OwnedSetLayout>,
-    pub _descriptor_pool: Option<OwnedDescriptorPool>,
+    pub pipeline: OwnedPipeline,
+    pub pipeline_layout: OwnedPipelineLayout,
+    pub _set_layout: OwnedSetLayout,
+    pub _descriptor_pool: OwnedDescriptorPool,
     // One compute set per frame in flight (each pointing at that frame's
-    // `ClusterParams` UBO).
+    // `ClusterParams` UBO and probe records).
     pub sets: Vec<vk::DescriptorSet>,
-    // Per-cluster light-index lists. Device-local; written by the kernel and
-    // read by the forward pass at global set 0 binding 11.
+    // Per-cluster light lists and probe masks. Device-local; written by the kernel
+    // and read at global set 0 binding 11.
     pub cluster_buffer: PooledBuffer,
     // Per-frame `ClusterParams` UBOs (host-visible, persistently mapped), bound
     // at global set 0 binding 10 for the main camera.
@@ -50,6 +56,26 @@ pub(in crate::vulkan) struct VkLightCull {
 }
 
 impl VkLightCull {
+    // Point frame `frame`'s kernel set at that frame's probe records. Called
+    // when the set is first wired and whenever the frame's records buffer is
+    // replaced; the caller guarantees no submission still reads the set.
+    pub(in crate::vulkan) fn write_probe_records(
+        &self,
+        device: &VkDevice,
+        frame: usize,
+        records: vk::DescriptorBufferInfo,
+    ) {
+        let write = vk::WriteDescriptorSet::default()
+            .dst_set(self.sets[frame])
+            .dst_binding(PROBE_RECORDS_BINDING)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .buffer_info(std::slice::from_ref(&records));
+        // SAFETY: the write and the buffer info it borrows are live for the call,
+        // the set and buffer belong to this device, and the caller guarantees no
+        // submission still references the set.
+        unsafe { device.update_descriptor_sets(&[write], &[]) };
+    }
+
     // Destroy every owned GPU object. Called from `VkContext::drop` after
     // `wait_idle`.
     pub(in crate::vulkan) fn destroy(&mut self, _device: &VkDevice) {
@@ -60,42 +86,28 @@ impl VkLightCull {
 }
 
 // Descriptor set layout for the light-cull kernel: the `ClusterParams` UBO, the
-// per-scene `GpuLight` SSBO, and the per-cluster list SSBO.
-fn create_light_cull_set_layout(device: &VkDevice) -> RenderResult<OwnedSetLayout> {
-    let bindings = [
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(0)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::COMPUTE),
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(1)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::COMPUTE),
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(2)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::COMPUTE),
-    ];
-    let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
-    device
-        .create_descriptor_set_layout(&info)
-        .map_err(|e| super::error::map_vk_result(e, "light cull set layout"))
+// per-scene `GpuLight` SSBO, the per-cluster list SSBO and the frame's probe
+// records SSBO.
+fn light_cull_set_bindings() -> [Binding; 4] {
+    use vk::DescriptorType as T;
+    let compute = vk::ShaderStageFlags::COMPUTE;
+    [
+        (0, T::UNIFORM_BUFFER, compute),
+        (1, T::STORAGE_BUFFER, compute),
+        (2, T::STORAGE_BUFFER, compute),
+        (PROBE_RECORDS_BINDING, T::STORAGE_BUFFER, compute),
+    ]
 }
 
 // Build the whole clustered-lighting state. `local_light_buffer` is the
-// per-scene `GpuLight` SSBO the kernel bins; when the scene has no local lights
-// the pipeline + descriptor set are skipped (the graph then omits `LightCull`)
-// but the buffers are still allocated for the forward pass's unconditional binds.
+// per-scene `GpuLight` SSBO the kernel bins. Every set's probe records are
+// written by `write_probe_records` once the probe set exists.
 pub(in crate::vulkan) fn build_light_cull(
     alloc: &DeviceAllocator,
     device: &VkDevice,
     frames: usize,
     local_light_buffer: vk::Buffer,
     local_light_size: vk::DeviceSize,
-    has_local_lights: bool,
     hot_reload: bool,
 ) -> RenderResult<VkLightCull> {
     // Per-cluster light lists: device-local, written by compute, read by the
@@ -125,28 +137,14 @@ pub(in crate::vulkan) fn build_light_cull(
     )?;
     unclustered_buffer.write_val(0, &ClusterParams::ZERO);
 
-    if !has_local_lights {
-        return Ok(VkLightCull {
-            pipeline: None,
-            pipeline_layout: None,
-            _set_layout: None,
-            _descriptor_pool: None,
-            sets: Vec::new(),
-            cluster_buffer,
-            params_buffers,
-            unclustered_buffer,
-        });
-    }
-
-    let set_layout = create_light_cull_set_layout(device)?;
+    let set_layout = create_descriptor_set_layout(device, &light_cull_set_bindings())?;
     let set_layouts = [set_layout.handle()];
     let layout_info = vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
     let pipeline_layout = device
         .create_pipeline_layout(&layout_info)
         .map_err(|e| super::error::map_vk_result(e, "light cull pipeline layout"))?;
 
-    let spirv = super::slang_builtins::LIGHT_CULL
-        .compile(&super::slang_builtins::Ctx::plain(hot_reload))?;
+    let spirv = super::builtin_shaders::LIGHT_CULL.compile(hot_reload)?;
     let module = spv_module(device, &spirv)?;
     let stage = vk::PipelineShaderStageCreateInfo::default()
         .stage(vk::ShaderStageFlags::COMPUTE)
@@ -160,16 +158,9 @@ pub(in crate::vulkan) fn build_light_cull(
 
     // One compute set per frame, each pointing at that frame's params UBO.
     let f = frames as u32;
-    let sizes = [
-        vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::UNIFORM_BUFFER,
-            descriptor_count: f,
-        },
-        vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::STORAGE_BUFFER,
-            descriptor_count: 2 * f,
-        },
-    ];
+    let sizes = PoolSizes::default()
+        .sets(&light_cull_set_bindings(), f)
+        .build();
     let pool_info = vk::DescriptorPoolCreateInfo::default()
         .max_sets(f)
         .pool_sizes(&sizes);
@@ -221,10 +212,10 @@ pub(in crate::vulkan) fn build_light_cull(
     }
 
     Ok(VkLightCull {
-        pipeline: Some(pipeline),
-        pipeline_layout: Some(pipeline_layout),
-        _set_layout: Some(set_layout),
-        _descriptor_pool: Some(descriptor_pool),
+        pipeline,
+        pipeline_layout,
+        _set_layout: set_layout,
+        _descriptor_pool: descriptor_pool,
         sets,
         cluster_buffer,
         params_buffers,
@@ -239,21 +230,17 @@ impl VkContext {
         self.light_cull.params_buffers[frame_idx].write_val(0, params);
     }
 
-    // Dispatch the clustered light-binning pass. One invocation per cluster; the
+    // Dispatch the clustered binning pass. One invocation per cluster; the
     // kernel builds the cluster's world-space AABB and tests each local light's
-    // sphere against it, writing the surviving indices into `cluster_buffer`.
-    // The trailing barrier orders the write before the forward pass's read.
+    // sphere and each probe's influence box against it, writing the surviving
+    // indices into `cluster_buffer`. The trailing barrier orders the write
+    // before the forward pass's read.
     pub(in crate::vulkan) fn encode_light_cull(&self, rec: &Recorder<'_>, frame_idx: usize) {
-        let (Some(pipeline), Some(layout)) = (
-            self.light_cull.pipeline.as_ref(),
-            self.light_cull.pipeline_layout.as_ref(),
-        ) else {
-            return;
-        };
         let Some(&set) = self.light_cull.sets.get(frame_idx) else {
             return;
         };
-        rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, pipeline);
+        let layout = &self.light_cull.pipeline_layout;
+        rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, &self.light_cull.pipeline);
         rec.bind_descriptor_sets(vk::PipelineBindPoint::COMPUTE, layout, 0, &[set], &[]);
         // One invocation per cluster, 64-wide workgroups.
         rec.dispatch(CLUSTER_COUNT.div_ceil(64), 1, 1);
@@ -263,24 +250,9 @@ impl VkContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::gfx::render_types::MAX_LIGHTS_PER_CLUSTER;
-
-    // The kernel hardcodes the list stride + per-cluster cap as constants, so
-    // they must track the Rust values the CPU sizes the buffer with.
-    #[test]
-    fn kernel_cluster_constants_match_render_types() {
-        let src = concinnity_core::render::shaders::LIGHT_CULL;
-        assert!(src.contains(&format!(
-            "CLUSTER_LIGHT_LIST_STRIDE = {CLUSTER_LIGHT_LIST_STRIDE}u"
-        )));
-        assert!(src.contains(&format!(
-            "MAX_LIGHTS_PER_CLUSTER = {MAX_LIGHTS_PER_CLUSTER}u"
-        )));
-    }
 
     #[test]
-    fn cluster_list_size_covers_every_cluster() {
-        let expected = (CLUSTER_COUNT * CLUSTER_LIGHT_LIST_STRIDE) as vk::DeviceSize * 4;
-        assert_eq!(cluster_list_size(), expected);
+    fn cluster_list_size_covers_every_list() {
+        assert_eq!(cluster_list_size(), CLUSTER_LIST_LEN as vk::DeviceSize * 4);
     }
 }

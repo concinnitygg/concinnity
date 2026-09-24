@@ -21,18 +21,18 @@ use objc2_metal::{
     MTLRenderCommandEncoder as _, MTLRenderPassDescriptor, MTLRenderPipelineState, MTLStoreAction,
 };
 
+use crate::metal::builtin_shaders::ShaderProgram;
 use crate::metal::context::MtlContext;
 use crate::metal::encode::RenderEncode;
 use crate::metal::post::fullscreen::{
-    FullscreenBlend, build_slang_fullscreen_pipeline, set_fragment_sampler_range,
+    FullscreenBlend, build_fullscreen_pipeline, set_fragment_sampler_range,
 };
 use crate::metal::scoped_encoder::ScopedEncoder;
-use crate::metal::slang_builtins::SlangLib;
 
 // Fragment sampler index the textured variant reads the bindless pool through.
-// slangc splits the combined screen sources into texture + sampler pairs at
-// 0..3, then the probe block's sampler takes 4, so the pool's own sampler lands
-// after them; the emitted `[[sampler(5)]]` is what pins it.
+// The screen sources split into texture + sampler pairs at 0..3 and the probe
+// block's sampler takes 4, so the pool's own sampler follows them; the shader's
+// `register(s5)` is what pins it.
 const RT_POOL_SAMPLER_INDEX: usize = 5;
 
 // Build one RT-reflection pipeline from the given single-source variant: a
@@ -45,10 +45,10 @@ const RT_POOL_SAMPLER_INDEX: usize = 5;
 // non-RT device cannot load.
 pub(crate) fn build_rt_reflection_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
-    fragment: &SlangLib,
+    fragment: &ShaderProgram,
     hot_reload: bool,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    build_slang_fullscreen_pipeline(
+    build_fullscreen_pipeline(
         device,
         fragment,
         MTLPixelFormat::RGBA16Float,
@@ -130,13 +130,24 @@ impl MtlContext {
         enc.set_fragment_texture(gb_normal_depth, 1);
         enc.set_fragment_texture(gb_roughness, 2);
         enc.set_fragment_texture(self.scene.env_map.prefilter.as_ref(), 3);
-        // Local reflection-probe cubes, through their argument buffer: a missed
-        // reflection ray reflects the box-projected scene capture instead of
-        // the foreign sky HDR (the source the forward IBL specular term uses).
-        // The ProbeSet's count gates use.
-        self.bind_probe_cubes(&enc);
+        // The reflection-probe set: a missed reflection ray reflects the
+        // box-projected scene capture instead of the foreign sky HDR (the source
+        // the forward IBL specular term uses), blending the probes the main
+        // camera's cluster grid (buffers 9 and 10) bins at the pixel. The
+        // ProbeSet's count gates use; count == 0 keeps the sky miss fallback.
+        // (buffer(7) is the bindless texture pool, bound only on the textured
+        // path below.)
+        self.probe_bindings().bind(
+            &enc,
+            crate::metal::probe_set::ProbeSlots {
+                set: 8,
+                records: 11,
+                cubes: Some(4),
+                cluster: Some((9, 10)),
+            },
+        );
         // The screen sources take the post sampler at 0..2; the prefilter cube
-        // at sampler(3) and the probe block's own sampler at sampler(4) take
+        // at sampler(3) and the probe array's own sampler at sampler(4) take
         // the cube sampler. The textured variant reads the bindless pool
         // through the repeat-address pool sampler after those.
         set_fragment_sampler_range(&enc, &self.composite.sampler, 0, 3);
@@ -156,16 +167,13 @@ impl MtlContext {
         // taken then. Direct buffer bindings, so Metal makes them resident.
         enc.set_fragment_buffer(accel.deformed_verts.as_ref(), 0, 5);
         enc.set_fragment_buffer(accel.skinned_indices.as_ref(), 0, 6);
-        // Reflection-probe set (count + per-probe parallax boxes) at buffer(8);
-        // count == 0 keeps the sky miss fallback. (buffer(7) is the bindless
-        // texture pool, bound only on the textured path below.)
-        enc.set_fragment_value(&self.probe.set, 8);
         // Textured path: bind the bindless albedo pool at buffer(7) (the
-        // same index the main pass uses) and declare its textures resident.
+        // same index the main pass uses), at the pool's offset in the main
+        // pass's block, and declare its textures resident.
         if textured && let Some(tex_args) = bindless_tex_args {
             enc.set_fragment_buffer(
                 tex_args.as_ref(),
-                0,
+                crate::metal::bindless_args::BINDLESS_POOL_OFFSET,
                 crate::metal::context::BINDLESS_TEXTURE_ARG_BUFFER_INDEX,
             );
             self.use_bindless_textures(&enc);

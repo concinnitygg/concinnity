@@ -131,7 +131,7 @@ pub fn export(options: &ExportOptions) -> io::Result<()> {
 
 // A folder bundle (Windows / Linux): the renamed player beside `data/`, then a
 // zip of that folder. `runtime_platform` is the player's stamped shader
-// platform (`hlsl`/`glsl`/`metal`, or None when unstamped), used to decide
+// platform (`directx`/`vulkan`/`metal`, or None when unstamped), used to decide
 // which native sidecars belong beside it.
 fn export_portable(
     meta: &AppMeta,
@@ -360,7 +360,7 @@ fn runtime_binary_path() -> io::Result<PathBuf> {
 // definition in that binary's main.rs); the shader-platform key follows it.
 const RUNTIME_PLATFORM_MARKER: &[u8] = b"cn-runtime-platform:";
 
-// Read the runtime player's stamped shader platform (`hlsl` / `glsl` / `metal`)
+// Read the runtime player's stamped shader platform (`directx` / `vulkan` / `metal`)
 // by scanning its binary for the backend marker. Returns None for an older,
 // unstamped runtime, warning once so the skipped backend check is visible.
 fn read_runtime_platform(runtime: &Path) -> io::Result<Option<String>> {
@@ -438,8 +438,8 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 fn backend_label(platform_key: &str) -> &str {
     match platform_key {
         "metal" => "Metal (MSL)",
-        "hlsl" => "DirectX (DXIL)",
-        "glsl" => "Vulkan (SPIR-V)",
+        "directx" => "DirectX (DXIL)",
+        "vulkan" => "Vulkan (SPIR-V)",
         other => other,
     }
 }
@@ -450,7 +450,7 @@ fn backend_label(platform_key: &str) -> &str {
 // Vulkan player reads as one feature list rather than two flags.
 fn feature_hint(platform_key: &str) -> &str {
     match platform_key {
-        "glsl" => ",vulkan",
+        "vulkan" => ",vulkan",
         _ => "",
     }
 }
@@ -842,7 +842,7 @@ fn copy_runtime_sidecars(
 // unstamped (unknown) runtime is treated as maybe-DX so nothing it needs is
 // dropped.
 fn runtime_wants_d3d12(runtime_platform: Option<&str>) -> bool {
-    !matches!(runtime_platform, Some("glsl") | Some("metal"))
+    !matches!(runtime_platform, Some("vulkan") | Some("metal"))
 }
 
 // Recursively copy the directory tree at `src` to `dst`.
@@ -1124,7 +1124,7 @@ mod tests {
         let dest = tmp.path().join("dest");
         fs::create_dir_all(&dest).unwrap();
         // A DX runtime pulls in its sibling DLLs and the Agility `D3D12/` dir.
-        copy_runtime_sidecars(&src.join("concinnity-run.exe"), Some("hlsl"), &dest).unwrap();
+        copy_runtime_sidecars(&src.join("concinnity-run.exe"), Some("directx"), &dest).unwrap();
 
         assert!(dest.join("amd_fidelityfx_dx12.dll").exists());
         assert!(dest.join("libconcinnity_ffi.dll").exists());
@@ -1148,7 +1148,7 @@ mod tests {
 
         let dest = tmp.path().join("dest");
         fs::create_dir_all(&dest).unwrap();
-        copy_runtime_sidecars(&src.join("concinnity-run.exe"), Some("glsl"), &dest).unwrap();
+        copy_runtime_sidecars(&src.join("concinnity-run.exe"), Some("vulkan"), &dest).unwrap();
 
         assert!(dest.join("amd_fidelityfx_vk.dll").exists());
         assert!(!dest.join("D3D12").exists());
@@ -1156,10 +1156,10 @@ mod tests {
 
     #[test]
     fn runtime_wants_d3d12_only_for_dx_or_unknown() {
-        assert!(runtime_wants_d3d12(Some("hlsl")));
+        assert!(runtime_wants_d3d12(Some("directx")));
         // Unstamped: keep everything the runtime may need.
         assert!(runtime_wants_d3d12(None));
-        assert!(!runtime_wants_d3d12(Some("glsl")));
+        assert!(!runtime_wants_d3d12(Some("vulkan")));
         assert!(!runtime_wants_d3d12(Some("metal")));
     }
 
@@ -1168,12 +1168,12 @@ mod tests {
         // Surround the stamp with binary noise, as it would appear in a real
         // executable, and terminate it with the stamp's NUL.
         let mut buf = vec![0xAAu8, 0x00, 0xFF, b'x'];
-        buf.extend_from_slice(b"cn-runtime-platform:hlsl\0");
+        buf.extend_from_slice(b"cn-runtime-platform:directx\0");
         buf.extend_from_slice(&[0x01, 0x02, 0x03]);
-        assert_eq!(find_platform_stamp(&buf).as_deref(), Some("hlsl"));
+        assert_eq!(find_platform_stamp(&buf).as_deref(), Some("directx"));
 
         // Each backend token is recovered verbatim.
-        for token in ["metal", "hlsl", "glsl"] {
+        for token in ["metal", "directx", "vulkan"] {
             let stamp = format!("cn-runtime-platform:{token}\0");
             assert_eq!(
                 find_platform_stamp(stamp.as_bytes()).as_deref(),
@@ -1202,10 +1202,10 @@ mod tests {
     #[test]
     fn backend_label_and_feature_hint_cover_each_platform() {
         assert_eq!(backend_label("metal"), "Metal (MSL)");
-        assert_eq!(backend_label("hlsl"), "DirectX (DXIL)");
-        assert_eq!(backend_label("glsl"), "Vulkan (SPIR-V)");
-        assert_eq!(feature_hint("glsl"), ",vulkan");
-        assert_eq!(feature_hint("hlsl"), "");
+        assert_eq!(backend_label("directx"), "DirectX (DXIL)");
+        assert_eq!(backend_label("vulkan"), "Vulkan (SPIR-V)");
+        assert_eq!(feature_hint("vulkan"), ",vulkan");
+        assert_eq!(feature_hint("directx"), "");
         assert_eq!(feature_hint("metal"), "");
     }
 
@@ -1271,7 +1271,7 @@ mod tests {
         verify_runtime_backend(None, cooked).unwrap();
         verify_runtime_backend(Some(cooked.key()), cooked).unwrap();
 
-        let err = verify_runtime_backend(Some("hlsl"), cooked).unwrap_err();
+        let err = verify_runtime_backend(Some("directx"), cooked).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("mismatch"), "got: {err}");
     }

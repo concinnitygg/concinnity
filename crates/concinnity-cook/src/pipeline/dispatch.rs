@@ -57,7 +57,7 @@ mod tests {
 
     #[test]
     fn voxel_chunk_payload_compiles_end_to_end() {
-        let world = r#"["Shader",{"$id":"scene_shader","fragment":"x.slang"}]
+        let world = r#"["Shader",{"$id":"scene_shader","fragment":"x.hlsl"}]
 ["BlockType",{"$id":"air","solid":false}]
 ["BlockType",{"$id":"stone","uv_min":[0,0],"uv_max":[1,1]}]
 ["VoxelChunk",{"$id":"chunk","palette":["air","stone"],"dim":[2,1,1],"blocks":[1,1]}]
@@ -411,17 +411,17 @@ mod tests {
         assert!(!bytes.is_empty());
     }
 
-    // The SdfVolume wrapper compiles the world's distance field through slangc,
+    // The SdfVolume wrapper compiles the world's distance field through dxc,
     // so a field that does not compile fails the build here rather than a
     // renderer's init. A missing source is a hard error, not an empty payload.
     #[test]
     fn compile_entry_sdf_volume_compiles_the_declared_field() {
         use concinnity_core::components::sdf_programs::SdfPrograms;
-        if !concinnity_slang::shader_tests_enabled() {
+        if !concinnity_shader::dxc_available() {
             return;
         }
         let dir = tempfile::tempdir().expect("tempdir");
-        let field = dir.path().join("blob.slang");
+        let field = dir.path().join("blob.hlsl");
         std::fs::write(
             &field,
             "float map(float3 p, SdfParams q, float t) { return sdSphere(p, 0.5); }\n\
@@ -436,13 +436,7 @@ mod tests {
         let bytes = (entry("SdfVolume").compile)(&args, &ctx()).expect("sdf compiles");
         let programs: SdfPrograms = postcard::from_bytes(&bytes).expect("payload decodes");
         // A surface volume that casts no shadow compiles its own pair only.
-        // How those two entries are grouped into artifacts is the backend's
-        // business, so the assertion is over the entries, not the artifacts.
-        let mut entries: Vec<&str> = programs
-            .programs
-            .iter()
-            .flat_map(|p| p.entries.iter().map(String::as_str))
-            .collect();
+        let mut entries: Vec<&str> = programs.programs.iter().map(|p| p.entry.as_str()).collect();
         entries.sort_unstable();
         assert_eq!(entries, ["raymarch_fragment", "raymarch_vertex"]);
         assert!(programs.programs.iter().all(|p| !p.artifact.is_empty()));
@@ -476,7 +470,7 @@ mod tests {
     fn cache_inputs_entry_covers_the_overriding_wrappers() {
         use crate::asset::SourceFiles;
         let dir = tempfile::tempdir().expect("tempdir");
-        let shader = dir.path().join("blob.slang");
+        let shader = dir.path().join("blob.hlsl");
         std::fs::write(&shader, b"x").expect("write field");
         let path = shader.to_str().unwrap();
 

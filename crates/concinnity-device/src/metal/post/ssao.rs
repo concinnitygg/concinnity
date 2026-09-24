@@ -18,14 +18,14 @@ use objc2_metal::{
     MTLTextureUsage,
 };
 
+use crate::metal::builtin_shaders::ShaderProgram;
 use crate::metal::context::MtlContext;
 use crate::metal::descriptors::TextureDesc;
 use crate::metal::encode::RenderEncode;
 use crate::metal::post::fullscreen::{
-    FullscreenBlend, FullscreenPass, PassTimer, build_slang_fullscreen_pipeline,
+    FullscreenBlend, FullscreenPass, PassTimer, build_fullscreen_pipeline,
     set_fragment_sampler_range,
 };
-use crate::metal::slang_builtins::SlangLib;
 
 // All SSAO (GTAO) state grouped into one feature unit: the resolved settings,
 // the kernel intermediate target, the kernel + blur pipelines, and the 1×1 white
@@ -52,10 +52,10 @@ pub(crate) const SSAO_OCCLUSION_FORMAT: MTLPixelFormat = MTLPixelFormat::R8Unorm
 // `fullscreen_vertex`; `fragment` selects which single-source variant.
 pub(crate) fn build_ssao_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
-    fragment: &SlangLib,
+    fragment: &ShaderProgram,
     hot_reload: bool,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    build_slang_fullscreen_pipeline(
+    build_fullscreen_pipeline(
         device,
         fragment,
         SSAO_OCCLUSION_FORMAT,

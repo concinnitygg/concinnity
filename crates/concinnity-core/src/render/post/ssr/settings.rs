@@ -22,7 +22,7 @@ const MAX_DISTANCE: f32 = 200.0;
 
 // Number of ray-march samples the resolve shader takes. The step length is
 // `max_distance / MARCH_STEPS`, so a longer ray spends a longer stride rather
-// than more samples. Must match `SSR_MAX_STEPS` in the SSR resolve MSL.
+// than more samples. Must match `SSR_MAX_STEPS` in ssr.hlsl.
 const MARCH_STEPS: f32 = 48.0;
 
 // View-space intersection tolerance as a multiple of the march stride. A ray
@@ -35,16 +35,13 @@ const THICKNESS_SCALE: f32 = 2.5;
 /// no screen-space / ray-traced reflection. One value drives four shaders that
 /// must agree for the reflection pipeline to be self-consistent:
 ///
-/// - the SSR resolve gate (ssr.metal)
-/// - the RT-reflection resolve gate (rt_reflections.slang)
-/// - the roughness blur ramp (reflection_composite.metal)
-/// - the forward double-count fade (`REFL_RESOLVE_CUT` in main_shading.slang)
+/// - the SSR resolve gate (`ssr.hlsl`)
+/// - the RT-reflection resolve gate (`rt_reflections.hlsl`)
+/// - the roughness blur ramp (`reflection.hlsl`)
+/// - the forward double-count fade (`main_shading.hlsl`)
 ///
-/// All four shaders are compiled offline, so each declares the literal itself
-/// and a unit test locks every declaration to this value (the engine shaders in
-/// reflection_shaders_lock_shared_roughness_cut, main_shading.slang alongside this
-/// module). As an MSL `constant` it folds at compile time: sharing it costs
-/// nothing at runtime.
+/// Each declares the literal as a `static const`, and a unit test locks every
+/// declaration to this value.
 pub const REFLECTION_ROUGHNESS_CUT: f32 = 0.6;
 
 /// Clamped SSR tunables resolved from the authored asset fields. Held by the
@@ -123,6 +120,35 @@ mod tests {
     use crate::gfx::camera::MIN_ASPECT;
     use crate::sky::SkyOrientation;
     use crate::transform::IDENTITY;
+
+    // Every shader that declares the cut spells this value, and the four that
+    // gate on it all declare it.
+    #[test]
+    fn every_shader_roughness_cut_matches_canonical() {
+        let expected = alloc::format!(
+            "static const float REFLECTION_ROUGHNESS_CUT = {REFLECTION_ROUGHNESS_CUT:?};"
+        );
+        let mut declaring = alloc::vec::Vec::new();
+        for (name, src) in crate::render::shaders::SOURCES {
+            if src.contains("static const float REFLECTION_ROUGHNESS_CUT") {
+                assert!(
+                    src.contains(&expected),
+                    "{name} drifted from REFLECTION_ROUGHNESS_CUT"
+                );
+                declaring.push(*name);
+            }
+        }
+        declaring.sort_unstable();
+        assert_eq!(
+            declaring,
+            [
+                "main_shading.hlsl",
+                "reflection.hlsl",
+                "rt_reflections.hlsl",
+                "ssr.hlsl"
+            ]
+        );
+    }
 
     #[test]
     fn from_config_follows_the_toggle() {

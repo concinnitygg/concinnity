@@ -1,10 +1,11 @@
-// Change detection for the per-frame Metal argument buffers.
+// The per-frame Metal argument buffers: how a tier-2 block of resource ids is
+// laid out and written, and the change detection that keeps it from being
+// rewritten every frame.
 //
-// The bindless texture block and the probe cube block are written with an
-// argument encoder, one Obj-C message send per texture handle. Their contents
-// change only on a texture stream/evict, a probe bake, an env-map swap or a
-// transient-pool repack, but they live in a per-frame ring slot, so a change
-// has to be re-encoded into every slot before the encode can stop.
+// The bindless texture block is written one resource id per texture handle.
+// Its contents change only on a texture stream/evict, a probe bake, an env-map
+// swap or a transient-pool repack, but it lives in a per-frame ring slot, so a
+// change has to be rewritten into every slot before the writes can stop.
 //
 // [`SlotGates`] is that bookkeeping: one accepted signature per ring slot, so a
 // producer re-encodes a slot only when the signature it computes differs from
@@ -14,13 +15,67 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::render::shader_programs::metal::bindless_textures;
+use core::marker::PhantomData;
 use core::ptr::NonNull;
 use objc2::Message as _;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTLRenderCommandEncoder, MTLRenderStages, MTLResource, MTLResourceUsage, MTLTexture,
+    MTLBuffer, MTLRenderCommandEncoder, MTLRenderStages, MTLResource, MTLResourceID,
+    MTLResourceUsage, MTLTexture,
 };
+
+// Bytes one member of a tier-2 argument buffer occupies: its resource id.
+const RESOURCE_ID_BYTES: usize = size_of::<MTLResourceID>();
+
+// Byte offset of argument id `id` in a block of resource ids.
+const fn resource_id_offset(id: usize) -> usize {
+    id * RESOURCE_ID_BYTES
+}
+
+// Byte length of the bindless texture block with a pool of `pool_len` slots.
+pub(super) const fn bindless_block_len(pool_len: usize) -> usize {
+    resource_id_offset(bindless_textures::pool(pool_len))
+}
+
+// Where the pool starts inside the bindless texture block. A pass that reads the
+// pool alone binds the block at this offset, so its unsized array's first
+// element is the pool's first slot.
+pub(super) const BINDLESS_POOL_OFFSET: usize = resource_id_offset(bindless_textures::pool(0));
+
+// Writes texture handles into a tier-2 argument buffer as resource ids, at
+// `resource_id_offset(id)`. Bounds-checked against the buffer, so a wrong id is
+// a panic rather than a write past it. The borrow keeps the buffer alive, and a
+// Metal buffer's contents never move, so the base pointer is taken once.
+pub(super) struct ResourceIdWriter<'a> {
+    base: NonNull<MTLResourceID>,
+    ids: usize,
+    _buffer: PhantomData<&'a ProtocolObject<dyn MTLBuffer>>,
+}
+
+impl<'a> ResourceIdWriter<'a> {
+    pub(super) fn new(buffer: &'a ProtocolObject<dyn MTLBuffer>) -> Self {
+        Self {
+            base: buffer.contents().cast::<MTLResourceID>(),
+            ids: buffer.length() / RESOURCE_ID_BYTES,
+            _buffer: PhantomData,
+        }
+    }
+
+    pub(super) fn set(&mut self, id: usize, texture: &ProtocolObject<dyn MTLTexture>) {
+        assert!(
+            id < self.ids,
+            "argument id {id} past a block of {} ids",
+            self.ids
+        );
+        // SAFETY: `id` is within the buffer's length in whole resource ids, the
+        // buffer is shared storage the CPU may write and outlives `self`, and
+        // its contents pointer is page-aligned, which satisfies
+        // `MTLResourceID`'s alignment.
+        unsafe { self.base.add(id).write(texture.gpuResourceID()) };
+    }
+}
 
 // Folds resource identities and counters into one 64-bit value. Two signatures
 // comparing equal means every input was identical, so the consumer of the
@@ -156,7 +211,10 @@ impl ResidencySet {
 
 #[cfg(test)]
 mod tests {
-    use super::{Signature, SlotGates};
+    use super::{
+        BINDLESS_POOL_OFFSET, RESOURCE_ID_BYTES, Signature, SlotGates, bindless_block_len,
+        bindless_textures, resource_id_offset,
+    };
 
     #[test]
     fn signature_is_order_sensitive_over_counters() {
@@ -217,5 +275,21 @@ mod tests {
         gates.invalidate(1);
         assert!(gates.stale(1, 7));
         assert!(!gates.stale(1, 7));
+    }
+
+    // Every member of a tier-2 block is one resource id, so an argument id's
+    // byte offset is the id times that width, and the pool the transparent and
+    // RT passes bind alone starts right after the fixed members.
+    #[test]
+    fn a_resource_id_block_is_one_id_per_member() {
+        assert_eq!(RESOURCE_ID_BYTES, 8);
+        assert_eq!(resource_id_offset(bindless_textures::PROBE_CUBES), 32);
+        assert_eq!(BINDLESS_POOL_OFFSET, bindless_textures::FIXED * 8);
+        assert_eq!(bindless_block_len(0), BINDLESS_POOL_OFFSET);
+        assert_eq!(
+            bindless_block_len(1024),
+            (bindless_textures::FIXED + 1024) * 8
+        );
+        assert_eq!(BINDLESS_POOL_OFFSET % RESOURCE_ID_BYTES, 0);
     }
 }

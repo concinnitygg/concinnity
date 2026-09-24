@@ -518,7 +518,7 @@ mod tests {
         // queue, which runs them in order, so Main needs only the later wait.
         let mut b = GraphBuilder::new();
         let args = b.create_buffer("draw_args", buf());
-        let lights = b.create_buffer("cluster_light_list", buf());
+        let lights = b.create_buffer("cluster_lists", buf());
         let shadow = b.create_texture("shadow_map", tex());
         let scene = b.create_texture("scene", tex());
 
@@ -557,7 +557,7 @@ mod tests {
         // aliasing planner from treating them as concurrent.
         let mut b = GraphBuilder::new();
         let args = b.create_buffer("draw_args", buf());
-        let lights = b.create_buffer("cluster_light_list", buf());
+        let lights = b.create_buffer("cluster_lists", buf());
         let shadow = b.create_texture("shadow_map", tex());
         let scene = b.create_texture("scene", tex());
 

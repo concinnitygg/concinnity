@@ -31,12 +31,12 @@ use super::super::context::VkContext;
 use super::super::pipeline::*;
 use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::super::texture::*;
+use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::owned::{
     OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass, OwnedSetLayout, VkDevice,
 };
-use crate::vulkan::slang_builtins::SlangCompile;
 
-// Threads per group, matching `[numthreads(64, 1, 1)]` in model_history.slang.
+// Threads per group, matching `[numthreads(64, 1, 1)]` in model_history.hlsl.
 const MODEL_HISTORY_THREADGROUP: usize = 64;
 
 // Normal+depth target: rgb = unit view-space normal, a = positive linear view
@@ -368,8 +368,6 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
     scene: GbufferBindlessScene,
     hot_reload: bool,
 ) -> RenderResult<GbufferBindless> {
-    use super::super::slang_builtins;
-
     let GbufferDeviceCtx { alloc, device } = ctx;
     let GbufferBindlessDescriptors {
         descriptor_pool,
@@ -381,9 +379,8 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
         draw_args_buffers,
     } = records;
 
-    let compile_ctx = slang_builtins::Ctx::plain(hot_reload);
-    let vs = super::super::slang_builtins::GBUFFER_BINDLESS_VERT.compile(&compile_ctx)?;
-    let fs = super::super::slang_builtins::GBUFFER_BINDLESS_FRAG.compile(&compile_ctx)?;
+    let vs = super::super::builtin_shaders::GBUFFER_PREPASS_VERT_BINDLESS.compile(hot_reload)?;
+    let fs = super::super::builtin_shaders::GBUFFER_PREPASS_FRAG_BINDLESS.compile(hot_reload)?;
 
     // Set 0: GbView UBO (binding 0), the previous frame's model-history slot
     // (binding 1) and this frame's draw args (binding 2), all VERTEX.
@@ -511,7 +508,7 @@ struct ModelHistoryScene {
 
 // Build the model-history snapshot kernel: set 0 binds the record-count UBO at
 // binding 0, the frame's object buffer at 1 and the frame's history slot at 2,
-// which is the declaration order `model_history.slang` fixes.
+// which is the declaration order `model_history.hlsl` fixes.
 fn build_model_history(
     ctx: GbufferDeviceCtx,
     descriptor_pool: vk::DescriptorPool,
@@ -522,8 +519,7 @@ fn build_model_history(
 ) -> RenderResult<ModelHistoryPipeline> {
     let GbufferDeviceCtx { alloc, device } = ctx;
     let ModelHistoryScene { n_cull, frames } = scene;
-    let compile_ctx = super::super::slang_builtins::Ctx::plain(hot_reload);
-    let cs = super::super::slang_builtins::MODEL_HISTORY.compile(&compile_ctx)?;
+    let cs = super::super::builtin_shaders::MODEL_HISTORY.compile(hot_reload)?;
 
     let set_layout = create_descriptor_set_layout(
         device,
@@ -1254,15 +1250,14 @@ mod tests {
     // prev_clip the fragment consumes for the motion vector.
     #[test]
     fn gbuffer_shaders_compile() {
-        if !concinnity_slang::shader_tests_enabled() {
+        if !concinnity_shader::dxc_available() {
             return;
         }
-        let ctx = super::super::super::slang_builtins::Ctx::plain(false);
-        super::super::super::slang_builtins::GBUFFER_BINDLESS_VERT
-            .compile(&ctx)
+        super::super::super::builtin_shaders::GBUFFER_PREPASS_VERT_BINDLESS
+            .compile(false)
             .expect("gbuffer bindless vertex compiles");
-        super::super::super::slang_builtins::GBUFFER_BINDLESS_FRAG
-            .compile(&ctx)
+        super::super::super::builtin_shaders::GBUFFER_PREPASS_FRAG_BINDLESS
+            .compile(false)
             .expect("gbuffer bindless fragment compiles");
     }
 }

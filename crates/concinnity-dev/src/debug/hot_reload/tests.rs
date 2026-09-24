@@ -536,11 +536,11 @@ fn shader_stage_source_map_collects_unique_parent_dirs() {
     let mut m = ShaderStageSourceMap::new();
     m.entries.push(ShaderStageSourceEntry {
         stage: ShaderStage::Vertex,
-        resolved_path: "assets/shaders/sway.slang".to_string(),
+        resolved_path: "assets/shaders/sway.hlsl".to_string(),
     });
     m.entries.push(ShaderStageSourceEntry {
         stage: ShaderStage::Fragment,
-        resolved_path: "assets/other/custom.slang".to_string(),
+        resolved_path: "assets/other/custom.hlsl".to_string(),
     });
     let dirs = m.watch_dirs();
     assert_eq!(dirs.len(), 2);
@@ -557,26 +557,29 @@ fn shader_stage_source_map_skips_bare_filenames_in_watch_dirs() {
     let mut m = ShaderStageSourceMap::new();
     m.entries.push(ShaderStageSourceEntry {
         stage: ShaderStage::Vertex,
-        resolved_path: "standalone.slang".to_string(),
+        resolved_path: "standalone.hlsl".to_string(),
     });
     assert!(m.watch_dirs().is_empty());
 }
 
 #[test]
-fn slang_extension_is_an_asset_event() {
+fn a_shader_source_is_an_asset_event() {
     // The world Shader's files travel through the same watcher as the texture
     // / mesh paths; the closure routes them to the shader-stage flag rather
     // than the texture-decode batch.
-    let evt = Event::new(EventKind::Modify(notify::event::ModifyKind::Any))
-        .add_path(PathBuf::from("/tmp/scene.slang"));
-    assert!(is_asset_event(&evt));
+    for path in ["/tmp/scene.hlsl", "/tmp/SCENE.HLSL"] {
+        let evt = Event::new(EventKind::Modify(notify::event::ModifyKind::Any))
+            .add_path(PathBuf::from(path));
+        assert!(is_asset_event(&evt), "{path}");
+    }
 }
 
+// Case never decides whether a save triggers the rebuild.
 #[test]
 fn shader_extension_matches_case_insensitively() {
-    assert!(is_shader_extension("slang"));
-    assert!(is_shader_extension("Slang"));
-    assert!(is_shader_extension("SLANG"));
+    assert!(is_shader_extension("hlsl"));
+    assert!(is_shader_extension("HLSL"));
+    assert!(is_shader_extension("Hlsl"));
     assert!(!is_shader_extension("metal"));
     assert!(!is_shader_extension("png"));
     assert!(!is_shader_extension("glb"));
@@ -592,8 +595,8 @@ fn modified(path: &str) -> Event {
 #[test]
 fn each_extension_routes_to_its_reload_pass() {
     for (path, expected) in [
-        ("/tmp/lit.slang", ReloadKind::ShaderStages),
-        ("/tmp/LIT.SLANG", ReloadKind::ShaderStages),
+        ("/tmp/lit.hlsl", ReloadKind::ShaderStages),
+        ("/tmp/LIT.HLSL", ReloadKind::ShaderStages),
         ("/tmp/world.jsonl", ReloadKind::World),
         ("/tmp/WORLD.JSONL", ReloadKind::World),
         ("/tmp/intro.md", ReloadKind::Stories),
@@ -628,11 +631,11 @@ fn an_irrelevant_change_routes_nowhere() {
 #[test]
 fn a_shader_among_several_paths_still_routes_to_the_shader_pass() {
     let leading = Event::new(EventKind::Modify(notify::event::ModifyKind::Any))
-        .add_path(PathBuf::from("/tmp/lit.slang"))
+        .add_path(PathBuf::from("/tmp/lit.hlsl"))
         .add_path(PathBuf::from("/tmp/albedo.png"));
     let trailing = Event::new(EventKind::Modify(notify::event::ModifyKind::Any))
         .add_path(PathBuf::from("/tmp/albedo.png"))
-        .add_path(PathBuf::from("/tmp/lit.slang"));
+        .add_path(PathBuf::from("/tmp/lit.hlsl"));
     assert_eq!(classify_event(&leading), Some(ReloadKind::ShaderStages));
     assert_eq!(classify_event(&trailing), Some(ReloadKind::ShaderStages));
 }
@@ -654,12 +657,12 @@ fn creates_and_removes_route_like_modifies() {
 fn state_with_only_shader_stages_still_spawns_a_watcher() {
     // World loaded only via shader-stage edits (no textures, no
     // meshes, no LUTs, no IBL, no world.jsonl) still want the watcher
-    // alive so `.slang` saves trigger the recompile pass.
+    // alive so a shader save triggers the recompile pass.
     use concinnity_core::components::ShaderStage;
     let mut stages = ShaderStageSourceMap::new();
     stages.entries.push(ShaderStageSourceEntry {
         stage: ShaderStage::Vertex,
-        resolved_path: concinnity_host::scratch::path("asset_hot_reload_shader_only.slang")
+        resolved_path: concinnity_host::scratch::path("asset_hot_reload_shader_only.hlsl")
             .to_string_lossy()
             .into_owned(),
     });
@@ -1965,7 +1968,7 @@ fn reload_shader_stages_missing_source_counts_as_failed_without_a_rebuild() {
         stage: ShaderStage::Vertex,
         resolved_path: dir
             .path()
-            .join("zz_never_written_stage.slang")
+            .join("zz_never_written_stage.hlsl")
             .to_string_lossy()
             .into_owned(),
     });

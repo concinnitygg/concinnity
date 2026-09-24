@@ -3,41 +3,22 @@
 // Every other engine shader is a build-time artifact. This one was not, because
 // the world authors the field that completes the source, so all three backends
 // compiled it at world load through whatever compiler their platform ships.
-// slangc is not one of those: it is a subprocess, and no exported bundle
-// carries it. Compiling here is what keeps a player from needing one.
-//
-// What is emitted is what that backend's renderer consumes directly: SPIR-V for
-// Vulkan, a signed DXIL container for D3D12, and MSL text for Metal, whose
-// `newLibraryWithSource` is an always-present OS API and so needs no metallib.
-// Each artifact carries the digest of the source it came from, so a renderer
-// whose template has moved compiles instead of loading something stale.
+// Neither compiler is one of those: both are subprocesses, and no exported
+// bundle carries one. Compiling here is what keeps a player from needing one.
+// What is emitted is described in `compile::program`.
 
-use concinnity_core::components::compiled_programs::CompiledProgram;
 use concinnity_core::components::sdf_programs::SdfPrograms;
 use concinnity_core::platform::Platform;
-use concinnity_core::render::slang_programs::raymarch;
-use concinnity_core::render::slang_source;
-use concinnity_slang::{SlangJob, SlangTarget};
+use concinnity_core::render::shader_programs::raymarch;
 
-// What slangc emits for a host, and for a stage where the target needs one.
-// DXIL is the only one that takes a profile: it sets the container's feature
-// floor, which no target flag implies.
-fn target(platform: Platform, stage: raymarch::Stage) -> SlangTarget {
-    match platform {
-        Platform::Metal => SlangTarget::Metal,
-        Platform::Glsl => SlangTarget::Spirv,
-        Platform::Hlsl => SlangTarget::Dxil(match stage {
-            raymarch::Stage::Vertex => "vs_6_0",
-            raymarch::Stage::Fragment => "ps_6_0",
-        }),
-    }
-}
+use crate::compile::program;
 
 /// Compile every entry a volume with these flags draws with, from `field`.
 ///
-/// A failure names the entry and carries slangc's own diagnostic: an authored
-/// field with a syntax error has to fail the build here, where the message can
-/// point at it, rather than at a renderer's init on someone else's machine.
+/// A failure names the entry and carries the compiler's own diagnostic: an
+/// authored field with a syntax error has to fail the build here, where the
+/// message can point at it, rather than at a renderer's init on someone else's
+/// machine.
 pub(super) fn compile(
     name: &str,
     field: &str,
@@ -51,94 +32,55 @@ pub(super) fn compile(
         platform,
         volumetric,
         cast_shadows,
-        concinnity_slang::slangc_available(),
+        concinnity_shader::dxc_available(),
     )
 }
 
 // [`compile`] with the host's compiler availability supplied, so the
-// no-compiler path is reachable without uninstalling slangc.
-//
-// Reaching here means the payload cache had nothing for this volume, so its
-// field has to be compiled and there is no compiler. A world whose volumes are
-// already cooked never gets this far: the cache answers first and the compiler
-// is not part of its key.
+// no-compiler path is reachable without uninstalling one.
 fn compile_with(
     name: &str,
     field: &str,
     platform: Platform,
     volumetric: bool,
     cast_shadows: bool,
-    have_slangc: bool,
+    have_compiler: bool,
 ) -> std::io::Result<SdfPrograms> {
-    if !have_slangc {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!(
-                "SdfVolume '{name}': {}",
-                concinnity_slang::unavailable_reason()
-                    .unwrap_or("slangc not found and this volume has no compiled payload")
-            ),
-        ));
-    }
-    let work = concinnity_host::scratch::Scratch::dir(&format!("sdf-{name}"))?;
-    let mut programs = Vec::new();
-    for family in raymarch::families(volumetric, cast_shadows) {
-        let source = raymarch::source(family, platform, field);
-        let digest = slang_source::source_digest(&source);
-        for group in entry_groups(family, platform) {
-            let entries: Vec<&str> = group.iter().map(|p| p.entry).collect();
-            let job = SlangJob {
-                source: &source,
-                file_name: raymarch::FILE,
-                entries: &entries,
-                target: target(platform, group[0].stage),
-            };
-            let artifact = concinnity_slang::compile(&job, work.path()).map_err(|e| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!(
-                        "SdfVolume '{name}': compiling '{}': {e}",
-                        entries.join(", ")
-                    ),
-                )
-            })?;
-            programs.push(CompiledProgram {
-                entries: entries.iter().map(|e| e.to_string()).collect(),
-                source_digest: digest,
-                artifact,
-            });
-        }
-    }
+    let owner = format!("SdfVolume '{name}'");
+    program::require_compiler(&owner, have_compiler)?;
+    let sources: Vec<(raymarch::Family, String)> = raymarch::families(volumetric, cast_shadows)
+        .map(|family| (family, raymarch::source(family, platform, field)))
+        .collect();
+    let jobs: Vec<program::Job<'_>> = sources
+        .iter()
+        .flat_map(|(family, source)| {
+            raymarch::ALL
+                .iter()
+                .filter(move |p| p.family == *family)
+                .map(move |p| program::Job {
+                    file: raymarch::FILE,
+                    entry: p.entry,
+                    source,
+                })
+        })
+        .collect();
+    let programs = program::compile_all(&owner, &format!("sdf-{name}"), &jobs, platform, |_| "")?;
     Ok(SdfPrograms {
         field: field.to_string(),
         programs,
     })
 }
 
-// How a family's entries are grouped into artifacts.
-//
-// Metal takes both stages at once: slangc emits one MSL translation unit and
-// the runtime wants one library to pull both functions out of, so splitting
-// them would mean compiling the same unit twice at every world load. The other
-// two take one entry each, which is what a DXIL container is and what each of
-// those renderers already binds.
-fn entry_groups(
-    family: raymarch::Family,
-    platform: Platform,
-) -> Vec<Vec<&'static raymarch::Program>> {
-    let of_family: Vec<&raymarch::Program> = raymarch::ALL
-        .iter()
-        .filter(|p| p.family == family)
-        .collect();
-    match platform {
-        Platform::Metal => vec![of_family],
-        _ => of_family.into_iter().map(|p| vec![p]).collect(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // A minimal surface field, so a failing compile is the template's fault.
+    const SURFACE: &str = "float map(float3 p, SdfParams q, float t) { return sdSphere(p, 0.5); }\n\
+        SdfSurface shade(float3 p, float3 n, SdfParams q, float t, float2 uv) {\n\
+            SdfSurface s; s.albedo = float3(1.0, 1.0, 1.0); s.roughness = 0.5;\n\
+            s.metallic = 0.0; s.emissive = float3(0.0, 0.0, 0.0);\n\
+            s.transmitted = float3(0.0, 0.0, 0.0); return s; }\n";
 
     // A volume whose field has to be compiled on a host with no compiler is an
     // error naming the volume, not a payload that quietly draws nothing.
@@ -151,102 +93,56 @@ mod tests {
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
         let message = err.to_string();
         assert!(message.contains("blob"), "{message}");
-        assert!(message.contains("slangc"), "{message}");
+        assert!(
+            message.contains("compiled payload") || message.contains("dxc"),
+            "{message}"
+        );
     }
 
     // Each compile runs in its own scratch directory, so a payload that differs
     // between two compiles of the same field has stamped that directory in.
     #[test]
     fn a_volume_payload_is_the_same_on_every_compile() {
-        if !concinnity_slang::shader_tests_enabled() {
+        if !concinnity_shader::dxc_available() {
             return;
         }
-        let field = "float map(float3 p, SdfParams q, float t) { return sdSphere(p, 0.5); }\n\
-             SdfSurface shade(float3 p, float3 n, SdfParams q, float t, float2 uv) {\n\
-                 SdfSurface s; s.albedo = float3(1.0, 1.0, 1.0); s.roughness = 0.5;\n\
-                 s.metallic = 0.0; s.emissive = float3(0.0, 0.0, 0.0);\n\
-                 s.transmitted = float3(0.0, 0.0, 0.0); return s; }\n";
-        for platform in [Platform::Metal, Platform::Glsl] {
+        for platform in [Platform::Metal, Platform::Vulkan] {
             let compile = || {
-                compile_with("blob", field, platform, false, true, true)
+                compile_with("blob", SURFACE, platform, false, true, true)
                     .unwrap_or_else(|e| panic!("{platform:?}: {e}"))
             };
             assert_eq!(compile(), compile(), "{platform:?}");
         }
     }
 
-    // Every host takes the target its renderer can load without a toolchain of
-    // its own: Metal source text for `newLibraryWithSource`, and a container
-    // for the two that consume bytecode.
+    // Every artifact is one entry point, which is what a DXIL container is,
+    // what a Vulkan pipeline binds, and what one MSL translation carries.
+    // Metal's is MSL text, emitted on every host: a world cooked on Windows or
+    // Linux still gives a Metal player its field without a compiler.
     #[test]
-    fn each_host_emits_what_its_renderer_consumes() {
-        assert_eq!(
-            target(Platform::Metal, raymarch::Stage::Fragment),
-            SlangTarget::Metal
-        );
-        assert_eq!(
-            target(Platform::Glsl, raymarch::Stage::Vertex),
-            SlangTarget::Spirv
-        );
-    }
-
-    // DXIL is the one target whose profile is not implied, and it is per stage:
-    // a container built at the wrong one is rejected by the PSO, not by slangc.
-    #[test]
-    fn the_dxil_profile_follows_the_stage() {
-        assert_eq!(
-            target(Platform::Hlsl, raymarch::Stage::Vertex),
-            SlangTarget::Dxil("vs_6_0")
-        );
-        assert_eq!(
-            target(Platform::Hlsl, raymarch::Stage::Fragment),
-            SlangTarget::Dxil("ps_6_0")
-        );
-    }
-
-    // Metal takes a family's two stages as one artifact and the other two take
-    // one each, which is what keeps a Metal world load to one source compile
-    // per family instead of two.
-    #[test]
-    fn metal_groups_a_family_into_one_artifact_and_the_others_split_it() {
-        let metal = entry_groups(raymarch::Family::Surface, Platform::Metal);
-        assert_eq!(metal.len(), 1);
-        assert_eq!(
-            metal[0].iter().map(|p| p.entry).collect::<Vec<_>>(),
-            ["raymarch_vertex", "raymarch_fragment"]
-        );
-
-        for platform in [Platform::Hlsl, Platform::Glsl] {
-            let split = entry_groups(raymarch::Family::Shadow, platform);
-            assert_eq!(split.len(), 2, "{platform:?}");
-            assert!(split.iter().all(|g| g.len() == 1), "{platform:?}");
+    fn every_host_cooks_one_artifact_per_entry_for_every_target() {
+        if !concinnity_shader::dxc_available() {
+            return;
         }
-    }
-
-    // Every grouping covers its family's entries exactly once, whichever way it
-    // splits: a dropped entry is a pipeline that cannot be built at load.
-    #[test]
-    fn a_grouping_covers_every_entry_of_its_family_once() {
-        for family in [
-            raymarch::Family::Surface,
-            raymarch::Family::Volumetric,
-            raymarch::Family::Shadow,
-        ] {
-            let expected: Vec<&str> = raymarch::ALL
-                .iter()
-                .filter(|p| p.family == family)
-                .map(|p| p.entry)
-                .collect();
-            for platform in [Platform::Metal, Platform::Hlsl, Platform::Glsl] {
-                let mut got: Vec<&str> = entry_groups(family, platform)
-                    .iter()
-                    .flatten()
-                    .map(|p| p.entry)
-                    .collect();
-                got.sort_unstable();
-                let mut want = expected.clone();
-                want.sort_unstable();
-                assert_eq!(got, want, "{family:?} on {platform:?}");
+        for platform in Platform::ALL {
+            let programs = compile_with("blob", SURFACE, platform, false, true, true)
+                .unwrap_or_else(|e| panic!("{platform:?}: {e}"));
+            let entries: Vec<&str> = programs.programs.iter().map(|p| p.entry.as_str()).collect();
+            assert_eq!(
+                entries,
+                [
+                    "raymarch_vertex",
+                    "raymarch_fragment",
+                    "raymarch_shadow_vertex",
+                    "raymarch_shadow_fragment"
+                ],
+                "{platform:?}"
+            );
+            if platform == Platform::Metal {
+                for p in &programs.programs {
+                    let text = std::str::from_utf8(&p.artifact).expect("MSL is text");
+                    assert!(text.contains(&p.entry), "{}", p.entry);
+                }
             }
         }
     }

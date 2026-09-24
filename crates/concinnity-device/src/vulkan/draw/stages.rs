@@ -22,15 +22,12 @@ impl VkContext {
         // Vulkan polygon mode is pipeline state, so the wireframe view needs its
         // own main-pass pipelines; built here on the first wireframe frame.
         self.ensure_wireframe_pipelines();
-        // Shader hot-reload: if either the filesystem watcher or the debug
-        // `reload-shaders` command set the flag, rebuild every built-in
-        // pipeline from disk-resident source before this frame's passes
-        // start using them. The flag is cleared regardless of outcome so a
-        // failed rebuild (typo in a shader edit) doesn't loop, and the
-        // previous pipelines stay live so the session keeps rendering; only a
-        // device failure propagates. Wait for the GPU to drain first so
-        // swapping pipelines out from under in-flight command buffers is safe.
-        // Mirrors the DirectX `apply_pending_rebuilds`.
+        // Shader hot-reload: if the debug `reload-shaders` command set the flag, rebuild every
+        // built-in pipeline from disk-resident source before this frame's passes start using them.
+        // The flag is cleared regardless of outcome so a failed rebuild (typo in a shader edit)
+        // doesn't loop, and the previous pipelines stay live so the session keeps rendering; only a
+        // device failure propagates. Wait for the GPU to drain first so swapping pipelines out from
+        // under in-flight command buffers is safe. Mirrors the DirectX `apply_pending_rebuilds`.
         if self.shader_reload_requested() {
             self.clear_shader_reload_flag();
             self.wait_idle();

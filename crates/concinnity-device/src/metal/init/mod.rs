@@ -216,7 +216,7 @@ impl MtlContext {
             },
         )?;
         let targets = targets::build_targets(&gpu, &features)?;
-        let light_cull = scene_data::build_light_cull(&gpu, &local_lights)?;
+        let light_cull = scene_data::build_light_cull(&gpu)?;
         let shadow = shadow::build_shadow(&gpu, &vert_desc, &shadows, &light_uniforms)?;
         let spot_shadow = shadow::build_spot_shadow(&gpu, &spot_shadows, shadows.map_size)?;
         let cull = cull::build_cull(
@@ -310,7 +310,7 @@ impl MtlContext {
             cluster_params: ClusterParams::ZERO,
             particle,
             auto_exposure,
-            hot_reload: HotReloadState::spawn(hot_reload),
+            hot_reload: HotReloadState::new(hot_reload),
             world_shader: world_shaders[0].programs.cloned(),
             capture,
             model_history: ModelHistory::new(),

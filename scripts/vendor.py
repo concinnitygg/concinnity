@@ -12,7 +12,8 @@ property of the revision rather than of the host.
     vendor.py selftest                  check the digest gate, downloading nothing
 
 With no component named, every one applies, and a component the verb does not
-apply to is skipped: most are downloaded, `fidelityfx-vk` is built.
+apply to is skipped: most are downloaded, `fidelityfx-vk` is built, and `dxc`
+is downloaded on Windows and Linux and built from the same commit on macOS.
 
 A downloaded archive is checked against a pinned sha256 before it is unpacked,
 so a release re-tagged in place fails the fetch rather than reaching a build.
@@ -24,6 +25,7 @@ once, and the build only ever reads what it left behind.
 """
 
 import argparse
+import fnmatch
 import hashlib
 import io
 import os
@@ -33,6 +35,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import time
 import urllib.error
 import urllib.request
 import zipfile
@@ -44,72 +47,6 @@ VENDOR = ROOT / "vendor"
 
 def is_windows():
     return platform.system() == "Windows"
-
-
-class Slang:
-    """The Slang shader compiler, which every backend's shaders compile through.
-
-    Raising the pin is a deliberate change: a different compiler emits different
-    bytes for the same shader source, so the bump belongs in a commit alongside
-    whatever it was verified against.
-    """
-
-    name = "slang"
-    release = "2026.16.1"
-    reports_version = True
-    build_payload = None
-    summary = "the Slang shader compiler (slangc)"
-    # The build scripts that resolve this component out of `vendor/`.
-    watchers = ("crates/concinnity-slang/build.rs",)
-    slugs = {
-        ("Darwin", "arm64"): "macos-aarch64",
-        ("Darwin", "x86_64"): "macos-x86_64",
-        ("Linux", "aarch64"): "linux-aarch64",
-        ("Linux", "x86_64"): "linux-x86_64",
-        ("Windows", "ARM64"): "windows-aarch64",
-        ("Windows", "AMD64"): "windows-x86_64",
-    }
-    # sha256 of each published archive, taken from the release's own asset
-    # digests. Raising `release` means replacing every one of these: a pin that
-    # outlives its version accepts nothing, which is the intended failure.
-    sha256 = {
-        "macos-aarch64": "31bb295d0ead64f5906ae140fb42067029412ca02330c11ff8ea63986560216a",
-        "macos-x86_64": "ced9cd7f3773cdf1cb083bab96a806942d16d139614be104de47492253a38621",
-        "linux-aarch64": "ce0f5a1a0dc1824aa4d89b17df22c8c06911dc37b31a75cadb50850f97bd4bea",
-        "linux-x86_64": "6c271f69309af124cf948a9f442b813fec190feb46ff7a883e11001d29df005f",
-        "windows-aarch64": "315a18a2ee56803bf558778d91481b47cefb51df14207342afdc9a4d9166c588",
-        "windows-x86_64": "0fd3e6a9a5d05ed4cdd000d467f1ffb5d9701b827e83bfb428902a45c37ef8a5",
-    }
-
-    @staticmethod
-    def payload():
-        """The file inside the release that must be there for it to be usable."""
-        return Path("bin") / ("slangc.exe" if is_windows() else "slangc")
-
-    @classmethod
-    def url(cls, slug):
-        archive = "zip" if is_windows() else "tar.gz"
-        return (
-            "https://github.com/shader-slang/slang/releases/download"
-            f"/v{cls.release}/slang-{cls.release}-{slug}.{archive}"
-        )
-
-    @staticmethod
-    def version(payload):
-        """What the vendored binary reports, or None if it cannot be run."""
-        return first_line(run_quietly([str(payload), "-version"]))
-
-    @staticmethod
-    def alternatives():
-        """Where else the build would look, for `status` to report."""
-        found = []
-        on_path = shutil.which("slangc")
-        if on_path:
-            found.append(("PATH", Path(on_path)))
-        sdk = os.environ.get("VULKAN_SDK")
-        if sdk:
-            found.append(("VULKAN_SDK", Path(sdk) / Slang.payload()))
-        return found
 
 
 WINDOWS_X64 = {("Windows", "AMD64"): "windows-x86_64"}
@@ -124,7 +61,6 @@ class WindowsSdk:
     script looks is the whole check.
     """
 
-    reports_version = False
     build_payload = None
     slugs = WINDOWS_X64
     # No pinned digest yet, so `fetch` reports what it got and unpacks it.
@@ -133,16 +69,16 @@ class WindowsSdk:
                 "crates/concinnity-engine/build.rs", "crates/concinnity-dev/build.rs")
 
     @classmethod
-    def payload(cls):
+    def payload(cls, _slug):
         return Path(*cls.payload_parts)
 
-    @staticmethod
-    def version(payload):
+    @classmethod
+    def keep(cls, _slug):
         return None
 
-    @staticmethod
-    def alternatives():
-        return []
+    @classmethod
+    def report(cls, _exe):
+        return None
 
 
 class Agility(WindowsSdk):
@@ -238,7 +174,7 @@ class FidelityFxVulkan(WindowsSdk):
         built = api / "bin" / "amd_fidelityfx_vk.dll"  # Release carries no postfix
         if not built.is_file():
             sys.exit(f"the build left no {built.name} at {built}")
-        install(built, install_dir(cls, slug) / cls.payload())
+        install(built, install_dir(cls, slug) / cls.payload(slug))
 
     @classmethod
     def fix_shader(cls, shader):
@@ -281,32 +217,142 @@ class Streamline(WindowsSdk):
                 f"/v{cls.release}/streamline-sdk-v{cls.release}.zip")
 
 
+class Dxc:
+    """The DirectX Shader Compiler every engine shader compiles through.
+
+    One release for every host, since the SPIR-V, DXIL and MSL a build embeds
+    and the runtime shader cache's key are all functions of it. Windows and
+    Linux take Microsoft's release archive, cut to the compiler, the two
+    libraries it loads and the license files. Microsoft publishes no macOS
+    build, so a Mac builds the same tagged commit from source: a shallow clone
+    of it and three submodules, then `dxc`, `dxcompiler` and `dxildll` in
+    Release. That costs a compile measured in minutes (3.5 on a 12-core Apple
+    silicon Mac), once per pin; the tree it builds in is deleted afterwards and
+    only the installed release stays under `vendor/`.
+
+    Every copy reports the same commit, which is what the shader cache keys on.
+    The build counter beside it does not agree even between Microsoft's own
+    archives: the Windows one counts the full history, the Linux one a shallow
+    clone, as a source build here does too.
+    """
+
+    name = "dxc"
+    release = "1.9.2607"
+    commit = "0d3ee6b551b8fa768fbf825300ebab81047ef6a8"
+    summary = "Microsoft's DirectX Shader Compiler, which compiles every engine shader"
+    repo = "https://github.com/microsoft/DirectXShaderCompiler"
+    slugs = {
+        ("Windows", "AMD64"): "windows-x86_64",
+        ("Linux", "x86_64"): "linux-x86_64",
+        ("Darwin", "arm64"): "macos-aarch64",
+    }
+    # Upstream's asset names, which follow no scheme from one release to the next.
+    assets = {
+        "windows-x86_64": "dxc_2026_07_29.zip",
+        "linux-x86_64": "linux_dxc_2026_07_29.x86_x64.tar.gz",
+    }
+    sha256 = {
+        "windows-x86_64": "a1dfb116ba3eeae6a1582291b53a8e7bf65ad760676bd3194685c8f7367cd241",
+        "linux-x86_64": "55665c87824051ed4774ff3280a79ccbbb7d39243b9736ca5e98222134112d54",
+    }
+    # Upstream spells one of them LICENCE.
+    licenses = "LICEN[CS]E*"
+    # The tests' googletest is the fourth, and nothing here builds a test.
+    submodules = ("external/SPIRV-Headers", "external/SPIRV-Tools", "external/DirectX-Headers")
+    source_licenses = ("LICENSE.TXT", "ThirdPartyNotices.txt")
+    watchers = ("crates/concinnity-shader/build.rs",)
+
+    @classmethod
+    def url(cls, slug):
+        asset = cls.assets.get(slug)
+        return asset and f"{cls.repo}/releases/download/v{cls.release}/{asset}"
+
+    @classmethod
+    def payload(cls, slug):
+        return Path("bin", "x64", "dxc.exe") if slug.startswith("windows") else Path("bin", "dxc")
+
+    @classmethod
+    def keep(cls, slug):
+        """The compiler, the libraries it loads, and the licenses: the Linux
+        archive also carries LLVM's tools and static libraries, 1 GB unpacked."""
+        if slug.startswith("windows"):
+            return ("bin/x64/dxc.exe", "bin/x64/dxcompiler.dll", "bin/x64/dxil.dll", cls.licenses)
+        return ("bin/dxc", "lib/libdxcompiler.so", "lib/libdxil.so", cls.licenses)
+
+    @classmethod
+    def report(cls, exe):
+        """What a compiler says it is, which proves it loads its library."""
+        try:
+            done = subprocess.run([str(exe), "--version"], capture_output=True, text=True)
+        except OSError as e:
+            return f"does not run: {e}"
+        if done.returncode != 0:
+            return f"does not run: {(done.stderr or done.stdout).strip()}"
+        return done.stdout.strip().splitlines()[0]
+
+    @classmethod
+    def on_path(cls, slug):
+        """The copy a build falls back to when nothing is vendored."""
+        found = shutil.which(cls.payload(slug).name)
+        return found and Path(found)
+
+    @classmethod
+    def build_payload(cls, slug, _args):
+        for tool in ("git", "cmake", "ninja"):
+            require(tool)
+        work = VENDOR / ".build" / f"{cls.name}-{cls.release}"
+        src, tree = work / "src", work / "build"
+        started = time.monotonic()
+
+        if not (src / ".git").is_dir():
+            shutil.rmtree(src, ignore_errors=True)
+            git("clone", "--depth", "1", "--branch", f"v{cls.release}", cls.repo, src)
+        head = git_output("-C", src, "rev-parse", "HEAD")
+        if head != cls.commit:
+            sys.exit(f"v{cls.release} resolved to {head}, not the pinned {cls.commit}")
+        git("-C", src, "submodule", "update", "--init", "--depth", "1", "--", *cls.submodules)
+
+        # Explicit values before `-C`: the cache script never overrides one.
+        cmake("-G", "Ninja", "-S", src, "-B", tree,
+              "-DCMAKE_BUILD_TYPE=Release",
+              "-DHLSL_INCLUDE_TESTS=OFF", "-DSPIRV_BUILD_TESTS=OFF",
+              "-DLLVM_INCLUDE_TESTS=OFF", "-DCLANG_INCLUDE_TESTS=OFF",
+              "-C", src / "cmake" / "caches" / "PredefinedParams.cmake")
+        cmake("--build", tree, "--target", "dxc", "dxildll")
+
+        target = install_dir(cls, slug)
+        staging = VENDOR / f".{target.name}.incoming"
+        shutil.rmtree(staging, ignore_errors=True)
+        suffix = ".dylib" if slug.startswith("macos") else ".so"
+        install(tree / "bin" / "dxc", staging / cls.payload(slug))
+        for library in ("libdxcompiler", "libdxil"):
+            # The real file under the name the executable loads, not a symlink to it.
+            install((tree / "lib" / f"{library}{suffix}").resolve(),
+                    staging / "lib" / f"{library}{suffix}")
+        for name in cls.source_licenses:
+            install(src / name, staging / name)
+        shutil.rmtree(target, ignore_errors=True)
+        staging.replace(target)
+
+        shutil.rmtree(work)
+        if not any(work.parent.iterdir()):
+            work.parent.rmdir()
+        print(f"  built in {(time.monotonic() - started) / 60:.1f} min")
+
+
 COMPONENTS = {
     c.name: c
-    for c in [Slang, Agility, FidelityFx, FidelityFxVulkan, Xess, Streamline]
+    for c in [Dxc, Agility, FidelityFx, FidelityFxVulkan, Xess, Streamline]
 }
 
 
-def run_quietly(cmd):
-    """`cmd`'s output, or None if it could not be run or failed."""
-    try:
-        done = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return done.stdout + done.stderr if done.returncode == 0 else None
+def fetched_on(component, slug):
+    """Whether `slug` downloads this component rather than building it."""
+    return component.url is not None and component.url(slug) is not None
 
 
-def described(component, payload):
-    """What to call the vendored copy: its own reported release, or the pin."""
-    if not component.reports_version:
-        return component.release
-    return component.version(payload) or "version unreadable"
-
-
-def first_line(text):
-    if text is None:
-        return None
-    return next((line.strip() for line in text.splitlines() if line.strip()), None)
+def built_on(component, slug):
+    return component.build_payload is not None and not fetched_on(component, slug)
 
 
 def host_slug(component, required=True):
@@ -350,19 +396,20 @@ def verify(component, slug, archive, url):
 
 
 def fetch(component, args):
-    if component.url is None:
-        if args.named:
-            sys.exit(f"{component.name} is built, not downloaded -- run `vendor.py build {component.name}`")
-        return 0
     slug = host_slug(component, required=args.named)
     if slug is None:
         print(f"{component.name}: no release for this host, skipped")
         return 0
+    if not fetched_on(component, slug):
+        if args.named:
+            sys.exit(f"{component.name} is built here, not downloaded -- run `vendor.py build {component.name}`")
+        print(f"{component.name}: built here, skipped -- `vendor.py build {component.name}` builds it")
+        return 0
     target = install_dir(component, slug)
-    payload = target / component.payload()
+    payload = target / component.payload(slug)
 
     if payload.is_file() and not args.force:
-        print(f"{component.name}: already vendored, {target.name} ({described(component, payload)})")
+        print(f"{component.name}: already vendored, {target.name} ({component.release})")
         return 0
 
     url = component.url(slug)
@@ -376,33 +423,42 @@ def fetch(component, args):
         sys.exit(f"{url}: {e.reason}")
     verify(component, slug, archive, url)
 
-    version = unpack(component, archive, url, target)
+    unpack(archive, url, component.payload(slug), target, keeps(component.keep(slug)))
     touch_watchers(component)
-    print(f"{component.name}: vendored {target.relative_to(ROOT)} ({version})")
+    print(f"{component.name}: vendored {target.relative_to(ROOT)} ({component.release})")
+    print_report(component, target, slug)
     return 0
 
 
 def build(component, args):
-    """Produce a component the build resolves but no upstream publishes."""
-    if component.build_payload is None:
-        if args.named:
-            sys.exit(f"{component.name} is downloaded, not built -- run `vendor.py fetch {component.name}`")
-        return 0
+    """Produce a component the build resolves but no upstream publishes for this host."""
     slug = host_slug(component, required=args.named)
     if slug is None:
         print(f"{component.name}: no build for this host, skipped")
         return 0
+    if not built_on(component, slug):
+        if args.named:
+            sys.exit(f"{component.name} is downloaded here, not built -- run `vendor.py fetch {component.name}`")
+        print(f"{component.name}: downloaded here, skipped")
+        return 0
 
     target = install_dir(component, slug)
-    if (target / component.payload()).is_file() and not args.force:
+    if (target / component.payload(slug)).is_file() and not args.force:
         print(f"{component.name}: already built, {target.name}")
         return 0
 
-    print(f"{component.name}: building from {install_dir(component.source, slug).name}")
+    print(f"{component.name}: building {component.release}")
     component.build_payload(slug, args)
     touch_watchers(component)
     print(f"{component.name}: built {target.relative_to(ROOT)}")
+    print_report(component, target, slug)
     return 0
+
+
+def print_report(component, root, slug):
+    line = component.report(root / component.payload(slug))
+    if line is not None:
+        print(f"  reports   {line}")
 
 
 def require(tool):
@@ -416,6 +472,19 @@ def cmake(*argv):
         sys.exit(f"cmake exited {done.returncode}")
 
 
+def git(*argv):
+    done = subprocess.run(["git", *(str(a) for a in argv)])
+    if done.returncode != 0:
+        sys.exit(f"git {argv[0]} exited {done.returncode}")
+
+
+def git_output(*argv):
+    done = subprocess.run(["git", *(str(a) for a in argv)], capture_output=True, text=True)
+    if done.returncode != 0:
+        sys.exit(f"git {' '.join(str(a) for a in argv)}: {done.stderr.strip()}")
+    return done.stdout.strip()
+
+
 def install(built, payload):
     """Put `built` at `payload`, which only exists once the copy is whole."""
     payload.parent.mkdir(parents=True, exist_ok=True)
@@ -424,48 +493,58 @@ def install(built, payload):
     incoming.replace(payload)
 
 
-def unpack(component, archive, url, target):
+def keeps(patterns):
+    """Which archive members to unpack: all of them, or those `patterns` name.
+
+    A pattern is matched against the member's path both as it stands and below
+    its first directory, since a release unpacks either at the archive root or
+    under one directory named for the release.
+    """
+    if patterns is None:
+        return lambda _name: True
+
+    def wanted(name):
+        parts = name.replace("\\", "/").strip("/").split("/")
+        paths = ["/".join(parts), "/".join(parts[1:])]
+        return any(fnmatch.fnmatchcase(path, pattern) for path in paths for pattern in patterns)
+
+    return wanted
+
+
+def unpack(archive, url, payload, target, wanted):
     """Extract `archive` into `target`, replacing it only once it checks out."""
     staging = VENDOR / f".{target.name}.incoming"
     shutil.rmtree(staging, ignore_errors=True)
     staging.mkdir(parents=True)
     try:
-        extract(archive, url, staging)
+        extract(archive, url, staging, wanted)
         # A release unpacks its payload either at the archive root or under one
         # directory named for the release.
         roots = [staging] + [p for p in staging.iterdir() if p.is_dir()]
-        source = next((r for r in roots if (r / component.payload()).is_file()), None)
+        source = next((r for r in roots if (r / payload).is_file()), None)
         if source is None:
-            sys.exit(f"{url}: contains no {component.payload().as_posix()}")
-
-        # The pin is the point, so a component that can state its release and
-        # states the wrong one is discarded here rather than left for the build
-        # to resolve. One that cannot has its payload as the only evidence,
-        # which the search above already found.
-        version = described(component, source / component.payload())
-        if component.reports_version and not version.startswith(component.release):
-            sys.exit(f"{url}: reports {version!r}, expected {component.release}")
+            sys.exit(f"{url}: contains no {payload.as_posix()}")
 
         shutil.rmtree(target, ignore_errors=True)
         source.replace(target)
-        return version
     finally:
         shutil.rmtree(staging, ignore_errors=True)
 
 
-def extract(archive, url, into):
+def extract(archive, url, into, wanted):
     # By content, not by name: a NuGet package is a zip called `.nupkg`, and a
     # release asset is free to be named anything at all.
     if archive[:2] == b"PK":
         with zipfile.ZipFile(io.BytesIO(archive)) as z:
-            z.extractall(into)
+            z.extractall(into, members=[m for m in z.infolist() if wanted(m.filename)])
         # Zip carries no executable bit.
         for path in into.rglob("*"):
             if path.is_file() and path.suffix in ("", ".exe"):
                 path.chmod(path.stat().st_mode | 0o111)
     elif archive[:2] == b"\x1f\x8b":
         with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as t:
-            t.extractall(into, filter="data")
+            members = [m for m in t.getmembers() if wanted(m.name)]
+            t.extractall(into, members=members, filter="data")
     else:
         sys.exit(f"{url}: not a zip or a gzip archive")
 
@@ -473,9 +552,8 @@ def extract(archive, url, into):
 def touch_watchers(component):
     """Make the build scripts that resolve this component re-run.
 
-    They watch `vendor/`, but only once it exists: an absent rerun path reruns a
-    build script on every build, so a `vendor/` created after one last ran is
-    picked up here instead.
+    They watch only the files they resolved, so touching them is what picks up
+    a newly installed component.
     """
     for name in component.watchers:
         script = ROOT / name
@@ -491,24 +569,31 @@ def status(component, args):
         return 0
     print(f"  host      {slug}")
     print(f"  pinned    {component.release}")
-    print(f"  digest    {(component.sha256 or {}).get(slug) or 'unpinned'}")
+    if built_on(component, slug):
+        print("  digest    built here")
+    else:
+        print(f"  digest    {(component.sha256 or {}).get(slug) or 'unpinned'}")
 
     vendored = sorted(
         p
         for p in (VENDOR.glob(f"{component.name}-*-{slug}") if VENDOR.is_dir() else [])
-        if (p / component.payload()).is_file()
+        if (p / component.payload(slug)).is_file()
     )
     if vendored:
         for path in vendored:
             mark = "*" if path == install_dir(component, slug) else " "
-            print(f"  vendored {mark}{path.name}  {described(component, path / component.payload())}")
+            print(f"  vendored {mark}{path.name}  {component.release}")
+            print_report(component, path, slug)
     else:
-        verb = "build" if component.url is None else "fetch"
+        verb = "build" if built_on(component, slug) else "fetch"
         print(f"  vendored  none -- run `scripts/vendor.py {verb} {component.name}`")
 
-    for label, payload in component.alternatives():
-        found = component.version(payload) if payload.is_file() else None
-        print(f"  {label:<9} {payload}  {found or 'unusable'}")
+    fallback = getattr(component, "on_path", lambda _slug: None)(slug)
+    if fallback is not None:
+        print(f"  on PATH   {fallback}")
+        line = component.report(fallback)
+        if line is not None:
+            print(f"  reports   {line}")
 
     return 0
 
@@ -533,11 +618,58 @@ def selftest():
         for c in COMPONENTS.values()
         if c.sha256 is not None
         for slug in c.slugs.values()
-        if slug not in c.sha256
+        if fetched_on(c, slug) and slug not in c.sha256
     ]
     if missing:
         sys.exit(f"selftest: pinned component(s) missing a digest: {', '.join(missing)}")
-    print(f"vendor selftest: digest gate OK, {len(cases)} cases")
+
+    unsourced = [
+        f"{c.name}/{slug}"
+        for c in COMPONENTS.values()
+        for slug in c.slugs.values()
+        if not fetched_on(c, slug) and not built_on(c, slug)
+    ]
+    if unsourced:
+        sys.exit(f"selftest: neither downloaded nor built: {', '.join(unsourced)}")
+
+    wanted = keeps(Dxc.keep("linux-x86_64"))
+    members = [
+        ("linux_dxc_2026_07_29.x86_x64/bin/dxc", True),
+        ("linux_dxc_2026_07_29.x86_x64/lib/libdxcompiler.so", True),
+        ("linux_dxc_2026_07_29.x86_x64/LICENCE-MIT.txt", True),
+        ("linux_dxc_2026_07_29.x86_x64/LICENSE-LLVM.txt", True),
+        ("linux_dxc_2026_07_29.x86_x64/lib/libLLVMSupport.a", False),
+        ("linux_dxc_2026_07_29.x86_x64/bin/opt", False),
+        ("bin/dxc", True),
+    ]
+    wanted_windows = keeps(Dxc.keep("windows-x86_64"))
+    members_windows = [
+        ("bin\\x64\\dxc.exe", True),
+        ("bin\\x64\\dxil.dll", True),
+        ("bin\\arm64\\dxc.exe", False),
+        ("inc\\hlsl\\LICENCE.txt", False),
+        ("LICENSE-MS.txt", True),
+    ]
+    for keep, name, want in [(wanted, *m) for m in members] + [(wanted_windows, *m) for m in members_windows]:
+        if keep(name) != want:
+            sys.exit(f"selftest: unpacking {name} gave {not want}, wanted {want}")
+    if not keeps(None)("anything/at/all"):
+        sys.exit("selftest: a component naming no members must unpack all of them")
+
+    kinds = [
+        (Dxc, "windows-x86_64", "fetch"),
+        (Dxc, "linux-x86_64", "fetch"),
+        (Dxc, "macos-aarch64", "build"),
+        (Agility, "windows-x86_64", "fetch"),
+        (FidelityFxVulkan, "windows-x86_64", "build"),
+    ]
+    for component, slug, want in kinds:
+        got = "fetch" if fetched_on(component, slug) else "build" if built_on(component, slug) else None
+        if got != want:
+            sys.exit(f"selftest: {component.name}/{slug} would {got}, wanted {want}")
+
+    checked = len(cases) + len(members) + len(members_windows) + len(kinds)
+    print(f"vendor selftest: digest gate, unpack filter and sourcing OK, {checked} cases")
     return 0
 
 

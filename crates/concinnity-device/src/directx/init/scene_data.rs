@@ -21,7 +21,7 @@ pub(super) fn build_uniforms(
 ) -> RenderResult<DxUniforms> {
     let hw = gpu.hw;
     // ProbeSet constant buffers: a `FRAMES` ring the main pass binds at root
-    // param [11] (written per frame from `probe.set`), plus a static count-0 CBV
+    // param [11] (written per frame with the live probe count), plus a static count-0 CBV
     // the asynchronous capture binds so a probe face samples the sky, not other
     // probes (and never reads the live ring while `record_frame` rewrites it).
     let probe_set_size = align256(std::mem::size_of::<ProbeSet>() as u64);
@@ -192,32 +192,23 @@ pub(super) fn build_uniforms(
     })
 }
 
-// Clustered light binning. The per-cluster list + `ClusterParams` buffers
-// are always allocated (the forward shaders reference them
-// unconditionally, guarded by `use_clusters`); the compute pipeline is
-// built only when the world has local lights to bin, which is also what
-// gates the `LightCull` graph node.
-pub(super) fn build_light_cull(
-    gpu: &InitGpu<'_>,
-    local_lights: &[GpuLight],
-) -> RenderResult<LightCullState> {
+// Clustered binning. The per-cluster list + `ClusterParams` buffers and the
+// compute pipeline are built whatever the world declares: the forward shaders
+// reference the buffers unconditionally (guarded by `use_clusters`), and
+// reflection probes are placed after init.
+pub(super) fn build_light_cull(gpu: &InitGpu<'_>) -> RenderResult<LightCullState> {
     let hw = gpu.hw;
     let cluster_buffer = lc::build_cluster_light_buffer(&hw.device)?;
     let (params_resources, params_ptrs) = lc::build_cluster_params_buffers(&hw.alloc, FRAMES)?;
-    let (root_sig, pso) = if local_lights.is_empty() {
-        (None, None)
-    } else {
-        let cs = lc::compile_light_cull_shader(gpu.hot_reload)?;
-        let rs = dump_on_err(
-            hw.info_queue.as_ref(),
-            lc::create_light_cull_root_signature(&hw.device),
-        )?;
-        let pso = dump_on_err(
-            hw.info_queue.as_ref(),
-            lc::create_light_cull_pso(&hw.device, &rs, &cs),
-        )?;
-        (Some(rs), Some(pso))
-    };
+    let cs = lc::compile_light_cull_shader(gpu.hot_reload)?;
+    let root_sig = dump_on_err(
+        hw.info_queue.as_ref(),
+        lc::create_light_cull_root_signature(&hw.device),
+    )?;
+    let pso = dump_on_err(
+        hw.info_queue.as_ref(),
+        lc::create_light_cull_pso(&hw.device, &root_sig, &cs),
+    )?;
     Ok(LightCullState {
         root_sig,
         pso,

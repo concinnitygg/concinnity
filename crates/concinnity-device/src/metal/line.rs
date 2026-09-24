@@ -172,14 +172,14 @@ fn build_line_pipeline(
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     // Each entry compiles to its own metallib, so the two stages come from
     // separate libraries and pair by semantic.
-    let vert_fn = super::slang_builtins::entry_function(
+    let vert_fn = super::builtin_shaders::entry_function(
         device,
-        &super::slang_builtins::LINE_VERT,
+        &super::builtin_shaders::LINE_VERT,
         hot_reload,
     )?;
-    let frag_fn = super::slang_builtins::entry_function(
+    let frag_fn = super::builtin_shaders::entry_function(
         device,
-        &super::slang_builtins::LINE_FRAG,
+        &super::builtin_shaders::LINE_FRAG,
         hot_reload,
     )?;
 

@@ -246,6 +246,14 @@ impl DxContext {
         let upscale = effects::build_upscale(&gpu, &descriptors, output, &post)?;
         let scene =
             scene_assets::build_scene_assets(&gpu, &descriptors, &media, &area_lights, &world)?;
+        // The probe set, with the stand-in array in the SRV slot until a world
+        // places a probe.
+        let probe_gpu =
+            crate::directx::probe_set::ProbeSetGpu::new(&gpu.hw.device, &gpu.hw.alloc, FRAMES)?;
+        probe_gpu.stand_in.write_srv(
+            &gpu.hw.device,
+            descriptors.slot_cpu(descriptors.layout.probe_cubes_srv_slot),
+        );
         let targets = targets::build_targets(
             &gpu,
             targets::TargetInputs {
@@ -259,7 +267,7 @@ impl DxContext {
             },
         )?;
         let uniforms = scene_data::build_uniforms(&gpu, light_uniforms, &local_lights)?;
-        let light_cull = scene_data::build_light_cull(&gpu, &local_lights)?;
+        let light_cull = scene_data::build_light_cull(&gpu)?;
         let shadow = shadow::build_shadow(
             &gpu,
             &descriptors,
@@ -437,10 +445,10 @@ impl DxContext {
             diagnostics: Default::default(),
             timestamps,
             auto_exposure,
-            hot_reload: HotReloadState::spawn(hot_reload),
+            hot_reload: HotReloadState::new(hot_reload),
             world_shader: world_programs.cloned(),
             quality_slots,
-            probe: ProbeState::new(probe_prefilter),
+            probe: ProbeState::new(probe_prefilter, probe_gpu),
             hw,
         })
     }

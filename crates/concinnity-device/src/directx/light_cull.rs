@@ -1,20 +1,22 @@
-//! Clustered light-binning compute pass. Once per frame, before the Main pass,
-//! bins the scene's local lights (the `GpuLight` buffer the forward pass reads)
-//! into per-cluster index lists over a screen-tiled, exponential-depth froxel
-//! grid. The forward pass then shades each fragment from only its cluster's
-//! lights instead of iterating every light. Mirrors src/metal/light_cull.rs.
+//! Clustered binning compute pass. Once per frame, before the Main pass, bins
+//! the scene's local lights (the `GpuLight` buffer the forward pass reads) into
+//! per-cluster light lists and the reflection probes' influence boxes into
+//! per-cluster probe masks, over a screen-tiled, exponential-depth froxel grid.
+//! The forward, SSR and transparent passes then shade from only a fragment's
+//! cluster's lights and blend only its cluster's probes. Mirrors
+//! src/metal/light_cull.rs.
 
-use concinnity_core::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIGHT_LIST_STRIDE, ClusterParams};
+use concinnity_core::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIST_LEN, ClusterParams};
 use concinnity_core::render::error::RenderResult;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
+use crate::directx::builtin_shaders;
+use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::context::DxContext;
 use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::serialize_desc_and_create;
-use crate::directx::slang_builtins;
-use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::create_uav_buffer;
 
 // Byte stride between the two `ClusterParams` slots in a frame's constant
@@ -27,15 +29,15 @@ const CLUSTER_SLOT_CLUSTERED: u64 = 0;
 const CLUSTER_SLOT_UNCLUSTERED: u64 = 1;
 
 // Clustered-lighting GPU state: the binning compute pipeline, the per-cluster
-// light-index buffer it writes / the forward pass reads, and the per-frame
-// `ClusterParams` constant buffers. The buffers are always allocated (the
-// forward shaders reference them unconditionally, guarded by `use_clusters`);
-// the pipeline is built only when the world has local lights.
+// list buffer it writes / the forward pass reads, and the per-frame
+// `ClusterParams` constant buffers. All of it always exists (the forward shaders
+// reference the buffers unconditionally, guarded by `use_clusters`); the kernel
+// runs only on frames with a light or a probe to bin.
 pub(in crate::directx) struct LightCullState {
-    pub root_sig: Option<ID3D12RootSignature>,
-    pub pso: Option<ID3D12PipelineState>,
-    // Per-cluster light-index lists: CLUSTER_COUNT blocks of
-    // CLUSTER_LIGHT_LIST_STRIDE u32 (slot 0 = count, slots 1.. = light indices).
+    pub root_sig: ID3D12RootSignature,
+    pub pso: ID3D12PipelineState,
+    // Per-cluster light lists and probe masks: CLUSTER_LIST_LEN u32, every cluster's
+    // light list and then every cluster's probe mask (see `cluster_types.hlsl`).
     // Rests in `PIXEL_SHADER_RESOURCE`; the dispatch flips it to UAV and back.
     pub cluster_buffer: ID3D12Resource,
     // Per-frame `ClusterParams` upload buffers, two 256-byte slots each.
@@ -56,11 +58,12 @@ impl LightCullState {
 
 // Compile the clustered light-binning compute kernel to DXIL.
 pub(in crate::directx) fn compile_light_cull_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    slang_builtins::LIGHT_CULL.compile(hot_reload)
+    builtin_shaders::LIGHT_CULL.compile(hot_reload)
 }
 
 // Root signature for the light-cull kernel: the `ClusterParams` CBV, the
-// per-scene `GpuLight` SRV, and the per-cluster list UAV.
+// per-scene `GpuLight` SRV, the per-cluster list UAV and the frame's probe
+// records SRV.
 pub(in crate::directx) fn create_light_cull_root_signature(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12RootSignature> {
@@ -98,6 +101,17 @@ pub(in crate::directx) fn create_light_cull_root_signature(
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
         },
+        // [3] Root SRV t1: StructuredBuffer<ProbeUniforms> probe_records
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                Descriptor: D3D12_ROOT_DESCRIPTOR {
+                    ShaderRegister: 1,
+                    RegisterSpace: 0,
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
+        },
     ];
     let desc = D3D12_ROOT_SIGNATURE_DESC {
         NumParameters: params.len() as u32,
@@ -128,7 +142,7 @@ pub(in crate::directx) fn create_light_cull_pso(
         .map_err(|e| map_pso_hresult(e.code(), "create light cull PSO"))
 }
 
-// Allocate the per-cluster light-index buffer. Created in `COMMON` (D3D12
+// Allocate the per-cluster list buffer. Created in `COMMON` (D3D12
 // creates every buffer there regardless of the requested state); the light-cull
 // pass transitions it to UNORDERED_ACCESS to write and back to
 // PIXEL_SHADER_RESOURCE for the forward pass, matching how the GPU-cull pass
@@ -136,8 +150,7 @@ pub(in crate::directx) fn create_light_cull_pso(
 pub(in crate::directx) fn build_cluster_light_buffer(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12Resource> {
-    let len =
-        (CLUSTER_COUNT * CLUSTER_LIGHT_LIST_STRIDE) as u64 * std::mem::size_of::<u32>() as u64;
+    let len = CLUSTER_LIST_LEN as u64 * std::mem::size_of::<u32>() as u64;
     create_uav_buffer(device, len, D3D12_RESOURCE_STATE_COMMON)
 }
 
@@ -195,7 +208,7 @@ impl DxContext {
         base + slot * CLUSTER_PARAMS_SLOT_STRIDE
     }
 
-    // GPU virtual address of the per-cluster light-index buffer (root SRV).
+    // GPU virtual address of the per-cluster list buffer (root SRV).
     pub(in crate::directx) fn cluster_list_gva(&self) -> u64 {
         com::gpu_va(&self.light_cull.cluster_buffer)
     }
@@ -219,9 +232,10 @@ impl DxContext {
         }
     }
 
-    // Dispatch the clustered light-binning pass. One thread per cluster; the
-    // kernel builds the cluster's world-space AABB and tests each local light's
-    // sphere against it, writing the surviving indices into `cluster_buffer`.
+    // Dispatch the clustered binning pass. One thread per cluster; the kernel
+    // builds the cluster's world-space AABB and tests each local light's sphere
+    // and each probe's influence box against it, writing the surviving indices
+    // into `cluster_buffer`.
     // The executor orders this before Main, which reads the same buffer, and
     // drives the buffer's `UAV` transition here and back at Main off that edge;
     // it rests in `PIXEL_SHADER_RESOURCE`.
@@ -230,43 +244,23 @@ impl DxContext {
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
     ) -> RenderResult<()> {
-        let (pso, root_sig) = match (&self.light_cull.pso, &self.light_cull.root_sig) {
-            (Some(p), Some(r)) => (p, r),
-            _ => return Ok(()),
-        };
         let cluster_buffer = &self.light_cull.cluster_buffer;
         let params_gva = self.cluster_params_gva(frame_idx, true);
         let lights_gva = com::gpu_va(&self.uniforms.local_light_buffer);
+        let records_gva = self.probe.gpu.records[frame_idx].gpu_va();
 
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {
-            cmd.SetComputeRootSignature(root_sig);
-            cmd.SetPipelineState(pso);
+            cmd.SetComputeRootSignature(&self.light_cull.root_sig);
+            cmd.SetPipelineState(&self.light_cull.pso);
             cmd.SetComputeRootConstantBufferView(0, params_gva);
             cmd.SetComputeRootShaderResourceView(1, lights_gva);
             cmd.SetComputeRootUnorderedAccessView(2, com::gpu_va(cluster_buffer));
+            cmd.SetComputeRootShaderResourceView(3, records_gva);
             // One thread per cluster, 64-wide threadgroups.
             cmd.Dispatch(CLUSTER_COUNT.div_ceil(64), 1, 1);
         }
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use concinnity_core::gfx::render_types;
-
-    // The kernel hardcodes the list stride + per-cluster cap as `static const
-    // uint`s, so they must track the Rust values the CPU sizes the buffer with.
-    #[test]
-    fn kernel_cluster_constants_match_render_types() {
-        let kernel = concinnity_core::render::shaders::LIGHT_CULL;
-        assert!(kernel.contains(&format!(
-            "CLUSTER_LIGHT_LIST_STRIDE = {CLUSTER_LIGHT_LIST_STRIDE}u"
-        )));
-        let max_per_cluster = render_types::MAX_LIGHTS_PER_CLUSTER;
-        assert!(kernel.contains(&format!("MAX_LIGHTS_PER_CLUSTER = {max_per_cluster}u")));
     }
 }

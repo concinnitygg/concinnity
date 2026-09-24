@@ -28,13 +28,10 @@ fn env_in(dir: &Path) -> SdkEnv {
         fidelityfx_vk_root: Some(dir.join("ffx-vk")),
         xess_root: Some(dir.join("xess")),
         streamline_root: Some(dir.join("streamline")),
-        dxc_root: None,
-        windows_sdk_bin: Some(dir.join("winkits")),
         agility_enabled: true,
         ffx_enabled: true,
         xess_enabled: true,
         dlss_enabled: true,
-        dxc_enabled: true,
     }
 }
 
@@ -112,16 +109,10 @@ fn install_ngx_dll(dir: &Path) {
     );
 }
 
-fn install_winkits_dxc(dir: &Path, version: &str, bytes: &[u8]) {
-    let x64 = dir.join("winkits").join(version).join("x64");
-    touch_with(&x64.join("dxcompiler.dll"), bytes);
-    touch_with(&x64.join("dxil.dll"), bytes);
-}
-
 #[test]
 fn check_cfg_directives_declare_every_gated_cfg() {
     let lines = check_cfg_directives();
-    assert_eq!(lines.len(), 8);
+    assert_eq!(lines.len(), 7);
     for cfg in [
         "backend_metal",
         "backend_dx",
@@ -130,7 +121,6 @@ fn check_cfg_directives_declare_every_gated_cfg() {
         "ffx_sdk_bundled",
         "xess_sdk_bundled",
         "ngx_sdk_bundled",
-        "dxc_bundled",
     ] {
         assert!(lines.contains(&format!("cargo::rustc-check-cfg=cfg({cfg})")));
     }
@@ -418,6 +408,7 @@ fn dlss_links_import_lib_without_bundling() {
 
     assert!(has(&out, "cargo::rustc-link-arg="));
     assert!(has(&out, "nvsdk_ngx_d.lib"));
+    assert!(out.contains(&"cargo::rustc-link-arg=advapi32.lib".to_string()));
     assert!(out.contains(&"cargo::rustc-cfg=ngx_sdk_bundled".to_string()));
     assert!(!profile(tmp.path()).join("nvngx_dlss.dll").exists());
 }
@@ -478,101 +469,6 @@ fn dlss_opt_out_skips_the_probe() {
     assert!(has(&out, "CN_ENABLE_DLSS=0"));
     assert!(!has(&out, "cargo::rustc-link-arg="));
     assert!(!has(&out, "CN_STREAMLINE_SDK"));
-}
-
-#[test]
-fn dxc_override_root_wins_over_windows_sdk() {
-    let tmp = TempDir::new().unwrap();
-    let override_dir = tmp.path().join("dxc-override");
-    touch_with(&override_dir.join("dxcompiler.dll"), b"override");
-    touch_with(&override_dir.join("dxil.dll"), b"override");
-    install_winkits_dxc(tmp.path(), "10.0.22621.0", b"winkits");
-    let env = SdkEnv {
-        dxc_root: Some(override_dir),
-        ..env_in(tmp.path())
-    };
-
-    let mut out = Vec::new();
-    dxc_directives(&env, BinaryTargets::Bins, &mut out);
-
-    let dst = profile(tmp.path()).join("dxcompiler.dll");
-    assert_eq!(fs::read(&dst).unwrap(), b"override");
-    assert!(profile(tmp.path()).join("dxil.dll").is_file());
-    assert!(out.contains(&"cargo::rustc-cfg=dxc_bundled".to_string()));
-}
-
-#[test]
-fn dxc_falls_back_to_the_newest_complete_windows_sdk() {
-    let tmp = TempDir::new().unwrap();
-    install_winkits_dxc(tmp.path(), "10.0.19041.0", b"old");
-    install_winkits_dxc(tmp.path(), "10.0.22621.0", b"new");
-    let env = env_in(tmp.path());
-
-    let mut out = Vec::new();
-    dxc_directives(&env, BinaryTargets::Bins, &mut out);
-
-    let dst = profile(tmp.path()).join("dxcompiler.dll");
-    assert_eq!(fs::read(&dst).unwrap(), b"new");
-    assert!(out.contains(&"cargo::rustc-cfg=dxc_bundled".to_string()));
-}
-
-#[test]
-fn dxc_skips_an_incomplete_newer_windows_sdk() {
-    let tmp = TempDir::new().unwrap();
-    install_winkits_dxc(tmp.path(), "10.0.19041.0", b"old");
-    // The newer version has only one of the two DLLs.
-    touch(
-        &tmp.path()
-            .join("winkits")
-            .join("10.0.22621.0")
-            .join("x64")
-            .join("dxcompiler.dll"),
-    );
-    let env = env_in(tmp.path());
-
-    let mut out = Vec::new();
-    dxc_directives(&env, BinaryTargets::Bins, &mut out);
-
-    let dst = profile(tmp.path()).join("dxcompiler.dll");
-    assert_eq!(fs::read(&dst).unwrap(), b"old");
-}
-
-#[test]
-fn dxc_override_missing_a_dll_falls_through_to_windows_sdk() {
-    let tmp = TempDir::new().unwrap();
-    let override_dir = tmp.path().join("dxc-override");
-    touch_with(&override_dir.join("dxcompiler.dll"), b"override");
-    install_winkits_dxc(tmp.path(), "10.0.22621.0", b"winkits");
-    let env = SdkEnv {
-        dxc_root: Some(override_dir),
-        ..env_in(tmp.path())
-    };
-
-    assert_eq!(
-        find_dxc_dir(&env),
-        Some(tmp.path().join("winkits").join("10.0.22621.0").join("x64"))
-    );
-}
-
-#[test]
-fn dxc_not_found_or_opted_out_warns_without_cfg() {
-    let tmp = TempDir::new().unwrap();
-    let env = env_in(tmp.path());
-
-    let mut missing = Vec::new();
-    dxc_directives(&env, BinaryTargets::Bins, &mut missing);
-    assert!(has(&missing, "dxcompiler.dll + dxil.dll not found"));
-    assert!(!has(&missing, "dxc_bundled"));
-    assert_eq!(find_dxc_dir(&env), None);
-
-    let disabled_env = SdkEnv {
-        dxc_enabled: false,
-        ..env_in(tmp.path())
-    };
-    let mut disabled = Vec::new();
-    dxc_directives(&disabled_env, BinaryTargets::Bins, &mut disabled);
-    assert!(has(&disabled, "CN_ENABLE_DXC=0"));
-    assert!(!has(&disabled, "CN_DXC_SDK"));
 }
 
 #[test]
@@ -731,24 +627,6 @@ fn profile_dir_none_when_too_shallow() {
 }
 
 #[test]
-fn version_dirs_sort_oldest_to_newest() {
-    let dirs = vec![
-        PathBuf::from("10.0.22621.0"),
-        PathBuf::from("10.0.19041.0"),
-        PathBuf::from("10.0.20348.0"),
-    ];
-    let sorted = sorted_version_dirs(dirs);
-    assert_eq!(
-        sorted,
-        vec![
-            PathBuf::from("10.0.19041.0"),
-            PathBuf::from("10.0.20348.0"),
-            PathBuf::from("10.0.22621.0"),
-        ]
-    );
-}
-
-#[test]
 fn metal_and_non_windows_vulkan_are_noops() {
     let tmp = TempDir::new().unwrap();
     let env = SdkEnv {
@@ -782,7 +660,6 @@ fn windows_vulkan_sets_up_the_vulkan_sdks() {
     assert!(out.contains(&"cargo::rustc-cfg=xess_sdk_bundled".to_string()));
     // No DirectX-only setup on the Vulkan path.
     assert!(!has(&out, "CN_ENABLE_AGILITY_SDK"));
-    assert!(!has(&out, "CN_ENABLE_DXC"));
 }
 
 #[test]
@@ -793,7 +670,6 @@ fn directx_bundling_runs_every_sdk() {
     install_xess(tmp.path());
     install_ngx_lib(tmp.path());
     install_ngx_dll(tmp.path());
-    install_winkits_dxc(tmp.path(), "10.0.22621.0", b"winkits");
     let env = env_in(tmp.path());
 
     let out = graphics_sdk_directives(Backend::Dx, &[BinaryTargets::Bins], &env);
@@ -803,7 +679,6 @@ fn directx_bundling_runs_every_sdk() {
         "ffx_sdk_bundled",
         "xess_sdk_bundled",
         "ngx_sdk_bundled",
-        "dxc_bundled",
     ] {
         assert!(out.contains(&format!("cargo::rustc-cfg={cfg}")), "{cfg}");
     }
@@ -816,26 +691,19 @@ fn directx_bundling_runs_every_sdk() {
         "amd_fidelityfx_dx12.dll",
         "libxess.dll",
         "nvngx_dlss.dll",
-        "dxcompiler.dll",
-        "dxil.dll",
     ] {
         assert!(prof.join(file).is_file(), "{file}");
     }
 }
 
 #[test]
-fn directx_without_bundling_skips_dxc() {
+fn directx_without_final_binaries_warns_about_no_absent_sdk() {
     let tmp = TempDir::new().unwrap();
-    install_winkits_dxc(tmp.path(), "10.0.22621.0", b"winkits");
     let env = env_in(tmp.path());
 
     let out = graphics_sdk_directives(Backend::Dx, &[BinaryTargets::None], &env);
 
-    assert!(!has(&out, "CN_ENABLE_DXC"));
-    assert!(!has(&out, "dxc_bundled"));
-    assert!(!profile(tmp.path()).join("dxcompiler.dll").exists());
-    // No warnings for absent SDKs when not producing a final binary.
-    assert!(warnings(&out).is_empty());
+    assert!(warnings(&out).is_empty(), "{:?}", warnings(&out));
 }
 
 #[test]
@@ -846,7 +714,6 @@ fn examples_take_their_dlls_and_exports_to_the_examples_directory() {
     install_xess(tmp.path());
     install_ngx_lib(tmp.path());
     install_ngx_dll(tmp.path());
-    install_winkits_dxc(tmp.path(), "10.0.22621.0", b"winkits");
     let env = env_in(tmp.path());
     // Deliberately not creating `examples/` first: on a clean tree the build
     // script runs before Cargo lays it out, and the copies have to survive that.
@@ -863,8 +730,6 @@ fn examples_take_their_dlls_and_exports_to_the_examples_directory() {
         "amd_fidelityfx_dx12.dll",
         "libxess.dll",
         "nvngx_dlss.dll",
-        "dxcompiler.dll",
-        "dxil.dll",
     ] {
         assert!(examples(tmp.path()).join(file).is_file(), "{file}");
         assert!(

@@ -23,7 +23,7 @@ schema = ["concinnity-core/schema"]
 [dependencies]
 concinnity-core = { workspace = true }
 concinnity-host = { workspace = true }
-concinnity-slang = { workspace = true }
+concinnity-shader = { workspace = true, features = ["spirv-cross"] }
 
 bytemuck = { workspace = true }
 serde = { workspace = true, features = ["derive", "std"] }

@@ -18,14 +18,14 @@ use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::device::PostBlend;
 use windows::Win32::Graphics::Direct3D12::*;
 
+use crate::directx::builtin_shaders;
+use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::context::{DxContext, dump_on_err};
 use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::pipeline::{create_blended_composite_pso, serialize_desc_and_create};
 use crate::directx::post::fullscreen::FullscreenExtent;
 use crate::directx::post::ssr::SSR_OUTPUT_FORMAT;
-use crate::directx::slang_builtins;
-use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::{create_rt_target, write_format_rtv, write_format_srv};
 
 // The blur pass runs at render-resolution / `blur_scale`. The blur is low-
@@ -46,13 +46,13 @@ struct ReflCompShaders {
 
 // Compile the shared fullscreen vertex shader + the blur + composite fragment
 // entry points. `REFLECTION_ROUGHNESS_CUT` is a `static const` in
-// `reflection.slang`, locked to the canonical Rust value by unit test, so the
+// `reflection.hlsl`, locked to the canonical Rust value by unit test, so the
 // blur ramp matches the SSR / RT resolve gates.
 fn compile_refl_composite_shaders(hot_reload: bool) -> RenderResult<ReflCompShaders> {
     Ok(ReflCompShaders {
-        vs: slang_builtins::FULLSCREEN_VERT.compile(hot_reload)?,
-        blur_ps: slang_builtins::REFLECTION_BLUR.compile(hot_reload)?,
-        composite_ps: slang_builtins::REFLECTION_COMPOSITE.compile(hot_reload)?,
+        vs: builtin_shaders::FULLSCREEN_VERT.compile(hot_reload)?,
+        blur_ps: builtin_shaders::REFLECTION_BLUR.compile(hot_reload)?,
+        composite_ps: builtin_shaders::REFLECTION_COMPOSITE.compile(hot_reload)?,
     })
 }
 
@@ -60,8 +60,8 @@ fn compile_refl_composite_shaders(hot_reload: bool) -> RenderResult<ReflCompShad
 
 // A descriptor table of `count` consecutive SRVs starting at register t0, plus
 // one static sampler per SRV. Both passes index their inputs t0.. as APPEND
-// ranges; the samplers are s0..s(count-1) because slangc splits each combined
-// sampler in the single source into its own texture/sampler pair.
+// ranges; the samplers are s0..s(count-1), each the sampler half of a source's
+// texture/sampler pair in the single source.
 fn srv_table_root_sig(
     device: &ID3D12Device,
     count: u32,
@@ -385,7 +385,7 @@ impl DxContext {
             cmd.SetPipelineState(&rc.composite_pso);
             cmd.SetGraphicsRootSignature(&rc.composite_root_sig);
             // t0 reflection, t1 scene, t2 G-buffer normal+depth, t3 roughness,
-            // t4 blur -- the order `reflection.slang`'s composite declares them.
+            // t4 blur -- the order `reflection.hlsl`'s composite declares them.
             cmd.set_graphics_srv_table(0, reflection_srv);
             cmd.set_graphics_srv_table(1, self.targets.hdr.srv_gpu);
             cmd.set_graphics_srv_table(2, gbuffer.normal_depth_srv_gpu);
@@ -403,13 +403,13 @@ impl DxContext {
 
 #[cfg(test)]
 mod tests {
-    // The blur + composite fragments compile from `reflection.slang` at renderer
+    // The blur + composite fragments compile from `reflection.hlsl` at renderer
     // init. Compile them offline so a source or register error fails a test
     // instead of only an init failure on the GPU host. Skipped on a host without
-    // slangc, matching `concinnity_slang`'s own round-trip tests.
+    // dxc.
     #[test]
     fn reflection_composite_shaders_compile() {
-        if !concinnity_slang::shader_tests_enabled() {
+        if !concinnity_shader::dxc_available() {
             return;
         }
         super::compile_refl_composite_shaders(false)

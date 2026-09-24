@@ -8,7 +8,7 @@
 //! its nearest projected NDC depth is strictly behind. Mirrors the DirectX
 //! implementation in `directx/hiz.rs`; Metal keeps the older per-mip chain (see
 //! `metal/hiz.rs`). Every backend's kernels ship from the single-source
-//! `src/shaders/hiz_build.slang` (one variant compile per kernel):
+//! `src/render/shaders/hiz_build.hlsl` (one variant compile per kernel):
 //!
 //!   * `hiz_spd_single`: reduce a single-sample main depth into mips 0..6.
 //!   * `hiz_spd_msaa`  : the same for an MSAA main depth, taking the MAX over
@@ -31,7 +31,7 @@
 //! write -> read memory barrier between each step. That per-mip chain is finer
 //! than the graph's one-state-per-resource granularity, so it stays inline here;
 //! the open and close around it are graph-derived. Between frames the image rests
-//! in `SHADER_READ_ONLY_OPTIMAL` so the cull kernel samples it via a `sampler2D`
+//! in `SHADER_READ_ONLY_OPTIMAL` so the cull kernel reads it as a sampled image
 //! (set 1). A single shared image read one frame and written the next is
 //! hazard-free on a single queue: the executor's end-of-frame restore (GENERAL ->
 //! SHADER_READ_ONLY) orders the write before the next frame's cull read, and the
@@ -48,7 +48,7 @@ use super::texture::{
     LayoutTransition, SubresourceRange, one_shot_submit, transition_image_layout_range,
 };
 use crate::vulkan::owned::{
-    OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSampler, OwnedSetLayout, VkDevice,
+    OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout, VkDevice,
 };
 use crate::vulkan::record::Recorder;
 
@@ -57,7 +57,7 @@ use crate::vulkan::record::Recorder;
 // so 16 covers any render target up to 32768 px on its longer edge.
 const MAX_HIZ_MIPS: usize = 16;
 
-use crate::vulkan::slang_builtins::SlangCompile;
+use crate::vulkan::builtin_shaders::CompileProgram;
 use concinnity_core::render::hiz_spd::{self, Plan};
 use concinnity_core::render::uniforms::HizSpdParams;
 use concinnity_core::render::uniforms::vulkan::CullHizParams;
@@ -86,8 +86,8 @@ pub(super) struct HiZResources {
     spd_set_layout: OwnedSetLayout,
     spd_tail_set_layout: OwnedSetLayout,
 
-    // Cull-read set layout (set 1 of the cull pipeline): sampler2D Hi-Z +
-    // CullHizParams UBO. Held here because `init.rs` threads it into the cull
+    // Cull-read set layout (set 1 of the cull pipeline): the Hi-Z sampled image
+    // + CullHizParams UBO. Held here because `init.rs` threads it into the cull
     // pipeline layout, and the layout survives a resize.
     pub(super) read_set_layout: OwnedSetLayout,
 
@@ -105,11 +105,6 @@ pub(super) struct HiZResources {
     // One single-level storage view per mip, bound as the mips phase 1 writes
     // and the level the tail reduces from. Length = `mip_count`.
     mip_views: Vec<vk::ImageView>,
-    // Nearest sampler the cull kernel reads the Hi-Z with (texelFetch ignores
-    // filtering, but a sampler is still required for the combined-image-sampler
-    // binding).
-    sampler: OwnedSampler,
-
     // Build sets: one phase-1 set per frame (depth differs per frame slot) and
     // one tail set (frame-independent, Hi-Z mips only).
     spd_sets: Vec<vk::DescriptorSet>,
@@ -125,7 +120,7 @@ pub(super) struct HiZResources {
     // needs a separate UBO from phase 1 because both consume their UBO at
     // different GPU times within one frame (phase 1's `prev_view_proj`, phase
     // 2's current-frame VP); sharing one host-mapped buffer would clobber
-    // phase 1's value before the GPU reads it. The sampler binding points at
+    // phase 1's value before the GPU reads it. The image binding points at
     // the same pyramid `sampled_view`, re-pointed alongside `read_sets` on a
     // resize. Uses the shared `read_set_layout`.
     pub(super) read_sets2: Vec<vk::DescriptorSet>,
@@ -200,17 +195,16 @@ fn build_hiz_pipelines(
     sample_count: u32,
     hot_reload: bool,
 ) -> RenderResult<(OwnedPipeline, OwnedPipeline)> {
-    // Phase 1 is a per-variant compile of the single-source `hiz_build.slang`:
+    // Phase 1 is a per-variant compile of the single-source `hiz_build.hlsl`:
     // the depth resource is a `Texture2DMS` when multisampled, a `Texture2D`
     // otherwise (a sampled image either way; the kernel reads texels by
     // coordinate, so no sampler is bound).
-    let ctx = super::slang_builtins::Ctx::plain(hot_reload);
     let phase1_spv = if sample_count > 1 {
-        super::slang_builtins::HIZ_SPD_MSAA.compile(&ctx)?
+        super::builtin_shaders::HIZ_SPD_MSAA.compile(hot_reload)?
     } else {
-        super::slang_builtins::HIZ_SPD_SINGLE.compile(&ctx)?
+        super::builtin_shaders::HIZ_SPD_SINGLE.compile(hot_reload)?
     };
-    let tail_spv = super::slang_builtins::HIZ_SPD_TAIL.compile(&ctx)?;
+    let tail_spv = super::builtin_shaders::HIZ_SPD_TAIL.compile(hot_reload)?;
     let phase1 = create_compute_pipeline(device, spd_layout, &phase1_spv)?;
     let tail = create_compute_pipeline(device, spd_tail_layout, &tail_spv)?;
     Ok((phase1, tail))
@@ -255,14 +249,13 @@ pub(super) struct HiZTarget<'a> {
 }
 
 impl HiZResources {
-    // The pyramid's all-mips sampled view + its sampler, the two resources a
-    // cull set-1 ("read set") binds at binding 0. Exposed so the reflection-probe
-    // bake can build a one-off read set (with `hiz_enabled = 0`) from its OWN
-    // descriptor pool -- the probe cull binds a valid set 1 without sampling the
-    // pyramid, and without taking a slot in this struct's pool. `read_set_layout`
-    // is already `pub(super)`.
-    pub(super) fn read_set_sources(&self) -> (vk::ImageView, vk::Sampler) {
-        (self.sampled_view, self.sampler.handle())
+    // The pyramid's all-mips sampled view, the image a cull set-1 ("read set")
+    // binds at binding 0. Exposed so the reflection-probe bake can build a one-off
+    // read set (with `hiz_enabled = 0`) from its OWN descriptor pool -- the probe
+    // cull binds a valid set 1 without reading the pyramid, and without taking a
+    // slot in this struct's pool. `read_set_layout` is already `pub(super)`.
+    pub(super) fn read_set_view(&self) -> vk::ImageView {
+        self.sampled_view
     }
 
     // Build every Hi-Z resource sized to the render (depth) resolution. Called
@@ -298,11 +291,11 @@ impl HiZResources {
             device,
             &[(0, vk::DescriptorType::STORAGE_IMAGE, hiz_spd::LEVELS)],
         )?;
-        // Cull-read (set 1 of the cull pipeline): sampler2D Hi-Z + UBO.
+        // Cull-read (set 1 of the cull pipeline): the Hi-Z image + UBO.
         let read_set_layout = create_set_layout(
             device,
             &[
-                (0, vk::DescriptorType::COMBINED_IMAGE_SAMPLER),
+                (0, vk::DescriptorType::SAMPLED_IMAGE),
                 (1, vk::DescriptorType::UNIFORM_BUFFER),
             ],
         )?;
@@ -358,7 +351,6 @@ impl HiZResources {
             pyramid: PooledImage::null(),
             sampled_view: vk::ImageView::null(),
             mip_views: Vec::new(),
-            sampler: create_sampler(device)?,
             spd_sets: Vec::new(),
             spd_tail_sets: Vec::new(),
             read_sets: Vec::new(),
@@ -476,9 +468,9 @@ impl HiZResources {
         for &set in &spd_tail_sets {
             write_storage_image_array(device, set, 0, &tail_mips);
         }
-        // Read sets: binding 0 = all-mips Hi-Z sampler, binding 1 = cull UBO.
+        // Read sets: binding 0 = the all-mips Hi-Z view, binding 1 = cull UBO.
         for (i, &set) in read_sets.iter().enumerate() {
-            write_sampler(device, set, 0, sampled_view, self.sampler.handle());
+            write_sampled_image(device, set, 0, sampled_view);
             write_uniform_buffer(
                 device,
                 set,
@@ -487,9 +479,9 @@ impl HiZResources {
                 std::mem::size_of::<CullHizParams>() as u64,
             );
         }
-        // Phase-2 read sets: same pyramid sampler, the phase-2 per-frame UBO.
+        // Phase-2 read sets: same pyramid view, the phase-2 per-frame UBO.
         for (i, &set) in read_sets2.iter().enumerate() {
-            write_sampler(device, set, 0, sampled_view, self.sampler.handle());
+            write_sampled_image(device, set, 0, sampled_view);
             write_uniform_buffer(
                 device,
                 set,
@@ -515,7 +507,7 @@ impl HiZResources {
     }
 
     // Recreate the image + views + sets at new render-target dimensions. The
-    // pipelines, layouts, sampler, and cull-read UBO buffers survive; the old
+    // pipelines, layouts and cull-read UBO buffers survive; the old
     // pyramid retires through the allocator when the new one replaces it. The
     // caller flips `hiz_valid` to false so the next cull dispatch ignores the
     // now-stale pyramid.
@@ -689,17 +681,14 @@ fn create_pool(
 ) -> RenderResult<OwnedDescriptorPool> {
     let f = frames as u32;
     // Two-pass occlusion adds one extra cull-read set per frame (phase 2),
-    // each with a sampler + a UBO descriptor.
+    // each with an image + a UBO descriptor.
     let read_rings = if two_pass { 2 } else { 1 };
     let sizes = [
-        // cull-read Hi-Z (frames per read ring).
-        vk::DescriptorPoolSize::default()
-            .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .descriptor_count(read_rings * f),
-        // Phase-1 depth (frames): read by coordinate, no sampler.
+        // cull-read Hi-Z (frames per read ring) + phase-1 depth (frames), both
+        // read by coordinate.
         vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::SAMPLED_IMAGE)
-            .descriptor_count(f),
+            .descriptor_count(read_rings * f + f),
         // One mip array per phase-1 set (frames) plus the tail's.
         vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::STORAGE_IMAGE)
@@ -720,44 +709,50 @@ fn create_pool(
         .map_err(|e| super::error::map_vk_result(e, "hiz descriptor pool"))
 }
 
-fn create_sampler(device: &VkDevice) -> RenderResult<OwnedSampler> {
-    let info = vk::SamplerCreateInfo::default()
-        .mag_filter(vk::Filter::NEAREST)
-        .min_filter(vk::Filter::NEAREST)
-        .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
-        .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-        .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-        .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-        .min_lod(0.0)
-        .max_lod(MAX_HIZ_MIPS as f32);
-    device
-        .create_sampler(&info)
-        .map_err(|e| super::error::map_vk_result(e, "hiz sampler"))
+// A read set (cull set 1) for an off-camera cull (a probe face, a planar
+// mirror), allocated from the caller's `pool`: the pyramid is bound because the
+// cull layout references set 1, but `hiz_enabled = 0` keeps the frustum-only
+// cull from sampling a pyramid built for another view. The returned UBO backs
+// the set.
+pub(super) fn off_camera_read_set(
+    alloc: &DeviceAllocator,
+    device: &VkDevice,
+    pool: vk::DescriptorPool,
+    layout: vk::DescriptorSetLayout,
+    view: vk::ImageView,
+) -> RenderResult<(vk::DescriptorSet, PooledBuffer)> {
+    let params = CullHizParams {
+        prev_view_proj: [[0.0; 4]; 4],
+        hiz_size: [1.0, 1.0],
+        hiz_mip_count: 1,
+        hiz_enabled: 0,
+    };
+    let size = std::mem::size_of::<CullHizParams>() as u64;
+    let ubo = alloc.create_buffer(
+        size,
+        vk::BufferUsageFlags::UNIFORM_BUFFER,
+        vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+    )?;
+    ubo.write_val(0, &params);
+    let set = alloc_descriptor_sets(device, pool, std::slice::from_ref(&layout))?[0];
+    write_sampled_image(device, set, 0, view);
+    write_uniform_buffer(device, set, 1, ubo.buffer(), size);
+    Ok((set, ubo))
 }
 
-fn write_sampler(
+// Re-point an off-camera read set at a rebuilt pyramid view: resize retires
+// the view it captured, and the set must not dangle even though it is never
+// sampled.
+pub(super) fn rewrite_read_set_view(
     device: &VkDevice,
     set: vk::DescriptorSet,
-    binding: u32,
     view: vk::ImageView,
-    sampler: vk::Sampler,
 ) {
-    let info = vk::DescriptorImageInfo::default()
-        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .image_view(view)
-        .sampler(sampler);
-    let write = vk::WriteDescriptorSet::default()
-        .dst_set(set)
-        .dst_binding(binding)
-        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-        .image_info(std::slice::from_ref(&info));
-    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
-    // and resource it names belongs to this device.
-    unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
+    write_sampled_image(device, set, 0, view);
 }
 
-// Sampled-image write with no sampler: the phase-1 kernel reads the depth by
-// texel coordinate, so only the image view is bound.
+// Sampled-image write: both the phase-1 kernel and the cull read their image by
+// texel coordinate, so only the view is bound.
 fn write_sampled_image(
     device: &VkDevice,
     set: vk::DescriptorSet,

@@ -17,11 +17,20 @@ pub(crate) mod cache;
 #[cfg(any(backend_dx, backend_vk, backend_metal))]
 pub(crate) mod compiler_work;
 
-// Shared source assembly for the single-source `.slang` shaders every backend
-// draws from.
+// The compile call for each backend's target: SPIR-V, DXIL, MSL or a metallib.
+#[cfg(any(backend_dx, backend_vk, backend_metal))]
+pub(crate) mod compile;
+
+// The embedded-else-cached-else-compiled fetch every backend's built-in
+// programs go through.
+#[cfg(any(backend_dx, backend_vk, backend_metal))]
+pub(crate) mod builtin;
+
+// Shared source assembly for the single-source shaders every backend draws
+// from.
 #[cfg(any(backend_dx, backend_vk, backend_metal))]
 pub(crate) mod raymarch_source;
-pub(crate) mod slang_source;
+pub(crate) mod source;
 pub(crate) mod surface_source;
 
 // Disk persistence for driver pipeline blobs (VkPipelineCache, D3D12 pipeline

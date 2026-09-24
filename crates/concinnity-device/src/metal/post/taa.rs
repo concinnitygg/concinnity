@@ -13,7 +13,7 @@ use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLTexture;
 
 use crate::metal::context::MtlContext;
-use crate::metal::post::post_device::{MtlPostDevice, MtlPostPipeline, MtlPostProbes};
+use crate::metal::post::post_device::{MtlPostDevice, MtlPostPipeline};
 
 // The shared temporal resolve, holding Metal's own pipeline and target handles.
 pub(crate) type MtlTaaPass = TaaPass<MtlPostPipeline, Retained<ProtocolObject<dyn MTLTexture>>>;
@@ -60,11 +60,7 @@ impl MtlContext {
             device: &self.hw.device,
             sampler: &self.composite.sampler,
             cube_sampler: &self.scene.cube_sampler,
-            probes: Some(MtlPostProbes {
-                set: &self.probe.set,
-                cube_args: self.probe.cube_args.as_deref(),
-                residency: &self.probe.cube_residency,
-            }),
+            probes: Some(self.probe_bindings()),
             timing: self.diagnostics.pass_timing.as_ref(),
             hot_reload: self.hot_reload.enabled,
         }

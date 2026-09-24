@@ -3,7 +3,7 @@
 //! [`TransparentDraw`] per frame. The shared `encode_transparent` encoder sorts
 //! it back-to-front against water + other panels and draws it; the fragment
 //! shader refracts the pre-transparent scene snapshot, tints it, and adds a
-//! Fresnel rim (see shaders/glass.slang).
+//! Fresnel rim (see shaders/glass.hlsl).
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
@@ -22,11 +22,11 @@ use objc2_metal::{
 };
 
 use super::allocator::{DeviceAllocator, PooledTexture};
+use super::builtin_shaders;
 use super::context::MtlContext;
 use super::descriptors::{TextureDesc, VertexAttr, VertexLayout, vertex_descriptor};
 use super::error::allocation_failed;
 use super::init::pipelines::make_depth_state;
-use super::slang_builtins;
 use super::texture::upload_texture;
 use super::transparent::{TransparentDraw, bytes_of};
 
@@ -134,7 +134,7 @@ pub(super) fn build_glass_pipeline(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    build_glass_pipeline_slang(device, hot_reload, &slang_builtins::GLASS_FRAG)
+    build_glass_pipeline_with(device, hot_reload, &builtin_shaders::GLASS_FRAG)
 }
 
 // A ray-traced glass pipeline and its reduced reflection pre-pass: `shade`
@@ -157,9 +157,9 @@ pub(super) fn build_glass_pipeline_rt(
     build_traced_glass_pipelines(
         device,
         hot_reload,
-        &slang_builtins::GLASS_VERT,
-        &slang_builtins::GLASS_FRAG_RT,
-        &slang_builtins::GLASS_REFLECTION_FRAG,
+        &builtin_shaders::GLASS_VERT,
+        &builtin_shaders::GLASS_FRAG_RT,
+        &builtin_shaders::GLASS_REFLECTION_FRAG,
     )
 }
 
@@ -174,9 +174,9 @@ pub(super) fn build_glass_pipeline_rt_textured(
     build_traced_glass_pipelines(
         device,
         hot_reload,
-        &slang_builtins::GLASS_VERT,
-        &slang_builtins::GLASS_FRAG_RT_TEXTURED,
-        &slang_builtins::GLASS_REFLECTION_FRAG_TEXTURED,
+        &builtin_shaders::GLASS_VERT,
+        &builtin_shaders::GLASS_FRAG_RT_TEXTURED,
+        &builtin_shaders::GLASS_REFLECTION_FRAG_TEXTURED,
     )
 }
 
@@ -192,9 +192,9 @@ pub(super) fn build_glass_mesh_pipeline_rt(
     build_traced_glass_pipelines(
         device,
         hot_reload,
-        &slang_builtins::GLASS_MESH_VERT,
-        &slang_builtins::GLASS_MESH_FRAG_RT,
-        &slang_builtins::GLASS_MESH_REFLECTION_FRAG,
+        &builtin_shaders::GLASS_MESH_VERT,
+        &builtin_shaders::GLASS_MESH_FRAG_RT,
+        &builtin_shaders::GLASS_MESH_REFLECTION_FRAG,
     )
 }
 
@@ -207,22 +207,23 @@ pub(super) fn build_glass_mesh_pipeline_rt_textured(
     build_traced_glass_pipelines(
         device,
         hot_reload,
-        &slang_builtins::GLASS_MESH_VERT,
-        &slang_builtins::GLASS_MESH_FRAG_RT_TEXTURED,
-        &slang_builtins::GLASS_MESH_REFLECTION_FRAG_TEXTURED,
+        &builtin_shaders::GLASS_MESH_VERT,
+        &builtin_shaders::GLASS_MESH_FRAG_RT_TEXTURED,
+        &builtin_shaders::GLASS_MESH_REFLECTION_FRAG_TEXTURED,
     )
 }
 
 // The probe-path pane pipeline, whose stages come from the single-source
-// `glass.slang`. Each fragment variant declares only the resources it binds, so
+// `glass.hlsl`. Each fragment variant declares only the resources it binds, so
 // each is its own metallib while the vertex is compiled once for all of them.
-fn build_glass_pipeline_slang(
+fn build_glass_pipeline_with(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
-    fragment: &slang_builtins::SlangLib,
+    fragment: &builtin_shaders::ShaderProgram,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    let vert_fn = slang_builtins::entry_function(device, &slang_builtins::GLASS_VERT, hot_reload)?;
-    let frag_fn = slang_builtins::entry_function(device, fragment, hot_reload)?;
+    let vert_fn =
+        builtin_shaders::entry_function(device, &builtin_shaders::GLASS_VERT, hot_reload)?;
+    let frag_fn = builtin_shaders::entry_function(device, fragment, hot_reload)?;
     build_transparent_pipeline_stages(device, &vert_fn, &frag_fn)
 }
 
@@ -231,13 +232,13 @@ fn build_glass_pipeline_slang(
 fn build_traced_glass_pipelines(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
-    vertex: &slang_builtins::SlangLib,
-    shade: &slang_builtins::SlangLib,
-    reflection: &slang_builtins::SlangLib,
+    vertex: &builtin_shaders::ShaderProgram,
+    shade: &builtin_shaders::ShaderProgram,
+    reflection: &builtin_shaders::ShaderProgram,
 ) -> RenderResult<TracedGlassPipelines> {
-    let vert_fn = slang_builtins::entry_function(device, vertex, hot_reload)?;
-    let shade_fn = slang_builtins::entry_function(device, shade, hot_reload)?;
-    let reflection_fn = slang_builtins::entry_function(device, reflection, hot_reload)?;
+    let vert_fn = builtin_shaders::entry_function(device, vertex, hot_reload)?;
+    let shade_fn = builtin_shaders::entry_function(device, shade, hot_reload)?;
+    let reflection_fn = builtin_shaders::entry_function(device, reflection, hot_reload)?;
     Ok(TracedGlassPipelines {
         shade: build_transparent_pipeline_stages(device, &vert_fn, &shade_fn)?,
         reflection: transparent_pipeline(
@@ -562,7 +563,7 @@ impl MtlContext {
     // Contribute one [`TransparentDraw`] per visible see-through glass MESH (Layer
     // 2): a `Material` flagged `see_through` (which implies `transparent`) on an
     // RT-capable device. Each mesh draws from the SHARED scene vertex/index buffers
-    // via its `DrawObject` offsets + model matrix; `glass_mesh.slang` traces
+    // via its `DrawObject` offsets + model matrix; `glass_mesh.hlsl` traces
     // a per-pixel reflection off the interpolated mesh normal. A no-op unless RT is
     // live (`mesh_glass_active`); when inactive the meshes render opaque (Layer 1)
     // in the main pass. The same gate skips them in the opaque pass + the RT BLAS,

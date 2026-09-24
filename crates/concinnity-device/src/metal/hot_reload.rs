@@ -1,24 +1,17 @@
-//! Filesystem watcher driving Metal shader hot-reload. A background notify
-//! watcher tails `<CARGO_MANIFEST_DIR>/src/metal/shaders/` and, on any modify
-//! event for a `.metal` file, flips a shared `Arc<AtomicBool>`. The main thread
-//! polls that flag at the top of `draw_frame` and calls
-//! `MtlContext::reload_shaders` when it's set. Same flag is also set by the
-//! `reload-shaders` debug command, so the two trigger paths converge.
+//! Metal shader hot-reload: `MtlContext::reload_shaders` rebuilds every live
+//! built-in pipeline from the checkout's shader sources. The `reload-shaders`
+//! debug command sets the shared flag, and the main thread polls it at the top
+//! of `draw_frame`.
 //!
-//! All entirely a dev-loop concern: only constructed when
-//! `MtlContext::new` is called with `hot_reload = true`. Production `cn run`
-//! never instantiates it.
+//! Entirely a dev-loop concern: the flag exists only when `MtlContext::new` is
+//! called with `hot_reload = true`. Production `cn run` never sets it.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::mesh_payload;
 use concinnity_core::render::error::RenderResult;
-use notify::{Event, EventKind, RecursiveMode, Watcher};
 use objc2::rc::Retained;
 use objc2_metal::{MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::sync::atomic::Ordering;
 
 use super::auto_exposure::build_auto_exposure_pipelines;
 use super::context::MtlContext;
@@ -28,8 +21,8 @@ use super::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
 use super::fog::build_fog_pipeline;
 use super::hiz::build_hiz_pipelines;
 use super::init::pipelines::{
-    build_bindless_arg_encoders, build_bindless_sampler_args, build_main_pipeline,
-    build_shadow_bindless_pipeline, build_shadow_pipeline, make_vertex_descriptor,
+    build_bindless_sampler_args, build_main_pipeline, build_shadow_bindless_pipeline,
+    build_shadow_pipeline, make_vertex_descriptor,
 };
 use super::pipeline::{build_post_pipeline, build_text_pipeline};
 use super::post::post_device::MtlPostDevice;
@@ -38,7 +31,7 @@ use super::post::{
     build_reflection_composite_pipeline, build_rt_reflection_pipeline, build_ssao_pipeline,
 };
 use super::resources::skinning::{build_skinned_shadow_pipeline, make_skinned_vertex_descriptor};
-use crate::metal::slang_builtins::{SSAO_BLUR, SSAO_KERNEL};
+use crate::metal::builtin_shaders::{SSAO_BLUR, SSAO_KERNEL};
 
 // Rebuild a built-in pipeline only when it is currently live. Expands to
 // `if $cond { Some($build?) } else { None }`: the rebuild-then-swap pattern
@@ -49,126 +42,6 @@ macro_rules! rebuild_if_live {
     ($cond:expr_2021, $build:expr_2021 $(,)?) => {
         if $cond { Some($build?) } else { None }
     };
-}
-
-// Live watcher handle. Held by `MtlContext` purely to keep the watcher
-// thread alive; dropping it stops the watcher. The flag itself is shared
-// via `MtlContext`'s `hot_reload.reload_pending`.
-pub(crate) struct WatcherHandle {
-    // We don't read `_watcher` after construction; notify keeps its own
-    // listener thread for as long as the handle is alive.
-    #[expect(
-        dead_code,
-        reason = "notify keeps its listener thread alive while the handle lives; never read after construction"
-    )]
-    watcher: notify::RecommendedWatcher,
-}
-
-// Spawn a `notify` watcher over the Metal shader source directory and wire
-// it to flip `flag` on any `.metal` file modify event. The path is derived
-// from `CARGO_MANIFEST_DIR` at compile time so the watcher works no matter
-// where the binary is launched from, but only as long as the source tree
-// still exists at that path. A shipped binary should never be hot-reload-
-// enabled, so the missing-path case logs and returns `None` instead of
-// failing the whole context init.
-pub(crate) fn spawn(flag: Arc<AtomicBool>) -> Option<WatcherHandle> {
-    let dir: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("src")
-        .join("metal")
-        .join("shaders");
-    if !dir.is_dir() {
-        tracing::warn!(
-            "hot-reload: shader source dir {} not found; watcher disabled (debug \
-             command still works)",
-            dir.display()
-        );
-        return None;
-    }
-
-    // Suppress event bursts: editors (vim, VSCode) frequently emit several
-    // close-write / rename events per save. Coalesce by a small debounce so
-    // one save triggers exactly one reload.
-    let debounce = Duration::from_millis(150);
-    let last_fire = std::sync::Mutex::new(Instant::now() - debounce);
-    let flag_for_cb = Arc::clone(&flag);
-    let mut watcher = match notify::recommended_watcher(move |res: notify::Result<Event>| {
-        let event = match res {
-            Ok(e) => e,
-            Err(e) => {
-                tracing::debug!("hot-reload watcher error: {e}");
-                return;
-            }
-        };
-        if !is_relevant(&event) {
-            return;
-        }
-        let mut last = match last_fire.lock() {
-            Ok(g) => g,
-            Err(p) => p.into_inner(),
-        };
-        let now = Instant::now();
-        if now.duration_since(*last) < debounce {
-            return;
-        }
-        *last = now;
-        tracing::info!(
-            "hot-reload: detected change to {:?}, scheduling shader rebuild",
-            event.paths
-        );
-        flag_for_cb.store(true, Ordering::SeqCst);
-    }) {
-        Ok(w) => w,
-        Err(e) => {
-            tracing::warn!("hot-reload: failed to create notify watcher: {e}");
-            return None;
-        }
-    };
-
-    if let Err(e) = watcher.watch(&dir, RecursiveMode::NonRecursive) {
-        tracing::warn!(
-            "hot-reload: failed to watch {} ({}); watcher disabled",
-            dir.display(),
-            e
-        );
-        return None;
-    }
-
-    // The single-source shader directory rides the same watcher: a `.slang`
-    // save rebuilds through the same flag. Best-effort, like the main dir.
-    let slang_dir: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("src")
-        .join("shaders");
-    if slang_dir.is_dir()
-        && let Err(e) = watcher.watch(&slang_dir, RecursiveMode::NonRecursive)
-    {
-        tracing::warn!(
-            "hot-reload: failed to watch {} ({e}); .slang edits will not trigger reloads",
-            slang_dir.display()
-        );
-    }
-
-    tracing::info!(
-        "hot-reload: watching {} for .metal and .slang changes",
-        dir.display()
-    );
-    Some(WatcherHandle { watcher })
-}
-
-// True when this notify event is a modify of a shader source file we care
-// about (`.metal`, or a single-source `.slang`). Filters out unrelated paths
-// (e.g. swap files, sub-directory churn) and the non-mutating events notify
-// emits (e.g. access/metadata).
-fn is_relevant(event: &Event) -> bool {
-    if !matches!(
-        event.kind,
-        EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
-    ) {
-        return false;
-    }
-    event
-        .paths
-        .iter()
-        .any(|p| p.extension().is_some_and(|e| e == "metal" || e == "slang"))
 }
 
 // Static-vertex-layout descriptor used by the velocity / SSAO / SSR pre-pass
@@ -298,22 +171,20 @@ impl MtlContext {
             )
         );
         let main_cull = rebuild_if_live!(main.is_some(), build_cull_pipeline(device, hr));
-        let main_encoders =
-            rebuild_if_live!(main.is_some(), build_bindless_arg_encoders(device, hr));
         // The engine sampler block rides the fresh fragment's encoder.
-        let main_sampler_args = match &main_encoders {
-            Some(enc) => Some(build_bindless_sampler_args(
+        let main_sampler_args = rebuild_if_live!(
+            main.is_some(),
+            build_bindless_sampler_args(
                 device,
-                &enc.sampler,
+                hr,
                 &self.scene.sampler,
                 &self.shadow.sampler,
                 &self.scene.cube_sampler,
-            )?),
-            None => None,
-        };
+            )
+        );
         // Hi-Z build kernels are engine built-ins (independent of the world
         // shader); rebuild them whenever a Hi-Z resource exists so a saved
-        // edit to `hiz_build.slang` is picked up. The texture + mip views are
+        // edit to `hiz_build.hlsl` is picked up. The texture + mip views are
         // kept: only the pipelines swap.
         let hiz_samples = self.targets.hdr.sample_count;
         let hiz = rebuild_if_live!(
@@ -350,10 +221,6 @@ impl MtlContext {
             self.ssr.resolve.is_some(),
             concinnity_core::render::post::ssr::build_pipeline(&post_device)
         );
-        // The probe cube argument encoder is read off the SSR resolve fragment,
-        // so an edit to that shader's block has to reach it whether or not the
-        // world runs SSR.
-        let probe_cube_arg_encoder = super::probe_cubes::probe_cube_arg_encoder(device, hr)?;
         let reflection_composite = rebuild_if_live!(
             self.ssr.composite_pipeline.is_some(),
             build_reflection_composite_pipeline(device, hr)
@@ -370,7 +237,7 @@ impl MtlContext {
             self.rt.pipelines.resolve.is_some(),
             build_rt_reflection_pipeline(
                 device,
-                &crate::metal::slang_builtins::RT_REFLECTIONS_FRAG,
+                &crate::metal::builtin_shaders::RT_REFLECTIONS_FRAG,
                 hr
             )
         );
@@ -378,7 +245,7 @@ impl MtlContext {
             self.rt.pipelines.resolve_textured.is_some(),
             build_rt_reflection_pipeline(
                 device,
-                &crate::metal::slang_builtins::RT_REFLECTIONS_FRAG_TEXTURED,
+                &crate::metal::builtin_shaders::RT_REFLECTIONS_FRAG_TEXTURED,
                 hr
             )
         );
@@ -409,7 +276,7 @@ impl MtlContext {
         );
 
         // GPU-driven cascaded-shadow pipelines: the frustum-only shadow
-        // decision kernel (from cull.slang) + the depth-only bindless shadow
+        // decision kernel (from cull.hlsl) + the depth-only bindless shadow
         // render pipeline. Both engine-internal, so they rebuild here. Gated on
         // the live shadow-bindless path.
         let shadow_cull = rebuild_if_live!(
@@ -434,10 +301,9 @@ impl MtlContext {
         if let (Some(p), Some(taa)) = (taa, self.taa.pass.as_mut()) {
             taa.swap_pipeline(p);
         }
-        if let (Some(p), Some(cull), Some(encoders)) = (main, main_cull, main_encoders) {
+        if let (Some(p), Some(cull), Some(sampler_args)) = (main, main_cull, main_sampler_args) {
             self.cull.main_pipeline = Some(p);
-            self.arg_buffers.bindless_tex_encoder = Some(encoders.texture);
-            self.arg_buffers.bindless_sampler_args = main_sampler_args;
+            self.arg_buffers.bindless_sampler_args = Some(sampler_args);
             self.cull.pipeline = Some(cull.decide);
             self.cull.pipeline_phase2 = Some(cull.decide_phase2);
             self.cull.encode_pipeline = Some(cull.encode);
@@ -483,7 +349,6 @@ impl MtlContext {
         if let (Some(p), Some(resolve)) = (ssr_resolve, self.ssr.resolve.as_mut()) {
             resolve.swap_pipeline(p);
         }
-        self.arg_buffers.probe_cube_encoder = probe_cube_arg_encoder;
         if let Some(p) = reflection_composite {
             self.ssr.composite_pipeline = Some(p);
         }
@@ -543,18 +408,17 @@ impl MtlContext {
             let pipeline =
                 build_main_pipeline(device, &vert_desc, world, hr, self.targets.hdr.sample_count)?;
             let cull = build_cull_pipeline(device, hr)?;
-            let encoders = build_bindless_arg_encoders(device, hr)?;
             // The engine sampler block rides the fresh fragment's encoder; built
             // here (still before the swap) so a failure leaves the live state
             // untouched.
             let sampler_args = build_bindless_sampler_args(
                 device,
-                &encoders.sampler,
+                hr,
                 &self.scene.sampler,
                 &self.shadow.sampler,
                 &self.scene.cube_sampler,
             )?;
-            Some((pipeline, cull, encoders.texture, sampler_args))
+            Some((pipeline, cull, sampler_args))
         } else {
             None
         };
@@ -562,7 +426,7 @@ impl MtlContext {
         // All builds succeeded: swap into the live context. After this
         // point the next frame's draw calls bind the freshly compiled
         // pipelines.
-        if let Some((pipeline, cull, tex_encoder, sampler_args)) = new_main {
+        if let Some((pipeline, cull, sampler_args)) = new_main {
             self.cull.main_pipeline = Some(pipeline);
             // Swap the cull state with the pipeline; `two_pass_occlusion` keeps
             // its init-time resolution.
@@ -570,7 +434,6 @@ impl MtlContext {
             self.cull.pipeline_phase2 = Some(cull.decide_phase2);
             self.cull.encode_pipeline = Some(cull.encode);
             self.cull.icb_arg_encoder = Some(cull.icb_arg_encoder);
-            self.arg_buffers.bindless_tex_encoder = Some(tex_encoder);
             self.arg_buffers.bindless_sampler_args = Some(sampler_args);
             // Force fresh ICBs on the next frame so every argument buffer is
             // re-encoded with the new encoder. Matches the `cull` swap in

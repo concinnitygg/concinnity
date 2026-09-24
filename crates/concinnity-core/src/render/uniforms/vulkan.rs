@@ -1,13 +1,13 @@
 //! repr(C) uniform / push-constant structs only the Vulkan frame encoders bind
 //! (std140 / std430 / push-constant layouts). Each is mirrored field-for-field
 //! in a `.glsl`/`.vert`/`.frag`/`.comp` shader under `vulkan/shaders/`, or in
-//! the one `.slang` block Vulkan alone declares.
+//! the one single-source block Vulkan alone declares.
 //!
-//! Blocks whose shader counterpart is a single-source `.slang` declaration are
+//! Blocks whose shader counterpart is a single-source declaration are
 //! declared once for every backend in the parent module; what is left here is
 //! what only this backend binds. Their layouts are checked by `shader_layout` in
-//! concinnity-device, which reads the expected offsets out of slangc's
-//! reflection per target. The hand-written asserts below are for the families
+//! concinnity-device, which reads the expected offsets out of the compiled
+//! module per target. The hand-written asserts below are for the families
 //! whose shaders are still per backend -- the cull kernel, the skinning and
 //! morph kernels, the raymarch SDF templates, the velocity pass, and Metal's
 //! water.
@@ -16,7 +16,7 @@
 /// what the pipeline layout declares.
 pub const AUTO_EXPOSURE_PUSH_BYTES: u32 = 16;
 
-/// The GPU-cull push constant (cull.slang): six already-normalized frustum
+/// The GPU-cull push constant (cull.hlsl): six already-normalized frustum
 /// planes (xyz = normal, w = d), the camera position sharing its 16-byte slot with
 /// the build-time object count, then the shader-bucket routing (120 B total).
 #[derive(Copy, Clone)]
@@ -37,7 +37,7 @@ pub struct CullParams {
     pub bucket_stride: u32,
 }
 
-/// Cull-side Hi-Z uniforms (cull.slang, 80 bytes): the previous frame's
+/// Cull-side Hi-Z uniforms (cull.hlsl, 80 bytes): the previous frame's
 /// un-jittered view-projection, the Hi-Z mip-0 dimensions, the mip count, and an
 /// enable flag. Mirrors the Metal / DirectX CullUniforms tail.
 #[derive(Copy, Clone)]
@@ -60,10 +60,10 @@ mod tests {
     use super::*;
     use core::mem::{offset_of, size_of};
 
-    // CullParams must match the `CullParams` push-constant block in cull.slang:
+    // CullParams must match the `CullParams` push-constant block in cull.hlsl:
     // six frustum planes, then cam_pos sharing its 16-byte slot with
     // object_count. `shader_layout` in concinnity-device reflects the same
-    // source; this is the copy that runs without slangc.
+    // source; this is the copy that runs without dxc.
     #[test]
     fn cull_params_layout_matches_the_shader() {
         assert_eq!(size_of::<CullParams>(), 120);
@@ -74,7 +74,7 @@ mod tests {
         assert_eq!(offset_of!(CullParams, bucket_stride), 116);
     }
 
-    // CullHizParams in cull.slang: mat4 (64) + float2 (8) + two uints. Total 80
+    // CullHizParams in cull.hlsl: mat4 (64) + float2 (8) + two uints. Total 80
     // bytes, tightly packed after the mat4.
     #[test]
     fn cull_hiz_params_layout_matches_the_shader() {

@@ -21,11 +21,11 @@ use objc2_metal::{
     MTLVertexFormat, MTLVertexStepFunction,
 };
 
+use crate::metal::builtin_shaders;
 use crate::metal::context::MtlContext;
 use crate::metal::descriptors::{TextureDesc, VertexAttr, VertexLayout, vertex_descriptor};
 use crate::metal::encode::RenderEncode;
 use crate::metal::scoped_encoder::ScopedEncoder;
-use crate::metal::slang_builtins;
 
 // All unified-G-buffer pre-pass state grouped into one unit: the shared
 // targets (normal+depth / roughness / velocity / sampleable depth) and the one
@@ -157,14 +157,14 @@ pub(crate) fn build_gbuffer_bindless_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    let vert_fn = slang_builtins::entry_function(
+    let vert_fn = builtin_shaders::entry_function(
         device,
-        &slang_builtins::GBUFFER_PREPASS_VERT_BINDLESS,
+        &builtin_shaders::GBUFFER_PREPASS_VERT_BINDLESS,
         hot_reload,
     )?;
-    let frag_fn = slang_builtins::entry_function(
+    let frag_fn = builtin_shaders::entry_function(
         device,
-        &slang_builtins::GBUFFER_PREPASS_FRAG_BINDLESS,
+        &builtin_shaders::GBUFFER_PREPASS_FRAG_BINDLESS,
         hot_reload,
     )?;
 

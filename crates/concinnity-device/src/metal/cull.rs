@@ -9,6 +9,7 @@ use concinnity_core::gfx::lod;
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::model_history::HistoryMode;
+use concinnity_core::render::shader_programs::metal::bindless_textures;
 use concinnity_core::transform::IDENTITY;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -18,9 +19,10 @@ use objc2_metal::{
     MTLDevice as _, MTLFunction as _, MTLLibrary as _, MTLRenderPipelineState,
 };
 
+use super::builtin_shaders::compute_pipeline;
 use super::context::*;
 use super::encode::ComputeEncode;
-use super::pipeline::{ns_str, shader_library};
+use super::pipeline::{cull_encode_library, ns_str};
 use super::scoped_encoder::ScopedEncoder;
 use concinnity_core::render::uniforms::metal::*;
 
@@ -48,7 +50,7 @@ pub(crate) struct CullState {
     // by a scene other than the start scene, and `install_world_shader` builds
     // it when that scene pins. Draws carrying a `None` bucket are skipped.
     pub world_pipelines: super::init::pipelines::WorldPipelineTable,
-    // The phase-1 decision kernel (`cull.slang`). `Some` only when `bindless`
+    // The phase-1 decision kernel (`cull.hlsl`). `Some` only when `bindless`
     // is set; every other pipeline here is `Some` exactly when it is.
     pub pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
     // The ICB encode kernel (`cull_encode.metal`), dispatched after every
@@ -148,14 +150,14 @@ const CULL_STATUS_BUFFER_INDEX: usize = 5;
 const CULL_ENCODE_PARAMS_INDEX: usize = 7;
 
 // The four texture-pool indices the Metal bindless fragment shader
-// (`fragment_main_bindless`, main_bindless.slang) reads for one surface. Albedo,
+// (`fragment_main_bindless`, main_bindless.hlsl) reads for one surface. Albedo,
 // normal, and every optional map share ONE handle-indexed pool (`tex_pool`,
 // [real textures..][flat-normal fallback]), which the shader indexes directly
 // (`tex_pool[obj.normal_index]`), so each index is the texture's own handle --
 // no albedo-count bias. A normal-less draw's `normal` is the flat-normal
 // fallback slot (`normal_pool_index`, at `texture_count`). Every index is
-// clamped to the `BINDLESS_TEXTURE_COUNT` cap (a fixed-size MSL array, so an
-// over-cap index would read past it). Shared by the per-frame static fill
+// clamped to the `BINDLESS_TEXTURE_COUNT` cap (the slots the host writes, so an
+// over-cap index would read past them). Shared by the per-frame static fill
 // (`build_object_buffer`) and the init-time instanced records
 // (`metal_instance_records`) so a folded instance addresses the pool identically
 // to a static object.
@@ -341,10 +343,7 @@ impl MtlContext {
     // Build this frame's per-object morph-weight buffers, from the same ring
     // slot as the joint palettes. The skin kernel reads them as a plain buffer
     // rather than inline constants, so the encoder binds a resource that lives
-    // for the whole frame -- which a parallel per-pass encoder needs, and which
-    // is also the only shape Metal accepts for a Slang-declared read-only
-    // buffer (slangc lowers one to a mutable `device` pointer, and Metal API
-    // validation rejects `setBytes` against that).
+    // for the whole frame, which a parallel per-pass encoder needs.
     pub(super) fn build_morph_weight_buffers(
         &mut self,
         ring_slot: usize,
@@ -982,28 +981,39 @@ impl MtlContext {
         Ok(())
     }
 
+    // The `BindlessTextures` block's members ahead of the pool, with their ids:
+    // the shadow maps, the two IBL cubes, the AO (the blurred occlusion when
+    // SSAO is on, else 1x1 white), the probe cube array and the LTC tables.
+    fn bindless_fixed_members(
+        &self,
+    ) -> [(usize, &ProtocolObject<dyn objc2_metal::MTLTexture>); bindless_textures::FIXED] {
+        use bindless_textures as ids;
+        [
+            (ids::SHADOW_MAP, &*self.shadow.map),
+            (ids::IRRADIANCE_CUBE, &*self.scene.env_map.irradiance),
+            (ids::PREFILTER_CUBE, &*self.scene.env_map.prefilter),
+            (ids::SSAO, self.ao_output_texture()),
+            (ids::PROBE_CUBES, self.probe.cubes.texture()),
+            (ids::SPOT_SHADOW_MAP, &*self.spot_shadow.map),
+            (ids::LTC_MATRIX, &*self.scene.ltc_matrix_texture),
+            (ids::LTC_MAGNITUDE, &*self.scene.ltc_magnitude_texture),
+        ]
+    }
+
     // The identity of everything the `BindlessTextures` block names outside the
     // shared pool, plus the pool's own generation. Two frames that agree on
     // this would write byte-identical argument buffers, so a ring slot already
     // holding it can be left alone.
-    fn bindless_texture_signature(&self) -> u64 {
-        use concinnity_core::render::uniforms::MAX_PROBES;
+    pub(super) fn bindless_texture_signature(&self) -> u64 {
         let mut sig = super::bindless_args::Signature::new();
         sig.push_u64(self.arg_buffers.texture_epoch);
         sig.push_u64(self.scene.textures.len() as u64);
         for tex in &self.scene.fallback_textures {
             sig.push_texture(tex.as_ref());
         }
-        sig.push_texture(self.shadow.map.as_ref());
-        sig.push_texture(self.scene.env_map.irradiance.as_ref());
-        sig.push_texture(self.scene.env_map.prefilter.as_ref());
-        sig.push_texture(self.ao_output_texture());
-        for i in 0..MAX_PROBES {
-            sig.push_texture(self.probe_cube_or_sky(i));
+        for (_, tex) in self.bindless_fixed_members() {
+            sig.push_texture(tex);
         }
-        sig.push_texture(self.spot_shadow.map.as_ref());
-        sig.push_texture(self.scene.ltc_matrix_texture.as_ref());
-        sig.push_texture(self.scene.ltc_magnitude_texture.as_ref());
         sig.finish()
     }
 
@@ -1021,37 +1031,35 @@ impl MtlContext {
     }
 
     // Build the per-frame `BindlessTextures` argument buffer for the bindless
-    // static pass: the albedo + normal-map pool (every one of the
-    // `BINDLESS_TEXTURE_COUNT` slots filled: overflow and trailing empty
-    // slots fall back to the white albedo texture at slot 0) followed by the
-    // shadow map and the two IBL cubes. The bindless fragment shader can only
-    // reach textures through this argument buffer because discrete texture
-    // bindings make it incompatible with indirect command buffers.
+    // static pass: the fixed members at their ids, then the albedo + normal-map
+    // pool (every one of the `BINDLESS_TEXTURE_COUNT` slots filled: overflow and
+    // trailing empty slots fall back to the white albedo texture). The bindless
+    // fragment shader can only reach textures through this argument buffer
+    // because discrete texture bindings make it incompatible with indirect
+    // command buffers.
     //
     // The buffer is a ring slot, one per frame in flight, so the GPU never
     // reads a slot the CPU is rewriting. Its contents move only on a texture
     // stream/evict, a probe bake, an env-map swap or a transient-pool repack,
-    // and a signature gate per slot skips the encode entirely on the frames
-    // between: a change is re-encoded once into each slot and then stops.
-    // `None` for non-bindless contexts. The committed command buffer keeps the
-    // buffer alive.
+    // and a signature gate per slot skips the write entirely on the frames
+    // between: a change is rewritten once into each slot and then stops. `sig`
+    // is this frame's `bindless_texture_signature`. `None` for non-bindless
+    // contexts. The committed command buffer keeps the buffer alive.
     pub(super) fn build_bindless_texture_args(
         &mut self,
         ring_slot: usize,
+        sig: u64,
     ) -> RenderResult<Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>> {
-        use objc2_metal::MTLArgumentEncoder as _;
-        // Clone the encoder handle (cheap refcount bump) so no borrow of `self`
-        // is held while the ring (a different field) is borrowed mutably below.
-        let enc = match &self.arg_buffers.bindless_tex_encoder {
-            Some(e) => e.clone(),
-            None => return Ok(None),
-        };
-        let sig = self.bindless_texture_signature();
+        use bindless_textures as ids;
+        if !self.cull.bindless {
+            return Ok(None);
+        }
         let tail_sig = self.bindless_tail_signature();
-        let len = enc.encodedLength().max(16);
-        // Ring slot, grown to the encoder's `encodedLength()` instead of a fresh
-        // allocation each frame. The argument encoder rewrites it in place; the
-        // fence guarantees the prior user of this slot has retired on the GPU.
+        let count = super::context::BINDLESS_TEXTURE_COUNT;
+        let len = super::bindless_args::bindless_block_len(count);
+        // Ring slot, grown to the block's length instead of a fresh allocation
+        // each frame, and rewritten in place; the fence guarantees the prior
+        // user of this slot has retired on the GPU.
         let (buf, allocated) =
             self.rings
                 .bindless_tex
@@ -1068,80 +1076,36 @@ impl MtlContext {
         if !write_pool && !write_tail {
             return Ok(Some(buf));
         }
-        // SAFETY: `buf` was sized to the encoder's `encodedLength()`, and every
-        // texture index below is within the `BindlessTextures` layout.
-        unsafe {
-            enc.setArgumentBuffer_offset(Some(&buf), 0);
-        }
-        let count = super::context::BINDLESS_TEXTURE_COUNT;
+        let mut block = super::bindless_args::ResourceIdWriter::new(&buf);
         let texture_count = self.scene.textures.len();
         if write_pool {
+            for (id, tex) in self.bindless_fixed_members() {
+                block.set(id, tex);
+            }
             // The shared pool: every real texture, then the reserved fallbacks --
             // flat-normal at `texture_count`, white at `texture_count + 1` -- so an
             // over-cap or clamped index still samples a valid texture.
-            for i in 0..count.min(texture_count) {
-                // SAFETY: every resource bound here is owned by `self` and outlives the encoder, at
-                // the buffer/texture indices the shaders declare.
-                unsafe {
-                    enc.setTexture_atIndex(Some(self.scene.textures[i].as_ref()), i);
-                }
+            for (i, tex) in self.scene.textures.iter().take(count).enumerate() {
+                block.set(ids::pool(i), tex);
             }
             for (i, tex) in (texture_count..count).zip(&self.scene.fallback_textures) {
-                // SAFETY: as above; `i` is a pool index the shaders declare.
-                unsafe {
-                    enc.setTexture_atIndex(Some(tex.as_ref()), i);
-                }
-            }
-            // SAFETY: every texture bound here is owned by `self` and outlives the encoder, and the
-            // argument ids match the layout the shaders declare: `count` shadow map, then irradiance,
-            // prefilter, AO, and `MAX_PROBES` probe cubes.
-            unsafe {
-                enc.setTexture_atIndex(Some(self.shadow.map.as_ref()), count);
-                enc.setTexture_atIndex(Some(self.scene.env_map.irradiance.as_ref()), count + 1);
-                enc.setTexture_atIndex(Some(self.scene.env_map.prefilter.as_ref()), count + 2);
-                // SSAO occlusion: the blurred AO when SSAO is on, else 1x1 white.
-                enc.setTexture_atIndex(Some(self.ao_output_texture()), count + 3);
-                // Local reflection probe cube array (specular only): one slice per
-                // baked probe, the sky prefilter for unused slots. Occupies argument
-                // ids `count + 4 ..= count + 4 + MAX_PROBES`.
-                for i in 0..concinnity_core::render::uniforms::MAX_PROBES {
-                    enc.setTexture_atIndex(Some(self.probe_cube_or_sky(i)), count + 4 + i);
-                }
-                // Spot shadow map array (1x1 fallback when nothing casts), just past
-                // the probe cubes.
-                enc.setTexture_atIndex(
-                    Some(self.spot_shadow.map.as_ref()),
-                    count + 4 + concinnity_core::render::uniforms::MAX_PROBES,
-                );
-                // The two area-light LTC tables follow the spot shadow array.
-                enc.setTexture_atIndex(
-                    Some(self.scene.ltc_matrix_texture.as_ref()),
-                    count + 5 + concinnity_core::render::uniforms::MAX_PROBES,
-                );
-                enc.setTexture_atIndex(
-                    Some(self.scene.ltc_magnitude_texture.as_ref()),
-                    count + 6 + concinnity_core::render::uniforms::MAX_PROBES,
-                );
+                block.set(ids::pool(i), tex);
             }
         }
-        if write_tail {
+        if write_tail && let Some(white) = self.scene.fallback_textures.last() {
             // White across the unused tail, past the two reserved fallbacks.
-            let white = self.scene.fallback_textures.last();
             for i in (texture_count + self.scene.fallback_textures.len()).min(count)..count {
-                // SAFETY: as above; `i` is a pool index the shaders declare.
-                unsafe {
-                    enc.setTexture_atIndex(white.map(|t| t.as_ref()), i);
-                }
+                block.set(ids::pool(i), white);
             }
         }
         Ok(Some(buf))
     }
 
     // Rebuild the bindless pass's residency set when the textures the
-    // `BindlessTextures` block names change. Called once per frame before any
-    // pass declares them; a frame whose signature is unchanged does nothing.
-    pub(super) fn refresh_bindless_residency(&mut self) {
-        let sig = self.bindless_texture_signature();
+    // `BindlessTextures` block names change, as `sig` (this frame's
+    // `bindless_texture_signature`) says. Called once per frame before any pass
+    // declares them; a frame whose signature is unchanged does nothing.
+    pub(super) fn refresh_bindless_residency(&mut self, sig: u64) {
         // Taken out so the iterator below can borrow the rest of `self`.
         let mut set = core::mem::replace(
             &mut self.arg_buffers.bindless_residency,
@@ -1154,19 +1118,7 @@ impl MtlContext {
                 .iter()
                 .chain(self.scene.fallback_textures.iter())
                 .map(|t| t.as_ref())
-                .chain([
-                    self.shadow.map.as_ref(),
-                    self.spot_shadow.map.as_ref(),
-                    self.scene.ltc_matrix_texture.as_ref(),
-                    self.scene.ltc_magnitude_texture.as_ref(),
-                    self.scene.env_map.irradiance.as_ref(),
-                    self.scene.env_map.prefilter.as_ref(),
-                    self.ao_output_texture(),
-                ])
-                .chain(
-                    (0..concinnity_core::render::uniforms::MAX_PROBES)
-                        .map(|i| self.probe_cube_or_sky(i)),
-                ),
+                .chain(self.bindless_fixed_members().map(|(_, tex)| tex)),
         );
         self.arg_buffers.bindless_residency = set;
     }
@@ -1188,7 +1140,7 @@ impl MtlContext {
 }
 
 // The GPU-driven cull's pipelines: the phase-1 and phase-2 decision kernels
-// from `cull.slang`, the ICB encode kernel from `cull_encode.metal`, and the
+// from `cull.hlsl`, the ICB encode kernel from `cull_encode.metal`, and the
 // argument encoder every ICB argument buffer is written with (the encode
 // kernel is the one function that declares the `ICBContainer`).
 pub(super) struct CullPipeline {
@@ -1196,27 +1148,6 @@ pub(super) struct CullPipeline {
     pub decide_phase2: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
     pub encode: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
     pub icb_arg_encoder: Retained<ProtocolObject<dyn MTLArgumentEncoder>>,
-}
-
-fn compute_pipeline(
-    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
-    function: &ProtocolObject<dyn objc2_metal::MTLFunction>,
-    what: &str,
-) -> RenderResult<Retained<ProtocolObject<dyn MTLComputePipelineState>>> {
-    device
-        .newComputePipelineStateWithFunction_error(function)
-        .map_err(|e| {
-            RenderError::ShaderCompile(format!("failed to create {what} pipeline state: {e:?}"))
-        })
-}
-
-fn decision_pipeline(
-    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
-    lib: &super::slang_builtins::SlangLib,
-    hot_reload: bool,
-) -> RenderResult<Retained<ProtocolObject<dyn MTLComputePipelineState>>> {
-    let function = super::slang_builtins::entry_function(device, lib, hot_reload)?;
-    compute_pipeline(device, &function, lib.name)
 }
 
 // Build the GPU-driven cull pipelines. The decision kernels run one thread
@@ -1228,15 +1159,17 @@ pub(super) fn build_cull_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> RenderResult<CullPipeline> {
-    let decide = decision_pipeline(device, &super::slang_builtins::CULL_PHASE1, hot_reload)?;
-    let decide_phase2 = decision_pipeline(device, &super::slang_builtins::CULL_PHASE2, hot_reload)?;
-    let library = shader_library(device, hot_reload, "cull_encode.metal")?;
+    let decide = compute_pipeline(device, &super::builtin_shaders::CULL_PHASE1, hot_reload)?;
+    let decide_phase2 = compute_pipeline(device, &super::builtin_shaders::CULL_PHASE2, hot_reload)?;
+    let library = cull_encode_library(device, hot_reload)?;
     let encode_fn = library
         .newFunctionWithName(&ns_str("cull_encode"))
         .ok_or_else(|| {
             RenderError::ShaderCompile("cull_encode not found in cull_encode library".to_string())
         })?;
-    let encode = compute_pipeline(device, &encode_fn, "cull encode")?;
+    let encode = device
+        .newComputePipelineStateWithFunction_error(&encode_fn)
+        .map_err(|e| RenderError::ShaderCompile(format!("cull encode pipeline: {e:?}")))?;
     // SAFETY: CULL_ICB_BUFFER_INDEX is the static buffer index the encode
     // kernel declares its argument-buffer parameter at.
     let icb_arg_encoder =
@@ -1258,7 +1191,7 @@ pub(super) fn build_shadow_cull_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLComputePipelineState>>> {
-    decision_pipeline(device, &super::slang_builtins::CULL_SHADOW, hot_reload)
+    compute_pipeline(device, &super::builtin_shaders::CULL_SHADOW, hot_reload)
 }
 
 #[cfg(test)]

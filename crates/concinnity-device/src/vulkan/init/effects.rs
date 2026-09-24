@@ -5,7 +5,6 @@
 
 use ash::vk;
 use concinnity_core::gfx::auto_exposure;
-use concinnity_core::gfx::render_types::{LightUniforms, ShadowUniforms};
 use concinnity_core::render::backend_init::{PostSettings, WorldFx};
 use concinnity_core::render::decal;
 use concinnity_core::render::error::RenderResult;
@@ -13,11 +12,12 @@ use concinnity_core::render::lights;
 use concinnity_core::render::planar_reflection;
 
 use super::ray_tracing::RtResources;
-use super::{Features, GlobalBindings, InitGpu};
+use super::{Features, InitGpu};
 use crate::vulkan::context::{
     AutoExposureState, BloomState, CompositeState, DecalState, FogState, HDR_FORMAT, VkCull,
     VkDescriptors, VkGeometry, VkSceneAssets, VkTargets,
 };
+use crate::vulkan::global_set::GlobalBindings;
 use crate::vulkan::planar::PlanarReflectionSet;
 use crate::vulkan::post::PostSupport;
 use crate::vulkan::post::bloom::rebind_bloom_input0;
@@ -122,11 +122,10 @@ fn shared_post_device<'a>(
         arena: &post_support.arena,
         sampler: post_support.sampler.handle(),
         cube_sampler: scene.cube_sampler.handle(),
-        probes: Some(VkPostProbes {
+        probes: VkPostProbes {
             layout: descriptors.global_set_layout.handle(),
             sets: &[],
-            cube_count: descriptors.probe_cube_count,
-        }),
+        },
         frame: 0,
         hot_reload,
     }
@@ -281,7 +280,6 @@ pub(super) fn build_taa_and_wire_scene_inputs(
         upscale,
     } = inputs;
     let init_post_device = shared_post_device(gpu, &screen.post, scene, descriptors);
-    let post_sampler = screen.post.sampler.handle();
     // When TAA is on the history resolve produces a post-TAA scene image;
     // the bloom prefilter and composite pass must sample that instead of the
     // raw HDR resolve, so their binding-0 descriptor is re-pointed at the
@@ -296,11 +294,10 @@ pub(super) fn build_taa_and_wire_scene_inputs(
                 taa.output_view(i),
                 bloom.mips[i][0].view,
                 scene.color_lut.view,
-                post_sampler,
             );
         }
         for (i, frame_sets) in bloom.input_sets.iter().enumerate() {
-            rebind_bloom_input0(device, frame_sets[0], taa.output_view(i), post_sampler);
+            rebind_bloom_input0(device, frame_sets[0], taa.output_view(i));
         }
         Some(taa)
     } else {
@@ -323,11 +320,10 @@ pub(super) fn build_taa_and_wire_scene_inputs(
                 up_output_view,
                 bloom.mips[i][0].view,
                 scene.color_lut.view,
-                post_sampler,
             );
         }
         for frame_sets in &bloom.input_sets {
-            rebind_bloom_input0(device, frame_sets[0], up_output_view, post_sampler);
+            rebind_bloom_input0(device, frame_sets[0], up_output_view);
         }
     }
 
@@ -360,7 +356,6 @@ pub(super) fn build_taa_and_wire_scene_inputs(
                 .transient_pool
                 .view_for("ao_output", i)
                 .unwrap_or(scene.ssao_white.view),
-            post_sampler,
         );
     }
     Ok(taa)
@@ -412,10 +407,7 @@ pub(super) fn build_world_effects(
     } = inputs;
     let GlobalBindings {
         uniforms,
-        light_cull,
         shadow,
-        spot_shadow,
-        area_light,
         scene,
         ..
     } = *bindings;
@@ -466,7 +458,6 @@ pub(super) fn build_world_effects(
                 hdr_format: HDR_FORMAT,
                 hdr_resolve_views: &hdr_resolve_views,
                 depth_views: &depth_views,
-                sampler: scene.linear_sampler.handle(),
                 extent: render_extent,
             },
             crate::vulkan::fog::FogShadowResources {
@@ -548,10 +539,10 @@ pub(super) fn build_world_effects(
             frame_draw_args_buffers: &cull.draw_args_buffers,
             cull_set_layout: csl.handle(),
             cull_count: n_cull,
-            hiz: cull.hiz.as_ref().map(|h| {
-                let (view, sampler) = h.read_set_sources();
-                (h.read_set_layout.handle(), view, sampler)
-            }),
+            hiz: cull
+                .hiz
+                .as_ref()
+                .map(|h| (h.read_set_layout.handle(), h.read_set_view())),
         };
         Some(crate::vulkan::planar::PlanarReflectionSet::new(
             crate::vulkan::planar::PlanarDevice { alloc, device },
@@ -564,32 +555,8 @@ pub(super) fn build_world_effects(
             &planar_assignment.representatives,
             &targets.main_render_pass,
             crate::vulkan::planar::PlanarGlobalSet {
-                update_after_bind: descriptors.global_update_after_bind,
                 layout: descriptors.global_set_layout.handle(),
-                probe_cube_count: descriptors.probe_cube_count,
-            },
-            crate::vulkan::planar::PlanarLightingBindings {
-                light_ubos: &uniforms.light_ubo_buffers,
-                light_size: std::mem::size_of::<LightUniforms>() as u64,
-                local_light_buffer: uniforms.local_light_buffer.buffer(),
-                local_light_size: uniforms.local_light_size,
-                cluster_params_ubo: light_cull.unclustered_buffer.buffer(),
-                cluster_list_buffer: light_cull.cluster_buffer.buffer(),
-                spot_shadow_map_view: spot_shadow.map.view,
-                spot_shadow_data_buffer: spot_shadow.data_buffer.buffer(),
-                area_light_buffer: area_light.buffer.buffer(),
-                ltc_matrix_view: area_light.ltc_matrix.view,
-                ltc_magnitude_view: area_light.ltc_magnitude.view,
-                ltc_sampler: area_light.sampler.handle(),
-                shadow_ubos: &shadow.ubos,
-                shadow_size: std::mem::size_of::<ShadowUniforms>() as u64,
-                shadow_map_view: shadow.map.view,
-                shadow_sampler: shadow.sampler.handle(),
-                irradiance_view: scene.env_map.irradiance.view,
-                prefilter_view: scene.env_map.prefilter.view,
-                cube_sampler: scene.cube_sampler.handle(),
-                ssao_white_view: scene.ssao_white.view,
-                linear_sampler: scene.linear_sampler.handle(),
+                bindings: *bindings,
             },
             cull_sources,
         )?)
@@ -662,7 +629,6 @@ pub(super) fn build_world_effects(
                 width: render_extent.width,
                 height: render_extent.height,
                 global_set_layout: descriptors.global_set_layout.handle(),
-                probe_cube_count: descriptors.probe_cube_count,
                 hot_reload,
                 reflection_divisor: post.rt_reflections.map_or(1, |rt| rt.divisor),
             },
@@ -703,7 +669,6 @@ pub(super) fn build_world_effects(
             device,
             frames,
             &hdr_resolve_views,
-            scene.linear_sampler.handle(),
             hot_reload,
         )?;
         let state = auto_exposure::AutoExposureState::new(settings);

@@ -193,7 +193,7 @@ pub(in crate::metal) struct GraphFrameParams<'a> {
     // consume it.
     pub fog_froxel_params: Option<&'a FogFroxelParams>,
     // Clustered light-binning params. `Some` only when the `LightCull` pass is
-    // in the graph this frame (matches `FrameGraphInputs::clustered_lighting_enabled`).
+    // in the graph this frame (matches `FrameGraphInputs::clustering_enabled`).
     pub cluster_params: Option<&'a ClusterParams>,
     // SSAO kernel + blur params. `Some` only when the `SsaoBlur` pass
     // is in the graph this frame (matches `FrameGraphInputs::ssao_enabled`).
@@ -798,7 +798,7 @@ impl MtlContext {
                 // frame's cull ICB + bindless buffers) so a flat reflector samples a
                 // sharp scene reflection instead of the blurry probe cube. A visible
                 // water surface holding a slot always wants it -- water takes the
-                // mirror over its own trace (see `water.slang`) -- and so does any
+                // mirror over its own trace (see `water.hlsl`) -- and so does any
                 // reflector when RT is off; a glass-only world under a live trace
                 // skips it. Encoded before `encode_transparent` on the same command
                 // buffer, which samples the resolves.

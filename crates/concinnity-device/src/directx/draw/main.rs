@@ -343,14 +343,11 @@ impl DxContext {
                 // [9] descriptor table: blurred SSAO occlusion (or 1x1 white
                 // fallback when SSAO is disabled).
                 cmd.set_graphics_srv_table(9, self.ssao_ao_srv_gpu());
-                // [10] reflection-probe cube array + [11] the live ProbeSet (this
-                // frame's boxes + count). The forward shader box-projects + blends
-                // them for the specular reflection; count 0 keeps the sky.
-                cmd.set_graphics_srv_table(10, self.probe_cube_table_gpu());
-                cmd.SetGraphicsRootConstantBufferView(
-                    11,
-                    com::gpu_va(&self.uniforms.probe_set_cbvs[frame_idx]),
-                );
+                // [10] reflection-probe cube array + [11] the live count + [19]
+                // this frame's boxes. The forward shader box-projects + blends them
+                // for the specular reflection; count 0 keeps the sky.
+                let probes = self.probe_bindings(frame_idx);
+                self.bind_main_probe_set(cmd, probes.set_cbv, probes.records);
                 // ExecuteIndirect #1: the static + instance prefix
                 // `[0, skinned_record_base())` against the static VB/IB (bound
                 // above). The skinned tail is drawn by a second ExecuteIndirect
@@ -441,11 +438,8 @@ impl DxContext {
                 cmd.set_graphics_sampler_table(7, self.descriptors.linear_sampler_gpu);
                 cmd.SetGraphicsRootShaderResourceView(8, object_gva);
                 cmd.set_graphics_srv_table(9, self.ssao_ao_srv_gpu());
-                cmd.set_graphics_srv_table(10, self.probe_cube_table_gpu());
-                cmd.SetGraphicsRootConstantBufferView(
-                    11,
-                    com::gpu_va(&self.uniforms.probe_set_cbvs[frame_idx]),
-                );
+                let probes = self.probe_bindings(frame_idx);
+                self.bind_main_probe_set(cmd, probes.set_cbv, probes.records);
                 // ExecuteIndirect #2: skinned tail
                 // `[skinned_record_base(), cull_count())`, byte-offset into the
                 // same indirect command buffer.
@@ -621,11 +615,8 @@ impl DxContext {
                 cmd.set_graphics_sampler_table(7, self.descriptors.linear_sampler_gpu);
                 cmd.SetGraphicsRootShaderResourceView(8, object_gva);
                 cmd.set_graphics_srv_table(9, self.ssao_ao_srv_gpu());
-                cmd.set_graphics_srv_table(10, self.probe_cube_table_gpu());
-                cmd.SetGraphicsRootConstantBufferView(
-                    11,
-                    com::gpu_va(&self.uniforms.probe_set_cbvs[frame_idx]),
-                );
+                let probes = self.probe_bindings(frame_idx);
+                self.bind_main_probe_set(cmd, probes.set_cbv, probes.records);
                 // ExecuteIndirect #1: static + instance prefix against the static
                 // VB/IB (bound above), once per shader bucket.
                 cmd.ExecuteIndirect(

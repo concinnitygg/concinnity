@@ -219,11 +219,12 @@ pub struct FrameGraphInputs {
     /// an empty visible set so the surviving Main pass is a bare clear; the
     /// opaque overlay then covers it.
     pub world_hidden: bool,
-    /// `true` when the scene has local lights to cluster. The graph adds a
-    /// `LightCull` compute pass before Main that bins the lights into per-cluster
-    /// lists Main reads (RAW edge). A backend with no light-cull pipeline keeps
-    /// this false and iterates the local lights directly.
-    pub clustered_lighting_enabled: bool,
+    /// `true` when the scene has local lights or reflection probes to cluster.
+    /// The graph adds a `LightCull` compute pass before Main that bins both into
+    /// per-cluster lists, which Main, SsrResolve, RtReflections and Transparent
+    /// read (RAW edges). While false, every reader iterates the whole light and
+    /// probe set.
+    pub clustering_enabled: bool,
     /// `true` when the composite samples the SSAO output directly (the
     /// occlusion view mode). Declares a Composite read of `ao_output`, so the
     /// pool-aliased transient stays live to the end of the frame instead of
@@ -278,7 +279,7 @@ impl FrameGraphInputs {
             rt_reflections_enabled: false,
             gbuffer_prepass_enabled: false,
             world_hidden: false,
-            clustered_lighting_enabled: false,
+            clustering_enabled: false,
             composite_reads_ao: false,
             shadowed_spot_count: 0,
             spot_shadow_slice_size: 512,
@@ -318,9 +319,7 @@ pub(crate) const GATED_FLAGS: &[(&str, FlagSetter)] = &[
     ("rt_reflections", |i| i.rt_reflections_enabled = true),
     ("gbuffer_prepass", |i| i.gbuffer_prepass_enabled = true),
     ("world_hidden", |i| i.world_hidden = true),
-    ("clustered_lighting", |i| {
-        i.clustered_lighting_enabled = true
-    }),
+    ("clustered_lighting", |i| i.clustering_enabled = true),
     ("composite_reads_ao", |i| i.composite_reads_ao = true),
     ("shadowed_spots", |i| i.shadowed_spot_count = 2),
     ("hiz_build", |i| i.hiz_build_enabled = true),
@@ -538,15 +537,16 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         None
     };
 
-    // Clustered light binning (compute): bins the scene's local lights into
-    // per-cluster index lists. Writes the imported cluster buffer; Main's read
-    // below pins LightCull before Main in the toposort. Backend-owned buffer, so
-    // the import is a dependency-tracking stub.
-    let cluster_lights_v1 = if inputs.clustered_lighting_enabled {
-        let cluster_lights = b.import_buffer("cluster_light_list", cluster_light_list_desc());
+    // Clustered binning (compute): bins the scene's local lights and reflection
+    // probes into per-cluster light lists and probe masks. Writes the imported
+    // cluster buffer; Main's read below pins LightCull before Main in the
+    // toposort. Backend-owned buffer, so the import is a dependency-tracking
+    // stub.
+    let cluster_lists = if inputs.clustering_enabled {
+        let lists = b.import_buffer("cluster_lists", cluster_lists_desc());
         Some(
             b.add_pass(PassId::LightCull, PassKind::Compute)
-                .write_buffer(cluster_lights),
+                .write_buffer(lists),
         )
     } else {
         None
@@ -595,9 +595,10 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
     };
 
     // Main pass: reads optional shadow_map / spot_shadow_map / draw_args /
-    // ao_output / cluster lights; writes the three HDR targets. Captures hdr_resolve_v1 (head of the
-    // hdr_resolve RMW chain, the version AutoExposure reads when two-pass
-    // is off) and hdr_depth_v1 (the depth HizBuild reduces under two-pass).
+    // ao_output / cluster lists; writes the three HDR targets. Captures
+    // hdr_resolve_v1 (head of the hdr_resolve RMW chain, the version
+    // AutoExposure reads when two-pass is off) and hdr_depth_v1 (the depth
+    // HizBuild reduces under two-pass).
     let (hdr_resolve_v1, hdr_depth_v1) = {
         let mut main = b.add_pass(PassId::Main, PassKind::Render);
         if let Some(h) = shadow_v1 {
@@ -609,7 +610,7 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         if let Some(h) = draw_args_v1 {
             main.read_buffer(h);
         }
-        if let Some(h) = cluster_lights_v1 {
+        if let Some(h) = cluster_lists {
             main.read_buffer(h);
         }
         if let Some(h) = ao_output_v1 {
@@ -798,6 +799,10 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
             if let Some(g) = gbuffer_v1 {
                 rt.read_texture(g.roughness);
             }
+            // A missed ray's probe fallback reads its cluster's probe mask.
+            if let Some(h) = cluster_lists {
+                rt.read_buffer(h);
+            }
             rt.write_texture(scene_pre_taa)
         } else {
             let mut ssr = b.add_pass(PassId::SsrResolve, PassKind::Render);
@@ -807,6 +812,10 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
             }
             if let Some(g) = gbuffer_v1 {
                 ssr.read_texture(g.roughness);
+            }
+            // A missed ray's probe fallback reads its cluster's probe mask.
+            if let Some(h) = cluster_lists {
+                ssr.read_buffer(h);
             }
             ssr.write_texture(scene_pre_taa)
         };
@@ -820,6 +829,9 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
             // reading v0 would be a WAR against Main's write and pin
             // Transparent *before* Main, closing a cycle.
             trans.read_texture(depth_cur);
+            if let Some(h) = cluster_lists {
+                trans.read_buffer(h);
+            }
             // RMW the resolve output. The read declares the sample dependency
             // (translucents sample the resolved scene for refraction); the
             // write produces the blended version downstream passes consume.
@@ -834,6 +846,9 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         // same object.
         let mut trans = b.add_pass(PassId::Transparent, PassKind::Render);
         trans.read_texture(depth_cur);
+        if let Some(h) = cluster_lists {
+            trans.read_buffer(h);
+        }
         trans.read_texture(hdr_resolve_cur);
         trans.write_texture(hdr_resolve_cur)
     } else {
@@ -1040,10 +1055,11 @@ fn particle_pool_desc() -> BufferDesc {
     }
 }
 
-fn cluster_light_list_desc() -> BufferDesc {
-    // Per-cluster light-index lists LightCull writes and Main reads. An identity
-    // stub: the backend owns the real (persistent) buffer, so the graph only
-    // tracks the read/write dependency, not the allocation.
+fn cluster_lists_desc() -> BufferDesc {
+    // Per-cluster light lists and probe masks LightCull writes and Main, the
+    // reflection resolves and Transparent read. An identity stub: the backend
+    // owns the real (persistent) buffer, so the graph only tracks the read/write
+    // dependency, not the allocation.
     BufferDesc {
         size_bytes: None,
         usage: BufferUsage::STORAGE,
@@ -1786,6 +1802,64 @@ mod tests {
                 .unwrap()
                 < order.iter().position(|p| *p == PassId::TaaResolve).unwrap()
         );
+    }
+
+    #[test]
+    fn both_reflection_resolves_read_the_cluster_lists() {
+        // A missed ray blends the probes its cluster bins, so each resolve must
+        // order after LightCull and keep the lists live until it has read them.
+        for rt in [false, true] {
+            let mut i = all_off();
+            i.ssr_enabled = true;
+            i.ssr_prepass_enabled = true;
+            i.rt_reflections_enabled = rt;
+            i.clustering_enabled = true;
+            let g = build_frame_graph(&i).expect("compiles");
+            let resolve = if rt {
+                PassId::RtReflections
+            } else {
+                PassId::SsrResolve
+            };
+            let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
+            let pos = |p: PassId| order.iter().position(|x| *x == p).expect("present");
+            let lists = resource_of(&g, "cluster_lists");
+            assert!(
+                g.passes[pos(resolve)]
+                    .reads
+                    .iter()
+                    .any(|r| r.resource_index() == lists),
+                "{resolve:?} reads the cluster lists"
+            );
+            assert!(pos(PassId::LightCull) < pos(resolve));
+            assert!(g.resources[lists].lifetime.last >= pos(resolve));
+        }
+    }
+
+    #[test]
+    fn transparent_reads_the_cluster_lists_with_and_without_a_resolve() {
+        // Glass and water blend the probes their cluster bins, on either side of
+        // the reflection-resolve branch.
+        for ssr in [false, true] {
+            let mut i = all_off();
+            i.ssr_enabled = ssr;
+            i.ssr_prepass_enabled = ssr;
+            i.transparent_enabled = true;
+            i.clustering_enabled = true;
+            let g = build_frame_graph(&i).expect("compiles");
+            let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
+            let pos = |p: PassId| order.iter().position(|x| *x == p).expect("present");
+            let lists = resource_of(&g, "cluster_lists");
+            let trans = pos(PassId::Transparent);
+            assert!(
+                g.passes[trans]
+                    .reads
+                    .iter()
+                    .any(|r| r.resource_index() == lists),
+                "Transparent reads the cluster lists (ssr: {ssr})"
+            );
+            assert!(pos(PassId::LightCull) < trans);
+            assert!(g.resources[lists].lifetime.last >= trans);
+        }
     }
 
     #[test]

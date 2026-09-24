@@ -13,12 +13,12 @@ use windows::Win32::Graphics::Direct3D12::*;
 use super::heap_layout::{DSV_SHADOW_BASE_SLOT, DSV_SPOT_SHADOW_BASE_SLOT};
 use super::pipelines::{create_shadow_pso, create_shadow_root_signature};
 use super::{InitGpu, heaps};
+use crate::directx::builtin_shaders::{self, CompileProgram};
 use crate::directx::context::{DxDescriptors, DxTargets, align256, dump_on_err};
 use crate::directx::draw::shadow::ShadowState;
 use crate::directx::draw::spot_shadow::SpotShadowState;
 use crate::directx::draw::upload_static_records;
 use crate::directx::error::map_hresult;
-use crate::directx::slang_builtins::{self, SlangCompile};
 use crate::directx::texture::{create_fallback_shadow_array, create_shadow_map_array};
 
 pub(super) fn build_shadow(
@@ -37,7 +37,7 @@ pub(super) fn build_shadow(
     // binding type stays identical between disabled and enabled cases.
     // CSM is gated on `shadow_map_size` (from GraphicsConfig; 0 disables
     // shadows). The shadow vertex shader is engine-internal
-    // (`slang_builtins::SHADOW_VERT`). Mirrors the Metal internal-shadow
+    // (`builtin_shaders::SHADOW_VERT`). Mirrors the Metal internal-shadow
     // path.
     let effective_shadow_size = shadows.map_size;
     let (shadow_resource_opt, shadow_dsvs, shadow_srv_gpu) = if effective_shadow_size > 0 {
@@ -68,7 +68,7 @@ pub(super) fn build_shadow(
     // keys off `shadow.pso.is_some()`, so passing `None` when
     // `effective_shadow_size == 0` keeps a shadow-disabled world from
     // rendering into nonexistent cascade DSVs.
-    let shadow_vs = slang_builtins::SHADOW_VERT.compile(gpu.hot_reload)?;
+    let shadow_vs = builtin_shaders::SHADOW_VERT.compile(gpu.hot_reload)?;
     let shadow_vs_for_pso = if effective_shadow_size > 0 {
         Some(shadow_vs.as_slice())
     } else {

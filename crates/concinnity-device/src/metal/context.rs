@@ -13,7 +13,7 @@ use concinnity_core::render::draw_slot;
 use concinnity_core::render::error;
 use concinnity_core::render::hdr_output;
 use concinnity_core::render::particles;
-use concinnity_core::render::reflection_probe;
+use concinnity_core::render::probe_book::ProbeBook;
 use concinnity_core::render::render_graph;
 use concinnity_core::render::scene_flow;
 use concinnity_core::render::shadow_schedule;
@@ -21,10 +21,10 @@ use concinnity_core::render::spot_shadow;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTLArgumentEncoder, MTLBuffer, MTLCommandBuffer as _, MTLCommandQueue, MTLDepthStencilState,
-    MTLDevice as _, MTLIndirectCommandBuffer, MTLIndirectCommandBufferDescriptor,
-    MTLIndirectCommandType, MTLPixelFormat, MTLRenderPipelineState, MTLResourceOptions,
-    MTLSamplerState, MTLTexture,
+    MTLArgumentEncoder as _, MTLBuffer, MTLCommandBuffer as _, MTLCommandQueue,
+    MTLDepthStencilState, MTLDevice as _, MTLIndirectCommandBuffer,
+    MTLIndirectCommandBufferDescriptor, MTLIndirectCommandType, MTLPixelFormat,
+    MTLRenderPipelineState, MTLResourceOptions, MTLSamplerState, MTLTexture,
 };
 use objc2_metal_kit::MTKView;
 
@@ -46,24 +46,24 @@ use super::transient_pool::TransientTexturePool;
 
 // Size of the bindless texture pool the static main pass samples. The pool
 // holds every albedo texture followed by every normal map; `GpuObjectData`
-// carries pool indices into it. Must match `BINDLESS_TEXTURE_COUNT` in
-// `main_bindless.slang`. Worlds with more than this many textures fall back to
-// clamped indices (logged once at init).
-pub(super) const BINDLESS_TEXTURE_COUNT: usize = 1024;
+// carries pool indices into it. Worlds with more than this many textures fall
+// back to clamped indices (logged once at init).
+pub(super) const BINDLESS_TEXTURE_COUNT: usize =
+    concinnity_core::render::uniforms::BINDLESS_POOL_SIZE;
 
 // Fragment buffer index the bindless static pass binds its `BindlessTextures`
 // argument buffer at. Discrete `[[texture(n)]]` bindings make a fragment
 // shader unusable from an indirect command buffer on Apple GPUs, so the
 // texture pool + shadow/IBL maps travel in an argument buffer instead. Must
-// match the buffer(7) slot of the engine fragment in `src/shaders/
-// main_bindless.slang` (locked by the build script's ABI assertion) and of
-// every world-authored bindless fragment.
+// match the buffer(7) slot of the engine fragment in `main_bindless.hlsl`
+// (locked by the build script's ABI assertion), which every world Shader
+// compiles from.
 pub(super) const BINDLESS_TEXTURE_ARG_BUFFER_INDEX: usize = 7;
 
 // Fragment buffer index of the engine sampler block: indirect-command
 // execution cannot see encoder-bound sampler state, so the engine's
 // single-source fragment reads its three static samplers from this argument
-// buffer. World-authored fragments declare inline samplers and ignore it.
+// buffer.
 pub(super) const BINDLESS_SAMPLER_ARG_BUFFER_INDEX: usize = 10;
 
 // The scene draw list and the record counts that extend the GPU-driven cull
@@ -160,20 +160,18 @@ impl ViewState {
 
 // Scene-captured reflection probes: each surface's specular reflection samples
 // the nearest probe whose box contains it, while the skybox + diffuse keep the
-// sky. See metal/probe.rs.
+// sky. See metal/probe.rs and metal/probe_set.rs.
 pub(super) struct ProbeState {
-    // The where/box list (declared `ReflectionProbe` assets or
-    // `auto_seed_probes`).
-    pub placements: Vec<reflection_probe::ProbePlacement>,
-    // The baked cube per placement, parallel to `placements`.
-    pub maps: Vec<ProbeCube>,
-    // Staggered bake cursor. Reset to the placement count when placements are
-    // set; each eligible frame bakes a bounded budget and advances it, so the
-    // load cost spreads over several frames instead of one.
-    pub bake_queue: reflection_probe::ProbeBakeQueue,
-    // Per-probe influence boxes + count, pushed to the fragment shader at
-    // buffer(6). `EMPTY` until a bake.
-    pub set: concinnity_core::render::uniforms::ProbeSet,
+    // The placements (declared `ReflectionProbe` assets or `auto_seed_probes`),
+    // the record of every installed probe (the live count the shaders read) and
+    // the staggered bake's queue, which spreads the load cost over several
+    // frames instead of one.
+    pub book: ProbeBook,
+    // One cube per placement; the first `book.count()` hold baked probes.
+    pub cubes: super::probe_set::ProbeCubeArray,
+    // This frame's copy of the book's records, written by `build_probe_records`.
+    // `None` before the first frame builds one.
+    pub records_buf: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
     // The probe currently rendering its six cube faces on the GPU (one at a
     // time; owns the reserved-ring-slot buffers + capture targets). The render
     // thread never blocks: the faces are submitted without `waitUntilCompleted`
@@ -192,21 +190,6 @@ pub(super) struct ProbeState {
     // here and freed once the frames-in-flight fence guarantees the bake has
     // retired.
     pub retire_pool: super::frame_rings::RetirePool<super::probe::RetiredBake>,
-    // This frame's `ProbeCubes` argument buffer, written by
-    // `build_probe_cube_args` and bound by every pass that samples the cubes.
-    // `None` before the first frame builds one.
-    pub cube_args: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
-    // Per-ring-slot change gate for that argument buffer, and the cube
-    // residency set every pass binding it declares.
-    pub cube_arg_gates: super::bindless_args::SlotGates,
-    pub cube_residency: super::bindless_args::ResidencySet,
-}
-
-// One baked reflection probe: the prefiltered radiance cube the specular term
-// samples. No irradiance cube -- a probe feeds specular only, and the diffuse
-// term keeps sampling `env_map`.
-pub(super) struct ProbeCube {
-    pub prefilter: super::allocator::PooledTexture,
 }
 
 // Cascaded shadow map resources + the cascade schedule. `pipeline_state` is
@@ -288,9 +271,9 @@ pub(super) struct FrameRings {
     // encoder fills the slot in place each frame; see
     // `build_bindless_texture_args`.
     pub bindless_tex: super::frame_rings::TransientRing,
-    // Ring of per-frame `ProbeCubes` argument buffers, written by
-    // `build_probe_cube_args`.
-    pub probe_cube: super::frame_rings::TransientRing,
+    // Ring of per-frame probe record buffers, written by
+    // `build_probe_records`.
+    pub probe_records: super::frame_rings::TransientRing,
     // Ring of per-skinned-object joint-palette buffers, one inner buffer per
     // object. Written by `build_joint_buffers`.
     pub joint: super::frame_rings::JointRing,
@@ -327,7 +310,7 @@ pub(super) struct GlassState {
     pub pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     pub pipeline_rt: Option<super::glass::TracedGlassPipelines>,
     pub pipeline_rt_textured: Option<super::glass::TracedGlassPipelines>,
-    // Ray-traced see-through glass MESH pipelines (`glass_mesh.slang`): an
+    // Ray-traced see-through glass MESH pipelines (`glass_mesh.hlsl`): an
     // imported `Material` with `transparent: true` routed through the transparent
     // pass with a per-pixel RT trace off the interpolated mesh normal, instead of
     // the Layer-1 opaque-reflective fallback. Built only on RT-capable devices
@@ -388,43 +371,23 @@ pub(super) struct TextState {
 }
 
 // Built-in shader hot reload. `enabled` is true only under `cn debug`: it
-// switches the built-in `.metal` source loader to a disk-first read with
-// embedded fallback, so a saved shader edit is picked up by
-// [`MtlContext::reload_shaders`]. Under `cn run` production keeps the static
-// `include_str!`-baked path. `reload_pending` is the atomic flag set by the
-// `notify` watcher or the `reload-shaders` debug tool call, polled at the top of
-// `draw_frame`; the debug server reads its `Arc` clone via `GraphicsSystem`.
-// Both it and `watcher` are `Some` only when `enabled`.
+// switches the built-in shader source loader to a disk-first read with
+// embedded fallback, so an edited shader is picked up by
+// [`MtlContext::reload_shaders`]. Under `cn run` production keeps the embedded
+// path. `reload_pending` is the atomic flag the `reload-shaders` debug tool
+// call sets, polled at the top of `draw_frame`; the debug server reads its
+// `Arc` clone via `GraphicsSystem`. `Some` only when `enabled`.
 pub(super) struct HotReloadState {
     pub enabled: bool,
     pub reload_pending: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-    // Held purely for lifetime: dropping it stops the watcher, which pushes
-    // events into `reload_pending` directly rather than being read from here.
-    #[expect(
-        dead_code,
-        reason = "held so the watcher thread stays alive; events arrive through reload_pending"
-    )]
-    pub watcher: Option<crate::metal::hot_reload::WatcherHandle>,
 }
 
 impl HotReloadState {
-    // The atomic flag is shared between the notify watcher thread and
-    // `draw_frame`, plus the `reload-shaders` debug tool call via
-    // `GraphicsSystem`. Watcher creation is best-effort: a missing source dir
-    // or a notify error logs a warning and disables only the watcher half --
-    // the debug command still works on the same flag.
-    pub(super) fn spawn(enabled: bool) -> Self {
-        let (reload_pending, watcher) = if enabled {
-            let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let watcher = super::hot_reload::spawn(std::sync::Arc::clone(&flag));
-            (Some(flag), watcher)
-        } else {
-            (None, None)
-        };
+    pub(super) fn new(enabled: bool) -> Self {
         Self {
             enabled,
-            reload_pending,
-            watcher,
+            reload_pending: enabled
+                .then(|| std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))),
         }
     }
 }
@@ -660,15 +623,13 @@ pub(super) struct MtlSceneAssets {
     pub cube_sampler: Retained<ProtocolObject<dyn MTLSamplerState>>,
 }
 
-// The argument encoders the bindless main pass and the probe-sampling passes
-// write through, plus what decides when a ring slot is re-encoded: the slot
-// gates, the residency set and the texture epoch. See `metal/bindless_args.rs`.
+// The bindless main pass's argument buffers, plus what decides when a ring
+// slot is rewritten: the slot gates, the residency set and the texture epoch.
+// See `metal/bindless_args.rs`. The texture block is written as plain resource
+// ids (argument-buffer tier 2), so it needs no encoder; only the sampler block,
+// written once, goes through one.
 pub(super) struct MtlArgumentBuffers {
-    // Encoder that packs the bindless pass's textures into a per-frame
-    // argument buffer (the `BindlessTextures` block). `Some` only when
-    // `cull.bindless`.
-    pub bindless_tex_encoder: Option<Retained<ProtocolObject<dyn MTLArgumentEncoder>>>,
-    // Per-ring-slot change gates for that argument buffer: the block's contents
+    // Per-ring-slot change gates for the texture block: the block's contents
     // and its unused tail, gated apart because a stream-in moves the former
     // every time and the latter almost never. See `build_bindless_texture_args`.
     pub bindless_tex_gates: super::bindless_args::SlotGates,
@@ -679,12 +640,9 @@ pub(super) struct MtlArgumentBuffers {
     pub bindless_residency: super::bindless_args::ResidencySet,
     // The engine sampler block bound at fragment buffer(10) for the
     // single-source main program: three static samplers written once at init
-    // (samplers never stream, so no per-frame ring is needed). `None` when a
-    // world-authored fragment owns the main pass.
+    // (samplers never stream, so no per-frame ring is needed). `None` when the
+    // bindless cull pipeline is off.
     pub bindless_sampler_args: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
-    // Argument encoder for the `ProbeCubes` block the five probe-sampling
-    // fragments declare; see `probe_cubes::probe_cube_arg_encoder`.
-    pub probe_cube_encoder: Retained<ProtocolObject<dyn MTLArgumentEncoder>>,
     // Bumped by every announced change to the textures those argument buffers
     // name (a pool slot streamed in or evicted, an env-map or probe swap), so a
     // handle that happens to reuse a freed one's address still moves the
@@ -966,17 +924,6 @@ impl MtlContext {
     // `draw.objects.len()` for static-only worlds, so those paths are untouched.
     pub(super) fn cull_count(&self) -> usize {
         self.draw.objects.len() + self.draw.n_instances + self.draw.n_skinned
-    }
-
-    // The prefiltered radiance cube for probe array slot `i`: the baked probe
-    // when present, else the sky `env_map` prefilter (a valid fallback for unused
-    // slots and for slots past the baked count). The skybox + diffuse always use
-    // `env_map` directly, so they keep the sky regardless.
-    pub(super) fn probe_cube_or_sky(&self, i: usize) -> &ProtocolObject<dyn MTLTexture> {
-        match self.probe.maps.get(i) {
-            Some(p) => &p.prefilter,
-            None => self.scene.env_map.prefilter.as_ref(),
-        }
     }
 
     // Index in the unified cull list where the folded skinned records begin

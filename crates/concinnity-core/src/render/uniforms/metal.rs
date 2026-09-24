@@ -2,11 +2,11 @@
 //! Each layout must match the corresponding struct in an `.metal` shader under
 //! `metal/shaders/`.
 //!
-//! Blocks whose shader counterpart is a single-source `.slang` declaration are
+//! Blocks whose shader counterpart is a single-source declaration are
 //! declared once for every backend in the parent module; what is left here is
 //! what only this backend binds. Their layouts are checked by `shader_layout` in
-//! concinnity-device, which reads the expected offsets out of slangc's
-//! reflection per target. The hand-written asserts below stay alongside that
+//! concinnity-device, which reads the expected offsets out of the compiled
+//! module per target. The hand-written asserts below stay alongside that
 //! check for the blocks this backend alone binds.
 
 /// Per-draw-call model matrix pushed at buffer(2) before each draw.
@@ -19,7 +19,7 @@ pub struct ModelUniforms {
 
 /// Per-frame inputs to the GPU-driven cull, pushed inline at buffer(2) of the
 /// encoder both cull dispatches share. Layout (208 bytes) must match the
-/// `METAL_BINDINGS` `CullParams` in `cull.slang`, which `shader_layout` reflects;
+/// `CN_BACKEND_METAL` `CullParams` in `cull.hlsl`, which `shader_layout` reflects;
 /// the encode kernel reads none of it and takes [`EncodeParams`] instead.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
@@ -106,7 +106,7 @@ mod tests {
 
     #[test]
     fn cull_uniforms_layout_matches_the_shader() {
-        // `CullParams` under METAL_BINDINGS in cull.slang: float4 planes[6], a
+        // `CullParams` under CN_BACKEND_METAL in cull.hlsl: float4 planes[6], a
         // float4 camera lane, a float4x4 at 112, a float2 and six uints.
         assert_eq!(size_of::<CullUniforms>(), 208);
         assert_eq!(offset_of!(CullUniforms, planes), 0);

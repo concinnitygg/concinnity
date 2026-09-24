@@ -9,7 +9,7 @@ pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), String> 
 fn check_args(args: &serde_json::Value) -> Result<(), String> {
     if crate::authoring::source_args::sdf_volume_source_path(args).is_none() {
         return Err(
-            "SdfVolume requires a `fragment_shader` path to a `.slang` distance field \
+            "SdfVolume requires a `fragment_shader` path to a `.hlsl` distance field \
              (declaring map + shade, or sampleVolume for a volumetric one)"
                 .to_string(),
         );
@@ -35,7 +35,7 @@ mod tests {
     fn check_requires_a_distance_field() {
         assert!(check_args(&serde_json::json!({})).is_err());
         assert!(check_args(&serde_json::json!({"fragment_shader": ""})).is_err());
-        assert!(check_args(&serde_json::json!({"fragment_shader": "shaders/blob.slang"})).is_ok());
+        assert!(check_args(&serde_json::json!({"fragment_shader": "shaders/blob.hlsl"})).is_ok());
     }
 
     #[test]
@@ -43,7 +43,7 @@ mod tests {
         let mut params = vec![0.0; SDF_PARAMS_LEN + 1];
         params[0] = 1.0;
         let args = serde_json::json!({
-            "fragment_shader": "shaders/blob.slang",
+            "fragment_shader": "shaders/blob.hlsl",
             "params": params,
         });
         assert!(check_args(&args).is_err());
@@ -53,7 +53,7 @@ mod tests {
     fn check_accepts_short_params() {
         // Less than SDF_PARAMS_LEN is fine: the rest defaults to 0.
         let args = serde_json::json!({
-            "fragment_shader": "shaders/blob.slang",
+            "fragment_shader": "shaders/blob.hlsl",
             "params": [1.0, 2.0, 3.0],
         });
         assert!(check_args(&args).is_ok());
@@ -63,7 +63,7 @@ mod tests {
     // validates for all of them. There is no per-backend source to be missing.
     #[test]
     fn check_does_not_depend_on_the_cooked_backend() {
-        let args = serde_json::json!({ "fragment_shader": "shaders/blob.slang" });
+        let args = serde_json::json!({ "fragment_shader": "shaders/blob.hlsl" });
         assert!(check_args(&args).is_ok());
     }
 

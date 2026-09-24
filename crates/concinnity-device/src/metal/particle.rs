@@ -28,20 +28,19 @@ use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
 use objc2_metal::{
     MTLBlendFactor, MTLBuffer, MTLCommandBuffer as _, MTLComputeCommandEncoder as _,
-    MTLComputePassDescriptor, MTLComputePipelineState, MTLDevice as _, MTLLibrary as _,
-    MTLLoadAction, MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder as _,
-    MTLRenderPassDescriptor, MTLRenderPipelineDescriptor, MTLRenderPipelineState,
-    MTLResourceOptions, MTLSamplerAddressMode, MTLSamplerDescriptor, MTLSamplerMinMagFilter,
-    MTLSamplerState, MTLSize, MTLStoreAction,
+    MTLComputePassDescriptor, MTLComputePipelineState, MTLDevice as _, MTLLoadAction,
+    MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder as _, MTLRenderPassDescriptor,
+    MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLResourceOptions, MTLSamplerAddressMode,
+    MTLSamplerDescriptor, MTLSamplerMinMagFilter, MTLSamplerState, MTLSize, MTLStoreAction,
 };
 // GPU-free repr(C) structs; live in `core::render` so their layout tests
 // count toward coverage. Re-exported so this file's existing paths are unchanged.
 use concinnity_core::render::uniforms::GpuParticle;
 
+use super::builtin_shaders::compute_pipeline;
 use super::context::MtlContext;
 use super::encode::{ComputeEncode, RenderEncode};
 use super::error::allocation_failed;
-use super::pipeline::ns_str;
 use super::scoped_encoder::ScopedEncoder;
 
 // Byte stride between an emitter's per-frame spawn-counter slots. The counter
@@ -398,29 +397,27 @@ pub(super) fn build_particle_pipelines(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> RenderResult<ParticlePipelines> {
-    // Compute kernel, from `particle_simulate.slang`. The render pair below
+    // Compute kernel, from `particle_simulate.hlsl`. The render pair below
     // splices the same `{PARTICLE_TYPES}` fragment, so both halves stride one
     // declaration of the pool record and the per-emitter uniform.
-    let sim_lib = super::slang_builtins::PARTICLE_SIMULATE.library(device, hot_reload)?;
-    let sim_fn = sim_lib
-        .newFunctionWithName(&ns_str("particle_simulate"))
-        .ok_or_else(|| RenderError::ShaderCompile("particle_simulate not found".into()))?;
-    let simulate = device
-        .newComputePipelineStateWithFunction_error(&sim_fn)
-        .map_err(|e| RenderError::ShaderCompile(format!("particle_simulate pipeline: {e:?}")))?;
+    let simulate = compute_pipeline(
+        device,
+        &super::builtin_shaders::PARTICLE_SIMULATE,
+        hot_reload,
+    )?;
 
     // Render pipeline. No vertex descriptor: the vertex shader reads from the
     // particle pool storage buffer directly via `[[vertex_id]]` + `[[instance_id]]`.
     // Each entry compiles to its own metallib, so the two stages come from
     // separate libraries and pair by semantic.
-    let vert_fn = super::slang_builtins::entry_function(
+    let vert_fn = super::builtin_shaders::entry_function(
         device,
-        &super::slang_builtins::PARTICLE_VERT,
+        &super::builtin_shaders::PARTICLE_VERT,
         hot_reload,
     )?;
-    let frag_fn = super::slang_builtins::entry_function(
+    let frag_fn = super::builtin_shaders::entry_function(
         device,
-        &super::slang_builtins::PARTICLE_FRAG,
+        &super::builtin_shaders::PARTICLE_FRAG,
         hot_reload,
     )?;
     let desc = MTLRenderPipelineDescriptor::new();

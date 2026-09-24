@@ -1,21 +1,21 @@
 // Where a raymarched volume's compiled shader comes from.
 //
-// The cook compiles a world's distance field and stores what slangc emitted, so
-// a shipped player needs no shader compiler for the one asset whose source is
-// only complete once a world is loaded. This resolves that: the stored artifact
-// when the engine template it was built against still matches, and a compile
-// here when it does not.
+// The cook compiles a world's distance field and stores what the compiler
+// emitted, so a shipped player needs no shader compiler for the one asset whose
+// source is only complete once a world is loaded. This resolves that: the
+// stored artifact when the engine template it was built against still matches,
+// and a compile here when it does not.
 //
 // The mismatch case is not an error path. It is what makes editing
-// `raymarch.slang` possible at all: a hot-reload build assembles from the
-// checkout, digests differently, and recompiles. A machine with no slangc says
-// so, naming the volume, rather than drawing nothing.
+// `raymarch.hlsl` possible at all: a hot-reload build assembles from the
+// checkout, digests differently, and recompiles. A machine with no compiler
+// says so, naming the volume, rather than drawing nothing.
 
 use concinnity_core::components::sdf_programs::SdfPrograms;
 use concinnity_core::platform::Platform;
-use concinnity_core::render::slang_programs::raymarch::{self, Family};
-use concinnity_core::render::slang_source;
-use concinnity_slang::{SlangJob, SlangTarget};
+use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::shader_programs::raymarch::{self, Family};
+use concinnity_core::render::shader_source;
 use std::borrow::Cow;
 
 /// Decode a volume's payload. A payload that does not decode is a build the
@@ -35,49 +35,70 @@ pub(crate) fn taps_scene(programs: &SdfPrograms) -> bool {
     raymarch::field_taps_scene(&programs.field)
 }
 
-/// Which artifact a host wants, and what to emit if it has to be compiled.
-///
-/// `entries` is what one artifact holds: both of a family's stages where the
-/// target allows it (Metal), one where it does not (SPIR-V, DXIL). The first is
-/// the lookup key, so a Metal library found under either of its entries is the
-/// same bytes.
-///
-/// `target` must match what the cook emitted for this host, or a fallback
-/// compile would produce something the renderer cannot load.
+/// Which artifact a host wants. Every artifact holds one entry point, which is
+/// also its lookup key.
 pub(crate) struct Request<'a> {
     pub family: Family,
     pub platform: Platform,
-    pub entries: &'a [&'a str],
-    pub target: SlangTarget,
+    pub entry: &'a str,
     pub hot_reload: bool,
     pub label: &'a str,
 }
 
 /// The artifact the request names: the cook's when the engine template it was
-/// built against still matches, and a compile here when it does not.
+/// built against still matches, and `compile` of the assembled source when it
+/// does not.
+///
+/// `compile` takes the host, the file, the entry and the assembled source, and
+/// must emit what the cook emitted for this host, or a fallback compile would
+/// produce something the renderer cannot load. Each backend passes
+/// `shader::compile::cooked`, which picks the target the way the cook does.
 pub(crate) fn artifact<'a>(
     programs: &'a SdfPrograms,
     req: &Request<'_>,
-) -> Result<Cow<'a, [u8]>, String> {
-    let label = req.label;
-    let entry = req.entries.first().copied().unwrap_or_default();
+    compile: impl FnOnce(Platform, &str, &str, &str) -> RenderResult<Vec<u8>>,
+) -> RenderResult<Cow<'a, [u8]>> {
+    let Request { label, entry, .. } = *req;
     let source = source(req.family, req.platform, &programs.field, req.hot_reload);
-    let digest = slang_source::source_digest(&source);
+    let digest = shader_source::source_digest(&source);
     if let Some(bytes) = programs.artifact(entry, digest) {
         return Ok(Cow::Borrowed(bytes));
     }
     tracing::debug!("SdfVolume '{label}': {entry} predates the engine template, compiling");
-    let job = SlangJob {
-        source: &source,
-        file_name: raymarch::FILE,
-        entries: req.entries,
-        target: req.target,
-    };
-    let work = concinnity_host::scratch::Scratch::dir(&format!("sdf-{label}"))
-        .map_err(|e| format!("SdfVolume '{label}': no scratch directory: {e}"))?;
-    concinnity_slang::compile(&job, work.path())
+    compile(req.platform, raymarch::FILE, entry, &source)
         .map(Cow::Owned)
-        .map_err(|e| format!("SdfVolume '{label}': compiling '{entry}': {e}"))
+        .map_err(|e| e.context(format_args!("SdfVolume '{label}': compiling '{entry}'")))
+}
+
+/// One family's artifacts on `platform`, as (vertex, fragment). The cook stores
+/// each stage as its own artifact, since a DXIL container or a Vulkan module
+/// binds one entry; a template edit makes both miss and compile here.
+#[cfg(any(backend_dx, backend_vk))]
+pub(crate) fn family_artifacts(
+    programs: &SdfPrograms,
+    family: Family,
+    platform: Platform,
+    hot_reload: bool,
+    label: &str,
+) -> RenderResult<(Vec<u8>, Vec<u8>)> {
+    let mut stages = raymarch::ALL.iter().filter(|p| p.family == family);
+    let mut stage = |which: &str| -> RenderResult<Vec<u8>> {
+        let entry = stages
+            .next()
+            .unwrap_or_else(|| panic!("a family declares a {which} entry"))
+            .entry;
+        let req = Request {
+            family,
+            platform,
+            entry,
+            hot_reload,
+            label,
+        };
+        artifact(programs, &req, crate::shader::compile::cooked).map(Cow::into_owned)
+    };
+    let vertex = stage("vertex")?;
+    let fragment = stage("fragment")?;
+    Ok((vertex, fragment))
 }
 
 // The source text this host expects for one family, preferring the checkout's
@@ -90,7 +111,7 @@ fn source(family: Family, platform: Platform, field: &str, hot_reload: bool) -> 
         family,
         platform,
         field,
-        crate::shader::slang_source::from_checkout,
+        crate::shader::source::from_checkout,
     )
 }
 
@@ -98,16 +119,17 @@ fn source(family: Family, platform: Platform, field: &str, hot_reload: bool) -> 
 mod tests {
     use super::*;
     use concinnity_core::components::compiled_programs::CompiledProgram;
+    use concinnity_core::render::error::RenderError;
 
     const FIELD: &str = "// a field";
 
-    fn stored(family: Family, platform: Platform, entries: &[&str], bytes: &[u8]) -> SdfPrograms {
+    fn stored(family: Family, platform: Platform, entry: &str, bytes: &[u8]) -> SdfPrograms {
         let src = raymarch::source(family, platform, FIELD);
         SdfPrograms {
             field: FIELD.to_string(),
             programs: vec![CompiledProgram {
-                entries: entries.iter().map(|e| e.to_string()).collect(),
-                source_digest: slang_source::source_digest(&src),
+                entry: entry.to_string(),
+                source_digest: shader_source::source_digest(&src),
                 artifact: bytes.to_vec(),
             }],
         }
@@ -120,41 +142,78 @@ mod tests {
         let programs = stored(
             Family::Surface,
             Platform::Metal,
-            &["raymarch_vertex", "raymarch_fragment"],
+            "raymarch_vertex",
             b"stored bytes",
         );
-        let got = artifact(
-            &programs,
-            &Request {
-                family: Family::Surface,
-                platform: Platform::Metal,
-                entries: &["raymarch_vertex", "raymarch_fragment"],
-                target: SlangTarget::Metal,
-                hot_reload: false,
-                label: "blob",
-            },
-        )
+        let got = artifact(&programs, &request("raymarch_vertex"), |_, _, _, _| {
+            panic!("a matching artifact reached the compiler")
+        })
         .expect("stored artifact");
         assert_eq!(got.as_ref(), b"stored bytes");
         assert!(matches!(got, Cow::Borrowed(_)), "no compile was needed");
     }
 
+    // A miss compiles the source this host assembles, and a failure names the
+    // volume and the entry, which is what makes it actionable in a world of many.
+    #[test]
+    fn a_stale_artifact_compiles_the_assembled_source_and_names_the_volume() {
+        let mut programs = stored(
+            Family::Surface,
+            Platform::Metal,
+            "raymarch_vertex",
+            b"stored bytes",
+        );
+        programs.programs[0].source_digest ^= 1;
+        let want = raymarch::source(Family::Surface, Platform::Metal, FIELD);
+        let got = artifact(
+            &programs,
+            &request("raymarch_vertex"),
+            |platform, file, entry, src| {
+                assert_eq!(platform, Platform::Metal);
+                assert_eq!((file, entry), (raymarch::FILE, "raymarch_vertex"));
+                assert_eq!(src, want);
+                Ok(b"fresh".to_vec())
+            },
+        )
+        .expect("compiled");
+        assert_eq!(got.as_ref(), b"fresh");
+
+        let err = artifact(&programs, &request("raymarch_vertex"), |_, _, _, _| {
+            Err(RenderError::ShaderCompile("no compiler".to_string()))
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("SdfVolume 'blob'"), "got: {err}");
+        assert!(err.contains("raymarch_vertex"), "got: {err}");
+        assert!(err.contains("no compiler"), "got: {err}");
+    }
+
+    fn request(entry: &str) -> Request<'_> {
+        Request {
+            family: Family::Surface,
+            platform: Platform::Metal,
+            entry,
+            hot_reload: false,
+            label: "blob",
+        }
+    }
+
     // An artifact built for another host, or for another family, is not this
-    // one's: the digest covers the ABI define and the family define alike.
+    // one's: the digest covers the backend define and the family define alike.
     #[test]
     fn an_artifact_from_another_host_or_family_does_not_match() {
         let metal_surface = stored(
             Family::Surface,
             Platform::Metal,
-            &["raymarch_vertex"],
+            "raymarch_vertex",
             b"stored bytes",
         );
-        let src_other_host = raymarch::source(Family::Surface, Platform::Hlsl, FIELD);
+        let src_other_host = raymarch::source(Family::Surface, Platform::DirectX, FIELD);
         assert!(
             metal_surface
                 .artifact(
                     "raymarch_vertex",
-                    slang_source::source_digest(&src_other_host)
+                    shader_source::source_digest(&src_other_host)
                 )
                 .is_none()
         );
@@ -163,7 +222,7 @@ mod tests {
             metal_surface
                 .artifact(
                     "raymarch_vertex",
-                    slang_source::source_digest(&src_other_family)
+                    shader_source::source_digest(&src_other_family)
                 )
                 .is_none()
         );
@@ -176,11 +235,11 @@ mod tests {
         let programs = stored(
             Family::Surface,
             Platform::Metal,
-            &["raymarch_vertex"],
+            "raymarch_vertex",
             b"stored bytes",
         );
         let src = raymarch::source(Family::Surface, Platform::Metal, FIELD);
-        let digest = slang_source::source_digest(&src);
+        let digest = shader_source::source_digest(&src);
         assert!(
             programs
                 .artifact("raymarch_shadow_vertex", digest)
@@ -195,7 +254,7 @@ mod tests {
         let mut programs = stored(
             Family::Surface,
             Platform::Metal,
-            &["raymarch_vertex"],
+            "raymarch_vertex",
             b"stored bytes",
         );
         assert!(!taps_scene(&programs), "'{FIELD}' calls nothing");
@@ -257,23 +316,13 @@ VolumeSample sampleVolume(float3 p, SdfParams params, float time)
     // proves: each variant reaches only the entries its family declares.
     #[test]
     fn every_raymarch_entry_compiles_on_every_backend() {
-        if !concinnity_slang::shader_tests_enabled() {
+        if !concinnity_shader::dxc_available() {
             return;
         }
         let work = concinnity_host::scratch::Scratch::dir("raymarch-compile-guard")
             .expect("scratch directory");
-        for platform in [Platform::Metal, Platform::Hlsl, Platform::Glsl] {
-            // DXIL needs a downstream compiler only a Windows host carries, so
-            // that leg checks the HLSL slangc emits instead. The shared source
-            // is the same either way; what differs is who consumes it.
-            let target = |stage| match platform {
-                Platform::Metal => SlangTarget::Metal,
-                Platform::Glsl => SlangTarget::Spirv,
-                Platform::Hlsl => SlangTarget::Hlsl(match stage {
-                    raymarch::Stage::Vertex => "vs_6_0",
-                    raymarch::Stage::Fragment => "ps_6_0",
-                }),
-            };
+        for platform in Platform::ALL {
+            let target = concinnity_shader::HlslTarget::cooked(platform);
             for family in [Family::Surface, Family::Volumetric, Family::Shadow] {
                 let field = if family == Family::Volumetric {
                     VOLUMETRIC_FIELD
@@ -282,13 +331,13 @@ VolumeSample sampleVolume(float3 p, SdfParams params, float time)
                 };
                 let source = raymarch::source(family, platform, field);
                 for program in raymarch::ALL.iter().filter(|p| p.family == family) {
-                    let job = SlangJob {
+                    let job = concinnity_shader::HlslJob {
                         source: &source,
                         file_name: raymarch::FILE,
-                        entries: &[program.entry],
-                        target: target(program.stage),
+                        entry: program.entry,
+                        target,
                     };
-                    concinnity_slang::compile(&job, work.path()).unwrap_or_else(|e| {
+                    concinnity_shader::compile(&job, work.path()).unwrap_or_else(|e| {
                         panic!("{:?}/{:?} {}: {e}", platform, family, program.entry)
                     });
                 }

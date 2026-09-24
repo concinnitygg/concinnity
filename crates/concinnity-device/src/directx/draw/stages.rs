@@ -37,14 +37,12 @@ impl DxContext {
         // main-pass PSOs; built here on the first wireframe frame so the `&self`
         // pass encoders can just read them.
         self.ensure_wireframe_pipelines();
-        // Shader hot-reload: if either the filesystem watcher or the debug
-        // `reload-shaders` command set the flag, rebuild every built-in PSO
-        // from disk-resident source before the frame's passes start using
-        // them. The flag is cleared regardless of outcome so a failed rebuild
-        // (typo in a shader edit) doesn't loop, and the previous pipelines
-        // stay live so the session keeps rendering; only a device failure
-        // propagates. Wait for the GPU to drain first so swapping PSOs out
-        // from under in-flight command lists is safe.
+        // Shader hot-reload: if the debug `reload-shaders` command set the flag, rebuild every
+        // built-in PSO from disk-resident source before the frame's passes start using them. The
+        // flag is cleared regardless of outcome so a failed rebuild (typo in a shader edit) doesn't
+        // loop, and the previous pipelines stay live so the session keeps rendering; only a device
+        // failure propagates. Wait for the GPU to drain first so swapping PSOs out from under
+        // in-flight command lists is safe.
         if self.shader_reload_requested() {
             self.clear_shader_reload_flag();
             self.wait_idle();
@@ -535,7 +533,7 @@ impl DxContext {
             // below: the pipeline is built only for a world with local lights,
             // and the live count has to still be non-zero. Otherwise the forward
             // pass brute-forces an empty light list.
-            clustered_lighting_enabled: clustered,
+            clustering_enabled: clustered,
             // Zero drops the SpotShadow node and its imported array from the
             // graph entirely, which is the common case (no shadow-casting spot).
             shadowed_spot_count: self.spot_shadow.count(),

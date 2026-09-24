@@ -13,6 +13,8 @@ use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
+use crate::directx::builtin_shaders;
+use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::com;
 use crate::directx::context::DxContext;
 use crate::directx::descriptor_slot::DescriptorTables;
@@ -20,8 +22,6 @@ use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::root_constants::{RootConstants, root_dwords};
-use crate::directx::slang_builtins;
-use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::{HDR_FORMAT, transition_barrier};
 
 // Bloom mip chain + pipelines. `mips[0]` is half-res; each subsequent mip
@@ -53,10 +53,10 @@ pub(in crate::directx) struct BloomShaders {
 // Compile the bloom prefilter / downsample / upsample shaders.
 pub(in crate::directx) fn compile_bloom_shaders(hot_reload: bool) -> RenderResult<BloomShaders> {
     Ok(BloomShaders {
-        vs: slang_builtins::FULLSCREEN_VERT.compile(hot_reload)?,
-        prefilter_ps: slang_builtins::BLOOM_PREFILTER.compile(hot_reload)?,
-        downsample_ps: slang_builtins::BLOOM_DOWNSAMPLE.compile(hot_reload)?,
-        upsample_ps: slang_builtins::BLOOM_UPSAMPLE.compile(hot_reload)?,
+        vs: builtin_shaders::FULLSCREEN_VERT.compile(hot_reload)?,
+        prefilter_ps: builtin_shaders::BLOOM_PREFILTER.compile(hot_reload)?,
+        downsample_ps: builtin_shaders::BLOOM_DOWNSAMPLE.compile(hot_reload)?,
+        upsample_ps: builtin_shaders::BLOOM_UPSAMPLE.compile(hot_reload)?,
     })
 }
 

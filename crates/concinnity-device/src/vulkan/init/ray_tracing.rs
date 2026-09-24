@@ -140,8 +140,6 @@ pub(super) fn build_rt_reflections(
                         hdr_resolve_views: &hdr_views,
                         gbuffer_views: &nd_views,
                         roughness_views: &rough_views,
-                        prefilter_view: scene.env_map.prefilter.view,
-                        cube_sampler: scene.cube_sampler.handle(),
                     },
                     crate::vulkan::post::rt_reflections::RtAccelHandles {
                         tlas: accel.tlas(),
@@ -153,7 +151,6 @@ pub(super) fn build_rt_reflections(
                     crate::vulkan::post::rt_reflections::RtLayoutConfig {
                         bindless_set_layout: cull.bindless_set_layout.as_ref().map(|l| l.handle()),
                         global_set_layout: descriptors.global_set_layout.handle(),
-                        probe_cube_count: descriptors.probe_cube_count,
                         pool_size: cull.bindless_pool_size,
                         hot_reload,
                     },

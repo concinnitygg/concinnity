@@ -19,19 +19,20 @@
 //! over both producers is what puts a pane standing in a pool on the correct side
 //! of the water.
 //!
-//! The producers also share their root signatures, because `glass.slang`,
-//! `water.slang` and `glass_mesh.slang` declare the same registers on purpose.
-//! There are two: the base
-//! signature (probe / planar reflection) and the RT one, whose ray-tracing SRVs
-//! at t4..t10 push the probe cube array to t20. Which one runs is a per-frame
-//! choice, not a per-producer one -- see `DxContext::rt_transparent_active`.
+//! The producers also share their root signatures, because `glass.hlsl`,
+//! `water.hlsl` and `glass_mesh.hlsl` declare the same registers on purpose.
+//! There are two: the base signature (probe / planar reflection) and the RT
+//! one, which adds the ray-tracing SRVs at t4..t12. Both bind the probe set at
+//! t20..t22, clear of those SRVs. Which one runs is a per-frame choice, not a
+//! per-producer one -- see `DxContext::rt_transparent_active`.
 //!
-//! The shaders are the shared `shaders/{glass,glass_mesh,water}.slang`, compiled
-//! through `slang_builtins`; the ray-traced fragments need shader model 6.5 for
-//! their inline ray query, the base pairs 6.0. The mesh producer is ray-traced
-//! only -- the per-pixel trace is what makes it see-through rather than the
-//! opaque reflective glass the main pass draws -- so it runs only under the RT
-//! root signature and is inert while RT is off.
+//! The shaders are the shared `shaders/glass.hlsl`, `shaders/glass_mesh.hlsl`
+//! and `shaders/water.hlsl`, compiled through `builtin_shaders`; the ray-traced
+//! fragments need shader model 6.5 for their inline ray query, the base pairs
+//! 6.0. The mesh producer is ray-traced only -- the per-pixel trace is what
+//! makes it see-through rather than the opaque reflective glass the main pass
+//! draws -- so it runs only under the RT root signature and is inert while RT
+//! is off.
 
 use concinnity_core::components::{GlassPanel, WaterSurface};
 use concinnity_core::gfx::lod;
@@ -51,7 +52,7 @@ use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::init::heap_layout::GLASS_REFLECTION_SRV_SLOTS;
-use crate::directx::pipeline::{main_input_layout, serialize_desc_and_create};
+use crate::directx::pipeline::{main_input_layout, root_cbv, root_srv, serialize_desc_and_create};
 use crate::directx::texture::{
     HDR_FORMAT, create_hdr_resolve_target, create_main_depth_texture, create_rt_target,
     transition_barrier, upload_buffer, write_format_rtv,
@@ -389,28 +390,35 @@ unsafe impl Sync for TransparentResources {}
 
 use concinnity_core::render::transparent::ordered_visible;
 
-// Root-signature layout (binds 1:1 with the `DXIL_ABI` declarations in
-// glass.slang and water.slang, which are deliberately identical):
+// Root-signature layout (binds 1:1 with the `CN_BACKEND_DIRECTX` declarations
+// in glass.hlsl and water.hlsl, which are deliberately identical):
 //   [0] root CBV b0   TransparentView (per-frame)
 //   [1] root CBV b1   GlassParams / WaterParams (per-record)
 //   [2] table  t0     scene-copy SRV  (Texture2D<float4>)
 //   [3] table  t1     scene depth SRV (Texture2D[MS]<float>)
 //   [4] table  t2     sky prefilter cube SRV
-//   [5] table  t7..   reflection-probe cube array
+//   [5] table  t20    reflection-probe cube array
 //   [6] root CBV b4   ProbeSet
 //   [7] table  t3     planar reflection resolve SRV (per record)
+//   [8] root SRV t21  reflection-probe records
+//   [9] root CBV b6   ClusterParams (the main camera's cluster grid)
+//   [10] root SRV t22 per-cluster light lists and probe masks
 //   static sampler s0 : linear clamp ; s2 : cube mip-linear clamp
 //
 // b1 is visible to every stage: the water vertex stage reads its wave table out
 // of the params block, where the glass vertex stage reads only the view.
-// Root parameter index of the per-record planar resolve table: the last
-// parameter of the base signature and the one before the reflection layers in
+// Root parameter index of the per-record planar resolve table: the one before
+// the probe records in the base signature and before the reflection layers in
 // the RT one, so each builder asserts its own length against the constants
 // rather than the encoder repeating a literal that can drift.
 const PLANAR_ROOT_BASE: u32 = 7;
 const PLANAR_ROOT_RT: u32 = 15;
 // Root parameter index of the RT signature's glass reflection layer table.
 const GLASS_REFLECTION_ROOT_RT: u32 = 16;
+// Root parameter index of the probe records root SRV (t21), followed in both
+// signatures by the cluster grid's params CBV (b6) and lists SRV (t22).
+const PROBE_RECORDS_ROOT_BASE: u32 = 8;
+const PROBE_RECORDS_ROOT_RT: u32 = 17;
 
 fn create_transparent_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     let scene_range = D3D12_DESCRIPTOR_RANGE {
@@ -435,13 +443,12 @@ fn create_transparent_root_signature(device: &ID3D12Device) -> RenderResult<ID3D
         RegisterSpace: 0,
         OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
     };
-    // t7..t7+MAX_PROBES: the reflection-probe cube array. Unbaked
-    // slots hold the sky prefilter, so a sample at any index is valid; box-projected
-    // when ProbeSet.count > 0.
+    // t20: the reflection-probe cube array, box-projected when ProbeSet.count > 0.
+    // Clear of the RT signature's trace SRVs, so both signatures agree.
     let probe_cube_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: concinnity_core::render::uniforms::MAX_PROBES as u32,
-        BaseShaderRegister: 7, // t7..
+        NumDescriptors: 1,
+        BaseShaderRegister: 20, // t20
         RegisterSpace: 0,
         OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
     };
@@ -455,15 +462,10 @@ fn create_transparent_root_signature(device: &ID3D12Device) -> RenderResult<ID3D
         RegisterSpace: 0,
         OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
     };
-    let cbv = |reg: u32, vis: D3D12_SHADER_VISIBILITY| D3D12_ROOT_PARAMETER {
-        ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
-        Anonymous: D3D12_ROOT_PARAMETER_0 {
-            Descriptor: D3D12_ROOT_DESCRIPTOR {
-                ShaderRegister: reg,
-                RegisterSpace: 0,
-            },
-        },
-        ShaderVisibility: vis,
+    // A root CBV every stage reads.
+    let cbv_all = |reg: u32| D3D12_ROOT_PARAMETER {
+        ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
+        ..root_cbv(reg)
     };
     let table = |range: &D3D12_DESCRIPTOR_RANGE| D3D12_ROOT_PARAMETER {
         ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
@@ -476,16 +478,20 @@ fn create_transparent_root_signature(device: &ID3D12Device) -> RenderResult<ID3D
         ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
     };
     let params = [
-        cbv(0, D3D12_SHADER_VISIBILITY_ALL),   // [0] b0 TransparentView
-        cbv(1, D3D12_SHADER_VISIBILITY_ALL),   // [1] b1 per-record params
-        table(&scene_range),                   // [2] t0 scene copy
-        table(&depth_range),                   // [3] t1 depth
-        table(&prefilter_range),               // [4] t2 prefilter cube
-        table(&probe_cube_range),              // [5] t7.. probe cubes
-        cbv(4, D3D12_SHADER_VISIBILITY_PIXEL), // [6] b4 ProbeSet
-        table(&planar_range),                  // [7] t3 planar resolve
+        cbv_all(0),               // [0] b0 TransparentView
+        cbv_all(1),               // [1] b1 per-record params
+        table(&scene_range),      // [2] t0 scene copy
+        table(&depth_range),      // [3] t1 depth
+        table(&prefilter_range),  // [4] t2 prefilter cube
+        table(&probe_cube_range), // [5] t20 probe cubes
+        root_cbv(4),              // [6] b4 ProbeSet
+        table(&planar_range),     // [7] t3 planar resolve
+        root_srv(21),             // [8] t21 probe records
+        root_cbv(6),              // [9] b6 ClusterParams
+        root_srv(22),             // [10] t22 cluster lists
     ];
-    debug_assert_eq!(params.len() as u32 - 1, PLANAR_ROOT_BASE);
+    debug_assert_eq!(params.len() as u32 - 4, PLANAR_ROOT_BASE);
+    debug_assert_eq!(params.len() as u32 - 3, PROBE_RECORDS_ROOT_BASE);
     // s0: linear-clamp for the scene snapshot / depth. s2: cube mip-linear clamp for
     // the prefilter + probe cube array.
     let samp = D3D12_STATIC_SAMPLER_DESC {
@@ -639,14 +645,14 @@ fn transparent_pso(
         .map_err(|e| map_pso_hresult(e.code(), "create transparent PSO"))
 }
 
-// Root signature for the RT PSOs (binds 1:1 with the `DXIL_ABI` declarations
-// under GLASS_RT / WATER_RT):
+// Root signature for the RT PSOs (binds 1:1 with the `CN_BACKEND_DIRECTX`
+// declarations the RT producers take from `transparent_rt.hlsl`, plus their own):
 //   [0]  root CBV b0   TransparentView (per-frame, vertex + pixel)
 //   [1]  root CBV b1   GlassParams / WaterParams (per-record, every stage)
 //   [2]  table  t0     scene-copy SRV
 //   [3]  table  t1     scene depth SRV
 //   [4]  table  t2     sky prefilter cube SRV
-//   [5]  table  t20..  reflection-probe cube array (remapped off t7)
+//   [5]  table  t20    reflection-probe cube array
 //   [6]  root CBV b4   ProbeSet
 //   [7]  root CBV b5   RtParams
 //   [8]  root SRV t4   scene TLAS
@@ -659,6 +665,9 @@ fn transparent_pso(
 //   [15] table  t3     this record's planar reflection resolve
 //   [16] table  t11..12 the glass reflection layers (one window of
 //                      `GlassReflectionSlots` per pass)
+//   [17] root SRV t21  reflection-probe records
+//   [18] root CBV b6   ClusterParams (the main camera's cluster grid)
+//   [19] root SRV t22  per-cluster light lists and probe masks
 //   static samplers s0 linear-clamp, s1 linear-repeat, s2 cube linear-clamp
 //
 // [15] is what the base signature carries at [7]: the water fragment samples its
@@ -678,7 +687,7 @@ fn create_transparent_rt_root_signature(
     let scene_range = table_range(0, 0, 1); // t0
     let depth_range = table_range(1, 0, 1); // t1
     let prefilter_range = table_range(2, 0, 1); // t2
-    let probe_cube_range = table_range(20, 0, concinnity_core::render::uniforms::MAX_PROBES as u32);
+    let probe_cube_range = table_range(20, 0, 1); // t20
     let planar_range = table_range(3, 0, 1); // t3
     let reflection_range = table_range(11, 0, 2); // t11..t12
     let pool_range = D3D12_DESCRIPTOR_RANGE {
@@ -689,25 +698,10 @@ fn create_transparent_rt_root_signature(
         OffsetInDescriptorsFromTableStart: 0,
     };
 
-    let cbv = |reg: u32, vis: D3D12_SHADER_VISIBILITY| D3D12_ROOT_PARAMETER {
-        ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
-        Anonymous: D3D12_ROOT_PARAMETER_0 {
-            Descriptor: D3D12_ROOT_DESCRIPTOR {
-                ShaderRegister: reg,
-                RegisterSpace: 0,
-            },
-        },
-        ShaderVisibility: vis,
-    };
-    let root_srv = |reg: u32| D3D12_ROOT_PARAMETER {
-        ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
-        Anonymous: D3D12_ROOT_PARAMETER_0 {
-            Descriptor: D3D12_ROOT_DESCRIPTOR {
-                ShaderRegister: reg,
-                RegisterSpace: 0,
-            },
-        },
-        ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+    // A root CBV every stage reads.
+    let cbv_all = |reg: u32| D3D12_ROOT_PARAMETER {
+        ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
+        ..root_cbv(reg)
     };
     let table = |range: &D3D12_DESCRIPTOR_RANGE| D3D12_ROOT_PARAMETER {
         ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
@@ -721,26 +715,30 @@ fn create_transparent_rt_root_signature(
     };
 
     let params = [
-        cbv(0, D3D12_SHADER_VISIBILITY_ALL), // [0] b0 TransparentView (vertex reads vp)
-        cbv(1, D3D12_SHADER_VISIBILITY_ALL), // [1] b1 per-record params (water's vertex reads it)
-        table(&scene_range),                 // [2] t0 scene copy
-        table(&depth_range),                 // [3] t1 depth
-        table(&prefilter_range),             // [4] t2 prefilter cube
-        table(&probe_cube_range),            // [5] t20.. probe cubes
-        cbv(4, D3D12_SHADER_VISIBILITY_PIXEL), // [6] b4 ProbeSet
-        cbv(5, D3D12_SHADER_VISIBILITY_PIXEL), // [7] b5 RtParams
-        root_srv(4),                         // [8] t4 TLAS
-        root_srv(5),                         // [9] t5 verts
-        root_srv(6),                         // [10] t6 indices
-        root_srv(10),                        // [11] t10 geom table
-        root_srv(8),                         // [12] t8 skinned verts
-        root_srv(9),                         // [13] t9 skinned indices
-        table(&pool_range),                  // [14] t0,space1 bindless pool
-        table(&planar_range),                // [15] t3 planar resolve
-        table(&reflection_range),            // [16] t11..t12 glass reflection layers
+        cbv_all(0),               // [0] b0 TransparentView (vertex reads vp)
+        cbv_all(1),               // [1] b1 per-record params (water's vertex reads it)
+        table(&scene_range),      // [2] t0 scene copy
+        table(&depth_range),      // [3] t1 depth
+        table(&prefilter_range),  // [4] t2 prefilter cube
+        table(&probe_cube_range), // [5] t20 probe cubes
+        root_cbv(4),              // [6] b4 ProbeSet
+        root_cbv(5),              // [7] b5 RtParams
+        root_srv(4),              // [8] t4 TLAS
+        root_srv(5),              // [9] t5 verts
+        root_srv(6),              // [10] t6 indices
+        root_srv(10),             // [11] t10 geom table
+        root_srv(8),              // [12] t8 skinned verts
+        root_srv(9),              // [13] t9 skinned indices
+        table(&pool_range),       // [14] t0,space1 bindless pool
+        table(&planar_range),     // [15] t3 planar resolve
+        table(&reflection_range), // [16] t11..t12 glass reflection layers
+        root_srv(21),             // [17] t21 probe records
+        root_cbv(6),              // [18] b6 ClusterParams
+        root_srv(22),             // [19] t22 cluster lists
     ];
-    debug_assert_eq!(params.len() as u32 - 2, PLANAR_ROOT_RT);
-    debug_assert_eq!(params.len() as u32 - 1, GLASS_REFLECTION_ROOT_RT);
+    debug_assert_eq!(params.len() as u32 - 5, PLANAR_ROOT_RT);
+    debug_assert_eq!(params.len() as u32 - 4, GLASS_REFLECTION_ROOT_RT);
+    debug_assert_eq!(params.len() as u32 - 3, PROBE_RECORDS_ROOT_RT);
 
     let linear = |addr: D3D12_TEXTURE_ADDRESS_MODE, reg: u32| D3D12_STATIC_SAMPLER_DESC {
         Filter: D3D12_FILTER_MIN_MAG_MIP_LINEAR,
@@ -1227,7 +1225,7 @@ impl TransparentResources {
     // separately. Together they drive `FrameGraphInputs::transparent_enabled`.
     // True when a visible water surface holds a planar slot, so the mirror
     // re-render has a consumer this frame even while the trace is live. Water
-    // takes the mirror over its own trace (see `water.slang`), so this is what
+    // takes the mirror over its own trace (see `water.hlsl`), so this is what
     // `planar_pass_needed` reads; glass is deliberately not counted.
     pub(in crate::directx) fn water_planar_slot_live(&self) -> bool {
         self.water.as_ref().is_some_and(|p| {
@@ -1535,18 +1533,19 @@ impl DxContext {
         }
 
         // Reflection sources frame-constant across every record (like Metal's
-        // encode_transparent): the sky prefilter cube (t2), the probe cube array,
-        // and the per-frame ProbeSet CBV (b4). count == 0 keeps the sky fallback.
+        // encode_transparent): the sky prefilter cube (t2), the probe cube array
+        // (t20), the per-frame ProbeSet CBV (b4) and records (t21), and the main
+        // camera's cluster grid binning them (b6, t22). count == 0 keeps the sky
+        // fallback.
         let prefilter_srv = self.prefilter_cube_srv_gpu();
-        let probe_cube_srv = self.probe_cube_table_gpu();
-        let probe_set_gva = com::gpu_va(&self.uniforms.probe_set_cbvs[frame_idx]);
+        let probes = self.probe_bindings(frame_idx);
 
         // The one per-record binding whose root parameter moves between the two
         // signatures (the RT one appends it past the trace's inputs).
-        let planar_root = if rt_live {
-            PLANAR_ROOT_RT
+        let (planar_root, probe_records_root) = if rt_live {
+            (PLANAR_ROOT_RT, PROBE_RECORDS_ROOT_RT)
         } else {
-            PLANAR_ROOT_BASE
+            (PLANAR_ROOT_BASE, PROBE_RECORDS_ROOT_BASE)
         };
         // The two producers share their root signature, so it binds once and only
         // the pipeline changes across the draw loop.
@@ -1566,8 +1565,11 @@ impl DxContext {
             cmd.set_graphics_srv_table(2, transparent.scene_copy_srv_gpu);
             cmd.set_graphics_srv_table(3, transparent.depth_srv_gpu);
             cmd.set_graphics_srv_table(4, prefilter_srv);
-            cmd.set_graphics_srv_table(5, probe_cube_srv);
-            cmd.SetGraphicsRootConstantBufferView(6, probe_set_gva);
+            cmd.set_graphics_srv_table(5, probes.cube_table);
+            cmd.SetGraphicsRootConstantBufferView(6, probes.set_cbv);
+            cmd.SetGraphicsRootShaderResourceView(probe_records_root, probes.records);
+            cmd.SetGraphicsRootConstantBufferView(probe_records_root + 1, probes.cluster_cbv);
+            cmd.SetGraphicsRootShaderResourceView(probe_records_root + 2, probes.cluster_list);
         }
         if rt_live {
             // Sharp per-pixel trace. Bind the RT inputs once before the draw loop

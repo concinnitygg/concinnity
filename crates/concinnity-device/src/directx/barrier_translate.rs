@@ -633,7 +633,7 @@ mod tests {
     fn ordered_classes_take_a_transition_not_a_uav_barrier() {
         // Every other class's read and write states differ, so its consumer edge
         // is a real transition and never reaches the UAV fallback. draw_args:
-        // UAV write -> INDIRECT_ARGUMENT read; cluster_light_list: UAV write ->
+        // UAV write -> INDIRECT_ARGUMENT read; cluster_lists: UAV write ->
         // PIXEL_SHADER_RESOURCE read.
         assert_eq!(
             d3d12_barrier(

@@ -24,6 +24,8 @@ pub(crate) mod font;
 pub(crate) mod geometry;
 pub mod mesh;
 pub(crate) mod physics_budget;
+/// Compiling an assembled program with dxc.
+pub(crate) mod program;
 pub(crate) mod root_motion;
 pub(crate) mod scene_partition;
 pub mod shader;

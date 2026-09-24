@@ -1,23 +1,16 @@
-//! Filesystem watcher driving Vulkan shader hot-reload. A background notify
-//! watcher tails `<CARGO_MANIFEST_DIR>/src/vulkan/shaders/` and, on any modify
-//! event for a known shader-source extension, flips a shared
-//! `Arc<AtomicBool>`. The main thread polls that flag at the top of
-//! `draw_frame` and calls `VkContext::reload_shaders` when it is set. The
-//! same flag is also set by the `reload-shaders` debug command, so
-//! the two trigger paths converge.
+//! Vulkan shader hot-reload: `VkContext::reload_shaders` rebuilds every live
+//! built-in pipeline from the checkout's shader sources. The `reload-shaders`
+//! debug command sets the shared flag, and the main thread polls it at the top
+//! of `draw_frame`.
 //!
-//! Entirely a dev-loop concern, only constructed when `VkContext::new` is
-//! called with `hot_reload = true`. Production `cn run` never instantiates
-//! it. Mirrors `directx/hot_reload.rs` and `metal/hot_reload.rs`.
+//! Entirely a dev-loop concern: the flag exists only when `VkContext::new` is
+//! called with `hot_reload = true`. Production `cn run` never sets it. Mirrors
+//! `directx/hot_reload.rs` and `metal/hot_reload.rs`.
 
 use ash::vk;
 use concinnity_core::render::backend_init;
 use concinnity_core::render::error::{RenderError, RenderResult};
-use notify::{Event, EventKind, RecursiveMode, Watcher};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::sync::atomic::Ordering;
 
 use super::auto_exposure::{AutoExposureResources, compile_auto_exposure_shaders};
 use super::context::VkContext;
@@ -40,134 +33,6 @@ macro_rules! rebuild_if_live {
     ($cond:expr_2021, $build:expr_2021 $(,)?) => {
         if $cond { Some($build?) } else { None }
     };
-}
-
-// Shader-source extensions the watcher reacts to: every program is a `.slang`
-// now. The helper rejects every other event so editor swap files, README
-// updates, and tmp files don't trigger a rebuild.
-const SHADER_EXTENSIONS: &[&str] = &["slang"];
-
-// Live watcher handle. Held by `VkContext` purely to keep the watcher
-// thread alive; dropping it stops the watcher. The flag itself is shared
-// via [`VkContext::shader_reload_pending`].
-pub(crate) struct WatcherHandle {
-    // notify keeps its own listener thread alive for as long as the handle
-    // exists; we never read this field after construction.
-    #[expect(
-        dead_code,
-        reason = "notify keeps its listener thread alive while the handle lives; never read after construction"
-    )]
-    watcher: notify::RecommendedWatcher,
-}
-
-// Spawn a `notify` watcher over the Vulkan shader source directory and
-// wire it to flip `flag` on any modify event for a known shader extension.
-// The path is derived from `CARGO_MANIFEST_DIR` at compile time so the
-// watcher works no matter where the binary is launched from, but only as
-// long as the source tree still exists at that path. A shipped binary
-// should never be hot-reload-enabled, so the missing-path case logs and
-// returns `None` instead of failing the whole context init.
-pub(crate) fn spawn(flag: Arc<AtomicBool>) -> Option<WatcherHandle> {
-    let dir: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("src")
-        .join("vulkan")
-        .join("shaders");
-    if !dir.is_dir() {
-        tracing::warn!(
-            "hot-reload: shader source dir {} not found; watcher disabled (debug \
-             command still works)",
-            dir.display()
-        );
-        return None;
-    }
-
-    // Suppress event bursts: editors (vim, VSCode) frequently emit several
-    // close-write / rename events per save. Coalesce by a small debounce so
-    // one save triggers exactly one reload.
-    let debounce = Duration::from_millis(150);
-    let last_fire = std::sync::Mutex::new(Instant::now() - debounce);
-    let flag_for_cb = Arc::clone(&flag);
-    let mut watcher = match notify::recommended_watcher(move |res: notify::Result<Event>| {
-        let event = match res {
-            Ok(e) => e,
-            Err(e) => {
-                tracing::debug!("hot-reload watcher error: {e}");
-                return;
-            }
-        };
-        if !is_relevant(&event) {
-            return;
-        }
-        let mut last = match last_fire.lock() {
-            Ok(g) => g,
-            Err(p) => p.into_inner(),
-        };
-        let now = Instant::now();
-        if now.duration_since(*last) < debounce {
-            return;
-        }
-        *last = now;
-        tracing::info!(
-            "hot-reload: detected change to {:?}, scheduling shader rebuild",
-            event.paths
-        );
-        flag_for_cb.store(true, Ordering::SeqCst);
-    }) {
-        Ok(w) => w,
-        Err(e) => {
-            tracing::warn!("hot-reload: failed to create notify watcher: {e}");
-            return None;
-        }
-    };
-
-    if let Err(e) = watcher.watch(&dir, RecursiveMode::NonRecursive) {
-        tracing::warn!(
-            "hot-reload: failed to watch {} ({}); watcher disabled",
-            dir.display(),
-            e
-        );
-        return None;
-    }
-
-    // The single-source shader directory rides the same watcher: a `.slang`
-    // save rebuilds through the same flag. Best-effort, like the main dir.
-    let slang_dir: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("src")
-        .join("shaders");
-    if slang_dir.is_dir()
-        && let Err(e) = watcher.watch(&slang_dir, RecursiveMode::NonRecursive)
-    {
-        tracing::warn!(
-            "hot-reload: failed to watch {} ({e}); .slang edits will not trigger reloads",
-            slang_dir.display()
-        );
-    }
-
-    tracing::info!(
-        "hot-reload: watching {} for {} changes",
-        dir.display(),
-        SHADER_EXTENSIONS.join("/"),
-    );
-    Some(WatcherHandle { watcher })
-}
-
-// True when this notify event is a modify of a known shader file. Filters
-// out unrelated paths (e.g. swap files, sub-directory churn) and the
-// non-mutating events notify emits (e.g. access/metadata).
-fn is_relevant(event: &Event) -> bool {
-    if !matches!(
-        event.kind,
-        EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
-    ) {
-        return false;
-    }
-    event.paths.iter().any(|p| {
-        p.extension().and_then(|e| e.to_str()).is_some_and(|e| {
-            SHADER_EXTENSIONS
-                .iter()
-                .any(|&se| se.eq_ignore_ascii_case(e))
-        })
-    })
 }
 
 impl VkContext {
@@ -276,7 +141,7 @@ impl VkContext {
         let bindless_main_pipeline = rebuild_if_live!(
             self.cull.bindless_pipeline_layout.is_some() && self.cull.bindless_pipeline.is_some(),
             {
-                let engine_pair = compile_bindless_shaders(hr, self.descriptors.probe_cube_count)?;
+                let engine_pair = compile_bindless_shaders(hr)?;
                 let pipeline =
                     self.build_world_main_pipeline(self.world_shader.as_ref(), &engine_pair)?;
                 Ok::<_, RenderError>((pipeline, engine_pair))
@@ -584,7 +449,6 @@ impl VkContext {
                 msaa_samples: self.targets.msaa_samples,
                 swapchain_format: self.swapchain.format,
                 hot_reload: self.hot_reload.enabled,
-                probe_count: self.descriptors.probe_cube_count as usize,
             },
             0,
             backend_init::WorldShader {

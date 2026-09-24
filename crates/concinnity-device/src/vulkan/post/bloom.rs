@@ -10,10 +10,10 @@ use concinnity_core::render::fullscreen;
 use super::super::allocator::DeviceAllocator;
 use super::super::context::*;
 use super::super::pipeline::GraphicsStages;
-use super::super::resources::alloc_descriptor_sets;
+use super::super::resources::{alloc_descriptor_sets, write_source_set};
 use super::super::texture::*;
+use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::owned::{OwnedFramebuffer, OwnedPipeline, VkDevice};
-use crate::vulkan::slang_builtins::SlangCompile;
 
 // Upper bound on `bloom_mip_count` (which clamps to 4..=6). The bloom
 // descriptor pool is sized for this many mips per frame so a resize that
@@ -30,13 +30,12 @@ pub(in crate::vulkan) struct BloomShaders {
 }
 
 pub(in crate::vulkan) fn compile_bloom_shaders(hot_reload: bool) -> RenderResult<BloomShaders> {
-    use super::super::slang_builtins;
-    let ctx = slang_builtins::Ctx::plain(hot_reload);
+    use super::super::builtin_shaders;
     Ok(BloomShaders {
-        vert: slang_builtins::FULLSCREEN_VERT.compile(&ctx)?,
-        prefilter: slang_builtins::BLOOM_PREFILTER.compile(&ctx)?,
-        downsample: slang_builtins::BLOOM_DOWNSAMPLE.compile(&ctx)?,
-        upsample: slang_builtins::BLOOM_UPSAMPLE.compile(&ctx)?,
+        vert: builtin_shaders::FULLSCREEN_VERT.compile(hot_reload)?,
+        prefilter: builtin_shaders::BLOOM_PREFILTER.compile(hot_reload)?,
+        downsample: builtin_shaders::BLOOM_DOWNSAMPLE.compile(hot_reload)?,
+        upsample: builtin_shaders::BLOOM_UPSAMPLE.compile(hot_reload)?,
     })
 }
 
@@ -291,16 +290,19 @@ pub(in crate::vulkan) fn rebind_bloom_input0(
     device: &VkDevice,
     set: vk::DescriptorSet,
     view: vk::ImageView,
-    sampler: vk::Sampler,
 ) {
+    write_bloom_input(device, set, view);
+}
+
+// Point bloom input `set`'s image binding at `view`.
+fn write_bloom_input(device: &VkDevice, set: vk::DescriptorSet, view: vk::ImageView) {
     let img_info = vk::DescriptorImageInfo::default()
         .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .image_view(view)
-        .sampler(sampler);
+        .image_view(view);
     let write = vk::WriteDescriptorSet::default()
         .dst_set(set)
         .dst_binding(0)
-        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
         .image_info(std::slice::from_ref(&img_info));
     // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
     // and resource it names belongs to this device.
@@ -309,7 +311,7 @@ pub(in crate::vulkan) fn rebind_bloom_input0(
 
 // Allocate + wire the bloom input descriptor sets. Per frame slot there is
 // one set per distinct input image: set 0 binds that slot's HDR resolve
-// image, set `1 + m` binds bloom mip `m`.
+// image, set `1 + m` binds bloom mip `m`. Every set reads through `sampler`.
 pub(in crate::vulkan) fn alloc_bloom_input_sets(
     device: &VkDevice,
     pool: vk::DescriptorPool,
@@ -328,18 +330,7 @@ pub(in crate::vulkan) fn alloc_bloom_input_sets(
             } else {
                 mips[idx - 1].view
             };
-            let img_info = vk::DescriptorImageInfo::default()
-                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(view)
-                .sampler(sampler);
-            let write = vk::WriteDescriptorSet::default()
-                .dst_set(set)
-                .dst_binding(0)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(std::slice::from_ref(&img_info));
-            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-            // every set and resource it names belongs to this device.
-            unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
+            write_source_set(device, set, &[(view, sampler)]);
         }
         out.push(sets);
     }

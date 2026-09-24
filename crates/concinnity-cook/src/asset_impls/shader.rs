@@ -1,5 +1,5 @@
 use concinnity_core::components::{Shader, ShaderPrograms, ShaderStage};
-use concinnity_core::render::slang_programs::surface::Sources;
+use concinnity_core::render::shader_programs::surface::Sources;
 
 use crate::asset::BuildCtx;
 use crate::compile::shader::{compile_world_shader, read_shader_source};
@@ -43,27 +43,13 @@ fn declared_path(args: &serde_json::Value, stage: ShaderStage) -> Option<String>
 }
 
 // A Shader's compiled programs, or an error naming what this host is missing.
-//
-// Reaching here means the payload cache had nothing for this Shader, so it has
-// to be compiled and there is no compiler. A world whose shaders are already
-// cooked never gets this far: the cache answers first and the compiler is not
-// part of its key.
 fn world_shader_programs(
     name: &str,
     sources: &Sources<'_>,
     platform: concinnity_core::platform::Platform,
-    have_slangc: bool,
+    have_compiler: bool,
 ) -> std::io::Result<ShaderPrograms> {
-    if !have_slangc {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!(
-                "Shader '{name}': {}",
-                concinnity_slang::unavailable_reason()
-                    .unwrap_or("slangc not found and this Shader has no compiled payload")
-            ),
-        ));
-    }
+    crate::compile::program::require_compiler(&format!("Shader '{name}'"), have_compiler)?;
     compile_world_shader(name, sources, platform)
 }
 
@@ -79,7 +65,7 @@ impl crate::asset::BuildAsset for Shader {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!(
-                    "Shader '{}': no `fragment` file declared (set it to a `.slang` path \
+                    "Shader '{}': no `fragment` file declared (set it to a `.hlsl` path \
                      defining `shade`)",
                     ctx.name
                 ),
@@ -97,7 +83,7 @@ impl crate::asset::BuildAsset for Shader {
             ctx.name,
             &sources,
             ctx.platform,
-            concinnity_slang::slangc_available(),
+            concinnity_shader::dxc_available(),
         )?;
         programs.encode().map_err(|e| {
             std::io::Error::other(format!("Asset '{}': shader payload encode: {e}", ctx.name))
@@ -176,7 +162,10 @@ mod tests {
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
         let message = err.to_string();
         assert!(message.contains("wall"), "{message}");
-        assert!(message.contains("slangc"), "{message}");
+        assert!(
+            message.contains("compiled payload") || message.contains("dxc"),
+            "{message}"
+        );
     }
 
     #[test]
@@ -185,12 +174,12 @@ mod tests {
         // search applies, with or without an asset root.
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(
-            resolve_source_path_for("shaders/x.slang", &ctx(None)),
-            "shaders/x.slang"
+            resolve_source_path_for("shaders/x.hlsl", &ctx(None)),
+            "shaders/x.hlsl"
         );
         assert_eq!(
-            resolve_source_path_for("shaders/x.slang", &with_assets(Some(dir.path()), None)),
-            "shaders/x.slang"
+            resolve_source_path_for("shaders/x.hlsl", &with_assets(Some(dir.path()), None)),
+            "shaders/x.hlsl"
         );
     }
 
@@ -201,28 +190,28 @@ mod tests {
         let assets = tempfile::tempdir().unwrap();
         let nested = assets.path().join("shaders");
         std::fs::create_dir_all(&nested).unwrap();
-        std::fs::write(nested.join("user.slang"), "// slang").unwrap();
+        std::fs::write(nested.join("user.hlsl"), "// hlsl").unwrap();
         let artifact_dir = tempfile::tempdir().unwrap();
-        std::fs::write(artifact_dir.path().join("user.slang"), "// slang").unwrap();
+        std::fs::write(artifact_dir.path().join("user.hlsl"), "// hlsl").unwrap();
         let artifacts = artifact_dir.path().to_string_lossy().into_owned();
 
         assert_eq!(
             resolve_source_path_for(
-                "user.slang",
+                "user.hlsl",
                 &with_assets(Some(assets.path()), Some(&artifacts))
             ),
-            nested.join("user.slang").to_string_lossy()
+            nested.join("user.hlsl").to_string_lossy()
         );
     }
 
     #[test]
     fn resolve_source_path_for_prefers_an_artifact_over_the_assets_dir() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("user.slang"), "// slang").unwrap();
+        std::fs::write(dir.path().join("user.hlsl"), "// hlsl").unwrap();
         let artifacts = dir.path().to_string_lossy().into_owned();
         assert_eq!(
-            resolve_source_path_for("user.slang", &ctx(Some(&artifacts))),
-            format!("{artifacts}/user.slang")
+            resolve_source_path_for("user.hlsl", &ctx(Some(&artifacts))),
+            format!("{artifacts}/user.hlsl")
         );
     }
 
@@ -231,12 +220,12 @@ mod tests {
         let assets = tempfile::tempdir().unwrap();
         let expected = assets
             .path()
-            .join("cn_no_such.slang")
+            .join("cn_no_such.hlsl")
             .to_string_lossy()
             .into_owned();
         // No artifacts dir at all...
         assert_eq!(
-            resolve_source_path_for("cn_no_such.slang", &with_assets(Some(assets.path()), None)),
+            resolve_source_path_for("cn_no_such.hlsl", &with_assets(Some(assets.path()), None)),
             expected
         );
         // ...and an artifacts dir that doesn't hold the file both land there.
@@ -244,15 +233,15 @@ mod tests {
         let artifacts = dir.path().to_string_lossy().into_owned();
         assert_eq!(
             resolve_source_path_for(
-                "cn_no_such.slang",
+                "cn_no_such.hlsl",
                 &with_assets(Some(assets.path()), Some(&artifacts))
             ),
             expected
         );
         // With no search root at all the bare name is left as it was authored.
         assert_eq!(
-            resolve_source_path_for("cn_no_such.slang", &ctx(None)),
-            "cn_no_such.slang"
+            resolve_source_path_for("cn_no_such.hlsl", &ctx(None)),
+            "cn_no_such.hlsl"
         );
     }
 
@@ -277,29 +266,25 @@ mod tests {
     // runs.
     #[test]
     fn a_missing_file_names_the_path() {
-        let err = Shader::compile_payload(&args("/no/such/user.slang"), &ctx(None)).unwrap_err();
+        let err = Shader::compile_payload(&args("/no/such/user.hlsl"), &ctx(None)).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
-        assert!(
-            err.to_string().contains("/no/such/user.slang"),
-            "got: {err}"
-        );
+        assert!(err.to_string().contains("/no/such/user.hlsl"), "got: {err}");
 
-        let both =
-            serde_json::json!({"vertex": "/no/such/v.slang", "fragment": "/no/such/f.slang"});
+        let both = serde_json::json!({"vertex": "/no/such/v.hlsl", "fragment": "/no/such/f.hlsl"});
         let dir = tempfile::tempdir().unwrap();
-        let frag = dir.path().join("f.slang");
+        let frag = dir.path().join("f.hlsl");
         std::fs::write(&frag, "// f").unwrap();
         let mut both = both;
         both["fragment"] = serde_json::Value::String(frag.to_string_lossy().into_owned());
         let err = Shader::compile_payload(&both, &ctx(None)).unwrap_err();
-        assert!(err.to_string().contains("/no/such/v.slang"), "got: {err}");
+        assert!(err.to_string().contains("/no/such/v.hlsl"), "got: {err}");
     }
 
     #[test]
     fn source_files_reports_the_declared_files_once_they_exist_on_disk() {
         let dir = tempfile::tempdir().unwrap();
-        let frag = dir.path().join("f.slang");
-        let vert = dir.path().join("v.slang");
+        let frag = dir.path().join("f.hlsl");
+        let vert = dir.path().join("v.hlsl");
         let raw_f = frag.to_string_lossy().into_owned();
         let raw_v = vert.to_string_lossy().into_owned();
         let both = serde_json::json!({"vertex": raw_v, "fragment": raw_f});

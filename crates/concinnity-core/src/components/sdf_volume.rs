@@ -21,7 +21,7 @@ pub const SDF_PARAMS_LEN: usize = 32;
 /// the box, composites correctly with the surrounding scene through the depth
 /// buffer, and shades hits with the engine's lighting helpers.
 ///
-/// The distance field is one `.slang` file for every backend. The build
+/// The distance field is one `.hlsl` file for every backend. The build
 /// compiles it, so a field that does not compile fails `cn build` rather than
 /// the renderer, and a shipped player needs no shader compiler of its own.
 ///
@@ -44,7 +44,7 @@ pub struct SdfVolume {
     /// XYZ half-widths of the bounding box. The raymarch is clipped to the box,
     /// so the SDF only has to be well-defined inside this region.
     pub extent: [f32; 3],
-    /// Distance-field source path (e.g. `"shaders/chrome_blob.slang"`),
+    /// Distance-field source path (e.g. `"shaders/chrome_blob.hlsl"`),
     /// resolved relative to the project's `assets/` at build time. The file
     /// defines `map` and `shade`, or `sampleVolume` for a volumetric volume.
     #[serde(default)]
@@ -163,27 +163,27 @@ mod tests {
     fn an_authored_volume_parses_and_round_trips_through_postcard() {
         let v: SdfVolume = serde_json::from_str(
             r#"{"center":[0,2,0],"extent":[3,3,3],"max_gradient":2.0,
-                "fragment_shader":"shaders/blob.slang",
+                "fragment_shader":"shaders/blob.hlsl",
                 "cast_shadows":true,"visible":false}"#,
         )
         .unwrap();
         assert_eq!(v.cone_ratio(), 0.5);
         assert!(v.cast_shadows);
         assert!(!v.visible);
-        assert_eq!(v.fragment_shader, "shaders/blob.slang".to_string());
+        assert_eq!(v.fragment_shader, "shaders/blob.hlsl".to_string());
 
         let bytes = postcard::to_allocvec(&v).unwrap();
         let back: SdfVolume = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(back.extent, [3.0, 3.0, 3.0]);
-        assert_eq!(back.fragment_shader, "shaders/blob.slang".to_string());
+        assert_eq!(back.fragment_shader, "shaders/blob.hlsl".to_string());
         // Identity and payload location are injected at load, never authored.
         assert!(back.locator.is_none());
     }
 
     #[test]
     fn params_is_a_fixed_width_block_rather_than_a_partial_fill() {
-        let v: SdfVolume = serde_json::from_str(r#"{"fragment_shader":"blob.slang"}"#).unwrap();
-        assert_eq!(v.fragment_shader, "blob.slang".to_string());
+        let v: SdfVolume = serde_json::from_str(r#"{"fragment_shader":"blob.hlsl"}"#).unwrap();
+        assert_eq!(v.fragment_shader, "blob.hlsl".to_string());
         // A short array is a length mismatch, not a partial fill.
         assert!(serde_json::from_str::<SdfVolume>(r#"{"params":[1.5]}"#).is_err());
     }

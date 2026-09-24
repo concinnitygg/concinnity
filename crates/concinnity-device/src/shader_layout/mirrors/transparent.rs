@@ -1,6 +1,6 @@
 //! The transparent pass's three producers, the ray-traced reflection resolve, and
-//! the fog pair. `TransparentView` is declared by glass.slang, glass_mesh.slang
-//! and water.slang alike, so all three are mirrored: they are separate
+//! the fog pair. `TransparentView` is declared by glass.hlsl, glass_mesh.hlsl
+//! and water.hlsl alike, so all three are mirrored: they are separate
 //! declarations that can drift apart. The fog froxel kernel carries the third declaration of
 //! `ShadowUniforms` -- the only one that spells out the trailing pad the CPU
 //! uploads.
@@ -40,8 +40,8 @@ pub(in crate::shader_layout) fn glass() -> Vec<Case> {
         everywhere(mirror!(ProbeUniforms => "ProbeUniforms" { box_min, box_max, probe_pos, })),
         everywhere(mirror!(ProbeSet => "ProbeSet" {
             count,
-            [_pad] => ["_pad0", "_pad1", "_pad2"],
-            probes,
+            mip_count,
+            [_pad] => ["_pad0", "_pad1"],
         })),
     ]
 }

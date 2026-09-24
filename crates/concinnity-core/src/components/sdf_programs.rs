@@ -5,7 +5,7 @@
 //! world is loaded, because the world authors the field that goes in the middle
 //! of the engine's template. Every other engine shader is a build-time artifact.
 //! Making this one a build-time artifact too is what keeps a shipped player from
-//! needing a shader compiler: the cook runs slangc and stores what it emitted.
+//! needing a shader compiler: the cook runs dxc and stores what it emitted.
 //!
 //! The field text rides along with the artifacts because a compiled artifact is
 //! only usable while the template it was built against still matches. The
@@ -68,19 +68,19 @@ mod tests {
             field: "float map() { return 1.0; }".to_string(),
             programs: vec![
                 CompiledProgram {
-                    entries: vec!["raymarch_vertex".to_string()],
+                    entry: "raymarch_vertex".to_string(),
                     source_digest: 7,
                     artifact: vec![1, 2, 3],
                 },
-                // One artifact holding both stages, the shape the Metal target
-                // takes: a library the runtime pulls two functions out of.
                 CompiledProgram {
-                    entries: vec![
-                        "raymarch_volumetric_vertex".to_string(),
-                        "raymarch_volumetric_fragment".to_string(),
-                    ],
+                    entry: "raymarch_volumetric_vertex".to_string(),
                     source_digest: 9,
                     artifact: vec![4, 5],
+                },
+                CompiledProgram {
+                    entry: "raymarch_volumetric_fragment".to_string(),
+                    source_digest: 9,
+                    artifact: vec![6],
                 },
             ],
         }
@@ -90,14 +90,14 @@ mod tests {
     fn an_entry_resolves_only_against_the_digest_it_was_built_from() {
         let p = programs();
         assert_eq!(p.artifact("raymarch_vertex", 7), Some(&[1u8, 2, 3][..]));
-        // Either entry of a two-entry artifact resolves to the same bytes.
+        // Two entries under one digest each resolve to their own artifact.
         assert_eq!(
             p.artifact("raymarch_volumetric_vertex", 9),
             Some(&[4u8, 5][..])
         );
         assert_eq!(
             p.artifact("raymarch_volumetric_fragment", 9),
-            Some(&[4u8, 5][..])
+            Some(&[6u8][..])
         );
         // The template moved under the artifact: the renderer has to compile.
         assert_eq!(p.artifact("raymarch_vertex", 8), None);

@@ -1,6 +1,6 @@
 //! The depth-bias raster state every shadow pass binds, on every host.
 //!
-//! The sample side owns per-cascade growth (`shadow_bias.slang`); the raster
+//! The sample side owns per-cascade growth (`shadow_bias.hlsl`); the raster
 //! side contributes slope alone, and does not vary by cascade or between the
 //! cascade and spot passes.
 //!

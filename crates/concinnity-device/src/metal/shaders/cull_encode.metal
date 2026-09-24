@@ -2,13 +2,13 @@
 #include <metal_command_buffer>
 using namespace metal;
 
-// Turns the per-object `cull_status` the single-source `cull.slang` decision
+// Turns the per-object `cull_status` the single-source `cull.hlsl` decision
 // kernel wrote into Metal indirect command buffers. One thread per command
 // slot: a record whose status equals `draw_status` gets an indexed draw in its
 // shader bucket's ICB and a reset in every other bucket; anything else resets
 // every bucket. This is the only half of the cull Metal keeps hand-written,
 // because the ICB encoding (`render_command`, `array<command_buffer, N>`) is a
-// declaration Slang cannot express.
+// declaration HLSL cannot express.
 
 // Mirrors gfx::render_types::GpuDrawArgs (16 B).
 struct GpuDrawArgs {

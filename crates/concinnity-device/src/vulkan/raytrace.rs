@@ -68,10 +68,10 @@ use concinnity_core::render::uniforms::SkinParams;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::pipeline::{SHADER_ENTRY, spv_module};
+use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout, VkDevice,
 };
-use crate::vulkan::slang_builtins::SlangCompile;
 
 // Byte stride of a `Vertex` in the shared vertex buffer (pos + normal + tangent
 // + color + uv = 14 floats). The BLAS reads positions at this stride and the
@@ -283,7 +283,7 @@ struct DeviceBufferRef {
 }
 
 // The compute pipeline that deforms skinned vertices for ray tracing
-// (`rt_skin.slang`): set 0 = [src skinned verts, joint palette, deformed output,
+// (`rt_skin.hlsl`): set 0 = [src skinned verts, joint palette, deformed output,
 // morph deltas, morph weights] (five storage buffers) + a 16-byte `SkinParams`
 // push-constant block. Built in `build_rt_accel` (gated on RT) and held on
 // `RtAccelData`; mirrors DirectX's `SkinPipeline` / Metal's `skin_pipeline`.
@@ -990,8 +990,7 @@ pub(super) fn build_skin_pipeline(
     device: &VkDevice,
     hot_reload: bool,
 ) -> RenderResult<SkinPipeline> {
-    let spv =
-        super::slang_builtins::RT_SKIN.compile(&super::slang_builtins::Ctx::plain(hot_reload))?;
+    let spv = super::builtin_shaders::RT_SKIN.compile(hot_reload)?;
     let module = spv_module(device, &spv)?;
 
     // Five storage buffers: src verts (0), joint palette (1), deformed output
@@ -3261,14 +3260,14 @@ mod tests {
 
     #[test]
     fn rt_skin_kernel_compiles() {
-        if !concinnity_slang::shader_tests_enabled() {
+        if !concinnity_shader::dxc_available() {
             return;
         }
         // The skin compute kernel compiles to SPIR-V. Its payload offsets and
         // the `SkinParams` block are checked against the Rust mirrors in
         // `shader_layout`, on all three targets rather than this one.
-        let spv = crate::vulkan::slang_builtins::RT_SKIN
-            .compile(&crate::vulkan::slang_builtins::Ctx::plain(false))
+        let spv = crate::vulkan::builtin_shaders::RT_SKIN
+            .compile(false)
             .expect("rt skin kernel compiles");
         assert!(super::super::pipeline::is_spirv(&spv));
     }

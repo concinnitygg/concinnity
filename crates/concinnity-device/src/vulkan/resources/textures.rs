@@ -12,6 +12,7 @@ use concinnity_core::render::error;
 use concinnity_core::render::error::{RenderError, RenderResult};
 
 use super::super::context::*;
+use super::super::descriptor_layout::{IRRADIANCE_CUBE_BINDING, PREFILTER_CUBE_BINDING};
 use super::super::texture::{
     GpuUploadContext, StreamedUploadRetire, upload_texture_image, upload_texture_image_deferred,
 };
@@ -23,13 +24,12 @@ impl VkContext {
     fn write_pool_image(&self, set: vk::DescriptorSet, index: u32, view: vk::ImageView) {
         let info = vk::DescriptorImageInfo::default()
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(view)
-            .sampler(self.scene.linear_sampler.handle());
+            .image_view(view);
         let write = vk::WriteDescriptorSet::default()
             .dst_set(set)
             .dst_binding(1)
             .dst_array_element(index)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
             .image_info(std::slice::from_ref(&info));
         // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every
         // set and resource it names belongs to this device.
@@ -221,12 +221,11 @@ impl VkContext {
         for &set in &self.composite.sets {
             let info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(new_view)
-                .sampler(self.post.sampler.handle());
+                .image_view(new_view);
             let write = vk::WriteDescriptorSet::default()
                 .dst_set(set)
                 .dst_binding(2)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                 .image_info(std::slice::from_ref(&info));
             // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
             // every set and resource it names belongs to this device.
@@ -245,10 +244,11 @@ impl VkContext {
     // emitted by `gfx::build::environment_map::serialize`, then re-uploads
     // the irradiance + prefilter cubes via the same `upload_environment_map`
     // the init path uses. Every consumer that captured the old image views is
-    // re-pointed at the new ones: each `global_sets` entry (irradiance +
-    // prefilter), the SSR resolve sets (prefilter), and the raymarch view sets
-    // (both cubes). `prefilter_mip_count` is refreshed on `self` so the next
-    // frame's `ViewUniforms` upload picks up the new mip count. Unlike DirectX,
+    // re-pointed at the new ones: every global set (each frame's, the planar
+    // mirrors' and an in-flight probe capture's faces) and the raymarch view
+    // sets. `prefilter_mip_count` is refreshed on `self` so the next frame's
+    // `ViewUniforms` upload picks up the new mip count, and the in-flight probe
+    // capture's face views are rewritten with it. Unlike DirectX,
     // which re-uploads into the same SRV heap slots so its consumers need no
     // re-wire, every Vulkan `upload_environment_map` mints fresh `vk::ImageView`
     // handles, so each descriptor set must be re-written. Mirrors
@@ -275,69 +275,23 @@ impl VkContext {
         let new_irradiance_view = new_env.irradiance.view;
         let new_prefilter_view = new_env.prefilter.view;
         let new_mip_count = new_env.prefilter_mip_count;
-        // Rewrite global sets before destroying the previous cubes; see the
+        // Rewrite every set before destroying the previous cubes; see the
         // texture-pool rewires above for the rationale.
         let old = std::mem::replace(&mut self.scene.env_map, new_env);
         self.scene.prefilter_mip_count = new_mip_count;
-        for &set in &self.descriptors.global_sets {
-            let irr_info = vk::DescriptorImageInfo::default()
-                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(new_irradiance_view)
-                .sampler(self.scene.cube_sampler.handle());
-            let pre_info = vk::DescriptorImageInfo::default()
-                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(new_prefilter_view)
-                .sampler(self.scene.cube_sampler.handle());
-            let writes = [
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(IRRADIANCE_CUBE_BINDING)
-                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .image_info(std::slice::from_ref(&irr_info)),
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(PREFILTER_CUBE_BINDING)
-                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .image_info(std::slice::from_ref(&pre_info)),
-            ];
-            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-            // every set and resource it names belongs to this device.
-            unsafe { self.hw.device.update_descriptor_sets(&writes, &[]) };
-        }
-        // The IBL cubes are also bound outside `global_sets`: the raymarch view
-        // sets sample both cubes (bindings 4 + 5). They captured the old image
-        // views too, so re-point them at the new cubes before the old ones are
-        // destroyed below; otherwise the next raymarch draw reads a destroyed
-        // view and loses the device. Done here, not in `global_sets`, because
-        // the resize path re-wires these the same way. The SSR resolve reads the
-        // prefilter cube per frame, so it needs no re-point.
+        self.rewrite_global_binding(IRRADIANCE_CUBE_BINDING);
+        self.rewrite_global_binding(PREFILTER_CUBE_BINDING);
+        self.rewrite_probe_capture_views();
+        // The raymarch view sets sample both cubes outside the global set. The
+        // SSR resolve reads the prefilter cube per frame, so it needs no
+        // re-point.
         if let Some(rm) = self.raymarch.as_ref() {
-            rm.rewire_ibl_cubes(
-                &self.hw.device,
-                new_irradiance_view,
-                new_prefilter_view,
-                self.scene.cube_sampler.handle(),
-            );
-        }
-        // The RT-reflection sets sample the prefilter cube at binding 8 (the miss
-        // fallback + the metallic/roughness IBL hit shading); re-point them too.
-        if let Some(rt) = self.rt_reflections.as_ref() {
-            rt.rewire_prefilter(
-                &self.hw.device,
-                new_prefilter_view,
-                self.scene.cube_sampler.handle(),
-            );
+            rm.rewire_ibl_cubes(&self.hw.device, new_irradiance_view, new_prefilter_view);
         }
         drop(old);
         Ok(())
     }
 }
-
-// Set-0 binding indices for the IBL cubemaps. Must match the bindings the
-// init path writes in `vulkan/init.rs` when wiring `global_sets`. Kept as
-// documentation of that layout; `init.rs` writes the literals directly.
-const IRRADIANCE_CUBE_BINDING: u32 = 4;
-const PREFILTER_CUBE_BINDING: u32 = 5;
 
 impl VkContext {
     // Append a new draw object that re-uses an existing slot's geometry

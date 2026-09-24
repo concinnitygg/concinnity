@@ -27,7 +27,7 @@ pub(super) fn build_rings(gpu: &InitGpu<'_>) -> FrameRings {
         draw_args: TransientRing::new(frames_in_flight.max(1) + 1),
         model_history: TransientRing::new(frames_in_flight),
         bindless_tex: TransientRing::new(frames_in_flight.max(1)),
-        probe_cube: TransientRing::new(frames_in_flight.max(1) + 1),
+        probe_records: TransientRing::new(frames_in_flight.max(1) + 1),
         joint: JointRing::new(frames_in_flight.max(1) + 1),
         object_scratch: Vec::new(),
         draw_args_scratch: Vec::new(),

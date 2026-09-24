@@ -43,8 +43,7 @@ use concinnity_core::gfx::render_types::LightUniforms;
 use concinnity_core::platform::Platform;
 use concinnity_core::render::backend_init::SdfVolumeSource;
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::slang_programs::raymarch::{self, Family};
-use concinnity_slang::SlangTarget;
+use concinnity_core::render::shader_programs::raymarch::Family;
 use std::ffi::c_void;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -67,6 +66,7 @@ use crate::directx::root_constants::RootConstants;
 use crate::directx::texture::{
     HDR_FORMAT, create_fallback_white_resource, create_hdr_resolve_target, transition_barrier,
 };
+use crate::shader::raymarch_source::family_artifacts;
 
 fn volume_uniforms_from(v: &SdfVolume) -> RaymarchVolumeUniforms {
     RaymarchVolumeUniforms {
@@ -175,49 +175,6 @@ pub(in crate::directx) struct RaymarchResources {
     pub(in crate::directx) sampler_table_gpu: SamplerSlot,
     // Per-volume records. Drained from the world's `SdfVolume`s at init.
     pub(in crate::directx) volumes: Vec<RaymarchVolumeRecord>,
-}
-
-// The DXIL for one family of a volume's field, as (vertex, fragment).
-//
-// The cook compiled these; a DXIL container holds exactly one entry, so each
-// stage is its own artifact. A template edit makes both miss and compile here.
-fn family_dxil(
-    programs: &SdfPrograms,
-    family: Family,
-    hot_reload: bool,
-    label: &str,
-) -> RenderResult<(Vec<u8>, Vec<u8>)> {
-    let mut stages = raymarch::ALL.iter().filter(|p| p.family == family);
-    let dxil = |entry: &str, profile: &'static str| -> RenderResult<Vec<u8>> {
-        crate::shader::raymarch_source::artifact(
-            programs,
-            &crate::shader::raymarch_source::Request {
-                family,
-                platform: Platform::Hlsl,
-                entries: &[entry],
-                target: SlangTarget::Dxil(profile),
-                hot_reload,
-                label,
-            },
-        )
-        .map(|bytes| bytes.into_owned())
-        .map_err(RenderError::ShaderCompile)
-    };
-    let vs = dxil(
-        stages
-            .next()
-            .expect("a family declares a vertex entry")
-            .entry,
-        "vs_6_0",
-    )?;
-    let ps = dxil(
-        stages
-            .next()
-            .expect("a family declares a fragment entry")
-            .entry,
-        "ps_6_0",
-    )?;
-    Ok((vs, ps))
 }
 
 // Root signature shared by every per-volume raymarch PSO.
@@ -397,7 +354,13 @@ fn compile_volume_pso(
     msaa_samples: u32,
     hot_reload: bool,
 ) -> RenderResult<ID3D12PipelineState> {
-    let (vs, ps) = family_dxil(programs, Family::Surface, hot_reload, asset_label)?;
+    let (vs, ps) = family_artifacts(
+        programs,
+        Family::Surface,
+        Platform::DirectX,
+        hot_reload,
+        asset_label,
+    )?;
     create_raymarch_pso(device, root_sig, &vs, &ps, msaa_samples)
 }
 
@@ -503,7 +466,13 @@ fn compile_volume_volumetric_pso(
     msaa_samples: u32,
     hot_reload: bool,
 ) -> RenderResult<ID3D12PipelineState> {
-    let (vs, ps) = family_dxil(programs, Family::Volumetric, hot_reload, asset_label)?;
+    let (vs, ps) = family_artifacts(
+        programs,
+        Family::Volumetric,
+        Platform::DirectX,
+        hot_reload,
+        asset_label,
+    )?;
     create_raymarch_volumetric_pso(device, root_sig, &vs, &ps, msaa_samples)
 }
 
@@ -636,7 +605,13 @@ fn compile_volume_shadow_pso(
     asset_label: &str,
     hot_reload: bool,
 ) -> RenderResult<ID3D12PipelineState> {
-    let (vs, ps) = family_dxil(programs, Family::Shadow, hot_reload, asset_label)?;
+    let (vs, ps) = family_artifacts(
+        programs,
+        Family::Shadow,
+        Platform::DirectX,
+        hot_reload,
+        asset_label,
+    )?;
     create_raymarch_shadow_pso(device, root_sig, &vs, &ps)
 }
 

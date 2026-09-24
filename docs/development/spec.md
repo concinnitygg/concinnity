@@ -110,7 +110,7 @@ Crates are defined under [crates/](../../crates).
 | `concinnity-device`    | The hardware-facing backends: Metal, DirectX 12, Vulkan.                                          |
 | `concinnity-cook`      | The build side, kept out of the runtime foundation so that foundation carries no build code.      |
 | `concinnity-dev`       | The dev tooling library: everything the `concinnity` binary does, minus its argv parsing.         |
-| `concinnity-slang`     | The `slangc` invocation, shared by build scripts and the renderer.                                |
+| `concinnity-shader`    | The HLSL shader toolchain (dxc, spirv-cross), shared by build scripts and the renderer.           |
 | `concinnity-toolchain` | Shared build-script support for the workspace.                                                    |
 | `concinnity-derive`    | Derive macros for the authored asset schemas (`AssetFields`); internal to core and cook.          |
 | `concinnity-ffi`       | The C ABI a host application links to embed the engine.                                           |
@@ -426,16 +426,18 @@ now:
 | Color LUT                | `.cube` parse into a 3D lookup payload.                                                                              |
 | Font                      | Glyph atlas rasterization with real metrics.                                                                         |
 | Audio clip                | Decode and re-encode into the runtime clip payload.                                                                  |
-| Shader                    | Slang compilation of the world's hooks into the engine's main-pass programs (see below).                             |
+| Shader                    | Compilation of the world's hooks into the engine's main-pass programs (see below).                                   |
 | Voxel chunk / SDF volume  | Palette resolution, volume bake.                                                                                     |
 
-**Shader compilation** runs `slangc` on the cook host. A `Shader` is one or
-two `.slang` files defining hooks (`shade`, and optionally `transform`) that
-the engine's own main-pass entries call; the cook splices them into the
+**Shader compilation** runs a shader compiler on the cook host. A `Shader` is
+one or two `.hlsl` files defining hooks (`shade`, and optionally `transform`)
+that the engine's own main-pass entries call; the cook splices them into the
 engine's templates and compiles every entry the target backend consumes,
-storing what slangc emitted (MSL text, a DXIL container, or SPIR-V) in the
-world. A player needs no shader compiler. The cook carries no backend cfgs and
-no native GPU dependencies: it must run on cook hosts with no GPU.
+storing what was emitted (MSL text, a DXIL container, or SPIR-V) in the world.
+The template and the spliced hooks are one translation unit, which dxc
+compiles. A player needs no shader compiler. The cook
+carries no backend cfgs and no native GPU dependencies: it must run on cook
+hosts with no GPU.
 
 **Scene partition.** Content reachable only from one scene is grouped into that
 scene's `SceneGroup`. Content shared between scenes, or used outside any scene,

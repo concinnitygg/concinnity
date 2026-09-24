@@ -18,7 +18,7 @@ use concinnity_core::render::error;
 use concinnity_core::render::hdr_output;
 use concinnity_core::render::lights;
 use concinnity_core::render::particles;
-use concinnity_core::render::reflection_probe;
+use concinnity_core::render::probe_book::ProbeBook;
 use concinnity_core::render::render_graph;
 use concinnity_core::render::scene_flow;
 use concinnity_core::render::shadow_schedule;
@@ -166,8 +166,6 @@ pub(super) struct VkAreaLight {
     pub(super) buffer: PooledBuffer,
     pub(super) ltc_matrix: GpuImage,
     pub(super) ltc_magnitude: GpuImage,
-    // Linear clamp-to-edge sampler for both tables.
-    pub(super) sampler: OwnedSampler,
 }
 
 impl VkAreaLight {
@@ -315,20 +313,6 @@ impl VkGeometry {
 // descriptors live in their own pools, not here.
 pub(super) struct VkDescriptors {
     pub(super) global_set_layout: OwnedSetLayout,
-    // Whether `global_set_layout` was created with
-    // `VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT`, so it budgets
-    // against the update-after-bind sampler limit instead of Metal's 16-entry
-    // per-stage table and costs the layouts that bind it nothing. Every pool that
-    // allocates a global set (here, `planar.rs`, `probe.rs`) must declare the
-    // matching flag. True on a sampler-constrained device (MoltenVK), false on
-    // every desktop driver.
-    pub(super) global_update_after_bind: bool,
-    // Descriptor count of `global_set_layout`'s reflection-probe cube array
-    // (binding 8), derived at init from the device's per-stage sampler limit by
-    // `descriptor_layout::probe_cube_array_count`. Every later probe cube write,
-    // re-rendered global set, and probe-shader recompile reads it from here so
-    // they stay sized to the layout the pipelines were built against.
-    pub(super) probe_cube_count: u32,
     pub(super) descriptor_pool: OwnedDescriptorPool,
     pub(super) global_sets: Vec<vk::DescriptorSet>,
     // The cascade shadow pass's set 0 per frame, over `VkShadow`'s layout and
@@ -470,7 +454,7 @@ pub(super) struct VkCull {
     pub(super) main_render_pass_phase2: Option<OwnedRenderPass>,
     // Hi-Z occlusion culling. The depth-mip pyramid (built at end of frame
     // from this frame's main depth) + its build pipelines + the cull pipeline's
-    // set 1 (`sampler2D` Hi-Z + per-frame `CullHizParams` UBO). `Some` exactly
+    // set 1 (the Hi-Z image + per-frame `CullHizParams` UBO). `Some` exactly
     // when the GPU-cull pipeline is active (same gating as `cull_pipeline`):
     // the next frame's `Cull` kernel projects each AABB through the previous
     // frame's un-jittered VP and discards objects fully behind the pyramid.
@@ -659,10 +643,10 @@ pub(super) struct VkUniforms {
     // Per-frame-in-flight `ViewUniforms` UBO (camera + IBL params), persistently
     // mapped. `record_frame` memcpys this frame's view into its slot.
     pub(super) view_ubo_buffers: Vec<PooledBuffer>,
-    // Per-frame-in-flight `ProbeSet` UBO (reflection-probe count + per-probe
-    // parallax boxes), bound at global set 0 binding 7, persistently mapped.
-    // `record_frame` memcpys `self.probe.set` into this frame's slot each
-    // frame; it stays `EMPTY` (count 0 = sky reflection) until a probe bakes.
+    // Per-frame-in-flight `ProbeSet` UBO (the live reflection-probe count),
+    // bound at global set 0 binding 7, persistently mapped. `upload_probe_set`
+    // writes this frame's slot; the count stays 0 (sky reflection) until a
+    // probe bakes.
     pub(super) probe_set_ubo_buffers: Vec<PooledBuffer>,
     // Per-frame-in-flight `LightUniforms` UBO, persistently mapped. Every pass
     // that reads the light block binds this frame's slot: the global set, the
@@ -674,10 +658,6 @@ pub(super) struct VkUniforms {
     // Single per-scene local-light storage buffer (SSBO), uploaded once at init
     // and bound at global set 0 binding 9. Static (never rewritten per-frame).
     pub(super) local_light_buffer: PooledBuffer,
-    // Byte size of `local_light_buffer`, kept so passes that rebind the global
-    // set from `ctx` (probe bake) can set the SSBO descriptor range without the
-    // original `local_lights` slice.
-    pub(super) local_light_size: u64,
     // The values the ring carries. A live Ambient-slider or directional-light
     // change mutates this and re-arms `light_dirty`; `record_frame` writes the
     // frame's own slot, so no in-flight read is ever raced.
@@ -734,39 +714,22 @@ pub(super) struct AutoExposureState {
 }
 
 // Built-in shader hot reload. `enabled` is true only under `cn debug`: it
-// routes every built-in GLSL source resolve through `pipeline::shader_source`'s
-// disk-first path and gates the `vulkan/shaders/` filesystem watcher. Under
-// `cn run` the `include_str!`-baked GLSL is the only source the binary sees.
-// `reload_pending` is the atomic flag set by the `notify` watcher or the
-// `reload-shaders` debug tool call, polled at the top of `draw_frame` to trigger a
-// pipeline rebuild. `watcher` is the live `notify` handle held purely for
-// lifetime; dropping it stops the watcher. Both are `Some` only when `enabled`.
+// routes every built-in shader source resolve through the disk-first path.
+// Under `cn run` the embedded source is the only one the binary sees.
+// `reload_pending` is the atomic flag the `reload-shaders` debug tool call
+// sets, polled at the top of `draw_frame` to trigger a pipeline rebuild;
+// `Some` only when `enabled`.
 pub(super) struct HotReloadState {
     pub enabled: bool,
     pub reload_pending: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-    #[expect(
-        dead_code,
-        reason = "held so the watcher thread stays alive; dropping it stops the watcher"
-    )]
-    pub watcher: Option<crate::vulkan::hot_reload::WatcherHandle>,
 }
 
 impl HotReloadState {
-    // Spawn a filesystem watcher over `vulkan/shaders/` only under `cn debug`.
-    // The shared atomic flag is also handed to the debug server elsewhere so
-    // the `reload-shaders` command converges on the same trigger path.
-    pub(super) fn spawn(enabled: bool) -> Self {
-        let (reload_pending, watcher) = if enabled {
-            let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let watcher = crate::vulkan::hot_reload::spawn(std::sync::Arc::clone(&flag));
-            (Some(flag), watcher)
-        } else {
-            (None, None)
-        };
+    pub(super) fn new(enabled: bool) -> Self {
         Self {
             enabled,
-            reload_pending,
-            watcher,
+            reload_pending: enabled
+                .then(|| std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))),
         }
     }
 }
@@ -960,23 +923,17 @@ impl ViewState {
 // Metal.
 pub(super) struct ProbeState {
     // Placements (declared `ReflectionProbe`s or an auto-seeded grid), supplied
-    // once after construction via `set_reflection_probes`. The cube capture that
-    // bakes one prefiltered cube per placement runs across later frames; held
-    // here so that capture can walk them.
-    pub placements: Vec<reflection_probe::ProbePlacement>,
-    // The probe set (count + per-probe parallax boxes) bound to the forward /
-    // SSR / RT shaders. `EMPTY` (count 0 = sky reflection) until the staggered
-    // capture bakes cubes and installs them; each install bumps the count.
-    pub set: concinnity_core::render::uniforms::ProbeSet,
-    // Baked prefilter cubes, one per installed probe, parallel to
-    // `set.probes[..set.count]`. Distinct from `env_map`; sampled only by the
-    // specular reflection term once the capture installs them. Grows as the
-    // staggered bake installs each probe. Destroyed in `Drop`.
-    pub maps: Vec<GpuImage>,
-    // Hands out placements in order; at most one probe is `rendering` (six faces
-    // submitting one per frame, on per-face fences) and one `prefiltering` (its
-    // capture convolving into its cube on the GPU, one destination mip per frame).
-    pub bake_queue: reflection_probe::ProbeBakeQueue,
+    // once after construction via `set_reflection_probes`, the record of every
+    // installed probe (the live count the forward / SSR / RT / transparent
+    // shaders read) and the queue handing placements to the bake.
+    pub book: ProbeBook,
+    // The cube array the bake writes a cube of per placement, and the per-frame
+    // record buffers. Distinct from `env_map`; sampled only by the specular
+    // reflection term.
+    pub gpu: super::probe_set::ProbeSetGpu,
+    // At most one probe is `rendering` (six faces submitting one per frame, on
+    // per-face fences) and one `prefiltering` (its capture convolving into its
+    // cube on the GPU, one destination mip per frame).
     pub rendering: Option<super::probe::RenderingBake>,
     pub prefiltering: Option<super::probe::PrefilteringBake>,
     // The three convolution kernels and the layouts they bind, built at init under
@@ -987,12 +944,13 @@ pub(super) struct ProbeState {
 impl ProbeState {
     // No placements and nothing baked, so reflections read the sky until
     // `set_reflection_probes` supplies placements and the bake installs cubes.
-    pub(super) fn new(prefilter: Option<super::probe_prefilter::ProbePrefilterPipelines>) -> Self {
+    pub(super) fn new(
+        prefilter: Option<super::probe_prefilter::ProbePrefilterPipelines>,
+        gpu: super::probe_set::ProbeSetGpu,
+    ) -> Self {
         Self {
-            placements: Vec::new(),
-            set: concinnity_core::render::uniforms::ProbeSet::EMPTY,
-            maps: Vec::new(),
-            bake_queue: reflection_probe::ProbeBakeQueue::new(0),
+            book: ProbeBook::new(),
+            gpu,
             rendering: None,
             prefiltering: None,
             prefilter,
@@ -1099,7 +1057,8 @@ pub(super) struct VkSceneAssets {
     // pool slots follow the last real texture.
     pub(super) fallback_textures: Vec<GpuImage>,
     pub(super) linear_sampler: OwnedSampler,
-    // Cube sampler shared by the IBL irradiance + prefilter cube bindings.
+    // Trilinear clamp sampler the IBL cubes, the probe cubes and the LTC tables
+    // are read through.
     pub(super) cube_sampler: OwnedSampler,
     // Owned IBL cube textures.
     pub(super) env_map: EnvironmentMapTextures,
@@ -1752,8 +1711,6 @@ impl VkContext {
         }
     }
 
-    // Re-point the combined-image-sampler at `binding` of `set` to `view`.
-    // Shared by the texture-streaming descriptor rewrites below.
     pub(crate) fn window_closed(&mut self) -> bool {
         self.window_mut().poll()
     }
@@ -2297,12 +2254,12 @@ impl VkContext {
 
         // Samplers.
 
-        // Scene textures + baked reflection-probe cubes: dropping them retires
+        // Scene textures + the reflection-probe cube array: dropping them retires
         // them through the allocator.
         self.scene.textures.clear();
         self.scene.fallback_textures.clear();
         self.text.atlas_textures.clear();
-        self.probe.maps.clear();
+        self.probe.gpu.release();
     }
 }
 

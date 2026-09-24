@@ -104,7 +104,7 @@ mod tests {
     #[test]
     fn a_segment_round_trips_its_index_and_payload() {
         let meta = CacheMeta {
-            toolchain: String::from("slang 2026.1"),
+            toolchain: String::from("dxc 1.9"),
             entries: vec![
                 entry(CacheEntryKind::Pipeline, "vk-aa", 0, 3),
                 entry(CacheEntryKind::Shader, "deadbeef", 3, 2),

@@ -6,17 +6,16 @@ use concinnity_core::gfx::lod;
 use concinnity_core::gfx::render_types::{GpuDrawArgs, InstancedCluster, draw_args_flags};
 use concinnity_core::render::backend_init::WorldShader;
 use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::reflection_probe;
-use concinnity_core::render::uniforms::ProbeSet;
+use concinnity_core::render::probe_book::ProbeBook;
 use concinnity_core::transform::IDENTITY;
 use objc2_metal::MTLVertexDescriptor;
 
 use super::{Features, InitGpu};
-use crate::metal::bindless_args::{ResidencySet, SlotGates};
 use crate::metal::context::{InstancedState, ProbeState};
 use crate::metal::cull::{CullState, metal_instance_records};
 use crate::metal::frame_rings::RetirePool;
 use crate::metal::probe_prefilter::ProbePrefilterPipelines;
+use crate::metal::probe_set::ProbeCubeArray;
 
 mod bindless;
 mod compute;
@@ -88,17 +87,13 @@ pub(super) fn build_probe(gpu: &InitGpu<'_>, cull: &CullState) -> RenderResult<P
         None
     };
     Ok(ProbeState {
-        placements: Vec::new(),
-        maps: Vec::new(),
-        bake_queue: reflection_probe::ProbeBakeQueue::new(0),
-        set: ProbeSet::EMPTY,
+        book: ProbeBook::new(),
+        cubes: ProbeCubeArray::placeholder(&gpu.hw.device)?,
+        records_buf: None,
         rendering: None,
         prefiltering: None,
         prefilter,
         retire_pool: RetirePool::new(),
-        cube_args: None,
-        cube_arg_gates: SlotGates::new(gpu.frames_in_flight.max(1) + 1),
-        cube_residency: ResidencySet::new(),
     })
 }
 

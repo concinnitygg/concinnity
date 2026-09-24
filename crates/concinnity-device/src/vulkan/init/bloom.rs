@@ -15,7 +15,7 @@ use crate::vulkan::post::bloom::{
 };
 use crate::vulkan::post::reflection_composite::ReflectionCompositeResources;
 use crate::vulkan::render_pass::create_bloom_render_pass;
-use crate::vulkan::resources::create_descriptor_set_layout;
+use crate::vulkan::resources::{create_descriptor_set_layout, source_set_bindings};
 
 pub(super) struct BloomInputs<'a> {
     pub(super) targets: &'a VkTargets,
@@ -40,15 +40,9 @@ pub(super) fn build_bloom(gpu: &InitGpu<'_>, inputs: BloomInputs<'_>) -> RenderR
     } = inputs;
     let write_pass = create_bloom_render_pass(device, HDR_FORMAT, false)?;
     let blend_pass = create_bloom_render_pass(device, HDR_FORMAT, true)?;
-    // Bloom set (set 0 for every bloom pass): the single input image.
-    let set_layout = create_descriptor_set_layout(
-        device,
-        &[(
-            0,
-            vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-            vk::ShaderStageFlags::FRAGMENT,
-        )],
-    )?;
+    // Bloom set (set 0 for every bloom pass): the single input image and its
+    // sampler.
+    let set_layout = create_descriptor_set_layout(device, &source_set_bindings(1))?;
     // Post-process push constant: the full `PostProcessParams` struct,
     // fragment-stage. Read by the bloom-prefilter shader.
     let post_pc_range = vk::PushConstantRange::default()
@@ -120,13 +114,19 @@ pub(super) fn build_bloom(gpu: &InitGpu<'_>, inputs: BloomInputs<'_>) -> RenderR
     // (the octave count can shift on resize) from the main pool. Sized for
     // the worst case (`MAX_BLOOM_MIPS + 1` sets per frame).
     let bloom_pool_capacity = frames as u32 * (MAX_BLOOM_MIPS + 1);
-    let bloom_pool_size = vk::DescriptorPoolSize::default()
-        .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-        .descriptor_count(bloom_pool_capacity);
+    let bloom_pool_sizes = [
+        vk::DescriptorType::SAMPLED_IMAGE,
+        vk::DescriptorType::SAMPLER,
+    ]
+    .map(|ty| {
+        vk::DescriptorPoolSize::default()
+            .ty(ty)
+            .descriptor_count(bloom_pool_capacity)
+    });
     let descriptor_pool = device
         .create_descriptor_pool(
             &vk::DescriptorPoolCreateInfo::default()
-                .pool_sizes(std::slice::from_ref(&bloom_pool_size))
+                .pool_sizes(&bloom_pool_sizes)
                 .max_sets(bloom_pool_capacity),
         )
         .map_err(|e| crate::vulkan::error::map_vk_result(e, "bloom descriptor pool"))?;
@@ -145,7 +145,7 @@ pub(super) fn build_bloom(gpu: &InitGpu<'_>, inputs: BloomInputs<'_>) -> RenderR
     // every frame's prefilter input 0 points at it.
     if let Some(view) = reflection_composite.map(|c| c.output.view) {
         for frame_sets in &input_sets {
-            rebind_bloom_input0(device, frame_sets[0], view, sampler.handle());
+            rebind_bloom_input0(device, frame_sets[0], view);
         }
     }
     Ok(BloomState {

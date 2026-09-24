@@ -40,7 +40,7 @@
 //!   [refl_composite_srv_base_slot..] (reflections) composited output + blur
 //!   [planar_resolve_srv_base_slot..] planar reflector resolves
 //!   [flat_pool_base_slot..]        bindless albedo + normal pool, per frame
-//!   [probe_cube_base_slot..]       MAX_PROBES reflection-probe cubes
+//!   [probe_cubes_srv_slot]         the reflection-probe cube array
 //!   [spot_shadow_srv_slot]         spot shadow depth array SRV (Texture2DArray)
 //!   [ltc_srv_base_slot..+2]        area-light LTC tables (matrix, magnitude)
 //!   srv_slots                      total descriptor count (heap size)
@@ -135,10 +135,9 @@ pub(in crate::directx) struct SrvHeapLayout {
     // Planar reflection resolve SRVs (one per distinct reflector plane).
     pub planar_resolve_srv_base_slot: usize,
     pub flat_pool_base_slot: usize,
-    // Contiguous MAX_PROBES-slot block of reflection-probe cube SRVs (the bindless
-    // main shader's `TextureCube probe_cubes[MAX_PROBES]` table). Filled with the sky
-    // prefilter cube at init; a baked probe overwrites its slot.
-    pub probe_cube_base_slot: usize,
+    // The reflection-probe cube array's SRV (the bindless main shader's
+    // `TextureCubeArray probe_cubes` table), one slot however many cubes it holds.
+    pub probe_cubes_srv_slot: usize,
     // Spot shadow depth array SRV. A single slot rather than one of the three
     // fixed globals: the main root signatures reach the CSM array and the IBL
     // cubes as one contiguous 3-slot table, so slots 0..3 cannot take a fourth
@@ -154,9 +153,6 @@ pub(in crate::directx) struct SrvHeapLayout {
 // The three global SRVs (shadow array, IBL irradiance, IBL prefilter) occupy
 // slots [0, 3); the first per-world block starts here.
 const GLOBAL_SRV_COUNT: usize = 3;
-
-// Reflection-probe cube array length (must equal `concinnity_core::render::uniforms::MAX_PROBES`).
-const PROBE_CUBE_COUNT: usize = concinnity_core::render::uniforms::MAX_PROBES;
 
 impl SrvHeapLayout {
     pub(in crate::directx) fn compute(p: &SrvHeapParams) -> Self {
@@ -212,12 +208,11 @@ impl SrvHeapLayout {
         // frame just fence-waited (provably unreferenced) instead of draining
         // the device to rewrite one shared region while lists reference it.
         let flat_pool_base_slot = planar_resolve_srv_base_slot + p.planar_resolve_srv_extra;
-        // Reflection-probe cube array at the heap tail (MAX_PROBES contiguous cube
-        // SRVs); a single descriptor table covers the whole block.
-        let probe_cube_base_slot = flat_pool_base_slot + FRAMES * (p.albedo_count + p.normal_count);
+        // Reflection-probe cube array at the heap tail: one SRV over every cube.
+        let probe_cubes_srv_slot = flat_pool_base_slot + FRAMES * (p.albedo_count + p.normal_count);
         // Spot shadow array SRV. Always reserved: a world with no shadowed spot
         // binds a 1x1 fallback array there so the descriptor is never unwritten.
-        let spot_shadow_srv_slot = probe_cube_base_slot + PROBE_CUBE_COUNT;
+        let spot_shadow_srv_slot = probe_cubes_srv_slot + 1;
         // Area-light LTC tables. Scene-independent (fitted at build time), so
         // they are always reserved and always uploaded.
         let ltc_srv_base_slot = spot_shadow_srv_slot + 1;
@@ -251,7 +246,7 @@ impl SrvHeapLayout {
             refl_composite_srv_base_slot,
             planar_resolve_srv_base_slot,
             flat_pool_base_slot,
-            probe_cube_base_slot,
+            probe_cubes_srv_slot,
             spot_shadow_srv_slot,
             ltc_srv_base_slot,
             srv_slots,
@@ -394,7 +389,7 @@ mod tests {
                 l.flat_pool_base_slot,
                 FRAMES * (p.albedo_count + p.normal_count),
             ),
-            (l.probe_cube_base_slot, PROBE_CUBE_COUNT),
+            (l.probe_cubes_srv_slot, 1),
             (l.spot_shadow_srv_slot, 1),
             (l.ltc_srv_base_slot, 2),
         ];

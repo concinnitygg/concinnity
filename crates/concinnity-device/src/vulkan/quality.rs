@@ -187,7 +187,6 @@ impl VkContext {
                 &self.hw.device,
                 self.frames_in_flight,
                 &hdr_views,
-                self.scene.linear_sampler.handle(),
                 self.hot_reload.enabled,
             )?;
             self.auto_exposure.resources = Some(resources);
@@ -285,16 +284,7 @@ impl VkContext {
         // reconciled `self.ssao`, rebuilds each `Some` feature's targets, and
         // re-points the bloom prefilter + composite scene input down the
         // upscale > TAA > reflection-composite > HDR priority chain.
-        self.rebuild_swapchain()?;
-
-        // `rebuild_swapchain` only re-points set-0 binding 6 inside its
-        // SSAO-present branch, so a turn-off leaves it on the just-destroyed
-        // `ao_output`. Point it back at the 1x1 white fallback. (On a turn-on it
-        // already moved to the rebuilt `ao_output`, so this is only needed off.)
-        if !desired_ssao {
-            self.rewire_ssao_white_fallback();
-        }
-        Ok(())
+        self.rebuild_swapchain()
     }
 
     // Build the RT acceleration structure + reflection pass at runtime (a live
@@ -374,8 +364,6 @@ impl VkContext {
                 hdr_resolve_views: &hdr_views,
                 gbuffer_views: &nd_views,
                 roughness_views: &rough_views,
-                prefilter_view: self.scene.env_map.prefilter.view,
-                cube_sampler: self.scene.cube_sampler.handle(),
             },
             super::post::rt_reflections::RtAccelHandles {
                 tlas: accel.tlas(),
@@ -387,7 +375,6 @@ impl VkContext {
             super::post::rt_reflections::RtLayoutConfig {
                 bindless_set_layout: self.cull.bindless_set_layout.as_ref().map(|l| l.handle()),
                 global_set_layout: self.descriptors.global_set_layout.handle(),
-                probe_cube_count: self.descriptors.probe_cube_count,
                 pool_size: bindless_pool_size,
                 hot_reload: self.hot_reload.enabled,
             },
@@ -403,36 +390,5 @@ impl VkContext {
         self.rt.accel = Some(accel);
         self.rt_reflections = Some(rt);
         Ok(())
-    }
-
-    // Point set-0 binding 6 (the SSAO occlusion input) at the per-frame pooled
-    // `ao_output` when present, else the 1x1 white fallback, on every global
-    // set. Used after a live SSAO toggle-off, where the transient pool no longer
-    // holds `ao_output` and the main pass's `ambient *= ao` must collapse to a
-    // pass-through 1.0. Mirrors the rewire in `rebuild_swapchain`'s SSAO branch.
-    fn rewire_ssao_white_fallback(&self) {
-        for (i, &set) in self.descriptors.global_sets.iter().enumerate() {
-            let ao_view = self
-                .targets
-                .transient_pool
-                .view_for("ao_output", i)
-                .unwrap_or(self.scene.ssao_white.view);
-            let info = vk::DescriptorImageInfo::default()
-                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(ao_view)
-                .sampler(self.scene.linear_sampler.handle());
-            let write = vk::WriteDescriptorSet::default()
-                .dst_set(set)
-                .dst_binding(6)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(std::slice::from_ref(&info));
-            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-            // every set and resource it names belongs to this device.
-            unsafe {
-                self.hw
-                    .device
-                    .update_descriptor_sets(std::slice::from_ref(&write), &[])
-            };
-        }
     }
 }

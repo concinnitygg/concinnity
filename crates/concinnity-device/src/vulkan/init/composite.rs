@@ -13,8 +13,13 @@ use crate::vulkan::owned::OwnedSampler;
 use crate::vulkan::pipeline::{compile_composite_shaders, create_composite_pipeline};
 use crate::vulkan::post::reflection_composite::ReflectionCompositeResources;
 use crate::vulkan::render_pass::create_composite_render_pass;
-use crate::vulkan::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
+use crate::vulkan::resources::{
+    alloc_descriptor_sets, create_descriptor_set_layout, source_set_bindings, write_samplers,
+};
 use crate::vulkan::swapchain::{create_composite_framebuffers, write_composite_set};
+
+// Sources the composite fragment samples, each through a sampler of its own.
+const COMPOSITE_SOURCES: u32 = 6;
 
 pub(super) struct CompositeInputs<'a> {
     pub(super) swapchain: &'a SwapchainState,
@@ -56,19 +61,9 @@ pub(super) fn build_composite(
     // Composite set (set 0 for composite pass): HDR resolve image at
     // binding 0, bloom mip 0 at binding 1, the 3D color LUT at binding 2,
     // then the G-buffer channels the debug view modes visualize (3 =
-    // normal+depth, 4 = roughness, 5 = SSAO occlusion).
-    let set_layout = create_descriptor_set_layout(
-        device,
-        &(0..6)
-            .map(|b| {
-                (
-                    b,
-                    vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                    vk::ShaderStageFlags::FRAGMENT,
-                )
-            })
-            .collect::<Vec<_>>(),
-    )?;
+    // normal+depth, 4 = roughness, 5 = SSAO occlusion), and each source's
+    // sampler at binding 6 + its own.
+    let set_layout = create_descriptor_set_layout(device, &source_set_bindings(COMPOSITE_SOURCES))?;
     // The composite shader reads the post-process tunables plus the scene fade,
     // so its push constant covers the wider `CompositeParams`.
     let composite_pc_range = vk::PushConstantRange::default()
@@ -119,7 +114,12 @@ pub(super) fn build_composite(
             scene_view,
             bloom.mips[i][0].view,
             scene.color_lut.view,
-            sampler.handle(),
+        );
+        write_samplers(
+            device,
+            set,
+            COMPOSITE_SOURCES,
+            &[sampler.handle(); COMPOSITE_SOURCES as usize],
         );
     }
     Ok(CompositeState {

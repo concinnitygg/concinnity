@@ -8,7 +8,9 @@ use concinnity_core::render::error::RenderResult;
 use super::InitGpu;
 use crate::vulkan::context::{CompositeState, TextState, VkDescriptors};
 use crate::vulkan::pipeline::{compile_text_shaders, create_text_pipeline};
-use crate::vulkan::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
+use crate::vulkan::resources::{
+    alloc_descriptor_sets, create_descriptor_set_layout, source_set_bindings, write_source_set,
+};
 use crate::vulkan::texture::{create_sampler_linear_clamp, upload_texture};
 use crate::vulkan::upload_ring::UploadRing;
 
@@ -35,15 +37,8 @@ pub(super) fn build_text(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let sampler = create_sampler_linear_clamp(device)?;
-    // Text set (set 0 for text pass): atlas sampler.
-    let set_layout = create_descriptor_set_layout(
-        device,
-        &[(
-            0,
-            vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-            vk::ShaderStageFlags::FRAGMENT,
-        )],
-    )?;
+    // Text set (set 0 for text pass): the atlas and its sampler.
+    let set_layout = create_descriptor_set_layout(device, &source_set_bindings(1))?;
     let text_pc_range = vk::PushConstantRange::default()
         .stage_flags(vk::ShaderStageFlags::VERTEX)
         .offset(0)
@@ -86,18 +81,7 @@ pub(super) fn build_text(
             &text_atlas_layouts,
         )?;
         for (&set, atlas) in sets.iter().zip(atlas_textures.iter()) {
-            let img_info = vk::DescriptorImageInfo::default()
-                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(atlas.view)
-                .sampler(sampler.handle());
-            let write = vk::WriteDescriptorSet::default()
-                .dst_set(set)
-                .dst_binding(0)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(std::slice::from_ref(&img_info));
-            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-            // every set and resource it names belongs to this device.
-            unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
+            write_source_set(device, set, &[(atlas.view, sampler.handle())]);
         }
         sets
     };

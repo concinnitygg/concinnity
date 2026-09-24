@@ -470,7 +470,7 @@ pub(crate) const IMPORT_EXTENSION_GROUPS: &[(&str, &[&str])] = &[
     ("Environment maps", &["hdr"]),
     ("Audio", &["ogg", "wav", "mp3", "flac"]),
     ("Fonts", &["ttf", "otf"]),
-    ("Shaders", &["slang"]),
+    ("Shaders", &["hlsl"]),
     ("Models & data", &["obj", "mtl", "json", "gguf"]),
 ];
 
@@ -505,11 +505,11 @@ pub(crate) fn entry_from_path(path_str: &str) -> std::io::Result<Vec<serde_json:
     }
 
     match ext.as_str() {
-        // Slang: a distance field (defines `map`) becomes an SdfVolume, any
-        // other file a Shader whose surface hook it defines.
-        "slang" => {
+        // A shader source: a distance field (defines `map`) becomes an
+        // SdfVolume, any other file a Shader whose surface hook it defines.
+        "hlsl" => {
             let source = read_source_file(path_str)?;
-            slang_entry(&stem, path_str, &source)
+            shader_entry(&stem, path_str, &source)
         }
 
         // Fonts: stem only, no extension suffix needed, font names won't conflict with shaders
@@ -626,10 +626,10 @@ fn environment_map_entry(stem: &str, path_str: &str) -> std::io::Result<serde_js
     )
 }
 
-// One entry from a `.slang` file: an SdfVolume named "{stem}_volume" when the
+// One entry from a shader source: an SdfVolume named "{stem}_volume" when the
 // file defines a distance field, else a fragment-only Shader named
 // "{stem}_shader". A Shader's optional vertex file is declared by hand.
-fn slang_entry(
+fn shader_entry(
     stem: &str,
     path_str: &str,
     source: &str,
@@ -648,7 +648,7 @@ fn slang_entry(
     )?])
 }
 
-// Whether a `.slang` file is an SdfVolume's distance field: it defines `map`,
+// Whether a shader source is an SdfVolume's distance field: it defines `map`,
 // which a surface Shader never does.
 pub(crate) fn defines_distance_field(source: &str) -> bool {
     source.lines().any(|l| {
@@ -877,21 +877,37 @@ fn entry_from_type_name(type_str: &str) -> std::io::Result<serde_json::Value> {
 mod tests {
     use super::*;
 
-    // slang_entry
+    // shader_entry
 
     #[test]
     fn a_surface_file_becomes_a_fragment_only_shader() {
-        let entries = slang_entry(
+        let entries = shader_entry(
             "water",
-            "shaders/water.slang",
-            "float4 shade(VertexOut in, GpuObjectData od) { return 1.0; }",
+            "shaders/water.hlsl",
+            "float4 shade(VertexOut v, GpuObjectData od) { return 1.0; }",
         )
         .unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0]["args"]["$id"], "water_shader");
         assert_eq!(entries[0]["type"], "Shader");
-        assert_eq!(entries[0]["args"]["fragment"], "shaders/water.slang");
+        assert_eq!(entries[0]["args"]["fragment"], "shaders/water.hlsl");
         assert!(entries[0]["args"].get("vertex").is_none_or(|v| v.is_null()));
+    }
+
+    // An `.hlsl` file dispatches on what it defines: a distance field becomes
+    // an SdfVolume.
+    #[test]
+    fn an_hlsl_distance_field_resolves_to_an_sdf_volume() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("blob.hlsl");
+        std::fs::write(
+            &path,
+            "float map(float3 p, SdfParams q, float t) { return 1.0; }",
+        )
+        .unwrap();
+        let entries = entry_from_path(&path.to_string_lossy()).unwrap();
+        assert_eq!(entries[0]["type"], "SdfVolume");
+        assert_eq!(entries[0]["args"]["$id"], "blob_volume");
     }
 
     #[test]
@@ -902,12 +918,12 @@ mod tests {
             "  float map (float3 p, SdfParams q, float t)"
         ));
         assert!(!defines_distance_field(
-            "float4 shade(VertexOut in, GpuObjectData od)"
+            "float4 shade(VertexOut v, GpuObjectData od)"
         ));
-        let entries = slang_entry("blob", "shaders/blob.slang", src).unwrap();
+        let entries = shader_entry("blob", "shaders/blob.hlsl", src).unwrap();
         assert_eq!(entries[0]["args"]["$id"], "blob_volume");
         assert_eq!(entries[0]["type"], "SdfVolume");
-        assert_eq!(entries[0]["args"]["fragment_shader"], "shaders/blob.slang");
+        assert_eq!(entries[0]["args"]["fragment_shader"], "shaders/blob.hlsl");
     }
 
     // font stem naming

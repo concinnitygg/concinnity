@@ -11,17 +11,16 @@ use concinnity_core::render::error::{RenderError, RenderResult};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTLBlendFactor, MTLCommandBuffer as _, MTLCommandEncoder as _, MTLDevice as _, MTLLibrary as _,
+    MTLBlendFactor, MTLCommandBuffer as _, MTLCommandEncoder as _, MTLDevice as _, MTLFunction,
     MTLLoadAction, MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder as _,
     MTLRenderPassDescriptor, MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLStoreAction,
     MTLTexture,
 };
 
+use crate::metal::builtin_shaders::{FULLSCREEN_VERT, ShaderProgram, entry_function};
 use crate::metal::context::MtlContext;
 use crate::metal::encode::RenderEncode;
 use crate::metal::pass_timing::PassId;
-use crate::metal::pipeline::ns_str;
-use crate::metal::slang_builtins::{FULLSCREEN_VERT, SlangLib};
 
 // Blend configuration for a fullscreen pass's single color attachment.
 #[derive(Clone, Copy)]
@@ -40,44 +39,21 @@ pub(crate) enum FullscreenBlend {
     PremultipliedOver,
 }
 
-// The two stages of a fullscreen pass, each with the library it comes from. The
-// single-source passes take their vertex from one shared `fullscreen.slang`
-// library and their fragment from the effect's own, so the pair cannot be named
-// by one library plus two function names.
-pub(crate) struct FullscreenStages<'a> {
-    pub vertex_library: &'a ProtocolObject<dyn objc2_metal::MTLLibrary>,
-    pub vertex_name: &'a str,
-    pub fragment_library: &'a ProtocolObject<dyn objc2_metal::MTLLibrary>,
-    pub fragment_name: &'a str,
-}
-
 // Build a render pipeline state for a fullscreen-triangle post pass: the two
-// named functions from their libraries, a single color attachment at `format`
-// with the requested `blend`, single-sample, no vertex descriptor, no depth. The
-// pipeline-create error is tagged with the fragment name so a failure points at
-// the exact entry point.
-pub(crate) fn build_fullscreen_pipeline_split(
+// stage functions, a single color attachment at `format` with the requested
+// `blend`, single-sample, no vertex descriptor, no depth. `label` names the
+// fragment in a pipeline-create error.
+fn build_fullscreen_pipeline_from(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
-    stages: FullscreenStages,
+    vert_fn: &ProtocolObject<dyn MTLFunction>,
+    frag_fn: &ProtocolObject<dyn MTLFunction>,
+    label: &str,
     format: MTLPixelFormat,
     blend: FullscreenBlend,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    let FullscreenStages {
-        vertex_library,
-        vertex_name,
-        fragment_library,
-        fragment_name,
-    } = stages;
-    let vert_fn = vertex_library
-        .newFunctionWithName(&ns_str(vertex_name))
-        .ok_or_else(|| RenderError::ShaderCompile(format!("{vertex_name} not found")))?;
-    let frag_fn = fragment_library
-        .newFunctionWithName(&ns_str(fragment_name))
-        .ok_or_else(|| RenderError::ShaderCompile(format!("{fragment_name} not found")))?;
-
     let desc = MTLRenderPipelineDescriptor::new();
-    desc.setVertexFunction(Some(&vert_fn));
-    desc.setFragmentFunction(Some(&frag_fn));
+    desc.setVertexFunction(Some(vert_fn));
+    desc.setFragmentFunction(Some(frag_fn));
     desc.setRasterSampleCount(1);
     // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
     // declares.
@@ -105,39 +81,28 @@ pub(crate) fn build_fullscreen_pipeline_split(
 
     device
         .newRenderPipelineStateWithDescriptor_error(&desc)
-        .map_err(|e| RenderError::ShaderCompile(format!("{fragment_name} pipeline: {e:?}")))
+        .map_err(|e| RenderError::ShaderCompile(format!("{label} pipeline: {e:?}")))
 }
 
 // Build a fullscreen-triangle pipeline whose fragment comes from a
-// single-source `.slang` program, paired with the one shared
-// `fullscreen_vertex`. The two stages come from separate libraries because a
-// fragment variant declares only the resources it binds, so each variant is its
-// own metallib while the vertex is compiled once for all of them.
-pub(in crate::metal) fn build_slang_fullscreen_pipeline(
+// single-source program, paired with the shared `fullscreen_vertex`. The two
+// stages come from separate libraries because a fragment variant declares only
+// the resources it binds, so each variant is its own metallib while the vertex
+// is compiled once for all of them.
+pub(in crate::metal) fn build_fullscreen_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
-    fragment: &SlangLib,
+    fragment: &ShaderProgram,
     format: MTLPixelFormat,
     blend: FullscreenBlend,
     hot_reload: bool,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    let vert = FULLSCREEN_VERT.library(device, hot_reload)?;
-    let frag = fragment.library(device, hot_reload)?;
-    build_fullscreen_pipeline_split(
-        device,
-        FullscreenStages {
-            vertex_library: &vert,
-            vertex_name: "fullscreen_vertex",
-            fragment_library: &frag,
-            fragment_name: fragment.entries[0],
-        },
-        format,
-        blend,
-    )
+    let vert_fn = entry_function(device, &FULLSCREEN_VERT, hot_reload)?;
+    let frag_fn = entry_function(device, fragment, hot_reload)?;
+    build_fullscreen_pipeline_from(device, &vert_fn, &frag_fn, fragment.label, format, blend)
 }
 
-// Bind `sampler` to fragment sampler slots `first..first + count`. The
-// single-source post passes declare their inputs as combined texture-samplers,
-// which slangc lowers to a texture and a sampler at the same index, so a pass
+// Bind `sampler` to fragment sampler slots `first..first + count`. A post
+// pass's source occupies a texture and a sampler at the same index, so a pass
 // sampling N textures through one sampler state binds it N times. A pass that
 // samples through two sampler states (SSR: the screen sources through one, the
 // cubemaps through another) calls this once per contiguous run.

@@ -1,16 +1,16 @@
 //! The convolution half of a runtime reflection-probe bake on DirectX: the three
-//! compute PSOs built from `probe_prefilter.slang`, their root signatures, the two
-//! cube resources one bake works between, and the dispatches that turn six
-//! captured faces into the prefiltered radiance cube the specular term samples.
+//! compute PSOs built from `probe_prefilter.hlsl`, their root signatures, the
+//! capture cube one bake works from, and the dispatches that turn six captured
+//! faces into the prefiltered radiance cube the specular term samples.
 //! Mirrors `metal::probe_prefilter` and `vulkan::probe_prefilter`.
 //!
 //! The capture cube collects the six rendered faces (one array slice each) and
-//! carries a mip chain the `probe_downsample` kernel fills; the probe cube is the
-//! result, mip 0 a firefly-clamped copy of the capture and every mip after it a
-//! GGX convolution at that mip's roughness. Both are R16G16B16A16_FLOAT: the faces
-//! are rendered as halfs, the clamp caps luminance well inside the format's range,
-//! and it halves what a probe costs against the R32G32B32A32 cube the CPU
-//! convolution used to upload.
+//! carries a mip chain the `probe_downsample` kernel fills; the probe cube is
+//! the result, one cube of the probe cube array: mip 0 a firefly-clamped copy
+//! of the capture and every mip after it a GGX convolution at that mip's
+//! roughness. Both are R16G16B16A16_FLOAT: the faces are rendered as halfs, the
+//! clamp caps luminance well inside the format's range, and it halves what a
+//! probe costs against an R32G32B32A32 cube.
 //!
 //! Nothing reads back. The whole convolution stays on the direct queue, so the
 //! frames that sample the finished cube are ordered after the dispatches that
@@ -19,8 +19,9 @@
 //! Resource states, which the barriers below are the whole of: the capture arrives
 //! in COPY_DEST (the per-face copies write it), moves to UNORDERED_ACCESS for the
 //! pyramid build, then to NON_PIXEL_SHADER_RESOURCE for the GGX dispatches that
-//! sample it. The probe cube sits in UNORDERED_ACCESS for every dispatch that
-//! writes it and moves to PIXEL_SHADER_RESOURCE at install.
+//! sample it. The probe's cube of the array moves from PIXEL_SHADER_RESOURCE to
+//! UNORDERED_ACCESS for the dispatches that write it and back after the last one,
+//! one subresource at a time, so the cubes other frames sample never move.
 
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::reflection_probe::PrefilterPlan;
@@ -28,16 +29,17 @@ use concinnity_core::render::uniforms::ProbePrefilterParams;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
+use super::builtin_shaders::CompileProgram;
 use super::com;
 use super::context::DxContext;
-use super::error::{map_hresult, map_pso_hresult};
+use super::error::map_pso_hresult;
 use super::pipeline::serialize_desc_and_create;
-use super::slang_builtins::SlangCompile;
+use super::probe_set::{CubeResource, create_cube_resource, write_cube_mip_uav};
 use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::root_constants::{RootConstants, root_dwords};
 
-/// Color format of both cubes.
+/// Color format of the capture and the probe cube array.
 pub(in crate::directx) const PROBE_CUBE_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
 /// Upper bound on a probe cube's mip count, sizing the descriptor block the SRV
@@ -84,25 +86,25 @@ pub(in crate::directx) fn typed_uav_load_supported(device: &ID3D12Device) -> boo
 
 impl ProbePrefilterPipelines {
     pub(in crate::directx) fn new(device: &ID3D12Device, hot_reload: bool) -> RenderResult<Self> {
-        use super::slang_builtins;
+        use super::builtin_shaders;
         let mip_root = create_mip_root_signature(device)?;
         let ggx_root = create_ggx_root_signature(device)?;
         let mip0 = create_pso(
             device,
             &mip_root,
-            &slang_builtins::PROBE_MIP0.compile(hot_reload)?,
+            &builtin_shaders::PROBE_MIP0.compile(hot_reload)?,
             "probe_mip0",
         )?;
         let downsample = create_pso(
             device,
             &mip_root,
-            &slang_builtins::PROBE_DOWNSAMPLE.compile(hot_reload)?,
+            &builtin_shaders::PROBE_DOWNSAMPLE.compile(hot_reload)?,
             "probe_downsample",
         )?;
         let ggx = create_pso(
             device,
             &ggx_root,
-            &slang_builtins::PROBE_GGX.compile(hot_reload)?,
+            &builtin_shaders::PROBE_GGX.compile(hot_reload)?,
             "probe_ggx",
         )?;
         Ok(Self {
@@ -115,8 +117,8 @@ impl ProbePrefilterPipelines {
     }
 }
 
-/// The two cube resources one bake convolves between. Their descriptors live in
-/// the SRV heap's reserved probe-prefilter block, which [`PrefilterGpu::new`]
+/// One bake's capture cube and the probe-array cube it convolves into. Their
+/// descriptors live in the SRV heap's reserved probe-prefilter block, which [`PrefilterGpu::new`]
 /// rewrites for each bake. One block for every bake is what serializes them on
 /// this backend: `bake_pending_probes` starts a capture only once the prefiltering
 /// slot is empty, and the install that empties it is gated on the fence covering
@@ -124,17 +126,20 @@ impl ProbePrefilterPipelines {
 /// it is rewritten.
 pub(in crate::directx) struct PrefilterGpu {
     capture: ID3D12Resource,
-    probe: ID3D12Resource,
+    // The cube of the probe cube array the convolution writes.
+    cube: usize,
     mips: u32,
 }
 
 impl PrefilterGpu {
-    /// Allocate both cubes and write every descriptor the bake's dispatches bind.
-    /// The capture starts in COPY_DEST so the per-face copies can write it, the
-    /// probe cube in UNORDERED_ACCESS so the first dispatch can.
+    /// Allocate the capture and write every descriptor the bake's dispatches
+    /// bind, writing into cube `cube` of `cubes`. The capture starts in COPY_DEST
+    /// so the per-face copies can write it.
     pub(in crate::directx) fn new(
         ctx: &DxContext,
         plan: &PrefilterPlan,
+        cubes: &super::probe_set::ProbeCubeArray,
+        cube: usize,
     ) -> RenderResult<PrefilterGpu> {
         let mips = plan.mips();
         if mips as usize > PROBE_MAX_MIPS {
@@ -142,19 +147,20 @@ impl PrefilterGpu {
                 "probe: {mips} mips exceeds the {PROBE_MAX_MIPS} descriptors reserved for one bake"
             )));
         }
-        let capture = create_cube(
+        if cube >= cubes.capacity() || cubes.mips() != mips {
+            return Err(RenderError::Other(format!(
+                "probe: the cube array has no cube {cube} at {mips} mips"
+            )));
+        }
+        let capture = create_cube_resource(
             &ctx.hw.device,
-            plan.face_size(),
-            mips,
-            D3D12_RESOURCE_STATE_COPY_DEST,
-            "probe capture cube",
-        )?;
-        let probe = create_cube(
-            &ctx.hw.device,
-            plan.face_size(),
-            mips,
-            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-            "probe cube",
+            CubeResource {
+                face_size: plan.face_size(),
+                mips,
+                cubes: 1,
+                state: D3D12_RESOURCE_STATE_COPY_DEST,
+                label: "probe capture cube",
+            },
         )?;
 
         let device = &ctx.hw.device;
@@ -164,12 +170,13 @@ impl PrefilterGpu {
             write_cube_mip_uav(
                 device,
                 &capture,
+                0,
                 mip,
                 cpu_slot(ctx, d.layout.probe_capture_uav_base_slot + mip as usize),
             );
-            write_cube_mip_uav(
+            cubes.write_mip_uav(
                 device,
-                &probe,
+                cube,
                 mip,
                 cpu_slot(ctx, d.layout.probe_cube_uav_base_slot + mip as usize),
             );
@@ -180,18 +187,19 @@ impl PrefilterGpu {
             device,
             &capture,
             0,
+            0,
             cpu_slot(ctx, d.layout.probe_mip0_pair_slot),
         );
-        write_cube_mip_uav(
+        cubes.write_mip_uav(
             device,
-            &probe,
+            cube,
             0,
             cpu_slot(ctx, d.layout.probe_mip0_pair_slot + 1),
         );
 
         Ok(PrefilterGpu {
             capture,
-            probe,
+            cube,
             mips,
         })
     }
@@ -201,20 +209,14 @@ impl PrefilterGpu {
         &self.capture
     }
 
-    /// The probe cube being written.
-    pub(in crate::directx) fn probe(&self) -> &ID3D12Resource {
-        &self.probe
+    /// The cube of the probe cube array being written.
+    pub(in crate::directx) fn cube(&self) -> usize {
+        self.cube
     }
 
-    /// Mip levels both cubes carry.
+    /// Mip levels the capture carries, which the face copies address it by.
     pub(in crate::directx) fn mips(&self) -> u32 {
         self.mips
-    }
-
-    /// The finished cube, handed to the probe pool at install. The capture drops
-    /// with the rest of `self`.
-    pub(in crate::directx) fn into_probe_cube(self) -> ID3D12Resource {
-        self.probe
     }
 }
 
@@ -225,10 +227,11 @@ impl DxContext {
     }
 
     /// Record the cheap half of the convolution: the capture moves from the
-    /// per-face copies' COPY_DEST into UNORDERED_ACCESS, the mirror mip is copied
-    /// through with the firefly clamp, the source pyramid is reduced level by
-    /// level, and the capture ends in NON_PIXEL_SHADER_RESOURCE for the GGX
-    /// dispatches that follow.
+    /// per-face copies' COPY_DEST into UNORDERED_ACCESS and the probe's cube of
+    /// the array into UNORDERED_ACCESS too, the mirror mip is copied through with
+    /// the firefly clamp, the source pyramid is reduced level by level, and the
+    /// capture ends in NON_PIXEL_SHADER_RESOURCE for the GGX dispatches that
+    /// follow.
     ///
     /// All of it goes in one command list: the reductions are a few taps per texel
     /// and each depends on the one before, so spreading them over frames would only
@@ -243,14 +246,20 @@ impl DxContext {
             self.probe.prefilter.as_ref().ok_or_else(|| {
                 RenderError::Other("probe: prefilter pipelines missing".to_string())
             })?;
+        let mut barriers = vec![super::texture::transition_barrier(
+            gpu.capture(),
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        )];
+        barriers.extend(self.probe.gpu.bound_cubes().cube_barriers(
+            gpu.cube(),
+            super::probe_set::PROBE_CUBES_STATE,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        ));
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {
-            cmd.ResourceBarrier(&[super::texture::transition_barrier(
-                gpu.capture(),
-                D3D12_RESOURCE_STATE_COPY_DEST,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-            )]);
+            cmd.ResourceBarrier(&barriers);
             cmd.SetComputeRootSignature(&pipelines.mip_root);
         }
         let d = &self.descriptors;
@@ -466,52 +475,6 @@ fn create_pso(
         .map_err(|e| map_pso_hresult(e.code(), &format!("create {label} PSO")))
 }
 
-// A cube resource: six array slices, `mips` levels, UAV + SRV capable. Committed
-// rather than pooled: the suballocator refuses GPU-written descs, because a placed
-// resource needs re-initializing every time it claims memory and the pool does not
-// do that.
-fn create_cube(
-    device: &ID3D12Device,
-    face_size: u32,
-    mips: u32,
-    state: D3D12_RESOURCE_STATES,
-    label: &str,
-) -> RenderResult<ID3D12Resource> {
-    let desc = D3D12_RESOURCE_DESC {
-        Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-        Width: face_size as u64,
-        Height: face_size,
-        DepthOrArraySize: 6,
-        MipLevels: mips as u16,
-        Format: PROBE_CUBE_FORMAT,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        Flags: D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
-        ..Default::default()
-    };
-    let heap_props = D3D12_HEAP_PROPERTIES {
-        Type: D3D12_HEAP_TYPE_DEFAULT,
-        ..Default::default()
-    };
-    let mut cube: Option<ID3D12Resource> = None;
-    // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
-    // COM object lands in a binding that owns it.
-    unsafe {
-        device.CreateCommittedResource(
-            &heap_props,
-            D3D12_HEAP_FLAG_NONE,
-            &desc,
-            state,
-            None,
-            &mut cube,
-        )
-    }
-    .map_err(|e| map_hresult(e.code(), &format!("create {label}")))?;
-    cube.ok_or_else(|| RenderError::Other(format!("create {label} returned None")))
-}
-
 // All-mips TEXTURECUBE SRV, the shape a sampler reads.
 fn write_cube_srv(
     device: &ID3D12Device,
@@ -534,31 +497,6 @@ fn write_cube_srv(
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe { device.CreateShaderResourceView(resource, Some(&desc), srv_cpu) };
-}
-
-// Single-mip TEXTURE2DARRAY UAV over all six faces. A cube is a six-slice array,
-// so this is what lets a kernel address (x, y, face) directly.
-fn write_cube_mip_uav(
-    device: &ID3D12Device,
-    resource: &ID3D12Resource,
-    mip: u32,
-    uav_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-) {
-    let desc = D3D12_UNORDERED_ACCESS_VIEW_DESC {
-        Format: PROBE_CUBE_FORMAT,
-        ViewDimension: D3D12_UAV_DIMENSION_TEXTURE2DARRAY,
-        Anonymous: D3D12_UNORDERED_ACCESS_VIEW_DESC_0 {
-            Texture2DArray: D3D12_TEX2D_ARRAY_UAV {
-                MipSlice: mip,
-                FirstArraySlice: 0,
-                ArraySize: 6,
-                PlaneSlice: 0,
-            },
-        },
-    };
-    // SAFETY: the view descriptor and the resource it names are live for the call, and the
-    // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe { device.CreateUnorderedAccessView(resource, None, Some(&desc), uav_cpu) };
 }
 
 // Order one dispatch's writes to `resource` before the next dispatch's reads.

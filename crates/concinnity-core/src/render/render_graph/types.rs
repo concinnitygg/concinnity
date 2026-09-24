@@ -188,7 +188,7 @@ pub enum GraphResourceClass {
     /// execution + memory dependency.
     IndirectBuffer,
     /// Compute-written, shader-read buffer (e.g. the clustered-lighting
-    /// `cluster_light_list`). Like `IndirectBuffer` it has no layout; its read side
+    /// `cluster_lists`). Like `IndirectBuffer` it has no layout; its read side
     /// follows the consuming stage union, so it reads as a shader resource.
     StorageBuffer,
     /// Buffer both written and read through an unordered-access view (e.g. the

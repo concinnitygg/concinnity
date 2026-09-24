@@ -18,12 +18,12 @@ use concinnity_core::render::error::RenderResult;
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
 use super::pipeline::GraphicsStages;
+use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
     OwnedSetLayout, VkDevice,
 };
 use crate::vulkan::record::Recorder;
-use crate::vulkan::slang_builtins::SlangCompile;
 
 // How much of a line still shows where scene geometry is in front of it. A
 // faint trace keeps the lines readable inside a dense scene without letting
@@ -71,7 +71,7 @@ struct VertexSlot {
 // Line-pass descriptor sets are a single per-frame set:
 //   * **set 0** (per-frame, FRAMES sets):
 //       - binding 0: UNIFORM_BUFFER, `LineView`
-//       - binding 1: COMBINED_IMAGE_SAMPLER, main depth view
+//       - binding 1: SAMPLED_IMAGE, main depth view (read by texel)
 pub(in crate::vulkan) struct LineResources {
     render_pass: OwnedRenderPass,
     pub(in crate::vulkan) pipeline: OwnedPipeline,
@@ -91,8 +91,6 @@ pub(in crate::vulkan) struct LineResources {
     // One framebuffer per frame-in-flight slot, each binding its frame slot's
     // `hdr_resolve_images[i].view` as the sole color attachment.
     framebuffers: Vec<OwnedFramebuffer>,
-
-    sampler: vk::Sampler,
 }
 
 // Vulkan handles needed to create the line pass's GPU resources. Borrowed for
@@ -104,14 +102,13 @@ pub(in crate::vulkan) struct LineDeviceContext<'a> {
 }
 
 // Render-target inputs the line pass writes into / samples from: the resolved
-// HDR color attachment (format + per-frame views), the main depth views, the
-// shared sampler, and the framebuffer extent.
+// HDR color attachment (format + per-frame views), the main depth views, and
+// the framebuffer extent.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct LinePassTargets<'a> {
     pub(in crate::vulkan) hdr_format: vk::Format,
     pub(in crate::vulkan) hdr_resolve_views: &'a [vk::ImageView],
     pub(in crate::vulkan) depth_views: &'a [vk::ImageView],
-    pub(in crate::vulkan) sampler: vk::Sampler,
     pub(in crate::vulkan) extent: vk::Extent2D,
 }
 
@@ -128,7 +125,6 @@ impl LineResources {
             hdr_format,
             hdr_resolve_views,
             depth_views,
-            sampler,
             extent,
         } = targets;
         let render_pass = create_line_render_pass(device, hdr_format)?;
@@ -171,7 +167,6 @@ impl LineResources {
                 set,
                 view_ubos[i].buffer(),
                 depth_views[i.min(depth_views.len().saturating_sub(1))],
-                sampler,
             );
         }
 
@@ -195,13 +190,12 @@ impl LineResources {
             vertex_slots,
             view_sets,
             framebuffers,
-            sampler,
         })
     }
 
     // Rebuild the framebuffers + re-point the per-frame view set's depth
     // binding after a swapchain resize. Same pattern as `DecalResources`; the
-    // pipeline, layouts, buffers, and sampler all survive.
+    // pipeline, layouts and buffers all survive.
     pub(in crate::vulkan) fn rebuild(
         &mut self,
         device: &VkDevice,
@@ -221,12 +215,11 @@ impl LineResources {
         for (i, &set) in self.view_sets.iter().enumerate() {
             let depth_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(depth_views[i.min(depth_views.len().saturating_sub(1))])
-                .sampler(self.sampler);
+                .image_view(depth_views[i.min(depth_views.len().saturating_sub(1))]);
             let write = vk::WriteDescriptorSet::default()
                 .dst_set(set)
                 .dst_binding(1)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                 .image_info(std::slice::from_ref(&depth_info));
             // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
             // every set and resource it names belongs to this device.
@@ -344,7 +337,7 @@ fn create_line_set_layout(device: &VkDevice) -> RenderResult<OwnedSetLayout> {
             .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
         vk::DescriptorSetLayoutBinding::default()
             .binding(1)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::FRAGMENT),
     ];
@@ -376,7 +369,7 @@ fn create_line_descriptor_pool(
             descriptor_count: frames,
         },
         vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+            ty: vk::DescriptorType::SAMPLED_IMAGE,
             descriptor_count: frames,
         },
     ];
@@ -393,7 +386,6 @@ fn write_view_set(
     set: vk::DescriptorSet,
     view_ubo: vk::Buffer,
     depth_view: vk::ImageView,
-    sampler: vk::Sampler,
 ) {
     let view_info = vk::DescriptorBufferInfo::default()
         .buffer(view_ubo)
@@ -401,8 +393,7 @@ fn write_view_set(
         .range(std::mem::size_of::<LineView>() as u64);
     let depth_info = vk::DescriptorImageInfo::default()
         .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .image_view(depth_view)
-        .sampler(sampler);
+        .image_view(depth_view);
     let writes = [
         vk::WriteDescriptorSet::default()
             .dst_set(set)
@@ -412,7 +403,7 @@ fn write_view_set(
         vk::WriteDescriptorSet::default()
             .dst_set(set)
             .dst_binding(1)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
             .image_info(std::slice::from_ref(&depth_info)),
     ];
     // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
@@ -421,12 +412,10 @@ fn write_view_set(
 }
 
 fn compile_line_shaders(hot_reload: bool, msaa: bool) -> RenderResult<(Vec<u8>, Vec<u8>)> {
-    let ctx = super::slang_builtins::Ctx {
-        msaa,
-        ..super::slang_builtins::Ctx::plain(hot_reload)
-    };
-    let vert = super::slang_builtins::LINE_VERT.compile(&ctx)?;
-    let frag = super::slang_builtins::LINE_FRAG.compile(&ctx)?;
+    let vert = super::builtin_shaders::LINE_VERT.compile(hot_reload)?;
+    let frag = super::builtin_shaders::LINE_FRAG
+        .at(msaa)
+        .compile(hot_reload)?;
     Ok((vert, frag))
 }
 
@@ -575,7 +564,6 @@ impl VkContext {
                     hdr_format: super::context::HDR_FORMAT,
                     hdr_resolve_views: &hdr_resolve_views,
                     depth_views: &depth_views,
-                    sampler: self.scene.linear_sampler.handle(),
                     extent: self.targets.render_extent,
                 },
                 self.frames_in_flight,

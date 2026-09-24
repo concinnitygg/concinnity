@@ -151,8 +151,8 @@ impl MtlContext {
     // Single-sources the decision the way `DxContext::rt_transparent_active` does,
     // and for the same reason: a producer whose RT metallib failed to build falls
     // back to its probe / planar path, so the planar gate has to keep the mirror
-    // re-render alive for it. `slangc` rejecting `TraceRayInline` on the Metal
-    // target is exactly that failure, and it is not hypothetical.
+    // re-render alive for it. A device whose Metal compiler rejects the ray
+    // query is exactly that failure.
     pub(in crate::metal) fn rt_transparent_active(&self) -> bool {
         let water_ready = self.water.pipeline.is_none() || self.water.pipeline_rt.is_some();
         let glass_ready = self.glass.pipeline.is_none() || self.glass.pipeline_rt.is_some();
@@ -174,16 +174,27 @@ impl MtlContext {
         enc.set_fragment_value(inputs.view, 5);
 
         // Reflection sources shared by every transparent shader that samples
-        // them (glass + water): the sky prefilter cube at texture(2), the local
-        // reflection-probe cubes through their argument buffer, the cube
-        // sampler at sampler(1), and the probe set (parallax boxes + count) at
-        // fragment buffer(7). Frame-constant, so bound once before the draw
-        // loop; a probe count of 0 keeps the sky-only fallback. The per-draw
-        // bindings never touch these slots, so the state persists.
+        // them (glass + water): the sky prefilter cube at texture(2), the probe
+        // set (count at fragment buffer(7), records at buffer(11), cube array at
+        // texture(6)) with the cluster grid binning it, and the cube sampler at
+        // sampler(1) and (2).
+        // Frame-constant, so bound once before the draw loop; a probe count of 0
+        // keeps the sky-only fallback. The per-draw bindings never touch these
+        // slots, so the state persists.
         enc.set_fragment_texture(self.scene.env_map.prefilter.as_ref(), 2);
-        self.bind_probe_cubes(enc);
+        // The main camera's cluster grid, which bins the probes a surface
+        // blends, takes the params at buffer(12) and the lists at buffer(13).
+        self.probe_bindings().bind(
+            enc,
+            super::probe_set::ProbeSlots {
+                set: 7,
+                records: 11,
+                cubes: Some(6),
+                cluster: Some((12, 13)),
+            },
+        );
         // The cube sampler covers the prefilter cube's own sampler at 1 and the
-        // probe block's at 2; the planar resolve takes the post sampler after
+        // probe array's at 2; the planar resolve takes the post sampler after
         // them, and the bindless pool the RT variants read takes the
         // repeat-address sampler after that.
         super::post::fullscreen::set_fragment_sampler_range(
@@ -204,11 +215,10 @@ impl MtlContext {
             GLASS_POOL_SAMPLER_INDEX,
             1,
         );
-        enc.set_fragment_value(&self.probe.set, 7);
         // A planar reflection resolve at the planar texture slot, the default
         // for every transparent draw so the slot is always bound
-        // (validation-safe) even for slotless / probe-path draws. water.slang +
-        // glass.slang sample it when their `planar.x` flag is set; a planar
+        // (validation-safe) even for slotless / probe-path draws. water.hlsl +
+        // glass.hlsl sample it when their `planar.x` flag is set; a planar
         // draw overrides this with ITS plane's resolve per-draw (see the
         // collect paths). The first slot's resolve is a valid stand-in for
         // draws that do not sample it.
@@ -253,7 +263,11 @@ impl MtlContext {
                     || self.water.pipeline_rt_textured.is_some()
                     || self.glass.mesh_pipeline_rt_textured.is_some()
             }) {
-                enc.set_fragment_buffer(tex_args.as_ref(), 0, 10);
+                enc.set_fragment_buffer(
+                    tex_args.as_ref(),
+                    super::bindless_args::BINDLESS_POOL_OFFSET,
+                    10,
+                );
                 self.use_bindless_textures(enc);
             }
         }

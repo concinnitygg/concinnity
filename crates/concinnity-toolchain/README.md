@@ -10,7 +10,7 @@ produces a Concinnity binary:
 
 1. Resolve the rendering backend once and emit it as a single cfg
    (`backend_metal` / `backend_dx` / `backend_vk`) the source gates on.
-2. Detect the optional graphics SDKs (Agility, FidelityFX, XeSS, NGX, DXC)
+2. Detect the optional graphics SDKs (Agility, FidelityFX, XeSS, NGX)
    and emit the cfgs the renderer gates on; for packages that produce final
    binaries it also bundles the runtime DLLs next to the executable and
    links the NGX import library.

@@ -287,17 +287,15 @@ mod tests {
         );
     }
 
-    // The compile target separates payloads that share every other input --
-    // the case that made the old `hlsl-` / `glsl-` filename prefixes
-    // load-bearing.
+    // The compile target separates payloads that share every other input.
     #[test]
     fn key_changes_with_the_compile_target() {
-        let a = json!({"sources": {"hlsl": "shared.inc", "glsl": "shared.inc"}});
-        let hlsl = key_from_parts(1, &a, &[], Some("hlsl"));
-        let glsl = key_from_parts(1, &a, &[], Some("glsl"));
-        assert_ne!(hlsl, glsl, "the compile target must affect the key");
+        let a = json!({"sources": {"directx": "shared.inc", "vulkan": "shared.inc"}});
+        let directx = key_from_parts(1, &a, &[], Some(Platform::DirectX.key()));
+        let vulkan = key_from_parts(1, &a, &[], Some(Platform::Vulkan.key()));
+        assert_ne!(directx, vulkan, "the compile target must affect the key");
         assert_ne!(
-            hlsl,
+            directx,
             key_from_parts(1, &a, &[], None),
             "a target-dependent key must differ from a target-independent one"
         );
@@ -508,7 +506,7 @@ mod tests {
 
     // A target-dependent asset does fold the platform in, so the two backends
     // separate even when every other input matches. The compiler is deliberately
-    // not part of the key: a host with no slangc has to reach the payloads an
+    // not part of the key: a host with no dxc has to reach the payloads an
     // earlier cook already made, and it computes this key to find them.
     #[test]
     fn target_dependent_payload_keys_fold_in_the_platform() {
@@ -522,13 +520,13 @@ mod tests {
             key_from_parts(1, &args, &[], Some(Platform::Metal.key())),
         );
         // A cook for another backend keys the same asset separately.
-        let hlsl_ctx = BuildCtx {
-            platform: Platform::Hlsl,
+        let dx_ctx = BuildCtx {
+            platform: Platform::DirectX,
             ..ctx()
         };
         assert_ne!(
             payload_key(1, &args, &ctx(), &dependent),
-            payload_key(1, &args, &hlsl_ctx, &dependent),
+            payload_key(1, &args, &dx_ctx, &dependent),
         );
         assert_ne!(
             payload_key(1, &args, &ctx(), &dependent),

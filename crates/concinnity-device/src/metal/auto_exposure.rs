@@ -27,12 +27,12 @@ use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
 use objc2_metal::{
     MTLBuffer as _, MTLCommandBuffer as _, MTLComputeCommandEncoder as _, MTLComputePassDescriptor,
-    MTLComputePipelineState, MTLDevice as _, MTLLibrary as _, MTLSize, MTLTexture as _,
+    MTLComputePipelineState, MTLSize, MTLTexture as _,
 };
 
+use super::builtin_shaders::compute_pipeline;
 use super::context::*;
 use super::encode::ComputeEncode;
-use super::pipeline::ns_str;
 use super::scoped_encoder::ScopedEncoder;
 
 // All auto-exposure (EV adaptation) state grouped into one feature unit: the
@@ -220,7 +220,7 @@ pub(super) struct AutoExposurePipelines {
 }
 
 // Build the auto-exposure compute pipelines from the single-source
-// `auto_exposure.slang`. Each kernel compiles as its own variant so it declares
+// `auto_exposure.hlsl`. Each kernel compiles as its own variant so it declares
 // only the resources it binds. Returned only when the world's
 // `PostProcessConfig` opts into auto-exposure; otherwise the histogram pass is
 // skipped entirely.
@@ -228,25 +228,16 @@ pub(super) fn build_auto_exposure_pipelines(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> RenderResult<AutoExposurePipelines> {
-    let build_lib = super::slang_builtins::AUTO_EXPOSURE_BUILD.library(device, hot_reload)?;
-    let average_lib = super::slang_builtins::AUTO_EXPOSURE_AVERAGE.library(device, hot_reload)?;
-    let build_fn = build_lib
-        .newFunctionWithName(&ns_str("histogram_build"))
-        .ok_or_else(|| {
-            RenderError::ShaderCompile("histogram_build not found in auto_exposure library".into())
-        })?;
-    let average_fn = average_lib
-        .newFunctionWithName(&ns_str("histogram_average"))
-        .ok_or_else(|| {
-            RenderError::ShaderCompile(
-                "histogram_average not found in auto_exposure library".into(),
-            )
-        })?;
-    let build = device
-        .newComputePipelineStateWithFunction_error(&build_fn)
-        .map_err(|e| RenderError::ShaderCompile(format!("histogram_build pipeline: {e:?}")))?;
-    let average = device
-        .newComputePipelineStateWithFunction_error(&average_fn)
-        .map_err(|e| RenderError::ShaderCompile(format!("histogram_average pipeline: {e:?}")))?;
-    Ok(AutoExposurePipelines { build, average })
+    Ok(AutoExposurePipelines {
+        build: compute_pipeline(
+            device,
+            &super::builtin_shaders::AUTO_EXPOSURE_BUILD,
+            hot_reload,
+        )?,
+        average: compute_pipeline(
+            device,
+            &super::builtin_shaders::AUTO_EXPOSURE_AVERAGE,
+            hot_reload,
+        )?,
+    })
 }

@@ -143,7 +143,7 @@ pub(super) fn spawn_watcher(
 // recompile plus a pipeline rebuild but no texture or mesh decode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ReloadKind {
-    // `.slang`.
+    // `.hlsl`.
     ShaderStages,
     // `.jsonl`, the world file.
     World,
@@ -253,11 +253,8 @@ pub(super) fn is_asset_event(event: &Event) -> bool {
     })
 }
 
-// True for the extension of a world `Shader`'s files. Case-insensitive so a
-// `.SLANG` save still triggers the rebuild. The engine's own `.slang` sources
-// are handled by a separate watcher in each backend's `hot_reload`; the asset
-// watcher here only subscribes to the parent directories of *captured* Shader
-// files, so the two never observe the same file.
-pub(super) fn is_shader_extension(ext: &str) -> bool {
-    ext.eq_ignore_ascii_case("slang")
-}
+// The engine's own sources are handled by a separate watcher in each backend's
+// `hot_reload`; the asset watcher here only subscribes to the parent
+// directories of *captured* Shader files, so the two never observe the same
+// file.
+pub(super) use concinnity_cook::check::is_shader_extension;

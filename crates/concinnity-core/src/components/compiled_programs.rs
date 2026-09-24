@@ -2,7 +2,7 @@
 //! them, shared by every asset whose shader source is only complete once a
 //! world is loaded: an `SdfVolume`'s distance field and a `Shader`'s hooks.
 //!
-//! The cook runs slangc and stores what it emitted; the renderer assembles the
+//! The cook runs dxc and stores what it emitted; the renderer assembles the
 //! source it expects, digests it, and takes a stored artifact only on a match.
 //! A hot-reload edit to an engine template misses every entry and recompiles,
 //! which is the behavior that makes editing one possible at all.
@@ -10,19 +10,17 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-/// One compiled artifact, the entries it holds, and the source it came from.
+/// One compiled artifact, the entry point it holds, and the source it came from.
 ///
-/// An artifact carries more than one entry where the target allows it: slangc
-/// emits one MSL translation unit for a pair of stages, and the Metal runtime
-/// wants both in one library. DXIL has no such form, so a container there
-/// holds exactly one.
+/// The cook compiles one entry point per artifact on every target: a variant
+/// binds only the resources it reads, so each entry is its own translation.
 #[derive(
     Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields,
 )]
 pub struct CompiledProgram {
-    /// Entry point names this artifact holds, as the shader source spells them.
-    pub entries: Vec<String>,
-    /// `slang_source::source_digest` of the assembled source this artifact was
+    /// The entry point this artifact holds, as the shader source spells it.
+    pub entry: String,
+    /// `shader_source::source_digest` of the assembled source this artifact was
     /// built from. A renderer whose assembly digests differently has a template
     /// the artifact predates and must compile rather than load.
     pub source_digest: u64,
@@ -35,7 +33,7 @@ pub struct CompiledProgram {
 pub fn artifact<'a>(programs: &'a [CompiledProgram], entry: &str, digest: u64) -> Option<&'a [u8]> {
     programs
         .iter()
-        .find(|p| p.source_digest == digest && p.entries.iter().any(|e| e == entry))
+        .find(|p| p.source_digest == digest && p.entry == entry)
         .map(|p| p.artifact.as_slice())
 }
 
@@ -48,19 +46,20 @@ mod tests {
     fn programs() -> Vec<CompiledProgram> {
         vec![
             CompiledProgram {
-                entries: vec!["vertex_main".to_string()],
+                entry: "vertex_main".to_string(),
                 source_digest: 7,
                 artifact: vec![1, 2, 3],
             },
-            // One artifact holding both stages, the shape the Metal target
-            // takes: a library the runtime pulls two functions out of.
+            // Both stages of one file under one digest, each its own artifact.
             CompiledProgram {
-                entries: vec![
-                    "vertex_main_bindless".to_string(),
-                    "fragment_main_bindless".to_string(),
-                ],
+                entry: "vertex_main_bindless".to_string(),
                 source_digest: 9,
                 artifact: vec![4, 5],
+            },
+            CompiledProgram {
+                entry: "fragment_main_bindless".to_string(),
+                source_digest: 9,
+                artifact: vec![6],
             },
         ]
     }
@@ -74,13 +73,10 @@ mod tests {
     }
 
     #[test]
-    fn a_shared_artifact_is_found_under_either_entry() {
+    fn entries_sharing_a_digest_each_find_their_own_artifact() {
         let p = programs();
         assert_eq!(artifact(&p, "vertex_main_bindless", 9), Some(&[4u8, 5][..]));
-        assert_eq!(
-            artifact(&p, "fragment_main_bindless", 9),
-            Some(&[4u8, 5][..])
-        );
+        assert_eq!(artifact(&p, "fragment_main_bindless", 9), Some(&[6u8][..]));
     }
 
     #[test]

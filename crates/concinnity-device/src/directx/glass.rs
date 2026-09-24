@@ -11,8 +11,8 @@
 //!     ray-traced only, so it builds nothing without DXR and its meshes then
 //!     rasterize opaque in the main pass instead.
 //!
-//! The shaders are the shared `shaders/glass.slang` and `shaders/glass_mesh.slang`,
-//! compiled through `slang_builtins`; the ray-traced fragments need shader model
+//! The shaders are the shared `shaders/glass.hlsl` and `shaders/glass_mesh.hlsl`,
+//! compiled through `builtin_shaders`; the ray-traced fragments need shader model
 //! 6.5 for their inline ray query, the base pair 6.0.
 
 use concinnity_core::components::GlassPanel;
@@ -26,9 +26,9 @@ use windows::Win32::Graphics::Direct3D12::*;
 pub(in crate::directx) use concinnity_core::render::uniforms::GlassParams;
 
 use super::allocator::DeviceAllocator;
+use crate::directx::builtin_shaders;
+use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::context::dump_on_err;
-use crate::directx::slang_builtins;
-use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::transparent::{
     GlassMeshProducer, RecordUpload, TracedGlassPsos, TransparentProducer, TransparentRecord,
     create_glass_reflection_pso, create_transparent_pso,
@@ -57,13 +57,10 @@ pub(in crate::directx) fn compile_glass_shaders(
     msaa_samples: u32,
     hot_reload: bool,
 ) -> RenderResult<(Vec<u8>, Vec<u8>)> {
-    let frag = if msaa_samples > 1 {
-        &slang_builtins::GLASS_FRAG_MSAA
-    } else {
-        &slang_builtins::GLASS_FRAG
-    };
-    let vs = slang_builtins::GLASS_VERT.compile(hot_reload)?;
-    let ps = frag.compile(hot_reload)?;
+    let vs = builtin_shaders::GLASS_VERT.compile(hot_reload)?;
+    let ps = builtin_shaders::GLASS_FRAG
+        .at(msaa_samples > 1)
+        .compile(hot_reload)?;
     Ok((vs, ps))
 }
 
@@ -94,44 +91,20 @@ struct GlassRtShaders {
     reflection_textured_ps: Vec<u8>,
 }
 
-// Pick the MSAA or single-sample twin of a fragment program.
-fn by_msaa<'a>(
-    msaa: bool,
-    single: &'a slang_builtins::SlangProgram,
-    multi: &'a slang_builtins::SlangProgram,
-) -> &'a slang_builtins::SlangProgram {
-    if msaa { multi } else { single }
-}
-
 // Compile the flat + textured ray-traced fragments (SM 6.5, for the inline ray
-// query). The shared source remaps its probe cube array to t20, since the RT
-// geometry SRVs claim t4..t10. Returns an `Err` (which the caller turns into a
-// None RT pipeline + the base path) when slangc is unavailable or the shader
-// fails to compile.
+// query). Returns an `Err` (which the caller turns into a None RT pipeline +
+// the base path) when dxc is unavailable or the shader fails to compile.
 fn compile_glass_rt_shaders(msaa_samples: u32, hot_reload: bool) -> RenderResult<GlassRtShaders> {
-    use slang_builtins as sb;
+    use builtin_shaders as sb;
     let msaa = msaa_samples > 1;
     Ok(GlassRtShaders {
         vs: sb::GLASS_VERT.compile(hot_reload)?,
-        flat_ps: by_msaa(msaa, &sb::GLASS_RT_FRAG, &sb::GLASS_RT_FRAG_MSAA).compile(hot_reload)?,
-        textured_ps: by_msaa(
-            msaa,
-            &sb::GLASS_RT_FRAG_TEXTURED,
-            &sb::GLASS_RT_FRAG_TEXTURED_MSAA,
-        )
-        .compile(hot_reload)?,
-        reflection_flat_ps: by_msaa(
-            msaa,
-            &sb::GLASS_REFLECTION_FRAG,
-            &sb::GLASS_REFLECTION_FRAG_MSAA,
-        )
-        .compile(hot_reload)?,
-        reflection_textured_ps: by_msaa(
-            msaa,
-            &sb::GLASS_REFLECTION_FRAG_TEXTURED,
-            &sb::GLASS_REFLECTION_FRAG_TEXTURED_MSAA,
-        )
-        .compile(hot_reload)?,
+        flat_ps: sb::GLASS_FRAG_RT.at(msaa).compile(hot_reload)?,
+        textured_ps: sb::GLASS_FRAG_RT_TEXTURED.at(msaa).compile(hot_reload)?,
+        reflection_flat_ps: sb::GLASS_REFLECTION_FRAG.at(msaa).compile(hot_reload)?,
+        reflection_textured_ps: sb::GLASS_REFLECTION_FRAG_TEXTURED
+            .at(msaa)
+            .compile(hot_reload)?,
     })
 }
 
@@ -303,30 +276,20 @@ pub(in crate::directx) struct GlassMeshBuild<'a> {
 // ray query) and the vertex stage they share. Unlike the pane family there is no
 // non-RT pair: the trace is what makes the mesh see-through.
 fn compile_glass_mesh_shaders(msaa_samples: u32, hot_reload: bool) -> RenderResult<GlassRtShaders> {
-    use slang_builtins as sb;
+    use builtin_shaders as sb;
     let msaa = msaa_samples > 1;
     Ok(GlassRtShaders {
         vs: sb::GLASS_MESH_VERT.compile(hot_reload)?,
-        flat_ps: by_msaa(msaa, &sb::GLASS_MESH_RT_FRAG, &sb::GLASS_MESH_RT_FRAG_MSAA)
+        flat_ps: sb::GLASS_MESH_FRAG_RT.at(msaa).compile(hot_reload)?,
+        textured_ps: sb::GLASS_MESH_FRAG_RT_TEXTURED
+            .at(msaa)
             .compile(hot_reload)?,
-        textured_ps: by_msaa(
-            msaa,
-            &sb::GLASS_MESH_RT_FRAG_TEXTURED,
-            &sb::GLASS_MESH_RT_FRAG_TEXTURED_MSAA,
-        )
-        .compile(hot_reload)?,
-        reflection_flat_ps: by_msaa(
-            msaa,
-            &sb::GLASS_MESH_REFLECTION_FRAG,
-            &sb::GLASS_MESH_REFLECTION_FRAG_MSAA,
-        )
-        .compile(hot_reload)?,
-        reflection_textured_ps: by_msaa(
-            msaa,
-            &sb::GLASS_MESH_REFLECTION_FRAG_TEXTURED,
-            &sb::GLASS_MESH_REFLECTION_FRAG_TEXTURED_MSAA,
-        )
-        .compile(hot_reload)?,
+        reflection_flat_ps: sb::GLASS_MESH_REFLECTION_FRAG
+            .at(msaa)
+            .compile(hot_reload)?,
+        reflection_textured_ps: sb::GLASS_MESH_REFLECTION_FRAG_TEXTURED
+            .at(msaa)
+            .compile(hot_reload)?,
     })
 }
 
@@ -361,12 +324,12 @@ mod tests {
 
     // The glass shaders compile at runtime from the shared single source, so a
     // syntax or register error in either MSAA variant would otherwise surface
-    // only as an init failure on a GPU host. slangc resolves from PATH and may
-    // be absent, in which case the runtime path reports its own error and this
-    // skips rather than failing.
+    // only as an init failure on a GPU host. dxc (bundled, vendored, on PATH or
+    // under VULKAN_SDK) may be absent, in which case the runtime path reports
+    // its own error and this skips rather than failing.
     #[test]
     fn glass_shaders_compile() {
-        if !concinnity_slang::shader_tests_enabled() {
+        if !concinnity_shader::dxc_available() {
             return;
         }
         for msaa in [1u32, 4] {
@@ -381,7 +344,7 @@ mod tests {
     // `compile_glass_rt_shaders`.
     #[test]
     fn glass_rt_shaders_compile() {
-        if !concinnity_slang::shader_tests_enabled() {
+        if !concinnity_shader::dxc_available() {
             return;
         }
         for msaa in [1u32, 4] {
@@ -394,7 +357,7 @@ mod tests {
     // applies the model matrix) and whose fragments carry the same SM 6.5 trace.
     #[test]
     fn glass_mesh_shaders_compile() {
-        if !concinnity_slang::shader_tests_enabled() {
+        if !concinnity_shader::dxc_available() {
             return;
         }
         for msaa in [1u32, 4] {

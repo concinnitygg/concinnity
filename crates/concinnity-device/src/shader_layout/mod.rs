@@ -1,8 +1,9 @@
 //! Layout drift guard for the `#[repr(C)]` structs the CPU uploads into the
-//! single-source `.slang` shaders. The expected offsets and sizes are not
-//! written down here: they come from `slangc -reflection-json` over the same
-//! source the renderer compiles, per target, so an edit on either side of the
-//! boundary fails the check.
+//! single-source shaders. The expected offsets and sizes are not written down
+//! here: they come from the compiler over the same source the renderer
+//! compiles, per target, so an edit on either side of the boundary fails the
+//! check. The SPIR-V module dxc emits states every offset in its own
+//! decorations, so that module is what the check reads.
 //!
 //! That is the difference from a hand-written assert. A hand assert pins the
 //! Rust struct against a number and a comment describing what the shader is
@@ -14,17 +15,17 @@
 //! a `float3` at 16 bytes -- in a structured buffer as much as in a constant
 //! buffer -- where SPIR-V and DXIL pack a scalar after it at 12, and SPIR-V
 //! aligns a following `float2` to 16 where neither of the others does. The
-//! engine's `.slang` sources avoid both shapes on purpose (`float4` lanes
+//! engine's shader sources avoid both shapes on purpose (`float4` lanes
 //! instead of `float3` + scalar), so today the three agree on every mirrored
 //! struct -- which is itself worth asserting rather than assuming. The block
 //! sizes already differ: DirectX reports a 276-byte `ShadowUniforms` block where
 //! Metal and SPIR-V round it to 288.
 //!
 //! Not every layout assert can move here. The Metal ICB encode kernel is
-//! hand-written, so its parameter block has no `.slang` to reflect and its hand
-//! assert is the only check it has. Vertex
-//! payloads are the other exclusion: slangc binds a vertex input by attribute
-//! index, not byte offset, so `Vertex` / `SkinnedVertex` / `MorphEntry` /
+//! hand-written, so its parameter block has no single source to reflect and its
+//! hand assert is the only check it has. Vertex
+//! payloads are the other exclusion: a vertex input binds by attribute index,
+//! not byte offset, so `Vertex` / `SkinnedVertex` / `MorphEntry` /
 //! `TextVertex` / `LineVertex` reflect no layout at all -- where a kernel
 //! byte-addresses those payloads instead, `byte_offsets` locks its constants to
 //! the mirrors, which reflection cannot do.
@@ -36,29 +37,23 @@ mod byte_offsets;
 mod mirror;
 mod mirrors;
 mod programs;
-mod reflect;
 
+use concinnity_core::platform::Platform;
 use mirror::Case;
-use programs::{Program, Target};
-
-// The probe-array length the programs bake in, pinned to the constant the
-// mirrored `ProbeSet` array uses.
-const _: () = assert!(concinnity_core::render::uniforms::MAX_PROBES == 8);
+use programs::Program;
 
 // Reflect `program` on every target its mirrors name and compare each against
-// what that target's layout rules produced. Skipped when slangc is absent, the
-// way concinnity-slang's own round-trip tests are; a host that declares it
-// carries the toolchain (`strict-shader-tests`) panics there instead.
+// what that target's layout rules produced. Skipped when dxc is absent.
 //
 // A target no mirror names is not compiled at all. That is how a program opts
 // out of a target it cannot build on, which is otherwise indistinguishable from
 // a layout failure.
 fn check(program: &Program, cases: &[Case]) {
-    if !concinnity_slang::shader_tests_enabled() {
+    if !concinnity_shader::dxc_available() {
         return;
     }
     let mut drift = Vec::new();
-    for target in Target::ALL {
+    for target in Platform::ALL {
         if !cases.iter().any(|case| case.targets.contains(&target)) {
             continue;
         }
@@ -76,27 +71,27 @@ fn check(program: &Program, cases: &[Case]) {
                     "{} ({}): the reflection of {} declares no `{name}`; the mirror names a \
                      struct this variant does not compile",
                     case.mirror.rust_name,
-                    target.label(),
-                    program.entry,
+                    target.key(),
+                    program.row.entry,
                 ));
                 continue;
             };
             drift.extend(
                 mirror::drift(&case.mirror, shader)
                     .into_iter()
-                    .map(|line| format!("[{}] {line}", target.label())),
+                    .map(|line| format!("[{}] {line}", target.key())),
             );
         }
     }
     assert!(
         drift.is_empty(),
         "{} layouts drifted from the shader:\n  {}",
-        program.entry,
+        program.row.entry,
         drift.join("\n  "),
     );
 }
 
-// The object record has one declaration, `object_common.slang`, spliced into
+// The object record has one declaration, `object_common.hlsl`, spliced into
 // every pass that strides the per-frame object buffer. A shader that grows its
 // own copy is exactly the drift the splice exists to prevent, on any backend,
 // so the single-source set and the hand-written Metal directory are both
@@ -108,7 +103,7 @@ fn no_shader_redeclares_the_object_record() {
     for (name, source) in concinnity_core::render::shaders::SOURCES {
         if source.contains(RECORD) {
             assert_eq!(
-                *name, "object_common.slang",
+                *name, "object_common.hlsl",
                 "{name} declares its own GpuObjectData; splice the shared fragment instead"
             );
             declarations += 1;
@@ -116,7 +111,7 @@ fn no_shader_redeclares_the_object_record() {
     }
     assert_eq!(
         declarations, 1,
-        "object_common.slang no longer declares the record"
+        "object_common.hlsl no longer declares the record"
     );
     let metal = concat!(env!("CARGO_MANIFEST_DIR"), "/src/metal/shaders");
     for entry in std::fs::read_dir(metal).unwrap_or_else(|e| panic!("read {metal}: {e}")) {
@@ -134,7 +129,7 @@ fn no_shader_redeclares_the_object_record() {
 #[test]
 fn main_bindless_layouts_match_the_shader() {
     check(
-        &programs::MAIN_BINDLESS_VERT,
+        &programs::MAIN_BINDLESS_FRAG,
         &mirrors::forward::main_bindless(),
     );
 }
@@ -144,36 +139,69 @@ fn main_bindless_layouts_match_the_shader() {
 // indirect command carries no texture binding, so a discrete one would be
 // unreachable from the ICB-executed draws the pass is made of. The Metal
 // encoder binds buffers only (`bind_main_pass_shared` in metal/draw/main.rs),
-// so a texture or sampler added to the METAL_ABI block would compile to a
+// so a texture or sampler added to the CN_BACKEND_METAL block would compile to a
 // parameter nothing fills and sample undefined contents.
 #[test]
 fn the_metal_main_pass_declares_no_discrete_texture_or_sampler() {
-    if !concinnity_slang::shader_tests_enabled() {
+    if !concinnity_shader::dxc_available() {
         return;
     }
-    let json = programs::reflection(&programs::MAIN_BINDLESS_VERT, Target::Metal)
-        .unwrap_or_else(|e| panic!("{e}"));
-    let params = reflect::global_params(&json).unwrap_or_else(|e| panic!("{e}"));
-    let discrete: Vec<&str> = params
-        .iter()
-        .filter(|p| {
-            p.kinds
-                .iter()
-                .any(|k| k == "shaderResource" || k == "samplerState")
-        })
-        .map(|p| p.name.as_str())
-        .collect();
-    assert!(
-        discrete.is_empty(),
-        "main_bindless.slang binds {discrete:?} to a discrete Metal texture or sampler slot; \
-         put it in BindlessTextures or EngineSamplers, which the ICB draws can reach"
-    );
-    // The check is only meaningful if the reflection is the Metal one and it
-    // saw the argument buffers at all.
-    for block in ["tex", "samps"] {
+    let msl = programs::msl(&programs::MAIN_BINDLESS_FRAG).unwrap_or_else(|e| panic!("{e}"));
+    let signature = msl
+        .lines()
+        .find(|line| line.contains(" fragment_main_bindless("))
+        .expect("the entry point's signature");
+    for discrete in ["[[texture(", "[[sampler("] {
         assert!(
-            params.iter().any(|p| p.name == block),
-            "the Metal reflection declares no `{block}` parameter block"
+            !signature.contains(discrete),
+            "main_bindless.hlsl binds a {discrete}..)]] slot: {signature}\nput it in the \
+             texture or sampler argument buffer, which the ICB draws can reach"
+        );
+    }
+    // The check is only meaningful if it saw the argument buffers at all.
+    for set in ["[[buffer(7)]]", "[[buffer(10)]]"] {
+        assert!(
+            signature.contains(set),
+            "the Metal entry takes no argument buffer at {set}: {signature}"
+        );
+    }
+}
+
+// Metal lays an argument buffer out by the members its function declares, and
+// the host encodes the two main-pass buffers whole, at the ids the engine's own
+// fragment declares. A world Shader's fragment whose `shade` reads one late
+// member has to declare every member, each at that same id.
+#[test]
+fn a_world_fragment_declares_the_whole_argument_buffers() {
+    if !concinnity_shader::dxc_available() {
+        return;
+    }
+    let msl = |program| programs::msl(program).unwrap_or_else(|e| panic!("{e}"));
+    let engine_msl = msl(&programs::MAIN_BINDLESS_FRAG);
+    let world_msl = msl(&programs::MAIN_BINDLESS_FRAG_LATE_MEMBER_SHADE);
+    for member in [
+        "tex_pool",
+        "shadow_map",
+        "irradiance_cube",
+        "prefilter_cube",
+        "ssao_tex",
+        "probe_cubes",
+        "spot_shadow_map",
+        "ltc_matrix",
+        "ltc_magnitude",
+        "tex_sampler",
+        "shadow_sampler",
+        "cube_sampler",
+    ] {
+        let expected = concinnity_shader::msl_argument_id(&engine_msl, member);
+        assert!(
+            expected.is_some(),
+            "the engine fragment's argument buffers do not declare `{member}`"
+        );
+        assert_eq!(
+            concinnity_shader::msl_argument_id(&world_msl, member),
+            expected,
+            "the world fragment's argument buffers declare `{member}` elsewhere than the engine's"
         );
     }
 }

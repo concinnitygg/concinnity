@@ -1,7 +1,7 @@
 //! Decides, per cull record, whether the model-history ring holds a usable
 //! previous-frame transform for the G-buffer pre-pass's motion vectors.
 //!
-//! The history ring is filled on the GPU by `model_history.slang`, which copies
+//! The history ring is filled on the GPU by `model_history.hlsl`, which copies
 //! this frame's model matrices straight out of the bindless object buffer. That
 //! makes a history entry meaningful only while its record keeps its occupant: a
 //! recycled draw slot, a runtime reserve that repacked around a

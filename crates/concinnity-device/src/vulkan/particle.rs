@@ -34,11 +34,11 @@ use super::allocator::PooledBuffer;
 use super::context::{HDR_FORMAT, VkContext};
 use super::pipeline::{GraphicsStages, SHADER_ENTRY, spv_module};
 use super::texture::GpuUploadContext;
+use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
     OwnedSampler, OwnedSetLayout, VkDevice,
 };
-use crate::vulkan::slang_builtins::SlangCompile;
 
 // Cap on the number of simultaneously-live particle emitters. The
 // per-emitter descriptor pool reserves a fixed block of `2 * MAX_EMITTERS`
@@ -61,13 +61,11 @@ pub(in crate::vulkan) fn compile_particle_shaders(
     hot_reload: bool,
     msaa: bool,
 ) -> RenderResult<ParticleShaderSpirv> {
-    let ctx = super::slang_builtins::Ctx {
-        msaa,
-        ..super::slang_builtins::Ctx::plain(hot_reload)
-    };
-    let cs = super::slang_builtins::PARTICLE_SIMULATE.compile(&ctx)?;
-    let vs = super::slang_builtins::PARTICLE_VERT.compile(&ctx)?;
-    let fs = super::slang_builtins::PARTICLE_FRAG.compile(&ctx)?;
+    let cs = super::builtin_shaders::PARTICLE_SIMULATE.compile(hot_reload)?;
+    let vs = super::builtin_shaders::PARTICLE_VERT.compile(hot_reload)?;
+    let fs = super::builtin_shaders::PARTICLE_FRAG
+        .at(msaa)
+        .compile(hot_reload)?;
     Ok((cs, vs, fs))
 }
 
@@ -97,8 +95,8 @@ pub(in crate::vulkan) struct ParticleEmitterGpuState {
     // today; emitters keep their pool for the emitter's whole lifetime).
     pub compute_set: vk::DescriptorSet,
     // Render emitter descriptor set (set 1): binding 0 the pool SSBO
-    // (read-only here), binding 1 the emitter's albedo combined image
-    // sampler. The albedo binding is rewritten by [`VkContext::add_emitter`]
+    // (read-only here), binding 1 the emitter's albedo image and binding 2 its
+    // sampler. The albedo image is rewritten by [`VkContext::add_emitter`]
     // from the live texture pool.
     pub render_set: vk::DescriptorSet,
     // Texture-pool slot last written into `render_set`'s albedo binding.
@@ -112,19 +110,19 @@ pub(in crate::vulkan) struct ParticleEmitterGpuState {
 // either at init (when the world declares ≥1 emitter) or on the first
 // runtime `add_emitter`.
 pub(in crate::vulkan) struct ParticleResources {
-    // Compute pass: particle_simulate.slang.
+    // Compute pass: particle_simulate.hlsl.
     pub(in crate::vulkan) compute_pipeline: OwnedPipeline,
     pub(in crate::vulkan) compute_pipeline_layout: OwnedPipelineLayout,
     // set 0: (pool SSBO, counter SSBO) per emitter.
     pub(in crate::vulkan) compute_set_layout: OwnedSetLayout,
 
-    // Render pass: the particle.slang billboard pair.
+    // Render pass: the particle.hlsl billboard pair.
     pub(in crate::vulkan) render_pass: OwnedRenderPass,
     pub(in crate::vulkan) render_pipeline: OwnedPipeline,
     pub(in crate::vulkan) render_pipeline_layout: OwnedPipelineLayout,
     // set 0: per-frame (ParticleView UBO, main depth).
     pub(in crate::vulkan) _view_set_layout: OwnedSetLayout,
-    // set 1: per-emitter (pool SSBO, albedo). Allocated for each
+    // set 1: per-emitter (pool SSBO, albedo, the albedo's sampler). Allocated for each
     // `ParticleEmitterGpuState` from `descriptor_pool` and written by
     // `add_emitter`.
     pub(in crate::vulkan) emitter_set_layout: OwnedSetLayout,
@@ -146,21 +144,17 @@ pub(in crate::vulkan) struct ParticleResources {
     // Linear-clamp sampler shared by every emitter's albedo binding.
     pub(in crate::vulkan) sampler: OwnedSampler,
 
-    // Sampler the depth binding carries; the fragment only `Load`s through it.
-    depth_sampler: vk::Sampler,
-
     // Whether the main depth is multisampled; picks the fragment variant.
     msaa: bool,
 }
 
 // Render-target inputs the particle pass writes into / samples from: the
-// per-frame resolved HDR color views, the per-frame main depth views, the
-// sampler the depth binding carries, and the framebuffer extent.
+// per-frame resolved HDR color views, the per-frame main depth views, and the
+// framebuffer extent.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct ParticlePassTargets<'a> {
     pub(in crate::vulkan) hdr_resolve_views: &'a [vk::ImageView],
     pub(in crate::vulkan) depth_views: &'a [vk::ImageView],
-    pub(in crate::vulkan) depth_sampler: vk::Sampler,
     pub(in crate::vulkan) extent: vk::Extent2D,
 }
 
@@ -181,7 +175,6 @@ impl ParticleResources {
         let ParticlePassTargets {
             hdr_resolve_views,
             depth_views,
-            depth_sampler,
             extent,
         } = targets;
         let render_pass = create_render_pass(device, HDR_FORMAT)?;
@@ -227,7 +220,7 @@ impl ParticleResources {
         let view_sets = alloc_descriptor_sets(device, descriptor_pool.handle(), &view_layouts)?;
         for (i, &set) in view_sets.iter().enumerate() {
             write_view_set(device, set, view_ubos[i].buffer());
-            write_depth_binding(device, set, frame_view(depth_views, i), depth_sampler);
+            write_depth_binding(device, set, frame_view(depth_views, i));
         }
 
         // Per-frame framebuffers (one per frame slot binding that slot's
@@ -261,7 +254,6 @@ impl ParticleResources {
             view_sets,
             framebuffers,
             sampler,
-            depth_sampler,
             msaa,
         })
     }
@@ -278,7 +270,7 @@ impl ParticleResources {
         extent: vk::Extent2D,
     ) -> RenderResult<()> {
         for (i, &set) in self.view_sets.iter().enumerate() {
-            write_depth_binding(device, set, frame_view(depth_views, i), self.depth_sampler);
+            write_depth_binding(device, set, frame_view(depth_views, i));
         }
         self.framebuffers.clear();
         for &view in hdr_resolve_views.iter().take(self.view_ubos.len()) {
@@ -391,10 +383,11 @@ pub(in crate::vulkan) fn build_emitter_gpu_state(
         pool_bytes,
         counter_buffer.buffer(),
     );
-    // Write the pool binding on the render set (set 1, binding 0). The
-    // albedo binding (set 1, binding 1) is written by `add_emitter` from
-    // the live texture pool.
+    // Write the pool binding on the render set (set 1, binding 0) and the
+    // albedo's sampler (binding 2), which never changes. The albedo image
+    // (binding 1) is written by `add_emitter` from the live texture pool.
     write_render_pool_binding(device, render_set, pool_buffer.buffer(), pool_bytes);
+    super::resources::write_samplers(device, render_set, 2, &[resources.sampler.handle()]);
 
     Ok(ParticleEmitterGpuState {
         pool_buffer,
@@ -487,7 +480,7 @@ fn create_render_set_layouts(device: &VkDevice) -> RenderResult<(OwnedSetLayout,
             .stage_flags(vk::ShaderStageFlags::VERTEX),
         vk::DescriptorSetLayoutBinding::default()
             .binding(1)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::FRAGMENT),
     ];
@@ -496,7 +489,7 @@ fn create_render_set_layouts(device: &VkDevice) -> RenderResult<(OwnedSetLayout,
         .create_descriptor_set_layout(&view_info)
         .map_err(|e| super::error::map_vk_result(e, "particle view set layout"))?;
 
-    // set 1: per-emitter (pool SSBO, albedo).
+    // set 1: per-emitter (pool SSBO, albedo, the albedo's sampler).
     let emitter_bindings = [
         vk::DescriptorSetLayoutBinding::default()
             .binding(0)
@@ -505,7 +498,12 @@ fn create_render_set_layouts(device: &VkDevice) -> RenderResult<(OwnedSetLayout,
             .stage_flags(vk::ShaderStageFlags::VERTEX),
         vk::DescriptorSetLayoutBinding::default()
             .binding(1)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(2)
+            .descriptor_type(vk::DescriptorType::SAMPLER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::FRAGMENT),
     ];
@@ -565,8 +563,9 @@ fn create_descriptor_pool(device: &VkDevice, frames: usize) -> RenderResult<Owne
     //   - UNIFORM_BUFFER: `frames` (one ParticleView UBO per frame slot)
     //   - STORAGE_BUFFER: `2 * MAX_EMITTERS` for compute (pool + counter)
     //                     + `MAX_EMITTERS` for render (pool, read-only)
-    //   - COMBINED_IMAGE_SAMPLER: `MAX_EMITTERS` (one albedo per emitter)
-    //                             + `frames` (one main depth per frame slot)
+    //   - SAMPLED_IMAGE: `MAX_EMITTERS` (one albedo per emitter)
+    //                    + `frames` (one main depth per frame slot)
+    //   - SAMPLER: `MAX_EMITTERS` (one albedo sampler per emitter)
     let sizes = [
         vk::DescriptorPoolSize {
             ty: vk::DescriptorType::UNIFORM_BUFFER,
@@ -577,8 +576,12 @@ fn create_descriptor_pool(device: &VkDevice, frames: usize) -> RenderResult<Owne
             descriptor_count: 3 * max_emitters,
         },
         vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+            ty: vk::DescriptorType::SAMPLED_IMAGE,
             descriptor_count: max_emitters + frames,
+        },
+        vk::DescriptorPoolSize {
+            ty: vk::DescriptorType::SAMPLER,
+            descriptor_count: max_emitters,
         },
     ];
     let info = vk::DescriptorPoolCreateInfo::default()
@@ -624,20 +627,15 @@ fn frame_view(views: &[vk::ImageView], i: usize) -> vk::ImageView {
     views[i.min(views.len().saturating_sub(1))]
 }
 
-fn write_depth_binding(
-    device: &VkDevice,
-    set: vk::DescriptorSet,
-    depth_view: vk::ImageView,
-    sampler: vk::Sampler,
-) {
+// The main depth, which the fragment reads by texel.
+fn write_depth_binding(device: &VkDevice, set: vk::DescriptorSet, depth_view: vk::ImageView) {
     let info = vk::DescriptorImageInfo::default()
         .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .image_view(depth_view)
-        .sampler(sampler);
+        .image_view(depth_view);
     let write = vk::WriteDescriptorSet::default()
         .dst_set(set)
         .dst_binding(1)
-        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
         .image_info(std::slice::from_ref(&info));
     // SAFETY: `write` and the image info it borrows are live for the call, and every set and
     // resource it names belongs to this device.
@@ -1222,7 +1220,6 @@ impl VkContext {
                 ParticlePassTargets {
                     hdr_resolve_views: &hdr_resolve_views,
                     depth_views: &depth_views,
-                    depth_sampler: self.scene.linear_sampler.handle(),
                     extent: self.targets.render_extent,
                 },
                 self.targets.msaa_samples != vk::SampleCountFlags::TYPE_1,
@@ -1257,18 +1254,10 @@ impl VkContext {
         // Write the albedo binding from the live texture pool.
         let last_tex = self.scene.textures.len().saturating_sub(1);
         let tex_idx = record.texture_slot.min(last_tex);
-        let sampler = self
-            .particle
-            .resources
-            .as_ref()
-            .expect("particle resources are live")
-            .sampler
-            .handle();
         write_render_albedo_binding(
             &self.hw.device,
             gpu_state.render_set,
             self.scene.textures[tex_idx].view,
-            sampler,
         );
 
         let id = if let Some(slot) = self.particle.free_slots.pop() {
@@ -1380,19 +1369,14 @@ impl VkContext {
     }
 
     pub(in crate::vulkan) fn rewrite_particle_albedo_slot(&self, slot: usize) {
-        let Some(resources) = self.particle.resources.as_ref() else {
+        if self.particle.resources.is_none() {
             return;
-        };
+        }
         let last = self.scene.textures.len().saturating_sub(1);
         let view = self.scene.textures[slot].view;
         for state in self.particle.emitter_state.iter().flatten() {
             if state.texture_slot.min(last) == slot {
-                write_render_albedo_binding(
-                    &self.hw.device,
-                    state.render_set,
-                    view,
-                    resources.sampler.handle(),
-                );
+                write_render_albedo_binding(&self.hw.device, state.render_set, view);
             }
         }
     }
@@ -1407,20 +1391,16 @@ impl VkContext {
     }
 }
 
-fn write_render_albedo_binding(
-    device: &VkDevice,
-    set: vk::DescriptorSet,
-    view: vk::ImageView,
-    sampler: vk::Sampler,
-) {
+// Point an emitter's render set at albedo `view`. Its sampler was written with
+// the set.
+fn write_render_albedo_binding(device: &VkDevice, set: vk::DescriptorSet, view: vk::ImageView) {
     let info = vk::DescriptorImageInfo::default()
         .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .image_view(view)
-        .sampler(sampler);
+        .image_view(view);
     let write = vk::WriteDescriptorSet::default()
         .dst_set(set)
         .dst_binding(1)
-        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
         .image_info(std::slice::from_ref(&info));
     // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
     // and resource it names belongs to this device.

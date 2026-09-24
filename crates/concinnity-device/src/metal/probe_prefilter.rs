@@ -1,12 +1,13 @@
 //! The convolution half of a runtime reflection-probe bake: the compute
-//! pipelines built from `probe_prefilter.slang`, the two cubes one bake works
+//! pipelines built from `probe_prefilter.hlsl`, the two cubes one bake works
 //! between, and the dispatches that turn six captured faces into the prefiltered
 //! radiance mip chain the specular term samples.
 //!
 //! The capture cube is the render target the six faces resolve into, one cube
 //! slice each, with a mip chain the `probe_downsample` kernel fills. The probe
-//! cube is the result: mip 0 a firefly-clamped copy of the capture, every mip
-//! after it a GGX convolution at that mip's roughness. Both are RGBA16Float --
+//! cube is the result, one cube of the probe cube array: mip 0 a
+//! firefly-clamped copy of the capture, every mip after it a GGX convolution at
+//! that mip's roughness. Both are RGBA16Float --
 //! the faces are captured as halfs, the clamp caps luminance well inside the
 //! format's range, and it halves what a probe costs in memory against the
 //! RGBA32Float cube the CPU convolution used to upload.
@@ -24,26 +25,26 @@ use objc2_foundation::NSRange;
 use objc2_foundation::ns_string;
 use objc2_metal::{
     MTLCommandBuffer as _, MTLComputeCommandEncoder as _, MTLComputePipelineState, MTLDevice,
-    MTLLibrary as _, MTLPixelFormat, MTLSize, MTLTexture, MTLTextureType, MTLTextureUsage,
+    MTLPixelFormat, MTLSize, MTLTexture, MTLTextureType, MTLTextureUsage,
 };
 
-use super::allocator::{DeviceAllocator, PooledTexture};
+use super::builtin_shaders::compute_pipeline;
 use super::descriptors::TextureDesc;
 use super::encode::ComputeEncode;
 use super::error::allocation_failed;
-use super::pipeline::ns_str;
 
 // Threadgroup tile size, matching the kernels' `[numthreads(8, 8, 1)]`. The
 // third dispatch dimension is the six cube faces, one thread deep.
 const PREFILTER_TILE: usize = 8;
 
-// Color format of both cubes. RGBA16Float is what the faces resolve as, and
-// what the read_write views the kernels bind require (an Apple7 device and
-// later reads and writes it; the engine's Metal floor is Apple7).
-const PROBE_CUBE_FORMAT: MTLPixelFormat = MTLPixelFormat::RGBA16Float;
+// Color format of the capture and the probe cube array. RGBA16Float is what the
+// faces resolve as, and what the read_write views the kernels bind require (an
+// Apple7 device and later reads and writes it; the engine's Metal floor is
+// Apple7).
+pub(in crate::metal) const PROBE_CUBE_FORMAT: MTLPixelFormat = MTLPixelFormat::RGBA16Float;
 
 /// The three compute pipelines a probe bake convolves with, built once from the
-/// precompiled `probe_prefilter.slang` variants.
+/// precompiled `probe_prefilter.hlsl` variants.
 pub(in crate::metal) struct ProbePrefilterPipelines {
     mip0: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
     downsample: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
@@ -59,43 +60,15 @@ impl ProbePrefilterPipelines {
         hot_reload: bool,
     ) -> RenderResult<ProbePrefilterPipelines> {
         Ok(ProbePrefilterPipelines {
-            mip0: build_kernel(
+            mip0: compute_pipeline(device, &super::builtin_shaders::PROBE_MIP0, hot_reload)?,
+            downsample: compute_pipeline(
                 device,
-                &super::slang_builtins::PROBE_MIP0,
-                "probe_mip0",
+                &super::builtin_shaders::PROBE_DOWNSAMPLE,
                 hot_reload,
             )?,
-            downsample: build_kernel(
-                device,
-                &super::slang_builtins::PROBE_DOWNSAMPLE,
-                "probe_downsample",
-                hot_reload,
-            )?,
-            ggx: build_kernel(
-                device,
-                &super::slang_builtins::PROBE_GGX,
-                "probe_ggx",
-                hot_reload,
-            )?,
+            ggx: compute_pipeline(device, &super::builtin_shaders::PROBE_GGX, hot_reload)?,
         })
     }
-}
-
-fn build_kernel(
-    device: &ProtocolObject<dyn MTLDevice>,
-    lib: &super::slang_builtins::SlangLib,
-    entry: &str,
-    hot_reload: bool,
-) -> RenderResult<Retained<ProtocolObject<dyn MTLComputePipelineState>>> {
-    let library = lib.library(device, hot_reload)?;
-    let function = library.newFunctionWithName(&ns_str(entry)).ok_or_else(|| {
-        RenderError::ShaderCompile(format!("{entry} not found in its probe prefilter library"))
-    })?;
-    device
-        .newComputePipelineStateWithFunction_error(&function)
-        .map_err(|e| {
-            RenderError::ShaderCompile(format!("failed to create {entry} pipeline: {e:?}"))
-        })
 }
 
 /// The capture cube six faces render into: RGBA16Float, one slice per face, with
@@ -127,8 +100,8 @@ pub(in crate::metal) fn create_capture_cube(
         .ok_or_else(|| allocation_failed("probe capture cube"))
 }
 
-/// The cubes and per-mip views one convolution works between, held by the
-/// prefiltering bake slot until the finished probe cube is installed.
+/// The capture and the per-mip views one convolution works between, held by
+/// the prefiltering bake slot until the probe's cube is installed.
 pub(in crate::metal) struct PrefilterGpu {
     // The capture, sampled whole (all mips) by the GGX kernel.
     capture: Retained<ProtocolObject<dyn MTLTexture>>,
@@ -136,67 +109,59 @@ pub(in crate::metal) struct PrefilterGpu {
     // downsample's source and mip M+1 its destination, so no dispatch reads the
     // texels it writes.
     capture_mip_views: Vec<Retained<ProtocolObject<dyn MTLTexture>>>,
-    // The prefiltered radiance cube this bake produces.
-    probe: PooledTexture,
-    // One single-level 2D-array view of the probe cube per mip, the destination
-    // of the mip-0 copy and of each GGX dispatch.
+    // One single-level 2D-array view per mip of this probe's six slices of the
+    // probe cube array, the destination of the mip-0 copy and of each GGX
+    // dispatch. A view keeps its parent alive, so a bake parked behind the
+    // fence keeps a replaced array alive with it.
     probe_mip_views: Vec<Retained<ProtocolObject<dyn MTLTexture>>>,
 }
 
 impl PrefilterGpu {
-    /// Take ownership of a finished `capture` and allocate the probe cube it
-    /// convolves into, plus the per-mip write views both need.
+    /// Take ownership of a finished `capture` and make the per-mip write views
+    /// of it and of cube `slot` of the probe cube array `cubes`.
     pub(in crate::metal) fn new(
-        alloc: &DeviceAllocator,
         capture: Retained<ProtocolObject<dyn MTLTexture>>,
+        cubes: &ProtocolObject<dyn MTLTexture>,
+        slot: usize,
         plan: &PrefilterPlan,
     ) -> RenderResult<PrefilterGpu> {
-        let desc = TextureDesc {
-            kind: MTLTextureType::TypeCube,
-            format: PROBE_CUBE_FORMAT,
-            width: plan.face_size() as usize,
-            height: plan.face_size() as usize,
-            mip_count: plan.mips() as usize,
-            usage: MTLTextureUsage(MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::ShaderWrite.0),
-            ..Default::default()
-        }
-        .build();
-        let probe = alloc.alloc_texture(&desc)?;
-        let capture_mip_views = mip_array_views(&capture, plan.mips(), "capture")?;
-        let probe_mip_views = mip_array_views(&probe, plan.mips(), "probe")?;
+        let capture_mip_views = mip_array_views(&capture, 0, plan.mips(), "capture")?;
+        let probe_mip_views = mip_array_views(cubes, slot, plan.mips(), "probe")?;
         Ok(PrefilterGpu {
             capture,
             capture_mip_views,
-            probe,
             probe_mip_views,
         })
     }
-
-    /// The finished cube, handed to the probe pool at install.
-    pub(in crate::metal) fn into_probe_cube(self) -> PooledTexture {
-        self.probe
-    }
 }
 
-// One single-level 2D-array view per mip of a cube texture. A cube is a
-// six-slice array, so the view is what lets a kernel address (x, y, face)
-// directly; the format is the parent's, so no reinterpretation occurs.
+// One single-level 2D-array view per mip of cube `cube` of a cube or cube-array
+// texture. A cube is six slices, so the view is what lets a kernel address
+// (x, y, face) directly; the format is the parent's, so no reinterpretation
+// occurs.
 fn mip_array_views(
     texture: &ProtocolObject<dyn MTLTexture>,
+    cube: usize,
     mips: u32,
     label: &str,
 ) -> RenderResult<Vec<Retained<ProtocolObject<dyn MTLTexture>>>> {
+    let slices = texture.arrayLength() * 6;
+    if (cube + 1) * 6 > slices || mips as usize > texture.mipmapLevelCount() {
+        return Err(RenderError::Other(format!(
+            "probe: {label} has no cube {cube} at {mips} mips"
+        )));
+    }
     (0..mips)
         .map(|mip| {
-            // SAFETY: `mip` is in `0..mips` and the texture was created with
-            // `mips` levels and the six slices of a cube; the view shares the
+            // SAFETY: `mip` is below the texture's level count and cube `cube`'s
+            // six slices are within it, both checked above; the view shares the
             // parent's pixel format, so it reinterprets nothing.
             unsafe {
                 texture.newTextureViewWithPixelFormat_textureType_levels_slices(
                     PROBE_CUBE_FORMAT,
                     MTLTextureType::Type2DArray,
                     NSRange::new(mip as usize, 1),
-                    NSRange::new(0, 6),
+                    NSRange::new(cube * 6, 6),
                 )
             }
             .ok_or_else(|| {

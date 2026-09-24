@@ -21,21 +21,20 @@ use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
 use objc2_metal::{
     MTLCommandBuffer as _, MTLComputeCommandEncoder as _, MTLComputePipelineState, MTLDevice as _,
-    MTLLibrary as _, MTLLoadAction, MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder as _,
+    MTLLoadAction, MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder as _,
     MTLRenderPassDescriptor, MTLRenderPipelineState, MTLSize, MTLStoreAction, MTLTexture,
     MTLTextureType, MTLTextureUsage,
 };
 
+use super::builtin_shaders::{FOG_FRAG, FOG_FROXEL, compute_pipeline};
 use super::context::MtlContext;
 use super::descriptors::TextureDesc;
 use super::encode::{ComputeEncode, RenderEncode};
 use super::error::allocation_failed;
-use super::pipeline::ns_str;
 use super::post::fullscreen::{
-    FullscreenBlend, build_slang_fullscreen_pipeline, set_fragment_sampler_range,
+    FullscreenBlend, build_fullscreen_pipeline, set_fragment_sampler_range,
 };
 use super::scoped_encoder::ScopedEncoder;
-use super::slang_builtins::{FOG_FRAG, FOG_FROXEL};
 
 // All volumetric-fog state grouped into one feature unit: the resolved
 // tunables, the fullscreen ray-march pipeline, and the froxel-volume compute
@@ -214,7 +213,7 @@ pub(super) fn build_fog_pipeline(
     hot_reload: bool,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     // `(scattered, 1 - T)` over `scene` -> `scene * T + scattered`.
-    build_slang_fullscreen_pipeline(
+    build_fullscreen_pipeline(
         device,
         &FOG_FRAG,
         MTLPixelFormat::RGBA16Float,
@@ -230,13 +229,7 @@ pub(super) fn build_fog_froxel_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLComputePipelineState>>> {
-    let library = FOG_FROXEL.library(device, hot_reload)?;
-    let func = library
-        .newFunctionWithName(&ns_str("fog_froxel_kernel"))
-        .ok_or_else(|| RenderError::ShaderCompile("fog_froxel_kernel not found".into()))?;
-    device
-        .newComputePipelineStateWithFunction_error(&func)
-        .map_err(|e| RenderError::ShaderCompile(format!("fog froxel pipeline: {e:?}")))
+    compute_pipeline(device, &FOG_FROXEL, hot_reload)
 }
 
 // Allocate the 3D `RGBA16Float` volume the froxel kernel writes and the

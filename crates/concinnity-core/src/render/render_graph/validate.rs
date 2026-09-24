@@ -633,7 +633,7 @@ mod tests {
             ("draw_args", C::IndirectBuffer),
             ("draw_args2", C::IndirectBuffer),
             ("cull_status", C::UnorderedBuffer),
-            ("cluster_light_list", C::StorageBuffer),
+            ("cluster_lists", C::StorageBuffer),
             ("ao_output", C::ColorTarget),
             ("shadow_map", C::DepthTarget),
             ("spot_shadow_map", C::DepthTarget),

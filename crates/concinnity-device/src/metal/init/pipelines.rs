@@ -13,23 +13,15 @@ use concinnity_core::render::error::{RenderError, RenderResult};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTLArgumentEncoder, MTLCompareFunction, MTLDepthStencilDescriptor, MTLDepthStencilState,
-    MTLDevice, MTLFunction as _, MTLLibrary as _, MTLPixelFormat, MTLRenderPipelineDescriptor,
+    MTLArgumentBuffersTier, MTLArgumentEncoder, MTLCompareFunction, MTLDepthStencilDescriptor,
+    MTLDepthStencilState, MTLDevice, MTLFunction, MTLPixelFormat, MTLRenderPipelineDescriptor,
     MTLRenderPipelineState, MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction,
 };
 
 use crate::metal::context::{BINDLESS_SAMPLER_ARG_BUFFER_INDEX, BINDLESS_TEXTURE_ARG_BUFFER_INDEX};
 use crate::metal::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
 use crate::metal::error::allocation_failed;
-use crate::metal::pipeline::{ns_str, world_library};
-
-// The argument encoders of the bindless main pass's engine blocks.
-pub(crate) struct BindlessArgEncoders {
-    // The `BindlessTextures` block at buffer(7).
-    pub texture: Retained<ProtocolObject<dyn MTLArgumentEncoder>>,
-    // The engine sampler block at buffer(10).
-    pub sampler: Retained<ProtocolObject<dyn MTLArgumentEncoder>>,
-}
+use crate::metal::pipeline::world_function;
 
 // Describes the per-vertex buffer layout so Metal can map [[stage_in]]:
 //   buffer(1): interleaved [float3 pos, float3 normal, float3 tangent, float3 color, float2 uv]
@@ -90,50 +82,24 @@ pub(crate) fn build_main_pipeline(
     // own, or the world's compile of the same file with its hooks spliced in.
     // The static pass is always GPU-driven now.
     let (vert_fn, main_frag_fn) = match world {
-        None => {
-            let vert_library = super::super::slang_builtins::MAIN_BINDLESS_VERT
-                .library(device, hot_reload)
-                .map_err(|e| e.context("engine vertex library"))?;
-            let frag_library = super::super::slang_builtins::MAIN_BINDLESS_FRAG
-                .library(device, hot_reload)
-                .map_err(|e| e.context("engine fragment library"))?;
-            let vert_fn = vert_library
-                .newFunctionWithName(&ns_str("vertex_main_bindless"))
-                .ok_or_else(|| {
-                    RenderError::ShaderCompile(
-                        "vertex_main_bindless not found in engine library".into(),
-                    )
-                })?;
-            let frag_fn = frag_library
-                .newFunctionWithName(&ns_str("fragment_main_bindless"))
-                .ok_or_else(|| {
-                    RenderError::ShaderCompile(
-                        "fragment_main_bindless not found in engine library".into(),
-                    )
-                })?;
-            (vert_fn, frag_fn)
-        }
-        Some(programs) => {
-            // One library holds the pair: the cook groups the bindless
-            // entries into one MSL translation unit on this host.
-            let library = world_library(device, hot_reload, programs, "fragment_main_bindless")
-                .map_err(|e| e.context("the world's main library"))?;
-            let vert_fn = library
-                .newFunctionWithName(&ns_str("vertex_main_bindless"))
-                .ok_or_else(|| {
-                    RenderError::ShaderCompile(
-                        "vertex_main_bindless not found in the world's main library".into(),
-                    )
-                })?;
-            let frag_fn = library
-                .newFunctionWithName(&ns_str("fragment_main_bindless"))
-                .ok_or_else(|| {
-                    RenderError::ShaderCompile(
-                        "fragment_main_bindless not found in the world's main library".into(),
-                    )
-                })?;
-            (vert_fn, frag_fn)
-        }
+        None => (
+            super::super::builtin_shaders::entry_function(
+                device,
+                &super::super::builtin_shaders::MAIN_BINDLESS_VERT,
+                hot_reload,
+            )?,
+            super::super::builtin_shaders::entry_function(
+                device,
+                &super::super::builtin_shaders::MAIN_BINDLESS_FRAG,
+                hot_reload,
+            )?,
+        ),
+        Some(programs) => (
+            world_function(device, hot_reload, programs, "vertex_main_bindless")
+                .map_err(|e| e.context("the world's main pass"))?,
+            world_function(device, hot_reload, programs, "fragment_main_bindless")
+                .map_err(|e| e.context("the world's main pass"))?,
+        ),
     };
     let pipeline_desc = MTLRenderPipelineDescriptor::new();
     pipeline_desc.setVertexDescriptor(Some(vert_desc));
@@ -159,44 +125,68 @@ pub(crate) fn build_main_pipeline(
         .map_err(|e| RenderError::ShaderCompile(format!("main pipeline state: {e:?}")))
 }
 
-// The argument encoders for the `BindlessTextures` buffer at buffer(7) and the
-// sampler block at buffer(10). They describe the engine's layouts, so they come
-// from the engine's own fragment. A world's compile of the same file declares
-// the same blocks, but a `shade` that samples nothing lets the compiler drop
-// them, and an encoder cannot be derived from a parameter that is not there.
-pub(crate) fn build_bindless_arg_encoders(
+// Fail unless the device and the engine fragment support the bindless main
+// pass: argument-buffer tier 2, and a `BindlessTextures` block at buffer(7)
+// laid out the way the resource-id writes assume. That block is written as
+// plain resource ids at `resource_id_offset(id)`, so its encoder is built only
+// to prove the layout: the block ends in an unsized pool, which the emitted MSL
+// declares one long, so every member an id and a resource id apart holds
+// exactly when the encoder's length is the fixed members plus one pool slot.
+fn check_bindless_support(
     device: &ProtocolObject<dyn MTLDevice>,
-    hot_reload: bool,
-) -> RenderResult<BindlessArgEncoders> {
-    let encoder_frag_fn = super::super::slang_builtins::entry_function(
-        device,
-        &super::super::slang_builtins::MAIN_BINDLESS_FRAG,
-        hot_reload,
-    )?;
-    // SAFETY: both indices are the static buffer indices the engine fragment
-    // declares its argument buffers at (locked by the build script's ABI
+    fragment: &ProtocolObject<dyn MTLFunction>,
+) -> RenderResult<()> {
+    use crate::metal::bindless_args::bindless_block_len;
+    if device.argumentBuffersSupport() != MTLArgumentBuffersTier::Tier2 {
+        return Err(RenderError::Other(
+            "the bindless main pass needs argument-buffer tier 2, which this device lacks".into(),
+        ));
+    }
+    // SAFETY: the index is the static buffer index the engine fragment declares
+    // its texture argument buffer at (locked by the build script's ABI
     // assertion).
-    let (texture, sampler) = unsafe {
-        (
-            encoder_frag_fn.newArgumentEncoderWithBufferIndex(BINDLESS_TEXTURE_ARG_BUFFER_INDEX),
-            encoder_frag_fn.newArgumentEncoderWithBufferIndex(BINDLESS_SAMPLER_ARG_BUFFER_INDEX),
-        )
-    };
-    Ok(BindlessArgEncoders { texture, sampler })
+    let texture =
+        unsafe { fragment.newArgumentEncoderWithBufferIndex(BINDLESS_TEXTURE_ARG_BUFFER_INDEX) };
+    let expected = bindless_block_len(1);
+    if texture.encodedLength() != expected {
+        return Err(RenderError::Other(format!(
+            "the bindless texture block encodes to {} bytes, not the {expected} its resource-id \
+             layout assumes",
+            texture.encodedLength()
+        )));
+    }
+    Ok(())
 }
 
-// Write the engine sampler block once: the pool sampler (trilinear +
-// anisotropic + repeat), the shadow compare sampler, and the cube sampler. Member order mirrors EngineSamplers
-// in `src/shaders/main_bindless.slang`. Samplers never stream, so unlike the
-// texture argument buffer this is written a single time at init.
+// Write the engine sampler block at buffer(10) once: the pool sampler
+// (trilinear + anisotropic + repeat), the shadow compare sampler, and the cube
+// sampler, at the argument ids their registers give them in
+// `main_bindless.hlsl` (s0..s2, locked by the build script). Samplers never
+// stream, so unlike the texture argument buffer this is written a single time.
+//
+// The block's encoder describes the engine's layout, so it comes from the
+// engine's own fragment. A world's compile of the same file declares the same
+// block, but a `shade` that samples nothing lets the compiler drop it, and an
+// encoder cannot be derived from a parameter that is not there.
 pub(crate) fn build_bindless_sampler_args(
     device: &ProtocolObject<dyn MTLDevice>,
-    encoder: &ProtocolObject<dyn MTLArgumentEncoder>,
+    hot_reload: bool,
     tex_sampler: &ProtocolObject<dyn objc2_metal::MTLSamplerState>,
     shadow_sampler: &ProtocolObject<dyn objc2_metal::MTLSamplerState>,
     cube_sampler: &ProtocolObject<dyn objc2_metal::MTLSamplerState>,
 ) -> RenderResult<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>> {
     use objc2_metal::MTLResourceOptions;
+    let fragment = super::super::builtin_shaders::entry_function(
+        device,
+        &super::super::builtin_shaders::MAIN_BINDLESS_FRAG,
+        hot_reload,
+    )?;
+    check_bindless_support(device, &fragment)?;
+    // SAFETY: the index is the static buffer index the engine fragment declares
+    // its sampler argument buffer at (locked by the build script's ABI
+    // assertion).
+    let encoder =
+        unsafe { fragment.newArgumentEncoderWithBufferIndex(BINDLESS_SAMPLER_ARG_BUFFER_INDEX) };
     let len = encoder.encodedLength().max(16);
     let buf = device
         .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
@@ -261,22 +251,12 @@ pub(crate) fn build_bucket_pipeline(
     hot_reload: bool,
     sample_count: u32,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    let library = world_library(device, hot_reload, programs, "fragment_main_bindless")
-        .map_err(|e| e.context(format_args!("shader bucket {bucket}")))?;
-    let vert_fn = library
-        .newFunctionWithName(&ns_str("vertex_main_bindless"))
-        .ok_or_else(|| {
-            RenderError::ShaderCompile(format!(
-                "shader bucket {bucket}: vertex_main_bindless not found"
-            ))
-        })?;
-    let frag_fn = library
-        .newFunctionWithName(&ns_str("fragment_main_bindless"))
-        .ok_or_else(|| {
-            RenderError::ShaderCompile(format!(
-                "shader bucket {bucket}: fragment_main_bindless not found"
-            ))
-        })?;
+    let world = |entry| {
+        world_function(device, hot_reload, programs, entry)
+            .map_err(|e| e.context(format_args!("shader bucket {bucket}")))
+    };
+    let vert_fn = world("vertex_main_bindless")?;
+    let frag_fn = world("fragment_main_bindless")?;
 
     let desc = MTLRenderPipelineDescriptor::new();
     desc.setVertexDescriptor(Some(vert_desc));
@@ -301,7 +281,7 @@ pub(crate) fn build_bucket_pipeline(
 }
 
 // Shadow pipeline: depth-only, no fragment function, no MSAA. Compiled from the
-// engine-internal single source (`shadow.slang`, entry `shadow_vertex_main`).
+// engine-internal single source (`shadow.hlsl`, entry `shadow_vertex_main`).
 // Shared by init (one-shot at startup) and the internal-shader hot-reload path
 // (`reload_shaders`) so the two stay consistent.
 pub(crate) fn build_shadow_pipeline(
@@ -309,9 +289,9 @@ pub(crate) fn build_shadow_pipeline(
     vert_desc: &MTLVertexDescriptor,
     hot_reload: bool,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    let shadow_fn = super::super::slang_builtins::entry_function(
+    let shadow_fn = super::super::builtin_shaders::entry_function(
         device,
-        &super::super::slang_builtins::SHADOW_VERT,
+        &super::super::builtin_shaders::SHADOW_VERT,
         hot_reload,
     )?;
     let shadow_pipeline_desc = MTLRenderPipelineDescriptor::new();
@@ -337,9 +317,9 @@ pub(crate) fn build_shadow_bindless_pipeline(
     vert_desc: &MTLVertexDescriptor,
     hot_reload: bool,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    let shadow_fn = super::super::slang_builtins::entry_function(
+    let shadow_fn = super::super::builtin_shaders::entry_function(
         device,
-        &super::super::slang_builtins::SHADOW_VERT_BINDLESS,
+        &super::super::builtin_shaders::SHADOW_VERT_BINDLESS,
         hot_reload,
     )?;
     let shadow_pipeline_desc = MTLRenderPipelineDescriptor::new();

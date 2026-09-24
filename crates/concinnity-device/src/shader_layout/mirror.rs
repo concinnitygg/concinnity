@@ -8,11 +8,11 @@
 //! must start at the same offset and span the same number of bytes; the Rust
 //! lanes together must tile the whole struct.
 //!
-//! Nothing here is a hand-written number. Every expected value comes from
-//! slangc's reflection of the shader that actually compiles.
+//! Nothing here is a hand-written number. Every expected value comes from the
+//! compiled module of the shader that actually ships.
 
-use crate::shader_layout::programs::Target;
-use crate::shader_layout::reflect::ShaderStruct;
+use concinnity_core::platform::Platform;
+use concinnity_shader::layout::StructLayout;
 
 // One Rust field: where `#[repr(C)]` puts it and how wide it is.
 pub(super) struct RustField {
@@ -92,9 +92,9 @@ macro_rules! mirror {
 
 pub(super) use {lanes, mirror, rust_field};
 
-// Every way `mirror` disagrees with the layout slangc gave `shader`. Empty means
+// Every way `mirror` disagrees with the layout the compiler gave `shader`. Empty means
 // the CPU struct and the compiled shader struct describe the same bytes.
-pub(super) fn drift(mirror: &Mirror, shader: &ShaderStruct) -> Vec<String> {
+pub(super) fn drift(mirror: &Mirror, shader: &StructLayout) -> Vec<String> {
     let mut out = Vec::new();
     check_tiling(mirror, &mut out);
     check_lanes(mirror, shader, &mut out);
@@ -127,7 +127,7 @@ fn check_tiling(mirror: &Mirror, out: &mut Vec<String>) {
 
 // Each lane's Rust run and shader run must start together and span the same
 // bytes. This is where a shader-side move or resize surfaces.
-fn check_lanes(mirror: &Mirror, shader: &ShaderStruct, out: &mut Vec<String>) {
+fn check_lanes(mirror: &Mirror, shader: &StructLayout, out: &mut Vec<String>) {
     let declared = shader.extent();
     for lane in &mirror.lanes {
         let rust_offset = lane.rust[0].offset;
@@ -190,7 +190,7 @@ fn check_lanes(mirror: &Mirror, shader: &ShaderStruct, out: &mut Vec<String>) {
 
 // Every shader member must be claimed by a lane, or a field added shader-side
 // would go unchecked.
-fn check_coverage(mirror: &Mirror, shader: &ShaderStruct, out: &mut Vec<String>) {
+fn check_coverage(mirror: &Mirror, shader: &StructLayout, out: &mut Vec<String>) {
     for field in &shader.fields {
         if !mirror
             .lanes
@@ -209,12 +209,10 @@ fn check_coverage(mirror: &Mirror, shader: &ShaderStruct, out: &mut Vec<String>)
 // sit past the bytes the CPU uploads. Two shapes pass besides an exact match:
 // the shader's declared extent stops short of a longer Rust struct (the DirectX
 // leg reports blocks unrounded, and some declarations are partial views), and
-// a Vulkan push constant whose block slangc rounded up to 16 bytes over a Rust
-// struct that is exactly the members' extent.
-fn check_size(mirror: &Mirror, shader: &ShaderStruct, out: &mut Vec<String>) {
-    let Some(block) = shader.block_size else {
-        return;
-    };
+// a block rounded up to 16 bytes over a Rust struct that is exactly the
+// members' extent.
+fn check_size(mirror: &Mirror, shader: &StructLayout, out: &mut Vec<String>) {
+    let block = shader.size;
     let extent = shader.extent();
     let rounds_up = block == extent && mirror.rust_size > block;
     let block_padded = block == extent.next_multiple_of(16) && mirror.rust_size == extent;
@@ -232,26 +230,26 @@ fn check_size(mirror: &Mirror, shader: &ShaderStruct, out: &mut Vec<String>) {
 // constant on Vulkan, so each leg mirrors a different struct.
 pub(super) struct Case {
     pub mirror: Mirror,
-    pub targets: &'static [Target],
+    pub targets: &'static [Platform],
 }
 
 // A mirror every backend declares.
 pub(super) fn everywhere(mirror: Mirror) -> Case {
     Case {
         mirror,
-        targets: &Target::ALL,
+        targets: &Platform::ALL,
     }
 }
 
 // A mirror only some backends declare.
-pub(super) fn on(targets: &'static [Target], mirror: Mirror) -> Case {
+pub(super) fn on(targets: &'static [Platform], mirror: Mirror) -> Case {
     Case { mirror, targets }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shader_layout::reflect::{ShaderField, ShaderStruct};
+    use concinnity_shader::layout::{Field, StructLayout};
 
     fn rust(size: usize) -> Mirror {
         Mirror {
@@ -262,14 +260,14 @@ mod tests {
         }
     }
 
-    fn shader(extent: usize, block: usize) -> ShaderStruct {
-        ShaderStruct {
-            fields: vec![ShaderField {
+    fn shader(extent: usize, block: usize) -> StructLayout {
+        StructLayout {
+            fields: vec![Field {
                 name: "a".to_string(),
                 offset: 0,
                 size: extent,
             }],
-            block_size: Some(block),
+            size: block,
         }
     }
 
@@ -279,8 +277,8 @@ mod tests {
         out
     }
 
-    // A Vulkan push constant: slangc rounds the block to 128 over 120 bytes of
-    // members, and the host pushes exactly the 120-byte Rust struct.
+    // A block rounded to 128 over 120 bytes of members, and a host that uploads
+    // exactly the 120-byte Rust struct.
     #[test]
     fn a_block_rounded_over_an_exact_rust_struct_passes() {
         assert!(size_findings(120, 120, 128).is_empty());

@@ -72,6 +72,19 @@ impl ProbePlacement {
             ],
         }
     }
+
+    /// The record the shaders read for this placement once its cube is baked:
+    /// the box with parallax enabled (`box_min.w = 1`) and the capture point.
+    pub fn uniforms(&self) -> crate::render::uniforms::ProbeUniforms {
+        let [x0, y0, z0] = self.box_min;
+        let [x1, y1, z1] = self.box_max;
+        let [px, py, pz] = self.position;
+        crate::render::uniforms::ProbeUniforms {
+            box_min: [x0, y0, z0, 1.0],
+            box_max: [x1, y1, z1, 0.0],
+            probe_pos: [px, py, pz, 0.0],
+        }
+    }
 }
 
 /// Tracks how far a staggered probe bake has progressed. Baking every probe on
@@ -243,7 +256,7 @@ impl PrefilterPlan {
     /// 512px faces match the `EnvironmentMap` asset default, so a captured probe
     /// resolves reflections as sharply as an imported HDR. 128 GGX samples per
     /// texel is well short of the importer's 1024, which the solid-angle mip
-    /// selection in `probe_prefilter.slang` pays for: each sample reads the
+    /// selection in `probe_prefilter.hlsl` pays for: each sample reads the
     /// pyramid level matching its own footprint, so a sparse set still integrates
     /// a wide lobe without aliasing. The clamp matches the asset default, so a
     /// captured probe and an imported HDR suppress the same bright-square fringe.
@@ -323,9 +336,7 @@ impl PrefilterPlan {
 }
 
 // Largest number of probes auto-seed places. Bounds the bake cost + probe-cube
-// memory for an un-authored world. Must not exceed the renderer's per-frame probe
-// bind limit (`crate::render::uniforms::MAX_PROBES`); asserted by
-// `auto_seed_budget_fits_max_probes` in the metal uniforms tests.
+// memory for an un-authored world.
 pub(crate) const AUTO_SEED_BUDGET: usize = 8;
 
 // Horizontal size (meters) each auto-seeded cell aims to cover -- roughly a large
@@ -943,6 +954,28 @@ fn seed_grid_probes(
     out
 }
 
+/// The placements a world reflects with: `declared` when it declares any, else
+/// probes auto-seeded over the scene objects' world-space `aabbs`, which serve
+/// as both the scene bounds and the occupancy that keeps a capture point out of
+/// a wall. A box with a non-finite corner is skipped. Empty when nothing is
+/// declared and no box is finite.
+pub fn resolve_placements(
+    declared: &[ProbePlacement],
+    aabbs: impl IntoIterator<Item = ([f32; 3], [f32; 3])>,
+) -> Vec<ProbePlacement> {
+    if !declared.is_empty() {
+        return declared.to_vec();
+    }
+    let occupancy: Vec<([f32; 3], [f32; 3])> = aabbs
+        .into_iter()
+        .filter(|(mn, mx)| mn.iter().chain(mx).all(|c| c.is_finite()))
+        .collect();
+    match fold_world_bounds(occupancy.iter().copied()) {
+        Some((mn, mx)) => auto_seed_probes(mn, mx, &occupancy),
+        None => Vec::new(),
+    }
+}
+
 /// Union the world-space AABBs of every scene object into one bounds, skipping
 /// any box with a non-finite corner (a degenerate / sentinel AABB). Returns
 /// `None` for an empty scene. The probe eye is then `probe_eye_point` of this.
@@ -1077,6 +1110,14 @@ mod tests {
     }
 
     #[test]
+    fn a_placement_record_enables_parallax_over_its_box() {
+        let u = ProbePlacement::from_center_extents([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]).uniforms();
+        assert_eq!(u.box_min, [-3.0, -3.0, -3.0, 1.0]);
+        assert_eq!(u.box_max, [5.0, 7.0, 9.0, 0.0]);
+        assert_eq!(u.probe_pos, [1.0, 2.0, 3.0, 0.0]);
+    }
+
+    #[test]
     fn placement_from_center_extents_builds_box() {
         let p = ProbePlacement::from_center_extents([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]);
         assert_eq!(p.box_min, [-3.0, -3.0, -3.0]);
@@ -1093,6 +1134,33 @@ mod tests {
             core::array::from_fn(|i| a[i].max(p.box_max[i]))
         });
         (mn, mx)
+    }
+
+    #[test]
+    fn resolve_placements_keeps_declared_probes() {
+        let declared = [ProbePlacement::from_center_extents(
+            [1.0, 2.0, 3.0],
+            [1.0; 3],
+        )];
+        let aabbs = [([-10.0, 0.0, -10.0], [10.0, 6.0, 10.0])];
+        assert_eq!(resolve_placements(&declared, aabbs), declared.to_vec());
+    }
+
+    #[test]
+    fn resolve_placements_seeds_from_the_finite_boxes() {
+        let wall = ([-10.0, 0.0, -10.0], [10.0, 6.0, 10.0]);
+        let degenerate = ([f32::NAN, 0.0, 0.0], [f32::INFINITY, 1.0, 1.0]);
+        assert_eq!(
+            resolve_placements(&[], [wall, degenerate]),
+            auto_seed_probes(wall.0, wall.1, &[wall])
+        );
+    }
+
+    #[test]
+    fn resolve_placements_is_empty_without_a_finite_box() {
+        let degenerate = ([f32::NAN; 3], [f32::NAN; 3]);
+        assert!(resolve_placements(&[], [degenerate]).is_empty());
+        assert!(resolve_placements(&[], []).is_empty());
     }
 
     #[test]

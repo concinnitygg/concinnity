@@ -15,12 +15,12 @@ use concinnity_core::render::uniforms::{
 };
 
 use crate::shader_layout::mirror::{Case, everywhere, mirror, on};
-use crate::shader_layout::programs::Target;
+use concinnity_core::platform::Platform;
 
-const METAL: &[Target] = &[Target::Metal];
-const VULKAN: &[Target] = &[Target::Vulkan];
-const DIRECTX: &[Target] = &[Target::DirectX];
-const METAL_AND_DIRECTX: &[Target] = &[Target::Metal, Target::DirectX];
+const METAL: &[Platform] = &[Platform::Metal];
+const VULKAN: &[Platform] = &[Platform::Vulkan];
+const DIRECTX: &[Platform] = &[Platform::DirectX];
+const METAL_AND_DIRECTX: &[Platform] = &[Platform::Metal, Platform::DirectX];
 
 pub(in crate::shader_layout) fn gbuffer_vertex() -> Vec<Case> {
     vec![everywhere(mirror!(GBufferView => "GbView" {

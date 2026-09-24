@@ -1,7 +1,7 @@
 //! The Shader asset: the authored schema (Shader, ShaderStage, and the
 //! ShaderPrograms container the cook fills), and the `Component` impl. The
 //! compile lives in concinnity-cook (`compile::shader`); which programs a
-//! world shader compiles to is `render::slang_programs::surface`.
+//! world shader compiles to is `render::shader_programs::surface`.
 
 use crate::ecs::Component;
 use crate::ecs::PayloadLocator;
@@ -21,7 +21,7 @@ pub enum ShaderStage {
 }
 
 /// Replaces how surfaces are shaded, and optionally how vertices are placed,
-/// with functions of your own. Written in Slang, one source for every
+/// with functions of your own. Written in HLSL, one source for every
 /// backend.
 ///
 /// **A Shader is entirely optional.** The engine ships its own lighting and
@@ -34,13 +34,13 @@ pub enum ShaderStage {
 /// # use concinnity_core::components::Shader;
 /// // Custom shading only; the engine still places every vertex.
 /// let water = Shader {
-///     fragment: "assets/shaders/water.slang".into(),
+///     fragment: "assets/shaders/water.hlsl".into(),
 ///     ..Default::default()
 /// };
 /// // Both hooks: a sway displacement, then the surface.
 /// let reeds = Shader {
-///     vertex: Some("assets/shaders/reeds_sway.slang".into()),
-///     fragment: "assets/shaders/reeds.slang".into(),
+///     vertex: Some("assets/shaders/reeds_sway.hlsl".into()),
+///     fragment: "assets/shaders/reeds.hlsl".into(),
 ///     ..Default::default()
 /// };
 /// assert!(water.vertex.is_none() && reeds.vertex.is_some());
@@ -54,7 +54,7 @@ pub enum ShaderStage {
 ///
 /// ```hlsl
 /// // the `fragment` file, required
-/// float4 shade(VertexOut in, GpuObjectData od);
+/// float4 shade(VertexOut v, GpuObjectData od);
 ///
 /// // the `vertex` file, optional; without one the engine projects the vertex itself
 /// VertexOut transform(float4x4 model, float3 pos, float3 normal, float3 tangent,
@@ -75,8 +75,8 @@ pub enum ShaderStage {
 /// see the same vocabulary the engine's shading uses and declare no layout,
 /// binding, register, attribute or varying of their own:
 ///
-/// - `shade_surface(in, od)`: the engine's PBR lighting, so
-///   `return shade_surface(in, od) * tint;` starts from it.
+/// - `shade_surface(v, od)`: the engine's PBR lighting, so
+///   `return shade_surface(v, od) * tint;` starts from it.
 /// - `project_vertex(model, pos, normal, tangent, color, uv)`: the engine's
 ///   projection.
 /// - `pool_sample(index, uv)`: a texture from the world's pool by the record's
@@ -84,8 +84,10 @@ pub enum ShaderStage {
 /// - `decode_normal_map(rg)`: a tangent-space normal from a normal-map texel.
 /// - `shadow_factor_cascaded(world_pos, view_depth, screen_xy)`: the sun's
 ///   cascaded shadow term.
-/// - `environment_specular(world_pos, reflected, lod)`: the reflection
-///   environment.
+/// - `environment_specular(probe_mask_all(), world_pos, reflected, roughness,
+///   radiance)`: the reflection environment for a surface of `roughness` into
+///   `radiance`, false where the world has neither a reflection probe nor an
+///   environment map.
 /// - `irradiance_sample(normal)`: the diffuse environment.
 /// - `VIEW`: the view block, with `vp`, `view_mat`, `elapsed`, `cam_x` /
 ///   `cam_y` / `cam_z` and `sky_rot`.
@@ -95,7 +97,7 @@ pub enum ShaderStage {
 ///
 /// `VertexOut` is the engine's varying block: `position` (clip), `world_pos`,
 /// `normal`, `tangent`, `bitangent`, `uv`, `view_depth` and `color`. A `shade`
-/// must not read `in.object_id`; the record is `od`.
+/// must not read `v.object_id`; the record is `od`.
 ///
 /// # More than one Shader
 ///
@@ -124,13 +126,14 @@ pub enum ShaderStage {
 /// `cn build` compiles both files for the backend it cooks for and stores the
 /// result in the world; a player needs no shader compiler. A file that fails
 /// to compile, or omits its hook, fails the build naming the Shader and the
-/// hook. Under `cn debug` a save to either file recompiles it and swaps the
+/// hook; a compiler warning is logged against the Shader and the build goes
+/// on. Under `cn debug` a save to either file recompiles it and swaps the
 /// live pipelines.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 pub struct Shader {
-    /// Path to the `.slang` file defining `shade`. Required.
+    /// Path to the `.hlsl` file defining `shade`. Required.
     pub fragment: String,
-    /// Path to the `.slang` file defining `transform`. Omit to keep the
+    /// Path to the `.hlsl` file defining `transform`. Omit to keep the
     /// engine's own projection.
     #[serde(default)]
     pub vertex: Option<String>,
@@ -216,25 +219,25 @@ mod tests {
     #[test]
     fn a_shader_parses_from_authored_args() {
         let s: Shader =
-            serde_json::from_str(r#"{"fragment":"assets/shaders/water.slang"}"#).unwrap();
-        assert_eq!(s.fragment, "assets/shaders/water.slang");
+            serde_json::from_str(r#"{"fragment":"assets/shaders/water.hlsl"}"#).unwrap();
+        assert_eq!(s.fragment, "assets/shaders/water.hlsl");
         assert!(s.vertex.is_none(), "the vertex file is optional");
         assert_eq!(s.stage(ShaderStage::Vertex), None);
         assert_eq!(
             s.stage(ShaderStage::Fragment),
-            Some("assets/shaders/water.slang")
+            Some("assets/shaders/water.hlsl")
         );
         // The identity and payload locator are injected, never authored.
         assert!(s.locator.is_none());
 
         let both: Shader =
-            serde_json::from_str(r#"{"vertex":"v.slang","fragment":"f.slang"}"#).unwrap();
-        assert_eq!(both.stage(ShaderStage::Vertex), Some("v.slang"));
+            serde_json::from_str(r#"{"vertex":"v.hlsl","fragment":"f.hlsl"}"#).unwrap();
+        assert_eq!(both.stage(ShaderStage::Vertex), Some("v.hlsl"));
 
         let bytes = postcard::to_allocvec(&both).unwrap();
         let back: Shader = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.vertex.as_deref(), Some("v.slang"));
-        assert_eq!(back.fragment, "f.slang");
+        assert_eq!(back.vertex.as_deref(), Some("v.hlsl"));
+        assert_eq!(back.fragment, "f.hlsl");
     }
 
     // The per-platform `sources` table is gone: a declaration still spelling it
@@ -259,9 +262,9 @@ mod tests {
         let payload = ShaderPrograms {
             name: "wall".to_string(),
             vertex: None,
-            fragment: "float4 shade(VertexOut in, GpuObjectData od) { return 1.0; }".to_string(),
+            fragment: "float4 shade(VertexOut v, GpuObjectData od) { return 1.0; }".to_string(),
             programs: vec![CompiledProgram {
-                entries: vec!["fragment_main".to_string()],
+                entry: "fragment_main".to_string(),
                 source_digest: 3,
                 artifact: vec![1, 2, 3],
             }],

@@ -20,13 +20,13 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
+use crate::directx::builtin_shaders;
+use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::serialize_desc_and_create;
-use crate::directx::slang_builtins;
-use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::HDR_FORMAT;
 use crate::directx::upload_ring::{UPLOAD_ALIGN, UploadRing};
 
@@ -121,13 +121,10 @@ impl LineResources {
 // fragment shader's depth SRV declaration in sync with the resource's sample
 // count. Used by the lazy build and by shader hot-reload.
 fn compile_line_shaders(msaa_samples: u32, hot_reload: bool) -> RenderResult<(Vec<u8>, Vec<u8>)> {
-    let frag = if msaa_samples > 1 {
-        &slang_builtins::LINE_FRAG_MSAA
-    } else {
-        &slang_builtins::LINE_FRAG
-    };
-    let vs = slang_builtins::LINE_VERT.compile(hot_reload)?;
-    let ps = frag.compile(hot_reload)?;
+    let vs = builtin_shaders::LINE_VERT.compile(hot_reload)?;
+    let ps = builtin_shaders::LINE_FRAG
+        .at(msaa_samples > 1)
+        .compile(hot_reload)?;
     Ok((vs, ps))
 }
 
@@ -147,9 +144,8 @@ pub(in crate::directx) fn rebuild_line_pso(
     )
 }
 
-// Root-signature layout (binds 1:1 with the `line.slang` declarations, whose
-// registers slangc assigns from declaration order; `SLANG_DXIL_ENTRY_ABI` in
-// build.rs pins each one):
+// Root-signature layout (binds 1:1 with the `line.hlsl` declarations, whose
+// `register()` annotations `DXIL_ENTRY_ABI` in build.rs pins):
 //   [0] root CBV b0   LineView (per-frame)
 //   [1] table  t0     scene depth SRV (Texture2D[MS]<float>)
 // No sampler: the fragment shader `Load`s the depth texel under the pixel.

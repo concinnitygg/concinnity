@@ -2,71 +2,43 @@
 //! invocation that reads their layouts back.
 //!
 //! One program per family is enough: a struct's declaration is shared by every
-//! entry in its file, so the smallest entry that declares it reports the same
-//! bytes the heaviest one does. Where two files declare the same struct name
-//! (`ShadowUniforms` is in both `main_bindless.slang` and `fog.slang`) both are
-//! listed, because they are separate declarations that can drift apart.
+//! entry in its file, and the reflection keeps every block the source binds
+//! whether the entry reads it or not, so any entry reports the same bytes. Where
+//! two files declare the same struct name (`ShadowUniforms` is in both
+//! `main_bindless.hlsl` and `fog.hlsl`) both are listed, because they are
+//! separate declarations that can drift apart.
 //!
-//! The defines mirror the backends' own program tables
-//! (`{vulkan,directx}/slang_builtins.rs`, `metal/slang_builtins.rs`): a variant
-//! compiles only with its gate, and each backend adds its own host-shape gate on
-//! top -- `METAL_ABI` or `METAL_BINDINGS` where the Metal slots are pinned,
-//! `DXIL_ABI` where the root signature is. Reflecting a family without its gate
-//! would read a declaration no backend compiles.
+//! Each program is a row of the backends' own tables (`shader_programs` in
+//! core), so it reflects the gates a backend compiles it with: a variant
+//! compiles only with its gate, and reflecting a family without it would read a
+//! declaration no backend compiles. The backend define comes from the
+//! assembler, as it does for them.
 
-use concinnity_slang as slang;
 use std::collections::BTreeMap;
 
-use crate::shader::slang_source;
-use crate::shader_layout::reflect::{self, ShaderStruct};
+use crate::shader::source;
+use concinnity_core::platform::Platform;
+use concinnity_core::render::shader_programs::{ShaderProgram, metal, shared};
+use concinnity_shader::layout::StructLayout;
 
-type Defines = &'static [(&'static str, &'static str)];
-
-// Which backend's layout rules slangc applies. The split is the point: MSL
-// sizes a `float3` at 16 bytes where SPIR-V and DXIL pack a scalar after it,
-// so a mirror has to be checked against each.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum Target {
-    Metal,
-    Vulkan,
-    DirectX,
-}
-
-impl Target {
-    pub(super) const ALL: [Target; 3] = [Target::Metal, Target::Vulkan, Target::DirectX];
-
-    pub(super) fn label(self) -> &'static str {
-        match self {
-            Target::Metal => "metal",
-            Target::Vulkan => "vulkan",
-            Target::DirectX => "directx",
-        }
-    }
-
-    // Reflection reads the same layout from the text targets as from the binary
-    // ones (`hlsl` and `dxil` emit byte-identical reflection), and neither needs
-    // a platform toolchain: `metallib` wants Xcode, `dxil` wants dxcompiler.
-    fn slang_target(self, profile: &'static str) -> slang::SlangTarget {
-        match self {
-            Target::Metal => slang::SlangTarget::Metal,
-            Target::Vulkan => slang::SlangTarget::Spirv,
-            Target::DirectX => slang::SlangTarget::Hlsl(profile),
-        }
+// The module whose decorations state `platform`'s layout. The split is the
+// point: MSL sizes a `float3` at 16 bytes where SPIR-V and DXIL pack a scalar
+// after it, so a mirror has to be checked against each. The Vulkan and Metal
+// legs read one compiled under the Vulkan artifact's layout rules --
+// spirv-cross pads the MSL it emits to the offsets the module declares, so the
+// two cannot differ -- and the DirectX leg one compiled under DirectX packing
+// rules, which is what `-fvk-use-dx-layout` is for. Nothing on a non-Windows
+// host can read a DXIL container's own reflection.
+fn layout_target(platform: Platform) -> concinnity_shader::HlslTarget {
+    match platform {
+        Platform::Metal | Platform::Vulkan => concinnity_shader::HlslTarget::SpirvWithVulkanLayout,
+        Platform::DirectX => concinnity_shader::HlslTarget::SpirvWithDxLayout,
     }
 }
 
 // One entry point to reflect.
 pub(super) struct Program {
-    pub file: &'static str,
-    pub entry: &'static str,
-    // Shader-model profile for the DirectX leg, from `directx/slang_builtins.rs`.
-    pub profile: &'static str,
-    // Variant gates and capacities every backend injects for this entry.
-    pub common: Defines,
-    // What each backend's own program table adds on top.
-    pub metal: Defines,
-    pub vulkan: Defines,
-    pub directx: Defines,
+    pub row: &'static ShaderProgram,
     // Text spliced in at a marker no file in the shader tree can fill. Only the
     // raymarched volumes need one: their source is completed by a world's own
     // distance field, so reflecting them means supplying a stand-in for it.
@@ -74,309 +46,179 @@ pub(super) struct Program {
 }
 
 impl Program {
-    // The exact text the renderer compiles for this variant on `target`.
-    fn source(&self, target: Target) -> String {
-        let backend = match target {
-            Target::Metal => self.metal,
-            Target::Vulkan => self.vulkan,
-            Target::DirectX => self.directx,
-        };
-        let defines: Vec<(&str, &str)> = self.common.iter().chain(backend).copied().collect();
-        slang_source::assemble(false, self.file, &defines, self.splices)
+    // The exact text the renderer compiles for this variant on `platform`.
+    fn source(&self, platform: Platform) -> String {
+        let defines = self.row.at(false).defines();
+        source::assemble(false, platform, self.row.file, &defines, self.splices)
     }
 }
 
-// slangc's reflection of `program` under `target`'s layout rules.
-pub(super) fn reflection(program: &Program, target: Target) -> Result<String, String> {
-    let source = program.source(target);
-    let job = slang::SlangJob {
+// The MSL the Metal backend compiles for `program`.
+pub(super) fn msl(program: &Program) -> Result<String, String> {
+    let source = program.source(Platform::Metal);
+    let job = concinnity_shader::HlslJob {
         source: &source,
-        file_name: program.file,
-        entries: &[program.entry],
-        target: target.slang_target(program.profile),
+        file_name: program.row.file,
+        entry: program.row.entry,
+        target: concinnity_shader::HlslTarget::Msl,
     };
     let work = crate::shader::compiler_work::dir()?;
-    slang::reflect(&job, work.path())
-        .map_err(|e| format!("{} ({}): {e}", program.entry, target.label()))
+    concinnity_shader::compile(&job, work.path())
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+        .map_err(|e| format!("{} (metal): {e}", program.row.entry))
 }
 
-// Every struct `program` declares, laid out the way `target` lays it out.
+// Every struct `program` declares, laid out the way `platform` lays it out,
+// read off the decorations of the SPIR-V module the artifact is built from,
+// which states every offset outright.
 pub(super) fn layouts(
     program: &Program,
-    target: Target,
-) -> Result<BTreeMap<String, ShaderStruct>, String> {
-    reflect::structs(&reflection(program, target)?)
+    platform: Platform,
+) -> Result<BTreeMap<String, StructLayout>, String> {
+    let source = program.source(platform);
+    let job = concinnity_shader::HlslJob {
+        source: &source,
+        file_name: program.row.file,
+        entry: program.row.entry,
+        target: layout_target(platform),
+    };
+    let work = crate::shader::compiler_work::dir()?;
+    let spirv = concinnity_shader::compile(&job, work.path())
+        .map_err(|e| format!("{} ({}): {e}", program.row.entry, platform.key()))?;
+    concinnity_shader::layout::struct_layouts(&spirv)
+        .map_err(|e| format!("{} ({}): {e}", program.row.entry, platform.key()))
 }
 
-// The reflection-probe array length and the bindless texture-pool capacity, as
-// the backends bake them in. A const assert in `super` pins the first to the
-// Rust constant the mirrored `ProbeSet` array uses; the pool sizes only the
-// texture argument buffer, which no mirrored struct reads.
-const PROBES: (&str, &str) = ("MAX_PROBES", "8");
-const POOL: (&str, &str) = ("POOL_SIZE", "1024");
-
-pub(super) static MAIN_BINDLESS_VERT: Program = Program {
-    file: "main_bindless.slang",
-    entry: "vertex_main_bindless",
-    profile: "vs_6_0",
-    common: &[PROBES],
-    metal: &[("METAL_ABI", "1"), POOL],
-    vulkan: &[POOL],
-    directx: &[("DXIL_ABI", "1")],
+// The fragment, whose MSL the argument-buffer checks read as well.
+pub(super) static MAIN_BINDLESS_FRAG: Program = Program {
+    row: &shared::MAIN_BINDLESS_FRAG,
     splices: &[],
 };
 
+// The same fragment compiled around a world `shade` that samples only the last
+// texture member, through the last sampler.
+pub(super) static MAIN_BINDLESS_FRAG_LATE_MEMBER_SHADE: Program = Program {
+    splices: &[(
+        "{SURFACE_FRAGMENT}",
+        "float4 shade(VertexOut v, GpuObjectData od) { return float4(ltc_magnitude_sample(v.uv), 0.0, 1.0); }",
+    )],
+    ..MAIN_BINDLESS_FRAG
+};
+
 // The phase-1 variant: the only one that declares every struct the family has.
-// Metal runs it as the decision half, under `METAL_BINDINGS`.
+// Metal runs it as the decision half.
 pub(super) static CULL_KERNEL: Program = Program {
-    file: "cull.slang",
-    entry: "cull_kernel",
-    profile: "cs_6_0",
-    common: &[],
-    metal: &[("METAL_BINDINGS", "1")],
-    vulkan: &[],
-    directx: &[("DXIL_ABI", "1")],
+    row: &shared::CULL_PHASE1,
     splices: &[],
 };
 
 pub(super) static LIGHT_CULL_KERNEL: Program = Program {
-    file: "light_cull.slang",
-    entry: "light_cull_kernel",
-    profile: "cs_6_0",
-    common: &[],
-    metal: &[],
-    vulkan: &[],
-    directx: &[],
+    row: &shared::LIGHT_CULL,
     splices: &[],
 };
 
-// The RT skinning kernel. `METAL_BINDINGS` picks the Metal host's slot
-// numbering; the mesh payloads it walks are byte-addressed and so reflect no
+// The RT skinning kernel. `CN_BACKEND_DIRECTX` picks the DirectX root
+// signature's slot numbering; the mesh payloads it walks are byte-addressed and so reflect no
 // layout of their own (see `mesh_payload_offsets_match_the_kernel`).
 pub(super) static RT_SKIN_KERNEL: Program = Program {
-    file: "rt_skin.slang",
-    entry: "rt_skin",
-    profile: "cs_6_5",
-    common: &[],
-    metal: &[("METAL_BINDINGS", "1")],
-    vulkan: &[],
-    directx: &[],
+    row: &shared::RT_SKIN,
     splices: &[],
 };
 
 pub(super) static GBUFFER_PREPASS_VERT: Program = Program {
-    file: "gbuffer_prepass.slang",
-    entry: "gbuffer_prepass_vertex_bindless",
-    profile: "vs_6_0",
-    common: &[("GB_BINDLESS", "1")],
-    metal: &[("METAL_BINDINGS", "1")],
-    vulkan: &[],
-    directx: &[("DXIL_ABI", "1")],
+    row: &shared::GBUFFER_PREPASS_VERT_BINDLESS,
     splices: &[],
 };
 
 pub(super) static SHADOW_VERT: Program = Program {
-    file: "shadow.slang",
-    entry: "shadow_vertex_main",
-    profile: "vs_6_0",
-    common: &[("SHADOW_STATIC", "1")],
-    metal: &[("METAL_BINDINGS", "1")],
-    vulkan: &[],
-    directx: &[("DXIL_ABI", "1")],
+    row: &shared::SHADOW_VERT,
     splices: &[],
 };
 
 pub(super) static GLASS_VERT: Program = Program {
-    file: "glass.slang",
-    entry: "glass_vertex",
-    profile: "vs_6_0",
-    common: &[PROBES],
-    metal: &[("METAL_ABI", "1")],
-    vulkan: &[("USE_MSAA", "1")],
-    directx: &[("DXIL_ABI", "1")],
+    row: &shared::GLASS_VERT,
     splices: &[],
 };
 
-// The glass mesh vertex stage declares both of its blocks: it reads the model
-// matrix out of the per-mesh params. The file is ray-traced only, but the ray
-// query is unreachable from the vertex entry, so slangc compiles it on the Metal
-// target too and all three reflect.
+// The file is ray-traced only, but the ray query is unreachable from the vertex
+// entry, so it compiles on every target.
 pub(super) static GLASS_MESH_VERT: Program = Program {
-    file: "glass_mesh.slang",
-    entry: "glass_mesh_vertex",
-    profile: "vs_6_0",
-    common: &[PROBES],
-    metal: &[("METAL_ABI", "1")],
-    vulkan: &[("USE_MSAA", "1")],
-    directx: &[("DXIL_ABI", "1")],
+    row: &shared::GLASS_MESH_VERT,
     splices: &[],
 };
 
-// The water vertex stage is the smallest entry that declares the whole water
-// block set: the Gerstner sum reads the wave table, so `WaterParams` (and the
-// `WaterWave` element it arrays) survive into the vertex reflection.
 pub(super) static WATER_VERT: Program = Program {
-    file: "water.slang",
-    entry: "water_vertex",
-    profile: "vs_6_0",
-    common: &[PROBES],
-    metal: &[("METAL_ABI", "1")],
-    vulkan: &[("USE_MSAA", "1")],
-    directx: &[("DXIL_ABI", "1")],
+    row: &shared::WATER_VERT,
     splices: &[],
 };
 
 pub(super) static RT_REFLECTIONS_FRAG: Program = Program {
-    file: "rt_reflections.slang",
-    entry: "rt_reflections_fragment",
-    profile: "ps_6_5",
-    common: &[PROBES],
-    metal: &[("METAL_ABI", "1")],
-    vulkan: &[],
-    directx: &[("DXIL_ABI", "1")],
+    row: &shared::RT_REFLECTIONS_FRAG,
     splices: &[],
 };
 
 pub(super) static DECAL_VERT: Program = Program {
-    file: "decal.slang",
-    entry: "decal_vertex",
-    profile: "vs_6_0",
-    common: &[],
-    metal: &[],
-    vulkan: &[],
-    directx: &[],
+    row: &shared::DECAL_VERT,
     splices: &[],
 };
 
 pub(super) static LINE_VERT: Program = Program {
-    file: "line.slang",
-    entry: "line_vertex",
-    profile: "vs_6_0",
-    common: &[],
-    metal: &[],
-    vulkan: &[],
-    directx: &[],
+    row: &shared::LINE_VERT,
     splices: &[],
 };
 
 pub(super) static PARTICLE_VERT: Program = Program {
-    file: "particle.slang",
-    entry: "particle_vertex",
-    profile: "vs_6_0",
-    common: &[],
-    metal: &[("METAL_BINDINGS", "1")],
-    vulkan: &[],
-    directx: &[("DXIL_ABI", "1")],
+    row: &shared::PARTICLE_VERT,
     splices: &[],
 };
 
 pub(super) static TEXT_VERT: Program = Program {
-    file: "text.slang",
-    entry: "text_vertex_main",
-    profile: "vs_6_0",
-    common: &[],
-    metal: &[("METAL_BINDINGS", "1")],
-    vulkan: &[],
-    directx: &[],
+    row: &shared::TEXT_VERT,
     splices: &[],
 };
 
 pub(super) static TAA_FRAG: Program = Program {
-    file: "taa.slang",
-    entry: "taa_fragment_main",
-    profile: "ps_6_0",
-    common: &[],
-    metal: &[],
-    vulkan: &[],
-    directx: &[],
+    row: &shared::TAA_FRAG,
     splices: &[],
 };
 
 pub(super) static BLOOM_PREFILTER: Program = Program {
-    file: "bloom.slang",
-    entry: "bloom_prefilter_fragment",
-    profile: "ps_6_0",
-    common: &[("BLOOM_PREFILTER", "1")],
-    metal: &[],
-    vulkan: &[],
-    directx: &[],
+    row: &shared::BLOOM_PREFILTER,
     splices: &[],
 };
 
 pub(super) static COMPOSITE_FRAG: Program = Program {
-    file: "composite.slang",
-    entry: "composite_fragment",
-    profile: "ps_6_0",
-    common: &[],
-    metal: &[],
-    vulkan: &[],
-    directx: &[],
+    row: &shared::COMPOSITE_FRAG,
     splices: &[],
 };
 
 pub(super) static SSAO_KERNEL: Program = Program {
-    file: "ssao.slang",
-    entry: "ssao_kernel_fragment",
-    profile: "ps_6_0",
-    common: &[("SSAO_KERNEL", "1")],
-    metal: &[],
-    vulkan: &[],
-    directx: &[],
+    row: &shared::SSAO_KERNEL,
     splices: &[],
 };
 
 pub(super) static SSR_RESOLVE: Program = Program {
-    file: "ssr.slang",
-    entry: "ssr_resolve_fragment",
-    profile: "ps_6_0",
-    common: &[PROBES],
-    metal: &[],
-    vulkan: &[],
-    directx: &[("SPLIT_PROBE_SAMPLER", "1")],
+    row: &shared::SSR_RESOLVE,
     splices: &[],
 };
 
 pub(super) static SSGI_GATHER: Program = Program {
-    file: "ssgi.slang",
-    entry: "ssgi_gather_fragment",
-    profile: "ps_6_0",
-    common: &[("SSGI_GATHER", "1")],
-    metal: &[],
-    vulkan: &[],
-    directx: &[],
+    row: &shared::SSGI_GATHER,
     splices: &[],
 };
 
 pub(super) static FOG_FROXEL: Program = Program {
-    file: "fog.slang",
-    entry: "fog_froxel_kernel",
-    profile: "cs_6_0",
-    common: &[("FOG_FROXEL", "1")],
-    metal: &[],
-    vulkan: &[],
-    directx: &[("DXIL_SPLIT", "1")],
+    row: &shared::FOG_FROXEL,
     splices: &[],
 };
 
 pub(super) static AUTO_EXPOSURE_BUILD: Program = Program {
-    file: "auto_exposure.slang",
-    entry: "histogram_build",
-    profile: "cs_6_0",
-    common: &[("AE_BUILD", "1")],
-    metal: &[("METAL_BINDINGS", "1")],
-    vulkan: &[],
-    directx: &[],
+    row: &shared::AUTO_EXPOSURE_BUILD,
     splices: &[],
 };
 
 pub(super) static HIZ_INIT_SINGLE: Program = Program {
-    file: "hiz_build.slang",
-    entry: "hiz_init_single",
-    profile: "cs_6_0",
-    common: &[("HIZ_INIT_SINGLE", "1")],
-    metal: &[],
-    vulkan: &[],
-    directx: &[],
+    row: &metal::HIZ_INIT_SINGLE,
     splices: &[],
 };
 
@@ -393,24 +235,26 @@ const SDF_STANDIN: (&str, &str) = (
 );
 
 pub(super) static RAYMARCH_FRAG: Program = Program {
-    file: "raymarch.slang",
-    entry: "raymarch_fragment",
-    profile: "ps_6_0",
-    common: &[("RAYMARCH_SURFACE", "1")],
-    metal: &[("RAYMARCH_METAL", "1")],
-    vulkan: &[],
-    directx: &[("RAYMARCH_DXIL", "1")],
+    row: &ShaderProgram {
+        file: "raymarch.hlsl",
+        entry: "raymarch_fragment",
+        label: "raymarch_frag.hlsl",
+        gates: &["RAYMARCH_SURFACE"],
+        msaa: false,
+    },
     splices: &[SDF_STANDIN],
 };
 
-// The shadow caster is the only entry that binds the cascade block.
+// The cascade block is a push constant in every SPIR-V leg, and a push constant
+// carries no binding for the reflection to keep, so it is read through the one
+// entry that uses it.
 pub(super) static RAYMARCH_SHADOW_VERT: Program = Program {
-    file: "raymarch.slang",
-    entry: "raymarch_shadow_vertex",
-    profile: "vs_6_0",
-    common: &[("RAYMARCH_SHADOW", "1")],
-    metal: &[("RAYMARCH_METAL", "1")],
-    vulkan: &[],
-    directx: &[("RAYMARCH_DXIL", "1")],
+    row: &ShaderProgram {
+        file: "raymarch.hlsl",
+        entry: "raymarch_shadow_vertex",
+        label: "raymarch_shadow_vert.hlsl",
+        gates: &["RAYMARCH_SHADOW"],
+        msaa: false,
+    },
     splices: &[SDF_STANDIN],
 };

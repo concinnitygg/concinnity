@@ -24,15 +24,13 @@
 
 use ash::vk;
 use concinnity_core::components::SdfVolume;
-use concinnity_core::components::sdf_programs::SdfPrograms;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::{LightUniforms, ShadowUniforms};
 use concinnity_core::platform::Platform;
 use concinnity_core::render::backend_init::SdfVolumeSource;
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::slang_programs::raymarch::{self, Family};
+use concinnity_core::render::shader_programs::raymarch::Family;
 use concinnity_core::transform::mat4_inverse;
-use concinnity_slang::SlangTarget;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::{HDR_FORMAT, VkContext};
@@ -42,6 +40,7 @@ use super::texture::{
     GpuImage, ImageSpec, LayoutTransition, SubresourceRange, create_image, create_image_view,
     one_shot_submit, transition_image_layout_range,
 };
+use crate::shader::raymarch_source::family_artifacts;
 use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass, OwnedSetLayout,
     VkDevice,
@@ -208,9 +207,6 @@ pub(in crate::vulkan) struct RaymarchResources {
     // The encoder copies hdr_resolve into this at the head of the pass; sized to
     // render dims, recreated by `rebuild` on resize.
     snapshot: GpuImage,
-    // Sampler bound alongside the snapshot at set 0 binding 6. Borrowed from
-    // `VkContext::linear_sampler`; not owned, never destroyed here.
-    scene_sampler: vk::Sampler,
 
     // Shadow-caster resources. Built only when at least one volume opts into
     // `cast_shadows`; null / empty otherwise. The shadow view set is a minimal
@@ -226,48 +222,6 @@ pub(in crate::vulkan) struct RaymarchResources {
 
     msaa: bool,
     volumes: Vec<RaymarchVolumeRecord>,
-}
-
-// The SPIR-V for one family of a volume's field, as (vertex, fragment).
-//
-// The cook compiled these; each entry is its own module here, which is what a
-// Vulkan pipeline binds and what a DXIL container is on the other host. A
-// template edit makes the stored artifacts miss and both entries compile.
-fn family_spirv(
-    programs: &SdfPrograms,
-    family: Family,
-    hot_reload: bool,
-    label: &str,
-) -> RenderResult<(Vec<u8>, Vec<u8>)> {
-    let mut stages = raymarch::ALL.iter().filter(|p| p.family == family);
-    let spirv = |entry: &str| -> RenderResult<Vec<u8>> {
-        crate::shader::raymarch_source::artifact(
-            programs,
-            &crate::shader::raymarch_source::Request {
-                family,
-                platform: Platform::Glsl,
-                entries: &[entry],
-                target: SlangTarget::Spirv,
-                hot_reload,
-                label,
-            },
-        )
-        .map(|bytes| bytes.into_owned())
-        .map_err(RenderError::ShaderCompile)
-    };
-    let vert = spirv(
-        stages
-            .next()
-            .expect("a family declares a vertex entry")
-            .entry,
-    )?;
-    let frag = spirv(
-        stages
-            .next()
-            .expect("a family declares a fragment entry")
-            .entry,
-    )?;
-    Ok((vert, frag))
 }
 
 // One corner of the proxy cube. Only the position is fetched (location 0); the
@@ -392,21 +346,26 @@ fn create_view_set_layout(device: &VkDevice) -> RenderResult<OwnedSetLayout> {
             .descriptor_count(1)
             .stage_flags(stages)
     };
-    let tex = |b: u32| {
+    let binding = |b: u32, ty: vk::DescriptorType| {
         vk::DescriptorSetLayoutBinding::default()
             .binding(b)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_type(ty)
             .descriptor_count(1)
             .stage_flags(frag)
     };
+    let tex = |b: u32| binding(b, vk::DescriptorType::SAMPLED_IMAGE);
+    let sampler = |b: u32| binding(b, vk::DescriptorType::SAMPLER);
     let bindings = [
         ubo(0, vert_frag), // RaymarchView
         ubo(1, frag),      // RaymarchLights
         ubo(2, frag),      // RaymarchShadow
-        tex(3),            // shadow_map (sampler2DArrayShadow)
+        tex(3),            // shadow_map
         tex(4),            // irradiance cube
         tex(5),            // prefilter cube
         tex(6),            // scene_color snapshot
+        sampler(8),        // the shadow map's compare sampler
+        sampler(9),        // the cubes' sampler
+        sampler(10),       // the snapshot's sampler
     ];
     let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
     device
@@ -446,8 +405,13 @@ fn create_descriptor_pool(
         },
         // view: shadow_map + irradiance + prefilter + scene_color (4) per frame.
         vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+            ty: vk::DescriptorType::SAMPLED_IMAGE,
             descriptor_count: 4 * f,
+        },
+        // view: shadow compare + cube + scene samplers (3) per frame.
+        vk::DescriptorPoolSize {
+            ty: vk::DescriptorType::SAMPLER,
+            descriptor_count: 3 * f,
         },
     ];
     let info = vk::DescriptorPoolCreateInfo::default()
@@ -590,16 +554,17 @@ fn write_view_set(
         .buffer(shadow_ubo)
         .offset(0)
         .range(std::mem::size_of::<ShadowUniforms>() as u64);
-    let img = |view: vk::ImageView, sampler: vk::Sampler| {
+    let images = [
+        shadow_map_view,
+        irradiance_view,
+        prefilter_view,
+        snapshot_view,
+    ]
+    .map(|view| {
         vk::DescriptorImageInfo::default()
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             .image_view(view)
-            .sampler(sampler)
-    };
-    let shadow_map_info = img(shadow_map_view, shadow_sampler);
-    let irradiance_info = img(irradiance_view, cube_sampler);
-    let prefilter_info = img(prefilter_view, cube_sampler);
-    let snapshot_info = img(snapshot_view, scene_sampler);
+    });
 
     let ubo = |b: u32| {
         vk::WriteDescriptorSet::default()
@@ -607,24 +572,26 @@ fn write_view_set(
             .dst_binding(b)
             .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
     };
-    let tex = |b: u32| {
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(b)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-    };
     let writes = [
         ubo(0).buffer_info(std::slice::from_ref(&view_info)),
         ubo(1).buffer_info(std::slice::from_ref(&light_info)),
         ubo(2).buffer_info(std::slice::from_ref(&shadow_info)),
-        tex(3).image_info(std::slice::from_ref(&shadow_map_info)),
-        tex(4).image_info(std::slice::from_ref(&irradiance_info)),
-        tex(5).image_info(std::slice::from_ref(&prefilter_info)),
-        tex(6).image_info(std::slice::from_ref(&snapshot_info)),
+        // Bindings 3..6, consecutive and of one type.
+        vk::WriteDescriptorSet::default()
+            .dst_set(set)
+            .dst_binding(3)
+            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+            .image_info(&images),
     ];
     // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
     // and resource it names belongs to this device.
     unsafe { device.update_descriptor_sets(&writes, &[]) };
+    super::resources::write_samplers(
+        device,
+        set,
+        8,
+        &[shadow_sampler, cube_sampler, scene_sampler],
+    );
 }
 
 fn write_volume_set(device: &VkDevice, set: vk::DescriptorSet, volume_ubo: vk::Buffer) {
@@ -1120,8 +1087,13 @@ impl RaymarchResources {
             // depth write; a surface volume authors `map` and `shade` and
             // sphere-traces an opaque surface. The asset's flag selects which.
             let pipeline = if vol.volumetric {
-                let (vert_spv, frag_spv) =
-                    family_spirv(&programs, Family::Volumetric, hot_reload, label)?;
+                let (vert_spv, frag_spv) = family_artifacts(
+                    &programs,
+                    Family::Volumetric,
+                    Platform::Vulkan,
+                    hot_reload,
+                    label,
+                )?;
                 create_volumetric_pipeline(
                     device,
                     render_pass.handle(),
@@ -1131,8 +1103,13 @@ impl RaymarchResources {
                     &frag_spv,
                 )?
             } else {
-                let (vert_spv, frag_spv) =
-                    family_spirv(&programs, Family::Surface, hot_reload, label)?;
+                let (vert_spv, frag_spv) = family_artifacts(
+                    &programs,
+                    Family::Surface,
+                    Platform::Vulkan,
+                    hot_reload,
+                    label,
+                )?;
                 create_pipeline(
                     device,
                     render_pass.handle(),
@@ -1145,8 +1122,13 @@ impl RaymarchResources {
 
             // Depth-only shadow caster when the asset opts in.
             let shadow_pipeline = if vol.cast_shadows {
-                let (sh_vert, sh_frag) =
-                    family_spirv(&programs, Family::Shadow, hot_reload, label)?;
+                let (sh_vert, sh_frag) = family_artifacts(
+                    &programs,
+                    Family::Shadow,
+                    Platform::Vulkan,
+                    hot_reload,
+                    label,
+                )?;
                 Some(create_shadow_pipeline(
                     device,
                     shadow_render_pass,
@@ -1194,7 +1176,6 @@ impl RaymarchResources {
             cube_vb,
             cube_ib,
             snapshot,
-            scene_sampler: linear_sampler,
             shadow_pipeline_layout,
             _shadow_view_set_layout: shadow_view_set_layout,
             shadow_view_ubos,
@@ -1248,12 +1229,11 @@ impl RaymarchResources {
         for &set in &self.view_sets {
             let info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(self.snapshot.view)
-                .sampler(self.scene_sampler);
+                .image_view(self.snapshot.view);
             let write = vk::WriteDescriptorSet::default()
                 .dst_set(set)
                 .dst_binding(6)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                 .image_info(std::slice::from_ref(&info));
             // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
             // every set and resource it names belongs to this device.
@@ -1273,27 +1253,24 @@ impl RaymarchResources {
         device: &VkDevice,
         irradiance_view: vk::ImageView,
         prefilter_view: vk::ImageView,
-        cube_sampler: vk::Sampler,
     ) {
         let irr_info = vk::DescriptorImageInfo::default()
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(irradiance_view)
-            .sampler(cube_sampler);
+            .image_view(irradiance_view);
         let pre_info = vk::DescriptorImageInfo::default()
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(prefilter_view)
-            .sampler(cube_sampler);
+            .image_view(prefilter_view);
         for &set in &self.view_sets {
             let writes = [
                 vk::WriteDescriptorSet::default()
                     .dst_set(set)
                     .dst_binding(4)
-                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                     .image_info(std::slice::from_ref(&irr_info)),
                 vk::WriteDescriptorSet::default()
                     .dst_set(set)
                     .dst_binding(5)
-                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                     .image_info(std::slice::from_ref(&pre_info)),
             ];
             // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
@@ -1302,8 +1279,7 @@ impl RaymarchResources {
         }
     }
 
-    // Destroy every owned GPU resource. The `scene_sampler` is borrowed from
-    // `VkContext` and is not destroyed here.
+    // Destroy every owned GPU resource.
     pub(in crate::vulkan) fn destroy(&mut self, _device: &VkDevice) {
         self.volumes.clear();
         self.view_ubos.clear();

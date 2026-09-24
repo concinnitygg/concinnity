@@ -180,14 +180,14 @@ pub(super) fn build_decal_pipeline(
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     // Each entry compiles to its own metallib, so the two stages come from
     // separate libraries and pair by semantic.
-    let vert_fn = super::slang_builtins::entry_function(
+    let vert_fn = super::builtin_shaders::entry_function(
         device,
-        &super::slang_builtins::DECAL_VERT,
+        &super::builtin_shaders::DECAL_VERT,
         hot_reload,
     )?;
-    let frag_fn = super::slang_builtins::entry_function(
+    let frag_fn = super::builtin_shaders::entry_function(
         device,
-        &super::slang_builtins::DECAL_FRAG,
+        &super::builtin_shaders::DECAL_FRAG,
         hot_reload,
     )?;
 

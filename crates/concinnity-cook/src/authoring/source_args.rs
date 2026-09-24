@@ -3,8 +3,8 @@
 //! reads the typed struct instead, so the runtime tier carries no JSON parsing.
 
 // Resolve an SdfVolume's distance-field source path from its raw args. One
-// source serves every backend: the field is Slang, so there is nothing for a
-// per-platform map to select between.
+// source serves every backend, so there is nothing for a per-platform map to
+// select between.
 pub(crate) fn sdf_volume_source_path(args: &serde_json::Value) -> Option<String> {
     args.get("fragment_shader")
         .and_then(|v| v.as_str())
@@ -21,10 +21,10 @@ mod tests {
     // and without an extension gate.
     #[test]
     fn sdf_source_path_is_the_one_declared_field() {
-        let args = json!({ "fragment_shader": "shaders/chrome_blob.slang" });
+        let args = json!({ "fragment_shader": "shaders/chrome_blob.hlsl" });
         assert_eq!(
             sdf_volume_source_path(&args).as_deref(),
-            Some("shaders/chrome_blob.slang")
+            Some("shaders/chrome_blob.hlsl")
         );
         assert_eq!(sdf_volume_source_path(&json!({})), None);
         assert_eq!(

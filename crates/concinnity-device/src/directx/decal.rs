@@ -19,13 +19,13 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
+use crate::directx::builtin_shaders;
+use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::serialize_desc_and_create;
-use crate::directx::slang_builtins;
-use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::{HDR_FORMAT, upload_buffer, write_texture_srv};
 
 // Projected decals. `state` (pipeline + unit-cube buffers + per-frame uniform
@@ -46,13 +46,10 @@ pub(in crate::directx) fn compile_decal_shaders(
     msaa_samples: u32,
     hot_reload: bool,
 ) -> RenderResult<(Vec<u8>, Vec<u8>)> {
-    let frag = if msaa_samples > 1 {
-        &slang_builtins::DECAL_FRAG_MSAA
-    } else {
-        &slang_builtins::DECAL_FRAG
-    };
-    let vs = slang_builtins::DECAL_VERT.compile(hot_reload)?;
-    let ps = frag.compile(hot_reload)?;
+    let vs = builtin_shaders::DECAL_VERT.compile(hot_reload)?;
+    let ps = builtin_shaders::DECAL_FRAG
+        .at(msaa_samples > 1)
+        .compile(hot_reload)?;
     Ok((vs, ps))
 }
 
@@ -97,9 +94,8 @@ const CUBE_INDICES: [u16; 36] = [
 pub(in crate::directx) use concinnity_core::render::uniforms::DecalParams;
 pub(in crate::directx) use concinnity_core::render::uniforms::DecalView;
 
-// Root-signature layout (binds 1:1 with the `decal.slang` declarations, whose
-// registers slangc assigns from declaration order; `SLANG_DXIL_ENTRY_ABI` in
-// build.rs pins each one):
+// Root-signature layout (binds 1:1 with the `decal.hlsl` declarations, whose
+// `register()` annotations `DXIL_ENTRY_ABI` in build.rs pins):
 //   [0] root CBV b0   DecalView    (per-frame)
 //   [1] root CBV b1   DecalParams  (per-decal)
 //   [2] table  t0     scene depth SRV (Texture2D[MS]<float>)

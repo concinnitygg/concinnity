@@ -122,6 +122,9 @@ const AUDITS: &[BackendAudit] = &[
             // graph derives it from the pool read the draw declares.
             ("particle.rs", "cmd_pipeline_barrier", 2, Reason::IntraPass),
             ("texture.rs", "cmd_pipeline_barrier", 1, Reason::Upload),
+            // The probe cube array's one transition into the layout it keeps,
+            // on a one-shot submit when the array is allocated.
+            ("probe_set.rs", "cmd_pipeline_barrier", 1, Reason::Upload),
             ("probe.rs", "cmd_pipeline_barrier", 3, Reason::OutOfFrame),
             (
                 "probe_prefilter.rs",

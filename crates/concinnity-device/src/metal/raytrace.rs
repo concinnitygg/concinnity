@@ -60,9 +60,10 @@ use objc2_metal::{
     MTLRenderStages, MTLResource, MTLResourceOptions, MTLResourceUsage, MTLSize,
 };
 use std::ptr::NonNull;
-// Shared with the Vulkan and DirectX hosts: one `.slang` declares it.
+// Shared with the Vulkan and DirectX hosts: one `.hlsl` declares it.
 use concinnity_core::render::uniforms::SkinParams;
 
+use super::builtin_shaders::compute_pipeline;
 use super::context::write_buffer_slice;
 use super::encode::ComputeEncode;
 use super::error::{allocation_failed, completed_command_buffer};
@@ -1965,22 +1966,13 @@ fn models_dirty(
 }
 
 // Build the compute pipeline that deforms skinned vertices for ray tracing
-// (`rt_skin.slang`). Compiled only when RT reflections are on and the GPU
+// (`rt_skin.hlsl`). Compiled only when RT reflections are on and the GPU
 // supports ray tracing, alongside the reflection pipelines.
 pub(crate) fn build_rt_skin_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> RenderResult<Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>> {
-    use objc2_metal::{MTLDevice as _, MTLLibrary as _};
-    let library = crate::metal::slang_builtins::RT_SKIN.library(device, hot_reload)?;
-    let func = library
-        .newFunctionWithName(&crate::metal::pipeline::ns_str("rt_skin"))
-        .ok_or_else(|| RenderError::ShaderCompile("rt_skin kernel not found".into()))?;
-    device
-        .newComputePipelineStateWithFunction_error(&func)
-        .map_err(|e| {
-            RenderError::ShaderCompile(format!("failed to create RT skin pipeline: {e:?}"))
-        })
+    compute_pipeline(device, &super::builtin_shaders::RT_SKIN, hot_reload)
 }
 
 // Fail if a command buffer faulted on the GPU. `waitUntilCompleted` returns

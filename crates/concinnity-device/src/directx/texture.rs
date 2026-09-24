@@ -1274,35 +1274,15 @@ fn write_cube_srv_single_mip(
     unsafe { device.CreateShaderResourceView(resource, Some(&srv_desc), srv_cpu) };
 }
 
-// Write a multi-mip TextureCube SRV at the given heap slot. `pub(super)` so the
-// reflection-probe init fill + install (`directx/probe.rs`) can point a probe cube
-// array slot at the sky prefilter (init) or a baked probe cube (install).
-pub(super) fn write_cube_srv_mips(
+// Write a multi-mip RGBA32F TextureCube SRV at the given heap slot.
+fn write_cube_srv_mips(
     device: &ID3D12Device,
     resource: &ID3D12Resource,
     mip_count: u32,
-    srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-) {
-    write_cube_srv_mips_format(
-        device,
-        resource,
-        mip_count,
-        DXGI_FORMAT_R32G32B32A32_FLOAT,
-        srv_cpu,
-    );
-}
-
-// The same, for a cube whose format is not the imported env map's RGBA32F: a
-// runtime-baked reflection probe is convolved straight into an RGBA16F cube.
-pub(super) fn write_cube_srv_mips_format(
-    device: &ID3D12Device,
-    resource: &ID3D12Resource,
-    mip_count: u32,
-    format: DXGI_FORMAT,
     srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
 ) {
     let srv_desc = D3D12_SHADER_RESOURCE_VIEW_DESC {
-        Format: format,
+        Format: DXGI_FORMAT_R32G32B32A32_FLOAT,
         ViewDimension: D3D12_SRV_DIMENSION_TEXTURECUBE,
         Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
         Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 {

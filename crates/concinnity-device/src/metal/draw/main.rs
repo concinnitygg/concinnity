@@ -548,12 +548,12 @@ impl MtlContext {
     }
 
     // Bind the clustered-lighting inputs the forward pass reads: the params at
-    // fragment buffer(11) + the per-cluster light-index list at buffer(12). Bound
-    // once per pass (the value is pass-level, shared by every geometry sub-path)
-    // on the shared encoder. `clustered` = true for the main camera (binds the
+    // fragment buffer(11) + the per-cluster light lists and probe masks at buffer(12).
+    // Bound once per pass (the value is pass-level, shared by every geometry
+    // sub-path) on the shared encoder. `clustered` = true for the main camera (binds the
     // live params); false for the planar / probe re-renders, which shade from a
     // viewpoint the main camera's grid does not match and so fall back to
-    // iterating every local light (use_clusters cleared).
+    // iterating every local light and probe (use_clusters cleared).
     fn bind_clusters(
         &self,
         enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
@@ -610,10 +610,18 @@ impl MtlContext {
         // above, so this one bind covers every main-pass variant.
         enc.set_fragment_buffer(&self.scene.area_light_buffer, 0, 14);
         enc.set_fragment_value(&self.shadow.uniforms, 5);
-        // Reflection-probe set (count + per-probe parallax boxes) at fragment
-        // buffer(6). `EMPTY` until a bake; the shader weights every box
-        // covering the surface.
-        enc.set_fragment_value(&self.probe.set, 6);
+        // Reflection-probe count at fragment buffer(6) and one parallax record
+        // per baked probe at buffer(15); the cube array rides the texture
+        // argument buffer. The shader weights every box covering the surface.
+        self.probe_bindings().bind(
+            enc,
+            crate::metal::probe_set::ProbeSlots {
+                set: 6,
+                records: 15,
+                cubes: None,
+                cluster: None,
+            },
+        );
         true
     }
 

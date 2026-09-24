@@ -17,13 +17,13 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::directx::allocator::PooledTexture;
+use crate::directx::builtin_shaders;
+use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::context::{DxContext, dump_on_err};
 use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::pipeline::{create_blended_composite_pso, serialize_desc_and_create};
 use crate::directx::root_constants::{RootConstants, root_dwords};
-use crate::directx::slang_builtins;
-use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::{
     create_rt_target, transition_barrier, write_format_rtv, write_format_srv,
 };
@@ -62,9 +62,9 @@ struct SsaoShaders {
 // passes that read the unified G-buffer; neither has a geometry input.
 fn compile_ssao_shaders(hot_reload: bool) -> RenderResult<SsaoShaders> {
     Ok(SsaoShaders {
-        fullscreen_vs: slang_builtins::FULLSCREEN_VERT.compile(hot_reload)?,
-        kernel_ps: slang_builtins::SSAO_KERNEL.compile(hot_reload)?,
-        blur_ps: slang_builtins::SSAO_BLUR.compile(hot_reload)?,
+        fullscreen_vs: builtin_shaders::FULLSCREEN_VERT.compile(hot_reload)?,
+        kernel_ps: builtin_shaders::SSAO_KERNEL.compile(hot_reload)?,
+        blur_ps: builtin_shaders::SSAO_BLUR.compile(hot_reload)?,
     })
 }
 
@@ -131,8 +131,7 @@ fn create_ssao_kernel_root_signature(device: &ID3D12Device) -> RenderResult<ID3D
 
 // Root signature for the depth-aware blur pass: two 1-SRV descriptor tables
 // (raw occlusion at t0, G-buffer at t1) and static linear-clamp samplers at
-// s0 / s1 -- one per source, because slangc splits each combined sampler in the
-// single source into its own texture/sampler pair.
+// s0 / s1 -- one per source, which is how the single source declares them.
 fn create_ssao_blur_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     let ao_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,

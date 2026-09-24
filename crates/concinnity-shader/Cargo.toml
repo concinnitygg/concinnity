@@ -1,0 +1,33 @@
+[package]
+name = "concinnity-shader"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "The HLSL shader toolchain shared by Concinnity build scripts and the renderer"
+readme = "README.md"
+keywords = ["gamedev", "shader", "hlsl", "concinnity"]
+categories = ["game-engines", "rendering::graphics-api"]
+include = [
+    "/README.md",
+    "/src",
+    "/build.rs",
+]
+
+[features]
+# The SPIR-V to MSL leg, and the layout reflection. Off by default: it links
+# spirv-cross, a C++ library no DirectX or Vulkan build has any use for.
+spirv-cross = ["dep:spirv-cross2"]
+
+[dependencies]
+concinnity-core = { workspace = true }
+spirv-cross2 = { version = "0.7.1", default-features = false, features = ["msl"], optional = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+concinnity-testing = { workspace = true }

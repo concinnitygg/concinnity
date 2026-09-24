@@ -1,5 +1,5 @@
 [workspace.package]
-version = "0.19.52"
+version = "0.19.53"
 description = "Asset-driven world engine"
 authors = ["Grant Wilkes <grant@concinnity.gg>"]
 edition = "2024"
@@ -19,7 +19,7 @@ concinnity-dev = { path = "crates/concinnity-dev", version = "0.19", default-fea
 concinnity-device = { path = "crates/concinnity-device", version = "0.19", default-features = false }
 concinnity-engine = { path = "crates/concinnity-engine", version = "0.19", default-features = false }
 concinnity-host = { path = "crates/concinnity-host", version = "0.19" }
-concinnity-slang = { path = "crates/concinnity-slang", version = "0.19" }
+concinnity-shader = { path = "crates/concinnity-shader", version = "0.19" }
 concinnity-testing = { path = "crates/concinnity-testing" }
 concinnity-toolchain = { path = "crates/concinnity-toolchain", version = "0.19" }
 
@@ -164,6 +164,12 @@ opt-level = 2
 
 [profile.dev.build-override]
 opt-level = 3
+
+# spirv-cross is both a build dependency and a runtime one. Giving the runtime
+# copy the build-override settings lets Cargo build its C++ once, not twice.
+[profile.dev.package.spirv-cross-sys]
+opt-level = 3
+debug = false
 
 [profile.release.build-override]
 opt-level = 3

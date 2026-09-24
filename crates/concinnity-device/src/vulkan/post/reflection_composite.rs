@@ -22,15 +22,18 @@ use ash::vk;
 use concinnity_core::render::error::RenderResult;
 
 use super::super::context::{HDR_FORMAT, VkContext};
+use super::super::descriptor_layout::PoolSizes;
 use super::super::pipeline::*;
-use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
+use super::super::resources::{
+    alloc_descriptor_sets, create_descriptor_set_layout, source_set_bindings, write_source_set,
+};
 use super::super::texture::*;
 use super::gbuffer::GbufferResources;
+use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
     OwnedSampler, OwnedSetLayout, VkDevice,
 };
-use crate::vulkan::slang_builtins::SlangCompile;
 use crate::vulkan::wire_cache::WireCache;
 
 // Reflection-composite resources, held by `VkContext` when the SSR resolve or RT
@@ -95,12 +98,11 @@ pub(in crate::vulkan) struct ReflectionCompositeShaders {
 pub(in crate::vulkan) fn compile_reflection_composite_shaders(
     hot_reload: bool,
 ) -> RenderResult<ReflectionCompositeShaders> {
-    use super::super::slang_builtins;
-    let ctx = slang_builtins::Ctx::plain(hot_reload);
+    use super::super::builtin_shaders;
     Ok(ReflectionCompositeShaders {
-        vs: slang_builtins::FULLSCREEN_VERT.compile(&ctx)?,
-        blur_fs: slang_builtins::REFLECTION_BLUR.compile(&ctx)?,
-        composite_fs: slang_builtins::REFLECTION_COMPOSITE.compile(&ctx)?,
+        vs: builtin_shaders::FULLSCREEN_VERT.compile(hot_reload)?,
+        blur_fs: builtin_shaders::REFLECTION_BLUR.compile(hot_reload)?,
+        composite_fs: builtin_shaders::REFLECTION_COMPOSITE.compile(hot_reload)?,
     })
 }
 
@@ -137,6 +139,11 @@ pub(in crate::vulkan) fn rebuild_reflection_composite_pipelines(
 // triangle overwrites every pixel so DONT_CARE is safe on load. Ends shader-readable
 // for the next pass (composite -> bloom/TAA; blur -> composite). Mirrors the SSR
 // resolve render pass.
+// Sources the reflection blur and composite fragments sample, each through a
+// sampler of its own.
+const BLUR_SOURCES: u32 = 2;
+const COMPOSITE_SOURCES: u32 = 5;
+
 fn create_composite_render_pass(device: &VkDevice) -> RenderResult<OwnedRenderPass> {
     let attachment = vk::AttachmentDescription::default()
         .format(HDR_FORMAT)
@@ -311,26 +318,12 @@ impl ReflectionCompositeResources {
         let render_pass = create_composite_render_pass(device)?;
 
         // Blur set 0: reflection + roughness. Composite set 0: reflection + scene +
-        // gbuffer normal+depth + roughness + blur.
-        let sampler_binding = |b: u32| {
-            (
-                b,
-                vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                vk::ShaderStageFlags::FRAGMENT,
-            )
-        };
-        let blur_set_layout =
-            create_descriptor_set_layout(device, &[sampler_binding(0), sampler_binding(1)])?;
-        let composite_set_layout = create_descriptor_set_layout(
-            device,
-            &[
-                sampler_binding(0),
-                sampler_binding(1),
-                sampler_binding(2),
-                sampler_binding(3),
-                sampler_binding(4),
-            ],
-        )?;
+        // gbuffer normal+depth + roughness + blur. Each source's sampler follows
+        // the images, in the same order.
+        let blur_bindings = source_set_bindings(BLUR_SOURCES);
+        let composite_bindings = source_set_bindings(COMPOSITE_SOURCES);
+        let blur_set_layout = create_descriptor_set_layout(device, &blur_bindings)?;
+        let composite_set_layout = create_descriptor_set_layout(device, &composite_bindings)?;
 
         let make_layout = |set_layout: vk::DescriptorSetLayout, name: &str| -> RenderResult<_> {
             let layouts = [set_layout];
@@ -360,11 +353,12 @@ impl ReflectionCompositeResources {
             &shaders.composite_fs,
         )?;
 
-        // Pool: per-frame blur sets (2 samplers) + composite sets (5 samplers).
+        // Pool: per-frame blur sets + composite sets.
         let f = frames as u32;
-        let pool_sizes = [vk::DescriptorPoolSize::default()
-            .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .descriptor_count(f * 7)];
+        let pool_sizes = PoolSizes::default()
+            .sets(&blur_bindings, f)
+            .sets(&composite_bindings, f)
+            .build();
         let descriptor_pool = device
             .create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
@@ -455,42 +449,33 @@ impl ReflectionCompositeResources {
         let hdr_resolve_views = inputs.hdr_resolve_views.as_slice();
         let normal_depth_views = inputs.normal_depth_views.as_slice();
         let roughness_views = inputs.roughness_views.as_slice();
-        let img = |view: vk::ImageView| {
-            vk::DescriptorImageInfo::default()
-                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(view)
-                .sampler(self.sampler.handle())
-        };
-        let write = |set: vk::DescriptorSet, binding: u32, info: &vk::DescriptorImageInfo| {
-            let w = vk::WriteDescriptorSet::default()
-                .dst_set(set)
-                .dst_binding(binding)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(std::slice::from_ref(info));
-            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-            // every set and resource it names belongs to this device.
-            unsafe { device.update_descriptor_sets(std::slice::from_ref(&w), &[]) };
-        };
         let frames = self.blur_sets.len();
         debug_assert_eq!(hdr_resolve_views.len(), frames);
         debug_assert_eq!(normal_depth_views.len(), frames);
         debug_assert_eq!(roughness_views.len(), frames);
-        let blur_info = img(self.blur.view);
+        let sampler = self.sampler.handle();
         for i in 0..frames {
-            let rough = img(roughness_views[i]);
-            let placeholder = img(hdr_resolve_views[i]);
+            let placeholder = hdr_resolve_views[i];
+            let rough = roughness_views[i];
             // Blur set: 0 = reflection placeholder, 1 = roughness.
-            write(self.blur_sets[i], 0, &placeholder);
-            write(self.blur_sets[i], 1, &rough);
+            write_source_set(
+                device,
+                self.blur_sets[i],
+                &[(placeholder, sampler), (rough, sampler)],
+            );
             // Composite set: 0 = reflection placeholder, 1 = scene, 2 = normal+depth,
             // 3 = roughness, 4 = blur.
-            let scene = img(hdr_resolve_views[i]);
-            let nd = img(normal_depth_views[i]);
-            write(self.composite_sets[i], 0, &placeholder);
-            write(self.composite_sets[i], 1, &scene);
-            write(self.composite_sets[i], 2, &nd);
-            write(self.composite_sets[i], 3, &rough);
-            write(self.composite_sets[i], 4, &blur_info);
+            write_source_set(
+                device,
+                self.composite_sets[i],
+                &[
+                    (placeholder, sampler),
+                    (hdr_resolve_views[i], sampler),
+                    (normal_depth_views[i], sampler),
+                    (rough, sampler),
+                    (self.blur.view, sampler),
+                ],
+            );
         }
     }
 
@@ -536,13 +521,12 @@ impl ReflectionCompositeResources {
         }
         let refl = vk::DescriptorImageInfo::default()
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(view)
-            .sampler(self.sampler.handle());
+            .image_view(view);
         let write = |set: vk::DescriptorSet| {
             vk::WriteDescriptorSet::default()
                 .dst_set(set)
                 .dst_binding(0)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                 .image_info(std::slice::from_ref(&refl))
         };
         let writes = [
@@ -786,7 +770,7 @@ mod tests {
     // CPU<->GPU layout to assert.
     #[test]
     fn reflection_composite_shaders_compile() {
-        if !concinnity_slang::shader_tests_enabled() {
+        if !concinnity_shader::dxc_available() {
             return;
         }
         let shaders = super::compile_reflection_composite_shaders(false)

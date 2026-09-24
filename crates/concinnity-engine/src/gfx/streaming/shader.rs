@@ -108,9 +108,9 @@ mod tests {
         ShaderPrograms {
             name: "wall".into(),
             vertex: None,
-            fragment: "float4 shade(VertexOut in, GpuObjectData od) { return 1.0; }".into(),
+            fragment: "float4 shade(VertexOut v, GpuObjectData od) { return 1.0; }".into(),
             programs: vec![compiled_programs::CompiledProgram {
-                entries: vec!["fragment_main_bindless".into()],
+                entry: "fragment_main_bindless".into(),
                 source_digest: 1,
                 artifact: vec![4, 5],
             }],

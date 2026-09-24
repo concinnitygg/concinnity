@@ -15,15 +15,15 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::super::allocator::PooledBuffer;
+use super::super::builtin_shaders;
 use super::super::com;
 use super::super::context::*;
 use super::super::error::{map_hresult, map_pso_hresult};
 use super::super::pipeline::{serialize_and_create_root_sig, skinned_input_layout};
-use super::super::slang_builtins;
 use super::super::texture::*;
+use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::draw::shadow::ShadowPush;
 use crate::directx::root_constants::root_dwords;
-use crate::directx::slang_builtins::SlangCompile;
 
 // Skinned (skeletally animated) mesh rendering. All `None` / empty until
 // `upload_skinned` runs; with no `SkinnedMesh` in the world every skinned pass
@@ -117,7 +117,7 @@ impl SkinnedState {
 
 // The depth-only skinned shadow vertex, the engine's own.
 fn compile_skinned_shadow_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    slang_builtins::SKINNED_SHADOW_VERT.compile(hot_reload)
+    builtin_shaders::SHADOW_VERT_SKINNED.compile(hot_reload)
 }
 
 // Same as the shadow root signature but with one extra root SRV at slot [2]

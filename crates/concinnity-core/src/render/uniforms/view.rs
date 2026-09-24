@@ -6,7 +6,7 @@
 /// every draw in it. `view` is the standalone view matrix the vertex shader uses
 /// to compute view-space depth for cascade selection in the fragment shader.
 ///
-/// The `.slang` source declares the same bytes with its own spelling
+/// The shader source declares the same bytes with its own spelling
 /// (`view_mat`, and `cam_x`/`cam_y`/`cam_z` in place of
 /// `cam_pos`), which is why the two are checked as byte ranges rather than by
 /// name.
@@ -52,7 +52,7 @@ pub struct ViewUniforms {
 /// VP drives the rasterized position (matching the main pass); `view` takes the
 /// normal + position into view space (where SSR / SSAO / SSGI / RT work); the
 /// un-jittered cur/prev VPs derive a jitter-free motion vector. Matches `GbView`
-/// in `shaders/gbuffer_prepass.slang`. 256 bytes (four float4x4, all naturally
+/// in `shaders/gbuffer_prepass.hlsl`. 256 bytes (four float4x4, all naturally
 /// 16-aligned, no padding).
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]

@@ -988,9 +988,9 @@ impl DxContext {
                 frame_idx,
                 D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
             ),
-            // Per-cluster light index lists: the dispatch flips them to UAV and
+            // Per-cluster light lists and probe masks: the dispatch flips them to UAV and
             // back, so they rest sampled. One buffer, not per-frame.
-            "cluster_light_list" => Some((&self.light_cull.cluster_buffer, SAMPLED)),
+            "cluster_lists" => Some((&self.light_cull.cluster_buffer, SAMPLED)),
             "ao_output" => self
                 .targets
                 .transient_pool
@@ -1185,11 +1185,11 @@ impl DxContext {
                 )));
             }
             PassId::LightCull => {
-                // Bins the local lights into per-cluster index lists. The
-                // builder emits this node only when the world has local lights
-                // (matching `clustered_lighting_enabled`), and the RAW edge on
-                // `cluster_light_list` pins it before Main, which reads the
-                // same buffer.
+                // Bins the local lights and probes into per-cluster light lists
+                // and probe masks. The builder emits this node only while either
+                // is live (matching `clustering_enabled`), and the RAW
+                // edge on `cluster_lists` pins it before Main, which reads
+                // the same buffer.
                 self.encode_light_cull(cmd, params.frame_idx)?;
             }
             PassId::Shadow => {

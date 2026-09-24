@@ -4,7 +4,7 @@
 //! order; `water.rs` is the other producer). Each panel is a flat world-space
 //! quad, built once at init; the fragment shader refracts the pass's scene
 //! snapshot, tints it, and mixes a reflection over it by a Schlick Fresnel term
-//! (see shaders/glass.slang, the single source all three backends compile).
+//! (see shaders/glass.hlsl, the single source all three backends compile).
 //!
 //! Same uniform layouts, back-to-front ordering and manual depth-occlusion test
 //! as the DirectX and Metal hosts.
@@ -20,7 +20,7 @@ use concinnity_core::render::error::RenderResult;
 pub(in crate::vulkan) use concinnity_core::render::uniforms::GlassParams;
 
 use super::allocator::DeviceAllocator;
-use crate::vulkan::slang_builtins::SlangCompile;
+use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::transparent::{
     GlassMeshProducer, ProducerCtx, RecordUpload, TracedGlassPipelines, TransparentProducer,
     TransparentRecord, TransparentVertexInput, create_glass_reflection_pipeline,
@@ -43,22 +43,13 @@ fn glass_params_from(panel: &GlassPanel, planar: f32) -> GlassParams {
     }
 }
 
-// Compile the glass vertex + fragment shaders, injecting the MSAA define so the
-// depth sampler type matches the main-depth resource's sample count. The
-// fragment's shared reflection-probe sampling is substituted by the
-// slang_builtins assembly. Mirrors compile_ssr_shaders.
-fn compile_glass_shaders(
-    hot_reload: bool,
-    msaa: bool,
-    probe_cube_count: u32,
-) -> RenderResult<(Vec<u8>, Vec<u8>)> {
-    let ctx = super::slang_builtins::Ctx {
-        hot_reload,
-        msaa,
-        probe_count: probe_cube_count as usize,
-    };
-    let vert = super::slang_builtins::GLASS_VERT.compile(&ctx)?;
-    let frag = super::slang_builtins::GLASS_FRAG.compile(&ctx)?;
+// Compile the glass vertex + fragment shaders, the fragment at the main
+// depth's sample count so its depth read matches the resource.
+fn compile_glass_shaders(hot_reload: bool, msaa: bool) -> RenderResult<(Vec<u8>, Vec<u8>)> {
+    let vert = super::builtin_shaders::GLASS_VERT.compile(hot_reload)?;
+    let frag = super::builtin_shaders::GLASS_FRAG
+        .at(msaa)
+        .compile(hot_reload)?;
     Ok((vert, frag))
 }
 
@@ -76,27 +67,33 @@ struct GlassRtShaders {
 }
 
 // Compile the glass vertex shader + the ray-traced glass fragment (flat, plus
-// the textured variant when `pool_size > 0`). slangc emits `SPV_KHR_ray_query`
+// the textured variant when `pool_size > 0`). dxc emits `SPV_KHR_ray_query`
 // for the traversal, which the device already advertises wherever these
 // pipelines are built.
 fn compile_glass_rt_shaders(
     hot_reload: bool,
     msaa: bool,
     pool_size: usize,
-    probe_cube_count: u32,
 ) -> RenderResult<GlassRtShaders> {
-    let ctx = super::slang_builtins::Ctx {
-        hot_reload,
-        msaa,
-        probe_count: probe_cube_count as usize,
-    };
-    let vs = super::slang_builtins::GLASS_VERT.compile(&ctx)?;
-    let flat_fs = super::slang_builtins::GLASS_FRAG_RT.compile(&ctx)?;
-    let reflection_flat_fs = super::slang_builtins::GLASS_REFLECTION_FRAG.compile(&ctx)?;
+    let vs = super::builtin_shaders::GLASS_VERT.compile(hot_reload)?;
+    let flat_fs = super::builtin_shaders::GLASS_FRAG_RT
+        .at(msaa)
+        .compile(hot_reload)?;
+    let reflection_flat_fs = super::builtin_shaders::GLASS_REFLECTION_FRAG
+        .at(msaa)
+        .compile(hot_reload)?;
     let (textured_fs, reflection_textured_fs) = if pool_size > 0 {
         (
-            Some(super::slang_builtins::GLASS_FRAG_RT_TEXTURED.compile(&ctx)?),
-            Some(super::slang_builtins::GLASS_REFLECTION_FRAG_TEXTURED.compile(&ctx)?),
+            Some(
+                super::builtin_shaders::GLASS_FRAG_RT_TEXTURED
+                    .at(msaa)
+                    .compile(hot_reload)?,
+            ),
+            Some(
+                super::builtin_shaders::GLASS_REFLECTION_FRAG_TEXTURED
+                    .at(msaa)
+                    .compile(hot_reload)?,
+            ),
         )
     } else {
         (None, None)
@@ -161,8 +158,7 @@ pub(in crate::vulkan) fn build_glass_producer(
     // probe/sky reflection. From `assign_planar_slots`.
     planar_slots: &[Option<usize>],
 ) -> RenderResult<TransparentProducer> {
-    let (vert_spv, frag_spv) =
-        compile_glass_shaders(ctx.hot_reload, ctx.msaa, ctx.probe_cube_count)?;
+    let (vert_spv, frag_spv) = compile_glass_shaders(ctx.hot_reload, ctx.msaa)?;
     let pipeline = create_transparent_pipeline(
         ctx.device,
         ctx.render_pass,
@@ -218,12 +214,7 @@ fn build_glass_rt_pipelines(
     ctx: &ProducerCtx,
     flat_layout: vk::PipelineLayout,
 ) -> RenderResult<TracedGlassPipelines> {
-    let shaders = compile_glass_rt_shaders(
-        ctx.hot_reload,
-        ctx.msaa,
-        ctx.bindless_pool_size,
-        ctx.probe_cube_count,
-    )?;
+    let shaders = compile_glass_rt_shaders(ctx.hot_reload, ctx.msaa, ctx.bindless_pool_size)?;
     build_traced_pipelines(ctx, flat_layout, &shaders, TransparentVertexInput::Position)
 }
 
@@ -280,20 +271,26 @@ fn compile_glass_mesh_shaders(
     hot_reload: bool,
     msaa: bool,
     pool_size: usize,
-    probe_cube_count: u32,
 ) -> RenderResult<GlassRtShaders> {
-    let ctx = super::slang_builtins::Ctx {
-        hot_reload,
-        msaa,
-        probe_count: probe_cube_count as usize,
-    };
-    let vs = super::slang_builtins::GLASS_MESH_VERT.compile(&ctx)?;
-    let flat_fs = super::slang_builtins::GLASS_MESH_FRAG_RT.compile(&ctx)?;
-    let reflection_flat_fs = super::slang_builtins::GLASS_MESH_REFLECTION_FRAG.compile(&ctx)?;
+    let vs = super::builtin_shaders::GLASS_MESH_VERT.compile(hot_reload)?;
+    let flat_fs = super::builtin_shaders::GLASS_MESH_FRAG_RT
+        .at(msaa)
+        .compile(hot_reload)?;
+    let reflection_flat_fs = super::builtin_shaders::GLASS_MESH_REFLECTION_FRAG
+        .at(msaa)
+        .compile(hot_reload)?;
     let (textured_fs, reflection_textured_fs) = if pool_size > 0 {
         (
-            Some(super::slang_builtins::GLASS_MESH_FRAG_RT_TEXTURED.compile(&ctx)?),
-            Some(super::slang_builtins::GLASS_MESH_REFLECTION_FRAG_TEXTURED.compile(&ctx)?),
+            Some(
+                super::builtin_shaders::GLASS_MESH_FRAG_RT_TEXTURED
+                    .at(msaa)
+                    .compile(hot_reload)?,
+            ),
+            Some(
+                super::builtin_shaders::GLASS_MESH_REFLECTION_FRAG_TEXTURED
+                    .at(msaa)
+                    .compile(hot_reload)?,
+            ),
         )
     } else {
         (None, None)
@@ -317,12 +314,7 @@ pub(in crate::vulkan) fn build_glass_mesh_producer(
     flat_layout: vk::PipelineLayout,
     object_indices: &[usize],
 ) -> RenderResult<GlassMeshProducer> {
-    let shaders = compile_glass_mesh_shaders(
-        ctx.hot_reload,
-        ctx.msaa,
-        ctx.bindless_pool_size,
-        ctx.probe_cube_count,
-    )?;
+    let shaders = compile_glass_mesh_shaders(ctx.hot_reload, ctx.msaa, ctx.bindless_pool_size)?;
     let pipelines = build_traced_pipelines(
         &ctx,
         flat_layout,
@@ -345,11 +337,11 @@ mod tests {
     // init failure on a GPU host.
     #[test]
     fn glass_mesh_shaders_compile() {
-        if !concinnity_slang::shader_tests_enabled() {
+        if !concinnity_shader::dxc_available() {
             return;
         }
         for msaa in [false, true] {
-            super::compile_glass_mesh_shaders(false, msaa, 16, 8)
+            super::compile_glass_mesh_shaders(false, msaa, 16)
                 .unwrap_or_else(|e| panic!("glass_mesh shaders (msaa={msaa}) must compile: {e}"));
         }
     }
@@ -382,18 +374,15 @@ mod tests {
     // guards.
     #[test]
     fn glass_shaders_compile() {
-        if !concinnity_slang::shader_tests_enabled() {
+        if !concinnity_shader::dxc_available() {
             return;
         }
-        // Both the ceiling and a device-shortened probe cube array must compile.
-        for probes in [1, concinnity_core::render::uniforms::MAX_PROBES as u32] {
-            super::compile_glass_shaders(false, true, probes).expect("glass compiles (msaa)");
-            super::compile_glass_shaders(false, false, probes).expect("glass compiles (no msaa)");
-        }
+        super::compile_glass_shaders(false, true).expect("glass compiles (msaa)");
+        super::compile_glass_shaders(false, false).expect("glass compiles (no msaa)");
     }
 
     // Compile the ray-traced glass shaders (both MSAA variants, both flat +
-    // textured) so a regression in glass.slang's `GLASS_RT` arm (the shared
+    // textured) so a regression in glass.hlsl's `GLASS_RT` arm (the shared
     // `{RT_TRACE}` traversal + the probe `{PROBE_COMMON}` injection + the
     // `RT_TEXTURED` split) fails the suite without a GPU. Mirrors
     // `rt_reflections_shaders_compile`. The CPU<->GPU `RtParams` / `RtGeomEntry`
@@ -401,12 +390,12 @@ mod tests {
     // in gfx::render_types.
     #[test]
     fn glass_rt_shaders_compile() {
-        if !concinnity_slang::shader_tests_enabled() {
+        if !concinnity_shader::dxc_available() {
             return;
         }
         for &msaa in &[true, false] {
-            let shaders = super::compile_glass_rt_shaders(false, msaa, 4, 4)
-                .expect("glass rt shaders compile");
+            let shaders =
+                super::compile_glass_rt_shaders(false, msaa, 4).expect("glass rt shaders compile");
             assert!(crate::vulkan::pipeline::is_spirv(&shaders.vs));
             assert!(crate::vulkan::pipeline::is_spirv(&shaders.flat_fs));
             assert!(
@@ -416,7 +405,7 @@ mod tests {
         }
         // pool_size 0 builds only the flat variant.
         let flat_only =
-            super::compile_glass_rt_shaders(false, false, 0, 4).expect("glass rt flat compiles");
+            super::compile_glass_rt_shaders(false, false, 0).expect("glass rt flat compiles");
         assert!(flat_only.textured_fs.is_none());
     }
 }

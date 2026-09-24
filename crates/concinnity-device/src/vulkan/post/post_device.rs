@@ -1,14 +1,13 @@
 //! Vulkan's implementation of the shared fullscreen post-pass seam
 //! (`render::post::device::PostPassDevice`).
 //!
-//! Everything a pass used to own per effect is derived here from what the single
-//! source declares: the descriptor set layout is N combined image samplers, the
+//! Each pass's objects are derived here from what the single source declares:
+//! the descriptor set layout is N sampled images and their N samplers, the
 //! pipeline layout adds a fragment push-constant range of the declared size and,
 //! for a probe-reading program, the forward global set as set 1, and the render
-//! pass comes from the target's format and load action. The sets themselves are
-//! allocated per frame (post/set_arena.rs) rather than pre-wired per effect,
-//! which is what removes the `rewire_*` a pass needed for every input another
-//! effect might own.
+//! pass comes from the target's format and load action. The sets are allocated
+//! per frame (post/set_arena.rs) rather than pre-wired per effect, so no pass
+//! has to rewire an input another effect owns.
 
 use ash::vk;
 use concinnity_core::render::error::{RenderError, RenderResult};
@@ -19,12 +18,12 @@ use concinnity_core::render::post::program::{PostProgram, PostProgramBindings};
 use concinnity_core::render::render_graph::{PixelFormat, TextureDesc};
 
 use crate::vulkan::allocator::DeviceAllocator;
+use crate::vulkan::builtin_shaders::{self, CompileProgram};
 use crate::vulkan::error::map_vk_result;
 use crate::vulkan::owned::{OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout, VkDevice};
 use crate::vulkan::pipeline::GraphicsStages;
 use crate::vulkan::post::pass_cache::PostPassCache;
 use crate::vulkan::post::set_arena::PostSetArena;
-use crate::vulkan::slang_builtins::{self, SlangCompile};
 use crate::vulkan::texture::{
     GpuImage, ImageSpec, create_image, create_image_view, one_shot_submit, transition_image_layout,
 };
@@ -71,14 +70,12 @@ pub(in crate::vulkan) struct VkAttachment {
 }
 
 // The forward global set, as a probe-reading program binds it for the probe
-// records (binding 7) and the cube array (binding 8).
+// count (binding 7), the cube array (binding 8) and the records (binding 17).
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct VkPostProbes<'a> {
     pub layout: vk::DescriptorSetLayout,
     // One set per frame in flight. Empty at init, where no draw is encoded.
     pub sets: &'a [vk::DescriptorSet],
-    // The cube array's descriptor count, which the fragment is compiled to.
-    pub cube_count: u32,
 }
 
 // The one-shot submit a freshly created target's initial layout transition
@@ -107,32 +104,17 @@ pub(in crate::vulkan) struct VkPostDevice<'a> {
     // The trilinear clamp-to-edge state an environment cube is sampled through.
     pub cube_sampler: vk::Sampler,
     // The global set a probe-reading program binds.
-    pub probes: Option<VkPostProbes<'a>>,
+    pub probes: VkPostProbes<'a>,
     // Which frame in flight is recording.
     pub frame: usize,
     pub hot_reload: bool,
 }
 
 // The SPIR-V a post program's two stages compile to: the one shared fullscreen
-// triangle vertex plus the program's own fragment, whose probe cube array is
-// sized to `probe_count`.
-fn compile(
-    program: PostProgram,
-    hot_reload: bool,
-    probe_count: usize,
-) -> RenderResult<(Vec<u8>, Vec<u8>)> {
-    let ctx = crate::vulkan::slang_builtins::Ctx {
-        probe_count,
-        ..crate::vulkan::slang_builtins::Ctx::plain(hot_reload)
-    };
-    let frag = match program {
-        PostProgram::TaaResolve => &slang_builtins::TAA_FRAG,
-        PostProgram::SsrResolve => &slang_builtins::SSR_RESOLVE,
-        PostProgram::SsgiGather => &slang_builtins::SSGI_GATHER,
-        PostProgram::SsgiComposite => &slang_builtins::SSGI_COMPOSITE,
-    };
-    let vert = slang_builtins::FULLSCREEN_VERT.compile(&ctx)?;
-    Ok((vert, frag.compile(&ctx)?))
+// triangle vertex plus the program's own fragment.
+fn compile(program: PostProgram, hot_reload: bool) -> RenderResult<(Vec<u8>, Vec<u8>)> {
+    let vert = builtin_shaders::FULLSCREEN_VERT.compile(hot_reload)?;
+    Ok((vert, program.program().compile(hot_reload)?))
 }
 
 fn blend_attachment(blend: PostBlend) -> vk::PipelineColorBlendAttachmentState {
@@ -156,36 +138,20 @@ fn blend_attachment(blend: PostBlend) -> vk::PipelineColorBlendAttachmentState {
 }
 
 impl VkPostDevice<'_> {
-    // The descriptor set layout for `n` combined image samplers at bindings
-    // `0..n`, fragment-visible. Derived from the program's declared count rather
-    // than written per pass, which is what keeps the single source the contract.
+    // The descriptor set layout for `n` sources, fragment-visible: their
+    // sampled images at bindings `0..n` and their samplers at `n..2n`. Derived
+    // from the program's declared count rather than written per pass, which is
+    // what keeps the single source the contract.
     fn set_layout(&self, n: usize) -> RenderResult<OwnedSetLayout> {
-        let bindings: Vec<_> = (0..n as u32)
-            .map(|b| {
-                (
-                    b,
-                    vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                    vk::ShaderStageFlags::FRAGMENT,
-                )
-            })
-            .collect();
-        crate::vulkan::resources::create_descriptor_set_layout(self.device, &bindings)
+        crate::vulkan::resources::create_descriptor_set_layout(
+            self.device,
+            &crate::vulkan::resources::source_set_bindings(n as u32),
+        )
     }
 
-    // The probe set a program that declares one binds, or an error naming the
-    // pass when this device holds none.
-    fn probes_for(
-        &self,
-        bindings: PostProgramBindings,
-        label: &str,
-    ) -> RenderResult<Option<VkPostProbes<'_>>> {
-        match (bindings.probes, self.probes) {
-            (false, _) => Ok(None),
-            (true, Some(probes)) => Ok(Some(probes)),
-            (true, None) => Err(RenderError::Other(format!(
-                "{label}: the program reads the reflection-probe set, but this device holds none"
-            ))),
-        }
+    // The probe set a program that declares one binds.
+    fn probes_for(&self, bindings: PostProgramBindings) -> Option<VkPostProbes<'_>> {
+        bindings.probes.then_some(self.probes)
     }
 
     fn sampler_for(&self, sampler: PostSampler) -> vk::Sampler {
@@ -269,7 +235,7 @@ impl PostPassDevice for VkPostDevice<'_> {
         blend: PostBlend,
     ) -> RenderResult<Self::Pipeline> {
         let bindings = program.bindings();
-        let probes = self.probes_for(bindings, program.label())?;
+        let probes = self.probes_for(bindings);
         let set_layout = self.set_layout(bindings.textures)?;
         let mut set_layouts = vec![set_layout.handle()];
         set_layouts.extend(probes.map(|p| p.layout));
@@ -292,8 +258,7 @@ impl PostPassDevice for VkPostDevice<'_> {
         let render_pass = self
             .cache
             .render_pass(self.device, format, PostLoadOp::DontCare)?;
-        let probe_count = probes.map_or(0, |p| p.cube_count as usize);
-        let shaders = compile(program, self.hot_reload, probe_count)?;
+        let shaders = compile(program, self.hot_reload)?;
         let pipeline = self.build_pipeline(shaders, render_pass, layout.handle(), blend)?;
         Ok(PostPipeline {
             pipeline,
@@ -376,7 +341,7 @@ impl PostPassDevice for VkPostDevice<'_> {
         draw.check(pipe.bindings)?;
         // A render pass writes its attachment's layout in and out itself, so
         // who owns the target's state between passes changes nothing here.
-        let probe_set = match self.probes_for(pipe.bindings, draw.label)? {
+        let probe_set = match self.probes_for(pipe.bindings) {
             None => None,
             Some(probes) => Some(*probes.sets.get(self.frame).ok_or_else(|| {
                 RenderError::Other(format!(
@@ -399,30 +364,12 @@ impl PostPassDevice for VkPostDevice<'_> {
         let set = self
             .arena
             .alloc(self.device, self.frame, pipe.set_layout.handle())?;
-        let infos: Vec<vk::DescriptorImageInfo> = draw
-            .binds
-            .iter()
-            .map(|b| {
-                vk::DescriptorImageInfo::default()
-                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                    .image_view(b.texture)
-                    .sampler(self.sampler_for(b.sampler))
-            })
-            .collect();
-        let writes: Vec<vk::WriteDescriptorSet> = infos
-            .iter()
-            .enumerate()
-            .map(|(i, info)| {
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(i as u32)
-                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .image_info(std::slice::from_ref(info))
-            })
-            .collect();
-        // SAFETY: `writes` and the image infos it borrows are live for the call, and every set and
-        // resource it names belongs to this device.
-        unsafe { self.device.update_descriptor_sets(&writes, &[]) };
+        let mut sources =
+            [(vk::ImageView::null(), vk::Sampler::null()); crate::vulkan::resources::MAX_SOURCES];
+        for (source, b) in sources.iter_mut().zip(draw.binds) {
+            *source = (b.texture, self.sampler_for(b.sampler));
+        }
+        crate::vulkan::resources::write_source_set(self.device, set, &sources[..draw.binds.len()]);
 
         let extent = target.extent;
         let rp_begin = vk::RenderPassBeginInfo::default()
@@ -504,11 +451,10 @@ impl crate::vulkan::context::VkContext {
             arena: &self.post.arena,
             sampler: self.post.sampler.handle(),
             cube_sampler: self.scene.cube_sampler.handle(),
-            probes: Some(VkPostProbes {
+            probes: VkPostProbes {
                 layout: self.descriptors.global_set_layout.handle(),
                 sets: &self.descriptors.global_sets,
-                cube_count: self.descriptors.probe_cube_count,
-            }),
+            },
             frame,
             hot_reload: self.hot_reload.enabled,
         }
@@ -530,26 +476,21 @@ mod tests {
     use super::*;
 
     // Every post program's fragment, and the shared vertex, compile to SPIR-V.
-    // The probe-reading resolve compiles against both a device-shortened cube
-    // array and the ceiling, since the array length is baked into the program.
     #[test]
     fn every_post_program_compiles() {
-        if !concinnity_slang::shader_tests_enabled() {
+        if !concinnity_shader::dxc_available() {
             return;
         }
-        let max = concinnity_core::render::uniforms::MAX_PROBES;
         for program in [
             PostProgram::TaaResolve,
             PostProgram::SsrResolve,
             PostProgram::SsgiGather,
             PostProgram::SsgiComposite,
         ] {
-            for probes in [1, max] {
-                let (vert, frag) = compile(program, false, probes)
-                    .unwrap_or_else(|e| panic!("{program:?} with {probes} probes: {e}"));
-                assert!(crate::vulkan::pipeline::is_spirv(&vert));
-                assert!(crate::vulkan::pipeline::is_spirv(&frag));
-            }
+            let (vert, frag) =
+                compile(program, false).unwrap_or_else(|e| panic!("{program:?}: {e}"));
+            assert!(crate::vulkan::pipeline::is_spirv(&vert));
+            assert!(crate::vulkan::pipeline::is_spirv(&frag));
         }
     }
 }

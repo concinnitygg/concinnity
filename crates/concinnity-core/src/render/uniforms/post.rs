@@ -2,7 +2,7 @@
 //! helpers that feed them take.
 
 /// Input to the TAA resolve fragment shader. Matches `TaaParams` in
-/// `shaders/taa.slang`. 4 bytes.
+/// `shaders/taa.hlsl`. 4 bytes.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct TaaParams {
@@ -12,7 +12,7 @@ pub struct TaaParams {
 
 /// Input to the auto-exposure histogram kernels: the three luminance-mapping
 /// scalars then a pad rounding to 16 bytes. Matches `AutoExposureParams` in
-/// `shaders/auto_exposure.slang`.
+/// `shaders/auto_exposure.hlsl`.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct AutoExposureParams {
@@ -28,7 +28,7 @@ pub struct AutoExposureParams {
 }
 
 /// Per-dispatch params for the Hi-Z build kernels: four tightly-packed uints.
-/// Matches `HizParams` in `shaders/hiz_build.slang`. 16 bytes.
+/// Matches `HizParams` in `shaders/hiz_build.hlsl`. 16 bytes.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct HizParams {
@@ -43,7 +43,7 @@ pub struct HizParams {
 }
 
 /// Per-dispatch params for the single-pass Hi-Z downsampler.
-/// Matches `HizSpdParams` in `shaders/hiz_build.slang`. 16 bytes.
+/// Matches `HizSpdParams` in `shaders/hiz_build.hlsl`. 16 bytes.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct HizSpdParams {

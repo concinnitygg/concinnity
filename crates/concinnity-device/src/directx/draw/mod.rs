@@ -10,15 +10,12 @@
 
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types::{
-    CLUSTER_GRID_X, CLUSTER_GRID_Y, CLUSTER_GRID_Z, ClusterParams, LightUniforms, LineVertex,
-    ShadowUniforms, TextDrawCall,
+    ClusterCamera, ClusterParams, LightUniforms, LineVertex, ShadowUniforms, TextDrawCall,
 };
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::lights;
 use concinnity_core::render::pass_timing;
 use concinnity_core::render::render_graph::build_frame_graph;
-use concinnity_core::transform::mat4_inverse;
-use concinnity_core::transform::mat4_mul;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::com;
@@ -219,20 +216,6 @@ impl DxContext {
             );
         }
 
-        // Reflection-probe set (parallax boxes + live count) into this frame's ring
-        // CBV; the bindless main pass binds it at root param [11]. A ring (one CBV per
-        // frame) so this write never races a prior frame's in-flight GPU read.
-        // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
-        // init sized for this payload, and the source is a separate live value, so the ranges
-        // cannot overlap.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                &self.probe.set as *const concinnity_core::render::uniforms::ProbeSet as *const u8,
-                self.uniforms.probe_set_cbv_ptrs[frame_idx],
-                std::mem::size_of::<concinnity_core::render::uniforms::ProbeSet>(),
-            );
-        }
-
         // Push this frame's skinning matrices into the per-frame joint buffers
         // before the skinned shadow + main passes read them. No-op when no
         // SkinnedMesh is declared.
@@ -268,13 +251,12 @@ impl DxContext {
             self.build_instance_upload(cam_pos);
         }
 
-        // Clustered light binning runs only when the pipeline exists (a world
-        // with local lights) and at least one light is still live. Drives both
-        // `ClusterParams::use_clusters` below and the `LightCull` graph node, so
-        // the forward pass never reads a list the skipped pass did not write.
-        let clustered = lights::clustered_lighting_active(
-            self.light_cull.pso.is_some(),
+        // Clustered binning runs while a local light or a baked probe is live,
+        // the same test `ClusterParams::for_camera` sets `use_clusters` by, so
+        // no reader sees a list the skipped `LightCull` node did not write.
+        let clustered = lights::clustering_active(
             self.uniforms.light_uniforms.num_local_lights,
+            self.probe.book.count(),
         );
         let seed_inputs = self.frame_graph_inputs(
             width,
@@ -294,30 +276,24 @@ impl DxContext {
         // these to build each cluster's world-space AABB (un-jittered inverse VP
         // + camera forward, matching the fog froxel convention) and the forward
         // pass reads the grid dims / depth range / screen size to place a
-        // fragment. `use_clusters` is set only when the world has local lights
-        // and at least one is live; otherwise the forward pass iterates them all
-        // (zero iterations) rather than reading a list the skipped binning pass
-        // never wrote. Slot 1 of the same buffer holds the `use_clusters = 0`
+        // fragment. `use_clusters` is set only while a local light or a baked
+        // probe is live; otherwise every reader iterates them all (zero
+        // iterations) rather than reading a list the skipped binning pass never
+        // wrote. Slot 1 of the same buffer holds the `use_clusters = 0`
         // copy the planar / probe re-renders bind (written once at init).
-        let cluster_params = ClusterParams {
-            inv_view_proj: mat4_inverse(mat4_mul(proj, self.view.matrix)),
-            cam_pos,
-            z_near: near.max(1e-3),
-            view_forward: [
-                -self.view.matrix[0][2],
-                -self.view.matrix[1][2],
-                -self.view.matrix[2][2],
-            ],
-            z_far: far,
-            grid_x: CLUSTER_GRID_X,
-            grid_y: CLUSTER_GRID_Y,
-            grid_z: CLUSTER_GRID_Z,
-            num_lights: self.uniforms.light_uniforms.num_local_lights.max(0) as u32,
-            screen_w: width as f32,
-            screen_h: height as f32,
-            use_clusters: u32::from(clustered),
-            _pad: 0,
-        };
+        let cluster_params = ClusterParams::for_camera(
+            &ClusterCamera {
+                view: self.view.matrix,
+                proj,
+                position: cam_pos,
+                near,
+                far,
+                width,
+                height,
+            },
+            self.uniforms.light_uniforms.num_local_lights,
+            self.probe.book.count() as u32,
+        );
         self.write_cluster_params(frame_idx, &cluster_params);
 
         // Upload this frame's view UBO.
@@ -472,6 +448,35 @@ impl LocalLightParams {
         area_buffer: 17,
         ltc_table: 18,
     };
+}
+
+// Root parameters the bindless main pass binds the reflection-probe set at:
+// the cube array table (t7), the ProbeSet constant buffer (b4) and the records
+// (a root SRV at t8).
+const MAIN_PROBE_CUBES_PARAM: u32 = 10;
+const MAIN_PROBE_SET_PARAM: u32 = 11;
+const MAIN_PROBE_RECORDS_PARAM: u32 = 19;
+
+impl DxContext {
+    // Bind a probe set on the bindless main root signature: the cube array
+    // table, the ProbeSet constant buffer at `set_cbv` and the records at
+    // `records`.
+    pub(super) fn bind_main_probe_set(
+        &self,
+        cmd: &ID3D12GraphicsCommandList,
+        set_cbv: u64,
+        records: u64,
+    ) {
+        use crate::directx::descriptor_slot::DescriptorTables as _;
+        // SAFETY: the command list is in the recording state with the SRV heap
+        // bound, and the table slot and both buffers are live for the frame the
+        // list records.
+        unsafe {
+            cmd.set_graphics_srv_table(MAIN_PROBE_CUBES_PARAM, self.probe_cube_table_gpu());
+            cmd.SetGraphicsRootConstantBufferView(MAIN_PROBE_SET_PARAM, set_cbv);
+            cmd.SetGraphicsRootShaderResourceView(MAIN_PROBE_RECORDS_PARAM, records);
+        }
+    }
 }
 
 // One-shot upload of a per-scene record list into its static storage buffer.

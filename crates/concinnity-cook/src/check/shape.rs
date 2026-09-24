@@ -240,7 +240,7 @@ mod tests {
             asset(
                 "scene_shader",
                 RegisteredType::Shader,
-                serde_json::json!({"fragment": "x.slang"}),
+                serde_json::json!({"fragment": "x.hlsl"}),
             ),
         ]
     }
@@ -436,7 +436,7 @@ mod tests {
         asset(
             name,
             RegisteredType::Shader,
-            serde_json::json!({"fragment": "x.slang"}),
+            serde_json::json!({"fragment": "x.hlsl"}),
         )
     }
 

@@ -14,13 +14,15 @@ use objc2_metal::{
 
 use concinnity_core::render::fullscreen;
 
+use crate::metal::builtin_shaders::{
+    BLOOM_DOWNSAMPLE, BLOOM_PREFILTER, BLOOM_UPSAMPLE, ShaderProgram,
+};
 use crate::metal::context::MtlContext;
 use crate::metal::descriptors::TextureDesc;
 use crate::metal::encode::RenderEncode;
 use crate::metal::post::fullscreen::{
-    FullscreenBlend, FullscreenPass, PassTimer, build_slang_fullscreen_pipeline,
+    FullscreenBlend, FullscreenPass, PassTimer, build_fullscreen_pipeline,
 };
-use crate::metal::slang_builtins::{BLOOM_DOWNSAMPLE, BLOOM_PREFILTER, BLOOM_UPSAMPLE, SlangLib};
 
 // Pixel format of every mip in the bloom chain, including the `bloom_top` mip
 // the transient pool backs.
@@ -42,7 +44,7 @@ pub(crate) struct BloomPipelines {
 }
 
 // Build the bloom prefilter / downsample / upsample pipelines from the
-// single-source `bloom.slang`. The filter kernels are the Jimenez "Next
+// single-source `bloom.hlsl`. The filter kernels are the Jimenez "Next
 // Generation Post Processing in Call of Duty" 13-tap downsample + 9-tap tent
 // upsample; the first downsample applies a Karis luma-weighted average to
 // suppress fireflies and a soft-knee luminance threshold.
@@ -50,8 +52,8 @@ pub(crate) fn build_bloom_pipelines(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> RenderResult<BloomPipelines> {
-    let build = |lib: &SlangLib, blend: FullscreenBlend| {
-        build_slang_fullscreen_pipeline(device, lib, BLOOM_FORMAT, blend, hot_reload)
+    let build = |lib: &ShaderProgram, blend: FullscreenBlend| {
+        build_fullscreen_pipeline(device, lib, BLOOM_FORMAT, blend, hot_reload)
     };
 
     Ok(BloomPipelines {

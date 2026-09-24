@@ -2,20 +2,18 @@
 //!
 //! Besides the Metal shader precompilation in `metal_shaders`, the emitted
 //! binding readers in `shader_abi` and the source hashing in `source_hash`, two
-//! responsibilities, both previously copy-pasted
-//! between the runtime crate's build script and the editor crate's build script
-//! (and missing entirely from the example binaries, which is why they failed to
-//! link against the runtime's DLSS code on Windows):
+//! responsibilities every build script that links the runtime needs, including
+//! the example binaries':
 //!
 //! 1. Resolve the rendering backend once and emit it as a single cfg
 //!    (`backend_metal` / `backend_dx` / `backend_vk`) the source gates on.
 //!
 //! 2. Detect the optional graphics SDKs and emit the cfgs the renderer gates on
 //!    (`agility_sdk_configured`, `ffx_sdk_bundled`, `xess_sdk_bundled`,
-//!    `ngx_sdk_bundled`, `dxc_bundled`). For a package that produces final
-//!    binaries this also copies the runtime DLLs next to the .exe and links the
-//!    NGX import lib; for a package that produces only an rlib and its own test
-//!    binaries just the NGX link is needed. Which of the two, and where the
+//!    `ngx_sdk_bundled`). For a package that produces final binaries this also
+//!    copies the runtime DLLs next to the .exe and links the NGX import lib; for
+//!    a package that produces only an rlib and its own test binaries just the
+//!    NGX link is needed. Which of the two, and where the
 //!    binaries land, is read off the calling package by `targets` -- a build
 //!    script declares nothing about its own target list.
 //!
@@ -41,18 +39,20 @@ use std::path::{Path, PathBuf};
 
 mod embedded_shaders;
 mod metal_shaders;
+mod parallel;
 mod sdks;
 mod shader_abi;
-mod slang_artifacts;
+mod shader_artifacts;
 mod source_hash;
 mod targets;
 mod vendored;
 mod version_stamp;
 
-pub use metal_shaders::{SlangLibSpec, precompile_metal_shaders};
+pub use metal_shaders::{EmittedMsl, precompile_metal_shaders};
+pub use parallel::parallel_map;
 use sdks::SdkEnv;
-pub use shader_abi::{dxil_register_declared, msl_binds, msl_entry_params, msl_param_name};
-pub use slang_artifacts::{SlangArtifact, precompile_slang_artifacts};
+pub use shader_abi::{msl_binds, msl_binds_a_resource, msl_entry_params, msl_param_name};
+pub use shader_artifacts::{ShaderArtifact, precompile_shader_artifacts};
 pub use version_stamp::emit_version_stamp;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -315,20 +315,6 @@ pub fn hash_sources(roots: &[PathBuf]) -> u32 {
     source_hash::hash_named(&mut named)
 }
 
-// Default SDK install roots, used when the matching env var is unset.
-// The Windows SDK's tool directory, under whichever Program Files the OS
-// reports. Windows always sets the variable, and off Windows there is no
-// Windows SDK to find, so an absent one is not a fallback but an answer.
-fn windows_sdk_bin() -> Option<PathBuf> {
-    let program_files = std::env::var("ProgramFiles(x86)").ok()?;
-    Some(
-        Path::new(&program_files)
-            .join("Windows Kits")
-            .join("10")
-            .join("bin"),
-    )
-}
-
 // Whether an opt-in variable's value asks for the feature, for the one SDK that
 // is off by default. Bundling Agility links `D3D12SDKVersion` / `D3D12SDKPath`
 // into the binary, and `d3d12.dll` reads those before any engine code runs: a
@@ -368,13 +354,10 @@ fn sdk_env_from_cargo() -> SdkEnv {
         fidelityfx_vk_root: vendored::newest(workspace.as_deref(), "fidelityfx-vk"),
         xess_root: root("CN_XESS_SDK", "xess"),
         streamline_root: root("CN_STREAMLINE_SDK", "streamline"),
-        dxc_root: var("CN_DXC_SDK").map(PathBuf::from),
-        windows_sdk_bin: windows_sdk_bin(),
         agility_enabled: opted_in("CN_ENABLE_AGILITY_SDK"),
         ffx_enabled: enabled("CN_ENABLE_FFX_FSR3"),
         xess_enabled: enabled("CN_ENABLE_XESS"),
         dlss_enabled: enabled("CN_ENABLE_DLSS"),
-        dxc_enabled: enabled("CN_ENABLE_DXC"),
     }
 }
 
@@ -585,7 +568,6 @@ mod tests {
             ("CN_ENABLE_FFX_FSR3", env.ffx_enabled),
             ("CN_ENABLE_XESS", env.xess_enabled),
             ("CN_ENABLE_DLSS", env.dlss_enabled),
-            ("CN_ENABLE_DXC", env.dxc_enabled),
         ] {
             if std::env::var(var).is_err() {
                 assert!(flag, "{var} should default on");

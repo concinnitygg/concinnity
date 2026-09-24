@@ -172,7 +172,7 @@ mod tests {
         i.bindless_cull_enabled = true;
         i.two_pass_occlusion_enabled = true;
         i.hiz_build_enabled = true;
-        i.clustered_lighting_enabled = true;
+        i.clustering_enabled = true;
         i.auto_exposure_enabled = true;
         i.particles_enabled = true;
         i.fog_enabled = true;

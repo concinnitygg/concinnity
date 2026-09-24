@@ -14,16 +14,15 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
 use objc2_metal::{
-    MTLBuffer, MTLCommandBuffer, MTLComputeCommandEncoder as _, MTLComputePipelineState,
-    MTLDevice as _, MTLLibrary as _, MTLSize,
+    MTLBuffer, MTLCommandBuffer, MTLComputeCommandEncoder as _, MTLComputePipelineState, MTLSize,
 };
 
+use super::builtin_shaders::compute_pipeline;
 use super::context::MtlContext;
 use super::encode::ComputeEncode;
-use super::pipeline::ns_str;
 use super::scoped_encoder::ScopedEncoder;
 
-// Threads per group, matching `[numthreads(64, 1, 1)]` in model_history.slang.
+// Threads per group, matching `[numthreads(64, 1, 1)]` in model_history.hlsl.
 const THREADGROUP: usize = 64;
 
 impl MtlContext {
@@ -84,19 +83,11 @@ impl MtlContext {
 }
 
 // Build the model-history compute pipeline from the single-source
-// `model_history.slang` (params buffer(0), objects buffer(1), history
+// `model_history.hlsl` (params buffer(0), objects buffer(1), history
 // buffer(2) -- the same slots the encode above binds).
 pub(super) fn build_model_history_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLComputePipelineState>>> {
-    let library = super::slang_builtins::MODEL_HISTORY.library(device, hot_reload)?;
-    let func = library
-        .newFunctionWithName(&ns_str("model_history_kernel"))
-        .ok_or_else(|| RenderError::ShaderCompile("model_history_kernel not found".to_string()))?;
-    device
-        .newComputePipelineStateWithFunction_error(&func)
-        .map_err(|e| {
-            RenderError::ShaderCompile(format!("failed to create model history pipeline: {e:?}"))
-        })
+    compute_pipeline(device, &super::builtin_shaders::MODEL_HISTORY, hot_reload)
 }

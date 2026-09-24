@@ -30,12 +30,12 @@ use super::pipeline::{GraphicsStages, SHADER_ENTRY, spv_module};
 use super::texture::{
     LayoutTransition, SubresourceRange, one_shot_submit, transition_image_layout_range,
 };
+use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
     OwnedSampler, OwnedSetLayout, VkDevice,
 };
 use crate::vulkan::record::Recorder;
-use crate::vulkan::slang_builtins::SlangCompile;
 
 // Threadgroup tile for the froxel kernel (8x8, one thread per (x, y) froxel),
 // matching the DirectX `[numthreads(8, 8, 1)]` and the Metal dispatch.
@@ -64,11 +64,12 @@ pub(in crate::vulkan) struct FogResources {
     pub(in crate::vulkan) froxel_ubos: Vec<PooledBuffer>,
 
     // Per-frame fog-render view sets (binding 0 FogParams, 1 depth, 2
-    // FogFroxelParams, 3 volume sampler3D).
+    // FogFroxelParams, 3 volume, 4 the volume's sampler).
     pub(in crate::vulkan) view_sets: Vec<vk::DescriptorSet>,
 
     // Froxel compute pipeline + its per-frame sets (binding 0 FogParams, 1
-    // FogFroxelParams, 2 ShadowUniforms, 3 shadow_map, 4 volume image3D).
+    // FogFroxelParams, 2 ShadowUniforms, 3 shadow_map, 4 volume image3D, 5 the
+    // shadow map's compare sampler).
     pub(in crate::vulkan) froxel_pipeline: OwnedPipeline,
     pub(in crate::vulkan) froxel_pipeline_layout: OwnedPipelineLayout,
     pub(in crate::vulkan) _froxel_set_layout: OwnedSetLayout,
@@ -87,9 +88,6 @@ pub(in crate::vulkan) struct FogResources {
     // `hdr_resolve_images[i].view` as the sole color attachment.
     pub(in crate::vulkan) framebuffers: Vec<OwnedFramebuffer>,
 
-    // Depth sampler (the shared linear sampler; depth is read via texelFetch so
-    // the filter mode is irrelevant).
-    pub(in crate::vulkan) sampler: vk::Sampler,
     // Linear-clamp sampler for the trilinear volume read.
     pub(in crate::vulkan) _volume_sampler: OwnedSampler,
 }
@@ -107,7 +105,7 @@ pub(in crate::vulkan) struct FogDeviceContext<'a> {
 
 // The per-frame render targets + config the fog pipeline binds against: the
 // resolved HDR color views (framebuffer attachments), the scene depth views,
-// the shared depth sampler, and the frame count / MSAA / format / extent.
+// and the frame count / MSAA / format / extent.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct FogFrameTargets<'a> {
     pub(in crate::vulkan) frames: usize,
@@ -115,7 +113,6 @@ pub(in crate::vulkan) struct FogFrameTargets<'a> {
     pub(in crate::vulkan) hdr_format: vk::Format,
     pub(in crate::vulkan) hdr_resolve_views: &'a [vk::ImageView],
     pub(in crate::vulkan) depth_views: &'a [vk::ImageView],
-    pub(in crate::vulkan) sampler: vk::Sampler,
     pub(in crate::vulkan) extent: vk::Extent2D,
 }
 
@@ -150,7 +147,6 @@ impl FogResources {
             hdr_format,
             hdr_resolve_views,
             depth_views,
-            sampler,
             extent,
         } = targets;
         let FogShadowResources {
@@ -227,10 +223,9 @@ impl FogResources {
                 FogViewBindings {
                     params_ubo: params_ubos[i].buffer(),
                     depth_view: depth_views[i.min(last_depth)],
-                    depth_sampler: sampler,
                     froxel_ubo: froxel_ubos[i].buffer(),
                     volume_view: volume_sampled_view,
-                    _volume_sampler: volume_sampler.handle(),
+                    volume_sampler: volume_sampler.handle(),
                 },
             );
         }
@@ -281,7 +276,6 @@ impl FogResources {
             froxel_sets,
             volume,
             framebuffers,
-            sampler,
             _volume_sampler: volume_sampler,
         })
     }
@@ -317,12 +311,11 @@ impl FogResources {
         for (i, &set) in self.view_sets.iter().enumerate() {
             let depth_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(depth_views[i.min(last_depth)])
-                .sampler(self.sampler);
+                .image_view(depth_views[i.min(last_depth)]);
             let write = vk::WriteDescriptorSet::default()
                 .dst_set(set)
                 .dst_binding(1)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                 .image_info(std::slice::from_ref(&depth_info));
             // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
             // every set and resource it names belongs to this device.
@@ -420,10 +413,10 @@ fn create_fog_set_layout(device: &VkDevice) -> RenderResult<OwnedSetLayout> {
             .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::FRAGMENT),
-        // 1: scene depth sampler.
+        // 1: scene depth, read by texel.
         vk::DescriptorSetLayoutBinding::default()
             .binding(1)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::FRAGMENT),
         // 2: FogFroxelParams UBO.
@@ -432,10 +425,16 @@ fn create_fog_set_layout(device: &VkDevice) -> RenderResult<OwnedSetLayout> {
             .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::FRAGMENT),
-        // 3: froxel volume sampler3D.
+        // 3: froxel volume.
         vk::DescriptorSetLayoutBinding::default()
             .binding(3)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+        // 4: the volume's sampler.
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(4)
+            .descriptor_type(vk::DescriptorType::SAMPLER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::FRAGMENT),
     ];
@@ -465,16 +464,22 @@ fn create_froxel_set_layout(device: &VkDevice) -> RenderResult<OwnedSetLayout> {
             .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::COMPUTE),
-        // 3: shadow map array (sampler2DArrayShadow).
+        // 3: shadow map array.
         vk::DescriptorSetLayoutBinding::default()
             .binding(3)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::COMPUTE),
         // 4: froxel volume image3D (storage).
         vk::DescriptorSetLayoutBinding::default()
             .binding(4)
             .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::COMPUTE),
+        // 5: the shadow map's compare sampler.
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(5)
+            .descriptor_type(vk::DescriptorType::SAMPLER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::COMPUTE),
     ];
@@ -518,10 +523,15 @@ fn create_fog_descriptor_pool(
             ty: vk::DescriptorType::UNIFORM_BUFFER,
             descriptor_count: 5 * f,
         },
-        // view: depth + volume sampled (2). froxel: shadow map (1).
+        // view: depth + volume (2). froxel: shadow map (1).
         vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+            ty: vk::DescriptorType::SAMPLED_IMAGE,
             descriptor_count: 3 * f,
+        },
+        // view: the volume's sampler (1). froxel: the shadow compare sampler (1).
+        vk::DescriptorPoolSize {
+            ty: vk::DescriptorType::SAMPLER,
+            descriptor_count: 2 * f,
         },
         // froxel: volume storage (1).
         vk::DescriptorPoolSize {
@@ -551,26 +561,24 @@ fn alloc_descriptor_sets(
         .map_err(|e| super::error::map_vk_result(e, "fog descriptor sets"))
 }
 
-// The four bindings of a per-frame fog-render view set: the FogParams +
-// FogFroxelParams UBOs, the scene depth sampler, and the froxel volume sampler.
+// The five bindings of a per-frame fog-render view set: the FogParams +
+// FogFroxelParams UBOs, the scene depth, and the froxel volume with its sampler.
 #[derive(Clone, Copy)]
 struct FogViewBindings {
     params_ubo: vk::Buffer,
     depth_view: vk::ImageView,
-    depth_sampler: vk::Sampler,
     froxel_ubo: vk::Buffer,
     volume_view: vk::ImageView,
-    _volume_sampler: vk::Sampler,
+    volume_sampler: vk::Sampler,
 }
 
 fn write_view_set(device: &VkDevice, set: vk::DescriptorSet, bindings: FogViewBindings) {
     let FogViewBindings {
         params_ubo,
         depth_view,
-        depth_sampler,
         froxel_ubo,
         volume_view,
-        _volume_sampler: volume_sampler,
+        volume_sampler,
     } = bindings;
     let params_info = vk::DescriptorBufferInfo::default()
         .buffer(params_ubo)
@@ -578,16 +586,14 @@ fn write_view_set(device: &VkDevice, set: vk::DescriptorSet, bindings: FogViewBi
         .range(std::mem::size_of::<FogParams>() as u64);
     let depth_info = vk::DescriptorImageInfo::default()
         .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .image_view(depth_view)
-        .sampler(depth_sampler);
+        .image_view(depth_view);
     let froxel_info = vk::DescriptorBufferInfo::default()
         .buffer(froxel_ubo)
         .offset(0)
         .range(std::mem::size_of::<FogFroxelParams>() as u64);
     let volume_info = vk::DescriptorImageInfo::default()
         .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .image_view(volume_view)
-        .sampler(volume_sampler);
+        .image_view(volume_view);
     let writes = [
         vk::WriteDescriptorSet::default()
             .dst_set(set)
@@ -597,7 +603,7 @@ fn write_view_set(device: &VkDevice, set: vk::DescriptorSet, bindings: FogViewBi
         vk::WriteDescriptorSet::default()
             .dst_set(set)
             .dst_binding(1)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
             .image_info(std::slice::from_ref(&depth_info)),
         vk::WriteDescriptorSet::default()
             .dst_set(set)
@@ -607,17 +613,18 @@ fn write_view_set(device: &VkDevice, set: vk::DescriptorSet, bindings: FogViewBi
         vk::WriteDescriptorSet::default()
             .dst_set(set)
             .dst_binding(3)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
             .image_info(std::slice::from_ref(&volume_info)),
     ];
     // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
     // and resource it names belongs to this device.
     unsafe { device.update_descriptor_sets(&writes, &[]) };
+    super::resources::write_samplers(device, set, 4, &[volume_sampler]);
 }
 
-// The five bindings of a per-frame froxel compute set: the FogParams,
-// FogFroxelParams, and ShadowUniforms UBOs, the CSM shadow map, and the froxel
-// volume storage image.
+// The six bindings of a per-frame froxel compute set: the FogParams,
+// FogFroxelParams, and ShadowUniforms UBOs, the CSM shadow map with its compare
+// sampler, and the froxel volume storage image.
 #[derive(Clone, Copy)]
 struct FogFroxelBindings {
     params_ubo: vk::Buffer,
@@ -651,8 +658,7 @@ fn write_froxel_set(device: &VkDevice, set: vk::DescriptorSet, bindings: FogFrox
         .range(std::mem::size_of::<ShadowUniforms>() as u64);
     let shadow_map_info = vk::DescriptorImageInfo::default()
         .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .image_view(shadow_map_view)
-        .sampler(shadow_sampler);
+        .image_view(shadow_map_view);
     let volume_info = vk::DescriptorImageInfo::default()
         .image_layout(vk::ImageLayout::GENERAL)
         .image_view(volume_storage_view);
@@ -675,7 +681,7 @@ fn write_froxel_set(device: &VkDevice, set: vk::DescriptorSet, bindings: FogFrox
         vk::WriteDescriptorSet::default()
             .dst_set(set)
             .dst_binding(3)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
             .image_info(std::slice::from_ref(&shadow_map_info)),
         vk::WriteDescriptorSet::default()
             .dst_set(set)
@@ -686,6 +692,7 @@ fn write_froxel_set(device: &VkDevice, set: vk::DescriptorSet, bindings: FogFrox
     // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
     // and resource it names belongs to this device.
     unsafe { device.update_descriptor_sets(&writes, &[]) };
+    super::resources::write_samplers(device, set, 5, &[shadow_sampler]);
 }
 
 // Create the shared 3D RGBA16F froxel volume (STORAGE | SAMPLED, GPU-local).
@@ -743,19 +750,17 @@ fn create_volume_sampler(device: &VkDevice) -> RenderResult<OwnedSampler> {
 }
 
 fn compile_fog_shaders(hot_reload: bool, msaa: bool) -> RenderResult<(Vec<u8>, Vec<u8>)> {
-    let ctx = super::slang_builtins::Ctx {
-        msaa,
-        ..super::slang_builtins::Ctx::plain(hot_reload)
-    };
-    let vert = super::slang_builtins::FULLSCREEN_VERT.compile(&ctx)?;
-    let frag = super::slang_builtins::FOG_FRAG.compile(&ctx)?;
+    let vert = super::builtin_shaders::FULLSCREEN_VERT.compile(hot_reload)?;
+    let frag = super::builtin_shaders::FOG_FRAG
+        .at(msaa)
+        .compile(hot_reload)?;
     Ok((vert, frag))
 }
 
 // Compile the froxel-volume compute kernel. MSAA-independent (the kernel does
 // not read the scene depth attachment).
 fn compile_fog_froxel_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    super::slang_builtins::FOG_FROXEL.compile(&super::slang_builtins::Ctx::plain(hot_reload))
+    super::builtin_shaders::FOG_FROXEL.compile(hot_reload)
 }
 
 // Rebuild the fog graphics pipeline against the existing render pass +
@@ -1051,7 +1056,7 @@ mod tests {
 
     #[test]
     fn fog_params_ubo_size_matches_glsl() {
-        // Both halves of fog.slang read the same 176 B std140 FogBlock.
+        // Both halves of fog.hlsl read the same 176 B std140 FogBlock.
         assert_eq!(size_of::<FogParams>(), 176);
     }
 
@@ -1064,7 +1069,7 @@ mod tests {
 
     #[test]
     fn fog_shaders_compile() {
-        if !concinnity_slang::shader_tests_enabled() {
+        if !concinnity_shader::dxc_available() {
             return;
         }
         // Compile the rewritten froxel-sampling fragment shader (both MSAA

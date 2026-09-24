@@ -323,7 +323,7 @@ mod tests {
     #[test]
     fn morph_entry_layout_matches_shaders() {
         // `MorphEntry` is read through a raw pointer by the deform kernel
-        // (by byte offset in rt_skin.slang): uint target at 0, two packed
+        // (by byte offset in rt_skin.hlsl): uint target at 0, two packed
         // float3s at 4 and 16, 28-byte stride.
         use core::mem::{offset_of, size_of};
         assert_eq!(size_of::<MorphEntry>(), MORPH_ENTRY_WORDS * 4);

@@ -87,7 +87,7 @@ pub(in crate::shader_layout) fn light_cull() -> Vec<Case> {
             screen_w,
             screen_h,
             use_clusters,
-            _pad,
+            num_probes,
         })),
         everywhere(mirror!(GpuLight => "GpuLight" {
             [position, range] => ["position_range"],

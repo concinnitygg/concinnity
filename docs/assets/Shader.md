@@ -3,7 +3,7 @@
 # Shader
 
 Replaces how surfaces are shaded, and optionally how vertices are placed,
-with functions of your own. Written in Slang, one source for every
+with functions of your own. Written in HLSL, one source for every
 backend.
 
 **A Shader is entirely optional.** The engine ships its own lighting and
@@ -20,7 +20,7 @@ functions from inside its own:
 
 ```hlsl
 // the `fragment` file, required
-float4 shade(VertexOut in, GpuObjectData od);
+float4 shade(VertexOut v, GpuObjectData od);
 
 // the `vertex` file, optional; without one the engine projects the vertex itself
 VertexOut transform(float4x4 model, float3 pos, float3 normal, float3 tangent,
@@ -41,8 +41,8 @@ Both files are compiled inside the engine's own main-pass source, so they
 see the same vocabulary the engine's shading uses and declare no layout,
 binding, register, attribute or varying of their own:
 
-- `shade_surface(in, od)`: the engine's PBR lighting, so
-  `return shade_surface(in, od) * tint;` starts from it.
+- `shade_surface(v, od)`: the engine's PBR lighting, so
+  `return shade_surface(v, od) * tint;` starts from it.
 - `project_vertex(model, pos, normal, tangent, color, uv)`: the engine's
   projection.
 - `pool_sample(index, uv)`: a texture from the world's pool by the record's
@@ -50,8 +50,10 @@ binding, register, attribute or varying of their own:
 - `decode_normal_map(rg)`: a tangent-space normal from a normal-map texel.
 - `shadow_factor_cascaded(world_pos, view_depth, screen_xy)`: the sun's
   cascaded shadow term.
-- `environment_specular(world_pos, reflected, lod)`: the reflection
-  environment.
+- `environment_specular(probe_mask_all(), world_pos, reflected, roughness,
+  radiance)`: the reflection environment for a surface of `roughness` into
+  `radiance`, false where the world has neither a reflection probe nor an
+  environment map.
 - `irradiance_sample(normal)`: the diffuse environment.
 - `VIEW`: the view block, with `vp`, `view_mat`, `elapsed`, `cam_x` /
   `cam_y` / `cam_z` and `sky_rot`.
@@ -61,7 +63,7 @@ binding, register, attribute or varying of their own:
 
 `VertexOut` is the engine's varying block: `position` (clip), `world_pos`,
 `normal`, `tangent`, `bitangent`, `uv`, `view_depth` and `color`. A `shade`
-must not read `in.object_id`; the record is `od`.
+must not read `v.object_id`; the record is `od`.
 
 # More than one Shader
 
@@ -90,10 +92,11 @@ loads at startup.
 `cn build` compiles both files for the backend it cooks for and stores the
 result in the world; a player needs no shader compiler. A file that fails
 to compile, or omits its hook, fails the build naming the Shader and the
-hook. Under `cn debug` a save to either file recompiles it and swaps the
+hook; a compiler warning is logged against the Shader and the build goes
+on. Under `cn debug` a save to either file recompiles it and swaps the
 live pipelines.
 
 ## Parameters
 
-- `fragment`: A string. Path to the `.slang` file defining `shade`. Required.
-- `vertex`: A string. Path to the `.slang` file defining `transform`. Omit to keep the engine's own projection.
+- `fragment`: A string. Path to the `.hlsl` file defining `shade`. Required.
+- `vertex`: A string. Path to the `.hlsl` file defining `transform`. Omit to keep the engine's own projection.

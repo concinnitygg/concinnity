@@ -266,7 +266,7 @@ Metal, and Vulkan) unless noted.
 | Environment maps    | `.hdr`                                          |
 | Audio               | `.ogg`, `.wav`, `.mp3`, `.flac`                 |
 | Fonts               | `.ttf`, `.otf`                                  |
-| Shaders             | `.slang`                                        |
+| Shaders             | `.hlsl`                                         |
 | Worlds & data       | `.json`, `.jsonl`                               |
 | Text & stories      | `.md`, `.txt`                                   |
 

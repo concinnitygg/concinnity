@@ -6,7 +6,7 @@
 //! texels are roughly the size of the projected rect, and culls the AABB when
 //! its nearest projected depth is behind the rasterized occluder depth.
 //!
-//! Three compute kernels build it (see `src/shaders/hiz_build.slang`):
+//! Three compute kernels build it (see `src/render/shaders/hiz_build.hlsl`):
 //!
 //!   * `hiz_spd_single`: reduce a single-sample main depth into mips 0..6.
 //!   * `hiz_spd_msaa`  : the same for an MSAA main depth, taking the MAX over
@@ -30,6 +30,8 @@ use concinnity_core::render::uniforms::HizSpdParams;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
+use crate::directx::builtin_shaders;
+use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::com;
 use crate::directx::context::dump_on_err;
 use crate::directx::descriptor_slot::DescriptorTables;
@@ -37,8 +39,6 @@ use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::root_constants::{RootConstants, root_dwords};
-use crate::directx::slang_builtins;
-use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::uav_barrier;
 
 // UAV descriptors one SPD dispatch binds, one per level it can write.
@@ -87,9 +87,9 @@ pub(super) struct HiZResources {
 type HizShaders = (Vec<u8>, Vec<u8>, Vec<u8>);
 
 pub(in crate::directx) fn compile_hiz_shaders(hot_reload: bool) -> RenderResult<HizShaders> {
-    let single = slang_builtins::HIZ_SPD_SINGLE.compile(hot_reload)?;
-    let msaa = slang_builtins::HIZ_SPD_MSAA.compile(hot_reload)?;
-    let tail = slang_builtins::HIZ_SPD_TAIL.compile(hot_reload)?;
+    let single = builtin_shaders::HIZ_SPD_SINGLE.compile(hot_reload)?;
+    let msaa = builtin_shaders::HIZ_SPD_MSAA.compile(hot_reload)?;
+    let tail = builtin_shaders::HIZ_SPD_TAIL.compile(hot_reload)?;
     Ok((single, msaa, tail))
 }
 

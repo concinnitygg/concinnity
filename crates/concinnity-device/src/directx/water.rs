@@ -7,8 +7,8 @@
 //! thickness the main depth gives, and mixes a reflection over it by a Schlick
 //! Fresnel term.
 //!
-//! The shaders are the shared `shaders/water.slang`, compiled through
-//! `slang_builtins`; the ray-traced fragment needs shader model 6.5 for its
+//! The shaders are the shared `shaders/water.hlsl`, compiled through
+//! `builtin_shaders`; the ray-traced fragment needs shader model 6.5 for its
 //! inline ray query, the base pair 6.0.
 
 use concinnity_core::components::{MAX_WATER_WAVES, WaterSurface, WaterWave};
@@ -25,9 +25,9 @@ pub(in crate::directx) use concinnity_core::render::uniforms::{
 };
 
 use super::allocator::DeviceAllocator;
+use crate::directx::builtin_shaders;
+use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::context::dump_on_err;
-use crate::directx::slang_builtins;
-use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::transparent::{
     RecordUpload, TransparentProducer, TransparentRecord, create_transparent_pso,
 };
@@ -84,13 +84,10 @@ pub(in crate::directx) fn compile_water_shaders(
     msaa_samples: u32,
     hot_reload: bool,
 ) -> RenderResult<(Vec<u8>, Vec<u8>)> {
-    let frag = if msaa_samples > 1 {
-        &slang_builtins::WATER_FRAG_MSAA
-    } else {
-        &slang_builtins::WATER_FRAG
-    };
-    let vs = slang_builtins::WATER_VERT.compile(hot_reload)?;
-    let ps = frag.compile(hot_reload)?;
+    let vs = builtin_shaders::WATER_VERT.compile(hot_reload)?;
+    let ps = builtin_shaders::WATER_FRAG
+        .at(msaa_samples > 1)
+        .compile(hot_reload)?;
     Ok((vs, ps))
 }
 
@@ -120,26 +117,18 @@ struct WaterRtShaders {
 }
 
 // Compile the flat + textured ray-traced fragments (SM 6.5, for the inline ray
-// query). The shared source remaps its probe cube array to t20, since the RT
-// geometry SRVs claim t4..t10. Returns an `Err` (which the caller turns into a
-// None RT pipeline + the base path) when slangc is unavailable or the shader
-// fails to compile.
+// query). Returns an `Err` (which the caller turns into a None RT pipeline +
+// the base path) when dxc is unavailable or the shader fails to compile.
 fn compile_water_rt_shaders(msaa_samples: u32, hot_reload: bool) -> RenderResult<WaterRtShaders> {
     let msaa = msaa_samples > 1;
-    let flat = if msaa {
-        &slang_builtins::WATER_RT_FRAG_MSAA
-    } else {
-        &slang_builtins::WATER_RT_FRAG
-    };
-    let textured = if msaa {
-        &slang_builtins::WATER_RT_FRAG_TEXTURED_MSAA
-    } else {
-        &slang_builtins::WATER_RT_FRAG_TEXTURED
-    };
     Ok(WaterRtShaders {
-        vs: slang_builtins::WATER_VERT.compile(hot_reload)?,
-        flat_ps: flat.compile(hot_reload)?,
-        textured_ps: textured.compile(hot_reload)?,
+        vs: builtin_shaders::WATER_VERT.compile(hot_reload)?,
+        flat_ps: builtin_shaders::WATER_FRAG_RT
+            .at(msaa)
+            .compile(hot_reload)?,
+        textured_ps: builtin_shaders::WATER_FRAG_RT_TEXTURED
+            .at(msaa)
+            .compile(hot_reload)?,
     })
 }
 
@@ -278,7 +267,7 @@ mod tests {
     // only as an init failure on a GPU host.
     #[test]
     fn water_shaders_compile() {
-        if !concinnity_slang::shader_tests_enabled() {
+        if !concinnity_shader::dxc_available() {
             return;
         }
         for msaa in [1u32, 4] {
@@ -291,7 +280,7 @@ mod tests {
     // traversal fragment and the shader model 6.5 the ray query needs.
     #[test]
     fn water_rt_shaders_compile() {
-        if !concinnity_slang::shader_tests_enabled() {
+        if !concinnity_shader::dxc_available() {
             return;
         }
         for msaa in [1u32, 4] {

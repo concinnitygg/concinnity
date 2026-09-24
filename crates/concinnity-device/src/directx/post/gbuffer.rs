@@ -22,14 +22,14 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
+use crate::directx::builtin_shaders;
+use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::serialize_and_create_root_sig;
 use crate::directx::root_constants::{RootConstants, root_dwords};
-use crate::directx::slang_builtins;
-use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::{create_main_depth_texture, write_format_rtv, write_format_srv};
 
 // Normal+depth target: rgb = unit view-space normal, a = positive linear view
@@ -144,10 +144,6 @@ fn create_gbuffer_pso(
 // both slots (prev_pos == cur_pos), the skinned tail binds the current deformed
 // buffer to slot 0 and the previous-frame deformed buffer to slot 1. Tangent +
 // UV are unused (the pre-pass samples no textures), so they are omitted.
-//
-// The previous position carries its own semantic rather than POSITION1 because
-// slangc appends an index to whatever a semantic spells; see the declaration in
-// shaders/gbuffer_prepass.slang.
 fn gbuffer_bindless_input_layout() -> Vec<D3D12_INPUT_ELEMENT_DESC> {
     vec![
         D3D12_INPUT_ELEMENT_DESC {
@@ -261,7 +257,7 @@ fn create_gbuffer_bindless_root_signature(
     serialize_and_create_root_sig(device, &params, "gbuffer bindless root sig")
 }
 
-// Threads per group, matching `[numthreads(64, 1, 1)]` in model_history.slang.
+// Threads per group, matching `[numthreads(64, 1, 1)]` in model_history.hlsl.
 const MODEL_HISTORY_THREADGROUP: u32 = 64;
 
 // A UAV barrier over one buffer: orders its shader writes against later
@@ -278,8 +274,9 @@ fn uav_barrier(resource: &ID3D12Resource) -> D3D12_RESOURCE_BARRIER {
     }
 }
 
-// Root signature for the model-history snapshot kernel. slangc assigns
-// b0/t0/u0 from declaration order, which is what these three parameters bind.
+// Root signature for the model-history snapshot kernel: the `CN_BACKEND_DIRECTX` arm of
+// `model_history.hlsl` declares b0/t0/u0, which is what these three parameters
+// bind.
 fn create_model_history_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     let params = [
         // [0] Root constants b0: ModelHistoryParams (record count + padding).
@@ -327,7 +324,7 @@ pub(in crate::directx) fn build_model_history(
     info_queue: Option<&ID3D12InfoQueue>,
     hot_reload: bool,
 ) -> RenderResult<(ID3D12RootSignature, ID3D12PipelineState)> {
-    let cs = slang_builtins::MODEL_HISTORY.compile(hot_reload)?;
+    let cs = builtin_shaders::MODEL_HISTORY.compile(hot_reload)?;
     let root_sig = dump_on_err(info_queue, create_model_history_root_signature(device))?;
     let pso = dump_on_err(
         info_queue,
@@ -355,8 +352,8 @@ pub(in crate::directx) fn build_gbuffer_bindless(
     info_queue: Option<&ID3D12InfoQueue>,
     hot_reload: bool,
 ) -> RenderResult<GbufferBindlessPipeline> {
-    let vs = slang_builtins::GBUFFER_BINDLESS_VERT.compile(hot_reload)?;
-    let ps = slang_builtins::GBUFFER_BINDLESS_FRAG.compile(hot_reload)?;
+    let vs = builtin_shaders::GBUFFER_PREPASS_VERT_BINDLESS.compile(hot_reload)?;
+    let ps = builtin_shaders::GBUFFER_PREPASS_FRAG_BINDLESS.compile(hot_reload)?;
     let root_sig = dump_on_err(info_queue, create_gbuffer_bindless_root_signature(device))?;
     let layout = gbuffer_bindless_input_layout();
     let pso = dump_on_err(

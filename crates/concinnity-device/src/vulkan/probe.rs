@@ -15,7 +15,7 @@
 //! frame from `draw_frame`) advances the shared `next_bake_action` transition table:
 //! it renders one cube face per frame into a bake-owned target on a per-face fence
 //! and copies it into a cube layer, convolves that capture into the probe cube with
-//! the compute kernels in `probe_prefilter.slang` (the source pyramid in one frame,
+//! the compute kernels in `probe_prefilter.hlsl` (the source pyramid in one frame,
 //! then one GGX mip per frame), and installs the finished cube into the forward /
 //! SSR / RT cube array -- all without blocking the render loop (the sky reflection
 //! covers a probe until its cube installs). Nothing is read back and no convolution
@@ -29,26 +29,23 @@ use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::reflection_probe::{
     self, BakeAction, BakePhase, BakeSignals, PrefilterPlan, ProbePlacement,
 };
-use concinnity_core::render::uniforms::MAX_PROBES;
-use concinnity_core::render::uniforms::ProbeSet;
-use concinnity_core::render::uniforms::ProbeUniforms;
 
 use super::allocator::PooledBuffer;
 use super::context::{HDR_FORMAT, VkContext};
-use super::descriptor_layout::{LOCAL_LIGHT_SSBO_BINDING, PROBE_CUBE_ARRAY_BINDING};
+use super::descriptor_layout::{PoolSizes, global_set};
 use super::draw::ViewUniforms;
+use super::global_set::{GlobalBindings, GlobalSetContents};
 use super::probe_prefilter::PrefilterGpu;
-use super::resources::alloc_descriptor_sets;
+use super::resources::{alloc_descriptor_sets, write_storage_buffer};
 use super::texture::{GpuImage, ImageSpec, create_image, create_image_view};
 use crate::vulkan::owned::{OwnedDescriptorPool, OwnedFramebuffer, VkDevice};
-use concinnity_core::render::uniforms::vulkan::CullHizParams;
 use concinnity_core::render::uniforms::vulkan::CullParams;
 
 // What a runtime capture bakes: face size, mip count, GGX sample count and firefly
 // clamp, shared with the DirectX and Metal backends (and with the build-time CPU
 // convolution's roughness ramp) so a probe looks the same whichever backend
 // captured it.
-const PLAN: PrefilterPlan = PrefilterPlan::RUNTIME;
+pub(super) const PLAN: PrefilterPlan = PrefilterPlan::RUNTIME;
 // Captured cube-face resolution (mip 0 of the prefilter chain).
 const PROBE_FACE_SIZE: u32 = PLAN.face_size();
 // Cube faces per probe.
@@ -88,111 +85,34 @@ impl VkContext {
     // Set the reflection-probe placements (declared `ReflectionProbe` assets,
     // converted to `ProbePlacement`s by the graphics system). An empty list
     // auto-seeds a grid from the scene bounds, so existing scenes still get local
-    // reflections without authoring. Capped at the cube array's descriptor count,
-    // so `probe.set.count` can never index past what the shader declares. Pushed
-    // once after construction; the cube capture that fills the probe set runs
-    // across later frames (next slice).
+    // reflections without authoring. The cube array grows to hold every
+    // placement; a world whose array cannot grow keeps the sky. Pushed once
+    // after construction; the cube capture that fills the probe set runs across
+    // later frames.
     pub(super) fn set_reflection_probes(&mut self, declared: &[ProbePlacement]) {
-        let mut placements: Vec<ProbePlacement> = if declared.is_empty() {
-            match self.scene_world_bounds() {
-                Some((mn, mx)) => {
-                    // Object AABBs as occupancy so a probe is not auto-captured from
-                    // inside a wall; skip degenerate (non-finite) boxes.
-                    let occupancy: Vec<([f32; 3], [f32; 3])> = self
-                        .draw
-                        .objects
-                        .iter()
-                        .map(|o| (o.bb_min, o.bb_max))
-                        .filter(|(mn, mx)| mn.iter().chain(mx).all(|c| c.is_finite()))
-                        .collect();
-                    reflection_probe::auto_seed_probes(mn, mx, &occupancy)
-                }
-                None => Vec::new(),
-            }
-        } else {
-            declared.to_vec()
-        };
-        let bind_count = self.descriptors.probe_cube_count as usize;
-        if placements.len() > bind_count {
-            // Past the CPU ceiling means authored (or seeded) probes are dropped;
-            // between the device's bind count and the ceiling is only what this
-            // GPU's sampler headroom affords, which init already reported.
-            if placements.len() > MAX_PROBES {
-                tracing::warn!(
-                    "reflection probes: {} placements, capping at {bind_count}",
-                    placements.len()
-                );
-            } else {
-                tracing::debug!(
-                    "reflection probes: binding {bind_count} of {} placements",
-                    placements.len()
-                );
-            }
-            placements.truncate(bind_count);
-        }
+        let placements = reflection_probe::resolve_placements(
+            declared,
+            self.draw.objects.iter().map(|o| (o.bb_min, o.bb_max)),
+        );
         // A re-placement (rare -- this is normally a one-time init call) abandons any
-        // in-flight staggered bake and frees the previously baked cubes. Idle first
-        // when a capture is in flight (its targets may still be on the GPU) or cubes
-        // exist (the forward shader may sample them), reset every cube-array slot back
-        // to the sky so none dangles, then drop the in-flight bake + the cubes. The
-        // common first call has an empty queue + `probe.maps`, so it skips all of this.
-        if self.probe.rendering.is_some()
-            || self.probe.prefiltering.is_some()
-            || !self.probe.maps.is_empty()
-        {
+        // in-flight staggered bake and forgets the installed probes. Idle first when
+        // probes are installed: the frames in flight may sample the cubes the next
+        // bake overwrites.
+        if self.probe.book.count() > 0 {
             self.wait_idle();
         }
-        let device = self.hw.device.clone();
-        if let Some(rendering) = self.probe.rendering.take() {
-            rendering.destroy(&device, self.commands.command_pool);
-        }
-        if let Some(prefiltering) = self.probe.prefiltering.take() {
-            prefiltering.destroy(&device, self.commands.command_pool);
-        }
-        if !self.probe.maps.is_empty() {
-            self.reset_probe_cube_slots_to_sky();
-            self.probe.maps.clear();
-        }
-        self.probe.placements = placements;
-        self.probe.set = ProbeSet::EMPTY;
+        self.abandon_in_flight_bakes();
         // Enqueue the placements; `bake_pending_probes` (driven each frame from
-        // `draw_frame`) renders + installs them staggered across later frames, so the
-        // construction call no longer blocks on the capture.
-        self.probe.bake_queue = reflection_probe::ProbeBakeQueue::new(self.probe.placements.len());
-    }
-
-    // World-space bounds over every static draw object, skipping degenerate
-    // (non-finite) AABBs. `None` for an empty scene. Mirrors
-    // `directx/probe.rs::scene_world_bounds`.
-    pub(super) fn scene_world_bounds(&self) -> Option<([f32; 3], [f32; 3])> {
-        reflection_probe::fold_world_bounds(self.draw.objects.iter().map(|o| (o.bb_min, o.bb_max)))
-    }
-
-    // Point every probe-cube-array slot (binding 8) of every frame's global set
-    // back at the sky prefilter cube. The init path leaves them this way; this
-    // restores it before a re-placement drops the old baked cubes, so no slot
-    // dangles a freed view (Vulkan requires every descriptor in a bound set be
-    // valid, even slots the shader's `i < count` loop never samples).
-    fn reset_probe_cube_slots_to_sky(&self) {
-        let sky: Vec<vk::DescriptorImageInfo> = (0..self.descriptors.probe_cube_count)
-            .map(|_| {
-                vk::DescriptorImageInfo::default()
-                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                    .image_view(self.scene.env_map.prefilter.view)
-                    .sampler(self.scene.cube_sampler.handle())
-            })
-            .collect();
-        for &set in &self.descriptors.global_sets {
-            let write = vk::WriteDescriptorSet::default()
-                .dst_set(set)
-                .dst_binding(PROBE_CUBE_ARRAY_BINDING)
-                .dst_array_element(0)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(&sky);
-            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-            // every set and resource it names belongs to this device.
-            unsafe { self.hw.device.update_descriptor_sets(&[write], &[]) };
-        }
+        // `draw_frame`) renders + installs them staggered across later frames, so
+        // this call does not block on the capture.
+        let placements = match self.reserve_probe_cubes(&PLAN, placements.len()) {
+            Ok(()) => placements,
+            Err(e) => {
+                tracing::warn!("reflection probes: {e}; keeping the sky");
+                Vec::new()
+            }
+        };
+        self.probe.book.reset(placements);
     }
 
     // Advance the staggered asynchronous reflection-probe bake by one step. Called
@@ -210,29 +130,27 @@ impl VkContext {
     //     like the DX / Metal first-frame bake.
     pub(super) fn bake_pending_probes(&mut self) -> RenderResult<()> {
         // Nothing queued and nothing in flight: cheap early-out once the bake drains.
-        if !self.probe.bake_queue.pending()
+        if !self.probe.book.pending()
             && self.probe.rendering.is_none()
             && self.probe.prefiltering.is_none()
         {
             return Ok(());
         }
-        // Permanent ineligibility: a probe only improves on a real captured
-        // environment, and the capture renders through the bindless GPU cull. These
-        // never become true after init, so abandon the queue rather than re-checking
-        // forever (the forward specular keeps sampling the sky).
-        if self.scene.env_map.prefilter_mip_count <= 1
-            || self.cull.cull_pipeline.is_none()
+        // Permanent ineligibility: the capture renders through the bindless GPU
+        // cull. That never changes after init, so abandon the queue rather than
+        // re-checking forever (the forward specular keeps sampling the sky).
+        if self.cull.cull_pipeline.is_none()
             || self.cull.bindless_pipeline.is_none()
             || self.probe.prefilter.is_none()
         {
             self.abandon_in_flight_bakes();
-            self.probe.bake_queue.abort();
+            self.probe.book.abort();
             return Ok(());
         }
 
         // Prefiltering slot first: convolve one mip, or install the finished cube,
         // freeing the slot so the rendering slot can hand its capture over this same
-        // frame (keeps installs in queue order -> `probe.maps` aligned with the
+        // frame (keeps installs in queue order -> the book's records aligned with the
         // placement list).
         let prefiltering_occupied = self.probe.prefiltering.is_some();
         let more_mips = self
@@ -302,7 +220,7 @@ impl VkContext {
             },
             BakeSignals {
                 faces_done: done && prefiltering_free,
-                queue_pending: self.probe.bake_queue.pending(),
+                queue_pending: self.probe.book.pending(),
                 eligible,
                 more_faces,
                 ..Default::default()
@@ -346,17 +264,18 @@ impl VkContext {
 
     // Abandon the rest of the bake after an unrecoverable error, keeping the cubes
     // already installed. The queue cursor advanced when the current probe started, so
-    // aborting (cursor -> end) keeps `probe.maps` aligned with the placement list.
+    // aborting (cursor -> end) keeps the installed records aligned with the
+    // placement list.
     fn fail_bake(&mut self, e: RenderError) {
         tracing::warn!(
             "reflection probe bake failed, keeping {} baked: {e}",
-            self.probe.maps.len()
+            self.probe.book.count()
         );
         // Idle before dropping either slot's GPU resources: their command buffers
         // may still be executing. A bake failure is rare (allocation / device
         // error), so the one-time stall is acceptable.
         self.abandon_in_flight_bakes();
-        self.probe.bake_queue.abort();
+        self.probe.book.abort();
     }
 
     // Begin baking the next pending placement: build the bake-owned capture resources
@@ -365,10 +284,9 @@ impl VkContext {
     // re-runs only the cull with its own frustum). No face is submitted here; the six
     // follow one per frame via `probe_render_next_face`.
     fn probe_start_next(&mut self) -> RenderResult<()> {
-        let Some(index) = self.probe.bake_queue.take_next() else {
+        let Some((index, placement)) = self.probe.book.take_next() else {
             return Ok(());
         };
-        let placement = self.probe.placements[index];
         let eye = placement.position;
         let bake = BakeResources::new(self)?;
 
@@ -386,29 +304,6 @@ impl VkContext {
             concinnity_core::render::model_history::HistoryMode::Untracked,
         );
 
-        // Per-face view uniforms (the only per-face binding), all six filled once.
-        // reflections_enabled stays 0: no resolve runs over a probe face, so the bake
-        // captures the full forward probe specular -- here the sky, since the bake
-        // binds an EMPTY ProbeSet.
-        let prefilter_mip_count = self.scene.env_map.prefilter_mip_count as f32;
-        for face in 0..PROBE_FACE_COUNT {
-            let vp = reflection_probe::face_view_projection(eye, face, PROBE_NEAR, PROBE_FAR);
-            let view_mat = reflection_probe::face_view_matrix(eye, face);
-            let view = ViewUniforms {
-                vp,
-                view: view_mat,
-                elapsed: 0.0,
-                reflections_enabled: 0.0,
-                cam_pos: [eye[0], eye[1], eye[2]],
-                prefilter_mip_count,
-                // A probe capture is always lit, whatever the viewport shows.
-                shade_mode: 0.0,
-                _end_pad: 0.0,
-                sky_rot: self.view.sky_rot,
-            };
-            bake.view_bufs[face].write_val(0, &view);
-        }
-
         // The capture cube each face copies into, and the probe cube the
         // convolution writes. Allocated with the capture rather than at the
         // convolution's start: face 0 copies into the cube, so it has to exist
@@ -418,19 +313,41 @@ impl VkContext {
             .prefilter
             .as_ref()
             .ok_or_else(|| RenderError::Other("probe: prefilter pipelines missing".into()))?;
-        let prefilter = PrefilterGpu::new(&self.hw.device, &self.hw.alloc, pipelines, &PLAN)?;
+        let cubes = self
+            .probe
+            .gpu
+            .cubes
+            .as_ref()
+            .ok_or_else(|| RenderError::Other("probe: no cube array for a placement".into()))?;
+        let prefilter = PrefilterGpu::new(
+            &self.hw.device,
+            &self.hw.alloc,
+            pipelines,
+            &PLAN,
+            super::probe_prefilter::ProbeSlice { cubes, index },
+        )?;
 
-        self.probe.rendering = Some(RenderingBake {
+        let rendering = RenderingBake {
             index,
-            placement,
             eye,
             cursor: 0,
             bake,
             prefilter,
             face_cmds: Vec::with_capacity(PROBE_FACE_COUNT),
             face_fences: Vec::with_capacity(PROBE_FACE_COUNT),
-        });
+        };
+        rendering.write_face_views(self.scene.prefilter_mip_count, self.view.sky_rot);
+        self.probe.rendering = Some(rendering);
         Ok(())
+    }
+
+    // Rewrite the in-flight capture's face view uniforms from the live scene,
+    // after an environment reload changed the prefilter mip count they carry. The
+    // caller has idled the device.
+    pub(super) fn rewrite_probe_capture_views(&self) {
+        if let Some(rendering) = self.probe.rendering.as_ref() {
+            rendering.write_face_views(self.scene.prefilter_mip_count, self.view.sky_rot);
+        }
     }
 
     // Write the whole live texture pool into a bake face's bindless set
@@ -448,7 +365,6 @@ impl VkContext {
                 vk::DescriptorImageInfo::default()
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                     .image_view(img.view)
-                    .sampler(self.scene.linear_sampler.handle())
             })
             .collect();
         if let Some(&tail) = pool_infos.last() {
@@ -458,7 +374,7 @@ impl VkContext {
             .dst_set(set)
             .dst_binding(1)
             .dst_array_element(0)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
             .image_info(&pool_infos);
         // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every
         // set and resource it names belongs to this device.
@@ -522,8 +438,8 @@ impl VkContext {
 
         // A fresh command buffer + fence for this face, from the one-shot pool.
         // Register both in the `RenderingBake` the instant they exist so a later
-        // record / submit error still reclaims them via `fail_bake` ->
-        // `RenderingBake::destroy` (which `wait_idle`s first); on the success path the
+        // record / submit error still reclaims them via `fail_bake`, which idles the
+        // device before `RenderingBake::destroy`; on the success path the
         // last-pushed fence is `face_fences[last_fence()]` after `cursor` advances.
         let cmd = {
             let info = vk::CommandBufferAllocateInfo::default()
@@ -735,7 +651,6 @@ impl VkContext {
         let device = self.hw.device.clone();
         let RenderingBake {
             index,
-            placement,
             bake,
             prefilter,
             face_cmds,
@@ -750,11 +665,10 @@ impl VkContext {
             &face_cmds,
             &face_fences,
         );
-        bake.destroy(&device);
+        drop(bake);
 
         let mut bake = PrefilteringBake {
             index,
-            placement,
             gpu: prefilter,
             cursor: 1,
             cmds: Vec::with_capacity(PLAN.mips() as usize),
@@ -785,10 +699,10 @@ impl VkContext {
             let cursor = bake.cursor;
             let (cmd, fence) = self.begin_prefilter_command(&mut bake)?;
             self.encode_probe_ggx_mip(cmd, &bake.gpu, &PLAN, cursor)?;
-            // The last mip's command buffer also carries the cube into
-            // SHADER_READ_ONLY_OPTIMAL, so the install has nothing left to submit.
+            // The last mip's command buffer also makes the cube's writes visible to
+            // the fragment reads, so the install has nothing left to submit.
             if cursor + 1 == PLAN.mips() {
-                self.encode_probe_cube_readable(cmd, bake.gpu.probe_image(), PLAN.mips());
+                self.encode_probe_cube_readable(cmd, &bake.gpu);
             }
             self.submit_prefilter_command(cmd, fence)
         })();
@@ -860,70 +774,27 @@ impl VkContext {
         }
     }
 
-    // Every mip is convolved and retired (the last one carried the cube into
-    // SHADER_READ_ONLY_OPTIMAL): point this probe's slot in every frame's cube array
-    // at it and bump `probe.set.count` so the forward specular samples it. Leaves
-    // `env_map` / the sky untouched.
-    //
-    // Nothing is uploaded -- the cube was written in place -- but the device is still
-    // idled once here, because the descriptor rewrite below is illegal while a
-    // submitted frame's command buffer still references the global sets. That is the
-    // same one-off idle the cube upload used to perform inside its own submit; the
-    // fence gate on this transition means everything but the in-flight frames has
-    // already retired, so it costs a fraction of a frame, once per probe.
+    // Every mip is convolved and retired (the last one made the cube's writes
+    // visible to fragment reads): append the probe's record so the forward
+    // specular samples its cube. Leaves `env_map` / the sky untouched. Nothing
+    // is uploaded -- the cube was written in place -- and no descriptor moves:
+    // the frame's records upload carries the new count.
     fn probe_install(&mut self) -> RenderResult<()> {
         let bake =
             self.probe.prefiltering.take().ok_or_else(|| {
                 RenderError::Other("probe: install with no bake in flight".into())
             })?;
-        self.wait_idle();
-        let device = self.hw.device.clone();
         let PrefilteringBake {
             index,
-            placement: p,
-            gpu,
             cmds,
             fences,
             ..
         } = bake;
         // The dispatches retired (`dispatches_retired` gated this transition), so
         // their recordings free here.
-        free_face_recordings(&device, self.commands.command_pool, &cmds, &fences);
-        let cube = gpu.into_probe_cube();
-
-        let img_info = vk::DescriptorImageInfo::default()
-            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(cube.view)
-            .sampler(self.scene.cube_sampler.handle());
-        for &set in &self.descriptors.global_sets {
-            let write = vk::WriteDescriptorSet::default()
-                .dst_set(set)
-                .dst_binding(PROBE_CUBE_ARRAY_BINDING)
-                .dst_array_element(index as u32)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(std::slice::from_ref(&img_info));
-            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-            // every set and resource it names belongs to this device.
-            unsafe { self.hw.device.update_descriptor_sets(&[write], &[]) };
-        }
-
-        // Installs run in queue order, so the cube array stays aligned with the
-        // placement list.
-        debug_assert_eq!(index, self.probe.maps.len());
-        self.probe.maps.push(cube);
-        self.probe.set.probes[index] = ProbeUniforms {
-            box_min: [p.box_min[0], p.box_min[1], p.box_min[2], 1.0],
-            box_max: [p.box_max[0], p.box_max[1], p.box_max[2], 0.0],
-            probe_pos: [p.position[0], p.position[1], p.position[2], 0.0],
-        };
-        self.probe.set.count = self.probe.maps.len() as u32;
-        if !self.probe.bake_queue.pending() && self.probe.rendering.is_none() {
-            tracing::info!(
-                "reflection probes: baked {}/{}",
-                self.probe.maps.len(),
-                self.probe.placements.len()
-            );
-        }
+        free_face_recordings(&self.hw.device, self.commands.command_pool, &cmds, &fences);
+        let progress = self.probe.book.install(index)?;
+        tracing::info!("reflection probes: {progress}");
         Ok(())
     }
 
@@ -957,7 +828,7 @@ impl VkContext {
         let device = &self.hw.device;
         let params = capture_cull_params(frustum, cam_pos, self.cull_count() as u32);
         // SAFETY: `CullParams` is `repr(C)` and matches the push-constant block
-        // cull.slang declares (pinned by the layout test in `core::render`).
+        // cull.hlsl declares (pinned by the layout test in `core::render`).
         let push = unsafe {
             std::slice::from_raw_parts(
                 &params as *const CullParams as *const u8,
@@ -1102,7 +973,6 @@ impl VkContext {
 // Mirrors `directx::probe::RenderingBake`.
 pub(super) struct RenderingBake {
     index: usize,
-    placement: ProbePlacement,
     eye: [f32; 3],
     // Next of `PROBE_FACE_COUNT` faces to submit; `more_faces = cursor < FACE_COUNT`.
     cursor: usize,
@@ -1122,23 +992,53 @@ impl RenderingBake {
         self.cursor.saturating_sub(1)
     }
 
+    // Write the six face view uniforms: each face's view from the probe eye, and
+    // the sky the capture lights with. reflections_enabled stays 0: no resolve
+    // runs over a probe face, so the bake captures the full forward probe
+    // specular -- here the sky, since the bake binds an EMPTY ProbeSet.
+    fn write_face_views(&self, prefilter_mip_count: u32, sky_rot: [[f32; 4]; 3]) {
+        let eye = self.eye;
+        for (face, buf) in self.bake.view_bufs.iter().enumerate() {
+            let view = ViewUniforms {
+                vp: reflection_probe::face_view_projection(eye, face, PROBE_NEAR, PROBE_FAR),
+                view: reflection_probe::face_view_matrix(eye, face),
+                elapsed: 0.0,
+                reflections_enabled: 0.0,
+                cam_pos: eye,
+                prefilter_mip_count: prefilter_mip_count as f32,
+                // A probe capture is always lit, whatever the viewport shows.
+                shade_mode: 0.0,
+                _end_pad: 0.0,
+                sky_rot,
+            };
+            buf.write_val(0, &view);
+        }
+    }
+
+    // Rewrite binding `binding` of every face's global set from what it is built
+    // with now. The caller has idled the device.
+    pub(super) fn rewrite_global_binding(
+        &self,
+        device: &VkDevice,
+        bindings: &GlobalBindings<'_>,
+        binding: u32,
+    ) {
+        for (face, &set) in self.bake.global_sets.iter().enumerate() {
+            self.bake
+                .global_contents(bindings, face)
+                .write_binding(device, set, binding);
+        }
+    }
+
     // Re-point this bake's Hi-Z set at a rebuilt pyramid view. Called by
     // `rebuild_swapchain` after `hiz.resize_to` retired the view this set
     // captured at bake start; `wait_idle` gated the in-flight faces, and
     // hiz_enabled = 0 keeps the binding unsampled, but it must not dangle.
     // Mirrors the planar cull set's treatment.
-    pub(super) fn rewrite_hiz_view(
-        &self,
-        device: &VkDevice,
-        view: vk::ImageView,
-        sampler: vk::Sampler,
-    ) {
-        let Some(set) = self.bake.hiz_set else { return };
-        let img = img_info(view, sampler);
-        let write = sampler_write(set, 0, &img);
-        // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every
-        // set and resource it names belongs to this device.
-        unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
+    pub(super) fn rewrite_hiz_view(&self, device: &VkDevice, view: vk::ImageView) {
+        if let Some(set) = self.bake.hiz_set {
+            super::hiz::rewrite_read_set_view(device, set, view);
+        }
     }
 
     // Free every owned GPU resource: the per-face command buffers (back to the
@@ -1147,7 +1047,6 @@ impl RenderingBake {
     // signaled, or the device is idle).
     pub(super) fn destroy(self, device: &VkDevice, command_pool: vk::CommandPool) {
         free_face_recordings(device, command_pool, &self.face_cmds, &self.face_fences);
-        self.bake.destroy(device);
     }
 }
 
@@ -1156,7 +1055,6 @@ impl RenderingBake {
 // every dispatch it has submitted, which install frees once they retire.
 pub(super) struct PrefilteringBake {
     index: usize,
-    placement: ProbePlacement,
     gpu: PrefilterGpu,
     // Next destination mip to convolve. Starts at 1: mip 0 is the clamped copy,
     // dispatched with the source pyramid when this slot is filled.
@@ -1206,8 +1104,8 @@ fn free_face_recordings(
 // The GPU resources for ONE reflection-probe capture: the 512x512 color/depth
 // (/resolve) target + framebuffer, a bake-owned cull ring + its descriptor sets,
 // and six per-face global sets carrying the face view + snapshot lighting. One
-// per in-flight probe (held in `RenderingBake`); `destroy` frees it when the
-// capture hands its cube to the convolution.
+// per in-flight probe (held in `RenderingBake`); it drops when the capture hands
+// its cube to the convolution.
 struct BakeResources {
     color: GpuImage,
     // Held for the bake's lifetime; the framebuffer and sets alias them.
@@ -1229,9 +1127,8 @@ struct BakeResources {
     _hiz_ubo: Option<PooledBuffer>,
     global_sets: Vec<vk::DescriptorSet>,
     view_bufs: Vec<PooledBuffer>,
-    _light: PooledBuffer,
-    _shadow: PooledBuffer,
-    _probeset: PooledBuffer,
+    light: PooledBuffer,
+    shadow: PooledBuffer,
 }
 
 impl BakeResources {
@@ -1246,9 +1143,7 @@ impl BakeResources {
     }
 
     fn new(ctx: &VkContext) -> RenderResult<BakeResources> {
-        use concinnity_core::gfx::render_types::{
-            GpuDrawArgs, GpuObjectData, LightUniforms, ShadowUniforms,
-        };
+        use concinnity_core::gfx::render_types::{GpuDrawArgs, GpuObjectData};
         let device = &ctx.hw.device;
         let alloc = &ctx.hw.alloc;
         let msaa = ctx.targets.msaa_samples != vk::SampleCountFlags::TYPE_1;
@@ -1365,11 +1260,9 @@ impl BakeResources {
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
 
-        // Snapshot lighting (so all faces share one set), an EMPTY ProbeSet (count 0
-        // so a probe face reflects only the sky), and six per-face view UBOs.
+        // Snapshot lighting (so all faces share one set) and six per-face view UBOs.
         let light = make_ubo_bytes(alloc, light_bytes(&ctx.uniforms.light_uniforms))?;
         let shadow = make_ubo_bytes(alloc, shadow_bytes(&ctx.shadow.uniforms))?;
-        let probeset = make_ubo_bytes(alloc, probeset_bytes(&ProbeSet::EMPTY))?;
         let view_size = std::mem::size_of::<ViewUniforms>() as u64;
         let mut view_bufs = Vec::with_capacity(PROBE_FACE_COUNT);
         for _ in 0..PROBE_FACE_COUNT {
@@ -1380,46 +1273,34 @@ impl BakeResources {
             )?);
         }
 
-        // A bake Hi-Z set (cull set 1) only when the world runs Hi-Z; written with
-        // hiz_enabled = 0 so the pyramid is never sampled. The UBO is kept so it can
-        // be freed in `destroy`.
-        let mut hiz_ubo: Option<PooledBuffer> = None;
-
         // One dedicated descriptor pool for the bake's cull + per-face bindless +
         // global + Hi-Z sets.
         // The pool binding's declared length, not the world's image count: the
         // bake allocates the same bindless set layout the main pass does, so it
         // has to budget for every slot that layout declares.
         let tex_pool = ctx.cull.bindless_pool_size as u32;
-        let has_hiz = ctx.cull.hiz.is_some();
-        // Per face: view + light + shadow + ProbeSet + ClusterParams UBOs.
-        let uniform_count = PROBE_FACE_COUNT as u32 * 5 + u32::from(has_hiz);
-        // 4 cull SSBOs + one bindless object SSBO per face + the binding-9
-        // local-light, binding-11 cluster-list, binding-13 spot-shadow and
-        // binding-14 area-light SSBOs, one of each per global set.
-        let storage_count = 4 + PROBE_FACE_COUNT as u32 * 5;
-        let sampler_count = PROBE_FACE_COUNT as u32
-            * (tex_pool + 7 + ctx.descriptors.probe_cube_count)
-            + u32::from(has_hiz);
-        let pool_sizes = [
-            vk::DescriptorPoolSize::default()
-                .ty(vk::DescriptorType::UNIFORM_BUFFER)
-                .descriptor_count(uniform_count),
-            vk::DescriptorPoolSize::default()
-                .ty(vk::DescriptorType::STORAGE_BUFFER)
-                .descriptor_count(storage_count),
-            vk::DescriptorPoolSize::default()
-                .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .descriptor_count(sampler_count.max(1)),
-        ];
-        let max_sets = 1 + 2 * PROBE_FACE_COUNT as u32 + u32::from(has_hiz);
-        // The per-face bindless sets below come from `cull.bindless_set_layout`
-        // and the per-face global sets from `descriptors.global_set_layout`, so
-        // this pool has to declare update-after-bind whenever either layout does.
+        let has_hiz = u32::from(ctx.cull.hiz.is_some());
+        let faces = PROBE_FACE_COUNT as u32;
+        // The six per-face global sets, the four cull SSBOs, the object SSBO and
+        // texture pool of each face's bindless set, and a Hi-Z set (an image and
+        // a UBO) when the world runs Hi-Z.
+        let pool_sizes = PoolSizes::default()
+            .sets(&global_set(), faces)
+            .add(vk::DescriptorType::STORAGE_BUFFER, 4 + faces)
+            .add(
+                vk::DescriptorType::SAMPLED_IMAGE,
+                faces * tex_pool + has_hiz,
+            )
+            .add(vk::DescriptorType::UNIFORM_BUFFER, has_hiz)
+            .build();
+        let max_sets = 1 + 2 * faces + has_hiz;
+        // The per-face bindless sets below come from `cull.bindless_set_layout`,
+        // so this pool has to declare update-after-bind whenever that layout
+        // does.
         let mut pool_info = vk::DescriptorPoolCreateInfo::default()
             .pool_sizes(&pool_sizes)
             .max_sets(max_sets);
-        if ctx.cull.bindless_update_after_bind || ctx.descriptors.global_update_after_bind {
+        if ctx.cull.bindless_update_after_bind {
             pool_info = pool_info.flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND);
         }
         let pool = device
@@ -1438,10 +1319,10 @@ impl BakeResources {
                     .handle(),
             ),
         )?[0];
-        write_storage(device, cull_set, 0, object_buf.buffer(), object_size);
-        write_storage(device, cull_set, 1, draw_args_buf.buffer(), args_size);
-        write_storage(device, cull_set, 2, indirect_buf.buffer(), indirect_size);
-        write_storage(device, cull_set, 3, status_buf.buffer(), status_size);
+        write_storage_buffer(device, cull_set, 0, object_buf.buffer(), object_size);
+        write_storage_buffer(device, cull_set, 1, draw_args_buf.buffer(), args_size);
+        write_storage_buffer(device, cull_set, 2, indirect_buf.buffer(), indirect_size);
+        write_storage_buffer(device, cull_set, 3, status_buf.buffer(), status_size);
 
         // Per-face bindless sets (set 1): object SSBO + the shared texture pool
         // array. Only the SSBO is written here; each face's pool array is
@@ -1478,173 +1359,27 @@ impl BakeResources {
         }
 
         // Bake Hi-Z set (cull set 1), hiz_enabled = 0.
-        let hiz_set = if let Some(hiz) = ctx.cull.hiz.as_ref() {
-            let params = CullHizParams {
-                prev_view_proj: [[0.0; 4]; 4],
-                hiz_size: [1.0, 1.0],
-                hiz_mip_count: 1,
-                hiz_enabled: 0,
-            };
-            let ubo = make_ubo_bytes(alloc, hiz_params_bytes(&params))?;
-            let (view, sampler) = hiz.read_set_sources();
-            let layout = hiz.read_set_layout.handle();
-            let set =
-                alloc_descriptor_sets(device, pool.handle(), std::slice::from_ref(&layout))?[0];
-            let img = vk::DescriptorImageInfo::default()
-                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(view)
-                .sampler(sampler);
-            let ubo_info = vk::DescriptorBufferInfo::default()
-                .buffer(ubo.buffer())
-                .offset(0)
-                .range(std::mem::size_of::<CullHizParams>() as u64);
-            let writes = [
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(0)
-                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .image_info(std::slice::from_ref(&img)),
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(1)
-                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                    .buffer_info(std::slice::from_ref(&ubo_info)),
-            ];
-            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-            // every set and resource it names belongs to this device.
-            unsafe { device.update_descriptor_sets(&writes, &[]) };
-            hiz_ubo = Some(ubo);
-            Some(set)
-        } else {
-            None
+        let (hiz_set, hiz_ubo) = match ctx.cull.hiz.as_ref() {
+            Some(hiz) => {
+                let (set, ubo) = super::hiz::off_camera_read_set(
+                    alloc,
+                    device,
+                    pool.handle(),
+                    hiz.read_set_layout.handle(),
+                    hiz.read_set_view(),
+                )?;
+                (Some(set), Some(ubo))
+            }
+            None => (None, None),
         };
 
         // Six per-face global sets (set 0 of the bindless main pass): the face view
-        // + shared snapshot lighting + env cubes + the SSAO white fallback + an
-        // EMPTY ProbeSet + the sky-filled probe cube array. Mirrors init.rs.
-        let layouts: Vec<_> = (0..PROBE_FACE_COUNT)
-            .map(|_| ctx.descriptors.global_set_layout.handle())
-            .collect();
+        // and the snapshot lighting, reading no probe so a face reflects only the
+        // sky.
+        let layouts = vec![ctx.descriptors.global_set_layout.handle(); PROBE_FACE_COUNT];
         let global_sets = alloc_descriptor_sets(device, pool.handle(), &layouts)?;
-        let probe_cube_sky: Vec<vk::DescriptorImageInfo> = (0..ctx.descriptors.probe_cube_count)
-            .map(|_| {
-                vk::DescriptorImageInfo::default()
-                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                    .image_view(ctx.scene.env_map.prefilter.view)
-                    .sampler(ctx.scene.cube_sampler.handle())
-            })
-            .collect();
-        for (face, &set) in global_sets.iter().enumerate() {
-            let view_info = buf_info(view_bufs[face].buffer(), view_size);
-            let light_info = buf_info(light.buffer(), std::mem::size_of::<LightUniforms>() as u64);
-            let shadow_info = buf_info(
-                shadow.buffer(),
-                std::mem::size_of::<ShadowUniforms>() as u64,
-            );
-            let probeset_info = buf_info(probeset.buffer(), std::mem::size_of::<ProbeSet>() as u64);
-            let shadow_img = img_info(ctx.shadow.map.view, ctx.shadow.sampler.handle());
-            let irr_img = img_info(
-                ctx.scene.env_map.irradiance.view,
-                ctx.scene.cube_sampler.handle(),
-            );
-            let pre_img = img_info(
-                ctx.scene.env_map.prefilter.view,
-                ctx.scene.cube_sampler.handle(),
-            );
-            let ssao_img = img_info(ctx.scene.ssao_white.view, ctx.scene.linear_sampler.handle());
-            let writes = [
-                ubo_write(set, 0, &view_info),
-                ubo_write(set, 1, &light_info),
-                ubo_write(set, 2, &shadow_info),
-                sampler_write(set, 3, &shadow_img),
-                sampler_write(set, 4, &irr_img),
-                sampler_write(set, 5, &pre_img),
-                sampler_write(set, 6, &ssao_img),
-                ubo_write(set, 7, &probeset_info),
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(PROBE_CUBE_ARRAY_BINDING)
-                    .dst_array_element(0)
-                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .image_info(&probe_cube_sky),
-            ];
-            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-            // every set and resource it names belongs to this device.
-            unsafe { device.update_descriptor_sets(&writes, &[]) };
-            // Binding 9: the shared static per-scene local-light SSBO.
-            write_storage(
-                device,
-                set,
-                LOCAL_LIGHT_SSBO_BINDING,
-                ctx.uniforms.local_light_buffer.buffer(),
-                ctx.uniforms.local_light_size,
-            );
-            // Bindings 10 + 11: the `use_clusters = 0` ClusterParams (a cube face
-            // does not match the main camera's grid) + the cluster lists, bound
-            // because the forward shader references them unconditionally.
-            let cluster_params_info = vk::DescriptorBufferInfo::default()
-                .buffer(ctx.light_cull.unclustered_buffer.buffer())
-                .offset(0)
-                .range(std::mem::size_of::<render_types::ClusterParams>() as u64);
-            let cluster_write = vk::WriteDescriptorSet::default()
-                .dst_set(set)
-                .dst_binding(super::descriptor_layout::CLUSTER_PARAMS_UBO_BINDING)
-                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                .buffer_info(std::slice::from_ref(&cluster_params_info));
-            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-            // every set and resource it names belongs to this device.
-            unsafe { device.update_descriptor_sets(std::slice::from_ref(&cluster_write), &[]) };
-            write_storage(
-                device,
-                set,
-                super::descriptor_layout::CLUSTER_LIGHT_LIST_SSBO_BINDING,
-                ctx.light_cull.cluster_buffer.buffer(),
-                super::light_cull::cluster_list_size(),
-            );
-            // Bindings 12 + 13: the spot shadow depth array + its per-slice
-            // projections, bound exactly as the main camera binds them.
-            let spot_img = img_info(ctx.spot_shadow.map.view, ctx.shadow.sampler.handle());
-            let spot_write = sampler_write(
-                set,
-                super::descriptor_layout::SPOT_SHADOW_MAP_BINDING,
-                &spot_img,
-            );
-            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-            // every set and resource it names belongs to this device.
-            unsafe { device.update_descriptor_sets(std::slice::from_ref(&spot_write), &[]) };
-            write_storage(
-                device,
-                set,
-                super::descriptor_layout::SPOT_SHADOW_DATA_SSBO_BINDING,
-                ctx.spot_shadow.data_buffer.buffer(),
-                vk::WHOLE_SIZE,
-            );
-            // Bindings 14..16: the area-light table and its two LTC lookups.
-            write_storage(
-                device,
-                set,
-                super::descriptor_layout::AREA_LIGHT_SSBO_BINDING,
-                ctx.area_light.buffer.buffer(),
-                vk::WHOLE_SIZE,
-            );
-            let ltc_m = img_info(
-                ctx.area_light.ltc_matrix.view,
-                ctx.area_light.sampler.handle(),
-            );
-            let ltc_g = img_info(
-                ctx.area_light.ltc_magnitude.view,
-                ctx.area_light.sampler.handle(),
-            );
-            let ltc_writes = [
-                sampler_write(set, super::descriptor_layout::LTC_MATRIX_BINDING, &ltc_m),
-                sampler_write(set, super::descriptor_layout::LTC_MAGNITUDE_BINDING, &ltc_g),
-            ];
-            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-            // every set and resource it names belongs to this device.
-            unsafe { device.update_descriptor_sets(&ltc_writes, &[]) };
-        }
 
-        Ok(BakeResources {
+        let bake = BakeResources {
             color,
             _depth: depth,
             resolve,
@@ -1660,16 +1395,24 @@ impl BakeResources {
             _hiz_ubo: hiz_ubo,
             global_sets,
             view_bufs,
-            _light: light,
-            _shadow: shadow,
-            _probeset: probeset,
-        })
+            light,
+            shadow,
+        };
+        let bindings = ctx.global_bindings();
+        for (face, &set) in bake.global_sets.iter().enumerate() {
+            bake.global_contents(&bindings, face).write(device, set);
+        }
+        Ok(bake)
     }
 
-    fn destroy(self, _device: &VkDevice) {
-        // The images and pooled buffers retire through the allocator when this
-        // drops; only the framebuffer and the descriptor pool are destroyed by
-        // hand (the pool frees every set allocated from it).
+    // What face `face`'s global set holds: its view, and the lighting snapshot
+    // every face shares.
+    fn global_contents(&self, bindings: &GlobalBindings<'_>, face: usize) -> GlobalSetContents {
+        bindings.off_camera(
+            self.view_bufs[face].buffer(),
+            self.light.buffer(),
+            self.shadow.buffer(),
+        )
     }
 }
 
@@ -1712,78 +1455,6 @@ fn shadow_bytes(u: &render_types::ShadowUniforms) -> &[u8] {
     }
 }
 
-fn probeset_bytes(p: &ProbeSet) -> &[u8] {
-    bytemuck::bytes_of(p)
-}
-
-fn hiz_params_bytes(p: &CullHizParams) -> &[u8] {
-    // SAFETY: `CullHizParams` is `#[repr(C)]` over 4-byte scalars and fixed-size arrays of them, so
-    // it has no padding and every byte is initialized; the slice borrows it and does not outlive
-    // it.
-    unsafe {
-        std::slice::from_raw_parts(
-            p as *const _ as *const u8,
-            std::mem::size_of::<CullHizParams>(),
-        )
-    }
-}
-
-fn buf_info(buffer: vk::Buffer, range: u64) -> vk::DescriptorBufferInfo {
-    vk::DescriptorBufferInfo::default()
-        .buffer(buffer)
-        .offset(0)
-        .range(range)
-}
-
-fn img_info(view: vk::ImageView, sampler: vk::Sampler) -> vk::DescriptorImageInfo {
-    vk::DescriptorImageInfo::default()
-        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .image_view(view)
-        .sampler(sampler)
-}
-
-fn ubo_write<'a>(
-    set: vk::DescriptorSet,
-    binding: u32,
-    info: &'a vk::DescriptorBufferInfo,
-) -> vk::WriteDescriptorSet<'a> {
-    vk::WriteDescriptorSet::default()
-        .dst_set(set)
-        .dst_binding(binding)
-        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-        .buffer_info(std::slice::from_ref(info))
-}
-
-fn sampler_write<'a>(
-    set: vk::DescriptorSet,
-    binding: u32,
-    info: &'a vk::DescriptorImageInfo,
-) -> vk::WriteDescriptorSet<'a> {
-    vk::WriteDescriptorSet::default()
-        .dst_set(set)
-        .dst_binding(binding)
-        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-        .image_info(std::slice::from_ref(info))
-}
-
-fn write_storage(
-    device: &VkDevice,
-    set: vk::DescriptorSet,
-    binding: u32,
-    buffer: vk::Buffer,
-    range: u64,
-) {
-    let info = buf_info(buffer, range);
-    let write = vk::WriteDescriptorSet::default()
-        .dst_set(set)
-        .dst_binding(binding)
-        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-        .buffer_info(std::slice::from_ref(&info));
-    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
-    // and resource it names belongs to this device.
-    unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1814,11 +1485,7 @@ mod tests {
                 std::mem::size_of::<CullParams>(),
             )
         };
-        assert_eq!(
-            bytes.len(),
-            120,
-            "cull.slang's push_constant block is 120 B"
-        );
+        assert_eq!(bytes.len(), 120, "cull.hlsl's push_constant block is 120 B");
         // The two routing fields live in the last 8 bytes: the exact span a
         // 112-byte push left undefined.
         assert_eq!(

@@ -23,6 +23,7 @@ use concinnity_core::render::uniforms::directx::CullParams;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::allocator::PooledBuffer;
+use crate::directx::builtin_shaders::{self, CompileProgram as _};
 use crate::directx::com;
 use crate::directx::context::DxContext;
 use crate::directx::descriptor_slot::DescriptorTables;
@@ -30,7 +31,6 @@ use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::root_constants::{RootConstants, root_dwords};
-use crate::directx::slang_builtins::{self, SlangCompile as _};
 use crate::directx::texture::transition_barrier;
 
 // GPU-driven cull + main pass. A compute kernel frustum/distance-tests every
@@ -146,20 +146,20 @@ pub(in crate::directx) const INDIRECT_COMMAND_STRIDE: u32 = 24;
 
 // Compile the phase-1 GPU-cull compute kernel (`main`) to DXBC.
 pub(in crate::directx) fn compile_cull_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    slang_builtins::CULL.compile(hot_reload)
+    builtin_shaders::CULL_PHASE1.compile(hot_reload)
 }
 
 // Compile the phase-2 GPU-cull compute kernel (`main_phase2`) for two-pass
 // occlusion. Same source / root signature as phase 1, different entry point.
 pub(in crate::directx) fn compile_cull_shader_phase2(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    slang_builtins::CULL_PHASE2.compile(hot_reload)
+    builtin_shaders::CULL_PHASE2.compile(hot_reload)
 }
 
 // Compile the GPU-driven shadow cull kernel (`main_shadow`): light-frustum only
 // (no Hi-Z, no distance cull, no status write). Same source / root signature as
 // phase 1, different entry point.
 pub(in crate::directx) fn compile_cull_shader_shadow(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    slang_builtins::CULL_SHADOW.compile(hot_reload)
+    builtin_shaders::CULL_SHADOW.compile(hot_reload)
 }
 
 // Root signature for the GPU-cull compute kernel: a `CullParams` root-constant

@@ -6,6 +6,8 @@
 //! `cull.rs` files so each effect is a single unit.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use std::borrow::Cow;
+
 use concinnity_core::render::error::{RenderError, RenderResult};
 use dispatch2::DispatchData;
 use objc2::rc::Retained;
@@ -16,109 +18,71 @@ use objc2_metal::{
 };
 
 use crate::metal::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
-use crate::metal::post::fullscreen::{FullscreenBlend, build_slang_fullscreen_pipeline};
+use crate::metal::post::fullscreen::{FullscreenBlend, build_fullscreen_pipeline};
 
 pub(super) fn ns_str(s: &str) -> Retained<NSString> {
     NSString::from_str(s)
 }
 
-// Resolve the MSL source for one of the built-in renderer shaders. With
-// `hot_reload` off this is just the `include_str!`-baked source -- same byte
-// stream the binary has always compiled. With `hot_reload` on (set by
-// `cn debug` via the `hot_reload` flag on `BackendInit`) the helper first tries
-// `<CARGO_MANIFEST_DIR>/src/metal/shaders/<name>` so a saved edit to the
-// `.metal` file in this checkout is picked up on the next call; if the disk
-// read fails (binary moved, file removed, IO error) it transparently falls
-// back to the embedded source. The embedded fallback means a shipped binary
-// keeps working no matter where it is run from.
-//
-// Returning `Cow` keeps the no-hot-reload case allocation-free.
-//
-// Panics on an unregistered `name`. Every caller passes a compile-time string
-// literal, so an unknown name is strictly a registration bug (a new
-// `shaders/*.metal` file that was never added to the match below) -- never a
-// runtime condition. Failing loudly here pins the blame at the source; the old
-// silent `""` fall-through instead "compiled" an empty library and surfaced as
-// a baffling `<entry-point> not found in metallib` at pipeline build. The
-// registration is required even with `hot_reload` on -- the disk read is keyed
-// off the same `name`, so an unregistered shader is never loaded from disk
-// either. Locked by `unknown_name_panics` /
-// `unknown_name_panics_even_with_hot_reload`.
-pub(super) fn shader_source(hot_reload: bool, name: &str) -> std::borrow::Cow<'static, str> {
-    let embedded: &'static str = match name {
-        "cull_encode.metal" => include_str!("shaders/cull_encode.metal"),
-        _ => panic!(
-            "shader_source: '{name}' is not a registered Metal shader. Add an \
-             `include_str!(\"shaders/{name}\")` arm to shader_source in \
-             metal/pipeline.rs -- every shipped shader must be registered."
-        ),
-    };
+// The hand-written cull encode kernel, the one built-in shader authored in MSL.
+pub(super) const CULL_ENCODE: &str = "cull_encode.metal";
+
+// The cull encode kernel's MSL. Under hot-reload the checkout's copy wins when
+// it is readable, so a saved edit is picked up on the next build; otherwise, or
+// when the read fails, the embedded copy.
+pub(super) fn cull_encode_source(hot_reload: bool) -> Cow<'static, str> {
     if hot_reload {
-        let path = format!("{}/src/metal/shaders/{}", env!("CARGO_MANIFEST_DIR"), name);
+        let path = format!(
+            "{}/src/metal/shaders/{CULL_ENCODE}",
+            env!("CARGO_MANIFEST_DIR")
+        );
         match std::fs::read_to_string(&path) {
-            Ok(s) => return std::borrow::Cow::Owned(s),
+            Ok(s) => return Cow::Owned(s),
             Err(e) => {
                 tracing::debug!(
-                    "hot-reload: falling back to embedded source for {} ({})",
-                    name,
-                    e
+                    "hot-reload: falling back to embedded source for {CULL_ENCODE} ({e})"
                 );
             }
         }
     }
-    std::borrow::Cow::Borrowed(embedded)
+    Cow::Borrowed(include_str!("shaders/cull_encode.metal"))
 }
 
-// Produce the MTLLibrary for a built-in renderer shader. The fast path loads
-// the metallib precompiled by the build script; source compilation remains for
-// an edited shader and for binaries built without the Metal toolchain, whose
-// embedded lookup is empty.
-//
-// The match is on the source digest rather than on hot-reload being off, as it
-// is on Vulkan and DirectX. `cn debug` and `cn editor` both run with hot-reload
-// on, and a mode check left them compiling every shader at startup, which needs
-// slangc installed -- so an installed editor failed init where the player it
-// ships beside started fine.
-pub(super) fn shader_library(
+// The cull encode kernel's MTLLibrary, from the metallib the build script
+// embedded when its source is unedited, else a cached or fresh compile.
+pub(super) fn cull_encode_library(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
-    name: &str,
 ) -> RenderResult<Retained<ProtocolObject<dyn objc2_metal::MTLLibrary>>> {
-    let msl = shader_source(hot_reload, name);
-    if let Some((digest, bytes)) = crate::metal::metallib::embedded_metallib(name)
-        && digest == concinnity_core::render::slang_source::source_digest(&msl)
-    {
-        return load_library(device, bytes)
-            .map_err(|e| e.context(format_args!("{name}: precompiled metallib")));
-    }
-    let options = objc2_metal::MTLCompileOptions::new();
-    device
-        .newLibraryWithSource_options_error(&ns_str(msl.as_ref()), Some(&options))
-        .map_err(|e| RenderError::ShaderCompile(format!("{name}: shader compile error: {e:?}")))
+    let msl = cull_encode_source(hot_reload);
+    super::msl_cache::compiled_library(
+        device,
+        &msl,
+        CULL_ENCODE,
+        super::metallib::embedded_metallib(CULL_ENCODE),
+    )
 }
 
-// The world Shader's library holding `entry`: the cook's MSL text, or a
-// compile of the current templates when it predates them, turned into a
-// library through the metallib cache.
-pub(super) fn world_library(
+// The world Shader's function for `entry`: the cook's MSL text, or a compile
+// of the current templates when it predates them. Each entry is its own
+// translation, so a pipeline takes its two stages from two of these.
+pub(super) fn world_function(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
     programs: &concinnity_core::components::ShaderPrograms,
     entry: &str,
-) -> RenderResult<Retained<ProtocolObject<dyn objc2_metal::MTLLibrary>>> {
+) -> RenderResult<Retained<ProtocolObject<dyn objc2_metal::MTLFunction>>> {
     let req = crate::shader::surface_source::Request {
         platform: concinnity_core::platform::Platform::Metal,
-        probe_count: concinnity_core::render::uniforms::MAX_PROBES,
         hot_reload,
     };
-    let msl = crate::shader::surface_source::artifact(programs, entry, &req)
-        .map_err(RenderError::ShaderCompile)?;
-    let msl = std::str::from_utf8(&msl).map_err(|e| {
-        RenderError::ShaderCompile(format!(
-            "world shader {entry}: artifact is not MSL text: {e}"
-        ))
-    })?;
-    super::msl_cache::compiled_library(device, msl, &format!("world shader {entry}"))
+    let msl = crate::shader::surface_source::artifact(
+        programs,
+        entry,
+        &req,
+        crate::shader::compile::cooked,
+    )?;
+    super::msl_cache::cooked_function(device, &msl, entry, &format!("world shader {entry}"))
 }
 
 // Load a MTLLibrary from raw .metallib bytes via a DispatchData.
@@ -132,7 +96,7 @@ pub(super) fn load_library(
         .map_err(|e| RenderError::ShaderCompile(format!("{e:?}")))
 }
 
-// Build the text overlay render pipeline from the single-source `text.slang`
+// Build the text overlay render pipeline from the single-source `text.hlsl`
 // pair. Renders screen-space quads with alpha blending and no depth test.
 pub(super) fn build_text_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
@@ -143,14 +107,14 @@ pub(super) fn build_text_pipeline(
 
     // Each entry compiles to its own metallib, so the two stages come from
     // separate libraries and pair by semantic.
-    let vert_fn = crate::metal::slang_builtins::entry_function(
+    let vert_fn = crate::metal::builtin_shaders::entry_function(
         device,
-        &crate::metal::slang_builtins::TEXT_VERT,
+        &crate::metal::builtin_shaders::TEXT_VERT,
         hot_reload,
     )?;
-    let frag_fn = crate::metal::slang_builtins::entry_function(
+    let frag_fn = crate::metal::builtin_shaders::entry_function(
         device,
-        &crate::metal::slang_builtins::TEXT_FRAG,
+        &crate::metal::builtin_shaders::TEXT_FRAG,
         hot_reload,
     )?;
 
@@ -229,9 +193,9 @@ pub(super) fn build_post_pipeline(
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     // Single color attachment matches the swapchain format chosen by
     // `configure_mtk_view` (`BGRA8Unorm` for SDR, `RGBA16Float` for HDR EDR).
-    build_slang_fullscreen_pipeline(
+    build_fullscreen_pipeline(
         device,
-        &super::slang_builtins::COMPOSITE_FRAG,
+        &super::builtin_shaders::COMPOSITE_FRAG,
         swap_pixel_format,
         FullscreenBlend::Replace,
         hot_reload,
@@ -239,75 +203,16 @@ pub(super) fn build_post_pipeline(
 }
 
 #[cfg(test)]
-mod shader_source_tests {
-    use super::shader_source;
+mod tests {
+    use super::cull_encode_source;
 
     #[test]
-    fn embedded_path_serves_the_registered_source() {
-        let s = shader_source(false, "cull_encode.metal");
-        assert!(s.contains("kernel void cull_encode("));
+    fn embedded_cull_encode_holds_its_kernel() {
+        assert!(cull_encode_source(false).contains("kernel void cull_encode("));
     }
 
     #[test]
-    #[should_panic(expected = "not a registered Metal shader")]
-    fn unknown_name_panics() {
-        // An unregistered shader name is a registration bug, not a runtime
-        // condition -- the loader hard-errors instead of silently returning an
-        // empty source that "compiles" to an empty library.
-        let _ = shader_source(false, "nope.metal");
-    }
-
-    #[test]
-    #[should_panic(expected = "not a registered Metal shader")]
-    fn unknown_name_panics_even_with_hot_reload() {
-        // Registration is required even with hot-reload on: the disk read is
-        // keyed off the same `name`, so an unregistered shader is never loaded
-        // from disk either.
-        let _ = shader_source(true, "nope.metal");
-    }
-
-    #[test]
-    fn hot_reload_prefers_disk_when_present() {
-        // The shader files live in this checkout, so the disk-load path
-        // succeeds and produces the same content (or a newer edit).
-        let s = shader_source(true, "cull_encode.metal");
-        assert!(s.contains("kernel void cull_encode("));
-    }
-
-    #[test]
-    fn shipped_shaders_are_registered() {
-        // Every `.metal` under src/metal/shaders/ must resolve to non-empty
-        // source through `shader_source` in BOTH hot-reload modes -- i.e. it is
-        // registered in the match (an unregistered name now panics) and, with
-        // hot_reload on, readable from disk. This is the guard that would have
-        // caught the unregistered `gbuffer_prepass.metal` at test time instead
-        // of as a baffling `<entry> not found in metallib` at init.
-        //
-        // A file spliced into another shader's text rather than loaded as a
-        // library of its own belongs here: it never passes through
-        // `shader_source`, so registering it would be wrong.
-        const ASSEMBLED_ELSEWHERE: &[&str] = &[];
-
-        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src/metal/shaders");
-        let mut checked = 0usize;
-        for entry in std::fs::read_dir(dir).expect("read shaders dir") {
-            let file_name = entry.expect("dir entry").file_name();
-            let name = file_name.to_str().expect("utf8 shader filename");
-            if !name.ends_with(".metal") || ASSEMBLED_ELSEWHERE.contains(&name) {
-                continue;
-            }
-            // Both arms must return non-empty. An unregistered name panics here
-            // (with the missing-arm message), which is the failure we want.
-            assert!(
-                !shader_source(false, name).trim().is_empty(),
-                "{name}: shader_source(false) returned empty source",
-            );
-            assert!(
-                !shader_source(true, name).trim().is_empty(),
-                "{name}: shader_source(true) returned empty source",
-            );
-            checked += 1;
-        }
-        assert!(checked > 0, "no .metal shaders found under {dir}");
+    fn hot_reload_reads_the_checkout_copy() {
+        assert!(cull_encode_source(true).contains("kernel void cull_encode("));
     }
 }

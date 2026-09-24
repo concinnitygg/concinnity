@@ -58,7 +58,7 @@ pub(super) fn build_descriptors(
 
 impl DxDescriptors {
     // CPU handle of SRV heap `slot`.
-    pub(super) fn slot_cpu(&self, slot: usize) -> D3D12_CPU_DESCRIPTOR_HANDLE {
+    pub(in crate::directx) fn slot_cpu(&self, slot: usize) -> D3D12_CPU_DESCRIPTOR_HANDLE {
         heaps::cpu_handle(&self.srv_heap, self.srv_descriptor_size, slot)
     }
 

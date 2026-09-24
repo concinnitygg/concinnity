@@ -61,7 +61,7 @@
 - [Screen](Screen.md) - A named full-screen layer of UI drawn over the world: a pause menu, a settings page, a console, a score overlay.
 - [ScrollPanel](ScrollPanel.md) - Runtime model that makes a band of UI rows scrollable and (optionally) collapsible.
 - [SdfVolume](SdfVolume.md) - A raymarched signed-distance-field volume. It occupies a world-space bounding box; a user-authored fragment shader sphere-traces an SDF inside the box, composites correctly with the surrounding scene through the depth buffer, and shades hits with the engine's lighting helpers.
-- [Shader](Shader.md) - Replaces how surfaces are shaded, and optionally how vertices are placed, with functions of your own. Written in Slang, one source for every backend.
+- [Shader](Shader.md) - Replaces how surfaces are shaded, and optionally how vertices are placed, with functions of your own. Written in HLSL, one source for every backend.
 - [SkinnedMesh](SkinnedMesh.md) - A skeletally animated mesh placed directly in the world.
 - [SkyRotation](SkyRotation.md) - Turns the whole celestial sphere: the sky, the image-based lighting it casts, every [DirectionalLight](DirectionalLight.md), and any [Prop](Prop.md) hung on it.
 - [Slider](Slider.md) - A settings row that sets a continuous value by dragging a handle along a track.

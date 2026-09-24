@@ -73,7 +73,7 @@ mod tests {
     use core::mem::size_of;
 
     // The sizes the three hosts allocate for these blocks. The per-field
-    // offsets are checked against slangc's reflection in
+    // offsets are checked against the compiled shader's layout in
     // `concinnity-device/src/shader_layout/`, which is what catches a shader-side
     // spelling that lays out differently on one target than on the others.
     #[test]

@@ -10,8 +10,8 @@
 //! writes its own output target) and is mutually exclusive with SSR resolve.
 //! Like SSGI it relies on the SSR pre-pass G-buffer, so the pre-pass is forced on
 //! whenever RT reflections are enabled. The shader is the shared
-//! `shaders/rt_reflections.slang`, compiled to a shader-model 6.5 DXIL container
-//! (the floor for the inline ray query) through `slang_builtins`; the Metal and
+//! `shaders/rt_reflections.hlsl`, compiled to a shader-model 6.5 DXIL container
+//! (the floor for the inline ray query) through `builtin_shaders`; the Metal and
 //! Vulkan hosts bind the same source at their own slots.
 
 use concinnity_core::gfx::render_types::RtParams;
@@ -22,14 +22,16 @@ use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
+use crate::directx::builtin_shaders;
+use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::error::map_hresult;
-use crate::directx::pipeline::{create_blended_composite_pso, serialize_desc_and_create};
-use crate::directx::slang_builtins;
-use crate::directx::slang_builtins::SlangCompile;
+use crate::directx::pipeline::{
+    create_blended_composite_pso, root_cbv, root_srv, serialize_desc_and_create,
+};
 use crate::directx::texture::{
     HDR_FORMAT, create_rt_target, transition_barrier, write_format_rtv, write_format_srv,
 };
@@ -47,16 +49,16 @@ struct RtShaders {
 }
 
 // Compile both fragment entry points from the single source (SM 6.5, for the
-// inline ray query) and pair them with the shared fullscreen vertex stage: its
-// `__target_switch` already carries the one divergence the pass's own vertex
-// shader existed for, the DirectX/Metal UV flip. Returns an `Err` (which the
-// caller turns into an SSR fallback) when slangc is unavailable or the shader
-// fails to compile.
+// inline ray query) and pair them with the shared fullscreen vertex stage the
+// fragment's own toolchain produced, which already carries the one divergence
+// the pass's own vertex shader existed for, the DirectX/Metal UV flip. Returns
+// an `Err` (which the caller turns into an SSR fallback) when the toolchain is
+// unavailable or the shader fails to compile.
 fn compile_rt_shaders(hot_reload: bool) -> RenderResult<RtShaders> {
     Ok(RtShaders {
-        vs: slang_builtins::FULLSCREEN_VERT.compile(hot_reload)?,
-        flat_ps: slang_builtins::RT_REFLECTIONS_FRAG.compile(hot_reload)?,
-        textured_ps: slang_builtins::RT_REFLECTIONS_FRAG_TEXTURED.compile(hot_reload)?,
+        vs: builtin_shaders::FULLSCREEN_VERT.compile(hot_reload)?,
+        flat_ps: builtin_shaders::RT_REFLECTIONS_FRAG.compile(hot_reload)?,
+        textured_ps: builtin_shaders::RT_REFLECTIONS_FRAG_TEXTURED.compile(hot_reload)?,
     })
 }
 
@@ -67,8 +69,11 @@ fn compile_rt_shaders(hot_reload: bool) -> RenderResult<RtShaders> {
 // ray tracing supports for the acceleration structure too); five descriptor tables
 // for the textures: scene t4, gbuffer normal+depth t5, roughness t6, prefilter cube
 // t7, and the unbounded bindless pool at (t0, space1); and two more root SRVs t8/t9
-// (deformed skinned verts / skinned indices, for skinned hits). Three static
-// samplers: linear-clamp s0, cube linear-clamp s1, linear-repeat s2.
+// (deformed skinned verts / skinned indices, for skinned hits). The miss
+// fallback's reflection probes follow: the cube array table t10, the ProbeSet
+// CBV b4, the records t11, and the main camera's cluster grid binning them (the
+// params CBV b5, the per-cluster lists t12). Four static samplers: linear-clamp
+// s0, cube linear-clamp s1, linear-repeat s2, and the probe cube sampler s3.
 fn create_rt_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     let table_range = |reg: u32| D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
@@ -88,39 +93,16 @@ fn create_rt_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSig
         RegisterSpace: 1,         // space1
         OffsetInDescriptorsFromTableStart: 0,
     };
-    // The reflection-probe cube array at t10..t10+MAX_PROBES, space0: the array
-    // spans MAX_PROBES registers, so it starts clear of the trace's own SRVs
-    // rather than at the forward pass's t7. Unbaked slots hold the sky prefilter
-    // cube, so a sample at any index is valid; the miss fallback box-projects
-    // these when ProbeSet.count > 0.
+    // The reflection-probe cube array at t10, clear of the trace's own SRVs; the
+    // miss fallback box-projects it when ProbeSet.count > 0.
     let probe_cube_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: concinnity_core::render::uniforms::MAX_PROBES as u32,
-        BaseShaderRegister: 10, // t10..
+        NumDescriptors: 1,
+        BaseShaderRegister: 10, // t10
         RegisterSpace: 0,
         OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
     };
 
-    let root_cbv = |reg: u32| D3D12_ROOT_PARAMETER {
-        ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
-        Anonymous: D3D12_ROOT_PARAMETER_0 {
-            Descriptor: D3D12_ROOT_DESCRIPTOR {
-                ShaderRegister: reg,
-                RegisterSpace: 0,
-            },
-        },
-        ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-    };
-    let root_srv = |reg: u32| D3D12_ROOT_PARAMETER {
-        ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
-        Anonymous: D3D12_ROOT_PARAMETER_0 {
-            Descriptor: D3D12_ROOT_DESCRIPTOR {
-                ShaderRegister: reg,
-                RegisterSpace: 0,
-            },
-        },
-        ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-    };
     let table = |range: &D3D12_DESCRIPTOR_RANGE| D3D12_ROOT_PARAMETER {
         ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
         Anonymous: D3D12_ROOT_PARAMETER_0 {
@@ -145,8 +127,11 @@ fn create_rt_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSig
         table(&pool_range),       // [9] t0,space1 bindless pool
         root_srv(8),              // [10] t8 deformed skinned verts (raw)
         root_srv(9),              // [11] t9 skinned indices (raw)
-        table(&probe_cube_range), // [12] t10.. reflection-probe cube array
+        table(&probe_cube_range), // [12] t10 reflection-probe cube array
         root_cbv(4),              // [13] b4 ProbeSet
+        root_srv(11),             // [14] t11 reflection-probe records
+        root_cbv(5),              // [15] b5 ClusterParams
+        root_srv(12),             // [16] t12 cluster lists
     ];
 
     let linear_clamp = |reg: u32| D3D12_STATIC_SAMPLER_DESC {
@@ -532,13 +517,10 @@ impl DxContext {
             cmd.SetGraphicsRootShaderResourceView(10, accel.deformed_verts_gva());
             cmd.SetGraphicsRootShaderResourceView(11, accel.skinned_index_gva());
             // Reflection-probe miss fallback: the cube array table at t10 + the
-            // per-frame ProbeSet CBV at b4. count == 0 keeps the sky path,
-            // so a probe-less world is byte-identical to before.
-            cmd.set_graphics_srv_table(12, self.probe_cube_table_gpu());
-            cmd.SetGraphicsRootConstantBufferView(
-                13,
-                com::gpu_va(&self.uniforms.probe_set_cbvs[frame_idx]),
-            );
+            // per-frame ProbeSet CBV at b4 + the per-frame records at t11, and
+            // the main camera's cluster grid binning them (b5, t12). count == 0
+            // keeps the sky path.
+            self.probe_bindings(frame_idx).bind(cmd, 12);
             cmd.IASetPrimitiveTopology(
                 windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             );

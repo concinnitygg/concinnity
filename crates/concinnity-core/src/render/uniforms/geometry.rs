@@ -2,7 +2,7 @@
 //! decals, world-space lines, and the GPU particle system.
 
 /// Per-frame view inputs to the projected-decal pass. Matches `DecalView` in
-/// `shaders/decal.slang`. 144 bytes.
+/// `shaders/decal.hlsl`. 144 bytes.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct DecalView {
@@ -18,7 +18,7 @@ pub struct DecalView {
 }
 
 /// Per-decal uniforms uploaded before each draw. Matches `DecalParams` in
-/// `shaders/decal.slang`. 160 bytes (two float4x4s, a float4 tint, four scalars).
+/// `shaders/decal.hlsl`. 160 bytes (two float4x4s, a float4 tint, four scalars).
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct DecalParams {
@@ -39,7 +39,7 @@ pub struct DecalParams {
 }
 
 /// Per-frame view inputs to the line pass. Matches `LineView` in
-/// `shaders/line.slang`. 80 bytes.
+/// `shaders/line.hlsl`. 80 bytes.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct LineView {
@@ -53,7 +53,7 @@ pub struct LineView {
 }
 
 /// Per-frame view inputs to the particle render pass. Matches `ParticleView` in
-/// `shaders/particle.slang`. 96 bytes.
+/// `shaders/particle.hlsl`. 96 bytes.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct ParticleView {
@@ -71,7 +71,7 @@ pub struct ParticleView {
 }
 
 /// One particle slot in the pool the simulation kernel writes and the render
-/// pair reads. Matches `Particle` in `shaders/particle_types.slang`, which
+/// pair reads. Matches `Particle` in `shaders/particle_types.hlsl`, which
 /// spells the same 32 bytes as two float4 lanes.
 #[derive(Copy, Clone, Default)]
 #[repr(C)]
@@ -88,7 +88,7 @@ pub struct GpuParticle {
 
 /// Per-dispatch parameters for the `rt_skin` compute kernel, which deforms one
 /// skinned object's bind-pose vertices into the shared deformed buffer the RT
-/// acceleration structure traces. Matches `SkinParams` in `rt_skin.slang`.
+/// acceleration structure traces. Matches `SkinParams` in `rt_skin.hlsl`.
 ///
 /// Metal writes it to buffer(3), Vulkan pushes it, DirectX takes it as root
 /// constants at b0.
@@ -108,7 +108,7 @@ pub struct SkinParams {
 /// Per-dispatch parameters for the `model_history` compute kernel, which
 /// snapshots this frame's model matrices out of the bindless object buffer into
 /// the frame's model-history ring slot. Matches `ModelHistoryParams` in
-/// `model_history.slang`.
+/// `model_history.hlsl`.
 ///
 /// Every backend binds it at the kernel's first slot: Metal at buffer(0),
 /// Vulkan as set 0 binding 0, DirectX as root constants at b0.

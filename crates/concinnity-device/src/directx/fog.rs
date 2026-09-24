@@ -28,13 +28,13 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
+use crate::directx::builtin_shaders;
+use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::serialize_desc_and_create;
-use crate::directx::slang_builtins;
-use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::HDR_FORMAT;
 
 // Volumetric fog. All fields `None`/default until the world declares a
@@ -58,18 +58,16 @@ pub(in crate::directx) fn compile_fog_shaders(
     msaa_samples: u32,
     hot_reload: bool,
 ) -> RenderResult<(Vec<u8>, Vec<u8>)> {
-    let vs = slang_builtins::FULLSCREEN_VERT.compile(hot_reload)?;
-    let ps = if msaa_samples > 1 {
-        slang_builtins::FOG_FRAG_MSAA.compile(hot_reload)?
-    } else {
-        slang_builtins::FOG_FRAG.compile(hot_reload)?
-    };
+    let vs = builtin_shaders::FULLSCREEN_VERT.compile(hot_reload)?;
+    let ps = builtin_shaders::FOG_FRAG
+        .at(msaa_samples > 1)
+        .compile(hot_reload)?;
     Ok((vs, ps))
 }
 
 // Compile the froxel-volume compute kernel.
 pub(in crate::directx) fn compile_fog_froxel_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    slang_builtins::FOG_FROXEL.compile(hot_reload)
+    builtin_shaders::FOG_FROXEL.compile(hot_reload)
 }
 
 // Rebuild the fog PSO against fresh shader source. Called from the DirectX

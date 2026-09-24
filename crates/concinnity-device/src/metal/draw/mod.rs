@@ -123,7 +123,7 @@ impl MtlContext {
             frustum,
         } = self.frame_projection(fov_y_radians, aspect, near, far, render_w, render_h);
 
-        self.refresh_argument_buffers(ring_slot)?;
+        let texture_signature = self.refresh_probe_records_and_residency(ring_slot)?;
 
         let SceneBuffers {
             object_buffer,
@@ -138,6 +138,7 @@ impl MtlContext {
             far,
             world_hidden,
             skinned_joint_bufs: &skinned_joint_bufs,
+            texture_signature,
         })?;
 
         let PassUniforms {

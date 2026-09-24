@@ -43,8 +43,8 @@ pub(crate) mod appkit;
 pub mod shader;
 
 // Reflection-driven layout guard for the `#[repr(C)]` structs the CPU uploads
-// into the single-source `.slang` shaders: the expected offsets come from
-// slangc, per target, rather than from a hand-written number. Reads the source
+// into the single-source shaders: the expected offsets come from the compiler,
+// per target, rather than from a hand-written number. Reads the source
 // assembly a backend brings with it, so a build with none has nothing to check.
 #[cfg(all(test, any(backend_metal, backend_dx, backend_vk)))]
 mod shader_layout;

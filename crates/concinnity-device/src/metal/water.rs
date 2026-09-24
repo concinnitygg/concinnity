@@ -17,7 +17,7 @@
 //!
 //! Output blends with SRC_ALPHA / ONE_MINUS_SRC_ALPHA into `scene_pre_taa`.
 //!
-//! The shaders are the shared `shaders/water.slang`, the single source all three
+//! The shaders are the shared `shaders/water.hlsl`, the single source all three
 //! backends compile; the pipeline state matches the glass panes exactly, because
 //! the same transparent encoder feeds both.
 //!
@@ -41,10 +41,10 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLDevice, MTLRenderPipelineState, MTLResourceOptions};
 
+use super::builtin_shaders;
 use super::context::MtlContext;
 use super::error::allocation_failed;
 use super::glass::build_transparent_pipeline_stages;
-use super::slang_builtins;
 use super::transparent::{TransparentDraw, bytes_of};
 
 // Per-surface GPU state: a static tessellated grid VB + IB.
@@ -171,7 +171,7 @@ fn wave_to_gpu(w: &WaterWave) -> WaterWaveGpu {
 impl MtlContext {
     // True when a visible water surface holds a planar slot, so the mirror
     // re-render has a consumer this frame even while the trace is live. Water
-    // takes the mirror over its own trace (see `water.slang`), so this is what
+    // takes the mirror over its own trace (see `water.hlsl`), so this is what
     // the planar gate reads; glass is deliberately not counted.
     pub(in crate::metal) fn water_planar_slot_live(&self) -> bool {
         self.water
@@ -276,7 +276,7 @@ pub(super) fn build_water_pipeline(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    build_water_pipeline_slang(device, hot_reload, &slang_builtins::WATER_FRAG)
+    build_water_pipeline_with(device, hot_reload, &builtin_shaders::WATER_FRAG)
 }
 
 // Build the ray-traced water pipeline: the same vertex layout + blend, but the
@@ -290,7 +290,7 @@ pub(super) fn build_water_pipeline_rt(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    build_water_pipeline_slang(device, hot_reload, &slang_builtins::WATER_FRAG_RT)
+    build_water_pipeline_with(device, hot_reload, &builtin_shaders::WATER_FRAG_RT)
 }
 
 // Build the textured ray-traced water pipeline: the same trace as the flat RT
@@ -301,19 +301,20 @@ pub(super) fn build_water_pipeline_rt_textured(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    build_water_pipeline_slang(device, hot_reload, &slang_builtins::WATER_FRAG_RT_TEXTURED)
+    build_water_pipeline_with(device, hot_reload, &builtin_shaders::WATER_FRAG_RT_TEXTURED)
 }
 
-// The water pipelines, whose stages come from the single-source `water.slang`.
+// The water pipelines, whose stages come from the single-source `water.hlsl`.
 // Each fragment variant declares only the resources it binds, so each is its own
 // metallib while the vertex is compiled once for all of them.
-fn build_water_pipeline_slang(
+fn build_water_pipeline_with(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
-    fragment: &slang_builtins::SlangLib,
+    fragment: &builtin_shaders::ShaderProgram,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    let vert_fn = slang_builtins::entry_function(device, &slang_builtins::WATER_VERT, hot_reload)?;
-    let frag_fn = slang_builtins::entry_function(device, fragment, hot_reload)?;
+    let vert_fn =
+        builtin_shaders::entry_function(device, &builtin_shaders::WATER_VERT, hot_reload)?;
+    let frag_fn = builtin_shaders::entry_function(device, fragment, hot_reload)?;
     build_transparent_pipeline_stages(device, &vert_fn, &frag_fn)
 }
 

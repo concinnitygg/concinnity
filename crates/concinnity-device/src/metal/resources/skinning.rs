@@ -176,7 +176,7 @@ pub(crate) fn make_skinned_vertex_descriptor() -> Retained<MTLVertexDescriptor> 
 }
 
 // Build the skinned shadow pipeline: depth-only, no fragment function, no
-// MSAA, compiled from the engine-internal single source (`shadow.slang`, entry
+// MSAA, compiled from the engine-internal single source (`shadow.hlsl`, entry
 // `shadow_vertex_main_skinned`). Mirrors
 // [`crate::metal::init::pipelines::build_shadow_pipeline`] but on the 80-byte
 // skinned vertex layout. Shared by [`MtlContext::upload_skinned`] and the
@@ -186,9 +186,9 @@ pub(crate) fn build_skinned_shadow_pipeline(
     vdesc: &MTLVertexDescriptor,
     hot_reload: bool,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    let shadow_fn = crate::metal::slang_builtins::entry_function(
+    let shadow_fn = crate::metal::builtin_shaders::entry_function(
         device,
-        &crate::metal::slang_builtins::SHADOW_VERT_SKINNED,
+        &crate::metal::builtin_shaders::SHADOW_VERT_SKINNED,
         hot_reload,
     )?;
     let sdesc = MTLRenderPipelineDescriptor::new();

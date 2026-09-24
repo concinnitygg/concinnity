@@ -45,6 +45,19 @@ pub const MAX_LIGHTS_PER_CLUSTER: u32 = 63;
 /// `u32` slots one cluster occupies in the light-index buffer: the count plus
 /// [`MAX_LIGHTS_PER_CLUSTER`] indices.
 pub const CLUSTER_LIGHT_LIST_STRIDE: u32 = MAX_LIGHTS_PER_CLUSTER + 1;
+/// `u32` words of each of a cluster's two reflection-probe masks. The masks
+/// follow every cluster's light list in the same buffer: bit `i` of a cluster's
+/// influence mask is set when probe `i`'s influence reaches the cluster, and bit
+/// `i` of its nearest mask when probe `i` can be the nearest capture to a point
+/// in it (the fallback where no influence reaches).
+pub const CLUSTER_PROBE_MASK_WORDS: u32 = 8;
+/// Probes a cluster mask can exclude. A probe past this index is never masked
+/// out, so a larger set costs its readers time but never drops a reflection.
+pub const MAX_CLUSTERED_PROBES: u32 = CLUSTER_PROBE_MASK_WORDS * 32;
+/// `u32` slots in the whole per-cluster list buffer: every cluster's light list,
+/// then every cluster's two probe masks.
+pub const CLUSTER_LIST_LEN: u32 =
+    CLUSTER_COUNT * (CLUSTER_LIGHT_LIST_STRIDE + 2 * CLUSTER_PROBE_MASK_WORDS);
 
 /// Number of cascades the directional shadow pre-pass renders into the shadow
 /// map array. Hardcoded because changing N requires re-compiling the shaders
@@ -170,7 +183,7 @@ impl MaterialUniforms {
 }
 
 /// One directional light entry in LightUniforms.
-/// Layout (32 bytes) mirrors `DirLight` in `main_types.slang`, which spells each
+/// Layout (32 bytes) mirrors `DirLight` in `main_types.hlsl`, which spells each
 /// (float3, scalar) pair as one float4 lane.
 #[derive(Copy, Clone, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
@@ -186,7 +199,7 @@ pub struct DirectionalLightData {
 }
 
 /// One point light entry in LightUniforms.
-/// Layout (32 bytes) mirrors `PointLight` in `main_types.slang`, spelled the
+/// Layout (32 bytes) mirrors `PointLight` in `main_types.hlsl`, spelled the
 /// same way as `DirectionalLightData`.
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
@@ -265,7 +278,7 @@ const ZERO_POINT_LIGHT: PointLightData = PointLightData {
 };
 
 /// All scene lights packed into a single GPU buffer pushed at fragment buffer(4).
-/// Mirrors `LightUniforms` in `main_types.slang`; the layout guard reflects it.
+/// Mirrors `LightUniforms` in `main_types.hlsl`; the layout guard reflects it.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct LightUniforms {
@@ -327,9 +340,10 @@ impl LightUniforms {
 /// slice's near/far depth to build a world-space AABB (same convention as the fog
 /// froxel kernel), then tests each GpuLight sphere against it. The forward pass
 /// reads the grid dims + depth range + screen size to map a fragment to its
-/// cluster. 128 bytes; packed_float3 keeps `cam_pos` / `view_forward` inside their
-/// 16-byte lanes. Must match the `ClusterParams` struct in the light-cull and
-/// forward shaders.
+/// cluster. The same pass bins the reflection probes' influence boxes into
+/// per-cluster probe masks. 128 bytes; `cam_pos` / `view_forward` each share a
+/// 16-byte lane with the scalar after them, which the shader spells as one
+/// float4. Must match the `ClusterParams` struct in `shaders/cluster_types.hlsl`.
 #[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct ClusterParams {
@@ -359,8 +373,9 @@ pub struct ClusterParams {
     /// falls back to iterating all `num_lights` lights (planar / probe re-renders,
     /// whose viewpoint differs from the grid the main camera binned).
     pub use_clusters: u32,
-    /// Padding so the field layout matches the shader-side struct.
-    pub _pad: u32,
+    /// Number of reflection-probe records the kernel bins: the frame's
+    /// `ProbeSet::count`.
+    pub num_probes: u32,
 }
 
 impl ClusterParams {
@@ -380,8 +395,55 @@ impl ClusterParams {
         screen_w: 0.0,
         screen_h: 0.0,
         use_clusters: 0,
-        _pad: 0,
+        num_probes: 0,
     };
+
+    /// The main camera's params for this frame. `use_clusters` is set while
+    /// [`clustering_active`](crate::render::lights::clustering_active) holds for
+    /// the counts; a negative `num_local_lights` bins none.
+    pub fn for_camera(camera: &ClusterCamera, num_local_lights: i32, num_probes: u32) -> Self {
+        let view = camera.view;
+        Self {
+            inv_view_proj: crate::transform::mat4_inverse(crate::transform::mat4_mul(
+                camera.proj,
+                view,
+            )),
+            cam_pos: camera.position,
+            z_near: camera.near.max(1e-3),
+            view_forward: [-view[0][2], -view[1][2], -view[2][2]],
+            z_far: camera.far,
+            grid_x: CLUSTER_GRID_X,
+            grid_y: CLUSTER_GRID_Y,
+            grid_z: CLUSTER_GRID_Z,
+            num_lights: num_local_lights.max(0) as u32,
+            screen_w: camera.width as f32,
+            screen_h: camera.height as f32,
+            use_clusters: u32::from(crate::render::lights::clustering_active(
+                num_local_lights,
+                num_probes as usize,
+            )),
+            num_probes,
+        }
+    }
+}
+
+/// The camera a frame's cluster grid is binned for.
+#[derive(Copy, Clone, Debug)]
+pub struct ClusterCamera {
+    /// World -> view, column-major.
+    pub view: [[f32; 4]; 4],
+    /// The un-jittered projection.
+    pub proj: [[f32; 4]; 4],
+    /// Camera world position.
+    pub position: [f32; 3],
+    /// Near plane in view units; clamped to 1e-3 so the slice math stays finite.
+    pub near: f32,
+    /// Far plane in view units.
+    pub far: f32,
+    /// Render-target width in pixels.
+    pub width: u32,
+    /// Render-target height in pixels.
+    pub height: u32,
 }
 
 /// Cascaded shadow map view-projection matrices and split depths.
@@ -831,7 +893,7 @@ pub struct RtParams {
 /// triangle's indices in the shared index buffer, transform its local-space
 /// vertices into world space for the geometric normal, and pick a base albedo to
 /// shade the hit with. `#[repr(C)]`, 128 bytes: the layout must stay in sync
-/// with the `RtGeomEntry` struct in the shared RT records (`rt_types.slang`), where
+/// with the `RtGeomEntry` struct in the shared RT records (`rt_types.hlsl`), where
 /// `tint` and `emissive` are `packed_float3` so the field offsets match; a plain
 /// `float3` there would stride the buffer differently and fault the trace. The
 /// `_pad` tail rounds the struct to 128 bytes so its array stride is a multiple
@@ -946,7 +1008,7 @@ pub struct FogParams {
 /// bind it.
 ///
 /// Bound at the fog fragment shader + the froxel kernel. Layout must stay in
-/// sync with `FogFroxelParams` in `shaders/fog.slang`, the single source both
+/// sync with `FogFroxelParams` in `shaders/fog.hlsl`, the single source both
 /// halves compile from on every backend. 96 bytes.
 #[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
@@ -982,7 +1044,7 @@ pub struct FogFroxelParams {
 /// dynamic per-frame inputs the compute kernel needs to age + integrate +
 /// respawn the pool. Pushed at compute buffer(2) and vertex buffer(1) of the
 /// Metal particle passes, so the layout must stay in sync with
-/// `ParticleParams` in `shaders/particle_types.slang`. 144 bytes.
+/// `ParticleParams` in `shaders/particle_types.hlsl`. 144 bytes.
 #[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct ParticleParams {
@@ -1189,9 +1251,9 @@ impl DrawObject {
 /// layout change.
 ///
 /// Layout (144 bytes) must stay in sync with the shader-side record, declared
-/// once in `shaders/object_common.slang` and spliced into every pass that
+/// once in `shaders/object_common.hlsl` and spliced into every pass that
 /// strides the buffer; `shader_layout` in concinnity-device pins this struct
-/// against slangc's reflection of it on every target.
+/// against the compiled module's layout of it on every target.
 ///
 /// `albedo_index` / `normal_index` (and the emissive / ORM indices)
 /// are indices into each backend's single handle-indexed texture pool: albedo,
@@ -1414,7 +1476,7 @@ pub fn pack_skinned_record(
 /// (mirrors `DrawObject::cullable()`: non-cullable objects always draw).
 ///
 /// Layout (16 bytes) must stay in sync with the `GpuDrawArgs` struct in
-/// `cull.slang` and in the Metal ICB encode kernel, `cull_encode.metal`.
+/// `cull.hlsl` and in the Metal ICB encode kernel, `cull_encode.metal`.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct GpuDrawArgs {
@@ -1441,11 +1503,11 @@ impl DrawArgsFlags {
     pub(crate) const CULLABLE: u32 = 2;
     // The record's entry in the model-history ring was written for a different
     // occupant, so the G-buffer pre-pass must reproject through the current
-    // model instead. Mirrored by DRAW_NO_HISTORY in object_common.slang.
+    // model instead. Mirrored by DRAW_NO_HISTORY in object_common.hlsl.
     pub(crate) const NO_HISTORY: u32 = 4;
     // The record's shader bucket rides bits 8..16: the cull kernel routes the
     // record's indirect command into that bucket's ICB. Values and layout are
-    // mirrored by the cull shaders (DRAW_BUCKET_SHIFT in cull.slang and
+    // mirrored by the cull shaders (DRAW_BUCKET_SHIFT in cull.hlsl and
     // cull_encode.metal).
     pub(crate) const BUCKET_SHIFT: u32 = 8;
 }
@@ -1803,6 +1865,85 @@ mod tests {
         assert_eq!(albedo_pool_index(0, 0), 0);
     }
 
+    // Every (vec3, scalar) pair shares one 16-byte lane, as the shader's float4
+    // spelling does.
+    #[test]
+    fn cluster_params_layout_matches_shaders() {
+        assert_eq!(size_of::<ClusterParams>(), 128);
+        assert_eq!(offset_of!(ClusterParams, inv_view_proj), 0);
+        assert_eq!(offset_of!(ClusterParams, cam_pos), 64);
+        assert_eq!(offset_of!(ClusterParams, z_near), 76);
+        assert_eq!(offset_of!(ClusterParams, view_forward), 80);
+        assert_eq!(offset_of!(ClusterParams, z_far), 92);
+        assert_eq!(offset_of!(ClusterParams, grid_x), 96);
+        assert_eq!(offset_of!(ClusterParams, grid_y), 100);
+        assert_eq!(offset_of!(ClusterParams, grid_z), 104);
+        assert_eq!(offset_of!(ClusterParams, num_lights), 108);
+        assert_eq!(offset_of!(ClusterParams, screen_w), 112);
+        assert_eq!(offset_of!(ClusterParams, screen_h), 116);
+        assert_eq!(offset_of!(ClusterParams, use_clusters), 120);
+        assert_eq!(offset_of!(ClusterParams, num_probes), 124);
+    }
+
+    #[test]
+    fn cluster_params_for_camera_fills_every_field() {
+        let mut view = crate::transform::IDENTITY;
+        // Camera looking down -X: view row 2 (the backward axis) is +X.
+        view[0][2] = 1.0;
+        view[2][2] = 0.0;
+        let camera = ClusterCamera {
+            view,
+            proj: crate::transform::IDENTITY,
+            position: [1.0, 2.0, 3.0],
+            near: 0.0,
+            far: 500.0,
+            width: 1920,
+            height: 1080,
+        };
+        let p = ClusterParams::for_camera(&camera, 7, 3);
+        assert_eq!(
+            p.inv_view_proj,
+            crate::transform::mat4_inverse(crate::transform::mat4_mul(
+                crate::transform::IDENTITY,
+                view
+            ))
+        );
+        assert_eq!(p.cam_pos, [1.0, 2.0, 3.0]);
+        assert_eq!(p.z_near, 1e-3, "near clamps off zero");
+        assert_eq!(p.view_forward, [-1.0, 0.0, 0.0]);
+        assert_eq!(p.z_far, 500.0);
+        assert_eq!(
+            (p.grid_x, p.grid_y, p.grid_z),
+            (CLUSTER_GRID_X, CLUSTER_GRID_Y, CLUSTER_GRID_Z)
+        );
+        assert_eq!((p.num_lights, p.num_probes, p.use_clusters), (7, 3, 1));
+        assert_eq!((p.screen_w, p.screen_h), (1920.0, 1080.0));
+
+        let off = ClusterParams::for_camera(&camera, -1, 0);
+        assert_eq!((off.num_lights, off.use_clusters), (0, 0));
+        let probes_only = ClusterParams::for_camera(&camera, 0, 1);
+        assert_eq!((probes_only.num_lights, probes_only.use_clusters), (0, 1));
+    }
+
+    // `cluster_types.hlsl` hardcodes the list layout every cluster reader and
+    // the binning kernel share, so it must track the values the CPU sizes the
+    // buffer with.
+    #[test]
+    fn cluster_list_constants_match_shaders() {
+        let src = crate::render::shaders::CLUSTER_TYPES;
+        for (name, value) in [
+            ("CLUSTER_LIGHT_LIST_STRIDE", CLUSTER_LIGHT_LIST_STRIDE),
+            ("MAX_LIGHTS_PER_CLUSTER", MAX_LIGHTS_PER_CLUSTER),
+            ("CLUSTER_PROBE_MASK_WORDS", CLUSTER_PROBE_MASK_WORDS),
+            ("MAX_CLUSTERED_PROBES", MAX_CLUSTERED_PROBES),
+        ] {
+            assert!(
+                src.contains(&alloc::format!("static const uint {name} = {value}u;")),
+                "cluster_types.hlsl {name} drifted from render_types"
+            );
+        }
+    }
+
     // The SSR resolve's push block. `sky_rot` is a float4 array, so it needs
     // the 16-byte boundary the matrix ahead of it already lands on.
     #[test]
@@ -1843,7 +1984,7 @@ mod tests {
 
     #[test]
     fn gpu_object_data_layout_matches_shaders() {
-        // `object_common.slang` spells each (vec3, scalar)
+        // `object_common.hlsl` spells each (vec3, scalar)
         // pair as one 16-byte lane; the four indices fill the lane between the
         // material block and the cull bounds.
         assert_eq!(size_of::<GpuObjectData>(), 144);
@@ -1867,7 +2008,7 @@ mod tests {
         // The text vertex buffer is consumed through a vertex descriptor whose
         // attributes sit at offsets 0 (pos), 8 (uv), 16 (color) with a 32-byte
         // stride, matching the `TextVertexIn` attribute slots in
-        // `shaders/text.slang`.
+        // `shaders/text.hlsl`.
         assert_eq!(size_of::<TextVertex>(), 32);
         assert_eq!(offset_of!(TextVertex, pos), 0);
         assert_eq!(offset_of!(TextVertex, uv), 8);
@@ -1879,7 +2020,7 @@ mod tests {
     fn line_vertex_layout_matches_shaders() {
         // Consumed through a vertex descriptor whose attributes sit at offsets
         // 0 (pos), 12 (edge), 16 (color) with a 32-byte stride, matching the
-        // `LineVertexIn` attribute slots in `shaders/line.slang`.
+        // `LineVertexIn` attribute slots in `shaders/line.hlsl`.
         assert_eq!(size_of::<LineVertex>(), 32);
         assert_eq!(offset_of!(LineVertex, pos), 0);
         assert_eq!(offset_of!(LineVertex, edge), 12);
@@ -2262,7 +2403,7 @@ mod tests {
 
     #[test]
     fn gpu_draw_args_layout_matches_shaders() {
-        // The `GpuDrawArgs` struct in `cull.slang` and `cull_encode.metal` is
+        // The `GpuDrawArgs` struct in `cull.hlsl` and `cull_encode.metal` is
         // four tightly packed uints; the kernel reads garbage if the Rust
         // record drifts from it.
         assert_eq!(size_of::<GpuDrawArgs>(), 16);

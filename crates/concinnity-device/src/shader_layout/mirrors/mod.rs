@@ -1,7 +1,7 @@
 //! The `#[repr(C)]` mirrors, grouped by the shader family whose reflection
 //! checks them. A mirror pairs runs of Rust fields with the runs of shader
 //! fields covering the same bytes, and carries no expected offset of its own:
-//! every number in the comparison comes from slangc.
+//! every number in the comparison comes from the compiled shader.
 
 pub(super) mod forward;
 pub(super) mod geometry;

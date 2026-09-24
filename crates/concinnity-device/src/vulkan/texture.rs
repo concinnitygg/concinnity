@@ -52,23 +52,6 @@ impl GpuImage {
         self.aux_views.push(view);
     }
 
-    // Wrap a pooled image with a primary view and a set of auxiliary views
-    // already attached to its lease. The reflection-probe convolution builds its
-    // cube and every view it dispatches through before there is a `GpuImage` to
-    // put them in, and hands the finished set over here.
-    pub(super) fn from_pooled_with_aux(
-        pooled: PooledImage,
-        view: vk::ImageView,
-        aux_views: Vec<vk::ImageView>,
-    ) -> Self {
-        Self {
-            image: pooled.image(),
-            view,
-            aux_views,
-            pooled,
-        }
-    }
-
     // Wrap handles owned elsewhere (e.g. the transient pool), so a mip chain
     // can index owned and borrowed images uniformly. Dropping it releases
     // nothing.

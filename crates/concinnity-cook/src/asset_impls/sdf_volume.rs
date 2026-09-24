@@ -60,7 +60,7 @@ impl crate::asset::BuildAsset for SdfVolume {
                 std::io::ErrorKind::InvalidData,
                 format!(
                     "SdfVolume '{}': no distance field declared (set `fragment_shader` \
-                     to a `.slang` path declaring map + shade, or sampleVolume)",
+                     to a `.hlsl` path declaring map + shade, or sampleVolume)",
                     ctx.name
                 ),
             )
@@ -136,7 +136,7 @@ mod tests {
         }
     }
 
-    // A minimal surface field: enough for slangc to accept it, so a compile
+    // A minimal surface field: enough for the compiler to accept it, so a compile
     // that fails in these tests is the engine template's fault, not the field's.
     const FIELD: &str = r#"
 float map(float3 p, SdfParams params, float time) { return sdSphere(p, 0.5); }
@@ -154,14 +154,14 @@ SdfSurface shade(float3 p, float3 n, SdfParams params, float time, float2 uv) {
     #[test]
     fn an_absolute_path_resolves_only_when_it_exists() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("chrome.slang");
+        let path = dir.path().join("chrome.hlsl");
         std::fs::write(&path, FIELD).unwrap();
         let raw = path.to_string_lossy().into_owned();
         assert_eq!(resolve_source_path(&raw, &ctx(None)), Some(raw.clone()));
 
         let missing = dir
             .path()
-            .join("absent.slang")
+            .join("absent.hlsl")
             .to_string_lossy()
             .into_owned();
         assert_eq!(resolve_source_path(&missing, &ctx(None)), None);
@@ -171,22 +171,22 @@ SdfSurface shade(float3 p, float3 n, SdfParams params, float time, float2 uv) {
     fn a_relative_path_resolves_under_the_artifacts_dir() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("shaders")).unwrap();
-        std::fs::write(dir.path().join("shaders/chrome.slang"), FIELD).unwrap();
+        std::fs::write(dir.path().join("shaders/chrome.hlsl"), FIELD).unwrap();
         let artifacts = dir.path().to_string_lossy().into_owned();
         assert_eq!(
-            resolve_source_path("shaders/chrome.slang", &ctx(Some(&artifacts))),
-            Some(format!("{artifacts}/shaders/chrome.slang"))
+            resolve_source_path("shaders/chrome.hlsl", &ctx(Some(&artifacts))),
+            Some(format!("{artifacts}/shaders/chrome.hlsl"))
         );
     }
 
     #[test]
     fn a_bare_filename_resolves_under_the_artifacts_dir() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("chrome.slang"), FIELD).unwrap();
+        std::fs::write(dir.path().join("chrome.hlsl"), FIELD).unwrap();
         let artifacts = dir.path().to_string_lossy().into_owned();
         assert_eq!(
-            resolve_source_path("chrome.slang", &ctx(Some(&artifacts))),
-            Some(format!("{artifacts}/chrome.slang"))
+            resolve_source_path("chrome.hlsl", &ctx(Some(&artifacts))),
+            Some(format!("{artifacts}/chrome.hlsl"))
         );
     }
 
@@ -195,11 +195,11 @@ SdfSurface shade(float3 p, float3 n, SdfParams params, float time, float2 uv) {
         let dir = tempfile::tempdir().unwrap();
         let artifacts = dir.path().to_string_lossy().into_owned();
         assert_eq!(
-            resolve_source_path("cn_no_such_field.slang", &ctx(Some(&artifacts))),
+            resolve_source_path("cn_no_such_field.hlsl", &ctx(Some(&artifacts))),
             None
         );
         assert_eq!(
-            resolve_source_path("cn_no_such_field.slang", &ctx(None)),
+            resolve_source_path("cn_no_such_field.hlsl", &ctx(None)),
             None
         );
     }
@@ -207,12 +207,11 @@ SdfSurface shade(float3 p, float3 n, SdfParams params, float time, float2 uv) {
     #[test]
     fn a_missing_source_file_names_the_asset_and_the_path() {
         let err =
-            SdfVolume::compile_payload(&args("/no/such/chrome.slang"), &ctx(None)).unwrap_err();
+            SdfVolume::compile_payload(&args("/no/such/chrome.hlsl"), &ctx(None)).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
         assert!(
-            err.to_string().contains(
-                "SdfVolume 'blob': failed to read distance field '/no/such/chrome.slang'"
-            ),
+            err.to_string()
+                .contains("SdfVolume 'blob': failed to read distance field '/no/such/chrome.hlsl'"),
             "got: {err}"
         );
     }
@@ -230,7 +229,7 @@ SdfSurface shade(float3 p, float3 n, SdfParams params, float time, float2 uv) {
     #[test]
     fn source_files_reports_only_the_declared_field() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("chrome.slang");
+        let path = dir.path().join("chrome.hlsl");
         std::fs::write(&path, FIELD).unwrap();
         let raw = path.to_string_lossy().into_owned();
         assert_eq!(
@@ -243,7 +242,7 @@ SdfSurface shade(float3 p, float3 n, SdfParams params, float time, float2 uv) {
             SourceFiles::Only(Vec::new())
         );
         assert_eq!(
-            SdfVolume::source_files(&args("/no/such/chrome.slang"), &ctx(None)),
+            SdfVolume::source_files(&args("/no/such/chrome.hlsl"), &ctx(None)),
             SourceFiles::Only(Vec::new())
         );
         // The field compiles to a different artifact per backend, so two

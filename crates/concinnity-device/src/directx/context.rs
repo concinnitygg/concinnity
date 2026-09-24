@@ -17,7 +17,7 @@ use concinnity_core::render::hdr_output;
 use concinnity_core::render::lights;
 use concinnity_core::render::pass_timing;
 use concinnity_core::render::planar_reflection;
-use concinnity_core::render::reflection_probe;
+use concinnity_core::render::probe_book::ProbeBook;
 use concinnity_core::render::render_graph;
 use concinnity_core::render::scene_flow;
 use concinnity_core::render::slot_rewrites;
@@ -214,8 +214,8 @@ pub(super) struct DxUniforms {
     pub light_uniforms: render_types::LightUniforms,
     pub shadow_ubo_resources: Vec<PooledBuffer>,
     pub shadow_ubo_ptrs: Vec<*mut u8>,
-    // Per-frame CBVs holding `probe.set` (the parallax boxes + live count) bound
-    // at root param [11] by the main pass. A `FRAMES` ring so a frame writes its
+    // Per-frame CBVs holding the live probe count, bound at root param [11] by
+    // the main pass. A `FRAMES` ring so a frame writes its
     // own slot without racing a prior frame's in-flight GPU read.
     pub probe_set_cbvs: Vec<PooledBuffer>,
     pub probe_set_cbv_ptrs: Vec<*mut u8>,
@@ -483,17 +483,15 @@ impl ViewState {
 // Scene-captured reflection probes and the staggered bake that fills them.
 // See [`super::probe`].
 pub(super) struct ProbeState {
-    // Placements (declared `ReflectionProbe` assets or an auto-seeded grid).
-    // Indexed in order by the staggered capture pass; one cube is baked per
-    // placement.
-    pub placements: Vec<reflection_probe::ProbePlacement>,
-    // Staggered bake cursor over `placements`: a not-yet-baked probe falls back
-    // to the sky until its turn, so no single frame pays the whole capture.
-    pub bake_queue: reflection_probe::ProbeBakeQueue,
-    // Per-frame probe set (parallax boxes + live count) bound to the forward /
-    // SSR / RT shaders. `EMPTY` until a bake installs a cube; distinct from
-    // `env_map` so the skybox + diffuse irradiance keep the sky.
-    pub set: concinnity_core::render::uniforms::ProbeSet,
+    // Placements (declared `ReflectionProbe` assets or an auto-seeded grid), the
+    // record of every installed probe (the live count the forward / SSR / RT /
+    // transparent shaders read) and the staggered bake's queue: a not-yet-baked
+    // probe falls back to the sky until its turn.
+    pub book: ProbeBook,
+    // The cube array the bake writes a cube of per placement, and the per-frame
+    // record buffers. Distinct from `env_map` so the skybox + diffuse irradiance
+    // keep the sky.
+    pub gpu: super::probe_set::ProbeSetGpu,
     // The probe whose six cube faces are currently rendering on the GPU (one at a
     // time, spread one face per frame). Owns the reserved-ring-slot capture
     // resources until its faces have landed in the capture cube.
@@ -504,24 +502,21 @@ pub(super) struct ProbeState {
     // The three convolution kernels and their root signatures, built at init under
     // the same gate the bake needs. `None` disables baking.
     pub prefilter: Option<super::probe_prefilter::ProbePrefilterPipelines>,
-    // One baked prefilter cube per installed probe, aligned with `set` (index `i`
-    // is placement `i`). Distinct from `env_map`; sampled only by the specular
-    // reflection term.
-    pub maps: Vec<super::probe::ProbeCube>,
 }
 
 impl ProbeState {
     // Empty until `set_reflection_probes` supplies placements (declared or
     // auto-seeded).
-    pub(super) fn new(prefilter: Option<super::probe_prefilter::ProbePrefilterPipelines>) -> Self {
+    pub(super) fn new(
+        prefilter: Option<super::probe_prefilter::ProbePrefilterPipelines>,
+        gpu: super::probe_set::ProbeSetGpu,
+    ) -> Self {
         Self {
-            placements: Vec::new(),
-            bake_queue: reflection_probe::ProbeBakeQueue::new(0),
-            set: concinnity_core::render::uniforms::ProbeSet::EMPTY,
+            book: ProbeBook::new(),
+            gpu,
             rendering: None,
             prefiltering: None,
             prefilter,
-            maps: Vec::new(),
         }
     }
 }
@@ -1096,6 +1091,10 @@ impl DxContext {
         self.ensure_line_pipeline(!lines.is_empty());
 
         self.update_shadow_schedule(cam_pos, fov_y_radians, near, far);
+        // Reflection-probe count + records into this frame's ring CBV and records
+        // buffer, which every probe-reading pass binds. A ring (one of each per
+        // frame) so this write never races a prior frame's in-flight GPU read.
+        self.upload_probe_set(frame)?;
 
         // 2. Open the END cmd list (Composite + final timestamp +
         //    ResolveQueryData + per-frame restore barriers). The
@@ -1339,7 +1338,7 @@ impl DxContext {
 
     // True when the transparent pass has to render its planar mirrors this frame.
     // Water takes the mirror over its own trace wherever it holds a slot (see
-    // `water.slang`), so a visible water surface keeps the re-render alive even
+    // `water.hlsl`), so a visible water surface keeps the re-render alive even
     // while the trace is live; a glass-only world under a live trace skips it as
     // before. Shared with the other backends through
     // `planar_reflection::planar_pass_needed`.

@@ -4,7 +4,7 @@
 
 /// Per-frame view inputs shared by every draw in the transparent pass (water,
 /// glass), bound once for the whole pass. Matches `TransparentView` in
-/// `shaders/glass.slang` and `shaders/water.slang`. 240 bytes.
+/// `shaders/glass.hlsl` and `shaders/water.hlsl`. 240 bytes.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct TransparentView {
@@ -38,7 +38,7 @@ pub struct TransparentView {
 
 /// Per-panel tunables for a `GlassPanel`, uploaded once per panel per frame.
 /// The vec3-ish fields are `[f32; 4]` so the layout is byte-identical to the
-/// shader's `float4`. Matches `GlassParams` in `shaders/glass.slang`. 64 bytes.
+/// shader's `float4`. Matches `GlassParams` in `shaders/glass.hlsl`. 64 bytes.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct GlassParams {
@@ -67,7 +67,7 @@ pub struct GlassParams {
 /// of the opaque one. Unlike `GlassParams` (a pre-baked world-space pane), a
 /// mesh is LOCAL-space, so this carries the model matrix the vertex stage
 /// applies; the fragment uses the interpolated per-vertex world normal. Matches
-/// `GlassMeshParams` in `shaders/glass_mesh.slang`. 96 bytes (model is the first
+/// `GlassMeshParams` in `shaders/glass_mesh.hlsl`. 96 bytes (model is the first
 /// field, so its 16-byte GPU alignment is satisfied at offset 0).
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
@@ -87,12 +87,12 @@ pub struct GlassMeshParams {
 }
 
 /// Maximum waves summed per `WaterParams`. Mirrors `MAX_WATER_WAVES` in
-/// `shaders/water.slang` and in the `WaterSurface` asset.
+/// `shaders/water.hlsl` and in the `WaterSurface` asset.
 pub const WATER_MAX_WAVES: usize = 4;
 
 /// One Gerstner wave coefficient set, packed into two `float4` lanes so the
 /// layout is identical on every target. Matches `WaterWave` in
-/// `shaders/water.slang`. 32 bytes.
+/// `shaders/water.hlsl`. 32 bytes.
 #[derive(Copy, Clone, Default, bytemuck::Zeroable, bytemuck::Pod)]
 #[repr(C)]
 pub struct WaterWaveGpu {
@@ -104,7 +104,7 @@ pub struct WaterWaveGpu {
 
 /// Per-surface tunables for a `WaterSurface`, uploaded once per surface. The
 /// vec3-ish fields are `[f32; 4]` so the layout is byte-identical to the
-/// shader's `float4`. Matches `WaterParams` in `shaders/water.slang`. 224 bytes.
+/// shader's `float4`. Matches `WaterParams` in `shaders/water.hlsl`. 224 bytes.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct WaterParams {

@@ -14,7 +14,7 @@
 //! pool on the correct side of the water.
 //!
 //! The producers also share every descriptor set layout and pipeline layout,
-//! because `glass.slang` and `water.slang` declare the same bindings on purpose:
+//! because `glass.hlsl` and `water.hlsl` declare the same bindings on purpose:
 //! the view set (0) carries the per-frame view UBO plus the snapshot and main
 //! depth, the params set (1) one record's uniforms plus its planar reflection
 //! target, the global set (2) is the forward one the probe / sky taps read, and
@@ -41,8 +41,9 @@ use concinnity_core::render::uniforms::GlassMeshParams;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::{HDR_FORMAT, VkContext};
+use super::descriptor_layout::{Binding, PoolSizes};
 use super::pipeline::GraphicsStages;
-use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
+use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout, write_samplers};
 use super::texture::{
     GpuImage, GpuUploadContext, ImageSpec, LayoutTransition, SubresourceRange, create_image,
     create_image_view, one_shot_submit, transition_image_layout_range, upload_texture,
@@ -91,10 +92,7 @@ pub(in crate::vulkan) struct TransparentRecord {
     vertex_buffer: PooledBuffer,
     index_buffer: PooledBuffer,
     index_count: u32,
-    params_ubo: PooledBuffer,
-    // Byte size of the record's uniform block, so the resize re-point can
-    // rewrite binding 0 with the same range the initial write used.
-    params_size: u64,
+    _params_ubo: PooledBuffer,
     params_set: vk::DescriptorSet,
     visible: bool,
     // World-space center, used for the back-to-front camera-distance sort.
@@ -118,7 +116,7 @@ pub(in crate::vulkan) struct RecordUpload<'a> {
 }
 
 // The descriptor plumbing a record needs: the pool + layout its params set comes
-// from, the planar target it samples (or the snapshot stand-in), and the linear
+// from, the planar target it samples (or the 1x1 stand-in), and the linear
 // sampler bound alongside.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct RecordDescriptors<'a> {
@@ -172,8 +170,7 @@ impl TransparentRecord {
             vertex_buffer,
             index_buffer,
             index_count: upload.indices.len() as u32,
-            params_ubo,
-            params_size: upload.params.len() as u64,
+            _params_ubo: params_ubo,
             params_set,
             visible: upload.visible,
             center: upload.center,
@@ -281,9 +278,9 @@ impl GlassMeshProducer {
     // pass's, whose size is fixed to the pane + water record count.
     //
     // Each set reuses the shared params layout, so its planar binding (1) is
-    // written with the snapshot stand-in: a mesh never samples a planar
-    // reflection, but the layout the pipeline was built against still declares
-    // the binding.
+    // written with the 1x1 stand-in: a mesh never samples a planar reflection,
+    // but the layout the pipeline was built against still declares the
+    // binding.
     pub(in crate::vulkan) fn new(
         ctx: &ProducerCtx,
         pipelines: TracedGlassPipelines,
@@ -307,16 +304,9 @@ impl GlassMeshProducer {
         }
 
         let sets_needed = (frames * count) as u32;
-        let sizes = [
-            vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::UNIFORM_BUFFER,
-                descriptor_count: sets_needed,
-            },
-            vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                descriptor_count: sets_needed,
-            },
-        ];
+        let sizes = PoolSizes::default()
+            .sets(&params_set_bindings(), sets_needed)
+            .build();
         let pool = device
             .create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
@@ -334,7 +324,7 @@ impl GlassMeshProducer {
                     params_buffers[frame].buffer(),
                     slot as u64 * params_stride,
                     std::mem::size_of::<GlassMeshParams>() as u64,
-                    ctx.snapshot_view,
+                    ctx.stand_in_view,
                     ctx.sampler,
                 );
             }
@@ -456,10 +446,6 @@ pub(in crate::vulkan) struct TransparentResources {
     // dims, recreated by `rebuild` on resize. Single image shared across frames
     // (the same single-shared-snapshot pattern as the raymarch pass).
     snapshot: GpuImage,
-    // Linear sampler bound alongside the snapshot (binding 1) and the main
-    // depth (binding 2). Borrowed from `VkContext`; not owned, never destroyed
-    // here.
-    sampler: vk::Sampler,
 
     glass: Option<TransparentProducer>,
     water: Option<TransparentProducer>,
@@ -477,20 +463,18 @@ pub(in crate::vulkan) struct TransparentResources {
 
 use concinnity_core::render::transparent::ordered_visible;
 
-fn create_rt_set_layout(device: &VkDevice) -> RenderResult<OwnedSetLayout> {
+fn rt_set_bindings() -> [Binding; 7] {
+    use vk::DescriptorType as T;
     let frag = vk::ShaderStageFlags::FRAGMENT;
-    create_descriptor_set_layout(
-        device,
-        &[
-            (0, vk::DescriptorType::UNIFORM_BUFFER, frag),
-            (1, vk::DescriptorType::ACCELERATION_STRUCTURE_KHR, frag),
-            (2, vk::DescriptorType::STORAGE_BUFFER, frag),
-            (3, vk::DescriptorType::STORAGE_BUFFER, frag),
-            (4, vk::DescriptorType::STORAGE_BUFFER, frag),
-            (5, vk::DescriptorType::STORAGE_BUFFER, frag),
-            (6, vk::DescriptorType::STORAGE_BUFFER, frag),
-        ],
-    )
+    [
+        (0, T::UNIFORM_BUFFER, frag),
+        (1, T::ACCELERATION_STRUCTURE_KHR, frag),
+        (2, T::STORAGE_BUFFER, frag),
+        (3, T::STORAGE_BUFFER, frag),
+        (4, T::STORAGE_BUFFER, frag),
+        (5, T::STORAGE_BUFFER, frag),
+        (6, T::STORAGE_BUFFER, frag),
+    ]
 }
 
 impl TransparentRt {
@@ -653,7 +637,7 @@ fn build_transparent_rt(
     layouts: RtSetLayouts,
     geometry: TransparentRtGeometry,
 ) -> RenderResult<TransparentRt> {
-    let set_layout = create_rt_set_layout(device)?;
+    let set_layout = create_descriptor_set_layout(device, &rt_set_bindings())?;
 
     let flat_layouts = [
         layouts.view,
@@ -707,20 +691,9 @@ fn build_transparent_rt(
         )?);
     }
 
-    // Pool: per-frame sets, each 1 UBO + 1 TLAS + 5 SSBO (geom, verts, indices,
-    // deformed verts, skinned indices).
+    // Pool: one set per frame.
     let f = frames as u32;
-    let pool_sizes = [
-        vk::DescriptorPoolSize::default()
-            .ty(vk::DescriptorType::UNIFORM_BUFFER)
-            .descriptor_count(f),
-        vk::DescriptorPoolSize::default()
-            .ty(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
-            .descriptor_count(f),
-        vk::DescriptorPoolSize::default()
-            .ty(vk::DescriptorType::STORAGE_BUFFER)
-            .descriptor_count(f * 5),
-    ];
+    let pool_sizes = PoolSizes::default().sets(&rt_set_bindings(), f).build();
     let pool = device
         .create_descriptor_pool(
             &vk::DescriptorPoolCreateInfo::default()
@@ -976,64 +949,35 @@ impl FrameViewSets {
 }
 
 // Set 0: the per-frame view UBO (0), the scene snapshot (1), this frame's main
-// depth (2) and the two glass reflection layers (3, 4). The view UBO is visible to the vertex stage as well: both
-// producers project through `vp`, and water reads `time` there for its wave
-// phase.
-fn create_view_set_layout(device: &VkDevice) -> RenderResult<OwnedSetLayout> {
+// depth (2), the two glass reflection layers (3, 4), and the sampler the
+// snapshot is read through (5). The sky prefilter cube and its sampler are the
+// global set's (set 2). The view UBO is
+// visible to the vertex stage as well: both producers project through `vp`, and
+// water reads `time` there for its wave phase.
+fn view_set_bindings() -> [Binding; 6] {
+    use vk::DescriptorType as T;
     let frag = vk::ShaderStageFlags::FRAGMENT;
-    let bindings = [
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(0)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(1)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .descriptor_count(1)
-            .stage_flags(frag),
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(2)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .descriptor_count(1)
-            .stage_flags(frag),
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(3)
-            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-            .descriptor_count(1)
-            .stage_flags(frag),
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(4)
-            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-            .descriptor_count(1)
-            .stage_flags(frag),
-    ];
-    let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
-    device
-        .create_descriptor_set_layout(&info)
-        .map_err(|e| super::error::map_vk_result(e, "transparent view set layout"))
+    [
+        (0, T::UNIFORM_BUFFER, vk::ShaderStageFlags::VERTEX | frag),
+        (1, T::SAMPLED_IMAGE, frag),
+        (2, T::SAMPLED_IMAGE, frag),
+        (3, T::SAMPLED_IMAGE, frag),
+        (4, T::SAMPLED_IMAGE, frag),
+        (5, T::SAMPLER, frag),
+    ]
 }
 
-// Set 1: one record's params UBO (0) and the planar reflection target it samples
-// (1). The UBO is visible to the vertex stage because the water vertex stage
-// reads its wave table out of it.
-fn create_params_set_layout(device: &VkDevice) -> RenderResult<OwnedSetLayout> {
-    let bindings = [
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(0)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(1)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
-    ];
-    let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
-    device
-        .create_descriptor_set_layout(&info)
-        .map_err(|e| super::error::map_vk_result(e, "transparent params set layout"))
+// Set 1: one record's params UBO (0), the planar reflection target it samples
+// (1) and that target's sampler (2). The UBO is visible to the vertex stage
+// because the water vertex stage reads its wave table out of it.
+fn params_set_bindings() -> [Binding; 3] {
+    use vk::DescriptorType as T;
+    let frag = vk::ShaderStageFlags::FRAGMENT;
+    [
+        (0, T::UNIFORM_BUFFER, vk::ShaderStageFlags::VERTEX | frag),
+        (1, T::SAMPLED_IMAGE, frag),
+        (2, T::SAMPLER, frag),
+    ]
 }
 
 fn create_descriptor_pool(
@@ -1044,23 +988,10 @@ fn create_descriptor_pool(
     // One view set per frame per `FrameViewSets` slot.
     let v = (frames * FrameViewSets::COUNT) as u32;
     let r = records as u32;
-    let sizes = [
-        // view UBO per view set + params UBO per record.
-        vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::UNIFORM_BUFFER,
-            descriptor_count: v + r,
-        },
-        // snapshot + depth per view set, plus one planar target per record.
-        vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-            descriptor_count: 2 * v + r,
-        },
-        // The two reflection layers per view set.
-        vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::SAMPLED_IMAGE,
-            descriptor_count: 2 * v,
-        },
-    ];
+    let sizes = PoolSizes::default()
+        .sets(&view_set_bindings(), v)
+        .sets(&params_set_bindings(), r)
+        .build();
     let info = vk::DescriptorPoolCreateInfo::default()
         .max_sets(v + r)
         .pool_sizes(&sizes);
@@ -1069,67 +1000,65 @@ fn create_descriptor_pool(
         .map_err(|e| super::error::map_vk_result(e, "transparent descriptor pool"))
 }
 
-// What one view set points at: the view UBO (binding 0), the shared scene
-// snapshot (1), this frame's main depth (2) and the two reflection layers (3, 4).
+// The images one view set points at: the shared scene snapshot (binding 1),
+// this frame's main depth (2) and the two reflection layers (3, 4).
 #[derive(Clone, Copy)]
-struct ViewSetInputs {
-    view_ubo: vk::Buffer,
+struct ViewSetImages {
     snapshot_view: vk::ImageView,
     depth_view: vk::ImageView,
     reflection: [vk::ImageView; 2],
-    sampler: vk::Sampler,
 }
 
-fn write_view_set(device: &VkDevice, set: vk::DescriptorSet, inputs: ViewSetInputs) {
+// Write the view set's resolution-independent bindings once: the view UBO (0)
+// and the snapshot's sampler (5).
+fn write_view_set_statics(
+    device: &VkDevice,
+    set: vk::DescriptorSet,
+    view_ubo: vk::Buffer,
+    sampler: vk::Sampler,
+) {
     let view_info = vk::DescriptorBufferInfo::default()
-        .buffer(inputs.view_ubo)
+        .buffer(view_ubo)
         .offset(0)
         .range(std::mem::size_of::<TransparentView>() as u64);
-    let img = |view: vk::ImageView| {
-        vk::DescriptorImageInfo::default()
-            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(view)
-            .sampler(inputs.sampler)
-    };
-    let sampled = |view: vk::ImageView| {
-        vk::DescriptorImageInfo::default()
-            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(view)
-    };
-    let snapshot_info = img(inputs.snapshot_view);
-    let depth_info = img(inputs.depth_view);
-    let front_info = sampled(inputs.reflection[0]);
-    let back_info = sampled(inputs.reflection[1]);
-    let image_write = |binding: u32, ty: vk::DescriptorType, info| {
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(binding)
-            .descriptor_type(ty)
-            .image_info(std::slice::from_ref(info))
-    };
-    let writes = [
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(0)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .buffer_info(std::slice::from_ref(&view_info)),
-        image_write(
-            1,
-            vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-            &snapshot_info,
-        ),
-        image_write(2, vk::DescriptorType::COMBINED_IMAGE_SAMPLER, &depth_info),
-        image_write(3, vk::DescriptorType::SAMPLED_IMAGE, &front_info),
-        image_write(4, vk::DescriptorType::SAMPLED_IMAGE, &back_info),
-    ];
-    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
-    // and resource it names belongs to this device.
-    unsafe { device.update_descriptor_sets(&writes, &[]) };
+    let write = vk::WriteDescriptorSet::default()
+        .dst_set(set)
+        .dst_binding(0)
+        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+        .buffer_info(std::slice::from_ref(&view_info));
+    // SAFETY: the write and the buffer info it borrows are live for the call, and the set and
+    // buffer belong to this device.
+    unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
+    write_samplers(device, set, 5, &[sampler]);
 }
 
-// Write a record's params set: its uniform block (binding 0) and the planar
+// Write the view set's images, which a resize replaces.
+fn write_view_set_images(device: &VkDevice, set: vk::DescriptorSet, inputs: ViewSetImages) {
+    let images = [
+        inputs.snapshot_view,
+        inputs.depth_view,
+        inputs.reflection[0],
+        inputs.reflection[1],
+    ]
+    .map(|view| {
+        vk::DescriptorImageInfo::default()
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .image_view(view)
+    });
+    let write = vk::WriteDescriptorSet::default()
+        .dst_set(set)
+        .dst_binding(1)
+        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+        .image_info(&images);
+    // SAFETY: the write and the image infos it borrows are live for the call, and the set and
+    // every view belong to this device.
+    unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
+}
+
+// Write a record's params set: its uniform block (binding 0), the planar
 // reflection target it samples (binding 1) -- its slot's mirror render, or the
-// snapshot stand-in for a slotless record (the shaders gate on the `planar` flag).
+// 1x1 stand-in for a slotless record (the shaders gate on the `planar` flag) --
+// and the sampler that target is read through (binding 2).
 fn write_params_set(
     device: &VkDevice,
     set: vk::DescriptorSet,
@@ -1164,25 +1093,31 @@ fn write_params_set_at(
         .buffer(params_ubo)
         .offset(params_offset)
         .range(params_size);
-    let planar_info = vk::DescriptorImageInfo::default()
+    let write = vk::WriteDescriptorSet::default()
+        .dst_set(set)
+        .dst_binding(0)
+        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+        .buffer_info(std::slice::from_ref(&info));
+    // SAFETY: the write and the buffer info it borrows are live for the call, and the set and
+    // buffer belong to this device.
+    unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
+    write_planar_view(device, set, planar_view);
+    write_samplers(device, set, 2, &[sampler]);
+}
+
+// Point a params set's planar binding (1) at `view`.
+fn write_planar_view(device: &VkDevice, set: vk::DescriptorSet, view: vk::ImageView) {
+    let info = vk::DescriptorImageInfo::default()
         .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .image_view(planar_view)
-        .sampler(sampler);
-    let writes = [
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(0)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .buffer_info(std::slice::from_ref(&info)),
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(1)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .image_info(std::slice::from_ref(&planar_info)),
-    ];
-    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
-    // and resource it names belongs to this device.
-    unsafe { device.update_descriptor_sets(&writes, &[]) };
+        .image_view(view);
+    let write = vk::WriteDescriptorSet::default()
+        .dst_set(set)
+        .dst_binding(1)
+        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+        .image_info(std::slice::from_ref(&info));
+    // SAFETY: the write and the image info it borrows are live for the call, and the set and
+    // view belong to this device.
+    unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
 }
 
 // Which attributes of the standard engine `Vertex` a transparent vertex stage
@@ -1423,12 +1358,10 @@ pub(in crate::vulkan) struct TransparentBuildConfig {
     pub width: u32,
     pub height: u32,
     // The per-frame global descriptor set layout (ViewUniforms, IBL cubes, probe
-    // set + cube array). Bound as set 2 so the fragment shaders reflect the probe
-    // set / sky prefilter cube; the pipeline layout must reference it even though
-    // the pass only samples bindings 5 / 7 / 8. `probe_cube_count` is that
-    // layout's binding-8 descriptor count, sizing the fragments' cube array.
+    // set). Bound as set 2 so the fragment shaders reflect the probe set / sky
+    // prefilter cube; the pipeline layout must reference it even though the pass
+    // reads only bindings 5, 7, 8, 10, 11, 17 and 19.
     pub global_set_layout: vk::DescriptorSetLayout,
-    pub probe_cube_count: u32,
     pub hot_reload: bool,
     // Per-axis divisor of the glass reflection pre-pass; 1 traces in place.
     pub reflection_divisor: u32,
@@ -1438,7 +1371,7 @@ pub(in crate::vulkan) struct TransparentBuildConfig {
 // `scene_views` / `scene_images` are the post-SSR scene target per frame slot
 // (SSR output repeated, or `hdr_resolve_images[i]`); `depth_views` are the main-
 // depth views the manual occlusion test samples. `sampler` is the linear sampler
-// bound alongside the snapshot + depth.
+// the snapshot and the planar targets are read through.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct TransparentSceneTargets<'a> {
     pub scene_views: &'a [vk::ImageView],
@@ -1492,7 +1425,7 @@ struct TransparentRtGeometry {
 
 // What a producer module needs to build its pipelines and records: the shared
 // render pass and pipeline layouts, the descriptor pool + params layout its
-// records allocate from, the snapshot stand-in, the sampler, and the shader
+// records allocate from, the planar stand-in, the sampler, and the shader
 // assembly inputs.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct ProducerCtx<'a> {
@@ -1506,12 +1439,13 @@ pub(in crate::vulkan) struct ProducerCtx<'a> {
     pub rt_layout_textured: Option<vk::PipelineLayout>,
     pub pool: vk::DescriptorPool,
     pub params_set_layout: vk::DescriptorSetLayout,
-    pub snapshot_view: vk::ImageView,
+    // The resolution-independent 1x1 image a params set's planar binding holds
+    // when its record samples no mirror.
+    pub stand_in_view: vk::ImageView,
     pub planar_target_views: &'a [vk::ImageView],
     pub sampler: vk::Sampler,
     pub msaa: bool,
     pub hot_reload: bool,
-    pub probe_cube_count: u32,
     pub bindless_pool_size: usize,
     // Ring depth, for the mesh producer's per-frame params buffers.
     pub frames: usize,
@@ -1522,7 +1456,7 @@ pub(in crate::vulkan) struct ProducerCtx<'a> {
 
 impl<'a> ProducerCtx<'a> {
     // The descriptor plumbing for one record, resolving its planar slot to the
-    // mirror target it samples (or the snapshot stand-in).
+    // mirror target it samples (or the stand-in).
     pub(in crate::vulkan) fn record_descriptors(
         &self,
         planar_slot: Option<usize>,
@@ -1533,7 +1467,7 @@ impl<'a> ProducerCtx<'a> {
             params_set_layout: self.params_set_layout,
             planar_view: planar_slot
                 .and_then(|s| self.planar_target_views.get(s).copied())
-                .unwrap_or(self.snapshot_view),
+                .unwrap_or(self.stand_in_view),
             sampler: self.sampler,
         }
     }
@@ -1542,8 +1476,7 @@ impl<'a> ProducerCtx<'a> {
 // The resized post-SSR scene target + per-frame depth views a `rebuild` re-points
 // into. `planar_target_views` are the resized per-distinct-plane mirror target
 // views (the planar set is rebuilt just before this), re-pointed into each
-// record's binding 1. The sampler is borrowed from `VkContext` and survives on
-// the resource.
+// slotted record's binding 1.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct TransparentRebuildTargets<'a> {
     pub scene_views: &'a [vk::ImageView],
@@ -1580,7 +1513,6 @@ impl TransparentResources {
             width,
             height,
             global_set_layout,
-            probe_cube_count,
             hot_reload,
             reflection_divisor,
         } = config;
@@ -1601,8 +1533,8 @@ impl TransparentResources {
         let msaa = msaa_samples != vk::SampleCountFlags::TYPE_1;
         let render_pass = create_transparent_render_pass(device, HDR_FORMAT)?;
         let reflection_render_pass = create_reflection_render_pass(device)?;
-        let view_set_layout = create_view_set_layout(device)?;
-        let params_set_layout = create_params_set_layout(device)?;
+        let view_set_layout = create_descriptor_set_layout(device, &view_set_bindings())?;
+        let params_set_layout = create_descriptor_set_layout(device, &params_set_bindings())?;
         let set_layouts = [
             view_set_layout.handle(),
             params_set_layout.handle(),
@@ -1704,12 +1636,11 @@ impl TransparentResources {
                 .map(|l| l.handle()),
             pool: descriptor_pool.handle(),
             params_set_layout: params_set_layout.handle(),
-            snapshot_view: snapshot.view,
+            stand_in_view: empty_layer.view,
             planar_target_views: content.planar_target_views,
             sampler,
             msaa,
             hot_reload,
-            probe_cube_count,
             bindless_pool_size,
             frames,
             // SAFETY: a property query on a live handle; it only reads.
@@ -1774,7 +1705,6 @@ impl TransparentResources {
             scene_images: scene_images.to_vec(),
             framebuffers,
             snapshot,
-            sampler,
             glass,
             water,
             glass_mesh,
@@ -1785,6 +1715,11 @@ impl TransparentResources {
         };
         me.reflection =
             me.build_reflection_layers(alloc, device, width, height, reflection_divisor)?;
+        for (sets, ubo) in me.view_sets.iter().zip(&me.view_ubos) {
+            for set in [sets.scene, sets.layers[0], sets.layers[1]] {
+                write_view_set_statics(device, set, ubo.buffer(), sampler);
+            }
+        }
         me.write_view_sets(device, depth_views);
         Ok(me)
     }
@@ -1816,10 +1751,10 @@ impl TransparentResources {
             .map(Some)
     }
 
-    // Write every frame's set-0 variants. The scene pass reads both reflection
-    // layers (the snapshot stands in while there are none, which the shaders
-    // never read then); the first pre-pass layer peels behind the empty layer and
-    // the second behind the first.
+    // Write the images of every frame's set-0 variants. The scene pass reads both
+    // reflection layers (the snapshot stands in while there are none, which the
+    // shaders never read then); the first pre-pass layer peels behind the empty
+    // layer and the second behind the first.
     fn write_view_sets(&self, device: &VkDevice, depth_views: &[vk::ImageView]) {
         let empty = self.empty_layer.view;
         let (scene, first) = match &self.reflection {
@@ -1827,16 +1762,14 @@ impl TransparentResources {
             None => ([self.snapshot.view; 2], empty),
         };
         for (i, sets) in self.view_sets.iter().enumerate() {
-            let inputs = |reflection| ViewSetInputs {
-                view_ubo: self.view_ubos[i].buffer(),
+            let inputs = |reflection| ViewSetImages {
                 snapshot_view: self.snapshot.view,
                 depth_view: depth_views[i.min(depth_views.len().saturating_sub(1))],
                 reflection,
-                sampler: self.sampler,
             };
-            write_view_set(device, sets.scene, inputs(scene));
-            write_view_set(device, sets.layers[0], inputs([empty; 2]));
-            write_view_set(device, sets.layers[1], inputs([first, empty]));
+            write_view_set_images(device, sets.scene, inputs(scene));
+            write_view_set_images(device, sets.layers[0], inputs([empty; 2]));
+            write_view_set_images(device, sets.layers[1], inputs([first, empty]));
         }
     }
 
@@ -1924,7 +1857,7 @@ impl TransparentResources {
 
     // True when a visible water surface holds a planar slot, so the mirror
     // re-render has a consumer this frame even while the trace is live. Water
-    // takes the mirror over its own trace (see `water.slang`), so this is what
+    // takes the mirror over its own trace (see `water.hlsl`), so this is what
     // `planar_pass_needed` reads; glass is deliberately not counted.
     pub(in crate::vulkan) fn water_planar_slot_live(&self) -> bool {
         self.water.as_ref().is_some_and(|p| {
@@ -2018,34 +1951,23 @@ impl TransparentResources {
             self.build_reflection_layers(alloc, device, width, height, reflection_divisor)?;
         self.write_view_sets(device, depth_views);
 
-        // Re-point each record's planar binding (binding 1) at its slot's resized
-        // target, or the new snapshot for a slotless record (the moved snapshot
-        // view must be refreshed there too, even though the shader never samples
-        // it).
+        // Re-point each slotted record's planar binding (binding 1) at its slot's
+        // resized target. Slotless records and the mesh sets hold the
+        // resolution-independent stand-in, which a resize leaves in place.
         for producer in [self.glass.as_ref(), self.water.as_ref()]
             .into_iter()
             .flatten()
         {
             for r in &producer.records {
-                let planar_view = r
-                    .planar_slot
-                    .and_then(|s| planar_target_views.get(s).copied())
-                    .unwrap_or(self.snapshot.view);
-                write_params_set(
-                    device,
-                    r.params_set,
-                    r.params_ubo.buffer(),
-                    r.params_size,
-                    planar_view,
-                    self.sampler,
-                );
+                if let Some(&view) = r.planar_slot.and_then(|s| planar_target_views.get(s)) {
+                    write_planar_view(device, r.params_set, view);
+                }
             }
         }
         Ok(())
     }
 
-    // Destroy every owned GPU resource. The `sampler` is borrowed from
-    // `VkContext` and is not destroyed here.
+    // Destroy every owned GPU resource.
     pub(in crate::vulkan) fn destroy(&mut self, device: &VkDevice) {
         if let Some(mut rt) = self.rt.take() {
             rt.destroy(device);

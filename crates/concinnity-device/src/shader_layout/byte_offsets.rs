@@ -1,9 +1,9 @@
 //! The layout lock for a kernel that byte-addresses its buffers.
 //!
-//! Reflection cannot reach these. `slangc -reflection-json` reports the layout of
-//! a struct a shader declares, and a `ByteAddressBuffer` declares none: the
+//! Reflection cannot reach these. A compiled module states the layout of a
+//! struct a shader declares, and a `ByteAddressBuffer` declares none: the
 //! strides and field offsets live in the kernel as plain constants. So the check
-//! reads those constants back out of the same `.slang` text the renderer
+//! reads those constants back out of the same shader text the renderer
 //! compiles and compares them to the `#[repr(C)]` mirror, which locks both sides
 //! the way the reflected mirrors do.
 //!

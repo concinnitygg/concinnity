@@ -20,11 +20,11 @@ pub fn current() -> Platform {
     }
     #[cfg(backend_dx)]
     {
-        Platform::Hlsl
+        Platform::DirectX
     }
     #[cfg(backend_vk)]
     {
-        Platform::Glsl
+        Platform::Vulkan
     }
     #[cfg(not(any(backend_metal, backend_dx, backend_vk)))]
     {
@@ -38,8 +38,8 @@ pub fn current() -> Platform {
 fn native_platform(target_os: &str) -> Platform {
     match target_os {
         "macos" | "ios" => Platform::Metal,
-        "windows" => Platform::Hlsl,
-        _ => Platform::Glsl,
+        "windows" => Platform::DirectX,
+        _ => Platform::Vulkan,
     }
 }
 
@@ -47,20 +47,12 @@ fn native_platform(target_os: &str) -> Platform {
 mod tests {
     use super::*;
 
-    // At most one backend cfg is on, so the resolved platform is one of the
-    // three.
-    #[test]
-    fn the_backend_resolves_to_one_platform() {
-        let platform = current();
-        assert!(["metal", "hlsl", "glsl"].contains(&platform.key()));
-    }
-
     #[test]
     fn every_target_has_a_native_platform() {
         assert_eq!(native_platform("macos"), Platform::Metal);
-        assert_eq!(native_platform("windows"), Platform::Hlsl);
-        assert_eq!(native_platform("linux"), Platform::Glsl);
+        assert_eq!(native_platform("windows"), Platform::DirectX);
+        assert_eq!(native_platform("linux"), Platform::Vulkan);
         assert_eq!(native_platform("ios"), Platform::Metal);
-        assert_eq!(native_platform("android"), Platform::Glsl);
+        assert_eq!(native_platform("android"), Platform::Vulkan);
     }
 }

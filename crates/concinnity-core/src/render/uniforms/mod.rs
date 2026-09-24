@@ -1,4 +1,4 @@
-//! The `#[repr(C)]` blocks the CPU uploads into a single-source `.slang` shader,
+//! The `#[repr(C)]` blocks the CPU uploads into a single-source shader,
 //! declared once for every backend.
 //!
 //! The `metal`, `directx` and `vulkan` children are the exception: a block only
@@ -26,7 +26,10 @@ pub use geometry::{
     DecalParams, DecalView, GpuParticle, LineView, ModelHistoryParams, ParticleView, SkinParams,
 };
 pub use post::{AutoExposureParams, HizParams, HizSpdParams, TaaParams};
-pub use probe::{MAX_PROBES, ProbePrefilterParams, ProbeSet, ProbeUniforms};
+pub use probe::{
+    DEFAULT_PROBE_RECORD_CAPACITY, ProbePrefilterParams, ProbeSet, ProbeUniforms,
+    grown_probe_capacity,
+};
 pub use raymarch::{RaymarchShadowCascade, RaymarchView, RaymarchVolumeUniforms};
 pub use transparent::{
     GlassMeshParams, GlassParams, TransparentView, WATER_MAX_WAVES, WaterParams, WaterWaveGpu,

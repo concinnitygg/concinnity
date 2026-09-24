@@ -27,14 +27,17 @@ use concinnity_core::render::post::rt_reflections::{RtParamsInputs, RtReflection
 
 use super::super::allocator::{DeviceAllocator, PooledBuffer};
 use super::super::context::{HDR_FORMAT, VkContext};
+use super::super::descriptor_layout::{Binding, PoolSizes};
 use super::super::pipeline::*;
-use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
+use super::super::resources::{
+    alloc_descriptor_sets, create_descriptor_set_layout, write_samplers,
+};
 use super::super::texture::*;
+use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
     OwnedSampler, OwnedSetLayout, VkDevice,
 };
-use crate::vulkan::slang_builtins::SlangCompile;
 use crate::vulkan::wire_cache::WireCache;
 
 // SPIR-V blobs for the RT pipelines. Produced by [`compile_rt_shaders`];
@@ -49,27 +52,18 @@ pub(in crate::vulkan) struct RtShaders {
 }
 
 // Compile the shared fullscreen vertex stage + the flat fragment, plus the
-// textured fragment when `pool_size > 0` (the bindless pool is live). slangc
+// textured fragment when `pool_size > 0` (the bindless pool is live). dxc
 // emits `SPV_KHR_ray_query` for the traversal, which the device already
 // advertises wherever this pass is built.
 pub(in crate::vulkan) fn compile_rt_shaders(
     hot_reload: bool,
     pool_size: usize,
-    probe_cube_count: u32,
 ) -> RenderResult<RtShaders> {
-    use super::super::slang_builtins;
-    // The probe array length comes from the global set layout's binding-8
-    // descriptor count; the pool declaration needs at least one slot even where
-    // the textured variant is skipped.
-    let ctx = slang_builtins::Ctx {
-        hot_reload,
-        msaa: false,
-        probe_count: probe_cube_count as usize,
-    };
-    let vs = slang_builtins::FULLSCREEN_VERT.compile(&ctx)?;
-    let flat_fs = slang_builtins::RT_REFLECTIONS_FRAG.compile(&ctx)?;
+    use super::super::builtin_shaders;
+    let vs = builtin_shaders::FULLSCREEN_VERT.compile(hot_reload)?;
+    let flat_fs = builtin_shaders::RT_REFLECTIONS_FRAG.compile(hot_reload)?;
     let textured_fs = if pool_size > 0 {
-        Some(slang_builtins::RT_REFLECTIONS_FRAG_TEXTURED.compile(&ctx)?)
+        Some(builtin_shaders::RT_REFLECTIONS_FRAG_TEXTURED.compile(hot_reload)?)
     } else {
         None
     };
@@ -111,12 +105,13 @@ pub(in crate::vulkan) struct RtReflectionsResources {
 
     _descriptor_pool: OwnedDescriptorPool,
     // Per-frame resolve sets: scene = that frame's HDR resolve, plus the shared
-    // gbuffer / roughness / prefilter / verts / indices. The TLAS + geometry
+    // gbuffer / roughness / verts / indices. The TLAS + geometry
     // table (bindings 1/2) are re-pointed every frame by `wire_dynamic`.
     resolve_sets: Vec<vk::DescriptorSet>,
 
-    // Linear-clamp sampler the pass reads scene / G-buffer / roughness through.
-    sampler: OwnedSampler,
+    // Linear-clamp sampler the pass reads scene / G-buffer / roughness through,
+    // written into every resolve set once at construction.
+    _sampler: OwnedSampler,
 
     // A 1-element dummy storage buffer bound to the skinned-index SSBO (binding
     // 10) when the scene carries no skinned geometry (the accel data's skinned
@@ -129,11 +124,6 @@ pub(in crate::vulkan) struct RtReflectionsResources {
     // textured variant.
     pool_size: usize,
 
-    // Probe cube-array length the fragments were built against, kept so the
-    // hot-reload recompile sizes `probe_cubes[]` to the same global set layout
-    // the pipeline layouts already reference.
-    probe_cube_count: u32,
-
     // What each frame's dynamic bindings (1/2/9/10) already point at, so a frame
     // whose acceleration structures did not move skips four descriptor writes,
     // one of them an acceleration-structure write.
@@ -143,6 +133,30 @@ pub(in crate::vulkan) struct RtReflectionsResources {
 // SAFETY: The params UBOs' mapped pointers are host-mapped, render-thread-only; the
 // whole struct lives inside `VkContext`, which is already `unsafe impl Send`.
 unsafe impl Send for RtReflectionsResources {}
+
+// Set 0 of the RT resolve: the RtParams UBO (0), TLAS (1), geometry table (2),
+// static verts and indices (3, 4), scene, G-buffer and roughness (5-7), the
+// deformed skinned verts and skinned indices (9, 10), for skinned hits, and
+// the three images' samplers (11-13).
+fn resolve_set_bindings() -> [Binding; 13] {
+    use vk::DescriptorType as T;
+    let frag = vk::ShaderStageFlags::FRAGMENT;
+    [
+        (0, T::UNIFORM_BUFFER, frag),
+        (1, T::ACCELERATION_STRUCTURE_KHR, frag),
+        (2, T::STORAGE_BUFFER, frag),
+        (3, T::STORAGE_BUFFER, frag),
+        (4, T::STORAGE_BUFFER, frag),
+        (5, T::SAMPLED_IMAGE, frag),
+        (6, T::SAMPLED_IMAGE, frag),
+        (7, T::SAMPLED_IMAGE, frag),
+        (9, T::STORAGE_BUFFER, frag),
+        (10, T::STORAGE_BUFFER, frag),
+        (11, T::SAMPLER, frag),
+        (12, T::SAMPLER, frag),
+        (13, T::SAMPLER, frag),
+    ]
+}
 
 // RT render pass: one HDR-format color attachment (`output`), no depth. The
 // fullscreen triangle overwrites every pixel so `DONT_CARE` is safe on load.
@@ -258,7 +272,7 @@ pub(in crate::vulkan) fn rebuild_rt_pipelines(
     rt: &RtReflectionsResources,
     hot_reload: bool,
 ) -> RenderResult<RebuiltRtPipelines> {
-    let shaders = compile_rt_shaders(hot_reload, rt.pool_size, rt.probe_cube_count)?;
+    let shaders = compile_rt_shaders(hot_reload, rt.pool_size)?;
     let flat = create_rt_pipeline(
         device,
         rt.render_pass.handle(),
@@ -292,17 +306,15 @@ pub(in crate::vulkan) struct RtBuild<'a> {
 }
 
 // The resolution-independent static resolve inputs the pass samples every frame:
-// the scene vertex/index SSBOs, the per-frame HDR scene / G-buffer / roughness
-// views, and the shared IBL prefilter cube. Wired by `wire_static` (at init and
-// on resize) into every frame's set.
+// the scene vertex/index SSBOs and the per-frame HDR scene / G-buffer /
+// roughness views. Wired by `wire_static` (at init and on resize) into every
+// frame's set. The IBL prefilter cube is the global set's.
 pub(in crate::vulkan) struct RtStaticInputs<'a> {
     pub vertex_buffer: vk::Buffer,
     pub index_buffer: vk::Buffer,
     pub hdr_resolve_views: &'a [vk::ImageView],
     pub gbuffer_views: &'a [vk::ImageView],
     pub roughness_views: &'a [vk::ImageView],
-    pub prefilter_view: vk::ImageView,
-    pub cube_sampler: vk::Sampler,
 }
 
 // The live acceleration-structure handles the trace binds per frame: the TLAS,
@@ -326,11 +338,10 @@ pub(in crate::vulkan) struct RtAccelHandles {
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct RtLayoutConfig {
     pub bindless_set_layout: Option<vk::DescriptorSetLayout>,
-    // The forward global set's layout, bound as set 1 so the pass can sample the
-    // reflection-probe set + cube array (binding 7/8) on a ray miss, and that
-    // layout's binding-8 descriptor count (sizes the fragment's array).
+    // The forward global set's layout, bound as set 1 so a missed ray can fall
+    // back to the reflection-probe set (bindings 7, 8 and 17) or the sky
+    // prefilter cube (5), read through the set's cube sampler (19).
     pub global_set_layout: vk::DescriptorSetLayout,
-    pub probe_cube_count: u32,
     pub pool_size: usize,
     pub hot_reload: bool,
 }
@@ -360,8 +371,6 @@ impl RtReflectionsResources {
             hdr_resolve_views,
             gbuffer_views,
             roughness_views,
-            prefilter_view,
-            cube_sampler,
         } = static_inputs;
         let RtAccelHandles {
             tlas,
@@ -373,78 +382,12 @@ impl RtReflectionsResources {
         let RtLayoutConfig {
             bindless_set_layout,
             global_set_layout,
-            probe_cube_count,
             pool_size,
             hot_reload,
         } = layout;
         let render_pass = create_rt_render_pass(device)?;
 
-        // set 0: RtParams UBO, TLAS, geom table, verts, indices, scene, gbuffer,
-        // roughness, prefilter cube.
-        let set_layout = create_descriptor_set_layout(
-            device,
-            &[
-                (
-                    0,
-                    vk::DescriptorType::UNIFORM_BUFFER,
-                    vk::ShaderStageFlags::FRAGMENT,
-                ),
-                (
-                    1,
-                    vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
-                    vk::ShaderStageFlags::FRAGMENT,
-                ),
-                (
-                    2,
-                    vk::DescriptorType::STORAGE_BUFFER,
-                    vk::ShaderStageFlags::FRAGMENT,
-                ),
-                (
-                    3,
-                    vk::DescriptorType::STORAGE_BUFFER,
-                    vk::ShaderStageFlags::FRAGMENT,
-                ),
-                (
-                    4,
-                    vk::DescriptorType::STORAGE_BUFFER,
-                    vk::ShaderStageFlags::FRAGMENT,
-                ),
-                (
-                    5,
-                    vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                    vk::ShaderStageFlags::FRAGMENT,
-                ),
-                (
-                    6,
-                    vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                    vk::ShaderStageFlags::FRAGMENT,
-                ),
-                (
-                    7,
-                    vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                    vk::ShaderStageFlags::FRAGMENT,
-                ),
-                (
-                    8,
-                    vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                    vk::ShaderStageFlags::FRAGMENT,
-                ),
-                // 9/10: the deformed (posed) skinned vertex buffer + the
-                // skinned index buffer, for skinned hits. Both are re-pointed per
-                // frame by `wire_dynamic` (the deformed buffer is fresh per
-                // rebuild); a dummy SSBO binds when there is no skinned geometry.
-                (
-                    9,
-                    vk::DescriptorType::STORAGE_BUFFER,
-                    vk::ShaderStageFlags::FRAGMENT,
-                ),
-                (
-                    10,
-                    vk::DescriptorType::STORAGE_BUFFER,
-                    vk::ShaderStageFlags::FRAGMENT,
-                ),
-            ],
-        )?;
+        let set_layout = create_descriptor_set_layout(device, &resolve_set_bindings())?;
 
         // set 0 = the RT resolve set; set 1 = the global set (probe set/cubes). The
         // textured variant adds the bindless pool as set 2 (kept past the global set
@@ -470,7 +413,7 @@ impl RtReflectionsResources {
             None
         };
 
-        let shaders = compile_rt_shaders(hot_reload, pool_size, probe_cube_count)?;
+        let shaders = compile_rt_shaders(hot_reload, pool_size)?;
         let flat_pso = create_rt_pipeline(
             device,
             render_pass.handle(),
@@ -501,23 +444,11 @@ impl RtReflectionsResources {
             params_buffers.push(buf);
         }
 
-        // Pool: per-frame sets, each with 1 UBO + 1 TLAS + 5 SSBO (geom table,
-        // verts, indices, deformed skinned verts, skinned indices) + 4 samplers.
+        // Pool: one resolve set per frame.
         let f = frames as u32;
-        let pool_sizes = [
-            vk::DescriptorPoolSize::default()
-                .ty(vk::DescriptorType::UNIFORM_BUFFER)
-                .descriptor_count(f),
-            vk::DescriptorPoolSize::default()
-                .ty(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
-                .descriptor_count(f),
-            vk::DescriptorPoolSize::default()
-                .ty(vk::DescriptorType::STORAGE_BUFFER)
-                .descriptor_count(f * 5),
-            vk::DescriptorPoolSize::default()
-                .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .descriptor_count(f * 4),
-        ];
+        let pool_sizes = PoolSizes::default()
+            .sets(&resolve_set_bindings(), f)
+            .build();
         let descriptor_pool = device
             .create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
@@ -529,6 +460,10 @@ impl RtReflectionsResources {
         let resolve_sets = alloc_descriptor_sets(device, descriptor_pool.handle(), &layouts)?;
 
         let sampler = create_sampler_linear_clamp(device)?;
+        let screen = sampler.handle();
+        for &set in &resolve_sets {
+            write_samplers(device, set, 11, &[screen, screen, screen]);
+        }
 
         // 1-element dummy storage buffer for the skinned-index binding when there
         // is no skinned geometry.
@@ -552,10 +487,9 @@ impl RtReflectionsResources {
             params_buffers,
             _descriptor_pool: descriptor_pool,
             resolve_sets,
-            sampler,
+            _sampler: sampler,
             dummy_ssbo,
             pool_size,
-            probe_cube_count,
             wired_accel: WireCache::new(frames),
         };
         me.build_targets(alloc, device, width, height)?;
@@ -567,8 +501,6 @@ impl RtReflectionsResources {
                 hdr_resolve_views,
                 gbuffer_views,
                 roughness_views,
-                prefilter_view,
-                cube_sampler,
             },
         );
         for i in 0..frames {
@@ -672,7 +604,7 @@ impl RtReflectionsResources {
     }
 
     // Wire the static per-frame bindings (UBO, verts, indices, scene, gbuffer,
-    // roughness, prefilter). The TLAS + geom table (bindings 1/2) are wired by
+    // roughness). The TLAS + geom table (bindings 1/2) are wired by
     // `wire_dynamic`. Called at init + on swapchain resize.
     //
     // `gbuffer_views` / `roughness_views` carry the unified G-buffer pre-pass's
@@ -684,14 +616,8 @@ impl RtReflectionsResources {
             hdr_resolve_views,
             gbuffer_views,
             roughness_views,
-            prefilter_view,
-            cube_sampler,
         } = inputs;
         self.rewire_geometry(device, vertex_buffer, index_buffer);
-        let cube_info = vk::DescriptorImageInfo::default()
-            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(prefilter_view)
-            .sampler(cube_sampler);
         let frames = self.resolve_sets.len();
         debug_assert_eq!(hdr_resolve_views.len(), frames);
         debug_assert_eq!(gbuffer_views.len(), frames);
@@ -699,12 +625,10 @@ impl RtReflectionsResources {
         for (i, &set) in self.resolve_sets.iter().enumerate() {
             let gb_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(gbuffer_views[i])
-                .sampler(self.sampler.handle());
+                .image_view(gbuffer_views[i]);
             let rough_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(roughness_views[i])
-                .sampler(self.sampler.handle());
+                .image_view(roughness_views[i]);
             let ubo_info = vk::DescriptorBufferInfo::default()
                 .buffer(self.params_buffers[i].buffer())
                 .offset(0)
@@ -712,8 +636,7 @@ impl RtReflectionsResources {
             let scene_view = hdr_resolve_views[i];
             let scene_info = vk::DescriptorImageInfo::default()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(scene_view)
-                .sampler(self.sampler.handle());
+                .image_view(scene_view);
             let writes = [
                 vk::WriteDescriptorSet::default()
                     .dst_set(set)
@@ -723,23 +646,18 @@ impl RtReflectionsResources {
                 vk::WriteDescriptorSet::default()
                     .dst_set(set)
                     .dst_binding(5)
-                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                     .image_info(std::slice::from_ref(&scene_info)),
                 vk::WriteDescriptorSet::default()
                     .dst_set(set)
                     .dst_binding(6)
-                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                     .image_info(std::slice::from_ref(&gb_info)),
                 vk::WriteDescriptorSet::default()
                     .dst_set(set)
                     .dst_binding(7)
-                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                     .image_info(std::slice::from_ref(&rough_info)),
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(8)
-                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .image_info(std::slice::from_ref(&cube_info)),
             ];
             // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
             // every set and resource it names belongs to this device.
@@ -827,33 +745,6 @@ impl RtReflectionsResources {
         };
     }
 
-    // Re-point every frame's prefilter-cube binding (binding 8) at a new IBL
-    // prefilter view. Called by `update_environment_map` after an EnvironmentMap
-    // hot-reload recreates the cubes (which destroys the old view the RT sets
-    // captured); without this the next trace samples a dangling cube view and
-    // loses the device. Mirrors the SSR resolve / raymarch cube re-wires.
-    pub(in crate::vulkan) fn rewire_prefilter(
-        &self,
-        device: &VkDevice,
-        prefilter_view: vk::ImageView,
-        cube_sampler: vk::Sampler,
-    ) {
-        let cube_info = vk::DescriptorImageInfo::default()
-            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(prefilter_view)
-            .sampler(cube_sampler);
-        for &set in &self.resolve_sets {
-            let write = vk::WriteDescriptorSet::default()
-                .dst_set(set)
-                .dst_binding(8)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(std::slice::from_ref(&cube_info));
-            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-            // every set and resource it names belongs to this device.
-            unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
-        }
-    }
-
     fn destroy_targets(&mut self, _device: &VkDevice) {
         if !self.framebuffer.is_null() {
             // SAFETY: the handle was created from this device and is destroyed exactly once; the
@@ -920,7 +811,7 @@ impl VkContext {
     // `DxContext::rt_transparent_active`.
     // True when the transparent pass has to render its planar mirrors this frame.
     // Water takes the mirror over its own trace wherever it holds a slot (see
-    // `water.slang`), so a visible water surface keeps the re-render alive even
+    // `water.hlsl`), so a visible water surface keeps the re-render alive even
     // while the trace is live; a glass-only world under a live trace skips it as
     // before. Shared with the other backends through
     // `planar_reflection::planar_pass_needed`.
@@ -1191,18 +1082,15 @@ mod tests {
     // `rt_params_layout_*` / `rt_geom_entry_*` tests in gfx::render_types.
     #[test]
     fn rt_reflections_shaders_compile() {
-        if !concinnity_slang::shader_tests_enabled() {
+        if !concinnity_shader::dxc_available() {
             return;
         }
-        // Both the ceiling and a device-shortened probe cube array must compile.
-        for probes in [1, concinnity_core::render::uniforms::MAX_PROBES as u32] {
-            let shaders = super::compile_rt_shaders(false, 4, probes).expect("rt shaders compile");
-            assert!(super::is_spirv(&shaders.vs));
-            assert!(super::is_spirv(&shaders.flat_fs));
-            assert!(shaders.textured_fs.is_some(), "pool_size>0 builds textured");
-        }
+        let shaders = super::compile_rt_shaders(false, 4).expect("rt shaders compile");
+        assert!(super::is_spirv(&shaders.vs));
+        assert!(super::is_spirv(&shaders.flat_fs));
+        assert!(shaders.textured_fs.is_some(), "pool_size>0 builds textured");
         // pool_size 0 builds only the flat variant.
-        let flat_only = super::compile_rt_shaders(false, 0, 4).expect("rt flat compiles");
+        let flat_only = super::compile_rt_shaders(false, 0).expect("rt flat compiles");
         assert!(flat_only.textured_fs.is_none());
     }
 }

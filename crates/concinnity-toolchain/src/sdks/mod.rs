@@ -30,13 +30,10 @@ pub(crate) struct SdkEnv {
     pub(crate) fidelityfx_vk_root: Option<PathBuf>,
     pub(crate) xess_root: Option<PathBuf>,
     pub(crate) streamline_root: Option<PathBuf>,
-    pub(crate) dxc_root: Option<PathBuf>,
-    pub(crate) windows_sdk_bin: Option<PathBuf>,
     pub(crate) agility_enabled: bool,
     pub(crate) ffx_enabled: bool,
     pub(crate) xess_enabled: bool,
     pub(crate) dlss_enabled: bool,
-    pub(crate) dxc_enabled: bool,
 }
 
 pub(crate) fn check_cfg_directives() -> Vec<String> {
@@ -48,7 +45,6 @@ pub(crate) fn check_cfg_directives() -> Vec<String> {
         "ffx_sdk_bundled",
         "xess_sdk_bundled",
         "ngx_sdk_bundled",
-        "dxc_bundled",
     ]
     .iter()
     .map(|cfg| format!("cargo::rustc-check-cfg=cfg({cfg})"))
@@ -90,9 +86,6 @@ fn directives_for_kind(backend: Backend, targets: BinaryTargets, env: &SdkEnv) -
             fidelityfx_dx_directives(env, targets, &mut out);
             xess_directives(env, targets, &mut out);
             dlss_directives(env, targets, &mut out);
-            if targets.bundles() {
-                dxc_directives(env, targets, &mut out);
-            }
         }
         Backend::Vk if env.target_os == "windows" => {
             // DLSS (NGX) and XeSS expose Vulkan entry points from the same
@@ -383,6 +376,9 @@ fn dlss_directives(env: &SdkEnv, targets: BinaryTargets, out: &mut Vec<String>) 
     // `rustc-link-arg` is scoped to the calling package's own targets, so each
     // package that links the DLSS code must emit this itself).
     out.push(format!("cargo::rustc-link-arg={}", ngx_lib.display()));
+    // NGX reads its install path from the registry, whose API lives in advapi32;
+    // nothing else in the engine is guaranteed to put it on the link line.
+    out.push("cargo::rustc-link-arg=advapi32.lib".to_string());
     out.push(rerun_path(&ngx_lib));
     out.push(rustc_cfg("ngx_sdk_bundled"));
 
@@ -402,40 +398,6 @@ fn dlss_directives(env: &SdkEnv, targets: BinaryTargets, out: &mut Vec<String>) 
         };
         copy_next_to_exe(env, targets, &dll_src, "nvngx_dlss.dll", out);
     }
-}
-
-// DirectX Shader Compiler (`dxcompiler.dll` + `dxil.dll`) for the runtime DXC
-// path that compiles the inline ray-tracing reflection shader. Copy-only, so
-// only relevant when bundling for a final binary.
-fn dxc_directives(env: &SdkEnv, targets: BinaryTargets, out: &mut Vec<String>) {
-    out.push(rerun_env("CN_ENABLE_DXC"));
-    if !env.dxc_enabled {
-        out.push(warning(
-            "DXC bundling skipped (CN_ENABLE_DXC=0); hardware \
-             ray-traced reflections will be unavailable unless dxcompiler.dll + \
-             dxil.dll are on PATH at runtime (the renderer falls back to SSR)",
-        ));
-        return;
-    }
-    out.push(rerun_env("CN_DXC_SDK"));
-
-    let Some(dxc_dir) = find_dxc_dir(env) else {
-        out.push(warning(
-            "dxcompiler.dll + dxil.dll not found - set CN_DXC_SDK \
-             to a directory containing them, or install the Windows SDK. Hardware \
-             ray-traced reflections will be unavailable (the renderer falls back \
-             to SSR).",
-        ));
-        return;
-    };
-
-    for dll in ["dxcompiler.dll", "dxil.dll"] {
-        let src = dxc_dir.join(dll);
-        if !copy_next_to_exe(env, targets, &src, dll, out) {
-            return;
-        }
-    }
-    out.push(rustc_cfg("dxc_bundled"));
 }
 
 // Copy `src` into the directory holding the package's binaries so
@@ -518,40 +480,6 @@ fn profile_dir(env: &SdkEnv) -> Option<PathBuf> {
 // (`<target>/<profile>/build/<pkg>-<hash>/out/`).
 fn profile_dir_from_out_dir(out_dir: &Path) -> Option<&Path> {
     out_dir.ancestors().nth(3)
-}
-
-// Locate a directory holding both `dxcompiler.dll` and `dxil.dll`: the
-// `CN_DXC_SDK` override, else the highest-versioned Windows SDK `x64` bin
-// that carries both.
-fn find_dxc_dir(env: &SdkEnv) -> Option<PathBuf> {
-    let has_both = |d: &Path| d.join("dxcompiler.dll").exists() && d.join("dxil.dll").exists();
-
-    if let Some(dir) = &env.dxc_root
-        && has_both(dir)
-    {
-        return Some(dir.clone());
-    }
-
-    let versions = sorted_version_dirs(
-        std::fs::read_dir(env.windows_sdk_bin.as_ref()?)
-            .ok()?
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.is_dir())
-            .collect(),
-    );
-    versions
-        .into_iter()
-        .rev()
-        .map(|ver| ver.join("x64"))
-        .find(|x64| has_both(x64))
-}
-
-// Sort version directories ascending so the newest is last. Lexicographic is
-// adequate because every Windows SDK entry is `10.0.NNNNN.0` (equal width).
-fn sorted_version_dirs(mut dirs: Vec<PathBuf>) -> Vec<PathBuf> {
-    dirs.sort();
-    dirs
 }
 
 fn warning(msg: &str) -> String {

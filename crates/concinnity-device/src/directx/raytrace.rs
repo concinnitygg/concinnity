@@ -53,8 +53,8 @@ use super::com;
 use super::context::FRAMES;
 use super::error::{map_hresult, map_pso_hresult};
 use super::texture::{create_uav_buffer, transition_barrier};
+use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::root_constants::{RootConstants, root_dwords};
-use crate::directx::slang_builtins::SlangCompile;
 
 // Byte stride of a `Vertex` in the shared vertex buffer (pos + normal + tangent
 // + color + uv = 14 floats). The BLAS reads positions at this stride and the
@@ -62,7 +62,7 @@ use crate::directx::slang_builtins::SlangCompile;
 // buffer the skin kernel writes carries the same 56-byte layout.
 const VERTEX_STRIDE: u64 = 56;
 
-// Shared with the Metal and Vulkan hosts: one `.slang` declares it.
+// Shared with the Metal and Vulkan hosts: one `.hlsl` declares it.
 use concinnity_core::render::uniforms::SkinParams;
 
 // Whether the active GPU supports the DXR feature tier inline `RayQuery` needs.
@@ -401,7 +401,7 @@ fn tlas_inputs(
 }
 
 // The compute pipeline that deforms skinned vertices for ray tracing
-// (`rt_skin.slang`): a root SRV for the bind-pose skinned vertices (t0), a root
+// (`rt_skin.hlsl`): a root SRV for the bind-pose skinned vertices (t0), a root
 // SRV for the per-object joint palette (t1), a root UAV for the deformed output
 // (u0), and a 4-DWORD `SkinParams` root-constant block (b0). Built alongside the
 // RT PSO and held on `RtAccelData`; mirrors Metal's `skin_pipeline`.
@@ -493,13 +493,13 @@ fn create_skin_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootS
     super::pipeline::serialize_desc_and_create(device, &desc, "rt skin root sig")
 }
 
-// Build the `rt_skin` compute pipeline (root signature + PSO). slangc emits it
+// Build the `rt_skin` compute pipeline (root signature + PSO). dxc emits it
 // as `cs_6_5` DXIL, the same SM the RT reflection shader needs. Returns `Err`
 // when the kernel fails to compile; the caller then leaves the skin pipeline
 // `None` and skinned geometry is absent from the BVH (the RT pass still runs for
 // static geometry).
 fn build_skin_pipeline(device: &ID3D12Device, hot_reload: bool) -> RenderResult<SkinPipeline> {
-    let cs = super::slang_builtins::RT_SKIN.compile(hot_reload)?;
+    let cs = super::builtin_shaders::RT_SKIN.compile(hot_reload)?;
     let root_sig = create_skin_root_signature(device)?;
     let desc = D3D12_COMPUTE_PIPELINE_STATE_DESC {
         pRootSignature: com::borrowed(&root_sig),

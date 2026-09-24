@@ -117,7 +117,7 @@ pub(crate) struct AssetHotReloadState {
     // `PENDING_WORLD` flag the Prop-diff path consumes.
     pub procedural_meshes: ProceduralMeshSourceMap,
     // The world default `Shader`'s files, which can be recompiled from disk.
-    // The asset watcher recognizes `.slang` events against the parent
+    // The asset watcher recognizes shader-source events against the parent
     // directories of these entries and sets
     // [`super::pending::set_pending_shader_stages`] (separate
     // from the texture / mesh / LUT batch path so a shader save does not

@@ -89,9 +89,9 @@ pub(super) struct LogicalDevice {
     // `descriptorBindingSampledImageUpdateAfterBind` was enabled, so the bindless
     // texture pool's set layout may opt into
     // `VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT` and budget
-    // against the far larger update-after-bind sampler limit. Only enabled on a
-    // device whose plain per-stage sampler budget is too tight to seat the pool
-    // (`descriptor_layout::sampler_budget_is_constrained`), which is MoltenVK and
+    // against the far larger update-after-bind sampled-image limit. Only enabled
+    // on a device whose plain per-stage budget is too tight to seat a full pool
+    // (`descriptor_layout::update_after_bind_is_wanted`), which is MoltenVK and
     // no desktop driver.
     pub update_after_bind: bool,
 }
@@ -292,17 +292,17 @@ pub(super) fn create_logical_device(
     }
 
     // Update-after-bind gate for the bindless texture pool. Enabled only on a
-    // device whose plain per-stage sampler budget cannot seat the pool, which
-    // keeps every desktop driver on the untouched feature chain, and never under
-    // XeSS, which forbids the descriptor-indexing struct alongside the
+    // device whose plain per-stage budget cannot seat the pool, which keeps
+    // every desktop driver on the untouched feature chain, and never under XeSS,
+    // which forbids the descriptor-indexing struct alongside the
     // `Vulkan12Features` it appends.
     let want_update_after_bind = di_probe.descriptor_binding_sampled_image_update_after_bind != 0
         && upscaler_sdk.choice != ResolvedBackend::Xess
-        && super::descriptor_layout::sampler_budget_is_constrained(
-            // SAFETY: a property query on a live handle; it only reads.
-            unsafe { instance.get_physical_device_properties(pd) }
-                .limits
-                .max_per_stage_descriptor_samplers,
+        && super::descriptor_layout::update_after_bind_is_wanted(
+            super::descriptor_layout::stage_limits(
+                // SAFETY: a property query on a live handle; it only reads.
+                &unsafe { instance.get_physical_device_properties(pd) }.limits,
+            ),
         );
 
     if rt_capable {
@@ -327,7 +327,7 @@ pub(super) fn create_logical_device(
     let ext_names: Vec<*const std::os::raw::c_char> = enabled.iter().map(|c| c.as_ptr()).collect();
 
     // `shader_sampled_image_array_dynamic_indexing` lets the bindless static
-    // pass index its `sampler2D tex_pool[N]` array by a dynamically-uniform
+    // pass index its `Texture2D tex_pool[]` array by a dynamically-uniform
     // index. `multi_draw_indirect` lets the compute-cull-driven main pass
     // issue every build-time object's draw with one
     // `cmd_draw_indexed_indirect` (`draw_count > 1`). Both are Vulkan 1.0 core
@@ -340,9 +340,16 @@ pub(super) fn create_logical_device(
     // inert for the engine's own shaders.
     // SAFETY: a property query on a live handle; it only reads.
     let base_supported = unsafe { instance.get_physical_device_features(pd) };
+    // The reflection probes are one cube-map array, whose view needs it.
+    if base_supported.image_cube_array == 0 {
+        return Err(RenderError::Other(
+            "the device lacks imageCubeArray, which the reflection-probe array needs".into(),
+        ));
+    }
     let features = vk::PhysicalDeviceFeatures::default()
         .shader_sampled_image_array_dynamic_indexing(true)
         .multi_draw_indirect(true)
+        .image_cube_array(true)
         // Anisotropic filtering for the scene albedo / normal sampler now that
         // those textures carry a mip chain. Inert when the device lacks it.
         .sampler_anisotropy(base_supported.sampler_anisotropy != 0)
@@ -376,21 +383,6 @@ pub(super) fn create_logical_device(
         );
     let mut sub_enable = vk::PhysicalDeviceShaderSubgroupExtendedTypesFeatures::default()
         .shader_subgroup_extended_types(sub_probe.shader_subgroup_extended_types != 0);
-
-    // The single-source bindless vertex reads the BaseInstance builtin (Slang
-    // lowers SV_StartInstanceLocation to it), which needs shaderDrawParameters
-    // enabled. Core since Vulkan 1.1 and universally supported on desktop
-    // drivers (MoltenVK included); probed anyway so an exotic device degrades
-    // to a validation error rather than a crash.
-    let mut draw_params_probe = vk::PhysicalDeviceShaderDrawParametersFeatures::default();
-    {
-        let mut probe = vk::PhysicalDeviceFeatures2::default().push_next(&mut draw_params_probe);
-        // SAFETY: a property query on a live handle; it only reads.
-        unsafe { instance.get_physical_device_features2(pd, &mut probe) };
-    }
-    let want_draw_params = draw_params_probe.shader_draw_parameters != 0;
-    let mut draw_params_enable = vk::PhysicalDeviceShaderDrawParametersFeatures::default()
-        .shader_draw_parameters(want_draw_params);
 
     // DLSS (NGX) needs the `bufferDeviceAddress` *feature* enabled, not just the
     // `VK_EXT_buffer_device_address` extension NGX lists: NGX calls
@@ -447,12 +439,7 @@ pub(super) fn create_logical_device(
     // the `Vulkan12Features` XeSS adds (chaining both is a validation error), and
     // FSR is not the active backend under XeSS so its enablers are unneeded.
     if upscaler_sdk.choice == ResolvedBackend::Xess {
-        // ShaderDrawParameters is its own feature struct (not part of the
-        // `Vulkan12Features` XeSS appends), so chaining it here is valid.
         let mut features2 = vk::PhysicalDeviceFeatures2::default().features(features);
-        if want_draw_params {
-            features2 = features2.push_next(&mut draw_params_enable);
-        }
         // Hand XeSS our chain head; it patches required features + appends its
         // own structs (SDK-owned memory, valid while `upscaler_sdk` lives) and
         // returns the head to use as `VkDeviceCreateInfo.pNext`.
@@ -498,9 +485,6 @@ pub(super) fn create_logical_device(
     }
     if want_bda {
         device_info = device_info.push_next(&mut bda_enable);
-    }
-    if want_draw_params {
-        device_info = device_info.push_next(&mut draw_params_enable);
     }
     if rt_capable {
         device_info = device_info

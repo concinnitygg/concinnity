@@ -16,15 +16,18 @@ use concinnity_core::render::post::ssao;
 
 use super::super::allocator::DeviceAllocator;
 use super::super::context::VkContext;
+use super::super::descriptor_layout::PoolSizes;
 use super::super::pipeline::*;
-use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
+use super::super::resources::{
+    alloc_descriptor_sets, create_descriptor_set_layout, source_set_bindings, write_source_set,
+};
 use super::super::texture::*;
+use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
     OwnedSampler, OwnedSetLayout, VkDevice,
 };
 use crate::vulkan::record::Recorder;
-use crate::vulkan::slang_builtins::SlangCompile;
 
 // Single-channel occlusion target format. 1.0 = unoccluded; the main pass
 // multiplies the ambient term by this value.
@@ -95,18 +98,17 @@ pub(in crate::vulkan) struct SsaoShaders {
     pub blur_fs: Vec<u8>,
 }
 
-// Compile the SSAO stages from `src/shaders/ssao.slang` plus the shared
+// Compile the SSAO stages from `src/render/shaders/ssao.hlsl` plus the shared
 // single-source fullscreen vertex. `hot_reload` routes each source resolve
 // through the disk-first path so dev-loop edits take effect on the next
 // pipeline build. Called from `SsaoResources::new` at init and by the Vulkan
 // shader hot-reload path.
 pub(in crate::vulkan) fn compile_ssao_shaders(hot_reload: bool) -> RenderResult<SsaoShaders> {
-    use super::super::slang_builtins;
-    let ctx = slang_builtins::Ctx::plain(hot_reload);
+    use super::super::builtin_shaders;
     Ok(SsaoShaders {
-        fullscreen_vs: slang_builtins::FULLSCREEN_VERT.compile(&ctx)?,
-        kernel_fs: slang_builtins::SSAO_KERNEL.compile(&ctx)?,
-        blur_fs: slang_builtins::SSAO_BLUR.compile(&ctx)?,
+        fullscreen_vs: builtin_shaders::FULLSCREEN_VERT.compile(hot_reload)?,
+        kernel_fs: builtin_shaders::SSAO_KERNEL.compile(hot_reload)?,
+        blur_fs: builtin_shaders::SSAO_BLUR.compile(hot_reload)?,
     })
 }
 
@@ -346,31 +348,12 @@ impl SsaoResources {
         let fullscreen_render_pass = create_fullscreen_render_pass(device)?;
         let blur_render_pass = create_blur_render_pass(device)?;
 
-        // Kernel set 0: G-buffer sampler.
-        let kernel_set_layout = create_descriptor_set_layout(
-            device,
-            &[(
-                0,
-                vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                vk::ShaderStageFlags::FRAGMENT,
-            )],
-        )?;
-        // Blur set 0: ao_raw + G-buffer samplers.
-        let blur_set_layout = create_descriptor_set_layout(
-            device,
-            &[
-                (
-                    0,
-                    vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                    vk::ShaderStageFlags::FRAGMENT,
-                ),
-                (
-                    1,
-                    vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                    vk::ShaderStageFlags::FRAGMENT,
-                ),
-            ],
-        )?;
+        // Kernel set 0: the G-buffer and its sampler. Blur set 0: ao_raw + the
+        // G-buffer, then their samplers.
+        let kernel_bindings = source_set_bindings(1);
+        let blur_bindings = source_set_bindings(2);
+        let kernel_set_layout = create_descriptor_set_layout(device, &kernel_bindings)?;
+        let blur_set_layout = create_descriptor_set_layout(device, &blur_bindings)?;
 
         // Pipeline layouts.
         let params_push = vk::PushConstantRange::default()
@@ -410,12 +393,13 @@ impl SsaoResources {
             &shaders.blur_fs,
         )?;
 
-        // Descriptor pool: `frames` kernel sets (1 sampler each) + `frames` blur
-        // sets (2 samplers each). The kernel/blur sets are per-frame so each
-        // binds its own frame's unified G-buffer normal+depth.
-        let pool_sizes = [vk::DescriptorPoolSize::default()
-            .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .descriptor_count(frames as u32 * 3)];
+        // Descriptor pool: `frames` kernel sets + `frames` blur sets. The
+        // kernel/blur sets are per-frame so each binds its own frame's unified
+        // G-buffer normal+depth.
+        let pool_sizes = PoolSizes::default()
+            .sets(&kernel_bindings, frames as u32)
+            .sets(&blur_bindings, frames as u32)
+            .build();
         let descriptor_pool = device
             .create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
@@ -517,40 +501,19 @@ impl SsaoResources {
     // is always a valid `SHADER_READ_ONLY` image. The blur set binding 0 always
     // samples the SSAO-internal raw AO (a single shared target).
     fn wire_kernel_and_blur_sets(&self, device: &VkDevice, gbuffer_views: &[vk::ImageView]) {
-        let raw_info = vk::DescriptorImageInfo::default()
-            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(self.ao_raw.view)
-            .sampler(self.sampler.handle());
+        let sampler = self.sampler.handle();
         for f in 0..self.kernel_sets.len() {
             let gb_view = if gbuffer_views.is_empty() {
                 self.ao_raw.view
             } else {
                 gbuffer_views[f % gbuffer_views.len()]
             };
-            let gb_info = vk::DescriptorImageInfo::default()
-                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(gb_view)
-                .sampler(self.sampler.handle());
-            let writes = [
-                vk::WriteDescriptorSet::default()
-                    .dst_set(self.kernel_sets[f])
-                    .dst_binding(0)
-                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .image_info(std::slice::from_ref(&gb_info)),
-                vk::WriteDescriptorSet::default()
-                    .dst_set(self.blur_sets[f])
-                    .dst_binding(0)
-                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .image_info(std::slice::from_ref(&raw_info)),
-                vk::WriteDescriptorSet::default()
-                    .dst_set(self.blur_sets[f])
-                    .dst_binding(1)
-                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .image_info(std::slice::from_ref(&gb_info)),
-            ];
-            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-            // every set and resource it names belongs to this device.
-            unsafe { device.update_descriptor_sets(&writes, &[]) };
+            write_source_set(device, self.kernel_sets[f], &[(gb_view, sampler)]);
+            write_source_set(
+                device,
+                self.blur_sets[f],
+                &[(self.ao_raw.view, sampler), (gb_view, sampler)],
+            );
         }
     }
 

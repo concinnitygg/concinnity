@@ -1,6 +1,6 @@
 //! Main-pass pipeline construction shared by init and the runtime rebuilds:
 //!   * Shader compilation for the bindless main pass and the GPU-driven shadow
-//!     pass, from the program declarations in `directx/slang_builtins.rs`.
+//!     pass, from the program declarations in `directx/builtin_shaders.rs`.
 //!   * Root-signature + PSO builders for the GPU-driven main pass, its shader
 //!     buckets, and the depth-only shadow pass.
 //!
@@ -15,14 +15,14 @@ use concinnity_core::render::shadow_bias;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
+use crate::directx::builtin_shaders;
+use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::com;
 use crate::directx::context::dump_on_err;
 use crate::directx::draw::shadow::ShadowPush;
 use crate::directx::error::map_pso_hresult;
 use crate::directx::pipeline::{main_input_layout, serialize_and_create_root_sig};
 use crate::directx::root_constants::root_dwords;
-use crate::directx::slang_builtins;
-use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::HDR_FORMAT;
 
 // Shader compilation
@@ -36,13 +36,11 @@ pub(in crate::directx) fn world_entry(
     hot_reload: bool,
 ) -> RenderResult<Vec<u8>> {
     let req = crate::shader::surface_source::Request {
-        platform: concinnity_core::platform::Platform::Hlsl,
-        probe_count: concinnity_core::render::uniforms::MAX_PROBES,
+        platform: concinnity_core::platform::Platform::DirectX,
         hot_reload,
     };
-    crate::shader::surface_source::artifact(world, entry, &req)
+    crate::shader::surface_source::artifact(world, entry, &req, crate::shader::compile::cooked)
         .map(|c| c.into_owned())
-        .map_err(RenderError::ShaderCompile)
 }
 
 // Compile the engine's bindless static-pass pair. A bucket whose Shader is the
@@ -52,8 +50,8 @@ pub(in crate::directx) fn world_entry(
 pub(in crate::directx) fn compile_main_bindless_shaders(
     hot_reload: bool,
 ) -> RenderResult<(Vec<u8>, Vec<u8>)> {
-    let vs = slang_builtins::MAIN_BINDLESS_VERT.compile(hot_reload)?;
-    let ps = slang_builtins::MAIN_BINDLESS_FRAG.compile(hot_reload)?;
+    let vs = builtin_shaders::MAIN_BINDLESS_VERT.compile(hot_reload)?;
+    let ps = builtin_shaders::MAIN_BINDLESS_FRAG.compile(hot_reload)?;
     Ok((vs, ps))
 }
 
@@ -61,7 +59,7 @@ pub(in crate::directx) fn compile_main_bindless_shaders(
 // alongside the bindless main pass (same built-in-shader gate); a depth-only
 // PSO with no pixel shader consumes it.
 pub(in crate::directx) fn compile_shadow_bindless_vs(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    slang_builtins::SHADOW_BINDLESS_VERT.compile(hot_reload)
+    builtin_shaders::SHADOW_VERT_BINDLESS.compile(hot_reload)
 }
 
 // Root signature builders
@@ -125,22 +123,22 @@ pub(super) fn create_main_bindless_root_signature(
         RegisterSpace: 0,
         OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
     };
-    // [10] table: the reflection-probe cube array at t7..t7+MAX_PROBES
-    // (`TextureCube probe_cubes[MAX_PROBES] : register(t7)`). Unbaked slots hold the sky
-    // prefilter cube, so a sample at any index is always valid.
+    // [10] table: the reflection-probe cube array at t7
+    // (`TextureCubeArray probe_cubes : register(t7)`), one descriptor however many
+    // cubes it holds.
     let probe_cube_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: concinnity_core::render::uniforms::MAX_PROBES as u32,
-        BaseShaderRegister: 7, // t7..
+        NumDescriptors: 1,
+        BaseShaderRegister: 7, // t7
         RegisterSpace: 0,
         OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
     };
     // [16] table: spot shadow depth array at t16, one register past the spot
-    // shadow records at t15 that follow the probe cube array (t7..t7+MAX_PROBES).
+    // shadow records at t15.
     let spot_shadow_srv_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
         NumDescriptors: 1,
-        BaseShaderRegister: 7 + concinnity_core::render::uniforms::MAX_PROBES as u32 + 1, // t16
+        BaseShaderRegister: 16, // t16
         RegisterSpace: 0,
         OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
     };
@@ -148,7 +146,7 @@ pub(super) fn create_main_bindless_root_signature(
     let ltc_srv_range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
         NumDescriptors: 2,
-        BaseShaderRegister: 7 + concinnity_core::render::uniforms::MAX_PROBES as u32 + 3, // t18..t19
+        BaseShaderRegister: 18, // t18..t19
         RegisterSpace: 0,
         OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
     };
@@ -265,7 +263,7 @@ pub(super) fn create_main_bindless_root_signature(
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
         },
-        // [10] Descriptor table: reflection-probe cube array (t7..)
+        // [10] Descriptor table: reflection-probe cube array (t7)
         D3D12_ROOT_PARAMETER {
             ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
             Anonymous: D3D12_ROOT_PARAMETER_0 {
@@ -276,7 +274,7 @@ pub(super) fn create_main_bindless_root_signature(
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
         },
-        // [11] Root CBV: the ProbeSet (parallax boxes + live count) at b4.
+        // [11] Root CBV: the ProbeSet (live probe count) at b4.
         D3D12_ROOT_PARAMETER {
             ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
             Anonymous: D3D12_ROOT_PARAMETER_0 {
@@ -288,7 +286,7 @@ pub(super) fn create_main_bindless_root_signature(
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
         },
         // [12] Root SRV: per-scene StructuredBuffer<GpuLight> at t1 (matches
-        // main_bindless.slang's DXIL_ABI block).
+        // main_bindless.hlsl's CN_BACKEND_DIRECTX block).
         D3D12_ROOT_PARAMETER {
             ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
             Anonymous: D3D12_ROOT_PARAMETER_0 {
@@ -310,8 +308,7 @@ pub(super) fn create_main_bindless_root_signature(
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
         },
-        // [14] Root SRV: per-cluster light-index lists at t2 (t7.. is the probe
-        // cube array).
+        // [14] Root SRV: per-cluster light-index lists at t2.
         D3D12_ROOT_PARAMETER {
             ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
             Anonymous: D3D12_ROOT_PARAMETER_0 {
@@ -322,13 +319,12 @@ pub(super) fn create_main_bindless_root_signature(
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
         },
-        // [15] Root SRV: per-slice StructuredBuffer<SpotShadowData>, past the
-        // probe cube array at t15.
+        // [15] Root SRV: per-slice StructuredBuffer<SpotShadowData> at t15.
         D3D12_ROOT_PARAMETER {
             ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
             Anonymous: D3D12_ROOT_PARAMETER_0 {
                 Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 7 + concinnity_core::render::uniforms::MAX_PROBES as u32, // t15
+                    ShaderRegister: 15, // t15
                     RegisterSpace: 0,
                 },
             },
@@ -350,7 +346,7 @@ pub(super) fn create_main_bindless_root_signature(
             ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
             Anonymous: D3D12_ROOT_PARAMETER_0 {
                 Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 7 + concinnity_core::render::uniforms::MAX_PROBES as u32 + 2, // t17,
+                    ShaderRegister: 17, // t17
                     RegisterSpace: 0,
                 },
             },
@@ -363,6 +359,17 @@ pub(super) fn create_main_bindless_root_signature(
                 DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
                     NumDescriptorRanges: 1,
                     pDescriptorRanges: &ltc_srv_range,
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+        },
+        // [19] Root SRV: the reflection-probe records at t8.
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                Descriptor: D3D12_ROOT_DESCRIPTOR {
+                    ShaderRegister: 8, // t8
+                    RegisterSpace: 0,
                 },
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
@@ -737,13 +744,12 @@ pub(super) fn build_world_pipeline_table(
 
 #[cfg(test)]
 mod tests {
-    // The bindless main pair compiles from `src/shaders/main_bindless.slang` at
-    // runtime (slangc, DXIL sm 6.0). This compiles it offline so a syntax or
-    // register error fails a test instead of only surfacing as an init failure
-    // on a GPU host.
+    // The bindless main pair compiles from `main_bindless.hlsl` (dxc, DXIL sm
+    // 6.0). This compiles it offline so a syntax or register error fails a test
+    // instead of only surfacing as an init failure on a GPU host.
     #[test]
     fn bindless_main_shaders_compile() {
-        if !concinnity_slang::shader_tests_enabled() {
+        if !concinnity_shader::dxc_available() {
             return;
         }
         super::compile_main_bindless_shaders(false).expect("bindless main shaders must compile");

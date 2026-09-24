@@ -65,7 +65,7 @@ pub(crate) trait BuildAsset: Component {
 
     // True when identical source bytes compile to a different payload per
     // backend, so the compile target is itself an input to the payload and
-    // belongs in the cache key. `Shader` and `SdfVolume` set this: one `.slang`
+    // belongs in the cache key. `Shader` and `SdfVolume` set this: one `.hlsl`
     // file compiles to MSL text on one backend, DXIL on another and SPIR-V on
     // the third.
     //

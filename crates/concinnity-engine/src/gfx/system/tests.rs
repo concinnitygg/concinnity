@@ -165,11 +165,11 @@ impl WorldBuilder {
         let container = ShaderPrograms {
             name: "shader".into(),
             vertex: None,
-            fragment: "float4 shade(VertexOut in, GpuObjectData od) { return 1.0; }".into(),
+            fragment: "float4 shade(VertexOut v, GpuObjectData od) { return 1.0; }".into(),
             programs: entries
                 .iter()
                 .map(|e| compiled_programs::CompiledProgram {
-                    entries: vec![e.to_string()],
+                    entry: e.to_string(),
                     source_digest: 1,
                     artifact: b"program-bytes".to_vec(),
                 })

@@ -19,11 +19,11 @@ use concinnity_core::render::uniforms::AutoExposureParams;
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
 use super::pipeline::{SHADER_ENTRY, spv_module};
+use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout, VkDevice,
 };
 use crate::vulkan::record::Recorder;
-use crate::vulkan::slang_builtins::SlangCompile;
 use concinnity_core::render::uniforms::vulkan::AUTO_EXPOSURE_PUSH_BYTES;
 
 // Compile the auto-exposure build + average compute kernels. Used at init
@@ -31,9 +31,8 @@ use concinnity_core::render::uniforms::vulkan::AUTO_EXPOSURE_PUSH_BYTES;
 pub(in crate::vulkan) fn compile_auto_exposure_shaders(
     hot_reload: bool,
 ) -> RenderResult<(Vec<u8>, Vec<u8>)> {
-    let ctx = super::slang_builtins::Ctx::plain(hot_reload);
-    let build_cs = super::slang_builtins::AUTO_EXPOSURE_BUILD.compile(&ctx)?;
-    let average_cs = super::slang_builtins::AUTO_EXPOSURE_AVERAGE.compile(&ctx)?;
+    let build_cs = super::builtin_shaders::AUTO_EXPOSURE_BUILD.compile(hot_reload)?;
+    let average_cs = super::builtin_shaders::AUTO_EXPOSURE_AVERAGE.compile(hot_reload)?;
     Ok((build_cs, average_cs))
 }
 
@@ -83,10 +82,9 @@ impl AutoExposureResources {
         device: &VkDevice,
         frames: usize,
         hdr_resolve_views: &[vk::ImageView],
-        linear_sampler: vk::Sampler,
         hot_reload: bool,
     ) -> RenderResult<Self> {
-        // Build descriptor set layout: 0 = HDR combined image sampler,
+        // Build descriptor set layout: 0 = the HDR image, read by texel,
         // 1 = histogram SSBO.
         let build_set_layout = create_build_set_layout(device)?;
         let average_set_layout = create_average_set_layout(device)?;
@@ -146,7 +144,7 @@ impl AutoExposureResources {
         // Descriptor pool: enough for `frames` build sets + 1 average set.
         let pool_sizes = [
             vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                ty: vk::DescriptorType::SAMPLED_IMAGE,
                 descriptor_count: frames as u32,
             },
             vk::DescriptorPoolSize {
@@ -190,7 +188,7 @@ impl AutoExposureResources {
         let last_view_idx = hdr_resolve_views.len().saturating_sub(1);
         for (i, &set) in build_sets.iter().enumerate() {
             let view = hdr_resolve_views[i.min(last_view_idx)];
-            write_build_set(device, set, view, linear_sampler, histogram_buffer.buffer());
+            write_build_set(device, set, view, histogram_buffer.buffer());
         }
         // Write the average set's histogram + output bindings.
         write_average_set(
@@ -260,18 +258,11 @@ impl AutoExposureResources {
         &mut self,
         device: &VkDevice,
         hdr_resolve_views: &[vk::ImageView],
-        linear_sampler: vk::Sampler,
     ) {
         let last_view_idx = hdr_resolve_views.len().saturating_sub(1);
         for (i, &set) in self.build_sets.iter().enumerate() {
             let view = hdr_resolve_views[i.min(last_view_idx)];
-            write_build_set(
-                device,
-                set,
-                view,
-                linear_sampler,
-                self.histogram_buffer.buffer(),
-            );
+            write_build_set(device, set, view, self.histogram_buffer.buffer());
         }
     }
 
@@ -288,7 +279,7 @@ fn create_build_set_layout(device: &VkDevice) -> RenderResult<OwnedSetLayout> {
     let bindings = [
         vk::DescriptorSetLayoutBinding::default()
             .binding(0)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::COMPUTE),
         vk::DescriptorSetLayoutBinding::default()
@@ -326,13 +317,11 @@ fn write_build_set(
     device: &VkDevice,
     set: vk::DescriptorSet,
     view: vk::ImageView,
-    sampler: vk::Sampler,
     histogram: vk::Buffer,
 ) {
     let img = vk::DescriptorImageInfo::default()
         .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .image_view(view)
-        .sampler(sampler);
+        .image_view(view);
     let hist = vk::DescriptorBufferInfo::default()
         .buffer(histogram)
         .offset(0)
@@ -341,7 +330,7 @@ fn write_build_set(
         vk::WriteDescriptorSet::default()
             .dst_set(set)
             .dst_binding(0)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
             .image_info(std::slice::from_ref(&img)),
         vk::WriteDescriptorSet::default()
             .dst_set(set)

@@ -29,14 +29,14 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
+use crate::directx::builtin_shaders;
+use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::serialize_desc_and_create;
-use crate::directx::slang_builtins;
-use crate::directx::slang_builtins::SlangCompile;
 use crate::directx::texture::{
     HDR_FORMAT, create_uav_buffer, transition_barrier, write_texture_srv,
 };
@@ -85,14 +85,11 @@ pub(in crate::directx) fn compile_particle_shaders(
     msaa_samples: u32,
     hot_reload: bool,
 ) -> RenderResult<ParticleShaders> {
-    let frag = if msaa_samples > 1 {
-        &slang_builtins::PARTICLE_FRAG_MSAA
-    } else {
-        &slang_builtins::PARTICLE_FRAG
-    };
-    let cs = slang_builtins::PARTICLE_SIMULATE.compile(hot_reload)?;
-    let vs = slang_builtins::PARTICLE_VERT.compile(hot_reload)?;
-    let ps = frag.compile(hot_reload)?;
+    let cs = builtin_shaders::PARTICLE_SIMULATE.compile(hot_reload)?;
+    let vs = builtin_shaders::PARTICLE_VERT.compile(hot_reload)?;
+    let ps = builtin_shaders::PARTICLE_FRAG
+        .at(msaa_samples > 1)
+        .compile(hot_reload)?;
     Ok((cs, vs, ps))
 }
 
@@ -165,7 +162,7 @@ fn create_simulate_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12R
 }
 
 // Graphics root signature for `particle_vertex` + `particle_fragment`. The two
-// constant buffers are why `particle.slang` carries a `DXIL_ABI` block at all:
+// constant buffers are why `particle.hlsl` branches on `CN_BACKEND_DIRECTX`:
 // b0 / b1 here are Metal buffer indices 1 / 2 there.
 //   [0] root CBV b0   : ParticleView   (per-frame)
 //   [1] root CBV b1   : ParticleParams (per-emitter)

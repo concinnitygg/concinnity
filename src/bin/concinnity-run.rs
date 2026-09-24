@@ -31,7 +31,7 @@ concinnity_core::install_global_allocator!();
 // launch. To catch that, the runtime bakes a fixed marker plus its shader
 // platform key into its binary; `cn export` scans these bytes and refuses a
 // mismatch. The token after the `cn-runtime-platform:` prefix is the
-// shader-platform key (`metal` / `hlsl` / `glsl`), matching
+// shader-platform key (`metal` / `directx` / `vulkan`), matching
 // `concinnity_core::platform::Platform::key`. `main` takes the static's
 // address through a `black_box` so no linker dead-strips it.
 // A build with no backend consumes no shaders, so it carries no stamp and the
@@ -41,10 +41,10 @@ concinnity_core::install_global_allocator!();
 static CN_RUNTIME_PLATFORM: [u8; 26] = *b"cn-runtime-platform:metal\0";
 #[cfg(backend_dx)]
 #[used]
-static CN_RUNTIME_PLATFORM: [u8; 25] = *b"cn-runtime-platform:hlsl\0";
+static CN_RUNTIME_PLATFORM: [u8; 28] = *b"cn-runtime-platform:directx\0";
 #[cfg(backend_vk)]
 #[used]
-static CN_RUNTIME_PLATFORM: [u8; 25] = *b"cn-runtime-platform:glsl\0";
+static CN_RUNTIME_PLATFORM: [u8; 27] = *b"cn-runtime-platform:vulkan\0";
 
 fn main() -> std::io::Result<()> {
     // Keep the backend stamp in the linked binary (its bytes are what `cn

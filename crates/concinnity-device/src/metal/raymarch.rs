@@ -30,8 +30,7 @@ use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::LightUniforms;
 use concinnity_core::platform::Platform;
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::slang_programs::raymarch::{self, Family};
-use concinnity_slang::SlangTarget;
+use concinnity_core::render::shader_programs::raymarch::Family;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
@@ -39,7 +38,7 @@ use objc2_foundation::ns_string;
 use objc2_metal::{
     MTLBlendFactor, MTLBlendOperation, MTLBlitCommandEncoder as _, MTLBuffer,
     MTLCommandBuffer as _, MTLCommandEncoder as _, MTLCullMode, MTLDevice, MTLIndexType,
-    MTLLibrary, MTLLoadAction, MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder as _,
+    MTLLoadAction, MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder as _,
     MTLRenderPassDescriptor, MTLRenderPipelineDescriptor, MTLRenderPipelineState,
     MTLResourceOptions, MTLStoreAction, MTLVertexFormat, MTLVertexStepFunction,
 };
@@ -54,17 +53,13 @@ use super::context::MtlContext;
 use super::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
 use super::encode::RenderEncode;
 use super::error::allocation_failed;
-use super::pipeline::ns_str;
 use super::scoped_encoder::ScopedEncoder;
 
 // Metal buffer index for the proxy cube's vertex stream.
 //
-// Vertex streams and uniform buffers share one index space on Metal, and every
-// entry point compiled from the single source receives every global the file
-// declares -- so the vertex stage sees the light and cascade blocks it never
-// reads, at their own slots. The stream therefore sits past all of them. The
-// hand-written MSL could use a low index because its vertex stage declared only
-// the two buffers it read.
+// Vertex streams and constant buffers share one index space on Metal, and the
+// shader's buffers sit at their `register()` numbers, b0..b4, so the stream
+// sits past all of them.
 const RAYMARCH_VERTEX_BUFFER: usize = 5;
 
 // `RaymarchLights` mirror of `concinnity_core::gfx::render_types::LightUniforms`.
@@ -132,64 +127,36 @@ pub(in crate::metal) fn volume_in_frustum(
     frustum.intersects_aabb(min, max)
 }
 
-// The MTLLibrary for one family of a volume's field.
+// One entry point of a volume's field, out of the library its MSL builds.
 //
-// slangc emits one MSL translation unit per family, so both stages come out of
-// one library and the cook stores it as one artifact. `msl_cache` turns that
-// text into a metallib where a Metal toolchain exists and hands it to
-// `newLibraryWithSource` where none does, which is every player machine.
-fn family_library(
+// Each entry is its own artifact: the cook stores one MSL translation per entry,
+// and `msl_cache` turns that text into a metallib where a Metal toolchain exists
+// and hands it to `newLibraryWithSource` where none does, which is every player
+// machine. A missing function names the volume rather than the engine.
+fn entry_function(
     device: &ProtocolObject<dyn MTLDevice>,
     programs: &SdfPrograms,
     family: Family,
+    entry: &str,
     hot_reload: bool,
     asset_label: &str,
-) -> RenderResult<Retained<ProtocolObject<dyn MTLLibrary>>> {
-    let entries: Vec<&str> = raymarch::ALL
-        .iter()
-        .filter(|p| p.family == family)
-        .map(|p| p.entry)
-        .collect();
+) -> RenderResult<Retained<ProtocolObject<dyn objc2_metal::MTLFunction>>> {
     let msl = crate::shader::raymarch_source::artifact(
         programs,
         &crate::shader::raymarch_source::Request {
             family,
             platform: Platform::Metal,
-            entries: &entries,
-            target: SlangTarget::Metal,
+            entry,
             hot_reload,
             label: asset_label,
         },
-    )
-    .map_err(RenderError::ShaderCompile)?;
-    let text = std::str::from_utf8(&msl).map_err(|e| {
-        RenderError::ShaderCompile(format!(
-            "SdfVolume '{asset_label}': compiled field is not MSL text: {e}"
-        ))
-    })?;
-    super::msl_cache::compiled_library(device, text, asset_label)
-        .map_err(|e| e.context(format_args!("SdfVolume '{asset_label}'")))
+        crate::shader::compile::cooked,
+    )?;
+    super::msl_cache::cooked_function(device, &msl, entry, &format!("SdfVolume '{asset_label}'"))
 }
 
-// One entry point out of a family's library, named so a missing one points at
-// the volume rather than at the engine.
-fn entry_function(
-    library: &ProtocolObject<dyn MTLLibrary>,
-    entry: &str,
-    asset_label: &str,
-) -> RenderResult<Retained<ProtocolObject<dyn objc2_metal::MTLFunction>>> {
-    library.newFunctionWithName(&ns_str(entry)).ok_or_else(|| {
-        RenderError::ShaderCompile(format!(
-            "{entry} entry not found in compiled library for SdfVolume '{asset_label}'"
-        ))
-    })
-}
-
-// Compile + link a per-volume raymarch pipeline. Wraps the user
-// fragment source bytes between the engine-shipped helpers and the
-// engine-shipped fragment_main template, then compiles with
-// `newLibraryWithSource_options_error` (same path the water / fog /
-// decal / particle passes use for their built-in MSL).
+// Compile + link a per-volume raymarch pipeline from the two entries of the
+// volume's surface family (see `entry_function`).
 //
 // `asset_label` is included in error messages so a malformed user
 // shader points at the right SdfVolume in the world.jsonl.
@@ -199,9 +166,18 @@ pub(in crate::metal) fn build_raymarch_pipeline(
     hot_reload: bool,
     asset_label: &str,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    let library = family_library(device, programs, Family::Surface, hot_reload, asset_label)?;
-    let vert_fn = entry_function(&library, "raymarch_vertex", asset_label)?;
-    let frag_fn = entry_function(&library, "raymarch_fragment", asset_label)?;
+    let entry = |name| {
+        entry_function(
+            device,
+            programs,
+            Family::Surface,
+            name,
+            hot_reload,
+            asset_label,
+        )
+    };
+    let vert_fn = entry("raymarch_vertex")?;
+    let frag_fn = entry("raymarch_fragment")?;
 
     // The proxy cube is stored as the engine's 56-byte `Vertex`, but the
     // shared vertex entry reads position alone, so the descriptor declares that
@@ -262,9 +238,18 @@ pub(in crate::metal) fn build_raymarch_shadow_pipeline(
     hot_reload: bool,
     asset_label: &str,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    let library = family_library(device, programs, Family::Shadow, hot_reload, asset_label)?;
-    let vert_fn = entry_function(&library, "raymarch_shadow_vertex", asset_label)?;
-    let frag_fn = entry_function(&library, "raymarch_shadow_fragment", asset_label)?;
+    let entry = |name| {
+        entry_function(
+            device,
+            programs,
+            Family::Shadow,
+            name,
+            hot_reload,
+            asset_label,
+        )
+    };
+    let vert_fn = entry("raymarch_shadow_vertex")?;
+    let frag_fn = entry("raymarch_shadow_fragment")?;
 
     // Same proxy-cube vertex layout as the main pass.
     let vert_desc = vertex_descriptor(
@@ -308,15 +293,18 @@ pub(in crate::metal) fn build_raymarch_volumetric_pipeline(
     hot_reload: bool,
     asset_label: &str,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    let library = family_library(
-        device,
-        programs,
-        Family::Volumetric,
-        hot_reload,
-        asset_label,
-    )?;
-    let vert_fn = entry_function(&library, "raymarch_volumetric_vertex", asset_label)?;
-    let frag_fn = entry_function(&library, "raymarch_volumetric_fragment", asset_label)?;
+    let entry = |name| {
+        entry_function(
+            device,
+            programs,
+            Family::Volumetric,
+            name,
+            hot_reload,
+            asset_label,
+        )
+    };
+    let vert_fn = entry("raymarch_volumetric_vertex")?;
+    let frag_fn = entry("raymarch_volumetric_fragment")?;
 
     // Same proxy-cube vertex layout as the main pass.
     let vert_desc = vertex_descriptor(

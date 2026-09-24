@@ -72,21 +72,6 @@ pub(super) fn build_scene_assets(
         }
     };
 
-    // Reflection-probe cube array: point every slot at the sky prefilter cube so
-    // the bindless main shader's `probe_cubes` table is valid before any probe
-    // bakes (unbaked slots stay the sky; a baked probe overwrites its slot in
-    // `probe_install`). The forward shader only samples a slot when
-    // `ProbeSet.count` covers it, but the descriptor table must still be valid.
-    let probe_sky_mips = env_map.prefilter_mip_count.max(1);
-    for k in 0..concinnity_core::render::uniforms::MAX_PROBES {
-        crate::directx::texture::write_cube_srv_mips(
-            &hw.device,
-            &env_map.prefilter.resource,
-            probe_sky_mips,
-            descriptors.slot_cpu(layout.probe_cube_base_slot + k),
-        );
-    }
-
     // Albedo texture pool
     // One ID3D12Resource per input texture; SRVs are written below at
     // per-object pair slots so a single texture can be referenced by many

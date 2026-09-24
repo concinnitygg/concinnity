@@ -22,6 +22,7 @@ use objc2_metal::{MTLBuffer, MTLDevice, MTLResourceOptions};
 use super::InitGpu;
 use crate::metal::allocator::DeviceAllocator;
 use crate::metal::auto_exposure::{AutoExposureGpu, build_auto_exposure_pipelines};
+use crate::metal::builtin_shaders::{SSAO_BLUR, SSAO_KERNEL};
 use crate::metal::context::{CompositeState, MtlSceneAssets};
 use crate::metal::error::allocation_failed;
 use crate::metal::post::post_device::MtlPostDevice;
@@ -31,7 +32,6 @@ use crate::metal::post::{
     build_reflection_composite_pipeline, build_ssao_pipeline, build_taa_pass,
     create_gbuffer_targets, create_ssao_targets, create_ssr_targets, temporal_scaler_supported,
 };
-use crate::metal::slang_builtins::{SSAO_BLUR, SSAO_KERNEL};
 use crate::metal::texture::create_fallback_texture;
 
 // The toggle-controlled feature settings the screen-space builders gate on:

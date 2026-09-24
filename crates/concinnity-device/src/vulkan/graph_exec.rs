@@ -921,9 +921,10 @@ impl VkContext {
                     VkResting::Discarded,
                 ))
             }
-            // Per-cluster light index lists: `LightCull` writes them, the main
-            // pass's fragment shader reads them. One buffer, not per-frame.
-            "cluster_light_list" => Some((
+            // Per-cluster light lists and probe masks: `LightCull` writes them, the
+            // main, SSR and transparent fragment shaders read them. One buffer,
+            // not per-frame.
+            "cluster_lists" => Some((
                 VkTargetObject::Buffer {
                     buffer: self.light_cull.cluster_buffer.buffer(),
                 },
@@ -1016,10 +1017,11 @@ impl VkContext {
                 self.encode_skin(cmd, params.frame_idx);
             }
             PassId::LightCull => {
-                // Bins the local lights into per-cluster index lists. The builder
-                // emits this node only when the world has local lights (matching
-                // `clustered_lighting_enabled`), and the RAW edge on
-                // `cluster_light_list` pins it before Main, which reads the same
+                // Bins the local lights and probes into per-cluster light lists
+                // and probe masks. The builder emits this node only while either
+                // is live (matching
+                // `clustering_enabled`), and the RAW edge on
+                // `cluster_lists` pins it before Main, which reads the same
                 // buffer.
                 self.encode_light_cull(rec, params.frame_idx);
             }

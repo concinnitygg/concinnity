@@ -61,7 +61,6 @@ pub(super) fn build_bindless_pass(
         bindless_uab,
         ..
     } = *plan;
-    let probe_cube_count = descriptors.probe_cube_count;
     // Bindless static pass: bindless static main pass resources. A dedicated
     // set layout (set 1: SSBO + bindless texture pool), pipeline layout,
     // pipeline, per-frame GpuObjectData storage buffers, and one descriptor
@@ -82,13 +81,13 @@ pub(super) fn build_bindless_pass(
                 .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
             vk::DescriptorSetLayoutBinding::default()
                 .binding(1)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                 .descriptor_count(bindless_pool_size as u32)
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),
         ];
-        // On a sampler-constrained device the pool binding is declared
+        // On a budget-constrained device the pool binding is declared
         // update-after-bind so it budgets against the update-after-bind
-        // sampler limit instead of the plain one. The pool is written once at
+        // sampled-image limit instead of the plain one. The pool is written once at
         // init, before any frame binds it, so nothing depends on the relaxed
         // update timing itself: this is purely how the layout is budgeted.
         let binding_flags = [
@@ -115,7 +114,7 @@ pub(super) fn build_bindless_pass(
         // The engine's own pair is the program for every bucket that
         // declares no Shader and the source of the Wireframe twin; bucket 0
         // takes the world default Shader's pair where it declares one.
-        let engine_pair = compile_bindless_shaders(hot_reload, probe_cube_count)?;
+        let engine_pair = compile_bindless_shaders(hot_reload)?;
         let pipeline = build_bucket_pipeline(
             device,
             BucketPipelineTargets {
@@ -124,7 +123,6 @@ pub(super) fn build_bindless_pass(
                 msaa_samples: targets.msaa_samples,
                 swapchain_format,
                 hot_reload,
-                probe_count: probe_cube_count as usize,
             },
             0,
             world_shaders[0],
@@ -146,7 +144,8 @@ pub(super) fn build_bindless_pass(
         }
 
         // One bindless set per frame: binding 0 = that frame's SSBO,
-        // binding 1 = the shared pool ([albedo views..] ++ [normal..]).
+        // binding 1 = the shared pool ([albedo views..] ++ [normal..]), read
+        // through the global set's linear sampler.
         let set_layouts: Vec<_> = (0..frames).map(|_| set_layout.handle()).collect();
         let sets =
             alloc_descriptor_sets(device, descriptors.descriptor_pool.handle(), &set_layouts)?;
@@ -164,7 +163,6 @@ pub(super) fn build_bindless_pass(
                 vk::DescriptorImageInfo::default()
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                     .image_view(img.view)
-                    .sampler(scene.linear_sampler.handle())
             })
             .collect();
         if let Some(&tail) = pool_infos.last() {
@@ -185,7 +183,7 @@ pub(super) fn build_bindless_pass(
                     .dst_set(set)
                     .dst_binding(1)
                     .dst_array_element(0)
-                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                     .image_info(&pool_infos),
             ];
             // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
@@ -230,7 +228,6 @@ pub(super) fn build_world_pipelines(
     world_shaders: &[WorldShader<'_>],
     targets: &VkTargets,
     swapchain_format: vk::Format,
-    probe_cube_count: u32,
 ) -> RenderResult<Vec<Option<OwnedPipeline>>> {
     let InitGpu { hw, hot_reload, .. } = *gpu;
     let bucket_shaders = world_shaders.get(1..).unwrap_or(&[]);
@@ -252,7 +249,6 @@ pub(super) fn build_world_pipelines(
                         msaa_samples: targets.msaa_samples,
                         swapchain_format,
                         hot_reload,
-                        probe_count: probe_cube_count as usize,
                     },
                     bucket_shaders,
                     &bindless.main_spv,

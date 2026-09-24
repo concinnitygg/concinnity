@@ -3,7 +3,6 @@
 
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::error;
-use concinnity_core::render::lights;
 use concinnity_core::render::post::rt_reflections::RtParamsInputs;
 use concinnity_core::render::render_graph;
 use concinnity_core::render::uniforms::metal::VelocityUniforms;
@@ -181,37 +180,26 @@ impl MtlContext {
         // these to build each cluster's world-space AABB (un-jittered inverse VP
         // + camera forward, matching the fog froxel convention) and the forward
         // pass reads the grid dims / depth range / screen size to place a
-        // fragment. `use_clusters` is set only when the world has local lights
-        // (the pipeline is built iff so) and at least one is still live;
-        // otherwise the forward pass brute-forces an empty list and the LightCull
-        // graph node is omitted, so a list the skipped pass did not write is never
-        // read. Stored on self so the shared main-pass bind can push it; a local
-        // copy feeds the LightCull arm.
-        let clustered = lights::clustered_lighting_active(
-            self.light_cull.pipeline.is_some(),
+        // fragment. `use_clusters` is set only when a local light or a baked
+        // probe is live; otherwise every reader brute-forces an empty list and
+        // the LightCull graph node is omitted, so a list the skipped pass did not
+        // write is never read. Stored on self so the shared main-pass bind can
+        // push it; a local copy feeds the LightCull arm.
+        self.cluster_params = render_types::ClusterParams::for_camera(
+            &render_types::ClusterCamera {
+                view: self.view.matrix,
+                proj,
+                position: cam_pos,
+                near,
+                far,
+                width: render_w,
+                height: render_h,
+            },
             self.light_uniforms.num_local_lights,
+            self.probe.book.count() as u32,
         );
-        let cluster_inv_vp = mat4_inverse(mat4_mul(proj, self.view.matrix));
-        self.cluster_params = render_types::ClusterParams {
-            inv_view_proj: cluster_inv_vp,
-            cam_pos,
-            z_near: near.max(1e-3),
-            view_forward: [
-                -self.view.matrix[0][2],
-                -self.view.matrix[1][2],
-                -self.view.matrix[2][2],
-            ],
-            z_far: far,
-            grid_x: render_types::CLUSTER_GRID_X,
-            grid_y: render_types::CLUSTER_GRID_Y,
-            grid_z: render_types::CLUSTER_GRID_Z,
-            num_lights: self.light_uniforms.num_local_lights.max(0) as u32,
-            screen_w: render_w as f32,
-            screen_h: render_h as f32,
-            use_clusters: u32::from(clustered),
-            _pad: 0,
-        };
         let cluster_params = self.cluster_params;
+        let clustered = cluster_params.use_clusters != 0;
         // Velocity (motion vectors in the G-buffer pre-pass) is needed whenever
         // temporal reconstruction runs: that's TAA or the MetalFX upscaler.
         let velocity_active = self.taa.enabled || self.upscale.scaler.is_some();

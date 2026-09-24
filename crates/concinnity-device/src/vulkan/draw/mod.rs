@@ -23,7 +23,6 @@ use concinnity_core::render::model_history::HistoryMode;
 use concinnity_core::render::pass_timing;
 use concinnity_core::render::render_graph;
 use concinnity_core::render::render_graph::{FrameGraphInputs, build_frame_graph};
-use concinnity_core::transform::mat4_inverse;
 use concinnity_core::transform::mat4_mul;
 // `ViewUniforms` (the std140 main-pass `ViewBlock` UBO) is a GPU-free layout
 // struct that lives in `core::render`; re-export it so
@@ -358,13 +357,12 @@ impl VkContext {
         // `draw_frame` retired everything that read this slot last trip.
         self.ensure_line_pipeline(frame_idx, lines);
 
-        // Clustered light binning runs only when the pipeline exists (a world
-        // with local lights) and at least one light is still live. Drives both
-        // `ClusterParams::use_clusters` below and the `LightCull` graph node, so
-        // the forward pass never reads a list the skipped pass did not write.
-        let clustered = lights::clustered_lighting_active(
-            self.light_cull.pipeline.is_some(),
+        // Clustered binning runs while a local light or a baked probe is live,
+        // the same test `ClusterParams::for_camera` sets `use_clusters` by, so
+        // no reader sees a list the skipped `LightCull` node did not write.
+        let clustered = lights::clustering_active(
             self.uniforms.light_uniforms.num_local_lights,
+            self.probe.book.count(),
         );
 
         let seed_inputs =
@@ -383,30 +381,24 @@ impl VkContext {
         // these to build each cluster's world-space AABB (un-jittered inverse VP
         // + camera forward, matching the fog froxel convention) and the forward
         // pass reads the grid dims / depth range / screen size to place a
-        // fragment. `use_clusters` is set only when the world has local lights
-        // and at least one is live; otherwise the forward pass iterates them all
-        // (zero iterations) rather than reading a list the skipped binning pass
-        // never wrote. The planar / probe global sets bind the static
+        // fragment. `use_clusters` is set only while a local light or a baked
+        // probe is live; otherwise every reader iterates them all (zero
+        // iterations) rather than reading a list the skipped binning pass never
+        // wrote. The planar / probe global sets bind the static
         // `use_clusters = 0` copy instead.
-        let cluster_params = render_types::ClusterParams {
-            inv_view_proj: mat4_inverse(mat4_mul(proj, self.view.matrix)),
-            cam_pos,
-            z_near: near.max(1e-3),
-            view_forward: [
-                -self.view.matrix[0][2],
-                -self.view.matrix[1][2],
-                -self.view.matrix[2][2],
-            ],
-            z_far: far,
-            grid_x: render_types::CLUSTER_GRID_X,
-            grid_y: render_types::CLUSTER_GRID_Y,
-            grid_z: render_types::CLUSTER_GRID_Z,
-            num_lights: self.uniforms.light_uniforms.num_local_lights.max(0) as u32,
-            screen_w: extent.width as f32,
-            screen_h: extent.height as f32,
-            use_clusters: u32::from(clustered),
-            _pad: 0,
-        };
+        let cluster_params = render_types::ClusterParams::for_camera(
+            &render_types::ClusterCamera {
+                view: self.view.matrix,
+                proj,
+                position: cam_pos,
+                near,
+                far,
+                width: extent.width,
+                height: extent.height,
+            },
+            self.uniforms.light_uniforms.num_local_lights,
+            self.probe.book.count() as u32,
+        );
         self.write_cluster_params(frame_idx, &cluster_params);
 
         // Update view UBO for this frame.
@@ -439,10 +431,11 @@ impl VkContext {
             );
         }
 
-        // Reflection-probe set (global set 0 binding 7): EMPTY (count 0 = sky
-        // reflection) until a probe bakes, so the forward shader keeps the sky
-        // path. Uploaded every frame so a later install is picked up immediately.
-        self.uniforms.probe_set_ubo_buffers[frame_idx].write_val(0, &self.probe.set);
+        // Reflection-probe count + records (global set 0 bindings 7 + 17): count
+        // 0 (sky reflection) until a probe bakes, so the forward shader keeps the
+        // sky path. Uploaded every frame so a later install is picked up
+        // immediately.
+        self.upload_probe_set(frame_idx)?;
 
         let frustum = Frustum::from_view_projection(vp_mat);
 
@@ -731,11 +724,10 @@ impl VkContext {
             // every world pass off, collapsing to Main (a bare clear, fed the
             // empty scene below) -> Composite (presents the overlay).
             world_hidden,
-            // Clustered light binning, sharing the gate that sets `use_clusters`
-            // below: the pipeline is built only for a world with local lights,
-            // and the live count has to still be non-zero. Otherwise the forward
-            // pass brute-forces an empty light list.
-            clustered_lighting_enabled: clustered,
+            // Clustered binning, sharing the gate that sets `use_clusters`
+            // below: a local light or a baked probe has to be live. Otherwise
+            // every reader brute-forces the empty light and probe sets.
+            clustering_enabled: clustered,
             // Zero drops the SpotShadow node and its imported array from the
             // graph entirely, which is the common case (no shadow-casting spot).
             shadowed_spot_count: self.spot_shadow.count(),

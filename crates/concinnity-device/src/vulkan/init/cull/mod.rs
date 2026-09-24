@@ -10,7 +10,6 @@ use concinnity_core::render::error::RenderResult;
 use concinnity_core::transform::IDENTITY;
 
 use super::InitGpu;
-use super::descriptors::GlobalSetBudget;
 use crate::vulkan::context::{VkCull, VkDescriptors, VkSceneAssets, VkShadow, VkTargets};
 use crate::vulkan::post::gbuffer::GbufferResources;
 use crate::vulkan::probe_prefilter::ProbePrefilterPipelines;
@@ -35,7 +34,6 @@ pub(super) fn plan_cull(
     gpu: &InitGpu<'_>,
     world: &SceneData<'_>,
     textures: &[TextureImage],
-    budget: &GlobalSetBudget,
 ) -> CullPlan {
     let hw = gpu.hw;
     let draw_objects = &world.draw_objects;
@@ -81,29 +79,26 @@ pub(super) fn plan_cull(
         0
     };
     // The texture pool's length is the world's texture table, so it cannot be
-    // clamped to the device's per-stage sampler headroom the way the probe
-    // cube array is. Where it does not fit, its set layout is declared
-    // update-after-bind, which moves it off `maxPerStageDescriptorSamplers`
-    // (16 on MoltenVK) and onto the update-after-bind limit (1024 there). This
-    // reshapes the layout, its binding flags, and the descriptor pool it is
-    // allocated from, so it is resolved once here. Desktop drivers report six
-    // figures and always stay on the plain path.
-    let max_per_stage_samplers = super::descriptors::max_per_stage_samplers(hw);
-    let pool_overflows_samplers = bindless_active
+    // clamped to the device's per-stage headroom. Where it does not fit, its set
+    // layout is declared update-after-bind, which moves it off
+    // `maxPerStageDescriptorSampledImages` (256 on MoltenVK) and onto the
+    // update-after-bind limit (a million there). This reshapes the layout, its
+    // binding flags, and the descriptor pool it is allocated from, so it is
+    // resolved once here. Desktop drivers report six figures and always stay on
+    // the plain path.
+    let limits = super::descriptors::stage_limits(hw);
+    let pool_overflows = bindless_active
         && crate::vulkan::descriptor_layout::bindless_pool_needs_update_after_bind(
-            max_per_stage_samplers,
-            budget.probe_cube_count,
+            limits,
             bindless_pool_size as u32,
-            budget.update_after_bind,
         );
-    if pool_overflows_samplers && !hw.update_after_bind {
+    if pool_overflows && !hw.update_after_bind {
         tracing::warn!(
-            "bindless texture pool: {bindless_pool_size} samplers exceed the device's \
-             per-stage budget ({max_per_stage_samplers}) and update-after-bind is \
-             unavailable"
+            "bindless texture pool: {bindless_pool_size} images exceed the device's \
+             per-stage budget ({limits:?}) and update-after-bind is unavailable"
         );
     }
-    let bindless_uab = pool_overflows_samplers && hw.update_after_bind;
+    let bindless_uab = pool_overflows && hw.update_after_bind;
     CullPlan {
         n_instances,
         n_cull,
@@ -155,14 +150,8 @@ pub(super) fn build_cull(
             swapchain_format,
         },
     )?;
-    let world_pipelines = bindless::build_world_pipelines(
-        gpu,
-        &bindless,
-        world_shaders,
-        targets,
-        swapchain_format,
-        descriptors.probe_cube_count,
-    )?;
+    let world_pipelines =
+        bindless::build_world_pipelines(gpu, &bindless, world_shaders, targets, swapchain_format)?;
     let shader_bucket_count = 1 + world_pipelines.len();
     let compute = compute::build_compute_cull(
         gpu,

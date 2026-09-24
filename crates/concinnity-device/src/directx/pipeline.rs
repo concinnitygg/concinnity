@@ -1,6 +1,6 @@
 //! Cross-cutting D3D12 pipeline helpers shared by every pass:
-//!   * Shader-compile + root-signature serialization helpers (`compile_hlsl`,
-//!     `serialize_and_create_root_sig`, `serialize_desc_and_create`).
+//!   * Root-signature helpers (`serialize_and_create_root_sig`,
+//!     `serialize_desc_and_create`, `root_cbv`, `root_srv`).
 //!   * Vertex input layouts referenced by main + shadow + velocity + SSAO
 //!     pre-pass + text pipelines (`main_input_layout`, `skinned_input_layout`,
 //!     `text_input_layout`).
@@ -8,8 +8,8 @@
 //!     `create_text_pso`) and the composite (post-process) pipeline
 //!     (`create_composite_root_signature`, `create_composite_pso`).
 //!
-//! Mirrors src/metal/pipeline.rs (trimmed in the audit to the equivalent set:
-//! shared helpers + text + composite). Per-effect pipelines live in their
+//! Mirrors src/metal/pipeline.rs (shared helpers + text + composite).
+//! Per-effect pipelines live in their
 //! own files: bloom/TAA/SSAO in directx/post/, cull at directx/cull.rs,
 //! main + shadow in directx/init/pipelines.rs.
 
@@ -19,11 +19,35 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::com;
+use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::root_constants::root_dwords;
-use crate::directx::slang_builtins::SlangCompile;
 
-// Shared shader-compile + root-sig helpers
+// Shared root-signature helpers
+
+// A pixel-visible root descriptor of `kind` at `register`, space 0.
+fn root_descriptor(kind: D3D12_ROOT_PARAMETER_TYPE, register: u32) -> D3D12_ROOT_PARAMETER {
+    D3D12_ROOT_PARAMETER {
+        ParameterType: kind,
+        Anonymous: D3D12_ROOT_PARAMETER_0 {
+            Descriptor: D3D12_ROOT_DESCRIPTOR {
+                ShaderRegister: register,
+                RegisterSpace: 0,
+            },
+        },
+        ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+    }
+}
+
+// A pixel-visible root CBV at `b{register}`.
+pub(super) fn root_cbv(register: u32) -> D3D12_ROOT_PARAMETER {
+    root_descriptor(D3D12_ROOT_PARAMETER_TYPE_CBV, register)
+}
+
+// A pixel-visible root SRV at `t{register}`.
+pub(super) fn root_srv(register: u32) -> D3D12_ROOT_PARAMETER {
+    root_descriptor(D3D12_ROOT_PARAMETER_TYPE_SRV, register)
+}
 
 pub(super) fn serialize_and_create_root_sig(
     device: &ID3D12Device,
@@ -173,10 +197,8 @@ pub(super) fn skinned_input_layout() -> Vec<D3D12_INPUT_ELEMENT_DESC> {
 // Vertex input elements for the text pass (32-byte TextVertex struct), asserted
 // by `text_vertex_layout_matches_shaders`.
 //
-// `mode` takes a semantic of its own rather than a second TEXCOORD: slangc
-// appends its own index to whatever a semantic spells, so `TEXCOORD1` in
-// `text.slang` would reach DXIL as TEXCOORD index 10 and never match an element
-// declared at index 1.
+// `mode` takes a semantic of its own rather than a second TEXCOORD, so every
+// element below matches the semantic `text.hlsl` spells at index 0.
 fn text_input_layout() -> Vec<D3D12_INPUT_ELEMENT_DESC> {
     vec![
         D3D12_INPUT_ELEMENT_DESC {
@@ -224,13 +246,13 @@ fn text_input_layout() -> Vec<D3D12_INPUT_ELEMENT_DESC> {
 // scene target, composites the bloom mip, applies an exposure multiplier, the
 // Narkowicz ACES tonemap + gamma 2.2 encode, a single FXAA 3.11-style edge
 // pass, a 3D-LUT color grade, and a radial vignette, then writes the
-// swapchain backbuffer. Ships from `src/shaders/composite.slang`, paired with
+// swapchain backbuffer. Ships from `src/render/shaders/composite.hlsl`, paired with
 // the shared single-source fullscreen-triangle vertex every post pass uses.
 
 // Compile the composite (post-process) pass shaders. Returns (vs, ps).
 pub(super) fn compile_composite_shaders(hot_reload: bool) -> RenderResult<(Vec<u8>, Vec<u8>)> {
-    let vs = super::slang_builtins::FULLSCREEN_VERT.compile(hot_reload)?;
-    let ps = super::slang_builtins::COMPOSITE_FRAG.compile(hot_reload)?;
+    let vs = super::builtin_shaders::FULLSCREEN_VERT.compile(hot_reload)?;
+    let ps = super::builtin_shaders::COMPOSITE_FRAG.compile(hot_reload)?;
     Ok((vs, ps))
 }
 
@@ -240,8 +262,8 @@ pub(super) fn compile_composite_shaders(hot_reload: bool) -> RenderResult<(Vec<u
 // at b0, a 1-SRV descriptor table at t2 (the 3D
 // color-grading LUT), one each at t3 / t4 / t5 (the G-buffer normal+depth,
 // roughness, and SSAO channels the debug view modes visualize), and static
-// linear-clamp samplers at s0..s5 -- one per source, because slangc splits each
-// combined sampler in the single source into its own texture/sampler pair. The
+// linear-clamp samplers at s0..s5 -- one per source, each the sampler half of a
+// source's texture/sampler pair in the single source. The
 // scene SRV is its own table (separate from bloom mip 0) so the runtime can
 // re-point it at the per-frame TAA output without the two needing to be
 // heap-contiguous. Clamp keeps the FXAA neighbor taps from wrapping at screen
@@ -521,8 +543,8 @@ pub(super) fn create_blended_composite_pso(
 
 // Compile the text overlay shaders.
 pub(super) fn compile_text_shaders(hot_reload: bool) -> RenderResult<(Vec<u8>, Vec<u8>)> {
-    let text_vs = super::slang_builtins::TEXT_VERT.compile(hot_reload)?;
-    let text_ps = super::slang_builtins::TEXT_FRAG.compile(hot_reload)?;
+    let text_vs = super::builtin_shaders::TEXT_VERT.compile(hot_reload)?;
+    let text_ps = super::builtin_shaders::TEXT_FRAG.compile(hot_reload)?;
     Ok((text_vs, text_ps))
 }
 

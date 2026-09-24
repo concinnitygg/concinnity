@@ -7,6 +7,7 @@ use concinnity_core::render::hdr_output;
 
 use super::allocator::DeviceAllocator;
 use super::context::*;
+use super::descriptor_layout::SSAO_BINDING;
 use super::device::*;
 use super::hiz::{HiZDeviceCtx, HiZTarget};
 use super::post::bloom::{
@@ -391,8 +392,6 @@ impl VkContext {
                     hdr_resolve_views: &hdr_views,
                     gbuffer_views: &nd_views,
                     roughness_views: &rough_views,
-                    prefilter_view: self.scene.env_map.prefilter.view,
-                    cube_sampler: self.scene.cube_sampler.handle(),
                 },
             )?;
             // The bloom prefilter samples the reflection composite output (re-pointed
@@ -423,12 +422,7 @@ impl VkContext {
                 &CompositeInputs::new(&self.targets.hdr_resolve_images, gb),
             )?;
             for frame_sets in &self.bloom.input_sets {
-                rebind_bloom_input0(
-                    &self.hw.device,
-                    frame_sets[0],
-                    rc.output.view,
-                    self.post.sampler.handle(),
-                );
+                rebind_bloom_input0(&self.hw.device, frame_sets[0], rc.output.view);
             }
             self.reflection_composite = Some(rc);
         }
@@ -443,12 +437,7 @@ impl VkContext {
         if let Some(mut taa) = self.taa.take() {
             taa.rebuild(&self.post_device(0), render_ext)?;
             for (i, frame_sets) in self.bloom.input_sets.iter().enumerate() {
-                rebind_bloom_input0(
-                    &self.hw.device,
-                    frame_sets[0],
-                    taa.output_view(i),
-                    self.post.sampler.handle(),
-                );
+                rebind_bloom_input0(&self.hw.device, frame_sets[0], taa.output_view(i));
             }
             self.taa = Some(taa);
         }
@@ -459,12 +448,7 @@ impl VkContext {
         if let Some(up) = &self.upscale {
             let up_output_view = up.output_image().view;
             for frame_sets in &self.bloom.input_sets {
-                rebind_bloom_input0(
-                    &self.hw.device,
-                    frame_sets[0],
-                    up_output_view,
-                    self.post.sampler.handle(),
-                );
+                rebind_bloom_input0(&self.hw.device, frame_sets[0], up_output_view);
             }
         }
         Ok(())
@@ -652,15 +636,13 @@ impl VkContext {
         // keeps it unsampled). A no-op when there's no planar set or no Hi-Z.
         if let (Some(planar), Some(hiz)) = (self.planar_reflection.as_ref(), self.cull.hiz.as_ref())
         {
-            let (view, sampler) = hiz.read_set_sources();
-            planar.rewrite_hiz_view(&self.hw.device, view, sampler);
+            planar.rewrite_hiz_view(&self.hw.device, hiz.read_set_view());
         }
 
         // An in-flight probe bake's Hi-Z set captured the same destroyed view
         // at bake start; re-point it too or its next face binds a freed view.
         if let (Some(bake), Some(hiz)) = (self.probe.rendering.as_ref(), self.cull.hiz.as_ref()) {
-            let (view, sampler) = hiz.read_set_sources();
-            bake.rewrite_hiz_view(&self.hw.device, view, sampler);
+            bake.rewrite_hiz_view(&self.hw.device, hiz.read_set_view());
         }
 
         // Rebuild the particle framebuffers + re-point the per-frame depth
@@ -693,11 +675,7 @@ impl VkContext {
                 .iter()
                 .map(|img| img.view)
                 .collect();
-            ae.rebuild(
-                &self.hw.device,
-                &hdr_views,
-                self.scene.linear_sampler.handle(),
-            );
+            ae.rebuild(&self.hw.device, &hdr_views);
             self.auto_exposure.resources = Some(ae);
         }
         Ok(())
@@ -706,13 +684,10 @@ impl VkContext {
     // Rebuild SSAO, re-point the composite sets at the rebuilt scene inputs, and
     // match the render-finished semaphores to the new swapchain image count.
     fn rebuild_ssao_and_composite_inputs(&mut self, render_ext: vk::Extent2D) -> RenderResult<()> {
-        // Rebuild the SSAO targets + re-point the SSAO descriptor at set 0
-        // binding 6 of every global set against the per-frame pooled `ao_output`
-        // views (the transient pool was already rebuilt above). SSAO's stale
-        // blur framebuffers are torn down inside `ssao.rebuild` (the device is
-        // idle, so freeing the pool views ahead of those framebuffers is sound).
-        // When SSAO is off the pool holds no `ao_output` and binding 6 stays on
-        // the (resolution-independent) 1×1 white fallback, so no rebuild needed.
+        // Rebuild the SSAO targets against the per-frame pooled `ao_output` views
+        // (the transient pool was already rebuilt above). SSAO's stale blur
+        // framebuffers are torn down inside `ssao.rebuild` (the device is idle,
+        // so freeing the pool views ahead of those framebuffers is sound).
         let frames = self.frames_in_flight;
         if let Some(mut ssao) = self.ssao.take() {
             // SSAO kernel/blur sample the unified G-buffer's per-frame normal+depth
@@ -735,31 +710,11 @@ impl VkContext {
                 &nd_views,
                 &ao_views,
             )?;
-            for (i, &set) in self.descriptors.global_sets.iter().enumerate() {
-                let ao_view = self
-                    .targets
-                    .transient_pool
-                    .view_for("ao_output", i)
-                    .unwrap_or(self.scene.ssao_white.view);
-                let info = vk::DescriptorImageInfo::default()
-                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                    .image_view(ao_view)
-                    .sampler(self.scene.linear_sampler.handle());
-                let write = vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(6)
-                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .image_info(std::slice::from_ref(&info));
-                // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-                // every set and resource it names belongs to this device.
-                unsafe {
-                    self.hw
-                        .device
-                        .update_descriptor_sets(std::slice::from_ref(&write), &[])
-                };
-            }
             self.ssao = Some(ssao);
         }
+        // Every global set's SSAO binding follows the rebuilt pool: this frame's
+        // `ao_output`, or the 1x1 white fallback when SSAO is off.
+        self.rewrite_global_binding(SSAO_BINDING);
 
         // Re-point the composite descriptor sets at the rebuilt scene-input
         // image (FSR upscale output > TAA output > reflection composite output >
@@ -779,7 +734,6 @@ impl VkContext {
                 scene_view,
                 self.bloom.mips[i][0].view,
                 self.scene.color_lut.view,
-                self.post.sampler.handle(),
             );
             // The view-mode channel sources are resolution-dependent too, so
             // they follow the rebuilt G-buffer / AO targets.
@@ -796,7 +750,6 @@ impl VkContext {
                     .transient_pool
                     .view_for("ao_output", i)
                     .unwrap_or(self.scene.ssao_white.view),
-                self.post.sampler.handle(),
             );
         }
 
@@ -1167,48 +1120,16 @@ pub(super) fn create_composite_framebuffers(
 }
 
 // Write a composite descriptor set: binding 0 = HDR resolve image,
-// binding 1 = bloom mip 0, binding 2 = the 3D color-grading LUT. All sampled
-// through `sampler`.
+// binding 1 = bloom mip 0, binding 2 = the 3D color-grading LUT. Their
+// samplers are written once, when the set is allocated.
 pub(super) fn write_composite_set(
     device: &VkDevice,
     set: vk::DescriptorSet,
     hdr_view: vk::ImageView,
     bloom_view: vk::ImageView,
     lut_view: vk::ImageView,
-    sampler: vk::Sampler,
 ) {
-    let hdr_info = vk::DescriptorImageInfo::default()
-        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .image_view(hdr_view)
-        .sampler(sampler);
-    let bloom_info = vk::DescriptorImageInfo::default()
-        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .image_view(bloom_view)
-        .sampler(sampler);
-    let lut_info = vk::DescriptorImageInfo::default()
-        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .image_view(lut_view)
-        .sampler(sampler);
-    let writes = [
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(0)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .image_info(std::slice::from_ref(&hdr_info)),
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(1)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .image_info(std::slice::from_ref(&bloom_info)),
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(2)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .image_info(std::slice::from_ref(&lut_info)),
-    ];
-    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
-    // and resource it names belongs to this device.
-    unsafe { device.update_descriptor_sets(&writes, &[]) };
+    write_composite_images(device, set, 0, &[hdr_view, bloom_view, lut_view]);
 }
 
 // Write the composite set's G-buffer channel bindings: normal+depth at 3,
@@ -1223,28 +1144,38 @@ pub(super) fn write_composite_channel_set(
     normal_depth_view: vk::ImageView,
     roughness_view: vk::ImageView,
     ao_view: vk::ImageView,
-    sampler: vk::Sampler,
 ) {
-    let infos = [normal_depth_view, roughness_view, ao_view].map(|view| {
-        vk::DescriptorImageInfo::default()
-            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(view)
-            .sampler(sampler)
-    });
-    let writes: Vec<_> = infos
+    write_composite_images(
+        device,
+        set,
+        3,
+        &[normal_depth_view, roughness_view, ao_view],
+    );
+}
+
+// Write `views` into consecutive composite image bindings from `first`.
+fn write_composite_images(
+    device: &VkDevice,
+    set: vk::DescriptorSet,
+    first: u32,
+    views: &[vk::ImageView],
+) {
+    let infos: Vec<_> = views
         .iter()
-        .enumerate()
-        .map(|(i, info)| {
-            vk::WriteDescriptorSet::default()
-                .dst_set(set)
-                .dst_binding(3 + i as u32)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(std::slice::from_ref(info))
+        .map(|&view| {
+            vk::DescriptorImageInfo::default()
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .image_view(view)
         })
         .collect();
-    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
+    let write = vk::WriteDescriptorSet::default()
+        .dst_set(set)
+        .dst_binding(first)
+        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+        .image_info(&infos);
+    // SAFETY: the write and the image infos it borrows are live for the call, and every set
     // and resource it names belongs to this device.
-    unsafe { device.update_descriptor_sets(&writes, &[]) };
+    unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
 }
 
 // Create one framebuffer per cascade slice of the array shadow map. Each

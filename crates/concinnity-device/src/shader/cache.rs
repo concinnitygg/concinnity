@@ -3,20 +3,17 @@
 // Every backend carries its built-in shaders in the binary and takes them
 // whenever the source digest matches, so what reaches this cache is the source
 // no build could have compiled ahead of time: an edited shader under
-// hot-reload, a program a device sizes differently from the build's ceiling,
-// and the Metal raymarch libraries assembled around world-authored SdfVolume
-// fragments (see `metal::msl_cache`). The output is a pure function of the
-// source text, the entry point, the compile target, and the compiler options,
-// none of which change between runs of an unedited binary -- so the second run
-// of a given build has no reason to compile any of them twice.
+// hot-reload, and the Metal libraries assembled around world-authored Shader
+// and SdfVolume programs (see `metal::msl_cache`). The output is a pure
+// function of the source text, the entry point, the compile target, and the
+// compiler, none of which change between runs of an unedited binary -- so the
+// second run of a given build has no reason to compile any of them twice.
 //
 // Each artifact is stored under the hex digest of those inputs, which makes the
 // entry self-validating: a shader edit, a flag change, or a debug/release switch
 // all produce a different key and simply miss rather than replaying stale bytes.
-// Keying on the *assembled* source is what lets this cover the runtime-templated
-// shaders (`{POOL_SIZE}`, `{MAX_PROBES}`, the probe_common injection, the
-// `CULL_PHASE2` / `SHADOW_CULL` variants) that a build-time table would have had
-// to enumerate by hand.
+// Keying on the *assembled* source covers every define variant and every world
+// Shader's spliced hooks without enumerating them.
 //
 // Artifacts live in the runtime cache segment, so an init that misses fifty
 // times writes one file at its checkpoint rather than fifty as it goes -- see
@@ -41,15 +38,13 @@ include!(concat!(env!("OUT_DIR"), "/shader_compile_source_hash.rs"));
 
 const KIND: CacheEntryKind = CacheEntryKind::Shader;
 
-// The inputs a compiled shader artifact is a function of. `compiler` separates
-// the toolchains (FXC's DXBC must never be served to a Vulkan build); `options`
-// carries whatever flag word or option discriminator the caller's compiler takes.
+// The inputs a compiled shader artifact is a function of. `compiler` names the
+// toolchain that produced it, so output from one is never served for another.
 pub(crate) struct Key<'a> {
     pub compiler: &'a str,
     pub source: &'a str,
     pub entry: &'a str,
     pub target: &'a str,
-    pub options: u64,
 }
 
 impl Key<'_> {
@@ -58,12 +53,11 @@ impl Key<'_> {
     fn digest(&self) -> String {
         let mut h = Sha256::new();
         h.update(SHADER_COMPILE_SOURCE_HASH.to_le_bytes());
-        h.update(concinnity_slang::SOURCE_HASH.to_le_bytes());
+        h.update(concinnity_shader::SOURCE_HASH.to_le_bytes());
         for part in [self.compiler, self.source, self.entry, self.target] {
             h.update((part.len() as u64).to_le_bytes());
             h.update(part.as_bytes());
         }
-        h.update(self.options.to_le_bytes());
         hex::encode(h.finalize())
     }
 }
@@ -129,16 +123,16 @@ fn enabled() -> bool {
 }
 
 // Discard the segment's artifacts when the shader toolchain changes. An entry
-// is a function of its source, not of what compiled it, and slangc is an
-// external binary that can be upgraded -- or shadowed by another install
-// earlier on PATH -- without a byte of source moving; without this, that
-// upgrade never takes effect and the old compiler's output is replayed forever.
+// is a function of its source, not of what compiled it, and dxc is an external
+// binary that can be upgraded -- or shadowed by another install earlier on
+// PATH -- without a byte of source moving; without this, that upgrade never
+// takes effect and the old compiler's output is replayed forever.
 //
-// Costs one `slangc -version` per process, which is why it is a `OnceLock`.
+// Costs one `--version` per process, which is why it is a `OnceLock`.
 fn verify_toolchain() {
     static ONCE: OnceLock<()> = OnceLock::new();
     ONCE.get_or_init(|| {
-        let current = concinnity_slang::compiler_id();
+        let current = crate::shader::compile::toolchain_id();
         if crate::shader::runtime_cache::verify_toolchain(current) {
             tracing::info!("shader cache: {current} did not write it, discarding entries");
         }
@@ -160,32 +154,30 @@ fn store(digest: &str, bytes: &[u8]) {
 mod tests {
     use super::*;
 
-    fn key<'a>(source: &'a str, entry: &'a str, target: &'a str, options: u64) -> Key<'a> {
+    fn key<'a>(source: &'a str, entry: &'a str, target: &'a str) -> Key<'a> {
         Key {
-            compiler: "fxc",
+            compiler: "hlsl",
             source,
             entry,
             target,
-            options,
         }
     }
 
     #[test]
     fn digest_is_stable_for_identical_inputs() {
-        let a = key("float4 main() { return 0; }", "main", "ps_5_1", 7);
-        let b = key("float4 main() { return 0; }", "main", "ps_5_1", 7);
+        let a = key("float4 main() { return 0; }", "main", "ps_6_0");
+        let b = key("float4 main() { return 0; }", "main", "ps_6_0");
         assert_eq!(a.digest(), b.digest());
     }
 
     #[test]
     fn every_field_changes_the_digest() {
-        let base = key("src", "main", "ps_5_1", 1).digest();
-        assert_ne!(base, key("other", "main", "ps_5_1", 1).digest(), "source");
-        assert_ne!(base, key("src", "main2", "ps_5_1", 1).digest(), "entry");
-        assert_ne!(base, key("src", "main", "vs_5_1", 1).digest(), "target");
-        assert_ne!(base, key("src", "main", "ps_5_1", 2).digest(), "options");
-        let mut other_compiler = key("src", "main", "ps_5_1", 1);
-        other_compiler.compiler = "glsl";
+        let base = key("src", "main", "ps_6_0").digest();
+        assert_ne!(base, key("other", "main", "ps_6_0").digest(), "source");
+        assert_ne!(base, key("src", "main2", "ps_6_0").digest(), "entry");
+        assert_ne!(base, key("src", "main", "vs_6_0").digest(), "target");
+        let mut other_compiler = key("src", "main", "ps_6_0");
+        other_compiler.compiler = "metal";
         assert_ne!(base, other_compiler.digest(), "compiler");
     }
 
@@ -193,10 +185,7 @@ mod tests {
     // them ("ab", "c") and ("a", "bc") would hash alike.
     #[test]
     fn field_boundaries_cannot_be_confused() {
-        assert_ne!(
-            key("ab", "c", "t", 0).digest(),
-            key("a", "bc", "t", 0).digest()
-        );
+        assert_ne!(key("ab", "c", "t").digest(), key("a", "bc", "t").digest());
     }
 
     // Under `cargo test` nothing reaches the state dir, in either direction.

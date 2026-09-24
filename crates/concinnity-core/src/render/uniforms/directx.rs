@@ -1,5 +1,5 @@
 //! The DirectX GPU-cull `CullParams` cbuffer, whose layout the test below
-//! asserts by hand against the `DXIL_ABI` block in `cull.slang`.
+//! asserts by hand against the `CN_BACKEND_DIRECTX` block in `cull.hlsl`.
 
 /// The GPU-cull `CullParams` cbuffer (b0, 208 bytes): six already-normalized
 /// frustum planes, the camera position sharing its row with the object count, the
@@ -40,7 +40,7 @@ mod tests {
     use core::mem::{offset_of, size_of};
 
     // CullParams must match the `CullParams` root-constant block (b0) in
-    // cull.slang under DXIL_ABI: six frustum planes, cam_pos sharing its row
+    // cull.hlsl under CN_BACKEND_DIRECTX: six frustum planes, cam_pos sharing its row
     // with object_count, the previous view-projection, the Hi-Z metadata, then
     // the bucket routing pair opening a fresh 16-byte row (208 B total).
     #[test]

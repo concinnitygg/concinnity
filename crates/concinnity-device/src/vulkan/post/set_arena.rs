@@ -26,9 +26,9 @@ use crate::vulkan::owned::{OwnedDescriptorPool, VkDevice};
 // ceiling and leaves room for a pass to gain a second.
 const SETS_PER_FRAME: u32 = 16;
 
-// Combined image samplers those sets may hold in total. The widest post pass
-// binds a handful of sources, so eight per set covers every one of them.
-const SAMPLERS_PER_FRAME: u32 = SETS_PER_FRAME * 8;
+// Sources those sets may hold in total, each an image and a sampler. The
+// widest post pass binds a handful, so eight per set covers every one of them.
+const SOURCES_PER_FRAME: u32 = SETS_PER_FRAME * 8;
 
 // A per-frame descriptor pool ring for the shared post passes.
 pub(in crate::vulkan) struct PostSetArena {
@@ -45,9 +45,15 @@ struct PoolSlot {
 impl PostSetArena {
     // A pool per frame in flight.
     pub(in crate::vulkan) fn new(device: &VkDevice, frames: usize) -> RenderResult<Self> {
-        let sizes = [vk::DescriptorPoolSize::default()
-            .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .descriptor_count(SAMPLERS_PER_FRAME)];
+        let sizes = [
+            vk::DescriptorType::SAMPLED_IMAGE,
+            vk::DescriptorType::SAMPLER,
+        ]
+        .map(|ty| {
+            vk::DescriptorPoolSize::default()
+                .ty(ty)
+                .descriptor_count(SOURCES_PER_FRAME)
+        });
         let mut slots = Vec::with_capacity(frames.max(1));
         for _ in 0..frames.max(1) {
             let pool = device

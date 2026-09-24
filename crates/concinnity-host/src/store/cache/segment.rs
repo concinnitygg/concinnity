@@ -450,25 +450,25 @@ mod tests {
         // The first stamp claims what is there rather than discarding it: a
         // compile stamps the segment before it stores, so an unstamped entry
         // came from no toolchain this could disagree with.
-        assert!(!segment.adopt_toolchain("slang 2026.1"));
+        assert!(!segment.adopt_toolchain("dxc 1.8"));
         assert!(segment.write_to(&path, BUDGET), "the stamp is a change");
 
         // The same toolchain keeps every entry and dirties nothing.
         let mut warm = Segment::read_from(&path);
-        assert!(!warm.adopt_toolchain("slang 2026.1"));
+        assert!(!warm.adopt_toolchain("dxc 1.8"));
         assert_eq!(warm.get(SHADER, "cafe"), Some(&[1, 2][..]));
         assert!(!warm.write_to(&path, BUDGET));
 
         // Another one drops what it did not produce, and the drop reaches disk.
         let mut upgraded = Segment::read_from(&path);
-        assert!(upgraded.adopt_toolchain("slang 2026.2"), "discarded");
+        assert!(upgraded.adopt_toolchain("dxc 1.9"), "discarded");
         assert_eq!(upgraded.get(SHADER, "cafe"), None);
         upgraded.put(SHADER, "f00d", &[3]);
         upgraded.write_to(&path, BUDGET);
         let mut reread = Segment::read_from(&path);
         assert_eq!(reread.get(SHADER, "cafe"), None);
         assert_eq!(reread.get(SHADER, "f00d"), Some(&[3][..]));
-        assert!(!reread.adopt_toolchain("slang 2026.2"), "stamp persisted");
+        assert!(!reread.adopt_toolchain("dxc 1.9"), "stamp persisted");
     }
 
     #[test]

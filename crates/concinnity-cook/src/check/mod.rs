@@ -25,6 +25,8 @@ pub(crate) mod prop;
 pub(crate) mod sdf_volume;
 /// `Shader` argument checks.
 pub(crate) mod shader;
+
+pub use shader::is_shader_extension;
 pub(crate) mod shape;
 pub(crate) mod texture;
 pub(crate) mod voxel_chunk;
@@ -158,7 +160,7 @@ mod tests {
             asset(
                 "scene_shader",
                 RegisteredType::Shader,
-                serde_json::json!({"fragment": "x.slang"}),
+                serde_json::json!({"fragment": "x.hlsl"}),
             ),
         ];
         assert!(check_world(&assets).is_ok());

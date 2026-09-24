@@ -43,14 +43,10 @@ pub(super) fn build_area_lights(
     let ltc_upload = gpu.upload();
     let ltc_matrix = upload_float_lut(&ltc_upload, ltc_size, 4, ltc::matrix_texels())?;
     let ltc_magnitude = upload_float_lut(&ltc_upload, ltc_size, 2, ltc::magnitude_texels())?;
-    // Linear clamp-to-edge: the LUT is indexed by roughness / view angle, so
-    // an edge sample must not wrap.
-    let sampler = create_sampler_cube_linear(&hw.device)?;
     Ok(VkAreaLight {
         buffer,
         ltc_matrix,
         ltc_magnitude,
-        sampler,
     })
 }
 
@@ -163,18 +159,15 @@ pub(super) fn build_scene_resources(
     // Empty scene keeps the 1-element placeholder (nothing copied in).
     upload_static_records(&local_light_buffer, local_lights);
 
-    // Clustered light binning. The per-cluster list + `ClusterParams` buffers
-    // are always allocated (the forward shaders reference bindings 10 + 11
-    // unconditionally, guarded by `use_clusters`); the compute pipeline is
-    // built only when the world has local lights to bin, which is also what
-    // gates the `LightCull` graph node.
+    // Clustered binning. Built whatever the world declares: the forward shaders
+    // reference bindings 10 + 11 unconditionally (guarded by `use_clusters`),
+    // and reflection probes are placed after init.
     let light_cull = crate::vulkan::light_cull::build_light_cull(
         alloc,
         device,
         frames,
         local_light_buffer.buffer(),
         local_light_size,
-        !local_lights.is_empty(),
         hot_reload,
     )?;
     Ok((
@@ -192,7 +185,6 @@ pub(super) fn build_scene_resources(
             light_ubo_buffers,
             light_dirty: FrameDirty::new(frames),
             local_light_buffer,
-            local_light_size,
             light_uniforms,
         },
         light_cull,

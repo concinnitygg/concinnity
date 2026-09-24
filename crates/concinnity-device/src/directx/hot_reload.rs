@@ -1,62 +1,37 @@
-//! Filesystem watcher driving D3D12 shader hot-reload. A background notify
-//! watcher tails `<CARGO_MANIFEST_DIR>/src/directx/shaders/` and the
-//! single-source `src/shaders/` beside it and, on any modify event for a known
-//! shader source, flips a shared `Arc<AtomicBool>`. The main thread
-//! polls that flag at the top of `draw_frame` and calls
-//! `DxContext::reload_shaders` when it's set. Same flag is also set by the
-//! `reload-shaders` debug command, so the two trigger paths converge.
+//! D3D12 shader hot-reload: `DxContext::reload_shaders` rebuilds every live
+//! built-in PSO from the checkout's shader sources. The `reload-shaders` debug
+//! command sets the shared flag, and the main thread polls it at the top of
+//! `draw_frame`.
 //!
-//! Entirely a dev-loop concern; only constructed when `DxContext::new` is
-//! called with `hot_reload = true`. Production `cn run` never instantiates it.
-//! Mirrors src/metal/hot_reload.rs.
+//! Entirely a dev-loop concern: the flag exists only when `DxContext::new` is
+//! called with `hot_reload = true`. Production `cn run` never sets it. Mirrors
+//! src/metal/hot_reload.rs.
 
 use concinnity_core::render::backend_init;
 use concinnity_core::render::error::{RenderError, RenderResult};
-use notify::{Event, EventKind, RecursiveMode, Watcher};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::sync::atomic::Ordering;
 use windows::Win32::Graphics::Direct3D12::ID3D12PipelineState;
 
 use super::context::DxContext;
 use super::init::pipelines::{BucketPipelineTargets, build_bucket_pipeline};
 
 // Shader hot-reload state. `enabled` is true only under `cn debug`: it routes
-// every built-in HLSL source resolve through `pipeline::shader_source`'s
-// disk-first path and gates the `directx/shaders/` filesystem watcher (false
-// under `cn run`, where the `include_str!`-baked HLSL is the only source).
-// `reload_pending` is the atomic flag set by the `notify` watcher or the debug
-// `reload-shaders` command, polled at the top of `draw_frame` to trigger a PSO
-// rebuild; `Some` only when `enabled`, and the debug server reads its `Arc`
-// clone via `GraphicsSystem`. `watcher` is the live `notify` handle held purely
-// for lifetime (dropping it stops the watcher); `Some` only when `enabled`.
+// every built-in shader source resolve through the disk-first path (false
+// under `cn run`, where the embedded source is the only one). `reload_pending`
+// is the atomic flag the debug `reload-shaders` command sets, polled at the top
+// of `draw_frame` to trigger a PSO rebuild; `Some` only when `enabled`, and the
+// debug server reads its `Arc` clone via `GraphicsSystem`.
 pub(in crate::directx) struct HotReloadState {
     pub enabled: bool,
     pub reload_pending: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-    #[expect(
-        dead_code,
-        reason = "held so the watcher thread stays alive; dropping it stops the watcher"
-    )]
-    pub watcher: Option<crate::directx::hot_reload::WatcherHandle>,
 }
 
 impl HotReloadState {
-    // Watcher creation is best-effort: a missing source dir or a notify error
-    // logs a warning and disables only the watcher half -- the debug command
-    // still works on the same flag.
-    pub(super) fn spawn(enabled: bool) -> Self {
-        let (reload_pending, watcher) = if enabled {
-            let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let watcher = crate::directx::hot_reload::spawn(std::sync::Arc::clone(&flag));
-            (Some(flag), watcher)
-        } else {
-            (None, None)
-        };
+    pub(super) fn new(enabled: bool) -> Self {
         Self {
             enabled,
-            reload_pending,
-            watcher,
+            reload_pending: enabled
+                .then(|| std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))),
         }
     }
 }
@@ -72,135 +47,6 @@ macro_rules! rebuild_if_live {
     ($cond:expr_2021, $build:expr_2021 $(,)?) => {
         if $cond { Some($build?) } else { None }
     };
-}
-
-// Shader-source extensions the watcher reacts to. The per-backend sources land
-// as `.hlsl`, the single-source programs as `.slang`; the helper rejects every
-// other event so editor swap files, README updates, and tmp files don't trigger
-// a rebuild.
-const SHADER_EXTENSIONS: &[&str] = &["hlsl", "slang"];
-
-// Live watcher handle. Held by `DxContext` purely to keep the watcher
-// thread alive; dropping it stops the watcher. The flag itself is shared
-// via [`DxContext::shader_reload_pending`].
-pub(crate) struct WatcherHandle {
-    // notify keeps its own listener thread alive for as long as the handle
-    // exists; we never read this field after construction.
-    #[expect(
-        dead_code,
-        reason = "notify keeps its listener thread alive while the handle lives; never read after construction"
-    )]
-    watcher: notify::RecommendedWatcher,
-}
-
-// Spawn a `notify` watcher over the D3D12 shader source directory and wire
-// it to flip `flag` on any known shader-source modify event. The path is derived
-// from `CARGO_MANIFEST_DIR` at compile time so the watcher works no matter
-// where the binary is launched from, but only as long as the source tree
-// still exists at that path. A shipped binary should never be hot-reload-
-// enabled, so the missing-path case logs and returns `None` instead of
-// failing the whole context init.
-pub(crate) fn spawn(flag: Arc<AtomicBool>) -> Option<WatcherHandle> {
-    let dir: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("src")
-        .join("directx")
-        .join("shaders");
-    if !dir.is_dir() {
-        tracing::warn!(
-            "hot-reload: shader source dir {} not found; watcher disabled (debug \
-             command still works)",
-            dir.display()
-        );
-        return None;
-    }
-
-    // Suppress event bursts: editors (vim, VSCode) frequently emit several
-    // close-write / rename events per save. Coalesce by a small debounce so
-    // one save triggers exactly one reload.
-    let debounce = Duration::from_millis(150);
-    let last_fire = std::sync::Mutex::new(Instant::now() - debounce);
-    let flag_for_cb = Arc::clone(&flag);
-    let mut watcher = match notify::recommended_watcher(move |res: notify::Result<Event>| {
-        let event = match res {
-            Ok(e) => e,
-            Err(e) => {
-                tracing::debug!("hot-reload watcher error: {e}");
-                return;
-            }
-        };
-        if !is_relevant(&event) {
-            return;
-        }
-        let mut last = match last_fire.lock() {
-            Ok(g) => g,
-            Err(p) => p.into_inner(),
-        };
-        let now = Instant::now();
-        if now.duration_since(*last) < debounce {
-            return;
-        }
-        *last = now;
-        tracing::info!(
-            "hot-reload: detected change to {:?}, scheduling shader rebuild",
-            event.paths
-        );
-        flag_for_cb.store(true, Ordering::SeqCst);
-    }) {
-        Ok(w) => w,
-        Err(e) => {
-            tracing::warn!("hot-reload: failed to create notify watcher: {e}");
-            return None;
-        }
-    };
-
-    if let Err(e) = watcher.watch(&dir, RecursiveMode::NonRecursive) {
-        tracing::warn!(
-            "hot-reload: failed to watch {} ({}); watcher disabled",
-            dir.display(),
-            e
-        );
-        return None;
-    }
-
-    // The single-source shader directory rides the same watcher: a `.slang`
-    // save rebuilds through the same flag. Best-effort, like the main dir.
-    let slang_dir: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("src")
-        .join("shaders");
-    if slang_dir.is_dir()
-        && let Err(e) = watcher.watch(&slang_dir, RecursiveMode::NonRecursive)
-    {
-        tracing::warn!(
-            "hot-reload: failed to watch {} ({e}); .slang edits will not trigger reloads",
-            slang_dir.display()
-        );
-    }
-
-    tracing::info!(
-        "hot-reload: watching {} for {} changes",
-        dir.display(),
-        SHADER_EXTENSIONS.join("/"),
-    );
-    Some(WatcherHandle { watcher })
-}
-
-// True when this notify event is a modify of a known shader file. Filters out
-// unrelated paths (e.g. swap files, sub-directory churn) and the non-mutating
-// events notify emits (e.g. access/metadata).
-fn is_relevant(event: &Event) -> bool {
-    if !matches!(
-        event.kind,
-        EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
-    ) {
-        return false;
-    }
-    event.paths.iter().any(|p| {
-        p.extension().and_then(|e| e.to_str()).is_some_and(|e| {
-            SHADER_EXTENSIONS
-                .iter()
-                .any(|&se| se.eq_ignore_ascii_case(e))
-        })
-    })
 }
 
 impl DxContext {

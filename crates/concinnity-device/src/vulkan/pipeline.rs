@@ -1,5 +1,5 @@
 // Vulkan pipeline creation for the main, shadow, and text render passes, over
-// the single-source programs in `super::slang_builtins` and a world Shader's
+// the single-source programs in `super::builtin_shaders` and a world Shader's
 // cooked artifacts.
 
 use ash::vk;
@@ -7,11 +7,10 @@ use concinnity_core::render::backend_init;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::shadow_bias;
 
-use super::slang_builtins;
+use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::owned::{OwnedPipeline, VkDevice};
-use crate::vulkan::slang_builtins::SlangCompile;
 
-// The uniform and push-constant layouts are the `.slang` sources' own, held
+// The uniform and push-constant layouts are the `.hlsl` sources' own, held
 // to the `#[repr(C)]` mirrors by `crate::shader_layout`.
 
 #[cfg(test)]
@@ -19,22 +18,13 @@ pub(super) fn is_spirv(bytes: &[u8]) -> bool {
     bytes.len() >= 4 && u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) == 0x07230203
 }
 
-// Compile the engine's bindless static-pass pair. `probe_cube_count` is the
-// global set layout's binding-8 descriptor count, injected into the probe cube
-// array. The texture pool takes no count: the fragment declares `tex_pool[]`
-// unsized and reads whatever the set layout holds. A bucket whose Shader is the
+// Compile the engine's bindless static-pass pair. No count reaches it: the
+// fragment declares `tex_pool[]` unsized and reads whatever the set layout
+// holds, and the probe set is a single cube array. A bucket whose Shader is the
 // world's compiles the same file through `world_entry` instead.
-pub(super) fn compile_bindless_shaders(
-    hot_reload: bool,
-    probe_cube_count: u32,
-) -> RenderResult<(Vec<u8>, Vec<u8>)> {
-    let ctx = slang_builtins::Ctx {
-        hot_reload,
-        msaa: false,
-        probe_count: probe_cube_count as usize,
-    };
-    let vert = super::slang_builtins::MAIN_BINDLESS_VERT.compile(&ctx)?;
-    let frag = super::slang_builtins::MAIN_BINDLESS_FRAG.compile(&ctx)?;
+pub(super) fn compile_bindless_shaders(hot_reload: bool) -> RenderResult<(Vec<u8>, Vec<u8>)> {
+    let vert = super::builtin_shaders::MAIN_BINDLESS_VERT.compile(hot_reload)?;
+    let frag = super::builtin_shaders::MAIN_BINDLESS_FRAG.compile(hot_reload)?;
     Ok((vert, frag))
 }
 
@@ -61,7 +51,7 @@ pub(super) const CULL_PUSH_CONSTANT_BYTES: u32 = 120;
 
 // Compile the Compute cull compute kernel to SPIR-V.
 pub(super) fn compile_cull_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    super::slang_builtins::CULL.compile(&slang_builtins::Ctx::plain(hot_reload))
+    super::builtin_shaders::CULL_PHASE1.compile(hot_reload)
 }
 
 // Compile the phase-2 (two-pass occlusion) variant of the cull kernel. Same
@@ -69,7 +59,7 @@ pub(super) fn compile_cull_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
 // re-test of phase 1's Hi-Z-occluded objects against the rebuilt pyramid.
 // Mirrors the `#define` split the Hi-Z init kernel uses.
 pub(super) fn compile_cull_shader_phase2(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    super::slang_builtins::CULL_PHASE2.compile(&slang_builtins::Ctx::plain(hot_reload))
+    super::builtin_shaders::CULL_PHASE2.compile(hot_reload)
 }
 
 // Compile the GPU-driven shadow cull kernel: the same cull source with a
@@ -77,12 +67,12 @@ pub(super) fn compile_cull_shader_phase2(hot_reload: bool) -> RenderResult<Vec<u
 // bindings and tests each cascade's light frustum only. Paired with the lean
 // 3-SSBO shadow cull set layout.
 pub(super) fn compile_shadow_cull_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    super::slang_builtins::CULL_SHADOW.compile(&slang_builtins::Ctx::plain(hot_reload))
+    super::builtin_shaders::CULL_SHADOW.compile(hot_reload)
 }
 
 // Compile the GPU-driven shadow pass's depth-only bindless vertex shader.
 pub(super) fn compile_shadow_bindless_vs(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    super::slang_builtins::SHADOW_BINDLESS_VERT.compile(&slang_builtins::Ctx::plain(hot_reload))
+    super::builtin_shaders::SHADOW_VERT_BINDLESS.compile(hot_reload)
 }
 
 // Create the GPU-cull compute pipeline. `layout` must include the cull
@@ -158,9 +148,9 @@ pub(in crate::vulkan) fn spv_module<'d>(
     Ok(SpvModule { device, module })
 }
 
-// The entry point every SPIR-V module the cook emits declares. slangc names the
-// entry after the stage function, and the emitter rewrites it to `main`, so one
-// name covers every stage on this backend.
+// The entry point every SPIR-V module the cook emits declares. dxc renames the
+// stage function to `main` on the Vulkan leg, so one name covers every stage on
+// this backend.
 pub(in crate::vulkan) const SHADER_ENTRY: &std::ffi::CStr = c"main";
 
 // The vertex + fragment modules a graphics pipeline is built from, held together
@@ -198,49 +188,42 @@ impl<'d> GraphicsStages<'d> {
 }
 
 // The world Shader's program for `entry`, as SPIR-V: the cook's artifact when
-// the engine template still matches, else a compile here. `probe_count` is the
-// probe cube array length the host declares.
+// the engine template still matches, else a compile here.
 pub(super) fn world_entry(
     world: &concinnity_core::components::ShaderPrograms,
     entry: &str,
     hot_reload: bool,
-    probe_count: usize,
 ) -> RenderResult<Vec<u8>> {
     let req = crate::shader::surface_source::Request {
-        platform: concinnity_core::platform::Platform::Glsl,
-        probe_count,
+        platform: concinnity_core::platform::Platform::Vulkan,
         hot_reload,
     };
-    crate::shader::surface_source::artifact(world, entry, &req)
+    crate::shader::surface_source::artifact(world, entry, &req, crate::shader::compile::cooked)
         .map(|c| c.into_owned())
-        .map_err(RenderError::ShaderCompile)
 }
 
 // The depth-only skinned shadow vertex, the engine's own: skinned main-pass
 // draws ride the GPU-driven pass through the skin fold.
 pub(super) fn compile_skinned_shadow_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    super::slang_builtins::SKINNED_SHADOW_VERT.compile(&slang_builtins::Ctx::plain(hot_reload))
+    super::builtin_shaders::SHADOW_VERT_SKINNED.compile(hot_reload)
 }
 
 // The shadow vertex shader is engine-internal. Whether the shadow pass runs at
 // all is gated by `effective_shadow_size` at the call site, not here.
 pub(super) fn resolve_shadow_shader(hot_reload: bool) -> RenderResult<Option<Vec<u8>>> {
-    let spv =
-        super::slang_builtins::SHADOW_VERT.compile(&slang_builtins::Ctx::plain(hot_reload))?;
+    let spv = super::builtin_shaders::SHADOW_VERT.compile(hot_reload)?;
     Ok(Some(spv))
 }
 
 pub(super) fn compile_text_shaders(hot_reload: bool) -> RenderResult<(Vec<u8>, Vec<u8>)> {
-    let ctx = slang_builtins::Ctx::plain(hot_reload);
-    let vert = super::slang_builtins::TEXT_VERT.compile(&ctx)?;
-    let frag = super::slang_builtins::TEXT_FRAG.compile(&ctx)?;
+    let vert = super::builtin_shaders::TEXT_VERT.compile(hot_reload)?;
+    let frag = super::builtin_shaders::TEXT_FRAG.compile(hot_reload)?;
     Ok((vert, frag))
 }
 
 pub(super) fn compile_composite_shaders(hot_reload: bool) -> RenderResult<(Vec<u8>, Vec<u8>)> {
-    let ctx = slang_builtins::Ctx::plain(hot_reload);
-    let vert = super::slang_builtins::FULLSCREEN_VERT.compile(&ctx)?;
-    let frag = super::slang_builtins::COMPOSITE_FRAG.compile(&ctx)?;
+    let vert = super::builtin_shaders::FULLSCREEN_VERT.compile(hot_reload)?;
+    let frag = super::builtin_shaders::COMPOSITE_FRAG.compile(hot_reload)?;
     Ok((vert, frag))
 }
 
@@ -368,9 +351,6 @@ pub(super) struct BucketPipelineTargets {
     pub msaa_samples: vk::SampleCountFlags,
     pub swapchain_format: vk::Format,
     pub hot_reload: bool,
-    // The probe cube count the global set layout declares, which a world's
-    // bindless pair compiles against.
-    pub probe_count: usize,
 }
 
 // Build one shader bucket's bindless main-pass pipeline. `bucket` is the
@@ -388,18 +368,8 @@ pub(super) fn build_bucket_pipeline(
 ) -> RenderResult<OwnedPipeline> {
     let (vert_spv, frag_spv) = match shader.programs {
         Some(programs) => (
-            world_entry(
-                programs,
-                "vertex_main_bindless",
-                targets.hot_reload,
-                targets.probe_count,
-            )?,
-            world_entry(
-                programs,
-                "fragment_main_bindless",
-                targets.hot_reload,
-                targets.probe_count,
-            )?,
+            world_entry(programs, "vertex_main_bindless", targets.hot_reload)?,
+            world_entry(programs, "fragment_main_bindless", targets.hot_reload)?,
         ),
         None => (engine_default.0.clone(), engine_default.1.clone()),
     };
@@ -875,9 +845,9 @@ pub(super) fn create_composite_pipeline(
 #[cfg(test)]
 mod tests {
     use super::{
-        SlangCompile, compile_bindless_shaders, compile_cull_shader, compile_cull_shader_phase2,
+        CompileProgram, compile_bindless_shaders, compile_cull_shader, compile_cull_shader_phase2,
         compile_shadow_bindless_vs, compile_shadow_cull_shader, compile_skinned_shadow_shader,
-        is_spirv, slang_builtins, spirv_words, world_entry,
+        is_spirv, spirv_words, world_entry,
     };
 
     // Whole words become native-endian u32s, matching the raw reinterpretation
@@ -911,7 +881,7 @@ mod tests {
 
     // The phase-1 cull kernel, its two-pass `CULL_PHASE2` variant, and the
     // GPU-driven shadow `SHADOW_CULL` variant all compile to valid SPIR-V from
-    // the embedded source. Guards the `#ifdef` split in `cull.slang`, which the
+    // the embedded source. Guards the `#ifdef` split in `cull.hlsl`, which the
     // Vulkan-on-Windows runtime cannot currently exercise.
     #[test]
     fn cull_shaders_compile_both_phases() {
@@ -930,7 +900,7 @@ mod tests {
     // valid SPIR-V from the embedded source.
     #[test]
     fn shadow_bindless_vs_compiles() {
-        if !concinnity_slang::shader_tests_enabled() {
+        if !concinnity_shader::dxc_available() {
             return;
         }
         let vs = compile_shadow_bindless_vs(false).expect("shadow bindless VS compiles");
@@ -938,34 +908,22 @@ mod tests {
     }
 
     // The bindless main shaders compile to valid SPIR-V from the embedded
-    // single-source program, across the probe-array lengths a device may bind
-    // (the array length is a runtime value on a sampler-starved driver, so the
-    // shortest and the ceiling forms both have to survive).
+    // single-source program, with nothing but the backend define ahead of it:
+    // neither the pool nor the probe set takes a count.
     #[test]
     fn bindless_shaders_compile() {
-        if !concinnity_slang::shader_tests_enabled() {
+        if !concinnity_shader::dxc_available() {
             return;
         }
-        for probes in [1, 7, concinnity_core::render::uniforms::MAX_PROBES as u32] {
-            let (vs, fs) =
-                compile_bindless_shaders(false, probes).expect("bindless shaders compile");
-            assert!(is_spirv(&vs), "bindless vertex is valid SPIR-V");
-            assert!(is_spirv(&fs), "bindless fragment is valid SPIR-V");
-        }
-        // The probe count rides the assembled source as a `#define` line, which
-        // is what the shader cache keys. The pool takes none: the array is
-        // declared unsized.
-        let frag_src =
-            crate::vulkan::slang_builtins::MAIN_BINDLESS_FRAG.source(&slang_builtins::Ctx {
-                hot_reload: false,
-                msaa: false,
-                probe_count: 4,
-            });
+        let (vs, fs) = compile_bindless_shaders(false).expect("bindless shaders compile");
+        assert!(is_spirv(&vs), "bindless vertex is valid SPIR-V");
+        assert!(is_spirv(&fs), "bindless fragment is valid SPIR-V");
+        let frag_src = crate::vulkan::builtin_shaders::MAIN_BINDLESS_FRAG.source(false);
         let injected: Vec<&str> = frag_src
             .lines()
             .take_while(|l| l.starts_with("#define "))
             .collect();
-        assert_eq!(injected, ["#define MAX_PROBES 4"]);
+        assert_eq!(injected, ["#define CN_BACKEND_VULKAN 1"]);
     }
 
     // A world Shader's bindless pair compiles from its programs, and is its own
@@ -975,21 +933,20 @@ mod tests {
     // compile branch of `surface_source`, which is also what a stale cook does.
     #[test]
     fn a_world_shader_compiles_its_own_bindless_pair() {
-        if !concinnity_slang::shader_tests_enabled() {
+        if !concinnity_shader::dxc_available() {
             return;
         }
         let programs = concinnity_core::components::ShaderPrograms {
             name: "wall".to_string(),
             vertex: None,
-            fragment: "float4 shade(VertexOut in, GpuObjectData od) { return float4(1.0); }"
+            fragment: "float4 shade(VertexOut v, GpuObjectData od) { return (float4)(1.0); }"
                 .to_string(),
             programs: Vec::new(),
         };
-        let probes = concinnity_core::render::uniforms::MAX_PROBES;
-        let vs = world_entry(&programs, "vertex_main_bindless", false, probes).unwrap();
-        let fs = world_entry(&programs, "fragment_main_bindless", false, probes).unwrap();
+        let vs = world_entry(&programs, "vertex_main_bindless", false).unwrap();
+        let fs = world_entry(&programs, "fragment_main_bindless", false).unwrap();
         assert!(is_spirv(&vs) && is_spirv(&fs), "the world's pair compiles");
-        let (_, engine_fs) = compile_bindless_shaders(false, probes as u32).unwrap();
+        let (_, engine_fs) = compile_bindless_shaders(false).unwrap();
         assert_ne!(fs, engine_fs, "the world's fragment is its own program");
         // The depth-only skinned shadow vertex stays the engine's.
         assert!(is_spirv(&compile_skinned_shadow_shader(false).unwrap()));

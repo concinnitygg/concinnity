@@ -11,7 +11,7 @@
 //! over 64x64 tiles. Metal keeps the per-mip init + downsample chain because the
 //! tile win those two measured did not reproduce on this backend.
 //!
-//! Two compute kernels come from the single-source `src/shaders/hiz_build.slang`
+//! Two compute kernels come from the single-source `src/render/shaders/hiz_build.hlsl`
 //! (one precompiled variant library each):
 //!
 //!   * `hiz_init_msaa` / `hiz_init_single`: reduce the main-depth resource into
@@ -34,6 +34,7 @@
 //! the downsample chain stays correct.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use super::builtin_shaders::compute_pipeline;
 use super::error::allocation_failed;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use objc2::rc::Retained;
@@ -42,7 +43,7 @@ use objc2_foundation::NSRange;
 use objc2_foundation::ns_string;
 use objc2_metal::{
     MTLCommandBuffer as _, MTLComputeCommandEncoder as _, MTLComputePipelineState, MTLDevice as _,
-    MTLLibrary as _, MTLPixelFormat, MTLSize, MTLTexture, MTLTextureType, MTLTextureUsage,
+    MTLPixelFormat, MTLSize, MTLTexture, MTLTextureType, MTLTextureUsage,
 };
 // GPU-free repr(C) push struct; lives in `core::render` so its layout test
 // counts toward coverage. Re-exported so this file's existing `HizParams` path
@@ -52,7 +53,6 @@ use concinnity_core::render::uniforms::HizParams;
 use super::context::MtlContext;
 use super::descriptors::TextureDesc;
 use super::encode::ComputeEncode;
-use super::pipeline::ns_str;
 use super::scoped_encoder::ScopedEncoder;
 
 // Compute threadgroup tile size for the Hi-Z build kernels (8x8, matching the
@@ -86,52 +86,28 @@ pub(super) struct HiZResources {
     pub(super) mip_count: u32,
 }
 
-// The init and downsample compute pipelines produced from `hiz_build.slang`.
+// The init and downsample compute pipelines produced from `hiz_build.hlsl`.
 type HizPipelines = (
     Retained<ProtocolObject<dyn MTLComputePipelineState>>,
     Retained<ProtocolObject<dyn MTLComputePipelineState>>,
 );
 
-// Build both Hi-Z compute kernels from the single-source `hiz_build.slang`
+// Build both Hi-Z compute kernels from the single-source `hiz_build.hlsl`
 // (one variant library per kernel, so each declares only what it binds).
 pub(super) fn build_hiz_pipelines(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
     sample_count: u32,
 ) -> RenderResult<HizPipelines> {
-    let (init_lib, init_entry) = if sample_count > 1 {
-        (
-            super::slang_builtins::HIZ_INIT_MSAA.library(device, hot_reload)?,
-            "hiz_init_msaa",
-        )
+    let init = if sample_count > 1 {
+        &super::builtin_shaders::HIZ_INIT_MSAA
     } else {
-        (
-            super::slang_builtins::HIZ_INIT_SINGLE.library(device, hot_reload)?,
-            "hiz_init_single",
-        )
+        &super::builtin_shaders::HIZ_INIT_SINGLE
     };
-    let downsample_lib = super::slang_builtins::HIZ_DOWNSAMPLE.library(device, hot_reload)?;
-    let init_fn = init_lib
-        .newFunctionWithName(&ns_str(init_entry))
-        .ok_or_else(|| {
-            RenderError::ShaderCompile(format!("{init_entry} not found in hiz library"))
-        })?;
-    let downsample_fn = downsample_lib
-        .newFunctionWithName(&ns_str("hiz_downsample"))
-        .ok_or_else(|| {
-            RenderError::ShaderCompile("hiz_downsample not found in hiz library".into())
-        })?;
-    let init_pipeline = device
-        .newComputePipelineStateWithFunction_error(&init_fn)
-        .map_err(|e| {
-            RenderError::ShaderCompile(format!("failed to create {init_entry} pipeline: {e:?}"))
-        })?;
-    let downsample_pipeline = device
-        .newComputePipelineStateWithFunction_error(&downsample_fn)
-        .map_err(|e| {
-            RenderError::ShaderCompile(format!("failed to create hiz_downsample pipeline: {e:?}"))
-        })?;
-    Ok((init_pipeline, downsample_pipeline))
+    Ok((
+        compute_pipeline(device, init, hot_reload)?,
+        compute_pipeline(device, &super::builtin_shaders::HIZ_DOWNSAMPLE, hot_reload)?,
+    ))
 }
 
 // The mip-chain texture paired with its one single-level view per mip.

@@ -8,13 +8,13 @@ use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLDevice;
 
 use super::InitGpu;
+use crate::metal::builtin_shaders::{RT_REFLECTIONS_FRAG, RT_REFLECTIONS_FRAG_TEXTURED};
 use crate::metal::context::{GlassState, MtlSceneAssets};
 use crate::metal::post::build_rt_reflection_pipeline;
 use crate::metal::raytrace::{
     RtGpu, RtPipelines, RtSceneGeometry, RtState, RtStaticGeometry, RtTextureCounts,
     build_rt_accel, build_rt_skin_pipeline, raytracing_supported,
 };
-use crate::metal::slang_builtins::{RT_REFLECTIONS_FRAG, RT_REFLECTIONS_FRAG_TEXTURED};
 
 pub(super) struct RtInputs<'a> {
     pub(super) world: &'a SceneData<'a>,

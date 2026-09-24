@@ -8,7 +8,7 @@
 //! the buffer back and tallying it here is what gives a Hi-Z change a
 //! behavioral oracle.
 //!
-//! Values mirror the `STATUS_*` constants in `cull.slang`; a test below reads
+//! Values mirror the `STATUS_*` constants in `cull.hlsl`; a test below reads
 //! that shader source and asserts the two agree.
 
 use alloc::vec::Vec;
@@ -178,11 +178,11 @@ mod tests {
 
     // The shader is the authority on these values: the Rust constants exist so
     // the host can name them, and Metal's encode kernel is handed one of them
-    // as a uniform. Read `cull.slang` and assert every `STATUS_*` it declares
+    // as a uniform. Read `cull.hlsl` and assert every `STATUS_*` it declares
     // matches, so a shader edit that renumbers one fails here rather than
     // silently mis-tallying a readback.
     #[test]
-    fn constants_match_cull_slang() {
+    fn constants_match_the_cull_shader() {
         let declared = parse_shader_statuses(crate::render::shaders::CULL);
         let expected = [
             ("STATUS_DRAWN", CullStatus::DRAWN),
@@ -194,7 +194,7 @@ mod tests {
         assert_eq!(
             declared.len(),
             expected.len(),
-            "cull.slang declares {} STATUS_* constants, the host names {}: {declared:?}",
+            "cull.hlsl declares {} STATUS_* constants, the host names {}: {declared:?}",
             declared.len(),
             expected.len(),
         );
@@ -202,8 +202,8 @@ mod tests {
             let found = declared
                 .iter()
                 .find(|(n, _)| n == name)
-                .unwrap_or_else(|| panic!("cull.slang declares no {name}"));
-            assert_eq!(found.1, value, "{name} disagrees with cull.slang");
+                .unwrap_or_else(|| panic!("cull.hlsl declares no {name}"));
+            assert_eq!(found.1, value, "{name} disagrees with cull.hlsl");
         }
     }
 

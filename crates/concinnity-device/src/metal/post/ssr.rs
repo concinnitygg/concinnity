@@ -18,15 +18,15 @@ use objc2_metal::{
     MTLTextureUsage,
 };
 
+use crate::metal::builtin_shaders::{REFLECTION_BLUR, REFLECTION_COMPOSITE};
 use crate::metal::context::MtlContext;
 use crate::metal::descriptors::TextureDesc;
 use crate::metal::encode::RenderEncode;
 use crate::metal::post::fullscreen::{
-    FullscreenBlend, FullscreenPass, PassTimer, build_slang_fullscreen_pipeline,
+    FullscreenBlend, FullscreenPass, PassTimer, build_fullscreen_pipeline,
     set_fragment_sampler_range,
 };
 use crate::metal::post::post_device::MtlPostPipeline;
-use crate::metal::slang_builtins::{REFLECTION_BLUR, REFLECTION_COMPOSITE};
 
 // The shared resolve, holding Metal's own pipeline handle.
 pub(crate) type MtlSsrPass = SsrPass<MtlPostPipeline>;
@@ -72,7 +72,7 @@ pub(crate) fn build_reflection_composite_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    build_slang_fullscreen_pipeline(
+    build_fullscreen_pipeline(
         device,
         &REFLECTION_COMPOSITE,
         MTLPixelFormat::RGBA16Float,
@@ -88,7 +88,7 @@ pub(crate) fn build_reflection_blur_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    build_slang_fullscreen_pipeline(
+    build_fullscreen_pipeline(
         device,
         &REFLECTION_BLUR,
         MTLPixelFormat::RGBA16Float,

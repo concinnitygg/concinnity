@@ -591,8 +591,8 @@ mod tests {
         let mut map = ShaderStageSourceMap::new();
         assert!(map.is_empty());
         for (stage, path) in [
-            (ShaderStage::Vertex, "shaders/sway.slang"),
-            (ShaderStage::Fragment, "shaders/surface/scene.slang"),
+            (ShaderStage::Vertex, "shaders/sway.hlsl"),
+            (ShaderStage::Fragment, "shaders/surface/scene.hlsl"),
         ] {
             map.entries.push(ShaderStageSourceEntry {
                 stage,
@@ -683,7 +683,7 @@ mod tests {
             |s| {
                 s.shader_stages.entries.push(ShaderStageSourceEntry {
                     stage: ShaderStage::Fragment,
-                    resolved_path: "shaders/scene.slang".to_string(),
+                    resolved_path: "shaders/scene.hlsl".to_string(),
                 })
             },
         ];

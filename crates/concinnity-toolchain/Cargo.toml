@@ -18,7 +18,11 @@ include = [
 
 [dependencies]
 concinnity-core = { workspace = true }
-concinnity-slang = { workspace = true }
+concinnity-shader = { workspace = true }
+
+# The MSL leg links spirv-cross; only a macOS host emits metallibs.
+[target.'cfg(target_os = "macos")'.dependencies]
+concinnity-shader = { workspace = true, features = ["spirv-cross"] }
 
 [dev-dependencies]
 concinnity-testing = { workspace = true }

@@ -40,7 +40,6 @@ impl VkContext {
                 msaa_samples: self.targets.msaa_samples,
                 swapchain_format: self.swapchain.format,
                 hot_reload: self.hot_reload.enabled,
-                probe_count: self.descriptors.probe_cube_count as usize,
             },
             bucket as usize,
             shader,

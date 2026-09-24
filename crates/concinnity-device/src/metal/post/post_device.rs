@@ -13,48 +13,40 @@ use concinnity_core::render::post::device::{
 };
 use concinnity_core::render::post::program::{PostProgram, PostProgramBindings};
 use concinnity_core::render::render_graph::{PixelFormat, TextureDesc};
-use concinnity_core::render::uniforms::ProbeSet;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTLBuffer, MTLCommandBuffer, MTLDevice as _, MTLLoadAction, MTLRenderPipelineState,
-    MTLSamplerState, MTLTexture,
+    MTLCommandBuffer, MTLDevice as _, MTLLoadAction, MTLRenderPipelineState, MTLSamplerState,
+    MTLTexture,
 };
 
-use crate::metal::bindless_args::ResidencySet;
 use crate::metal::encode::RenderEncode;
 use crate::metal::error::allocation_failed;
 use crate::metal::pass_timing::PassTimingResources;
 use crate::metal::post::fullscreen::{
-    FullscreenBlend, FullscreenPass, PassTimer, build_slang_fullscreen_pipeline,
-    encode_fullscreen_pass,
+    FullscreenBlend, FullscreenPass, PassTimer, build_fullscreen_pipeline, encode_fullscreen_pass,
 };
-use crate::metal::probe_cubes::PROBE_CUBE_ARG_BUFFER_INDEX;
-use crate::metal::slang_builtins::{SSGI_COMPOSITE, SSGI_GATHER, SSR_RESOLVE, SlangLib, TAA_FRAG};
+use crate::metal::probe_set::{ProbeBindings, ProbeSlots};
 use crate::metal::transient_pool::{pixel_format, texture_descriptor_for};
 
-// Buffer slot a probe-reading post program declares its `ProbeSet` at, after
-// the constants at buffer(0).
-const PROBE_SET_BUFFER_INDEX: usize = 1;
+// Buffer slots a probe-reading post program declares its `ProbeSet`, the
+// cluster params, its probe records and the cluster lists at, after the
+// constants at buffer(0): the registers ssr.hlsl names. The cube array takes
+// the texture slot after the declared sources.
+fn probe_slots(sources: usize) -> ProbeSlots {
+    ProbeSlots {
+        set: 1,
+        records: 5,
+        cubes: Some(sources),
+        cluster: Some((2, 6)),
+    }
+}
 
 // A built fullscreen post pipeline plus what its program declares, so a draw
 // can check what it was handed.
 pub(crate) struct MtlPostPipeline {
     state: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
     bindings: PostProgramBindings,
-}
-
-// The world's reflection-probe set, as a probe-reading program binds it.
-#[derive(Clone, Copy)]
-pub(in crate::metal) struct MtlPostProbes<'a> {
-    // Per-probe influence boxes and the count.
-    pub set: &'a ProbeSet,
-    // This frame's cube argument buffer. `None` before the first frame builds
-    // one, which leaves the shader's probe path unbound: the same state a world
-    // with no probe set is in.
-    pub cube_args: Option<&'a ProtocolObject<dyn MTLBuffer>>,
-    // Every cube the argument buffer names, declared resident per draw.
-    pub residency: &'a ResidencySet,
 }
 
 // The Metal handles a shared post pass builds and encodes through. Borrowed
@@ -68,20 +60,10 @@ pub(in crate::metal) struct MtlPostDevice<'a> {
     pub cube_sampler: &'a ProtocolObject<dyn MTLSamplerState>,
     // The probe set a probe-reading program binds. Absent at init, where no
     // draw is encoded.
-    pub probes: Option<MtlPostProbes<'a>>,
+    pub probes: Option<ProbeBindings<'a>>,
     // GPU-timing resources, absent when timing is off.
     pub timing: Option<&'a PassTimingResources>,
     pub hot_reload: bool,
-}
-
-// The Metal library a post program's fragment comes from.
-fn library(program: PostProgram) -> &'static SlangLib {
-    match program {
-        PostProgram::TaaResolve => &TAA_FRAG,
-        PostProgram::SsrResolve => &SSR_RESOLVE,
-        PostProgram::SsgiGather => &SSGI_GATHER,
-        PostProgram::SsgiComposite => &SSGI_COMPOSITE,
-    }
 }
 
 fn blend(blend: PostBlend) -> FullscreenBlend {
@@ -130,9 +112,9 @@ impl PostPassDevice for MtlPostDevice<'_> {
         format: PixelFormat,
         blend_mode: PostBlend,
     ) -> RenderResult<Self::Pipeline> {
-        let state = build_slang_fullscreen_pipeline(
+        let state = build_fullscreen_pipeline(
             self.device,
-            library(program),
+            program.program(),
             pixel_format(format),
             blend(blend_mode),
             self.hot_reload,
@@ -190,25 +172,19 @@ impl PostPassDevice for MtlPostDevice<'_> {
             |enc| {
                 for (slot, bind) in draw.binds.iter().enumerate() {
                     enc.set_fragment_texture(bind.texture, slot);
-                    // slangc lowers each combined sampler to a texture and a
-                    // sampler at the same index, so a source's sampler slot is
-                    // its texture slot.
+                    // Every post source occupies a texture and a sampler at
+                    // the same index, so a source's sampler slot is its texture
+                    // slot.
                     enc.set_fragment_sampler(self.sampler_for(bind.sampler), slot);
                 }
                 if !draw.constants.is_empty() {
                     enc.set_fragment_bytes(draw.constants, 0);
                 }
                 if let Some(probes) = probes {
-                    // The cube array's one sampler is the next sampler slot
-                    // after the declared sources.
+                    // The cube array's sampler takes the sampler slot after the
+                    // declared sources, beside the array itself.
                     enc.set_fragment_sampler(self.cube_sampler, draw.binds.len());
-                    enc.set_fragment_value(probes.set, PROBE_SET_BUFFER_INDEX);
-                    if let Some(args) = probes.cube_args {
-                        enc.set_fragment_buffer(args, 0, PROBE_CUBE_ARG_BUFFER_INDEX);
-                        // An argument buffer's contents are not tracked, so a
-                        // cube reached only through it has to be declared.
-                        probes.residency.declare_fragment(enc);
-                    }
+                    probes.bind(enc, probe_slots(draw.binds.len()));
                 }
             },
         )?;

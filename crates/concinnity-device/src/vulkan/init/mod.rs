@@ -22,8 +22,8 @@ use concinnity_core::render::backend_init::{BackendInit, PostSettings, WorldShad
 use concinnity_core::render::error::{RenderError, RenderResult};
 
 use super::context::*;
-use super::light_cull::VkLightCull;
 use super::texture::GpuUploadContext;
+use crate::vulkan::global_set::GlobalBindings;
 
 mod bloom;
 pub(in crate::vulkan) mod bootstrap;
@@ -110,18 +110,6 @@ impl Features {
                 || rt_wanted,
         }
     }
-}
-
-// The per-frame lighting, shadow and environment resources the global set binds,
-// which fog, raymarched volumes and planar reflections bind as well.
-struct GlobalBindings<'a> {
-    uniforms: &'a VkUniforms,
-    light_cull: &'a VkLightCull,
-    shadow: &'a VkShadow,
-    spot_shadow: &'a VkSpotShadow,
-    area_light: &'a VkAreaLight,
-    scene: &'a VkSceneAssets,
-    targets: &'a VkTargets,
 }
 
 impl VkContext {
@@ -226,6 +214,10 @@ impl VkContext {
         )?;
         let shadow = shadow::build_shadow(&gpu, &shadows, &uniforms.light_uniforms)?;
         let spot_shadow = shadow::build_spot_shadow(&gpu, &shadow, &spot_shadows)?;
+        let probe_gpu = crate::vulkan::probe_set::ProbeSetGpu::new(&gpu.upload(), frames)?;
+        for (frame, records) in probe_gpu.records.iter().enumerate() {
+            light_cull.write_probe_records(&hw.device, frame, records.descriptor());
+        }
         let globals = GlobalBindings {
             uniforms: &uniforms,
             light_cull: &light_cull,
@@ -234,12 +226,11 @@ impl VkContext {
             area_light: &area_light,
             scene: &scene,
             targets: &targets,
+            probes: &probe_gpu,
         };
-        let budget = descriptors::global_set_budget(&hw);
-        let plan = cull::plan_cull(&gpu, &world, media.textures, &budget);
+        let plan = cull::plan_cull(&gpu, &world, media.textures);
         let descriptors = descriptors::build_descriptors(
             &gpu,
-            budget,
             descriptors::SetPoolInputs {
                 instanced_clusters: &world.instanced_clusters,
                 text_atlas_count: media.text_atlases.len(),
@@ -373,7 +364,7 @@ impl VkContext {
             planar_reflection: world_fx.planar_reflection,
             particle: Default::default(),
             auto_exposure: world_fx.auto_exposure,
-            hot_reload: HotReloadState::spawn(hot_reload),
+            hot_reload: HotReloadState::new(hot_reload),
             world_shader: world_programs.cloned(),
             frame_stats: Default::default(),
             draw_calls_accum: Default::default(),
@@ -390,7 +381,7 @@ impl VkContext {
             draw: DrawState::new(world.draw_objects, plan.n_instances, world.n_chunk_max),
             view: ViewState::new(clear_color),
             wireframe: Default::default(),
-            probe: ProbeState::new(probe_prefilter),
+            probe: ProbeState::new(probe_prefilter, probe_gpu),
             stream: StreamState::new(frames),
             // A freshly built context owns its hardware outright; only
             // `apply_world_reload` flips this on the outgoing context.

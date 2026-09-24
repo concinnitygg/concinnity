@@ -68,6 +68,14 @@ per checkout:
 scripts/vendor.py fetch
 ```
 
+On macOS, which Microsoft publishes no `dxc` for, build the pinned
+[shader compiler](#shader-compiler) from source as well. It needs `git`, `cmake`
+and `ninja`, and takes a few minutes (3.5 on a 12-core Apple silicon Mac):
+
+```sh
+scripts/vendor.py build dxc
+```
+
 To see what is vendored and what the build would otherwise pick:
 
 ```sh
@@ -76,6 +84,32 @@ scripts/vendor.py status
 
 [Third-party environment variables](#third-party-environment-variables)
 lists how to override vendor paths.
+
+### Shader compiler
+
+Every engine shader is HLSL, compiled by the
+[DirectX Shader Compiler](https://github.com/microsoft/DirectXShaderCompiler)
+(`dxc`) to DXIL for DirectX 12 and to SPIR-V for Vulkan; on macOS the SPIR-V is
+translated to Metal by spirv-cross, which the build links, so there is nothing
+extra to install for it. The build compiles every engine shader into the
+binary, and stops if no `dxc` resolves. It is looked for in this order:
+
+1. `dxc/bin/` beside the running executable, which is where a release carries
+   the one it was built with
+2. `vendor/dxc-<version>-<os>-<arch>/`, the release `scripts/vendor.py` pins
+3. `PATH`
+4. `$VULKAN_SDK/bin`
+
+Every host compiles with the one pinned release, since the embedded shaders and
+the runtime shader cache's key both depend on it: Windows and Linux fetch
+Microsoft's archive, and macOS builds the same commit from source. Outside a
+checkout, install a
+[DXC release](https://github.com/microsoft/DirectXShaderCompiler/releases) and
+put its `bin/` on `PATH`.
+
+A built binary needs no compiler to draw its own shaders. `cn build` needs one
+to cook a world that declares a `Shader` or an `SdfVolume`, whose authored HLSL
+compiles alongside the engine's.
 
 ## Third-party environment variables
 
@@ -88,13 +122,11 @@ needed for an SDK installed somewhere `vendor.py` did not put it.
 
 | Variable            | Read at     | Default                                                                             | Locates                                                                                                          |
 | ------------------- | ----------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `CN_SLANG_SDK`      | build + run | `slang/` beside the executable, then `vendor/`, then `PATH`, then `$VULKAN_SDK/bin` | The Slang shader compiler; expects `bin/slangc` under it                                                         |
-| `VULKAN_SDK`        | build + run | none                                                                                | The Vulkan SDK: `bin/slangc` as the last slangc candidate, and the loader, layers and `glslc` for a Vulkan build |
+| `VULKAN_SDK`        | build + run | none                                                                                | The Vulkan SDK: `bin/dxc` as the last `dxc` candidate, and the loader, layers and `glslc` for a Vulkan build     |
 | `CN_AGILITY_SDK`    | build       | `vendor/agility-*`                                                                  | Microsoft's D3D12 Agility SDK                                                                                    |
 | `CN_FIDELITYFX_SDK` | build       | `vendor/fidelityfx-*`                                                               | AMD FidelityFX, for FSR 3. The Vulkan runtime prefers `vendor/fidelityfx-vk-*`, which has no variable of its own |
 | `CN_XESS_SDK`       | build       | `vendor/xess-*`                                                                     | Intel XeSS                                                                                                       |
 | `CN_STREAMLINE_SDK` | build       | `vendor/streamline-*`                                                               | NVIDIA Streamline, for DLSS                                                                                      |
-| `CN_DXC_SDK`        | build       | the Windows SDK's `bin`, under `%ProgramFiles(x86)%`                                | A standalone DirectX Shader Compiler, over the Windows SDK's                                                     |
 
 ### Turning a feature off
 
@@ -107,7 +139,6 @@ launch.
 | `CN_ENABLE_FFX_FSR3`    | on      | No FSR 3; upscaling falls back to native resolution    |
 | `CN_ENABLE_XESS`        | on      | No XeSS                                                |
 | `CN_ENABLE_DLSS`        | on      | No DLSS                                                |
-| `CN_ENABLE_DXC`         | on      | No bundled DXC; hardware ray tracing needs one on PATH |
 | `CN_ENABLE_AGILITY_SDK` | **off** | Not applicable; this one is opt-_in_, see below        |
 
 The three upscalers are loaded with `LoadLibrary` at runtime and degrade to a
@@ -152,6 +183,9 @@ below.
    xcrun metal --version
    ```
 
+3. Build `dxc`, the [shader compiler](#shader-compiler), with
+   `scripts/vendor.py build dxc`: DXC publishes no macOS release of its own.
+
 ### Build
 
 ```sh
@@ -184,8 +218,8 @@ build them). In addition:
    vulkaninfo --summary
    ```
 
-2. Every shader compiles through `slangc`, resolved from `vendor/` (see
-   `scripts/vendor.py`) or the Vulkan SDK; no other shader compiler is built.
+2. The build still compiles with the vendored
+   [shader compiler](#shader-compiler), not the SDK's `dxc`.
 
    ```sh
    brew install cmake python git
@@ -231,9 +265,8 @@ DirectX 12 is the default backend on Windows.
    through Visual Studio 2022 (any edition) or the standalone
    [Build Tools for Visual Studio](https://visualstudio.microsoft.com/downloads/),
    selecting the **Desktop development with C++** workload. This provides the MSVC
-   linker plus the Windows SDK, which supplies the DirectX Shader Compiler
-   (`DXC`) that `slangc` hands its DXIL to. The build script locates
-   `dxcompiler.dll` / `dxil.dll` in the Windows SDK automatically.
+   linker plus the Windows SDK. Shaders compile with the pinned `dxc` that
+   `scripts/vendor.py fetch` vendors; see [Shader compiler](#shader-compiler).
 
 ### Build
 
@@ -306,8 +339,8 @@ In addition to the [DirectX prerequisites](#windows-directx-12) above (the MSVC
 toolchain is still required):
 
 1. Install the [Vulkan SDK](https://vulkan.lunarg.com/sdk/home) from LunarG. This
-   provides the Vulkan loader and validation layers. Shaders compile through
-   the vendored `slangc`, or the SDK's when none is vendored.
+   provides the Vulkan loader and validation layers. Its `dxc` is only the
+   last [shader compiler](#shader-compiler) candidate, after the vendored one.
 
 Windowing and input use the native Win32 window (shared with the DirectX
 backend), so no windowing-library install or runtime DLL is involved.
@@ -391,7 +424,10 @@ Ubuntu; translate them to your distribution's equivalents as needed.
    sudo apt install libvulkan1 vulkan-validationlayers
    ```
 
-3. To **run** the engine you also need a Vulkan-capable GPU driver (e.g.
+3. Vendor `dxc`, the [shader compiler](#shader-compiler), with
+   `scripts/vendor.py fetch dxc`.
+
+4. To **run** the engine you also need a Vulkan-capable GPU driver (e.g.
    `mesa-vulkan-drivers` for Intel/AMD, or the proprietary NVIDIA driver). The
    `vulkan-tools` package provides `vulkaninfo` to confirm a working ICD:
 

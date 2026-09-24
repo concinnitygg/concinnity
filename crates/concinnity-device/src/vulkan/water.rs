@@ -5,7 +5,7 @@
 //! XZ grid built once at init and displaced per frame by the vertex stage's
 //! Gerstner sum; the fragment refracts the pass's scene snapshot, tints and foams
 //! it by the water-column thickness the main depth gives, and mixes a reflection
-//! over it by a Schlick Fresnel term (see shaders/water.slang, the single source
+//! over it by a Schlick Fresnel term (see shaders/water.hlsl, the single source
 //! all three backends compile).
 //!
 //! Same uniform layouts, back-to-front ordering and manual depth-occlusion test
@@ -25,7 +25,7 @@ pub(in crate::vulkan) use concinnity_core::render::uniforms::{
 };
 
 use super::allocator::DeviceAllocator;
-use crate::vulkan::slang_builtins::SlangCompile;
+use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::transparent::{
     ProducerCtx, RecordUpload, TransparentProducer, TransparentRecord, TransparentVertexInput,
     create_transparent_pipeline,
@@ -77,18 +77,11 @@ fn water_params_from(surface: &WaterSurface, planar: bool) -> WaterParams {
 
 // Compile the water vertex + fragment shaders, injecting the MSAA define so the
 // depth sampler type matches the main-depth resource's sample count.
-fn compile_water_shaders(
-    hot_reload: bool,
-    msaa: bool,
-    probe_cube_count: u32,
-) -> RenderResult<(Vec<u8>, Vec<u8>)> {
-    let ctx = super::slang_builtins::Ctx {
-        hot_reload,
-        msaa,
-        probe_count: probe_cube_count as usize,
-    };
-    let vert = super::slang_builtins::WATER_VERT.compile(&ctx)?;
-    let frag = super::slang_builtins::WATER_FRAG.compile(&ctx)?;
+fn compile_water_shaders(hot_reload: bool, msaa: bool) -> RenderResult<(Vec<u8>, Vec<u8>)> {
+    let vert = super::builtin_shaders::WATER_VERT.compile(hot_reload)?;
+    let frag = super::builtin_shaders::WATER_FRAG
+        .at(msaa)
+        .compile(hot_reload)?;
     Ok((vert, frag))
 }
 
@@ -103,26 +96,24 @@ struct WaterRtShaders {
 }
 
 // Compile the water vertex shader + the ray-traced water fragment (flat, plus
-// the textured variant when `pool_size > 0`). slangc emits `SPV_KHR_ray_query`
+// the textured variant when `pool_size > 0`). dxc emits `SPV_KHR_ray_query`
 // for the traversal, which the device already advertises wherever these
 // pipelines are built.
 fn compile_water_rt_shaders(
     hot_reload: bool,
     msaa: bool,
     pool_size: usize,
-    probe_cube_count: u32,
 ) -> RenderResult<WaterRtShaders> {
-    // The pool declaration needs at least one slot even when the bindless pool
-    // is absent (the textured variant is then skipped).
-    let ctx = super::slang_builtins::Ctx {
-        hot_reload,
-        msaa,
-        probe_count: probe_cube_count as usize,
-    };
-    let vs = super::slang_builtins::WATER_VERT.compile(&ctx)?;
-    let flat_fs = super::slang_builtins::WATER_FRAG_RT.compile(&ctx)?;
+    let vs = super::builtin_shaders::WATER_VERT.compile(hot_reload)?;
+    let flat_fs = super::builtin_shaders::WATER_FRAG_RT
+        .at(msaa)
+        .compile(hot_reload)?;
     let textured_fs = if pool_size > 0 {
-        Some(super::slang_builtins::WATER_FRAG_RT_TEXTURED.compile(&ctx)?)
+        Some(
+            super::builtin_shaders::WATER_FRAG_RT_TEXTURED
+                .at(msaa)
+                .compile(hot_reload)?,
+        )
     } else {
         None
     };
@@ -186,8 +177,7 @@ pub(in crate::vulkan) fn build_water_producer(
     // keep the probe/sky reflection. From `assign_planar_slots`.
     planar_slots: &[Option<usize>],
 ) -> RenderResult<TransparentProducer> {
-    let (vert_spv, frag_spv) =
-        compile_water_shaders(ctx.hot_reload, ctx.msaa, ctx.probe_cube_count)?;
+    let (vert_spv, frag_spv) = compile_water_shaders(ctx.hot_reload, ctx.msaa)?;
     let pipeline = create_transparent_pipeline(
         ctx.device,
         ctx.render_pass,
@@ -238,12 +228,7 @@ fn build_water_rt_pipelines(
     ctx: &ProducerCtx,
     flat_layout: vk::PipelineLayout,
 ) -> RenderResult<WaterRtPipelines> {
-    let shaders = compile_water_rt_shaders(
-        ctx.hot_reload,
-        ctx.msaa,
-        ctx.bindless_pool_size,
-        ctx.probe_cube_count,
-    )?;
+    let shaders = compile_water_rt_shaders(ctx.hot_reload, ctx.msaa, ctx.bindless_pool_size)?;
     let flat = create_transparent_pipeline(
         ctx.device,
         ctx.render_pass,
@@ -338,28 +323,25 @@ mod tests {
     // regression fails the suite without a GPU.
     #[test]
     fn water_shaders_compile() {
-        if !concinnity_slang::shader_tests_enabled() {
+        if !concinnity_shader::dxc_available() {
             return;
         }
-        // Both the ceiling and a device-shortened probe cube array must compile.
-        for probes in [1, concinnity_core::render::uniforms::MAX_PROBES as u32] {
-            super::compile_water_shaders(false, true, probes).expect("water compiles (msaa)");
-            super::compile_water_shaders(false, false, probes).expect("water compiles (no msaa)");
-        }
+        super::compile_water_shaders(false, true).expect("water compiles (msaa)");
+        super::compile_water_shaders(false, false).expect("water compiles (no msaa)");
     }
 
     // Compile the ray-traced water shaders (both MSAA variants, both flat +
-    // textured) so a regression in water.slang's `WATER_RT` arm (the shared
+    // textured) so a regression in water.hlsl's `WATER_RT` arm (the shared
     // `{RT_TRACE}` traversal + the probe `{PROBE_COMMON}` injection + the
     // `RT_TEXTURED` split) fails the suite without a GPU.
     #[test]
     fn water_rt_shaders_compile() {
-        if !concinnity_slang::shader_tests_enabled() {
+        if !concinnity_shader::dxc_available() {
             return;
         }
         for &msaa in &[true, false] {
-            let shaders = super::compile_water_rt_shaders(false, msaa, 4, 4)
-                .expect("water rt shaders compile");
+            let shaders =
+                super::compile_water_rt_shaders(false, msaa, 4).expect("water rt shaders compile");
             assert!(crate::vulkan::pipeline::is_spirv(&shaders.vs));
             assert!(crate::vulkan::pipeline::is_spirv(&shaders.flat_fs));
             assert!(
@@ -369,7 +351,7 @@ mod tests {
         }
         // pool_size 0 builds only the flat variant.
         let flat_only =
-            super::compile_water_rt_shaders(false, false, 0, 4).expect("water rt flat compiles");
+            super::compile_water_rt_shaders(false, false, 0).expect("water rt flat compiles");
         assert!(flat_only.textured_fs.is_none());
     }
 }

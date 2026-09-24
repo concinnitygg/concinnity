@@ -71,6 +71,8 @@ pub(super) struct SceneBufferArgs<'a> {
     pub(super) far: f32,
     pub(super) world_hidden: bool,
     pub(super) skinned_joint_bufs: &'a [Retained<ProtocolObject<dyn MTLBuffer>>],
+    // This frame's `bindless_texture_signature`.
+    pub(super) texture_signature: u64,
 }
 
 // This frame's bindless-path buffers. All three are `None` while the world is
@@ -207,14 +209,13 @@ impl MtlContext {
 
     // Rebuilds requested since last frame: hot-reloaded shaders.
     pub(super) fn apply_pending_rebuilds(&mut self) -> error::RenderResult<()> {
-        // Shader hot-reload: if either the filesystem watcher or the debug
-        // `reload-shaders` command set the flag, rebuild every built-in
-        // pipeline from disk-resident source before the frame's passes start
-        // using them. The flag is cleared regardless of outcome so a failed
-        // rebuild (typo in a shader edit) doesn't loop, and the previous
-        // pipelines stay live so the session keeps rendering; only a device
-        // failure propagates. In-flight command buffers retain the pipelines
-        // they encoded, so no GPU drain is needed.
+        // Shader hot-reload: if the debug `reload-shaders` command set the
+        // flag, rebuild every built-in pipeline from disk-resident source
+        // before the frame's passes start using them. The flag is cleared
+        // regardless of outcome so a failed rebuild (typo in a shader edit)
+        // doesn't loop, and the previous pipelines stay live so the session
+        // keeps rendering; only a device failure propagates. In-flight command
+        // buffers retain the pipelines they encoded, so no GPU drain is needed.
         if self.shader_reload_requested() {
             self.clear_shader_reload_flag();
             match self.reload_shaders() {
@@ -441,10 +442,10 @@ impl MtlContext {
             // world pass off, collapsing to Main (a bare clear, fed the empty
             // scene above) -> Composite (presents the overlay).
             world_hidden,
-            // Clustered light binning runs when the world has local lights (the
-            // cull pipeline is built iff so). The builder inserts LightCull
-            // before Main and Main reads its per-cluster list buffer.
-            clustered_lighting_enabled: clustered,
+            // Clustered binning runs while a local light or a baked probe is
+            // live. The builder inserts LightCull before Main, and Main, the SSR
+            // resolve and the transparent pass read its per-cluster lists.
+            clustering_enabled: clustered,
             // Set by the view-mode mask below (occlusion view only).
             composite_reads_ao: false,
             shadowed_spot_count: self.spot_shadow.count,
@@ -598,21 +599,25 @@ impl MtlContext {
         Ok((render_w, render_h))
     }
 
-    // This frame's probe cube argument buffer, plus the residency every
-    // argument buffer's contents need.
-    pub(super) fn refresh_argument_buffers(&mut self, ring_slot: usize) -> error::RenderResult<()> {
-        // The probe cube handles, for every pass that samples the set. Built
-        // ahead of `build_scene_buffers` and outside its world-hidden gate:
-        // the transparent and post passes read the set without a static draw
-        // list of their own, and a slot left holding last frame's ring buffer
-        // would outlive the frame that wrote it.
-        self.probe.cube_args = Some(self.build_probe_cube_args(ring_slot)?);
-        // The residency sets the argument buffers' contents need. Refreshed
-        // before any pass encodes, and a no-op on a frame whose textures are
+    // This frame's probe records, plus the residency the bindless block's
+    // contents need. Returns the block's texture signature, which the block's
+    // own write reuses.
+    pub(super) fn refresh_probe_records_and_residency(
+        &mut self,
+        ring_slot: usize,
+    ) -> error::RenderResult<u64> {
+        // The probe records, for every pass that samples the set. Built ahead
+        // of `build_scene_buffers` and outside its world-hidden gate: the
+        // transparent and post passes read the set without a static draw list
+        // of their own, and a slot left holding last frame's ring buffer would
+        // outlive the frame that wrote it.
+        self.probe.records_buf = Some(self.build_probe_records(ring_slot)?);
+        // The residency the bindless block's contents need. Refreshed before
+        // any pass encodes, and a no-op on a frame whose textures are
         // unchanged, which is every frame between a stream-in or a bake.
-        self.refresh_probe_cube_residency();
-        self.refresh_bindless_residency();
-        Ok(())
+        let sig = self.bindless_texture_signature();
+        self.refresh_bindless_residency(sig);
+        Ok(sig)
     }
 
     // The per-frame GPU buffers the world's passes consume, plus the probe
@@ -630,6 +635,7 @@ impl MtlContext {
             far,
             world_hidden,
             skinned_joint_bufs,
+            texture_signature,
         } = args;
         // While the world is hidden behind an opaque menu, the surviving Main
         // pass is fed an empty scene -- no bindless object / cull / texture
@@ -690,7 +696,7 @@ impl MtlContext {
                 None
             };
             let bindless_tex_args = if object_buffer.is_some() {
-                self.build_bindless_texture_args(ring_slot)?
+                self.build_bindless_texture_args(ring_slot, texture_signature)?
             } else {
                 None
             };
